@@ -155,6 +155,23 @@ client 3 sets x expecting 0 -> ITEM_REVISION_CONFLICT
 
 The session revision may change between unrelated item updates without causing a conflict. Attempt identity prevents updates after complete, retry, decide, or rework.
 
+### Atomic multi-item concurrency
+
+The internal `item.record_many` command fences the observed session revision and
+active attempt, while each of its 1 to 64 unique operations fences its own item
+revision. Operations are normalized into item-ID order before evaluation. Every
+target, type, constraint, prepared artifact value, and item revision must validate
+against one current state; otherwise the pure transition returns no successor and
+the Store writes no item row.
+
+When the set changes at least one item, the Store persists the complete successor,
+the item-ID-ordered outcome projection, the terminal job, and the idempotency
+receipt in one existing `BEGIN IMMEDIATE` transaction. A failure after relational
+state writes therefore rolls back both state and terminal metadata. Restart
+requeues a pre-terminal running job, and an exact replay observes the one retained
+receipt. The command reuses existing item, job, and receipt tables and introduces
+no SQLite migration.
+
 ## No-op behavior
 
 A semantic no-op, such as clearing an already-unset item with current preconditions:

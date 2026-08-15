@@ -31,25 +31,27 @@ pub mod v2_memory;
 pub mod v2_state;
 
 pub use codec::{
-    PersistedGraphMutationFailureV2, PersistedGraphTerminalOperationV2,
-    PersistedGraphTerminalSessionProjectionV2, PersistedResponseContextV1,
-    PersistedStartIdentityV1, PersistedTerminalJobProjectionV1, PersistedTerminalJobStateV1,
-    PersistedTerminalReceiptV1, PersistedTerminalSessionProjectionV1,
+    PersistedGraphItemMutationV2, PersistedGraphMutationFailureV2,
+    PersistedGraphTerminalOperationV2, PersistedGraphTerminalSessionProjectionV2,
+    PersistedResponseContextV1, PersistedStartIdentityV1, PersistedTerminalJobProjectionV1,
+    PersistedTerminalJobStateV1, PersistedTerminalReceiptV1, PersistedTerminalSessionProjectionV1,
 };
 pub use sqlite_store::SqliteStoreV1;
 pub use v2_goal::{AttemptCriterionAssessmentStateV2, CriterionAssessmentStateV2, GoalStateV2};
 pub use v2_memory::{
-    ActiveItemMutationV2, AttemptWorkflowMemoryV2, BlockerStateV2, EvidenceReadbackV2,
-    EvidenceResolutionStateV2, GraphMutationErrorV2, ItemSlotStateV2, MAX_OPEN_BLOCKERS_V2,
-    WorkflowMemoryStateV2, canonical_recorded_items_json_v2, recorded_items_digest_v2,
+    ActiveItemMutationRequestV2, ActiveItemMutationV2, AttemptWorkflowMemoryV2, BlockerStateV2,
+    EvidenceReadbackV2, EvidenceResolutionStateV2, GraphMutationErrorV2, ItemSlotStateV2,
+    MAX_ACTIVE_ITEM_MUTATIONS_V2, MAX_OPEN_BLOCKERS_V2, WorkflowMemoryStateV2,
+    canonical_recorded_items_json_v2, recorded_items_digest_v2,
 };
 pub use v2_state::{
     AttemptMetadataV2, GraphActionCompletionOutcomeV2, GraphActionSkipOutcomeV2,
     GraphBlockOutcomeV2, GraphCancelOutcomeV2, GraphCriterionAssessmentOutcomeV2,
-    GraphGoalDefinitionOutcomeV2, GraphGoalRevisionOutcomeV2, GraphItemMutationOutcomeV2,
-    GraphNodeCounterV2, GraphNodeSnapshotV2, GraphRetryOutcomeV2, GraphSessionStateV2,
-    GraphStartCurrentTaskV2, GraphUnblockOutcomeV2, GraphWorkspaceViewV2, ProcedureSnapshotV2,
-    StoreGraphMutationContractV2, StoreGraphReadContractV2, StoreGraphStateContractV2,
+    GraphGoalDefinitionOutcomeV2, GraphGoalRevisionOutcomeV2, GraphItemMutationEntryV2,
+    GraphItemMutationOutcomeV2, GraphItemsMutationOutcomeV2, GraphNodeCounterV2,
+    GraphNodeSnapshotV2, GraphRetryOutcomeV2, GraphSessionStateV2, GraphStartCurrentTaskV2,
+    GraphUnblockOutcomeV2, GraphWorkspaceViewV2, ProcedureSnapshotV2, StoreGraphMutationContractV2,
+    StoreGraphReadContractV2, StoreGraphStateContractV2,
 };
 
 pub const MAX_IDEMPOTENCY_KEY_BYTES_V1: usize = 256;
@@ -117,6 +119,7 @@ pub(crate) fn command_name_v1(command: &CommandV1) -> &'static str {
         CommandV1::ItemRemove { .. } => "item.remove",
         CommandV1::ItemAttach { .. } => "item.attach",
         CommandV1::ItemClear { .. } => "item.clear",
+        CommandV1::ItemRecordMany => "item.record_many",
     }
 }
 pub(crate) fn command_is_session_scoped_v1(command: &CommandV1) -> bool {
@@ -140,6 +143,7 @@ pub(crate) fn command_is_session_scoped_v1(command: &CommandV1) -> bool {
             | CommandV1::ItemRemove { .. }
             | CommandV1::ItemAttach { .. }
             | CommandV1::ItemClear { .. }
+            | CommandV1::ItemRecordMany
     )
 }
 /// A bounded, exact canonical JSON document needed to execute a durable command after restart.
@@ -219,6 +223,7 @@ fn legacy_minimal_canonical_execution_v1(command: &CommandV1) -> CanonicalExecut
         | CommandV1::ItemClear { item_id } => {
             serde_json::json!({"command": command_name, "item_id": item_id.as_str()})
         }
+        CommandV1::ItemRecordMany => serde_json::json!({"command": command_name}),
         _ => serde_json::json!({"command": command_name}),
     };
     let canonical = podway_core::canonicalize_json_v1(&document)

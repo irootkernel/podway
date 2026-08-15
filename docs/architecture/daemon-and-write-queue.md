@@ -156,6 +156,16 @@ Different items may update concurrently because they do not require an unchanged
 
 Same-item conflicts return `ITEM_REVISION_CONFLICT`.
 
+The internal multi-item recording path is bounded to 64 unique current-attempt
+items. It additionally fences the observed session revision, canonicalizes the
+operations by item ID, and produces one durable job effect. Its pure state
+transition validates and applies the complete set or returns no successor; a
+changed set increments the session revision once and never advances the cursor.
+Resolved artifact values use the same artifact representation, so the daemon can
+perform safe-open hashing before the transaction and completion can retain its
+ordinary local-artifact revalidation. The public route and CLI grammar are owned
+by `V2AGT-004`.
+
 ## Synchronous and detached behavior
 
 By default, the CLI waits for terminal state:

@@ -205,6 +205,7 @@ pub enum PersistedDomainCommandV1 {
     ItemRemove { item_id: ItemId },
     ItemAttach { item_id: ItemId },
     ItemClear { item_id: ItemId },
+    ItemRecordMany,
 }
 
 impl PersistedDomainCommandV1 {
@@ -247,6 +248,7 @@ impl PersistedDomainCommandV1 {
             CommandV1::ItemClear { item_id } => Self::ItemClear {
                 item_id: item_id.clone(),
             },
+            CommandV1::ItemRecordMany => Self::ItemRecordMany,
         }
     }
 
@@ -275,6 +277,7 @@ impl PersistedDomainCommandV1 {
             Self::ItemRemove { item_id } => CommandV1::ItemRemove { item_id },
             Self::ItemAttach { item_id } => CommandV1::ItemAttach { item_id },
             Self::ItemClear { item_id } => CommandV1::ItemClear { item_id },
+            Self::ItemRecordMany => CommandV1::ItemRecordMany,
         }
     }
 
@@ -307,6 +310,7 @@ impl PersistedDomainCommandV1 {
             Self::ItemRemove { .. } => "item.remove",
             Self::ItemAttach { .. } => "item.attach",
             Self::ItemClear { .. } => "item.clear",
+            Self::ItemRecordMany => "item.record_many",
         }
     }
 }
@@ -556,6 +560,7 @@ fn procedure_v2_runtime_command(command: &CommandV1) -> bool {
             | CommandV1::ItemRemove { .. }
             | CommandV1::ItemAttach { .. }
             | CommandV1::ItemClear { .. }
+            | CommandV1::ItemRecordMany
     )
 }
 
@@ -581,6 +586,7 @@ fn procedure_v2_current_session_command(command: &CommandV1) -> bool {
             | CommandV1::ItemRemove { .. }
             | CommandV1::ItemAttach { .. }
             | CommandV1::ItemClear { .. }
+            | CommandV1::ItemRecordMany
     )
 }
 
@@ -646,6 +652,12 @@ fn procedure_v2_preconditions_match(
                 && preconditions.expected_item_id() == Some(item_id)
                 && preconditions.expected_item_revision().is_some()
         }
+        CommandV1::ItemRecordMany => {
+            preconditions.expected_session_revision().is_some()
+                && preconditions.expected_attempt_id().is_some()
+                && preconditions.expected_item_id().is_none()
+                && preconditions.expected_item_revision().is_none()
+        }
         _ => false,
     }
 }
@@ -677,6 +689,7 @@ pub enum PersistedDomainCommandKindV1 {
     ItemRemove,
     ItemAttach,
     ItemClear,
+    ItemRecordMany,
 }
 
 impl From<DomainCommandKind> for PersistedDomainCommandKindV1 {
@@ -705,6 +718,7 @@ impl From<DomainCommandKind> for PersistedDomainCommandKindV1 {
             DomainCommandKind::ItemRemove => Self::ItemRemove,
             DomainCommandKind::ItemAttach => Self::ItemAttach,
             DomainCommandKind::ItemClear => Self::ItemClear,
+            DomainCommandKind::ItemRecordMany => Self::ItemRecordMany,
         }
     }
 }
@@ -752,6 +766,12 @@ pub enum PersistedDomainResultV1 {
         revision_after: RevisionV1,
         changed: bool,
     },
+    ItemsChanged {
+        session_id: SessionId,
+        revision_before: RevisionV1,
+        revision_after: RevisionV1,
+        changed: bool,
+    },
 }
 
 impl PersistedDomainResultV1 {
@@ -791,6 +811,17 @@ impl PersistedDomainResultV1 {
             } => Self::ItemChanged {
                 session_id: session_id.clone(),
                 item_id: item_id.clone(),
+                revision_before: *revision_before,
+                revision_after: *revision_after,
+                changed: *changed,
+            },
+            DomainResult::ItemsChanged {
+                session_id,
+                revision_before,
+                revision_after,
+                changed,
+            } => Self::ItemsChanged {
+                session_id: session_id.clone(),
                 revision_before: *revision_before,
                 revision_after: *revision_after,
                 changed: *changed,
@@ -1169,9 +1200,64 @@ pub enum PersistedGraphTerminalOperationV2 {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         value_digest: Option<Sha256Digest>,
     },
+    ItemMutations {
+        graph_node_id: GraphNodeId,
+        attempt_id: AttemptId,
+        attempt_number: u64,
+        items: Vec<PersistedGraphItemMutationV2>,
+    },
     Failure {
         error: PersistedGraphMutationFailureV2,
     },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PersistedGraphItemMutationV2 {
+    item_id: ItemId,
+    expected_item_revision: RevisionV1,
+    changed: bool,
+    item_revision: RevisionV1,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    value_digest: Option<Sha256Digest>,
+}
+
+impl PersistedGraphItemMutationV2 {
+    pub fn new(
+        item_id: ItemId,
+        expected_item_revision: RevisionV1,
+        changed: bool,
+        item_revision: RevisionV1,
+        value_digest: Option<Sha256Digest>,
+    ) -> Self {
+        Self {
+            item_id,
+            expected_item_revision,
+            changed,
+            item_revision,
+            value_digest,
+        }
+    }
+
+    pub fn item_id(&self) -> &ItemId {
+        &self.item_id
+    }
+
+    pub const fn expected_item_revision(&self) -> RevisionV1 {
+        self.expected_item_revision
+    }
+
+    pub const fn changed(&self) -> bool {
+        self.changed
+    }
+
+    pub const fn item_revision(&self) -> RevisionV1 {
+        self.item_revision
+    }
+
+    pub fn value_digest(&self) -> Option<&Sha256Digest> {
+        self.value_digest.as_ref()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1286,6 +1372,13 @@ pub enum PersistedGraphMutationFailureV2 {
         blocker_id: BlockerId,
     },
     NoOpenBlockers,
+    ItemMutationBatchEmpty,
+    TooManyItemMutations {
+        maximum: u32,
+    },
+    DuplicateItemMutation {
+        item_id: ItemId,
+    },
     ItemNotFound {
         item_id: ItemId,
     },
@@ -1501,6 +1594,15 @@ impl TryFrom<&crate::GraphMutationErrorV2> for PersistedGraphMutationFailureV2 {
                 }
             }
             crate::GraphMutationErrorV2::NoOpenBlockers => Self::NoOpenBlockers,
+            crate::GraphMutationErrorV2::ItemMutationBatchEmpty => Self::ItemMutationBatchEmpty,
+            crate::GraphMutationErrorV2::TooManyItemMutations { maximum } => {
+                Self::TooManyItemMutations { maximum: *maximum }
+            }
+            crate::GraphMutationErrorV2::DuplicateItemMutation { item_id } => {
+                Self::DuplicateItemMutation {
+                    item_id: item_id.clone(),
+                }
+            }
             crate::GraphMutationErrorV2::ItemNotFound { item_id } => Self::ItemNotFound {
                 item_id: item_id.clone(),
             },
@@ -2077,6 +2179,22 @@ impl PersistedGraphTerminalOperationV2 {
         Ok(operation)
     }
 
+    pub fn item_mutations(
+        graph_node_id: GraphNodeId,
+        attempt_id: AttemptId,
+        attempt_number: AttemptNumberV2,
+        items: Vec<PersistedGraphItemMutationV2>,
+    ) -> Result<Self, StoreCodecErrorV1> {
+        let operation = Self::ItemMutations {
+            graph_node_id,
+            attempt_id,
+            attempt_number: attempt_number.get(),
+            items,
+        };
+        operation.validate()?;
+        Ok(operation)
+    }
+
     pub fn retry(
         graph_node_id: GraphNodeId,
         from_attempt_id: AttemptId,
@@ -2272,6 +2390,18 @@ impl PersistedGraphTerminalOperationV2 {
             Self::Cancel { reason, .. } => ReasonV2::new(reason.clone()).is_ok(),
             Self::Reset { .. } => true,
             Self::ItemMutation { attempt_number, .. } => *attempt_number > 0,
+            Self::ItemMutations {
+                attempt_number,
+                items,
+                ..
+            } => {
+                *attempt_number > 0
+                    && !items.is_empty()
+                    && items.len() <= crate::MAX_ACTIVE_ITEM_MUTATIONS_V2
+                    && items
+                        .windows(2)
+                        .all(|pair| pair[0].item_id < pair[1].item_id)
+            }
             Self::Failure { error } => error.validate(),
         };
         if valid {
@@ -2384,6 +2514,8 @@ impl PersistedGraphMutationFailureV2 {
             | Self::BlockerNotCurrent { .. }
             | Self::BlockerAlreadyResolved { .. }
             | Self::NoOpenBlockers
+            | Self::ItemMutationBatchEmpty
+            | Self::DuplicateItemMutation { .. }
             | Self::ItemNotFound { .. }
             | Self::ItemRevisionConflict { .. }
             | Self::ItemTypeMismatch
@@ -2394,6 +2526,7 @@ impl PersistedGraphMutationFailureV2 {
             | Self::BlockersPresent
             | Self::SessionGoalMissing => true,
             Self::TooManyOpenBlockers { maximum } => *maximum == 64,
+            Self::TooManyItemMutations { maximum } => *maximum == 64,
         }
     }
 }
@@ -2947,6 +3080,18 @@ impl PersistedTerminalReceiptV1 {
                     && graph.revision_after() == *revision_after
                     && *changed == (*revision_before != *revision_after) => {}
                 (
+                    Some(PersistedGraphTerminalOperationV2::ItemMutations { .. }),
+                    PersistedTerminalResultV1::Success(PersistedDomainResultV1::ItemsChanged {
+                        session_id,
+                        revision_before,
+                        revision_after,
+                        changed,
+                    }),
+                ) if graph.session_id() == session_id
+                    && graph.revision_before() == *revision_before
+                    && graph.revision_after() == *revision_after
+                    && *changed == (*revision_before != *revision_after) => {}
+                (
                     Some(PersistedGraphTerminalOperationV2::Failure { .. }),
                     PersistedTerminalResultV1::Failure(_),
                 ) if graph.revision_before() == graph.revision_after() => {}
@@ -2974,6 +3119,12 @@ impl PersistedTerminalReceiptV1 {
                         revision_after,
                         changed,
                         ..
+                    }
+                    | PersistedDomainResultV1::ItemsChanged {
+                        session_id,
+                        revision_before,
+                        revision_after,
+                        changed,
                     },
                 ),
                 Some(session_projection),
@@ -3020,14 +3171,16 @@ impl PersistedTerminalReceiptV1 {
             (
                 PersistedTerminalResultV1::Success(
                     PersistedDomainResultV1::SessionChanged { .. }
-                    | PersistedDomainResultV1::ItemChanged { .. },
+                    | PersistedDomainResultV1::ItemChanged { .. }
+                    | PersistedDomainResultV1::ItemsChanged { .. },
                 ),
                 None,
             ) if self.graph_session_projection.is_some() => {}
             (
                 PersistedTerminalResultV1::Success(
                     PersistedDomainResultV1::SessionChanged { .. }
-                    | PersistedDomainResultV1::ItemChanged { .. },
+                    | PersistedDomainResultV1::ItemChanged { .. }
+                    | PersistedDomainResultV1::ItemsChanged { .. },
                 ),
                 None,
             )
@@ -3891,6 +4044,15 @@ fn validate_success_result_for_command_v1(
             item_id == result_item_id
                 && monotonic_revisions_are_possible(*revision_before, *revision_after, *changed)
         }
+        (
+            CommandV1::ItemRecordMany,
+            PersistedDomainResultV1::ItemsChanged {
+                revision_before,
+                revision_after,
+                changed,
+                ..
+            },
+        ) => monotonic_revisions_are_possible(*revision_before, *revision_after, *changed),
         _ => false,
     };
     compatible

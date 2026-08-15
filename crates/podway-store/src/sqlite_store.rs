@@ -826,6 +826,7 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
                     | crate::CommandV1::ItemRemove { .. }
                     | crate::CommandV1::ItemAttach { .. }
                     | crate::CommandV1::ItemClear { .. }
+                    | crate::CommandV1::ItemRecordMany
             )
         {
             return Err(corrupt(StoreRecordKindV1::Job));
@@ -1067,6 +1068,7 @@ impl StoreContractV1 for SqliteStoreV1 {
                 | crate::CommandV1::ItemRemove { .. }
                 | crate::CommandV1::ItemAttach { .. }
                 | crate::CommandV1::ItemClear { .. }
+                | crate::CommandV1::ItemRecordMany
         );
         if command_is_session_scoped_v1(request.command()) && !is_v2 {
             return Err(invariant(StoreInvariantV1::TransitionMutationShape));
@@ -1885,6 +1887,35 @@ fn validate_procedure_v2_action_admission_v1(
                     actual: active_attempt.cloned(),
                 }));
             }
+        }
+        return Ok(());
+    }
+
+    if matches!(request.command(), crate::CommandV1::ItemRecordMany) {
+        let expected_revision = preconditions
+            .expected_session_revision()
+            .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+        let expected_attempt = preconditions
+            .expected_attempt_id()
+            .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+        if preconditions.expected_item_id().is_some()
+            || preconditions.expected_item_revision().is_some()
+        {
+            return Err(invariant(StoreInvariantV1::TransitionMutationShape));
+        }
+        if expected_revision != current_revision {
+            return Err(reject(
+                PersistedGraphMutationFailureV2::SessionRevisionConflict {
+                    expected: expected_revision,
+                    actual: current_revision,
+                },
+            ));
+        }
+        if active_attempt != Some(expected_attempt) {
+            return Err(reject(PersistedGraphMutationFailureV2::AttemptNotCurrent {
+                expected: expected_attempt.clone(),
+                actual: active_attempt.cloned(),
+            }));
         }
         return Ok(());
     }
@@ -5465,6 +5496,42 @@ fn validate_graph_mutation_terminal_shape_v2(
                 && *attempt_number == active.number().get()
         }
         (
+            crate::CommandV1::ItemRecordMany,
+            TerminalResultV1::Success(podway_core::DomainResult::ItemsChanged {
+                session_id,
+                revision_before,
+                revision_after,
+                changed,
+            }),
+            PersistedGraphTerminalOperationV2::ItemMutations {
+                graph_node_id,
+                attempt_id,
+                attempt_number,
+                items,
+            },
+        ) => {
+            let active = current
+                .trace()
+                .active_attempt()
+                .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            let next_revision = next
+                .map(|state| state.trace().revision())
+                .unwrap_or_else(|| current.trace().revision());
+            session_id == current.trace().session_id()
+                && *revision_before == current.trace().revision()
+                && *revision_after == next_revision
+                && *changed == next.is_some()
+                && *changed == (*revision_before != *revision_after)
+                && preconditions.expected_session_revision() == Some(current.trace().revision())
+                && preconditions.expected_attempt_id() == Some(active.attempt_id())
+                && preconditions.expected_item_id().is_none()
+                && preconditions.expected_item_revision().is_none()
+                && graph_node_id == active.graph_node_id()
+                && attempt_id == active.attempt_id()
+                && *attempt_number == active.number().get()
+                && graph_item_batch_successor_matches_v2(current, next, items)
+        }
+        (
             command,
             TerminalResultV1::Failure(podway_core::DomainError::InvalidState {
                 reason: "Procedure v2 graph mutation failed",
@@ -6197,6 +6264,108 @@ fn item_command_accepts_type_v2(
         crate::CommandV1::ItemClear { .. } => true,
         _ => false,
     }
+}
+
+fn graph_item_batch_successor_matches_v2(
+    current: &crate::GraphSessionStateV2,
+    next: Option<&crate::GraphSessionStateV2>,
+    items: &[crate::PersistedGraphItemMutationV2],
+) -> bool {
+    let state = next.unwrap_or(current);
+    let Some(active) = current.trace().active_attempt() else {
+        return false;
+    };
+    let expected_workspace_revision = if next.is_some() {
+        current.workspace_revision().checked_next().ok()
+    } else {
+        Some(current.workspace_revision())
+    };
+    let expected_session_revision = if next.is_some() {
+        current.trace().revision().checked_next().ok()
+    } else {
+        Some(current.trace().revision())
+    };
+    if Some(state.workspace_revision()) != expected_workspace_revision
+        || Some(state.trace().revision()) != expected_session_revision
+        || state.task_title() != current.task_title()
+        || state.snapshot() != current.snapshot()
+        || state.trace().session_id() != current.trace().session_id()
+        || state.trace().lifecycle() != current.trace().lifecycle()
+        || state.trace().attempts() != current.trace().attempts()
+        || state.counters() != current.counters()
+        || state.attempt_metadata() != current.attempt_metadata()
+        || state.goal_state() != current.goal_state()
+        || state.created_at() != current.created_at()
+        || state.completed_at() != current.completed_at()
+        || state.cancelled_at() != current.cancelled_at()
+        || state.cancel_reason() != current.cancel_reason()
+        || state.workflow_memory().decisions() != current.workflow_memory().decisions()
+        || state.workflow_memory().reworks() != current.workflow_memory().reworks()
+        || state.workflow_memory().attempts().len() != current.workflow_memory().attempts().len()
+    {
+        return false;
+    }
+
+    let selected = items
+        .iter()
+        .map(crate::PersistedGraphItemMutationV2::item_id)
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut any_changed = false;
+    let mut matched = 0usize;
+    for (before, after) in current
+        .workflow_memory()
+        .attempts()
+        .iter()
+        .zip(state.workflow_memory().attempts())
+    {
+        if before.attempt_id() != active.attempt_id() {
+            if before != after {
+                return false;
+            }
+            continue;
+        }
+        if before.attempt_id() != after.attempt_id()
+            || before.blockers() != after.blockers()
+            || before.evidence() != after.evidence()
+            || before.item_slots().len() != after.item_slots().len()
+        {
+            return false;
+        }
+        for (before_slot, after_slot) in before.item_slots().iter().zip(after.item_slots()) {
+            if before_slot.item_id() != after_slot.item_id() {
+                return false;
+            }
+            let outcome = items
+                .iter()
+                .find(|outcome| outcome.item_id() == before_slot.item_id());
+            if let Some(outcome) = outcome {
+                matched += 1;
+                let changed = before_slot != after_slot;
+                any_changed |= changed;
+                let expected_item_revision = if changed {
+                    before_slot.revision().checked_next().ok()
+                } else {
+                    Some(before_slot.revision())
+                };
+                let value_digest = after_slot
+                    .value()
+                    .and_then(podway_core::RecordedItemValueV2::as_artifact)
+                    .map(podway_core::ArtifactValueV1::digest);
+                if outcome.changed() != changed
+                    || outcome.expected_item_revision() != before_slot.revision()
+                    || Some(outcome.item_revision()) != expected_item_revision
+                    || outcome.value_digest() != value_digest
+                    || before_slot.item_type() != after_slot.item_type()
+                    || before_slot.created_at() != after_slot.created_at()
+                {
+                    return false;
+                }
+            } else if before_slot != after_slot {
+                return false;
+            }
+        }
+    }
+    selected.len() == items.len() && matched == items.len() && any_changed == next.is_some()
 }
 
 fn graph_item_id_v2(command: &crate::CommandV1) -> Option<&podway_core::ItemId> {

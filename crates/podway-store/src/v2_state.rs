@@ -23,9 +23,10 @@ use crate::v2_goal::{
     validate_goal_revision_target_v2, validate_goal_state_successor_v2, validate_goal_state_v2,
 };
 use crate::v2_memory::{
-    ActiveItemMutationV2, EvidenceReadbackV2, GraphMutationErrorV2, WorkflowGoalTransitionV2,
-    WorkflowMemoryStateV2, insert_workflow_memory_v2, load_workflow_memory_v2,
-    replace_workflow_memory_v2, validate_workflow_memory_successor_v2, validate_workflow_memory_v2,
+    ActiveItemMutationRequestV2, ActiveItemMutationV2, EvidenceReadbackV2, GraphMutationErrorV2,
+    WorkflowGoalTransitionV2, WorkflowMemoryStateV2, insert_workflow_memory_v2,
+    load_workflow_memory_v2, replace_workflow_memory_v2, validate_workflow_memory_successor_v2,
+    validate_workflow_memory_v2,
 };
 use crate::{
     DurableWorktreeIdentityV1, EpochMillisV1, JobIdV1, RusqliteErrorContextV1, StoreErrorV1,
@@ -659,6 +660,53 @@ pub struct GraphItemMutationOutcomeV2 {
     value_digest: Option<Sha256Digest>,
 }
 
+/// Item-ID-ordered result of one operation in an atomic active-item mutation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GraphItemMutationEntryV2 {
+    item_id: ItemId,
+    changed: bool,
+    item_revision: Revision,
+    value_digest: Option<Sha256Digest>,
+}
+
+impl GraphItemMutationEntryV2 {
+    pub fn item_id(&self) -> &ItemId {
+        &self.item_id
+    }
+    pub const fn changed(&self) -> bool {
+        self.changed
+    }
+    pub const fn item_revision(&self) -> Revision {
+        self.item_revision
+    }
+    pub fn value_digest(&self) -> Option<&Sha256Digest> {
+        self.value_digest.as_ref()
+    }
+}
+
+/// Pure result of atomically mutating a bounded set of current-attempt item slots.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GraphItemsMutationOutcomeV2 {
+    state: GraphSessionStateV2,
+    changed: bool,
+    items: Vec<GraphItemMutationEntryV2>,
+}
+
+impl GraphItemsMutationOutcomeV2 {
+    pub fn state(&self) -> &GraphSessionStateV2 {
+        &self.state
+    }
+    pub fn into_state(self) -> GraphSessionStateV2 {
+        self.state
+    }
+    pub const fn changed(&self) -> bool {
+        self.changed
+    }
+    pub fn items(&self) -> &[GraphItemMutationEntryV2] {
+        &self.items
+    }
+}
+
 impl GraphItemMutationOutcomeV2 {
     pub fn state(&self) -> &GraphSessionStateV2 {
         &self.state
@@ -1270,6 +1318,72 @@ impl GraphSessionStateV2 {
             changed: true,
             item_revision: memory.item_revision,
             value_digest: memory.value_digest,
+        })
+    }
+
+    pub fn mutate_active_items_v2(
+        &self,
+        expected_attempt_id: &AttemptId,
+        mutations: &[ActiveItemMutationRequestV2],
+        now: UnixMillis,
+    ) -> Result<GraphItemsMutationOutcomeV2, GraphMutationErrorV2> {
+        let memory = self.workflow_memory.mutate_active_items_v2(
+            &self.snapshot,
+            &self.trace,
+            expected_attempt_id,
+            mutations,
+            now,
+        )?;
+        let changed = memory.outcomes.iter().any(|outcome| outcome.changed);
+        let items = memory
+            .outcomes
+            .into_iter()
+            .map(|outcome| GraphItemMutationEntryV2 {
+                item_id: outcome.item_id,
+                changed: outcome.changed,
+                item_revision: outcome.item_revision,
+                value_digest: outcome.value_digest,
+            })
+            .collect();
+        if !changed {
+            return Ok(GraphItemsMutationOutcomeV2 {
+                state: self.clone(),
+                changed: false,
+                items,
+            });
+        }
+        let workspace_revision = self
+            .workspace_revision
+            .checked_next()
+            .map_err(GraphMutationErrorV2::Domain)?;
+        let trace = SessionTraceV2::from_parts(
+            self.trace.session_id().clone(),
+            self.trace.lifecycle(),
+            self.trace
+                .revision()
+                .checked_next()
+                .map_err(GraphMutationErrorV2::Domain)?,
+            self.trace.attempts().to_vec(),
+        )
+        .map_err(GraphMutationErrorV2::Domain)?;
+        let state = Self::new_with_goal_state(
+            workspace_revision,
+            self.task_title.clone(),
+            self.snapshot.clone(),
+            trace,
+            self.counters.clone(),
+            self.attempt_metadata.clone(),
+            memory.memory,
+            self.goal_state.clone(),
+            self.created_at,
+            self.completed_at,
+            self.cancelled_at,
+            self.cancel_reason.clone(),
+        )?;
+        Ok(GraphItemsMutationOutcomeV2 {
+            state,
+            changed: true,
+            items,
         })
     }
 

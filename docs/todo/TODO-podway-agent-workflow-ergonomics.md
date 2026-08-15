@@ -125,6 +125,13 @@ receipt retention, response-loss reconciliation, crash recovery, and one-writer
 sequencing use the established durable-job machinery. Existing item rows and
 job/receipt storage are reused; no SQLite migration is introduced.
 
+`V2AGT-003` establishes the bounded pure transition, deterministic per-item
+outcomes, internal durable command and terminal projection, atomic Store commit,
+rollback, replay, and restart behavior. It accepts already resolved artifact
+values so the existing safe-open and completion-revalidation boundary remains
+available to the daemon. Route registration, request decoding, public schema
+assets, CLI input, and automation guidance remain owned by `V2AGT-004`.
+
 ### Recovery recipes
 
 Keep `podway.error/v1`, stable error codes, retryability, admission facts, and

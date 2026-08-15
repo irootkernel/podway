@@ -14,9 +14,10 @@ use podway_core::{
 };
 use podway_store::codec::encode_persisted_terminal_receipt_v1;
 use podway_store::{
-    ActiveItemMutationV2, AdmissionSessionIdentityV1, AdmitRequestV1, AttemptMetadataV2,
-    CanonicalExecutionJsonV1, DurableWorktreeIdentityV1, GraphNodeCounterV2, GraphSessionStateV2,
-    GraphStartCurrentTaskV2, IdempotencyKeyV1, JobStateV1, PersistedGraphMutationFailureV2,
+    ActiveItemMutationRequestV2, ActiveItemMutationV2, AdmissionSessionIdentityV1, AdmitRequestV1,
+    AttemptMetadataV2, CanonicalExecutionJsonV1, DurableWorktreeIdentityV1, GraphNodeCounterV2,
+    GraphSessionStateV2, GraphStartCurrentTaskV2, IdempotencyKeyV1, JobStateV1,
+    PersistedGraphItemMutationV2, PersistedGraphMutationFailureV2,
     PersistedGraphTerminalOperationV2, PersistedResponseContextV1, ProcedureSnapshotV2,
     RevisionAttemptItemPreconditionsV1, SqliteStoreOptionsV1, SqliteStoreV1, StoreContractV1,
     StoreErrorV1, StoreFailpointActionV1, StoreFailpointV1, StoreGraphMutationContractV2,
@@ -823,6 +824,39 @@ fn action_runtime_admit_request(
         )
         .unwrap(),
     )
+}
+
+fn admit_item_record_many_and_claim(
+    store: &SqliteStoreV1,
+    state: &GraphSessionStateV2,
+    key: &str,
+    job_number: u64,
+) -> podway_store::ClaimedJobV1 {
+    let active = state.trace().active_attempt().unwrap();
+    let request = action_runtime_admit_request(
+        state,
+        DomainCommand::ItemRecordMany,
+        "item.record_many",
+        key,
+        job_number,
+        digest('9'),
+        RevisionAttemptItemPreconditionsV1::new(
+            Some(state.trace().revision()),
+            Some(active.attempt_id().clone()),
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    store.admit(&identity(), request).unwrap();
+    store
+        .claim_next(
+            &identity(),
+            WorkerIdV1::new("v2-item-batch-worker").unwrap(),
+            UnixMillis::new(31),
+        )
+        .unwrap()
+        .unwrap()
 }
 
 #[test]
@@ -2963,6 +2997,183 @@ fn graph_item_no_op_commits_terminal_receipt_without_replacing_state() {
     assert_eq!(
         reopened.read_graph_session_v2(&identity()).unwrap(),
         Some(current)
+    );
+}
+
+#[test]
+fn graph_item_batch_rolls_back_then_recovers_and_commits_one_durable_effect() {
+    let temporary = TempDir::new().unwrap();
+    let current = graph_state(6_700, 6_710, 10);
+    {
+        let seed = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
+        seed.create_graph_session_v2(&identity(), current.clone())
+            .unwrap();
+    }
+    let options = SqliteStoreOptionsV1::new(8)
+        .unwrap()
+        .with_failpoint(Some(
+            StoreFailpointV1::TerminalAfterRelationalStateUpdatesBeforeJobTerminalUpdate,
+        ))
+        .with_failpoint_action(StoreFailpointActionV1::ReturnInjectedStorageIo);
+    let store = open(&temporary, options, 11);
+    let claimed =
+        admit_item_record_many_and_claim(&store, &current, "v2-item-batch-rollback", 6_720);
+    let job_id = claimed.job().job_id().clone();
+    let active = current.trace().active_attempt().unwrap();
+    let outcome = current
+        .mutate_active_items_v2(
+            active.attempt_id(),
+            &[
+                ActiveItemMutationRequestV2::new(
+                    ItemId::new("note").unwrap(),
+                    Revision::ZERO,
+                    ActiveItemMutationV2::Set {
+                        value: "recorded".to_owned(),
+                    },
+                ),
+                ActiveItemMutationRequestV2::new(
+                    ItemId::new("done").unwrap(),
+                    Revision::ZERO,
+                    ActiveItemMutationV2::Check,
+                ),
+            ],
+            UnixMillis::new(32),
+        )
+        .unwrap();
+    let operation = PersistedGraphTerminalOperationV2::item_mutations(
+        active.graph_node_id().clone(),
+        active.attempt_id().clone(),
+        active.number(),
+        outcome
+            .items()
+            .iter()
+            .map(|item| {
+                PersistedGraphItemMutationV2::new(
+                    item.item_id().clone(),
+                    Revision::ZERO,
+                    item.changed(),
+                    item.item_revision(),
+                    item.value_digest().cloned(),
+                )
+            })
+            .collect(),
+    )
+    .unwrap();
+    let forged_operation = PersistedGraphTerminalOperationV2::item_mutations(
+        active.graph_node_id().clone(),
+        active.attempt_id().clone(),
+        active.number(),
+        outcome
+            .items()
+            .iter()
+            .map(|item| {
+                PersistedGraphItemMutationV2::new(
+                    item.item_id().clone(),
+                    Revision::new(1),
+                    item.changed(),
+                    item.item_revision(),
+                    item.value_digest().cloned(),
+                )
+            })
+            .collect(),
+    )
+    .unwrap();
+    let next = outcome.into_state();
+    let success = TerminalResultV1::Success(DomainResult::ItemsChanged {
+        session_id: current.trace().session_id().clone(),
+        revision_before: current.trace().revision(),
+        revision_after: next.trace().revision(),
+        changed: true,
+    });
+
+    assert_eq!(
+        store.commit_graph_mutation_terminal_v2(
+            claimed.claim().clone(),
+            current.workspace_revision(),
+            current.trace().revision(),
+            Some(next.clone()),
+            success.clone(),
+            forged_operation,
+            UnixMillis::new(33),
+        ),
+        Err(StoreErrorV1::InternalInvariantViolationV1 {
+            invariant: StoreInvariantV1::TransitionMutationShape,
+        })
+    );
+
+    assert!(
+        store
+            .commit_graph_mutation_terminal_v2(
+                claimed.claim().clone(),
+                current.workspace_revision(),
+                current.trace().revision(),
+                Some(next.clone()),
+                success.clone(),
+                operation.clone(),
+                UnixMillis::new(33),
+            )
+            .is_err()
+    );
+    assert_eq!(
+        store.read_graph_session_v2(&identity()).unwrap(),
+        Some(current.clone())
+    );
+    let running = store.read_job(&identity(), &job_id).unwrap().unwrap();
+    assert_eq!(running.state(), JobStateV1::Running);
+    assert!(running.terminal_receipt().is_none());
+    drop(store);
+
+    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 34);
+    assert_eq!(reopened.startup_recovery_report().requeued_job_count(), 1);
+    let reclaimed = reopened
+        .claim_next(
+            &identity(),
+            WorkerIdV1::new("v2-item-batch-recovery-worker").unwrap(),
+            UnixMillis::new(35),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(reclaimed.job().job_id(), &job_id);
+    reopened
+        .commit_graph_mutation_terminal_v2(
+            reclaimed.claim().clone(),
+            current.workspace_revision(),
+            current.trace().revision(),
+            Some(next.clone()),
+            success,
+            operation.clone(),
+            UnixMillis::new(36),
+        )
+        .unwrap();
+    assert_eq!(
+        reopened.read_graph_session_v2(&identity()).unwrap(),
+        Some(next.clone())
+    );
+    let succeeded = reopened.read_job(&identity(), &job_id).unwrap().unwrap();
+    assert_eq!(succeeded.state(), JobStateV1::Succeeded);
+    let receipt = succeeded.terminal_receipt().unwrap();
+    assert_eq!(
+        receipt.graph_session_projection().unwrap().operation(),
+        Some(&operation)
+    );
+    assert_eq!(
+        reopened
+            .read_idempotency_lookup(
+                &identity(),
+                &IdempotencyKeyV1::new("v2-item-batch-rollback").unwrap(),
+            )
+            .unwrap()
+            .unwrap()
+            .terminal_receipt(),
+        Some(receipt)
+    );
+    drop(reopened);
+
+    let restarted = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 37);
+    assert_eq!(restarted.startup_recovery_report().requeued_job_count(), 0);
+    assert_eq!(
+        restarted.read_graph_session_v2(&identity()).unwrap(),
+        Some(next)
     );
 }
 

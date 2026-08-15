@@ -26,6 +26,7 @@ use crate::{
 };
 
 pub const MAX_OPEN_BLOCKERS_V2: usize = 64;
+pub const MAX_ACTIVE_ITEM_MUTATIONS_V2: usize = 64;
 const MAX_BLOCKER_REASON_CHARS_V2: usize = 1_000;
 
 fn invalid(reason: &'static str) -> StoreValueErrorV1 {
@@ -59,6 +60,40 @@ pub enum ActiveItemMutationV2 {
     Remove { value: String, ignore_missing: bool },
     Attach { value: ArtifactValueV1 },
     Clear,
+}
+
+/// One item mutation and its optimistic-concurrency fence in an atomic batch.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ActiveItemMutationRequestV2 {
+    item_id: ItemId,
+    expected_item_revision: Revision,
+    mutation: ActiveItemMutationV2,
+}
+
+impl ActiveItemMutationRequestV2 {
+    pub fn new(
+        item_id: ItemId,
+        expected_item_revision: Revision,
+        mutation: ActiveItemMutationV2,
+    ) -> Self {
+        Self {
+            item_id,
+            expected_item_revision,
+            mutation,
+        }
+    }
+
+    pub fn item_id(&self) -> &ItemId {
+        &self.item_id
+    }
+
+    pub const fn expected_item_revision(&self) -> Revision {
+        self.expected_item_revision
+    }
+
+    pub fn mutation(&self) -> &ActiveItemMutationV2 {
+        &self.mutation
+    }
 }
 
 /// Stable typed failures produced before a Procedure v2 graph mutation reaches persistence.
@@ -172,6 +207,13 @@ pub enum GraphMutationErrorV2 {
         blocker_id: BlockerId,
     },
     NoOpenBlockers,
+    ItemMutationBatchEmpty,
+    TooManyItemMutations {
+        maximum: u32,
+    },
+    DuplicateItemMutation {
+        item_id: ItemId,
+    },
     ItemNotFound {
         item_id: ItemId,
     },
@@ -291,6 +333,15 @@ impl fmt::Display for GraphMutationErrorV2 {
                 formatter.write_str("blocker is already resolved")
             }
             Self::NoOpenBlockers => formatter.write_str("the active attempt has no open blockers"),
+            Self::ItemMutationBatchEmpty => {
+                formatter.write_str("an item mutation batch must not be empty")
+            }
+            Self::TooManyItemMutations { .. } => {
+                formatter.write_str("an item mutation batch has too many operations")
+            }
+            Self::DuplicateItemMutation { .. } => {
+                formatter.write_str("an item mutation batch contains a duplicate item")
+            }
             Self::ItemNotFound { .. } => formatter.write_str("Procedure v2 item was not found"),
             Self::ItemRevisionConflict { .. } => {
                 formatter.write_str("Procedure v2 item revision changed")
@@ -335,6 +386,18 @@ impl From<podway_core::DomainError> for GraphMutationErrorV2 {
 
 pub(crate) struct ActiveItemMemoryMutationV2 {
     pub memory: WorkflowMemoryStateV2,
+    pub changed: bool,
+    pub item_revision: Revision,
+    pub value_digest: Option<Sha256Digest>,
+}
+
+pub(crate) struct ActiveItemsMemoryMutationV2 {
+    pub memory: WorkflowMemoryStateV2,
+    pub outcomes: Vec<ActiveItemMemoryMutationOutcomeV2>,
+}
+
+pub(crate) struct ActiveItemMemoryMutationOutcomeV2 {
+    pub item_id: ItemId,
     pub changed: bool,
     pub item_revision: Revision,
     pub value_digest: Option<Sha256Digest>,
@@ -858,6 +921,59 @@ impl WorkflowMemoryStateV2 {
             }
         }
         Ok((next, selected))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn mutate_active_items_v2(
+        &self,
+        snapshot: &ProcedureSnapshotV2,
+        trace: &SessionTraceV2,
+        expected_attempt_id: &AttemptId,
+        mutations: &[ActiveItemMutationRequestV2],
+        now: UnixMillis,
+    ) -> Result<ActiveItemsMemoryMutationV2, GraphMutationErrorV2> {
+        if mutations.is_empty() {
+            return Err(GraphMutationErrorV2::ItemMutationBatchEmpty);
+        }
+        if mutations.len() > MAX_ACTIVE_ITEM_MUTATIONS_V2 {
+            return Err(GraphMutationErrorV2::TooManyItemMutations {
+                maximum: MAX_ACTIVE_ITEM_MUTATIONS_V2 as u32,
+            });
+        }
+
+        let mut ordered = mutations.iter().collect::<Vec<_>>();
+        ordered.sort_by(|left, right| left.item_id().cmp(right.item_id()));
+        if let Some(duplicate) = ordered
+            .windows(2)
+            .find(|pair| pair[0].item_id() == pair[1].item_id())
+        {
+            return Err(GraphMutationErrorV2::DuplicateItemMutation {
+                item_id: duplicate[0].item_id().clone(),
+            });
+        }
+
+        let mut memory = self.clone();
+        let mut outcomes = Vec::with_capacity(ordered.len());
+        for request in ordered {
+            let outcome = memory.mutate_active_item_v2(
+                snapshot,
+                trace,
+                expected_attempt_id,
+                request.item_id(),
+                request.expected_item_revision(),
+                request.mutation().clone(),
+                now,
+            )?;
+            outcomes.push(ActiveItemMemoryMutationOutcomeV2 {
+                item_id: request.item_id().clone(),
+                changed: outcome.changed,
+                item_revision: outcome.item_revision,
+                value_digest: outcome.value_digest,
+            });
+            memory = outcome.memory;
+        }
+
+        Ok(ActiveItemsMemoryMutationV2 { memory, outcomes })
     }
 
     #[allow(clippy::too_many_arguments)]

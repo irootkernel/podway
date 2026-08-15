@@ -450,6 +450,7 @@ pub enum DomainCommandKind {
     ItemRemove,
     ItemAttach,
     ItemClear,
+    ItemRecordMany,
 }
 
 /// A pure domain mutation. Payload interpretation remains inside the domain rather than IPC DTOs.
@@ -478,6 +479,7 @@ pub enum DomainCommand {
     ItemRemove { item_id: ItemId },
     ItemAttach { item_id: ItemId },
     ItemClear { item_id: ItemId },
+    ItemRecordMany,
 }
 
 impl DomainCommand {
@@ -506,6 +508,7 @@ impl DomainCommand {
             Self::ItemRemove { .. } => DomainCommandKind::ItemRemove,
             Self::ItemAttach { .. } => DomainCommandKind::ItemAttach,
             Self::ItemClear { .. } => DomainCommandKind::ItemClear,
+            Self::ItemRecordMany => DomainCommandKind::ItemRecordMany,
         }
     }
 }
@@ -555,6 +558,12 @@ pub enum DomainResult {
     ItemChanged {
         session_id: SessionId,
         item_id: ItemId,
+        revision_before: Revision,
+        revision_after: Revision,
+        changed: bool,
+    },
+    ItemsChanged {
+        session_id: SessionId,
         revision_before: Revision,
         revision_after: Revision,
         changed: bool,

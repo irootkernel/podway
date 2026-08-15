@@ -2734,6 +2734,7 @@ fn durable_command_name(command: &podway_store::CommandV1) -> &'static str {
         podway_store::CommandV1::ItemRemove { .. } => "item.remove",
         podway_store::CommandV1::ItemAttach { .. } => "item.attach",
         podway_store::CommandV1::ItemClear { .. } => "item.clear",
+        podway_store::CommandV1::ItemRecordMany => "item.record_many",
     }
 }
 
@@ -2988,7 +2989,8 @@ fn validate_frozen_terminal_error(
             | PersistedGraphTerminalOperationV2::Unblock { .. }
             | PersistedGraphTerminalOperationV2::Cancel { .. }
             | PersistedGraphTerminalOperationV2::Reset { .. }
-            | PersistedGraphTerminalOperationV2::ItemMutation { .. },
+            | PersistedGraphTerminalOperationV2::ItemMutation { .. }
+            | PersistedGraphTerminalOperationV2::ItemMutations { .. },
         ) => return Err(terminal_replay_integrity_failure()),
         None => {
             let command = receipt
@@ -3443,7 +3445,8 @@ fn expected_stage_transition_v2(command: &PersistedDomainCommandV1) -> Option<&'
         | PersistedDomainCommandV1::ItemAdd { .. }
         | PersistedDomainCommandV1::ItemRemove { .. }
         | PersistedDomainCommandV1::ItemAttach { .. }
-        | PersistedDomainCommandV1::ItemClear { .. } => None,
+        | PersistedDomainCommandV1::ItemClear { .. }
+        | PersistedDomainCommandV1::ItemRecordMany => None,
     }
 }
 
@@ -3830,6 +3833,9 @@ fn graph_terminal_envelope_v2(
             }
             graph_success_terminal_envelope_v2(receipt, result)
         }
+        Some(PersistedGraphTerminalOperationV2::ItemMutations { .. }) => {
+            Err(terminal_replay_integrity_failure())
+        }
         Some(PersistedGraphTerminalOperationV2::Failure { error }) => {
             let context = terminal_response_context(receipt)?
                 .ok_or_else(terminal_replay_integrity_failure)?;
@@ -3972,6 +3978,16 @@ fn terminal_job_success_result(result: &PersistedDomainResultV1) -> TerminalJobS
             ..
         } => TerminalJobSuccessResultV1::ItemChanged {
             item_id: item_id.clone(),
+            changed: *changed,
+            revision_before: *revision_before,
+            revision_after: *revision_after,
+        },
+        PersistedDomainResultV1::ItemsChanged {
+            revision_before,
+            revision_after,
+            changed,
+            ..
+        } => TerminalJobSuccessResultV1::SessionChanged {
             changed: *changed,
             revision_before: *revision_before,
             revision_after: *revision_after,
@@ -4474,6 +4490,11 @@ fn map_graph_mutation_failure_v2(error: &PersistedGraphMutationFailureV2) -> Dis
         PersistedGraphMutationFailureV2::BlockerNotCurrent { .. }
         | PersistedGraphMutationFailureV2::BlockerAlreadyResolved { .. } => {
             DispatchFailureV1::new(DispatchFailureKindV1::BlockerNotCurrent)
+        }
+        PersistedGraphMutationFailureV2::ItemMutationBatchEmpty
+        | PersistedGraphMutationFailureV2::TooManyItemMutations { .. }
+        | PersistedGraphMutationFailureV2::DuplicateItemMutation { .. } => {
+            DispatchFailureV1::new(DispatchFailureKindV1::RequestInvalid)
         }
         PersistedGraphMutationFailureV2::ItemNotFound { .. } => {
             DispatchFailureV1::new(DispatchFailureKindV1::ItemNotFound)

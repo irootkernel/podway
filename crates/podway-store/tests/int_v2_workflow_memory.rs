@@ -13,12 +13,12 @@ use podway_core::{
     UnixMillis, WorkspaceId, canonicalize_json_v1,
 };
 use podway_store::{
-    ActiveItemMutationV2, AttemptMetadataV2, AttemptWorkflowMemoryV2, BlockerStateV2,
-    DurableWorktreeIdentityV1, EvidenceResolutionStateV2, GraphMutationErrorV2, GraphNodeCounterV2,
-    GraphSessionStateV2, ItemSlotStateV2, ProcedureSnapshotV2, SqliteStoreOptionsV1, SqliteStoreV1,
-    StoreErrorV1, StoreFailpointV1, StoreGraphStateContractV2, StoreIntegrityCheckV1,
-    StoreUnavailableReasonV1, StoreValueErrorV1, ValidatedWorkspaceRootV1, WorkflowMemoryStateV2,
-    canonical_recorded_items_json_v2,
+    ActiveItemMutationRequestV2, ActiveItemMutationV2, AttemptMetadataV2, AttemptWorkflowMemoryV2,
+    BlockerStateV2, DurableWorktreeIdentityV1, EvidenceResolutionStateV2, GraphMutationErrorV2,
+    GraphNodeCounterV2, GraphSessionStateV2, ItemSlotStateV2, MAX_ACTIVE_ITEM_MUTATIONS_V2,
+    ProcedureSnapshotV2, SqliteStoreOptionsV1, SqliteStoreV1, StoreErrorV1, StoreFailpointV1,
+    StoreGraphStateContractV2, StoreIntegrityCheckV1, StoreUnavailableReasonV1, StoreValueErrorV1,
+    ValidatedWorkspaceRootV1, WorkflowMemoryStateV2, canonical_recorded_items_json_v2,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -3533,6 +3533,168 @@ fn active_item_mutations_cover_every_type_and_completion_freezes_activation_evid
         .unwrap();
     assert_eq!(readback[0].items().items().len(), 1);
     assert_eq!(readback[0].items().items()[0].id(), &item("z-summary"));
+}
+
+#[test]
+fn active_item_batch_is_bounded_ordered_atomic_and_advances_the_session_once() {
+    let state = initial_state();
+    let active_before = state.trace().active_attempt().unwrap().clone();
+    let mutations = vec![
+        ActiveItemMutationRequestV2::new(
+            item("z-summary"),
+            Revision::ZERO,
+            ActiveItemMutationV2::Set {
+                value: "ready".to_owned(),
+            },
+        ),
+        ActiveItemMutationRequestV2::new(
+            item("c-confirm"),
+            Revision::ZERO,
+            ActiveItemMutationV2::Check,
+        ),
+        ActiveItemMutationRequestV2::new(
+            item("b-choice"),
+            Revision::ZERO,
+            ActiveItemMutationV2::Set {
+                value: "green".to_owned(),
+            },
+        ),
+        ActiveItemMutationRequestV2::new(
+            item("a-count"),
+            Revision::ZERO,
+            ActiveItemMutationV2::Set {
+                value: "7".to_owned(),
+            },
+        ),
+        ActiveItemMutationRequestV2::new(
+            item("m-tags"),
+            Revision::ZERO,
+            ActiveItemMutationV2::Add {
+                value: "locked".to_owned(),
+            },
+        ),
+        ActiveItemMutationRequestV2::new(
+            item("y-artifact"),
+            Revision::ZERO,
+            ActiveItemMutationV2::Attach {
+                value: ArtifactValueV1::local_path(
+                    "reports/result.txt",
+                    digest('c'),
+                    42,
+                    "text/plain",
+                )
+                .unwrap(),
+            },
+        ),
+    ];
+
+    let outcome = state
+        .mutate_active_items_v2(&attempt_id(1), &mutations, UnixMillis::new(11))
+        .unwrap();
+    assert!(outcome.changed());
+    assert_eq!(outcome.state().workspace_revision(), Revision::new(2));
+    assert_eq!(outcome.state().trace().revision(), Revision::new(2));
+    assert_eq!(
+        outcome.state().trace().active_attempt(),
+        Some(&active_before)
+    );
+    assert_eq!(
+        outcome
+            .items()
+            .iter()
+            .map(|entry| entry.item_id().as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "a-count",
+            "b-choice",
+            "c-confirm",
+            "m-tags",
+            "y-artifact",
+            "z-summary"
+        ]
+    );
+    assert!(outcome.items().iter().all(|entry| entry.changed()));
+    assert!(
+        outcome
+            .items()
+            .iter()
+            .all(|entry| entry.item_revision() == Revision::new(1))
+    );
+    assert_eq!(outcome.items()[4].value_digest(), Some(&digest('c')));
+
+    let next = outcome.into_state();
+    let before_failed = next.clone();
+    let error = next
+        .mutate_active_items_v2(
+            &attempt_id(1),
+            &[
+                ActiveItemMutationRequestV2::new(
+                    item("c-confirm"),
+                    Revision::new(1),
+                    ActiveItemMutationV2::Uncheck,
+                ),
+                ActiveItemMutationRequestV2::new(
+                    item("z-summary"),
+                    Revision::ZERO,
+                    ActiveItemMutationV2::Clear,
+                ),
+            ],
+            UnixMillis::new(12),
+        )
+        .unwrap_err();
+    assert_eq!(
+        error,
+        GraphMutationErrorV2::ItemRevisionConflict {
+            expected: Revision::ZERO,
+            actual: Revision::new(1),
+        }
+    );
+    assert_eq!(next, before_failed);
+
+    let no_op = next
+        .mutate_active_items_v2(
+            &attempt_id(1),
+            &[ActiveItemMutationRequestV2::new(
+                item("c-confirm"),
+                Revision::new(1),
+                ActiveItemMutationV2::Check,
+            )],
+            UnixMillis::new(12),
+        )
+        .unwrap();
+    assert!(!no_op.changed());
+    assert_eq!(no_op.state(), &next);
+
+    assert!(matches!(
+        next.mutate_active_items_v2(&attempt_id(1), &[], UnixMillis::new(12)),
+        Err(GraphMutationErrorV2::ItemMutationBatchEmpty)
+    ));
+    let duplicate = ActiveItemMutationRequestV2::new(
+        item("c-confirm"),
+        Revision::new(1),
+        ActiveItemMutationV2::Check,
+    );
+    assert!(matches!(
+        next.mutate_active_items_v2(
+            &attempt_id(1),
+            &[duplicate.clone(), duplicate],
+            UnixMillis::new(12)
+        ),
+        Err(GraphMutationErrorV2::DuplicateItemMutation { .. })
+    ));
+    let excessive = (0..=MAX_ACTIVE_ITEM_MUTATIONS_V2)
+        .map(|index| {
+            ActiveItemMutationRequestV2::new(
+                item(&format!("item-{index}")),
+                Revision::ZERO,
+                ActiveItemMutationV2::Clear,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(matches!(
+        next.mutate_active_items_v2(&attempt_id(1), &excessive, UnixMillis::new(12)),
+        Err(GraphMutationErrorV2::TooManyItemMutations { maximum: 64 })
+    ));
 }
 
 #[test]
