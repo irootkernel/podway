@@ -214,3 +214,20 @@ on August 15, 2026.
 | `V2CUT-004` | Migrate to v2-only storage | Completed | Add schema-v4 and reject nonempty legacy state without mutation. | [V2CUT dossier](archive/podway-v2-only.md) |
 | `V2CUT-005` | Synchronize product surfaces | Completed | Align machine assets, tests, current specifications, examples, and guidance. | [V2CUT dossier](archive/podway-v2-only.md) |
 | `V2CUT-006` | Pass the development gate | Completed | Pass focused coverage and complete `make test`. | [V2CUT dossier](archive/podway-v2-only.md) |
+
+## V2AGT — Agent Workflow Ergonomics
+
+Dependencies: completed `V2CUT` epic.
+
+This epic is post-v0.2.1 unreleased work. It does not advance the product
+version or authorize distribution.
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `V2AGT-001` | Adopt the agent-loop contract | Completed | Freeze the self-contained observation, atomic recording, recovery, lightweight-preset, delivery, and hardening boundaries. | [V2AGT dossier](../todo/TODO-podway-agent-workflow-ergonomics.md#accepted-design) |
+| `V2AGT-002` | Add self-contained session observation | Planned | Serve one bounded running-or-terminal observation with typed active inputs and fenced mutation templates. | [Session observation](../todo/TODO-podway-agent-workflow-ergonomics.md#session-observation) |
+| `V2AGT-003` | Build atomic multi-item recording core | Planned | Apply a bounded current-attempt item set atomically through existing state and durable-job machinery. | [Atomic recording](../todo/TODO-podway-agent-workflow-ergonomics.md#atomic-multi-item-recording) |
+| `V2AGT-004` | Expose bounded multi-item recording | Planned | Add the closed JSON-stdin CLI, route, results, receipts, and agent guidance. | [Atomic recording](../todo/TODO-podway-agent-workflow-ergonomics.md#atomic-multi-item-recording) |
+| `V2AGT-005` | Add structured recovery recipes | Planned | Return bounded read-only remediation commands for common automation failures. | [Recovery recipes](../todo/TODO-podway-agent-workflow-ergonomics.md#recovery-recipes) |
+| `V2AGT-006` | Add the small-change preset | Planned | Ship and dogfood a short verified change path without goal tracking. | [Small-change preset](../todo/TODO-podway-agent-workflow-ergonomics.md#small-change-preset) |
+| `V2AGT-007` | Harden integrated agent workflows | Planned | Review the complete epic, fix findings, close conformance, and pass the development gate. | [Verification](../todo/TODO-podway-agent-workflow-ergonomics.md#verification-and-acceptance) |
