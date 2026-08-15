@@ -1,22 +1,18 @@
-# Podway 0.2.2 release candidate notes
+# Podway 0.2.3 release candidate notes
 
-Podway 0.2.2 is a release candidate and has not been published. These notes do
-not claim a publication date or an existing `v0.2.2` tag.
+Podway 0.2.3 is a release candidate and has not been published. These notes do
+not claim a publication date or an existing `v0.2.3` tag.
 
-## Changes since 0.2.1
+## Changes since 0.2.2
 
-- Add self-contained session observation with bounded active inputs, current
-  workflow memory, and fenced mutation templates for automation clients.
-- Add atomic multi-item recording through the closed `podway record --stdin`
-  contract.
-- Add structured, read-only recovery recipes to common automation errors.
-- Ship the lightweight `small-change-v2` preset alongside `bug-fix-v2` and
-  `sw-dev-v2`.
-- Prevent different workspace UUIDs from owning the same canonical root and let
-  confirmed reset converge a proven legacy duplicate-root registry generation.
-- Preserve reset terminal replay after cold reopen so `job status`, unfiltered
-  `job list`, and `job lookup` return the immutable original response instead of
-  `WORKSPACE_STATE_UNREADABLE`.
+- During LaunchAgent replacement, wait for launchd to report the prior label as
+  unloaded before requesting the replacement bootstrap.
+- Recover an authenticated `prepared` service publication by rerunning the same
+  `podway daemon install` command without requiring an internal socket override.
+- Keep prepared endpoints unavailable to ordinary daemon clients and other
+  lifecycle commands until installation makes the receipt durable.
+- Preserve `DAEMON_UNAVAILABLE` and its public details schema while making human
+  service-lifecycle diagnostics distinguish the failure category.
 
 ## Compatibility and migration
 
@@ -37,10 +33,10 @@ Podway remains a same-user local tool rather than a multi-user security boundary
 
 The qualified, unpublished distribution contains these exact top-level artifacts:
 
-- `podway-0.2.2-aarch64-apple-darwin.tar.gz`;
-- `podway-0.2.2-aarch64-apple-darwin.tar.gz.sha256`;
-- `podway-0.2.2-aarch64-apple-darwin.provenance.json`;
-- `podway-0.2.2-aarch64-apple-darwin.dolgorae-handoff.json`.
+- `podway-0.2.3-aarch64-apple-darwin.tar.gz`;
+- `podway-0.2.3-aarch64-apple-darwin.tar.gz.sha256`;
+- `podway-0.2.3-aarch64-apple-darwin.provenance.json`;
+- `podway-0.2.3-aarch64-apple-darwin.dolgorae-handoff.json`.
 
 The archive contains both binaries, shell completions, and three built-in Procedure v2 presets: `bug-fix-v2`, `small-change-v2`, and `sw-dev-v2`. It also
 contains public schemas and specifications, canonicalization fixtures, the
@@ -58,7 +54,7 @@ CLI and its versioned JSON and local IPC contracts; the optional source-distribu
 
 ## Signing and known limitations
 
-The Podway 0.2.2 Apple Silicon release candidate is unsigned and not notarized.
+The Podway 0.2.3 Apple Silicon release candidate is unsigned and not notarized.
 Users must verify the attached SHA-256 checksum before installing a published
 artifact.
 
