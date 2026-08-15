@@ -68,6 +68,7 @@ use crate::{
         ReadNotificationV1, ReadNotificationVersionV1, ReadServiceErrorV1, ReadWaitOutcomeV1,
         ReadWaitV1,
     },
+    registry::RegistryErrorV1,
     runtime_workspace::{
         ReadonlyReconciliationResolutionV1, ResetSourceAuthorityV1, WorkspaceRuntimeErrorV1,
         WorkspaceRuntimeManagerV1, WorkspaceRuntimeObservationV1, WorkspaceSchedulerContextV1,
@@ -4896,6 +4897,9 @@ fn map_runtime_error(error: WorkspaceRuntimeErrorV1) -> DispatchFailureV1 {
             DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceInitConflict)
         }
         WorkspaceRuntimeErrorV1::Store(error) => map_store_error(error),
+        WorkspaceRuntimeErrorV1::Registry(RegistryErrorV1::WorkspaceRootOccupied { .. }) => {
+            DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceIdentityConflict)
+        }
         WorkspaceRuntimeErrorV1::Registry(_) | WorkspaceRuntimeErrorV1::Scheduler(_) => {
             DispatchFailureV1::new(DispatchFailureKindV1::DaemonUnavailable)
         }

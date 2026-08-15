@@ -791,6 +791,40 @@ fn moves_require_an_exact_previous_root_and_removal_is_exact() {
 }
 
 #[test]
+fn insert_and_move_reject_a_root_owned_by_another_workspace() {
+    let fixture = RegistryFixture::new();
+    let store = RegistryStoreV1::new(&fixture.paths);
+    let owner = workspace(60);
+    let contender = workspace(61);
+    let occupied = root("/tmp/registry-occupied");
+    let contender_root = root("/tmp/registry-contender");
+
+    store
+        .insert_or_refresh(owner.clone(), occupied.clone(), timestamp())
+        .expect("the first workspace must own the root");
+    assert!(matches!(
+        store.insert_or_refresh(contender.clone(), occupied.clone(), timestamp()),
+        Err(RegistryErrorV1::WorkspaceRootOccupied {
+            registered_workspace_uuid,
+            requested_workspace_uuid,
+            ..
+        }) if registered_workspace_uuid == owner && requested_workspace_uuid == contender
+    ));
+
+    store
+        .insert_or_refresh(contender.clone(), contender_root.clone(), timestamp())
+        .expect("the contender must own a distinct root");
+    assert!(matches!(
+        store.move_workspace(&contender, &contender_root, occupied, timestamp()),
+        Err(RegistryErrorV1::WorkspaceRootOccupied {
+            registered_workspace_uuid,
+            requested_workspace_uuid,
+            ..
+        }) if registered_workspace_uuid == owner && requested_workspace_uuid == contender
+    ));
+}
+
+#[test]
 fn registry_document_contains_only_metadata_fields() {
     let fixture = RegistryFixture::new();
     let store = RegistryStoreV1::new(&fixture.paths);
@@ -855,8 +889,13 @@ fn reset_replacement_publishes_only_old_or_target_identity_at_the_exact_root() {
         RegistryFailpointActionV1::ReturnError,
     );
     assert!(matches!(
-        before_rename
-            .replace_for_reset(&previous, target.clone(), exact_root.clone(), timestamp(),),
+        before_rename.replace_for_reset(
+            &previous,
+            std::slice::from_ref(&previous),
+            target.clone(),
+            exact_root.clone(),
+            timestamp(),
+        ),
         Err(RegistryErrorV1::Failpoint {
             point: RegistryFailpointV1::BeforeRename
         })
@@ -868,7 +907,13 @@ fn reset_replacement_publishes_only_old_or_target_identity_at_the_exact_root() {
     assert!(old_document.lookup(&target).is_none());
 
     let replacement = RegistryStoreV1::new(&fixture.paths)
-        .replace_for_reset(&previous, target.clone(), exact_root.clone(), timestamp())
+        .replace_for_reset(
+            &previous,
+            std::slice::from_ref(&previous),
+            target.clone(),
+            exact_root.clone(),
+            timestamp(),
+        )
         .expect("one publication must replace the reset identity");
     assert_eq!(replacement.workspace_uuid(), &target);
     let target_document = RegistryStoreV1::new(&fixture.paths)
@@ -884,6 +929,74 @@ fn reset_replacement_publishes_only_old_or_target_identity_at_the_exact_root() {
     );
 
     RegistryStoreV1::new(&fixture.paths)
-        .replace_for_reset(&previous, target.clone(), exact_root, timestamp())
+        .replace_for_reset(
+            &previous,
+            std::slice::from_ref(&target),
+            target.clone(),
+            exact_root,
+            timestamp(),
+        )
         .expect("replaying an already-published target must be idempotent");
+}
+
+#[test]
+fn reset_replacement_atomically_converges_a_legacy_duplicate_root_generation() {
+    let fixture = RegistryFixture::new();
+    let stale = workspace(80);
+    let previous = workspace(81);
+    let unrelated = workspace(82);
+    let target = workspace(83);
+    let exact_root = root("/tmp/registry-reset-duplicate");
+    let unrelated_root = root("/tmp/registry-reset-unrelated");
+    let bytes = format!(
+        concat!(
+            "{{\"schema\":\"podway.registry/v1\",\"workspaces\":[",
+            "{{\"last_known_root\":\"{}\",\"last_seen_at\":\"{}\",\"workspace_uuid\":\"{}\"}},",
+            "{{\"last_known_root\":\"{}\",\"last_seen_at\":\"{}\",\"workspace_uuid\":\"{}\"}},",
+            "{{\"last_known_root\":\"{}\",\"last_seen_at\":\"{}\",\"workspace_uuid\":\"{}\"}}]}}"
+        ),
+        exact_root.as_encoded(),
+        timestamp().as_str(),
+        stale,
+        exact_root.as_encoded(),
+        timestamp().as_str(),
+        previous,
+        unrelated_root.as_encoded(),
+        timestamp().as_str(),
+        unrelated,
+    );
+    fs::create_dir_all(fixture.registry_parent()).expect("registry parent must exist");
+    set_mode(fixture.registry_parent(), 0o700);
+    write_private_registry(fixture.registry_path(), bytes.as_bytes());
+
+    let expected_generation = vec![stale.clone(), previous.clone()];
+    RegistryStoreV1::new(&fixture.paths)
+        .replace_for_reset(
+            &previous,
+            &expected_generation,
+            target.clone(),
+            exact_root.clone(),
+            timestamp(),
+        )
+        .expect("explicit reset must converge the proven duplicate-root generation");
+
+    let registry = RegistryStoreV1::new(&fixture.paths)
+        .load()
+        .expect("the converged registry must remain valid");
+    assert!(registry.lookup(&stale).is_none());
+    assert!(registry.lookup(&previous).is_none());
+    assert_eq!(
+        registry
+            .lookup(&target)
+            .expect("the target must own the reset root")
+            .last_known_root(),
+        &exact_root
+    );
+    assert_eq!(
+        registry
+            .lookup(&unrelated)
+            .expect("unrelated metadata must remain")
+            .last_known_root(),
+        &unrelated_root
+    );
 }

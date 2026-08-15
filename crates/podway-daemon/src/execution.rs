@@ -2420,6 +2420,7 @@ pub enum ResetStoreInspectionV1 {
     Readable,
     Absent,
     Unreadable(StoreErrorV1),
+    GitIdentityDetached,
 }
 
 /// Manager-issued proof that a particular inspected source has no readable Store. Its fields and
@@ -2446,11 +2447,20 @@ impl ValidatedUnavailableStoreV1 {
         }
     }
 
+    pub(crate) fn git_identity_detached(source: DurableWorktreeIdentityV1) -> Self {
+        Self {
+            source,
+            inspection: ResetStoreInspectionV1::GitIdentityDetached,
+        }
+    }
+
     fn matches_source(&self, source: &DurableWorktreeIdentityV1) -> bool {
         &self.source == source
             && matches!(
                 &self.inspection,
-                ResetStoreInspectionV1::Absent | ResetStoreInspectionV1::Unreadable(_)
+                ResetStoreInspectionV1::Absent
+                    | ResetStoreInspectionV1::Unreadable(_)
+                    | ResetStoreInspectionV1::GitIdentityDetached
             )
     }
 }

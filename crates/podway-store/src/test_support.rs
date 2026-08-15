@@ -55,6 +55,41 @@ pub fn downgrade_to_schema_v3_with_legacy_snapshot(
     Ok(())
 }
 
+/// Replaces the persisted Git directory fingerprints without changing the workspace UUID or root.
+pub fn detach_git_identity(database_path: &Path) -> Result<(), String> {
+    let connection = Connection::open(database_path).map_err(|error| error.to_string())?;
+    let changed = connection
+        .execute(
+            "UPDATE workspace_state SET git_common_fingerprint = ?1, \
+             git_worktree_fingerprint = ?2 WHERE singleton = 1",
+            params![
+                format!("sha256:{}", "1".repeat(64)),
+                format!("sha256:{}", "2".repeat(64)),
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+    if changed != 1 {
+        return Err(format!("expected one workspace binding, changed {changed}"));
+    }
+    Ok(())
+}
+
+/// Replaces the persisted workspace root with another valid encoded absolute path.
+pub fn detach_workspace_root(database_path: &Path) -> Result<(), String> {
+    let connection = Connection::open(database_path).map_err(|error| error.to_string())?;
+    let changed = connection
+        .execute(
+            "UPDATE workspace_state SET last_validated_root = 'podway.unix-path/v1:2f746d70' \
+             WHERE singleton = 1",
+            [],
+        )
+        .map_err(|error| error.to_string())?;
+    if changed != 1 {
+        return Err(format!("expected one workspace binding, changed {changed}"));
+    }
+    Ok(())
+}
+
 /// Rewrites one start terminal receipt to its pre-PSTRT shape in both durable copies.
 pub fn rewrite_start_terminal_as_legacy(
     database_path: &Path,

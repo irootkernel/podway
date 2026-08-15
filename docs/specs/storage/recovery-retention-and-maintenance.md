@@ -48,6 +48,12 @@ The daemon is the sole writer. The implemented registry uses the user-global
 location above. Updates use a same-directory temporary write, fsync where
 appropriate, and atomic rename.
 
+Workspace UUIDs and exact roots are each unique in newly written registry state.
+Bootstrap, refresh, and move reject an exact root owned by another UUID. A legacy
+duplicate-root document remains readable only for isolated diagnosis and explicit
+reset recovery; ordinary activation does not add another owner or silently choose
+one.
+
 The registry contains no task title, procedure, graph node, attempt, item, blocker, artifact, or job payload data.
 
 ## Moved worktrees
@@ -84,15 +90,19 @@ Podway does not automatically discard state.
 
 Because the database may be unreadable, reset-all is a daemon maintenance operation guarded by a filesystem marker.
 
-1. validate the Git worktree and path containment;
-2. acquire the workspace maintenance lock;
+1. validate the Git worktree and path containment; when persisted Git directory
+   fingerprints are detached, reset still requires an exact stored-root match and
+   registry membership for the persisted workspace UUID;
+2. acquire the workspace maintenance lock and bind the exact registry-root UUID
+   generation to Store identity or an existing reset marker;
 3. stop its scheduler and reject new admissions;
 4. close all database handles;
 5. create `.podway/runtime/reset.marker` atomically; newly published v2 markers contain the operation ID, idempotency key, request digest, predecessor and target workspace UUIDs, submitted time, and original response request ID; v1 markers remain readable only so an upgrade can finish an already-published reset;
 6. remove `state.sqlite3`, `-wal`, and `-shm` files;
 7. create a new database using the target workspace UUID;
 8. insert a terminal workspace-scoped reset job and v3 idempotency receipt into the new database, including the lookup command and full target-workspace response context;
-9. update the global registry;
+9. compare the registry-root generation again and atomically replace every stale
+   exact-root entry with the target UUID;
 10. remove the marker;
 11. restart the scheduler.
 

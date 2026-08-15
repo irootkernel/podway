@@ -2,10 +2,12 @@
 
 use super::{int_v2run003_runtime as runtime, support_phase4_workspace};
 
-use std::{fs, path::Path, sync::Arc};
+use std::{fs, os::unix::fs::PermissionsExt, path::Path, sync::Arc};
 
-use podway_core::WorkspaceId;
-use podway_protocol::{PreconditionsV1, ResponseEnvelopeV2, WorktreeSelectorWireV1};
+use podway_core::{UnixMillis, WorkspaceId, canonicalize_json_v1};
+use podway_daemon::{execution::ResetStoreInspectionV1, workspace::ResetMarkerV1};
+use podway_protocol::{PreconditionsV1, RequestIdV1, ResponseEnvelopeV2, WorktreeSelectorWireV1};
+use podway_store::{CanonicalRequestDigestV1, IdempotencyKeyV1, JobIdV1};
 use serde_json::{Map, json};
 
 fn selector_with_workspace(path: &Path, workspace: WorkspaceId) -> WorktreeSelectorWireV1 {
@@ -16,6 +18,138 @@ fn selector_with_workspace(path: &Path, workspace: WorkspaceId) -> WorktreeSelec
         Some(workspace),
     )
     .unwrap()
+}
+
+#[test]
+fn bootstrap_rejects_a_new_workspace_identity_at_an_already_registered_root() {
+    let fixture = support_phase4_workspace::git_worktrees();
+    runtime::make_runtime_private(fixture.main());
+    let manager = Arc::new(runtime::manager(fixture.temporary_path()));
+    let initialized = manager
+        .bootstrap(
+            support_phase4_workspace::selector(fixture.main()),
+            runtime::observation(),
+        )
+        .unwrap();
+    let expected_registered_workspace = initialized
+        .context_snapshot()
+        .binding()
+        .identity()
+        .workspace_uuid()
+        .clone();
+    let database_path = fixture.main().join(".podway/runtime/state.sqlite3");
+    drop(initialized);
+    drop(manager);
+
+    for path in [
+        database_path.clone(),
+        database_path.with_extension("sqlite3-wal"),
+        database_path.with_extension("sqlite3-shm"),
+    ] {
+        match fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!("fixture database removal failed: {error}"),
+        }
+    }
+
+    let manager = runtime::manager(fixture.temporary_path());
+    let error = match manager.bootstrap(
+        support_phase4_workspace::selector(fixture.main()),
+        runtime::observation(),
+    ) {
+        Ok(_) => panic!("bootstrap must not create a second workspace UUID at the same root"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        podway_daemon::runtime_workspace::WorkspaceRuntimeErrorV1::Registry(
+            podway_daemon::registry::RegistryErrorV1::WorkspaceRootOccupied {
+                registered_workspace_uuid,
+                ..
+            }
+        ) if registered_workspace_uuid == expected_registered_workspace
+    ));
+    assert!(
+        !database_path.exists(),
+        "root ownership must be rejected before Store creation"
+    );
+}
+
+#[test]
+fn reset_rejects_a_store_bound_to_another_exact_root() {
+    let fixture = support_phase4_workspace::git_worktrees();
+    runtime::make_runtime_private(fixture.main());
+    let manager = runtime::manager(fixture.temporary_path());
+    let initialized = manager
+        .bootstrap(
+            support_phase4_workspace::selector(fixture.main()),
+            runtime::observation(),
+        )
+        .unwrap();
+    let database_path = fixture.main().join(".podway/runtime/state.sqlite3");
+    drop(initialized);
+    drop(manager);
+
+    podway_store::test_support::detach_workspace_root(&database_path).unwrap();
+
+    let manager = runtime::manager(fixture.temporary_path());
+    let error = match manager
+        .registered_reset_source_authority(support_phase4_workspace::selector(fixture.main()))
+    {
+        Ok(_) => panic!("a copied Store root must not authorize destructive reset"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        podway_daemon::runtime_workspace::WorkspaceRuntimeErrorV1::ResetSourceAmbiguous
+    ));
+}
+
+#[test]
+fn reset_marker_resume_accepts_an_exact_root_with_detached_git_identity() {
+    let fixture = support_phase4_workspace::git_worktrees();
+    runtime::make_runtime_private(fixture.main());
+    let manager = runtime::manager(fixture.temporary_path());
+    let initialized = manager
+        .bootstrap(
+            support_phase4_workspace::selector(fixture.main()),
+            runtime::observation(),
+        )
+        .unwrap();
+    let old_workspace = initialized
+        .context_snapshot()
+        .binding()
+        .identity()
+        .workspace_uuid()
+        .clone();
+    let database_path = fixture.main().join(".podway/runtime/state.sqlite3");
+    drop(initialized);
+    drop(manager);
+
+    podway_store::test_support::detach_git_identity(&database_path).unwrap();
+    let marker = ResetMarkerV1::new_with_response_request_id(
+        JobIdV1::new("00000000-0000-4000-8000-000000009910").unwrap(),
+        IdempotencyKeyV1::new("detached-marker-resume").unwrap(),
+        CanonicalRequestDigestV1::new(format!("sha256:{}", "9".repeat(64))).unwrap(),
+        old_workspace.clone(),
+        WorkspaceId::new("00000000-0000-4000-8000-000000009911").unwrap(),
+        UnixMillis::new(1_700_000_000_123),
+        RequestIdV1::new("00000000-0000-4000-8000-000000009912").unwrap(),
+    );
+    let marker_path = fixture.main().join(".podway/runtime/reset.marker");
+    fs::write(&marker_path, marker.canonical_bytes().unwrap()).unwrap();
+    fs::set_permissions(&marker_path, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let manager = runtime::manager(fixture.temporary_path());
+    let authority = manager
+        .registered_reset_source_authority(support_phase4_workspace::selector(fixture.main()))
+        .expect("the durable marker and exact Store root must authorize reset recovery");
+    assert_eq!(authority.registry_previous_workspace_uuid(), &old_workspace);
+    assert!(matches!(
+        authority.store_inspection(),
+        ResetStoreInspectionV1::GitIdentityDetached
+    ));
 }
 
 #[test]
@@ -35,6 +169,7 @@ fn v2cut_legacy_schema_v3_rejects_then_confirmed_reset_all_replaces_and_cold_reo
         .identity()
         .workspace_uuid()
         .clone();
+    let registry_path = manager.registry().registry_path().to_path_buf();
     drop(initialized);
     drop(manager);
 
@@ -44,9 +179,35 @@ fn v2cut_legacy_schema_v3_rejects_then_confirmed_reset_all_replaces_and_cold_reo
         "podway.procedure/v1",
     )
     .unwrap();
+    podway_store::test_support::detach_git_identity(&database_path).unwrap();
+
+    let stale_workspace = WorkspaceId::new("00000000-0000-4000-8000-000000009901").unwrap();
+    let mut registry: serde_json::Value =
+        serde_json::from_slice(&fs::read(&registry_path).unwrap()).unwrap();
+    let workspaces = registry["workspaces"].as_array_mut().unwrap();
+    let current = workspaces
+        .iter()
+        .find(|entry| entry["workspace_uuid"] == old_workspace.as_str())
+        .unwrap();
+    workspaces.push(json!({
+        "last_known_root": current["last_known_root"],
+        "last_seen_at": "2026-07-14T12:34:56.789Z",
+        "workspace_uuid": stale_workspace,
+    }));
+    workspaces.sort_by(|left, right| {
+        left["workspace_uuid"]
+            .as_str()
+            .cmp(&right["workspace_uuid"].as_str())
+    });
+    fs::write(&registry_path, canonicalize_json_v1(&registry).unwrap()).unwrap();
 
     let selector = selector_with_workspace(fixture.main(), old_workspace.clone());
     let manager = Arc::new(runtime::manager(fixture.temporary_path()));
+    let authority = manager
+        .registered_reset_source_authority(support_phase4_workspace::selector(fixture.main()))
+        .expect("the local Store binding must select the reset predecessor");
+    assert_eq!(authority.registry_previous_workspace_uuid(), &old_workspace);
+    assert_eq!(authority.registry_root_workspace_uuids().len(), 2);
     let dispatcher = runtime::dispatcher(Arc::clone(&manager), "v2cut-reset-recovery");
     let rejected = runtime::request(
         95_002,
@@ -83,6 +244,20 @@ fn v2cut_legacy_schema_v3_rejects_then_confirmed_reset_all_replaces_and_cold_reo
     let new_workspace = reset_output.workspace().unwrap().uuid().clone();
     assert_ne!(new_workspace, old_workspace);
     assert_eq!(reset_output.command().as_str(), "workspace.reset_all");
+    let registry = manager.registry().load().unwrap();
+    assert!(registry.lookup(&old_workspace).is_none());
+    assert!(registry.lookup(&stale_workspace).is_none());
+    assert_eq!(
+        registry
+            .lookup(&new_workspace)
+            .expect("the reset target must be the sole owner of the worktree root")
+            .last_known_root()
+            .unix_bytes(),
+        fs::canonicalize(fixture.main())
+            .unwrap()
+            .as_os_str()
+            .as_encoded_bytes()
+    );
     drop(dispatcher);
     drop(manager);
 

@@ -16,6 +16,9 @@ item, blocker, or session-scoped legacy job exists, migration rolls back without
 changing `user_version`, migration rows, or task data and returns
 `LEGACY_PROCEDURE_STATE_UNSUPPORTED`. Podway never converts or deletes that state.
 After the owner backs it up, `podway reset --all` is the supported clean recovery.
+Reset may inspect only the validated predecessor workspace binding from such a
+database to disambiguate stale same-root registry metadata. This read-only identity
+inspection does not migrate, accept, open, convert, or delete the legacy task state.
 
 An empty predecessor or one containing only Procedure v2 and shared operational
 state migrates atomically to v4. The migration drops only obsolete tables and keeps

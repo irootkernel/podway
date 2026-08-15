@@ -252,3 +252,11 @@ installed v0.2.1 runtime rejected the preserved workspace state with
 `LEGACY_PROCEDURE_STATE_UNSUPPORTED`; the validator did not mutate that state.
 This record does not claim distribution readiness, upstream publication,
 installation, or runtime activation, and `make dist` was not run.
+
+## V2REC — Workspace Recovery Conformance
+
+Dependencies: completed `V2AGT` epic.
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `V2REC-001` | Repair workspace identity recovery | Completed | Prevent duplicate-root workspace identities and make confirmed reset atomically converge a proven legacy registry generation. | [V2REC dossier](archive/podway-workspace-recovery-conformance.md) |

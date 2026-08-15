@@ -318,6 +318,14 @@ pub enum RegistryErrorV1 {
         registered_root: ValidatedWorkspaceRootV1,
         supplied_root: ValidatedWorkspaceRootV1,
     },
+    WorkspaceRootOccupied {
+        registered_workspace_uuid: WorkspaceId,
+        requested_workspace_uuid: WorkspaceId,
+        root: ValidatedWorkspaceRootV1,
+    },
+    ResetRootGenerationChanged {
+        root: ValidatedWorkspaceRootV1,
+    },
     WorkspaceNotRegistered {
         workspace_uuid: WorkspaceId,
     },
@@ -414,6 +422,20 @@ impl fmt::Display for RegistryErrorV1 {
                 "workspace {workspace_uuid} is registered at {}, not {}",
                 registered_root.as_encoded(),
                 supplied_root.as_encoded()
+            ),
+            Self::WorkspaceRootOccupied {
+                registered_workspace_uuid,
+                requested_workspace_uuid,
+                root,
+            } => write!(
+                formatter,
+                "workspace root {} is registered to {registered_workspace_uuid}, not {requested_workspace_uuid}",
+                root.as_encoded()
+            ),
+            Self::ResetRootGenerationChanged { root } => write!(
+                formatter,
+                "workspace root {} registry generation changed during reset",
+                root.as_encoded()
             ),
             Self::WorkspaceNotRegistered { workspace_uuid } => {
                 write!(formatter, "workspace {workspace_uuid} is not registered")
@@ -531,6 +553,27 @@ impl RegistryStoreV1 {
             .map(|registry| registry.lookup(workspace_uuid).cloned())
     }
 
+    /// Rejects bootstrap before Store creation when another workspace already owns the root.
+    pub(crate) fn require_root_available(
+        &self,
+        requested_workspace_uuid: &WorkspaceId,
+        root: &ValidatedWorkspaceRootV1,
+    ) -> Result<(), RegistryErrorV1> {
+        self.with_locked(|parent, current_uid| {
+            let registry = read_registry_v1(&self.registry_path, parent, current_uid)?;
+            if let Some(owner) = registry.workspaces.iter().find(|entry| {
+                entry.last_known_root == *root && entry.workspace_uuid != *requested_workspace_uuid
+            }) {
+                return Err(RegistryErrorV1::WorkspaceRootOccupied {
+                    registered_workspace_uuid: owner.workspace_uuid.clone(),
+                    requested_workspace_uuid: requested_workspace_uuid.clone(),
+                    root: root.clone(),
+                });
+            }
+            Ok(())
+        })
+    }
+
     /// Adds a new workspace observation or refreshes the timestamp for the exact same root.
     ///
     /// A UUID associated with a different root is rejected; callers must use
@@ -550,6 +593,16 @@ impl RegistryStoreV1 {
 
         self.with_locked(|parent, current_uid| {
             let mut registry = read_registry_v1(&self.registry_path, parent, current_uid)?;
+            if let Some(owner) = registry.workspaces.iter().find(|current| {
+                current.last_known_root == last_known_root
+                    && current.workspace_uuid != workspace_uuid
+            }) {
+                return Err(RegistryErrorV1::WorkspaceRootOccupied {
+                    registered_workspace_uuid: owner.workspace_uuid.clone(),
+                    requested_workspace_uuid: workspace_uuid,
+                    root: last_known_root,
+                });
+            }
             match registry
                 .workspaces
                 .binary_search_by(|current| current.workspace_uuid.cmp(&workspace_uuid))
@@ -609,6 +662,16 @@ impl RegistryStoreV1 {
                     supplied_root: previous_root.clone(),
                 });
             }
+            if let Some(owner) = registry.workspaces.iter().find(|entry| {
+                entry.last_known_root == *updated.last_known_root()
+                    && entry.workspace_uuid != *workspace_uuid
+            }) {
+                return Err(RegistryErrorV1::WorkspaceRootOccupied {
+                    registered_workspace_uuid: owner.workspace_uuid.clone(),
+                    requested_workspace_uuid: workspace_uuid.clone(),
+                    root: updated.last_known_root().clone(),
+                });
+            }
             registry.workspaces[index] = updated.clone();
             persist_registry_v1(self, parent, current_uid, &registry)?;
             Ok(updated)
@@ -623,6 +686,7 @@ impl RegistryStoreV1 {
     pub(crate) fn replace_for_reset(
         &self,
         previous_uuid: &WorkspaceId,
+        expected_root_workspace_uuids: &[WorkspaceId],
         target_uuid: WorkspaceId,
         exact_root: ValidatedWorkspaceRootV1,
         seen_at: Rfc3339MillisV1,
@@ -633,16 +697,17 @@ impl RegistryStoreV1 {
 
         self.with_locked(|parent, current_uid| {
             let mut registry = read_registry_v1(&self.registry_path, parent, current_uid)?;
-            let previous_index = registry
+            let observed_root_workspace_uuids = registry
                 .workspaces
-                .binary_search_by(|entry| entry.workspace_uuid.cmp(previous_uuid));
-            let target_index = registry
-                .workspaces
-                .binary_search_by(|entry| entry.workspace_uuid.cmp(&target_uuid));
+                .iter()
+                .filter(|entry| entry.last_known_root == exact_root)
+                .map(|entry| entry.workspace_uuid.clone())
+                .collect::<Vec<_>>();
+            if observed_root_workspace_uuids != expected_root_workspace_uuids {
+                return Err(RegistryErrorV1::ResetRootGenerationChanged { root: exact_root });
+            }
             if let Some(conflict) = registry.workspaces.iter().find(|entry| {
-                entry.last_known_root == exact_root
-                    && entry.workspace_uuid != *previous_uuid
-                    && entry.workspace_uuid != target_uuid
+                entry.workspace_uuid == target_uuid && entry.last_known_root != exact_root
             }) {
                 return Err(RegistryErrorV1::WorkspaceRootConflict {
                     workspace_uuid: target_uuid.clone(),
@@ -650,73 +715,17 @@ impl RegistryStoreV1 {
                     supplied_root: exact_root,
                 });
             }
-
-            if previous_uuid == &target_uuid {
-                let index =
-                    previous_index.map_err(|_| RegistryErrorV1::WorkspaceNotRegistered {
-                        workspace_uuid: previous_uuid.clone(),
-                    })?;
-                {
-                    let current = &mut registry.workspaces[index];
-                    if current.last_known_root != exact_root {
-                        return Err(RegistryErrorV1::WorkspaceRootConflict {
-                            workspace_uuid: previous_uuid.clone(),
-                            registered_root: current.last_known_root.clone(),
-                            supplied_root: exact_root,
-                        });
-                    }
-                    current.last_seen_at = target.last_seen_at.clone();
-                }
-                let updated = registry.workspaces[index].clone();
-                persist_registry_v1(self, parent, current_uid, &registry)?;
-                return Ok(updated);
-            }
-
-            if let Ok(index) = target_index {
-                let current = &registry.workspaces[index];
-                if current.last_known_root != exact_root {
-                    return Err(RegistryErrorV1::WorkspaceRootConflict {
-                        workspace_uuid: target_uuid,
-                        registered_root: current.last_known_root.clone(),
-                        supplied_root: exact_root,
-                    });
-                }
-                if let Ok(previous_index) = previous_index {
-                    let previous = &registry.workspaces[previous_index];
-                    if previous.last_known_root != exact_root {
-                        return Err(RegistryErrorV1::WorkspaceRootConflict {
-                            workspace_uuid: previous_uuid.clone(),
-                            registered_root: previous.last_known_root.clone(),
-                            supplied_root: exact_root,
-                        });
-                    }
-                    registry.workspaces.remove(previous_index);
-                    let index = registry
-                        .workspaces
-                        .binary_search_by(|entry| entry.workspace_uuid.cmp(&target_uuid))
-                        .expect("target entry remains after removing a different UUID");
-                    registry.workspaces[index].last_seen_at = target.last_seen_at.clone();
-                } else {
-                    registry.workspaces[index].last_seen_at = target.last_seen_at.clone();
-                }
-                persist_registry_v1(self, parent, current_uid, &registry)?;
-                return Ok(target);
-            }
-
-            let previous_index =
-                previous_index.map_err(|_| RegistryErrorV1::WorkspaceNotRegistered {
+            let target_already_published =
+                observed_root_workspace_uuids.as_slice() == std::slice::from_ref(&target_uuid);
+            if !target_already_published && !observed_root_workspace_uuids.contains(previous_uuid) {
+                return Err(RegistryErrorV1::WorkspaceNotRegistered {
                     workspace_uuid: previous_uuid.clone(),
-                })?;
-            let previous = &registry.workspaces[previous_index];
-            if previous.last_known_root != exact_root {
-                return Err(RegistryErrorV1::WorkspaceRootConflict {
-                    workspace_uuid: previous_uuid.clone(),
-                    registered_root: previous.last_known_root.clone(),
-                    supplied_root: exact_root,
                 });
             }
 
-            registry.workspaces.remove(previous_index);
+            registry
+                .workspaces
+                .retain(|entry| entry.last_known_root != exact_root);
             let target_index = registry
                 .workspaces
                 .binary_search_by(|entry| entry.workspace_uuid.cmp(&target_uuid))

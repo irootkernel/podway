@@ -64,7 +64,7 @@ behavior. Manifest registration alone does not imply executable capability.
 | `WORKSPACE_NOT_INITIALIZED` | 5 | no | `.podway/runtime` state is absent |
 | `WORKSPACE_ALREADY_INITIALIZED` | 1 | no | Initialization requested where compatible state already exists in a non-idempotent mode |
 | `WORKSPACE_INIT_CONFLICT` | 5 | no | Existing `.podway` content conflicts with safe initialization |
-| `WORKSPACE_ID_CONFLICT` | 5 | no | Same workspace UUID appears at multiple live roots |
+| `WORKSPACE_ID_CONFLICT` | 5 | no | Workspace UUID-to-root metadata is non-unique or conflicts with live identity evidence |
 | `WORKSPACE_UUID_MISMATCH` | 4 | no | Authoritative workspace UUID differs from the expected UUID |
 | `WORKSPACE_CONFIG_INVALID` | 5 | no | Workspace config fails schema or semantic validation |
 | `WORKSPACE_STATE_UNREADABLE` | 5 | no | SQLite state is corrupt or inaccessible |

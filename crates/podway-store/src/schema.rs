@@ -312,6 +312,23 @@ pub(crate) fn verify_binding_inspection_schema_v1(
     }
 }
 
+pub(crate) fn verify_reset_binding_inspection_schema_v1(
+    connection: &Connection,
+) -> Result<(), StoreErrorV1> {
+    let version = read_user_version_v1(connection)?;
+    match version {
+        SQLITE_SCHEMA_VERSION_V1 | SQLITE_SCHEMA_VERSION_V2 | SQLITE_SCHEMA_VERSION_V3 => {
+            verify_migration_predecessor_v1(connection, version)
+        }
+        SQLITE_SCHEMA_VERSION_V4 => verify_schema_v1(connection),
+        found if found > SQLITE_SCHEMA_VERSION_CURRENT => Err(StoreErrorV1::NewerStateV1 {
+            found_schema_version: found,
+            supported_schema_version: SQLITE_SCHEMA_VERSION_CURRENT,
+        }),
+        _ => Err(integrity_error(StoreIntegrityCheckV1::SchemaVersion)),
+    }
+}
+
 pub(crate) fn verify_binding_inspection_identity_v1(
     connection: &mut Connection,
     expected_identity: &DurableWorktreeIdentityV1,

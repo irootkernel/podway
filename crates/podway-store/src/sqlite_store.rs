@@ -101,6 +101,23 @@ impl SqliteStoreV1 {
         path: impl AsRef<Path>,
         options: &SqliteStoreOptionsV1,
     ) -> Result<Option<WorkspaceBindingV1>, StoreErrorV1> {
+        Self::inspect_workspace_binding_with(path, options, false)
+    }
+
+    /// Reads only the validated binding needed to select an explicit reset predecessor.
+    /// Legacy task state remains unsupported for every normal Store open and inspection.
+    pub fn inspect_reset_workspace_binding(
+        path: impl AsRef<Path>,
+        options: &SqliteStoreOptionsV1,
+    ) -> Result<Option<WorkspaceBindingV1>, StoreErrorV1> {
+        Self::inspect_workspace_binding_with(path, options, true)
+    }
+
+    fn inspect_workspace_binding_with(
+        path: impl AsRef<Path>,
+        options: &SqliteStoreOptionsV1,
+        reset_identity_only: bool,
+    ) -> Result<Option<WorkspaceBindingV1>, StoreErrorV1> {
         let database_path = canonical_database_path_v1(path.as_ref())?;
         match inspect_database_path_v1(&database_path)? {
             DatabasePathStateV1::Missing => return Ok(None),
@@ -112,7 +129,11 @@ impl SqliteStoreV1 {
 
         let binding =
             inspect_database_snapshot_unbound_v1(&database_path, options, |connection| {
-                crate::schema::verify_binding_inspection_schema_v1(connection)?;
+                if reset_identity_only {
+                    crate::schema::verify_reset_binding_inspection_schema_v1(connection)?;
+                } else {
+                    crate::schema::verify_binding_inspection_schema_v1(connection)?;
+                }
                 let (
                     workspace_uuid,
                     common_dir_identity,

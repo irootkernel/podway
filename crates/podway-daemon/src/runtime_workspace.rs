@@ -48,8 +48,8 @@ use crate::{
         ResetMaintenanceFilesystemTokenV1, ResetMarkerPublicationErrorV1, ResetMarkerV1,
         ResetWorkspaceResolutionV1, ResolvedWorkspaceV1, SqliteWorkspaceBindingInspectorV1,
         ValidatedRuntimeDirectoryErrorV1, ValidatedRuntimeDirectoryV1,
-        WorkspaceBindingInspectionErrorV1, WorkspaceGitObservationV1, WorkspaceResolutionErrorV1,
-        WorkspaceResolverV1,
+        WorkspaceBindingInspectionErrorV1, WorkspaceBindingInspectorV1, WorkspaceGitObservationV1,
+        WorkspaceResolutionErrorV1, WorkspaceResolverV1,
     },
 };
 
@@ -1358,6 +1358,8 @@ impl ResetAllCompletionV1 {
 pub struct ResetSourceAuthorityV1 {
     worktree: podway_git::ValidatedWorktreeV1,
     registry_previous_workspace_uuid: WorkspaceId,
+    registry_root_workspace_uuids: Vec<WorkspaceId>,
+    routing_identity: podway_store::DurableWorktreeIdentityV1,
     persisted_identity: Option<podway_store::DurableWorktreeIdentityV1>,
     store_inspection: ResetStoreInspectionV1,
 }
@@ -1366,6 +1368,9 @@ impl ResetSourceAuthorityV1 {
     pub fn registry_previous_workspace_uuid(&self) -> &WorkspaceId {
         &self.registry_previous_workspace_uuid
     }
+    pub fn registry_root_workspace_uuids(&self) -> &[WorkspaceId] {
+        &self.registry_root_workspace_uuids
+    }
     pub fn persisted_identity(&self) -> Option<&podway_store::DurableWorktreeIdentityV1> {
         self.persisted_identity.as_ref()
     }
@@ -1373,19 +1378,7 @@ impl ResetSourceAuthorityV1 {
         &self.store_inspection
     }
     pub(crate) fn routing_identity(&self) -> podway_store::DurableWorktreeIdentityV1 {
-        self.persisted_identity.clone().unwrap_or_else(|| {
-            podway_store::DurableWorktreeIdentityV1::new(
-                self.worktree
-                    .identity()
-                    .common_directory_fingerprint()
-                    .clone(),
-                self.registry_previous_workspace_uuid.clone(),
-                self.worktree
-                    .identity()
-                    .worktree_administration_fingerprint()
-                    .clone(),
-            )
-        })
+        self.routing_identity.clone()
     }
     fn unavailable_store_proof(&self) -> Option<ValidatedUnavailableStoreV1> {
         let source = self.routing_identity();
@@ -1395,6 +1388,9 @@ impl ResetSourceAuthorityV1 {
             ResetStoreInspectionV1::Unreadable(error) => Some(
                 ValidatedUnavailableStoreV1::unreadable(source, error.clone()),
             ),
+            ResetStoreInspectionV1::GitIdentityDetached => {
+                Some(ValidatedUnavailableStoreV1::git_identity_detached(source))
+            }
         }
     }
     fn matches_reset(&self, reset: &ResetWorkspaceResolutionV1) -> bool {
@@ -1739,50 +1735,179 @@ impl WorkspaceRuntimeManagerV1 {
             .iter()
             .filter(|entry| entry.last_known_root() == reset.workspace_root())
             .collect::<Vec<_>>();
-        let entry = match entries.as_slice() {
-            [entry] => entry,
-            [] => return Err(WorkspaceRuntimeErrorV1::ResetSourceNotRegistered),
-            _ => return Err(WorkspaceRuntimeErrorV1::ResetSourceAmbiguous),
-        };
-        let (persisted_identity, store_inspection) = match self
-            .resolver
-            .resolve_existing(selector, Some(entry.workspace_uuid()))
-        {
-            Ok(resolved) => (
-                Some(resolved.store_identity().clone()),
-                ResetStoreInspectionV1::Readable,
-            ),
-            Err(WorkspaceResolutionErrorV1::ExistingBindingMissing) => {
-                (None, ResetStoreInspectionV1::Absent)
-            }
-            Err(WorkspaceResolutionErrorV1::BindingInspection {
-                source: WorkspaceBindingInspectionErrorV1::Store(error),
-            }) => (None, ResetStoreInspectionV1::Unreadable(error)),
-            Err(WorkspaceResolutionErrorV1::ExpectedWorkspaceUuidMismatch { expected, actual }) => {
-                let marker = reset
-                    .open_runtime_directory()
-                    .map_err(WorkspaceRuntimeErrorV1::RuntimeDirectory)?
-                    .read_reset_marker()
-                    .map_err(WorkspaceRuntimeErrorV1::RuntimeDirectory)?;
-                if marker.as_ref().is_some_and(|marker| {
-                    marker.target_workspace_uuid() == &actual
-                        && marker.previous_workspace_uuid() == entry.workspace_uuid()
-                }) {
-                    (None, ResetStoreInspectionV1::Absent)
+        if entries.is_empty() {
+            return Err(WorkspaceRuntimeErrorV1::ResetSourceNotRegistered);
+        }
+        let registry_root_workspace_uuids = entries
+            .iter()
+            .map(|entry| entry.workspace_uuid().clone())
+            .collect::<Vec<_>>();
+        let marker = reset
+            .open_runtime_directory()
+            .map_err(WorkspaceRuntimeErrorV1::RuntimeDirectory)?
+            .read_reset_marker()
+            .map_err(WorkspaceRuntimeErrorV1::RuntimeDirectory)?;
+
+        let (
+            registry_previous_workspace_uuid,
+            routing_identity,
+            persisted_identity,
+            store_inspection,
+        ) = if let Some(marker) = marker {
+            let registered =
+                if registry_root_workspace_uuids.contains(marker.previous_workspace_uuid()) {
+                    marker.previous_workspace_uuid().clone()
+                } else if registry_root_workspace_uuids.contains(marker.target_workspace_uuid()) {
+                    marker.target_workspace_uuid().clone()
                 } else {
-                    return Err(WorkspaceRuntimeErrorV1::Resolution(
-                        WorkspaceResolutionErrorV1::ExpectedWorkspaceUuidMismatch {
-                            expected,
-                            actual,
-                        },
-                    ));
+                    return Err(WorkspaceRuntimeErrorV1::ResetSourceAmbiguous);
+                };
+            match self.resolver.resolve_existing(selector, None) {
+                Ok(resolved)
+                    if resolved.store_identity().workspace_uuid()
+                        == marker.previous_workspace_uuid() =>
+                {
+                    (
+                        registered,
+                        resolved.store_identity().clone(),
+                        Some(resolved.store_identity().clone()),
+                        ResetStoreInspectionV1::Readable,
+                    )
                 }
+                Ok(resolved)
+                    if resolved.store_identity().workspace_uuid()
+                        == marker.target_workspace_uuid() =>
+                {
+                    let routing_identity = reset.target_identity(registered.clone());
+                    (
+                        registered,
+                        routing_identity,
+                        None,
+                        ResetStoreInspectionV1::Absent,
+                    )
+                }
+                Ok(_) => return Err(WorkspaceRuntimeErrorV1::ResetSourceAmbiguous),
+                Err(WorkspaceResolutionErrorV1::ExistingBindingMissing) => {
+                    let routing_identity = reset.target_identity(registered.clone());
+                    (
+                        registered,
+                        routing_identity,
+                        None,
+                        ResetStoreInspectionV1::Absent,
+                    )
+                }
+                Err(WorkspaceResolutionErrorV1::BindingInspection {
+                    source: WorkspaceBindingInspectionErrorV1::Store(error),
+                }) => {
+                    let routing_identity = self
+                        .resolver
+                        .binding_inspector()
+                        .inspect_reset_workspace_binding(reset.database_path())
+                        .ok()
+                        .flatten()
+                        .filter(|binding| {
+                            binding.last_validated_root() == reset.workspace_root()
+                                && binding.identity().workspace_uuid()
+                                    == marker.previous_workspace_uuid()
+                        })
+                        .map(|binding| binding.identity().clone())
+                        .unwrap_or_else(|| reset.target_identity(registered.clone()));
+                    (
+                        registered,
+                        routing_identity,
+                        None,
+                        ResetStoreInspectionV1::Unreadable(error),
+                    )
+                }
+                Err(WorkspaceResolutionErrorV1::GitStoreFingerprintMismatch { .. }) => {
+                    let binding = self
+                        .resolver
+                        .binding_inspector()
+                        .inspect_reset_workspace_binding(reset.database_path())
+                        .map_err(|source| {
+                            WorkspaceRuntimeErrorV1::Resolution(
+                                WorkspaceResolutionErrorV1::BindingInspection { source },
+                            )
+                        })?
+                        .ok_or(WorkspaceRuntimeErrorV1::ResetSourceAmbiguous)?;
+                    if binding.last_validated_root() != reset.workspace_root()
+                        || binding.identity().workspace_uuid() != marker.previous_workspace_uuid()
+                    {
+                        return Err(WorkspaceRuntimeErrorV1::ResetSourceAmbiguous);
+                    }
+                    (
+                        registered,
+                        binding.identity().clone(),
+                        None,
+                        ResetStoreInspectionV1::GitIdentityDetached,
+                    )
+                }
+                Err(error) => return Err(WorkspaceRuntimeErrorV1::Resolution(error)),
             }
-            Err(error) => return Err(WorkspaceRuntimeErrorV1::Resolution(error)),
+        } else {
+            let binding = self
+                .resolver
+                .binding_inspector()
+                .inspect_reset_workspace_binding(reset.database_path())
+                .map_err(|source| {
+                    WorkspaceRuntimeErrorV1::Resolution(
+                        WorkspaceResolutionErrorV1::BindingInspection { source },
+                    )
+                })?;
+            let Some(binding) = binding else {
+                let [registered] = registry_root_workspace_uuids.as_slice() else {
+                    return Err(WorkspaceRuntimeErrorV1::ResetSourceAmbiguous);
+                };
+                let registered = registered.clone();
+                let routing_identity = reset.target_identity(registered.clone());
+                return Ok(ResetSourceAuthorityV1 {
+                    worktree: reset.worktree().clone(),
+                    registry_previous_workspace_uuid: registered,
+                    registry_root_workspace_uuids,
+                    routing_identity,
+                    persisted_identity: None,
+                    store_inspection: ResetStoreInspectionV1::Absent,
+                });
+            };
+            let registered = binding.identity().workspace_uuid().clone();
+            if binding.last_validated_root() != reset.workspace_root()
+                || !registry_root_workspace_uuids.contains(&registered)
+            {
+                return Err(WorkspaceRuntimeErrorV1::ResetSourceAmbiguous);
+            }
+            let routing_identity = binding.identity().clone();
+            match self.resolver.resolve_existing(selector, Some(&registered)) {
+                Ok(resolved) => (
+                    registered,
+                    routing_identity,
+                    Some(resolved.store_identity().clone()),
+                    ResetStoreInspectionV1::Readable,
+                ),
+                Err(WorkspaceResolutionErrorV1::ExistingBindingMissing) => {
+                    return Err(WorkspaceRuntimeErrorV1::ResetSourceAmbiguous);
+                }
+                Err(WorkspaceResolutionErrorV1::BindingInspection {
+                    source: WorkspaceBindingInspectionErrorV1::Store(error),
+                }) => (
+                    registered,
+                    routing_identity,
+                    None,
+                    ResetStoreInspectionV1::Unreadable(error),
+                ),
+                Err(WorkspaceResolutionErrorV1::GitStoreFingerprintMismatch { .. }) => (
+                    registered,
+                    routing_identity,
+                    None,
+                    ResetStoreInspectionV1::GitIdentityDetached,
+                ),
+                Err(error) => return Err(WorkspaceRuntimeErrorV1::Resolution(error)),
+            }
         };
         Ok(ResetSourceAuthorityV1 {
             worktree: reset.worktree().clone(),
-            registry_previous_workspace_uuid: entry.workspace_uuid().clone(),
+            registry_previous_workspace_uuid,
+            registry_root_workspace_uuids,
+            routing_identity,
             persisted_identity,
             store_inspection,
         })
@@ -2021,6 +2146,7 @@ impl WorkspaceRuntimeManagerV1 {
                 self.registry
                     .replace_for_reset(
                         marker.previous_workspace_uuid(),
+                        authority.registry_root_workspace_uuids(),
                         marker.target_workspace_uuid().clone(),
                         reset.workspace_root().clone(),
                         observation.registry_seen_at().clone(),
@@ -2089,6 +2215,12 @@ impl WorkspaceRuntimeManagerV1 {
             .initialize_with_config(candidate.worktree(), DEFAULT_WORKSPACE_CONFIG_YAML_V1)
             .map_err(WorkspaceRuntimeErrorV1::Layout)?;
         self.ensure_activation_marker_clear(&candidate)?;
+        self.registry
+            .require_root_available(
+                candidate.store_identity().workspace_uuid(),
+                candidate.workspace_root(),
+            )
+            .map_err(WorkspaceRuntimeErrorV1::Registry)?;
 
         // Admit the configuration before Store creation. The layout either created the canonical
         // default or descriptor-validated an existing regular config file.
@@ -2340,6 +2472,8 @@ impl WorkspaceRuntimeManagerV1 {
         if !fresh.matches_reset(reset)
             || fresh.registry_previous_workspace_uuid()
                 != authority.registry_previous_workspace_uuid()
+            || fresh.registry_root_workspace_uuids() != authority.registry_root_workspace_uuids()
+            || fresh.routing_identity() != authority.routing_identity()
             || fresh.persisted_identity() != authority.persisted_identity()
             || fresh.store_inspection() != authority.store_inspection()
         {
@@ -2358,15 +2492,15 @@ impl WorkspaceRuntimeManagerV1 {
             .registry
             .load()
             .map_err(WorkspaceRuntimeErrorV1::Registry)?;
-        let entries = registry
+        let workspace_uuids = registry
             .workspaces()
             .iter()
             .filter(|entry| entry.last_known_root() == reset.workspace_root())
+            .map(|entry| entry.workspace_uuid().clone())
             .collect::<Vec<_>>();
-        let [entry] = entries.as_slice() else {
-            return Err(WorkspaceRuntimeErrorV1::ResetRegistryPredecessorStale);
-        };
-        if entry.workspace_uuid() != authority.registry_previous_workspace_uuid() {
+        if workspace_uuids != authority.registry_root_workspace_uuids()
+            || !workspace_uuids.contains(authority.registry_previous_workspace_uuid())
+        {
             return Err(WorkspaceRuntimeErrorV1::ResetRegistryPredecessorStale);
         }
         Ok(())
@@ -2466,13 +2600,15 @@ impl WorkspaceRuntimeManagerV1 {
                 && current.runtime_directory_path() == expected_runtime_directory
                 && current.git_evidence() == resolved.worktree()
             {
-                refresh_registry_metadata(
-                    &self.registry,
-                    &resolved,
-                    current.binding(),
-                    expected_binding.identity().workspace_uuid().clone(),
-                    observation.registry_seen_at().clone(),
-                )?;
+                if !maintenance_authorized {
+                    refresh_registry_metadata(
+                        &self.registry,
+                        &resolved,
+                        current.binding(),
+                        expected_binding.identity().workspace_uuid().clone(),
+                        observation.registry_seen_at().clone(),
+                    )?;
+                }
                 current
                     .bind_maintenance_generation(scheduler.key().clone(), scheduler.generation());
                 return Ok(scheduler);
@@ -2525,13 +2661,15 @@ impl WorkspaceRuntimeManagerV1 {
                 ),
             )?,
         };
-        refresh_registry_metadata(
-            &self.registry,
-            &resolved,
-            &binding_before_open,
-            binding.identity().workspace_uuid().clone(),
-            observation.registry_seen_at().clone(),
-        )?;
+        if !maintenance_authorized {
+            refresh_registry_metadata(
+                &self.registry,
+                &resolved,
+                &binding_before_open,
+                binding.identity().workspace_uuid().clone(),
+                observation.registry_seen_at().clone(),
+            )?;
+        }
 
         let context = WorkspaceSchedulerContextV1::new(WorkspaceSchedulerContextInputV1 {
             binding,
