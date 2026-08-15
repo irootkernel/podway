@@ -403,6 +403,11 @@ case "${1:-}" in
     exit 113
     ;;
   bootstrap)
+    if [ -f "$state/fail-bootstrap-once" ]; then
+      /bin/rm -f "$state/fail-bootstrap-once"
+      echo "scripted bootstrap failure" >&2
+      exit 1
+    fi
     plist=${3:?}
     daemon=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$plist")
     socket=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:3' "$plist")
@@ -1024,6 +1029,77 @@ fn aut_t_path_installs_explicit_sibling_and_path_daemons_from_a_sanitized_direct
         &["--json", "daemon", "install"],
         &path_daemon,
     );
+    fixture.uninstall(&controlled_path);
+}
+
+#[test]
+fn aut_t_path_default_install_recovers_a_prepared_publication_without_a_socket_override() {
+    let fixture = ControlledPathFixtureV1::new();
+    if fixture.production_service {
+        return;
+    }
+    let release_bin = fixture.root.join("prepared-recovery/release/bin");
+    let release_cli = release_bin.join("podway");
+    let release_daemon = release_bin.join("podwayd");
+    let controlled_bin = fixture.root.join("prepared-recovery/controlled-bin");
+    copy_executable(&cli_binary(), &release_cli);
+    copy_executable(&daemon_binary(), &release_daemon);
+    fs::create_dir_all(&controlled_bin).expect("prepared recovery bin must be created");
+    symlink(&release_cli, controlled_bin.join("podway"))
+        .expect("prepared recovery CLI symlink must be created");
+    let controlled_path = format!("{}:/usr/bin:/bin", controlled_bin.display());
+    fs::write(
+        fixture.launchctl_state.join("fail-bootstrap-once"),
+        b"fail\n",
+    )
+    .expect("one-shot bootstrap failure marker must be written");
+
+    let first = fixture.run(
+        &controlled_path,
+        &[
+            "--json",
+            "daemon",
+            "install",
+            "--daemon-path",
+            release_daemon
+                .to_str()
+                .expect("release daemon path must be UTF-8"),
+        ],
+    );
+    let failure = assert_json_error(first, "DAEMON_UNAVAILABLE", 3);
+    assert_eq!(
+        failure["message"],
+        "launchd could not complete the daemon service transition"
+    );
+    let metadata_path = fixture.home.join(".podway/state/service.json");
+    let prepared: Value = serde_json::from_slice(
+        &fs::read(&metadata_path).expect("prepared service metadata must remain"),
+    )
+    .expect("prepared service metadata must be JSON");
+    assert_eq!(prepared["publication_state"], "prepared");
+
+    let recovered = fixture.run_json_success(
+        &controlled_path,
+        &[
+            "--json",
+            "daemon",
+            "install",
+            "--daemon-path",
+            release_daemon
+                .to_str()
+                .expect("release daemon path must be UTF-8"),
+        ],
+    );
+    assert_eq!(recovered["command"], "daemon.install");
+    assert_eq!(recovered["result"]["outcome"], "changed");
+    let receipt: Value = serde_json::from_slice(
+        &fs::read(&metadata_path).expect("durable service metadata must be published"),
+    )
+    .expect("durable service metadata must be JSON");
+    assert_eq!(receipt["publication_state"], "receipt_durable");
+
+    let status = fixture.run_json_success(&controlled_path, &["--json", "daemon", "status"]);
+    assert_eq!(status["result"]["reachable"], true);
     fixture.uninstall(&controlled_path);
 }
 

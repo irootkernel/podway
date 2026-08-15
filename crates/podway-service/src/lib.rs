@@ -53,6 +53,8 @@ const SERVICE_BINARY_IDENTITY_HEX_LENGTH_V1: usize = 64;
 const SERVICE_TEMPORARY_STALE_AGE_V1: Duration = Duration::from_secs(300);
 const SERVICE_LIFECYCLE_LOCK_TIMEOUT_V1: Duration = Duration::from_secs(10);
 const SERVICE_LIFECYCLE_LOCK_RETRY_V1: Duration = Duration::from_millis(10);
+const SERVICE_BOOTOUT_SETTLE_TIMEOUT_V1: Duration = Duration::from_secs(10);
+const SERVICE_BOOTOUT_SETTLE_RETRY_V1: Duration = Duration::from_millis(50);
 const SERVICE_TEMPORARY_SCAN_LIMIT_V1: usize = 8_192;
 const SERVICE_TEMPORARY_RETAIN_LIMIT_V1: usize = 64;
 const SERVICE_TEMPORARY_RETAIN_TARGET_V1: usize = 32;
@@ -3141,6 +3143,8 @@ pub struct MacosServiceCommandRunnerV1<F, L, C, V = SystemDaemonContractVerifier
     contract_verifier: V,
     observer: Arc<dyn ServiceObserverV1>,
     user_id: u32,
+    bootout_settle_timeout: Duration,
+    bootout_settle_retry: Duration,
 }
 
 impl<F, L, C> MacosServiceCommandRunnerV1<F, L, C, SystemDaemonContractVerifierV1>
@@ -3181,6 +3185,8 @@ where
             contract_verifier: SystemDaemonContractVerifierV1::default(),
             observer,
             user_id,
+            bootout_settle_timeout: SERVICE_BOOTOUT_SETTLE_TIMEOUT_V1,
+            bootout_settle_retry: SERVICE_BOOTOUT_SETTLE_RETRY_V1,
         })
     }
 }
@@ -3227,7 +3233,16 @@ where
             contract_verifier,
             observer,
             user_id,
+            bootout_settle_timeout: SERVICE_BOOTOUT_SETTLE_TIMEOUT_V1,
+            bootout_settle_retry: SERVICE_BOOTOUT_SETTLE_RETRY_V1,
         })
+    }
+
+    /// Overrides the bounded post-bootout convergence window for deterministic adapter tests.
+    pub fn with_bootout_settle_bounds(mut self, timeout: Duration, retry: Duration) -> Self {
+        self.bootout_settle_timeout = timeout;
+        self.bootout_settle_retry = retry;
+        self
     }
 
     fn domain(&self) -> String {
@@ -3459,7 +3474,19 @@ where
 
     fn bootout(&self, op: ServiceOperationV1) -> Result<(), ServiceErrorV1> {
         self.launch(op, vec!["bootout".to_owned(), self.loaded_target()])?;
-        Ok(())
+        let deadline = Instant::now() + self.bootout_settle_timeout;
+        loop {
+            if !self.loaded_or_not_loaded(op)? {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(ServiceErrorV1::TimeoutV1 {
+                    operation: op,
+                    timeout_ms: self.bootout_settle_timeout.as_millis() as u64,
+                });
+            }
+            std::thread::sleep(self.bootout_settle_retry);
+        }
     }
     fn loaded_or_not_loaded(&self, op: ServiceOperationV1) -> Result<bool, ServiceErrorV1> {
         self.observe(ServiceObservationV1::LaunchctlSideEffectRequested);
@@ -4226,6 +4253,15 @@ pub fn installed_socket_path_from_metadata_v1(bytes: &[u8]) -> Result<PathBuf, S
         });
     }
     Ok(metadata.socket_path)
+}
+
+/// Resolves the endpoint recorded by metadata that an explicit install retry may reconcile.
+///
+/// Normal clients must continue to use [`installed_socket_path_from_metadata_v1`]. Installation
+/// is the sole operation allowed to consume a complete prepared publication because it rechecks
+/// the daemon bytes and authenticated plist before making the receipt durable.
+pub fn install_socket_path_from_metadata_v1(bytes: &[u8]) -> Result<PathBuf, ServiceErrorV1> {
+    Ok(parse_metadata_v1(bytes)?.socket_path)
 }
 struct DuplicateFreeMetadataKeysV1;
 

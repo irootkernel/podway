@@ -7,7 +7,7 @@ use std::{
     process::Command,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 
@@ -120,24 +120,46 @@ impl ServiceFilesystemV1 for CrashBetweenDeclaredRemovals {
     }
 }
 
-struct SuccessfulLaunchctl;
+struct SuccessfulLaunchctl {
+    loaded: AtomicBool,
+}
+
+impl Default for SuccessfulLaunchctl {
+    fn default() -> Self {
+        Self {
+            loaded: AtomicBool::new(true),
+        }
+    }
+}
 
 impl LaunchctlRunnerV1 for SuccessfulLaunchctl {
     fn run(&self, arguments: &[String]) -> Result<LaunchctlOutputV1, ServiceErrorV1> {
-        if arguments
-            .first()
-            .is_some_and(|argument| argument == "print")
-        {
-            return Ok(LaunchctlOutputV1 {
+        match arguments.first().map(String::as_str) {
+            Some("print") if self.loaded.load(Ordering::SeqCst) => Ok(LaunchctlOutputV1 {
                 exit_status: 0,
                 stdout: format!(
                     "{} = {{\n\tpid = 123\n}}\n",
                     arguments.get(1).expect("print target")
                 ),
                 stderr: String::new(),
-            });
+            }),
+            Some("print") => Ok(LaunchctlOutputV1 {
+                exit_status: 113,
+                stdout: String::new(),
+                stderr: format!(
+                    "Bad request.\nCould not find service \"{SERVICE_LABEL_V1}\" in domain for user gui: 501"
+                ),
+            }),
+            Some("bootout") => {
+                self.loaded.store(false, Ordering::SeqCst);
+                Ok(LaunchctlOutputV1::success())
+            }
+            Some("bootstrap") => {
+                self.loaded.store(true, Ordering::SeqCst);
+                Ok(LaunchctlOutputV1::success())
+            }
+            _ => Ok(LaunchctlOutputV1::success()),
         }
-        Ok(LaunchctlOutputV1::success())
     }
 }
 struct OrphanLoadedLaunchctl {
@@ -437,7 +459,7 @@ fn expected_publication_generations(root: &Path) -> (PublicationBytes, Publicati
     let old_clock = FixedServiceClockV1::new(UnixMillis::new(1));
     let old_runner = MacosServiceCommandRunnerV1::new(
         StdServiceFilesystemV1,
-        SuccessfulLaunchctl,
+        SuccessfulLaunchctl::default(),
         old_clock,
         501,
     )
@@ -453,7 +475,7 @@ fn expected_publication_generations(root: &Path) -> (PublicationBytes, Publicati
     let new_clock = FixedServiceClockV1::new(UnixMillis::new(2));
     let new_runner = MacosServiceCommandRunnerV1::new(
         StdServiceFilesystemV1,
-        SuccessfulLaunchctl,
+        SuccessfulLaunchctl::default(),
         new_clock,
         501,
     )
@@ -534,9 +556,13 @@ fn assert_crash_publication_state(
 ) {
     assert_complete_publication_bytes(observed, point);
     let clock = FixedServiceClockV1::new(UnixMillis::new(3));
-    let runner =
-        MacosServiceCommandRunnerV1::new(StdServiceFilesystemV1, SuccessfulLaunchctl, clock, 501)
-            .expect("crash-state observer");
+    let runner = MacosServiceCommandRunnerV1::new(
+        StdServiceFilesystemV1,
+        SuccessfulLaunchctl::default(),
+        clock,
+        501,
+    )
+    .expect("crash-state observer");
     let manager = ServiceManagerV1::new(runner, clock, paths.clone());
 
     if observed == old || observed == new {
@@ -566,7 +592,7 @@ fn run_publication_crash_child(root: &Path, destination: &str, point: &str, writ
     let old_clock = FixedServiceClockV1::new(UnixMillis::new(1));
     let old_runner = MacosServiceCommandRunnerV1::new(
         StdServiceFilesystemV1,
-        SuccessfulLaunchctl,
+        SuccessfulLaunchctl::default(),
         old_clock,
         501,
     )
@@ -586,9 +612,13 @@ fn run_publication_crash_child(root: &Path, destination: &str, point: &str, writ
         failpoint(point),
     );
     let clock = FixedServiceClockV1::new(UnixMillis::new(2));
-    let runner =
-        MacosServiceCommandRunnerV1::new(StdServiceFilesystemV1, SuccessfulLaunchctl, clock, 501)
-            .expect("replacement runner");
+    let runner = MacosServiceCommandRunnerV1::new(
+        StdServiceFilesystemV1,
+        SuccessfulLaunchctl::default(),
+        clock,
+        501,
+    )
+    .expect("replacement runner");
     let _ = runner.run(podway_service::ServiceCommandV1::Install {
         requested_at: UnixMillis::new(2),
         spec: install_spec(&new_binary, &paths),
@@ -668,7 +698,7 @@ fn atomic_service_publication_crash_child_leaves_no_partial_state() {
                 let clock = FixedServiceClockV1::new(UnixMillis::new(3));
                 let runner = MacosServiceCommandRunnerV1::new(
                     StdServiceFilesystemV1,
-                    SuccessfulLaunchctl,
+                    SuccessfulLaunchctl::default(),
                     clock,
                     501,
                 )
@@ -722,7 +752,7 @@ fn run_removal_crash_child(root: &Path) {
     let binary = binary(root, "podwayd");
     let setup = MacosServiceCommandRunnerV1::new(
         StdServiceFilesystemV1,
-        SuccessfulLaunchctl,
+        SuccessfulLaunchctl::default(),
         FixedServiceClockV1::new(UnixMillis::new(1)),
         501,
     )
@@ -750,7 +780,7 @@ fn run_removal_crash_child(root: &Path) {
         CrashBetweenDeclaredRemovals {
             removals: AtomicU64::new(0),
         },
-        SuccessfulLaunchctl,
+        SuccessfulLaunchctl::default(),
         clock,
         501,
     )
@@ -809,9 +839,13 @@ fn service_removal_crash_child_preserves_complete_prior_state() {
     );
 
     let clock = FixedServiceClockV1::new(UnixMillis::new(2));
-    let runner =
-        MacosServiceCommandRunnerV1::new(StdServiceFilesystemV1, SuccessfulLaunchctl, clock, 501)
-            .expect("retry runner");
+    let runner = MacosServiceCommandRunnerV1::new(
+        StdServiceFilesystemV1,
+        SuccessfulLaunchctl::default(),
+        clock,
+        501,
+    )
+    .expect("retry runner");
     let manager = ServiceManagerV1::new(runner, clock, paths.clone());
     manager.uninstall().expect("removal retry convergence");
     assert!(!paths.metadata_index_path().as_path().exists());
@@ -909,7 +943,7 @@ fn bootstrap_side_effect_crash_child_reconciles_to_one_installed_state() {
     );
     let prepared_status = MacosServiceCommandRunnerV1::new(
         StdServiceFilesystemV1,
-        SuccessfulLaunchctl,
+        SuccessfulLaunchctl::default(),
         FixedServiceClockV1::new(UnixMillis::new(2)),
         501,
     )

@@ -62,7 +62,7 @@ use podway_service::{
     ServiceFilesystemV1, ServiceLabelV1, ServiceLogStreamV1, ServiceManagerContractV1,
     ServiceManagerV1, ServiceOutcomeV1, ServicePathErrorV1, ServiceRuntimePathsV1, ServiceStatusV1,
     StdServiceFilesystemV1, SystemLaunchctlRunnerV1, UninstallOptionsV1,
-    installed_socket_path_from_metadata_v1,
+    install_socket_path_from_metadata_v1, installed_socket_path_from_metadata_v1,
 };
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
@@ -2442,6 +2442,8 @@ fn execute_service_lifecycle(
     let command_name = daemon_command_name(command);
     let mut paths = if socket_path.is_some() {
         effective_service_paths(command_name)?
+    } else if matches!(command, DaemonCommand::Install { .. }) {
+        service_install_runtime_paths(command_name)?
     } else {
         service_runtime_paths(command_name)?
     };
@@ -2574,7 +2576,12 @@ fn socket_path_failure(error: ServicePathErrorV1) -> LocalFailure {
 
 fn service_runtime_paths(command: &str) -> Result<ServiceRuntimePathsV1, LocalFailure> {
     let paths = effective_service_paths(command)?;
-    resolve_installed_service_endpoint(paths, command)
+    resolve_installed_service_endpoint(paths, command, false)
+}
+
+fn service_install_runtime_paths(command: &str) -> Result<ServiceRuntimePathsV1, LocalFailure> {
+    let paths = effective_service_paths(command)?;
+    resolve_installed_service_endpoint(paths, command, true)
 }
 
 fn effective_service_paths(command: &str) -> Result<ServiceRuntimePathsV1, LocalFailure> {
@@ -2611,6 +2618,7 @@ fn system_launchctl_runner() -> SystemLaunchctlRunnerV1 {
 fn resolve_installed_service_endpoint(
     paths: ServiceRuntimePathsV1,
     command: &str,
+    allow_prepared: bool,
 ) -> Result<ServiceRuntimePathsV1, LocalFailure> {
     let metadata_path = paths.metadata_index_path().as_path();
     let metadata = match fs::symlink_metadata(metadata_path) {
@@ -2638,8 +2646,12 @@ fn resolve_installed_service_endpoint(
     let bytes = StdServiceFilesystemV1
         .read_file_bounded(metadata_path, SERVICE_METADATA_MAX_BYTES_V1)
         .map_err(|_| LocalFailure::daemon_unavailable(command))?;
-    let socket_path = installed_socket_path_from_metadata_v1(&bytes)
-        .map_err(|_| LocalFailure::daemon_unavailable(command))?;
+    let socket_path = if allow_prepared {
+        install_socket_path_from_metadata_v1(&bytes)
+    } else {
+        installed_socket_path_from_metadata_v1(&bytes)
+    }
+    .map_err(|_| LocalFailure::daemon_unavailable(command))?;
     paths
         .with_socket_path(socket_path)
         .map_err(|_| LocalFailure::daemon_unavailable(command))
@@ -3294,13 +3306,41 @@ fn map_service_error(error: ServiceErrorV1, command: &str) -> LocalFailure {
             command,
         ),
         ServiceErrorV1::OperationFailureV1 { source, .. } => map_service_error(*source, command),
-        ServiceErrorV1::IoV1 { .. }
-        | ServiceErrorV1::LaunchctlFailureV1 { .. }
-        | ServiceErrorV1::PermissionDeniedV1 { .. }
-        | ServiceErrorV1::StaleOrUnexpectedProcessV1 { .. }
-        | ServiceErrorV1::TimeoutV1 { .. }
-        | ServiceErrorV1::OutputLimitExceededV1 { .. }
-        | ServiceErrorV1::LaunchctlTimeoutV1 { .. } => LocalFailure::daemon_unavailable(command),
+        ServiceErrorV1::IoV1 { .. } => LocalFailure::catalog(
+            "DAEMON_UNAVAILABLE",
+            "the daemon service state is unavailable",
+            command,
+        ),
+        ServiceErrorV1::LaunchctlFailureV1 { .. } => LocalFailure::catalog(
+            "DAEMON_UNAVAILABLE",
+            "launchd could not complete the daemon service transition",
+            command,
+        ),
+        ServiceErrorV1::PermissionDeniedV1 { .. } => LocalFailure::catalog(
+            "DAEMON_UNAVAILABLE",
+            "the daemon service operation was denied",
+            command,
+        ),
+        ServiceErrorV1::StaleOrUnexpectedProcessV1 { .. } => LocalFailure::catalog(
+            "DAEMON_UNAVAILABLE",
+            "the daemon service process changed unexpectedly",
+            command,
+        ),
+        ServiceErrorV1::TimeoutV1 { .. } => LocalFailure::catalog(
+            "DAEMON_UNAVAILABLE",
+            "the daemon service lifecycle operation timed out",
+            command,
+        ),
+        ServiceErrorV1::OutputLimitExceededV1 { .. } => LocalFailure::catalog(
+            "DAEMON_UNAVAILABLE",
+            "launchctl returned too much output",
+            command,
+        ),
+        ServiceErrorV1::LaunchctlTimeoutV1 { .. } => LocalFailure::catalog(
+            "DAEMON_UNAVAILABLE",
+            "launchctl timed out during the daemon service transition",
+            command,
+        ),
     }
 }
 
@@ -5410,7 +5450,7 @@ fn daemon_client(
     let paths = if socket_path.is_some() || dev_mode {
         paths
     } else {
-        resolve_installed_service_endpoint(paths, "cli")?
+        resolve_installed_service_endpoint(paths, "cli", false)?
     };
     let read_timeout = Duration::from_millis(wait_timeout_ms.saturating_add(1_000))
         .max(DEFAULT_DAEMON_CONNECT_TIMEOUT_V1);
@@ -6474,13 +6514,29 @@ mod tests {
         fs::set_permissions(metadata_path, fs::Permissions::from_mode(0o600))
             .expect("metadata fixture must be private");
 
-        let resolved = resolve_installed_service_endpoint(paths.clone(), "cli")
+        let resolved = resolve_installed_service_endpoint(paths.clone(), "cli", false)
             .expect("private durable metadata must select its endpoint");
         assert_eq!(resolved.socket_path().as_path(), installed_socket);
 
+        let mut prepared: serde_json::Value =
+            serde_json::from_slice(&metadata).expect("metadata fixture must parse");
+        prepared["publication_state"] = json!("prepared");
+        fs::write(
+            metadata_path,
+            serde_json::to_vec(&prepared).expect("prepared metadata must serialize"),
+        )
+        .expect("prepared metadata fixture must be written");
+        let install_recovery = resolve_installed_service_endpoint(paths.clone(), "cli", true)
+            .expect("daemon install must recover the prepared endpoint");
+        assert_eq!(install_recovery.socket_path().as_path(), installed_socket);
+        assert!(
+            resolve_installed_service_endpoint(paths.clone(), "cli", false).is_err(),
+            "normal clients must reject a non-durable endpoint"
+        );
+
         fs::set_permissions(metadata_path, fs::Permissions::from_mode(0o644))
             .expect("insecure metadata mode fixture must be installed");
-        assert!(resolve_installed_service_endpoint(paths, "cli").is_err());
+        assert!(resolve_installed_service_endpoint(paths, "cli", true).is_err());
     }
 
     #[test]
@@ -6867,8 +6923,8 @@ mod tests {
     fn daemon_service_results_and_errors_use_local_contracts() {
         use podway_core::UnixMillis;
         use podway_service::{
-            ServiceChangedV1, ServiceErrorV1, ServiceNotInstalledV1, ServiceOutcomeV1,
-            ServiceRunningV1, ServiceRuntimePathsV1, ServiceStatusV1,
+            ServiceChangedV1, ServiceErrorV1, ServiceNotInstalledV1, ServiceOperationV1,
+            ServiceOutcomeV1, ServiceRunningV1, ServiceRuntimePathsV1, ServiceStatusV1,
         };
         let root = std::env::temp_dir().join(format!(
             "podway-cli-local-status-{}-{}",
@@ -6935,6 +6991,35 @@ mod tests {
             "daemon.start",
         );
         assert_eq!(unavailable.code, "DAEMON_UNAVAILABLE");
+        assert_eq!(
+            unavailable.message,
+            "the daemon service state is unavailable"
+        );
+        let launchctl = map_service_error(
+            ServiceErrorV1::LaunchctlFailureV1 {
+                operation: ServiceOperationV1::Install,
+                exit_status: Some(5),
+                message: "secret host diagnostic /Users/example".to_owned(),
+            },
+            "daemon.install",
+        );
+        assert_eq!(launchctl.code, "DAEMON_UNAVAILABLE");
+        assert_eq!(
+            launchctl.message,
+            "launchd could not complete the daemon service transition"
+        );
+        assert!(!launchctl.message.contains("secret host diagnostic"));
+        let timed_out = map_service_error(
+            ServiceErrorV1::TimeoutV1 {
+                operation: ServiceOperationV1::Install,
+                timeout_ms: 10_000,
+            },
+            "daemon.install",
+        );
+        assert_eq!(
+            timed_out.message,
+            "the daemon service lifecycle operation timed out"
+        );
         let mismatch = map_service_error(
             ServiceErrorV1::ContractMismatchV1 {
                 expected_product: "podway".to_owned(),

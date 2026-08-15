@@ -104,10 +104,16 @@ fn service_observer_emits_only_stable_categories_at_production_boundaries() {
     .expect("service paths");
     let binary = root.join("bin/podwayd");
     let launchctl = root.join("bin/launchctl");
+    let launchctl_state = root.join("launchctl.loaded");
     write_executable(&binary);
     fs::write(
         &launchctl,
-        b"#!/bin/sh\nif [ \"$1\" = print ]; then printf 'gui/501/dev.podway.podwayd = {\\npid = 4242\\n'; fi\nexit 0\n",
+        format!(
+            "#!/bin/sh\ncase \"$1\" in\nbootstrap) touch '{}';;\nbootout) rm -f '{}';;\nprint) if [ -f '{}' ]; then printf 'gui/501/dev.podway.podwayd = {{\\npid = 4242\\n'; else printf '%s\\n' 'Bad request.\nCould not find service \"dev.podway.podwayd\" in domain for user gui: 501' >&2; exit 113; fi;;\nesac\nexit 0\n",
+            launchctl_state.display(),
+            launchctl_state.display(),
+            launchctl_state.display(),
+        ),
     )
     .expect("write launchctl fixture");
     fs::set_permissions(&launchctl, fs::Permissions::from_mode(0o700))
@@ -142,8 +148,6 @@ fn service_observer_emits_only_stable_categories_at_production_boundaries() {
         vec![
             ServiceObservationV1::LaunchctlSideEffectRequested,
             ServiceObservationV1::LaunchctlSideEffectCompleted,
-            ServiceObservationV1::LaunchctlSideEffectRequested,
-            ServiceObservationV1::LaunchctlSideEffectCompleted,
             ServiceObservationV1::AtomicMetadataPublished,
             ServiceObservationV1::AtomicPlistPublished,
             ServiceObservationV1::LogRotationCompleted,
@@ -155,10 +159,14 @@ fn service_observer_emits_only_stable_categories_at_production_boundaries() {
             ServiceObservationV1::LaunchctlSideEffectCompleted,
             ServiceObservationV1::LaunchctlSideEffectRequested,
             ServiceObservationV1::LaunchctlSideEffectCompleted,
+            ServiceObservationV1::LaunchctlSideEffectRequested,
+            ServiceObservationV1::LaunchctlSideEffectCompleted,
             ServiceObservationV1::LogRotationCompleted,
             ServiceObservationV1::LaunchctlSideEffectRequested,
             ServiceObservationV1::LaunchctlSideEffectCompleted,
             ServiceObservationV1::ServiceOutcome(ServiceOperationV1::Restart),
+            ServiceObservationV1::LaunchctlSideEffectRequested,
+            ServiceObservationV1::LaunchctlSideEffectCompleted,
             ServiceObservationV1::LaunchctlSideEffectRequested,
             ServiceObservationV1::LaunchctlSideEffectCompleted,
             ServiceObservationV1::LaunchctlSideEffectRequested,

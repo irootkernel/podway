@@ -75,8 +75,15 @@ fn unique_root() -> PathBuf {
 }
 
 fn unique_runtime() -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock after epoch")
+        .as_nanos();
     let sequence = FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    PathBuf::from(format!("/tmp/pw6-{}-{sequence}", std::process::id()))
+    PathBuf::from(format!(
+        "/tmp/pw6-{}-{nanos}-{sequence}",
+        std::process::id()
+    ))
 }
 
 fn write_executable(path: &Path, bytes: &[u8]) {

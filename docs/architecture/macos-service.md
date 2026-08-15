@@ -112,7 +112,8 @@ podway daemon logs --follow
    executable and has the exact CLI product and contract-manifest identity;
 3. creates PODWAY_HOME directories with user-private permissions;
 4. writes the plist atomically;
-5. bootstraps the LaunchAgent in the current GUI user domain;
+5. waits for a replaced LaunchAgent to become observably unloaded, then
+   bootstraps it in the current GUI user domain;
 6. waits for `daemon.status` to report the installed executable path and the
    complete expected build, protocol, and contract identity;
 7. records install metadata.
@@ -120,6 +121,13 @@ podway daemon logs --follow
 The target installer does not stage or copy the daemon. It is idempotent when the
 same actual binary and configuration are installed. A changed binary path or
 contract identity updates the plist and restarts the service.
+
+If a prior install stopped after publishing an authenticated `prepared`
+generation, rerunning `podway daemon install` without a socket override reuses
+that generation's recorded endpoint, revalidates the selected daemon and plist,
+and either observes or bootstraps the service before making the receipt durable.
+Other lifecycle commands and ordinary daemon clients continue to reject
+non-durable service metadata.
 
 The current CLI executable is canonicalized before sibling lookup. Consequently,
 invoking a PATH-installed CLI symlink still selects `podwayd` beside the resolved
@@ -218,8 +226,9 @@ The LaunchAgent sends both standard output and standard error to the same `podwa
 A CLI and daemon product or contract-manifest mismatch fails before command
 execution or admission. During service refresh, a stale daemon that still owns
 the socket is not considered ready; installation waits until the replacement
-process reports the installed executable and current identity. Package upgrade
-should:
+process reports the installed executable and current identity. After bootout,
+installation also waits for launchd to report the label as unloaded before
+requesting the replacement bootstrap. Package upgrade should:
 
 1. install both binaries together;
 2. run `podway daemon install` or equivalent service refresh;

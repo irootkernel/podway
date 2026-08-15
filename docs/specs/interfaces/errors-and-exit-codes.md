@@ -54,6 +54,12 @@ behavior. Manifest registration alone does not imply executable capability.
 `effective_user_unavailable`. Mutation failures also include
 `admission: {"admitted": false}`.
 
+Service lifecycle failures retain `DAEMON_UNAVAILABLE`, exit code 3,
+retryability, and the existing endpoint details schema. Their human-readable
+message may distinguish launchd failure, launchctl timeout or oversized output,
+lifecycle-lock timeout, permission denial, unavailable service state, and an
+unexpected process transition. Automation must not branch on those messages.
+
 ## Worktree and workspace errors
 
 | Code | Exit | Retryable | Meaning |

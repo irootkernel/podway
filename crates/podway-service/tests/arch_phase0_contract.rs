@@ -8,6 +8,7 @@ use std::{
     os::unix::ffi::OsStringExt,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use podway_core::UnixMillis;
@@ -20,7 +21,7 @@ use podway_service::{
     ServiceErrorV1, ServiceFilesystemErrorV1, ServiceFilesystemV1, ServiceLogStreamV1,
     ServiceManagerContractV1, ServiceOperationV1, ServiceOutcomeV1, ServicePathErrorV1,
     ServiceRunningV1, ServiceRuntimePathsV1, ServiceStatusV1, ServiceStoppedV1, UninstallOptionsV1,
-    installed_socket_path_from_metadata_v1,
+    install_socket_path_from_metadata_v1, installed_socket_path_from_metadata_v1,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -855,20 +856,31 @@ struct Phase6Launchctl {
 
 impl LaunchctlRunnerV1 for Phase6Launchctl {
     fn run(&self, arguments: &[String]) -> Result<LaunchctlOutputV1, ServiceErrorV1> {
-        self.events
-            .lock()
-            .expect("test lock")
-            .push(format!("launchctl:{}", arguments.join(" ")));
+        let mut events = self.events.lock().expect("test lock");
+        events.push(format!("launchctl:{}", arguments.join(" ")));
         let is_bootstrap = arguments
             .first()
             .is_some_and(|argument| argument == "bootstrap");
         let is_print = arguments
             .first()
             .is_some_and(|argument| argument == "print");
+        let last_side_effect = events.iter().rev().skip(1).find_map(|event| {
+            if event.starts_with("launchctl:bootout ") {
+                Some(false)
+            } else if event.starts_with("launchctl:bootstrap ") {
+                Some(true)
+            } else {
+                None
+            }
+        });
         let exit_status = if is_bootstrap {
             self.bootstrap_status
         } else if is_print {
-            self.print_status
+            match (self.print_status, last_side_effect) {
+                (0, Some(true)) => 0,
+                (0, Some(false)) => 113,
+                _ => self.print_status,
+            }
         } else {
             0
         };
@@ -906,6 +918,95 @@ struct ExactPrintLaunchctl {
 impl LaunchctlRunnerV1 for ExactPrintLaunchctl {
     fn run(&self, _: &[String]) -> Result<LaunchctlOutputV1, ServiceErrorV1> {
         Ok(self.output.clone())
+    }
+}
+
+#[derive(Clone)]
+struct DelayedBootoutLaunchctl {
+    events: Arc<Mutex<Vec<String>>>,
+    bootout_seen: Arc<Mutex<bool>>,
+    loaded_prints_after_bootout: Arc<Mutex<Option<usize>>>,
+}
+
+impl DelayedBootoutLaunchctl {
+    fn settling(events: Arc<Mutex<Vec<String>>>, loaded_prints: usize) -> Self {
+        Self {
+            events,
+            bootout_seen: Arc::new(Mutex::new(false)),
+            loaded_prints_after_bootout: Arc::new(Mutex::new(Some(loaded_prints))),
+        }
+    }
+
+    fn never_settling(events: Arc<Mutex<Vec<String>>>) -> Self {
+        Self {
+            events,
+            bootout_seen: Arc::new(Mutex::new(false)),
+            loaded_prints_after_bootout: Arc::new(Mutex::new(None)),
+        }
+    }
+}
+
+impl LaunchctlRunnerV1 for DelayedBootoutLaunchctl {
+    fn run(&self, arguments: &[String]) -> Result<LaunchctlOutputV1, ServiceErrorV1> {
+        let operation = arguments.first().map(String::as_str);
+        let output = match operation {
+            Some("bootout") => {
+                *self.bootout_seen.lock().expect("bootout state lock") = true;
+                self.events
+                    .lock()
+                    .expect("event lock")
+                    .push("launchctl:bootout".to_owned());
+                LaunchctlOutputV1::success()
+            }
+            Some("bootstrap") => {
+                self.events
+                    .lock()
+                    .expect("event lock")
+                    .push("launchctl:bootstrap".to_owned());
+                LaunchctlOutputV1::success()
+            }
+            Some("print") => {
+                let after_bootout = *self.bootout_seen.lock().expect("bootout state lock");
+                let loaded = if !after_bootout {
+                    true
+                } else {
+                    let mut remaining = self
+                        .loaded_prints_after_bootout
+                        .lock()
+                        .expect("loaded print state lock");
+                    match *remaining {
+                        Some(0) => false,
+                        Some(value) => {
+                            *remaining = Some(value - 1);
+                            true
+                        }
+                        None => true,
+                    }
+                };
+                self.events.lock().expect("event lock").push(format!(
+                    "launchctl:print:{}",
+                    if loaded { "loaded" } else { "unloaded" }
+                ));
+                if loaded {
+                    LaunchctlOutputV1 {
+                        exit_status: 0,
+                        stdout: format!(
+                            "{} = {{\n\tpid = 4242\n}}\n",
+                            arguments.get(1).expect("print target")
+                        ),
+                        stderr: String::new(),
+                    }
+                } else {
+                    LaunchctlOutputV1 {
+                        exit_status: 113,
+                        stdout: String::new(),
+                        stderr: "Bad request.\nCould not find service \"dev.podway.podwayd\" in domain for user gui: 501\n".to_owned(),
+                    }
+                }
+            }
+            _ => LaunchctlOutputV1::success(),
+        };
+        Ok(output)
     }
 }
 
@@ -1285,6 +1386,142 @@ fn phase6_install_is_idempotent_and_plist_is_canonical() {
     )));
     assert!(plist.contains("<key>RunAtLoad</key>\n  <true/>"));
     assert!(plist.contains("<key>SuccessfulExit</key>\n    <false/>"));
+}
+
+#[test]
+fn phase6_upgrade_waits_for_bootout_to_converge_before_bootstrap() {
+    let filesystem = Phase6Filesystem::default();
+    let initial = MacosServiceCommandRunnerV1::new(
+        filesystem.clone(),
+        Phase6Launchctl {
+            events: filesystem.events.clone(),
+            bootstrap_status: 0,
+            print_status: 113,
+        },
+        FixedServiceClockV1::new(UnixMillis::new(3_010)),
+        501,
+    )
+    .expect("initial service runner");
+    initial
+        .run(ServiceCommandV1::Install {
+            requested_at: UnixMillis::new(3_010),
+            spec: phase6_spec(),
+        })
+        .expect("initial install");
+    filesystem.events.lock().expect("event lock").clear();
+
+    let replacement = InstallSpecV1::new(
+        LocalPlatformPathV1::new("/Applications/Podway/podwayd-next")
+            .expect("replacement binary path"),
+        podway_service::ServiceLabelV1::podwayd(),
+        service_paths(),
+        "podway",
+        format!("sha256:{}", "a".repeat(64)),
+    );
+    let runner = MacosServiceCommandRunnerV1::new(
+        filesystem.clone(),
+        DelayedBootoutLaunchctl::settling(filesystem.events.clone(), 2),
+        FixedServiceClockV1::new(UnixMillis::new(3_011)),
+        501,
+    )
+    .expect("upgrade service runner");
+    assert!(matches!(
+        runner.run(ServiceCommandV1::Install {
+            requested_at: UnixMillis::new(3_011),
+            spec: replacement,
+        }),
+        Ok(ServiceCommandResultV1::Outcome(
+            ServiceOutcomeV1::ChangedV1(_)
+        ))
+    ));
+
+    let events = filesystem.events.lock().expect("event lock").clone();
+    let last_loaded = events
+        .iter()
+        .rposition(|event| event == "launchctl:print:loaded")
+        .expect("loaded teardown observation");
+    let unloaded = events
+        .iter()
+        .position(|event| event == "launchctl:print:unloaded")
+        .expect("unloaded teardown observation");
+    let bootstrap = events
+        .iter()
+        .position(|event| event == "launchctl:bootstrap")
+        .expect("replacement bootstrap");
+    assert!(last_loaded < unloaded && unloaded < bootstrap);
+
+    let receipt: serde_json::Value = serde_json::from_slice(
+        filesystem
+            .files
+            .lock()
+            .expect("file lock")
+            .get(service_paths().metadata_index_path().as_path())
+            .expect("upgrade receipt"),
+    )
+    .expect("upgrade receipt JSON");
+    assert_eq!(receipt["publication_state"], "receipt_durable");
+    assert_eq!(
+        receipt["daemon_binary"],
+        "/Applications/Podway/podwayd-next"
+    );
+}
+
+#[test]
+fn phase6_upgrade_times_out_before_bootstrap_when_bootout_never_converges() {
+    let filesystem = Phase6Filesystem::default();
+    let initial = MacosServiceCommandRunnerV1::new(
+        filesystem.clone(),
+        Phase6Launchctl {
+            events: filesystem.events.clone(),
+            bootstrap_status: 0,
+            print_status: 113,
+        },
+        FixedServiceClockV1::new(UnixMillis::new(3_020)),
+        501,
+    )
+    .expect("initial service runner");
+    initial
+        .run(ServiceCommandV1::Install {
+            requested_at: UnixMillis::new(3_020),
+            spec: phase6_spec(),
+        })
+        .expect("initial install");
+    filesystem.events.lock().expect("event lock").clear();
+
+    let replacement = InstallSpecV1::new(
+        LocalPlatformPathV1::new("/Applications/Podway/podwayd-next")
+            .expect("replacement binary path"),
+        podway_service::ServiceLabelV1::podwayd(),
+        service_paths(),
+        "podway",
+        format!("sha256:{}", "a".repeat(64)),
+    );
+    let runner = MacosServiceCommandRunnerV1::new(
+        filesystem.clone(),
+        DelayedBootoutLaunchctl::never_settling(filesystem.events.clone()),
+        FixedServiceClockV1::new(UnixMillis::new(3_021)),
+        501,
+    )
+    .expect("upgrade service runner")
+    .with_bootout_settle_bounds(Duration::ZERO, Duration::ZERO);
+    assert!(matches!(
+        runner.run(ServiceCommandV1::Install {
+            requested_at: UnixMillis::new(3_021),
+            spec: replacement,
+        }),
+        Err(ServiceErrorV1::TimeoutV1 {
+            operation: ServiceOperationV1::Install,
+            timeout_ms: 0,
+        })
+    ));
+    assert!(
+        !filesystem
+            .events
+            .lock()
+            .expect("event lock")
+            .iter()
+            .any(|event| event == "launchctl:bootstrap")
+    );
 }
 #[test]
 fn phase6_restart_leaves_socket_recovery_to_daemon_endpoint_then_bootstraps() {
@@ -1927,6 +2164,18 @@ fn aut_daemon_001_metadata_requires_and_returns_the_installed_socket() {
     let bytes = serde_json::to_vec(&metadata).expect("metadata fixture");
     assert_eq!(
         installed_socket_path_from_metadata_v1(&bytes).expect("installed endpoint"),
+        Path::new("/Users/podway/.podway/run/custom.sock")
+    );
+
+    let mut prepared = metadata.clone();
+    prepared["publication_state"] = serde_json::json!("prepared");
+    let prepared_bytes = serde_json::to_vec(&prepared).expect("prepared metadata fixture");
+    assert!(
+        installed_socket_path_from_metadata_v1(&prepared_bytes).is_err(),
+        "normal endpoint resolution must require a durable receipt"
+    );
+    assert_eq!(
+        install_socket_path_from_metadata_v1(&prepared_bytes).expect("install retry endpoint"),
         Path::new("/Users/podway/.podway/run/custom.sock")
     );
 
