@@ -240,8 +240,8 @@ fn request_with_options(
     );
     let operation = match command {
         "workspace.init" | "workspace.reset_all" => OperationV1::Bootstrap,
-        "workspace.show" | "session.status" | "session.next" | "session.observe" | "job.lookup"
-        | "job.status" | "job.wait" => OperationV1::Query,
+        "workspace.show" | "session.status" | "session.next" | "session.observe" | "job.list"
+        | "job.lookup" | "job.status" | "job.wait" => OperationV1::Query,
         _ => OperationV1::Mutate,
     };
     let envelope = RequestEnvelopeV1::new(RequestEnvelopeInputV1 {

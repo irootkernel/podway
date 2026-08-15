@@ -242,6 +242,8 @@ fn v2cut_legacy_schema_v3_rejects_then_confirmed_reset_all_replaces_and_cold_reo
         panic!("confirmed reset-all must replace the unsupported legacy store: {reset:?}");
     };
     let new_workspace = reset_output.workspace().unwrap().uuid().clone();
+    let reset_job_id = reset_output.job().unwrap().id().clone();
+    let reset_terminal_response = serde_json::to_value(reset_output).unwrap();
     assert_ne!(new_workspace, old_workspace);
     assert_eq!(reset_output.command().as_str(), "workspace.reset_all");
     let registry = manager.registry().load().unwrap();
@@ -291,6 +293,50 @@ fn v2cut_legacy_schema_v3_rejects_then_confirmed_reset_all_replaces_and_cold_reo
         panic!("replacement workspace must cold-reopen through the production dispatcher");
     };
     assert_eq!(shown.workspace().unwrap().uuid(), &new_workspace);
+
+    let status = runtime::request(
+        95_005,
+        "job.status",
+        &selector,
+        json!({"job_id": reset_job_id}).as_object().unwrap().clone(),
+        "",
+        PreconditionsV1::default(),
+    );
+    let status = runtime::v2_result(runtime::dispatch(&dispatcher, &status), "job.status");
+    assert_eq!(status["job"], reset_terminal_response);
+
+    let list = runtime::request(
+        95_006,
+        "job.list",
+        &selector,
+        Map::new(),
+        "",
+        PreconditionsV1::default(),
+    );
+    let list = runtime::v2_result(runtime::dispatch(&dispatcher, &list), "job.list");
+    let listed_reset = list["jobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|job| job["id"] == reset_job_id.as_str())
+        .expect("the unfiltered job list must include the reset job");
+    assert_eq!(listed_reset["terminal_response"], reset_terminal_response);
+
+    let lookup = runtime::request(
+        95_007,
+        "job.lookup",
+        &selector,
+        json!({"idempotency_key": "v2cut-reset-confirmed"})
+            .as_object()
+            .unwrap()
+            .clone(),
+        "",
+        PreconditionsV1::default(),
+    );
+    let lookup = runtime::v2_result(runtime::dispatch(&dispatcher, &lookup), "job.lookup");
+    assert_eq!(lookup["found"], true);
+    assert_eq!(lookup["job"]["id"], reset_job_id.as_str());
+    assert_eq!(lookup["job"]["terminal_response"], reset_terminal_response);
     drop(dispatcher);
     drop(manager);
 

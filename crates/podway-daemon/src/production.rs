@@ -3041,6 +3041,23 @@ fn validate_frozen_v2_result_projection(
     let graph_session = receipt.graph_session_projection();
     let matches_projection = match (schema, receipt.result()) {
         (
+            None,
+            PersistedTerminalResultV1::Success(PersistedDomainResultV1::WorkspaceReset {
+                workspace_id,
+                revision,
+            }),
+        ) => {
+            matches!(
+                receipt.lookup_command(),
+                Some(PersistedDomainCommandV1::WorkspaceResetAll)
+            ) && receipt
+                .response_context()
+                .is_some_and(|context| context.workspace_uuid() == workspace_id)
+                && result.len() == 3
+                && result.get("reset").and_then(Value::as_bool) == Some(true)
+                && result.get("revision").and_then(Value::as_u64) == Some(revision.get())
+        }
+        (
             Some("podway.session-start-result/v2"),
             PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
                 session_id,
@@ -5847,6 +5864,39 @@ mod tests {
         (receipt, envelope)
     }
 
+    fn workspace_reset_terminal_fixture(
+        sequence: u64,
+        result_workspace_id: WorkspaceId,
+    ) -> (PersistedTerminalReceiptV1, Value) {
+        let context_workspace_id =
+            WorkspaceId::new("00000000-0000-4000-8000-000000000099").unwrap();
+        let receipt = PersistedTerminalReceiptV1::new_with_projections(
+            fixture_job(sequence),
+            PersistedTerminalResultV1::Success(PersistedDomainResultV1::WorkspaceReset {
+                workspace_id: result_workspace_id,
+                revision: Revision::ZERO,
+            }),
+            terminal_job_projection(PersistedTerminalJobStateV1::Succeeded),
+            None,
+        )
+        .unwrap()
+        .with_lookup_command(PersistedDomainCommandV1::WorkspaceResetAll)
+        .unwrap()
+        .with_response_context(
+            PersistedResponseContextV1::new(
+                format!("00000000-0000-4000-8000-{sequence:012x}"),
+                "workspace.reset_all",
+                context_workspace_id,
+                "/safe/worktree",
+                sequence,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let envelope = seal_terminal_receipt_v1(&receipt).unwrap();
+        (receipt, envelope)
+    }
+
     #[test]
     fn v2plt007_terminal_replay_accepts_a_complete_correlated_v2_envelope() {
         let (receipt, frozen) = procedure_v2_terminal_fixture(80);
@@ -5859,6 +5909,39 @@ mod tests {
             terminal_job_response(&receipt, TerminalCommandKindV1::Other).unwrap(),
             frozen
         );
+    }
+
+    #[test]
+    fn v2rec001_terminal_replay_accepts_only_the_exact_workspace_reset_projection() {
+        let workspace_id = WorkspaceId::new("00000000-0000-4000-8000-000000000099").unwrap();
+        let (receipt, frozen) = workspace_reset_terminal_fixture(82, workspace_id);
+        validate_frozen_terminal_envelope(&receipt, &frozen).unwrap();
+
+        let invalid = [
+            {
+                let mut value = frozen.clone();
+                value["result"]["reset"] = json!(false);
+                value
+            },
+            {
+                let mut value = frozen.clone();
+                value["result"]["revision"] = json!(1);
+                value
+            },
+            {
+                let mut value = frozen.clone();
+                value["result"]["unexpected"] = json!(true);
+                value
+            },
+        ];
+        for envelope in invalid {
+            assert!(validate_frozen_terminal_envelope(&receipt, &envelope).is_err());
+        }
+
+        let mismatched_workspace_id =
+            WorkspaceId::new("00000000-0000-4000-8000-000000000098").unwrap();
+        let (receipt, frozen) = workspace_reset_terminal_fixture(83, mismatched_workspace_id);
+        assert!(validate_frozen_terminal_envelope(&receipt, &frozen).is_err());
     }
 
     #[test]
