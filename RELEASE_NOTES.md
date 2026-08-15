@@ -1,46 +1,67 @@
-# Podway 0.2.1 release candidate notes
+# Podway 0.2.2 release candidate notes
 
-Podway 0.2.1 is a release candidate and has not been published. These notes do not claim a publication date or an existing `v0.2.1` tag.
+Podway 0.2.2 is a release candidate and has not been published. These notes do
+not claim a publication date or an existing `v0.2.2` tag.
 
-## Changes since 0.2.0
+## Changes since 0.2.1
 
-- Make Procedure v2 the only supported authoring and runtime model, removing Procedure v1 parsing, commands, presets, public success schemas, and runtime paths.
-- Emit all successful commands through the closed `podway.output/v3` envelope while retaining `podway.error/v1` for failures and current procedure-independent `/v1` contracts.
-- Move worktree persistence to schema-v4 and fail closed before migration when legacy Procedure v1 state is present.
-- Ship three built-in Procedure v2 presets: `bug-fix-v2`, `small-change-v2`, and
+- Add self-contained session observation with bounded active inputs, current
+  workflow memory, and fenced mutation templates for automation clients.
+- Add atomic multi-item recording through the closed `podway record --stdin`
+  contract.
+- Add structured, read-only recovery recipes to common automation errors.
+- Ship the lightweight `small-change-v2` preset alongside `bug-fix-v2` and
   `sw-dev-v2`.
-- Add optional source-distributed `use-podway` guidance for AI coding agents.
+- Prevent different workspace UUIDs from owning the same canonical root and let
+  confirmed reset converge a proven legacy duplicate-root registry generation.
+- Preserve reset terminal replay after cold reopen so `job status`, unfiltered
+  `job list`, and `job lookup` return the immutable original response instead of
+  `WORKSPACE_STATE_UNREADABLE`.
 
 ## Compatibility and migration
 
-Procedure v2 is now the only supported authoring and runtime model. This is an intentionally compatibility-breaking release: Procedure v1 inputs and commands are no longer accepted, and consumers must use `podway.output/v3` success envelopes.
+Podway remains Procedure v2-only. No existing public contract identifier or
+SQLite schema version changes in this release. Existing Procedure v2 state and
+identities remain supported, and empty predecessor databases still migrate
+transactionally to canonical schema-v4.
 
-Existing Procedure v2 state and identities remain supported. Empty predecessor databases migrate transactionally to canonical schema-v4. A database containing legacy Procedure v1 state fails closed with `LEGACY_PROCEDURE_STATE_UNSUPPORTED`; Podway does not convert or discard that state automatically. After any desired backup, recovery requires an explicit confirmed `podway reset --all`.
+A database containing legacy Procedure v1 state fails closed with `LEGACY_PROCEDURE_STATE_UNSUPPORTED`; Podway does not convert or discard that state
+automatically. After any desired backup, recovery requires an explicit confirmed
+`podway reset --all`.
 
-The supported release target remains native Apple Silicon macOS: `aarch64-apple-darwin` with thin `arm64` Mach-O `podway` and `podwayd` binaries.
-
-Podway is a same-user local tool. Its IPC endpoint and worktree state are trusted only within the operating-system user account that owns them. It does not provide a multi-user access-control boundary.
+The supported release target remains native Apple Silicon macOS:
+`aarch64-apple-darwin` with thin `arm64` Mach-O `podway` and `podwayd` binaries.
+Podway remains a same-user local tool rather than a multi-user security boundary.
 
 ## Distribution metadata
 
 The qualified, unpublished distribution contains these exact top-level artifacts:
 
-- `podway-0.2.1-aarch64-apple-darwin.tar.gz`;
-- `podway-0.2.1-aarch64-apple-darwin.tar.gz.sha256`;
-- `podway-0.2.1-aarch64-apple-darwin.provenance.json`;
-- `podway-0.2.1-aarch64-apple-darwin.dolgorae-handoff.json`.
+- `podway-0.2.2-aarch64-apple-darwin.tar.gz`;
+- `podway-0.2.2-aarch64-apple-darwin.tar.gz.sha256`;
+- `podway-0.2.2-aarch64-apple-darwin.provenance.json`;
+- `podway-0.2.2-aarch64-apple-darwin.dolgorae-handoff.json`.
 
-The archive contains both binaries, shell completions, the three built-in Procedure v2 presets, public schemas and specifications, canonicalization fixtures, the contract manifest, README, release notes, and license. Provenance records the source and build identities, artifact class, target, checksums, contract-manifest identity, qualification results, and signing/notarization status.
+The archive contains both binaries, shell completions, and three built-in Procedure v2 presets: `bug-fix-v2`, `small-change-v2`, and `sw-dev-v2`. It also
+contains public schemas and specifications, canonicalization fixtures, the
+contract manifest, README, release notes, and license. Provenance records the
+source and build identities, target, checksums, qualification results, and
+signing and notarization status.
 
-## Admission and release boundary
+## Admission and integration boundary
 
-This qualified release candidate admits Procedure v2 sessions normally and does not contain the development-only admission unlock. Publication may publish only the unchanged qualified artifacts after explicit release authorization and must reverify the published bytes.
+This qualified release candidate admits Procedure v2 sessions normally and does not contain the development-only admission unlock. Publication may publish only the unchanged qualified artifacts after explicit release authorization.
 
-Development-only v2 admission remains limited to feature-enabled binaries, disposable workspaces, development mode, and isolated socket and state directories. That state has no migration-preservation promise and is not part of a release artifact.
+No MCP server or MCP transport is included. Automation integrates through the
+CLI and its versioned JSON and local IPC contracts; the optional source-distributed
+`use-podway` skill provides agent guidance over those interfaces.
 
 ## Signing and known limitations
 
-The Podway 0.2.1 Apple Silicon release candidate is unsigned and not notarized. Users must verify the attached SHA-256 checksum before installing a published artifact.
+The Podway 0.2.2 Apple Silicon release candidate is unsigned and not notarized.
+Users must verify the attached SHA-256 checksum before installing a published
+artifact.
 
 - Only native Apple Silicon macOS is supported.
-- The service is a per-user LaunchAgent. It starts after GUI login and does not run before login.
+- The service is a per-user LaunchAgent. It starts after GUI login and does not
+  run before login.

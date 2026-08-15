@@ -27,7 +27,7 @@ import release_evidence
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PRODUCT_VERSION = "0.2.1"
+PRODUCT_VERSION = "0.2.2"
 TARGET = "aarch64-apple-darwin"
 ARCHIVE_ROOT = f"podway-{PRODUCT_VERSION}-{TARGET}"
 MACHO_64_LITTLE_ENDIAN = b"\xcf\xfa\xed\xfe"
@@ -849,17 +849,19 @@ def rust_toolchain() -> str:
 def release_status() -> dict[str, str]:
     notes = (ROOT / "RELEASE_NOTES.md").read_text(encoding="utf-8")
     required = (
-        "Podway 0.2.1 is a release candidate and has not been published",
-        "Procedure v2 is now the only supported authoring and runtime model",
+        "Podway 0.2.2 is a release candidate and has not been published",
+        "self-contained session observation",
+        "`podway record --stdin`",
         "three built-in Procedure v2 presets",
         "fails closed with `LEGACY_PROCEDURE_STATE_UNSUPPORTED`",
-        "podway-0.2.1-aarch64-apple-darwin.tar.gz.sha256",
-        "podway-0.2.1-aarch64-apple-darwin.dolgorae-handoff.json",
+        "podway-0.2.2-aarch64-apple-darwin.tar.gz.sha256",
+        "podway-0.2.2-aarch64-apple-darwin.dolgorae-handoff.json",
         "native Apple Silicon macOS",
         "same-user local tool",
         "qualified release candidate admits Procedure v2 sessions normally",
         "does not contain the development-only admission unlock",
         "publish only the unchanged qualified artifacts after explicit release authorization",
+        "No MCP server or MCP transport is included",
         "unsigned and not notarized",
     )
     missing = [text for text in required if text not in notes]
