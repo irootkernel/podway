@@ -4,8 +4,9 @@ Use the managed development runtime when you need a disposable Podway daemon
 and worktree that cannot touch the installed production service state.
 
 The helper is `tools/dev_runtime.py`. It builds the pinned debug `podway` and
-`podwayd` pair, snapshots both binaries under a private root, and drives only
-that snapshot through `--dev` with debug-only account-root isolation.
+`podwayd` pair, snapshots both binaries under a private root, writes purpose
+`contributor` `podway.managed-dev-runtime/v2` metadata, and drives only that
+snapshot through `--dev`.
 
 ## Commands
 
@@ -69,7 +70,7 @@ Below that root the helper keeps:
 
 | Path | Role |
 |---|---|
-| `account/` | `PODWAY_TEST_ACCOUNT_ROOT`; `account/.podway/run/podwayd.lock` is the isolated singleton lock |
+| `account/` | private account root; `account/.podway/run/podwayd.lock` is the isolated singleton lock |
 | `dev/` | `PODWAY_DEV_HOME`; owns the dev socket, registry, and logs |
 | `sandbox/` | disposable Git worktree used by `init` and `run` |
 | `snapshots/<id>/` | immutable matching `podway` and `podwayd` binaries |
@@ -96,17 +97,17 @@ stop it and start `daemon` again.
 
 ## Production coexistence
 
-The managed runtime sets debug-only `PODWAY_TEST_ACCOUNT_ROOT` together with a
-separate `PODWAY_DEV_HOME`. That makes the singleton lock disjoint from the real
+The managed runtime declares a private account root together with a separate
+`PODWAY_DEV_HOME`. The release daemon validates this topology before deriving
+paths, while debug tooling additionally retains its test-isolation safeguards.
+That makes the singleton lock disjoint from the real
 account's `~/.podway/run/podwayd.lock`, so the managed daemon can coexist with an
 installed production LaunchAgent.
 
 Raw `podwayd --dev` without this helper still uses the production singleton lock
-and therefore still contends with an installed production daemon and with the
-release-archive production-lock preflight.
-
-The managed runtime does not change release-archive contents or the installed
-singleton/preflight behavior used by packaging qualification.
+and therefore still contends with an installed production daemon. Packaged
+qualification uses the same metadata schema with purpose `release-qualification`
+under a separate temporary managed root; it does not enable development-v2 admission.
 
 ## Procedure v2 admission
 

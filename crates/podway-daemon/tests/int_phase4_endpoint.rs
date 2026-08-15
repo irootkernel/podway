@@ -263,6 +263,7 @@ fn assert_frozen_daemon_source_inventory(source_root: &Path) {
         "execution/int_v2gol_epic_execution_integrity/mod.rs",
         "lib.rs",
         "main.rs",
+        "managed_dev.rs",
         "native_execution.rs",
         "observability.rs",
         "peer.rs",

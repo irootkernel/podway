@@ -4962,7 +4962,8 @@ fn map_runtime_error(error: WorkspaceRuntimeErrorV1) -> DispatchFailureV1 {
 
 fn map_resolution_error(error: WorkspaceResolutionErrorV1) -> DispatchFailureV1 {
     match error {
-        WorkspaceResolutionErrorV1::Selector { .. }
+        WorkspaceResolutionErrorV1::ManagedDevScopeViolation
+        | WorkspaceResolutionErrorV1::Selector { .. }
         | WorkspaceResolutionErrorV1::StoredRootPathInvalid { .. }
         | WorkspaceResolutionErrorV1::WorkspaceRootPathInvalid { .. }
         | WorkspaceResolutionErrorV1::RuntimeDirectoryPathInvalid { .. }

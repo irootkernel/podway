@@ -1605,6 +1605,15 @@ impl WorkspaceRuntimeManagerV1 {
         inspection_options: SqliteStoreOptionsV1,
         observability: Option<ObservabilityEmitterV1>,
     ) -> Self {
+        Self::with_observability_and_scope(paths, inspection_options, observability, None)
+    }
+
+    pub fn with_observability_and_scope(
+        paths: &ServiceRuntimePathsV1,
+        inspection_options: SqliteStoreOptionsV1,
+        observability: Option<ObservabilityEmitterV1>,
+        allowed_worktree_root: Option<PathBuf>,
+    ) -> Self {
         let (registry, schedulers) = match observability {
             Some(emitter) => (
                 RegistryStoreV1::with_observability(paths, Some(emitter.clone())),
@@ -1616,9 +1625,10 @@ impl WorkspaceRuntimeManagerV1 {
             ),
         };
         Self {
-            resolver: WorkspaceResolverV1::new(
+            resolver: WorkspaceResolverV1::new_scoped(
                 NativeGitResolverV1::new(),
                 SqliteWorkspaceBindingInspectorV1::new(inspection_options.clone()),
+                allowed_worktree_root,
             ),
             layout_initializer: WorkspaceLayoutInitializerV1::new(),
             inspection_options,

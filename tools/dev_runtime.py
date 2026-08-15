@@ -27,7 +27,7 @@ import release_archive
 import release_evidence
 ROOT = Path(__file__).resolve().parents[1]
 PINNED_RUST_TOOLCHAIN = "1.97.1"
-SCHEMA = "podway.dev-runtime/v1"
+SCHEMA = "podway.managed-dev-runtime/v2"
 V2REL003_QUALIFICATION_SCHEMA = "podway.v2rel003-native-qualification/v1"
 IPC_MAX_PAYLOAD_BYTES = 1_048_576
 METADATA_NAME = "runtime.json"
@@ -114,6 +114,7 @@ def layout_paths(root: Path) -> dict[str, Path]:
 def expected_identity(checkout: Path, root: Path) -> dict[str, Any]:
     paths = layout_paths(root)
     return {
+        "purpose": "contributor",
         "checkout": checkout.as_posix(),
         "uid": euid(),
         "root": root.as_posix(),
@@ -472,6 +473,7 @@ def snapshot_pair(
         fail(f"snapshot podwayd lacks {DEVELOPMENT_V2_FEATURE} capability")
     return {
         "schema": SCHEMA,
+        "purpose": "contributor",
         "checkout": checkout.as_posix(),
         "uid": euid(),
         "root": paths["root"].as_posix(),

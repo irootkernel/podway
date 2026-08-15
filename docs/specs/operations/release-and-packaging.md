@@ -87,12 +87,9 @@ compatibility handoff under `dist/`. The archive
 builder rejects a translated or non-arm64 host, non-thin-arm64 Mach-O binaries,
 version mismatches, incomplete archive contents, a Rust toolchain other than 1.97.1,
 and any dirty tracked or untracked source state.
-The first preflight derives the effective account home from the operating-system
-account database instead of ambient `HOME`. If the production runtime and lock
-exist, it requires an owner-private `0700` real directory and owner-private `0600`
-regular lock file, then probes the daemon's non-blocking exclusive singleton lock.
-A held or unsafe lock fails before formatting or compilation. The probe releases a
-free lock immediately and never reads, removes, or replaces the daemon socket.
+The first preflight verifies the native host and clean worktree before formatting
+or compilation. It does not inspect, acquire, remove, or replace any production
+runtime path, lock, or socket.
 The builder first snapshots both executable inputs through non-symlink file
 descriptors. Binary validation, isolation classification, packaged content, recorded
 digests, and provenance all use those immutable snapshot bytes. Probe failure,
@@ -121,11 +118,16 @@ construction always requires a clean tree.
 
 Packaging initially writes the exact required conformance scenario list with a
 `pending` result. Qualification is an automatic, unprivileged step of `make dist`;
-there is no separate qualification target or receipt. It uses a private temporary
-`PODWAY_DEV_HOME`, starts the extracted `podwayd --dev`, and runs packaged fenced
+there is no separate qualification target or receipt. It creates an owner-private
+`podway.managed-dev-runtime/v2` root directly under `/private/tmp`, declares purpose
+`release-qualification`, snapshots the extracted binaries into that root, starts
+the snapshot `podwayd --dev`, and runs packaged fenced
 lifecycle, conflict, admitted-timeout, response-loss, reconciliation, and identity
-scenarios through the extracted `podway --dev`. Success requires orderly termination
-and absence of every temporary daemon socket. Only after every extracted-archive
+scenarios through the snapshot `podway --dev`. Success requires orderly termination
+and absence of every temporary daemon socket. The managed account lock, registry,
+logs, and sandbox are disjoint from production, selectors and canonical Git roots
+outside the sandbox fail before Store access, and release-purpose metadata never
+enables debug development admission. Only after every extracted-archive
 check and scenario succeeds does qualification atomically replace the provenance
 result with `passed`; failure preserves the pending document byte-for-byte. This
 verifies Podway's executable and IPC interfaces; it does not retest macOS launchd

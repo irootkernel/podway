@@ -1296,6 +1296,7 @@ pub enum WorkspaceGitObservationV1 {
 /// Exact failures that prevent a workspace from receiving daemon authority.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WorkspaceResolutionErrorV1 {
+    ManagedDevScopeViolation,
     Selector {
         source: SelectorValidationErrorV1,
     },
@@ -1347,6 +1348,9 @@ pub enum WorkspaceResolutionErrorV1 {
 impl fmt::Display for WorkspaceResolutionErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ManagedDevScopeViolation => {
+                formatter.write_str("workspace is outside the managed dev sandbox")
+            }
             Self::Selector { .. } => formatter.write_str("workspace selector is invalid"),
             Self::Git { observation, .. } => {
                 write!(formatter, "{observation} Git observation failed")
@@ -1398,7 +1402,8 @@ impl Error for WorkspaceResolutionErrorV1 {
         match self {
             Self::BindingInspection { source } => Some(source),
             Self::WorkspaceRootConversion { source } => Some(source),
-            Self::Selector { .. }
+            Self::ManagedDevScopeViolation
+            | Self::Selector { .. }
             | Self::Git { .. }
             | Self::StoredRootPathInvalid { .. }
             | Self::WorkspaceRootPathInvalid { .. }
@@ -1544,6 +1549,7 @@ impl ResetWorkspaceResolutionV1 {
 pub struct WorkspaceResolverV1<R, I> {
     git_resolver: R,
     binding_inspector: I,
+    allowed_worktree_root: Option<PathBuf>,
 }
 
 impl<R, I> WorkspaceResolverV1<R, I>
@@ -1552,9 +1558,18 @@ where
     I: WorkspaceBindingInspectorV1,
 {
     pub fn new(git_resolver: R, binding_inspector: I) -> Self {
+        Self::new_scoped(git_resolver, binding_inspector, None)
+    }
+
+    pub fn new_scoped(
+        git_resolver: R,
+        binding_inspector: I,
+        allowed_worktree_root: Option<PathBuf>,
+    ) -> Self {
         Self {
             git_resolver,
             binding_inspector,
+            allowed_worktree_root,
         }
     }
 
@@ -1590,6 +1605,7 @@ where
         expected_workspace_id: Option<&WorkspaceId>,
         reset_identity_only: bool,
     ) -> Result<ResolvedWorkspaceV1, WorkspaceResolutionErrorV1> {
+        self.require_selector_scope(&selector)?;
         let preliminary_selector = preliminary_selector(&selector)?;
         let preliminary = self
             .git_resolver
@@ -1598,6 +1614,7 @@ where
                 observation: WorkspaceGitObservationV1::Preliminary,
                 source,
             })?;
+        self.require_worktree_scope(&preliminary)?;
         require_candidate_identity(&preliminary)?;
 
         let database_path = database_path_from_worktree(&preliminary)?;
@@ -1637,6 +1654,7 @@ where
                 observation: WorkspaceGitObservationV1::BoundRevalidation,
                 source,
             })?;
+        self.require_worktree_scope(&revalidated)?;
 
         require_revalidated_identity(
             &revalidated,
@@ -1656,6 +1674,7 @@ where
         &self,
         selector: WorktreeSelectorV1,
     ) -> Result<ResetWorkspaceResolutionV1, WorkspaceResolutionErrorV1> {
+        self.require_selector_scope(&selector)?;
         let preliminary_selector = preliminary_selector(&selector)?;
         let preliminary = self
             .git_resolver
@@ -1664,6 +1683,7 @@ where
                 observation: WorkspaceGitObservationV1::Preliminary,
                 source,
             })?;
+        self.require_worktree_scope(&preliminary)?;
         require_candidate_identity(&preliminary)?;
         let database_path = database_path_from_worktree(&preliminary)?;
         let candidate_selector = WorktreeSelectorV1::new(
@@ -1679,6 +1699,7 @@ where
                 observation: WorkspaceGitObservationV1::CandidateRevalidation,
                 source,
             })?;
+        self.require_worktree_scope(&revalidated)?;
         require_revalidated_identity(
             &revalidated,
             WorkspaceIdentityStateV1::Candidate,
@@ -1696,6 +1717,7 @@ where
         &self,
         selector: WorktreeSelectorV1,
     ) -> Result<ResolvedWorkspaceV1, WorkspaceResolutionErrorV1> {
+        self.require_selector_scope(&selector)?;
         let preliminary_selector = preliminary_selector(&selector)?;
         let preliminary = self
             .git_resolver
@@ -1704,6 +1726,7 @@ where
                 observation: WorkspaceGitObservationV1::Preliminary,
                 source,
             })?;
+        self.require_worktree_scope(&preliminary)?;
         require_candidate_identity(&preliminary)?;
 
         let database_path = database_path_from_worktree(&preliminary)?;
@@ -1729,6 +1752,7 @@ where
                 observation: WorkspaceGitObservationV1::CandidateRevalidation,
                 source,
             })?;
+        self.require_worktree_scope(&revalidated)?;
         require_revalidated_identity(
             &revalidated,
             WorkspaceIdentityStateV1::Candidate,
@@ -1737,6 +1761,67 @@ where
 
         let revalidated_database_path = require_stable_database_path(&database_path, &revalidated)?;
         ResolvedWorkspaceV1::new(revalidated, revalidated_database_path)
+    }
+
+    #[cfg(unix)]
+    fn require_selector_scope(
+        &self,
+        selector: &WorktreeSelectorV1,
+    ) -> Result<(), WorkspaceResolutionErrorV1> {
+        let Some(allowed) = &self.allowed_worktree_root else {
+            return Ok(());
+        };
+        let path = PathBuf::from(OsString::from_vec(
+            selector
+                .path()
+                .decode_path_bytes()
+                .map_err(|_| WorkspaceResolutionErrorV1::ManagedDevScopeViolation)?,
+        ));
+        if !path.is_absolute() || !path.starts_with(allowed) {
+            return Err(WorkspaceResolutionErrorV1::ManagedDevScopeViolation);
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn require_worktree_scope(
+        &self,
+        worktree: &ValidatedWorktreeV1,
+    ) -> Result<(), WorkspaceResolutionErrorV1> {
+        let Some(allowed) = &self.allowed_worktree_root else {
+            return Ok(());
+        };
+        let root = PathBuf::from(OsString::from_vec(
+            worktree
+                .roots()
+                .worktree_root()
+                .decode_path_bytes()
+                .map_err(|_| WorkspaceResolutionErrorV1::ManagedDevScopeViolation)?,
+        ));
+        if !root.starts_with(allowed) {
+            return Err(WorkspaceResolutionErrorV1::ManagedDevScopeViolation);
+        }
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    fn require_selector_scope(
+        &self,
+        _selector: &WorktreeSelectorV1,
+    ) -> Result<(), WorkspaceResolutionErrorV1> {
+        self.allowed_worktree_root.as_ref().map_or(Ok(()), |_| {
+            Err(WorkspaceResolutionErrorV1::ManagedDevScopeViolation)
+        })
+    }
+
+    #[cfg(not(unix))]
+    fn require_worktree_scope(
+        &self,
+        _worktree: &ValidatedWorktreeV1,
+    ) -> Result<(), WorkspaceResolutionErrorV1> {
+        self.allowed_worktree_root.as_ref().map_or(Ok(()), |_| {
+            Err(WorkspaceResolutionErrorV1::ManagedDevScopeViolation)
+        })
     }
 }
 

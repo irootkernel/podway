@@ -34,6 +34,7 @@ use serde_json::Value;
 static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 const DISTRIBUTION_QUALIFICATION_ROOT_ENV: &str = "PODWAY_DISTRIBUTION_QUALIFICATION_ROOT";
 const DISTRIBUTION_ACCOUNT_HOME_ENV: &str = "PODWAY_DISTRIBUTION_ACCOUNT_HOME";
+const DISTRIBUTION_DEV_HOME_ENV: &str = "PODWAY_DISTRIBUTION_DEV_HOME";
 
 struct ControlledPathFixtureV1 {
     root: PathBuf,
@@ -276,7 +277,14 @@ impl ControlledPathFixtureV1 {
     }
 
     fn dev_home(&self) -> PathBuf {
-        self.home.join(".podway/dev")
+        if self.production_service {
+            PathBuf::from(
+                std::env::var_os(DISTRIBUTION_DEV_HOME_ENV)
+                    .expect("distribution qualification must provide the dev home"),
+            )
+        } else {
+            self.home.join(".podway/dev")
+        }
     }
 
     fn socket_path(&self) -> PathBuf {

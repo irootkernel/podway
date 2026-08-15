@@ -42,10 +42,11 @@ the developer's installed service state.
 release binaries so packaged IPC conformance can exercise the actual artifact
 without installing a LaunchAgent. Its default root is
 `<effective-user-home>/.podway/dev/`; an absolute `PODWAY_DEV_HOME` overrides that
-root only in dev mode. The dev socket, registry, metadata, and log paths live below
-that root. The singleton lock remains the production
-`<effective-user-home>/.podway/run/podwayd.lock`, preventing simultaneous production
-and dev daemon ownership.
+root only in dev mode. Raw `--dev` keeps its socket, registry, metadata, and logs
+below that root while retaining the production singleton lock for compatibility.
+When that root belongs to a validated `podway.managed-dev-runtime/v2` topology,
+the daemon instead uses the topology's isolated account root and restricts every
+workspace to its canonical sandbox. Invalid present metadata fails startup.
 
 `podway --dev` selects the dev socket directly and never consults installed-service
 metadata. `podway --dev terminate` sends the dev-only `daemon.terminate` control
@@ -64,9 +65,9 @@ GUI login domain during distribution packaging.
 Contributors who need a disposable daemon that can coexist with an installed
 production service should use `tools/dev_runtime.py` rather than raw
 `podwayd --dev`. The helper derives a short private root under `/private/tmp`,
-snapshots matching debug binaries, and sets debug-only `PODWAY_TEST_ACCOUNT_ROOT`
-together with a separate `PODWAY_DEV_HOME` so the isolated lock is disjoint from
-production. Raw `podwayd --dev` without that account-root override still shares the
+snapshots matching debug binaries, and writes purpose `contributor` managed-runtime
+metadata. `podwayd --dev` validates that metadata and derives an isolated lock from
+its private account root. Raw `podwayd --dev` without managed metadata still shares the
 production lock and never satisfies the development-v2 admission gate. Only the
 feature-built, helper-managed daemon plus its exact disposable sandbox marker can
 produce a development admission token; current v2 runtime routes remain closed

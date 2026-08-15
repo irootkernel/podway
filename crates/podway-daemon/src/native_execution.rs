@@ -519,7 +519,8 @@ fn workspace_resolution_boundary_error_v1(
         WorkspaceResolutionErrorV1::ExpectedWorkspaceUuidMismatch { expected, actual } => {
             ExecutionBoundaryErrorV1::workspace_identity_mismatch(expected, actual)
         }
-        WorkspaceResolutionErrorV1::Selector { .. }
+        WorkspaceResolutionErrorV1::ManagedDevScopeViolation
+        | WorkspaceResolutionErrorV1::Selector { .. }
         | WorkspaceResolutionErrorV1::ExistingBindingMissing
         | WorkspaceResolutionErrorV1::BootstrapBindingAlreadyPresent
         | WorkspaceResolutionErrorV1::GitStoreFingerprintMismatch { .. }

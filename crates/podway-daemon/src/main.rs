@@ -2,11 +2,13 @@
 
 use std::{env, io, num::NonZeroUsize, path::PathBuf, process, sync::Arc, thread};
 
-#[cfg(debug_assertions)]
 use nix::unistd::geteuid;
+#[cfg(all(feature = "development-v2-admission", debug_assertions))]
+use podway_daemon::managed_dev::ManagedDevPurposeV2;
 use podway_daemon::{
     ObservabilityCountersV1, ObservabilityFinalizationV1, ObservabilityV1, RotatingFileSinkV1,
     SystemClockV1,
+    managed_dev::ManagedDevRuntimeV2,
     runtime::{ProductionDaemonRuntimeConfigV1, ProductionDaemonRuntimeV1},
     server::{
         DaemonProcessIdentityV1, ResponseMetadataSourceV1, ServerTransportTimeoutsV1,
@@ -126,7 +128,7 @@ fn run_service(
     dev_mode: bool,
     socket_path: Option<PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let paths = effective_service_paths(dev_mode)?;
+    let (paths, managed_dev) = effective_service_paths(dev_mode)?;
     let paths = match socket_path {
         Some(socket_path) => paths.with_socket_path(socket_path)?,
         None => paths,
@@ -146,11 +148,19 @@ fn run_service(
         ServerTransportTimeoutsV1::default(),
     )
     .with_process_identity(process_identity);
+    if let Some(managed_dev) = &managed_dev {
+        configuration = configuration.with_managed_dev_workspace_root(managed_dev.sandbox());
+    }
     #[cfg(all(feature = "development-v2-admission", debug_assertions))]
     if dev_mode {
-        configuration = configuration
-            .with_dev_mode()
-            .with_development_v2_admission(&paths, &env::current_exe()?.canonicalize()?);
+        configuration = configuration.with_dev_mode();
+        if managed_dev
+            .as_ref()
+            .is_some_and(|runtime| runtime.purpose() == ManagedDevPurposeV2::Contributor)
+        {
+            configuration = configuration
+                .with_development_v2_admission(&paths, &env::current_exe()?.canonicalize()?);
+        }
     }
     #[cfg(not(all(feature = "development-v2-admission", debug_assertions)))]
     if dev_mode {
@@ -219,7 +229,19 @@ fn run_service(
 
 fn effective_service_paths(
     dev_mode: bool,
-) -> Result<ServiceRuntimePathsV1, podway_service::ServicePathErrorV1> {
+) -> Result<(ServiceRuntimePathsV1, Option<ManagedDevRuntimeV2>), Box<dyn std::error::Error>> {
+    if dev_mode
+        && let Some(dev_home) = env::var_os("PODWAY_DEV_HOME").map(PathBuf::from)
+        && let Some(runtime) =
+            ManagedDevRuntimeV2::discover(&dev_home, &env::current_exe()?.canonicalize()?)?
+    {
+        let paths = ServiceRuntimePathsV1::for_dev_home(
+            runtime.account_root(),
+            runtime.dev_home(),
+            geteuid().as_raw(),
+        )?;
+        return Ok((paths, Some(runtime)));
+    }
     #[cfg(debug_assertions)]
     if let Some(account_root) = env::var_os("PODWAY_TEST_ACCOUNT_ROOT") {
         if dev_mode {
@@ -227,15 +249,24 @@ fn effective_service_paths(
             let dev_home = env::var_os("PODWAY_DEV_HOME")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| account_root.join(".podway/dev"));
-            return ServiceRuntimePathsV1::for_dev_home(account_root, dev_home, geteuid().as_raw());
+            return Ok((
+                ServiceRuntimePathsV1::for_dev_home(account_root, dev_home, geteuid().as_raw())?,
+                None,
+            ));
         }
-        return ServiceRuntimePathsV1::for_account_home(account_root, geteuid().as_raw());
+        return Ok((
+            ServiceRuntimePathsV1::for_account_home(account_root, geteuid().as_raw())?,
+            None,
+        ));
     }
     if dev_mode {
         let dev_home = env::var_os("PODWAY_DEV_HOME").map(PathBuf::from);
-        return ServiceRuntimePathsV1::for_effective_user_dev(dev_home.as_deref());
+        return Ok((
+            ServiceRuntimePathsV1::for_effective_user_dev(dev_home.as_deref())?,
+            None,
+        ));
     }
-    ServiceRuntimePathsV1::for_effective_user()
+    Ok((ServiceRuntimePathsV1::for_effective_user()?, None))
 }
 
 type StageResult = Result<(), String>;

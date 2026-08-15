@@ -197,17 +197,45 @@ def build_harness() -> Path:
 
 
 def run_packaged_suite(root: Path, harness: Path, cli: Path, daemon: Path) -> None:
-    home = root / "home"
-    cases = root / "cases"
-    root.mkdir(mode=0o700)
-    home.mkdir(mode=0o700)
-    cases.mkdir(mode=0o700)
+    account = root / "account"
+    dev_home = root / "dev"
+    sandbox = root / "sandbox"
+    snapshots = root / "snapshots"
+    snapshot_id = release_archive.sha256_file(daemon)[:16]
+    snapshot = snapshots / snapshot_id
+    for directory in (account, dev_home, sandbox, snapshots, snapshot):
+        directory.mkdir(mode=0o700)
+    snapshot_cli = release_archive.snapshot_executable(cli, snapshot / "podway", "podway")
+    snapshot_daemon = release_archive.snapshot_executable(
+        daemon, snapshot / "podwayd", "podwayd"
+    )
+    metadata = {
+        "schema": "podway.managed-dev-runtime/v2",
+        "purpose": "release-qualification",
+        "uid": os.geteuid(),
+        "root": str(root),
+        "account_root": str(account),
+        "dev_home": str(dev_home),
+        "sandbox": str(sandbox),
+        "snapshot": {
+            "id": snapshot_id,
+            "directory": str(snapshot),
+            "podway": str(snapshot_cli),
+            "podwayd": str(snapshot_daemon),
+            "podway_sha256": release_archive.sha256_file(snapshot_cli),
+            "podwayd_sha256": release_archive.sha256_file(snapshot_daemon),
+        },
+    }
+    metadata_path = root / "runtime.json"
+    release_archive.write_json(metadata_path, metadata)
+    metadata_path.chmod(0o600)
     environment = {
         "PATH": "/usr/bin:/bin",
-        "PODWAY_DISTRIBUTION_QUALIFICATION_ROOT": str(cases),
-        "PODWAY_DISTRIBUTION_ACCOUNT_HOME": str(home),
-        "PODWAY_TEST_CLI_BINARY": str(cli),
-        "PODWAYD_TEST_BINARY": str(daemon),
+        "PODWAY_DISTRIBUTION_QUALIFICATION_ROOT": str(sandbox),
+        "PODWAY_DISTRIBUTION_ACCOUNT_HOME": str(account),
+        "PODWAY_DISTRIBUTION_DEV_HOME": str(dev_home),
+        "PODWAY_TEST_CLI_BINARY": str(snapshot_cli),
+        "PODWAYD_TEST_BINARY": str(snapshot_daemon),
     }
     for test in REQUIRED_TESTS:
         completed = run(
@@ -235,14 +263,15 @@ def qualify(output_directory: Path) -> dict[str, Any]:
     tree = source_tree()
     archive, checksum, provenance_path = expected_paths(output_directory)
     harness = build_harness()
-    # Keep the account-derived dev socket below macOS's Unix-domain path limit.
-    with tempfile.TemporaryDirectory(prefix="pw-rel10-", dir="/tmp") as temporary_name:
+    with tempfile.TemporaryDirectory(
+        prefix=f"podway-release-{os.geteuid()}-", dir="/private/tmp"
+    ) as temporary_name:
         temporary = Path(temporary_name)
         temporary.chmod(0o700)
         cli, daemon, provenance = verify_distribution(
             archive, checksum, provenance_path, temporary / "extracted", commit, tree
         )
-        run_packaged_suite(temporary / "runtime", harness, cli, daemon)
+        run_packaged_suite(temporary, harness, cli, daemon)
         passed = release_evidence.mark_packaged_conformance_passed(provenance_path, provenance)
         return {
             "archive": archive.name,

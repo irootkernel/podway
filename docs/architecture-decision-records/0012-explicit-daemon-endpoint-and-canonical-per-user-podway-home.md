@@ -3,6 +3,10 @@
 - Status: Accepted
 - Date: 2026-07-23
 
+The statement below that every daemon instance contends on the production lock is
+superseded for validated managed `--dev` runtimes by
+[ADR-0020](0020-managed-dev-runtime-isolation.md).
+
 ## Context
 
 Podway currently derives service paths from ambient `HOME` and `TMPDIR` values,
@@ -87,4 +91,3 @@ Worktree-owned state remains under `<worktree>/.podway`, including
   service is reinstalled or upgraded.
 - Runtime-path migration, stale socket recovery, and uninstall require explicit
   compatibility handling during the `RPATH` epic.
-

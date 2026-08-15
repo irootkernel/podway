@@ -168,6 +168,42 @@ fn injected_binding_inspector_is_observed_without_granting_store_mutation_author
     assert!(!resolved.database_path().exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn managed_dev_scope_rejects_lexical_and_symlink_escapes_before_store_inspection() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = git_worktrees();
+    let sandbox = fixture.temporary_path().join("managed-sandbox");
+    fs::create_dir(&sandbox).expect("managed sandbox must be created");
+    let inspector = MissingBindingInspectorV1::new();
+    let resolver = WorkspaceResolverV1::new_scoped(
+        NativeGitResolverV1::new(),
+        inspector,
+        Some(sandbox.clone()),
+    );
+
+    let lexical_error = resolver
+        .resolve_bootstrap(selector(fixture.main()))
+        .expect_err("an out-of-sandbox selector must fail before Git resolution");
+    assert_eq!(
+        lexical_error,
+        WorkspaceResolutionErrorV1::ManagedDevScopeViolation
+    );
+    assert_eq!(resolver.binding_inspector().calls(), 0);
+
+    let escape = sandbox.join("escaped-worktree");
+    symlink(fixture.main(), &escape).expect("scope escape symlink must be created");
+    let symlink_error = resolver
+        .resolve_bootstrap(selector(&escape))
+        .expect_err("a selector symlink resolving outside the sandbox must fail closed");
+    assert_eq!(
+        symlink_error,
+        WorkspaceResolutionErrorV1::ManagedDevScopeViolation
+    );
+    assert_eq!(resolver.binding_inspector().calls(), 0);
+}
+
 #[test]
 fn existing_resolution_rejects_an_expected_uuid_mismatch_before_bound_git_revalidation() {
     let fixture = git_worktrees();

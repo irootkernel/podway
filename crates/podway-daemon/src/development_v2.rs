@@ -189,7 +189,8 @@ fn enabled_process_identity_v1(
     let production_paths = ServiceRuntimePathsV1::for_effective_user().ok()?;
     let state_directory = active_paths.workspace_registry_path().as_path().parent()?;
     let account_lock = Path::new(&metadata.account_root).join(".podway/run/podwayd.lock");
-    if metadata.schema != "podway.dev-runtime/v1"
+    if metadata.schema != "podway.managed-dev-runtime/v2"
+        || metadata.purpose != "contributor"
         || metadata.uid != uid
         || metadata.root != managed_root
         || metadata.dev_home != dev_home
@@ -385,6 +386,7 @@ fn validate_request_directories_v1(identity: &DevelopmentV2ProcessIdentityV1) ->
 #[serde(deny_unknown_fields)]
 struct DevelopmentRuntimeMetadataV1 {
     schema: String,
+    purpose: String,
     checkout: PathBuf,
     uid: u32,
     root: PathBuf,
@@ -532,7 +534,8 @@ mod tests {
             write_private_json(
                 &root.join("runtime.json"),
                 &serde_json::json!({
-                    "schema": "podway.dev-runtime/v1",
+                    "schema": "podway.managed-dev-runtime/v2",
+                    "purpose": "contributor",
                     "checkout": checkout,
                     "uid": uid,
                     "root": root,

@@ -34,12 +34,11 @@ mode. Distribution construction rejects dirty trees, translated execution,
 non-arm64 binaries, version mismatches, and stale layouts.
 
 The native-host and clean-worktree preflight runs before the expensive test gate,
-while packaging repeats those checks before writing release artifacts. The early
-preflight probes the effective account's fixed production singleton lock without
-trusting `HOME` or touching its socket, so stop any production or raw foreground
-`podwayd --dev` daemon before starting the gate. The managed
-[contributor development runtime](dev-runtime.md) uses a disjoint debug account
-root and does not satisfy or replace that production-lock preflight.
+while packaging repeats those checks before writing release artifacts. It does not
+inspect or acquire the production singleton lock. Packaged live qualification
+creates a private purpose `release-qualification` managed runtime under
+`/private/tmp` and uses the existing `--dev` lifecycle, so an installed production
+daemon may remain active throughout `make dist`.
 
 Qualification changes packaged-conformance evidence from `pending` to `passed`
 only after all extracted scenarios succeed; handoff generation rejects anything

@@ -4,7 +4,13 @@
 //! existing endpoint, workspace runtime manager, production dispatcher, and bounded Unix transport
 //! into one daemon process boundary.
 
-use std::{error::Error, fmt, num::NonZeroUsize, path::Path, sync::Arc};
+use std::{
+    error::Error,
+    fmt,
+    num::NonZeroUsize,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use podway_core::WorkspaceId;
 use podway_git::{
@@ -44,6 +50,7 @@ pub struct ProductionDaemonRuntimeConfigV1 {
     transport_timeouts: ServerTransportTimeoutsV1,
     process_identity: Option<DaemonProcessIdentityV1>,
     dev_mode: bool,
+    managed_dev_workspace_root: Option<PathBuf>,
     procedure_v2_admission: ProcedureV2AdmissionGateV1,
 }
 
@@ -59,6 +66,7 @@ impl ProductionDaemonRuntimeConfigV1 {
             transport_timeouts,
             process_identity: None,
             dev_mode: false,
+            managed_dev_workspace_root: None,
             procedure_v2_admission: ProcedureV2AdmissionGateV1::public(),
         }
     }
@@ -70,6 +78,11 @@ impl ProductionDaemonRuntimeConfigV1 {
 
     pub fn with_dev_mode(mut self) -> Self {
         self.dev_mode = true;
+        self
+    }
+
+    pub fn with_managed_dev_workspace_root(mut self, root: &Path) -> Self {
+        self.managed_dev_workspace_root = Some(root.to_path_buf());
         self
     }
 
@@ -388,10 +401,11 @@ impl ProductionDaemonRuntimeV1 {
                 return Err(ProductionDaemonStartupErrorV1::EndpointAcquire(error));
             }
         };
-        let manager = Arc::new(WorkspaceRuntimeManagerV1::with_observability(
+        let manager = Arc::new(WorkspaceRuntimeManagerV1::with_observability_and_scope(
             paths,
             inspection_options,
             observability.clone(),
+            configuration.managed_dev_workspace_root.clone(),
         ));
         let registry = match manager.registry().load() {
             Ok(registry) => registry,
@@ -761,6 +775,7 @@ fn unavailable_reason_from_resolution_error(
             source: podway_git::GitResolverErrorV1::Selector(_),
             ..
         }
+        | WorkspaceResolutionErrorV1::ManagedDevScopeViolation
         | WorkspaceResolutionErrorV1::Selector { .. }
         | WorkspaceResolutionErrorV1::StoredRootPathInvalid { .. }
         | WorkspaceResolutionErrorV1::WorkspaceRootPathInvalid { .. }

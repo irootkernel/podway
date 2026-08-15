@@ -33,3 +33,4 @@ narrative architecture and specifications when sources conflict.
 - [ADR-0017](0017-single-cursor-convergence.md): single-cursor convergence
 - [ADR-0018](0018-v2-success-envelope.md): versioned Procedure v2 success envelope
 - [ADR-0019](0019-procedure-v2-only-product.md): Procedure v2-only product and unified success envelope
+- [ADR-0020](0020-managed-dev-runtime-isolation.md): isolated managed `--dev` runtimes

@@ -11,6 +11,7 @@ mod development_v2;
 pub mod dispatch;
 pub mod endpoint;
 pub mod execution;
+pub mod managed_dev;
 pub mod native_execution;
 pub mod observability;
 pub mod peer;
