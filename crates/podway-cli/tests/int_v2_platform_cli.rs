@@ -5,7 +5,7 @@ use std::{
     io::{self, Read, Write},
     os::unix::{ffi::OsStrExt, fs::PermissionsExt, net::UnixListener},
     path::{Path, PathBuf},
-    process::{Command, Output},
+    process::{Command, Output, Stdio},
     sync::atomic::{AtomicU64, Ordering},
     thread::{self, JoinHandle},
 };
@@ -26,6 +26,47 @@ const BLOCKER_ID: &str = "123e4567-e89b-42d3-a456-426614174006";
 const CURRENT_ATTEMPT_ID: &str = "123e4567-e89b-42d3-a456-426614174007";
 const PROCEDURE_DIGEST: &str =
     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+#[test]
+fn v2agt004_record_stdin_builds_one_fully_fenced_atomic_request_without_preflight() {
+    let fixture = Fixture::new();
+    let daemon = RecordingDaemon::start(&fixture.socket, Reply::WorkspaceError);
+    let arguments = vec![
+        "--json".to_owned(),
+        "--socket".to_owned(),
+        fixture.socket.display().to_string(),
+        "--worktree".to_owned(),
+        fixture.root.display().to_string(),
+        "record".to_owned(),
+        "--stdin".to_owned(),
+    ];
+    let stdin = serde_json::to_vec(&json!({
+        "schema":"podway.item-record-many-input/v1",
+        "workspace_uuid":WORKSPACE_ID,
+        "session_id":SESSION_ID,
+        "session_revision":7,
+        "attempt_id":ATTEMPT_ID,
+        "idempotency_key":"v2agt004-record",
+        "operations":[
+            {"item_id":"zeta","expected_item_revision":2,"clear":true},
+            {"item_id":"alpha","expected_item_revision":1,"record":{"type":"integer","value":42}}
+        ]
+    }))
+    .unwrap();
+
+    let output = fixture.run_with_stdin(&arguments, &stdin);
+    assert_eq!(output.status.code(), Some(5), "{output:?}");
+    let request = daemon.finish();
+    assert_eq!(request["command"], "item.record_many");
+    assert_eq!(request["operation"], "mutate");
+    assert_eq!(request["idempotency_key"], "v2agt004-record");
+    assert_eq!(request["workspace"]["expected_uuid"], WORKSPACE_ID);
+    assert_eq!(request["preconditions"]["session_id"], SESSION_ID);
+    assert_eq!(request["preconditions"]["session_revision"], 7);
+    assert_eq!(request["preconditions"]["attempt_id"], ATTEMPT_ID);
+    assert_eq!(request["payload"]["operations"][0]["item_id"], "alpha");
+    assert_eq!(request["payload"]["operations"][1]["item_id"], "zeta");
+}
 
 static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -55,6 +96,27 @@ impl Fixture {
             .env_remove("XDG_CONFIG_HOME")
             .output()
             .expect("podway binary must run")
+    }
+
+    fn run_with_stdin(&self, arguments: &[String], stdin: &[u8]) -> Output {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_podway"))
+            .args(arguments)
+            .env("PODWAY_TEST_ACCOUNT_ROOT", self.root.join("account"))
+            .env_remove("HOME")
+            .env_remove("TMPDIR")
+            .env_remove("XDG_CONFIG_HOME")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("podway binary must start");
+        child
+            .stdin
+            .take()
+            .expect("stdin must be piped")
+            .write_all(stdin)
+            .expect("stdin must be writable");
+        child.wait_with_output().expect("podway binary must finish")
     }
 
     fn daemon_arguments(&self, command: &[&str]) -> Vec<String> {

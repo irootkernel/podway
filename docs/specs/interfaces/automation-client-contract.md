@@ -136,6 +136,15 @@ not create a contract mismatch.
 | `AUT-ID-005` | Item mutations MUST enforce workspace UUID, session ID, attempt ID, and item revision for automation requests. |
 | `AUT-ID-006` | Replacement and reset MUST enforce the currently observed workspace, session, and applicable session revision before mutation. |
 | `AUT-ID-007` | Identity mismatches MUST return stable typed errors with closed details containing expected and actual identities and no mutation. |
+| `AUT-ID-008` | `item.record_many` MUST enforce workspace UUID, session ID, session revision, active attempt, and every selected item revision before atomically changing any selected item. |
+
+`podway record --stdin` consumes only closed
+`podway.item-record-many-input/v1` JSON bounded to 1 MiB and 1..64 unique item
+operations. Each operation contains exactly one typed complete record value or
+`clear: true`. Operations and per-item outcomes are canonicalized by item ID.
+The command uses the normal durable admission, detached execution, idempotent
+replay, and `job lookup` reconciliation contracts. It returns
+`podway.item-record-many-result/v1` and never advances the graph cursor.
 
 A matching numeric revision is not sufficient evidence that an operation targets
 the same session.

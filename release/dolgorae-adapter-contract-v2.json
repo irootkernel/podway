@@ -355,6 +355,7 @@
       "item.remove",
       "item.attach",
       "item.clear",
+      "item.record_many",
       "job.list",
       "job.lookup",
       "job.status",
@@ -1037,14 +1038,24 @@
         "sha256": "sha256:f7d945086b4a5ccaa1d1256621379f336befa0de163a2642437fc81b4485e214"
       },
       {
+        "id": "urn:podway:schema:item-record-many-input:v1",
+        "path": "schemas/item-record-many-input-v1.schema.json",
+        "sha256": "sha256:7cd4ae9c4ca8111cf309a141790ca59182e31da2cff466e5c1f429a0df9c4f16"
+      },
+      {
+        "id": "urn:podway:schema:item-record-many-result:v1",
+        "path": "schemas/item-record-many-result-v1.schema.json",
+        "sha256": "sha256:ec3029ef014b1673db17d06ca6942b1c77f220afc98e036e2a3b2948dcd7e000"
+      },
+      {
         "id": "urn:podway:schema:job-lookup-result:v3",
         "path": "schemas/job-lookup-result-v3.schema.json",
-        "sha256": "sha256:00def052d3cb9f1975bb5c3c378a4bb503eb2374b9a203fb8470273ca68d57ab"
+        "sha256": "sha256:2473130ac734fc19fec1b428bd2d34dbe2fe17aedd99141f7672d16a1d99615d"
       },
       {
         "id": "urn:podway:schema:job-result:v3",
         "path": "schemas/job-result-v3.schema.json",
-        "sha256": "sha256:785667e42f2eaea1a8c08c5332f560a6ea02f3e5876f34597e2a20d5ebac8501"
+        "sha256": "sha256:450594b841d7bb5b71575a7b0b35c1d6b0cd17fe7d14cca7feb4cbea46da4f9f"
       },
       {
         "id": "urn:podway:schema:job-wait-timeout-details:v1",
@@ -1064,7 +1075,7 @@
       {
         "id": "urn:podway:schema:output:v3",
         "path": "schemas/output-v3.schema.json",
-        "sha256": "sha256:f0ddb2c4c333837706d84102759dc89376b36f00956e97dac9c94dacaeaf9704"
+        "sha256": "sha256:4d9d392e7086ef19d3c9be9cf740b84ec51800b5e2aeab3c07fd03e76c308083"
       },
       {
         "id": "urn:podway:schema:procedure-diagnostics-result:v1",
@@ -1134,7 +1145,7 @@
       {
         "id": "urn:podway:schema:v2-result-components:v1",
         "path": "schemas/v2-result-components-v1.schema.json",
-        "sha256": "sha256:24548fed2cbd5bc91aa0c833c281a45a5c7151fb81eee36c3a4c87dfd72159ba"
+        "sha256": "sha256:6596fd6f7eaf47cd55604addeed927e7bff4c092a64b7453efc204ee037915d6"
       },
       {
         "id": "urn:podway:schema:v2-runtime-error-details:v1",
@@ -1165,9 +1176,9 @@
   },
   "current_surface_counts": {
     "authoring_diagnostics": 53,
-    "routes": 57,
+    "routes": 58,
     "runtime_errors": 88,
-    "schemas": 43
+    "schemas": 45
   },
   "migration_boundary": {
     "adapter_database_access": "forbidden",

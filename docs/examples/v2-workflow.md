@@ -76,6 +76,31 @@ podway --json set observed-behavior \
   --idempotency-key bug-42-observed
 ```
 
+When one observation supplies several independent results, record them in one
+atomic mutation. Put all fences in the closed stdin document; do not repeat
+identity, revision, or idempotency flags on the command line:
+
+```bash
+podway --json record --stdin <<'JSON'
+{
+  "schema": "podway.item-record-many-input/v1",
+  "workspace_uuid": "<workspace-uuid>",
+  "session_id": "<session-id>",
+  "session_revision": 12,
+  "attempt_id": "<attempt-id>",
+  "idempotency_key": "bug-42-record-reproduction",
+  "operations": [
+    {"item_id":"reproduction-status","expected_item_revision":0,"record":{"type":"choice","value":"reproduced"}},
+    {"item_id":"observed-behavior","expected_item_revision":0,"record":{"type":"text","value":"Concurrent callbacks create two sessions."}}
+  ]
+}
+JSON
+```
+
+The result schema is `podway.item-record-many-result/v1`. Its `items` array is
+ordered by item ID and reports each item revision; any invalid or stale operation
+leaves the whole set unchanged.
+
 Re-read observe after every successful mutation and use the returned revisions.
 Do not increment a revision locally or reuse a stale attempt ID.
 

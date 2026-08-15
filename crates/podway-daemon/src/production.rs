@@ -103,6 +103,7 @@ fn is_shared_v2_automation_mutation(command: &str) -> bool {
             | "item.remove"
             | "item.attach"
             | "item.clear"
+            | "item.record_many"
     )
 }
 
@@ -2795,6 +2796,12 @@ fn validate_terminal_receipt_projection(
                 PersistedTerminalResultV1::Success(PersistedDomainResultV1::ItemChanged { .. }),
             )
             | (
+                Some(PersistedGraphTerminalOperationV2::ItemMutations { .. }),
+                PersistedTerminalResultV1::Success(PersistedDomainResultV1::ItemsChanged {
+                    ..
+                }),
+            )
+            | (
                 Some(PersistedGraphTerminalOperationV2::Failure { .. }),
                 PersistedTerminalResultV1::Failure(_),
             ) => Ok(()),
@@ -3321,6 +3328,52 @@ fn validate_frozen_v2_result_projection(
             }
         }
         (
+            Some("podway.item-record-many-result/v1"),
+            PersistedTerminalResultV1::Success(PersistedDomainResultV1::ItemsChanged {
+                revision_after,
+                changed,
+                ..
+            }),
+        ) => graph_session
+            .and_then(|projection| projection.operation())
+            .is_some_and(|operation| {
+                let PersistedGraphTerminalOperationV2::ItemMutations {
+                    graph_node_id,
+                    attempt_id,
+                    attempt_number,
+                    items,
+                } = operation
+                else {
+                    return false;
+                };
+                result.get("revision").and_then(Value::as_u64) == Some(revision_after.get())
+                    && result.get("changed").and_then(Value::as_bool) == Some(*changed)
+                    && result.get("graph_node_id").and_then(Value::as_str)
+                        == Some(graph_node_id.as_str())
+                    && result.get("attempt_id").and_then(Value::as_str) == Some(attempt_id.as_str())
+                    && result.get("attempt_number").and_then(Value::as_u64) == Some(*attempt_number)
+                    && result
+                        .get("items")
+                        .and_then(Value::as_array)
+                        .is_some_and(|values| {
+                            values.len() == items.len()
+                                && values.iter().zip(items).all(|(value, item)| {
+                                    value.get("item_id").and_then(Value::as_str)
+                                        == Some(item.item_id().as_str())
+                                        && value
+                                            .get("expected_item_revision")
+                                            .and_then(Value::as_u64)
+                                            == Some(item.expected_item_revision().get())
+                                        && value.get("changed").and_then(Value::as_bool)
+                                            == Some(item.changed())
+                                        && value.get("item_revision").and_then(Value::as_u64)
+                                            == Some(item.item_revision().get())
+                                        && value.get("value_digest").and_then(Value::as_str)
+                                            == item.value_digest().map(|digest| digest.as_str())
+                                })
+                        })
+            }),
+        (
             Some("podway.goal-definition-result/v1"),
             PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
                 revision_after,
@@ -3833,8 +3886,51 @@ fn graph_terminal_envelope_v2(
             }
             graph_success_terminal_envelope_v2(receipt, result)
         }
-        Some(PersistedGraphTerminalOperationV2::ItemMutations { .. }) => {
-            Err(terminal_replay_integrity_failure())
+        Some(PersistedGraphTerminalOperationV2::ItemMutations {
+            graph_node_id,
+            attempt_id,
+            attempt_number,
+            items,
+        }) => {
+            let PersistedTerminalResultV1::Success(PersistedDomainResultV1::ItemsChanged {
+                changed,
+                ..
+            }) = receipt.result()
+            else {
+                return Err(terminal_replay_integrity_failure());
+            };
+            let items = items
+                .iter()
+                .map(|item| {
+                    let mut result = json!({
+                        "item_id": item.item_id(),
+                        "expected_item_revision": item.expected_item_revision(),
+                        "changed": item.changed(),
+                        "item_revision": item.item_revision(),
+                    })
+                    .as_object()
+                    .expect("batch item result is an object")
+                    .clone();
+                    if let Some(value_digest) = item.value_digest() {
+                        result.insert("value_digest".to_owned(), json!(value_digest));
+                    }
+                    Value::Object(result)
+                })
+                .collect::<Vec<_>>();
+            let result = json!({
+                "schema": "podway.item-record-many-result/v1",
+                "changed": changed,
+                "graph_node_id": graph_node_id,
+                "attempt_id": attempt_id,
+                "attempt_number": attempt_number,
+                "revision": graph.revision_after(),
+                "items": items,
+                "admission": graph_admission_value_v2(receipt)?,
+            })
+            .as_object()
+            .expect("graph item batch result is an object")
+            .clone();
+            graph_success_terminal_envelope_v2(receipt, result)
         }
         Some(PersistedGraphTerminalOperationV2::Failure { error }) => {
             let context = terminal_response_context(receipt)?
@@ -4145,7 +4241,8 @@ fn terminal_session_projection(
         }
         (
             PersistedDomainResultV1::SessionChanged { .. }
-            | PersistedDomainResultV1::ItemChanged { .. },
+            | PersistedDomainResultV1::ItemChanged { .. }
+            | PersistedDomainResultV1::ItemsChanged { .. },
             Some(persisted),
         ) => {
             let lifecycle = match persisted.lifecycle() {
@@ -4165,7 +4262,8 @@ fn terminal_session_projection(
         }
         (
             PersistedDomainResultV1::SessionChanged { .. }
-            | PersistedDomainResultV1::ItemChanged { .. },
+            | PersistedDomainResultV1::ItemChanged { .. }
+            | PersistedDomainResultV1::ItemsChanged { .. },
             None,
         )
         | (_, Some(_)) => Err(terminal_replay_integrity_failure()),
@@ -4181,7 +4279,8 @@ fn terminal_command_kind(command: &SliceCommandV1) -> TerminalCommandKindV1 {
         | SliceCommandV1::ItemAdd(_)
         | SliceCommandV1::ItemRemove(_)
         | SliceCommandV1::ItemAttach(_)
-        | SliceCommandV1::ItemClear(_) => TerminalCommandKindV1::ItemMutation,
+        | SliceCommandV1::ItemClear(_)
+        | SliceCommandV1::ItemRecordMany(_) => TerminalCommandKindV1::ItemMutation,
         SliceCommandV1::SessionStart(_) | SliceCommandV1::SessionStartReplace(_) => {
             TerminalCommandKindV1::Start
         }
@@ -5112,7 +5211,7 @@ mod tests {
                 .copied()
                 .collect()
         );
-        assert_eq!(shared.len(), 14);
+        assert_eq!(shared.len(), 15);
         assert!(start.is_disjoint(&typed));
         assert!(start.is_disjoint(&shared));
         assert!(typed.is_disjoint(&shared));

@@ -15,3 +15,5 @@ mod int_v2_protocol_requests;
 mod int_v2_response_codec;
 #[path = "int_v2_result_contract.rs"]
 mod int_v2_result_contract;
+#[path = "int_v2agt004_record_many.rs"]
+mod int_v2agt004_record_many;

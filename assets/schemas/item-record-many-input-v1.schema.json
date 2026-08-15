@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:item-record-many-input:v1",
+  "title": "Podway Atomic Item Record Input v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "workspace_uuid", "session_id", "session_revision", "attempt_id", "idempotency_key", "operations"],
+  "properties": {
+    "schema": { "const": "podway.item-record-many-input/v1" },
+    "workspace_uuid": { "type": "string", "format": "uuid" },
+    "session_id": { "type": "string", "format": "uuid" },
+    "session_revision": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+    "attempt_id": { "type": "string", "format": "uuid" },
+    "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "operations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["item_id", "expected_item_revision"],
+        "properties": {
+          "item_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" },
+          "expected_item_revision": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+          "clear": { "const": true },
+          "record": { "$ref": "#/$defs/recordValue" }
+        },
+        "oneOf": [
+          { "required": ["clear"], "not": { "required": ["record"] } },
+          { "required": ["record"], "not": { "required": ["clear"] } }
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "recordValue": {
+      "oneOf": [
+        { "type": "object", "additionalProperties": false, "required": ["type", "value"], "properties": { "type": { "const": "confirm" }, "value": { "type": "boolean" } } },
+        { "type": "object", "additionalProperties": false, "required": ["type", "value"], "properties": { "type": { "const": "text" }, "value": { "type": "string", "maxLength": 16384 } } },
+        { "type": "object", "additionalProperties": false, "required": ["type", "value"], "properties": { "type": { "const": "choice" }, "value": { "type": "string", "minLength": 1, "maxLength": 120 } } },
+        { "type": "object", "additionalProperties": false, "required": ["type", "value"], "properties": { "type": { "const": "integer" }, "value": { "type": "integer", "minimum": -9223372036854775808, "maximum": 9223372036854775807 } } },
+        { "type": "object", "additionalProperties": false, "required": ["type", "value"], "properties": { "type": { "const": "list" }, "value": { "type": "array", "maxItems": 200, "items": { "type": "string", "minLength": 1, "maxLength": 1000 } } } },
+        { "type": "object", "additionalProperties": false, "required": ["type", "path"], "properties": { "type": { "const": "artifact" }, "path": { "type": "string", "minLength": 1, "maxLength": 4096 }, "media_type": { "type": "string", "minLength": 1, "maxLength": 255 } } },
+        { "type": "object", "additionalProperties": false, "required": ["type", "reference", "digest", "size_bytes", "media_type"], "properties": { "type": { "const": "artifact" }, "reference": { "type": "string", "minLength": 1, "maxLength": 4096 }, "digest": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/digest" }, "size_bytes": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 }, "media_type": { "type": "string", "minLength": 1, "maxLength": 255 } } }
+      ]
+    }
+  }
+}

@@ -6075,6 +6075,41 @@ fn graph_mutation_failure_matches_v2(
             }
             _ => false,
         },
+        crate::CommandV1::ItemRecordMany => match error {
+            PersistedGraphMutationFailureV2::SessionNotRunning => {
+                current.trace().lifecycle() != podway_core::SessionLifecycle::Running
+            }
+            PersistedGraphMutationFailureV2::SessionRevisionConflict { expected, actual } => {
+                preconditions.expected_session_revision() == Some(*expected)
+                    && current.trace().revision() == *actual
+            }
+            PersistedGraphMutationFailureV2::AttemptNotCurrent { expected, actual } => {
+                preconditions.expected_attempt_id() == Some(expected)
+                    && active.map(podway_core::SessionAttemptV2::attempt_id) == actual.as_ref()
+            }
+            PersistedGraphMutationFailureV2::ArtifactChanged => {
+                serde_json::from_str::<serde_json::Value>(execution.canonical_execution().as_str())
+                    .ok()
+                    .filter(|document| {
+                        document
+                            .get("execution_version")
+                            .and_then(serde_json::Value::as_u64)
+                            == Some(16)
+                    })
+                    .and_then(|document| document.get("attached_artifacts").cloned())
+                    .and_then(|artifacts| artifacts.as_array().cloned())
+                    .is_some_and(|artifacts| {
+                        artifacts.iter().any(|resolved| {
+                            resolved
+                                .get("artifact")
+                                .and_then(|artifact| artifact.get("location_kind"))
+                                .and_then(serde_json::Value::as_str)
+                                == Some("local_path")
+                        })
+                    })
+            }
+            _ => false,
+        },
         command if graph_item_id_v2(command).is_some() => {
             let command_item_id = graph_item_id_v2(command).expect("guarded item command");
             let active_memory = active.and_then(|attempt| {

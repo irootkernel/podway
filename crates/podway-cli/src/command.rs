@@ -47,11 +47,12 @@ use podway_core::{
 };
 use podway_presets::{PresetError, catalog_v2};
 use podway_protocol::{
-    ClientInfoV1, CommandNameV1, IdempotencyKeyV1, JobStateV1, MAX_SLICE_ITEM_TEXT_SCALARS_V1,
-    MAX_WAIT_TIMEOUT_MILLIS_V1, OperationV1, OutputEnvelopeInputV3, OutputEnvelopeV3,
-    PreconditionsV1, RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, RequestOptionsV1,
-    ResponseEnvelopeV2, Rfc3339MillisV1, WorkspaceContextV1, WorktreeSelectorWireV1,
-    build_identity_v1, ensure_error_details_schema_v1,
+    ClientInfoV1, CommandNameV1, IdempotencyKeyV1, ItemRecordManyInputV1, JobStateV1,
+    MAX_FRAME_PAYLOAD_BYTES_V1, MAX_SLICE_ITEM_TEXT_SCALARS_V1, MAX_WAIT_TIMEOUT_MILLIS_V1,
+    OperationV1, OutputEnvelopeInputV3, OutputEnvelopeV3, PreconditionsV1, RequestEnvelopeInputV1,
+    RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, ResponseEnvelopeV2, Rfc3339MillisV1,
+    WorkspaceContextV1, WorktreeSelectorWireV1, build_identity_v1,
+    decode_item_record_many_input_v1, ensure_error_details_schema_v1,
     ensure_procedure_independent_result_schema_v1, validate_command_result_v2,
     validate_procedure_independent_result_v1,
 };
@@ -269,6 +270,8 @@ enum Command {
         #[arg(value_name = "ITEM_ID")]
         item_id: String,
     },
+    /// Atomically record or clear a bounded set of typed item values from JSON stdin.
+    Record(RecordArgs),
     Job {
         #[command(subcommand)]
         command: JobCommand,
@@ -462,6 +465,14 @@ struct AttachArgs {
     media_type: Option<String>,
 }
 
+#[derive(Debug, Args)]
+struct RecordArgs {
+    #[arg(long, required = true, action = ArgAction::SetTrue)]
+    stdin: bool,
+    #[arg(skip)]
+    input: Option<ItemRecordManyInputV1>,
+}
+
 #[derive(Debug, Subcommand)]
 enum ProcedureCommand {
     Validate {
@@ -623,6 +634,7 @@ impl Command {
             Self::Remove { .. } => Some("item.remove"),
             Self::Attach(_) => Some("item.attach"),
             Self::Clear { .. } => Some("item.clear"),
+            Self::Record(_) => Some("item.record_many"),
             Self::Job {
                 command: JobCommand::List { .. },
             } => Some("job.list"),
@@ -716,7 +728,8 @@ impl Command {
             | Self::Add { .. }
             | Self::Remove { .. }
             | Self::Attach(_)
-            | Self::Clear { .. } => true,
+            | Self::Clear { .. }
+            | Self::Record(_) => true,
             Self::Start(args) => !args.dry_run,
             Self::Reset(args) => !args.dry_run,
             _ => false,
@@ -740,7 +753,8 @@ impl Command {
             | Self::Add { .. }
             | Self::Remove { .. }
             | Self::Attach(_)
-            | Self::Clear { .. } => true,
+            | Self::Clear { .. }
+            | Self::Record(_) => true,
             Self::Start(args) => args.replace,
             Self::Reset(args) => !args.all,
             _ => false,
@@ -784,6 +798,7 @@ impl Command {
                 | Self::Remove { .. }
                 | Self::Attach(_)
                 | Self::Clear { .. }
+                | Self::Record(_)
         )
     }
 
@@ -811,6 +826,7 @@ impl Command {
                 | Self::Remove { .. }
                 | Self::Attach(_)
                 | Self::Clear { .. }
+                | Self::Record(_)
         )
     }
 
@@ -1524,6 +1540,7 @@ fn parse_failure_command_context_from_matches(
         "remove" => ParseFailureCommandContext::new("item.remove", true),
         "attach" => ParseFailureCommandContext::new("item.attach", true),
         "clear" => ParseFailureCommandContext::new("item.clear", true),
+        "record" => ParseFailureCommandContext::new("item.record_many", true),
         "job" => nested_parse_failure_context(
             matches,
             &[
@@ -1610,9 +1627,10 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
         .command
         .daemon_wire_name()
         .ok_or_else(|| LocalFailure::request_invalid("unsupported command"))?;
+    prepare_stdin_payload(&mut cli.command)?;
+    apply_record_input(&mut cli)?;
     validate_daemon_flags(&cli).map_err(|failure| failure.with_command(wire_name))?;
     validate_command_shape(&cli.command).map_err(|failure| failure.with_command(wire_name))?;
-    prepare_stdin_payload(&mut cli.command)?;
     if cli.if_workspace_uuid.is_none()
         && matches!(
             &cli.command,
@@ -1667,6 +1685,7 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
         && !fully_fenced_start_replace(&cli.command, &explicit)
         && !fully_fenced_v2_start_replace(&cli.command, &explicit)
         && !fully_fenced_v2_mutation(&cli.command, &explicit)
+        && !matches!(cli.command, Command::Record(_))
     {
         let status_request = build_request(
             "session.status",
@@ -1861,6 +1880,7 @@ fn direct_preconditions(
         Command::Block { .. } | Command::Unblock { .. } | Command::Cancel { .. } => {
             v2_session_preconditions(explicit, true, false)
         }
+        Command::Record(_) => v2_session_preconditions(explicit, true, false),
         Command::Reset(ResetArgs {
             all: false,
             dry_run: false,
@@ -5154,6 +5174,18 @@ fn daemon_payload(
                 payload.insert("media_type".to_owned(), Value::String(media_type.clone()));
             }
         }
+        Command::Record(args) => {
+            let input = args
+                .input
+                .as_ref()
+                .ok_or_else(|| LocalFailure::request_invalid("record requires --stdin"))?;
+            payload.insert(
+                "operations".to_owned(),
+                serde_json::to_value(&input.operations).map_err(|_| {
+                    LocalFailure::request_invalid("cannot encode record operations")
+                })?,
+            );
+        }
         Command::Job { command } => match command {
             JobCommand::List { state } => {
                 if let Some(state) = state {
@@ -5240,8 +5272,54 @@ fn prepare_stdin_payload(command: &mut Command) -> Result<(), LocalFailure> {
         Command::Set(args) if args.stdin => {
             args.value = Some(read_stdin_text()?);
         }
+        Command::Record(args) if args.stdin => {
+            let mut bytes = Vec::with_capacity(MAX_FRAME_PAYLOAD_BYTES_V1.min(8 * 1024));
+            io::stdin()
+                .take((MAX_FRAME_PAYLOAD_BYTES_V1 + 1) as u64)
+                .read_to_end(&mut bytes)
+                .map_err(|_| LocalFailure::request_invalid("cannot read record stdin"))?;
+            args.input = Some(decode_item_record_many_input_v1(&bytes).map_err(|error| {
+                if bytes.len() > MAX_FRAME_PAYLOAD_BYTES_V1 {
+                    LocalFailure::catalog(
+                        "REQUEST_TOO_LARGE",
+                        "record stdin exceeds the maximum size",
+                        "cli",
+                    )
+                } else {
+                    LocalFailure::request_invalid(error.to_string())
+                }
+            })?);
+        }
         _ => {}
     }
+    Ok(())
+}
+
+fn apply_record_input(cli: &mut Cli) -> Result<(), LocalFailure> {
+    let input = match &cli.command {
+        Command::Record(args) => args
+            .input
+            .clone()
+            .ok_or_else(|| LocalFailure::request_invalid("record requires --stdin"))?,
+        _ => return Ok(()),
+    };
+    if cli.idempotency_key.is_some()
+        || cli.if_workspace_uuid.is_some()
+        || cli.if_session_id.is_some()
+        || cli.if_session_revision.is_some()
+        || cli.if_attempt.is_some()
+        || cli.if_item_revision.is_some()
+        || cli.if_goal_revision.is_some()
+    {
+        return Err(LocalFailure::request_invalid(
+            "record identity, revision, and idempotency fences must come only from stdin",
+        ));
+    }
+    cli.idempotency_key = Some(input.idempotency_key.as_str().to_owned());
+    cli.if_workspace_uuid = Some(input.workspace_uuid.as_str().to_owned());
+    cli.if_session_id = Some(input.session_id.as_str().to_owned());
+    cli.if_session_revision = Some(input.session_revision.get());
+    cli.if_attempt = Some(input.attempt_id.as_str().to_owned());
     Ok(())
 }
 
@@ -6281,6 +6359,9 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
         }
         "item.clear" => {
             "Usage:\n  podway clear <item-id> [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-attempt <uuid>] [--if-item-revision <n>]\n\nExample:\n  podway clear constraints"
+        }
+        "item.record_many" => {
+            "Usage:\n  podway record --stdin [--worktree <path>] [--json] [--detach]\n\nThe closed JSON stdin document supplies workspace_uuid, session_id, session_revision, attempt_id, idempotency_key, and 1..64 unique typed operations.\n\nExample:\n  podway record --stdin < record.json"
         }
         "job.list" => {
             "Usage:\n  podway job list [--state <queued|running|succeeded|failed|cancelled>]\n\nExample:\n  podway job list --state queued"

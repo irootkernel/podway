@@ -3569,8 +3569,8 @@ fn active_item_batch_is_bounded_ordered_atomic_and_advances_the_session_once() {
         ActiveItemMutationRequestV2::new(
             item("m-tags"),
             Revision::ZERO,
-            ActiveItemMutationV2::Add {
-                value: "locked".to_owned(),
+            ActiveItemMutationV2::ReplaceList {
+                values: vec!["locked".to_owned()],
             },
         ),
         ActiveItemMutationRequestV2::new(

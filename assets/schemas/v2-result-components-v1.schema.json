@@ -186,7 +186,7 @@
         "determined_outcome": { "enum": ["achieved", "not_achieved", "superseded"] }
       }
     },
-    "v2Command": { "enum": ["session.complete", "session.decide", "session.retry", "session.skip", "session.rework", "session.block", "session.unblock", "session.cancel", "session.reset", "goal.define", "goal.revise", "goal.assess_criterion", "item.check", "item.uncheck", "item.set", "item.add", "item.remove", "item.attach", "item.clear"] },
+    "v2Command": { "enum": ["session.complete", "session.decide", "session.retry", "session.skip", "session.rework", "session.block", "session.unblock", "session.cancel", "session.reset", "goal.define", "goal.revise", "goal.assess_criterion", "item.check", "item.uncheck", "item.set", "item.add", "item.remove", "item.attach", "item.clear", "item.record_many"] },
     "suggestion": {
       "type": "object", "additionalProperties": false,
       "required": ["command", "argv"],

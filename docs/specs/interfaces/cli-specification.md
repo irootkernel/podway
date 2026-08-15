@@ -13,7 +13,7 @@ human-readable text or one JSON document. It never writes SQLite directly.
 - Session reads: `status`, `next`, and `job list|status|wait|lookup|cancel`.
 - Session mutations: `start`, `complete`, `skip`, `retry`, `block`, `unblock`,
   `cancel`, `reset`, `decide`, `rework`, `goal define|revise|assess-criterion`,
-  and `check|uncheck|set|add|remove|attach|clear`.
+  `check|uncheck|set|add|remove|attach|clear`, and `record --stdin`.
 
 The executable grammar is owned by the command catalog and clap definitions.
 Removed commands are not aliases and must fail argument parsing.
@@ -43,6 +43,13 @@ outcomes are reconciled with `job lookup --idempotency-key` before retry.
 `retry` remains on the active action node. `rework --to <node>` uses the Procedure
 v2 manual-rework contract. Decisions, goals, and criterion assessments use their
 typed commands. Cursor changes occur only through declared graph effects.
+
+`record --stdin` is the only multi-item mutation grammar. It reads at most 1 MiB
+of closed `podway.item-record-many-input/v1` JSON. The document supplies the
+workspace, session revision, active attempt, idempotency key, and 1..64 unique
+item-local revision fences. The daemon canonicalizes operations by item ID and
+records or clears the complete set atomically without advancing the cursor.
+Identity, revision, and idempotency flags must not duplicate the stdin fields.
 
 ## Output and exits
 

@@ -328,6 +328,14 @@
       "capabilities": []
     },
     {
+      "command": "item.record_many",
+      "availability": "executable",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
       "command": "job.list",
       "availability": "executable",
       "owner": "podway-daemon",

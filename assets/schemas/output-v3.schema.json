@@ -30,6 +30,7 @@
     { "$ref": "#/$defs/observation" },
     { "$ref": "#/$defs/stageTransition" },
     { "$ref": "#/$defs/itemMutation" },
+    { "$ref": "#/$defs/itemRecordMany" },
     { "$ref": "#/$defs/jobLookup" },
     { "$ref": "#/$defs/jobResult" },
     { "$ref": "#/$defs/procedureSource" },
@@ -111,6 +112,7 @@
         { "$ref": "#/$defs/sessionStartMutation" },
         { "$ref": "#/$defs/stageTransition" },
         { "$ref": "#/$defs/itemMutation" },
+        { "$ref": "#/$defs/itemRecordMany" },
         { "$ref": "#/$defs/decision" },
         { "$ref": "#/$defs/rework" },
         { "$ref": "#/$defs/goalDefinition" },
@@ -136,7 +138,7 @@
     "detachedAdmission": {
       "required": ["workspace", "job"],
       "properties": {
-        "command": { "enum": ["session.start", "session.start_replace", "session.complete", "session.skip", "session.retry", "session.block", "session.unblock", "session.cancel", "session.reset", "session.decide", "session.rework", "goal.define", "goal.revise", "goal.assess_criterion", "item.check", "item.uncheck", "item.set", "item.add", "item.remove", "item.attach", "item.clear"] },
+        "command": { "enum": ["session.start", "session.start_replace", "session.complete", "session.skip", "session.retry", "session.block", "session.unblock", "session.cancel", "session.reset", "session.decide", "session.rework", "goal.define", "goal.revise", "goal.assess_criterion", "item.check", "item.uncheck", "item.set", "item.add", "item.remove", "item.attach", "item.clear", "item.record_many"] },
         "result": { "$ref": "urn:podway:schema:detached-admission-result:v2" }
       },
       "allOf": [
@@ -184,6 +186,7 @@
       ]
     },
     "itemMutation": { "required": ["workspace", "job"], "properties": { "command": { "enum": ["item.check", "item.uncheck", "item.set", "item.add", "item.remove", "item.attach", "item.clear"] }, "result": { "$ref": "urn:podway:schema:item-mutation-result:v2" } } },
+    "itemRecordMany": { "required": ["workspace", "job"], "properties": { "command": { "const": "item.record_many" }, "result": { "$ref": "urn:podway:schema:item-record-many-result:v1" } } },
     "jobLookup": { "properties": { "command": { "const": "job.lookup" }, "result": { "$ref": "urn:podway:schema:job-lookup-result:v3" } } },
     "jobResult": { "required": ["job"], "properties": { "command": { "enum": ["job.status", "job.wait"] }, "result": { "$ref": "urn:podway:schema:job-result:v3" } } },
     "procedureSource": { "properties": { "command": { "enum": ["procedure.format", "procedure.scaffold"] }, "result": { "$ref": "urn:podway:schema:procedure-source-result:v1" } } },

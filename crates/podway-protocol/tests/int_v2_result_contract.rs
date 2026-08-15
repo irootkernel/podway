@@ -184,6 +184,10 @@ fn examples() -> BTreeMap<&'static str, Value> {
             json!({"schema":"podway.item-mutation-result/v2","admission":admission(),"changed":true,"graph_node_id":"work","attempt_id":UUID,"attempt_number":1,"item_id":"done","revision":2}),
         ),
         (
+            "podway.item-record-many-result/v1",
+            json!({"schema":"podway.item-record-many-result/v1","admission":admission(),"changed":true,"graph_node_id":"work","attempt_id":UUID,"attempt_number":1,"revision":2,"items":[{"item_id":"done","expected_item_revision":0,"changed":true,"item_revision":1}]}),
+        ),
+        (
             "podway.job-lookup-result/v3",
             json!({"schema":"podway.job-lookup-result/v3","found":false}),
         ),
@@ -315,7 +319,7 @@ fn v2grf_preview_uses_one_closed_result_family_for_every_document_outcome() {
 #[test]
 fn v2ctr003_registry_is_versioned_and_covers_exactly_the_v2_authoring_routes() {
     assert_eq!(EXISTING_ROUTE_RESULT_SCHEMAS_V2.len(), 10);
-    assert_eq!(NEW_ROUTE_RESULT_SCHEMAS_V1.len(), 10);
+    assert_eq!(NEW_ROUTE_RESULT_SCHEMAS_V1.len(), 11);
     assert!(
         EXISTING_ROUTE_RESULT_SCHEMAS_V2
             .iter()
@@ -348,9 +352,10 @@ fn v2ctr003_registry_is_versioned_and_covers_exactly_the_v2_authoring_routes() {
             "goal.define",
             "goal.revise",
             "goal.assess_criterion",
+            "item.record_many",
         ])
     );
-    assert_eq!(routes.len(), 14);
+    assert_eq!(routes.len(), 15);
 }
 
 #[test]

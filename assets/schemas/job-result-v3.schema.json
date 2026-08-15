@@ -23,7 +23,7 @@
             "enum": ["schema", "request_id", "command", "generated_at", "code", "message", "retryable", "exit_code", "workspace", "details"]
           },
           "properties": {
-            "command": { "enum": ["workspace.init", "workspace.reset_all", "session.start", "session.start_replace", "session.complete", "session.skip", "session.retry", "session.block", "session.unblock", "session.cancel", "session.reset", "session.decide", "session.rework", "goal.define", "goal.revise", "goal.assess_criterion", "item.check", "item.uncheck", "item.set", "item.add", "item.remove", "item.attach", "item.clear"] },
+            "command": { "enum": ["workspace.init", "workspace.reset_all", "session.start", "session.start_replace", "session.complete", "session.skip", "session.retry", "session.block", "session.unblock", "session.cancel", "session.reset", "session.decide", "session.rework", "goal.define", "goal.revise", "goal.assess_criterion", "item.check", "item.uncheck", "item.set", "item.add", "item.remove", "item.attach", "item.clear", "item.record_many"] },
             "message": { "type": "string", "minLength": 1, "maxLength": 512 },
             "workspace": {
               "type": "object",

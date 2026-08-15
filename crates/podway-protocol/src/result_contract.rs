@@ -156,6 +156,7 @@ pub const V2_MUTATION_COMMANDS: &[&str] = &[
     "item.remove",
     "item.attach",
     "item.clear",
+    "item.record_many",
 ];
 
 /// Result families for existing routes whose v2-session shape breaks from v1.
@@ -190,6 +191,7 @@ pub const EXISTING_ROUTE_RESULT_SCHEMAS_V2: &[ResultSchemaContractV2] = &[
             "item.remove",
             "item.attach",
             "item.clear",
+            "item.record_many",
         ],
     ),
     result_schema_v2(
@@ -255,6 +257,11 @@ pub const PROCEDURE_DIAGNOSTICS_RESULT_SCHEMA_V1: &str = "podway.procedure-diagn
 
 /// Result families for v2-only routes. New command surfaces begin at `/v1`.
 pub const NEW_ROUTE_RESULT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
+    result_schema_v2(
+        "podway.item-record-many-result/v1",
+        "schemas/item-record-many-result-v1.schema.json",
+        &["item.record_many"],
+    ),
     result_schema_v2(
         "podway.observation-result/v1",
         "schemas/observation-result-v1.schema.json",
@@ -661,6 +668,16 @@ fn required_result_fields_v2(schema: &str) -> &'static [&'static str] {
             "item_id",
             "revision",
         ],
+        "podway.item-record-many-result/v1" => &[
+            "schema",
+            "admission",
+            "changed",
+            "graph_node_id",
+            "attempt_id",
+            "attempt_number",
+            "revision",
+            "items",
+        ],
         "podway.job-lookup-result/v3" => &["schema", "found"],
         "podway.job-result/v3" => &["schema", "job"],
         "podway.procedure-source-result/v1" => &[
@@ -894,6 +911,16 @@ fn allowed_result_fields_v2(schema: &str) -> &'static [&'static str] {
             "item_id",
             "revision",
             "value_digest",
+        ],
+        "podway.item-record-many-result/v1" => &[
+            "schema",
+            "admission",
+            "changed",
+            "graph_node_id",
+            "attempt_id",
+            "attempt_number",
+            "revision",
+            "items",
         ],
         "podway.job-lookup-result/v3" => &["schema", "found", "job"],
         "podway.job-result/v3" => &["schema", "job"],

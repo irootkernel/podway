@@ -439,6 +439,15 @@ fn route_cases() -> Vec<RouteCase> {
             preconditions: item_preconditions(),
         },
         RouteCase {
+            command: "item.record_many",
+            operation: OperationV1::Mutate,
+            durable: true,
+            payload: json!({"selector": selector.clone(), "operations": [
+                {"item_id": "artifact", "expected_item_revision": 2, "clear": true}
+            ]}),
+            preconditions: session_preconditions(),
+        },
+        RouteCase {
             command: "job.list",
             operation: OperationV1::Query,
             durable: false,
@@ -477,10 +486,10 @@ fn route_cases() -> Vec<RouteCase> {
 }
 
 #[test]
-fn recon001_exhaustively_admits_only_the_29_canonical_daemon_routes() {
+fn recon001_exhaustively_admits_only_the_30_canonical_daemon_routes() {
     let cases = route_cases();
-    assert_eq!(cases.len(), 29);
-    assert_eq!(DAEMON_COMMAND_NAMES_V1.len(), 29);
+    assert_eq!(cases.len(), 30);
+    assert_eq!(DAEMON_COMMAND_NAMES_V1.len(), 30);
     assert_eq!(
         cases.iter().map(|case| case.command).collect::<Vec<_>>(),
         DAEMON_COMMAND_NAMES_V1.to_vec(),

@@ -25,6 +25,11 @@ pub const MAX_SLICE_ITEM_TEXT_SCALARS_V1: usize = 65_536;
 pub const MAX_SLICE_LIST_VALUE_SCALARS_V1: usize = 4_000;
 pub const MAX_SLICE_ARTIFACT_PATH_SCALARS_V1: usize = 4_000;
 pub const MAX_SLICE_MEDIA_TYPE_BYTES_V1: usize = 255;
+pub const ITEM_RECORD_MANY_INPUT_SCHEMA_V1: &str = "podway.item-record-many-input/v1";
+pub const MAX_ITEM_RECORD_MANY_OPERATIONS_V1: usize = 64;
+pub const MAX_ITEM_RECORD_MANY_LIST_ENTRIES_V1: usize = 200;
+pub const MAX_ITEM_RECORD_MANY_LIST_ENTRY_SCALARS_V1: usize = 1_000;
+pub const MAX_ITEM_RECORD_MANY_CHOICE_SCALARS_V1: usize = 120;
 
 /// Validation failures for the G006 protocol slice.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -551,6 +556,99 @@ pub struct ItemClearV1 {
     pub preconditions: ItemMutationPreconditionsWireV1,
 }
 
+/// One complete typed value accepted by atomic multi-item recording.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ItemRecordValueV1 {
+    Confirm {
+        value: bool,
+    },
+    Text {
+        value: String,
+    },
+    Choice {
+        value: String,
+    },
+    Integer {
+        value: i64,
+    },
+    List {
+        value: Vec<String>,
+    },
+    Artifact {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reference: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        digest: Option<Sha256Digest>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        size_bytes: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        media_type: Option<String>,
+    },
+}
+
+impl ItemRecordValueV1 {
+    pub fn artifact_source(&self) -> Option<Result<ItemAttachSourceV1, SliceErrorV1>> {
+        match self {
+            Self::Artifact {
+                path,
+                reference,
+                digest,
+                size_bytes,
+                media_type,
+            } => Some(validated_attach_source(
+                path.clone(),
+                reference.clone(),
+                digest.clone(),
+                *size_bytes,
+                media_type.clone(),
+            )),
+            _ => None,
+        }
+    }
+}
+
+/// Exactly one record value or clear disposition for an atomic item operation.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum ItemRecordManyDispositionV1 {
+    Record { record: ItemRecordValueV1 },
+    Clear { clear: bool },
+}
+
+/// One item-local fence and mutation within a canonicalized atomic batch.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ItemRecordManyOperationV1 {
+    pub item_id: ItemId,
+    pub expected_item_revision: Revision,
+    #[serde(flatten)]
+    pub disposition: ItemRecordManyDispositionV1,
+}
+
+/// Validated public stdin document consumed by `podway record --stdin`.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ItemRecordManyInputV1 {
+    pub schema: String,
+    pub workspace_uuid: WorkspaceId,
+    pub session_id: SessionId,
+    pub session_revision: Revision,
+    pub attempt_id: AttemptId,
+    pub idempotency_key: IdempotencyKeyV1,
+    pub operations: Vec<ItemRecordManyOperationV1>,
+}
+
+/// Validated daemon payload for one atomic multi-item mutation.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ItemRecordManyV1 {
+    pub operations: Vec<ItemRecordManyOperationV1>,
+    pub preconditions: SessionMutationPreconditionsWireV1,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionBlockV1 {
@@ -828,7 +926,7 @@ pub struct ProcedureV2MutationRequestV1 {
 }
 
 /// The authoritative G006 daemon route set. No aliases are admitted at the protocol boundary.
-pub const DAEMON_COMMAND_NAMES_V1: [&str; 29] = [
+pub const DAEMON_COMMAND_NAMES_V1: [&str; 30] = [
     "workspace.init",
     "workspace.doctor",
     "workspace.show",
@@ -853,6 +951,7 @@ pub const DAEMON_COMMAND_NAMES_V1: [&str; 29] = [
     "item.remove",
     "item.attach",
     "item.clear",
+    "item.record_many",
     "job.list",
     "job.lookup",
     "job.status",
@@ -888,6 +987,7 @@ pub enum SliceCommandV1 {
     ItemRemove(ItemRemoveV1),
     ItemAttach(ItemAttachV1),
     ItemClear(ItemClearV1),
+    ItemRecordMany(ItemRecordManyV1),
     JobList(JobListV1),
     JobLookup(JobLookupV1),
     JobStatus(JobStatusV1),
@@ -922,6 +1022,7 @@ impl SliceCommandV1 {
             Self::ItemRemove(_) => "item.remove",
             Self::ItemAttach(_) => "item.attach",
             Self::ItemClear(_) => "item.clear",
+            Self::ItemRecordMany(_) => "item.record_many",
             Self::JobList(_) => "job.list",
             Self::JobLookup(_) => "job.lookup",
             Self::JobStatus(_) => "job.status",
@@ -976,7 +1077,8 @@ impl SliceCommandV1 {
             | Self::ItemAdd(_)
             | Self::ItemRemove(_)
             | Self::ItemAttach(_)
-            | Self::ItemClear(_) => OperationV1::Mutate,
+            | Self::ItemClear(_)
+            | Self::ItemRecordMany(_) => OperationV1::Mutate,
         }
     }
 
@@ -1003,6 +1105,7 @@ impl SliceCommandV1 {
                     | Self::ItemRemove(_)
                     | Self::ItemAttach(_)
                     | Self::ItemClear(_)
+                    | Self::ItemRecordMany(_)
             ),
         }
     }
@@ -1383,6 +1486,18 @@ impl SliceRequestV1 {
                     payload.selector,
                     SliceCommandV1::ItemClear(ItemClearV1 {
                         item_id: payload.item_id,
+                        preconditions,
+                    }),
+                )
+            }
+            "item.record_many" => {
+                require_envelope(envelope, "item.record_many", OperationV1::Mutate, true)?;
+                let preconditions = require_session_preconditions(envelope.preconditions())?;
+                let payload: ItemRecordManyPayloadV1 = parse_payload(envelope)?;
+                (
+                    payload.selector,
+                    SliceCommandV1::ItemRecordMany(ItemRecordManyV1 {
+                        operations: validate_item_record_many_operations_v1(payload.operations)?,
                         preconditions,
                     }),
                 )
@@ -1954,6 +2069,220 @@ struct ItemAttachPayloadV1 {
     size_bytes: Option<u64>,
     #[serde(default, deserialize_with = "deserialize_optional_non_null")]
     media_type: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum RawItemRecordValueV1 {
+    Confirm {
+        value: bool,
+    },
+    Text {
+        value: String,
+    },
+    Choice {
+        value: String,
+    },
+    Integer {
+        value: i64,
+    },
+    List {
+        value: Vec<String>,
+    },
+    Artifact {
+        #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+        path: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+        reference: Option<String>,
+        #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+        digest: Option<Sha256Digest>,
+        #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+        size_bytes: Option<u64>,
+        #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+        media_type: Option<String>,
+    },
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawItemRecordManyOperationV1 {
+    item_id: ItemId,
+    expected_item_revision: Revision,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    record: Option<RawItemRecordValueV1>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    clear: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ItemRecordManyPayloadV1 {
+    selector: WorktreeSelectorWireV1,
+    operations: Vec<RawItemRecordManyOperationV1>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawItemRecordManyInputV1 {
+    schema: String,
+    workspace_uuid: WorkspaceId,
+    session_id: SessionId,
+    session_revision: Revision,
+    attempt_id: AttemptId,
+    idempotency_key: IdempotencyKeyV1,
+    operations: Vec<RawItemRecordManyOperationV1>,
+}
+
+/// Decodes only the closed, bounded stdin contract for atomic item recording.
+pub fn decode_item_record_many_input_v1(
+    bytes: &[u8],
+) -> Result<ItemRecordManyInputV1, SliceErrorV1> {
+    if bytes.len() > crate::MAX_FRAME_PAYLOAD_BYTES_V1 {
+        return Err(SliceErrorV1::ValueTooLong {
+            field: "item record input",
+            maximum: crate::MAX_FRAME_PAYLOAD_BYTES_V1,
+            actual: bytes.len(),
+        });
+    }
+    let raw: RawItemRecordManyInputV1 =
+        serde_json::from_slice(bytes).map_err(|error| SliceErrorV1::InvalidPayload {
+            message: error.to_string(),
+        })?;
+    if raw.schema != ITEM_RECORD_MANY_INPUT_SCHEMA_V1 {
+        return Err(SliceErrorV1::InvalidValue {
+            field: "item record input schema",
+        });
+    }
+    Ok(ItemRecordManyInputV1 {
+        schema: raw.schema,
+        workspace_uuid: raw.workspace_uuid,
+        session_id: raw.session_id,
+        session_revision: raw.session_revision,
+        attempt_id: raw.attempt_id,
+        idempotency_key: raw.idempotency_key,
+        operations: validate_item_record_many_operations_v1(raw.operations)?,
+    })
+}
+
+/// Validates and canonicalizes the operation array embedded in a durable execution document.
+pub fn decode_item_record_many_operations_v1(
+    value: serde_json::Value,
+) -> Result<Vec<ItemRecordManyOperationV1>, SliceErrorV1> {
+    let operations: Vec<RawItemRecordManyOperationV1> =
+        serde_json::from_value(value).map_err(|error| SliceErrorV1::InvalidPayload {
+            message: error.to_string(),
+        })?;
+    validate_item_record_many_operations_v1(operations)
+}
+
+fn validate_item_record_many_operations_v1(
+    operations: Vec<RawItemRecordManyOperationV1>,
+) -> Result<Vec<ItemRecordManyOperationV1>, SliceErrorV1> {
+    if operations.is_empty() || operations.len() > MAX_ITEM_RECORD_MANY_OPERATIONS_V1 {
+        return Err(SliceErrorV1::InvalidValue {
+            field: "item record operations",
+        });
+    }
+    let mut operations = operations
+        .into_iter()
+        .map(|operation| {
+            let disposition = match (operation.record, operation.clear) {
+                (Some(record), None) => ItemRecordManyDispositionV1::Record {
+                    record: validate_item_record_value_v1(record)?,
+                },
+                (None, Some(true)) => ItemRecordManyDispositionV1::Clear { clear: true },
+                _ => {
+                    return Err(SliceErrorV1::InvalidValue {
+                        field: "item record disposition",
+                    });
+                }
+            };
+            Ok(ItemRecordManyOperationV1 {
+                item_id: operation.item_id,
+                expected_item_revision: operation.expected_item_revision,
+                disposition,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    operations.sort_by(|left, right| left.item_id.cmp(&right.item_id));
+    if operations
+        .windows(2)
+        .any(|pair| pair[0].item_id == pair[1].item_id)
+    {
+        return Err(SliceErrorV1::InvalidValue {
+            field: "item record item_id",
+        });
+    }
+    Ok(operations)
+}
+
+fn validate_item_record_value_v1(
+    record: RawItemRecordValueV1,
+) -> Result<ItemRecordValueV1, SliceErrorV1> {
+    Ok(match record {
+        RawItemRecordValueV1::Confirm { value } => ItemRecordValueV1::Confirm { value },
+        RawItemRecordValueV1::Text { value } => {
+            validate_item_text(&value)?;
+            ItemRecordValueV1::Text { value }
+        }
+        RawItemRecordValueV1::Choice { value } => {
+            validate_scalar_bound(&value, MAX_ITEM_RECORD_MANY_CHOICE_SCALARS_V1, "choice")?;
+            if value.is_empty() {
+                return Err(SliceErrorV1::EmptyValue { field: "choice" });
+            }
+            ItemRecordValueV1::Choice { value }
+        }
+        RawItemRecordValueV1::Integer { value } => ItemRecordValueV1::Integer { value },
+        RawItemRecordValueV1::List { value } => {
+            if value.len() > MAX_ITEM_RECORD_MANY_LIST_ENTRIES_V1 {
+                return Err(SliceErrorV1::ValueTooLong {
+                    field: "list",
+                    maximum: MAX_ITEM_RECORD_MANY_LIST_ENTRIES_V1,
+                    actual: value.len(),
+                });
+            }
+            for entry in &value {
+                validate_scalar_bound(
+                    entry,
+                    MAX_ITEM_RECORD_MANY_LIST_ENTRY_SCALARS_V1,
+                    "list entry",
+                )?;
+                if entry.is_empty() {
+                    return Err(SliceErrorV1::EmptyValue {
+                        field: "list entry",
+                    });
+                }
+            }
+            ItemRecordValueV1::List { value }
+        }
+        RawItemRecordValueV1::Artifact {
+            path,
+            reference,
+            digest,
+            size_bytes,
+            media_type,
+        } => match validated_attach_source(path, reference, digest, size_bytes, media_type)? {
+            ItemAttachSourceV1::Path { path, media_type } => ItemRecordValueV1::Artifact {
+                path: Some(path),
+                reference: None,
+                digest: None,
+                size_bytes: None,
+                media_type,
+            },
+            ItemAttachSourceV1::OpaqueReference {
+                reference,
+                digest,
+                size_bytes,
+                media_type,
+            } => ItemRecordValueV1::Artifact {
+                path: None,
+                reference: Some(reference),
+                digest: Some(digest),
+                size_bytes: Some(size_bytes),
+                media_type: Some(media_type),
+            },
+        },
+    })
 }
 
 #[derive(Deserialize)]
@@ -2959,6 +3288,10 @@ pub fn canonical_mutation_identity_v1(
         SliceCommandV1::ItemClear(item) => (
             item_preconditions_json(&item.preconditions),
             json!({"item_id": &item.item_id}),
+        ),
+        SliceCommandV1::ItemRecordMany(item) => (
+            session_preconditions_json(&item.preconditions),
+            json!({"operations": &item.operations}),
         ),
         SliceCommandV1::WorkspaceDoctor(_)
         | SliceCommandV1::WorkspaceShow(_)

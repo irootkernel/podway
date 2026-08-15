@@ -56,6 +56,7 @@ pub enum ActiveItemMutationV2 {
     Check,
     Uncheck,
     Set { value: String },
+    ReplaceList { values: Vec<String> },
     Add { value: String },
     Remove { value: String, ignore_missing: bool },
     Attach { value: ArtifactValueV1 },
@@ -1904,6 +1905,15 @@ fn mutate_item_value_v2(
                 return Err(GraphMutationErrorV2::ItemTypeMismatch);
             }
         }),
+        ActiveItemMutationV2::ReplaceList { values } => {
+            if specification.item_type() != ItemTypeV1::List {
+                return Err(GraphMutationErrorV2::ItemTypeMismatch);
+            }
+            Some(
+                RecordedItemValueV2::list(values)
+                    .map_err(|_| GraphMutationErrorV2::ItemConstraintFailed)?,
+            )
+        }
         ActiveItemMutationV2::Add { value } => {
             let ItemSpecV2::List(list_specification) = specification else {
                 return Err(GraphMutationErrorV2::ItemTypeMismatch);

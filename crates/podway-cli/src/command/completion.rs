@@ -310,6 +310,9 @@ const ITEM_MUTATION_FLAGS: &[&Flag] = &[
     &IF_ATTEMPT,
     &IF_ITEM_REVISION,
 ];
+const RECORD_FLAGS: &[&Flag] = &[
+    &JSON, &DEV, &WORKTREE, &TIMEOUT, &SOCKET, &NO_COLOR, &QUIET, &DETACH, &STDIN,
+];
 const START_FLAGS: &[&Flag] = &[
     &JSON,
     &DEV,
@@ -922,6 +925,12 @@ const ROUTES: &[Route] = &[
         flags: ITEM_MUTATION_FLAGS,
         values: "",
         dynamic: Some("items"),
+    },
+    Route {
+        words: "record",
+        flags: RECORD_FLAGS,
+        values: "",
+        dynamic: None,
     },
     Route {
         words: "job list",

@@ -134,6 +134,13 @@ fn v2rel003_all_mutations_admit_common_transport_with_applicable_revision_fences
             json!({"item_id":"proof","path":"proof.txt","media_type":"text/plain"}),
         ),
         ("item.clear", item, json!({"item_id":"proof"})),
+        (
+            "item.record_many",
+            session_preconditions(),
+            json!({"operations":[
+                {"item_id":"proof","expected_item_revision":11,"clear":true}
+            ]}),
+        ),
     ];
     let mut observed = std::collections::BTreeSet::new();
     for (command, preconditions, payload) in shared {

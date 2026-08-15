@@ -31,6 +31,8 @@ These JSON Schema Draft 2020-12 files define Podway's versioned structural contr
 - `next-result-v2.schema.json`: bounded action, decision, and goal-aware machine guidance.
 - `stage-transition-result-v2.schema.json`: Procedure v2 action and administrative transitions.
 - `item-mutation-result-v2.schema.json`: Procedure v2 item mutation outcome.
+- `item-record-many-input-v1.schema.json`: closed JSON stdin contract for bounded atomic item recording.
+- `item-record-many-result-v1.schema.json`: item-ID-ordered atomic recording outcome.
 - `authoring-diagnostic-v1.schema.json`: standalone bounded authoring diagnostic.
 - `procedure-source-result-v1.schema.json`: format and scaffold source output.
 - `procedure-diagnostics-result-v1.schema.json`: shared bounded diagnostics for every Procedure v2 authoring command.

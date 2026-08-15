@@ -2088,6 +2088,7 @@ where
                     | SliceCommandV1::ItemRemove(_)
                     | SliceCommandV1::ItemAttach(_)
                     | SliceCommandV1::ItemClear(_)
+                    | SliceCommandV1::ItemRecordMany(_)
             );
             let development_v2_requires_admission = matches!(
                 slice_request.command(),
@@ -2107,6 +2108,7 @@ where
                     | SliceCommandV1::ItemRemove(_)
                     | SliceCommandV1::ItemAttach(_)
                     | SliceCommandV1::ItemClear(_)
+                    | SliceCommandV1::ItemRecordMany(_)
             );
             let procedure_v2_admission = if development_v2_candidate {
                 match self

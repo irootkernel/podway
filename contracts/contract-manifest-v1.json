@@ -3,7 +3,7 @@
     {
       "kind": "catalog",
       "path": "contracts/command-routes.json",
-      "sha256": "sha256:a8e53e5ee93f7b21bb7f8311f18ff0981a35896e16e5dbcb17d2983d1b360050"
+      "sha256": "sha256:c9f5e7960c5c1e055c7c7f212544e7b8ab88cae883eb3a6785abcab4b232b1ec"
     },
     {
       "kind": "known_answer_fixture",
@@ -28,7 +28,7 @@
     {
       "kind": "catalog",
       "path": "release/dolgorae-adapter-contract-v2.json",
-      "sha256": "sha256:74e118a18750705b1aac49ec9b5b059658525fa4f9de40c25574ea32407448ae"
+      "sha256": "sha256:4a3b228accd13b958ed91e79013fe244c1e3461f34a73dadd87187c435957310"
     },
     {
       "kind": "schema",
@@ -122,13 +122,23 @@
     },
     {
       "kind": "schema",
+      "path": "schemas/item-record-many-input-v1.schema.json",
+      "sha256": "sha256:7cd4ae9c4ca8111cf309a141790ca59182e31da2cff466e5c1f429a0df9c4f16"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/item-record-many-result-v1.schema.json",
+      "sha256": "sha256:ec3029ef014b1673db17d06ca6942b1c77f220afc98e036e2a3b2948dcd7e000"
+    },
+    {
+      "kind": "schema",
       "path": "schemas/job-lookup-result-v3.schema.json",
-      "sha256": "sha256:00def052d3cb9f1975bb5c3c378a4bb503eb2374b9a203fb8470273ca68d57ab"
+      "sha256": "sha256:2473130ac734fc19fec1b428bd2d34dbe2fe17aedd99141f7672d16a1d99615d"
     },
     {
       "kind": "schema",
       "path": "schemas/job-result-v3.schema.json",
-      "sha256": "sha256:785667e42f2eaea1a8c08c5332f560a6ea02f3e5876f34597e2a20d5ebac8501"
+      "sha256": "sha256:450594b841d7bb5b71575a7b0b35c1d6b0cd17fe7d14cca7feb4cbea46da4f9f"
     },
     {
       "kind": "schema",
@@ -148,7 +158,7 @@
     {
       "kind": "schema",
       "path": "schemas/output-v3.schema.json",
-      "sha256": "sha256:f0ddb2c4c333837706d84102759dc89376b36f00956e97dac9c94dacaeaf9704"
+      "sha256": "sha256:4d9d392e7086ef19d3c9be9cf740b84ec51800b5e2aeab3c07fd03e76c308083"
     },
     {
       "kind": "schema",
@@ -218,7 +228,7 @@
     {
       "kind": "schema",
       "path": "schemas/v2-result-components-v1.schema.json",
-      "sha256": "sha256:24548fed2cbd5bc91aa0c833c281a45a5c7151fb81eee36c3a4c87dfd72159ba"
+      "sha256": "sha256:6596fd6f7eaf47cd55604addeed927e7bff4c092a64b7453efc204ee037915d6"
     },
     {
       "kind": "schema",
@@ -258,7 +268,7 @@
     {
       "kind": "catalog",
       "path": "spec/command-catalog.yaml",
-      "sha256": "sha256:8e4c10b135f1bd2e9d6d6ed341e9e5b77ac59ed81a1ec3e0390fe4e7fa5c1efd"
+      "sha256": "sha256:4296bd0035a5ff051c4398356d631ec324edd2df014880ecac537c328c9edbbe"
     },
     {
       "kind": "catalog",
@@ -268,7 +278,7 @@
     {
       "kind": "transition_matrix",
       "path": "spec/state-transition-matrix.csv",
-      "sha256": "sha256:283c28f1e1d9aaaf3626d4dc662f54a5e24ce33f97ceefc2df7c6c143d19197c"
+      "sha256": "sha256:9ffa747247d0f2e6f9c5997493031bc28f0121e139d08580c36052ef69c4393f"
     },
     {
       "kind": "known_answer_fixture",
@@ -341,7 +351,7 @@
       "sha256": "sha256:bb6f715e58da861c89097aa16c9b73816f2cf2c321ec0616ebe2209c574f9049"
     }
   ],
-  "digest": "sha256:1f8349cdf4f5f8440c99d35db35feede40673fe5142b40f9c3f646e1809e9272",
+  "digest": "sha256:bd233fe858ba4c1ffcbcbf2ed856ff3eb6c71f8fecaff2e034a900dfb072dd6c",
   "product": "podway",
   "product_version": "0.2.1",
   "schema_version": "podway.contract-manifest/v1",

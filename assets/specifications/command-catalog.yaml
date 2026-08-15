@@ -548,6 +548,26 @@ commands:
   result_schemas:
   - podway.item-mutation-result/v2
   - podway.detached-admission-result/v2
+- name: item.record_many
+  availability: executable
+  cli:
+  - record
+  - --stdin
+  operation: mutate
+  workspace_required: true
+  durable_job: true
+  session_mutation: true
+  destructive_confirmation: false
+  preconditions:
+  - workspace_uuid
+  - session_id
+  - session_revision
+  - attempt_id
+  - item_revisions
+  idempotency_scope: session
+  result_schemas:
+  - podway.item-record-many-result/v1
+  - podway.detached-admission-result/v2
 - name: job.list
   availability: executable
   cli:

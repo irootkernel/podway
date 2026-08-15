@@ -408,6 +408,166 @@ fn v2run003_action_readback_fixture_is_valid_and_vetted() {
 }
 
 #[test]
+fn v2agt004_record_many_updates_all_item_types_atomically_and_replays_terminal_receipt() {
+    let fixture = support_phase4_workspace::git_worktrees();
+    make_runtime_private(fixture.main());
+    fs::write(
+        fixture.main().join("record-many.yaml"),
+        ACTION_READBACK_PROCEDURE,
+    )
+    .unwrap();
+    fs::write(fixture.main().join("report.txt"), b"atomic report\n").unwrap();
+    let ParsedProcedure::V2(parsed) = parse_procedure_document(
+        ACTION_READBACK_PROCEDURE.as_bytes(),
+        ProcedureDocumentFormat::Yaml,
+    )
+    .unwrap() else {
+        unreachable!()
+    };
+    let procedure_digest = validate_procedure_v2(parsed).unwrap().digest().clone();
+    let workspace_selector = selector(fixture.main());
+    let runtime_manager = Arc::new(manager(fixture.temporary_path()));
+    let production = dispatcher(Arc::clone(&runtime_manager), "v2agt004-record-many");
+
+    let initialize = request(
+        28_001,
+        "workspace.init",
+        &workspace_selector,
+        Map::new(),
+        "v2agt004-initialize",
+        PreconditionsV1::default(),
+    );
+    assert!(matches!(
+        dispatch(&production, &initialize),
+        ResponseEnvelopeV2::OutputV2(_)
+    ));
+    let start = request(
+        28_002,
+        "session.start",
+        &workspace_selector,
+        json!({
+            "procedure": "record-many.yaml",
+            "expected_procedure_digest": procedure_digest,
+            "task_title": "V2AGT-004 atomic recording"
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+        "v2agt004-start",
+        PreconditionsV1::default(),
+    );
+    let started = v2_result(dispatch(&production, &start), "session.start");
+    let session_id = started["session_id"].as_str().unwrap();
+    let before = status(&production, &workspace_selector, 28_003, session_id);
+    let revision_before = before["session"]["revision"].as_u64().unwrap();
+    let preconditions = session_preconditions(&before);
+    let batch = request(
+        28_004,
+        "item.record_many",
+        &workspace_selector,
+        json!({"operations":[
+            {"item_id":"summary","expected_item_revision":0,"record":{"type":"text","value":"atomic summary"}},
+            {"item_id":"report","expected_item_revision":0,"record":{"type":"artifact","path":"report.txt","media_type":"text/plain"}},
+            {"item_id":"outcome","expected_item_revision":0,"record":{"type":"choice","value":"accepted"}},
+            {"item_id":"findings","expected_item_revision":0,"record":{"type":"list","value":["one","two"]}},
+            {"item_id":"count","expected_item_revision":0,"record":{"type":"integer","value":7}},
+            {"item_id":"confirmed","expected_item_revision":0,"record":{"type":"confirm","value":true}}
+        ]})
+        .as_object()
+        .unwrap()
+        .clone(),
+        "v2agt004-batch",
+        preconditions.clone(),
+    );
+    let response = dispatch(&production, &batch);
+    let result = v2_result(response.clone(), "item.record_many");
+    assert_eq!(result["schema"], "podway.item-record-many-result/v1");
+    assert_eq!(result["changed"], true);
+    assert_eq!(result["revision"], revision_before + 1);
+    assert_eq!(result["items"].as_array().unwrap().len(), 6);
+    assert_eq!(result["items"][0]["item_id"], "confirmed");
+    assert_eq!(result["items"][5]["item_id"], "summary");
+
+    let after = status(&production, &workspace_selector, 28_005, session_id);
+    assert_eq!(after["session"]["revision"], revision_before + 1);
+    for item_id in [
+        "confirmed",
+        "summary",
+        "outcome",
+        "count",
+        "findings",
+        "report",
+    ] {
+        assert!(
+            after["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["item_id"] == item_id)
+                .is_some_and(|item| item["satisfied"] == true)
+        );
+    }
+
+    assert_eq!(
+        without_request_id(&dispatch(&production, &batch)),
+        without_request_id(&response),
+        "exact idempotent replay must return the sealed terminal response"
+    );
+
+    let invalid = request(
+        28_006,
+        "item.record_many",
+        &workspace_selector,
+        json!({"operations":[
+            {"item_id":"confirmed","expected_item_revision":1,"clear":true},
+            {"item_id":"summary","expected_item_revision":0,"clear":true}
+        ]})
+        .as_object()
+        .unwrap()
+        .clone(),
+        "v2agt004-invalid-item-revision",
+        session_preconditions(&after),
+    );
+    let ResponseEnvelopeV2::Error(error) = dispatch(&production, &invalid) else {
+        panic!("a batch with one stale item revision must fail atomically")
+    };
+    assert_eq!(error.code().as_str(), "ITEM_REVISION_CONFLICT");
+    let unchanged_after_invalid = status(&production, &workspace_selector, 28_007, session_id);
+    assert_eq!(
+        unchanged_after_invalid["session"]["revision"],
+        revision_before + 1
+    );
+    assert!(
+        unchanged_after_invalid["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["item_id"] == "confirmed")
+            .is_some_and(|item| item["satisfied"] == true)
+    );
+
+    let stale = request(
+        28_008,
+        "item.record_many",
+        &workspace_selector,
+        json!({"operations":[
+            {"item_id":"summary","expected_item_revision":0,"clear":true}
+        ]})
+        .as_object()
+        .unwrap()
+        .clone(),
+        "v2agt004-stale",
+        preconditions,
+    );
+    let ResponseEnvelopeV2::Error(error) = dispatch(&production, &stale) else {
+        panic!("a stale batch must fail before changing any item")
+    };
+    assert_eq!(error.code().as_str(), "SESSION_REVISION_CONFLICT");
+    let unchanged = status(&production, &workspace_selector, 28_009, session_id);
+    assert_eq!(unchanged["session"]["revision"], revision_before + 1);
+}
+
+#[test]
 fn v2run003_detached_job_wait_reads_terminal_v2_job_from_v2_only_store() {
     let fixture = support_phase4_workspace::git_worktrees();
     make_runtime_private(fixture.main());
