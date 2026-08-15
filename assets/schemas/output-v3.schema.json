@@ -27,6 +27,7 @@
     { "$ref": "#/$defs/status" },
     { "$ref": "#/$defs/compactStatus" },
     { "$ref": "#/$defs/next" },
+    { "$ref": "#/$defs/observation" },
     { "$ref": "#/$defs/stageTransition" },
     { "$ref": "#/$defs/itemMutation" },
     { "$ref": "#/$defs/jobLookup" },
@@ -170,6 +171,7 @@
     "status": { "properties": { "command": { "const": "session.status" }, "result": { "$ref": "urn:podway:schema:status-result:v2" } } },
     "compactStatus": { "properties": { "command": { "const": "session.status" }, "result": { "$ref": "urn:podway:schema:compact-status-result:v2" } } },
     "next": { "properties": { "command": { "const": "session.next" }, "result": { "$ref": "urn:podway:schema:next-result:v2" } } },
+    "observation": { "properties": { "command": { "const": "session.observe" }, "result": { "$ref": "urn:podway:schema:observation-result:v1" } } },
     "stageTransition": {
       "required": ["workspace"],
       "properties": { "command": { "enum": ["session.complete", "session.skip", "session.retry", "session.block", "session.unblock", "session.cancel", "session.reset"] }, "result": { "$ref": "urn:podway:schema:stage-transition-result:v2" } },

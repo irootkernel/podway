@@ -4,7 +4,7 @@ Initialize one Git worktree with `podway init`, inspect `podway preset list`, an
 start either `sw-dev-v2`, `bug-fix-v2`, or a validated worktree-local Procedure v2
 file. Use `--dry-run` before a destructive replacement or other supported preview.
 
-During a task, read `podway status` and `podway next`, perform the actual work
+During a task, read `podway observe`, perform the actual work
 outside Podway, then record only supported evidence on the active attempt. Use typed
 item commands and `complete` to follow an action's declared edge. Use `decide` on a
 decision node and the goal commands for goal-tracked sessions.
@@ -19,7 +19,7 @@ preconditions, and assigns an idempotency key to every mutation. On response los
 uses `job lookup --idempotency-key` before retrying. A detached mutation is followed
 through `job status` or `job wait`.
 
-Actors may hand off within a worktree by reading the recorded v2 status and next
+Actors may hand off within a worktree by reading one recorded v2 observation
 result; chat history is not authority. Parallel tasks belong in separate Git
 worktrees and therefore separate Podway workspaces. Podway does not transfer a
 session between worktrees.

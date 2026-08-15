@@ -17,7 +17,7 @@ use podway_daemon::{
         ProcedureProviderV1, ProcedureV2SourceAdmissionErrorV1, prepare_custom_procedure_v2_start,
         workspace_procedure_snapshot_from_bytes_v2,
     },
-    v2_read_service::project_graph_next_v2,
+    v2_read_service::{project_graph_next_v2, project_graph_observation_v1},
 };
 use podway_protocol::{
     CommandNameV1, OutputEnvelopeInputV3, OutputEnvelopeV3, RequestIdV1, ResponseEnvelopeV2,
@@ -542,6 +542,12 @@ fn v2rel002_admitted_maximum_next_uses_the_production_projector_and_frame() {
         UnixMillis::new(1_700_000_030_000),
     );
     let next = project_graph_next_v2(&view).unwrap();
+    let observation = project_graph_observation_v1(&view).unwrap();
+    let observation_bytes = serde_json::to_vec(&observation).unwrap().len();
+    assert!(
+        observation_bytes <= 983_040,
+        "maximum observation exceeds the frame minus 64 KiB envelope reserve: {observation_bytes} bytes"
+    );
     assert_eq!(next["node"]["node_type"], "decision");
     assert_eq!(next["missing_required_items"].as_array().unwrap().len(), 64);
     assert_eq!(next["goal"]["criteria"].as_array().unwrap().len(), 16);

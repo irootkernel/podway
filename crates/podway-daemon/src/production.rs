@@ -76,7 +76,8 @@ use crate::{
     scheduler::WorkspaceSchedulerV1,
     server::{DaemonRequestV1, ResponseMetadataSourceV1, SystemResponseMetadataSourceV1},
     v2_read_service::{
-        GraphStatusTierV2, GraphViewErrorV2, project_graph_next_v2, project_graph_status_v2,
+        GraphStatusTierV2, GraphViewErrorV2, project_graph_next_v2, project_graph_observation_v1,
+        project_graph_status_v2,
     },
     worker::{
         DaemonWorkerV1, WorkerClockV1, WorkerCompletionModeV1, WorkerErrorV1, WorkerExecutionV1,
@@ -1765,7 +1766,9 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
         }
         if matches!(
             slice_request.command(),
-            SliceCommandV1::SessionStatus(_) | SliceCommandV1::SessionNext(_)
+            SliceCommandV1::SessionStatus(_)
+                | SliceCommandV1::SessionNext(_)
+                | SliceCommandV1::SessionObserve(_)
         ) {
             let selector = selector_from_wire(slice_request.selector())?;
             let readonly = self
@@ -1781,6 +1784,13 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                     input.preconditions.expected_session_id.as_ref(),
                 ),
                 SliceCommandV1::SessionNext(input) => (
+                    RequestReadWaitV1::from_query_wait(
+                        &input.wait,
+                        request.options().wait_timeout_ms(),
+                    ),
+                    input.preconditions.expected_session_id.as_ref(),
+                ),
+                SliceCommandV1::SessionObserve(input) => (
                     RequestReadWaitV1::from_query_wait(
                         &input.wait,
                         request.options().wait_timeout_ms(),
@@ -1884,6 +1894,7 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                     )
                 }
                 SliceCommandV1::SessionNext(_) => project_graph_next_v2(&view),
+                SliceCommandV1::SessionObserve(_) => project_graph_observation_v1(&view),
                 _ => unreachable!("non-read requests returned above"),
             }
             .map_err(map_graph_view_error_v2)?;

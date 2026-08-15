@@ -10,8 +10,8 @@ use podway_config::{
     goal_revision_safe_targets_v2, parse_procedure_document, validate_procedure_v2,
 };
 use podway_core::{
-    AttemptLifecycle, AttemptValidityV2, BlockerState, CriterionCitationV2, CriterionStatusV2,
-    GoalOutcome, GraphPlacementV2, ItemSpecV2, ItemTypeV1, RecordedItemValueV2,
+    ArtifactLocationKindV1, AttemptLifecycle, AttemptValidityV2, BlockerState, CriterionCitationV2,
+    CriterionStatusV2, GoalOutcome, GraphPlacementV2, ItemSpecV2, ItemTypeV1, RecordedItemValueV2,
     ResolvedEvidenceReferenceV2, SessionAttemptV2, SessionLifecycle, TraceSequenceV2, UnixMillis,
     canonicalize_json_v1,
 };
@@ -26,6 +26,8 @@ const ITEM_DISPLAY_CHARS_MAX: usize = 2_048;
 const STATUS_VALUES_BYTES_MAX: usize = 262_144;
 const BLOCKER_WINDOW_BYTES_MAX: usize = 49_152;
 const HISTORY_WINDOW_BYTES_MAX: usize = 65_536;
+const OBSERVATION_ITEM_VALUE_CHARS_MAX: usize = 128;
+const OBSERVATION_ITEM_VALUE_BYTES_MAX: usize = 1_024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GraphStatusTierV2 {
@@ -322,6 +324,45 @@ pub fn project_graph_next_v2(
     Ok(result)
 }
 
+/// Project one self-contained automation observation from a single coherent Store view.
+pub fn project_graph_observation_v1(
+    view: &GraphWorkspaceViewV2,
+) -> Result<Map<String, Value>, GraphViewErrorV2> {
+    let state = graph_state(view)?;
+    let procedure = rehydrate_snapshot(state)?;
+    let current = CurrentProjection::derive(state, &procedure)?;
+    let status = project_graph_status_v2(view, GraphStatusTierV2::Standard, None)?;
+    let guidance = if current.is_some() {
+        Value::Object(project_graph_next_v2(view)?)
+    } else {
+        Value::Null
+    };
+
+    let mut result = Map::new();
+    result.insert("schema".to_owned(), json!("podway.observation-result/v1"));
+    result.insert("status".to_owned(), Value::Object(status));
+    result.insert("guidance".to_owned(), guidance);
+    result.insert(
+        "active_items".to_owned(),
+        Value::Array(
+            current
+                .as_ref()
+                .map(CurrentProjection::active_item_descriptors)
+                .unwrap_or_default(),
+        ),
+    );
+    result.insert(
+        "mutation_templates".to_owned(),
+        Value::Array(
+            current
+                .as_ref()
+                .map(|current| current.mutation_templates(view, state, &procedure))
+                .unwrap_or_default(),
+        ),
+    );
+    Ok(result)
+}
+
 fn graph_state(view: &GraphWorkspaceViewV2) -> Result<&GraphSessionStateV2, GraphViewErrorV2> {
     view.graph_state()
         .ok_or(GraphViewErrorV2::MissingGraphSession)
@@ -600,6 +641,244 @@ impl<'a> CurrentProjection<'a> {
         (values, total, truncated)
     }
 
+    fn active_item_descriptors(&self) -> Vec<Value> {
+        self.item_specs
+            .iter()
+            .zip(self.memory.item_slots())
+            .map(|(spec, slot)| {
+                let mut descriptor = Map::new();
+                descriptor.insert("item_id".to_owned(), json!(spec.id().as_str()));
+                descriptor.insert("type".to_owned(), json!(item_type(spec.item_type())));
+                descriptor.insert("prompt".to_owned(), json!(spec.common().prompt()));
+                if let Some(help) = spec.common().help() {
+                    descriptor.insert("help".to_owned(), json!(help));
+                }
+                descriptor.insert("required".to_owned(), json!(spec.common().required()));
+                descriptor.insert(
+                    "satisfied".to_owned(),
+                    json!(
+                        slot.value()
+                            .is_some_and(|value| spec.admits_recorded_value(value))
+                    ),
+                );
+                descriptor.insert("revision".to_owned(), json!(slot.revision().get()));
+                descriptor.insert("constraints".to_owned(), item_constraints(spec));
+                let (value, value_truncated) = slot
+                    .value()
+                    .map(project_observation_item_value)
+                    .unwrap_or((Value::Null, false));
+                descriptor.insert("value".to_owned(), value);
+                descriptor.insert("value_truncated".to_owned(), json!(value_truncated));
+                Value::Object(descriptor)
+            })
+            .collect()
+    }
+
+    fn mutation_templates(
+        &self,
+        view: &GraphWorkspaceViewV2,
+        state: &GraphSessionStateV2,
+        procedure: &ParsedProcedureV2,
+    ) -> Vec<Value> {
+        let actions = self.allowed_actions(state, procedure);
+        let mut recipes = self.suggestions(state, &actions);
+        for (spec, slot) in self.item_specs.iter().zip(self.memory.item_slots()) {
+            let item_id = spec.id().as_str();
+            let set_placeholder = match spec.item_type() {
+                ItemTypeV1::Text => Some(("item.set", "set", "<text>")),
+                ItemTypeV1::Choice => Some(("item.set", "set", "<choice>")),
+                ItemTypeV1::Integer => Some(("item.set", "set", "<integer>")),
+                ItemTypeV1::Artifact => Some(("item.attach", "attach", "<path>")),
+                ItemTypeV1::Confirm | ItemTypeV1::List => None,
+            };
+            if let Some((command, verb, placeholder)) = set_placeholder {
+                push_recipe_unique(
+                    &mut recipes,
+                    json!({
+                        "command": command,
+                        "argv": ["podway", verb, item_id, placeholder],
+                        "item_id": item_id,
+                    }),
+                );
+            }
+            if spec.item_type() == ItemTypeV1::Confirm {
+                push_recipe_unique(
+                    &mut recipes,
+                    json!({"command":"item.check","argv":["podway","check",item_id],"item_id":item_id}),
+                );
+            }
+            if let ItemSpecV2::List(list) = spec {
+                let count = slot
+                    .value()
+                    .and_then(RecordedItemValueV2::as_list)
+                    .map_or(0, <[String]>::len);
+                if count < usize::from(list.max_items()) {
+                    push_recipe_unique(
+                        &mut recipes,
+                        json!({"command":"item.add","argv":["podway","add",item_id,"<value>"],"item_id":item_id}),
+                    );
+                }
+                if count != 0 {
+                    push_recipe_unique(
+                        &mut recipes,
+                        json!({"command":"item.remove","argv":["podway","remove",item_id,"<value>"],"item_id":item_id}),
+                    );
+                }
+            }
+            if slot.value().is_some() {
+                if spec.item_type() == ItemTypeV1::Confirm {
+                    push_recipe_unique(
+                        &mut recipes,
+                        json!({"command":"item.uncheck","argv":["podway","uncheck",item_id],"item_id":item_id}),
+                    );
+                }
+                push_recipe_unique(
+                    &mut recipes,
+                    json!({"command":"item.clear","argv":["podway","clear",item_id],"item_id":item_id}),
+                );
+            }
+        }
+        if actions.contains(&"session.block") {
+            push_recipe_unique(
+                &mut recipes,
+                json!({"command":"session.block","argv":["podway","block","--reason","<reason>"]}),
+            );
+        }
+        if actions.contains(&"session.unblock") {
+            push_recipe_unique(
+                &mut recipes,
+                json!({"command":"session.unblock","argv":["podway","unblock","<blocker-id>"]}),
+            );
+        }
+        push_recipe_unique(
+            &mut recipes,
+            json!({"command":"session.cancel","argv":["podway","cancel","--reason","<reason>"]}),
+        );
+        push_recipe_unique(
+            &mut recipes,
+            json!({"command":"session.reset","argv":["podway","reset","--yes"]}),
+        );
+        if actions.contains(&"session.rework") {
+            push_recipe_unique(
+                &mut recipes,
+                json!({"command":"session.rework","argv":["podway","rework","--to","<graph-node-id>","--reason","<reason>"]}),
+            );
+        }
+        if actions.contains(&"goal.revise") {
+            push_recipe_unique(
+                &mut recipes,
+                json!({
+                    "command":"goal.revise",
+                    "argv":["podway","goal","revise","--goal","<goal>","--criterion","<criterion>","--rework-to","<graph-node-id>","--reason","<reason>"]
+                }),
+            );
+        }
+        recipes
+            .into_iter()
+            .filter_map(|suggestion| {
+                let object = suggestion.as_object()?;
+                let command = object.get("command")?.as_str()?;
+                let mut argv = object.get("argv")?.as_array()?.clone();
+                append_flag(
+                    &mut argv,
+                    "--if-workspace-uuid",
+                    view.identity().workspace_uuid().as_str(),
+                );
+                append_flag(
+                    &mut argv,
+                    "--if-session-id",
+                    state.trace().session_id().as_str(),
+                );
+
+                let mut fences = Map::new();
+                fences.insert(
+                    "workspace_uuid".to_owned(),
+                    json!(view.identity().workspace_uuid().as_str()),
+                );
+                fences.insert(
+                    "session_id".to_owned(),
+                    json!(state.trace().session_id().as_str()),
+                );
+                if command.starts_with("item.") {
+                    let item_id = object.get("item_id")?.as_str()?;
+                    let slot = self
+                        .memory
+                        .item_slots()
+                        .iter()
+                        .find(|slot| slot.item_id().as_str() == item_id)?;
+                    append_flag(
+                        &mut argv,
+                        "--if-attempt",
+                        self.attempt.attempt_id().as_str(),
+                    );
+                    append_flag(
+                        &mut argv,
+                        "--if-item-revision",
+                        &slot.revision().get().to_string(),
+                    );
+                    fences.insert(
+                        "attempt_id".to_owned(),
+                        json!(self.attempt.attempt_id().as_str()),
+                    );
+                    fences.insert("item_revision".to_owned(), json!(slot.revision().get()));
+                } else {
+                    append_flag(
+                        &mut argv,
+                        "--if-session-revision",
+                        &state.trace().revision().get().to_string(),
+                    );
+                    fences.insert(
+                        "session_revision".to_owned(),
+                        json!(state.trace().revision().get()),
+                    );
+                    if matches!(
+                        command,
+                        "session.complete"
+                            | "session.decide"
+                            | "session.retry"
+                            | "session.skip"
+                            | "session.rework"
+                            | "session.block"
+                            | "session.unblock"
+                            | "session.cancel"
+                            | "goal.revise"
+                            | "goal.assess_criterion"
+                    ) {
+                        append_flag(
+                            &mut argv,
+                            "--if-attempt",
+                            self.attempt.attempt_id().as_str(),
+                        );
+                        fences.insert(
+                            "attempt_id".to_owned(),
+                            json!(self.attempt.attempt_id().as_str()),
+                        );
+                    }
+                    if matches!(
+                        command,
+                        "session.decide" | "goal.revise" | "goal.assess_criterion"
+                    ) && let Some(revision) = state.goal_state().current_revision()
+                    {
+                        append_flag(&mut argv, "--if-goal-revision", &revision.get().to_string());
+                        fences.insert("goal_revision".to_owned(), json!(revision.get()));
+                    }
+                }
+                append_flag(&mut argv, "--idempotency-key", "<idempotency-key>");
+                Some(json!({
+                    "command": command,
+                    "argv": argv,
+                    "preconditions": fences,
+                    "authority": "optimistic_concurrency_only",
+                    "idempotency_key_required": true,
+                    "requires_explicit_authorization": matches!(
+                        command,
+                        "goal.define" | "goal.revise" | "session.cancel" | "session.reset"
+                    ),
+                }))
+            })
+            .collect()
+    }
+
     fn blocker_window(&self) -> Result<(Vec<Value>, bool), GraphViewErrorV2> {
         let mut blockers = self.open_blockers.clone();
         blockers.sort_by_key(|blocker| std::cmp::Reverse(blocker.created_at()));
@@ -818,6 +1097,101 @@ impl<'a> CurrentProjection<'a> {
         suggestions.truncate(128);
         suggestions
     }
+}
+
+fn append_flag(argv: &mut Vec<Value>, flag: &str, value: &str) {
+    argv.push(json!(flag));
+    argv.push(json!(value));
+}
+
+fn push_recipe_unique(recipes: &mut Vec<Value>, recipe: Value) {
+    if !recipes.contains(&recipe) {
+        recipes.push(recipe);
+    }
+}
+
+fn item_constraints(spec: &ItemSpecV2) -> Value {
+    match spec {
+        ItemSpecV2::Confirm(_) => json!({}),
+        ItemSpecV2::Text(spec) => json!({
+            "min_length": spec.min_length(),
+            "max_length": spec.max_length(),
+            "multiline": spec.multiline(),
+        }),
+        ItemSpecV2::Choice(spec) => json!({"choices": spec.choices()}),
+        ItemSpecV2::Integer(spec) => {
+            let mut constraints = Map::new();
+            if let Some(minimum) = spec.minimum() {
+                constraints.insert("minimum".to_owned(), json!(minimum));
+            }
+            if let Some(maximum) = spec.maximum() {
+                constraints.insert("maximum".to_owned(), json!(maximum));
+            }
+            Value::Object(constraints)
+        }
+        ItemSpecV2::List(spec) => json!({
+            "min_items": spec.min_items(),
+            "max_items": spec.max_items(),
+            "max_item_length": spec.max_item_length(),
+            "unique": spec.unique(),
+        }),
+        ItemSpecV2::Artifact(spec) => {
+            json!({"allowed_media_types": spec.allowed_media_types()})
+        }
+    }
+}
+
+fn project_observation_item_value(value: &RecordedItemValueV2) -> (Value, bool) {
+    if value.item_type() == ItemTypeV1::Confirm {
+        return (Value::Bool(true), false);
+    }
+    if let Some(value) = value.as_text() {
+        let (value, truncated) = truncate_chars(value, OBSERVATION_ITEM_VALUE_CHARS_MAX);
+        return (json!(value), truncated);
+    }
+    if let Some(value) = value.as_choice() {
+        return (json!(value), false);
+    }
+    if let Some(value) = value.as_integer() {
+        return (json!(value), false);
+    }
+    if let Some(value) = value.as_list() {
+        let mut projected = Vec::new();
+        let mut truncated = false;
+        for entry in value {
+            let (entry, entry_truncated) = truncate_chars(entry, OBSERVATION_ITEM_VALUE_CHARS_MAX);
+            let mut candidate = projected.clone();
+            candidate.push(entry);
+            if serde_json::to_vec(&candidate).map_or(true, |encoded| {
+                encoded.len() > OBSERVATION_ITEM_VALUE_BYTES_MAX
+            }) {
+                truncated = true;
+                break;
+            }
+            projected = candidate;
+            truncated |= entry_truncated;
+        }
+        truncated |= projected.len() < value.len();
+        return (json!(projected), truncated);
+    }
+    let artifact = value
+        .as_artifact()
+        .expect("the item type guarantees an artifact value");
+    let (location, location_truncated) =
+        truncate_chars(artifact.location(), OBSERVATION_ITEM_VALUE_CHARS_MAX);
+    (
+        json!({
+            "location_type": match artifact.location_kind() {
+                ArtifactLocationKindV1::LocalPath => "path",
+                ArtifactLocationKindV1::ExternalReference => "reference",
+            },
+            "location": location,
+            "sha256_digest": artifact.digest().as_str(),
+            "size_bytes": artifact.size_bytes(),
+            "media_type": artifact.media_type(),
+        }),
+        location_truncated,
+    )
 }
 
 fn procedure_identity(state: &GraphSessionStateV2) -> Value {

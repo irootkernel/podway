@@ -178,6 +178,7 @@ PROCEDURE_INDEPENDENT_EXECUTABLE_ROUTES = {
     "daemon.start", "daemon.stop", "daemon.restart", "daemon.status", "daemon.terminate",
     "daemon.logs", "workspace.init", "workspace.doctor", "workspace.show", "workspace.repair",
     "session.start", "session.start_replace", "session.status", "session.next",
+    "session.observe",
     "session.complete", "session.skip", "session.retry", "session.block",
     "session.unblock", "session.cancel", "session.reset",
     "workspace.reset_all", "item.check", "item.uncheck", "item.set", "item.add",
@@ -630,7 +631,7 @@ def validate_routes(root: Path) -> int:
     if not isinstance(prohibited, list) or set(prohibited) != PROHIBITED_CAPABILITIES or len(prohibited) != len(PROHIBITED_CAPABILITIES):
         fail("command route contract must prohibit command_runner, git_mutation, and network")
     routes = contract["routes"]
-    if not isinstance(routes, list) or len(routes) != 56:
+    if not isinstance(routes, list) or len(routes) != 57:
         fail("command route contract routes must be a list")
 
     expected_commands = catalog_commands(root) | {"completions"}

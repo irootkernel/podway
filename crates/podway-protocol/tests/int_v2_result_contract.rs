@@ -150,7 +150,7 @@ fn examples() -> BTreeMap<&'static str, Value> {
     let queue = json!({"pending_mutations":false,"queued_count":0,"running_job_id":null,"latest_workspace_sequence":1});
     let readiness =
         json!({"items_satisfied":true,"unblocked":true,"goal_ready":true,"can_advance":true});
-    BTreeMap::from([
+    let mut examples = BTreeMap::from([
         (
             "podway.procedure-validation-result/v2",
             json!({"schema":"podway.procedure-validation-result/v2","file":"workflow.yaml","procedure_schema":"podway.procedure/v2","digest":DIGEST,"valid":true}),
@@ -227,7 +227,18 @@ fn examples() -> BTreeMap<&'static str, Value> {
             "podway.criterion-assessment-result/v1",
             json!({"schema":"podway.criterion-assessment-result/v1","admission":admission(),"graph_node_id":"assess","attempt_id":UUID,"goal_revision":1,"mode":"assessment","result":{"criterion_id":"tests","status":"satisfied","reason":"verified","citations":[]},"complete":true,"determined_outcome":"achieved","revision":3}),
         ),
-    ])
+    ]);
+    examples.insert(
+        "podway.observation-result/v1",
+        json!({
+            "schema": "podway.observation-result/v1",
+            "status": examples["podway.status-result/v2"].clone(),
+            "guidance": examples["podway.next-result/v2"].clone(),
+            "active_items": [],
+            "mutation_templates": []
+        }),
+    );
+    examples
 }
 
 #[test]
@@ -304,7 +315,7 @@ fn v2grf_preview_uses_one_closed_result_family_for_every_document_outcome() {
 #[test]
 fn v2ctr003_registry_is_versioned_and_covers_exactly_the_v2_authoring_routes() {
     assert_eq!(EXISTING_ROUTE_RESULT_SCHEMAS_V2.len(), 10);
-    assert_eq!(NEW_ROUTE_RESULT_SCHEMAS_V1.len(), 9);
+    assert_eq!(NEW_ROUTE_RESULT_SCHEMAS_V1.len(), 10);
     assert!(
         EXISTING_ROUTE_RESULT_SCHEMAS_V2
             .iter()
@@ -333,12 +344,13 @@ fn v2ctr003_registry_is_versioned_and_covers_exactly_the_v2_authoring_routes() {
             "procedure.scaffold",
             "session.decide",
             "session.rework",
+            "session.observe",
             "goal.define",
             "goal.revise",
             "goal.assess_criterion",
         ])
     );
-    assert_eq!(routes.len(), 13);
+    assert_eq!(routes.len(), 14);
 }
 
 #[test]

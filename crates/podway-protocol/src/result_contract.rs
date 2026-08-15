@@ -256,6 +256,11 @@ pub const PROCEDURE_DIAGNOSTICS_RESULT_SCHEMA_V1: &str = "podway.procedure-diagn
 /// Result families for v2-only routes. New command surfaces begin at `/v1`.
 pub const NEW_ROUTE_RESULT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
     result_schema_v2(
+        "podway.observation-result/v1",
+        "schemas/observation-result-v1.schema.json",
+        &["session.observe"],
+    ),
+    result_schema_v2(
         "podway.procedure-source-result/v1",
         "schemas/procedure-source-result-v1.schema.json",
         &["procedure.format", "procedure.scaffold"],
@@ -638,6 +643,13 @@ fn required_result_fields_v2(schema: &str) -> &'static [&'static str] {
             "readback",
             "allowed_manual_rework_targets",
         ],
+        "podway.observation-result/v1" => &[
+            "schema",
+            "status",
+            "guidance",
+            "active_items",
+            "mutation_templates",
+        ],
         "podway.stage-transition-result/v2" => &["schema", "admission", "transition", "revision"],
         "podway.item-mutation-result/v2" => &[
             "schema",
@@ -849,6 +861,13 @@ fn allowed_result_fields_v2(schema: &str) -> &'static [&'static str] {
             "blockers_total",
             "blockers",
             "blockers_truncated",
+        ],
+        "podway.observation-result/v1" => &[
+            "schema",
+            "status",
+            "guidance",
+            "active_items",
+            "mutation_templates",
         ],
         "podway.stage-transition-result/v2" => &[
             "schema",

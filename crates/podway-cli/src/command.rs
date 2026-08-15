@@ -206,6 +206,7 @@ enum Command {
     Start(StartArgs),
     Status(StatusArgs),
     Next(ReadArgs),
+    Observe(ReadArgs),
     Complete,
     Decide(DecideArgs),
     Rework(ReworkArgs),
@@ -595,6 +596,7 @@ impl Command {
             Self::Start(_) => Some("session.start"),
             Self::Status(_) | Self::CompleteDynamic { .. } => Some("session.status"),
             Self::Next(_) => Some("session.next"),
+            Self::Observe(_) => Some("session.observe"),
             Self::Complete => Some("session.complete"),
             Self::Decide(_) => Some("session.decide"),
             Self::Rework(_) => Some("session.rework"),
@@ -764,6 +766,7 @@ impl Command {
             Self::Start(_)
                 | Self::Status(_)
                 | Self::Next(_)
+                | Self::Observe(_)
                 | Self::Complete
                 | Self::Decide(_)
                 | Self::Rework(_)
@@ -790,6 +793,7 @@ impl Command {
             Self::Start(StartArgs { replace: true, .. })
                 | Self::Status(_)
                 | Self::Next(_)
+                | Self::Observe(_)
                 | Self::Complete
                 | Self::Decide(_)
                 | Self::Rework(_)
@@ -1484,6 +1488,7 @@ fn parse_failure_command_context_from_matches(
         ),
         "status" => ParseFailureCommandContext::new("session.status", false),
         "next" => ParseFailureCommandContext::new("session.next", false),
+        "observe" => ParseFailureCommandContext::new("session.observe", false),
         "complete" => ParseFailureCommandContext::new("session.complete", true),
         "decide" => ParseFailureCommandContext::new("session.decide", true),
         "rework" => ParseFailureCommandContext::new("session.rework", true),
@@ -1844,7 +1849,7 @@ fn direct_preconditions(
             None,
         )
         .map_err(|_| LocalFailure::request_invalid("start-replace preconditions are invalid")),
-        Command::Status(_) | Command::Next(_) => {
+        Command::Status(_) | Command::Next(_) | Command::Observe(_) => {
             PreconditionsV1::new(explicit.session_id.clone(), None, None, None, None, None).map_err(
                 |_| LocalFailure::request_invalid("session identity precondition is invalid"),
             )
@@ -4728,7 +4733,11 @@ fn validate_daemon_flags(cli: &Cli) -> Result<(), LocalFailure> {
             "--yes applies only to destructive commands",
         ));
     }
-    if matches!(command, Command::Next(ReadArgs { verbose: true, .. })) {
+    if matches!(
+        command,
+        Command::Next(ReadArgs { verbose: true, .. })
+            | Command::Observe(ReadArgs { verbose: true, .. })
+    ) {
         return Err(LocalFailure::request_invalid(
             "--verbose applies only to status",
         ));
@@ -5020,6 +5029,7 @@ fn daemon_payload(
             }
         }
         Command::Next(args) => read_payload(&mut payload, args),
+        Command::Observe(args) => read_payload(&mut payload, args),
         Command::Complete => {}
         Command::Decide(args) => {
             payload.insert("option_id".to_owned(), Value::String(args.option.clone()));
@@ -6223,6 +6233,9 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
         }
         "session.next" => {
             "Usage:\n  podway next [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--wait-for-idle | --after-job <uuid>]\n\nExample:\n  podway next"
+        }
+        "session.observe" => {
+            "Usage:\n  podway observe [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--wait-for-idle | --after-job <uuid>]\n\nReturns one bounded, self-contained status and guidance observation with typed active-item descriptors and fenced mutation templates.\n\nExample:\n  podway --json observe --wait-for-idle"
         }
         "session.complete" => {
             "Usage:\n  podway complete [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>] [--if-attempt <uuid>]\n\nExample:\n  podway complete --if-session-revision 12 --if-attempt <uuid>"

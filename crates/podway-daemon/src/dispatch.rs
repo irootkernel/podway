@@ -1512,7 +1512,9 @@ where
             }
             SliceCommandV1::WorkspaceShow(_) => self.dispatch_show(request, slice_request),
             SliceCommandV1::WorkspaceRepair(_) => self.dispatch_repair(request, slice_request),
-            SliceCommandV1::SessionStatus(_) | SliceCommandV1::SessionNext(_) => {
+            SliceCommandV1::SessionStatus(_)
+            | SliceCommandV1::SessionNext(_)
+            | SliceCommandV1::SessionObserve(_) => {
                 Err(DispatchFailureV1::new(DispatchFailureKindV1::Internal))
             }
             SliceCommandV1::SessionStart(input) if input.dry_run => {
@@ -2071,6 +2073,7 @@ where
                     | SliceCommandV1::SessionStartReplace(_)
                     | SliceCommandV1::SessionStatus(_)
                     | SliceCommandV1::SessionNext(_)
+                    | SliceCommandV1::SessionObserve(_)
                     | SliceCommandV1::SessionComplete(_)
                     | SliceCommandV1::SessionSkip(_)
                     | SliceCommandV1::SessionRetry(_)

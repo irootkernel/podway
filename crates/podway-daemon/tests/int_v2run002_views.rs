@@ -21,7 +21,10 @@ use podway_daemon::{
         ProcedureProviderV1, ProcedureV2SourceAdmissionErrorV1, prepare_custom_procedure_v2_start,
         workspace_procedure_snapshot_from_bytes_v2,
     },
-    v2_read_service::{GraphStatusTierV2, project_graph_next_v2, project_graph_status_v2},
+    v2_read_service::{
+        GraphStatusTierV2, project_graph_next_v2, project_graph_observation_v1,
+        project_graph_status_v2,
+    },
 };
 use podway_protocol::{
     CommandNameV1, OutputEnvelopeInputV3, OutputEnvelopeV3, RequestIdV1, ResponseEnvelopeV2,
@@ -524,6 +527,64 @@ fn v2run002_fresh_action_projects_closed_compact_standard_verbose_and_next_views
     assert_output_v2("session.status", standard);
     assert_output_v2("session.status", verbose);
     assert_output_v2("session.next", next);
+}
+
+#[test]
+fn v2agt002_observation_projects_typed_items_and_fenced_templates() {
+    let view = view(fresh_state("applicability.json", APPLICABILITY_PROCEDURE));
+    let observation = project_graph_observation_v1(&view).unwrap();
+
+    assert_eq!(observation["schema"], "podway.observation-result/v1");
+    assert_eq!(observation["status"]["session"]["lifecycle"], "running");
+    assert_eq!(observation["guidance"]["node"]["graph_node_id"], "work");
+    let items = observation["active_items"].as_array().unwrap();
+    assert_eq!(items.len(), 6);
+    assert_eq!(items[0]["type"], "confirm");
+    assert_eq!(items[1]["constraints"]["max_length"], 4_000);
+    assert_eq!(items[2]["constraints"]["choices"], json!(["yes", "no"]));
+    assert_eq!(items[3]["constraints"]["minimum"], 0);
+    assert_eq!(items[3]["constraints"]["maximum"], 9);
+    assert_eq!(items[4]["constraints"]["max_items"], 2);
+    assert_eq!(
+        items[5]["constraints"]["allowed_media_types"],
+        json!(["text/plain"])
+    );
+    assert!(items.iter().all(|item| item["value"].is_null()));
+
+    let templates = observation["mutation_templates"].as_array().unwrap();
+    assert_eq!(templates.len(), 13);
+    for action in observation["guidance"]["allowed_actions"]
+        .as_array()
+        .unwrap()
+    {
+        assert!(
+            templates
+                .iter()
+                .any(|template| template["command"] == *action),
+            "observation omitted a template for {action}"
+        );
+    }
+    for template in templates {
+        assert_eq!(template["authority"], "optimistic_concurrency_only");
+        assert_eq!(template["idempotency_key_required"], true);
+        assert!(template["requires_explicit_authorization"].is_boolean());
+        assert_eq!(template["preconditions"]["workspace_uuid"], WORKSPACE_ID);
+        assert_eq!(template["preconditions"]["session_id"], SESSION_ID);
+        let argv = template["argv"].as_array().unwrap();
+        assert!(argv.contains(&json!("--if-workspace-uuid")));
+        assert!(argv.contains(&json!("--if-session-id")));
+        assert!(argv.contains(&json!("--idempotency-key")));
+        if template["command"].as_str().unwrap().starts_with("item.") {
+            assert_eq!(template["preconditions"]["attempt_id"], ATTEMPT_ID);
+            assert!(template["preconditions"]["item_revision"].is_number());
+            assert!(argv.contains(&json!("--if-attempt")));
+            assert!(argv.contains(&json!("--if-item-revision")));
+        } else {
+            assert_eq!(template["preconditions"]["session_revision"], 1);
+            assert!(argv.contains(&json!("--if-session-revision")));
+        }
+    }
+    assert_output_v2("session.observe", observation);
 }
 
 #[test]
@@ -3191,6 +3252,7 @@ fn v2run002_maxish_projector_outputs_remain_within_window_and_frame_budgets() {
     let bounded_view = view(blocker_and_item_state());
     let bounded = project_graph_status_v2(&bounded_view, GraphStatusTierV2::Verbose, None).unwrap();
     let bounded_next = project_graph_next_v2(&bounded_view).unwrap();
+    let bounded_observation = project_graph_observation_v1(&bounded_view).unwrap();
     assert_eq!(bounded["blockers_truncated"], true);
     assert!(bounded.get("items_truncated").is_some());
     assert_eq!(bounded["item_values"][0]["value_truncated"], true);
@@ -3200,6 +3262,16 @@ fn v2run002_maxish_projector_outputs_remain_within_window_and_frame_budgets() {
             .len()
             <= 49_152
     );
+    assert_eq!(
+        bounded_observation["active_items"][0]["value_truncated"],
+        true
+    );
+    assert!(
+        serde_json::to_vec(&bounded_observation["active_items"][0]["value"])
+            .unwrap()
+            .len()
+            <= 1_024
+    );
 
     for (command, result) in [
         ("session.status", compact),
@@ -3207,6 +3279,7 @@ fn v2run002_maxish_projector_outputs_remain_within_window_and_frame_budgets() {
         ("session.status", bounded),
         ("session.next", wide_next),
         ("session.next", bounded_next),
+        ("session.observe", bounded_observation),
     ] {
         let envelope = output(command, result);
         let encoded = serde_json::to_vec(&envelope).unwrap();
@@ -3237,6 +3310,11 @@ fn v2run002_terminal_status_preserves_goal_without_a_current_attempt() {
             assert_output_v2("session.status", status);
         }
         assert!(project_graph_next_v2(&view).is_err());
+        let observation = project_graph_observation_v1(&view).unwrap();
+        assert!(observation["guidance"].is_null());
+        assert_eq!(observation["active_items"], json!([]));
+        assert_eq!(observation["mutation_templates"], json!([]));
+        assert_output_v2("session.observe", observation);
     }
 }
 

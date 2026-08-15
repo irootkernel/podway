@@ -269,6 +269,19 @@ commands:
   - session_id_optional
   result_schemas:
   - podway.next-result/v2
+- name: session.observe
+  availability: executable
+  cli:
+  - observe
+  operation: query
+  workspace_required: true
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+  preconditions:
+  - session_id_optional
+  result_schemas:
+  - podway.observation-result/v1
 - name: session.complete
   availability: executable
   cli:

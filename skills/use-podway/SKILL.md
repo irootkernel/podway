@@ -21,12 +21,11 @@ description: Operate a Podway Procedure v2 session safely in a Git worktree by r
 3. If the workspace is initialized, run:
 
    ```bash
-   podway status --json
-   podway next --json
+   podway observe --json --wait-for-idle
    ```
 
-4. Require the session results to identify `podway.status-result/v2` and `podway.next-result/v2`.
-5. Treat the returned v2 state as authoritative. Do not rely on chat memory. For status, anchor on `purpose`, `procedure`, `session`, `current.node`, `current.attempt`, `items`, `item_values`, `missing_required_item_ids`, `blocker_window`, and `references`. For next, use `node`, `attempt`, `readiness`, `missing_required_items`, `blockers`, `allowed_actions`, `suggestions`, `references`, and `readback`.
+4. Require `result.schema` to identify `podway.observation-result/v1`.
+5. Treat the returned observation as authoritative. Do not rely on chat memory. Read identity and queue facts from `status`, current guidance from `guidance`, item declarations and bounded values from `active_items`, and copyable fenced mutations from `mutation_templates`. A null `guidance` means the session is completed or cancelled. Use `status --verbose` only when history is needed and `next` only for compatibility with callers that need its narrower result.
 6. If no active session exists, continue the user's work without creating one unless the user explicitly asks to start or manage a Podway session.
 
 `--json` is a global flag on every command. For a non-default invocation, the global endpoint options are `--worktree <path>`, `--socket <absolute-path>`, and `--timeout <duration>`.
@@ -42,7 +41,7 @@ For initialization, session creation or replacement, daemon control, reset, canc
    - The six item types map to their commands: `confirm` uses `check` and `uncheck`; `text`, `choice`, and `integer` use `set`, with `--stdin` reading a text value; `list` uses `add` and `remove`; `artifact` uses `attach`; `clear` removes any recorded value.
    - Keep distinct actors distinct with `--actor`, accepted by `start` with a goal, `decide`, `rework`, and the `goal` commands.
    - A required local artifact path is re-verified when completing the active action. A file changed after `attach` fails `complete` with `ARTIFACT_CHANGED` and must be attached again.
-5. Re-read `podway status --json` and `podway next --json` after every mutation. Never issue a batch of mutations from one stale snapshot. When queued work may still be pending, re-read with `--wait-for-idle` so the snapshot follows the queue barrier and reports `pending_mutations=false`.
+5. Re-read `podway observe --json --wait-for-idle` after every mutation. Never issue multiple mutations from one stale observation. Templates classify explicit-authorization requirements, but they never supply semantic values or idempotency keys; substitute supported values and a unique stable key before invocation.
 6. Invoke `complete`, `skip`, `retry`, `decide`, `rework`, `block`, or `unblock` only when the current work justifies the transition and the latest v2 `allowed_actions[]` permits it.
    - Skip is a distinct disposition, not a quiet completion. It is legal only where the active placement's declared skip policy allows it; required items and open blockers do not gate it; it atomically clears the attempt's recorded item values; and a terminal skip applies the same goal and fresh-assessment readiness gates as terminal completion.
 7. Stop and report a real external dependency with `podway block` only when the active task cannot progress; do not use a blocker to represent ordinary incomplete work.
@@ -62,6 +61,6 @@ For creating or reviewing a custom Procedure, read [references/authoring.md](ref
 
 ## Recover failures
 
-- On a stale revision, attempt, identity, or item precondition, do not weaken the fence. Re-read status and next, then derive a fresh action.
+- On a stale revision, attempt, identity, or item precondition, do not weaken the fence. Re-read observe, then derive a fresh action.
 - On an uncertain mutation outcome, do not blindly retry or change the idempotency key.
 - On daemon, storage, job, or state-recovery problems, read [references/recovery.md](references/recovery.md) before acting.

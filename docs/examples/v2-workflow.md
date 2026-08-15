@@ -32,29 +32,29 @@ start the session.
 ## Read stable state before each mutation
 
 ```bash
-podway --json status
-podway --json next
+podway --json observe --wait-for-idle
 ```
 
-Automation uses the JSON contract, never human-readable text. From the status
-envelope, read these stable fields:
+Automation uses the JSON contract, never human-readable text. The observation
+returns `podway.observation-result/v1`; read these stable fields:
 
 | JSON field | CLI precondition or use |
 |---|---|
 | `workspace.uuid` | `--if-workspace-uuid` |
-| `result.session.id` | `--if-session-id` |
-| `result.session.revision` | `--if-session-revision` |
-| `result.current.attempt.attempt_id` | `--if-attempt` |
-| `result.goal_revision` | `--if-goal-revision` when present |
-| `result.items[].item_id` and `result.items[].revision` | select the matching `--if-item-revision` |
-| `result.allowed_option_ids[]` | legal `decide --option` values |
-| `result.allowed_manual_rework_targets[]` | legal `rework --to` values |
-| `result.queue.pending_mutations` | re-read after queued work settles |
+| `result.status.session.id` | `--if-session-id` |
+| `result.status.session.revision` | `--if-session-revision` |
+| `result.status.current.attempt.attempt_id` | `--if-attempt` |
+| `result.status.goal_revision` | `--if-goal-revision` when present |
+| `result.active_items[].item_id` and `.revision` | select the matching `--if-item-revision` |
+| `result.guidance.allowed_actions[]` | legal current mutations |
+| `result.guidance.allowed_manual_rework_targets[]` | legal `rework --to` values |
+| `result.status.queue.pending_mutations` | false after the requested queue barrier |
 
-The next envelope uses `result.node.graph_node_id`,
-`result.attempt.attempt_id`, `result.revision`, `result.allowed_actions[]`, and
-`result.suggestions[].argv`. These are machine fields; `title`, `intent`,
-`prompt`, and other human-readable wording are not automation keys.
+`result.mutation_templates[]` supplies the applicable optimistic-concurrency
+fences and states whether explicit authorization is required. Templates still
+contain semantic and idempotency placeholders; callers must fill them from
+performed work and their own stable key. Human-readable wording is not an
+automation key.
 
 Pass all applicable fences for a direct mutation. The examples below abbreviate
 UUIDs and revisions only for readability:
@@ -76,7 +76,7 @@ podway --json set observed-behavior \
   --idempotency-key bug-42-observed
 ```
 
-Re-read status after every successful mutation and use the returned revisions.
+Re-read observe after every successful mutation and use the returned revisions.
 Do not increment a revision locally or reuse a stale attempt ID.
 
 ## Advance, retry, and decide

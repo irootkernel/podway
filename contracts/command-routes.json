@@ -200,6 +200,14 @@
       "capabilities": []
     },
     {
+      "command": "session.observe",
+      "availability": "executable",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
       "command": "session.complete",
       "availability": "executable",
       "owner": "podway-daemon",

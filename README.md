@@ -98,7 +98,7 @@ For a small project-wide policy, add this template to the project's `AGENTS.md`:
 ## Podway
 
 - Podway supports Procedure v2 only. Treat `LEGACY_PROCEDURE_STATE_UNSUPPORTED` as a backup-and-reset boundary; do not edit the database or attempt conversion.
-- When `.podway/config.yaml` exists, read `podway status --json` and `podway next --json` before task work. Require `podway.status-result/v2` and `podway.next-result/v2`, and re-read both after every mutation.
+- When `.podway/config.yaml` exists, read `podway observe --json --wait-for-idle` before task work. Require `podway.observation-result/v1`, and re-read it after every mutation.
 - Treat the active Podway graph node and attempt as the current work boundary. Perform the work before recording an item. Side work may run outside Podway, but record only conclusions supported by current evidence on the active attempt.
 - Use JSON fields, stable error codes, explicit preconditions, and idempotency keys for mutations. Never parse human-readable output as an API.
 - You may update items and advance an existing active v2 session when the work supports it. Do not run `podway init`, start or replace a session, cancel or reset state, control the daemon, or reactivate a completed session through `rework` or `goal revise --reactivate` unless the user explicitly requests it.
@@ -155,6 +155,7 @@ podway start \
   --criterion verified="Fresh verification supports the change." \
   --actor developer
 podway next
+podway observe --json --wait-for-idle
 ```
 
 `podway next` describes the active graph node, its required items, allowed actions,
@@ -165,6 +166,7 @@ Procedure v2 action with the current revision fences:
 ```bash
 podway --json status
 podway --json next
+podway --json observe --wait-for-idle
 ```
 
 The complete fenced mutation sequence is shown in the
@@ -216,6 +218,7 @@ Add `--json` to receive one versioned JSON object instead of human-readable text
 ```bash
 podway status --json
 podway next --json
+podway observe --json --wait-for-idle
 ```
 
 Automation must use JSON fields and stable error codes, never parse human output. Mutations support idempotency keys, revision preconditions, detached admission, job lookup, and durable outcome reconciliation.

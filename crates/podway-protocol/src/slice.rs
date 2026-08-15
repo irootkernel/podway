@@ -476,6 +476,13 @@ pub struct SessionNextV1 {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct SessionObserveV1 {
+    pub wait: QueryWaitV1,
+    pub preconditions: SessionReadPreconditionsWireV1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ItemCheckV1 {
     pub item_id: ItemId,
     pub preconditions: ItemMutationPreconditionsWireV1,
@@ -821,7 +828,7 @@ pub struct ProcedureV2MutationRequestV1 {
 }
 
 /// The authoritative G006 daemon route set. No aliases are admitted at the protocol boundary.
-pub const DAEMON_COMMAND_NAMES_V1: [&str; 28] = [
+pub const DAEMON_COMMAND_NAMES_V1: [&str; 29] = [
     "workspace.init",
     "workspace.doctor",
     "workspace.show",
@@ -830,6 +837,7 @@ pub const DAEMON_COMMAND_NAMES_V1: [&str; 28] = [
     "session.start_replace",
     "session.status",
     "session.next",
+    "session.observe",
     "session.complete",
     "session.skip",
     "session.retry",
@@ -864,6 +872,7 @@ pub enum SliceCommandV1 {
     SessionStartReplace(SessionStartReplaceV1),
     SessionStatus(SessionStatusV1),
     SessionNext(SessionNextV1),
+    SessionObserve(SessionObserveV1),
     SessionComplete(SessionCompleteV1),
     SessionSkip(SessionSkipV1),
     SessionRetry(SessionRetryV1),
@@ -897,6 +906,7 @@ impl SliceCommandV1 {
             Self::SessionStartReplace(_) => "session.start_replace",
             Self::SessionStatus(_) => "session.status",
             Self::SessionNext(_) => "session.next",
+            Self::SessionObserve(_) => "session.observe",
             Self::SessionComplete(_) => "session.complete",
             Self::SessionSkip(_) => "session.skip",
             Self::SessionRetry(_) => "session.retry",
@@ -949,6 +959,7 @@ impl SliceCommandV1 {
             | Self::WorkspaceShow(_)
             | Self::SessionStatus(_)
             | Self::SessionNext(_)
+            | Self::SessionObserve(_)
             | Self::JobList(_)
             | Self::JobLookup(_)
             | Self::JobStatus(_)
@@ -1129,6 +1140,18 @@ impl SliceRequestV1 {
                 (
                     payload.selector,
                     SliceCommandV1::SessionNext(SessionNextV1 {
+                        wait: validated_query_wait(payload.wait_for_idle, payload.after_job_id)?,
+                        preconditions,
+                    }),
+                )
+            }
+            "session.observe" => {
+                require_envelope(envelope, "session.observe", OperationV1::Query, false)?;
+                let preconditions = require_session_read_preconditions(envelope.preconditions())?;
+                let payload: SessionNextPayloadV1 = parse_payload(envelope)?;
+                (
+                    payload.selector,
+                    SliceCommandV1::SessionObserve(SessionObserveV1 {
                         wait: validated_query_wait(payload.wait_for_idle, payload.after_job_id)?,
                         preconditions,
                     }),
@@ -2942,6 +2965,7 @@ pub fn canonical_mutation_identity_v1(
         | SliceCommandV1::WorkspaceRepair(_)
         | SliceCommandV1::SessionStatus(_)
         | SliceCommandV1::SessionNext(_)
+        | SliceCommandV1::SessionObserve(_)
         | SliceCommandV1::JobList(_)
         | SliceCommandV1::JobLookup(_)
         | SliceCommandV1::JobStatus(_)

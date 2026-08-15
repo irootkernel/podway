@@ -173,7 +173,7 @@ def adapter_contract() -> dict[str, Any]:
         or len(route_inventory) != len(set(route_inventory))
     ):
         fail("command route catalog contains invalid or duplicate commands")
-    if len(route_inventory) != 56:
+    if len(route_inventory) != 57:
         fail("command route catalog does not contain the v2-only route inventory")
 
     error_catalog = read_object(ROOT / "assets/specifications/error-codes.json", "error catalog")

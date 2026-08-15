@@ -339,6 +339,7 @@
       "session.start_replace",
       "session.status",
       "session.next",
+      "session.observe",
       "session.complete",
       "session.skip",
       "session.retry",
@@ -1056,9 +1057,14 @@
         "sha256": "sha256:ef64559c7ede43ea11c64de1dcd60dea46539da92113fc20734aa2c006d4aa26"
       },
       {
+        "id": "urn:podway:schema:observation-result:v1",
+        "path": "schemas/observation-result-v1.schema.json",
+        "sha256": "sha256:40d25ebb6f0abf708eed23457816cb4ab896e8d66ef1bc82950d48f67eaf4323"
+      },
+      {
         "id": "urn:podway:schema:output:v3",
         "path": "schemas/output-v3.schema.json",
-        "sha256": "sha256:6be137a3e934655f590b192631ac9b486aaed0845d68bae033e5ceba820a2e80"
+        "sha256": "sha256:f0ddb2c4c333837706d84102759dc89376b36f00956e97dac9c94dacaeaf9704"
       },
       {
         "id": "urn:podway:schema:procedure-diagnostics-result:v1",
@@ -1159,9 +1165,9 @@
   },
   "current_surface_counts": {
     "authoring_diagnostics": 53,
-    "routes": 56,
+    "routes": 57,
     "runtime_errors": 88,
-    "schemas": 42
+    "schemas": 43
   },
   "migration_boundary": {
     "adapter_database_access": "forbidden",

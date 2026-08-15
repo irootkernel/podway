@@ -1862,6 +1862,7 @@ fn v2drw005_verbose_status_preserves_decision_and_rework_history_in_json_and_tex
 fn help_and_every_completion_target_publish_the_v2_routes_and_flags() {
     for topic in [
         "session.status",
+        "session.observe",
         "session.decide",
         "session.rework",
         "goal.define",
@@ -1901,6 +1902,7 @@ fn help_and_every_completion_target_publish_the_v2_routes_and_flags() {
         let script = String::from_utf8(output.stdout).expect("completion must be UTF-8");
         for token in [
             "history-before",
+            "observe",
             "decide",
             "rework",
             "goal",

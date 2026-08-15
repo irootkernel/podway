@@ -240,8 +240,8 @@ fn request_with_options(
     );
     let operation = match command {
         "workspace.init" | "workspace.reset_all" => OperationV1::Bootstrap,
-        "workspace.show" | "session.status" | "session.next" | "job.lookup" | "job.status"
-        | "job.wait" => OperationV1::Query,
+        "workspace.show" | "session.status" | "session.next" | "session.observe" | "job.lookup"
+        | "job.status" | "job.wait" => OperationV1::Query,
         _ => OperationV1::Mutate,
     };
     let envelope = RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
@@ -996,6 +996,38 @@ fn v2run003_production_actions_mutate_complete_read_back_restart_and_replay() {
     assert_eq!(readback[1]["source_graph_node_id"], "finish");
     assert_eq!(readback[1]["state"], "unresolved");
     assert!(readback[1]["items"].as_array().unwrap().is_empty());
+
+    let observe = request(
+        30_161,
+        "session.observe",
+        &workspace_selector,
+        Map::new(),
+        "unused-observe-key",
+        PreconditionsV1::new(
+            Some(SessionId::new(&session_id).unwrap()),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let observation = v2_result(dispatch(&production, &observe), "session.observe");
+    assert_eq!(observation["schema"], "podway.observation-result/v1");
+    assert_eq!(observation["status"]["session"]["id"], session_id);
+    assert_eq!(
+        observation["guidance"]["readback"],
+        next_before_restart["readback"]
+    );
+    assert_eq!(observation["active_items"].as_array().unwrap().len(), 1);
+    assert!(
+        observation["mutation_templates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|template| template["idempotency_key_required"] == true)
+    );
 
     fs::remove_file(fixture.main().join("action-readback.yaml")).unwrap();
     fs::remove_file(fixture.main().join("report.txt")).unwrap();

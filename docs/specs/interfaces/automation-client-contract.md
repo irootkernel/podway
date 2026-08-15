@@ -189,11 +189,21 @@ not replace, the session revision or active-attempt fence.
 | `AUT-OBS-003` | Compact status MUST omit instructions, prompts, task titles, previous-attempt narratives, and item values unless a value is strictly required to form a valid mutation. |
 | `AUT-OBS-004` | Compact status MUST use a closed schema and the complete serialized JSON envelope MUST NOT exceed 262,144 UTF-8 bytes. |
 
+### Self-contained observation (AUT-OBS-005–009)
+
+| ID | Normative requirement |
+|---|---|
+| `AUT-OBS-005` | `observe`, `observe --wait-for-idle`, and `observe --after-job <job-id>` MUST use the same immediate and queue-barrier semantics as the existing read routes and MUST return one coherent Store observation. |
+| `AUT-OBS-006` | A running observation MUST return closed `podway.observation-result/v1` containing standard status, current next guidance, all active item declarations with type-specific constraints and bounded typed value projections, and applicable mutation templates. |
+| `AUT-OBS-007` | Every mutation template MUST carry exact current workspace, session, and applicable revision/attempt/item/goal fences, mark the idempotency-key requirement, and classify whether an explicit user request is required. Templates MUST NOT invent semantic values or an idempotency key, and fences MUST NOT be represented as authentication or authorization. |
+| `AUT-OBS-008` | A completed or cancelled observation MUST succeed with standard terminal status, null guidance, no active items, and no mutation templates. Existing `next` terminal behavior remains unchanged. |
+| `AUT-OBS-009` | Observation MUST omit history, bound every projected item value, and leave the existing 65,536-byte envelope reserve within the 1,048,576-byte frame for the admitted maximum Procedure fixture. |
+
 ## 21. Command-specific JSON schemas (AUT-JSON-001–004)
 
 | ID | Normative requirement |
 |---|---|
-| `AUT-JSON-001` | Version, daemon status, Procedure validation, start, status, next, item mutation, graph-node transition, detached admission, job status/wait, and job lookup MUST each have a closed result schema. |
+| `AUT-JSON-001` | Version, daemon status, Procedure validation, start, status, next, observation, item mutation, graph-node transition, detached admission, job status/wait, and job lookup MUST each have a closed result schema. |
 | `AUT-JSON-002` | Daemon, socket, identity, revision, attempt, digest, idempotency, and timeout failures MUST each have closed error-detail schemas. |
 | `AUT-JSON-003` | Results and error details MUST carry an unambiguous schema identifier or discriminator. |
 | `AUT-JSON-004` | A closed v1 object MUST reject unknown fields; adding fields requires a new schema identifier or discriminator version rather than an undocumented additive-field exception. |
