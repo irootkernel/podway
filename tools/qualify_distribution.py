@@ -203,7 +203,15 @@ def run_packaged_suite(root: Path, harness: Path, cli: Path, daemon: Path) -> No
     snapshots = root / "snapshots"
     snapshot_id = release_archive.sha256_file(daemon)[:16]
     snapshot = snapshots / snapshot_id
-    for directory in (account, dev_home, sandbox, snapshots, snapshot):
+    for directory in (
+        account,
+        account / ".podway",
+        account / ".podway/run",
+        dev_home,
+        sandbox,
+        snapshots,
+        snapshot,
+    ):
         directory.mkdir(mode=0o700)
     snapshot_cli = release_archive.snapshot_executable(cli, snapshot / "podway", "podway")
     snapshot_daemon = release_archive.snapshot_executable(

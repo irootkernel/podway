@@ -171,7 +171,7 @@ impl ControlledPathFixtureV1 {
     fn assert_install(&self, path: &str, arguments: &[&str], expected_daemon: &Path) {
         if self.production_service {
             assert_eq!(arguments.first(), Some(&"--json"));
-            self.start_dev_daemon(expected_daemon);
+            self.start_dev_daemon(&daemon_binary());
             return;
         }
         let output = self.run(path, arguments);
