@@ -69,6 +69,32 @@ def verify_detached_checksum(archive: Path, checksum: Path) -> str:
     return digest
 
 
+def is_managed_release_daemon_process(command: str, uid: int) -> bool:
+    prefix = f"/private/tmp/podway-release-{uid}-"
+    return (
+        command.startswith(prefix)
+        and "/snapshots/" in command
+        and command.endswith("/podwayd --dev")
+    )
+
+
+def managed_release_daemon_processes(uid: int) -> list[str]:
+    completed = subprocess.run(
+        ["ps", "-Ao", "command="],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if completed.returncode != 0:
+        fail("cannot inspect processes for leftover release qualification daemons")
+    return [
+        command
+        for line in completed.stdout.splitlines()
+        if is_managed_release_daemon_process((command := line.strip()), uid)
+    ]
+
+
 def verify(output_directory: Path) -> dict[str, Any]:
     release_archive.require_native_host()
     release_archive.require_clean_tree(False)
@@ -159,19 +185,9 @@ def verify(output_directory: Path) -> dict[str, Any]:
         sockets = list(extraction.glob("**/podwayd.sock"))
         if sockets:
             fail(f"final verification left daemon sockets behind: {sockets}")
-    processes = subprocess.run(
-        ["pgrep", "-x", "podwayd"],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    if processes.returncode == 0:
-        fail(
-            "podwayd remains running after qualification; stop production and dev daemons "
-            "before accepting the final bundle"
-        )
-    if processes.returncode not in {0, 1}:
-        fail("cannot prove absence of leftover podwayd processes")
+    processes = managed_release_daemon_processes(os.geteuid())
+    if processes:
+        fail(f"managed release qualification daemons remain running: {processes}")
     return {
         "archive": {"name": archive.name, "sha256": archive_digest},
         "binaries": provenance["binaries"],
@@ -250,6 +266,14 @@ def self_test() -> dict[str, Any]:
         adapter_catalog_sha256,
     )
     sentinels = 0
+    uid = os.geteuid()
+    managed = f"/private/tmp/podway-release-{uid}-fixture/snapshots/digest/podwayd --dev"
+    production = "/Users/example/.local/bin/podwayd --service"
+    if not is_managed_release_daemon_process(managed, uid) or is_managed_release_daemon_process(
+        production, uid
+    ):
+        fail("managed release daemon process classifier self-test failed")
+    sentinels += 1
     for field, bad in (
         ("product", "another-product"),
         ("release_gate_result", "pending"),
