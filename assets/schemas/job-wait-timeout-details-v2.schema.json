@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:job-wait-timeout-details:v2",
+  "title": "Podway Job Wait Timeout Details v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "recovery"],
+  "properties": {
+    "schema": { "const": "podway.job-wait-timeout-details/v2" },
+    "job_id": { "type": "string", "format": "uuid" },
+    "job_sequence": { "type": "integer", "minimum": 1 },
+    "admission": { "oneOf": [{ "$ref": "#/$defs/notAdmitted" }, { "$ref": "#/$defs/admitted" }] },
+    "recovery": { "$ref": "urn:podway:schema:recovery-recipe:v1" }
+  },
+  "allOf": [
+    {
+      "if": { "required": ["job_id"] },
+      "then": { "required": ["job_sequence", "admission"], "properties": { "admission": { "$ref": "#/$defs/admitted" } } }
+    },
+    {
+      "if": { "required": ["job_sequence"] },
+      "then": { "required": ["job_id", "admission"], "properties": { "admission": { "$ref": "#/$defs/admitted" } } }
+    }
+  ],
+  "$defs": {
+    "notAdmitted": { "type": "object", "additionalProperties": false, "required": ["admitted"], "properties": { "admitted": { "const": false } } },
+    "admitted": { "type": "object", "additionalProperties": false, "required": ["admitted", "job_id", "workspace_sequence"], "properties": { "admitted": { "const": true }, "job_id": { "type": "string", "format": "uuid" }, "workspace_sequence": { "type": "integer", "minimum": 1 } } }
+  }
+}

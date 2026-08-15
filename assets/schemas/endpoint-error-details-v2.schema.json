@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:endpoint-error-details:v2",
+  "title": "Podway Endpoint Error Details v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "recovery"],
+  "properties": {
+    "schema": { "const": "podway.endpoint-error-details/v2" },
+    "recovery": { "$ref": "urn:podway:schema:recovery-recipe:v1" },
+    "admission": { "$ref": "#/$defs/notAdmitted" }
+  },
+  "$defs": {
+    "notAdmitted": { "type": "object", "additionalProperties": false, "required": ["admitted"], "properties": { "admitted": { "const": false } } }
+  }
+}

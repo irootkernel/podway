@@ -28,12 +28,17 @@
     {
       "kind": "catalog",
       "path": "release/dolgorae-adapter-contract-v2.json",
-      "sha256": "sha256:4a3b228accd13b958ed91e79013fe244c1e3461f34a73dadd87187c435957310"
+      "sha256": "sha256:61747e3912e99421178262cf93b165aa183b5e9fd186cbc3203c3744fad66d1f"
     },
     {
       "kind": "schema",
       "path": "schemas/attempt-conflict-details-v1.schema.json",
       "sha256": "sha256:865829b0bea4977601d07466abeaf2e505011eb72ee0c789e56ec99427b121a2"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/attempt-conflict-details-v2.schema.json",
+      "sha256": "sha256:68573b74b1c892a6bf3443e6aef6796a779a81eb25c15d260a496045c177b1ac"
     },
     {
       "kind": "schema",
@@ -67,6 +72,11 @@
     },
     {
       "kind": "schema",
+      "path": "schemas/daemon-contract-mismatch-details-v2.schema.json",
+      "sha256": "sha256:ec33bc1b6bec14ce58f9c05205070258b8352e49484ce22476878e0d045cd166"
+    },
+    {
+      "kind": "schema",
       "path": "schemas/daemon-status-result-v1.schema.json",
       "sha256": "sha256:998d14853d3d86b226d9a67f239ee6f0d3e90590ecbd7eaa15c1c91952552486"
     },
@@ -92,8 +102,13 @@
     },
     {
       "kind": "schema",
+      "path": "schemas/endpoint-error-details-v2.schema.json",
+      "sha256": "sha256:281731fa96c0ede70d802d46adbcce05300c40a2415521e078c58b7988dfcfc1"
+    },
+    {
+      "kind": "schema",
       "path": "schemas/error-v1.schema.json",
-      "sha256": "sha256:371ccd1e07a0f503bc70a5a4b167ff43a0dfbe9ed8e5b78533cd9a7848d06bf8"
+      "sha256": "sha256:bde25746accfef3b44e30e77f1bc9c9211a90fa921098c581f469f0de133c7ec"
     },
     {
       "kind": "schema",
@@ -147,6 +162,11 @@
     },
     {
       "kind": "schema",
+      "path": "schemas/job-wait-timeout-details-v2.schema.json",
+      "sha256": "sha256:245060d02f3e35ddbec5ff8ab3441f1a780d0824e4d518a6745d11210aaa64cd"
+    },
+    {
+      "kind": "schema",
       "path": "schemas/next-result-v2.schema.json",
       "sha256": "sha256:ef64559c7ede43ea11c64de1dcd60dea46539da92113fc20734aa2c006d4aa26"
     },
@@ -192,6 +212,16 @@
     },
     {
       "kind": "schema",
+      "path": "schemas/recoverable-v2-runtime-error-details-v1.schema.json",
+      "sha256": "sha256:66db39a40c9454425d8e04d0096151a4db7b0c1b99c11b2ffefffeeb354e1c2a"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/recovery-recipe-v1.schema.json",
+      "sha256": "sha256:5816b20deb8ac3996c08990b74f58858c8d1695a2aa4411cd9d3ff254b1ca667"
+    },
+    {
+      "kind": "schema",
       "path": "schemas/registry-v1.schema.json",
       "sha256": "sha256:ae259c2fb9d5e285c8450a55b2f9133ab4758e32041905475fb0d1fd8ff3f2ad"
     },
@@ -199,6 +229,11 @@
       "kind": "schema",
       "path": "schemas/revision-conflict-details-v1.schema.json",
       "sha256": "sha256:63572df5acaada406783daca68535c642fa14924d41cd8c44741d9977af13dbc"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/revision-conflict-details-v2.schema.json",
+      "sha256": "sha256:bb7a9f9d5c942c7eb80652780e875f330b2fc7f391343b69dc78f21609c2ffb9"
     },
     {
       "kind": "schema",
@@ -252,6 +287,11 @@
     },
     {
       "kind": "schema",
+      "path": "schemas/workspace-recovery-details-v1.schema.json",
+      "sha256": "sha256:d5ac050ba137f9231e0d6e3c79c7d6fda763cecd490c5d9ee31c39defc49a052"
+    },
+    {
+      "kind": "schema",
       "path": "schemas/workspace-v1.schema.json",
       "sha256": "sha256:61461264d6da76953a1e41534360a28e3fe294bf329972da7b687f3ac7822d1a"
     },
@@ -273,7 +313,7 @@
     {
       "kind": "catalog",
       "path": "spec/error-codes.json",
-      "sha256": "sha256:24e8d485567339f7ac1ec5a2913f998c8a5caf2c9a3597c8c230b48f62868d25"
+      "sha256": "sha256:efd8abc4a009a8c68078d13e8414b700408dd7a5ce1e4105b0cd8fdca233293e"
     },
     {
       "kind": "transition_matrix",
@@ -351,7 +391,7 @@
       "sha256": "sha256:bb6f715e58da861c89097aa16c9b73816f2cf2c321ec0616ebe2209c574f9049"
     }
   ],
-  "digest": "sha256:bd233fe858ba4c1ffcbcbf2ed856ff3eb6c71f8fecaff2e034a900dfb072dd6c",
+  "digest": "sha256:5e3e86a8a20d541e53ea057f6073ad1df1c78f9ee78d7222f3120b82ddaf4016",
   "product": "podway",
   "product_version": "0.2.1",
   "schema_version": "podway.contract-manifest/v1",

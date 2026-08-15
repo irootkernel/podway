@@ -36,13 +36,15 @@
         "schema",
         "expected_workspace_uuid",
         "actual_workspace_uuid",
-        "admission"
+        "admission",
+        "recovery"
       ],
       "properties": {
-        "schema": { "const": "podway.workspace-uuid-mismatch-details/v1" },
+        "schema": { "const": "podway.workspace-uuid-mismatch-details/v2" },
         "expected_workspace_uuid": { "type": "string", "format": "uuid" },
         "actual_workspace_uuid": { "type": "string", "format": "uuid" },
-        "admission": { "$ref": "#/$defs/admission" }
+        "admission": { "$ref": "#/$defs/admission" },
+        "recovery": { "$ref": "urn:podway:schema:recovery-recipe:v1" }
       }
     },
     "sessionIdMismatchDetails": {
@@ -52,10 +54,11 @@
         "schema",
         "expected_session_id",
         "actual_session_id",
-        "admission"
+        "admission",
+        "recovery"
       ],
       "properties": {
-        "schema": { "const": "podway.session-id-mismatch-details/v1" },
+        "schema": { "const": "podway.session-id-mismatch-details/v2" },
         "expected_session_id": { "type": "string", "format": "uuid" },
         "actual_session_id": {
           "oneOf": [
@@ -63,7 +66,8 @@
             { "type": "null" }
           ]
         },
-        "admission": { "$ref": "#/$defs/admission" }
+        "admission": { "$ref": "#/$defs/admission" },
+        "recovery": { "$ref": "urn:podway:schema:recovery-recipe:v1" }
       }
     },
     "procedureDigestMismatchDetails": {
@@ -73,10 +77,11 @@
         "schema",
         "expected_procedure_digest",
         "actual_procedure_digest",
-        "admission"
+        "admission",
+        "recovery"
       ],
       "properties": {
-        "schema": { "const": "podway.procedure-digest-mismatch-details/v1" },
+        "schema": { "const": "podway.procedure-digest-mismatch-details/v2" },
         "expected_procedure_digest": {
           "type": "string",
           "pattern": "^sha256:[0-9a-f]{64}$"
@@ -85,15 +90,16 @@
           "type": "string",
           "pattern": "^sha256:[0-9a-f]{64}$"
         },
-        "admission": { "$ref": "#/$defs/notAdmitted" }
+        "admission": { "$ref": "#/$defs/notAdmitted" },
+        "recovery": { "$ref": "urn:podway:schema:recovery-recipe:v1" }
       }
     },
     "mutationOutcomeUnknownDetails": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema", "outcome", "idempotency_key", "reconcile"],
+      "required": ["schema", "outcome", "idempotency_key", "reconcile", "recovery"],
       "properties": {
-        "schema": { "const": "podway.mutation-outcome-unknown-details/v1" },
+        "schema": { "const": "podway.mutation-outcome-unknown-details/v2" },
         "outcome": { "const": "unknown" },
         "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 256 },
         "reconcile": {
@@ -104,7 +110,8 @@
             "command": { "const": "job.lookup" },
             "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 256 }
           }
-        }
+        },
+        "recovery": { "$ref": "urn:podway:schema:recovery-recipe:v1" }
       }
     }
   },
@@ -215,7 +222,6 @@
           "code": {
             "enum": [
               "DAEMON_NOT_INSTALLED",
-              "DAEMON_UNAVAILABLE",
               "DAEMON_SHUTTING_DOWN",
               "DAEMON_VERSION_INCOMPATIBLE"
             ]
@@ -231,12 +237,23 @@
     },
     {
       "if": {
+        "properties": { "code": { "const": "DAEMON_UNAVAILABLE" } },
+        "required": ["code"]
+      },
+      "then": {
+        "properties": {
+          "details": { "$ref": "urn:podway:schema:endpoint-error-details:v2" }
+        }
+      }
+    },
+    {
+      "if": {
         "properties": { "code": { "const": "DAEMON_CONTRACT_MISMATCH" } },
         "required": ["code"]
       },
       "then": {
         "properties": {
-          "details": { "$ref": "urn:podway:schema:daemon-contract-mismatch-details:v1" }
+          "details": { "$ref": "urn:podway:schema:daemon-contract-mismatch-details:v2" }
         }
       }
     },
@@ -262,7 +279,7 @@
       },
       "then": {
         "properties": {
-          "details": { "$ref": "urn:podway:schema:revision-conflict-details:v1" }
+          "details": { "$ref": "urn:podway:schema:revision-conflict-details:v2" }
         }
       }
     },
@@ -273,7 +290,7 @@
       },
       "then": {
         "properties": {
-          "details": { "$ref": "urn:podway:schema:attempt-conflict-details:v1" }
+          "details": { "$ref": "urn:podway:schema:attempt-conflict-details:v2" }
         }
       }
     },
@@ -295,7 +312,29 @@
       },
       "then": {
         "properties": {
-          "details": { "$ref": "urn:podway:schema:job-wait-timeout-details:v1" }
+          "details": { "$ref": "urn:podway:schema:job-wait-timeout-details:v2" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "code": { "enum": ["WORKSPACE_STATE_UNREADABLE", "WORKSPACE_SCHEMA_UNSUPPORTED"] } },
+        "required": ["code"]
+      },
+      "then": {
+        "properties": {
+          "details": { "$ref": "urn:podway:schema:workspace-recovery-details:v1" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "code": { "enum": ["EVIDENCE_REFERENCE_STALE", "GOAL_REVISION_STALE"] } },
+        "required": ["code"]
+      },
+      "then": {
+        "properties": {
+          "details": { "$ref": "urn:podway:schema:recoverable-v2-runtime-error-details:v1" }
         }
       }
     },

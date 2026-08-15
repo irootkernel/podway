@@ -476,7 +476,7 @@ impl DispatchErrorDetailsV1 {
                     json!({"schema":"podway.v2-runtime-error-details/v1","kind":"SESSION_GOAL_ALREADY_DEFINED","goal_revision":goal_revision,"admission":admission})
                 }
                 V2RuntimeErrorDetailsV1::GoalRevisionStale { expected, actual } => {
-                    json!({"schema":"podway.v2-runtime-error-details/v1","kind":"GOAL_REVISION_STALE","expected_goal_revision":expected,"actual_goal_revision":actual,"admission":admission})
+                    json!({"schema":"podway.recoverable-v2-runtime-error-details/v1","kind":"GOAL_REVISION_STALE","expected_goal_revision":expected,"actual_goal_revision":actual,"admission":admission})
                 }
                 V2RuntimeErrorDetailsV1::GoalRevisionTargetNotAllowed {
                     target_graph_node_id,
@@ -602,7 +602,7 @@ impl DispatchErrorDetailsV1 {
                     expected_source_attempt_id,
                     current_source_attempt_id,
                 } => json!({
-                    "schema": "podway.v2-runtime-error-details/v1", "kind": "EVIDENCE_REFERENCE_STALE",
+                    "schema": "podway.recoverable-v2-runtime-error-details/v1", "kind": "EVIDENCE_REFERENCE_STALE",
                     "graph_node_id": graph_node_id, "source_graph_node_id": source_graph_node_id,
                     "expected_source_attempt_id": expected_source_attempt_id,
                     "current_source_attempt_id": current_source_attempt_id, "admission": admission,
@@ -667,7 +667,7 @@ impl DispatchErrorDetailsV1 {
         }
         if let Some(idempotency_key) = self.outcome_unknown_key {
             return json!({
-                "schema": "podway.mutation-outcome-unknown-details/v1",
+                "schema": "podway.mutation-outcome-unknown-details/v2",
                 "outcome": "unknown",
                 "idempotency_key": idempotency_key.as_str(),
                 "reconcile": {
@@ -683,7 +683,7 @@ impl DispatchErrorDetailsV1 {
             return Map::from_iter([
                 (
                     "schema".to_owned(),
-                    Value::String("podway.procedure-digest-mismatch-details/v1".to_owned()),
+                    Value::String("podway.procedure-digest-mismatch-details/v2".to_owned()),
                 ),
                 (
                     "expected_procedure_digest".to_owned(),
@@ -707,14 +707,14 @@ impl DispatchErrorDetailsV1 {
             }
             let (schema, expected_key, expected, actual_key, actual) = match *identity {
                 IdentityConflictDetailsV1::Workspace { expected, actual } => (
-                    "podway.workspace-uuid-mismatch-details/v1",
+                    "podway.workspace-uuid-mismatch-details/v2",
                     "expected_workspace_uuid",
                     Value::String(expected.into_inner()),
                     "actual_workspace_uuid",
                     Value::String(actual.into_inner()),
                 ),
                 IdentityConflictDetailsV1::Session { expected, actual } => (
-                    "podway.session-id-mismatch-details/v1",
+                    "podway.session-id-mismatch-details/v2",
                     "expected_session_id",
                     Value::String(expected.into_inner()),
                     "actual_session_id",

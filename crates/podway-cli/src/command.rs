@@ -1274,7 +1274,7 @@ impl LocalFailure {
             "cli",
         );
         failure.details = serde_json::from_value(json!({
-            "schema": "podway.mutation-outcome-unknown-details/v1",
+            "schema": "podway.mutation-outcome-unknown-details/v2",
             "outcome": "unknown",
             "idempotency_key": idempotency_key.as_str(),
             "reconcile": {
@@ -1311,7 +1311,7 @@ impl LocalFailure {
         failure.details = Map::from_iter([
             (
                 "schema".to_owned(),
-                Value::String("podway.procedure-digest-mismatch-details/v1".to_owned()),
+                Value::String("podway.procedure-digest-mismatch-details/v2".to_owned()),
             ),
             (
                 "expected_procedure_digest".to_owned(),

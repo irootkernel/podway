@@ -5247,7 +5247,7 @@ mod tests {
             Map::from_iter([
                 (
                     "schema".to_owned(),
-                    json!("podway.procedure-digest-mismatch-details/v1"),
+                    json!("podway.procedure-digest-mismatch-details/v2"),
                 ),
                 ("expected_procedure_digest".to_owned(), json!(expected)),
                 ("actual_procedure_digest".to_owned(), json!(actual)),
@@ -5357,7 +5357,7 @@ mod tests {
             Map::from_iter([
                 (
                     "schema".to_owned(),
-                    json!("podway.workspace-uuid-mismatch-details/v1"),
+                    json!("podway.workspace-uuid-mismatch-details/v2"),
                 ),
                 (
                     "expected_workspace_uuid".to_owned(),
@@ -5427,7 +5427,7 @@ mod tests {
         assert_eq!(
             unknown.into_details().into_json(true),
             json!({
-                "schema": "podway.mutation-outcome-unknown-details/v1",
+                "schema": "podway.mutation-outcome-unknown-details/v2",
                 "outcome": "unknown",
                 "idempotency_key": "unknown-admission",
                 "reconcile": {
@@ -5529,7 +5529,7 @@ mod tests {
             Map::from_iter([
                 (
                     "schema".to_owned(),
-                    json!("podway.procedure-digest-mismatch-details/v1"),
+                    json!("podway.procedure-digest-mismatch-details/v2"),
                 ),
                 (
                     "expected_procedure_digest".to_owned(),
@@ -6245,13 +6245,20 @@ mod tests {
         assert_eq!(
             terminal["details"],
             json!({
-                "schema": "podway.session-id-mismatch-details/v1",
+                "schema": "podway.session-id-mismatch-details/v2",
                 "expected_session_id": expected.as_str(),
                 "actual_session_id": actual.as_str(),
                 "admission": {
                     "admitted": true,
                     "job_id": fixture_job(26).job_id().as_str(),
                     "workspace_sequence": 26
+                },
+                "recovery": {
+                    "action": "refresh_state",
+                    "command": "session.observe",
+                    "argv": ["podway", "--json", "observe", "--wait-for-idle"],
+                    "reason": "Re-read bounded current state before deriving another request.",
+                    "requires_explicit_authorization": false
                 }
             })
         );

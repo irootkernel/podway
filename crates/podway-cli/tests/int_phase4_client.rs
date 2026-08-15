@@ -332,7 +332,7 @@ fn typed_v2_mutation_output_v1_payload() -> Vec<u8> {
 
 fn error_payload() -> Vec<u8> {
     format!(
-        r#"{{"schema":"podway.error/v1","request_id":"{REQUEST_ID}","command":"session.status","generated_at":"2026-07-15T12:34:56.789Z","code":"DAEMON_UNAVAILABLE","message":"daemon is restarting","retryable":true,"exit_code":3,"details":{{"schema":"podway.endpoint-error-details/v1"}}}}"#
+        r#"{{"schema":"podway.error/v1","request_id":"{REQUEST_ID}","command":"session.status","generated_at":"2026-07-15T12:34:56.789Z","code":"DAEMON_UNAVAILABLE","message":"daemon is restarting","retryable":true,"exit_code":3,"details":{{"schema":"podway.endpoint-error-details/v2","recovery":{{"action":"inspect_daemon","command":"daemon.status","argv":["podway","--json","daemon","status"],"reason":"Inspect daemon and contract health before deciding on a lifecycle action.","requires_explicit_authorization":false}}}}}}"#
     )
     .into_bytes()
 }

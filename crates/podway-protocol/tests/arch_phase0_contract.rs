@@ -421,7 +421,7 @@ fn api_004_error_catalog_is_exhaustive_and_error_pairs_fail_closed() {
     for &(code, exit_code, retryable) in FROZEN_ERROR_CATALOG {
         let details = match code {
             "WORKSPACE_UUID_MISMATCH" => identity_details(
-                "podway.workspace-uuid-mismatch-details/v1",
+                "podway.workspace-uuid-mismatch-details/v2",
                 "expected_workspace_uuid",
                 WORKSPACE_ID,
                 "actual_workspace_uuid",
@@ -429,7 +429,7 @@ fn api_004_error_catalog_is_exhaustive_and_error_pairs_fail_closed() {
                 false,
             ),
             "SESSION_ID_MISMATCH" => identity_details(
-                "podway.session-id-mismatch-details/v1",
+                "podway.session-id-mismatch-details/v2",
                 "expected_session_id",
                 SESSION_ID,
                 "actual_session_id",
@@ -439,7 +439,7 @@ fn api_004_error_catalog_is_exhaustive_and_error_pairs_fail_closed() {
             "PROCEDURE_DIGEST_MISMATCH" => Map::from_iter([
                 (
                     "schema".to_owned(),
-                    json!("podway.procedure-digest-mismatch-details/v1"),
+                    json!("podway.procedure-digest-mismatch-details/v2"),
                 ),
                 (
                     "expected_procedure_digest".to_owned(),
@@ -598,7 +598,7 @@ fn mutation_outcome_unknown_details(idempotency_key: &str) -> Map<String, Value>
     Map::from_iter([
         (
             "schema".to_owned(),
-            json!("podway.mutation-outcome-unknown-details/v1"),
+            json!("podway.mutation-outcome-unknown-details/v2"),
         ),
         ("outcome".to_owned(), json!("unknown")),
         ("idempotency_key".to_owned(), json!(idempotency_key)),
@@ -717,7 +717,7 @@ fn api_004_identity_conflict_details_are_closed_and_admission_aware() {
             "WORKSPACE_UUID_MISMATCH",
             4,
             identity_details(
-                "podway.workspace-uuid-mismatch-details/v1",
+                "podway.workspace-uuid-mismatch-details/v2",
                 "expected_workspace_uuid",
                 WORKSPACE_ID,
                 "actual_workspace_uuid",
@@ -729,7 +729,7 @@ fn api_004_identity_conflict_details_are_closed_and_admission_aware() {
             "SESSION_ID_MISMATCH",
             4,
             identity_details(
-                "podway.session-id-mismatch-details/v1",
+                "podway.session-id-mismatch-details/v2",
                 "expected_session_id",
                 SESSION_ID,
                 "actual_session_id",
@@ -785,7 +785,7 @@ fn api_004_identity_conflict_details_are_closed_and_admission_aware() {
     assert_error_rejected(wrong_schema);
 
     let workspace_details = identity_details(
-        "podway.workspace-uuid-mismatch-details/v1",
+        "podway.workspace-uuid-mismatch-details/v2",
         "expected_workspace_uuid",
         WORKSPACE_ID,
         "actual_workspace_uuid",

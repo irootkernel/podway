@@ -19,7 +19,7 @@
     },
     {
       "code": "DAEMON_UNAVAILABLE",
-      "details_schema": "podway.endpoint-error-details/v1",
+      "details_schema": "podway.endpoint-error-details/v2",
       "exit_code": 3,
       "retryable": true,
       "summary": "Daemon socket cannot be reached."
@@ -40,7 +40,7 @@
     },
     {
       "code": "DAEMON_CONTRACT_MISMATCH",
-      "details_schema": "podway.daemon-contract-mismatch-details/v1",
+      "details_schema": "podway.daemon-contract-mismatch-details/v2",
       "exit_code": 3,
       "retryable": false,
       "summary": "CLI and daemon product or contract manifest identity differs."
@@ -114,7 +114,7 @@
     },
     {
       "code": "WORKSPACE_UUID_MISMATCH",
-      "details_schema": "podway.workspace-uuid-mismatch-details/v1",
+      "details_schema": "podway.workspace-uuid-mismatch-details/v2",
       "exit_code": 4,
       "retryable": false,
       "summary": "The workspace UUID differs from the expected identity."
@@ -127,12 +127,14 @@
     },
     {
       "code": "WORKSPACE_STATE_UNREADABLE",
+      "details_schema": "podway.workspace-recovery-details/v1",
       "exit_code": 5,
       "retryable": false,
       "summary": "Workspace state is corrupt or inaccessible."
     },
     {
       "code": "WORKSPACE_SCHEMA_UNSUPPORTED",
+      "details_schema": "podway.workspace-recovery-details/v1",
       "exit_code": 5,
       "retryable": false,
       "summary": "Workspace schema is unsupported."
@@ -193,7 +195,7 @@
     },
     {
       "code": "PROCEDURE_DIGEST_MISMATCH",
-      "details_schema": "podway.procedure-digest-mismatch-details/v1",
+      "details_schema": "podway.procedure-digest-mismatch-details/v2",
       "exit_code": 4,
       "retryable": false,
       "summary": "The canonical Procedure digest differs from the expected digest."
@@ -212,7 +214,7 @@
     },
     {
       "code": "SESSION_ID_MISMATCH",
-      "details_schema": "podway.session-id-mismatch-details/v1",
+      "details_schema": "podway.session-id-mismatch-details/v2",
       "exit_code": 4,
       "retryable": false,
       "summary": "The session ID differs from the expected identity."
@@ -237,14 +239,14 @@
     },
     {
       "code": "SESSION_REVISION_CONFLICT",
-      "details_schema": "podway.revision-conflict-details/v1",
+      "details_schema": "podway.revision-conflict-details/v2",
       "exit_code": 4,
       "retryable": true,
       "summary": "The session changed after it was observed."
     },
     {
       "code": "ATTEMPT_NOT_CURRENT",
-      "details_schema": "podway.attempt-conflict-details/v1",
+      "details_schema": "podway.attempt-conflict-details/v2",
       "exit_code": 4,
       "retryable": true,
       "summary": "The target attempt is no longer active."
@@ -294,7 +296,7 @@
     },
     {
       "code": "ITEM_REVISION_CONFLICT",
-      "details_schema": "podway.revision-conflict-details/v1",
+      "details_schema": "podway.revision-conflict-details/v2",
       "exit_code": 4,
       "retryable": true,
       "summary": "The item changed after it was observed."
@@ -374,14 +376,14 @@
     },
     {
       "code": "JOB_WAIT_TIMEOUT",
-      "details_schema": "podway.job-wait-timeout-details/v1",
+      "details_schema": "podway.job-wait-timeout-details/v2",
       "exit_code": 4,
       "retryable": true,
       "summary": "The wait expired; the admitted job may continue."
     },
     {
       "code": "MUTATION_OUTCOME_UNKNOWN",
-      "details_schema": "podway.mutation-outcome-unknown-details/v1",
+      "details_schema": "podway.mutation-outcome-unknown-details/v2",
       "exit_code": 4,
       "retryable": true,
       "summary": "The mutation may have been admitted; reconcile by idempotency key."
@@ -456,7 +458,7 @@
     },
     {
       "code": "EVIDENCE_REFERENCE_STALE",
-      "details_schema": "podway.v2-runtime-error-details/v1",
+      "details_schema": "podway.recoverable-v2-runtime-error-details/v1",
       "exit_code": 4,
       "retryable": true,
       "summary": "A resolved evidence reference is stale."
@@ -498,7 +500,7 @@
     },
     {
       "code": "GOAL_REVISION_STALE",
-      "details_schema": "podway.v2-runtime-error-details/v1",
+      "details_schema": "podway.recoverable-v2-runtime-error-details/v1",
       "exit_code": 4,
       "retryable": true,
       "summary": "The expected goal revision is no longer current."

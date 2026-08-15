@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:attempt-conflict-details:v2",
+  "title": "Podway Attempt Conflict Details v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "expected_attempt_id", "recovery"],
+  "properties": {
+    "schema": { "const": "podway.attempt-conflict-details/v2" },
+    "expected_attempt_id": { "type": "string", "format": "uuid" },
+    "actual_attempt_id": { "type": "string", "format": "uuid" },
+    "job_id": { "type": "string", "format": "uuid" },
+    "job_sequence": { "type": "integer", "minimum": 1 },
+    "admission": { "oneOf": [{ "$ref": "#/$defs/notAdmitted" }, { "$ref": "#/$defs/admitted" }] },
+    "recovery": { "$ref": "urn:podway:schema:recovery-recipe:v1" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "admission": { "properties": { "admitted": { "const": true } }, "required": ["admitted"] } }, "required": ["admission"] },
+      "then": { "required": ["job_id", "job_sequence"] }
+    },
+    {
+      "if": { "anyOf": [{ "required": ["job_id"] }, { "required": ["job_sequence"] }] },
+      "then": { "required": ["admission", "job_id", "job_sequence"], "properties": { "admission": { "properties": { "admitted": { "const": true } }, "required": ["admitted"] } } }
+    }
+  ],
+  "$defs": {
+    "notAdmitted": { "type": "object", "additionalProperties": false, "required": ["admitted"], "properties": { "admitted": { "const": false } } },
+    "admitted": { "type": "object", "additionalProperties": false, "required": ["admitted", "job_id", "workspace_sequence"], "properties": { "admitted": { "const": true }, "job_id": { "type": "string", "format": "uuid" }, "workspace_sequence": { "type": "integer", "minimum": 1 } } }
+  }
+}

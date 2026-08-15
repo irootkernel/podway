@@ -163,14 +163,14 @@ stale. Consequently, `ROUTE_NOT_ALLOWED` and `EVIDENCE_REFERENCE_STALE` also
 remain registered defensive domain results rather than expected outcomes from a
 coherent current public request.
 
-Every registered v2 runtime code uses the closed
-`podway.v2-runtime-error-details/v1` details family inside the retained
-`podway.error/v1` envelope. Its required `kind` exactly equals the outer error
-code; code-specific fields are bounded, unknown fields are rejected, and the
-optional `admission` field retains the ordinary admission metadata contract.
-The canonical error catalog binds each of these 26 codes to that details schema,
-and v2 runtime error messages are bounded to 512 characters without changing the
-released `podway.error/v1` schema.
+Registered v2 runtime codes use closed code-bound details inside the retained
+`podway.error/v1` envelope. `EVIDENCE_REFERENCE_STALE` and
+`GOAL_REVISION_STALE` use
+`podway.recoverable-v2-runtime-error-details/v1`; the other 24 codes retain
+`podway.v2-runtime-error-details/v1`. The required `kind` exactly equals the
+outer error code; code-specific fields are bounded, unknown fields are rejected,
+and optional `admission` retains the ordinary admission metadata contract. V2
+runtime error messages remain bounded to 512 characters.
 
 Authoring diagnostics never use runtime error codes. The authoring catalog
 separately enumerates every validate, vet, graph-projection, and lint condition from Procedure v2,
@@ -196,15 +196,17 @@ On revision conflicts, details include current values:
 }
 ```
 
-Clients should refresh `status --json`, reassess the active graph node, and issue a new command rather than blindly changing only the revision.
+Clients should run the returned `observe --json --wait-for-idle` recipe, reassess
+the active graph node, and derive a new command rather than blindly changing
+only the revision.
 
 ## Identity-conflict details
 
 `WORKSPACE_UUID_MISMATCH` uses the closed
-`podway.workspace-uuid-mismatch-details/v1` object with
+`podway.workspace-uuid-mismatch-details/v2` object with
 `expected_workspace_uuid`, `actual_workspace_uuid`, and `admission`.
 `SESSION_ID_MISMATCH` uses the closed
-`podway.session-id-mismatch-details/v1` object with `expected_session_id`,
+`podway.session-id-mismatch-details/v2` object with `expected_session_id`,
 nullable `actual_session_id`, and `admission`. A null actual session means the
 expected session no longer exists as the workspace's current session.
 
@@ -215,14 +217,14 @@ identity errors are non-retryable exit-4 conflicts: callers must observe fresh
 identity before deciding whether a new operation is valid.
 
 `PROCEDURE_DIGEST_MISMATCH` is a non-retryable exit-4 conflict. Its closed
-`podway.procedure-digest-mismatch-details/v1` object contains the expected and actual canonical
+`podway.procedure-digest-mismatch-details/v2` object contains the expected and actual canonical
 Procedure digests plus `{ "admitted": false }`; the comparison always precedes durable admission.
 
 Every daemon mutation error now carries `details.admission`. Pre-admission
 errors use exactly `{ "admitted": false }`; terminal errors and
 `JOB_WAIT_TIMEOUT` use `{ "admitted": true, "job_id": "<uuid>",
 "workspace_sequence": <positive integer> }`. The normative target is the
-[automation error contract](automation-client-contract.md#22-error-and-exit-code-requirements-aut-err-001002).
+[automation error contract](automation-client-contract.md#22-error-and-exit-code-requirements-aut-err-001005).
 
 `BLOCKER_LIMIT_REACHED` uses the closed
 `podway.blocker-limit-details/v1` object. `maximum_open_blockers` is `64`.
@@ -236,12 +238,19 @@ it emits `MUTATION_OUTCOME_UNKNOWN` with this closed details object:
 
 ```json
 {
-  "schema": "podway.mutation-outcome-unknown-details/v1",
+  "schema": "podway.mutation-outcome-unknown-details/v2",
   "outcome": "unknown",
   "idempotency_key": "original-key",
   "reconcile": {
     "command": "job.lookup",
     "idempotency_key": "original-key"
+  },
+  "recovery": {
+    "action": "reconcile_mutation",
+    "command": "job.lookup",
+    "argv": ["podway", "--json", "job", "lookup", "--idempotency-key", "original-key"],
+    "reason": "Reconcile the original idempotency key before considering another mutation.",
+    "requires_explicit_authorization": false
   }
 }
 ```
@@ -250,6 +259,34 @@ The object deliberately omits `admission`, job ID, and sequence because none is
 known without a trustworthy response. `retryable=true` means the caller can
 recover safely: run `job lookup --idempotency-key <original-key>` first and do
 not submit a new-key mutation until reconciliation proves that is appropriate.
+
+## Structured recovery recipes
+
+The following errors add one required closed `recovery` object through a new
+details-schema version while preserving the outer `podway.error/v1`, stable
+code, retryability, exit class, and admission facts:
+
+| Error family | Details schema | Read-only command |
+|---|---|---|
+| `DAEMON_UNAVAILABLE` | `podway.endpoint-error-details/v2` | `daemon.status` |
+| `DAEMON_CONTRACT_MISMATCH` | `podway.daemon-contract-mismatch-details/v2` | `daemon.status` |
+| `WORKSPACE_UUID_MISMATCH` | `podway.workspace-uuid-mismatch-details/v2` | `workspace.doctor` |
+| `WORKSPACE_STATE_UNREADABLE`, `WORKSPACE_SCHEMA_UNSUPPORTED` | `podway.workspace-recovery-details/v1` | `workspace.doctor` |
+| `PROCEDURE_DIGEST_MISMATCH` | `podway.procedure-digest-mismatch-details/v2` | `session.observe` |
+| `SESSION_ID_MISMATCH` | `podway.session-id-mismatch-details/v2` | `session.observe` |
+| `SESSION_REVISION_CONFLICT`, `ITEM_REVISION_CONFLICT` | `podway.revision-conflict-details/v2` | `session.observe` |
+| `ATTEMPT_NOT_CURRENT` | `podway.attempt-conflict-details/v2` | `session.observe` |
+| `EVIDENCE_REFERENCE_STALE`, `GOAL_REVISION_STALE` | `podway.recoverable-v2-runtime-error-details/v1` | `session.observe` |
+| `MUTATION_OUTCOME_UNKNOWN` | `podway.mutation-outcome-unknown-details/v2` | `job.lookup` |
+| `JOB_WAIT_TIMEOUT` | `podway.job-wait-timeout-details/v2` | `job.wait` when the job ID is known, otherwise `session.observe` |
+
+`podway.recovery-recipe/v1` contains exactly `action`, `command`, `argv`,
+`reason`, and `requires_explicit_authorization`. Commands are limited to
+`session.observe`, `job.lookup`, `job.wait`, `daemon.status`, and
+`workspace.doctor`; argv is limited to 2..8 non-empty strings and reason to 256
+Unicode scalars. Every current recipe is read-only and therefore reports
+`requires_explicit_authorization=false`. The object never authorizes retry,
+restart, repair, reset, reinstall, fence weakening, or another mutation.
 
 ## Error redaction
 

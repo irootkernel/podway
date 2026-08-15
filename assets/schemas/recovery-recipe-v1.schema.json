@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:recovery-recipe:v1",
+  "title": "Podway Read-Only Recovery Recipe v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["action", "command", "argv", "reason", "requires_explicit_authorization"],
+  "properties": {
+    "action": { "enum": ["refresh_state", "reconcile_mutation", "wait_for_job", "inspect_daemon", "diagnose_workspace"] },
+    "command": { "enum": ["session.observe", "job.lookup", "job.wait", "daemon.status", "workspace.doctor"] },
+    "argv": { "type": "array", "minItems": 2, "maxItems": 8, "items": { "type": "string", "minLength": 1, "maxLength": 256 } },
+    "reason": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "requires_explicit_authorization": { "const": false }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "command": { "const": "session.observe" } }, "required": ["command"] },
+      "then": { "properties": { "action": { "const": "refresh_state" }, "argv": { "const": ["podway", "--json", "observe", "--wait-for-idle"] } } }
+    },
+    {
+      "if": { "properties": { "command": { "const": "daemon.status" } }, "required": ["command"] },
+      "then": { "properties": { "action": { "const": "inspect_daemon" }, "argv": { "const": ["podway", "--json", "daemon", "status"] } } }
+    },
+    {
+      "if": { "properties": { "command": { "const": "workspace.doctor" } }, "required": ["command"] },
+      "then": { "properties": { "action": { "const": "diagnose_workspace" }, "argv": { "const": ["podway", "--json", "doctor"] } } }
+    },
+    {
+      "if": { "properties": { "command": { "const": "job.lookup" } }, "required": ["command"] },
+      "then": {
+        "properties": {
+          "action": { "const": "reconcile_mutation" },
+          "argv": {
+            "type": "array", "minItems": 6, "maxItems": 6,
+            "prefixItems": [{ "const": "podway" }, { "const": "--json" }, { "const": "job" }, { "const": "lookup" }, { "const": "--idempotency-key" }, { "type": "string", "minLength": 1, "maxLength": 256 }]
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "command": { "const": "job.wait" } }, "required": ["command"] },
+      "then": {
+        "properties": {
+          "action": { "const": "wait_for_job" },
+          "argv": {
+            "type": "array", "minItems": 5, "maxItems": 5,
+            "prefixItems": [{ "const": "podway" }, { "const": "--json" }, { "const": "job" }, { "const": "wait" }, { "type": "string", "format": "uuid" }]
+          }
+        }
+      }
+    }
+  ]
+}

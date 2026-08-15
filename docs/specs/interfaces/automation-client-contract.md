@@ -217,12 +217,15 @@ not replace, the session revision or active-attempt fence.
 | `AUT-JSON-003` | Results and error details MUST carry an unambiguous schema identifier or discriminator. |
 | `AUT-JSON-004` | A closed v1 object MUST reject unknown fields; adding fields requires a new schema identifier or discriminator version rather than an undocumented additive-field exception. |
 
-## 22. Error and exit-code requirements (AUT-ERR-001–002)
+## 22. Error and exit-code requirements (AUT-ERR-001–005)
 
 | ID | Normative requirement |
 |---|---|
 | `AUT-ERR-001` | `WORKSPACE_UUID_MISMATCH`, `SESSION_ID_MISMATCH`, `PROCEDURE_DIGEST_MISMATCH`, `DAEMON_CONTRACT_MISMATCH`, socket errors, and wait timeout MUST have stable catalog entries and exit mappings. |
 | `AUT-ERR-002` | A pre-admission contract, identity, digest, endpoint, or validation failure MUST report `admission.admitted=false`; a mismatch MUST NOT admit a job. |
+| `AUT-ERR-003` | Adopted recoverable errors MUST carry one closed bounded `recovery` recipe containing `action`, canonical read-only `command`, structured `argv`, bounded `reason`, and `requires_explicit_authorization=false`. |
+| `AUT-ERR-004` | Recovery recipes MUST recommend only `session.observe`, `job.lookup`, `job.wait`, `daemon.status`, or `workspace.doctor`; they MUST NOT weaken a fence or recommend retry, restart, repair, reset, reinstall, or another mutation. |
+| `AUT-ERR-005` | Recovery recipes MUST derive only from existing public error details, MUST preserve code, retryability, exit class, and admission facts, and MUST NOT copy item values, requests, environment variables, file contents, credentials, or artifact bytes. |
 
 ## 23. Release artifact and installation (AUT-REL-001–004)
 
@@ -292,7 +295,7 @@ Preview and other authoring reads remain side-effect free.
 | `AUT-START-001`–`004` | `PSTRT001`–`PSTRT005` | `AUT-T-START` |
 | `AUT-ADMIT-001`–`003`, `AUT-RECON-001`–`004` | `RECON001`–`RECON005` | `AUT-T-RECON` |
 | `AUT-OBS-001`–`004` | `MCONT004`, `MCONT006`, `DOLGI002` | `AUT-T-OBS` |
-| `AUT-JSON-001`–`004`, `AUT-ERR-001`–`002` | `CASID004`, `MCONT001`–`MCONT006` | `AUT-T-JSON` |
+| `AUT-JSON-001`–`004`, `AUT-ERR-001`–`005` | `CASID004`, `MCONT001`–`MCONT006`, `V2AGT-005` | `AUT-T-JSON` |
 | `AUT-REL-001`–`004` | `DOLGI005`, `REL10001`–`REL10005` | `AUT-T-DIST`, repository-local `make dist` |
 
 ## 26. Example Dolgorae command sequences

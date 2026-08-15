@@ -134,7 +134,7 @@ fn assert_absent_session_mismatch(response: ResponseEnvelopeV2, session_id: &str
     assert!(!error.retryable());
     assert_eq!(
         error.details()["schema"],
-        "podway.session-id-mismatch-details/v1"
+        "podway.session-id-mismatch-details/v2"
     );
     assert_eq!(error.details()["expected_session_id"], session_id);
     assert!(error.details()["actual_session_id"].is_null());

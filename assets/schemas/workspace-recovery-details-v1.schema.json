@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:workspace-recovery-details:v1",
+  "title": "Podway Workspace Recovery Details v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "recovery"],
+  "properties": {
+    "schema": { "const": "podway.workspace-recovery-details/v1" },
+    "admission": { "$ref": "#/$defs/notAdmitted" },
+    "recovery": { "$ref": "urn:podway:schema:recovery-recipe:v1" }
+  },
+  "$defs": {
+    "notAdmitted": { "type": "object", "additionalProperties": false, "required": ["admitted"], "properties": { "admitted": { "const": false } } }
+  }
+}

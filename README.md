@@ -226,6 +226,10 @@ Automation must use JSON fields and stable error codes, never parse human output
 record or clear 1..64 uniquely identified active-attempt items atomically. The
 document carries every workspace, session, attempt, item-revision, and
 idempotency fence; see the [Procedure v2 walkthrough](docs/examples/v2-workflow.md).
+Common stale-state, uncertain-outcome, daemon, and workspace failures include a
+closed `details.recovery` recipe containing only a bounded read-only command.
+Automation must validate that recipe and must never treat it as authorization
+for a lifecycle action or mutation.
 
 Podway v0.2.1 implements an evidence-gated, goal-directed workflow memory:
 Procedure v2 documents are declarative graphs with recorded decisions, selected

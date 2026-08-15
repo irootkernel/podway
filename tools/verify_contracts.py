@@ -431,10 +431,36 @@ def validate_v2_catalog_delta(root: Path) -> int:
         for entry in entries
         if entry.get("code") in V2_RUNTIME_ERROR_CODES
     }
-    if v2_details_schemas != dict.fromkeys(
+    expected_v2_details_schemas = dict.fromkeys(
         V2_RUNTIME_ERROR_CODES, "podway.v2-runtime-error-details/v1"
-    ):
+    )
+    for code in ("EVIDENCE_REFERENCE_STALE", "GOAL_REVISION_STALE"):
+        expected_v2_details_schemas[code] = "podway.recoverable-v2-runtime-error-details/v1"
+    if v2_details_schemas != expected_v2_details_schemas:
         fail("every v2 runtime error must bind the closed v2 details schema")
+    recovery_details_schemas = {
+        "DAEMON_UNAVAILABLE": "podway.endpoint-error-details/v2",
+        "DAEMON_CONTRACT_MISMATCH": "podway.daemon-contract-mismatch-details/v2",
+        "WORKSPACE_UUID_MISMATCH": "podway.workspace-uuid-mismatch-details/v2",
+        "WORKSPACE_STATE_UNREADABLE": "podway.workspace-recovery-details/v1",
+        "WORKSPACE_SCHEMA_UNSUPPORTED": "podway.workspace-recovery-details/v1",
+        "PROCEDURE_DIGEST_MISMATCH": "podway.procedure-digest-mismatch-details/v2",
+        "SESSION_ID_MISMATCH": "podway.session-id-mismatch-details/v2",
+        "SESSION_REVISION_CONFLICT": "podway.revision-conflict-details/v2",
+        "ATTEMPT_NOT_CURRENT": "podway.attempt-conflict-details/v2",
+        "ITEM_REVISION_CONFLICT": "podway.revision-conflict-details/v2",
+        "JOB_WAIT_TIMEOUT": "podway.job-wait-timeout-details/v2",
+        "MUTATION_OUTCOME_UNKNOWN": "podway.mutation-outcome-unknown-details/v2",
+        "EVIDENCE_REFERENCE_STALE": "podway.recoverable-v2-runtime-error-details/v1",
+        "GOAL_REVISION_STALE": "podway.recoverable-v2-runtime-error-details/v1",
+    }
+    actual_recovery_schemas = {
+        entry["code"]: entry.get("details_schema")
+        for entry in entries
+        if entry.get("code") in recovery_details_schemas
+    }
+    if actual_recovery_schemas != recovery_details_schemas:
+        fail("structured recovery errors must bind their exact closed details schemas")
 
     authoring = read_json(
         root, Path("assets/specifications/authoring-diagnostics.json"),

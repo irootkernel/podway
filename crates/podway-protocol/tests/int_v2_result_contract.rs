@@ -600,26 +600,129 @@ fn v2ctr004_v2_runtime_error_catalog_is_schema_and_decoder_bound() {
         .as_array()
         .unwrap()
         .iter()
-        .filter(|entry| entry["details_schema"] == json!("podway.v2-runtime-error-details/v1"))
-        .map(|entry| entry["code"].as_str().unwrap())
+        .filter(|entry| {
+            matches!(
+                entry["details_schema"].as_str(),
+                Some(
+                    "podway.v2-runtime-error-details/v1"
+                        | "podway.recoverable-v2-runtime-error-details/v1"
+                )
+            )
+        })
+        .map(|entry| entry["code"].as_str().unwrap().to_owned())
         .collect::<BTreeSet<_>>();
     let decoder_codes = V2_RUNTIME_ERROR_CODES_V1
         .iter()
-        .copied()
+        .map(|code| (*code).to_owned())
         .collect::<BTreeSet<_>>();
-    let details_schema = read_schema("schemas/v2-runtime-error-details-v1.schema.json");
-    let schema_codes = details_schema["$defs"]
-        .as_object()
-        .unwrap()
-        .values()
-        .filter_map(|definition| definition["allOf"].as_array())
-        .filter_map(|all_of| all_of.get(1))
-        .filter_map(|variant| variant["properties"]["kind"]["const"].as_str())
-        .collect::<BTreeSet<_>>();
+    let schema_codes = [
+        "schemas/v2-runtime-error-details-v1.schema.json",
+        "schemas/recoverable-v2-runtime-error-details-v1.schema.json",
+    ]
+    .into_iter()
+    .flat_map(|path| {
+        let details_schema = read_schema(path);
+        details_schema["$defs"]
+            .as_object()
+            .unwrap()
+            .values()
+            .filter_map(|definition| definition["allOf"].as_array())
+            .filter_map(|all_of| all_of.get(1))
+            .filter_map(|variant| variant["properties"]["kind"]["const"].as_str())
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    })
+    .collect::<BTreeSet<_>>();
 
     assert_eq!(catalog_codes, decoder_codes);
     assert_eq!(schema_codes, decoder_codes);
     assert_eq!(decoder_codes.len(), 26);
+}
+
+#[test]
+fn v2agt005_recovery_schemas_accept_exact_closed_read_only_fixtures() {
+    let daemon = json!({
+        "action":"inspect_daemon","command":"daemon.status",
+        "argv":["podway","--json","daemon","status"],
+        "reason":"Inspect daemon and contract health before deciding on a lifecycle action.",
+        "requires_explicit_authorization":false
+    });
+    let doctor = json!({
+        "action":"diagnose_workspace","command":"workspace.doctor",
+        "argv":["podway","--json","doctor"],
+        "reason":"Inspect bounded workspace diagnostics before deciding on a recovery action.",
+        "requires_explicit_authorization":false
+    });
+    let wait = json!({
+        "action":"wait_for_job","command":"job.wait",
+        "argv":["podway","--json","job","wait",UUID],
+        "reason":"Wait for the admitted job instead of resubmitting its mutation.",
+        "requires_explicit_authorization":false
+    });
+    let cases = [
+        (
+            "schemas/endpoint-error-details-v2.schema.json",
+            json!({"schema":"podway.endpoint-error-details/v2","recovery":daemon}),
+        ),
+        (
+            "schemas/daemon-contract-mismatch-details-v2.schema.json",
+            json!({
+                "schema":"podway.daemon-contract-mismatch-details/v2",
+                "expected":{"product":"podway","contract_manifest_digest":DIGEST},
+                "actual":{"product":"podway","contract_manifest_digest":DIGEST},
+                "admission":{"admitted":false},"recovery":daemon
+            }),
+        ),
+        (
+            "schemas/revision-conflict-details-v2.schema.json",
+            json!({"schema":"podway.revision-conflict-details/v2","expected_revision":1,"recovery":refresh_state_recovery()}),
+        ),
+        (
+            "schemas/attempt-conflict-details-v2.schema.json",
+            json!({"schema":"podway.attempt-conflict-details/v2","expected_attempt_id":UUID,"recovery":refresh_state_recovery()}),
+        ),
+        (
+            "schemas/job-wait-timeout-details-v2.schema.json",
+            json!({
+                "schema":"podway.job-wait-timeout-details/v2","job_id":UUID,"job_sequence":1,
+                "admission":{"admitted":true,"job_id":UUID,"workspace_sequence":1},"recovery":wait
+            }),
+        ),
+        (
+            "schemas/workspace-recovery-details-v1.schema.json",
+            json!({"schema":"podway.workspace-recovery-details/v1","recovery":doctor}),
+        ),
+        (
+            "schemas/recoverable-v2-runtime-error-details-v1.schema.json",
+            json!({
+                "schema":"podway.recoverable-v2-runtime-error-details/v1",
+                "kind":"GOAL_REVISION_STALE","expected_goal_revision":1,
+                "actual_goal_revision":2,"admission":{"admitted":false},
+                "recovery":refresh_state_recovery()
+            }),
+        ),
+    ];
+    for (schema, fixture) in cases {
+        assert_valid(schema, &fixture);
+        let mut open = fixture;
+        open["recovery"]["extra"] = json!(true);
+        assert_invalid(schema, &open);
+    }
+
+    for recipe in [
+        refresh_state_recovery(),
+        daemon,
+        doctor,
+        wait,
+        json!({
+            "action":"reconcile_mutation","command":"job.lookup",
+            "argv":["podway","--json","job","lookup","--idempotency-key","key"],
+            "reason":"Reconcile the original idempotency key before considering another mutation.",
+            "requires_explicit_authorization":false
+        }),
+    ] {
+        assert_valid("schemas/recovery-recipe-v1.schema.json", &recipe);
+    }
 }
 
 #[test]
@@ -1551,6 +1654,16 @@ fn maximum_terminal_success_candidate(schema: &str) -> (&'static str, Value) {
     (command, result)
 }
 
+fn refresh_state_recovery() -> Value {
+    json!({
+        "action":"refresh_state",
+        "command":"session.observe",
+        "argv":["podway","--json","observe","--wait-for-idle"],
+        "reason":"Re-read bounded current state before deriving another request.",
+        "requires_explicit_authorization":false
+    })
+}
+
 fn maximum_runtime_error_details(code: &str) -> Value {
     let identifier = maximum_identifier(0);
     let identifiers_8 = (0..8).map(maximum_identifier).collect::<Vec<_>>();
@@ -1561,6 +1674,10 @@ fn maximum_runtime_error_details(code: &str) -> Value {
         "kind":code,
         "admission":{"admitted":true,"job_id":UUID,"workspace_sequence":u64::MAX}
     });
+    if matches!(code, "EVIDENCE_REFERENCE_STALE" | "GOAL_REVISION_STALE") {
+        details["schema"] = json!("podway.recoverable-v2-runtime-error-details/v1");
+        details["recovery"] = refresh_state_recovery();
+    }
     match code {
         "PROCEDURE_V2_SCHEMA_INVALID" => {
             details["diagnostic_codes"] = Value::Array(
@@ -1643,19 +1760,22 @@ fn maximum_runtime_error_details(code: &str) -> Value {
 fn shared_terminal_error_details(code: &str) -> Value {
     match code {
         "SESSION_REVISION_CONFLICT" | "ITEM_REVISION_CONFLICT" => json!({
-            "schema":"podway.revision-conflict-details/v1",
+            "schema":"podway.revision-conflict-details/v2",
             "expected_revision":u64::MAX,
-            "current_revision":u64::MAX - 1
+            "current_revision":u64::MAX - 1,
+            "recovery":refresh_state_recovery()
         }),
         "SESSION_ID_MISMATCH" => json!({
-            "schema":"podway.session-id-mismatch-details/v1",
+            "schema":"podway.session-id-mismatch-details/v2",
             "expected_session_id":UUID,
             "actual_session_id":null,
-            "admission":{"admitted":false}
+            "admission":{"admitted":false},
+            "recovery":refresh_state_recovery()
         }),
         "ATTEMPT_NOT_CURRENT" => json!({
-            "schema":"podway.attempt-conflict-details/v1",
-            "expected_attempt_id":UUID
+            "schema":"podway.attempt-conflict-details/v2",
+            "expected_attempt_id":UUID,
+            "recovery":refresh_state_recovery()
         }),
         "BLOCKER_LIMIT_REACHED" => json!({
             "schema":"podway.blocker-limit-details/v1",
@@ -1764,7 +1884,13 @@ fn v2rel002_largest_terminal_error_receipt_round_trips_once_in_job_reads() {
             _ => (1, false),
         };
         let details = maximum_runtime_error_details(code);
-        assert_valid("schemas/v2-runtime-error-details-v1.schema.json", &details);
+        let details_schema = if matches!(*code, "EVIDENCE_REFERENCE_STALE" | "GOAL_REVISION_STALE")
+        {
+            "schemas/recoverable-v2-runtime-error-details-v1.schema.json"
+        } else {
+            "schemas/v2-runtime-error-details-v1.schema.json"
+        };
+        assert_valid(details_schema, &details);
         let error = json!({
             "schema":"podway.error/v1",
             "request_id":"ffffffff-ffff-4fff-8fff-ffffffffffff",

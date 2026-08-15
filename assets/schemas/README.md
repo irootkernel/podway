@@ -9,13 +9,20 @@ These JSON Schema Draft 2020-12 files define Podway's versioned structural contr
 - `output-v3.schema.json`: unified success envelope with closed command-to-result selection.
 - `error-v1.schema.json`: error envelope.
 - `endpoint-error-details-v1.schema.json`: daemon endpoint and availability failures.
+- `endpoint-error-details-v2.schema.json`: daemon-unavailable details with a bounded read-only recovery recipe.
 - `socket-endpoint-error-details-v1.schema.json`: invalid explicit Unix socket paths.
 - `daemon-contract-mismatch-details-v1.schema.json`: CLI/daemon contract identity mismatch.
+- `daemon-contract-mismatch-details-v2.schema.json`: contract mismatch details with daemon-health recovery.
 - `revision-conflict-details-v1.schema.json`: session and item revision conflicts.
+- `revision-conflict-details-v2.schema.json`: revision conflicts with bounded state-refresh recovery.
 - `attempt-conflict-details-v1.schema.json`: stale current-attempt conflicts.
+- `attempt-conflict-details-v2.schema.json`: stale attempt conflicts with bounded state-refresh recovery.
 - `blocker-limit-details-v1.schema.json`: active-attempt open-blocker limit failures.
 - `idempotency-key-reused-details-v1.schema.json`: rejected idempotency-key reuse.
 - `job-wait-timeout-details-v1.schema.json`: query and admitted mutation wait timeouts.
+- `job-wait-timeout-details-v2.schema.json`: wait timeouts with bounded job-wait recovery.
+- `workspace-recovery-details-v1.schema.json`: unreadable or unsupported workspace-state recovery.
+- `recovery-recipe-v1.schema.json`: shared closed read-only remediation command contract.
 - `daemon-status-result-v1.schema.json`: merged local-service and live-daemon status result.
 - `version-summary-v1.schema.json`: compact public product name and version.
 - `version-result-v1.schema.json`: detailed static build and contract identity.
@@ -45,6 +52,7 @@ These JSON Schema Draft 2020-12 files define Podway's versioned structural contr
 - `criterion-assessment-result-v1.schema.json`: one criterion assessment outcome.
 - `v2-result-components-v1.schema.json`: shared closed and bounded Procedure v2 result components.
 - `v2-runtime-error-details-v1.schema.json`: closed code-bound details for registered Procedure v2 runtime errors.
+- `recoverable-v2-runtime-error-details-v1.schema.json`: stale evidence and goal-revision details with state-refresh recovery.
 - `contract-manifest-v1.schema.json`: deterministic integration contract inventory.
 
 JSON Schema does not express every semantic rule, including duplicate identifiers,

@@ -43,7 +43,7 @@ pub use result_contract::{
 };
 pub use slice::*;
 
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
 pub const IPC_PROTOCOL_V1: &str = "podway.ipc/v1";
 pub const ERROR_SCHEMA_V1: &str = "podway.error/v1";
@@ -1951,6 +1951,7 @@ impl ErrorEnvelopeV1 {
         validate_procedure_digest_mismatch_details_v1(self.code.as_str(), &self.details)?;
         validate_mutation_outcome_unknown_details_v1(self.code.as_str(), &self.details)?;
         validate_closed_error_details_v1(self.code.as_str(), &self.details)?;
+        validate_recovery_details_v1(self.code.as_str(), &self.details)?;
         if is_v2_runtime_error_code_v1(self.code.as_str())
             && V2_MUTATION_COMMANDS.contains(&self.command.as_str())
             && !self.details.contains_key("admission")
@@ -2026,20 +2027,20 @@ fn validate_identity_conflict_details_v1(
 ) -> Result<(), ProtocolError> {
     let (schema, expected_key, actual_key, session) = match code {
         "WORKSPACE_UUID_MISMATCH" => (
-            "podway.workspace-uuid-mismatch-details/v1",
+            "podway.workspace-uuid-mismatch-details/v2",
             "expected_workspace_uuid",
             "actual_workspace_uuid",
             false,
         ),
         "SESSION_ID_MISMATCH" => (
-            "podway.session-id-mismatch-details/v1",
+            "podway.session-id-mismatch-details/v2",
             "expected_session_id",
             "actual_session_id",
             true,
         ),
         _ => return Ok(()),
     };
-    if details.len() != 4
+    if details.len() != 5
         || details.get("schema").and_then(Value::as_str) != Some(schema)
         || !details.contains_key(expected_key)
         || !details.contains_key(actual_key)
@@ -2098,9 +2099,9 @@ fn validate_procedure_digest_mismatch_details_v1(
     if code != "PROCEDURE_DIGEST_MISMATCH" {
         return Ok(());
     }
-    if details.len() != 4
+    if details.len() != 5
         || details.get("schema").and_then(Value::as_str)
-            != Some("podway.procedure-digest-mismatch-details/v1")
+            != Some("podway.procedure-digest-mismatch-details/v2")
         || details
             .get("admission")
             .and_then(Value::as_object)
@@ -2129,9 +2130,9 @@ fn validate_mutation_outcome_unknown_details_v1(
     if code != "MUTATION_OUTCOME_UNKNOWN" {
         return Ok(());
     }
-    if details.len() != 4
+    if details.len() != 5
         || details.get("schema").and_then(Value::as_str)
-            != Some("podway.mutation-outcome-unknown-details/v1")
+            != Some("podway.mutation-outcome-unknown-details/v2")
         || details.get("outcome").and_then(Value::as_str) != Some("unknown")
     {
         return Err(ProtocolError::InvalidMutationOutcomeUnknownDetails);
@@ -2163,7 +2164,7 @@ fn validate_closed_error_details_v1(
         "DAEMON_NOT_INSTALLED"
         | "DAEMON_UNAVAILABLE"
         | "DAEMON_SHUTTING_DOWN"
-        | "DAEMON_VERSION_INCOMPATIBLE" => validate_endpoint_details_v1(details),
+        | "DAEMON_VERSION_INCOMPATIBLE" => validate_endpoint_details_v1(code, details),
         "DAEMON_CONTRACT_MISMATCH" => validate_daemon_contract_mismatch_details_v1(details),
         "SOCKET_ENDPOINT_INVALID" => validate_socket_endpoint_details_v1(details),
         "SESSION_REVISION_CONFLICT" | "ITEM_REVISION_CONFLICT" => {
@@ -2175,6 +2176,9 @@ fn validate_closed_error_details_v1(
         }
         "JOB_WAIT_TIMEOUT" => validate_wait_timeout_details_v1(details),
         "BLOCKER_LIMIT_REACHED" => validate_blocker_limit_details_v1(details),
+        "WORKSPACE_STATE_UNREADABLE" | "WORKSPACE_SCHEMA_UNSUPPORTED" => {
+            validate_workspace_recovery_details_v1(details)
+        }
         code if is_v2_runtime_error_code_v1(code) => {
             validate_v2_runtime_error_details_v1(code, details)
         }
@@ -2292,12 +2296,19 @@ fn validate_v2_runtime_error_details_v1(code: &str, details: &Map<String, Value>
         "UNSUPPORTED_V2_CAPABILITY" => &[("capability", validate_bounded_text_128_v1)],
         _ => return false,
     };
-    if details.get("schema").and_then(Value::as_str) != Some(V2_RUNTIME_ERROR_DETAILS_SCHEMA_V1)
+    let recoverable = matches!(code, "EVIDENCE_REFERENCE_STALE" | "GOAL_REVISION_STALE");
+    let expected_schema = if recoverable {
+        "podway.recoverable-v2-runtime-error-details/v1"
+    } else {
+        V2_RUNTIME_ERROR_DETAILS_SCHEMA_V1
+    };
+    if details.get("schema").and_then(Value::as_str) != Some(expected_schema)
         || details.get("kind").and_then(Value::as_str) != Some(code)
         || details.keys().any(|key| {
             key != "schema"
                 && key != "kind"
                 && key != "admission"
+                && !(recoverable && key == "recovery")
                 && !fields.iter().any(|(field, _)| key == field)
                 && !(code == "UNSUPPORTED_V2_CAPABILITY"
                     && matches!(
@@ -2449,7 +2460,16 @@ fn validate_citation_v1(value: &Value) -> bool {
     )
 }
 
-fn validate_endpoint_details_v1(details: &Map<String, Value>) -> bool {
+fn validate_endpoint_details_v1(code: &str, details: &Map<String, Value>) -> bool {
+    if code == "DAEMON_UNAVAILABLE" {
+        return details.get("schema").and_then(Value::as_str)
+            == Some("podway.endpoint-error-details/v2")
+            && (details.len() == 2
+                || (details.len() == 3
+                    && details
+                        .get("admission")
+                        .is_some_and(|value| validate_not_admitted_value_v1(Some(value)))));
+    }
     details.get("schema").and_then(Value::as_str) == Some("podway.endpoint-error-details/v1")
         && (details.len() == 1
             || validate_schema_and_not_admitted_v1(details, "podway.endpoint-error-details/v1"))
@@ -2487,9 +2507,9 @@ fn validate_schema_and_not_admitted_v1(details: &Map<String, Value>, schema: &st
 }
 
 fn validate_daemon_contract_mismatch_details_v1(details: &Map<String, Value>) -> bool {
-    if details.len() != 4
+    if details.len() != 5
         || details.get("schema").and_then(Value::as_str)
-            != Some("podway.daemon-contract-mismatch-details/v1")
+            != Some("podway.daemon-contract-mismatch-details/v2")
         || !validate_not_admitted_value_v1(details.get("admission"))
     {
         return false;
@@ -2520,11 +2540,12 @@ fn validate_revision_conflict_details_v1(details: &Map<String, Value>) -> bool {
         "job_sequence",
         "admission",
         "schema",
+        "recovery",
     ];
     if details.keys().any(|key| !ALLOWED.contains(&key.as_str())) {
         return false;
     }
-    if details.get("schema").and_then(Value::as_str) != Some("podway.revision-conflict-details/v1")
+    if details.get("schema").and_then(Value::as_str) != Some("podway.revision-conflict-details/v2")
     {
         return false;
     }
@@ -2550,11 +2571,12 @@ fn validate_attempt_conflict_details_v1(details: &Map<String, Value>) -> bool {
         "job_sequence",
         "admission",
         "schema",
+        "recovery",
     ];
     if details.keys().any(|key| !ALLOWED.contains(&key.as_str())) {
         return false;
     }
-    if details.get("schema").and_then(Value::as_str) != Some("podway.attempt-conflict-details/v1") {
+    if details.get("schema").and_then(Value::as_str) != Some("podway.attempt-conflict-details/v2") {
         return false;
     }
     let Some(expected) = details.get("expected_attempt_id").and_then(Value::as_str) else {
@@ -2577,10 +2599,13 @@ fn validate_attempt_conflict_details_v1(details: &Map<String, Value>) -> bool {
 }
 
 fn validate_wait_timeout_details_v1(details: &Map<String, Value>) -> bool {
-    details.get("schema").and_then(Value::as_str) == Some("podway.job-wait-timeout-details/v1")
-        && (details.len() == 1
-            || validate_schema_and_not_admitted_v1(details, "podway.job-wait-timeout-details/v1")
-            || (details.len() == 4
+    details.get("schema").and_then(Value::as_str) == Some("podway.job-wait-timeout-details/v2")
+        && (details.len() == 2
+            || (details.len() == 3
+                && details
+                    .get("admission")
+                    .is_some_and(|value| validate_not_admitted_value_v1(Some(value))))
+            || (details.len() == 5
                 && validate_job_fields_v1(details)
                 && details.get("admission").is_some_and(|admission| {
                     validate_admission_metadata_v1(admission, false)
@@ -2592,6 +2617,14 @@ fn validate_wait_timeout_details_v1(details: &Map<String, Value>) -> bool {
                                     == Some(sequence)
                         })
                 })))
+}
+
+fn validate_workspace_recovery_details_v1(details: &Map<String, Value>) -> bool {
+    details.get("schema").and_then(Value::as_str) == Some("podway.workspace-recovery-details/v1")
+        && match details.get("admission") {
+            None => details.len() == 2,
+            Some(value) => details.len() == 3 && validate_not_admitted_value_v1(Some(value)),
+        }
 }
 
 fn validate_blocker_limit_details_v1(details: &Map<String, Value>) -> bool {
@@ -2646,40 +2679,209 @@ fn validate_not_admitted_value_v1(value: Option<&Value>) -> bool {
     value.is_some_and(|value| validate_admission_metadata_v1(value, true).ok() == Some(None))
 }
 
+const RECOVERY_ERROR_CODES_V1: &[&str] = &[
+    "DAEMON_UNAVAILABLE",
+    "DAEMON_CONTRACT_MISMATCH",
+    "WORKSPACE_UUID_MISMATCH",
+    "WORKSPACE_STATE_UNREADABLE",
+    "WORKSPACE_SCHEMA_UNSUPPORTED",
+    "PROCEDURE_DIGEST_MISMATCH",
+    "SESSION_ID_MISMATCH",
+    "SESSION_REVISION_CONFLICT",
+    "ATTEMPT_NOT_CURRENT",
+    "ITEM_REVISION_CONFLICT",
+    "JOB_WAIT_TIMEOUT",
+    "MUTATION_OUTCOME_UNKNOWN",
+    "EVIDENCE_REFERENCE_STALE",
+    "GOAL_REVISION_STALE",
+];
+
+fn recovery_recipe_v1(code: &str, details: &Map<String, Value>) -> Option<Value> {
+    let (action, command, argv, reason) = match code {
+        "DAEMON_UNAVAILABLE" | "DAEMON_CONTRACT_MISMATCH" => (
+            "inspect_daemon",
+            "daemon.status",
+            json!(["podway", "--json", "daemon", "status"]),
+            "Inspect daemon and contract health before deciding on a lifecycle action.",
+        ),
+        "WORKSPACE_UUID_MISMATCH"
+        | "WORKSPACE_STATE_UNREADABLE"
+        | "WORKSPACE_SCHEMA_UNSUPPORTED" => (
+            "diagnose_workspace",
+            "workspace.doctor",
+            json!(["podway", "--json", "doctor"]),
+            "Inspect bounded workspace diagnostics before deciding on a recovery action.",
+        ),
+        "SESSION_ID_MISMATCH"
+        | "PROCEDURE_DIGEST_MISMATCH"
+        | "SESSION_REVISION_CONFLICT"
+        | "ATTEMPT_NOT_CURRENT"
+        | "ITEM_REVISION_CONFLICT"
+        | "EVIDENCE_REFERENCE_STALE"
+        | "GOAL_REVISION_STALE" => (
+            "refresh_state",
+            "session.observe",
+            json!(["podway", "--json", "observe", "--wait-for-idle"]),
+            "Re-read bounded current state before deriving another request.",
+        ),
+        "MUTATION_OUTCOME_UNKNOWN" => {
+            let key = details.get("idempotency_key")?.as_str()?;
+            (
+                "reconcile_mutation",
+                "job.lookup",
+                json!([
+                    "podway",
+                    "--json",
+                    "job",
+                    "lookup",
+                    "--idempotency-key",
+                    key
+                ]),
+                "Reconcile the original idempotency key before considering another mutation.",
+            )
+        }
+        "JOB_WAIT_TIMEOUT" => match details.get("job_id").and_then(Value::as_str) {
+            Some(job_id) => (
+                "wait_for_job",
+                "job.wait",
+                json!(["podway", "--json", "job", "wait", job_id]),
+                "Wait for the admitted job instead of resubmitting its mutation.",
+            ),
+            None => (
+                "refresh_state",
+                "session.observe",
+                json!(["podway", "--json", "observe", "--wait-for-idle"]),
+                "Re-read bounded current state before deriving another request.",
+            ),
+        },
+        _ => return None,
+    };
+    Some(json!({
+        "action": action,
+        "command": command,
+        "argv": argv,
+        "reason": reason,
+        "requires_explicit_authorization": false,
+    }))
+}
+
+fn validate_recovery_details_v1(
+    code: &str,
+    details: &Map<String, Value>,
+) -> Result<(), ProtocolError> {
+    let expected = recovery_recipe_v1(code, details);
+    if !RECOVERY_ERROR_CODES_V1.contains(&code) {
+        return if details.contains_key("recovery") {
+            Err(ProtocolError::InvalidErrorDetails {
+                code: code.to_owned(),
+            })
+        } else {
+            Ok(())
+        };
+    }
+    let Some(expected) = expected else {
+        return Err(ProtocolError::InvalidErrorDetails {
+            code: code.to_owned(),
+        });
+    };
+    let recovery = details.get("recovery").and_then(Value::as_object);
+    let valid = recovery.is_some_and(|recovery| {
+        recovery.len() == 5
+            && details.get("recovery") == Some(&expected)
+            && recovery
+                .get("action")
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.is_empty() && value.chars().count() <= 64)
+            && recovery
+                .get("command")
+                .and_then(Value::as_str)
+                .is_some_and(|value| {
+                    matches!(
+                        value,
+                        "session.observe"
+                            | "job.lookup"
+                            | "job.wait"
+                            | "daemon.status"
+                            | "workspace.doctor"
+                    )
+                })
+            && recovery
+                .get("argv")
+                .and_then(Value::as_array)
+                .is_some_and(|argv| {
+                    (2..=8).contains(&argv.len())
+                        && argv.iter().all(|value| {
+                            value.as_str().is_some_and(|value| {
+                                !value.is_empty() && value.chars().count() <= 256
+                            })
+                        })
+                })
+            && recovery
+                .get("reason")
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.is_empty() && value.chars().count() <= 256)
+            && recovery
+                .get("requires_explicit_authorization")
+                .and_then(Value::as_bool)
+                == Some(false)
+    });
+    if valid {
+        Ok(())
+    } else {
+        Err(ProtocolError::InvalidErrorDetails {
+            code: code.to_owned(),
+        })
+    }
+}
+
 /// Adds a stable schema identifier to each closed public error-detail family.
 pub fn ensure_error_details_schema_v1(code: &str, details: &mut Map<String, Value>) {
     if is_v2_runtime_error_code_v1(code) {
+        let schema = if RECOVERY_ERROR_CODES_V1.contains(&code) {
+            "podway.recoverable-v2-runtime-error-details/v1"
+        } else {
+            V2_RUNTIME_ERROR_DETAILS_SCHEMA_V1
+        };
         details
             .entry("schema".to_owned())
-            .or_insert_with(|| Value::String(V2_RUNTIME_ERROR_DETAILS_SCHEMA_V1.to_owned()));
+            .or_insert_with(|| Value::String(schema.to_owned()));
         details
             .entry("kind".to_owned())
             .or_insert_with(|| Value::String(code.to_owned()));
+        if let Some(recovery) = recovery_recipe_v1(code, details) {
+            details.insert("recovery".to_owned(), recovery);
+        }
         return;
     }
     let schema = match code {
-        "DAEMON_NOT_INSTALLED"
-        | "DAEMON_UNAVAILABLE"
-        | "DAEMON_SHUTTING_DOWN"
-        | "DAEMON_VERSION_INCOMPATIBLE" => "podway.endpoint-error-details/v1",
-        "DAEMON_CONTRACT_MISMATCH" => "podway.daemon-contract-mismatch-details/v1",
+        "DAEMON_UNAVAILABLE" => "podway.endpoint-error-details/v2",
+        "DAEMON_NOT_INSTALLED" | "DAEMON_SHUTTING_DOWN" | "DAEMON_VERSION_INCOMPATIBLE" => {
+            "podway.endpoint-error-details/v1"
+        }
+        "DAEMON_CONTRACT_MISMATCH" => "podway.daemon-contract-mismatch-details/v2",
         "SOCKET_ENDPOINT_INVALID" => "podway.socket-endpoint-error-details/v1",
         "SESSION_REVISION_CONFLICT" | "ITEM_REVISION_CONFLICT" => {
-            "podway.revision-conflict-details/v1"
+            "podway.revision-conflict-details/v2"
         }
-        "ATTEMPT_NOT_CURRENT" => "podway.attempt-conflict-details/v1",
+        "ATTEMPT_NOT_CURRENT" => "podway.attempt-conflict-details/v2",
         "IDEMPOTENCY_KEY_REUSED" => "podway.idempotency-key-reused-details/v1",
-        "JOB_WAIT_TIMEOUT" => "podway.job-wait-timeout-details/v1",
+        "JOB_WAIT_TIMEOUT" => "podway.job-wait-timeout-details/v2",
         "BLOCKER_LIMIT_REACHED" => "podway.blocker-limit-details/v1",
-        "WORKSPACE_UUID_MISMATCH" => "podway.workspace-uuid-mismatch-details/v1",
-        "SESSION_ID_MISMATCH" => "podway.session-id-mismatch-details/v1",
-        "PROCEDURE_DIGEST_MISMATCH" => "podway.procedure-digest-mismatch-details/v1",
-        "MUTATION_OUTCOME_UNKNOWN" => "podway.mutation-outcome-unknown-details/v1",
+        "WORKSPACE_UUID_MISMATCH" => "podway.workspace-uuid-mismatch-details/v2",
+        "WORKSPACE_STATE_UNREADABLE" | "WORKSPACE_SCHEMA_UNSUPPORTED" => {
+            "podway.workspace-recovery-details/v1"
+        }
+        "SESSION_ID_MISMATCH" => "podway.session-id-mismatch-details/v2",
+        "PROCEDURE_DIGEST_MISMATCH" => "podway.procedure-digest-mismatch-details/v2",
+        "MUTATION_OUTCOME_UNKNOWN" => "podway.mutation-outcome-unknown-details/v2",
         _ => return,
     };
     details
         .entry("schema".to_owned())
         .or_insert_with(|| Value::String(schema.to_owned()));
+    if let Some(recovery) = recovery_recipe_v1(code, details) {
+        details.insert("recovery".to_owned(), recovery);
+    }
 }
 
 impl<'de> Deserialize<'de> for ErrorEnvelopeV1 {

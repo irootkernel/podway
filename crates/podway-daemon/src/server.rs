@@ -1055,7 +1055,7 @@ where
             return self.transport_error_response(Some(context), TransportErrorKindV1::Internal);
         };
         let details = serde_json::json!({
-            "schema": "podway.mutation-outcome-unknown-details/v1",
+            "schema": "podway.mutation-outcome-unknown-details/v2",
             "outcome": "unknown",
             "idempotency_key": idempotency_key.as_str(),
             "reconcile": {

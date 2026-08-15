@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:recoverable-v2-runtime-error-details:v1",
+  "title": "Podway Recoverable Procedure v2 Runtime Error Details v1",
+  "oneOf": [
+    { "$ref": "#/$defs/evidenceReferenceStale" },
+    { "$ref": "#/$defs/goalRevisionStale" }
+  ],
+  "$defs": {
+    "base": {
+      "type": "object",
+      "required": ["schema", "kind", "recovery"],
+      "properties": {
+        "schema": { "const": "podway.recoverable-v2-runtime-error-details/v1" },
+        "kind": { "type": "string" },
+        "admission": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/admission" },
+        "recovery": { "$ref": "urn:podway:schema:recovery-recipe:v1" }
+      }
+    },
+    "identifier": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" },
+    "attemptId": { "type": "string", "format": "uuid" },
+    "revision": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 },
+    "evidenceReferenceStale": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "required": ["graph_node_id", "source_graph_node_id", "expected_source_attempt_id", "current_source_attempt_id"],
+          "properties": {
+            "kind": { "const": "EVIDENCE_REFERENCE_STALE" },
+            "graph_node_id": { "$ref": "#/$defs/identifier" },
+            "source_graph_node_id": { "$ref": "#/$defs/identifier" },
+            "expected_source_attempt_id": { "$ref": "#/$defs/attemptId" },
+            "current_source_attempt_id": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/attemptId" }] }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "goalRevisionStale": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "required": ["expected_goal_revision", "actual_goal_revision"],
+          "properties": {
+            "kind": { "const": "GOAL_REVISION_STALE" },
+            "expected_goal_revision": { "$ref": "#/$defs/revision" },
+            "actual_goal_revision": { "$ref": "#/$defs/revision" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}
