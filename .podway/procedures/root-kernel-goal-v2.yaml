@@ -1,0 +1,145 @@
+schema: podway.procedure/v2
+id: root-kernel-goal-v2
+version: "1"
+name: Root Kernel Goal
+purpose: Deliver one epic member, remediation, or closeout goal with current evidence.
+description: A flexible goal-centered Podway procedure for epic-handler work.
+goal_tracking: true
+node_definitions:
+  work-record:
+    type: action
+    title: Complete the goal work
+    intent: Record the bounded implementation, investigation, documentation, and lifecycle work.
+    items:
+      - id: work-summary
+        type: text
+        prompt: Record the completed goal work and task-owned boundary.
+        required: true
+        min_length: 1
+        max_length: 5000
+        multiline: true
+      - id: source-revision
+        type: text
+        prompt: Record HEAD and the goal-owned dirty-tree identity.
+        required: true
+        min_length: 1
+        max_length: 512
+        multiline: true
+  evidence-record:
+    type: action
+    title: Record verification and review
+    intent: Record current checks and complete Mulgae evidence for this goal.
+    items:
+      - id: evidence-summary
+        type: text
+        prompt: Record commands, exit statuses, review target, run identity, coverage, publication, findings, and gaps.
+        required: true
+        min_length: 1
+        max_length: 7000
+        multiline: true
+      - id: unresolved-valid-findings
+        type: integer
+        prompt: Record the number of unresolved valid findings.
+        required: true
+  evidence-decision:
+    type: decision
+    title: Evaluate goal evidence
+    objective: Only complete current evidence without valid findings may proceed.
+    prompt: Does the current evidence support this goal?
+    evidence_guidance:
+      - Read the goal work, checks, Mulgae status, and finding dispositions.
+    options:
+      - id: supported
+        label: Evidence supports goal
+        criteria: Required checks and review are complete with no unresolved valid finding.
+      - id: rework-required
+        label: Rework required
+        criteria: Evidence failed, is stale or incomplete, or a valid finding remains.
+    reason:
+      required: true
+      prompt: Explain the selection using the recorded evidence.
+  goal-assessment:
+    type: decision
+    title: Assess the goal
+    objective: Determine whether the current goal revision is achieved.
+    prompt: What is the outcome of the current goal?
+    evidence_guidance:
+      - Read the latest work and evidence records and assess every goal criterion.
+    options:
+      - id: achieved
+        label: Goal achieved
+        criteria: Fresh criterion assessments support the current goal revision.
+      - id: not-achieved
+        label: Goal not achieved
+        criteria: Fresh evidence does not support the current goal revision.
+      - id: superseded
+        label: Goal superseded
+        criteria: The current goal revision is no longer desired.
+    reason:
+      required: true
+      prompt: Explain the outcome using criterion assessments and evidence.
+    assessment:
+      target: session_goal
+      outcomes:
+        achieved: achieved
+        not-achieved: not_achieved
+        superseded: superseded
+  closeout-record:
+    type: action
+    title: Record goal closeout
+    intent: Record roadmap, commit, worktree, and publication handoff state.
+    items:
+      - id: closeout-summary
+        type: text
+        prompt: Record the outcome, roadmap state, commit, residue, and publication state.
+        required: true
+        min_length: 1
+        max_length: 3000
+        multiline: true
+graph:
+  entry: complete-work
+  nodes:
+    - id: complete-work
+      use: work-record
+      next: record-evidence
+    - id: record-evidence
+      use: evidence-record
+      next: decide-evidence
+    - id: decide-evidence
+      use: evidence-decision
+      evidence_from:
+        - node: complete-work
+          required: true
+        - node: record-evidence
+          required: true
+      routes:
+        supported:
+          to: assess-goal
+          effect: advance
+        rework-required:
+          to: complete-work
+          effect: rework
+    - id: assess-goal
+      use: goal-assessment
+      evidence_from:
+        - node: complete-work
+          required: true
+        - node: record-evidence
+          required: true
+      routes:
+        achieved:
+          to: closeout
+          effect: advance
+        not-achieved:
+          to: closeout
+          effect: advance
+        superseded:
+          to: closeout
+          effect: advance
+    - id: closeout
+      use: closeout-record
+      terminal: true
+manual_rework:
+  allowed_targets:
+    - complete-work
+    - record-evidence

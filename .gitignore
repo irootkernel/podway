@@ -11,13 +11,24 @@
 **/target/
 
 # Podway local runtime state and SQLite sidecars
-/.podway/
 *.sqlite3-shm
 *.sqlite3-wal
 
-# Mulgae and Gaori local configuration and evidence
-/.mulgae/
-/.gaori/
+# Mulgae shared policy and local state
+/.mulgae/*
+!/.mulgae/config.yaml
+
+# Gaori portable policy and local state
+/.gaori/*
+!/.gaori/tester.yaml
+!/.gaori/tester/
+/.gaori/tester/*
+!/.gaori/tester/rules/
+/.gaori/tester/rules/*
+!/.gaori/tester/rules/*.yaml
+
+# Project-local Codex MCP configuration
+/.codex/config.toml
 
 # Test, coverage, and temporary artifacts
 /coverage/

@@ -206,6 +206,16 @@ Apply these distinctions as well:
 - Do not rewrite accepted ADR decisions. Add a new ADR with the next identifier and
   link supersession in both records when an architectural decision changes.
 
+## Development skill references
+
+- Use `$root-kernel:task-handler` for one named roadmap task.
+- Use `$root-kernel:dev-setup` to diagnose or configure development tooling.
+- Use `$use-mulgae` for an authorized Mulgae review, run inspection, finding
+  follow-up, configuration diagnosis, cleanup plan, or recovery.
+- Use `$use-gaori` when a selected long or noisy check is routed through Gaori
+  or existing Gaori evidence must be inspected.
+- Repository-specific rules below override defaults from the referenced skills.
+
 ## Verification
 
 - Run an exact focused test first when practical. Cargo integration tests are
@@ -227,91 +237,43 @@ Apply these distinctions as well:
 - After any formatting, generation, test, or release command, inspect `git status`
   and the complete diff so generated or evidence changes are intentional.
 
-### Mulgae Code Review
+### Mulgae Code Review Overrides
 
-Use Mulgae only when master explicitly asks for a Mulgae review. Mulgae is an
-advisory reviewer, not an acceptance, merge, or release authority.
+- Outside the `$root-kernel:task-handler` workflow, use Mulgae only when master
+  explicitly requests a review. An explicit task-handler invocation authorizes
+  its task-scoped Mulgae review phase.
+- Configure the `logic`, `security`, `maintainability`, `product`,
+  `documentation`, and `testing` roles with ZCode as their only provider and a
+  `60m` provider timeout.
+- Use `--diff origin/main...HEAD` for a branch or pull request, `--stage` for
+  staged changes, `--dirty` for staged and unstaged changes, or `--workspace`
+  only when master explicitly requests all tracked files. Preflight the same
+  target and confirm the captured paths and ZCode-only routing before review.
+- Track `.mulgae/config.yaml` and `.mulgaeignore`. Keep `.mulgae/local.yaml`,
+  every other `.mulgae/**` path, provider homes, credentials, raw transcripts,
+  diagnostics, and exported review bundles untracked and private.
 
-- Run Mulgae from the repository root. Before a review, verify that
-  `mulgae version --json` succeeds and that `.mulgae/config.yaml` exists and is
-  admitted by `mulgae config --mode effective --output json`. Do not require or
-  compare a specific Mulgae version.
-- Do not install, upgrade, or initialize Mulgae unless master explicitly asks.
-  When installation is authorized, use
-  `go install github.com/irootkernel/mulgae@latest`; never persist a tool version
-  requirement. Project initialization must configure the `logic`, `security`,
-  `maintainability`, `product`, `documentation`, and `testing` roles with ZCode
-  as their only provider.
-- Select exactly one target matching the requested scope: use
-  `--diff origin/main...HEAD` for a branch or pull request, `--stage` for staged
-  changes, `--dirty` for staged and unstaged changes, or `--workspace` only when
-  master explicitly requests all tracked files. Before spending provider time,
-  run the same target with `--preflight --output json` and confirm the captured
-  paths and ZCode-only role routing.
-- State the review goal with `--objective` and use `--output json`. Preserve the
-  returned run ID and inspect the run with
-  `mulgae status --run <run-id> --output json` and
-  `mulgae findings --run <run-id> --severity low --output json`.
-- Read the JSON result even when Mulgae exits with status 1: status 1 is a policy
-  outcome, not an operational failure. Treat any status other than 0 or 1 as an
-  operational failure and report it instead of bypassing Mulgae.
-- Treat every finding as an advisory hypothesis. Verify it against the captured
-  target and current code before changing anything, and make fixes only within
-  master's authorized scope. After an authorized fix, use the original run and
-  finding IDs with `mulgae followup` against a target containing the fix.
-- Keep the entire `.mulgae/` directory, provider credential directories, raw
-  transcripts, and exported review bundles out of Git and do not share them.
+### Gaori Test Evidence Overrides
 
-### Gaori Test Evidence
+Route long or noisy repository checks through these configured command IDs:
 
-The repository verification rules above remain authoritative. Gaori is an optional
-local execution and evidence-compression adapter, not an additional test gate or
-acceptance authority.
+- preparation and static checks: `prepare`;
+- unit tests: `unit`;
+- integration tests: `integration`;
+- end-to-end tests: `e2e`;
+- complete development gate: `full`;
+- complete distribution gate, only for release readiness: `dist`.
 
-When a required check is expected to produce long or noisy output, prefer running
-it through Gaori from the repository root:
-
-- preparation and static checks: `gaori --json run prepare`;
-- unit tests: `gaori --json run unit`;
-- integration tests: `gaori --json run integration`;
-- end-to-end tests: `gaori --json run e2e`;
-- complete development gate: `gaori --json run full`;
-- complete distribution gate, only when release readiness is in scope:
-  `gaori --json run dist`.
-
-For a dynamically selected Rust test, use a tagged ad-hoc run with the generic
-parser:
+For a dynamically selected Rust test, use:
 
 ```bash
-gaori --json run --tag rust --tag unit -- \
-  cargo test -p <package> --test int_suite <source>::<function> -- --exact
+gaori --json run --tag rust --tag unit -- cargo test -p <package> --test int_suite <source>::<function> -- --exact
 ```
 
-Before the first Gaori run in a task, verify that `gaori --version` succeeds. Do
-not require or compare a specific Gaori version. Configured commands require the
-local `.gaori/tester.yaml`. If the binary or compatible local config is unavailable,
-run the underlying Make or Cargo command documented by the repository and report
-that Gaori evidence compression was unavailable. Do not install or upgrade Gaori
-unless master explicitly asks. When installation is authorized, use
-`go install github.com/irootkernel/gaori@latest`; never persist a tool version
-requirement.
-
-The wrapped command's exit code is authoritative for pass/fail. `extractor_status`
-describes evidence quality only and never changes the result. Tags select project
-rules, not parsers, and specialized parsers do not automatically fall back to
-`generic`.
-
-When a command passes, do not open its generated logs by default. When it does not
-pass, inspect `*.summary.md` first, followed by `*.summary.json` or a bounded
-excerpt. Read only a bounded raw-log section when compact evidence is insufficient
-or degraded. Raw logs are unredacted and may contain secrets.
-
-Keep the entire `.gaori/` directory out of Git. Do not add or commit its config,
-rules, toolchain metadata, proposals, or evidence. In the final report, include the
-Gaori command, process exit code, artifact `status`, `extractor_status`, relevant
-summary and raw-log paths, and skipped checks. Gaori evidence alone does not
-establish review acceptance, development readiness, release readiness, or runtime
-activation.
+Track portable `.gaori/tester.yaml` and explicitly reviewed
+`.gaori/tester/rules/*.yaml`. Keep toolchain metadata, rule proposals, runs,
+and every other `.gaori/**` path local; never stage configuration or rules
+without explicit authorization.
 
 ### Commit Messages and Lore
 

@@ -1,0 +1,40 @@
+version: 2
+commands:
+  prepare:
+    command: ["make", "test-prepare"]
+    tags: [rust, static]
+    parser: generic
+    timeout_sec: 3600
+  unit:
+    command: ["make", "test-unit"]
+    tags: [rust, unit]
+    parser: cargo-test
+    timeout_sec: 3600
+  integration:
+    command: ["make", "test-int"]
+    tags: [rust, integration]
+    parser: cargo-test
+    timeout_sec: 3600
+  e2e:
+    command: ["make", "test-e2e"]
+    tags: [rust, e2e]
+    parser: generic
+    timeout_sec: 3600
+  full:
+    command: ["make", "test"]
+    tags: [rust, full]
+    parser: generic
+    timeout_sec: 14400
+  dist:
+    command: ["make", "dist"]
+    tags: [rust, release, distribution]
+    parser: generic
+    timeout_sec: 28800
+redaction:
+  patterns:
+    - name: credential-assignment
+      regex: '(?i)\b(authorization|api[_-]?key|token|secret|password)=\S+'
+      replace: '$1=<redacted>'
+    - name: bearer-token
+      regex: '(?i)(Bearer)\s+\S+'
+      replace: '$1 <redacted>'
