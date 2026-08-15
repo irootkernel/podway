@@ -28,7 +28,13 @@ Podway is not a project manager, CI system, command runner, Git automation layer
 
 ### For AI agents and harnesses
 
-Scripts and AI agents use the same public contract as humans. `podway status --json` and `podway next --json` return the authoritative task state, so an agent re-derives what happens next from the worktree instead of from its conversation history. Sessions survive context loss and transfer between actors mid-task, and mutations accept explicit preconditions and idempotency keys so retried or concurrent callers cannot corrupt state. See the [Procedure v2 workflow](docs/examples/v2-workflow.md).
+Scripts and AI agents use the same public contract as humans. The single
+`podway observe --json --wait-for-idle` command returns one authoritative,
+self-contained task observation, so an agent re-derives what happens next from
+the worktree instead of from its conversation history. Sessions survive context
+loss and transfer between actors mid-task, and mutations accept explicit
+preconditions and idempotency keys so retried or concurrent callers cannot
+corrupt state. See the [Procedure v2 workflow](docs/examples/v2-workflow.md).
 
 ## Requirements
 

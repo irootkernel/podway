@@ -16,7 +16,7 @@ authorization.
 ## Stale state
 
 1. Preserve the rejected request and its idempotency key.
-2. Run `podway status --json` and `podway next --json` again.
+2. Run `podway observe --json --wait-for-idle` again.
 3. Compare session, attempt, goal, and item identities and revisions with the rejected request.
 4. If another mutation already achieved the intended state, do not repeat it.
 5. Otherwise derive a new request from current state with new applicable preconditions. Reuse an idempotency key only for the identical canonical request; use a new key for a changed request.
@@ -38,7 +38,7 @@ If Podway reports `MUTATION_OUTCOME_UNKNOWN`, the mutation may have been durably
 
 3. If a job exists, inspect or wait for that job with the exact commands from `podway help job.status` and `podway help job.wait`.
 4. If no job was admitted, resubmit the identical request with the same key.
-5. Re-read status and next before taking another mutation.
+5. Re-read `podway observe --json --wait-for-idle` before taking another mutation.
 
 `JOB_WAIT_TIMEOUT` is a retryable exit-4 result meaning the wait expired while the admitted job may still complete. A wait timeout or a client disconnect never cancels an admitted mutation, so inspect the job with the job status and wait commands instead of resubmitting the request. `job cancel` succeeds only for a job that is still queued.
 

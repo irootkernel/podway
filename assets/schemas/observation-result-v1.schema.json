@@ -21,7 +21,7 @@
     },
     "mutation_templates": {
       "type": "array",
-      "maxItems": 192,
+      "maxItems": 384,
       "items": { "$ref": "#/$defs/mutationTemplate" }
     }
   },

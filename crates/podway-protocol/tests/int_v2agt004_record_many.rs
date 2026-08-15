@@ -99,6 +99,80 @@ fn v2agt004_stdin_accepts_exactly_64_operations_and_rejects_65() {
 }
 
 #[test]
+fn v2agt007_stdin_schema_and_decoder_share_public_string_bounds() {
+    let schema: Value = serde_json::from_slice(include_bytes!(
+        "../../../assets/schemas/item-record-many-input-v1.schema.json"
+    ))
+    .unwrap();
+    assert_eq!(schema["properties"]["idempotency_key"]["maxLength"], 256);
+    let record_variants = schema["$defs"]["recordValue"]["oneOf"].as_array().unwrap();
+    for field in ["path", "reference"] {
+        let variant = record_variants
+            .iter()
+            .find(|variant| variant["properties"].get(field).is_some())
+            .unwrap();
+        assert_eq!(variant["properties"][field]["maxLength"], 4_000);
+    }
+
+    let document = |idempotency_key: String, artifact_field: &str, artifact_value: String| {
+        let mut document: Value = serde_json::from_slice(&input(json!([{
+            "item_id": "artifact",
+            "expected_item_revision": 0,
+            "record": {
+                "type": "artifact",
+                "reference": "placeholder",
+                "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "size_bytes": 0,
+                "media_type": "text/plain"
+            }
+        }])))
+        .unwrap();
+        document["idempotency_key"] = json!(idempotency_key);
+        let record = &mut document["operations"][0]["record"];
+        if artifact_field == "path" {
+            record.as_object_mut().unwrap().remove("reference");
+            record.as_object_mut().unwrap().remove("digest");
+            record.as_object_mut().unwrap().remove("size_bytes");
+        }
+        record[artifact_field] = json!(artifact_value);
+        serde_json::to_vec(&document).unwrap()
+    };
+
+    assert!(
+        decode_item_record_many_input_v1(&document(
+            "k".repeat(256),
+            "reference",
+            "r".repeat(4_000),
+        ))
+        .is_ok()
+    );
+    assert!(
+        decode_item_record_many_input_v1(&document(
+            "k".repeat(257),
+            "reference",
+            "r".repeat(4_000),
+        ))
+        .is_err()
+    );
+    assert!(
+        decode_item_record_many_input_v1(&document(
+            "key".to_owned(),
+            "reference",
+            "r".repeat(4_001),
+        ))
+        .is_err()
+    );
+    assert!(
+        decode_item_record_many_input_v1(&document("key".to_owned(), "path", "p".repeat(4_000),))
+            .is_ok()
+    );
+    assert!(
+        decode_item_record_many_input_v1(&document("key".to_owned(), "path", "p".repeat(4_001),))
+            .is_err()
+    );
+}
+
+#[test]
 fn v2agt004_route_is_durable_and_semantically_item_order_independent() {
     let selector = json!({
         "version": 1,

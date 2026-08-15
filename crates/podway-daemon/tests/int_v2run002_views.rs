@@ -3290,6 +3290,111 @@ fn v2run002_maxish_projector_outputs_remain_within_window_and_frame_budgets() {
     }
 }
 
+fn maximum_satisfied_confirm_state() -> GraphSessionStateV2 {
+    let items = (0..64)
+        .map(|index| {
+            json!({
+                "id": format!("confirm-{index:02}"),
+                "type": "confirm",
+                "prompt": "Confirm the bounded result.",
+                "required": true
+            })
+        })
+        .collect::<Vec<_>>();
+    let source = serde_json::to_vec(&json!({
+        "schema": "podway.procedure/v2",
+        "id": "maximum-satisfied-confirm-observation",
+        "version": "2",
+        "name": "Maximum satisfied confirm observation",
+        "purpose": "Exercise the maximum dense observation mutation-template set.",
+        "node_definitions": {
+            "finish": {
+                "type": "action",
+                "title": "Confirm every result",
+                "intent": "Record the bounded confirmations.",
+                "items": items
+            }
+        },
+        "graph": {
+            "entry": "finish",
+            "nodes": [{"id": "finish", "use": "finish", "terminal": true}]
+        },
+        "manual_rework": {"allowed_targets": ["finish"]}
+    }))
+    .unwrap();
+    let base = fresh_state("maximum-satisfied-confirm-observation.json", &source);
+    let active = base.workflow_memory().attempts().first().unwrap();
+    let slots = active
+        .item_slots()
+        .iter()
+        .map(|slot| {
+            ItemSlotStateV2::new(
+                slot.attempt_id().clone(),
+                slot.item_id().clone(),
+                slot.item_type(),
+                Revision::new(1),
+                Some(RecordedItemValueV2::confirm()),
+                slot.created_at(),
+                UnixMillis::new(slot.created_at().get() + 1),
+            )
+            .unwrap()
+        })
+        .collect();
+    let memory =
+        AttemptWorkflowMemoryV2::new(active.attempt_id().clone(), slots, Vec::new(), Vec::new())
+            .unwrap();
+    GraphSessionStateV2::new_with_goal_state(
+        base.workspace_revision(),
+        base.task_title(),
+        base.snapshot().clone(),
+        base.trace().clone(),
+        base.counters().to_vec(),
+        base.attempt_metadata().to_vec(),
+        WorkflowMemoryStateV2::new(vec![memory], Vec::new(), Vec::new()).unwrap(),
+        base.goal_state().clone(),
+        base.created_at(),
+        base.completed_at(),
+        base.cancelled_at(),
+        base.cancel_reason().map(str::to_owned),
+    )
+    .unwrap()
+}
+
+#[test]
+fn v2agt007_dense_observation_templates_fit_the_public_schema_and_frame() {
+    let observation = project_graph_observation_v1(&view(maximum_satisfied_confirm_state()))
+        .expect("maximum dense observation must project");
+    let templates = observation["mutation_templates"].as_array().unwrap();
+    assert!(
+        templates.len() > 192,
+        "the fixture must exercise the former under-sized schema limit"
+    );
+    let schema: Value = serde_json::from_slice(include_bytes!(
+        "../../../assets/schemas/observation-result-v1.schema.json"
+    ))
+    .unwrap();
+    let schema_maximum = schema["properties"]["mutation_templates"]["maxItems"]
+        .as_u64()
+        .unwrap() as usize;
+    assert!(
+        templates.len() <= schema_maximum,
+        "{} templates exceed the public schema maximum {schema_maximum}",
+        templates.len()
+    );
+    for action in observation["guidance"]["allowed_actions"]
+        .as_array()
+        .unwrap()
+    {
+        assert!(
+            templates
+                .iter()
+                .any(|template| template["command"] == *action),
+            "dense observation omitted a template for {action}"
+        );
+    }
+    assert_output_v2("session.observe", observation);
+}
+
 #[test]
 fn v2run002_terminal_status_preserves_goal_without_a_current_attempt() {
     for (lifecycle, expected) in [

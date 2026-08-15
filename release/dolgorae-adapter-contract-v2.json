@@ -1057,7 +1057,7 @@
       {
         "id": "urn:podway:schema:item-record-many-input:v1",
         "path": "schemas/item-record-many-input-v1.schema.json",
-        "sha256": "sha256:7cd4ae9c4ca8111cf309a141790ca59182e31da2cff466e5c1f429a0df9c4f16"
+        "sha256": "sha256:af8919610c39bc923c937223ae2011c154434dd8b274e414e98c938d03f1f503"
       },
       {
         "id": "urn:podway:schema:item-record-many-result:v1",
@@ -1092,7 +1092,7 @@
       {
         "id": "urn:podway:schema:observation-result:v1",
         "path": "schemas/observation-result-v1.schema.json",
-        "sha256": "sha256:40d25ebb6f0abf708eed23457816cb4ab896e8d66ef1bc82950d48f67eaf4323"
+        "sha256": "sha256:159a649dfd698805d33f4cea6aaaf60622519f1e84c6df08bb923cc360e7362c"
       },
       {
         "id": "urn:podway:schema:output:v3",

@@ -136,8 +136,8 @@ podway --json complete \
 ```
 
 If an action or decision attempt must be discarded and repeated, use retry. A
-successful retry creates a fresh attempt; re-read status before recording any
-new item:
+successful retry creates a fresh attempt. Before recording any new item, re-run
+`podway observe --json --wait-for-idle`:
 
 ```bash
 podway --json retry \
@@ -166,8 +166,8 @@ podway --json decide \
 ```
 
 The success result exposes `result.effect`, `result.target_graph_node_id`,
-`result.target_attempt_id`, and `result.revision`. Re-read status instead of
-inferring later state from these fields alone.
+`result.target_attempt_id`, and `result.revision`. Do not infer later state from
+these fields alone; instead, re-run `podway observe --json --wait-for-idle`.
 
 ## Rework and revise the goal
 

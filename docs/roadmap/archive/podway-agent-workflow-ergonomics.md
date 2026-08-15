@@ -2,16 +2,16 @@
 
 ## Status and authority
 
-- Document state: `Adopted`
+- Document state: `Historical`
 - Owning roadmap epic: `V2AGT`
 - Intended release train: post-v0.2.1 unreleased work
 - Product version in this epic: unchanged
 - Contract target: Procedure v2, `podway.output/v3`, and additive public routes
 
-This dossier is the decision-complete implementation authority for unfinished
-`V2AGT` work. The active roadmap owns task order and status. Accepted ADRs,
-canonical assets, executable contracts, and current specifications retain their
-normal precedence.
+This dossier records the completed design authority for historical `V2AGT`
+work. The active roadmap owns final task status. Accepted ADRs, canonical
+assets, executable contracts, and current specifications retain their normal
+precedence.
 
 ## Verified context
 

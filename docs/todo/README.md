@@ -62,7 +62,6 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 Current adopted dossiers:
 
 - [Podway v0.1.2 contract recovery and native release](TODO-podway-v0.1.2-contract-recovery.md)
-- [Podway agent workflow ergonomics](TODO-podway-agent-workflow-ergonomics.md)
 
 Historical path-retained dossiers:
 
