@@ -27,6 +27,8 @@ REQUIRED_MAKE_TARGETS = (
     "test-prepare",
     "release-prepare",
     "dist-preflight",
+    "patch-release-preflight",
+    "release-version-check",
     "lint-all",
     "test-rust",
     "test-unit",
@@ -39,6 +41,7 @@ REQUIRED_MAKE_TARGETS = (
     "preset-tool-test",
     "dev-runtime-test",
     "dist",
+    "dist-patch",
     "contract-manifest",
 )
 REQUIRED_TEST_SEQUENCE = (
@@ -56,6 +59,7 @@ REQUIRED_PREPARE_COMMANDS = (
     "cargo deny check",
     "python3 tools/verify_test_layout.py --check",
     "python3 tools/verify_quality_contracts.py",
+    "python3 tools/verify_patch_release.py self-test",
     "python3 tools/create_dolgorae_handoff.py self-test",
     "python3 tools/verify_contracts.py --check",
     "python3 tools/verify_preset_tooling.py --podway",
@@ -83,6 +87,26 @@ REQUIRED_RELEASE_COMMANDS = (
     "tools/qualify_distribution.py qualify",
     "tools/create_dolgorae_handoff.py create",
     "tools/verify_release_bundle.py verify",
+)
+REQUIRED_PATCH_RELEASE_COMMANDS = (
+    "$(MAKE) patch-release-preflight",
+    "$(MAKE) test-prepare",
+    "$(MAKE) test-unit",
+    "$(MAKE) test-int",
+    "cargo build --release --locked",
+    "$(MAKE) release-version-check",
+    "tools/release_archive.py package",
+    "--gate patch",
+    "tools/create_dolgorae_handoff.py create",
+    "tools/verify_release_bundle.py verify",
+)
+FORBIDDEN_PATCH_RELEASE_COMMANDS = (
+    "$(MAKE) test",
+    "$(MAKE) release-prepare",
+    "$(MAKE) test-fuzzing",
+    "$(MAKE) test-e2e",
+    "$(MAKE) dev-runtime-test",
+    "tools/qualify_distribution.py qualify",
 )
 CRATE_ORDER = (
     "podway-core",
@@ -777,10 +801,34 @@ def validate_makefile_contract(root: Path) -> int:
             "Makefile dist target does not run the complete release gate in order",
             "makefile_contract_drift",
         )
+    patch_recipe = re.search(r"^dist-patch\s*:\s*\n((?:\t.*\n)+)", text, flags=re.MULTILINE)
+    if patch_recipe is None:
+        fail("Makefile dist-patch target has no recipe", "makefile_contract_drift")
+    patch_text = patch_recipe.group(1)
+    patch_positions = [patch_text.find(command) for command in REQUIRED_PATCH_RELEASE_COMMANDS]
+    if any(position < 0 for position in patch_positions) or patch_positions != sorted(
+        patch_positions
+    ):
+        fail(
+            "Makefile dist-patch target does not run the reduced release gate in order",
+            "makefile_contract_drift",
+        )
+    patch_lines = [line.strip() for line in patch_text.splitlines()]
+    forbidden_patch = [
+        command
+        for command in FORBIDDEN_PATCH_RELEASE_COMMANDS
+        if any(line == command or line.startswith(f"{command} ") for line in patch_lines)
+    ]
+    if forbidden_patch:
+        fail(
+            f"Makefile dist-patch target contains full-gate commands: {forbidden_patch}",
+            "makefile_contract_drift",
+        )
     return (
         len(REQUIRED_MAKE_TARGETS)
         + len(REQUIRED_PREPARE_COMMANDS)
         + len(REQUIRED_RELEASE_PREPARE_COMMANDS)
+        + len(REQUIRED_PATCH_RELEASE_COMMANDS)
     )
 
 

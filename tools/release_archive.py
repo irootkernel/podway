@@ -717,17 +717,16 @@ def release_status() -> dict[str, str]:
     notes = (ROOT / "RELEASE_NOTES.md").read_text(encoding="utf-8")
     required = (
         "Podway 0.2.3 is a release candidate and has not been published",
-        "During LaunchAgent replacement",
-        "`podway daemon install`",
+        "## Changes since",
         "three built-in Procedure v2 presets",
         "fails closed with `LEGACY_PROCEDURE_STATE_UNSUPPORTED`",
         "podway-0.2.3-aarch64-apple-darwin.tar.gz.sha256",
         "podway-0.2.3-aarch64-apple-darwin.dolgorae-handoff.json",
         "native Apple Silicon macOS",
         "same-user local tool",
-        "qualified release candidate admits Procedure v2 sessions normally",
+        "release candidate admits Procedure v2 sessions normally",
         "does not contain the development-only admission unlock",
-        "publish only the unchanged qualified artifacts after explicit release authorization",
+        "after explicit release authorization",
         "No MCP server or MCP transport is included",
         "unsigned and not notarized",
     )
@@ -746,6 +745,9 @@ def write_json(path: Path, value: Any) -> None:
 
 def package(arguments: argparse.Namespace) -> dict[str, Any]:
     validate_package_mode(arguments.artifact_class, arguments.allow_dirty)
+    gate = getattr(arguments, "gate", "full")
+    if arguments.artifact_class != "distribution" and gate != "full":
+        fail("patch gate is valid only for distribution artifacts")
     require_native_host()
     dirty = require_clean_tree(arguments.allow_dirty)
     source_commit = run(["git", "rev-parse", "HEAD"], label="source commit probe").decode().strip()
@@ -796,19 +798,23 @@ def package(arguments: argparse.Namespace) -> dict[str, Any]:
             "cargo_lock_sha256": sha256_file(ROOT / "Cargo.lock"),
             "contract_manifest_digest": contract_receipt["contract_manifest_digest"],
             "contract_manifest_schema": contract_receipt["contract_manifest_schema"],
-            "packaged_conformance": {
-                "result": release_evidence.PENDING,
-                "scenarios": release_evidence.PACKAGED_CONFORMANCE_SCENARIOS,
-            },
             "product": release_evidence.PRODUCT,
             "release_gate": (
                 "test-fixture"
                 if arguments.artifact_class == "test-fixture"
-                else "make test + fuzzing: passed"
+                else (
+                    release_evidence.PATCH_RELEASE_GATE
+                    if gate == "patch"
+                    else release_evidence.RELEASE_GATE
+                )
             ),
             "release_gate_result": release_evidence.PASSED,
             "release_status": release_status(),
-            "schema": "podway.release-provenance/v1",
+            "schema": (
+                release_evidence.PATCH_PROVENANCE_SCHEMA
+                if gate == "patch"
+                else release_evidence.PROVENANCE_SCHEMA
+            ),
             "source_commit": source_commit,
             "source_dirty": dirty,
             "source_tree": source_tree,
@@ -816,6 +822,11 @@ def package(arguments: argparse.Namespace) -> dict[str, Any]:
             "toolchain": rust_toolchain(),
             "version": PRODUCT_VERSION,
         }
+        if gate == "full":
+            provenance["packaged_conformance"] = {
+                "result": release_evidence.PENDING,
+                "scenarios": release_evidence.PACKAGED_CONFORMANCE_SCENARIOS,
+            }
     if arguments.artifact_class == "distribution":
         try:
             release_evidence.validate_provenance(
@@ -824,7 +835,7 @@ def package(arguments: argparse.Namespace) -> dict[str, Any]:
                 target=TARGET,
                 commit=source_commit,
                 tree=source_tree,
-                conformance_result=release_evidence.PENDING,
+                conformance_result=(release_evidence.PENDING if gate == "full" else None),
             )
         except release_evidence.EvidenceError as error:
             fail(str(error))
@@ -842,6 +853,22 @@ def package(arguments: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def verify_version(podway: Path, podwayd: Path) -> dict[str, Any]:
+    require_native_host()
+    source_commit = run(["git", "rev-parse", "HEAD"], label="source commit probe").decode().strip()
+    cli = require_native_binary(podway, "podway")
+    daemon = require_native_binary(podwayd, "podwayd")
+    receipt = verify_release_contract(ROOT, cli, daemon, source_commit)
+    if receipt.get("version") != PRODUCT_VERSION:
+        fail("release contract receipt does not report the product version")
+    return {
+        "build_identity": receipt["build_identity"],
+        "mode": "verify-version",
+        "ok": True,
+        "version": PRODUCT_VERSION,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -851,16 +878,22 @@ def main() -> int:
     package_parser.add_argument(
         "--artifact-class", choices=("test-fixture", "distribution"), required=True
     )
+    package_parser.add_argument("--gate", choices=("full", "patch"), default="full")
     package_parser.add_argument("--output-dir", type=Path, required=True)
     package_parser.add_argument("--allow-dirty", action="store_true", help="test-only: package an uncommitted tree")
     subparsers.add_parser("preflight", help="verify release host and Git worktree state")
     subparsers.add_parser("self-test", help="run isolated artifact-class sentinels")
+    version_parser = subparsers.add_parser("verify-version", help="verify release binary version identities")
+    version_parser.add_argument("--podway", type=Path, required=True)
+    version_parser.add_argument("--podwayd", type=Path, required=True)
     arguments = parser.parse_args()
     try:
         if arguments.command == "self-test":
             result = self_test()
         elif arguments.command == "preflight":
             result = preflight()
+        elif arguments.command == "verify-version":
+            result = verify_version(arguments.podway, arguments.podwayd)
         else:
             result = package(arguments)
     except (

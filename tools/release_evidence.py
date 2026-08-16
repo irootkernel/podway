@@ -15,8 +15,11 @@ from typing import Any
 
 PRODUCT = "podway"
 PROVENANCE_SCHEMA = "podway.release-provenance/v1"
+PATCH_PROVENANCE_SCHEMA = "podway.release-provenance/v2"
 HANDOFF_SCHEMA = "podway.dolgorae-compatibility-handoff/v2"
+PATCH_HANDOFF_SCHEMA = "podway.dolgorae-compatibility-handoff/v3"
 RELEASE_GATE = "make test + fuzzing: passed"
+PATCH_RELEASE_GATE = "make dist-patch: passed"
 PASSED = "passed"
 PENDING = "pending"
 PACKAGED_CONFORMANCE_SCENARIOS = [
@@ -70,6 +73,8 @@ HANDOFF_KEYS = {
     "toolchain",
     "version",
 }
+PATCH_PROVENANCE_KEYS = PROVENANCE_KEYS - {"packaged_conformance"}
+PATCH_HANDOFF_KEYS = HANDOFF_KEYS - {"packaged_conformance"}
 
 
 class EvidenceError(RuntimeError):
@@ -177,15 +182,23 @@ def validate_provenance(
     target: str,
     commit: str,
     tree: str,
-    conformance_result: str,
+    conformance_result: str | None,
 ) -> None:
-    _exact_keys(value, PROVENANCE_KEYS, "provenance")
+    schema = value.get("schema")
+    patch = schema == PATCH_PROVENANCE_SCHEMA
+    if schema not in {PROVENANCE_SCHEMA, PATCH_PROVENANCE_SCHEMA}:
+        fail(f"unsupported provenance schema: {schema!r}")
+    _exact_keys(value, PATCH_PROVENANCE_KEYS if patch else PROVENANCE_KEYS, "provenance")
+    if patch and conformance_result is not None:
+        fail("patch provenance cannot claim packaged conformance")
+    if not patch and conformance_result is None:
+        fail("full provenance requires packaged conformance")
     expected = {
         "artifact_class": "distribution",
         "product": PRODUCT,
-        "release_gate": RELEASE_GATE,
+        "release_gate": PATCH_RELEASE_GATE if patch else RELEASE_GATE,
         "release_gate_result": PASSED,
-        "schema": PROVENANCE_SCHEMA,
+        "schema": PATCH_PROVENANCE_SCHEMA if patch else PROVENANCE_SCHEMA,
         "source_commit": commit,
         "source_dirty": False,
         "source_tree": tree,
@@ -222,7 +235,9 @@ def validate_provenance(
         fail("provenance contract manifest schema is invalid")
     _string(value["toolchain"], "provenance toolchain")
     validate_release_status(value["release_status"])
-    validate_packaged_conformance(value["packaged_conformance"], conformance_result)
+    if not patch:
+        assert conformance_result is not None
+        validate_packaged_conformance(value["packaged_conformance"], conformance_result)
 
 
 def handoff_from_provenance(
@@ -232,7 +247,8 @@ def handoff_from_provenance(
     adapter: dict[str, Any],
     adapter_catalog_sha256: str,
 ) -> dict[str, Any]:
-    return {
+    patch = provenance.get("schema") == PATCH_PROVENANCE_SCHEMA
+    handoff = {
         "adapter": adapter,
         "adapter_catalog": {
             "path": "release/dolgorae-adapter-contract-v2.json",
@@ -245,13 +261,12 @@ def handoff_from_provenance(
             "digest": provenance["contract_manifest_digest"],
             "schema": provenance["contract_manifest_schema"],
         },
-        "packaged_conformance": provenance["packaged_conformance"],
         "product": provenance["product"],
         "provenance": {"name": provenance_name, "sha256": provenance_sha256},
         "release_gate": provenance["release_gate"],
         "release_gate_result": provenance["release_gate_result"],
         "release_status": provenance["release_status"],
-        "schema": HANDOFF_SCHEMA,
+        "schema": PATCH_HANDOFF_SCHEMA if patch else HANDOFF_SCHEMA,
         "source": {
             "clean": not provenance["source_dirty"],
             "commit": provenance["source_commit"],
@@ -264,6 +279,9 @@ def handoff_from_provenance(
         },
         "version": provenance["version"],
     }
+    if not patch:
+        handoff["packaged_conformance"] = provenance["packaged_conformance"]
+    return handoff
 
 
 def validate_handoff(
@@ -274,7 +292,8 @@ def validate_handoff(
     adapter: dict[str, Any],
     adapter_catalog_sha256: str,
 ) -> None:
-    _exact_keys(value, HANDOFF_KEYS, "handoff")
+    patch = provenance.get("schema") == PATCH_PROVENANCE_SCHEMA
+    _exact_keys(value, PATCH_HANDOFF_KEYS if patch else HANDOFF_KEYS, "handoff")
     expected = handoff_from_provenance(
         provenance,
         provenance_name,

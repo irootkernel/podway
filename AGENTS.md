@@ -218,6 +218,28 @@ Apply these distinctions as well:
 
 ## Verification
 
+### Release Gate Selection
+
+- This subsection is the single source of truth for agent-operated release gate
+  selection and confirmation. Documentation that describes `make dist` applies to
+  the full gate and does not override this agent workflow.
+- When master requests a release, first ask whether to use the full gate or the
+  reduced patch gate. Do not infer the choice from an earlier release.
+- Use `make dist` for the full gate.
+- The reduced gate is available only for an exact patch-version increment after
+  the same clean code candidate passed `make test`. Ask master separately whether
+  that `make test` run succeeded. Proceed only after an explicit yes.
+- Record the tested baseline commit before changing version metadata, then run
+  `make dist-patch PRIOR_MAKE_TEST_PASSED=yes PATCH_BASE_COMMIT=<sha>` from the
+  clean version-bumped release commit.
+- The reduced gate permits only canonical version and release-metadata changes
+  after the tested baseline. Any other change, missing or negative confirmation,
+  or failed check stops the release. Do not fall back to the full gate without a
+  new instruction.
+- A successful reduced gate establishes patch release readiness through its own
+  provenance and handoff contract. Do not claim that omitted fuzzing or packaged
+  runtime qualification ran, and do not add a `skipped` result to patch evidence.
+
 - Run an exact focused test first when practical. Cargo integration tests are
   aggregated through each crate's `int_suite`; follow the documented exact-test
   invocation rather than creating an unregistered test target.
@@ -225,11 +247,12 @@ Apply these distinctions as well:
   target while iterating.
 - Run `make test` before sharing a development revision that changes executable
   behavior or contracts. This is the required development gate.
-- Run `make dist` only when release or distribution readiness is in scope. It is the
-  complete release gate and includes the development gate, bounded fuzzing, release
-  build, native qualification, Dolgorae handoff, and final bundle verification.
+- Run `make dist` only when full release or distribution readiness is in scope. It
+  includes the development gate, bounded fuzzing, release build, native
+  qualification, Dolgorae handoff, and final bundle verification. Use
+  `make dist-patch` only under the confirmed patch conditions above.
 - Optional diagnostics and direct Cargo commands support investigation but do not
-  replace `make test` or `make dist` for their respective claims.
+  replace `make test`, `make dist`, or `make dist-patch` for their respective claims.
 - For documentation-only or agent-guidance-only changes, read back the file, verify
   references and authority claims, and run `git diff --check`; broader executable
   gates are unnecessary unless the documentation changes executable commands or

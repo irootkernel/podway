@@ -95,7 +95,7 @@ def managed_release_daemon_processes(uid: int) -> list[str]:
     ]
 
 
-def verify(output_directory: Path) -> dict[str, Any]:
+def verify(output_directory: Path, gate: str) -> dict[str, Any]:
     release_archive.require_native_host()
     release_archive.require_clean_tree(False)
     commit = git_identity("HEAD")
@@ -111,13 +111,20 @@ def verify(output_directory: Path) -> dict[str, Any]:
     archive_digest = verify_detached_checksum(archive, checksum)
     try:
         provenance = release_evidence.read_object(provenance_path, "release provenance")
+        expected_schema = (
+            release_evidence.PATCH_PROVENANCE_SCHEMA
+            if gate == "patch"
+            else release_evidence.PROVENANCE_SCHEMA
+        )
+        if provenance.get("schema") != expected_schema:
+            fail(f"release provenance does not match requested {gate} gate")
         release_evidence.validate_provenance(
             provenance,
             version=VERSION,
             target=TARGET,
             commit=commit,
             tree=tree,
-            conformance_result=release_evidence.PASSED,
+            conformance_result=(release_evidence.PASSED if gate == "full" else None),
         )
     except release_evidence.EvidenceError as error:
         fail(str(error))
@@ -185,22 +192,25 @@ def verify(output_directory: Path) -> dict[str, Any]:
         sockets = list(extraction.glob("**/podwayd.sock"))
         if sockets:
             fail(f"final verification left daemon sockets behind: {sockets}")
-    processes = managed_release_daemon_processes(os.geteuid())
-    if processes:
-        fail(f"managed release qualification daemons remain running: {processes}")
-    return {
+    if gate == "full":
+        processes = managed_release_daemon_processes(os.geteuid())
+        if processes:
+            fail(f"managed release qualification daemons remain running: {processes}")
+    result = {
         "archive": {"name": archive.name, "sha256": archive_digest},
         "binaries": provenance["binaries"],
         "build_identity": provenance["build_identity"],
         "contract_manifest_digest": provenance["contract_manifest_digest"],
         "mode": "verify",
         "ok": True,
-        "packaged_conformance": provenance["packaged_conformance"],
         "provenance_sha256": release_archive.sha256_file(provenance_path),
         "handoff_sha256": release_archive.sha256_file(handoff_path),
         "source": {"commit": commit, "tree": tree},
         "tag_candidate": f"v{VERSION}",
     }
+    if gate == "full":
+        result["packaged_conformance"] = provenance["packaged_conformance"]
+    return result
 
 
 def fixture_provenance() -> dict[str, Any]:
@@ -228,6 +238,14 @@ def fixture_provenance() -> dict[str, Any]:
         "toolchain": "rustc 1.97.1 (fixture)",
         "version": VERSION,
     }
+
+
+def fixture_patch_provenance() -> dict[str, Any]:
+    provenance = fixture_provenance()
+    provenance.pop("packaged_conformance")
+    provenance["release_gate"] = release_evidence.PATCH_RELEASE_GATE
+    provenance["schema"] = release_evidence.PATCH_PROVENANCE_SCHEMA
+    return provenance
 
 
 def expect_rejection(action: Any, label: str) -> None:
@@ -266,6 +284,48 @@ def self_test() -> dict[str, Any]:
         adapter_catalog_sha256,
     )
     sentinels = 0
+    patch_provenance = fixture_patch_provenance()
+    release_evidence.validate_provenance(
+        patch_provenance,
+        version=VERSION,
+        target=TARGET,
+        commit="1" * 40,
+        tree="2" * 40,
+        conformance_result=None,
+    )
+    patch_handoff = release_evidence.handoff_from_provenance(
+        patch_provenance,
+        "provenance.json",
+        "3" * 64,
+        adapter,
+        adapter_catalog_sha256,
+    )
+    if (
+        patch_handoff.get("schema") != release_evidence.PATCH_HANDOFF_SCHEMA
+        or "packaged_conformance" in patch_handoff
+    ):
+        fail("patch handoff contains full-gate conformance claims")
+    release_evidence.validate_handoff(
+        patch_handoff,
+        patch_provenance,
+        "provenance.json",
+        "3" * 64,
+        adapter,
+        adapter_catalog_sha256,
+    )
+    sentinels += 2
+    expect_rejection(
+        lambda: release_evidence.validate_provenance(
+            patch_provenance,
+            version=VERSION,
+            target=TARGET,
+            commit="1" * 40,
+            tree="2" * 40,
+            conformance_result=release_evidence.PASSED,
+        ),
+        "patch provenance with a packaged-conformance claim",
+    )
+    sentinels += 1
     uid = os.geteuid()
     managed = f"/private/tmp/podway-release-{uid}-fixture/snapshots/digest/podwayd --dev"
     production = "/Users/example/.local/bin/podwayd --service"
@@ -371,9 +431,14 @@ def main() -> int:
     subparsers.add_parser("self-test")
     verify_parser = subparsers.add_parser("verify")
     verify_parser.add_argument("--output-dir", type=Path, default=ROOT / "dist")
+    verify_parser.add_argument("--gate", choices=("full", "patch"), default="full")
     arguments = parser.parse_args()
     try:
-        result = self_test() if arguments.mode == "self-test" else verify(arguments.output_dir)
+        result = (
+            self_test()
+            if arguments.mode == "self-test"
+            else verify(arguments.output_dir, arguments.gate)
+        )
     except (
         VerificationError,
         release_archive.ReleaseError,

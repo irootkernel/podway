@@ -338,7 +338,7 @@ def packaged_adapter_contract(archive: Path) -> tuple[dict[str, Any], str]:
     return adapter, f"sha256:{release_archive.sha256_file(source)}"
 
 
-def create(output_directory: Path) -> dict[str, Any]:
+def create(output_directory: Path, gate: str) -> dict[str, Any]:
     release_archive.require_native_host()
     if run_git("status", "--porcelain=v1", "--untracked-files=normal"):
         fail("Dolgorae handoff requires a clean Git worktree")
@@ -351,6 +351,13 @@ def create(output_directory: Path) -> dict[str, Any]:
     require_regular_file(checksum, "release archive checksum")
     require_regular_file(provenance_path, "release provenance")
     provenance = read_object(provenance_path, "release provenance")
+    expected_schema = (
+        release_evidence.PATCH_PROVENANCE_SCHEMA
+        if gate == "patch"
+        else release_evidence.PROVENANCE_SCHEMA
+    )
+    if provenance.get("schema") != expected_schema:
+        fail(f"release provenance does not match requested {gate} gate")
     try:
         release_evidence.validate_provenance(
             provenance,
@@ -358,7 +365,7 @@ def create(output_directory: Path) -> dict[str, Any]:
             target=TARGET,
             commit=commit,
             tree=source_tree,
-            conformance_result=release_evidence.PASSED,
+            conformance_result=(release_evidence.PASSED if gate == "full" else None),
         )
     except release_evidence.EvidenceError as error:
         fail(str(error))
@@ -606,6 +613,7 @@ def main() -> int:
     prepare_parser.add_argument("--output", type=Path, default=ADAPTER_CONTRACT_PATH)
     create_parser = subparsers.add_parser("create")
     create_parser.add_argument("--output-dir", type=Path, default=ROOT / "dist")
+    create_parser.add_argument("--gate", choices=("full", "patch"), default="full")
     arguments = parser.parse_args()
     try:
         if arguments.mode == "self-test":
@@ -613,7 +621,7 @@ def main() -> int:
         elif arguments.mode == "prepare-adapter":
             result = prepare_adapter_contract(arguments.output)
         else:
-            result = create(arguments.output_dir)
+            result = create(arguments.output_dir, arguments.gate)
         print(json.dumps(result, sort_keys=True, separators=(",", ":")))
         return 0
     except (

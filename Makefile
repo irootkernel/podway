@@ -14,9 +14,9 @@ PRESET_DIR ?= assets/presets
 PRESET_VALIDATOR ?= target/debug/podway
 export PRESET_ID PRESET_NAME PRESET_DESCRIPTION PRESET_FILE PRESET_DIR PRESET_VALIDATOR
 
-.PHONY: test test-prepare release-prepare dist-preflight test-rust test-unit test-int test-fuzzing test-e2e contract-verifier-test \
+.PHONY: test test-prepare release-prepare dist-preflight patch-release-preflight release-version-check test-rust test-unit test-int test-fuzzing test-e2e contract-verifier-test \
 	toolchain format format-check vet lint lint-all architecture architecture-static preset-validator \
-	preset-create preset-import preset-tool-test contract-manifest dist \
+	preset-create preset-import preset-tool-test contract-manifest dist dist-patch \
 	dev-daemon dev-runtime-test
 
 toolchain:
@@ -47,6 +47,11 @@ release-prepare:
 dist-preflight:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/release_archive.py preflight
 
+patch-release-preflight: dist-preflight
+	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_patch_release.py check \
+		--base "$(PATCH_BASE_COMMIT)" \
+		--confirmed "$(PRIOR_MAKE_TEST_PASSED)"
+
 format:
 	$(RUST_TOOLCHAIN_ENV) cargo fmt --all
 
@@ -71,6 +76,7 @@ architecture-static:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_docs.py
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_test_layout.py --check
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_quality_contracts.py
+	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_patch_release.py self-test
 	$(RUST_TOOLCHAIN_ENV) python3 tools/create_dolgorae_handoff.py self-test
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_contracts.py --check
 
@@ -143,6 +149,11 @@ test-e2e:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_test_layout.py --check
 	$(RUST_GATE_ENV) python3 tools/run_e2e.py
 
+release-version-check:
+	$(RUST_TOOLCHAIN_ENV) python3 tools/release_archive.py verify-version \
+		--podway target/release/podway \
+		--podwayd target/release/podwayd
+
 dist:
 	$(MAKE) dist-preflight
 	$(MAKE) test
@@ -160,4 +171,25 @@ dist:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/create_dolgorae_handoff.py create \
 		--output-dir $(DIST_DIR)
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_release_bundle.py verify \
+		--output-dir $(DIST_DIR)
+
+dist-patch:
+	$(MAKE) patch-release-preflight
+	$(MAKE) test-prepare
+	$(MAKE) test-unit
+	$(MAKE) test-int
+	$(RUST_GATE_ENV) cargo build --release --locked \
+		-p podway-cli --bin podway -p podway-daemon --bin podwayd
+	$(MAKE) release-version-check
+	$(RUST_TOOLCHAIN_ENV) python3 tools/release_archive.py package \
+		--artifact-class distribution \
+		--gate patch \
+		--podway target/release/podway \
+		--podwayd target/release/podwayd \
+		--output-dir $(DIST_DIR)
+	$(RUST_TOOLCHAIN_ENV) python3 tools/create_dolgorae_handoff.py create \
+		--gate patch \
+		--output-dir $(DIST_DIR)
+	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_release_bundle.py verify \
+		--gate patch \
 		--output-dir $(DIST_DIR)
