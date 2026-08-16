@@ -1,4 +1,4 @@
-version: 2
+version: 3
 project:
   name: "podway"
 providers:
@@ -28,7 +28,6 @@ resources:
   primary_repair_attempts: 1
   role_max_invocations: 2
   run_max_invocations: 12
-  run_total_output_cap: "64MiB"
 ci:
   fail_on_severity: ["high", "critical", "blocker"]
   degraded_review_fails: true
