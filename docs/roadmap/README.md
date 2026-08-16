@@ -254,6 +254,20 @@ installed v0.2.1 runtime rejected the preserved workspace state with
 This record does not claim distribution readiness, upstream publication,
 installation, or runtime activation, and `make dist` was not run.
 
+An independent cold revalidation on August 16, 2026 audited committed snapshot
+`acfcf9a63f7da4bd33da9ab03a8dd76e5a82304b` and the current path-scoped V2AGT
+target `sha256:fd7b293942cb2e06120c482583ee283808ab972796ab8df613ee45afd58f8c89`.
+The fresh requirement-to-implementation audit found no confirmed gap. The exact
+atomic-recording regression test passed, and `gaori --json run full` completed
+the `make test` development gate with exit `0`, artifact status `passed`, and
+zero failures. Mulgae run `r_01a0094a-171e-7846-a1ff-af149b8b2b2e` completed
+all six ZCode roles with complete coverage, CI decision `pass`, committed
+publication, a successful low-severity findings query, and zero findings. No
+remediation goal or remediation commit was required. Podway was explicitly
+excluded from this validation. This record does not claim distribution
+readiness, upstream publication, installation, or runtime activation, and
+`make dist` was not run.
+
 ## V2REC — Workspace Recovery Conformance
 
 Dependencies: completed `V2AGT` epic.
