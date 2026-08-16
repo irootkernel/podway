@@ -59,12 +59,4 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 - Do not leave generated reports, logs, mutable qualification receipts, or
   temporary plans in this directory.
 
-Current adopted dossiers:
-
-- [Podway v0.1.2 contract recovery and native release](TODO-podway-v0.1.2-contract-recovery.md)
-
-Historical path-retained dossiers:
-
-- [Podway v2 full-feature GA](TODO-podway-v2-full-feature-ga.md) remains at its
-  executable-evidence-bound path; its immutable completion record is the
-  [v0.2.0 release report](../roadmap/archive/v0.2.0-release-report.md).
+There are no current adopted or path-retained historical dossiers.

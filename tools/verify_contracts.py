@@ -312,13 +312,15 @@ PROCEDURE_V1_LITERAL_ALLOWLIST = {
     Path("crates/podway-daemon/tests/int_v2_only_reset_recovery.rs"),
     Path("crates/podway-store/tests/int_v2_only_schema.rs"),
     Path("docs/architecture-decision-records/0019-procedure-v2-only-product.md"),
-    Path("docs/todo/TODO-podway-v2-full-feature-ga.md"),
 }
 V2_ONLY_TEXT_SUFFIXES = {".csv", ".json", ".md", ".py", ".rs", ".sql", ".toml", ".yaml", ".yml"}
 V2_ONLY_SCAN_ROOTS = ("assets", "contracts", "crates", "docs", "fuzz", "quality", "release", "tests", "tools")
 V2_ONLY_EXCLUDED_DIRECTORIES = {"target", ".gaori", "artifacts", "dist"}
-HISTORICAL_DOSSIER = Path("docs/todo/TODO-podway-v2-full-feature-ga.md")
-HISTORICAL_SUPERSESSION_MARKER = "> **Superseded product boundary:**"
+V2_ONLY_ADR = Path("docs/architecture-decision-records/0019-procedure-v2-only-product.md")
+V2_ONLY_ADR_MARKERS = (
+    "- Status: Accepted",
+    "Procedure v2 is the only supported authoring and runtime model.",
+)
 
 
 def validate_v2_only_surface(root: Path) -> int:
@@ -360,9 +362,12 @@ def validate_v2_only_surface(root: Path) -> int:
             if relative not in PROCEDURE_V1_LITERAL_ALLOWLIST:
                 fail(f"Procedure v1 schema literal is not allowlisted in {relative}")
 
-    dossier = root / HISTORICAL_DOSSIER
-    if not dossier.exists() or HISTORICAL_SUPERSESSION_MARKER not in dossier.read_text(encoding="utf-8"):
-        fail("historical v0.2.0 dossier must carry the ADR-0019 supersession banner")
+    decision = root / V2_ONLY_ADR
+    if not decision.exists():
+        fail(f"Procedure v2-only decision is missing: {V2_ONLY_ADR}")
+    decision_text = decision.read_text(encoding="utf-8")
+    if any(marker not in decision_text for marker in V2_ONLY_ADR_MARKERS):
+        fail("ADR-0019 must remain accepted and preserve the Procedure v2-only decision")
     return checked
 
 
@@ -1000,9 +1005,9 @@ def run_sentinels(root: Path) -> list[str]:
 
         v1_surface_fixture = temporary / "procedure-v1-surface"
         (v1_surface_fixture / "crates/podway-core/src").mkdir(parents=True)
-        (v1_surface_fixture / HISTORICAL_DOSSIER.parent).mkdir(parents=True)
-        (v1_surface_fixture / HISTORICAL_DOSSIER).write_text(
-            HISTORICAL_SUPERSESSION_MARKER + "\n", encoding="utf-8"
+        (v1_surface_fixture / V2_ONLY_ADR.parent).mkdir(parents=True)
+        (v1_surface_fixture / V2_ONLY_ADR).write_text(
+            "\n".join(V2_ONLY_ADR_MARKERS) + "\n", encoding="utf-8"
         )
         (v1_surface_fixture / "crates/podway-core/src/lib.rs").write_text(
             "pub struct StageId(String);\n", encoding="utf-8"
