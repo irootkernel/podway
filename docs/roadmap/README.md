@@ -277,3 +277,73 @@ This completed recovery task shipped in the immutable
 | id | title | status | goal | references |
 |---|---|---|---|---|
 | `V2REC-001` | Repair workspace identity recovery | Completed | Prevent duplicate-root workspace identities and make confirmed reset atomically converge a proven legacy registry generation. | [V2REC dossier](archive/podway-workspace-recovery-conformance.md) |
+
+## Procedure Evidence and Reference Quality
+
+The next minor product line is implemented through four sequential epics:
+
+```text
+V2SCL -> V2AST -> V2GRD -> V2REF
+```
+
+Within each epic, tasks execute in numeric order. An epic remains entirely
+`Planned` until its dependency is complete. At most the first incomplete task in
+the first unblocked epic may be `In Progress`, `In Review`, or `Blocked`.
+
+Each final epic task must first promote completed design and operating knowledge
+from its adopted TODO dossier into the appropriate ADRs, machine contracts,
+specifications, architecture, implementation tips, examples, and roadmap
+evidence. It then repairs dossier references, removes the TODO index entry, and
+deletes the completed dossier before marking the epic `Completed`. Completed TODO
+dossiers are not moved to `docs/roadmap/archive/`; roadmap archival is separate
+maintenance performed only when historical roadmap content needs compaction.
+
+## V2SCL — Bounded Evidence Scale and Read-back
+
+Dependencies: completed `V2REC` epic.
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `V2SCL-001` | Adopt the bounded evidence scale authority | Planned | Adopt the ADR and normative scale, paging, compatibility, and diagnostic contracts. | [V2SCL dossier](../todo/TODO-podway-evidence-scaling.md#3-accepted-design-and-public-interfaces) |
+| `V2SCL-002` | Reserve pageable evidence read contracts | Planned | Register `evidence.read`, `next-result/v3`, `observation-result/v2`, the closed `output-v3` branch, shared and record-many schema bounds, public errors, command routes, manifest digests, and compatibility fixtures without premature runtime admission. | [V2SCL dossier](../todo/TODO-podway-evidence-scaling.md#32-pageable-evidence-reads) |
+| `V2SCL-003` | Align item limits and structured diagnostics | Planned | Unify authoring and runtime limits, protocol slices, total-list and attempt bounds, re-pin the rotated preset digests, and report exact exceeded fields and maxima. | [V2SCL dossier](../todo/TODO-podway-evidence-scaling.md#31-scale-envelope) |
+| `V2SCL-004` | Implement snapshot-bound evidence paging | Planned | Serve deterministic bounded text and list pages under current evidence identity, freshness, page-token, metadata, and IPC constraints. | [V2SCL dossier](../todo/TODO-podway-evidence-scaling.md#32-pageable-evidence-reads) |
+| `V2SCL-005` | Integrate observation budgets and close conformance | Planned | Prove the compact-status observation composition, its five component windows and truncation semantics, promote durable documentation, remove the completed dossier, and pass the development gate. | [V2SCL dossier](../todo/TODO-podway-evidence-scaling.md#6-verification-and-acceptance) |
+
+## V2AST — External Check Result Typing
+
+Dependencies: completed `V2SCL` epic.
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `V2AST-001` | Adopt the external check result authority | Planned | Adopt the extending ADR and normative item, trust, storage, protocol, and compatibility contracts. | [V2AST dossier](../todo/TODO-podway-assurance-typing.md#3-accepted-design-and-public-interfaces) |
+| `V2AST-002` | Reserve check-result contracts and storage | Planned | Reserve the closed schemas, observation windows, canonical SQLite v5 DDL and migration identity, manifest changes, and compatibility fixtures without runtime admission. | [V2AST dossier](../todo/TODO-podway-assurance-typing.md#35-compatibility-sensitive-contract-inventory) |
+| `V2AST-003` | Add the check-result domain and authoring model | Planned | Add bounded declarations, complete values, satisfaction, parsing, diagnostics, and canonicalization while preserving existing Procedure digests. | [V2AST dossier](../todo/TODO-podway-assurance-typing.md#32-procedure-declaration) |
+| `V2AST-004` | Migrate, decode, and record check results | Planned | Rebuild the constrained item table, add bounded protocol decoding and atomic frame-sized record-many support, and prove replay, restart, idempotency, and downgrade protection. | [V2AST dossier](../todo/TODO-podway-assurance-typing.md#33-recorded-value) |
+| `V2AST-005` | Expose check-result guidance and read-back | Planned | Add allowed actions, suggestions, the bounded structured projection and stdin template, single-page evidence read-back, CLI guidance, and honest rendering. | [V2AST dossier](../todo/TODO-podway-assurance-typing.md#34-recording-and-observation) |
+| `V2AST-006` | Close check-result compatibility and conformance | Planned | Prove compatibility, promote durable documentation, remove the completed dossier, and close trust, migration, recovery, frame, projection, and maximum-size evidence. | [V2AST dossier](../todo/TODO-podway-assurance-typing.md#6-verification-and-acceptance) |
+
+## V2GRD — Typed Guards and Authoring Diagnostics
+
+Dependencies: completed `V2AST` epic.
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `V2GRD-001` | Adopt the typed predicate authority | Planned | Adopt the ADR and normative predicate, authoring, runtime, error, and compatibility contracts. | [V2GRD dossier](../todo/TODO-podway-typed-guards.md#3-accepted-design-and-public-interfaces) |
+| `V2GRD-002` | Reserve typed-condition contracts | Planned | Reserve authoring and result schemas, frozen-catalog replacements, the closed error branch, protocol tables, response budgets, and compatibility fixtures without runtime admission. | [V2GRD dossier](../todo/TODO-podway-typed-guards.md#36-compatibility-sensitive-contract-inventory) |
+| `V2GRD-003` | Add conditional required items | Planned | Implement bounded same-attempt required conditions with static validation, canonical and preview projection, atomic derived satisfaction, and observation status. | [V2GRD dossier](../todo/TODO-podway-typed-guards.md#32-conditional-required-items) |
+| `V2GRD-004` | Add decision option guards | Planned | Implement typed guards over required selected fresh evidence with complete options, authoritative allowed IDs, and bounded three-valued statuses. | [V2GRD dossier](../todo/TODO-podway-typed-guards.md#33-decision-option-guards) |
+| `V2GRD-005` | Enforce runtime condition gates | Planned | Enforce identity, freshness, and guards in order; expose structured statuses; and register non-retryable `OPTION_GUARD_UNSATISFIED`. | [V2GRD dossier](../todo/TODO-podway-typed-guards.md#33-decision-option-guards) |
+| `V2GRD-006` | Repair phase-owner lint and close conformance | Planned | Remove the two count constants and legacy codes, add distinct-label and weak-criteria diagnostics, promote durable documentation, remove the completed dossier, and pass the development gate. | [V2GRD dossier](../todo/TODO-podway-typed-guards.md#34-lint-semantics) |
+
+## V2REF — Reference Procedures and Authoring Guidance
+
+Dependencies: completed `V2GRD` epic.
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `V2REF-001` | Adopt the reference procedure quality contract | Planned | Promote the adopted requirement matrix, exact graphs, selection boundaries, and executable path fixtures into durable authorities. | [V2REF dossier](../todo/TODO-podway-reference-procedures.md#3-accepted-preset-designs) |
+| `V2REF-002` | Rebuild sw-dev-v2 as the full reference | Planned | Add bounded planning, check results, conditions, guards, paging, artifacts, goals, and phase-owner rework; re-pin the digest and update its budget known answers. | [V2REF dossier](../todo/TODO-podway-reference-procedures.md#33-sw-dev-v2) |
+| `V2REF-003` | Harden bug-fix-v2 and small-change-v2 | Planned | Add guarded fresh bug-fix evidence, preserve the assertion-only small-change boundary, re-pin both digests, and update their budget known answers. | [V2REF dossier](../todo/TODO-podway-reference-procedures.md#3-accepted-preset-designs) |
+| `V2REF-004` | Add English recording and authoring examples | Planned | Document English narrative recording, the new-session default impact, and copyable page-token, check-result, condition, guard, selector, and rework patterns. | [V2REF dossier](../todo/TODO-podway-reference-procedures.md#34-english-recording-policy) |
+| `V2REF-005` | Dogfood supported paths and pass the development gate | Planned | Prove every path, budget fit, guard dominance, satisfiability, and option totality; promote durable guidance; delete the completed dossier; and close bundle and development-gate evidence. | [V2REF dossier](../todo/TODO-podway-reference-procedures.md#7-verification-and-acceptance) |
