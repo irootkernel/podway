@@ -1590,14 +1590,14 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                 let Some(state) = state else {
                     return Ok(None);
                 };
-                let actual_current = SqliteStoreV1::inspect_graph_start_current_task_v2(
+                let view = SqliteStoreV1::inspect_graph_workspace_view_v2(
                     readonly.database_path(),
                     readonly.binding().identity(),
                     readonly.store_options(),
                     podway_store::EpochMillisV1::new(now.get()),
                 )
                 .map_err(map_store_error)?;
-                validate_graph_start_dry_run_fence_v2(&expected_current, &actual_current)?;
+                validate_graph_start_dry_run_view_v2(&expected_current, &view)?;
                 let result = json!({
                     "schema":"podway.session-start-result/v3", "procedure_schema":"podway.procedure/v2",
                     "procedure_digest":state.snapshot().digest(), "dry_run":true,
@@ -5101,6 +5101,37 @@ fn validate_graph_start_dry_run_fence_v2(
         }
         _ => Ok(()),
     }
+}
+
+fn validate_graph_start_dry_run_view_v2(
+    expected: &GraphStartCurrentTaskV2,
+    view: &GraphWorkspaceViewV2,
+) -> Result<(), DispatchFailureV1> {
+    let actual = view
+        .graph_state()
+        .map(|state| GraphStartCurrentTaskV2::Exact {
+            session_id: state.trace().session_id().clone(),
+            session_revision: state.trace().revision(),
+        })
+        .unwrap_or(GraphStartCurrentTaskV2::Absent);
+    validate_graph_start_dry_run_fence_v2(expected, &actual)?;
+
+    if matches!(expected, GraphStartCurrentTaskV2::Eligible { .. }) {
+        let state = view.graph_state().ok_or_else(|| {
+            DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceStateUnreadable)
+        })?;
+        let lifecycle = state.trace().lifecycle();
+        if !lifecycle.is_default_reset_eligible(view.current_terminal_disposition()) {
+            return Err(
+                DispatchFailureV1::new(DispatchFailureKindV1::SessionResetNotEligible)
+                    .with_details(
+                        DispatchErrorDetailsV1::default()
+                            .with_session_reset_not_eligible(lifecycle),
+                    ),
+            );
+        }
+    }
+    Ok(())
 }
 
 fn map_read_error(error: ReadServiceErrorV1) -> DispatchFailureV1 {

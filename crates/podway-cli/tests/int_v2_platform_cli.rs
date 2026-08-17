@@ -680,6 +680,33 @@ fn one_json(output: &Output) -> Value {
 }
 
 #[test]
+fn eligible_replacement_dry_run_does_not_use_the_local_start_preview() {
+    let fixture = Fixture::new();
+    let output = fixture.run(&[
+        "--json".to_owned(),
+        "--socket".to_owned(),
+        fixture.socket.display().to_string(),
+        "--worktree".to_owned(),
+        fixture.root.display().to_string(),
+        "start".to_owned(),
+        "--preset".to_owned(),
+        "sw-dev-v2".to_owned(),
+        "--task".to_owned(),
+        "Preview eligible replacement".to_owned(),
+        "--replace-eligible".to_owned(),
+        "--dry-run".to_owned(),
+    ]);
+
+    assert!(
+        !output.status.success(),
+        "eligible replacement preview must consult workspace state: {output:?}"
+    );
+    let error = one_json(&output);
+    assert_eq!(error["command"], "session.start_replace");
+    assert!(error.get("result").is_none());
+}
+
+#[test]
 fn typed_v2_commands_shape_exact_requests_and_preserve_capability_errors() {
     let cases = [
         (

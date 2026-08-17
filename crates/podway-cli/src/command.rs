@@ -1670,6 +1670,7 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
             Command::Start(StartArgs {
                 dry_run: true,
                 replace: false,
+                replace_eligible: false,
                 ..
             })
         )

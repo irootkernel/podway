@@ -1213,13 +1213,10 @@ fn graph_session_is_reset_eligible_v2(
     state: &GraphSessionStateV2,
     current_terminal_disposition: bool,
 ) -> bool {
-    match state.trace().lifecycle() {
-        podway_core::SessionLifecycle::Prepared => true,
-        podway_core::SessionLifecycle::Running => false,
-        podway_core::SessionLifecycle::Completed | podway_core::SessionLifecycle::Cancelled => {
-            current_terminal_disposition
-        }
-    }
+    state
+        .trace()
+        .lifecycle()
+        .is_default_reset_eligible(current_terminal_disposition)
 }
 
 fn terminal_disposition_from_operation_v2(
@@ -1376,6 +1373,12 @@ impl StoreContractV1 for SqliteStoreV1 {
             });
         }
         if is_v2 && is_v2_action_runtime {
+            validate_procedure_v2_action_admission_v1(
+                &request,
+                current_graph
+                    .as_ref()
+                    .ok_or_else(|| corrupt(StoreRecordKindV1::Session))?,
+            )?;
             if matches!(
                 request.command(),
                 crate::CommandV1::SessionTerminalDisposition
@@ -1393,12 +1396,6 @@ impl StoreContractV1 for SqliteStoreV1 {
                     });
                 }
             }
-            validate_procedure_v2_action_admission_v1(
-                &request,
-                current_graph
-                    .as_ref()
-                    .ok_or_else(|| corrupt(StoreRecordKindV1::Session))?,
-            )?;
         }
         if is_v2 && matches!(request.command(), crate::CommandV1::SessionStartReplace) {
             let actual_revision = current_graph.as_ref().map(|state| state.trace().revision());

@@ -399,6 +399,17 @@ pub enum SessionLifecycle {
     Cancelled,
 }
 
+impl SessionLifecycle {
+    /// Whether the current session may be deleted without an explicit force summary.
+    pub const fn is_default_reset_eligible(self, current_terminal_disposition: bool) -> bool {
+        match self {
+            Self::Prepared => true,
+            Self::Running => false,
+            Self::Completed | Self::Cancelled => current_terminal_disposition,
+        }
+    }
+}
+
 /// Persistent attempt lifecycle states.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AttemptLifecycle {

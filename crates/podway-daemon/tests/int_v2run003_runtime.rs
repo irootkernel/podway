@@ -1612,6 +1612,35 @@ fn v2lif004_prepared_begin_disposition_and_eligible_reset_form_one_runtime_flow(
     };
     assert_eq!(duplicate_disposition.code().as_str(), "REQUEST_INVALID");
 
+    let stale_duplicate_disposition = request(
+        140_012,
+        "session.terminal_disposition",
+        &selector,
+        json!({"kind":"not_required","reason":"The stale fence must win."})
+            .as_object()
+            .unwrap()
+            .clone(),
+        "v2lif005-duplicate-disposition-stale-revision",
+        PreconditionsV1::new(
+            Some(session_id.clone()),
+            Some(Revision::new(terminal_revision - 1)),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let ResponseEnvelopeV2::Error(stale_duplicate_disposition) =
+        dispatch(&production, &stale_duplicate_disposition)
+    else {
+        panic!("a stale disposition fence must fail before duplicate-domain validation");
+    };
+    assert_eq!(
+        stale_duplicate_disposition.code().as_str(),
+        "SESSION_REVISION_CONFLICT"
+    );
+
     let reset = request(
         140_011,
         "session.reset",
@@ -1753,6 +1782,194 @@ fn v2lif005_prepared_session_dry_run_and_eligible_reset_need_no_force_summary() 
         panic!("eligible reset must remove the prepared session");
     };
     assert_eq!(status_after_reset.code().as_str(), "SESSION_ID_MISMATCH");
+}
+
+#[test]
+fn v2lif005_eligible_replacement_dry_run_uses_current_reset_eligibility() {
+    let fixture = support_phase4_workspace::git_worktrees();
+    make_runtime_private(fixture.main());
+    fs::write(
+        fixture.main().join("replacement-preview.yaml"),
+        ACTION_READBACK_PROCEDURE,
+    )
+    .unwrap();
+    let ParsedProcedure::V2(parsed) = parse_procedure_document(
+        ACTION_READBACK_PROCEDURE.as_bytes(),
+        ProcedureDocumentFormat::Yaml,
+    )
+    .unwrap();
+    let digest = validate_procedure_v2(parsed).unwrap().digest().clone();
+    let selector = selector(fixture.main());
+    let manager = Arc::new(manager(fixture.temporary_path()));
+    let production = dispatcher(Arc::clone(&manager), "v2lif005-replacement-preview");
+
+    let initialize = request(
+        143_001,
+        "workspace.init",
+        &selector,
+        Map::new(),
+        "v2lif005-replacement-preview-init",
+        PreconditionsV1::default(),
+    );
+    assert!(matches!(
+        dispatch(&production, &initialize),
+        ResponseEnvelopeV2::OutputV2(_)
+    ));
+
+    let start_payload = |title: &str| {
+        json!({
+            "procedure": "replacement-preview.yaml",
+            "expected_procedure_digest": digest,
+            "task_title": title
+        })
+        .as_object()
+        .unwrap()
+        .clone()
+    };
+    let preview = |request_number, title, preconditions| {
+        let mut payload = start_payload(title);
+        payload.insert("replace_eligible".to_owned(), Value::Bool(true));
+        payload.insert("dry_run".to_owned(), Value::Bool(true));
+        let preview = request(
+            request_number,
+            "session.start_replace",
+            &selector,
+            payload,
+            "unused-replacement-preview-key",
+            preconditions,
+        );
+        dispatch(&production, &preview)
+    };
+    let ResponseEnvelopeV2::Error(absent) = preview(
+        143_002,
+        "Absent preview",
+        PreconditionsV1::new(
+            Some(SessionId::new("00000000-0000-4000-8000-000000143002").unwrap()),
+            Some(Revision::ZERO),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    ) else {
+        panic!("eligible replacement preview must reject an absent current session");
+    };
+    assert_eq!(absent.code().as_str(), "SESSION_ID_MISMATCH");
+
+    let start = request(
+        143_003,
+        "session.start",
+        &selector,
+        start_payload("Prepared preview"),
+        "v2lif005-replacement-preview-start",
+        PreconditionsV1::default(),
+    );
+    let started = v2_result(dispatch(&production, &start), "session.start");
+    let session_id = SessionId::new(started["session_id"].as_str().unwrap()).unwrap();
+    let prepared_fence = PreconditionsV1::new(
+        Some(session_id.clone()),
+        Some(Revision::ZERO),
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    let prepared = v2_result(
+        preview(
+            143_004,
+            "Prepared replacement preview",
+            prepared_fence.clone(),
+        ),
+        "session.start_replace",
+    );
+    assert_eq!(prepared["dry_run"], true);
+
+    let begin = request(
+        143_005,
+        "session.begin",
+        &selector,
+        Map::new(),
+        "v2lif005-replacement-preview-begin",
+        prepared_fence,
+    );
+    let begun = v2_result(dispatch(&production, &begin), "session.begin");
+    assert_eq!(begun["session_state"], "running");
+    let running = status(&production, &selector, 143_050, session_id.as_str());
+    let running_fence = session_preconditions(&running);
+
+    let ResponseEnvelopeV2::Error(running) = preview(
+        143_006,
+        "Running replacement preview",
+        PreconditionsV1::new(
+            Some(session_id.clone()),
+            Some(Revision::new(1)),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    ) else {
+        panic!("eligible replacement preview must reject a running session");
+    };
+    assert_eq!(running.code().as_str(), "SESSION_RESET_NOT_ELIGIBLE");
+
+    let cancel = request(
+        143_007,
+        "session.cancel",
+        &selector,
+        json!({"reason":"Exercise undisposed terminal preview."})
+            .as_object()
+            .unwrap()
+            .clone(),
+        "v2lif005-replacement-preview-cancel",
+        running_fence,
+    );
+    let cancelled = v2_result(dispatch(&production, &cancel), "session.cancel");
+    let terminal_revision = cancelled["revision"].as_u64().unwrap();
+    let terminal_fence = PreconditionsV1::new(
+        Some(session_id.clone()),
+        Some(Revision::new(terminal_revision)),
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    let ResponseEnvelopeV2::Error(undisposed) = preview(
+        143_008,
+        "Undisposed replacement preview",
+        terminal_fence.clone(),
+    ) else {
+        panic!("eligible replacement preview must reject an undisposed terminal session");
+    };
+    assert_eq!(undisposed.code().as_str(), "SESSION_RESET_NOT_ELIGIBLE");
+
+    let disposition = request(
+        143_009,
+        "session.terminal_disposition",
+        &selector,
+        json!({"kind":"not_required","reason":"The preview needs no external handoff."})
+            .as_object()
+            .unwrap()
+            .clone(),
+        "v2lif005-replacement-preview-disposition",
+        terminal_fence.clone(),
+    );
+    let _ = v2_result(
+        dispatch(&production, &disposition),
+        "session.terminal_disposition",
+    );
+
+    let disposed = v2_result(
+        preview(143_010, "Disposed replacement preview", terminal_fence),
+        "session.start_replace",
+    );
+    assert_eq!(disposed["dry_run"], true);
 }
 
 #[test]
