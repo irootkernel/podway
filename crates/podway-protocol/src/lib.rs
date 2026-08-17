@@ -31,6 +31,7 @@ pub use release_contract::{
     ReleaseContractErrorV1, ReleaseContractVerifierConfigV1, VerificationReceiptV1,
     verify_release_contract_v1,
 };
+use result_contract::is_v2_mutation_contract_command;
 pub use result_contract::{
     EXISTING_ROUTE_RESULT_SCHEMAS_V2, MAX_V2_OUTPUT_WARNINGS, MAX_V2_TERMINAL_ERROR_BYTES,
     MAX_V2_WARNING_CODE_CHARS, MAX_V2_WARNING_MESSAGE_CHARS, MAX_V2_WARNING_PATH_CHARS,
@@ -1513,6 +1514,16 @@ const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
         retryable: false,
     },
     ErrorCodeCatalogEntryV1 {
+        code: "SESSION_NOT_TERMINAL",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "SESSION_RESET_NOT_ELIGIBLE",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
         code: "SESSION_CANCELLED",
         exit_code: 1,
         retryable: false,
@@ -1953,7 +1964,7 @@ impl ErrorEnvelopeV1 {
         validate_closed_error_details_v1(self.code.as_str(), &self.details)?;
         validate_recovery_details_v1(self.code.as_str(), &self.details)?;
         if is_v2_runtime_error_code_v1(self.code.as_str())
-            && V2_MUTATION_COMMANDS.contains(&self.command.as_str())
+            && is_v2_mutation_contract_command(self.command.as_str())
             && !self.details.contains_key("admission")
         {
             return Err(ProtocolError::InvalidErrorDetails {
@@ -2171,6 +2182,7 @@ fn validate_closed_error_details_v1(
             validate_revision_conflict_details_v1(details)
         }
         "ATTEMPT_NOT_CURRENT" => validate_attempt_conflict_details_v1(details),
+        "SESSION_RESET_NOT_ELIGIBLE" => validate_session_reset_not_eligible_details_v1(details),
         "IDEMPOTENCY_KEY_REUSED" => {
             validate_schema_and_not_admitted_v1(details, "podway.idempotency-key-reused-details/v1")
         }
@@ -2191,6 +2203,30 @@ fn validate_closed_error_details_v1(
             code: code.to_owned(),
         })
     }
+}
+
+fn validate_session_reset_not_eligible_details_v1(details: &Map<String, Value>) -> bool {
+    if details.len() != 5
+        || details.get("schema").and_then(Value::as_str)
+            != Some("podway.session-reset-not-eligible-details/v1")
+        || details
+            .get("current_terminal_disposition")
+            .and_then(Value::as_bool)
+            != Some(false)
+        || details
+            .get("admission")
+            .is_none_or(|value| validate_admission_metadata_v1(value, true).is_err())
+    {
+        return false;
+    }
+    matches!(
+        (
+            details.get("lifecycle").and_then(Value::as_str),
+            details.get("required_action").and_then(Value::as_str),
+        ),
+        (Some("running"), Some("force"))
+            | (Some("completed" | "cancelled"), Some("record_disposition"))
+    )
 }
 
 const V2_RUNTIME_ERROR_DETAILS_SCHEMA_V1: &str = "podway.v2-runtime-error-details/v1";
@@ -2864,6 +2900,7 @@ pub fn ensure_error_details_schema_v1(code: &str, details: &mut Map<String, Valu
             "podway.revision-conflict-details/v2"
         }
         "ATTEMPT_NOT_CURRENT" => "podway.attempt-conflict-details/v2",
+        "SESSION_RESET_NOT_ELIGIBLE" => "podway.session-reset-not-eligible-details/v1",
         "IDEMPOTENCY_KEY_REUSED" => "podway.idempotency-key-reused-details/v1",
         "JOB_WAIT_TIMEOUT" => "podway.job-wait-timeout-details/v2",
         "BLOCKER_LIMIT_REACHED" => "podway.blocker-limit-details/v1",

@@ -12,7 +12,7 @@
     "generated_at": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/timestamp" },
     "workspace": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/workspace" },
     "job": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/job" },
-    "session": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/session" },
+    "session": { "$ref": "urn:podway:schema:v2-result-components:v2#/$defs/sessionOutput" },
     "result": { "type": "object" },
     "warnings": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/warnings" }
   },
@@ -24,6 +24,9 @@
     { "$ref": "#/$defs/procedureValidation" },
     { "$ref": "#/$defs/detachedAdmission" },
     { "$ref": "#/$defs/sessionStart" },
+    { "$ref": "#/$defs/sessionBegin" },
+    { "$ref": "#/$defs/terminalDisposition" },
+    { "$ref": "#/$defs/sessionReset" },
     { "$ref": "#/$defs/status" },
     { "$ref": "#/$defs/compactStatus" },
     { "$ref": "#/$defs/next" },
@@ -102,7 +105,7 @@
         "generated_at": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/timestamp" },
         "workspace": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/workspace" },
         "job": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/job" },
-        "session": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/session" },
+        "session": { "$ref": "urn:podway:schema:v2-result-components:v2#/$defs/sessionOutput" },
         "result": { "type": "object" },
         "warnings": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/warnings" }
       },
@@ -110,6 +113,9 @@
         { "$ref": "#/$defs/workspaceInitTerminalMutation" },
         { "$ref": "#/$defs/workspaceResetAllTerminalMutation" },
         { "$ref": "#/$defs/sessionStartMutation" },
+        { "$ref": "#/$defs/sessionBegin" },
+        { "$ref": "#/$defs/terminalDisposition" },
+        { "$ref": "#/$defs/sessionReset" },
         { "$ref": "#/$defs/stageTransition" },
         { "$ref": "#/$defs/itemMutation" },
         { "$ref": "#/$defs/itemRecordMany" },
@@ -138,7 +144,7 @@
     "detachedAdmission": {
       "required": ["workspace", "job"],
       "properties": {
-        "command": { "enum": ["session.start", "session.start_replace", "session.complete", "session.skip", "session.retry", "session.block", "session.unblock", "session.cancel", "session.reset", "session.decide", "session.rework", "goal.define", "goal.revise", "goal.assess_criterion", "item.check", "item.uncheck", "item.set", "item.add", "item.remove", "item.attach", "item.clear", "item.record_many"] },
+        "command": { "enum": ["session.start", "session.start_replace", "session.begin", "session.terminal_disposition", "session.complete", "session.skip", "session.retry", "session.block", "session.unblock", "session.cancel", "session.reset", "session.decide", "session.rework", "goal.define", "goal.revise", "goal.assess_criterion", "item.check", "item.uncheck", "item.set", "item.add", "item.remove", "item.attach", "item.clear", "item.record_many"] },
         "result": { "$ref": "urn:podway:schema:detached-admission-result:v2" }
       },
       "allOf": [
@@ -150,7 +156,7 @@
       ]
     },
     "sessionStart": {
-      "properties": { "command": { "enum": ["session.start", "session.start_replace"] }, "result": { "$ref": "urn:podway:schema:session-start-result:v2" } },
+      "properties": { "command": { "enum": ["session.start", "session.start_replace"] }, "result": { "oneOf": [{ "$ref": "urn:podway:schema:session-start-result:v2" }, { "$ref": "urn:podway:schema:session-start-result:v3" }] } },
       "allOf": [
         {
           "if": { "properties": { "result": { "properties": { "dry_run": { "const": false } }, "required": ["dry_run"] } }, "required": ["result"] },
@@ -162,18 +168,24 @@
       "required": ["workspace", "job"],
       "properties": {
         "command": { "enum": ["session.start", "session.start_replace"] },
-        "result": {
-          "allOf": [
-            { "$ref": "urn:podway:schema:session-start-result:v2" },
-            { "properties": { "dry_run": { "const": false } }, "required": ["dry_run"] }
-          ]
-        }
+        "result": { "oneOf": [
+          { "allOf": [{ "$ref": "urn:podway:schema:session-start-result:v2" }, { "properties": { "dry_run": { "const": false } }, "required": ["dry_run"] }] },
+          { "allOf": [{ "$ref": "urn:podway:schema:session-start-result:v3" }, { "properties": { "dry_run": { "const": false } }, "required": ["dry_run"] }] }
+        ] }
       }
     },
-    "status": { "properties": { "command": { "const": "session.status" }, "result": { "$ref": "urn:podway:schema:status-result:v2" } } },
-    "compactStatus": { "properties": { "command": { "const": "session.status" }, "result": { "$ref": "urn:podway:schema:compact-status-result:v2" } } },
-    "next": { "properties": { "command": { "const": "session.next" }, "result": { "$ref": "urn:podway:schema:next-result:v2" } } },
-    "observation": { "properties": { "command": { "const": "session.observe" }, "result": { "$ref": "urn:podway:schema:observation-result:v1" } } },
+    "sessionBegin": { "required": ["workspace", "job"], "properties": { "command": { "const": "session.begin" }, "result": { "$ref": "urn:podway:schema:session-begin-result:v1" } } },
+    "terminalDisposition": { "required": ["workspace", "job"], "properties": { "command": { "const": "session.terminal_disposition" }, "result": { "$ref": "urn:podway:schema:terminal-disposition-result:v1" } } },
+    "sessionReset": {
+      "properties": { "command": { "const": "session.reset" }, "result": { "$ref": "urn:podway:schema:session-reset-result:v1" } },
+      "allOf": [
+        { "if": { "properties": { "result": { "properties": { "dry_run": { "const": false } }, "required": ["dry_run"] } }, "required": ["result"] }, "then": { "required": ["workspace", "job"] } }
+      ]
+    },
+    "status": { "properties": { "command": { "const": "session.status" }, "result": { "oneOf": [{ "$ref": "urn:podway:schema:status-result:v2" }, { "$ref": "urn:podway:schema:status-result:v3" }] } } },
+    "compactStatus": { "properties": { "command": { "const": "session.status" }, "result": { "oneOf": [{ "$ref": "urn:podway:schema:compact-status-result:v2" }, { "$ref": "urn:podway:schema:compact-status-result:v3" }] } } },
+    "next": { "properties": { "command": { "const": "session.next" }, "result": { "oneOf": [{ "$ref": "urn:podway:schema:next-result:v2" }, { "$ref": "urn:podway:schema:prepared-next-result:v1" }] } } },
+    "observation": { "properties": { "command": { "const": "session.observe" }, "result": { "oneOf": [{ "$ref": "urn:podway:schema:observation-result:v1" }, { "$ref": "urn:podway:schema:observation-result:v2" }] } } },
     "stageTransition": {
       "required": ["workspace"],
       "properties": { "command": { "enum": ["session.complete", "session.skip", "session.retry", "session.block", "session.unblock", "session.cancel", "session.reset"] }, "result": { "$ref": "urn:podway:schema:stage-transition-result:v2" } },

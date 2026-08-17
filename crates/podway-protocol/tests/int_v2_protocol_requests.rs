@@ -201,6 +201,21 @@ fn v2rel003_all_mutations_admit_common_transport_with_applicable_revision_fences
 }
 
 #[test]
+fn v2lif002_reserved_mutations_are_not_admitted_before_runtime_implementation() {
+    for command in ["session.begin", "session.terminal_disposition"] {
+        let request = envelope(
+            command,
+            json!({"session_id":SESSION_ID,"session_revision":7}),
+            json!({}),
+        );
+        assert!(
+            ProcedureV2MutationRequestV1::from_envelope(&request).is_err(),
+            "reserved mutation was admitted early: {command}"
+        );
+    }
+}
+
+#[test]
 fn v2plt006_decodes_every_typed_mutation_with_closed_bounded_payloads() {
     let cases = [
         (

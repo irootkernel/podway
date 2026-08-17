@@ -159,6 +159,8 @@ pub const V2_MUTATION_COMMANDS: &[&str] = &[
     "item.record_many",
 ];
 
+const V2_RESERVED_MUTATION_COMMANDS: &[&str] = &["session.begin", "session.terminal_disposition"];
+
 /// Result families for existing routes whose v2-session shape breaks from v1.
 pub const EXISTING_ROUTE_RESULT_SCHEMAS_V2: &[ResultSchemaContractV2] = &[
     result_schema_v2(
@@ -200,8 +202,18 @@ pub const EXISTING_ROUTE_RESULT_SCHEMAS_V2: &[ResultSchemaContractV2] = &[
         &["session.start", "session.start_replace"],
     ),
     result_schema_v2(
+        "podway.session-start-result/v3",
+        "schemas/session-start-result-v3.schema.json",
+        &["session.start", "session.start_replace"],
+    ),
+    result_schema_v2(
         "podway.status-result/v2",
         "schemas/status-result-v2.schema.json",
+        &["session.status"],
+    ),
+    result_schema_v2(
+        "podway.status-result/v3",
+        "schemas/status-result-v3.schema.json",
         &["session.status"],
     ),
     result_schema_v2(
@@ -210,8 +222,18 @@ pub const EXISTING_ROUTE_RESULT_SCHEMAS_V2: &[ResultSchemaContractV2] = &[
         &["session.status"],
     ),
     result_schema_v2(
+        "podway.compact-status-result/v3",
+        "schemas/compact-status-result-v3.schema.json",
+        &["session.status"],
+    ),
+    result_schema_v2(
         "podway.next-result/v2",
         "schemas/next-result-v2.schema.json",
+        &["session.next"],
+    ),
+    result_schema_v2(
+        "podway.prepared-next-result/v1",
+        "schemas/prepared-next-result-v1.schema.json",
         &["session.next"],
     ),
     result_schema_v2(
@@ -266,6 +288,26 @@ pub const NEW_ROUTE_RESULT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
         "podway.observation-result/v1",
         "schemas/observation-result-v1.schema.json",
         &["session.observe"],
+    ),
+    result_schema_v2(
+        "podway.observation-result/v2",
+        "schemas/observation-result-v2.schema.json",
+        &["session.observe"],
+    ),
+    result_schema_v2(
+        "podway.session-begin-result/v1",
+        "schemas/session-begin-result-v1.schema.json",
+        &["session.begin"],
+    ),
+    result_schema_v2(
+        "podway.terminal-disposition-result/v1",
+        "schemas/terminal-disposition-result-v1.schema.json",
+        &["session.terminal_disposition"],
+    ),
+    result_schema_v2(
+        "podway.session-reset-result/v1",
+        "schemas/session-reset-result-v1.schema.json",
+        &["session.reset"],
     ),
     result_schema_v2(
         "podway.procedure-source-result/v1",
@@ -358,6 +400,15 @@ pub fn decode_result_schema_contract_v2(
 
 fn validate_result_correlations_v2(schema: &str, result: &Map<String, Value>) -> bool {
     match schema {
+        "podway.terminal-disposition-result/v1" => result
+            .get("session_revision")
+            .zip(
+                result
+                    .get("disposition")
+                    .and_then(Value::as_object)
+                    .and_then(|value| value.get("session_revision")),
+            )
+            .is_some_and(|(session, disposition)| session == disposition),
         "podway.decision-result/v1" => {
             let Some(record) = result.get("record").and_then(Value::as_object) else {
                 return false;
@@ -576,8 +627,13 @@ fn is_v2_mutation_command(command: &str) -> bool {
     V2_MUTATION_COMMANDS.contains(&command)
 }
 
+pub(crate) fn is_v2_mutation_contract_command(command: &str) -> bool {
+    is_v2_mutation_command(command) || V2_RESERVED_MUTATION_COMMANDS.contains(&command)
+}
+
 fn is_durable_job_command_v3(command: &str) -> bool {
-    matches!(command, "workspace.init" | "workspace.reset_all") || is_v2_mutation_command(command)
+    matches!(command, "workspace.init" | "workspace.reset_all")
+        || is_v2_mutation_contract_command(command)
 }
 
 fn required_result_fields_v2(schema: &str) -> &'static [&'static str] {
@@ -594,7 +650,51 @@ fn required_result_fields_v2(schema: &str) -> &'static [&'static str] {
             "goal_tracking",
             "goal_defined",
         ],
-        "podway.compact-status-result/v2" => &[
+        "podway.session-start-result/v3" => &[
+            "schema",
+            "procedure_schema",
+            "procedure_digest",
+            "dry_run",
+            "session_state",
+            "goal_tracking",
+            "goal_defined",
+            "active_attempt",
+            "goal_revision",
+        ],
+        "podway.session-begin-result/v1" => &[
+            "schema",
+            "procedure_schema",
+            "procedure_digest",
+            "session_id",
+            "revision",
+            "session_state",
+            "entry_graph_node_id",
+            "attempt",
+            "goal_tracking",
+            "goal_defined",
+            "goal_revision",
+            "admission",
+        ],
+        "podway.terminal-disposition-result/v1" => &[
+            "schema",
+            "session_id",
+            "session_revision",
+            "disposition",
+            "admission",
+        ],
+        "podway.session-reset-result/v1" => &[
+            "schema",
+            "dry_run",
+            "mode",
+            "session_id",
+            "session_revision",
+            "lifecycle",
+            "current_terminal_disposition",
+            "eligible",
+            "required_action",
+            "reset",
+        ],
+        "podway.compact-status-result/v2" | "podway.compact-status-result/v3" => &[
             "schema",
             "procedure",
             "session",
@@ -606,7 +706,7 @@ fn required_result_fields_v2(schema: &str) -> &'static [&'static str] {
             "items",
             "queue",
         ],
-        "podway.status-result/v2" => &[
+        "podway.status-result/v2" | "podway.status-result/v3" => &[
             "schema",
             "tier",
             "procedure",
@@ -650,7 +750,21 @@ fn required_result_fields_v2(schema: &str) -> &'static [&'static str] {
             "readback",
             "allowed_manual_rework_targets",
         ],
-        "podway.observation-result/v1" => &[
+        "podway.prepared-next-result/v1" => &[
+            "schema",
+            "procedure_schema",
+            "procedure_digest",
+            "session_id",
+            "session_state",
+            "revision",
+            "goal_tracking",
+            "goal_defined",
+            "trace_length",
+            "queue",
+            "allowed_actions",
+            "suggestions",
+        ],
+        "podway.observation-result/v1" | "podway.observation-result/v2" => &[
             "schema",
             "status",
             "guidance",
@@ -791,7 +905,56 @@ fn allowed_result_fields_v2(schema: &str) -> &'static [&'static str] {
             "entry_graph_node_id",
             "goal_defined",
         ],
-        "podway.compact-status-result/v2" => &[
+        "podway.session-start-result/v3" => &[
+            "schema",
+            "procedure_schema",
+            "procedure_digest",
+            "dry_run",
+            "session_state",
+            "goal_tracking",
+            "goal_defined",
+            "active_attempt",
+            "goal_revision",
+            "entry_graph_node_id",
+            "admission",
+            "session_id",
+            "revision",
+        ],
+        "podway.session-begin-result/v1" => &[
+            "schema",
+            "procedure_schema",
+            "procedure_digest",
+            "session_id",
+            "revision",
+            "session_state",
+            "entry_graph_node_id",
+            "attempt",
+            "goal_tracking",
+            "goal_defined",
+            "goal_revision",
+            "admission",
+        ],
+        "podway.terminal-disposition-result/v1" => &[
+            "schema",
+            "session_id",
+            "session_revision",
+            "disposition",
+            "admission",
+        ],
+        "podway.session-reset-result/v1" => &[
+            "schema",
+            "dry_run",
+            "mode",
+            "session_id",
+            "session_revision",
+            "lifecycle",
+            "current_terminal_disposition",
+            "eligible",
+            "required_action",
+            "reset",
+            "admission",
+        ],
+        "podway.compact-status-result/v2" | "podway.compact-status-result/v3" => &[
             "schema",
             "procedure",
             "session",
@@ -805,7 +968,7 @@ fn allowed_result_fields_v2(schema: &str) -> &'static [&'static str] {
             "items",
             "queue",
         ],
-        "podway.status-result/v2" => &[
+        "podway.status-result/v2" | "podway.status-result/v3" => &[
             "schema",
             "tier",
             "procedure",
@@ -879,7 +1042,21 @@ fn allowed_result_fields_v2(schema: &str) -> &'static [&'static str] {
             "blockers",
             "blockers_truncated",
         ],
-        "podway.observation-result/v1" => &[
+        "podway.prepared-next-result/v1" => &[
+            "schema",
+            "procedure_schema",
+            "procedure_digest",
+            "session_id",
+            "session_state",
+            "revision",
+            "goal_tracking",
+            "goal_defined",
+            "trace_length",
+            "queue",
+            "allowed_actions",
+            "suggestions",
+        ],
+        "podway.observation-result/v1" | "podway.observation-result/v2" => &[
             "schema",
             "status",
             "guidance",

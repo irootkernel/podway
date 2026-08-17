@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:session-start-result:v3",
+  "title": "Podway Prepared Session Start Result v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "procedure_schema", "procedure_digest", "dry_run", "session_state", "goal_tracking", "goal_defined", "active_attempt", "goal_revision"],
+  "properties": {
+    "schema": { "const": "podway.session-start-result/v3" },
+    "procedure_schema": { "const": "podway.procedure/v2" },
+    "procedure_digest": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/digest" },
+    "dry_run": { "type": "boolean" },
+    "session_state": { "const": "prepared" },
+    "goal_tracking": { "type": "boolean" },
+    "goal_defined": { "const": false },
+    "active_attempt": { "type": "null" },
+    "goal_revision": { "type": "null" },
+    "entry_graph_node_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" },
+    "admission": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/admitted" },
+    "session_id": { "type": "string", "format": "uuid" },
+    "revision": { "const": 0 }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "dry_run": { "const": true } }, "required": ["dry_run"] },
+      "then": { "not": { "anyOf": [{ "required": ["admission"] }, { "required": ["session_id"] }, { "required": ["revision"] }] } },
+      "else": { "required": ["admission", "session_id", "revision"] }
+    }
+  ]
+}

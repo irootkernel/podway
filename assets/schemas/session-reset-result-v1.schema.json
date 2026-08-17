@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:session-reset-result:v1",
+  "title": "Podway Smart Session Reset Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "dry_run", "mode", "session_id", "session_revision", "lifecycle", "current_terminal_disposition", "eligible", "required_action", "reset"],
+  "properties": {
+    "schema": { "const": "podway.session-reset-result/v1" },
+    "dry_run": { "type": "boolean" },
+    "mode": { "$ref": "urn:podway:schema:v2-result-components:v2#/$defs/resetMode" },
+    "session_id": { "type": "string", "format": "uuid" },
+    "session_revision": { "$ref": "urn:podway:schema:v2-result-components:v2#/$defs/sessionRevision" },
+    "lifecycle": { "$ref": "urn:podway:schema:v2-result-components:v2#/$defs/sessionLifecycle" },
+    "current_terminal_disposition": { "type": "boolean" },
+    "eligible": { "type": "boolean" },
+    "required_action": { "$ref": "urn:podway:schema:v2-result-components:v2#/$defs/resetRequiredAction" },
+    "reset": { "type": "boolean" },
+    "admission": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/admitted" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "dry_run": { "const": true } }, "required": ["dry_run"] },
+      "then": { "properties": { "reset": { "const": false } }, "not": { "required": ["admission"] } },
+      "else": { "required": ["admission"], "properties": { "reset": { "const": true }, "required_action": { "const": "none" } } }
+    },
+    {
+      "if": { "properties": { "eligible": { "const": true } }, "required": ["eligible"] },
+      "then": { "properties": { "required_action": { "const": "none" } } }
+    },
+    {
+      "if": { "properties": { "lifecycle": { "const": "prepared" } }, "required": ["lifecycle"] },
+      "then": { "properties": { "session_revision": { "const": 0 }, "current_terminal_disposition": { "const": false }, "eligible": { "const": true } } },
+      "else": { "properties": { "session_revision": { "$ref": "urn:podway:schema:v2-result-components:v2#/$defs/runningSessionRevision" } } }
+    }
+  ]
+}

@@ -53,6 +53,11 @@ prepared session and infers no terminal disposition. Rebuilding the constrained
 session table preserves referenced bytes and foreign-key relationships before
 the old table is removed. Any row that fails v4 reconstruction or v5 constraints
 rolls the migration back without advancing `user_version` or its migration row.
+The migration driver disables foreign-key enforcement before opening that
+transaction, applies the canonical v5 DDL with legacy rename behavior, runs
+`foreign_key_check` before commit, and restores enforcement after commit or
+rollback. The DDL does not toggle `foreign_keys` because SQLite ignores that
+pragma inside an open transaction.
 Opening a schema newer than v5 remains an unsupported downgrade and performs no
 mutation.
 

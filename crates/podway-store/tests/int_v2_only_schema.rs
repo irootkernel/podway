@@ -112,6 +112,311 @@ fn assert_schema_v3_shape(connection: &Connection) {
     }
 }
 
+fn canonical_schema_v4(lifecycle: &str) -> Connection {
+    let connection = Connection::open_in_memory().unwrap();
+    for ddl in [
+        include_str!("../../../assets/specifications/sqlite-v1.sql"),
+        include_str!("../../../assets/specifications/sqlite-v2.sql"),
+        include_str!("../../../assets/specifications/sqlite-v3.sql"),
+        include_str!("../../../assets/specifications/sqlite-v4.sql"),
+    ] {
+        connection.execute_batch(ddl).unwrap();
+    }
+    connection
+        .execute(
+            "INSERT INTO v2_procedure_snapshots (
+                snapshot_id, schema_id, procedure_id, procedure_version, name, purpose,
+                digest, canonical_json, source_kind, source_label, goal_tracking,
+                created_at_ms
+             ) VALUES ('snapshot', 'podway.procedure/v2', 'workflow', '1', 'Workflow',
+                       'Migration fixture', ?1, '{}', 'file', 'workflow.yaml', 0, 1)",
+            [digest('a').as_str()],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO v2_graph_nodes (
+                snapshot_id, graph_node_id, node_definition_id, placement_index,
+                node_type, goal_assessment, canonical_placement_json
+             ) VALUES ('snapshot', 'work', 'work', 0, 'action', 0, '{}')",
+            [],
+        )
+        .unwrap();
+
+    let (active_graph_node_id, active_attempt_id, active_trace_sequence) = if lifecycle == "running"
+    {
+        (Some("work"), Some("attempt"), Some(1_i64))
+    } else {
+        (None, None, None)
+    };
+    let completed_at_ms = (lifecycle == "completed").then_some(2_i64);
+    let cancelled_at_ms = (lifecycle == "cancelled").then_some(2_i64);
+    let cancel_reason = (lifecycle == "cancelled").then_some("cancelled");
+    connection
+        .execute(
+            "INSERT INTO v2_task_sessions (
+                singleton, session_id, task_title, procedure_snapshot_id, lifecycle,
+                session_revision, latest_trace_sequence, active_graph_node_id,
+                active_attempt_id, active_trace_sequence, goal_tracking,
+                current_goal_revision, created_at_ms, completed_at_ms, cancelled_at_ms,
+                cancel_reason
+             ) VALUES (1, ?1, 'Migration fixture', 'snapshot', ?2, 7, 1, ?3, ?4, ?5,
+                       0, NULL, 1, ?6, ?7, ?8)",
+            params![
+                uuid(700),
+                lifecycle,
+                active_graph_node_id,
+                active_attempt_id,
+                active_trace_sequence,
+                completed_at_ms,
+                cancelled_at_ms,
+                cancel_reason,
+            ],
+        )
+        .unwrap();
+    if lifecycle == "running" {
+        connection
+            .execute(
+                "INSERT INTO v2_attempts (
+                    attempt_id, session_id, snapshot_id, graph_node_id, node_definition_id,
+                    attempt_number, trace_sequence, lifecycle, validity, goal_revision,
+                    started_at_ms, ended_at_ms, terminal_reason
+                 ) VALUES ('attempt', ?1, 'snapshot', 'work', 'work', 1, 1, 'active',
+                           'valid', NULL, 1, NULL, NULL)",
+                [uuid(700)],
+            )
+            .unwrap();
+    }
+    connection
+}
+
+fn apply_reserved_schema_v5(connection: &mut Connection) {
+    connection
+        .pragma_update(None, "foreign_keys", false)
+        .unwrap();
+    let transaction = connection.transaction().unwrap();
+    transaction
+        .execute_batch(include_str!("../../../assets/specifications/sqlite-v5.sql"))
+        .unwrap();
+    let foreign_key_violations: i64 = transaction
+        .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(foreign_key_violations, 0);
+    transaction.commit().unwrap();
+    connection
+        .pragma_update(None, "foreign_keys", true)
+        .unwrap();
+}
+
+#[test]
+fn v2lif002_sqlite_v5_contract_preserves_v4_sessions_and_reserves_prepared_storage() {
+    for lifecycle in ["running", "completed", "cancelled"] {
+        let mut connection = canonical_schema_v4(lifecycle);
+        let before: (
+            String,
+            i64,
+            i64,
+            Option<String>,
+            Option<String>,
+            Option<i64>,
+        ) = connection
+            .query_row(
+                "SELECT lifecycle, session_revision, latest_trace_sequence,
+                        active_graph_node_id, active_attempt_id, active_trace_sequence
+                 FROM v2_task_sessions",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .unwrap();
+
+        apply_reserved_schema_v5(&mut connection);
+
+        let after: (
+            String,
+            i64,
+            i64,
+            Option<String>,
+            Option<String>,
+            Option<i64>,
+        ) = connection
+            .query_row(
+                "SELECT lifecycle, session_revision, latest_trace_sequence,
+                        active_graph_node_id, active_attempt_id, active_trace_sequence
+                 FROM v2_task_sessions",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .unwrap();
+        let (version, attempts, foreign_key_violations): (i64, i64, i64) = connection
+            .query_row(
+                "SELECT (SELECT user_version FROM pragma_user_version),
+                        (SELECT COUNT(*) FROM v2_attempts),
+                        (SELECT COUNT(*) FROM pragma_foreign_key_check)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(after, before, "v5 changed the {lifecycle} v4 session");
+        assert_eq!(version, 5);
+        assert_eq!(attempts, i64::from(lifecycle == "running"));
+        assert_eq!(foreign_key_violations, 0);
+    }
+
+    let mut connection = canonical_schema_v4("completed");
+    apply_reserved_schema_v5(&mut connection);
+    connection
+        .execute("DELETE FROM v2_task_sessions", [])
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO v2_task_sessions (
+                singleton, session_id, task_title, procedure_snapshot_id, lifecycle,
+                session_revision, latest_trace_sequence, active_graph_node_id,
+                active_attempt_id, active_trace_sequence, goal_tracking,
+                current_goal_revision, created_at_ms, completed_at_ms, cancelled_at_ms,
+                cancel_reason
+             ) VALUES (1, ?1, 'Prepared fixture', 'snapshot', 'prepared', 0, 0,
+                       NULL, NULL, NULL, 1, NULL, 1, NULL, NULL, NULL)",
+            [uuid(701)],
+        )
+        .unwrap();
+    assert!(
+        connection
+            .execute(
+                "UPDATE v2_task_sessions SET session_revision = 1 WHERE singleton = 1",
+                [],
+            )
+            .is_err(),
+        "prepared storage must reject a nonzero revision"
+    );
+    for mutation in [
+        "UPDATE v2_task_sessions SET latest_trace_sequence = 1 WHERE singleton = 1",
+        "UPDATE v2_task_sessions SET active_graph_node_id = 'work' WHERE singleton = 1",
+        "UPDATE v2_task_sessions SET completed_at_ms = 2 WHERE singleton = 1",
+    ] {
+        assert!(
+            connection.execute(mutation, []).is_err(),
+            "prepared storage accepted forbidden state: {mutation}"
+        );
+    }
+
+    connection
+        .execute(
+            "UPDATE v2_task_sessions
+             SET lifecycle = 'completed', session_revision = 8, completed_at_ms = 2
+             WHERE singleton = 1",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO v2_terminal_dispositions (
+                session_id, terminal_session_revision, kind, summary,
+                stable_reference, reason, actor, recorded_at_ms
+             ) VALUES (?1, 8, 'handed_off', 'Delivered', 'commit:abc', NULL,
+                       'master', 3)",
+            [uuid(701)],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO v2_terminal_dispositions (
+                session_id, terminal_session_revision, kind, summary,
+                stable_reference, reason, actor, recorded_at_ms
+             ) VALUES (?1, 9, 'not_required', NULL, NULL, 'No handoff needed',
+                       NULL, 4)",
+            [uuid(701)],
+        )
+        .unwrap();
+    let oversized_reason = "x".repeat(4001);
+    let oversized_actor = "x".repeat(257);
+    for (revision, kind, summary, reference, reason, actor) in [
+        (
+            0_i64,
+            "handed_off",
+            Some("Delivered"),
+            Some("commit:abc"),
+            None,
+            None,
+        ),
+        (10, "handed_off", Some("Delivered"), None, None, None),
+        (
+            11,
+            "not_required",
+            None,
+            None,
+            Some(oversized_reason.as_str()),
+            None,
+        ),
+        (
+            12,
+            "handed_off",
+            Some("Delivered"),
+            Some("commit:abc"),
+            None,
+            Some(oversized_actor.as_str()),
+        ),
+    ] {
+        assert!(
+            connection
+                .execute(
+                    "INSERT INTO v2_terminal_dispositions (
+                        session_id, terminal_session_revision, kind, summary,
+                        stable_reference, reason, actor, recorded_at_ms
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 5)",
+                    params![uuid(701), revision, kind, summary, reference, reason, actor],
+                )
+                .is_err(),
+            "terminal disposition storage accepted an invalid row"
+        );
+    }
+    assert!(
+        connection
+            .execute(
+                "UPDATE v2_task_sessions
+                 SET lifecycle = 'running', session_revision = 0,
+                     active_graph_node_id = 'work', active_attempt_id = 'attempt',
+                     active_trace_sequence = 1, completed_at_ms = NULL
+                 WHERE singleton = 1",
+                [],
+            )
+            .is_err(),
+        "running storage must reject revision zero"
+    );
+    connection
+        .execute("DELETE FROM v2_task_sessions", [])
+        .unwrap();
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM v2_terminal_dispositions", [], |row| {
+                row.get::<_, i64>(0)
+            },)
+            .unwrap(),
+        0,
+        "reset must cascade terminal disposition history"
+    );
+}
+
 fn seed_populated_v2_schema_v3(
     temporary: &TempDir,
 ) -> (GraphSessionStateV2, JobId, PersistedTerminalReceiptV1) {

@@ -200,10 +200,11 @@ attempted before completion or cancellation.
 
 `SESSION_RESET_NOT_ELIGIBLE` is a non-retryable domain result for default reset
 and `--replace-eligible`. Its closed details identify the observed lifecycle,
-whether a current terminal disposition exists, and the required next mode as
-`record_disposition` or `force`. They contain no Git, roadmap, process, external
+always report `current_terminal_disposition: false`, and identify the required
+next mode as `record_disposition` or `force`. They contain no Git, roadmap, process, external
 reference, item value, or progress-summary data. A caller must reassess ownership
 before choosing a new mutation; the error never recommends force deletion.
+The details use `podway.session-reset-not-eligible-details/v1`.
 
 Missing or blank force progress summary, incompatible disposition fields, initial
 goal fields supplied to start instead of begin, and unsupported mode combinations

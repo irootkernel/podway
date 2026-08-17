@@ -176,7 +176,7 @@ V2_ROUTE_DELTA = {
     "procedure.format", "procedure.vet", "procedure.lint", "procedure.check",
     "procedure.graph", "procedure.preview", "procedure.scaffold",
     "session.decide", "session.rework", "goal.define", "goal.revise",
-    "goal.assess_criterion",
+    "goal.assess_criterion", "session.begin", "session.terminal_disposition",
 }
 # V2_ROUTE_DELTA members whose owning task has landed. The delta itself never shrinks: a route
 # stays registered forever, and this set records only which of them the build now serves.
@@ -221,7 +221,8 @@ PROCEDURE_INDEPENDENT_RUNTIME_ERROR_CODES = (
     "PATH_OUTSIDE_WORKTREE", "MIGRATION_FAILED", "PROCEDURE_NOT_FOUND", "PROCEDURE_INVALID",
     "PROCEDURE_SCHEMA_UNSUPPORTED", "PROCEDURE_DIGEST_MISMATCH", "PRESET_NOT_FOUND",
     "SESSION_NOT_FOUND", "SESSION_ID_MISMATCH", "SESSION_ALREADY_EXISTS",
-    "SESSION_NOT_RUNNING", "SESSION_CANCELLED", "SESSION_REVISION_CONFLICT",
+    "SESSION_NOT_RUNNING", "SESSION_NOT_TERMINAL", "SESSION_RESET_NOT_ELIGIBLE",
+    "SESSION_CANCELLED", "SESSION_REVISION_CONFLICT",
     "ATTEMPT_NOT_CURRENT", "STAGE_NOT_SKIPPABLE",
     "REQUIRED_ITEMS_MISSING", "BLOCKERS_PRESENT", "BLOCKER_LIMIT_REACHED", "ITEM_NOT_FOUND",
     "ITEM_TYPE_MISMATCH", "ITEM_CONSTRAINT_FAILED", "ITEM_REVISION_CONFLICT",
@@ -438,7 +439,7 @@ def validate_v2_catalog_delta(root: Path) -> int:
     if set(runtime) != {"schema", "exit_codes", "errors"}:
         fail("error catalog has unexpected or missing top-level fields")
     entries = runtime.get("errors")
-    if not isinstance(entries, list) or len(entries) != 88:
+    if not isinstance(entries, list) or len(entries) != 90:
         fail("runtime error catalog must contain the v2-only error set")
     runtime_codes = [entry.get("code") for entry in entries if isinstance(entry, dict)]
     if len(runtime_codes) != len(entries) or len(set(runtime_codes)) != len(runtime_codes):
@@ -482,6 +483,7 @@ def validate_v2_catalog_delta(root: Path) -> int:
         "MUTATION_OUTCOME_UNKNOWN": "podway.mutation-outcome-unknown-details/v2",
         "EVIDENCE_REFERENCE_STALE": "podway.recoverable-v2-runtime-error-details/v1",
         "GOAL_REVISION_STALE": "podway.recoverable-v2-runtime-error-details/v1",
+        "SESSION_RESET_NOT_ELIGIBLE": "podway.session-reset-not-eligible-details/v1",
     }
     actual_recovery_schemas = {
         entry["code"]: entry.get("details_schema")
@@ -686,7 +688,7 @@ def validate_routes(root: Path) -> int:
     if not isinstance(prohibited, list) or set(prohibited) != PROHIBITED_CAPABILITIES or len(prohibited) != len(PROHIBITED_CAPABILITIES):
         fail("command route contract must prohibit command_runner, git_mutation, and network")
     routes = contract["routes"]
-    if not isinstance(routes, list) or len(routes) != 58:
+    if not isinstance(routes, list) or len(routes) != 60:
         fail("command route contract routes must be a list")
 
     expected_commands = catalog_commands(root) | {"completions"}

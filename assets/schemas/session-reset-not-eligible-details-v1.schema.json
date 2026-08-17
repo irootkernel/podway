@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:session-reset-not-eligible-details:v1",
+  "title": "Podway Session Reset Not Eligible Details v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "lifecycle", "current_terminal_disposition", "required_action", "admission"],
+  "properties": {
+    "schema": { "const": "podway.session-reset-not-eligible-details/v1" },
+    "lifecycle": { "enum": ["running", "completed", "cancelled"] },
+    "current_terminal_disposition": { "const": false },
+    "required_action": { "enum": ["record_disposition", "force"] },
+    "admission": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/admission" }
+  },
+  "allOf": [
+    { "if": { "properties": { "lifecycle": { "const": "running" } }, "required": ["lifecycle"] }, "then": { "properties": { "required_action": { "const": "force" } } }, "else": { "properties": { "required_action": { "const": "record_disposition" } } } }
+  ]
+}

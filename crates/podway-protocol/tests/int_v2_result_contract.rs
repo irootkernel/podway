@@ -242,6 +242,22 @@ fn examples() -> BTreeMap<&'static str, Value> {
             "mutation_templates": []
         }),
     );
+    let prepared_fixtures: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/v2/protocol/result-families.json"
+    ))
+    .unwrap();
+    for schema in [
+        "podway.compact-status-result/v3",
+        "podway.observation-result/v2",
+        "podway.prepared-next-result/v1",
+        "podway.session-begin-result/v1",
+        "podway.session-reset-result/v1",
+        "podway.session-start-result/v3",
+        "podway.status-result/v3",
+        "podway.terminal-disposition-result/v1",
+    ] {
+        examples.insert(schema, prepared_fixtures["fixtures"][schema].clone());
+    }
     examples
 }
 
@@ -318,17 +334,22 @@ fn v2grf_preview_uses_one_closed_result_family_for_every_document_outcome() {
 
 #[test]
 fn v2ctr003_registry_is_versioned_and_covers_exactly_the_v2_authoring_routes() {
-    assert_eq!(EXISTING_ROUTE_RESULT_SCHEMAS_V2.len(), 10);
-    assert_eq!(NEW_ROUTE_RESULT_SCHEMAS_V1.len(), 11);
+    assert_eq!(EXISTING_ROUTE_RESULT_SCHEMAS_V2.len(), 14);
+    assert_eq!(NEW_ROUTE_RESULT_SCHEMAS_V1.len(), 15);
     assert!(
         EXISTING_ROUTE_RESULT_SCHEMAS_V2
             .iter()
-            .all(|entry| { entry.schema.ends_with("/v2") || entry.schema.ends_with("/v3") })
-    );
-    assert!(
-        NEW_ROUTE_RESULT_SCHEMAS_V1
-            .iter()
-            .all(|entry| entry.schema.ends_with("/v1"))
+            .chain(NEW_ROUTE_RESULT_SCHEMAS_V1)
+            .all(
+                |entry| entry.schema.rsplit_once("/v").is_some_and(|(_, version)| {
+                    version
+                        .bytes()
+                        .next()
+                        .is_some_and(|byte| byte.is_ascii_digit() && byte != b'0')
+                        && version.chars().all(|character| character.is_ascii_digit())
+                })
+            ),
+        "every registered result schema must carry a positive /vN suffix"
     );
 
     let routes: BTreeSet<_> = NEW_ROUTE_RESULT_SCHEMAS_V1
@@ -347,15 +368,18 @@ fn v2ctr003_registry_is_versioned_and_covers_exactly_the_v2_authoring_routes() {
             "procedure.preview",
             "procedure.scaffold",
             "session.decide",
+            "session.begin",
+            "session.reset",
             "session.rework",
             "session.observe",
+            "session.terminal_disposition",
             "goal.define",
             "goal.revise",
             "goal.assess_criterion",
             "item.record_many",
         ])
     );
-    assert_eq!(routes.len(), 15);
+    assert_eq!(routes.len(), 18);
 }
 
 #[test]
@@ -1223,6 +1247,132 @@ fn v2ctr003_decoder_rejects_missing_non_string_and_unregistered_discriminators()
         decode_result_schema_contract_v2(incomplete.as_object().unwrap()),
         None
     );
+}
+
+#[test]
+fn v2lif002_prepared_result_families_enforce_the_reserved_lifecycle_boundary() {
+    let fixtures = examples();
+
+    let mut dry_run = fixtures["podway.session-start-result/v3"].clone();
+    dry_run["dry_run"] = json!(true);
+    for field in ["admission", "session_id", "revision"] {
+        dry_run.as_object_mut().unwrap().remove(field);
+    }
+    assert_valid("schemas/session-start-result-v3.schema.json", &dry_run);
+    let mut started = fixtures["podway.session-start-result/v3"].clone();
+    started["active_attempt"] = json!({"attempt_id":UUID,"attempt_number":1});
+    assert_invalid("schemas/session-start-result-v3.schema.json", &started);
+
+    let mut begin_without_goal = fixtures["podway.session-begin-result/v1"].clone();
+    begin_without_goal["goal_defined"] = json!(false);
+    begin_without_goal["goal_revision"] = Value::Null;
+    assert_valid(
+        "schemas/session-begin-result-v1.schema.json",
+        &begin_without_goal,
+    );
+    begin_without_goal["goal_revision"] = json!(1);
+    assert_invalid(
+        "schemas/session-begin-result-v1.schema.json",
+        &begin_without_goal,
+    );
+
+    let mut disposition = fixtures["podway.terminal-disposition-result/v1"].clone();
+    disposition["disposition"]["summary"] = json!("x".repeat(4001));
+    assert_invalid(
+        "schemas/terminal-disposition-result-v1.schema.json",
+        &disposition,
+    );
+    let mut mismatched_disposition = fixtures["podway.terminal-disposition-result/v1"].clone();
+    mismatched_disposition["disposition"]["session_revision"] = json!(3);
+    assert_valid(
+        "schemas/terminal-disposition-result-v1.schema.json",
+        &mismatched_disposition,
+    );
+    assert_eq!(
+        decode_result_schema_contract_v2(mismatched_disposition.as_object().unwrap()),
+        None
+    );
+
+    let mut prepared_reset = fixtures["podway.session-reset-result/v1"].clone();
+    prepared_reset["session_revision"] = json!(1);
+    assert_invalid(
+        "schemas/session-reset-result-v1.schema.json",
+        &prepared_reset,
+    );
+    let mut reset_dry_run = fixtures["podway.session-reset-result/v1"].clone();
+    reset_dry_run["dry_run"] = json!(true);
+    reset_dry_run["reset"] = json!(false);
+    reset_dry_run.as_object_mut().unwrap().remove("admission");
+    assert_valid(
+        "schemas/session-reset-result-v1.schema.json",
+        &reset_dry_run,
+    );
+
+    let reset_not_eligible = json!({
+        "schema":"podway.session-reset-not-eligible-details/v1",
+        "lifecycle":"completed",
+        "current_terminal_disposition":false,
+        "required_action":"record_disposition",
+        "admission":{"admitted":false}
+    });
+    assert_valid(
+        "schemas/session-reset-not-eligible-details-v1.schema.json",
+        &reset_not_eligible,
+    );
+    let mut mismatched_reset_details = reset_not_eligible;
+    mismatched_reset_details["required_action"] = json!("force");
+    assert_invalid(
+        "schemas/session-reset-not-eligible-details-v1.schema.json",
+        &mismatched_reset_details,
+    );
+
+    let mut status = fixtures["podway.status-result/v3"].clone();
+    status["current"] = fixtures["podway.status-result/v2"]["current"].clone();
+    assert_invalid("schemas/status-result-v3.schema.json", &status);
+    let mut compact = fixtures["podway.compact-status-result/v3"].clone();
+    compact["trace_length"] = json!(1);
+    assert_invalid("schemas/compact-status-result-v3.schema.json", &compact);
+
+    let mut next = fixtures["podway.prepared-next-result/v1"].clone();
+    let duplicate_suggestion = next["suggestions"][1].clone();
+    next["suggestions"][0] = duplicate_suggestion;
+    assert_invalid("schemas/prepared-next-result-v1.schema.json", &next);
+
+    let mut observation = fixtures["podway.observation-result/v2"].clone();
+    observation["mutation_templates"][0]["preconditions"]
+        .as_object_mut()
+        .unwrap()
+        .remove("session_revision");
+    assert_invalid("schemas/observation-result-v2.schema.json", &observation);
+    let mut duplicate_template = fixtures["podway.observation-result/v2"].clone();
+    let duplicate_reset = duplicate_template["mutation_templates"][1].clone();
+    duplicate_template["mutation_templates"][0] = duplicate_reset;
+    assert_invalid(
+        "schemas/observation-result-v2.schema.json",
+        &duplicate_template,
+    );
+
+    for command in ["session.begin", "session.terminal_disposition"] {
+        let queued_job = json!({
+            "schema":"podway.job-lookup-result/v3",
+            "found":true,
+            "job":{
+                "id":UUID,
+                "sequence":1,
+                "state":"queued",
+                "submitted_at":"2026-08-04T00:00:00.000Z",
+                "finished_at":null,
+                "command":command,
+                "request_digest":DIGEST,
+                "terminal_response":null
+            }
+        });
+        assert_valid("schemas/job-lookup-result-v3.schema.json", &queued_job);
+        assert!(
+            decode_result_schema_contract_v2(queued_job.as_object().unwrap()).is_some(),
+            "reserved durable job command was rejected: {command}"
+        );
+    }
 }
 
 #[test]

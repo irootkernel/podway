@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:prepared-next-result:v1",
+  "title": "Podway Prepared Session Next Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "procedure_schema", "procedure_digest", "session_id", "session_state", "revision", "goal_tracking", "goal_defined", "trace_length", "queue", "allowed_actions", "suggestions"],
+  "properties": {
+    "schema": { "const": "podway.prepared-next-result/v1" },
+    "procedure_schema": { "const": "podway.procedure/v2" },
+    "procedure_digest": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/digest" },
+    "session_id": { "type": "string", "format": "uuid" },
+    "session_state": { "const": "prepared" },
+    "revision": { "const": 0 },
+    "goal_tracking": { "type": "boolean" },
+    "goal_defined": { "const": false },
+    "trace_length": { "const": 0 },
+    "queue": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/queue" },
+    "allowed_actions": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": { "enum": ["session.begin", "session.reset", "session.start_replace"] },
+      "allOf": [
+        { "contains": { "const": "session.begin" }, "minContains": 1, "maxContains": 1 },
+        { "contains": { "const": "session.reset" }, "minContains": 1, "maxContains": 1 },
+        { "contains": { "const": "session.start_replace" }, "minContains": 1, "maxContains": 1 }
+      ]
+    },
+    "suggestions": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "allOf": [
+        { "contains": { "properties": { "command": { "const": "session.begin" } }, "required": ["command"] }, "minContains": 1, "maxContains": 1 },
+        { "contains": { "properties": { "command": { "const": "session.reset" } }, "required": ["command"] }, "minContains": 1, "maxContains": 1 },
+        { "contains": { "properties": { "command": { "const": "session.start_replace" } }, "required": ["command"] }, "minContains": 1, "maxContains": 1 }
+      ],
+      "items": { "$ref": "urn:podway:schema:v2-result-components:v2#/$defs/lifecycleSuggestion" }
+    }
+  }
+}

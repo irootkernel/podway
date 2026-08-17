@@ -221,6 +221,7 @@ commands:
   maintenance_barrier: false
   result_schemas:
   - podway.session-start-result/v2
+  - podway.session-start-result/v3
   - podway.detached-admission-result/v2
 - name: session.start_replace
   availability: executable
@@ -241,6 +242,24 @@ commands:
   idempotency_scope: workspace
   result_schemas:
   - podway.session-start-result/v2
+  - podway.session-start-result/v3
+  - podway.detached-admission-result/v2
+- name: session.begin
+  availability: reserved_contract
+  cli:
+  - begin
+  operation: mutate
+  workspace_required: true
+  durable_job: true
+  session_mutation: true
+  destructive_confirmation: false
+  preconditions:
+  - workspace_uuid
+  - session_id
+  - session_revision
+  idempotency_scope: session
+  result_schemas:
+  - podway.session-begin-result/v1
   - podway.detached-admission-result/v2
 - name: session.status
   availability: executable
@@ -256,6 +275,8 @@ commands:
   result_schemas:
   - podway.status-result/v2
   - podway.compact-status-result/v2
+  - podway.status-result/v3
+  - podway.compact-status-result/v3
 - name: session.next
   availability: executable
   cli:
@@ -269,6 +290,7 @@ commands:
   - session_id_optional
   result_schemas:
   - podway.next-result/v2
+  - podway.prepared-next-result/v1
 - name: session.observe
   availability: executable
   cli:
@@ -282,6 +304,7 @@ commands:
   - session_id_optional
   result_schemas:
   - podway.observation-result/v1
+  - podway.observation-result/v2
 - name: session.complete
   availability: executable
   cli:
@@ -407,6 +430,24 @@ commands:
   maintenance_barrier: true
   result_schemas:
   - podway.stage-transition-result/v2
+  - podway.session-reset-result/v1
+  - podway.detached-admission-result/v2
+- name: session.terminal_disposition
+  availability: reserved_contract
+  cli:
+  - disposition
+  operation: mutate
+  workspace_required: true
+  durable_job: true
+  session_mutation: true
+  destructive_confirmation: false
+  preconditions:
+  - workspace_uuid
+  - session_id
+  - session_revision
+  idempotency_scope: session
+  result_schemas:
+  - podway.terminal-disposition-result/v1
   - podway.detached-admission-result/v2
 - name: workspace.reset_all
   availability: executable

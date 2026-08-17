@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:terminal-disposition-result:v1",
+  "title": "Podway Terminal Disposition Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "session_id", "session_revision", "disposition", "admission"],
+  "properties": {
+    "schema": { "const": "podway.terminal-disposition-result/v1" },
+    "session_id": { "type": "string", "format": "uuid" },
+    "session_revision": { "$ref": "urn:podway:schema:v2-result-components:v2#/$defs/runningSessionRevision" },
+    "disposition": { "$ref": "urn:podway:schema:v2-result-components:v2#/$defs/terminalDisposition" },
+    "admission": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/admitted" }
+  }
+}

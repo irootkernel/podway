@@ -305,6 +305,8 @@ const FROZEN_ERROR_CATALOG: &[(&str, u8, bool)] = &[
     ("SESSION_ID_MISMATCH", 4, false),
     ("SESSION_ALREADY_EXISTS", 1, false),
     ("SESSION_NOT_RUNNING", 1, false),
+    ("SESSION_NOT_TERMINAL", 1, false),
+    ("SESSION_RESET_NOT_ELIGIBLE", 1, false),
     ("SESSION_CANCELLED", 1, false),
     ("SESSION_REVISION_CONFLICT", 4, true),
     ("ATTEMPT_NOT_CURRENT", 4, true),
@@ -481,6 +483,15 @@ fn api_004_error_catalog_is_exhaustive_and_error_pairs_fail_closed() {
                 "expected_attempt_id".to_owned(),
                 json!("00000000-0000-4000-8000-000000000019"),
             )]),
+            "SESSION_RESET_NOT_ELIGIBLE" => json!({
+                "lifecycle": "running",
+                "current_terminal_disposition": false,
+                "required_action": "force",
+                "admission": {"admitted": false}
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
             "BLOCKER_LIMIT_REACHED" => {
                 Map::from_iter([("maximum_open_blockers".to_owned(), json!(64))])
             }
@@ -591,6 +602,69 @@ fn api_004_automation_error_details_reject_unknown_fields() {
             }),
             Err(ProtocolError::InvalidErrorDetails { .. })
         ));
+    }
+}
+
+fn session_reset_not_eligible_error(
+    details: Map<String, Value>,
+) -> Result<ErrorEnvelopeV1, ProtocolError> {
+    ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
+        request_id: RequestIdV1::new(REQUEST_ID).unwrap(),
+        command: CommandNameV1::new("session.reset").unwrap(),
+        generated_at: timestamp(),
+        code: ErrorCodeV1::new("SESSION_RESET_NOT_ELIGIBLE").unwrap(),
+        message: "session reset is not eligible".to_owned(),
+        retryable: false,
+        exit_code: ExitCodeV1::new(1).unwrap(),
+        workspace: None,
+        details,
+    })
+}
+
+#[test]
+fn api_004_session_reset_not_eligible_details_are_closed_and_state_correlated() {
+    let details = |lifecycle: &str, required_action: &str| {
+        json!({
+            "lifecycle": lifecycle,
+            "current_terminal_disposition": false,
+            "required_action": required_action,
+            "admission": {"admitted": false}
+        })
+        .as_object()
+        .unwrap()
+        .clone()
+    };
+    for valid in [
+        details("running", "force"),
+        details("completed", "record_disposition"),
+        details("cancelled", "record_disposition"),
+    ] {
+        assert_round_trip(session_reset_not_eligible_error(valid).unwrap());
+    }
+
+    let mut invalid = vec![
+        details("running", "record_disposition"),
+        details("completed", "force"),
+        details("prepared", "force"),
+    ];
+    let mut current_disposition = details("running", "force");
+    current_disposition.insert("current_terminal_disposition".to_owned(), json!(true));
+    invalid.push(current_disposition);
+    let mut malformed_admission = details("running", "force");
+    malformed_admission.insert("admission".to_owned(), json!({"admitted": true}));
+    invalid.push(malformed_admission);
+    let mut missing = details("running", "force");
+    missing.remove("lifecycle");
+    invalid.push(missing);
+    let mut extra = details("running", "force");
+    extra.insert("unexpected".to_owned(), json!(true));
+    invalid.push(extra);
+    let mut wrong_schema = details("running", "force");
+    wrong_schema.insert("schema".to_owned(), json!("podway.unknown/v1"));
+    invalid.push(wrong_schema);
+
+    for details in invalid {
+        assert!(session_reset_not_eligible_error(details).is_err());
     }
 }
 

@@ -337,6 +337,7 @@
       "workspace.repair",
       "session.start",
       "session.start_replace",
+      "session.begin",
       "session.status",
       "session.next",
       "session.observe",
@@ -347,6 +348,7 @@
       "session.unblock",
       "session.cancel",
       "session.reset",
+      "session.terminal_disposition",
       "workspace.reset_all",
       "item.check",
       "item.uncheck",
@@ -595,6 +597,19 @@
         "exit_code": 1,
         "retryable": false,
         "summary": "The command requires a running session."
+      },
+      {
+        "code": "SESSION_NOT_TERMINAL",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The command requires a completed or cancelled session."
+      },
+      {
+        "code": "SESSION_RESET_NOT_ELIGIBLE",
+        "details_schema": "podway.session-reset-not-eligible-details/v1",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The current session is not eligible for default reset or replacement."
       },
       {
         "code": "SESSION_CANCELLED",
@@ -975,6 +990,11 @@
         "sha256": "sha256:de8b30d82a597940838981ebc344f4c7aea08aea70f37b745ad3f0b4cc73ed20"
       },
       {
+        "id": "urn:podway:schema:compact-status-result:v3",
+        "path": "schemas/compact-status-result-v3.schema.json",
+        "sha256": "sha256:32a3cd28d1df85b739b3fe69959edd6e924f34de5db9a5e805aebd8d64b01511"
+      },
+      {
         "id": "urn:podway:schema:contract-manifest:v1",
         "path": "schemas/contract-manifest-v1.schema.json",
         "sha256": "sha256:798b3528db2495c819e45b091d9e594a812d49c1c9a6a55f6c429aa3cb2e5340"
@@ -1067,12 +1087,12 @@
       {
         "id": "urn:podway:schema:job-lookup-result:v3",
         "path": "schemas/job-lookup-result-v3.schema.json",
-        "sha256": "sha256:2473130ac734fc19fec1b428bd2d34dbe2fe17aedd99141f7672d16a1d99615d"
+        "sha256": "sha256:36113cee8291cec12ba4dfd0dbf062dfd2aaee650deb0b078b367f24bbe74340"
       },
       {
         "id": "urn:podway:schema:job-result:v3",
         "path": "schemas/job-result-v3.schema.json",
-        "sha256": "sha256:450594b841d7bb5b71575a7b0b35c1d6b0cd17fe7d14cca7feb4cbea46da4f9f"
+        "sha256": "sha256:6049719dc04311ed4e7aabdd61ed5ee89f35c2c1bcec236ceccdf5da6ba1c223"
       },
       {
         "id": "urn:podway:schema:job-wait-timeout-details:v1",
@@ -1095,9 +1115,19 @@
         "sha256": "sha256:159a649dfd698805d33f4cea6aaaf60622519f1e84c6df08bb923cc360e7362c"
       },
       {
+        "id": "urn:podway:schema:observation-result:v2",
+        "path": "schemas/observation-result-v2.schema.json",
+        "sha256": "sha256:686bd908912078d600423ca1404bcce8db1ab43227baf670f87de3a6ef2741e7"
+      },
+      {
         "id": "urn:podway:schema:output:v3",
         "path": "schemas/output-v3.schema.json",
-        "sha256": "sha256:4d9d392e7086ef19d3c9be9cf740b84ec51800b5e2aeab3c07fd03e76c308083"
+        "sha256": "sha256:6b85f283b5b54cf428ee900c2ef2cab44d68e057a8cf06dab98fdadef637a74a"
+      },
+      {
+        "id": "urn:podway:schema:prepared-next-result:v1",
+        "path": "schemas/prepared-next-result-v1.schema.json",
+        "sha256": "sha256:26b11d4061e759d324d1f432b9a0a3f516eac99307900746478785c101e5088a"
       },
       {
         "id": "urn:podway:schema:procedure-diagnostics-result:v1",
@@ -1160,9 +1190,29 @@
         "sha256": "sha256:ac46b49fa31932a27a46034e479e7e86dcbb30e1cd5367f10de4344ea8849b15"
       },
       {
+        "id": "urn:podway:schema:session-begin-result:v1",
+        "path": "schemas/session-begin-result-v1.schema.json",
+        "sha256": "sha256:d311a85c4afc0b4e57e16a50604626bea9d44aa043f8d581daca06ea4781a757"
+      },
+      {
+        "id": "urn:podway:schema:session-reset-not-eligible-details:v1",
+        "path": "schemas/session-reset-not-eligible-details-v1.schema.json",
+        "sha256": "sha256:8fc4bc7290fbf9a40fcb8a63e242c0ad940b60158db241fa289bd483158c4fd9"
+      },
+      {
+        "id": "urn:podway:schema:session-reset-result:v1",
+        "path": "schemas/session-reset-result-v1.schema.json",
+        "sha256": "sha256:18287c7d80b63b5337d9f8ec1824633f4cabbc6ea0b41ebadd9288067df7ca7f"
+      },
+      {
         "id": "urn:podway:schema:session-start-result:v2",
         "path": "schemas/session-start-result-v2.schema.json",
         "sha256": "sha256:5f139d4490ced94204f47b32591c0ab319dd2566e690d6d3b82a6b2391df20f7"
+      },
+      {
+        "id": "urn:podway:schema:session-start-result:v3",
+        "path": "schemas/session-start-result-v3.schema.json",
+        "sha256": "sha256:205098ea9ea6732ef39d7e4a021735e739e86ed8a4785b5448e83f476a4ea97c"
       },
       {
         "id": "urn:podway:schema:socket-endpoint-error-details:v1",
@@ -1180,9 +1230,24 @@
         "sha256": "sha256:40daafcf5426c5367e4462dc2e42f4481bf169942ee8545076e6ae56edd828b3"
       },
       {
+        "id": "urn:podway:schema:status-result:v3",
+        "path": "schemas/status-result-v3.schema.json",
+        "sha256": "sha256:f3daa02a6521fa1f45461a4644873d6a76920f12ef5e678839c30539a3a7300d"
+      },
+      {
+        "id": "urn:podway:schema:terminal-disposition-result:v1",
+        "path": "schemas/terminal-disposition-result-v1.schema.json",
+        "sha256": "sha256:4427c5353e2222b52e49b54b62044dd77d6914a495d599835c10431439d643ec"
+      },
+      {
         "id": "urn:podway:schema:v2-result-components:v1",
         "path": "schemas/v2-result-components-v1.schema.json",
         "sha256": "sha256:6596fd6f7eaf47cd55604addeed927e7bff4c092a64b7453efc204ee037915d6"
+      },
+      {
+        "id": "urn:podway:schema:v2-result-components:v2",
+        "path": "schemas/v2-result-components-v2.schema.json",
+        "sha256": "sha256:e20c147d02bcf9ce4c0555ed95b9407abcc33062d40ceb770355992d58665251"
       },
       {
         "id": "urn:podway:schema:v2-runtime-error-details:v1",
@@ -1218,9 +1283,9 @@
   },
   "current_surface_counts": {
     "authoring_diagnostics": 53,
-    "routes": 58,
-    "runtime_errors": 88,
-    "schemas": 53
+    "routes": 60,
+    "runtime_errors": 90,
+    "schemas": 63
   },
   "migration_boundary": {
     "adapter_database_access": "forbidden",

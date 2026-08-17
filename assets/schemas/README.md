@@ -33,9 +33,16 @@ These JSON Schema Draft 2020-12 files define Podway's versioned structural contr
 - `procedure-validation-result-v2.schema.json`: metadata-only Procedure v2 validation success.
 - `detached-admission-result-v2.schema.json`: Procedure v2 durable mutation admission.
 - `session-start-result-v2.schema.json`: Procedure v2 dry-run and live start outcomes.
+- `session-start-result-v3.schema.json`: prepared-session dry-run and live start outcomes.
+- `session-begin-result-v1.schema.json`: atomic prepared-to-running transition outcome.
+- `terminal-disposition-result-v1.schema.json`: caller-asserted terminal handoff disposition.
+- `session-reset-result-v1.schema.json`: eligible and force reset preview and deletion outcome.
 - `compact-status-result-v2.schema.json`: bounded value-free Procedure v2 status.
 - `status-result-v2.schema.json`: standard status and verbose status with six independently bounded history windows, including decisions and rework.
+- `compact-status-result-v3.schema.json`: prepared-aware bounded value-free status.
+- `status-result-v3.schema.json`: prepared-aware standard and verbose status.
 - `next-result-v2.schema.json`: bounded action, decision, and goal-aware machine guidance.
+- `prepared-next-result-v1.schema.json`: cursor-free prepared-session guidance.
 - `stage-transition-result-v2.schema.json`: Procedure v2 action and administrative transitions.
 - `item-mutation-result-v2.schema.json`: Procedure v2 item mutation outcome.
 - `item-record-many-input-v1.schema.json`: closed JSON stdin contract for bounded atomic item recording.
@@ -51,6 +58,9 @@ These JSON Schema Draft 2020-12 files define Podway's versioned structural contr
 - `goal-revision-result-v1.schema.json`: revised session goal and rework outcome.
 - `criterion-assessment-result-v1.schema.json`: one criterion assessment outcome.
 - `v2-result-components-v1.schema.json`: shared closed and bounded Procedure v2 result components.
+- `v2-result-components-v2.schema.json`: shared prepared lifecycle, disposition, reset, and guidance components.
+- `observation-result-v2.schema.json`: prepared-aware coherent status, guidance, item, and mutation-template observation.
+- `session-reset-not-eligible-details-v1.schema.json`: closed smart-reset eligibility failure details.
 - `v2-runtime-error-details-v1.schema.json`: closed code-bound details for registered Procedure v2 runtime errors.
 - `recoverable-v2-runtime-error-details-v1.schema.json`: stale evidence and goal-revision details with state-refresh recovery.
 - `contract-manifest-v1.schema.json`: deterministic integration contract inventory.

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:session-begin-result:v1",
+  "title": "Podway Session Begin Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "procedure_schema", "procedure_digest", "session_id", "revision", "session_state", "entry_graph_node_id", "attempt", "goal_tracking", "goal_defined", "goal_revision", "admission"],
+  "properties": {
+    "schema": { "const": "podway.session-begin-result/v1" },
+    "procedure_schema": { "const": "podway.procedure/v2" },
+    "procedure_digest": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/digest" },
+    "session_id": { "type": "string", "format": "uuid" },
+    "revision": { "$ref": "urn:podway:schema:v2-result-components:v2#/$defs/runningSessionRevision" },
+    "session_state": { "const": "running" },
+    "entry_graph_node_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" },
+    "attempt": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/attemptIdentity" },
+    "goal_tracking": { "type": "boolean" },
+    "goal_defined": { "type": "boolean" },
+    "goal_revision": { "oneOf": [{ "type": "null" }, { "$ref": "urn:podway:schema:v2-result-components:v2#/$defs/runningSessionRevision" }] },
+    "admission": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/admitted" }
+  },
+  "allOf": [
+    { "if": { "properties": { "goal_tracking": { "const": false } }, "required": ["goal_tracking"] }, "then": { "properties": { "goal_defined": { "const": false }, "goal_revision": { "type": "null" } } } },
+    { "if": { "properties": { "goal_defined": { "const": false } }, "required": ["goal_defined"] }, "then": { "properties": { "goal_revision": { "type": "null" } } } },
+    { "if": { "properties": { "goal_defined": { "const": true } }, "required": ["goal_defined"] }, "then": { "properties": { "goal_tracking": { "const": true }, "goal_revision": { "const": 1 } } } }
+  ]
+}

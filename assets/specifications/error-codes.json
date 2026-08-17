@@ -232,6 +232,19 @@
       "summary": "The command requires a running session."
     },
     {
+      "code": "SESSION_NOT_TERMINAL",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The command requires a completed or cancelled session."
+    },
+    {
+      "code": "SESSION_RESET_NOT_ELIGIBLE",
+      "details_schema": "podway.session-reset-not-eligible-details/v1",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The current session is not eligible for default reset or replacement."
+    },
+    {
       "code": "SESSION_CANCELLED",
       "exit_code": 1,
       "retryable": false,

@@ -184,6 +184,14 @@
       "capabilities": []
     },
     {
+      "command": "session.begin",
+      "availability": "reserved_contract",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
       "command": "session.status",
       "availability": "executable",
       "owner": "podway-daemon",
@@ -258,6 +266,14 @@
     {
       "command": "session.reset",
       "availability": "executable",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "session.terminal_disposition",
+      "availability": "reserved_contract",
       "owner": "podway-daemon",
       "path": ["podway-cli", "podway-protocol", "podway-daemon"],
       "execution": "daemon",
