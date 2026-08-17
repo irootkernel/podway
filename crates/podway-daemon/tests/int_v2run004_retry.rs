@@ -189,6 +189,14 @@ fn v2run004_production_retry_is_clean_durable_replayable_and_re_resolves_evidenc
     );
     let started = runtime::v2_result(runtime::dispatch(&production, &start), "session.start");
     let session_id = started["session_id"].as_str().unwrap().to_owned();
+    runtime::begin(
+        &production,
+        &workspace_selector,
+        40_009,
+        &session_id,
+        Map::new(),
+        "v2run004-begin",
+    );
 
     runtime::mutate_item(
         &production,
@@ -461,6 +469,14 @@ fn v2run004_retry_reason_uses_the_v2_unicode_scalar_boundary_before_admission() 
     );
     let started = runtime::v2_result(runtime::dispatch(&production, &start), "session.start");
     let session_id = started["session_id"].as_str().unwrap();
+    runtime::begin(
+        &production,
+        &workspace_selector,
+        40_299,
+        session_id,
+        Map::new(),
+        "v2run004-boundary-begin",
+    );
     let before = status_with(&production, &workspace_selector, 40_203, session_id, false);
 
     let too_long = raw_retry_request(

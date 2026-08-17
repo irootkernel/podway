@@ -255,9 +255,10 @@ impl SqliteStoreV1 {
             let state = load_graph_session_connection_v2(connection)?
                 .ok_or_else(|| invariant(StoreInvariantV1::ProcedureV2GraphState))?;
             let dispositions = load_terminal_dispositions_connection_v2(connection, &state)?;
-            Ok(dispositions.last().is_some_and(|disposition| {
-                disposition.terminal_session_revision() == state.trace().revision()
-            }))
+            Ok(crate::v2_state::terminal_disposition_is_current_v2(
+                &dispositions,
+                state.trace().revision(),
+            ))
         })
     }
 
@@ -707,9 +708,10 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
         }
         if let Some(current) = &current_v2 {
             let dispositions = load_terminal_dispositions_connection_v2(&transaction, current)?;
-            let current_disposition = dispositions.last().is_some_and(|disposition| {
-                disposition.terminal_session_revision() == current.trace().revision()
-            });
+            let current_disposition = crate::v2_state::terminal_disposition_is_current_v2(
+                &dispositions,
+                current.trace().revision(),
+            );
             if matches!(expected_current, GraphStartCurrentTaskV2::Eligible { .. })
                 && !graph_session_is_reset_eligible_v2(current, current_disposition)
             {
@@ -982,9 +984,10 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
         }
         if let PersistedGraphTerminalOperationV2::Reset { mode, .. } = &operation {
             let dispositions = load_terminal_dispositions_connection_v2(&transaction, &current)?;
-            let current_disposition = dispositions.last().is_some_and(|disposition| {
-                disposition.terminal_session_revision() == current.trace().revision()
-            });
+            let current_disposition = crate::v2_state::terminal_disposition_is_current_v2(
+                &dispositions,
+                current.trace().revision(),
+            );
             if *mode == crate::PersistedGraphResetModeV2::Eligible
                 && !graph_session_is_reset_eligible_v2(&current, current_disposition)
             {
@@ -1381,9 +1384,10 @@ impl StoreContractV1 for SqliteStoreV1 {
                     .as_ref()
                     .ok_or_else(|| corrupt(StoreRecordKindV1::Session))?;
                 let dispositions = load_terminal_dispositions_connection_v2(&transaction, current)?;
-                if dispositions.last().is_some_and(|disposition| {
-                    disposition.terminal_session_revision() == current.trace().revision()
-                }) {
+                if crate::v2_state::terminal_disposition_is_current_v2(
+                    &dispositions,
+                    current.trace().revision(),
+                ) {
                     return Err(StoreErrorV1::TerminalDispositionAlreadyRecordedV1 {
                         session_revision: current.trace().revision(),
                     });
@@ -2184,6 +2188,11 @@ fn validate_procedure_v2_action_admission_v1(
                     actual: current_revision,
                 },
             ));
+        }
+        if current.trace().lifecycle() == podway_core::SessionLifecycle::Prepared
+            && !matches!(request.command(), crate::CommandV1::SessionReset)
+        {
+            return Err(reject(PersistedGraphMutationFailureV2::SessionNotRunning));
         }
         if !matches!(
             request.command(),
@@ -6032,6 +6041,45 @@ fn graph_mutation_failure_matches_v2(
     let command = execution.command();
     let active = current.trace().active_attempt();
     match command {
+        crate::CommandV1::SessionBegin => {
+            let Some(expected_revision) = preconditions.expected_session_revision() else {
+                return false;
+            };
+            let Ok((document, payload)) =
+                procedure_v2_operation_payload_v1(execution, "session.begin", 18)
+            else {
+                return false;
+            };
+            let Some(fresh_attempt_id) = document
+                .get("fresh_attempt_id")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| podway_core::AttemptId::new(value.to_owned()).ok())
+            else {
+                return false;
+            };
+            let initial_goal = match payload.get("initial_goal") {
+                Some(serde_json::Value::Null) => None,
+                Some(serde_json::Value::Object(goal)) => {
+                    let Ok((statement, criteria, actor)) = procedure_v2_goal_definition_v1(goal)
+                    else {
+                        return false;
+                    };
+                    Some(crate::GraphInitialGoalV2::new(statement, criteria, actor))
+                }
+                _ => return false,
+            };
+            current
+                .begin_v2(
+                    expected_revision,
+                    fresh_attempt_id,
+                    initial_goal,
+                    podway_core::UnixMillis::new(u64::MAX),
+                )
+                .err()
+                .and_then(|failure| PersistedGraphMutationFailureV2::try_from(&failure).ok())
+                .as_ref()
+                == Some(error)
+        }
         crate::CommandV1::GoalDefine => {
             let Some(expected_revision) = preconditions.expected_session_revision() else {
                 return false;
@@ -7193,6 +7241,18 @@ fn read_graph_workspace_view_connection_v2(
     identity: &DurableWorktreeIdentityV1,
 ) -> Result<GraphWorkspaceViewV2, StoreErrorV1> {
     let graph_state = load_graph_session_connection_v2(connection)?;
+    let current_terminal_disposition = graph_state
+        .as_ref()
+        .map(|state| {
+            load_terminal_dispositions_connection_v2(connection, state).map(|dispositions| {
+                crate::v2_state::terminal_disposition_is_current_v2(
+                    &dispositions,
+                    state.trace().revision(),
+                )
+            })
+        })
+        .transpose()?
+        .unwrap_or(false);
     let queued: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM jobs WHERE state = 'queued'",
@@ -7223,7 +7283,8 @@ fn read_graph_workspace_view_connection_v2(
         u64::try_from(latest_workspace_sequence)
             .map_err(|_| corrupt(StoreRecordKindV1::Workspace))?,
         epoch(observed_at, StoreRecordKindV1::Workspace)?,
-    ))
+    )
+    .with_current_terminal_disposition(current_terminal_disposition))
 }
 
 fn read_job_state_connection_v1(

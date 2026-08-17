@@ -21,6 +21,9 @@ transition matrix binds each state-changing route to its terminal `result_schema
 and uses `none` where no closed terminal result is defined. A
 `procedure_digest_file_source_only` precondition is an optional caller guard that
 applies to Procedure-file starts and is invalid for preset starts.
+The `cli` field identifies one representative route spelling; it is not an
+exhaustive inventory of mutually exclusive flags. The CLI specification and
+generated help own the complete command grammar.
 
 Narrative rationale and operational rules are in the
 [contributor specifications](../../docs/specs/). These files are canonical build

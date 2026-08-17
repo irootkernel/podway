@@ -459,6 +459,14 @@ fn v2drw005_production_readback_is_bounded_immutable_pageable_and_cold_stable() 
         .as_str()
         .unwrap()
         .to_owned();
+    runtime::begin(
+        &production,
+        &selector,
+        next_number(&mut number),
+        &session_id,
+        Map::new(),
+        "v2drw005-begin",
+    );
 
     let mut expected_decisions = Vec::new();
     let mut expected_reworks = Vec::new();

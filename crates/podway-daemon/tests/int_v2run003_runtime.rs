@@ -238,11 +238,15 @@ fn request_with_options(
         "selector".to_owned(),
         serde_json::to_value(selector).unwrap(),
     );
-    let operation = match command {
-        "workspace.init" | "workspace.reset_all" => OperationV1::Bootstrap,
-        "workspace.show" | "session.status" | "session.next" | "session.observe" | "job.list"
-        | "job.lookup" | "job.status" | "job.wait" => OperationV1::Query,
-        _ => OperationV1::Mutate,
+    let operation = if payload.get("dry_run").and_then(Value::as_bool) == Some(true) {
+        OperationV1::Query
+    } else {
+        match command {
+            "workspace.init" | "workspace.reset_all" => OperationV1::Bootstrap,
+            "workspace.show" | "session.status" | "session.next" | "session.observe"
+            | "job.list" | "job.lookup" | "job.status" | "job.wait" => OperationV1::Query,
+            _ => OperationV1::Mutate,
+        }
     };
     let envelope = RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
         request_id: RequestIdV1::new(format!("00000000-0000-4000-8000-{request_number:012x}"))
@@ -357,6 +361,33 @@ pub(super) fn status(
     v2_result(dispatch(dispatcher, &request), "session.status")
 }
 
+pub(super) fn begin(
+    dispatcher: &impl RequestDispatcherV1,
+    selector: &WorktreeSelectorWireV1,
+    request_number: u64,
+    session_id: &str,
+    payload: Map<String, Value>,
+    idempotency_key: &str,
+) -> Map<String, Value> {
+    let request = request(
+        request_number,
+        "session.begin",
+        selector,
+        payload,
+        idempotency_key,
+        PreconditionsV1::new(
+            Some(SessionId::new(session_id).unwrap()),
+            Some(Revision::ZERO),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    v2_result(dispatch(dispatcher, &request), "session.begin")
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn mutate_item(
     dispatcher: &impl RequestDispatcherV1,
@@ -462,6 +493,14 @@ fn v2agt004_record_many_updates_all_item_types_atomically_and_replays_terminal_r
     );
     let started = v2_result(dispatch(&production, &start), "session.start");
     let session_id = started["session_id"].as_str().unwrap();
+    begin(
+        &production,
+        &workspace_selector,
+        28_099,
+        session_id,
+        Map::new(),
+        "v2agt004-begin",
+    );
     let before = status(&production, &workspace_selector, 28_003, session_id);
     let revision_before = before["session"]["revision"].as_u64().unwrap();
     let preconditions = session_preconditions(&before);
@@ -623,6 +662,14 @@ fn v2run003_detached_job_wait_reads_terminal_v2_job_from_v2_only_store() {
     );
     let started = v2_result(dispatch(&production, &start), "session.start");
     let session_id = started["session_id"].as_str().unwrap();
+    begin(
+        &production,
+        &workspace_selector,
+        29_099,
+        session_id,
+        Map::new(),
+        "v2run003-detached-begin",
+    );
     let before_retry = status(&production, &workspace_selector, 29_003, session_id);
     let retry = request_with_options(
         29_004,
@@ -793,7 +840,8 @@ fn v2rel003_detached_start_lookup_and_terminal_replay_use_common_automation_pipe
     );
     let terminal = dispatch(&production, &synchronous);
     let terminal_result = v2_result(terminal.clone(), "session.start");
-    assert_eq!(terminal_result["schema"], "podway.session-start-result/v2");
+    assert_eq!(terminal_result["schema"], "podway.session-start-result/v3");
+    assert_eq!(terminal_result["session_state"], "prepared");
     assert_eq!(terminal_result["admission"]["job_id"], job_id.as_str());
 
     fs::remove_file(fixture.main().join("detached-start.yaml")).unwrap();
@@ -871,6 +919,14 @@ fn v2run003_production_actions_mutate_complete_read_back_restart_and_replay() {
     );
     let started = v2_result(dispatch(&production, &start), "session.start");
     let session_id = started["session_id"].as_str().unwrap().to_owned();
+    begin(
+        &production,
+        &workspace_selector,
+        30_009,
+        &session_id,
+        Map::new(),
+        "v2run003-begin",
+    );
 
     let _ = status(&production, &workspace_selector, 30_003, &session_id);
 
@@ -1178,7 +1234,7 @@ fn v2run003_production_actions_mutate_complete_read_back_restart_and_replay() {
         .unwrap(),
     );
     let observation = v2_result(dispatch(&production, &observe), "session.observe");
-    assert_eq!(observation["schema"], "podway.observation-result/v1");
+    assert_eq!(observation["schema"], "podway.observation-result/v2");
     assert_eq!(observation["status"]["session"]["id"], session_id);
     assert_eq!(
         observation["guidance"]["readback"],
@@ -1311,6 +1367,73 @@ fn v2lif004_prepared_begin_disposition_and_eligible_reset_form_one_runtime_flow(
         None,
     )
     .unwrap();
+    let stale_begin = request(
+        149_997,
+        "session.begin",
+        &selector,
+        Map::new(),
+        "v2lif004-begin-stale-revision",
+        PreconditionsV1::new(
+            Some(session_id.clone()),
+            Some(Revision::new(1)),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let ResponseEnvelopeV2::Error(stale_begin) = dispatch(&production, &stale_begin) else {
+        panic!("begin must reject a stale prepared-session revision");
+    };
+    assert_eq!(stale_begin.code().as_str(), "SESSION_REVISION_CONFLICT");
+
+    let mismatched_begin = request(
+        149_996,
+        "session.begin",
+        &selector,
+        Map::new(),
+        "v2lif004-begin-session-mismatch",
+        PreconditionsV1::new(
+            Some(SessionId::new("00000000-0000-4000-8000-000000149996").unwrap()),
+            Some(Revision::ZERO),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let ResponseEnvelopeV2::Error(mismatched_begin) = dispatch(&production, &mismatched_begin)
+    else {
+        panic!("begin must reject a mismatched prepared session");
+    };
+    assert_eq!(mismatched_begin.code().as_str(), "SESSION_ID_MISMATCH");
+
+    let cancel_prepared = request(
+        149_999,
+        "session.cancel",
+        &selector,
+        json!({"reason":"Prepared sessions have no active work to cancel."})
+            .as_object()
+            .unwrap()
+            .clone(),
+        "v2lif004-cancel-prepared",
+        PreconditionsV1::new(
+            Some(session_id.clone()),
+            Some(Revision::ZERO),
+            Some(AttemptId::new("00000000-0000-4000-8000-000000014999").unwrap()),
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let ResponseEnvelopeV2::Error(cancel_prepared) = dispatch(&production, &cancel_prepared) else {
+        panic!("cancel must reject a prepared session");
+    };
+    assert_eq!(cancel_prepared.code().as_str(), "SESSION_NOT_RUNNING");
+
     let begin = request(
         140_004,
         "session.begin",
@@ -1325,7 +1448,29 @@ fn v2lif004_prepared_begin_disposition_and_eligible_reset_form_one_runtime_flow(
     assert_eq!(begun["revision"], 1);
     assert_eq!(begun["goal_defined"], false);
 
+    let begin_again = request(
+        149_998,
+        "session.begin",
+        &selector,
+        Map::new(),
+        "v2lif004-begin-running",
+        PreconditionsV1::new(
+            Some(session_id.clone()),
+            Some(Revision::new(1)),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let ResponseEnvelopeV2::Error(begin_again) = dispatch(&production, &begin_again) else {
+        panic!("begin must reject a running session");
+    };
+    assert_eq!(begin_again.code().as_str(), "SESSION_NOT_RUNNING");
+
     let running = status(&production, &selector, 140_005, session_id.as_str());
+    assert_eq!(running["session"]["revision"], 1);
     let running_identity_fence = PreconditionsV1::new(
         Some(session_id.clone()),
         Some(Revision::new(
@@ -1392,14 +1537,47 @@ fn v2lif004_prepared_begin_disposition_and_eligible_reset_form_one_runtime_flow(
         None,
     )
     .unwrap();
+    let stale_disposition = request(
+        149_995,
+        "session.terminal_disposition",
+        &selector,
+        json!({"kind":"not_required","reason":"A stale terminal fence must fail."})
+            .as_object()
+            .unwrap()
+            .clone(),
+        "v2lif004-disposition-stale-revision",
+        PreconditionsV1::new(
+            Some(session_id.clone()),
+            Some(Revision::new(terminal_revision - 1)),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let ResponseEnvelopeV2::Error(stale_disposition) = dispatch(&production, &stale_disposition)
+    else {
+        panic!("terminal disposition must reject a stale session revision");
+    };
+    assert_eq!(
+        stale_disposition.code().as_str(),
+        "SESSION_REVISION_CONFLICT"
+    );
+
     let disposition = request(
         140_009,
         "session.terminal_disposition",
         &selector,
-        json!({"kind":"not_required","reason":"The test owns no external handoff."})
-            .as_object()
-            .unwrap()
-            .clone(),
+        json!({
+            "kind":"handed_off",
+            "summary":"Delivered the prepared lifecycle result.",
+            "reference":"commit:v2lif005",
+            "actor":"integration-test"
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
         "v2lif004-disposition",
         terminal_fence.clone(),
     );
@@ -1408,7 +1586,13 @@ fn v2lif004_prepared_begin_disposition_and_eligible_reset_form_one_runtime_flow(
         "session.terminal_disposition",
     );
     assert_eq!(disposed["schema"], "podway.terminal-disposition-result/v1");
-    assert_eq!(disposed["disposition"]["kind"], "not_required");
+    assert_eq!(disposed["disposition"]["kind"], "handed_off");
+    assert_eq!(
+        disposed["disposition"]["summary"],
+        "Delivered the prepared lifecycle result."
+    );
+    assert_eq!(disposed["disposition"]["reference"], "commit:v2lif005");
+    assert_eq!(disposed["disposition"]["actor"], "integration-test");
 
     let duplicate_disposition = request(
         140_010,
@@ -1440,6 +1624,135 @@ fn v2lif004_prepared_begin_disposition_and_eligible_reset_form_one_runtime_flow(
     assert_eq!(reset["schema"], "podway.session-reset-result/v1");
     assert_eq!(reset["mode"], "eligible");
     assert_eq!(reset["reset"], true);
+}
+
+#[test]
+fn v2lif005_prepared_session_dry_run_and_eligible_reset_need_no_force_summary() {
+    let fixture = support_phase4_workspace::git_worktrees();
+    make_runtime_private(fixture.main());
+    fs::write(
+        fixture.main().join("prepared-reset.yaml"),
+        ACTION_READBACK_PROCEDURE,
+    )
+    .unwrap();
+    let ParsedProcedure::V2(parsed) = parse_procedure_document(
+        ACTION_READBACK_PROCEDURE.as_bytes(),
+        ProcedureDocumentFormat::Yaml,
+    )
+    .unwrap();
+    let digest = validate_procedure_v2(parsed).unwrap().digest().clone();
+    let selector = selector(fixture.main());
+    let manager = Arc::new(manager(fixture.temporary_path()));
+    let production = dispatcher(Arc::clone(&manager), "v2lif005-prepared-reset");
+
+    let initialize = request(
+        142_001,
+        "workspace.init",
+        &selector,
+        Map::new(),
+        "v2lif005-prepared-reset-init",
+        PreconditionsV1::default(),
+    );
+    assert!(matches!(
+        dispatch(&production, &initialize),
+        ResponseEnvelopeV2::OutputV2(_)
+    ));
+    let start = request(
+        142_002,
+        "session.start",
+        &selector,
+        json!({
+            "procedure": "prepared-reset.yaml",
+            "expected_procedure_digest": digest,
+            "task_title": "Reset unused preparation"
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+        "v2lif005-prepared-reset-start",
+        PreconditionsV1::default(),
+    );
+    let started = v2_result(dispatch(&production, &start), "session.start");
+    let session_id = SessionId::new(started["session_id"].as_str().unwrap()).unwrap();
+    let prepared_fence = PreconditionsV1::new(
+        Some(session_id.clone()),
+        Some(Revision::ZERO),
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    let goal_begin = request(
+        142_006,
+        "session.begin",
+        &selector,
+        json!({
+            "goal":"Bind a goal where goal tracking is disabled.",
+            "criteria":[{
+                "criterion_id":"verified",
+                "statement":"The invalid goal is rejected."
+            }]
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+        "v2lif005-prepared-reset-goal-begin",
+        prepared_fence.clone(),
+    );
+    let ResponseEnvelopeV2::Error(goal_begin) = dispatch(&production, &goal_begin) else {
+        panic!("goal-bearing begin must reject a goal-free procedure");
+    };
+    assert_eq!(goal_begin.code().as_str(), "GOAL_TRACKING_NOT_ENABLED");
+    let still_prepared = status(&production, &selector, 142_007, session_id.as_str());
+    assert_eq!(still_prepared["session"]["lifecycle"], "prepared");
+    assert_eq!(still_prepared["session"]["revision"], 0);
+
+    let dry_run = request(
+        142_003,
+        "session.reset",
+        &selector,
+        json!({"dry_run":true}).as_object().unwrap().clone(),
+        "v2lif005-prepared-reset-dry-run",
+        prepared_fence.clone(),
+    );
+    let dry_run = v2_result(dispatch(&production, &dry_run), "session.reset");
+    assert_eq!(dry_run["schema"], "podway.session-reset-result/v1");
+    assert_eq!(dry_run["mode"], "eligible");
+    assert_eq!(dry_run["lifecycle"], "prepared");
+    assert_eq!(dry_run["eligible"], true);
+    assert_eq!(dry_run["required_action"], "none");
+    assert_eq!(dry_run["reset"], false);
+
+    let reset = request(
+        142_004,
+        "session.reset",
+        &selector,
+        Map::new(),
+        "v2lif005-prepared-reset-eligible",
+        prepared_fence,
+    );
+    let reset = v2_result(dispatch(&production, &reset), "session.reset");
+    assert_eq!(reset["schema"], "podway.session-reset-result/v1");
+    assert_eq!(reset["mode"], "eligible");
+    assert_eq!(reset["lifecycle"], "prepared");
+    assert_eq!(reset["eligible"], true);
+    assert_eq!(reset["reset"], true);
+
+    let status_after_reset = request(
+        142_005,
+        "session.status",
+        &selector,
+        Map::new(),
+        "unused-status-key",
+        PreconditionsV1::new(Some(session_id), None, None, None, None, None).unwrap(),
+    );
+    let ResponseEnvelopeV2::Error(status_after_reset) = dispatch(&production, &status_after_reset)
+    else {
+        panic!("eligible reset must remove the prepared session");
+    };
+    assert_eq!(status_after_reset.code().as_str(), "SESSION_ID_MISMATCH");
 }
 
 #[test]

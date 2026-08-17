@@ -206,6 +206,14 @@ fn v2run005_production_skip_discards_values_advances_terminates_restarts_and_rep
     );
     let started = runtime::v2_result(runtime::dispatch(&production, &start), "session.start");
     let session_id = started["session_id"].as_str().unwrap().to_owned();
+    runtime::begin(
+        &production,
+        &selector,
+        50_099,
+        &session_id,
+        Map::new(),
+        "v2run005-begin",
+    );
 
     let prepare = status_with(&production, &selector, 50_003, &session_id, false);
     let rejected_prepare = runtime::request(
@@ -462,6 +470,14 @@ fn v2run005_skip_reason_uses_the_v2_unicode_scalar_boundary_before_admission() {
     );
     let started = runtime::v2_result(runtime::dispatch(&production, &start), "session.start");
     let session_id = started["session_id"].as_str().unwrap();
+    runtime::begin(
+        &production,
+        &selector,
+        50_299,
+        session_id,
+        Map::new(),
+        "v2run005-boundary-begin",
+    );
     let prepare = status_with(&production, &selector, 50_203, session_id, false);
     let complete_prepare = runtime::request(
         50_204,
@@ -580,6 +596,14 @@ fn v2run005_production_rejects_decision_skip() {
         "session.start",
     );
     let decision_session_id = started["session_id"].as_str().unwrap();
+    runtime::begin(
+        &production,
+        &main_selector,
+        50_399,
+        decision_session_id,
+        Map::new(),
+        "v2run005-decision-begin",
+    );
     let decision_status = status_with(
         &production,
         &main_selector,

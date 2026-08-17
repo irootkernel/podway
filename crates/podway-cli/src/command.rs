@@ -4840,6 +4840,11 @@ fn validate_daemon_flags(cli: &Cli) -> Result<(), LocalFailure> {
                 "reset --all does not support --dry-run",
             ));
         }
+        if args.progress_summary.is_some() {
+            return Err(LocalFailure::request_invalid(
+                "reset --all does not support --progress-summary",
+            ));
+        }
     }
     match command {
         Command::Start(StartArgs {
@@ -4853,9 +4858,24 @@ fn validate_daemon_flags(cli: &Cli) -> Result<(), LocalFailure> {
         _ => {}
     }
     match command {
+        Command::Start(args) if args.replace && args.dry_run => {
+            return Err(LocalFailure::request_invalid(
+                "--dry-run supports --replace-eligible, not --replace",
+            ));
+        }
         Command::Start(args) if args.replace && args.progress_summary.is_none() => {
             return Err(LocalFailure::request_invalid(
-                "--replace --yes requires --progress-summary",
+                "--replace requires --progress-summary",
+            ));
+        }
+        Command::Start(args) if args.replace_eligible && args.progress_summary.is_some() => {
+            return Err(LocalFailure::request_invalid(
+                "--replace-eligible does not support --progress-summary",
+            ));
+        }
+        Command::Reset(args) if args.dry_run && args.progress_summary.is_some() => {
+            return Err(LocalFailure::request_invalid(
+                "reset --dry-run does not support --progress-summary",
             ));
         }
         Command::Reset(args)
@@ -5264,7 +5284,9 @@ fn daemon_payload(
             }
         },
         Command::Reset(args) => {
-            if args.dry_run {
+            if args.all {
+                payload.insert("confirmed".to_owned(), Value::Bool(true));
+            } else if args.dry_run {
                 payload.insert("dry_run".to_owned(), Value::Bool(true));
             } else if let Some(summary) = &args.progress_summary {
                 payload.insert("confirmed".to_owned(), Value::Bool(true));
@@ -6347,10 +6369,10 @@ fn candidate_strings(result: &Map<String, Value>, collection: &str) -> Vec<Strin
 fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
     let text = match topic.unwrap_or("overview") {
         "overview" => {
-            "Podway coordinates durable worktree-local procedures.\n\nTrust boundary:\n  Podway trusts same-user processes connecting through its local socket.\n  It provides no authentication or workspace access key.\n  It does not protect against malicious same-user processes.\n  It records caller assertions and does not judge their semantic truth.\n\nDaemon endpoint:\n  Daemon-backed commands accept --socket <absolute-path>.\n  Without --socket, Podway selects the installed or default per-user endpoint.\n\nUsage:\n  podway help <route>\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'add retry backoff'\n  podway status --json\n  podway next --json\n\nProcedure v2 routes:\n  procedure format|vet|lint|check|graph|preview|scaffold\n  session.decide, session.rework, goal.define, goal.revise, goal.assess_criterion\n\nShipped presets: bug-fix-v2, small-change-v2, sw-dev-v2. Normal daemon endpoints admit complete Procedure v2 sessions. Contributors may use the managed disposable runtime documented by help workflow for isolated development."
+            "Podway coordinates durable worktree-local procedures.\n\nTrust boundary:\n  Podway trusts same-user processes connecting through its local socket.\n  It provides no authentication or workspace access key.\n  It does not protect against malicious same-user processes.\n  It records caller assertions and does not judge their semantic truth.\n\nDaemon endpoint:\n  Daemon-backed commands accept --socket <absolute-path>.\n  Without --socket, Podway selects the installed or default per-user endpoint.\n\nUsage:\n  podway help <route>\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'add retry backoff'\n  podway begin\n  podway status --json\n  podway observe --json\n\nProcedure v2 routes:\n  procedure format|vet|lint|check|graph|preview|scaffold\n  session.begin, session.terminal_disposition, session.decide, session.rework\n  goal.define, goal.revise, goal.assess_criterion\n\nShipped presets: bug-fix-v2, small-change-v2, sw-dev-v2. Start prepares a session; begin creates its first active attempt. Contributors may use the managed disposable runtime documented by help workflow for isolated development."
         }
         "workflow" => {
-            "Procedure v2 workflow:\n  podway init\n  podway --json preset show bug-fix-v2\n  podway --json start --preset bug-fix-v2 --task 'inspect the workflow' --goal 'Verify the requested behavior.' --criterion verified='Relevant checks pass.' --actor developer\n  podway --json status\n  podway --json next\n\nAdd --dry-run to start for read-only inspection without creating a session. For an admitted session, follow the allowed item, option, evidence, and rework identifiers returned by status and next. Contributors can use python3 tools/dev_runtime.py for an isolated disposable daemon and sandbox. See docs/examples/v2-workflow.md for the complete executable sequence. Podway records caller assertions; it does not establish their semantic truth."
+            "Procedure v2 workflow:\n  podway init\n  podway --json preset show bug-fix-v2\n  podway --json start --preset bug-fix-v2 --task 'inspect the workflow'\n  podway --json begin --goal 'Verify the requested behavior.' --criterion verified='Relevant checks pass.' --actor developer\n  podway --json observe --wait-for-idle\n\nAdd --dry-run to start for read-only Procedure inspection without creating a session. A successful start creates a prepared session; begin atomically creates the first attempt and optional goal. Follow the allowed item, option, evidence, and rework identifiers returned by observe. Contributors can use python3 tools/dev_runtime.py for an isolated disposable daemon and sandbox. See docs/examples/v2-workflow.md for the complete executable sequence. Podway records caller assertions; it does not establish their semantic truth."
         }
         "rework" => "Rework:\n  podway rework --to implement --reason 'review found a gap'",
         "automation" => {
@@ -6433,7 +6455,10 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Usage:\n  podway workspace repair\n\nExample:\n  podway workspace repair"
         }
         "session.start" => {
-            "Usage:\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> [--goal <text> --criterion <id>=<statement>...] [--actor <text>] [--if-workspace-uuid <uuid>] [--dry-run]\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'implement feature'\n  podway start --procedure .podway/procedures/custom.yaml --expect-procedure-digest sha256:<hex> --task 'implement feature'\n  podway start --preset bug-fix-v2 --task 'preview procedure' --goal 'Repair the defect.' --criterion verified='The fix is verified.' --actor developer --dry-run\n  podway --json start --preset bug-fix-v2 --task 'repair defect' --goal 'Repair the defect.' --criterion verified='The fix is verified.' --actor developer\n\nProcedure digests provide content integrity and correlation only; actor attribution is a caller-supplied correlation label. Neither authenticates nor authorizes a caller or confers cryptographic authority.\n\nNormal daemon endpoints admit complete Procedure v2 sessions. Contributors may use python3 tools/dev_runtime.py for isolated disposable development state."
+            "Usage:\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> [--if-workspace-uuid <uuid>] [--dry-run]\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'implement feature'\n  podway start --procedure .podway/procedures/custom.yaml --expect-procedure-digest sha256:<hex> --task 'implement feature'\n  podway start --preset bug-fix-v2 --task 'preview procedure' --dry-run\n\nA successful start creates a prepared session at revision 0 without a cursor, attempt, or goal. Use session.begin to start work. Procedure digests provide content integrity and correlation only; they do not authenticate or authorize a caller."
+        }
+        "session.begin" => {
+            "Usage:\n  podway begin [--goal <text> --criterion <id>=<statement>...] [--actor <text>] [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision 0]\n\nExamples:\n  podway begin\n  podway begin --goal 'Ship safely.' --criterion tested='Tests pass.' --actor developer --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 0\n\nBegin atomically creates attempt 1 at the entry node, optionally creates goal revision 1, and changes the prepared session to running. Omitted fences are filled from a fresh status preflight."
         }
         "session.decide" => {
             "Usage:\n  podway decide --option <id> --reason <text> [--actor <text>] --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision <n> --if-attempt <uuid> [--if-goal-revision <n>]\n\nThe goal revision fence is required for a session-goal assessment decision and, when supplied for a general decision, must match the current goal.\n\nExample:\n  podway decide --option approve --reason 'The evidence supports this route.' --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 7 --if-attempt <uuid>"
@@ -6451,7 +6476,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Usage:\n  podway goal assess-criterion <criterion-id> --status <satisfied|unsatisfied|not_applicable> --reason <text> [--evidence <graph-node-id>]... [--item <item-id>]... [--actor <text>] --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision <n> --if-attempt <uuid> --if-goal-revision <n>\n\nExample:\n  podway goal assess-criterion tested --status satisfied --reason 'The test passed.' --evidence test --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 7 --if-attempt <uuid> --if-goal-revision 1"
         }
         "session.start_replace" => {
-            "Usage:\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> --replace [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>] [--dry-run] [--yes]\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> --goal <text> --criterion <id>=<statement>... [--actor <text>] --replace [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>] [--dry-run] [--yes]\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'replace task' --replace --yes\n  podway start --procedure .podway/procedures/custom.yaml --expect-procedure-digest sha256:<hex> --task 'replace task' --replace --yes\n  podway start --procedure workflow.yaml --expect-procedure-digest sha256:<hex> --task 'replace goal' --goal 'Ship safely.' --criterion tested='Tests pass.' --replace --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 7 --yes\n  podway start --preset sw-dev-v2 --task 'preview replacement' --replace --dry-run"
+            "Usage:\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> --replace-eligible --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision <n> [--dry-run]\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> --replace --progress-summary <text> --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision <n> [--yes]\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'replace unused preparation' --replace-eligible --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 0\n  podway start --preset sw-dev-v2 --task 'replace running work' --replace --progress-summary 'Superseded after preserving the current diff.' --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 7 --yes\n\nEligible replacement accepts prepared sessions and terminal sessions with a current disposition and supports read-only dry runs. Force replacement requires an explicit bounded progress summary and does not support dry runs. Every replacement creates a new prepared session."
         }
         "session.status" => {
             "Usage:\n  podway status [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--verbose [--history-before <trace-sequence>]] [--wait-for-idle [--compact] | --after-job <uuid>]\n\nExamples:\n  podway status --verbose\n  podway status --verbose --history-before 42\n  podway status --wait-for-idle --compact"
@@ -6480,8 +6505,11 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
         "session.cancel" => {
             "Usage:\n  podway cancel --reason <text> [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>] [--if-attempt <uuid>]\n\nExample:\n  podway cancel --reason 'task no longer needed'"
         }
+        "session.terminal_disposition" => {
+            "Usage:\n  podway disposition handed-off --summary <text> --reference <text> [--actor <text>] [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>]\n  podway disposition not-required --reason <text> [--actor <text>] [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>]\n\nA disposition is valid only for the exact current completed or cancelled revision. It makes that terminal session eligible for default reset or replacement. Omitted fences are filled from a fresh status preflight."
+        }
         "session.reset" => {
-            "Usage:\n  podway reset [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>] [--dry-run] [--yes]\n\nExample:\n  podway reset --yes"
+            "Usage:\n  podway reset [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>] [--dry-run]\n  podway reset --progress-summary <text> [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>] [--yes]\n\nExamples:\n  podway reset --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 0\n  podway reset --progress-summary 'Preserved the current diff and verification notes.' --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 7 --yes\n\nDefault reset deletes only a prepared session or a terminal session with a current disposition. A dry run reports eligibility without mutation. Force reset requires a bounded progress summary and explicit confirmation; JSON or non-terminal callers must pass --yes, while an interactive caller may confirm the prompt."
         }
         "workspace.reset_all" => {
             "Usage:\n  podway reset --all --force --yes [--if-workspace-uuid <uuid>]\n\nExample:\n  podway reset --all --force --yes"
@@ -6548,7 +6576,7 @@ mod tests {
         render_result_with_clock_and_writers, resolve_daemon_executable,
         resolve_implicit_daemon_executable_from, resolve_installed_service_endpoint,
         service_outcome_result, service_status_result, stream_log_follow_update,
-        system_service_clock, validate_daemon_flags,
+        system_service_clock, validate_command_shape, validate_daemon_flags,
     };
     use clap::{Parser, error::ErrorKind};
     use serde_json::json;
@@ -6874,30 +6902,47 @@ mod tests {
         assert_eq!(begin_payload["goal"], "Ship safely.");
         assert_eq!(begin_payload["criteria"][0]["criterion_id"], "tests");
 
-        for arguments in [
-            vec![
+        let mut handed_off = Cli::try_parse_from([
+            "podway",
+            "disposition",
+            "handed-off",
+            "--summary",
+            "Handoff complete.",
+            "--reference",
+            "local:handoff",
+        ])
+        .unwrap();
+        assert_eq!(
+            handed_off.command.daemon_wire_name(),
+            Some("session.terminal_disposition")
+        );
+        let (_, handed_off_payload) = daemon_payload(&mut handed_off.command, None).unwrap();
+        assert_eq!(handed_off_payload["kind"], "handed_off");
+        assert_eq!(handed_off_payload["summary"], "Handoff complete.");
+        assert_eq!(handed_off_payload["reference"], "local:handoff");
+        assert!(
+            Cli::try_parse_from([
                 "podway",
                 "disposition",
                 "handed-off",
                 "--summary",
                 "Handoff complete.",
-                "--reference",
-                "local:handoff",
-            ],
-            vec![
-                "podway",
-                "disposition",
-                "not-required",
-                "--reason",
-                "No external handoff exists.",
-            ],
-        ] {
-            let disposition = Cli::try_parse_from(arguments).unwrap();
-            assert_eq!(
-                disposition.command.daemon_wire_name(),
-                Some("session.terminal_disposition")
-            );
-        }
+            ])
+            .is_err()
+        );
+
+        let not_required = Cli::try_parse_from([
+            "podway",
+            "disposition",
+            "not-required",
+            "--reason",
+            "No external handoff exists.",
+        ])
+        .unwrap();
+        assert_eq!(
+            not_required.command.daemon_wire_name(),
+            Some("session.terminal_disposition")
+        );
 
         let eligible = Cli::try_parse_from([
             "podway",
@@ -6958,6 +7003,108 @@ mod tests {
             let cli = Cli::try_parse_from(arguments).unwrap();
             assert!(validate_daemon_flags(&cli).is_err());
         }
+
+        let reset_all_with_summary = Cli::try_parse_from([
+            "podway",
+            "--yes",
+            "reset",
+            "--all",
+            "--force",
+            "--progress-summary",
+            "must not be discarded",
+        ])
+        .unwrap();
+        assert!(validate_daemon_flags(&reset_all_with_summary).is_err());
+
+        let force_replacement_dry_run = Cli::try_parse_from([
+            "podway",
+            "start",
+            "--preset",
+            "sw-dev-v2",
+            "--task",
+            "task",
+            "--replace",
+            "--progress-summary",
+            "must not be discarded",
+            "--dry-run",
+        ])
+        .unwrap();
+        assert!(validate_daemon_flags(&force_replacement_dry_run).is_err());
+
+        let force_reset_dry_run = Cli::try_parse_from([
+            "podway",
+            "reset",
+            "--progress-summary",
+            "must not be discarded",
+            "--dry-run",
+        ])
+        .unwrap();
+        assert!(validate_daemon_flags(&force_reset_dry_run).is_err());
+
+        let eligible_replacement_with_summary = Cli::try_parse_from([
+            "podway",
+            "start",
+            "--preset",
+            "sw-dev-v2",
+            "--task",
+            "task",
+            "--replace-eligible",
+            "--progress-summary",
+            "must not be discarded",
+        ])
+        .unwrap();
+        assert!(validate_daemon_flags(&eligible_replacement_with_summary).is_err());
+
+        let reset_dry_run_with_confirmation =
+            Cli::try_parse_from(["podway", "--yes", "reset", "--dry-run"]).unwrap();
+        assert!(validate_daemon_flags(&reset_dry_run_with_confirmation).is_err());
+
+        let mut reset_all_after_interactive_confirmation =
+            Cli::try_parse_from(["podway", "reset", "--all", "--force"]).unwrap();
+        assert!(validate_daemon_flags(&reset_all_after_interactive_confirmation).is_ok());
+        assert!(
+            reset_all_after_interactive_confirmation
+                .command
+                .is_destructive()
+        );
+        let (_, reset_all_payload) =
+            daemon_payload(&mut reset_all_after_interactive_confirmation.command, None).unwrap();
+        assert_eq!(reset_all_payload["confirmed"], true);
+
+        for arguments in [
+            vec![
+                "podway",
+                "disposition",
+                "handed-off",
+                "--summary",
+                " ",
+                "--reference",
+                "local:handoff",
+            ],
+            vec![
+                "podway",
+                "disposition",
+                "handed-off",
+                "--summary",
+                "Completed.",
+                "--reference",
+                " ",
+            ],
+            vec!["podway", "disposition", "not-required", "--reason", " "],
+        ] {
+            let cli = Cli::try_parse_from(arguments).unwrap();
+            assert!(validate_command_shape(&cli.command).is_err());
+        }
+
+        let over_limit = "x".repeat(4_001);
+        let force_reset_over_limit = Cli::try_parse_from(vec![
+            "podway".to_owned(),
+            "reset".to_owned(),
+            "--progress-summary".to_owned(),
+            over_limit,
+        ])
+        .unwrap();
+        assert!(validate_command_shape(&force_reset_over_limit.command).is_err());
     }
 
     #[test]

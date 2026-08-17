@@ -1076,6 +1076,7 @@ impl GraphActionCompletionOutcomeV2 {
 pub struct GraphWorkspaceViewV2 {
     identity: DurableWorktreeIdentityV1,
     graph_state: Option<GraphSessionStateV2>,
+    current_terminal_disposition: bool,
     queued_job_count: u32,
     running_job_id: Option<JobIdV1>,
     latest_workspace_sequence: u64,
@@ -1094,11 +1095,17 @@ impl GraphWorkspaceViewV2 {
         Self {
             identity,
             graph_state,
+            current_terminal_disposition: false,
             queued_job_count,
             running_job_id,
             latest_workspace_sequence,
             observed_at,
         }
+    }
+
+    pub fn with_current_terminal_disposition(mut self, current_terminal_disposition: bool) -> Self {
+        self.current_terminal_disposition = current_terminal_disposition;
+        self
     }
 
     pub fn identity(&self) -> &DurableWorktreeIdentityV1 {
@@ -1107,6 +1114,10 @@ impl GraphWorkspaceViewV2 {
 
     pub fn graph_state(&self) -> Option<&GraphSessionStateV2> {
         self.graph_state.as_ref()
+    }
+
+    pub const fn current_terminal_disposition(&self) -> bool {
+        self.current_terminal_disposition
     }
 
     pub const fn queued_job_count(&self) -> u32 {
@@ -4407,9 +4418,7 @@ pub(crate) fn record_terminal_disposition_transaction_v2(
         return Err(invalid_store("terminal disposition timestamp regressed"));
     }
     let dispositions = load_terminal_dispositions_connection_v2(transaction, &state)?;
-    if dispositions.last().is_some_and(|current| {
-        current.terminal_session_revision() == disposition.terminal_session_revision()
-    }) {
+    if terminal_disposition_is_current_v2(&dispositions, disposition.terminal_session_revision()) {
         return Err(StoreErrorV1::TerminalDispositionAlreadyRecordedV1 {
             session_revision: disposition.terminal_session_revision(),
         });
@@ -4454,6 +4463,15 @@ pub(crate) fn record_terminal_disposition_transaction_v2(
         });
     }
     Ok(())
+}
+
+pub(crate) fn terminal_disposition_is_current_v2(
+    dispositions: &[TerminalDispositionV2],
+    session_revision: Revision,
+) -> bool {
+    dispositions
+        .last()
+        .is_some_and(|disposition| disposition.terminal_session_revision() == session_revision)
 }
 
 fn persisted_time_v2(value: i64, record: StoreRecordKindV1) -> Result<UnixMillis, StoreErrorV1> {

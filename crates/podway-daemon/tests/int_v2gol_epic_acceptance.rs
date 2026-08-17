@@ -124,7 +124,7 @@ fn start(
     file: &str,
     initial_goal: bool,
 ) -> String {
-    let mut payload = json!({
+    let payload = json!({
         "procedure": file,
         "expected_procedure_digest": fixture.digest,
         "task_title": "V2GOL epic acceptance"
@@ -132,44 +132,40 @@ fn start(
     .as_object()
     .unwrap()
     .clone();
-    if initial_goal {
-        payload.extend(
-            json!({
-                "goal": "Preserve running revision semantics.",
-                "criteria": [{
-                    "criterion_id": "verified",
-                    "statement": "The running revision remains an ordinary rework."
-                }],
-                "actor": "V2GOL epic acceptance"
-            })
-            .as_object()
-            .unwrap()
-            .clone(),
-        );
-    }
-    let request = if initial_goal {
-        typed_mutation(
-            number,
-            "session.start",
-            &fixture.selector,
-            payload,
-            &format!("v2gol-epic-start-{number}"),
-            PreconditionsV1::default(),
-        )
-    } else {
-        runtime::request(
-            number,
-            "session.start",
-            &fixture.selector,
-            payload,
-            &format!("v2gol-epic-start-{number}"),
-            PreconditionsV1::default(),
-        )
-    };
-    runtime::v2_result(runtime::dispatch(dispatcher, &request), "session.start")["session_id"]
-        .as_str()
+    let request = runtime::request(
+        number,
+        "session.start",
+        &fixture.selector,
+        payload,
+        &format!("v2gol-epic-start-{number}"),
+        PreconditionsV1::default(),
+    );
+    let started = runtime::v2_result(runtime::dispatch(dispatcher, &request), "session.start");
+    let session_id = started["session_id"].as_str().unwrap().to_owned();
+    let initial_goal = if initial_goal {
+        json!({
+            "goal": "Preserve running revision semantics.",
+            "criteria": [{
+                "criterion_id": "verified",
+                "statement": "The running revision remains an ordinary rework."
+            }],
+            "actor": "V2GOL epic acceptance"
+        })
+        .as_object()
         .unwrap()
-        .to_owned()
+        .clone()
+    } else {
+        Map::new()
+    };
+    runtime::begin(
+        dispatcher,
+        &fixture.selector,
+        number + 90,
+        &session_id,
+        initial_goal,
+        &format!("v2gol-epic-begin-{number}"),
+    );
+    session_id
 }
 
 fn verbose_status(

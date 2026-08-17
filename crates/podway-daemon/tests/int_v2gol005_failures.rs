@@ -416,7 +416,23 @@ fn start_fixture(
         json!({
             "procedure": "v2gol005.yaml",
             "expected_procedure_digest": digest,
-            "task_title": "V2GOL-005 failure closure",
+            "task_title": "V2GOL-005 failure closure"
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+        &format!("v2gol005-start-{number}"),
+        PreconditionsV1::default(),
+        false,
+    );
+    let started = runtime::v2_result(runtime::dispatch(dispatcher, &start), "session.start");
+    let session_id = started["session_id"].as_str().unwrap().to_owned();
+    runtime::begin(
+        dispatcher,
+        &selector,
+        number + 2,
+        &session_id,
+        json!({
             "goal": "Ship a correct and tested result.",
             "criteria": [
                 {"criterion_id": "correct", "statement": "The result is correct."},
@@ -427,15 +443,12 @@ fn start_fixture(
         .as_object()
         .unwrap()
         .clone(),
-        &format!("v2gol005-start-{number}"),
-        PreconditionsV1::default(),
-        false,
+        &format!("v2gol005-begin-{number}"),
     );
-    let started = runtime::v2_result(runtime::dispatch(dispatcher, &start), "session.start");
     Fixture {
         _workspace: workspace,
         selector,
-        session_id: started["session_id"].as_str().unwrap().to_owned(),
+        session_id,
     }
 }
 

@@ -5,6 +5,8 @@ start `sw-dev-v2`, `bug-fix-v2`, `small-change-v2`, or a validated worktree-loca
 Procedure v2 file. Use `small-change-v2` for a bounded change that still requires
 explicit inspection, verification, review, and closeout but no tracked goal. Use
 `--dry-run` before a destructive replacement or other supported preview.
+Starting creates a prepared session without a cursor or goal. Use `podway begin`
+to create its first attempt, optionally defining the initial goal at the same time.
 
 During a task, read `podway observe`, perform the actual work
 outside Podway, then record only supported evidence on the active attempt. Use typed
@@ -26,7 +28,10 @@ result; chat history is not authority. Parallel tasks belong in separate Git
 worktrees and therefore separate Podway workspaces. Podway does not transfer a
 session between worktrees.
 
-Cancel a task that will not continue. Reset a completed or cancelled session when
-its current-task history is no longer needed. If opening old runtime state returns
+Cancel a task that will not continue. A prepared session can be reset immediately.
+Before default reset or replacement of a completed or cancelled session, record a
+handoff or not-required disposition for its exact current terminal revision. Force
+deletion of running or undisposed terminal work requires explicit authorization and
+a bounded progress summary. If opening old runtime state returns
 `LEGACY_PROCEDURE_STATE_UNSUPPORTED`, back up `.podway/runtime/` first and use
 `podway reset --all` only with explicit authorization.

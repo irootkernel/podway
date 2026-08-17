@@ -225,9 +225,17 @@ fn start_left_branch(
             .as_str()
             .unwrap()
             .to_owned();
-    let decision = runtime::status(dispatcher, &selector, number + 2, &session_id);
+    runtime::begin(
+        dispatcher,
+        &selector,
+        number + 2,
+        &session_id,
+        Map::new(),
+        &format!("v2drw003-begin-{number}"),
+    );
+    let decision = runtime::status(dispatcher, &selector, number + 3, &session_id);
     let decide = decide_request(
-        number + 3,
+        number + 4,
         &selector,
         &format!("v2drw003-decide-{number}"),
         runtime::session_preconditions(&decision),

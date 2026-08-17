@@ -1115,7 +1115,7 @@ def dogfood_v2_status(paths: dict[str, Path], metadata: dict[str, Any]) -> dict[
         ["status"],
         command="session.status",
         output_schema="podway.output/v3",
-        result_schema="podway.status-result/v2",
+        result_schema="podway.status-result/v3",
     )["result"]
 
 
@@ -1222,6 +1222,19 @@ def self_test_v2_dogfood(cli: Path, daemon: Path) -> dict[str, Any]:
                 "sw-dev-v2",
                 "--task",
                 "Dogfood the complete Procedure v2 workflow",
+                "--idempotency-key",
+                "v2dog005-start",
+            ],
+            command="session.start",
+            result_schema="podway.session-start-result/v3",
+        )
+        if started.get("procedure_schema") != "podway.procedure/v2":
+            fail("v2 dogfood did not start a Procedure v2 session")
+        dogfood_v2_mutation(
+            paths,
+            metadata,
+            [
+                "begin",
                 "--goal",
                 "Complete the disposable Procedure v2 dogfood workflow.",
                 "--criterion",
@@ -1229,13 +1242,11 @@ def self_test_v2_dogfood(cli: Path, daemon: Path) -> dict[str, Any]:
                 "--actor",
                 "V2DOG-005 dogfood",
                 "--idempotency-key",
-                "v2dog005-start",
+                "v2dog005-begin",
             ],
-            command="session.start",
-            result_schema="podway.session-start-result/v2",
+            command="session.begin",
+            result_schema="podway.session-begin-result/v1",
         )
-        if started.get("procedure_schema") != "podway.procedure/v2":
-            fail("v2 dogfood did not start a Procedure v2 session")
         status = dogfood_v2_status(paths, metadata)
         require_dogfood_node(status, "implement")
         procedure = status.get("procedure")
@@ -1587,9 +1598,16 @@ def self_test_v2_dogfood(cli: Path, daemon: Path) -> dict[str, Any]:
         dogfood_v2_mutation(
             paths,
             metadata,
-            ["reset", "--yes", "--idempotency-key", "v2dog005-reset-v2"],
+            [
+                "reset",
+                "--yes",
+                "--progress-summary",
+                "Preserved the completed dogfood evidence",
+                "--idempotency-key",
+                "v2dog005-reset-v2",
+            ],
             command="session.reset",
-            result_schema="podway.stage-transition-result/v2",
+            result_schema="podway.session-reset-result/v1",
         )
         return {
             "preset": "sw-dev-v2",
@@ -1794,22 +1812,38 @@ def command_qualify_v2rel003(
                 metadata,
                 [
                     "start", "--preset", "sw-dev-v2", "--task", "Preset admission",
-                    "--goal", "Prove preset admission.",
-                    "--criterion", "preset=Preset admission succeeds without a digest.",
-                    "--actor", "V2REL-003 qualifier", "--idempotency-key", "v2rel003-preset",
+                    "--idempotency-key", "v2rel003-preset",
                 ],
                 command="session.start",
                 output_schema="podway.output/v3",
-                result_schema="podway.session-start-result/v2",
+                result_schema="podway.session-start-result/v3",
             ),
             command="session.start",
-            result_schema="podway.session-start-result/v2",
+            result_schema="podway.session-start-result/v3",
         )
         checks["preset_without_digest"] = preset.get("procedure_schema") == "podway.procedure/v2"
+        dogfood_v2_mutation(
+            paths,
+            metadata,
+            [
+                "begin",
+                "--goal", "Prove preset admission.",
+                "--criterion", "preset=Preset admission succeeds without a digest.",
+                "--actor", "V2REL-003 qualifier",
+                "--idempotency-key", "v2rel003-preset-begin",
+            ],
+            command="session.begin",
+            result_schema="podway.session-begin-result/v1",
+        )
         qualification_command(
             snap_cli,
             paths,
-            ["--yes", "--idempotency-key", "v2rel003-reset-preset", "reset"],
+            [
+                "--yes",
+                "--idempotency-key", "v2rel003-reset-preset",
+                "reset",
+                "--progress-summary", "Preserved the preset admission evidence",
+            ],
             label="preset reset",
         )
 
@@ -1865,12 +1899,6 @@ def command_qualify_v2rel003(
                 digest,
                 "--task",
                 "Stale semantic confirmation",
-                "--goal",
-                "Prove semantic edits invalidate confirmation.",
-                "--criterion",
-                "semantic=The stale digest is rejected.",
-                "--actor",
-                "V2REL-003 qualifier",
             ],
             label="semantic edit digest mismatch",
             expected_code=None,
@@ -1905,21 +1933,34 @@ def command_qualify_v2rel003(
 
         start_argv = [str(value) for value in argv[1:]]
         start_argv = ["Native qualification" if value == "<task>" else value for value in start_argv]
-        start_argv.extend(
-            ["--goal", "Prove native recovery.", "--criterion", "native=Native recovery passes.", "--actor", "V2REL-003 qualifier"]
-        )
         started = require_output_result(
             qualification_command(snap_cli, paths, start_argv, label="suggested custom start"),
             command="session.start",
-            result_schema="podway.session-start-result/v2",
+            result_schema="podway.session-start-result/v3",
         )
         if started.get("procedure_digest") != digest:
             fail("custom start lost the preview-confirmed digest")
+        require_output_result(
+            qualification_command(
+                snap_cli,
+                paths,
+                [
+                    "--idempotency-key", "v2rel003-begin",
+                    "begin",
+                    "--goal", "Prove native recovery.",
+                    "--criterion", "native=Native recovery passes.",
+                    "--actor", "V2REL-003 qualifier",
+                ],
+                label="begin custom session",
+            ),
+            command="session.begin",
+            result_schema="podway.session-begin-result/v1",
+        )
 
         before_kill = require_output_result(
             qualification_command(snap_cli, paths, ["status"], label="status before SIGKILL"),
             command="session.status",
-            result_schema="podway.status-result/v2",
+            result_schema="podway.status-result/v3",
         )
         session_id = before_kill["session"]["id"]
         process.kill()
@@ -1933,7 +1974,7 @@ def command_qualify_v2rel003(
         after_kill = require_output_result(
             qualification_command(snap_cli, paths, ["status"], label="status after SIGKILL"),
             command="session.status",
-            result_schema="podway.status-result/v2",
+            result_schema="podway.status-result/v3",
         )
         if after_kill["session"]["id"] != session_id or after_kill["procedure"]["digest"] != digest:
             fail("SIGKILL recovery changed session or Procedure identity")
@@ -1975,7 +2016,7 @@ def command_qualify_v2rel003(
         status = require_output_result(
             status_envelope,
             command="session.status",
-            result_schema="podway.status-result/v2",
+            result_schema="podway.status-result/v3",
         )
         fence = [
             "--if-workspace-uuid", status_envelope["workspace"]["uuid"],
@@ -2052,7 +2093,7 @@ def command_qualify_v2rel003(
         loss_status = require_output_result(
             loss_status_envelope,
             command="session.status",
-            result_schema="podway.status-result/v2",
+            result_schema="podway.status-result/v3",
         )
         proxy = paths["dev_home"] / "run" / "response-loss.sock"
         relay, relay_outcome = response_loss_relay(proxy, paths["socket"])
@@ -2256,7 +2297,7 @@ def command_qualify_v2rel003(
         completed_status = require_output_result(
             qualification_command(snap_cli, paths, ["status"], label="completed status"),
             command="session.status",
-            result_schema="podway.status-result/v2",
+            result_schema="podway.status-result/v3",
         )
         if completed_status["session"]["lifecycle"] != "completed":
             fail("qualification session did not complete")
@@ -2329,16 +2370,13 @@ def command_qualify_v2rel003(
             [
                 "--idempotency-key", "v2rel003-release-public-admission",
                 "start", "--preset", "sw-dev-v2", "--task", "Release admission",
-                "--goal", "Prove public Procedure v2 admission in the release profile.",
-                "--criterion", "admission=Release profile admits Procedure v2 publicly.",
-                "--actor", "V2REL-003 qualifier",
             ],
             label="release-profile public v2 admission",
         )
         release_started = require_output_result(
             release_started_envelope,
             command="session.start",
-            result_schema="podway.session-start-result/v2",
+            result_schema="podway.session-start-result/v3",
         )
         if release_started_envelope.get("schema") != "podway.output/v3":
             fail("release-profile public v2 start did not use the v2 output envelope")
@@ -2347,6 +2385,22 @@ def command_qualify_v2rel003(
             or release_started.get("admission", {}).get("admitted") is not True
         ):
             fail("release-profile public v2 start was not durably admitted")
+        require_output_result(
+            qualification_command(
+                cli,
+                release_paths,
+                [
+                    "--idempotency-key", "v2rel003-release-public-begin",
+                    "begin",
+                    "--goal", "Prove public Procedure v2 admission in the release profile.",
+                    "--criterion", "admission=Release profile admits Procedure v2 publicly.",
+                    "--actor", "V2REL-003 qualifier",
+                ],
+                label="release-profile public v2 begin",
+            ),
+            command="session.begin",
+            result_schema="podway.session-begin-result/v1",
+        )
         release_status = require_output_result(
             qualification_command(
                 cli,
@@ -2355,7 +2409,7 @@ def command_qualify_v2rel003(
                 label="release-profile status after public v2 admission",
             ),
             command="session.status",
-            result_schema="podway.status-result/v2",
+            result_schema="podway.status-result/v3",
         )
         if release_status.get("procedure", {}).get("schema") != "podway.procedure/v2":
             fail("release-profile status did not retain the admitted Procedure v2 session")

@@ -262,6 +262,13 @@ fn validated_json_procedure(source: &[u8]) -> ValidatedProcedureV2 {
 }
 
 fn view(state: GraphSessionStateV2) -> GraphWorkspaceViewV2 {
+    view_with_terminal_disposition(state, false)
+}
+
+fn view_with_terminal_disposition(
+    state: GraphSessionStateV2,
+    current_terminal_disposition: bool,
+) -> GraphWorkspaceViewV2 {
     GraphWorkspaceViewV2::new(
         identity(),
         Some(state),
@@ -270,9 +277,23 @@ fn view(state: GraphSessionStateV2) -> GraphWorkspaceViewV2 {
         1,
         UnixMillis::new(1_700_000_000_100),
     )
+    .with_current_terminal_disposition(current_terminal_disposition)
+}
+
+fn prepared_state() -> GraphSessionStateV2 {
+    let running = fresh_state("workflow.yaml", EQUIVALENT_YAML);
+    GraphSessionStateV2::prepared(
+        running.workspace_revision(),
+        running.task_title(),
+        running.snapshot().clone(),
+        SessionId::new(SESSION_ID).unwrap(),
+        running.created_at(),
+    )
+    .unwrap()
 }
 
 fn output(command: &str, result: Map<String, Value>) -> OutputEnvelopeV3 {
+    let rendered_result = serde_json::to_string(&result).unwrap();
     OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
         request_id: RequestIdV1::new(REQUEST_ID).unwrap(),
         command: CommandNameV1::new(command).unwrap(),
@@ -283,7 +304,7 @@ fn output(command: &str, result: Map<String, Value>) -> OutputEnvelopeV3 {
         result,
         warnings: Vec::new(),
     })
-    .unwrap()
+    .unwrap_or_else(|error| panic!("{error:?}: {rendered_result}"))
 }
 
 fn maximum_production_output(command: &str, result: Map<String, Value>) -> OutputEnvelopeV3 {
@@ -385,10 +406,10 @@ fn v2run002_fresh_action_projects_closed_compact_standard_verbose_and_next_views
     let verbose = project_graph_status_v2(&view, GraphStatusTierV2::Verbose, None).unwrap();
     let next = project_graph_next_v2(&view).unwrap();
 
-    assert_eq!(compact["schema"], "podway.compact-status-result/v2");
-    assert_eq!(standard["schema"], "podway.status-result/v2");
+    assert_eq!(compact["schema"], "podway.compact-status-result/v3");
+    assert_eq!(standard["schema"], "podway.status-result/v3");
     assert_eq!(standard["tier"], "standard");
-    assert_eq!(verbose["schema"], "podway.status-result/v2");
+    assert_eq!(verbose["schema"], "podway.status-result/v3");
     assert_eq!(verbose["tier"], "verbose");
     assert_eq!(next["schema"], "podway.next-result/v2");
 
@@ -534,7 +555,7 @@ fn v2agt002_observation_projects_typed_items_and_fenced_templates() {
     let view = view(fresh_state("applicability.json", APPLICABILITY_PROCEDURE));
     let observation = project_graph_observation_v1(&view).unwrap();
 
-    assert_eq!(observation["schema"], "podway.observation-result/v1");
+    assert_eq!(observation["schema"], "podway.observation-result/v2");
     assert_eq!(observation["status"]["session"]["lifecycle"], "running");
     assert_eq!(observation["guidance"]["node"]["graph_node_id"], "work");
     let items = observation["active_items"].as_array().unwrap();
@@ -582,6 +603,12 @@ fn v2agt002_observation_projects_typed_items_and_fenced_templates() {
         } else {
             assert_eq!(template["preconditions"]["session_revision"], 1);
             assert!(argv.contains(&json!("--if-session-revision")));
+        }
+        if template["command"] == "session.reset" {
+            assert!(argv.windows(2).any(|arguments| {
+                arguments == [json!("--progress-summary"), json!("<progress-summary>")]
+            }));
+            assert!(argv.contains(&json!("--yes")));
         }
     }
     assert_output_v2("session.observe", observation);
@@ -3418,9 +3445,43 @@ fn v2run002_terminal_status_preserves_goal_without_a_current_attempt() {
         let observation = project_graph_observation_v1(&view).unwrap();
         assert!(observation["guidance"].is_null());
         assert_eq!(observation["active_items"], json!([]));
-        assert_eq!(observation["mutation_templates"], json!([]));
+        let templates = observation["mutation_templates"].as_array().unwrap();
+        assert_eq!(templates.len(), 1);
+        assert_eq!(templates[0]["command"], "session.terminal_disposition");
+        assert!(templates.iter().all(|template| {
+            template["preconditions"]["session_revision"]
+                == observation["status"]["session"]["revision"]
+        }));
         assert_output_v2("session.observe", observation);
+
+        let disposed_view =
+            view_with_terminal_disposition(decided_assessment_state(lifecycle, false), true);
+        let disposed = project_graph_observation_v1(&disposed_view).unwrap();
+        let templates = disposed["mutation_templates"].as_array().unwrap();
+        assert_eq!(templates.len(), 2);
+        assert_eq!(templates[0]["command"], "session.reset");
+        assert_eq!(templates[1]["command"], "session.start_replace");
+        assert_output_v2("session.observe", disposed);
     }
+}
+
+#[test]
+fn v2lif005_prepared_observation_exposes_only_fenced_eligible_actions() {
+    let observation = project_graph_observation_v1(&view(prepared_state())).unwrap();
+    assert_eq!(observation["status"]["session"]["lifecycle"], "prepared");
+    assert!(observation["status"]["current"].is_null());
+    assert_eq!(observation["active_items"], json!([]));
+    let templates = observation["mutation_templates"].as_array().unwrap();
+    assert_eq!(templates.len(), 3);
+    assert_eq!(templates[0]["command"], "session.begin");
+    assert_eq!(templates[1]["command"], "session.reset");
+    assert_eq!(templates[2]["command"], "session.start_replace");
+    assert!(templates.iter().all(|template| {
+        template["preconditions"]["session_revision"] == 0
+            && template["preconditions"]["workspace_uuid"] == WORKSPACE_ID
+            && template["preconditions"]["session_id"] == SESSION_ID
+    }));
+    assert_output_v2("session.observe", observation);
 }
 
 #[test]

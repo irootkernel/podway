@@ -84,8 +84,6 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 
 ## Current adopted dossiers
 
-- [Podway Prepared Session Lifecycle](TODO-podway-prepared-session-lifecycle.md)
-  owns `V2LIF`.
 - [Podway Bounded Evidence Scale and Read-back](TODO-podway-evidence-scaling.md)
   owns `V2SCL`.
 - [Podway External Check Result Typing](TODO-podway-assurance-typing.md)

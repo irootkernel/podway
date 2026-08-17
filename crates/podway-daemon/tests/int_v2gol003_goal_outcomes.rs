@@ -258,7 +258,20 @@ fn goal_fixture(worker_id: &str) -> (GoalFixture, impl RequestDispatcherV1) {
         json!({
             "procedure": "goal.yaml",
             "expected_procedure_digest": digest,
-            "task_title": "Derive goal outcomes",
+            "task_title": "Derive goal outcomes"
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    );
+    let started = runtime::v2_result(runtime::dispatch(&dispatcher, &start), "session.start");
+    let session_id = started["session_id"].as_str().unwrap().to_owned();
+    runtime::begin(
+        &dispatcher,
+        &selector,
+        103_099,
+        &session_id,
+        json!({
             "goal": "Ship a correct and tested result.",
             "criteria": [
                 {"criterion_id": "correct", "statement": "The result is correct."},
@@ -269,9 +282,8 @@ fn goal_fixture(worker_id: &str) -> (GoalFixture, impl RequestDispatcherV1) {
         .as_object()
         .unwrap()
         .clone(),
+        "v2gol003-begin",
     );
-    let started = runtime::v2_result(runtime::dispatch(&dispatcher, &start), "session.start");
-    let session_id = started["session_id"].as_str().unwrap().to_owned();
     runtime::mutate_item(
         &dispatcher,
         &selector,
@@ -328,9 +340,7 @@ fn general_decision_fixture(worker_id: &str) -> (GoalFixture, impl RequestDispat
         json!({
             "procedure": "general.yaml",
             "expected_procedure_digest": digest,
-            "task_title": "General decision regression",
-            "goal": "Reach a recorded outcome.",
-            "criteria": [{"criterion_id": "verified", "statement": "The result is verified."}]
+            "task_title": "General decision regression"
         })
         .as_object()
         .unwrap()
@@ -338,6 +348,20 @@ fn general_decision_fixture(worker_id: &str) -> (GoalFixture, impl RequestDispat
     );
     let started = runtime::v2_result(runtime::dispatch(&dispatcher, &start), "session.start");
     let session_id = started["session_id"].as_str().unwrap().to_owned();
+    runtime::begin(
+        &dispatcher,
+        &selector,
+        103_299,
+        &session_id,
+        json!({
+            "goal": "Reach a recorded outcome.",
+            "criteria": [{"criterion_id": "verified", "statement": "The result is verified."}]
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+        "v2gol003-general-begin",
+    );
     (
         GoalFixture {
             workspace,

@@ -596,7 +596,7 @@
         "code": "SESSION_NOT_RUNNING",
         "exit_code": 1,
         "retryable": false,
-        "summary": "The command requires a running session."
+        "summary": "The command requires a running session, or begin requires a prepared session."
       },
       {
         "code": "SESSION_NOT_TERMINAL",
@@ -1117,7 +1117,7 @@
       {
         "id": "urn:podway:schema:observation-result:v2",
         "path": "schemas/observation-result-v2.schema.json",
-        "sha256": "sha256:686bd908912078d600423ca1404bcce8db1ab43227baf670f87de3a6ef2741e7"
+        "sha256": "sha256:894b3ec2f3d84a8219c825c86ac72c0891aeb47c6e2f5f2e630d3f66e94e14e0"
       },
       {
         "id": "urn:podway:schema:output:v3",

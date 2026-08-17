@@ -309,7 +309,13 @@ fn route_cases() -> Vec<RouteCase> {
             command: "session.start_replace",
             operation: OperationV1::Mutate,
             durable: true,
-            payload: json!({"selector": selector.clone(), "procedure": "procedures/custom.yaml", "task_title": "Replace the task", "confirmed": true}),
+            payload: json!({
+                "selector": selector.clone(),
+                "procedure": "procedures/custom.yaml",
+                "task_title": "Replace the task",
+                "confirmed": true,
+                "progress_summary": "Preserved the current task state",
+            }),
             preconditions: session_identity_preconditions(),
         },
         RouteCase {
@@ -379,7 +385,11 @@ fn route_cases() -> Vec<RouteCase> {
             command: "session.reset",
             operation: OperationV1::Mutate,
             durable: true,
-            payload: json!({"selector": selector.clone(), "confirmed": true}),
+            payload: json!({
+                "selector": selector.clone(),
+                "confirmed": true,
+                "progress_summary": "Preserved the current task state",
+            }),
             preconditions: session_identity_preconditions(),
         },
         RouteCase {
@@ -857,13 +867,18 @@ fn g006_dry_runs_are_query_only_and_excluded_from_mutation_identity() {
                 "preset": "bug-fix",
                 "task_title": "Preview replace",
                 "confirmed": true,
+                "progress_summary": "Preserved the current task state",
             }),
         ),
         (
             "session.reset",
             session_identity_preconditions(),
             json!({"selector": selector(), "dry_run": true}),
-            json!({"selector": selector(), "confirmed": true}),
+            json!({
+                "selector": selector(),
+                "confirmed": true,
+                "progress_summary": "Preserved the current task state",
+            }),
         ),
     ];
 
@@ -1194,7 +1209,11 @@ fn g006_reset_all_identity_binds_stable_git_fingerprints_not_workspace_uuids() {
         "session.reset",
         OperationV1::Mutate,
         true,
-        json!({"selector": selector(), "confirmed": true}),
+        json!({
+            "selector": selector(),
+            "confirmed": true,
+            "progress_summary": "Preserved the current task state",
+        }),
         session_identity_preconditions(),
     ))
     .unwrap();

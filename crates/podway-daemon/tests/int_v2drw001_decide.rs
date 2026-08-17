@@ -204,6 +204,14 @@ fn start_at_decision(
             .as_str()
             .unwrap()
             .to_owned();
+    runtime::begin(
+        dispatcher,
+        selector,
+        91_003,
+        &session_id,
+        Map::new(),
+        "v2drw001-begin",
+    );
     let action = runtime::status(dispatcher, selector, 91_005, &session_id);
     let wrong_node_type = decide_request(
         91_006,

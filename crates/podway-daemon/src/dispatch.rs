@@ -2459,7 +2459,7 @@ fn catalog_error_spec_v1(kind: DispatchFailureKindV1) -> (&'static str, &'static
         ),
         DispatchFailureKindV1::SessionNotRunning => (
             "SESSION_NOT_RUNNING",
-            "The command requires a running session.",
+            "The command requires a running session, or begin requires a prepared session.",
             false,
             1,
         ),

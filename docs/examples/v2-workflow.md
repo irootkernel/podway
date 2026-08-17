@@ -17,17 +17,21 @@ podway --json preset show bug-fix-v2
 podway --json start \
   --preset bug-fix-v2 \
   --task "fix duplicate session creation" \
-  --goal "Prevent duplicate sessions without regressing login." \
-  --criterion reproduced="The original defect is recorded." \
-  --criterion verified="Fresh verification supports the correction." \
-  --actor developer \
   --dry-run
 ```
 
 The dry run returns `podway.output/v3` with
-`result.schema: podway.session-start-result/v2`, `result.dry_run: true`, and the
+`result.schema: podway.session-start-result/v3`, `result.dry_run: true`, and the
 shipped `result.procedure_digest`; it creates no session. Remove `--dry-run` to
-start the session.
+create a prepared session, then begin it with the optional initial goal:
+
+```bash
+podway --json begin \
+  --goal "Prevent duplicate sessions without regressing login." \
+  --criterion reproduced="The original defect is recorded." \
+  --criterion verified="Fresh verification supports the correction." \
+  --actor developer
+```
 
 For a smaller change that does not require a tracked goal, inspect and start the
 lightweight preset without `--goal` or `--criterion`:
@@ -38,6 +42,10 @@ podway --json start \
   --preset small-change-v2 \
   --task "update one validation rule" \
   --dry-run
+podway --json start \
+  --preset small-change-v2 \
+  --task "update one validation rule"
+podway --json begin
 ```
 
 Its complete graph is `inspect -> implement -> verify -> review -> closeout`.
@@ -53,7 +61,7 @@ podway --json observe --wait-for-idle
 ```
 
 Automation uses the JSON contract, never human-readable text. The observation
-returns `podway.observation-result/v1`; read these stable fields:
+returns `podway.observation-result/v2`; read these stable fields:
 
 | JSON field | CLI precondition or use |
 |---|---|
@@ -229,6 +237,30 @@ The criterion result reports `result.goal_revision`, `result.result.status`,
 `result.determined_outcome`. Select the matching goal-assessment decision option,
 record the outcome and closeout items, and continue using `status --json` and
 `next --json` until the terminal action completes.
+
+## Record terminal ownership and reset
+
+A completed or cancelled session is not eligible for default deletion until its
+exact current terminal revision has a disposition. Record either a handoff or the
+fact that no handoff is required, then use the fresh observation's reset template:
+
+```bash
+podway --json disposition not-required \
+  --reason "No external handoff is required." \
+  --if-workspace-uuid <workspace-uuid> \
+  --if-session-id <session-id> \
+  --if-session-revision <session-revision> \
+  --idempotency-key bug-42-disposition
+
+podway --json reset \
+  --if-workspace-uuid <workspace-uuid> \
+  --if-session-id <session-id> \
+  --if-session-revision <disposed-session-revision> \
+  --idempotency-key bug-42-reset
+```
+
+A prepared session is already eligible. Running work is not: force reset requires
+`--progress-summary <text> --yes` and a fresh identity/revision fence.
 
 ## Optional contributor isolation
 

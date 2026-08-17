@@ -157,6 +157,7 @@ enum Reply {
     StatusV2GoalDefined,
     StatusV2Verbose,
     SharedMutationV2,
+    SessionReset,
 }
 
 struct RecordingDaemon {
@@ -469,6 +470,42 @@ fn response_for(request: &RequestEnvelopeV1, reply: Reply) -> Value {
                 "warnings": []
             })
         }
+        Reply::SessionReset => {
+            let mut fixture: Value = serde_json::from_str(include_str!(
+                "../../../tests/fixtures/v2/protocol/result-families.json"
+            ))
+            .expect("v2 result fixtures must parse");
+            let mut result = fixture["fixtures"]["podway.session-reset-result/v1"].take();
+            result["session_id"] = json!(SESSION_ID);
+            result["session_revision"] = json!(7);
+            result["lifecycle"] = json!("running");
+            result["eligible"] = json!(false);
+            result["required_action"] = json!("none");
+            result["mode"] = json!("force");
+            result["admission"]["job_id"] = json!(JOB_ID);
+            result["admission"]["workspace_sequence"] = json!(8);
+            json!({
+                "schema": "podway.output/v3",
+                "request_id": request.request_id().as_str(),
+                "command": request.command().as_str(),
+                "generated_at": "2026-08-09T12:34:56.789Z",
+                "workspace": {
+                    "uuid": WORKSPACE_ID,
+                    "root": request.workspace().expect("reset selects a workspace").root(),
+                    "latest_workspace_sequence": 8
+                },
+                "job": {
+                    "id": JOB_ID,
+                    "sequence": 8,
+                    "state": "succeeded",
+                    "submitted_at": "2026-08-09T12:34:56.789Z",
+                    "claimed_at": "2026-08-09T12:34:56.789Z",
+                    "finished_at": "2026-08-09T12:34:56.789Z"
+                },
+                "result": result,
+                "warnings": []
+            })
+        }
     }
 }
 
@@ -622,7 +659,8 @@ fn verbose_status_result() -> Value {
 
 fn required_result_schema(command: &str) -> &'static str {
     match command {
-        "session.start" | "session.start_replace" => "podway.session-start-result/v2",
+        "session.start" | "session.start_replace" => "podway.session-start-result/v3",
+        "session.begin" => "podway.session-begin-result/v1",
         "session.decide" => "podway.decision-result/v1",
         "session.rework" => "podway.rework-result/v1",
         "goal.define" => "podway.goal-definition-result/v1",
@@ -1115,12 +1153,28 @@ fn fully_fenced_state_mutations_skip_status_preflight_and_render_output_v2() {
             "cancel",
             true,
         ),
-        ("session.reset", vec!["reset"], "reset", false),
+        (
+            "session.reset",
+            vec![
+                "reset",
+                "--progress-summary",
+                "Discard the isolated fixture session.",
+            ],
+            "reset",
+            false,
+        ),
     ];
 
     for (command, command_arguments, transition, requires_attempt) in cases {
         let fixture = Fixture::new();
-        let daemon = RecordingDaemon::start(&fixture.socket, Reply::SharedMutationV2);
+        let daemon = RecordingDaemon::start(
+            &fixture.socket,
+            if command == "session.reset" {
+                Reply::SessionReset
+            } else {
+                Reply::SharedMutationV2
+            },
+        );
         let mut arguments = vec![
             "--json".to_owned(),
             "--socket".to_owned(),
@@ -1155,14 +1209,26 @@ fn fully_fenced_state_mutations_skip_status_preflight_and_render_output_v2() {
         } else {
             assert!(request["preconditions"].get("attempt_id").is_none());
             assert_eq!(request["payload"]["confirmed"], true);
+            assert_eq!(
+                request["payload"]["progress_summary"],
+                "Discard the isolated fixture session."
+            );
         }
         let envelope = one_json(&output);
         assert_eq!(envelope["schema"], "podway.output/v3");
-        assert_eq!(
-            envelope["result"]["schema"],
-            "podway.stage-transition-result/v2"
-        );
-        assert_eq!(envelope["result"]["transition"], transition);
+        if command == "session.reset" {
+            assert_eq!(
+                envelope["result"]["schema"],
+                "podway.session-reset-result/v1"
+            );
+            assert_eq!(envelope["result"]["reset"], true);
+        } else {
+            assert_eq!(
+                envelope["result"]["schema"],
+                "podway.stage-transition-result/v2"
+            );
+            assert_eq!(envelope["result"]["transition"], transition);
+        }
     }
 }
 
@@ -1180,12 +1246,27 @@ fn state_mutations_with_omitted_fences_use_v2_status_preflight() {
             vec!["cancel", "--reason", "cancel after review"],
             true,
         ),
-        ("session.reset", vec!["reset"], false),
+        (
+            "session.reset",
+            vec![
+                "reset",
+                "--progress-summary",
+                "Discard the isolated fixture session.",
+            ],
+            false,
+        ),
     ] {
         let fixture = Fixture::new();
         let daemon = SequenceRecordingDaemon::start(
             &fixture.socket,
-            vec![Reply::StatusV2, Reply::SharedMutationV2],
+            vec![
+                Reply::StatusV2,
+                if command == "session.reset" {
+                    Reply::SessionReset
+                } else {
+                    Reply::SharedMutationV2
+                },
+            ],
         );
         let mut arguments = vec![
             "--json".to_owned(),
@@ -1273,12 +1354,26 @@ fn state_mutation_preflight_renders_output_v3() {
             "session.cancel",
             vec!["cancel", "--reason", "current cancellation"],
         ),
-        ("session.reset", vec!["reset"]),
+        (
+            "session.reset",
+            vec![
+                "reset",
+                "--progress-summary",
+                "Discard the isolated fixture session.",
+            ],
+        ),
     ] {
         let fixture = Fixture::new();
         let daemon = SequenceRecordingDaemon::start(
             &fixture.socket,
-            vec![Reply::StatusV2, Reply::SharedMutationV2],
+            vec![
+                Reply::StatusV2,
+                if command == "session.reset" {
+                    Reply::SessionReset
+                } else {
+                    Reply::SharedMutationV2
+                },
+            ],
         );
         let mut arguments = vec![
             "--json".to_owned(),
@@ -1303,7 +1398,11 @@ fn state_mutation_preflight_renders_output_v3() {
         assert_eq!(envelope["schema"], "podway.output/v3");
         assert_eq!(
             envelope["result"]["schema"],
-            "podway.stage-transition-result/v2"
+            if command == "session.reset" {
+                "podway.session-reset-result/v1"
+            } else {
+                "podway.stage-transition-result/v2"
+            }
         );
     }
 }
@@ -1386,19 +1485,11 @@ fn shared_skip_uses_output_v3_after_preflight() {
 }
 
 #[test]
-fn goal_bearing_start_is_typed() {
+fn goal_bearing_begin_is_typed() {
     let fixture = Fixture::new();
-    let procedure = fixture.root.join("procedure.yaml");
-    fs::write(&procedure, "schema: podway.procedure/v2\n").expect("fixture procedure must write");
     let daemon = RecordingDaemon::start(&fixture.socket, Reply::Unsupported);
-    let mut arguments = fixture.daemon_arguments(&[
-        "start",
-        "--procedure",
-        "procedure.yaml",
-        "--expect-procedure-digest",
-        PROCEDURE_DIGEST,
-        "--task",
-        "Ship v2",
+    let arguments = fixture.daemon_arguments(&[
+        "begin",
         "--goal",
         "Ship safely.",
         "--criterion",
@@ -1406,18 +1497,10 @@ fn goal_bearing_start_is_typed() {
         "--actor",
         "owner",
     ]);
-    // A fresh start carries no session fences.
-    for flag in ["--if-session-id", "--if-session-revision"] {
-        let index = arguments
-            .iter()
-            .position(|argument| argument == flag)
-            .unwrap();
-        arguments.drain(index..=index + 1);
-    }
     let output = fixture.run(&arguments);
     let request = daemon.finish();
     assert_eq!(output.status.code(), Some(3));
-    assert_eq!(request["command"], "session.start");
+    assert_eq!(request["command"], "session.begin");
     assert_eq!(request["payload"]["goal"], "Ship safely.");
     assert_eq!(
         request["payload"]["criteria"],
@@ -1428,7 +1511,7 @@ fn goal_bearing_start_is_typed() {
 }
 
 #[test]
-fn goal_bearing_start_replace_preflights_omitted_and_partial_identity_fences() {
+fn force_start_replace_preflights_omitted_and_partial_identity_fences() {
     for explicit_session_id in [false, true] {
         let fixture = Fixture::new();
         let daemon = SequenceRecordingDaemon::start(
@@ -1452,13 +1535,11 @@ fn goal_bearing_start_replace_preflights_omitted_and_partial_identity_fences() {
             "--preset".to_owned(),
             "sw-dev-v2".to_owned(),
             "--task".to_owned(),
-            "Replace with a goal".to_owned(),
-            "--goal".to_owned(),
-            "Ship safely.".to_owned(),
-            "--criterion".to_owned(),
-            "tested=Tests pass.".to_owned(),
+            "Replace the current session".to_owned(),
             "--replace".to_owned(),
             "--yes".to_owned(),
+            "--progress-summary".to_owned(),
+            "Discard the isolated fixture session.".to_owned(),
         ]);
 
         let output = fixture.run(&arguments);
@@ -1478,12 +1559,12 @@ fn goal_bearing_start_replace_preflights_omitted_and_partial_identity_fences() {
         assert_eq!(requests[1]["workspace"]["expected_uuid"], WORKSPACE_ID);
         assert_eq!(requests[1]["preconditions"]["session_id"], SESSION_ID);
         assert_eq!(requests[1]["preconditions"]["session_revision"], 7);
-        assert_eq!(requests[1]["payload"]["goal"], "Ship safely.");
-        assert_eq!(
-            requests[1]["payload"]["criteria"],
-            json!([{"criterion_id":"tested","statement":"Tests pass."}])
-        );
+        assert!(requests[1]["payload"].get("goal").is_none());
         assert_eq!(requests[1]["payload"]["confirmed"], true);
+        assert_eq!(
+            requests[1]["payload"]["progress_summary"],
+            "Discard the isolated fixture session."
+        );
     }
 }
 
@@ -1934,6 +2015,9 @@ fn help_and_every_completion_target_publish_the_v2_routes_and_flags() {
     for topic in [
         "session.status",
         "session.observe",
+        "session.begin",
+        "session.terminal_disposition",
+        "session.reset",
         "session.decide",
         "session.rework",
         "goal.define",
@@ -1961,11 +2045,9 @@ fn help_and_every_completion_target_publish_the_v2_routes_and_flags() {
         .as_str()
         .unwrap()
         .to_owned();
-    assert!(replacement_help.contains(
-        "--goal <text> --criterion <id>=<statement>... [--actor <text>] --replace \
-         [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>] \
-         [--dry-run] [--yes]"
-    ));
+    assert!(replacement_help.contains("--replace-eligible"));
+    assert!(replacement_help.contains("--replace --progress-summary <text>"));
+    assert!(!replacement_help.contains("--goal"));
     for shell in ["bash", "zsh", "fish"] {
         let fixture = Fixture::new();
         let output = fixture.run(&["completions".to_owned(), shell.to_owned()]);
@@ -1974,6 +2056,10 @@ fn help_and_every_completion_target_publish_the_v2_routes_and_flags() {
         for token in [
             "history-before",
             "observe",
+            "begin",
+            "disposition",
+            "replace-eligible",
+            "progress-summary",
             "decide",
             "rework",
             "goal",

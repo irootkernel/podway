@@ -617,6 +617,14 @@ fn v2gol004_command_generated_goal_history_is_complete_pageable_and_cold_stable(
     );
     let started = runtime::v2_result(runtime::dispatch(&dispatcher, &start), "session.start");
     let session_id = started["session_id"].as_str().unwrap().to_owned();
+    runtime::begin(
+        &dispatcher,
+        &selector,
+        next_number(&mut number),
+        &session_id,
+        Map::new(),
+        "v2gol004-begin",
+    );
 
     let before_define = status(&dispatcher, &selector, &session_id, &mut number);
     let define = mutation_request(
@@ -956,6 +964,14 @@ fn v2gol004_max_escaped_assessment_stays_out_of_history_but_survives_next_readba
     );
     let started = runtime::v2_result(runtime::dispatch(&dispatcher, &start), "session.start");
     let session_id = started["session_id"].as_str().unwrap().to_owned();
+    runtime::begin(
+        &dispatcher,
+        &selector,
+        next_number(&mut number),
+        &session_id,
+        Map::new(),
+        "v2gol004-max-begin",
+    );
 
     let criteria = (0..16)
         .map(|index| {

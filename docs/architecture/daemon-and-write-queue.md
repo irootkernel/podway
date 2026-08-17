@@ -138,7 +138,11 @@ The following commands require an expected session revision and active attempt I
 - decide and rework;
 - block and unblock;
 - cancel;
-- reset of a running session.
+
+`begin`, terminal disposition, session reset, and session replacement require the
+exact session identity and revision but never an attempt fence. Default reset and
+replacement admit only a prepared session or a terminal session with a current
+disposition. Force mode additionally requires a bounded progress summary.
 
 The normal CLI reads current state and supplies the observed values automatically. Automation can specify them explicitly.
 

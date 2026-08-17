@@ -174,6 +174,8 @@ pub const EXISTING_ROUTE_RESULT_SCHEMAS_V2: &[ResultSchemaContractV2] = &[
         &[
             "session.start",
             "session.start_replace",
+            "session.begin",
+            "session.terminal_disposition",
             "session.complete",
             "session.skip",
             "session.retry",

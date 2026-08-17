@@ -50,10 +50,20 @@ fn start(
         "v2run007-start",
         PreconditionsV1::default(),
     );
-    runtime::v2_result(runtime::dispatch(dispatcher, &request), "session.start")["session_id"]
-        .as_str()
-        .unwrap()
-        .to_owned()
+    let session_id =
+        runtime::v2_result(runtime::dispatch(dispatcher, &request), "session.start")["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+    runtime::begin(
+        dispatcher,
+        selector,
+        70_003,
+        &session_id,
+        Map::new(),
+        "v2run007-begin",
+    );
+    session_id
 }
 
 fn item_set_request(

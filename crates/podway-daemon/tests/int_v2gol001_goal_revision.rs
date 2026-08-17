@@ -157,22 +157,19 @@ fn initialize(
 }
 
 #[test]
-fn v2gol001_initial_goal_is_durable_for_start_and_replace() {
+fn v2gol001_initial_goal_is_durable_for_begin_and_replace() {
     let fixture = fixture();
     let production = runtime::dispatcher(Arc::clone(&fixture.manager), "v2gol001-start");
     initialize(&production, &fixture.selector, 101_001);
 
-    let mut payload = goal_fields("Ship the first goal.", "The first goal is persisted.");
-    payload.extend(
-        json!({
-            "procedure": "goal.yaml",
-            "expected_procedure_digest": fixture.digest,
-            "task_title": "Initial goal start"
-        })
-        .as_object()
-        .unwrap()
-        .clone(),
-    );
+    let payload = json!({
+        "procedure": "goal.yaml",
+        "expected_procedure_digest": fixture.digest,
+        "task_title": "Initial goal start"
+    })
+    .as_object()
+    .unwrap()
+    .clone();
     let start = typed_request(
         101_002,
         "session.start",
@@ -183,32 +180,53 @@ fn v2gol001_initial_goal_is_durable_for_start_and_replace() {
     );
     let started_once = runtime::dispatch(&production, &start);
     let started = runtime::v2_result(started_once.clone(), "session.start");
-    assert_eq!(started["goal_tracking"], true);
-    assert_eq!(started["goal_defined"], true);
-    assert_eq!(started["revision"], 1);
+    assert_eq!(started["goal_defined"], false);
+    assert_eq!(started["revision"], 0);
     assert_eq!(
         runtime::without_request_id(&runtime::dispatch(&production, &start)),
         runtime::without_request_id(&started_once),
-        "initial goal start must replay one durable outcome"
+        "prepared start must replay one durable outcome"
     );
 
     let session_id = started["session_id"].as_str().unwrap();
+    let begin = typed_request(
+        101_003,
+        "session.begin",
+        &fixture.selector,
+        goal_fields("Ship the first goal.", "The first goal is persisted."),
+        "v2gol001-initial-begin",
+        PreconditionsV1::new(
+            Some(SessionId::new(session_id).unwrap()),
+            Some(Revision::ZERO),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let begun_once = runtime::dispatch(&production, &begin);
+    let begun = runtime::v2_result(begun_once.clone(), "session.begin");
+    assert_eq!(begun["goal_tracking"], true);
+    assert_eq!(begun["goal_defined"], true);
+    assert_eq!(begun["revision"], 1);
+    assert_eq!(
+        runtime::without_request_id(&runtime::dispatch(&production, &begin)),
+        runtime::without_request_id(&begun_once),
+        "goal-bearing begin must replay one durable outcome"
+    );
+
     let status = runtime::status(&production, &fixture.selector, 101_010, session_id);
-    let mut replacement_payload = goal_fields(
-        "Ship the replacement goal.",
-        "The replacement owns an immutable first revision.",
-    );
-    replacement_payload.extend(
-        json!({
-            "procedure": "goal.yaml",
-            "expected_procedure_digest": fixture.digest,
-            "task_title": "Replacement initial goal",
-            "confirmed": true
-        })
-        .as_object()
-        .unwrap()
-        .clone(),
-    );
+    let replacement_payload = json!({
+        "procedure": "goal.yaml",
+        "expected_procedure_digest": fixture.digest,
+        "task_title": "Replacement initial goal",
+        "confirmed": true,
+        "progress_summary": "The isolated test intentionally replaces its running session."
+    })
+    .as_object()
+    .unwrap()
+    .clone();
     let replace = typed_request(
         101_011,
         "session.start_replace",
@@ -221,9 +239,36 @@ fn v2gol001_initial_goal_is_durable_for_start_and_replace() {
         runtime::dispatch(&production, &replace),
         "session.start_replace",
     );
-    assert_eq!(replaced["goal_defined"], true);
-    assert_eq!(replaced["revision"], 1);
+    assert_eq!(replaced["goal_defined"], false);
+    assert_eq!(replaced["revision"], 0);
     assert_ne!(replaced["session_id"], started["session_id"]);
+
+    let replacement_session_id = replaced["session_id"].as_str().unwrap();
+    let replacement_begin = typed_request(
+        101_012,
+        "session.begin",
+        &fixture.selector,
+        goal_fields(
+            "Ship the replacement goal.",
+            "The replacement owns an immutable first revision.",
+        ),
+        "v2gol001-replacement-begin",
+        PreconditionsV1::new(
+            Some(SessionId::new(replacement_session_id).unwrap()),
+            Some(Revision::ZERO),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let replacement_begun = runtime::v2_result(
+        runtime::dispatch(&production, &replacement_begin),
+        "session.begin",
+    );
+    assert_eq!(replacement_begun["goal_defined"], true);
+    assert_eq!(replacement_begun["revision"], 1);
 }
 
 #[test]
@@ -249,6 +294,14 @@ fn v2gol001_define_and_running_revise_are_fenced_replayable_and_restart_safe() {
     let started = runtime::v2_result(runtime::dispatch(&production, &start), "session.start");
     assert_eq!(started["goal_defined"], false);
     let session_id = started["session_id"].as_str().unwrap().to_owned();
+    runtime::begin(
+        &production,
+        &fixture.selector,
+        102_003,
+        &session_id,
+        Map::new(),
+        "v2gol001-goalless-begin",
+    );
     let before_define = runtime::status(&production, &fixture.selector, 102_010, &session_id);
 
     let define = typed_request(

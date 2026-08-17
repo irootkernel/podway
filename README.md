@@ -105,7 +105,7 @@ For a small project-wide policy, add this template to the project's `AGENTS.md`:
 ## Podway
 
 - Podway supports Procedure v2 only. Treat `LEGACY_PROCEDURE_STATE_UNSUPPORTED` as a backup-and-reset boundary; do not edit the database or attempt conversion.
-- When `.podway/config.yaml` exists, read `podway observe --json --wait-for-idle` before task work. Require `podway.observation-result/v1`, and re-read it after every mutation.
+- When `.podway/config.yaml` exists, read `podway observe --json --wait-for-idle` before task work. Require `podway.observation-result/v2`, and re-read it after every mutation.
 - Treat the active Podway graph node and attempt as the current work boundary. Perform the work before recording an item. Side work may run outside Podway, but record only conclusions supported by current evidence on the active attempt.
 - Use JSON fields, stable error codes, explicit preconditions, and idempotency keys for mutations. Never parse human-readable output as an API.
 - You may update items and advance an existing active v2 session when the work supports it. Do not run `podway init`, start or replace a session, cancel or reset state, control the daemon, or reactivate a completed session through `rework` or `goal revise --reactivate` unless the user explicitly requests it.
@@ -157,7 +157,8 @@ podway init
 podway preset list
 podway start \
   --preset sw-dev-v2 \
-  --task "add bounded retry backoff" \
+  --task "add bounded retry backoff"
+podway begin \
   --goal "Retry transient writes with a bounded exponential delay." \
   --criterion verified="Fresh verification supports the change." \
   --actor developer
@@ -201,6 +202,7 @@ For a bounded verified change that does not need a tracked goal:
 
 ```bash
 podway start --preset small-change-v2 --task "update one validation rule"
+podway begin
 ```
 
 You can also use a worktree-local YAML procedure:
@@ -208,6 +210,7 @@ You can also use a worktree-local YAML procedure:
 ```bash
 podway procedure validate .podway/procedures/custom.yaml
 podway start --procedure .podway/procedures/custom.yaml --task "review queue behavior"
+podway begin
 ```
 
 Rework is part of the normal lifecycle:
@@ -218,11 +221,17 @@ Rework is part of the normal lifecycle:
 - `podway goal revise --reactivate ...` reactivates a completed goal-tracked session when explicitly authorized.
 - `--dry-run` previews destructive transitions that support it.
 
-After a completed or cancelled task no longer needs its local history:
+`start` creates a disposable prepared session. `begin` creates the first active
+attempt. A prepared session can be reset immediately. A completed or cancelled
+session must first record its current terminal disposition before eligible reset:
 
 ```bash
-podway reset --yes
+podway disposition not-required --reason "No external handoff is required."
+podway reset
 ```
+
+Resetting running work requires explicit confirmation and a bounded progress
+summary, for example `podway reset --progress-summary "Preserved the current diff." --yes`.
 
 ## Automation
 

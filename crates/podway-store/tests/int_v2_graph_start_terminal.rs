@@ -23,9 +23,9 @@ use podway_store::{
     PersistedGraphTerminalOperationV2, PersistedResponseContextV1, ProcedureSnapshotV2,
     RevisionAttemptItemPreconditionsV1, SqliteStoreOptionsV1, SqliteStoreV1, StoreContractV1,
     StoreErrorV1, StoreFailpointActionV1, StoreFailpointV1, StoreGraphMutationContractV2,
-    StoreGraphStateContractV2, StoreIdempotencyReadContractV1, StoreInvariantV1,
-    StoreReadContractV1, StoreTerminalDispositionContractV2, StoreUnavailableReasonV1,
-    TerminalResultV1, ValidatedWorkspaceRootV1, WorkerIdV1,
+    StoreGraphReadContractV2, StoreGraphStateContractV2, StoreIdempotencyReadContractV1,
+    StoreInvariantV1, StoreReadContractV1, StoreTerminalDispositionContractV2,
+    StoreUnavailableReasonV1, TerminalResultV1, ValidatedWorkspaceRootV1, WorkerIdV1,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -91,6 +91,7 @@ fn graph_state_with_required_artifact(
         created_at,
         required_artifact,
         false,
+        false,
     )
 }
 
@@ -100,6 +101,7 @@ fn graph_state_with_options(
     created_at: u64,
     required_artifact: bool,
     goal_tracking: bool,
+    manual_rework: bool,
 ) -> GraphSessionStateV2 {
     let mut items = vec![
         json!({
@@ -138,6 +140,12 @@ fn graph_state_with_options(
             .as_object_mut()
             .unwrap()
             .insert("goal_tracking".to_owned(), json!(true));
+    }
+    if manual_rework {
+        document.as_object_mut().unwrap().insert(
+            "manual_rework".to_owned(),
+            json!({"allowed_targets":["work"]}),
+        );
     }
     let canonical = canonicalize_json_v1(&document).unwrap();
     let procedure_digest =
@@ -204,7 +212,7 @@ fn prepared_session_and_begin_with_optional_goal_reconstruct_exactly() {
         let temporary = TempDir::new().unwrap();
         let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
         let template =
-            graph_state_with_options(session_number, session_number + 1, 10, false, true);
+            graph_state_with_options(session_number, session_number + 1, 10, false, true, false);
         let prepared = GraphSessionStateV2::prepared(
             Revision::new(1),
             "Prepared graph session",
@@ -290,7 +298,7 @@ fn prepared_session_and_begin_with_optional_goal_reconstruct_exactly() {
         );
     }
 
-    let template = graph_state_with_options(741, 742, 10, false, false);
+    let template = graph_state_with_options(741, 742, 10, false, false, false);
     let prepared = GraphSessionStateV2::prepared(
         Revision::new(1),
         "Prepared graph session",
@@ -357,7 +365,7 @@ fn prepared_reconstruction_rejects_session_scoped_history() {
 fn terminal_dispositions_persist_and_remain_bound_to_the_terminal_revision() {
     let temporary = TempDir::new().unwrap();
     let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
-    let running = graph_state(731, 732, 10);
+    let running = graph_state_with_options(731, 732, 10, false, false, true);
     store
         .create_graph_session_v2(&identity(), running.clone())
         .unwrap();
@@ -395,6 +403,12 @@ fn terminal_dispositions_persist_and_remain_bound_to_the_terminal_revision() {
             completed.clone(),
         )
         .unwrap();
+    assert!(
+        !store
+            .read_graph_workspace_view_v2(&identity())
+            .unwrap()
+            .current_terminal_disposition()
+    );
     assert!(
         store
             .record_terminal_disposition_v2(
@@ -439,6 +453,12 @@ fn terminal_dispositions_persist_and_remain_bound_to_the_terminal_revision() {
         .unwrap();
     assert!(
         store
+            .read_graph_workspace_view_v2(&identity())
+            .unwrap()
+            .current_terminal_disposition()
+    );
+    assert!(
+        store
             .record_terminal_disposition_v2(&identity(), disposition.clone())
             .is_err()
     );
@@ -450,11 +470,44 @@ fn terminal_dispositions_persist_and_remain_bound_to_the_terminal_revision() {
 
     let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 14);
     let history = reopened.read_terminal_dispositions_v2(&identity()).unwrap();
+    assert!(
+        reopened
+            .read_graph_workspace_view_v2(&identity())
+            .unwrap()
+            .current_terminal_disposition()
+    );
     assert_eq!(history, vec![disposition]);
     assert_eq!(history[0].kind(), TerminalDispositionKindV2::HandedOff);
     assert_eq!(
         history[0].terminal_session_revision(),
         completed.trace().revision()
+    );
+
+    let reactivated = completed
+        .manual_rework_v2(
+            completed.trace().revision(),
+            None,
+            node("work"),
+            AttemptId::new(uuid(735)).unwrap(),
+            ReasonV2::new("Reopen the terminal work.").unwrap(),
+            None,
+            UnixMillis::new(15),
+        )
+        .unwrap()
+        .into_state();
+    reopened
+        .replace_graph_session_v2(
+            &identity(),
+            completed.workspace_revision(),
+            completed.trace().revision(),
+            reactivated,
+        )
+        .unwrap();
+    assert!(
+        !reopened
+            .read_graph_workspace_view_v2(&identity())
+            .unwrap()
+            .current_terminal_disposition()
     );
 }
 

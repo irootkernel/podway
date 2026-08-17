@@ -169,6 +169,14 @@ const REPLACE: Flag = Flag {
     long: "replace",
     takes_value: false,
 };
+const REPLACE_ELIGIBLE: Flag = Flag {
+    long: "replace-eligible",
+    takes_value: false,
+};
+const PROGRESS_SUMMARY: Flag = Flag {
+    long: "progress-summary",
+    takes_value: true,
+};
 const DRY_RUN: Flag = Flag {
     long: "dry-run",
     takes_value: false,
@@ -219,6 +227,10 @@ const IGNORE_MISSING: Flag = Flag {
 };
 const REFERENCE: Flag = Flag {
     long: "reference",
+    takes_value: true,
+};
+const SUMMARY: Flag = Flag {
+    long: "summary",
     takes_value: true,
 };
 const DIGEST: Flag = Flag {
@@ -330,10 +342,9 @@ const START_FLAGS: &[&Flag] = &[
     &PROCEDURE,
     &EXPECT_PROCEDURE_DIGEST,
     &TASK,
-    &GOAL,
-    &CRITERION,
-    &ACTOR,
     &REPLACE,
+    &REPLACE_ELIGIBLE,
+    &PROGRESS_SUMMARY,
     &DRY_RUN,
     &YES,
 ];
@@ -352,6 +363,7 @@ const RESET_FLAGS: &[&Flag] = &[
     &IF_SESSION_REVISION,
     &ALL,
     &FORCE,
+    &PROGRESS_SUMMARY,
     &DRY_RUN,
     &YES,
 ];
@@ -538,6 +550,28 @@ const ROUTES: &[Route] = &[
         words: "start",
         flags: START_FLAGS,
         values: "bug-fix-v2 small-change-v2 sw-dev-v2",
+        dynamic: None,
+    },
+    Route {
+        words: "begin",
+        flags: &[
+            &JSON,
+            &DEV,
+            &WORKTREE,
+            &TIMEOUT,
+            &SOCKET,
+            &NO_COLOR,
+            &QUIET,
+            &IDEMPOTENCY_KEY,
+            &DETACH,
+            &IF_WORKSPACE_UUID,
+            &IF_SESSION_ID,
+            &IF_SESSION_REVISION,
+            &GOAL,
+            &CRITERION,
+            &ACTOR,
+        ],
+        values: "",
         dynamic: None,
     },
     Route {
@@ -826,6 +860,49 @@ const ROUTES: &[Route] = &[
             &IF_SESSION_REVISION,
             &IF_ATTEMPT,
             &REASON,
+        ],
+        values: "",
+        dynamic: None,
+    },
+    Route {
+        words: "disposition handed-off",
+        flags: &[
+            &JSON,
+            &DEV,
+            &WORKTREE,
+            &TIMEOUT,
+            &SOCKET,
+            &NO_COLOR,
+            &QUIET,
+            &IDEMPOTENCY_KEY,
+            &DETACH,
+            &IF_WORKSPACE_UUID,
+            &IF_SESSION_ID,
+            &IF_SESSION_REVISION,
+            &SUMMARY,
+            &REFERENCE,
+            &ACTOR,
+        ],
+        values: "",
+        dynamic: None,
+    },
+    Route {
+        words: "disposition not-required",
+        flags: &[
+            &JSON,
+            &DEV,
+            &WORKTREE,
+            &TIMEOUT,
+            &SOCKET,
+            &NO_COLOR,
+            &QUIET,
+            &IDEMPOTENCY_KEY,
+            &DETACH,
+            &IF_WORKSPACE_UUID,
+            &IF_SESSION_ID,
+            &IF_SESSION_REVISION,
+            &REASON,
+            &ACTOR,
         ],
         values: "",
         dynamic: None,

@@ -955,7 +955,7 @@ fn public_v2_status(
     let output = public_v2_command(fixture, path, socket, worktree, arguments);
     assert_eq!(output["schema"], "podway.output/v3");
     assert_eq!(output["command"], "session.status");
-    assert_eq!(output["result"]["schema"], "podway.status-result/v2");
+    assert_eq!(output["result"]["schema"], "podway.status-result/v3");
     output["result"].clone()
 }
 
@@ -1176,15 +1176,32 @@ fn aut_t_obs_installed_service_returns_compact_quiescent_status_on_the_explicit_
             "start",
             "--preset",
             "sw-dev-v2",
-            "--goal",
-            "Observe compact idle status through the v2-only product.",
-            "--criterion",
-            "observed=The compact status is bounded and quiescent.",
             "--task",
             "Observe compact idle status",
         ],
     );
     assert_eq!(start["command"], "session.start");
+
+    let begin = fixture.run_json_success(
+        &controlled_path,
+        &[
+            "--json",
+            "--socket",
+            socket_text,
+            "--worktree",
+            worktree_text,
+            "--timeout",
+            "25s",
+            "--idempotency-key",
+            "11111111-1111-4111-8111-111111111112",
+            "begin",
+            "--goal",
+            "Observe compact idle status through the v2-only product.",
+            "--criterion",
+            "observed=The compact status is bounded and quiescent.",
+        ],
+    );
+    assert_eq!(begin["command"], "session.begin");
 
     let compact = fixture.run_json_success(
         &controlled_path,
@@ -1221,7 +1238,7 @@ fn aut_t_obs_installed_service_returns_compact_quiescent_status_on_the_explicit_
             "trace_length",
         ])
     );
-    assert_eq!(result["schema"], "podway.compact-status-result/v2");
+    assert_eq!(result["schema"], "podway.compact-status-result/v3");
     assert_eq!(result["queue"]["pending_mutations"], false);
     assert_eq!(result["queue"]["queued_count"], 0);
     assert!(result["queue"]["running_job_id"].is_null());
@@ -1339,6 +1356,31 @@ fn aut_t_id_custom_procedure_survives_restart_and_completes_the_fenced_lifecycle
         recovered.raw["result"]["procedure"]["digest"],
         procedure_digest
     );
+    let begun = fixture.run_json_success_owned(
+        &controlled_path,
+        &[
+            "--json",
+            "--socket",
+            socket_text,
+            "--worktree",
+            worktree_text,
+            "--timeout",
+            "25s",
+            "--idempotency-key",
+            "33333333-0000-4000-8000-000000000012",
+            "--if-workspace-uuid",
+            &recovered.workspace_id,
+            "--if-session-id",
+            &recovered.session_id,
+            "--if-session-revision",
+            &recovered.session_revision,
+            "begin",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>(),
+    );
+    assert_eq!(begun["command"], "session.begin");
 
     let mutations: [(&str, &str, &[&str]); 6] = [
         (
@@ -1510,6 +1552,8 @@ fn aut_t_id_custom_procedure_survives_restart_and_completes_the_fenced_lifecycle
             &reopened_status.session_revision,
             "start",
             "--replace",
+            "--progress-summary",
+            "Preserved the reopened lifecycle evidence",
             "--procedure",
             "dolgorae-procedure.yaml",
             "--expect-procedure-digest",
@@ -1566,7 +1610,6 @@ fn aut_t_id_custom_procedure_survives_restart_and_completes_the_fenced_lifecycle
         &controlled_path,
         &[
             "--json",
-            "--yes",
             "--socket",
             socket_text,
             "--worktree",
@@ -1588,9 +1631,8 @@ fn aut_t_id_custom_procedure_survives_restart_and_completes_the_fenced_lifecycle
         .collect::<Vec<_>>(),
     );
     assert_eq!(reset["command"], "session.reset");
-    assert_eq!(reset["result"]["transition"], "reset");
+    assert_eq!(reset["result"]["schema"], "podway.session-reset-result/v1");
     assert_eq!(reset["result"]["reset"], true);
-    assert!(reset["result"]["revision"].as_u64().is_some());
 
     fixture.uninstall(&controlled_path);
 }
@@ -1822,13 +1864,45 @@ fn aut_t_id_and_recon_reject_conflicts_and_recover_an_admitted_timeout() {
     );
     assert_eq!(session_conflict["details"]["admission"]["admitted"], false);
 
-    let stale_revision = current.session_revision.clone();
+    let begun = fixture.run_json_success_owned(
+        &controlled_path,
+        &[
+            "--json",
+            "--socket",
+            socket_text,
+            "--worktree",
+            worktree_text,
+            "--timeout",
+            "25s",
+            "--idempotency-key",
+            "44444444-0000-4000-8000-000000000004",
+            "--if-workspace-uuid",
+            &current.workspace_id,
+            "--if-session-id",
+            &current.session_id,
+            "--if-session-revision",
+            &current.session_revision,
+            "begin",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>(),
+    );
+    assert_eq!(begun["command"], "session.begin");
+    let running = compact_status(
+        &fixture,
+        &controlled_path,
+        socket_text,
+        worktree_text,
+        Some((&current.workspace_id, &current.session_id)),
+    );
+    let stale_revision = running.session_revision.clone();
     fenced_item_mutation(
         &fixture,
         &controlled_path,
         socket_text,
         worktree_text,
-        &current,
+        &running,
         (
             "confirmed",
             "44444444-0000-4000-8000-000000000002",
@@ -1840,7 +1914,7 @@ fn aut_t_id_and_recon_reject_conflicts_and_recover_an_admitted_timeout() {
         &controlled_path,
         socket_text,
         worktree_text,
-        Some((&current.workspace_id, &current.session_id)),
+        Some((&running.workspace_id, &running.session_id)),
     );
     assert_ne!(advanced.session_revision, stale_revision);
     let revision_conflict = assert_json_error(
@@ -1865,6 +1939,8 @@ fn aut_t_id_and_recon_reject_conflicts_and_recover_an_admitted_timeout() {
                 &stale_revision,
                 "start",
                 "--replace",
+                "--progress-summary",
+                "Preserved the running session before stale replacement",
                 "--procedure",
                 "dolgorae-procedure.yaml",
                 "--expect-procedure-digest",
@@ -2135,12 +2211,6 @@ fn aut_t_v2_public_admission_survives_restart_and_completes_rework_and_goal_clos
             &procedure_digest,
             "--task",
             "Qualify public Procedure v2 admission",
-            "--goal",
-            "Prove the packaged public v2 lifecycle.",
-            "--criterion",
-            "verified=The packaged lifecycle survives restart and closes out.",
-            "--actor",
-            "V2REL-006 qualifier",
             "--idempotency-key",
             "66666666-0000-4000-8000-000000000001",
         ],
@@ -2149,14 +2219,55 @@ fn aut_t_v2_public_admission_survives_restart_and_completes_rework_and_goal_clos
     assert_eq!(started["command"], "session.start");
     assert_eq!(
         started["result"]["schema"],
-        "podway.session-start-result/v2"
+        "podway.session-start-result/v3"
     );
+    assert_eq!(started["result"]["session_state"], "prepared");
+    assert_eq!(started["result"]["revision"], 0);
+    assert!(started["result"]["active_attempt"].is_null());
     assert_eq!(started["result"]["procedure_digest"], procedure_digest);
     assert_eq!(started["result"]["procedure_schema"], "podway.procedure/v2");
     assert!(
         !development_marker.exists(),
         "normal public v2 start must not depend on a development marker"
     );
+
+    let restarted_prepared =
+        fixture.run_json_success(&controlled_path, &["--json", "daemon", "restart"]);
+    assert_eq!(restarted_prepared["command"], "daemon.restart");
+    let prepared = public_v2_status(
+        &fixture,
+        &controlled_path,
+        socket_text,
+        worktree_text,
+        false,
+    );
+    assert_eq!(prepared["session"]["lifecycle"], "prepared");
+    assert_eq!(prepared["session"]["revision"], 0);
+    assert!(prepared["current"].is_null());
+    let prepared_session_id =
+        required_text(&prepared["session"]["id"], "prepared public v2 session ID");
+
+    let begun = public_v2_command(
+        &fixture,
+        &controlled_path,
+        socket_text,
+        worktree_text,
+        &[
+            "begin",
+            "--goal",
+            "Prove the packaged public v2 lifecycle.",
+            "--criterion",
+            "verified=The packaged lifecycle survives restart and closes out.",
+            "--actor",
+            "V2REL-006 qualifier",
+            "--idempotency-key",
+            "66666666-0000-4000-8000-000000000100",
+        ],
+    );
+    assert_eq!(begun["command"], "session.begin");
+    assert_eq!(begun["result"]["schema"], "podway.session-begin-result/v1");
+    assert_eq!(begun["result"]["session_state"], "running");
+    assert_eq!(begun["result"]["session_id"], prepared_session_id);
 
     let first_work = public_v2_status(
         &fixture,
@@ -2412,6 +2523,41 @@ fn aut_t_v2_public_admission_survives_restart_and_completes_rework_and_goal_clos
     assert!(terminal["current"].is_null());
     assert_eq!(terminal["latest_goal_outcome"], "achieved");
     assert_eq!(terminal["goal_revision"], goal_revision);
+
+    let disposition = public_v2_command(
+        &fixture,
+        &controlled_path,
+        socket_text,
+        worktree_text,
+        &[
+            "disposition",
+            "not-required",
+            "--reason",
+            "The isolated qualification has no external handoff.",
+            "--idempotency-key",
+            "66666666-0000-4000-8000-000000000101",
+        ],
+    );
+    assert_eq!(
+        disposition["result"]["schema"],
+        "podway.terminal-disposition-result/v1"
+    );
+    assert_eq!(disposition["result"]["disposition"]["kind"], "not_required");
+
+    let reset = public_v2_command(
+        &fixture,
+        &controlled_path,
+        socket_text,
+        worktree_text,
+        &[
+            "reset",
+            "--idempotency-key",
+            "66666666-0000-4000-8000-000000000102",
+        ],
+    );
+    assert_eq!(reset["result"]["schema"], "podway.session-reset-result/v1");
+    assert_eq!(reset["result"]["mode"], "eligible");
+    assert_eq!(reset["result"]["reset"], true);
 
     fixture.uninstall(&controlled_path);
 }

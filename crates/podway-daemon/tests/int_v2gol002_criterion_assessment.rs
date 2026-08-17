@@ -178,7 +178,20 @@ fn fixture(worker_id: &str) -> (Fixture, impl RequestDispatcherV1) {
         json!({
             "procedure": "assessment.yaml",
             "expected_procedure_digest": digest,
-            "task_title": "Assess the goal",
+            "task_title": "Assess the goal"
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    );
+    let started = runtime::v2_result(runtime::dispatch(&dispatcher, &start), "session.start");
+    let session_id = started["session_id"].as_str().unwrap().to_owned();
+    runtime::begin(
+        &dispatcher,
+        &selector,
+        102_003,
+        &session_id,
+        json!({
             "goal": "Ship a correct and tested result.",
             "criteria": [
                 {"criterion_id": "correct", "statement": "The result is correct."},
@@ -189,9 +202,8 @@ fn fixture(worker_id: &str) -> (Fixture, impl RequestDispatcherV1) {
         .as_object()
         .unwrap()
         .clone(),
+        "v2gol002-begin",
     );
-    let started = runtime::v2_result(runtime::dispatch(&dispatcher, &start), "session.start");
-    let session_id = started["session_id"].as_str().unwrap().to_owned();
 
     runtime::mutate_item(
         &dispatcher,

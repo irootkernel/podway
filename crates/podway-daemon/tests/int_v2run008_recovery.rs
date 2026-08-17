@@ -55,10 +55,20 @@ fn start(
         "v2run008-start",
         PreconditionsV1::default(),
     );
-    runtime::v2_result(runtime::dispatch(dispatcher, &request), "session.start")["session_id"]
-        .as_str()
-        .unwrap()
-        .to_owned()
+    let session_id =
+        runtime::v2_result(runtime::dispatch(dispatcher, &request), "session.start")["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+    runtime::begin(
+        dispatcher,
+        selector,
+        80_003,
+        &session_id,
+        Map::new(),
+        "v2run008-begin",
+    );
+    session_id
 }
 
 fn status(

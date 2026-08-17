@@ -355,12 +355,12 @@ pub fn project_graph_observation_v1(
         ),
     );
     let mutation_templates = if state.trace().lifecycle() == SessionLifecycle::Prepared {
-        lifecycle_mutation_templates(view, state, true)
+        prepared_mutation_templates(view, state)
     } else if matches!(
         state.trace().lifecycle(),
         SessionLifecycle::Completed | SessionLifecycle::Cancelled
     ) {
-        lifecycle_mutation_templates(view, state, false)
+        terminal_mutation_templates(view, state)
     } else {
         current
             .as_ref()
@@ -401,12 +401,11 @@ fn project_prepared_next_v1(
     .clone()
 }
 
-fn lifecycle_mutation_templates(
+fn prepared_mutation_templates(
     view: &GraphWorkspaceViewV2,
     state: &GraphSessionStateV2,
-    prepared: bool,
 ) -> Vec<Value> {
-    let template = |command: &str, argv: Vec<&str>, explicit: bool| {
+    let template = |command: &str, argv: Vec<&str>| {
         json!({
             "command": command,
             "argv": argv,
@@ -417,33 +416,50 @@ fn lifecycle_mutation_templates(
             },
             "authority": "optimistic_concurrency_only",
             "idempotency_key_required": true,
-            "requires_explicit_authorization": explicit,
+            "requires_explicit_authorization": false,
         })
     };
-    if prepared {
+    vec![
+        template("session.begin", vec!["podway", "begin"]),
+        template("session.reset", vec!["podway", "reset"]),
+        template(
+            "session.start_replace",
+            vec!["podway", "start", "--replace-eligible"],
+        ),
+    ]
+}
+
+fn terminal_mutation_templates(
+    view: &GraphWorkspaceViewV2,
+    state: &GraphSessionStateV2,
+) -> Vec<Value> {
+    let template = |command: &str, argv: Vec<&str>| {
+        json!({
+            "command": command,
+            "argv": argv,
+            "preconditions": {
+                "workspace_uuid": view.identity().workspace_uuid(),
+                "session_id": state.trace().session_id(),
+                "session_revision": state.trace().revision(),
+            },
+            "authority": "optimistic_concurrency_only",
+            "idempotency_key_required": true,
+            "requires_explicit_authorization": false,
+        })
+    };
+    if view.current_terminal_disposition() {
         vec![
-            template("session.begin", vec!["podway", "begin"], false),
-            template("session.reset", vec!["podway", "reset"], false),
+            template("session.reset", vec!["podway", "reset"]),
             template(
                 "session.start_replace",
                 vec!["podway", "start", "--replace-eligible"],
-                false,
             ),
         ]
     } else {
-        vec![
-            template(
-                "session.terminal_disposition",
-                vec!["podway", "disposition"],
-                false,
-            ),
-            template("session.reset", vec!["podway", "reset"], false),
-            template(
-                "session.start_replace",
-                vec!["podway", "start", "--replace-eligible"],
-                false,
-            ),
-        ]
+        vec![template(
+            "session.terminal_disposition",
+            vec!["podway", "disposition"],
+        )]
     }
 }
 
@@ -840,7 +856,10 @@ impl<'a> CurrentProjection<'a> {
         );
         push_recipe_unique(
             &mut recipes,
-            json!({"command":"session.reset","argv":["podway","reset","--yes"]}),
+            json!({
+                "command":"session.reset",
+                "argv":["podway","reset","--progress-summary","<progress-summary>","--yes"]
+            }),
         );
         if actions.contains(&"session.rework") {
             push_recipe_unique(

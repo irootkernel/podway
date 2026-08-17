@@ -895,10 +895,19 @@ fn lifecycle_mutation_execution_document_v1(
     fresh_attempt_id: Option<&AttemptId>,
 ) -> Result<CanonicalExecutionJsonV1, ExecutionErrorV1> {
     let (preconditions, payload) = match request.command() {
-        ProcedureV2MutationCommandV1::SessionBegin(command) => (
-            &command.preconditions,
-            json!({ "initial_goal": &command.initial_goal }),
-        ),
+        ProcedureV2MutationCommandV1::SessionBegin(command) => {
+            let initial_goal = command.initial_goal.as_ref().map(|goal| {
+                json!({
+                    "goal": &goal.goal,
+                    "criteria": &goal.criteria,
+                    "actor": &goal.actor,
+                })
+            });
+            (
+                &command.preconditions,
+                json!({ "initial_goal": initial_goal }),
+            )
+        }
         ProcedureV2MutationCommandV1::SessionTerminalDisposition(command) => (
             &command.preconditions,
             json!({

@@ -60,9 +60,18 @@ fn start(dispatcher: &impl RequestDispatcherV1, root: &std::path::Path, base: u6
         PreconditionsV1::default(),
     );
     let started = runtime::v2_result(runtime::dispatch(dispatcher, &start), "session.start");
+    let session_id = started["session_id"].as_str().unwrap().to_owned();
+    runtime::begin(
+        dispatcher,
+        &selector,
+        base + 2,
+        &session_id,
+        Map::new(),
+        &format!("v2agt006-begin-{base}"),
+    );
     Session {
         selector,
-        id: started["session_id"].as_str().unwrap().to_owned(),
+        id: session_id,
         next_request: base + 10,
     }
 }

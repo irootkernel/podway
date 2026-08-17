@@ -2,10 +2,9 @@
 
 ## 1. Status and target release
 
-This document defines the implemented local automation boundary targeted by Podway
-v0.1.0. Runtime, identity, conformance, and packaged-fixture work through `DOLGI`
-is complete; final release readiness remains tracked by the incomplete `REL10`
-epic in the [roadmap](../../roadmap/).
+This document defines Podway's implemented local automation boundary. Current
+work and release ownership are tracked by the active [roadmap](../../roadmap/);
+historical task identifiers remain in the traceability tables as provenance.
 
 The requirement IDs in this document are stable. A requirement becomes satisfied
 only when its roadmap task is completed and its planned executable check is in
@@ -221,7 +220,7 @@ not replace, the session revision or active-attempt fence.
 | `AUT-OBS-005` | `observe`, `observe --wait-for-idle`, and `observe --after-job <job-id>` MUST use the same immediate and queue-barrier semantics as the existing read routes and MUST return one coherent Store observation. |
 | `AUT-OBS-006` | A prepared or running observation MUST return closed `podway.observation-result/v2`. Running contains prepared-aware status, current next guidance, active item declarations with type-specific constraints and bounded typed value projections, and applicable mutation templates. Prepared contains prepared-aware status, cursor-free prepared guidance, no active items, and only begin, eligible-reset, and eligible-replacement templates. |
 | `AUT-OBS-007` | Every mutation template MUST carry exact current workspace, session, and applicable revision/attempt/item/goal fences, mark the idempotency-key requirement, and classify whether an explicit user request is required. Templates MUST NOT invent semantic values or an idempotency key, and fences MUST NOT be represented as authentication or authorization. |
-| `AUT-OBS-008` | A completed or cancelled observation MUST succeed with prepared-aware terminal status, null guidance, no active items, and only a terminal-disposition template when the current terminal revision has no disposition; disposed terminal state additionally offers eligible reset and replacement templates. Existing `next` terminal behavior remains unchanged. |
+| `AUT-OBS-008` | A completed or cancelled observation MUST succeed with prepared-aware terminal status, null guidance, no active items, and only a terminal-disposition template when the current terminal revision has no disposition; a disposed terminal state MUST instead offer only eligible reset and replacement templates. Existing `next` terminal behavior remains unchanged. |
 | `AUT-OBS-009` | Observation MUST omit history, bound every projected item value and lifecycle template, and leave the existing 65,536-byte envelope reserve within the 1,048,576-byte frame for the admitted maximum Procedure fixture. |
 
 ## 21. Command-specific JSON schemas (AUT-JSON-001–004)

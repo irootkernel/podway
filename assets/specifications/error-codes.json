@@ -229,7 +229,7 @@
       "code": "SESSION_NOT_RUNNING",
       "exit_code": 1,
       "retryable": false,
-      "summary": "The command requires a running session."
+      "summary": "The command requires a running session, or begin requires a prepared session."
     },
     {
       "code": "SESSION_NOT_TERMINAL",

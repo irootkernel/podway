@@ -249,10 +249,20 @@ fn start(
         &format!("v2run006-start-{request_number}"),
         PreconditionsV1::default(),
     );
-    runtime::v2_result(runtime::dispatch(dispatcher, &start), "session.start")["session_id"]
-        .as_str()
-        .unwrap()
-        .to_owned()
+    let session_id =
+        runtime::v2_result(runtime::dispatch(dispatcher, &start), "session.start")["session_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+    runtime::begin(
+        dispatcher,
+        selector,
+        request_number + 2,
+        &session_id,
+        Map::new(),
+        &format!("v2run006-begin-{request_number}"),
+    );
+    session_id
 }
 
 fn procedure_digest() -> podway_core::Sha256Digest {
@@ -297,11 +307,16 @@ fn v2run006_state_fixture_is_valid_and_vetted() {
 #[test]
 fn v2run006_reset_dry_run_result_accepts_a_not_admitted_projection() {
     let result = json!({
-        "schema": "podway.stage-transition-result/v2",
-        "admission": {"admitted": false},
-        "transition": "reset",
-        "reset": true,
-        "revision": 1,
+        "schema": "podway.session-reset-result/v1",
+        "dry_run": true,
+        "mode": "eligible",
+        "session_id": "00000000-0000-4000-8000-000000006000",
+        "session_revision": 1,
+        "lifecycle": "running",
+        "current_terminal_disposition": false,
+        "eligible": false,
+        "required_action": "force",
+        "reset": false,
     });
     validate_command_result_v2("session.reset", result.as_object().unwrap()).unwrap();
 }
@@ -491,8 +506,22 @@ fn v2run006_blocked_state_unblocks_restarts_completes_and_resets() {
         "v2 reset dry-run must project a non-admitted result: {dry_run_value}"
     );
     assert!(dry_run_value.get("job").is_none());
-    assert_eq!(dry_run_value["result"]["transition"], "reset");
-    assert_eq!(dry_run_value["result"]["reset"], true);
+    assert_eq!(
+        dry_run_value["result"]["schema"],
+        "podway.session-reset-result/v1"
+    );
+    assert_eq!(dry_run_value["result"]["mode"], "eligible");
+    assert_eq!(dry_run_value["result"]["lifecycle"], "completed");
+    assert_eq!(
+        dry_run_value["result"]["current_terminal_disposition"],
+        false
+    );
+    assert_eq!(dry_run_value["result"]["eligible"], false);
+    assert_eq!(
+        dry_run_value["result"]["required_action"],
+        "record_disposition"
+    );
+    assert_eq!(dry_run_value["result"]["reset"], false);
     validate_command_result_v2(
         "session.reset",
         dry_run_value["result"].as_object().unwrap(),
@@ -505,12 +534,19 @@ fn v2run006_blocked_state_unblocks_restarts_completes_and_resets() {
         after_dry_run["queue"]["latest_workspace_sequence"],
         reset_before["queue"]["latest_workspace_sequence"]
     );
-    let reset_request = runtime::request(
+
+    let disposition_request = runtime::request(
         60_039,
-        "session.reset",
+        "session.terminal_disposition",
         &selector,
-        json!({"confirmed": true}).as_object().unwrap().clone(),
-        "v2run006-reset-completed",
+        json!({
+            "kind": "not_required",
+            "reason": "The isolated test session needs no external handoff."
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+        "v2run006-dispose-completed",
         PreconditionsV1::new(
             Some(SessionId::new(&session_id).unwrap()),
             Some(Revision::new(
@@ -523,16 +559,42 @@ fn v2run006_blocked_state_unblocks_restarts_completes_and_resets() {
         )
         .unwrap(),
     );
-    let reset_once = runtime::dispatch(&restarted, &reset_request);
-    let reset = runtime::v2_result(reset_once.clone(), "session.reset");
-    assert_eq!(reset["transition"], "reset");
-    assert_eq!(reset["reset"], true);
-    assert!(reset.get("session_state").is_none());
-    let reset_replay_request = runtime::request(
-        60_040,
+    let disposition = runtime::v2_result(
+        runtime::dispatch(&restarted, &disposition_request),
+        "session.terminal_disposition",
+    );
+    assert_eq!(disposition["disposition"]["kind"], "not_required");
+    let disposed = status(&restarted, &selector, 60_390, &session_id);
+
+    let reset_request = runtime::request(
+        60_391,
         "session.reset",
         &selector,
-        json!({"confirmed": true}).as_object().unwrap().clone(),
+        Map::new(),
+        "v2run006-reset-completed",
+        PreconditionsV1::new(
+            Some(SessionId::new(&session_id).unwrap()),
+            Some(Revision::new(
+                disposed["session"]["revision"].as_u64().unwrap(),
+            )),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let reset_once = runtime::dispatch(&restarted, &reset_request);
+    let reset = runtime::v2_result(reset_once.clone(), "session.reset");
+    assert_eq!(reset["schema"], "podway.session-reset-result/v1");
+    assert_eq!(reset["mode"], "eligible");
+    assert_eq!(reset["eligible"], true);
+    assert_eq!(reset["reset"], true);
+    let reset_replay_request = runtime::request(
+        60_392,
+        "session.reset",
+        &selector,
+        Map::new(),
         "v2run006-reset-completed",
         reset_request.0.preconditions().clone(),
     );
@@ -579,7 +641,7 @@ fn v2run006_blocked_state_unblocks_restarts_completes_and_resets() {
         60_045,
         "session.reset",
         &selector,
-        json!({"confirmed": true}).as_object().unwrap().clone(),
+        Map::new(),
         "v2run006-reset-absent",
         session_identity.clone(),
     );
@@ -921,7 +983,13 @@ fn v2run006_cancel_restarts_without_a_cursor_and_reset_clears_running_and_cancel
             number + 1,
             "session.reset",
             selector,
-            json!({"confirmed": true}).as_object().unwrap().clone(),
+            json!({
+                "confirmed": true,
+                "progress_summary": "The isolated state test intentionally discards this session."
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
             key,
             PreconditionsV1::new(
                 Some(SessionId::new(session_id).unwrap()),
@@ -939,7 +1007,8 @@ fn v2run006_cancel_restarts_without_a_cursor_and_reset_clears_running_and_cancel
             runtime::dispatch(&restarted, &reset_request),
             "session.reset",
         );
-        assert_eq!(reset["transition"], "reset");
+        assert_eq!(reset["schema"], "podway.session-reset-result/v1");
+        assert_eq!(reset["mode"], "force");
         assert_eq!(reset["reset"], true);
         assert_session_absent(&restarted, selector, number + 2, session_id);
     }

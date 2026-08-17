@@ -459,6 +459,14 @@ fn start_ready(
             .as_str()
             .unwrap()
             .to_owned();
+    runtime::begin(
+        dispatcher,
+        &selector,
+        number + 2,
+        &session_id,
+        Map::new(),
+        &format!("v2drw006-begin-{number}"),
+    );
     runtime::mutate_item(
         dispatcher,
         &selector,
@@ -1043,7 +1051,7 @@ fn v2drw006_generated_cycle_counts_have_no_runtime_traversal_limit_and_stay_boun
             assert_eq!(counter(projection, "review")["rework_traversal_count"], 0);
             assert_eq!(counter(projection, "finish")["attempt_count"], 0);
         }
-        assert_eq!(compact["schema"], "podway.compact-status-result/v2");
+        assert_eq!(compact["schema"], "podway.compact-status-result/v3");
         assert_eq!(standard["tier"], "standard");
         assert_eq!(verbose["tier"], "verbose");
         assert_eq!(next["schema"], "podway.next-result/v2");

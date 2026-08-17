@@ -70,8 +70,9 @@ revision has a disposition. It preserves workspace initialization. A running
 session or a terminal session without a current disposition fails with
 `SESSION_RESET_NOT_ELIGIBLE` and no deletion.
 
-Force reset requires `--yes`, a non-blank progress summary bounded to 4,000
-Unicode scalars, and the same workspace, session, and revision fences. The
+Force reset requires explicit destructive confirmation (`--yes` for JSON or
+non-terminal callers, or an interactive prompt), a non-blank progress summary
+bounded to 4,000 Unicode scalars, and the same workspace, session, and revision fences. The
 summary is retained only in the bounded durable request and terminal receipt
 that outlive session-row deletion under normal retention rules. It is not a new
 evidence archive.

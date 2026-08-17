@@ -224,6 +224,47 @@ fn v2lif004_lifecycle_mutations_are_admitted_with_closed_payloads() {
 }
 
 #[test]
+fn v2lif005_lifecycle_text_bounds_reject_invalid_requests() {
+    let session_identity = json!({"session_id":SESSION_ID,"session_revision":7});
+    let over_limit = "x".repeat(4_001);
+
+    for payload in [
+        json!({"kind":"handed_off","summary":" ","reference":"local:handoff"}),
+        json!({"kind":"handed_off","summary":"Completed.","reference":" "}),
+        json!({"kind":"not_required","reason":" "}),
+        json!({"kind":"not_required","reason":over_limit}),
+    ] {
+        let disposition = envelope(
+            "session.terminal_disposition",
+            session_identity.clone(),
+            payload,
+        );
+        assert!(ProcedureV2MutationRequestV1::from_envelope(&disposition).is_err());
+    }
+
+    for progress_summary in [" ".to_owned(), "x".repeat(4_001)] {
+        let reset = envelope(
+            "session.reset",
+            session_identity.clone(),
+            json!({"confirmed":true,"progress_summary":progress_summary}),
+        );
+        assert!(SliceRequestV1::from_envelope(&reset).is_err());
+
+        let replace = envelope(
+            "session.start_replace",
+            session_identity.clone(),
+            json!({
+                "preset":"sw-dev-v2",
+                "task_title":"Replace invalid lifecycle text",
+                "confirmed":true,
+                "progress_summary":progress_summary
+            }),
+        );
+        assert!(ProcedureV2StartRequestV1::from_envelope(&replace).is_err());
+    }
+}
+
+#[test]
 fn v2plt006_decodes_every_typed_mutation_with_closed_bounded_payloads() {
     let cases = [
         (

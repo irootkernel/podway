@@ -79,7 +79,34 @@
         "properties": {
           "guidance": { "type": "null" },
           "active_items": { "maxItems": 0 },
-          "mutation_templates": { "minItems": 1, "maxItems": 3, "items": { "allOf": [{ "$ref": "#/$defs/mutationTemplate" }, { "properties": { "command": { "enum": ["session.terminal_disposition", "session.reset", "session.start_replace"] } } }] } }
+          "mutation_templates": {
+            "oneOf": [
+              {
+                "minItems": 1,
+                "maxItems": 1,
+                "items": {
+                  "allOf": [
+                    { "$ref": "#/$defs/mutationTemplate" },
+                    { "properties": { "command": { "const": "session.terminal_disposition" } } }
+                  ]
+                }
+              },
+              {
+                "minItems": 2,
+                "maxItems": 2,
+                "allOf": [
+                  { "contains": { "properties": { "command": { "const": "session.reset" } }, "required": ["command"] }, "minContains": 1, "maxContains": 1 },
+                  { "contains": { "properties": { "command": { "const": "session.start_replace" } }, "required": ["command"] }, "minContains": 1, "maxContains": 1 }
+                ],
+                "items": {
+                  "allOf": [
+                    { "$ref": "#/$defs/mutationTemplate" },
+                    { "properties": { "command": { "enum": ["session.reset", "session.start_replace"] } } }
+                  ]
+                }
+              }
+            ]
+          }
         }
       }
     }
@@ -138,7 +165,7 @@
         "preconditions": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["workspace_uuid", "session_id", "session_revision"],
+          "required": ["workspace_uuid", "session_id"],
           "properties": {
             "workspace_uuid": { "type": "string", "format": "uuid" },
             "session_id": { "type": "string", "format": "uuid" },
@@ -151,7 +178,25 @@
         "authority": { "const": "optimistic_concurrency_only" },
         "idempotency_key_required": { "const": true },
         "requires_explicit_authorization": { "type": "boolean" }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "command": { "pattern": "^item\\." } },
+            "required": ["command"]
+          },
+          "then": {
+            "properties": {
+              "preconditions": { "required": ["workspace_uuid", "session_id", "attempt_id", "item_revision"] }
+            }
+          },
+          "else": {
+            "properties": {
+              "preconditions": { "required": ["workspace_uuid", "session_id", "session_revision"] }
+            }
+          }
+        }
+      ]
     }
   }
 }

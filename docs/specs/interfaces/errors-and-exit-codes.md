@@ -97,7 +97,7 @@ unexpected process transition. Automation must not branch on those messages.
 | `SESSION_NOT_FOUND` | 1 | no | Workspace has no current session |
 | `SESSION_ID_MISMATCH` | 4 | no | Authoritative session ID differs from the expected ID, including when no current session exists |
 | `SESSION_ALREADY_EXISTS` | 1 | no | Start requested while a session exists |
-| `SESSION_NOT_RUNNING` | 1 | no | Command requires a running session |
+| `SESSION_NOT_RUNNING` | 1 | no | Command requires a running session, or `begin` requires a prepared session |
 | `SESSION_NOT_TERMINAL` | 1 | no | Terminal disposition requires a completed or cancelled session |
 | `SESSION_RESET_NOT_ELIGIBLE` | 1 | no | Eligible reset or replacement requires prepared state or a current terminal disposition |
 | `SESSION_CANCELLED` | 1 | no | Cancelled session cannot perform the operation |
@@ -195,7 +195,9 @@ including the mandatory stable codes
 
 `SESSION_NOT_RUNNING` applies to every cursor, item, blocker, goal, completion,
 cancellation, retry, skip, decision, and rework mutation attempted while the
-session is prepared. `SESSION_NOT_TERMINAL` applies when a disposition is
+session is prepared. For compatibility, it also reports `begin` against a
+non-prepared session; callers should re-read status rather than interpret the
+code name as a lifecycle observation. `SESSION_NOT_TERMINAL` applies when a disposition is
 attempted before completion or cancellation.
 
 `SESSION_RESET_NOT_ELIGIBLE` is a non-retryable domain result for default reset

@@ -256,7 +256,7 @@ fn v2_start_request() -> podway_protocol::RequestEnvelopeV1 {
     let identity = build_identity_v1();
     decode_request_payload_v1(
         format!(
-            r#"{{"protocol":"podway.ipc/v1","request_id":"{REQUEST_ID}","client":{{"name":"podway","version":"0.2.0-dev","pid":1,"product":"{}","contract_manifest_digest":"{}"}},"operation":"mutate","command":"session.start","workspace":{{"root":"/fixture/worktree","expected_uuid":"{WORKSPACE_ID}"}},"idempotency_key":"v2-start-fixture","options":{{"detach":false,"wait_timeout_ms":30000}},"payload":{{"selector":{{"version":1,"path_bytes_base64url":"L2ZpeHR1cmUvd29ya3RyZWU","display":"/fixture/worktree","expected_uuid":"{WORKSPACE_ID}"}},"procedure":"workflow.yaml","task_title":"A bounded v2 fixture task","goal":"Ship safely.","criteria":[{{"criterion_id":"tests","statement":"The focused tests pass."}}]}}}}"#,
+            r#"{{"protocol":"podway.ipc/v1","request_id":"{REQUEST_ID}","client":{{"name":"podway","version":"0.2.0-dev","pid":1,"product":"{}","contract_manifest_digest":"{}"}},"operation":"mutate","command":"session.start","workspace":{{"root":"/fixture/worktree","expected_uuid":"{WORKSPACE_ID}"}},"idempotency_key":"v2-start-fixture","options":{{"detach":false,"wait_timeout_ms":30000}},"payload":{{"selector":{{"version":1,"path_bytes_base64url":"L2ZpeHR1cmUvd29ya3RyZWU","display":"/fixture/worktree","expected_uuid":"{WORKSPACE_ID}"}},"procedure":"workflow.yaml","task_title":"A bounded v2 fixture task"}}}}"#,
             identity.product(),
             identity.contract_manifest_digest(),
         )
@@ -298,19 +298,22 @@ fn v2_start_output_payload() -> Vec<u8> {
             "finished_at": "2026-07-15T12:34:56.791Z"
         },
         "result": {
-            "schema": "podway.session-start-result/v2",
+            "schema": "podway.session-start-result/v3",
             "procedure_schema": "podway.procedure/v2",
             "procedure_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
             "dry_run": false,
+            "session_state": "prepared",
             "goal_tracking": true,
-            "goal_defined": true,
+            "goal_defined": false,
+            "active_attempt": null,
+            "goal_revision": null,
             "admission": {
                 "admitted": true,
                 "job_id": "123e4567-e89b-42d3-a456-426614174012",
                 "workspace_sequence": 1
             },
             "session_id": "123e4567-e89b-42d3-a456-426614174010",
-            "revision": 1,
+            "revision": 0,
             "entry_graph_node_id": "work"
         },
         "warnings": []
@@ -616,7 +619,7 @@ fn version_aware_request_admits_typed_v2_start_and_decodes_output_v3() {
 }
 
 #[test]
-fn version_aware_request_rejects_output_v1_for_goal_bearing_v2_start() {
+fn version_aware_request_rejects_output_v1_for_typed_v2_start() {
     let fixture = RuntimeFixture::new();
     let frame = encode_frame_v1(&legacy_output_v1_payload("session.start"))
         .expect("legacy output response must frame");
@@ -624,7 +627,7 @@ fn version_aware_request_rejects_output_v1_for_goal_bearing_v2_start() {
 
     let error = client(&fixture)
         .request_v2(&v2_start_request())
-        .expect_err("a goal-bearing v2 start must require output/v3");
+        .expect_err("a typed v2 start must require output/v3");
     assert!(matches!(
         transmitted_source(error),
         DaemonClientErrorV1::ResponseDecoding {
