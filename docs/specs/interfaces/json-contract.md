@@ -13,9 +13,21 @@ allowed result schema, including Procedure v2 session families and
 procedure-independent service/workspace families whose own first-version IDs remain
 `/v1`.
 
-Procedure runtime results identify `procedure_schema: podway.procedure/v2` and use
-the v2 status, next, admission, start, item, and transition families plus the
-first-version decision, rework, goal, authoring, and platform result families.
+Procedure runtime results identify `procedure_schema: podway.procedure/v2`.
+Prepared-aware routes use `session-start-result/v3`,
+`session-begin-result/v1`, `terminal-disposition-result/v1`,
+`session-reset-result/v1`, `status-result/v3`, `compact-status-result/v3`,
+`prepared-next-result/v1`, and `observation-result/v2`. Running next retains its
+v2 family until the separately adopted evidence-scale contract introduces
+`next-result/v3`. Item and graph-transition families retain their current
+versions, and decision, rework, goal, authoring, and platform results remain
+first-version families where their shapes do not change.
+
+The output-v3 `session.next` branch accepts the running next result or the
+disjoint cursor-free prepared result. Prepared status uses null cursor, attempt,
+goal, and readiness projections; prepared observation has no active items and
+contains only bounded lifecycle guidance and applicable fenced templates.
+Existing released closed schemas are not widened in place.
 `job status`, `job wait`, and `job lookup` use their v3 wrapper schemas so an embedded
 terminal success is a non-recursive `podway.output/v3` document.
 

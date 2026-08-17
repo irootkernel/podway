@@ -163,14 +163,16 @@ schemas in place. This epic reserves and then admits:
 - `terminal-disposition-result/v1`;
 - `session-reset-result/v1`;
 - `status-result/v3` and `compact-status-result/v3`;
+- `prepared-next-result/v1` for the cursor-free `session.next` branch;
 - `observation-result/v2`;
 - shared prepared-aware result components v2; and
 - the corresponding closed `output-v3`, job result, lookup, command-route,
   public-error, manifest, and compatibility-fixture branches.
 
-Prepared status has null cursor, attempt, and goal projections. Prepared next and
-observation results contain no active items and offer only begin, eligible reset,
-and eligible replacement guidance and fenced mutation templates. Existing v2
+Prepared status has null cursor, attempt, and goal projections.
+`prepared-next-result/v1` offers only begin, eligible reset, and eligible
+replacement guidance. Prepared observation contains no active items and adds the
+corresponding fenced mutation templates. Existing v2
 result schemas remain available for decoding previously released payloads, but a
 v0.2.4 daemon emits only the new family for affected routes.
 

@@ -137,6 +137,7 @@ not create a contract mismatch.
 | `AUT-ID-006` | Replacement and reset MUST enforce the currently observed workspace, session, and applicable session revision before mutation. |
 | `AUT-ID-007` | Identity mismatches MUST return stable typed errors with closed details containing expected and actual identities and no mutation. |
 | `AUT-ID-008` | `item.record_many` MUST enforce workspace UUID, session ID, session revision, active attempt, and every selected item revision before atomically changing any selected item. |
+| `AUT-ID-009` | `begin`, terminal disposition, eligible or force replacement, and eligible or force reset MUST enforce the exact observed workspace UUID, session ID, and session revision; begin and disposition MUST NOT accept an attempt fence. |
 
 `podway record --stdin` consumes only closed
 `podway.item-record-many-input/v1` JSON bounded to 1 MiB and 1..64 unique item
@@ -161,6 +162,21 @@ not replace, the session revision or active-attempt fence.
 | `AUT-START-002` | The canonical Procedure snapshot used by an admitted start MUST be durable before successful admission is reported. |
 | `AUT-START-003` | An admitted start MUST NOT depend on later source-file reads; deletion, replacement, truncation, symlink change, or daemon restart MUST NOT alter the admitted Procedure. |
 | `AUT-START-004` | The canonical Procedure digest and relevant start preconditions MUST participate in idempotency identity and MUST be returned by start and later session observations. |
+
+### Prepared session lifecycle (AUT-LIF-001–010)
+
+| ID | Normative requirement |
+|---|---|
+| `AUT-LIF-001` | `start` and both replacement modes MUST create a `prepared` session at revision 0 with no attempt, cursor, goal revision, item value, or blocker. |
+| `AUT-LIF-002` | `begin` MUST atomically create the entry-node attempt, optionally create and bind initial goal revision 1, change lifecycle to `running`, and advance session revision exactly once. |
+| `AUT-LIF-003` | Prepared sessions MUST reject item, goal, blocker, cursor, completion, cancellation, retry, skip, decision, and rework mutations with `SESSION_NOT_RUNNING` and no state change. |
+| `AUT-LIF-004` | Terminal disposition MUST accept exactly one closed `handed_off` summary/reference or `not_required` reason shape, bind it to the current completed or cancelled session revision, and treat every assertion as caller-supplied. |
+| `AUT-LIF-005` | Reactivating a completed session MUST make every earlier terminal disposition non-current; a later terminal revision MUST require a new disposition for default deletion. |
+| `AUT-LIF-006` | Default reset and `--replace-eligible` MUST delete only prepared sessions or terminal sessions with a disposition for the current revision and MUST evaluate eligibility atomically with deletion. |
+| `AUT-LIF-007` | Force reset and force replacement of a running or undisposed terminal session MUST require destructive confirmation and a non-blank progress summary bounded to 4,000 Unicode scalars. |
+| `AUT-LIF-008` | Reset eligibility MUST NOT depend on Git cleanliness, roadmap status, process state, external reference reachability, or any network request. |
+| `AUT-LIF-009` | Prepared `status`, compact status, next, and observation MUST expose the lifecycle without inventing cursor, attempt, goal, item, blocker, or history values; observation MUST provide only fenced begin, eligible-reset, and eligible-replacement templates. |
+| `AUT-LIF-010` | Exact idempotent replay and uncertain-outcome reconciliation MUST cover begin, disposition, eligible and force reset, and eligible and force replacement without weakening identity or revision fences. |
 
 ## 16. Durable mutation admission (AUT-ADMIT-001–002)
 
@@ -194,7 +210,7 @@ not replace, the session revision or active-attempt fence.
 
 | ID | Normative requirement |
 |---|---|
-| `AUT-OBS-002` | `status --wait-for-idle --compact` MUST return workspace and queue identity, Procedure identity, session lifecycle and revision, current graph node and attempt, completion readiness, item identity/state/revision, and blocker identity/state. |
+| `AUT-OBS-002` | `status --wait-for-idle --compact` MUST return workspace and queue identity, Procedure identity, session lifecycle and revision, and lifecycle-valid cursor, readiness, item, and blocker projections; every cursor-bearing projection MUST be null or empty for prepared state. |
 | `AUT-OBS-003` | Compact status MUST omit instructions, prompts, task titles, previous-attempt narratives, and item values unless a value is strictly required to form a valid mutation. |
 | `AUT-OBS-004` | Compact status MUST use a closed schema and the complete serialized JSON envelope MUST NOT exceed 262,144 UTF-8 bytes. |
 
@@ -203,16 +219,16 @@ not replace, the session revision or active-attempt fence.
 | ID | Normative requirement |
 |---|---|
 | `AUT-OBS-005` | `observe`, `observe --wait-for-idle`, and `observe --after-job <job-id>` MUST use the same immediate and queue-barrier semantics as the existing read routes and MUST return one coherent Store observation. |
-| `AUT-OBS-006` | A running observation MUST return closed `podway.observation-result/v1` containing standard status, current next guidance, all active item declarations with type-specific constraints and bounded typed value projections, and applicable mutation templates. |
+| `AUT-OBS-006` | A prepared or running observation MUST return closed `podway.observation-result/v2`. Running contains prepared-aware status, current next guidance, active item declarations with type-specific constraints and bounded typed value projections, and applicable mutation templates. Prepared contains prepared-aware status, cursor-free prepared guidance, no active items, and only begin, eligible-reset, and eligible-replacement templates. |
 | `AUT-OBS-007` | Every mutation template MUST carry exact current workspace, session, and applicable revision/attempt/item/goal fences, mark the idempotency-key requirement, and classify whether an explicit user request is required. Templates MUST NOT invent semantic values or an idempotency key, and fences MUST NOT be represented as authentication or authorization. |
-| `AUT-OBS-008` | A completed or cancelled observation MUST succeed with standard terminal status, null guidance, no active items, and no mutation templates. Existing `next` terminal behavior remains unchanged. |
-| `AUT-OBS-009` | Observation MUST omit history, bound every projected item value, and leave the existing 65,536-byte envelope reserve within the 1,048,576-byte frame for the admitted maximum Procedure fixture. |
+| `AUT-OBS-008` | A completed or cancelled observation MUST succeed with prepared-aware terminal status, null guidance, no active items, and only a terminal-disposition template when the current terminal revision has no disposition; disposed terminal state additionally offers eligible reset and replacement templates. Existing `next` terminal behavior remains unchanged. |
+| `AUT-OBS-009` | Observation MUST omit history, bound every projected item value and lifecycle template, and leave the existing 65,536-byte envelope reserve within the 1,048,576-byte frame for the admitted maximum Procedure fixture. |
 
 ## 21. Command-specific JSON schemas (AUT-JSON-001–004)
 
 | ID | Normative requirement |
 |---|---|
-| `AUT-JSON-001` | Version, daemon status, Procedure validation, start, status, next, observation, item mutation, graph-node transition, detached admission, job status/wait, and job lookup MUST each have a closed result schema. |
+| `AUT-JSON-001` | Version, daemon status, Procedure validation, start, begin, terminal disposition, reset, status, running and prepared next, observation, item mutation, graph-node transition, detached admission, job status/wait, and job lookup MUST each have a closed result schema. |
 | `AUT-JSON-002` | Daemon, socket, identity, revision, attempt, digest, idempotency, and timeout failures MUST each have closed error-detail schemas. |
 | `AUT-JSON-003` | Results and error details MUST carry an unambiguous schema identifier or discriminator. |
 | `AUT-JSON-004` | A closed v1 object MUST reject unknown fields; adding fields requires a new schema identifier or discriminator version rather than an undocumented additive-field exception. |
@@ -259,7 +275,8 @@ env -i PATH="<release-bin>:/usr/bin:/bin" \
 | `AUT-T-SOCK` | correct, wrong, relative, over-long, regular-file, symlink, insecure-parent, wrong-owner, stale, same/different-socket duplicate daemon | `RPATH003`–`RPATH006` |
 | `AUT-T-CONTRACT` | matching peers, complete source/package schema validation, malformed v0.1.1 and generated identity/manifest/schema/reference drift, same version/different manifest, different version/same IPC, replaced executable, restart after upgrade | `CONID003`–`CONID006`, `REL12003`–`REL12004` |
 | `AUT-T-ID` | replaced workspace/session, same numeric revision on another session, stale replacement, wrong attempt/item, guarded reads | `CASID003`–`CASID005` |
-| `AUT-T-START` | matching/mismatching digest, source deletion/replacement/race, restart, exact replay, key reuse with another digest | `PSTRT001`–`PSTRT005` |
+| `AUT-T-START` | matching/mismatching digest, prepared creation, source deletion/replacement/race, restart, exact replay, key reuse with another digest | `PSTRT001`–`PSTRT005`, `V2LIF-004`–`005` |
+| `AUT-T-LIF` | prepared reconstruction, begin with and without a goal, forbidden prepared mutations, terminal disposition currentness, eligible and force reset/replacement, restart, replay, and stale fences | `V2LIF-002`–`005` |
 | `AUT-T-RECON` | disconnect before/after admission, wait timeout, lookup in every state, domain failure, pruning, missing key, key reuse | `RECON001`–`RECON005` |
 | `AUT-T-OBS` | idle barrier invariants, closed compact schema, maximum envelope size | `MCONT004`, `MCONT006`, `DOLGI002` |
 | `AUT-T-JSON` | every result/detail fixture validates its discriminator and rejects unknown or malformed fields | `MCONT001`–`MCONT006` |
@@ -291,10 +308,11 @@ Preview and other authoring reads remain side-effect free.
 | `AUT-HOME-001`–`004` | `RPATH001`, `RPATH002`, `RPATH004` | `AUT-T-PATH`, `AUT-T-SOCK` |
 | `AUT-SOCK-001`–`005`, `AUT-SEC-001`–`004` | `RPATH003`–`RPATH006` | `AUT-T-SOCK` |
 | `AUT-CONTRACT-001`–`005` | `CONID001`–`CONID006` | `AUT-T-CONTRACT`, `AUT-T-DIST` |
-| `AUT-ID-001`–`007` | `CASID001`–`CASID005` | `AUT-T-ID`, `AUT-T-JSON` |
+| `AUT-ID-001`–`009` | `CASID001`–`CASID005`, `V2LIF-004` | `AUT-T-ID`, `AUT-T-LIF`, `AUT-T-JSON` |
 | `AUT-START-001`–`004` | `PSTRT001`–`PSTRT005` | `AUT-T-START` |
+| `AUT-LIF-001`–`010` | `V2LIF-002`–`005` | `AUT-T-LIF`, `AUT-T-OBS`, `AUT-T-JSON` |
 | `AUT-ADMIT-001`–`003`, `AUT-RECON-001`–`004` | `RECON001`–`RECON005` | `AUT-T-RECON` |
-| `AUT-OBS-001`–`004` | `MCONT004`, `MCONT006`, `DOLGI002` | `AUT-T-OBS` |
+| `AUT-OBS-001`–`009` | `MCONT004`, `MCONT006`, `DOLGI002`, `V2LIF-004`–`005` | `AUT-T-OBS`, `AUT-T-LIF` |
 | `AUT-JSON-001`–`004`, `AUT-ERR-001`–`005` | `CASID004`, `MCONT001`–`MCONT006`, `V2AGT-005` | `AUT-T-JSON` |
 | `AUT-REL-001`–`004` | `DOLGI005`, `REL10001`–`REL10005` | `AUT-T-DIST`, repository-local `make dist` |
 
@@ -326,6 +344,19 @@ podway --json \
   --procedure ".dolgorae/runtime/podway/request-42/procedure.json" \
   --expect-procedure-digest "$PROCEDURE_DIGEST" \
   --task "WI-0042: Implement Podway graph dispatch"
+
+podway --json \
+  --socket "/Users/example/.podway/run/podwayd.sock" \
+  --worktree "/Users/example/src/project" \
+  --timeout 25s \
+  --idempotency-key "$BEGIN_IDEMPOTENCY_KEY" \
+  --if-workspace-uuid "$WORKSPACE_UUID" \
+  --if-session-id "$SESSION_ID" \
+  --if-session-revision 0 \
+  begin \
+  --goal "Complete WI-0042 safely" \
+  --criterion verified="Required checks pass" \
+  --actor "dolgorae"
 
 podway --json \
   --socket "/Users/example/.podway/run/podwayd.sock" \

@@ -122,21 +122,30 @@ blocker_id
 job_state
 ```
 
-The command specification determines required fields. Session-bearing reads accept an optional
-`session_id`; graph-node, item, replacement, and session-reset mutations require it. Unknown
-precondition fields are rejected in v1.
+The command specification determines required fields. Session-bearing reads accept
+an optional `session_id`; begin, terminal disposition, graph-node, item,
+replacement, and session-reset mutations require it. Unknown precondition fields
+are rejected in v1.
 
 Procedure v2 goal revision and criterion-assessment mutations additionally carry
 `goal_revision`. It is a positive integer and binds the mutation to the exact
 current immutable goal revision; it never substitutes for the session revision
 or active-attempt fence.
 
-The protocol decoder also owns a closed Procedure v2 form of `session.start` and
-`session.start_replace` that may carry one complete initial goal definition
-(`goal`, ordered `criteria`, and optional `actor`). Its semantic mutation
-identity includes that definition and the resolved Procedure digest. This typed
-form is executable through Procedure v2 daemon dispatch; the decoder rejects
-unsupported Procedure input instead of discarding additional fields.
+The protocol decoder owns closed Procedure v2 forms for `session.start`,
+`session.start_replace`, and `session.begin`. Start and replacement carry no goal
+definition and create a prepared session. Begin may carry one complete initial
+goal definition (`goal`, ordered `criteria`, and optional `actor`) and creates the
+entry attempt and goal atomically. Semantic mutation identity includes the
+resolved Procedure digest for start and replacement and the complete optional
+goal definition for begin. The decoder rejects unsupported or misplaced
+Procedure input instead of discarding additional fields.
+
+`session.terminal_disposition` has disjoint closed `handed_off` and
+`not_required` payloads. `session.reset` and `session.start_replace` carry an
+explicit eligible-or-force mode; force mode requires a bounded progress summary.
+The daemon evaluates mode, lifecycle, current disposition, and every fence in the
+same authoritative Store transaction that applies the mutation.
 
 The daemon compares these identities with the same authoritative Store view used by the operation.
 Waiting reads recheck the session identity on every Store observation. New mutations check identity
@@ -244,7 +253,7 @@ workspace UUID
 workspace and session identity fences
 semantic preconditions
 payload
-canonical Procedure digest for start
+canonical Procedure digest for start or replacement
 ```
 
 For `session.start` and `session.start_replace`, the optional
@@ -254,6 +263,12 @@ Start idempotency identity binds both that guard, when present, and the resolved
 Procedure digest. Exact retries reconstruct the identity from the immutable admitted execution,
 so they do not depend on a later source-file read; a changed digest or start precondition reusing
 the same key returns `IDEMPOTENCY_KEY_REUSED`.
+
+Begin identity includes the optional complete initial goal. Terminal-disposition
+identity includes its kind and bounded assertion fields. Reset and replacement
+identity includes eligible-or-force mode and any force progress summary. These
+fields remain in the bounded retained request and terminal receipt required for
+replay; they are never reconstructed from current Git or roadmap state.
 
 Every successful `session.start` and `session.start_replace` response returns the admitted
 canonical digest as `result.procedure_digest`, including a newly queued detached admission,

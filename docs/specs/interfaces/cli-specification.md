@@ -10,9 +10,11 @@ human-readable text or one JSON document. It never writes SQLite directly.
   `reset --all`.
 - Procedures: `preset list|show|explain` and `procedure
   validate|show|format|vet|graph|preview|lint|check|scaffold`.
-- Session reads: `status`, `next`, and `job list|status|wait|lookup|cancel`.
-- Session mutations: `start`, `complete`, `skip`, `retry`, `block`, `unblock`,
-  `cancel`, `reset`, `decide`, `rework`, `goal define|revise|assess-criterion`,
+- Session reads: `status`, `next`, `observe`, and
+  `job list|status|wait|lookup|cancel`.
+- Session mutations: `start`, `begin`, `complete`, `skip`, `retry`, `block`,
+  `unblock`, `cancel`, `disposition handed-off|not-required`, `reset`, `decide`,
+  `rework`, `goal define|revise|assess-criterion`,
   `check|uncheck|set|add|remove|attach|clear`, and `record --stdin`.
 
 The executable grammar is owned by the command catalog and clap definitions.
@@ -28,10 +30,15 @@ same-directory replacement. Other procedure commands are read-only. Unsupported
 schemas report `PROCEDURE_SCHEMA_UNSUPPORTED` or `PROCEDURE_INVALID` as appropriate.
 
 Built-in catalog commands expose only `bug-fix-v2`, `small-change-v2`, and
-`sw-dev-v2`. `start` accepts
-one preset or one safe worktree-local procedure path, an optional expected procedure
-digest for file sources, a nonempty task title, optional v2 goal inputs, and the
-documented replacement/dry-run controls.
+`sw-dev-v2`. `start` accepts one preset or one safe worktree-local Procedure
+path, an optional expected Procedure digest for file sources, a nonempty task
+title, and the documented replacement and dry-run controls. Start creates a
+prepared session and never accepts or creates initial goal state.
+
+`begin` accepts optional initial goal inputs and actor attribution, fences the
+prepared session, and atomically creates the first running attempt. Goal input is
+allowed only when the admitted Procedure enables goal tracking and retains the
+existing goal and criterion bounds.
 
 ## Mutation rules
 
@@ -44,6 +51,20 @@ outcomes are reconciled with `job lookup --idempotency-key` before retry.
 `retry` remains on the active action node. `rework --to <node>` uses the Procedure
 v2 manual-rework contract. Decisions, goals, and criterion assessments use their
 typed commands. Cursor changes occur only through declared graph effects.
+
+Prepared sessions expose no cursor-bearing mutations. `disposition handed-off`
+requires summary and reference, while `disposition not-required` requires a
+reason. Each form accepts optional actor attribution and exact terminal-session
+fences. These values are caller assertions; the CLI does not inspect Git or
+validate external handoff semantics.
+
+`reset` without `--yes` deletes only a prepared session or a completed or
+cancelled session with a disposition for its current revision. `reset --dry-run`
+reports the same current eligibility without mutation. Force reset uses `--yes`
+and requires `--progress-summary` for a running or undisposed terminal session.
+`start --replace-eligible` applies the default eligibility predicate atomically;
+`start --replace --yes` is the force replacement form and applies the same
+progress-summary rule. Every deletion or replacement remains fully fenced.
 
 `record --stdin` is the only multi-item mutation grammar. It reads at most 1 MiB
 of closed `podway.item-record-many-input/v1` JSON. The document supplies the

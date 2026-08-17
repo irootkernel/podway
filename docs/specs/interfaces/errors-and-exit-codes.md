@@ -98,6 +98,8 @@ unexpected process transition. Automation must not branch on those messages.
 | `SESSION_ID_MISMATCH` | 4 | no | Authoritative session ID differs from the expected ID, including when no current session exists |
 | `SESSION_ALREADY_EXISTS` | 1 | no | Start requested while a session exists |
 | `SESSION_NOT_RUNNING` | 1 | no | Command requires a running session |
+| `SESSION_NOT_TERMINAL` | 1 | no | Terminal disposition requires a completed or cancelled session |
+| `SESSION_RESET_NOT_ELIGIBLE` | 1 | no | Eligible reset or replacement requires prepared state or a current terminal disposition |
 | `SESSION_CANCELLED` | 1 | no | Cancelled session cannot perform the operation |
 | `SESSION_REVISION_CONFLICT` | 4 | yes | Observed session revision is stale |
 | `ATTEMPT_NOT_CURRENT` | 4 | yes | Observed attempt is no longer active |
@@ -188,6 +190,24 @@ including the mandatory stable codes
 `NO_REACTIVATION_PATH`.
 
 `INTERNAL_ERROR` is never marked retryable, and its details include a diagnostic ID. A client may make an out-of-band retry decision, but the daemon does not prove that an unexpected failure committed no mutation.
+
+## Prepared lifecycle failures
+
+`SESSION_NOT_RUNNING` applies to every cursor, item, blocker, goal, completion,
+cancellation, retry, skip, decision, and rework mutation attempted while the
+session is prepared. `SESSION_NOT_TERMINAL` applies when a disposition is
+attempted before completion or cancellation.
+
+`SESSION_RESET_NOT_ELIGIBLE` is a non-retryable domain result for default reset
+and `--replace-eligible`. Its closed details identify the observed lifecycle,
+whether a current terminal disposition exists, and the required next mode as
+`record_disposition` or `force`. They contain no Git, roadmap, process, external
+reference, item value, or progress-summary data. A caller must reassess ownership
+before choosing a new mutation; the error never recommends force deletion.
+
+Missing or blank force progress summary, incompatible disposition fields, initial
+goal fields supplied to start instead of begin, and unsupported mode combinations
+are malformed requests and return `REQUEST_INVALID` before durable admission.
 
 ## Conflict remediation
 
