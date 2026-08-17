@@ -3148,6 +3148,7 @@ fn validate_frozen_v2_result_projection(
             if let Some(projection) = graph_session {
                 (|| {
                     let lifecycle = match projection.lifecycle() {
+                        PersistedSessionLifecycleV1::Prepared => return false,
                         PersistedSessionLifecycleV1::Running => "running",
                         PersistedSessionLifecycleV1::Completed => "completed",
                         PersistedSessionLifecycleV1::Cancelled => "cancelled",
@@ -3299,6 +3300,7 @@ fn validate_frozen_v2_result_projection(
                     base_matches
                         && session.is_some_and(|projection| {
                             let lifecycle = match projection.lifecycle() {
+                                PersistedSessionLifecycleV1::Prepared => return false,
                                 PersistedSessionLifecycleV1::Running => "running",
                                 PersistedSessionLifecycleV1::Completed => "completed",
                                 PersistedSessionLifecycleV1::Cancelled => "cancelled",
@@ -3688,7 +3690,7 @@ fn graph_terminal_envelope_v2(
             let session_state = match graph.lifecycle() {
                 PersistedSessionLifecycleV1::Running => "running",
                 PersistedSessionLifecycleV1::Completed => "completed",
-                PersistedSessionLifecycleV1::Cancelled => {
+                PersistedSessionLifecycleV1::Prepared | PersistedSessionLifecycleV1::Cancelled => {
                     return Err(terminal_replay_integrity_failure());
                 }
             };
@@ -3724,7 +3726,7 @@ fn graph_terminal_envelope_v2(
             let session_state = match graph.lifecycle() {
                 PersistedSessionLifecycleV1::Running => "running",
                 PersistedSessionLifecycleV1::Completed => "completed",
-                PersistedSessionLifecycleV1::Cancelled => {
+                PersistedSessionLifecycleV1::Prepared | PersistedSessionLifecycleV1::Cancelled => {
                     return Err(terminal_replay_integrity_failure());
                 }
             };
@@ -4264,6 +4266,9 @@ fn terminal_session_projection(
             Some(persisted),
         ) => {
             let lifecycle = match persisted.lifecycle() {
+                PersistedSessionLifecycleV1::Prepared => {
+                    return Err(terminal_replay_integrity_failure());
+                }
                 PersistedSessionLifecycleV1::Running => SessionLifecycleV1::Running,
                 PersistedSessionLifecycleV1::Completed => SessionLifecycleV1::Completed,
                 PersistedSessionLifecycleV1::Cancelled => SessionLifecycleV1::Cancelled,

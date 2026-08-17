@@ -6,24 +6,26 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use podway_core::{
-    ArtifactValueV1, AttemptId, AttemptLifecycle, AttemptNumberV2, AttemptValidityV2,
-    CanonicalProcedureJsonV1, DomainCommand, DomainError, DomainResult, GraphNodeId, ItemId,
-    OptionId, ProcedureSnapshotId, ProcedureSourceLabelV1, ReasonV2, Revision, SessionAttemptV2,
-    SessionId, SessionLifecycle, SessionTraceV2, Sha256Digest, TraceSequenceV2, UnixMillis,
-    WorkspaceId, canonicalize_json_v1,
+    ActorAttributionV2, ArtifactValueV1, AttemptId, AttemptLifecycle, AttemptNumberV2,
+    AttemptValidityV2, CanonicalProcedureJsonV1, CriterionId, DomainCommand, DomainError,
+    DomainResult, GoalCriterionV2, GoalDefinitionV2, GoalRevisionNumberV2, GoalStatementV2,
+    GraphNodeId, ItemId, OptionId, ProcedureSnapshotId, ProcedureSourceLabelV1, ReasonV2, Revision,
+    SessionAttemptV2, SessionId, SessionLifecycle, SessionTraceV2, Sha256Digest,
+    TerminalDispositionKindV2, TerminalDispositionV2, TraceSequenceV2, UnixMillis, WorkspaceId,
+    canonicalize_json_v1,
 };
 use podway_store::codec::encode_persisted_terminal_receipt_v1;
 use podway_store::{
     ActiveItemMutationRequestV2, ActiveItemMutationV2, AdmissionSessionIdentityV1, AdmitRequestV1,
-    AttemptMetadataV2, CanonicalExecutionJsonV1, DurableWorktreeIdentityV1, GraphNodeCounterV2,
-    GraphSessionStateV2, GraphStartCurrentTaskV2, IdempotencyKeyV1, JobStateV1,
+    AttemptMetadataV2, CanonicalExecutionJsonV1, DurableWorktreeIdentityV1, GraphInitialGoalV2,
+    GraphNodeCounterV2, GraphSessionStateV2, GraphStartCurrentTaskV2, IdempotencyKeyV1, JobStateV1,
     PersistedGraphItemMutationV2, PersistedGraphMutationFailureV2,
     PersistedGraphTerminalOperationV2, PersistedResponseContextV1, ProcedureSnapshotV2,
     RevisionAttemptItemPreconditionsV1, SqliteStoreOptionsV1, SqliteStoreV1, StoreContractV1,
     StoreErrorV1, StoreFailpointActionV1, StoreFailpointV1, StoreGraphMutationContractV2,
     StoreGraphStateContractV2, StoreIdempotencyReadContractV1, StoreInvariantV1,
-    StoreReadContractV1, StoreUnavailableReasonV1, TerminalResultV1, ValidatedWorkspaceRootV1,
-    WorkerIdV1,
+    StoreReadContractV1, StoreTerminalDispositionContractV2, StoreUnavailableReasonV1,
+    TerminalResultV1, ValidatedWorkspaceRootV1, WorkerIdV1,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -83,6 +85,22 @@ fn graph_state_with_required_artifact(
     created_at: u64,
     required_artifact: bool,
 ) -> GraphSessionStateV2 {
+    graph_state_with_options(
+        session_number,
+        snapshot_number,
+        created_at,
+        required_artifact,
+        false,
+    )
+}
+
+fn graph_state_with_options(
+    session_number: u64,
+    snapshot_number: u64,
+    created_at: u64,
+    required_artifact: bool,
+    goal_tracking: bool,
+) -> GraphSessionStateV2 {
     let mut items = vec![
         json!({
             "id":"done","type":"confirm","prompt":"Done","required":required_artifact
@@ -96,7 +114,7 @@ fn graph_state_with_required_artifact(
             "id":"proof","type":"artifact","prompt":"Proof","required":true
         }));
     }
-    let document = json!({
+    let mut document = json!({
         "schema": "podway.procedure/v2",
         "id": "atomic-start",
         "version": "1",
@@ -115,6 +133,12 @@ fn graph_state_with_required_artifact(
             "nodes": [{"id": "work", "use": "work", "skip":{"allowed":true,"reason_required":true}, "terminal": true}]
         }
     });
+    if goal_tracking {
+        document
+            .as_object_mut()
+            .unwrap()
+            .insert("goal_tracking".to_owned(), json!(true));
+    }
     let canonical = canonicalize_json_v1(&document).unwrap();
     let procedure_digest =
         Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))).unwrap();
@@ -157,6 +181,281 @@ fn graph_state_with_required_artifact(
         None,
     )
     .unwrap()
+}
+
+fn initial_goal() -> GraphInitialGoalV2 {
+    GraphInitialGoalV2::new(
+        GoalStatementV2::new("Persist the prepared lifecycle.").unwrap(),
+        GoalDefinitionV2::new(vec![
+            GoalCriterionV2::new(
+                CriterionId::new("verified").unwrap(),
+                "Prepared begin survives restart.",
+            )
+            .unwrap(),
+        ])
+        .unwrap(),
+        Some(ActorAttributionV2::new("planner").unwrap()),
+    )
+}
+
+#[test]
+fn prepared_session_and_begin_with_optional_goal_reconstruct_exactly() {
+    for (with_goal, session_number) in [(false, 701_u64), (true, 711_u64)] {
+        let temporary = TempDir::new().unwrap();
+        let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
+        let template =
+            graph_state_with_options(session_number, session_number + 1, 10, false, true);
+        let prepared = GraphSessionStateV2::prepared(
+            Revision::new(1),
+            "Prepared graph session",
+            template.snapshot().clone(),
+            SessionId::new(uuid(session_number + 2)).unwrap(),
+            UnixMillis::new(10),
+        )
+        .unwrap();
+        store
+            .create_graph_session_v2(&identity(), prepared.clone())
+            .unwrap();
+        assert_eq!(
+            store.read_graph_session_v2(&identity()).unwrap(),
+            Some(prepared.clone())
+        );
+        drop(store);
+
+        let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 11);
+        assert_eq!(
+            reopened.read_graph_session_v2(&identity()).unwrap(),
+            Some(prepared.clone())
+        );
+        assert_eq!(
+            prepared
+                .begin_v2(
+                    Revision::new(1),
+                    AttemptId::new(uuid(session_number + 4)).unwrap(),
+                    None,
+                    UnixMillis::new(12),
+                )
+                .unwrap_err(),
+            podway_store::GraphMutationErrorV2::SessionRevisionConflict {
+                expected: Revision::new(1),
+                actual: Revision::ZERO,
+            }
+        );
+        let attempt_id = AttemptId::new(uuid(session_number + 3)).unwrap();
+        let begun = prepared
+            .begin_v2(
+                Revision::ZERO,
+                attempt_id.clone(),
+                with_goal.then(initial_goal),
+                UnixMillis::new(12),
+            )
+            .unwrap();
+        assert_eq!(begun.state().trace().lifecycle(), SessionLifecycle::Running);
+        assert_eq!(begun.state().trace().revision(), Revision::new(1));
+        assert_eq!(begun.attempt_id(), &attempt_id);
+        assert_eq!(
+            begun.goal_revision(),
+            with_goal.then_some(GoalRevisionNumberV2::FIRST)
+        );
+        assert_eq!(
+            begun.state().goal_state().current_revision(),
+            with_goal.then_some(GoalRevisionNumberV2::FIRST)
+        );
+        reopened
+            .replace_graph_session_v2(
+                &identity(),
+                prepared.workspace_revision(),
+                Revision::ZERO,
+                begun.state().clone(),
+            )
+            .unwrap();
+        let expected = begun.into_state();
+        drop(reopened);
+
+        let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 13);
+        assert_eq!(
+            reopened.read_graph_session_v2(&identity()).unwrap(),
+            Some(expected.clone())
+        );
+        assert_eq!(
+            expected
+                .begin_v2(
+                    expected.trace().revision(),
+                    AttemptId::new(uuid(session_number + 4)).unwrap(),
+                    None,
+                    UnixMillis::new(14),
+                )
+                .unwrap_err(),
+            podway_store::GraphMutationErrorV2::SessionNotPrepared
+        );
+    }
+
+    let template = graph_state_with_options(741, 742, 10, false, false);
+    let prepared = GraphSessionStateV2::prepared(
+        Revision::new(1),
+        "Prepared graph session",
+        template.snapshot().clone(),
+        SessionId::new(uuid(743)).unwrap(),
+        UnixMillis::new(10),
+    )
+    .unwrap();
+    assert_eq!(
+        prepared
+            .begin_v2(
+                Revision::ZERO,
+                AttemptId::new(uuid(744)).unwrap(),
+                Some(initial_goal()),
+                UnixMillis::new(11),
+            )
+            .unwrap_err(),
+        podway_store::GraphMutationErrorV2::GoalTrackingNotEnabled
+    );
+}
+
+#[test]
+fn prepared_reconstruction_rejects_session_scoped_history() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
+    let template = graph_state(721, 722, 10);
+    let prepared = GraphSessionStateV2::prepared(
+        Revision::new(1),
+        "Prepared graph session",
+        template.snapshot().clone(),
+        SessionId::new(uuid(723)).unwrap(),
+        UnixMillis::new(10),
+    )
+    .unwrap();
+    store
+        .create_graph_session_v2(&identity(), prepared.clone())
+        .unwrap();
+    drop(store);
+
+    let connection = Connection::open(database_path(&temporary)).unwrap();
+    connection
+        .execute(
+            "INSERT INTO v2_terminal_dispositions (
+                session_id, terminal_session_revision, kind, reason, recorded_at_ms
+             ) VALUES (?1, 1, 'not_required', 'invalid prepared history', 11)",
+            [prepared.trace().session_id().as_str()],
+        )
+        .unwrap();
+    drop(connection);
+
+    assert!(matches!(
+        SqliteStoreV1::open(
+            database_path(&temporary),
+            &root(),
+            identity(),
+            SqliteStoreOptionsV1::new(8).unwrap(),
+            UnixMillis::new(12),
+        ),
+        Err(StoreErrorV1::StorageIntegrityV1 { .. })
+    ));
+}
+
+#[test]
+fn terminal_dispositions_persist_and_remain_bound_to_the_terminal_revision() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
+    let running = graph_state(731, 732, 10);
+    store
+        .create_graph_session_v2(&identity(), running.clone())
+        .unwrap();
+    assert!(
+        store
+            .record_terminal_disposition_v2(
+                &identity(),
+                TerminalDispositionV2::not_required(
+                    running.trace().session_id().clone(),
+                    running.trace().revision(),
+                    "No handoff",
+                    None,
+                    UnixMillis::new(11),
+                )
+                .unwrap(),
+            )
+            .is_err()
+    );
+
+    let active = running.trace().active_attempt().unwrap();
+    let completed = running
+        .complete_active_action_v2(
+            running.trace().revision(),
+            active.attempt_id(),
+            None,
+            UnixMillis::new(12),
+        )
+        .unwrap()
+        .into_state();
+    store
+        .replace_graph_session_v2(
+            &identity(),
+            running.workspace_revision(),
+            running.trace().revision(),
+            completed.clone(),
+        )
+        .unwrap();
+    assert!(
+        store
+            .record_terminal_disposition_v2(
+                &identity(),
+                TerminalDispositionV2::not_required(
+                    completed.trace().session_id().clone(),
+                    running.trace().revision(),
+                    "Stale revision",
+                    None,
+                    UnixMillis::new(13),
+                )
+                .unwrap(),
+            )
+            .is_err()
+    );
+    assert!(
+        store
+            .record_terminal_disposition_v2(
+                &identity(),
+                TerminalDispositionV2::not_required(
+                    completed.trace().session_id().clone(),
+                    completed.trace().revision(),
+                    "Regressed timestamp",
+                    None,
+                    UnixMillis::new(9),
+                )
+                .unwrap(),
+            )
+            .is_err()
+    );
+    let disposition = TerminalDispositionV2::handed_off(
+        completed.trace().session_id().clone(),
+        completed.trace().revision(),
+        "Delivered to the owning task",
+        "commit:abc123",
+        Some(ActorAttributionV2::new("agent").unwrap()),
+        UnixMillis::new(13),
+    )
+    .unwrap();
+    store
+        .record_terminal_disposition_v2(&identity(), disposition.clone())
+        .unwrap();
+    assert!(
+        store
+            .record_terminal_disposition_v2(&identity(), disposition.clone())
+            .is_err()
+    );
+    assert_eq!(
+        store.read_terminal_dispositions_v2(&identity()).unwrap(),
+        vec![disposition.clone()]
+    );
+    drop(store);
+
+    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 14);
+    let history = reopened.read_terminal_dispositions_v2(&identity()).unwrap();
+    assert_eq!(history, vec![disposition]);
+    assert_eq!(history[0].kind(), TerminalDispositionKindV2::HandedOff);
+    assert_eq!(
+        history[0].terminal_session_revision(),
+        completed.trace().revision()
+    );
 }
 
 fn decision_graph_state(

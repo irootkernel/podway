@@ -879,8 +879,12 @@ pub(crate) fn validate_goal_state_successor_v2<'a>(
         ));
     }
     if previous.revisions().is_empty() {
-        let active = previous_trace
-            .active_attempt()
+        let active = previous_trace.active_attempt().or_else(|| {
+            (previous_trace.lifecycle() == SessionLifecycle::Prepared)
+                .then(|| next_trace.active_attempt())
+                .flatten()
+        });
+        let active = active
             .ok_or_else(|| invalid("Procedure v2 initial goal definition has no active attempt"))?;
         if revision.revision() != GoalRevisionNumberV2::FIRST
             || revision.binding_trace() != active.trace()

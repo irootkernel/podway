@@ -115,6 +115,7 @@ pub enum GraphMutationErrorV2 {
         target_graph_node_id: GraphNodeId,
     },
     ReactivationFlagRequired,
+    SessionNotPrepared,
     SessionNotRunning,
     SessionRevisionConflict {
         expected: Revision,
@@ -259,6 +260,7 @@ impl fmt::Display for GraphMutationErrorV2 {
             Self::ReactivationFlagRequired => {
                 formatter.write_str("completed Procedure v2 goal revision requires reactivation")
             }
+            Self::SessionNotPrepared => formatter.write_str("Procedure v2 session is not prepared"),
             Self::SessionNotRunning => formatter.write_str("Procedure v2 session is not running"),
             Self::SessionRevisionConflict { .. } => {
                 formatter.write_str("Procedure v2 session revision changed")
@@ -2594,6 +2596,18 @@ pub(crate) fn validate_workflow_memory_v2(
     {
         return Err(invalid("Procedure v2 workflow memory is incomplete"));
     }
+    if trace.lifecycle() == SessionLifecycle::Prepared {
+        if !memory.attempts().is_empty()
+            || !memory.decisions().is_empty()
+            || !memory.reworks().is_empty()
+            || counters.iter().any(|counter| {
+                counter.attempt_count() != 0 || counter.rework_traversal_count() != 0
+            })
+        {
+            return Err(invalid("prepared Procedure v2 workflow state is not empty"));
+        }
+        return Ok(());
+    }
     let model = SnapshotMemoryModelV2::from_snapshot(snapshot)?;
     let attempts_by_id: BTreeMap<_, _> = trace
         .attempts()
@@ -3339,6 +3353,44 @@ pub(crate) fn validate_workflow_memory_successor_v2(
             ));
         }
         cursor_stable_changed |= old_memory.blockers().len() != new_memory.blockers().len();
+    }
+    if previous_trace.lifecycle() == SessionLifecycle::Prepared
+        && next_trace.lifecycle() == SessionLifecycle::Running
+    {
+        let fresh = next
+            .attempts()
+            .first()
+            .ok_or_else(|| invalid("prepared Procedure v2 begin has no workflow memory"))?;
+        let fresh_attempt = next_trace
+            .attempts()
+            .first()
+            .ok_or_else(|| invalid("prepared Procedure v2 begin has no attempt"))?;
+        if previous_trace.attempts().is_empty()
+            && previous.attempts().is_empty()
+            && next_trace.attempts().len() == 1
+            && next.attempts().len() == 1
+            && next.decisions().is_empty()
+            && next.reworks().is_empty()
+            && fresh_attempt.graph_node_id() == snapshot.entry_graph_node_id()
+            && fresh
+                .item_slots()
+                .iter()
+                .all(|slot| slot.revision() == Revision::ZERO && slot.value().is_none())
+            && fresh.blockers().is_empty()
+            && match goal_transition {
+                WorkflowGoalTransitionV2::None => fresh_attempt.goal_revision().is_none(),
+                WorkflowGoalTransitionV2::InitialBinding { attempt_id } => {
+                    fresh_attempt.attempt_id() == attempt_id
+                        && fresh_attempt.goal_revision() == Some(GoalRevisionNumberV2::FIRST)
+                }
+                WorkflowGoalTransitionV2::Rework { .. } => false,
+            }
+        {
+            return Ok(());
+        }
+        return Err(invalid(
+            "prepared Procedure v2 begin workflow successor is invalid",
+        ));
     }
     let cursor_stable = previous_trace.active_attempt().is_some_and(|old| {
         next_trace

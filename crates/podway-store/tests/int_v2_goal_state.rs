@@ -19,6 +19,7 @@ use podway_core::{
     TransitionEffectV2, UnixMillis, WorkspaceId, canonicalize_json_v1,
 };
 use podway_store::CanonicalExecutionJsonV1;
+use podway_store::schema::SQLITE_SCHEMA_VERSION_CURRENT;
 use podway_store::{
     AdmissionSessionIdentityV1, AdmitOutcomeV1, AdmitRequestV1, AttemptCriterionAssessmentStateV2,
     AttemptMetadataV2, AttemptWorkflowMemoryV2, CriterionAssessmentStateV2,
@@ -1816,7 +1817,10 @@ fn populated_newer_schema_fails_without_changing_v2_state() {
     let newer_counts = v2_table_counts(&newer_path);
     let newer_base = base_store_identity(&newer_path);
     let connection = Connection::open(&newer_path).unwrap();
-    connection.pragma_update(None, "user_version", 5).unwrap();
+    let newer_version = SQLITE_SCHEMA_VERSION_CURRENT + 1;
+    connection
+        .pragma_update(None, "user_version", newer_version)
+        .unwrap();
     drop(connection);
 
     let newer_error = match SqliteStoreV1::open(
@@ -1832,8 +1836,8 @@ fn populated_newer_schema_fails_without_changing_v2_state() {
     assert_eq!(
         newer_error,
         StoreErrorV1::NewerStateV1 {
-            found_schema_version: 5,
-            supported_schema_version: 4,
+            found_schema_version: newer_version,
+            supported_schema_version: SQLITE_SCHEMA_VERSION_CURRENT,
         }
     );
     assert_eq!(v2_table_counts(&newer_path), newer_counts);
@@ -1842,7 +1846,7 @@ fn populated_newer_schema_fails_without_changing_v2_state() {
         .unwrap()
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 5);
+    assert_eq!(version, i64::from(newer_version));
 }
 
 #[test]

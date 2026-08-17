@@ -2267,6 +2267,7 @@ const fn item_type(value: ItemTypeV1) -> &'static str {
 
 const fn lifecycle(value: SessionLifecycle) -> &'static str {
     match value {
+        SessionLifecycle::Prepared => "prepared",
         SessionLifecycle::Running => "running",
         SessionLifecycle::Completed => "completed",
         SessionLifecycle::Cancelled => "cancelled",

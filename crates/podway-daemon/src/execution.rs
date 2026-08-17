@@ -4181,6 +4181,13 @@ where
             (SessionLifecycle::Running, Some(_))
             | (SessionLifecycle::Completed, None)
             | (SessionLifecycle::Cancelled, _) => {}
+            (SessionLifecycle::Prepared, _) => {
+                return Err(ExecutionErrorV1::BoundaryDomain(
+                    DomainError::InvalidState {
+                        reason: "prepared Procedure v2 session cannot be reworked",
+                    },
+                ));
+            }
             (SessionLifecycle::Running, None) => {
                 return Err(ExecutionErrorV1::BoundaryDomain(
                     DomainError::InvalidState {

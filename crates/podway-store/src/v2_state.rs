@@ -10,8 +10,8 @@ use podway_core::{
     GoalRevisionReasonV2, GoalRevisionRecordV2, GoalStatementV2, GraphNodeId, ItemId,
     NodeDefinitionId, NodeKindV2, OptionId, ProcedureSnapshotId, ProcedureSourceKindV1,
     ProcedureSourceLabelV1, ReasonV2, Revision, SessionAttemptV2, SessionId, SessionLifecycle,
-    SessionTraceV2, Sha256Digest, TraceSequenceV2, UnixMillis, canonicalize_json_v1,
-    verify_canonical_json_v1,
+    SessionTraceV2, Sha256Digest, TerminalDispositionKindV2, TerminalDispositionV2,
+    TraceSequenceV2, UnixMillis, canonicalize_json_v1, verify_canonical_json_v1,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde_json::Value;
@@ -651,6 +651,52 @@ pub struct GraphSessionStateV2 {
     cancel_reason: Option<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GraphInitialGoalV2 {
+    statement: GoalStatementV2,
+    criteria: GoalDefinitionV2,
+    actor: Option<ActorAttributionV2>,
+}
+
+impl GraphInitialGoalV2 {
+    pub fn new(
+        statement: GoalStatementV2,
+        criteria: GoalDefinitionV2,
+        actor: Option<ActorAttributionV2>,
+    ) -> Self {
+        Self {
+            statement,
+            criteria,
+            actor,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GraphBeginOutcomeV2 {
+    state: GraphSessionStateV2,
+    attempt_id: AttemptId,
+    goal_revision: Option<GoalRevisionNumberV2>,
+}
+
+impl GraphBeginOutcomeV2 {
+    pub fn state(&self) -> &GraphSessionStateV2 {
+        &self.state
+    }
+
+    pub fn into_state(self) -> GraphSessionStateV2 {
+        self.state
+    }
+
+    pub fn attempt_id(&self) -> &AttemptId {
+        &self.attempt_id
+    }
+
+    pub const fn goal_revision(&self) -> Option<GoalRevisionNumberV2> {
+        self.goal_revision
+    }
+}
+
 /// Pure result of mutating one item slot of the current Procedure v2 attempt.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GraphItemMutationOutcomeV2 {
@@ -1081,6 +1127,121 @@ impl GraphWorkspaceViewV2 {
 }
 
 impl GraphSessionStateV2 {
+    pub fn prepared(
+        workspace_revision: Revision,
+        task_title: impl Into<String>,
+        snapshot: ProcedureSnapshotV2,
+        session_id: SessionId,
+        created_at: UnixMillis,
+    ) -> Result<Self, StoreValueErrorV1> {
+        let counters = snapshot
+            .graph_nodes()
+            .iter()
+            .map(|node| GraphNodeCounterV2::new(node.graph_node_id().clone(), 0, 0))
+            .collect();
+        Self::new(
+            workspace_revision,
+            task_title,
+            snapshot,
+            SessionTraceV2::prepared(session_id),
+            counters,
+            Vec::new(),
+            created_at,
+            None,
+            None,
+            None,
+        )
+    }
+
+    pub fn begin_v2(
+        &self,
+        expected_session_revision: Revision,
+        attempt_id: AttemptId,
+        initial_goal: Option<GraphInitialGoalV2>,
+        now: UnixMillis,
+    ) -> Result<GraphBeginOutcomeV2, GraphMutationErrorV2> {
+        if self.trace.revision() != expected_session_revision {
+            return Err(GraphMutationErrorV2::SessionRevisionConflict {
+                expected: expected_session_revision,
+                actual: self.trace.revision(),
+            });
+        }
+        if self.trace.lifecycle() != SessionLifecycle::Prepared {
+            return Err(GraphMutationErrorV2::SessionNotPrepared);
+        }
+        if initial_goal.is_some() && !self.snapshot.goal_tracking() {
+            return Err(GraphMutationErrorV2::GoalTrackingNotEnabled);
+        }
+
+        let goal_revision = initial_goal.as_ref().map(|_| GoalRevisionNumberV2::FIRST);
+        let mut trace = self.trace.clone();
+        trace
+            .begin(
+                self.snapshot.entry_graph_node_id().clone(),
+                attempt_id.clone(),
+                goal_revision,
+            )
+            .map_err(GraphMutationErrorV2::Domain)?;
+        let counters = self
+            .counters
+            .iter()
+            .map(|counter| {
+                GraphNodeCounterV2::new(
+                    counter.graph_node_id().clone(),
+                    u64::from(counter.graph_node_id() == self.snapshot.entry_graph_node_id()),
+                    0,
+                )
+            })
+            .collect::<Vec<_>>();
+        let metadata = vec![AttemptMetadataV2::new(attempt_id.clone(), now, None, None)?];
+        let workflow_memory =
+            WorkflowMemoryStateV2::initial_for_trace(&self.snapshot, &trace, &metadata)?;
+        let goal_state = match initial_goal {
+            Some(goal) => {
+                let revision = GoalRevisionRecordV2::new(
+                    GoalRevisionNumberV2::FIRST,
+                    None,
+                    goal.statement,
+                    goal.criteria,
+                    None,
+                    None,
+                    false,
+                    goal.actor,
+                    TraceSequenceV2::FIRST,
+                    now,
+                )?;
+                GoalStateV2::new(
+                    Some(GoalRevisionNumberV2::FIRST),
+                    vec![revision],
+                    Vec::new(),
+                    Vec::new(),
+                )?
+            }
+            None => GoalStateV2::empty(),
+        };
+        let state = Self::new_with_goal_state(
+            self.workspace_revision
+                .checked_next()
+                .map_err(GraphMutationErrorV2::Domain)?,
+            self.task_title.clone(),
+            self.snapshot.clone(),
+            trace,
+            counters,
+            metadata,
+            workflow_memory,
+            goal_state,
+            self.created_at,
+            None,
+            None,
+            None,
+        )?;
+        Ok(GraphBeginOutcomeV2 {
+            state,
+            attempt_id,
+            goal_revision,
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         workspace_revision: Revision,
@@ -1162,8 +1323,11 @@ impl GraphSessionStateV2 {
         {
             return Err(invalid("Procedure v2 task title is invalid"));
         }
-        if workspace_revision == Revision::ZERO || trace.revision() == Revision::ZERO {
-            return Err(invalid("Procedure v2 persisted revisions must be nonzero"));
+        if workspace_revision == Revision::ZERO
+            || (trace.lifecycle() == SessionLifecycle::Prepared)
+                != (trace.revision() == Revision::ZERO)
+        {
+            return Err(invalid("Procedure v2 persisted revisions are inconsistent"));
         }
         validate_session_metadata(
             trace.lifecycle(),
@@ -2488,6 +2652,7 @@ impl GraphSessionStateV2 {
             });
         }
         match self.trace.lifecycle() {
+            SessionLifecycle::Prepared => return Err(GraphMutationErrorV2::SessionNotRunning),
             SessionLifecycle::Cancelled => return Err(GraphMutationErrorV2::SessionCancelled),
             SessionLifecycle::Completed if !reactivate => {
                 return Err(GraphMutationErrorV2::ReactivationFlagRequired);
@@ -2648,6 +2813,7 @@ impl GraphSessionStateV2 {
             });
         }
         let source = match self.trace.lifecycle() {
+            SessionLifecycle::Prepared => return Err(GraphMutationErrorV2::SessionNotRunning),
             SessionLifecycle::Cancelled => return Err(GraphMutationErrorV2::SessionCancelled),
             SessionLifecycle::Running => {
                 let active = self
@@ -2945,7 +3111,7 @@ fn validate_session_metadata(
         !reason.trim().is_empty() && reason.chars().count() <= MAX_TERMINAL_REASON_CHARACTERS_V2
     });
     let valid = match lifecycle {
-        SessionLifecycle::Running => {
+        SessionLifecycle::Prepared | SessionLifecycle::Running => {
             completed_at.is_none() && cancelled_at.is_none() && cancel_reason.is_none()
         }
         SessionLifecycle::Completed => {
@@ -2984,6 +3150,7 @@ fn validate_terminal_graph_state_v2(
         .find(|item| item.attempt_id() == last.attempt_id())
         .ok_or_else(|| invalid("Procedure v2 terminal attempt metadata is absent"))?;
     let valid = match trace.lifecycle() {
+        SessionLifecycle::Prepared => false,
         SessionLifecycle::Running => true,
         SessionLifecycle::Completed => {
             snapshot
@@ -3128,6 +3295,19 @@ pub trait StoreGraphReadContractV2: Send + Sync {
     ) -> Result<GraphWorkspaceViewV2, StoreErrorV1>;
 }
 
+pub trait StoreTerminalDispositionContractV2: Send + Sync {
+    fn record_terminal_disposition_v2(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        disposition: TerminalDispositionV2,
+    ) -> Result<(), StoreErrorV1>;
+
+    fn read_terminal_dispositions_v2(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+    ) -> Result<Vec<TerminalDispositionV2>, StoreErrorV1>;
+}
+
 /// Exact current-task fence for a Procedure v2 start terminal transaction.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum GraphStartCurrentTaskV2 {
@@ -3234,6 +3414,26 @@ where
         identity: &DurableWorktreeIdentityV1,
     ) -> Result<GraphWorkspaceViewV2, StoreErrorV1> {
         (**self).read_graph_workspace_view_v2(identity)
+    }
+}
+
+impl<Store> StoreTerminalDispositionContractV2 for Arc<Store>
+where
+    Store: StoreTerminalDispositionContractV2 + ?Sized,
+{
+    fn record_terminal_disposition_v2(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        disposition: TerminalDispositionV2,
+    ) -> Result<(), StoreErrorV1> {
+        (**self).record_terminal_disposition_v2(identity, disposition)
+    }
+
+    fn read_terminal_dispositions_v2(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+    ) -> Result<Vec<TerminalDispositionV2>, StoreErrorV1> {
+        (**self).read_terminal_dispositions_v2(identity)
     }
 }
 
@@ -3660,7 +3860,7 @@ pub(crate) fn load_graph_session_connection_v2(
 
     match (workspace_revision, session) {
         (None, None) => {
-            let orphan_count: i64 = connection
+            let mut orphan_count: i64 = connection
                 .query_row(
                     "SELECT (SELECT COUNT(*) FROM v2_procedure_snapshots) + \
                      (SELECT COUNT(*) FROM v2_graph_nodes) + \
@@ -3680,6 +3880,16 @@ pub(crate) fn load_graph_session_connection_v2(
                     |row| row.get(0),
                 )
                 .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+            let schema_version: i64 = connection
+                .query_row("PRAGMA user_version", [], |row| row.get(0))
+                .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+            if schema_version >= 5 {
+                orphan_count += connection
+                    .query_row("SELECT COUNT(*) FROM v2_terminal_dispositions", [], |row| {
+                        row.get::<_, i64>(0)
+                    })
+                    .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+            }
             if orphan_count == 0 {
                 return Ok(None);
             }
@@ -3757,6 +3967,12 @@ fn load_present_graph_session_v2(
         persisted.cancel_reason,
     )
     .map_err(|_| corrupt(StoreRecordKindV1::Session))?;
+    let schema_version: i64 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+    if schema_version >= 5 {
+        load_terminal_dispositions_connection_v2(connection, &state)?;
+    }
 
     let expected_cursor = active_cursor_values(state.trace())?;
     let persisted_cursor = (
@@ -4026,6 +4242,169 @@ pub(crate) fn verify_v2_graph_state_connection_v2(
     load_graph_session_connection_v2(connection).map(|_| ())
 }
 
+pub(crate) fn load_terminal_dispositions_connection_v2(
+    connection: &Connection,
+    state: &GraphSessionStateV2,
+) -> Result<Vec<TerminalDispositionV2>, StoreErrorV1> {
+    type PersistedDispositionV2 = (
+        String,
+        i64,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        i64,
+    );
+    let mut statement = connection
+        .prepare(
+            "SELECT session_id, terminal_session_revision, kind, summary, stable_reference, \
+             reason, actor, recorded_at_ms FROM v2_terminal_dispositions \
+             WHERE session_id = ?1 ORDER BY terminal_session_revision",
+        )
+        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+    let rows = statement
+        .query_map([state.trace().session_id().as_str()], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+                row.get(7)?,
+            ))
+        })
+        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+    let persisted = rows
+        .collect::<Result<Vec<PersistedDispositionV2>, _>>()
+        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+    let mut dispositions = Vec::with_capacity(persisted.len());
+    for (session_id, revision, kind, summary, reference, reason, actor, recorded_at) in persisted {
+        let session_id =
+            SessionId::new(session_id).map_err(|_| corrupt(StoreRecordKindV1::Session))?;
+        let revision = Revision::new(persisted_u64(revision, StoreRecordKindV1::Session)?);
+        let actor = actor
+            .map(ActorAttributionV2::new)
+            .transpose()
+            .map_err(|_| corrupt(StoreRecordKindV1::Session))?;
+        let recorded_at = persisted_time_v2(recorded_at, StoreRecordKindV1::Session)?;
+        let disposition = match kind.as_str() {
+            "handed_off" => TerminalDispositionV2::handed_off(
+                session_id,
+                revision,
+                summary.ok_or_else(|| corrupt(StoreRecordKindV1::Session))?,
+                reference.ok_or_else(|| corrupt(StoreRecordKindV1::Session))?,
+                actor,
+                recorded_at,
+            ),
+            "not_required" => TerminalDispositionV2::not_required(
+                session_id,
+                revision,
+                reason.ok_or_else(|| corrupt(StoreRecordKindV1::Session))?,
+                actor,
+                recorded_at,
+            ),
+            _ => return Err(corrupt(StoreRecordKindV1::Session)),
+        }
+        .map_err(|_| corrupt(StoreRecordKindV1::Session))?;
+        dispositions.push(disposition);
+    }
+    validate_terminal_disposition_history_v2(state, &dispositions)?;
+    Ok(dispositions)
+}
+
+fn validate_terminal_disposition_history_v2(
+    state: &GraphSessionStateV2,
+    dispositions: &[TerminalDispositionV2],
+) -> Result<(), StoreErrorV1> {
+    if state.trace().lifecycle() == SessionLifecycle::Prepared && !dispositions.is_empty() {
+        return Err(corrupt(StoreRecordKindV1::Session));
+    }
+    let mut prior = Revision::ZERO;
+    for disposition in dispositions {
+        if disposition.session_id() != state.trace().session_id()
+            || disposition.terminal_session_revision() <= prior
+            || disposition.terminal_session_revision() > state.trace().revision()
+            || disposition.recorded_at() < state.created_at()
+            || (disposition.terminal_session_revision() == state.trace().revision()
+                && !matches!(
+                    state.trace().lifecycle(),
+                    SessionLifecycle::Completed | SessionLifecycle::Cancelled
+                ))
+        {
+            return Err(corrupt(StoreRecordKindV1::Session));
+        }
+        prior = disposition.terminal_session_revision();
+    }
+    Ok(())
+}
+
+pub(crate) fn record_terminal_disposition_transaction_v2(
+    transaction: &Transaction<'_>,
+    disposition: &TerminalDispositionV2,
+) -> Result<(), StoreErrorV1> {
+    let state = load_graph_session_connection_v2(transaction)?
+        .ok_or_else(|| invalid_store("no current Procedure v2 graph session exists"))?;
+    if disposition.session_id() != state.trace().session_id()
+        || disposition.terminal_session_revision() != state.trace().revision()
+    {
+        return Err(invalid_store("terminal disposition identity is stale"));
+    }
+    if !matches!(
+        state.trace().lifecycle(),
+        SessionLifecycle::Completed | SessionLifecycle::Cancelled
+    ) {
+        return Err(invalid_store(
+            "terminal disposition requires a terminal session",
+        ));
+    }
+    if disposition.recorded_at() < state.created_at() {
+        return Err(invalid_store("terminal disposition timestamp regressed"));
+    }
+    let (kind, summary, reference, reason) = match disposition.kind() {
+        TerminalDispositionKindV2::HandedOff => (
+            "handed_off",
+            disposition.summary(),
+            disposition.stable_reference(),
+            None,
+        ),
+        TerminalDispositionKindV2::NotRequired => {
+            ("not_required", None, None, disposition.reason())
+        }
+    };
+    let inserted = transaction
+        .execute(
+            "INSERT INTO v2_terminal_dispositions (session_id, terminal_session_revision, kind, \
+             summary, stable_reference, reason, actor, recorded_at_ms) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                disposition.session_id().as_str(),
+                sqlite_u64(
+                    disposition.terminal_session_revision().get(),
+                    "terminal disposition session revision",
+                )?,
+                kind,
+                summary,
+                reference,
+                reason,
+                disposition.actor().map(ActorAttributionV2::as_str),
+                sqlite_u64(
+                    disposition.recorded_at().get(),
+                    "terminal disposition timestamp",
+                )?,
+            ],
+        )
+        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+    if inserted != 1 {
+        return Err(StoreErrorV1::InternalInvariantViolationV1 {
+            invariant: StoreInvariantV1::ProcedureV2GraphState,
+        });
+    }
+    Ok(())
+}
+
 fn persisted_time_v2(value: i64, record: StoreRecordKindV1) -> Result<UnixMillis, StoreErrorV1> {
     persisted_u64(value, record).map(UnixMillis::new)
 }
@@ -4041,6 +4420,7 @@ fn optional_persisted_time_v2(
 
 fn parse_session_lifecycle_v2(value: &str) -> Result<SessionLifecycle, StoreErrorV1> {
     match value {
+        "prepared" => Ok(SessionLifecycle::Prepared),
         "running" => Ok(SessionLifecycle::Running),
         "completed" => Ok(SessionLifecycle::Completed),
         "cancelled" => Ok(SessionLifecycle::Cancelled),
@@ -4113,9 +4493,19 @@ fn validate_successor_v2(
     let goal_reactivation = previous.trace().lifecycle() == SessionLifecycle::Completed
         && next.trace().lifecycle() == SessionLifecycle::Running
         && matches!(goal_transition, WorkflowGoalTransitionV2::Rework { .. });
+    let prepared_begin = previous.trace().lifecycle() == SessionLifecycle::Prepared
+        && next.trace().lifecycle() == SessionLifecycle::Running
+        && previous.trace().attempts().is_empty()
+        && next.trace().attempts().len() == 1
+        && next.trace().attempts().first().is_some_and(|attempt| {
+            attempt.graph_node_id() == previous.snapshot().entry_graph_node_id()
+                && attempt.number() == AttemptNumberV2::FIRST
+                && attempt.trace() == TraceSequenceV2::FIRST
+        });
     if (previous.trace().lifecycle() != SessionLifecycle::Running
         && !manual_reactivation
-        && !goal_reactivation)
+        && !goal_reactivation
+        && !prepared_begin)
         || next.trace().attempts().len() < previous.trace().attempts().len()
         || next.trace().attempts().len() > previous.trace().attempts().len() + 1
     {
@@ -4525,6 +4915,7 @@ fn optional_sqlite_time(
 
 fn session_lifecycle_text(lifecycle: SessionLifecycle) -> &'static str {
     match lifecycle {
+        SessionLifecycle::Prepared => "prepared",
         SessionLifecycle::Running => "running",
         SessionLifecycle::Completed => "completed",
         SessionLifecycle::Cancelled => "cancelled",

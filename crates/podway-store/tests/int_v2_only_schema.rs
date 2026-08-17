@@ -48,7 +48,49 @@ fn populated_graph_state() -> GraphSessionStateV2 {
     crate::int_v2_goal_state::rich_v2_state_for_schema_migration()
 }
 
+fn restore_schema_v4_shape(connection: &Connection) {
+    let reference = Connection::open_in_memory().unwrap();
+    reference
+        .execute_batch(include_str!("../../../assets/specifications/sqlite-v1.sql"))
+        .unwrap();
+    reference
+        .execute_batch(include_str!("../../../assets/specifications/sqlite-v2.sql"))
+        .unwrap();
+    reference
+        .execute_batch(include_str!("../../../assets/specifications/sqlite-v3.sql"))
+        .unwrap();
+    let session_table_sql: String = reference
+        .query_row(
+            "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'v2_task_sessions'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    connection
+        .execute_batch(
+            "PRAGMA foreign_keys = ON;
+             PRAGMA foreign_keys = OFF;
+             DROP TABLE v2_terminal_dispositions;
+             PRAGMA legacy_alter_table = ON;
+             ALTER TABLE v2_task_sessions RENAME TO v2_task_sessions_v5;",
+        )
+        .unwrap();
+    connection.execute_batch(&session_table_sql).unwrap();
+    connection
+        .execute_batch(
+            "INSERT INTO v2_task_sessions SELECT * FROM v2_task_sessions_v5;
+             DROP TABLE v2_task_sessions_v5;
+             PRAGMA legacy_alter_table = OFF;",
+        )
+        .unwrap();
+    connection
+        .execute("DELETE FROM schema_migrations WHERE version = 5", [])
+        .unwrap();
+    connection.pragma_update(None, "user_version", 4).unwrap();
+}
+
 fn restore_schema_v3_shape(connection: &Connection) {
+    restore_schema_v4_shape(connection);
     let reference = Connection::open_in_memory().unwrap();
     reference
         .execute_batch(include_str!("../../../assets/specifications/sqlite-v1.sql"))
@@ -560,7 +602,59 @@ fn seed_schema_v3(temporary: &TempDir, with_legacy_state: bool) {
 }
 
 #[test]
-fn schema_v3_without_legacy_state_migrates_to_v2_only_schema_v4() {
+fn empty_schema_v4_inspects_read_only_then_migrates_to_v5() {
+    let temporary = TempDir::new().unwrap();
+    let path = temporary.path().join("state.sqlite3");
+    drop(
+        SqliteStoreV1::open(
+            &path,
+            &root(),
+            identity(),
+            SqliteStoreOptionsV1::new(8).unwrap(),
+            UnixMillis::new(1),
+        )
+        .unwrap(),
+    );
+    let connection = Connection::open(&path).unwrap();
+    restore_schema_v4_shape(&connection);
+    drop(connection);
+    let predecessor = fs::read(&path).unwrap();
+
+    let binding =
+        SqliteStoreV1::inspect_workspace_binding(&path, &SqliteStoreOptionsV1::new(8).unwrap())
+            .unwrap()
+            .unwrap();
+    assert_eq!(binding.identity(), &identity());
+    assert_eq!(fs::read(&path).unwrap(), predecessor);
+
+    let migrated = SqliteStoreV1::open(
+        &path,
+        &root(),
+        identity(),
+        SqliteStoreOptionsV1::new(8).unwrap(),
+        UnixMillis::new(2),
+    )
+    .unwrap();
+    assert_eq!(migrated.read_graph_session_v2(&identity()).unwrap(), None);
+    drop(migrated);
+
+    let connection = Connection::open(path).unwrap();
+    let version: i64 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    let disposition_table_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_schema \
+             WHERE type = 'table' AND name = 'v2_terminal_dispositions'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!((version, disposition_table_count), (5, 1));
+}
+
+#[test]
+fn schema_v3_without_legacy_state_migrates_to_prepared_lifecycle_schema_v5() {
     let temporary = TempDir::new().unwrap();
     seed_schema_v3(&temporary, false);
     let path = temporary.path().join("state.sqlite3");
@@ -588,7 +682,7 @@ fn schema_v3_without_legacy_state_migrates_to_v2_only_schema_v4() {
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 4);
+    assert_eq!(version, 5);
     let legacy_tables: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name IN \
@@ -602,7 +696,7 @@ fn schema_v3_without_legacy_state_migrates_to_v2_only_schema_v4() {
 }
 
 #[test]
-fn schema_v3_v2_state_and_terminal_receipt_survive_v4_migration_and_reopen() {
+fn schema_v3_v2_state_and_terminal_receipt_survive_v5_migration_and_reopen() {
     let temporary = TempDir::new().unwrap();
     let (expected_state, job_id, expected_receipt) = seed_populated_v2_schema_v3(&temporary);
     let path = temporary.path().join("state.sqlite3");
@@ -652,7 +746,7 @@ fn schema_v3_v2_state_and_terminal_receipt_survive_v4_migration_and_reopen() {
         .unwrap();
     let migration: i64 = connection
         .query_row(
-            "SELECT COUNT(*) FROM schema_migrations WHERE version = 4",
+            "SELECT COUNT(*) FROM schema_migrations WHERE version IN (4, 5)",
             [],
             |row| row.get(0),
         )
@@ -699,7 +793,7 @@ fn schema_v3_v2_state_and_terminal_receipt_survive_v4_migration_and_reopen() {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
-    assert_eq!((version, migration, legacy_tables), (4, 1, 0));
+    assert_eq!((version, migration, legacy_tables), (5, 2, 0));
     assert_eq!(receipts.0, receipts.1);
 }
 

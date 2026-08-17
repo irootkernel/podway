@@ -393,6 +393,7 @@ impl From<Sha256Digest> for String {
 /// Persistent session lifecycle states.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SessionLifecycle {
+    Prepared,
     Running,
     Completed,
     Cancelled,

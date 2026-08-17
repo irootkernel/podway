@@ -726,6 +726,7 @@ impl From<DomainCommandKind> for PersistedDomainCommandKindV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PersistedSessionLifecycleV1 {
+    Prepared,
     Running,
     Completed,
     Cancelled,
@@ -734,6 +735,7 @@ pub enum PersistedSessionLifecycleV1 {
 impl From<SessionLifecycle> for PersistedSessionLifecycleV1 {
     fn from(lifecycle: SessionLifecycle) -> Self {
         match lifecycle {
+            SessionLifecycle::Prepared => Self::Prepared,
             SessionLifecycle::Running => Self::Running,
             SessionLifecycle::Completed => Self::Completed,
             SessionLifecycle::Cancelled => Self::Cancelled,
@@ -1429,7 +1431,8 @@ impl TryFrom<&crate::GraphMutationErrorV2> for PersistedGraphMutationFailureV2 {
                 target_graph_node_id: target_graph_node_id.clone(),
             },
             crate::GraphMutationErrorV2::ReactivationFlagRequired => Self::ReactivationFlagRequired,
-            crate::GraphMutationErrorV2::SessionNotRunning => Self::SessionNotRunning,
+            crate::GraphMutationErrorV2::SessionNotPrepared
+            | crate::GraphMutationErrorV2::SessionNotRunning => Self::SessionNotRunning,
             crate::GraphMutationErrorV2::SessionCancelled => Self::SessionCancelled,
             crate::GraphMutationErrorV2::SessionRevisionConflict { expected, actual } => {
                 Self::SessionRevisionConflict {

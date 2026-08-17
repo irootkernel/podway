@@ -33,8 +33,10 @@ use crate::state_rows::load_workspace_state;
 use crate::v2_state::{
     GraphSessionStateV2, GraphStartCurrentTaskV2, GraphWorkspaceViewV2,
     StoreGraphMutationContractV2, StoreGraphReadContractV2, StoreGraphStateContractV2,
-    clear_graph_session_transaction_v2, create_graph_session_transaction_v2,
-    load_graph_session_connection_v2, replace_graph_session_transaction_v2,
+    StoreTerminalDispositionContractV2, clear_graph_session_transaction_v2,
+    create_graph_session_transaction_v2, load_graph_session_connection_v2,
+    load_terminal_dispositions_connection_v2, record_terminal_disposition_transaction_v2,
+    replace_graph_session_transaction_v2,
 };
 use crate::{
     AdmitOutcomeV1, AdmitRequestV1, CancelOutcomeV1, CanonicalRequestDigestV1, ClaimTokenV1,
@@ -509,6 +511,34 @@ impl StoreGraphReadContractV2 for SqliteStoreV1 {
         let view = read_graph_workspace_view_connection_v2(&transaction, &self.identity)?;
         transaction.commit().map_err(storage)?;
         Ok(view)
+    }
+}
+
+impl StoreTerminalDispositionContractV2 for SqliteStoreV1 {
+    fn record_terminal_disposition_v2(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        disposition: podway_core::TerminalDispositionV2,
+    ) -> Result<(), StoreErrorV1> {
+        self.require_identity(identity)?;
+        let mut connection = self.lock_connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage)?;
+        record_terminal_disposition_transaction_v2(&transaction, &disposition)?;
+        self.trigger_failpoint(StoreFailpointV1::V2GraphStateBeforeCommit)?;
+        transaction.commit().map_err(storage)
+    }
+
+    fn read_terminal_dispositions_v2(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+    ) -> Result<Vec<podway_core::TerminalDispositionV2>, StoreErrorV1> {
+        self.require_identity(identity)?;
+        let connection = self.lock_connection()?;
+        let state = load_graph_session_connection_v2(&connection)?
+            .ok_or_else(|| invariant(StoreInvariantV1::ProcedureV2GraphState))?;
+        load_terminal_dispositions_connection_v2(&connection, &state)
     }
 }
 
@@ -1826,6 +1856,9 @@ fn validate_procedure_v2_action_admission_v1(
             ));
         }
         match current.trace().lifecycle() {
+            podway_core::SessionLifecycle::Prepared => {
+                return Err(reject(PersistedGraphMutationFailureV2::SessionNotRunning));
+            }
             podway_core::SessionLifecycle::Running => match preconditions.expected_attempt_id() {
                 Some(expected_attempt) if active_attempt != Some(expected_attempt) => {
                     return Err(reject(PersistedGraphMutationFailureV2::AttemptNotCurrent {

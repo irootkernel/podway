@@ -16,6 +16,37 @@ pub fn downgrade_to_schema_v3_with_legacy_snapshot(
     reference
         .execute_batch(crate::schema::sqlite_v1_ddl())
         .map_err(|error| error.to_string())?;
+    reference
+        .execute_batch(crate::schema::sqlite_v2_ddl())
+        .map_err(|error| error.to_string())?;
+    reference
+        .execute_batch(crate::schema::sqlite_v3_ddl())
+        .map_err(|error| error.to_string())?;
+    let session_table_sql: String = reference
+        .query_row(
+            "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'v2_task_sessions'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute_batch(
+            "PRAGMA foreign_keys = OFF;
+             DROP TABLE v2_terminal_dispositions;
+             PRAGMA legacy_alter_table = ON;
+             ALTER TABLE v2_task_sessions RENAME TO v2_task_sessions_v5;",
+        )
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute_batch(&session_table_sql)
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute_batch(
+            "INSERT INTO v2_task_sessions SELECT * FROM v2_task_sessions_v5;
+             DROP TABLE v2_task_sessions_v5;
+             PRAGMA legacy_alter_table = OFF;",
+        )
+        .map_err(|error| error.to_string())?;
     let mut statement = reference
         .prepare(
             "SELECT sql FROM sqlite_schema WHERE sql IS NOT NULL AND (\
@@ -37,7 +68,7 @@ pub fn downgrade_to_schema_v3_with_legacy_snapshot(
             .map_err(|error| error.to_string())?;
     }
     connection
-        .execute("DELETE FROM schema_migrations WHERE version = 4", [])
+        .execute("DELETE FROM schema_migrations WHERE version IN (4, 5)", [])
         .map_err(|error| error.to_string())?;
     connection
         .pragma_update(None, "user_version", 3)

@@ -11,8 +11,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
-    AttemptId, AttemptLifecycle, DomainError, GraphNodeId, Revision, SessionId, SessionLifecycle,
+    ActorAttributionV2, AttemptId, AttemptLifecycle, DomainError, GraphNodeId, Revision, SessionId,
+    SessionLifecycle, UnixMillis,
 };
+
+pub const MAX_TERMINAL_DISPOSITION_CHARACTERS_V2: usize = 4_000;
 
 const fn invalid(reason: &'static str) -> DomainError {
     DomainError::InvalidState { reason }
@@ -236,6 +239,141 @@ pub enum AdvanceTerminalV2 {
     Skipped,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TerminalDispositionKindV2 {
+    HandedOff,
+    NotRequired,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TerminalDispositionV2 {
+    session_id: SessionId,
+    terminal_session_revision: Revision,
+    kind: TerminalDispositionKindV2,
+    summary: Option<String>,
+    stable_reference: Option<String>,
+    reason: Option<String>,
+    actor: Option<ActorAttributionV2>,
+    recorded_at: UnixMillis,
+}
+
+impl TerminalDispositionV2 {
+    pub fn handed_off(
+        session_id: SessionId,
+        terminal_session_revision: Revision,
+        summary: impl Into<String>,
+        stable_reference: impl Into<String>,
+        actor: Option<ActorAttributionV2>,
+        recorded_at: UnixMillis,
+    ) -> Result<Self, DomainError> {
+        let summary = bounded_disposition_text(summary.into())?;
+        let stable_reference = bounded_disposition_text(stable_reference.into())?;
+        Self::new(
+            session_id,
+            terminal_session_revision,
+            TerminalDispositionKindV2::HandedOff,
+            Some(summary),
+            Some(stable_reference),
+            None,
+            actor,
+            recorded_at,
+        )
+    }
+
+    pub fn not_required(
+        session_id: SessionId,
+        terminal_session_revision: Revision,
+        reason: impl Into<String>,
+        actor: Option<ActorAttributionV2>,
+        recorded_at: UnixMillis,
+    ) -> Result<Self, DomainError> {
+        let reason = bounded_disposition_text(reason.into())?;
+        Self::new(
+            session_id,
+            terminal_session_revision,
+            TerminalDispositionKindV2::NotRequired,
+            None,
+            None,
+            Some(reason),
+            actor,
+            recorded_at,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        session_id: SessionId,
+        terminal_session_revision: Revision,
+        kind: TerminalDispositionKindV2,
+        summary: Option<String>,
+        stable_reference: Option<String>,
+        reason: Option<String>,
+        actor: Option<ActorAttributionV2>,
+        recorded_at: UnixMillis,
+    ) -> Result<Self, DomainError> {
+        if terminal_session_revision == Revision::ZERO {
+            return Err(invalid("terminal disposition revision must be nonzero"));
+        }
+        Ok(Self {
+            session_id,
+            terminal_session_revision,
+            kind,
+            summary,
+            stable_reference,
+            reason,
+            actor,
+            recorded_at,
+        })
+    }
+
+    pub fn session_id(&self) -> &SessionId {
+        &self.session_id
+    }
+
+    pub const fn terminal_session_revision(&self) -> Revision {
+        self.terminal_session_revision
+    }
+
+    pub const fn kind(&self) -> TerminalDispositionKindV2 {
+        self.kind
+    }
+
+    pub fn summary(&self) -> Option<&str> {
+        self.summary.as_deref()
+    }
+
+    pub fn stable_reference(&self) -> Option<&str> {
+        self.stable_reference.as_deref()
+    }
+
+    pub fn reason(&self) -> Option<&str> {
+        self.reason.as_deref()
+    }
+
+    pub fn actor(&self) -> Option<&ActorAttributionV2> {
+        self.actor.as_ref()
+    }
+
+    pub const fn recorded_at(&self) -> UnixMillis {
+        self.recorded_at
+    }
+}
+
+fn bounded_disposition_text(value: String) -> Result<String, DomainError> {
+    if value.trim().is_empty() {
+        return Err(invalid("terminal disposition text must be non-blank"));
+    }
+    let actual = value.chars().count();
+    if actual > MAX_TERMINAL_DISPOSITION_CHARACTERS_V2 {
+        return Err(DomainError::ValueTooLong {
+            field: "terminal disposition text",
+            maximum: MAX_TERMINAL_DISPOSITION_CHARACTERS_V2,
+            actual,
+        });
+    }
+    Ok(value)
+}
+
 /// The append-only execution trace of one v2 session and its authoritative cursor.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SessionTraceV2 {
@@ -262,7 +400,17 @@ impl SessionTraceV2 {
             .filter(|attempt| attempt.is_active())
             .count();
         match lifecycle {
+            SessionLifecycle::Prepared => {
+                if revision != Revision::ZERO || !attempts.is_empty() {
+                    return Err(invalid(
+                        "a prepared session requires revision zero and no attempts",
+                    ));
+                }
+            }
             SessionLifecycle::Running => {
+                if revision == Revision::ZERO {
+                    return Err(invalid("a running session requires a nonzero revision"));
+                }
                 if active_count != 1 {
                     return Err(invalid(
                         "a running session requires exactly one active attempt",
@@ -273,6 +421,9 @@ impl SessionTraceV2 {
                 }
             }
             SessionLifecycle::Completed | SessionLifecycle::Cancelled => {
+                if revision == Revision::ZERO {
+                    return Err(invalid("a terminal session requires a nonzero revision"));
+                }
                 if active_count != 0 {
                     return Err(invalid("a terminal session must have no active attempt"));
                 }
@@ -289,7 +440,7 @@ impl SessionTraceV2 {
                     SessionLifecycle::Cancelled => {
                         last.lifecycle == AttemptLifecycle::Abandoned && !last.validity.is_valid()
                     }
-                    SessionLifecycle::Running => unreachable!(),
+                    SessionLifecycle::Prepared | SessionLifecycle::Running => unreachable!(),
                 };
                 if !terminal_shape_valid {
                     return Err(invalid("the terminal session attempt is inconsistent"));
@@ -302,6 +453,42 @@ impl SessionTraceV2 {
             revision,
             attempts,
         })
+    }
+
+    pub fn prepared(session_id: SessionId) -> Self {
+        Self {
+            session_id,
+            lifecycle: SessionLifecycle::Prepared,
+            revision: Revision::ZERO,
+            attempts: Vec::new(),
+        }
+    }
+
+    pub fn begin(
+        &mut self,
+        entry_node: GraphNodeId,
+        attempt_id: AttemptId,
+        goal_revision: Option<GoalRevisionNumberV2>,
+    ) -> Result<(), DomainError> {
+        if self.lifecycle != SessionLifecycle::Prepared
+            || self.revision != Revision::ZERO
+            || !self.attempts.is_empty()
+        {
+            return Err(invalid("only a prepared session may begin"));
+        }
+        let attempt = SessionAttemptV2::new(
+            attempt_id,
+            entry_node,
+            AttemptNumberV2::FIRST,
+            TraceSequenceV2::FIRST,
+            AttemptLifecycle::Active,
+            AttemptValidityV2::Valid,
+            goal_revision,
+        )?;
+        self.attempts.push(attempt);
+        self.lifecycle = SessionLifecycle::Running;
+        self.revision = Revision::new(1);
+        Ok(())
     }
 
     /// Activates the first attempt of the entry graph node in a fresh running session.
@@ -323,7 +510,7 @@ impl SessionTraceV2 {
         Ok(Self {
             session_id,
             lifecycle: SessionLifecycle::Running,
-            revision: Revision::ZERO,
+            revision: Revision::new(1),
             attempts: vec![attempt],
         })
     }
@@ -486,6 +673,9 @@ impl SessionTraceV2 {
         goal_revision: Option<GoalRevisionNumberV2>,
     ) -> Result<(), DomainError> {
         match self.lifecycle {
+            SessionLifecycle::Prepared => {
+                Err(invalid("a prepared session cannot be manually reworked"))
+            }
             SessionLifecycle::Running => {
                 let expected_active = expected_active
                     .ok_or_else(|| invalid("running manual rework requires the active attempt"))?;
@@ -860,7 +1050,7 @@ mod tests {
         let completed = SessionTraceV2::from_parts(
             session(),
             SessionLifecycle::Completed,
-            Revision::ZERO,
+            Revision::new(1),
             vec![terminal(
                 1,
                 "terminal",
@@ -877,7 +1067,7 @@ mod tests {
         let cancelled = SessionTraceV2::from_parts(
             session(),
             SessionLifecycle::Cancelled,
-            Revision::ZERO,
+            Revision::new(1),
             vec![terminal(
                 1,
                 "entry",
@@ -890,6 +1080,111 @@ mod tests {
         )
         .unwrap();
         assert!(cancelled.active_cursor().is_none());
+    }
+
+    #[test]
+    fn prepared_begin_creates_the_first_running_cursor_once() {
+        let mut trace = SessionTraceV2::prepared(session());
+        assert_eq!(trace.lifecycle(), SessionLifecycle::Prepared);
+        assert_eq!(trace.revision(), Revision::ZERO);
+        assert!(trace.attempts().is_empty());
+        assert!(trace.active_cursor().is_none());
+
+        trace
+            .begin(
+                node("entry"),
+                attempt_id(1),
+                Some(GoalRevisionNumberV2::FIRST),
+            )
+            .unwrap();
+        assert_eq!(trace.lifecycle(), SessionLifecycle::Running);
+        assert_eq!(trace.revision(), Revision::new(1));
+        let active = trace.active_attempt().unwrap();
+        assert_eq!(active.attempt_id(), &attempt_id(1));
+        assert_eq!(active.number(), AttemptNumberV2::FIRST);
+        assert_eq!(active.trace(), TraceSequenceV2::FIRST);
+        assert_eq!(active.goal_revision(), Some(GoalRevisionNumberV2::FIRST));
+
+        let before = trace.clone();
+        assert_eq!(
+            trace.begin(node("entry"), attempt_id(2), None).unwrap_err(),
+            invalid("only a prepared session may begin")
+        );
+        assert_eq!(trace, before);
+    }
+
+    #[test]
+    fn prepared_reconstruction_and_terminal_disposition_bounds_fail_closed() {
+        assert_eq!(
+            SessionTraceV2::from_parts(
+                session(),
+                SessionLifecycle::Prepared,
+                Revision::new(1),
+                Vec::new(),
+            ),
+            Err(invalid(
+                "a prepared session requires revision zero and no attempts"
+            ))
+        );
+        assert_eq!(
+            SessionTraceV2::from_parts(
+                session(),
+                SessionLifecycle::Prepared,
+                Revision::ZERO,
+                vec![active(1, "entry", 1, 1, None)],
+            ),
+            Err(invalid(
+                "a prepared session requires revision zero and no attempts"
+            ))
+        );
+
+        let handed_off = TerminalDispositionV2::handed_off(
+            session(),
+            Revision::new(2),
+            "Delivered",
+            "commit:abc",
+            Some(ActorAttributionV2::new("agent").unwrap()),
+            UnixMillis::new(10),
+        )
+        .unwrap();
+        assert_eq!(handed_off.kind(), TerminalDispositionKindV2::HandedOff);
+        assert_eq!(handed_off.summary(), Some("Delivered"));
+        assert_eq!(handed_off.stable_reference(), Some("commit:abc"));
+        assert_eq!(handed_off.reason(), None);
+
+        assert_eq!(
+            TerminalDispositionV2::not_required(
+                session(),
+                Revision::ZERO,
+                "No handoff",
+                None,
+                UnixMillis::new(10),
+            ),
+            Err(invalid("terminal disposition revision must be nonzero"))
+        );
+        assert!(matches!(
+            TerminalDispositionV2::not_required(
+                session(),
+                Revision::new(1),
+                "x".repeat(MAX_TERMINAL_DISPOSITION_CHARACTERS_V2 + 1),
+                None,
+                UnixMillis::new(10),
+            ),
+            Err(DomainError::ValueTooLong {
+                maximum: MAX_TERMINAL_DISPOSITION_CHARACTERS_V2,
+                ..
+            })
+        ));
+        assert_eq!(
+            TerminalDispositionV2::not_required(
+                session(),
+                Revision::new(1),
+                "  ",
+                None,
+                UnixMillis::new(10),
+            ),
+            Err(invalid("terminal disposition text must be non-blank"))
+        );
     }
 
     #[test]
@@ -913,7 +1208,7 @@ mod tests {
             SessionTraceV2::from_parts(
                 session(),
                 running,
-                Revision::ZERO,
+                Revision::new(1),
                 vec![
                     completed(1, "a", 1, 1, AttemptValidityV2::Valid),
                     active(2, "b", 1, 3, None),
@@ -928,7 +1223,7 @@ mod tests {
             SessionTraceV2::from_parts(
                 session(),
                 running,
-                Revision::ZERO,
+                Revision::new(1),
                 vec![
                     completed(1, "a", 2, 1, AttemptValidityV2::Stale),
                     active(2, "a", 1, 2, None),
@@ -941,7 +1236,7 @@ mod tests {
             SessionTraceV2::from_parts(
                 session(),
                 running,
-                Revision::ZERO,
+                Revision::new(1),
                 vec![
                     completed(1, "a", 1, 1, AttemptValidityV2::Stale),
                     active(2, "a", 3, 2, None),
@@ -956,7 +1251,7 @@ mod tests {
             SessionTraceV2::from_parts(
                 session(),
                 running,
-                Revision::ZERO,
+                Revision::new(1),
                 vec![
                     completed(1, "a", 1, 1, AttemptValidityV2::Stale),
                     active(1, "b", 1, 2, None),
@@ -969,7 +1264,7 @@ mod tests {
             SessionTraceV2::from_parts(
                 session(),
                 running,
-                Revision::ZERO,
+                Revision::new(1),
                 vec![
                     completed(1, "a", 1, 1, AttemptValidityV2::Valid),
                     active(2, "a", 2, 2, None),
@@ -997,7 +1292,7 @@ mod tests {
             SessionTraceV2::from_parts(
                 session(),
                 running,
-                Revision::ZERO,
+                Revision::new(1),
                 vec![completed(1, "a", 1)]
             ),
             Err(invalid(
@@ -1008,7 +1303,7 @@ mod tests {
             SessionTraceV2::from_parts(
                 session(),
                 running,
-                Revision::ZERO,
+                Revision::new(1),
                 vec![active(1, "a", 1, 1, None), active(2, "b", 1, 2, None)],
             ),
             Err(invalid(
@@ -1019,7 +1314,7 @@ mod tests {
             SessionTraceV2::from_parts(
                 session(),
                 running,
-                Revision::ZERO,
+                Revision::new(1),
                 vec![active(1, "a", 1, 1, None), completed(2, "b", 2)],
             ),
             Err(invalid("the active attempt must be the last trace member"))
@@ -1028,7 +1323,7 @@ mod tests {
             SessionTraceV2::from_parts(
                 session(),
                 SessionLifecycle::Completed,
-                Revision::ZERO,
+                Revision::new(1),
                 vec![active(1, "a", 1, 1, None)],
             ),
             Err(invalid("a terminal session must have no active attempt"))
@@ -1058,7 +1353,7 @@ mod tests {
         );
         assert_eq!(trace.attempts()[0].lifecycle(), AttemptLifecycle::Completed);
         assert_eq!(identity(&trace.attempts()[0]), entry_identity);
-        assert_eq!(trace.revision(), Revision::new(1));
+        assert_eq!(trace.revision(), Revision::new(2));
     }
 
     #[test]
@@ -1098,7 +1393,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(trace.revision(), Revision::new(2));
+        assert_eq!(trace.revision(), Revision::new(3));
         assert_eq!(trace.attempts()[0].validity(), AttemptValidityV2::Valid);
         assert_eq!(trace.attempts()[1].lifecycle(), AttemptLifecycle::Abandoned);
         assert_eq!(trace.attempts()[1].validity(), AttemptValidityV2::Stale);
@@ -1209,7 +1504,7 @@ mod tests {
             completed.active_attempt().unwrap().attempt_id(),
             &attempt_id(3)
         );
-        assert_eq!(completed.revision(), Revision::new(3));
+        assert_eq!(completed.revision(), Revision::new(4));
     }
 
     #[test]
@@ -1761,6 +2056,11 @@ mod tests {
     fn assert_invariants(trace: &SessionTraceV2) {
         let active_count = trace.attempts().iter().filter(|a| a.is_active()).count();
         match trace.lifecycle() {
+            SessionLifecycle::Prepared => {
+                assert_eq!(trace.revision(), Revision::ZERO);
+                assert!(trace.attempts().is_empty());
+                assert!(trace.active_cursor().is_none());
+            }
             SessionLifecycle::Running => {
                 assert_eq!(
                     active_count, 1,
