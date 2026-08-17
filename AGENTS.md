@@ -208,8 +208,8 @@ Apply these distinctions as well:
 
 ## Development skill references
 
-- Use `$root-kernel:task-handler` for one named roadmap task.
-- Use `$root-kernel:dev-setup` to diagnose or configure development tooling.
+- Use `$aquarium:task-handler` for one named roadmap task.
+- Use `$aquarium:dev-setup` to diagnose or configure development tooling.
 - Use `$use-mulgae` for an authorized Mulgae review, run inspection, finding
   follow-up, configuration diagnosis, cleanup plan, or recovery.
 - Use `$use-gaori` when a selected long or noisy check is routed through Gaori
@@ -262,7 +262,7 @@ Apply these distinctions as well:
 
 ### Mulgae Code Review Overrides
 
-- Outside the `$root-kernel:task-handler` workflow, use Mulgae only when master
+- Outside the `$aquarium:task-handler` workflow, use Mulgae only when master
   explicitly requests a review. An explicit task-handler invocation authorizes
   its task-scoped Mulgae review phase.
 - Configure the `logic`, `security`, `maintainability`, `product`,
