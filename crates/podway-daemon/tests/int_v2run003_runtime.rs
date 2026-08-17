@@ -749,6 +749,147 @@ fn v2run003_detached_job_wait_reads_terminal_v2_job_from_v2_only_store() {
 }
 
 #[test]
+fn v2lif007_workspace_and_lifecycle_jobs_remain_readable_after_cold_reopen() {
+    let fixture = support_phase4_workspace::git_worktrees();
+    make_runtime_private(fixture.main());
+    fs::write(
+        fixture.main().join("v2lif007-readback.yaml"),
+        ACTION_READBACK_PROCEDURE,
+    )
+    .unwrap();
+    let ParsedProcedure::V2(parsed) = parse_procedure_document(
+        ACTION_READBACK_PROCEDURE.as_bytes(),
+        ProcedureDocumentFormat::Yaml,
+    )
+    .unwrap() else {
+        unreachable!()
+    };
+    let procedure_digest = validate_procedure_v2(parsed).unwrap().digest().clone();
+    let workspace_selector = selector(fixture.main());
+    let runtime_manager = Arc::new(manager(fixture.temporary_path()));
+    let production = dispatcher(Arc::clone(&runtime_manager), "v2lif007-readback");
+
+    let initialize = request(
+        29_051,
+        "workspace.init",
+        &workspace_selector,
+        Map::new(),
+        "v2lif007-initialize",
+        PreconditionsV1::default(),
+    );
+    let ResponseEnvelopeV2::OutputV2(initialized) = dispatch(&production, &initialize) else {
+        panic!("workspace.init must succeed");
+    };
+    let initialize_job_id = initialized.job().unwrap().id().clone();
+
+    let start = request(
+        29_052,
+        "session.start",
+        &workspace_selector,
+        json!({
+            "procedure": "v2lif007-readback.yaml",
+            "expected_procedure_digest": procedure_digest,
+            "task_title": "Read every durable lifecycle job"
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+        "v2lif007-start",
+        PreconditionsV1::default(),
+    );
+    let ResponseEnvelopeV2::OutputV2(started) = dispatch(&production, &start) else {
+        panic!("session.start must prepare the session");
+    };
+    let start_job_id = started.job().unwrap().id().clone();
+    let session_id = started.result()["session_id"].as_str().unwrap();
+
+    let begin = request(
+        29_053,
+        "session.begin",
+        &workspace_selector,
+        Map::new(),
+        "v2lif007-begin",
+        PreconditionsV1::new(
+            Some(SessionId::new(session_id).unwrap()),
+            Some(Revision::ZERO),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let ResponseEnvelopeV2::OutputV2(began) = dispatch(&production, &begin) else {
+        panic!("session.begin must start the prepared session");
+    };
+    let begin_job_id = began.job().unwrap().id().clone();
+
+    let list = request(
+        29_054,
+        "job.list",
+        &workspace_selector,
+        Map::new(),
+        "unused-v2lif007-list",
+        PreconditionsV1::default(),
+    );
+    let listed = v2_result(dispatch(&production, &list), "job.list");
+    let jobs = listed["jobs"].as_array().unwrap();
+    assert_eq!(jobs.len(), 3);
+    assert_eq!(
+        jobs.iter()
+            .map(|job| job["command"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["workspace.init", "session.start", "session.begin"]
+    );
+    assert!(
+        jobs.iter()
+            .all(|job| job["terminal_response"] != Value::Null)
+    );
+
+    for (request_number, job_id, command) in [
+        (29_055, &initialize_job_id, "workspace.init"),
+        (29_056, &start_job_id, "session.start"),
+        (29_057, &begin_job_id, "session.begin"),
+    ] {
+        let status = request(
+            request_number,
+            "job.status",
+            &workspace_selector,
+            json!({"job_id": job_id}).as_object().unwrap().clone(),
+            "unused-v2lif007-status",
+            PreconditionsV1::default(),
+        );
+        let status = v2_result(dispatch(&production, &status), "job.status");
+        assert_eq!(status["schema"], "podway.job-result/v4");
+        assert_eq!(status["job"]["command"], command);
+    }
+
+    drop(production);
+    drop(runtime_manager);
+    let restarted_manager = Arc::new(manager(fixture.temporary_path()));
+    let restarted = dispatcher(Arc::clone(&restarted_manager), "v2lif007-restarted");
+    let reopened = v2_result(dispatch_after_cold_reopen(&restarted, &list), "job.list");
+    assert_eq!(reopened, listed);
+
+    let init_status = request(
+        29_058,
+        "job.status",
+        &workspace_selector,
+        json!({"job_id": initialize_job_id})
+            .as_object()
+            .unwrap()
+            .clone(),
+        "unused-v2lif007-reopened-status",
+        PreconditionsV1::default(),
+    );
+    let reopened_init = v2_result(
+        dispatch_after_cold_reopen(&restarted, &init_status),
+        "job.status",
+    );
+    assert_eq!(reopened_init["job"]["command"], "workspace.init");
+}
+
+#[test]
 fn v2rel003_detached_start_lookup_and_terminal_replay_use_common_automation_pipeline() {
     let fixture = support_phase4_workspace::git_worktrees();
     make_runtime_private(fixture.main());
