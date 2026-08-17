@@ -737,7 +737,7 @@ fn v2run003_detached_job_wait_reads_terminal_v2_job_from_v2_only_store() {
     };
     assert_eq!(waited.command().as_str(), "job.wait");
     assert_eq!(waited.job().unwrap().id(), &job_id);
-    assert_eq!(waited.result()["schema"], "podway.job-result/v3");
+    assert_eq!(waited.result()["schema"], "podway.job-result/v4");
     assert_eq!(
         serde_json::to_value(waited.job().unwrap()).unwrap()["state"],
         "succeeded"

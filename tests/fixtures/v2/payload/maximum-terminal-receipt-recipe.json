@@ -6,7 +6,7 @@
   "production_proof_required": false,
   "frame_bytes": 1048576,
   "outer_schema": "assets/schemas/output-v3.schema.json",
-  "terminal_result_schema": "assets/schemas/job-result-v3.schema.json",
+  "terminal_result_schema": "assets/schemas/job-result-v4.schema.json",
   "terminal_success_ref": "urn:podway:schema:output:v2#/$defs/terminalMutationOutput",
   "terminal_error_ref": "urn:podway:schema:error:v1",
   "terminal_error_details_ref": "urn:podway:schema:v2-runtime-error-details:v1",
@@ -84,7 +84,7 @@
     "serialize each candidate as a complete admitted podway.output/v3 mutation success",
     "serialize each error candidate as a complete admitted podway.error/v1 mutation failure",
     "select the success and error candidates with the largest encoded byte lengths",
-    "wrap each selected terminal mutation response exactly once in podway.job-result/v3",
+    "wrap each selected terminal mutation response exactly once in podway.job-result/v4",
     "serialize the job result through a complete job.status and job.wait podway.output/v3 envelope",
     "use an escape-heavy 4096-character workspace root in both the terminal error and outer envelope, maximal job, admission, and warning fields, and the production job-read session null shape"
   ],

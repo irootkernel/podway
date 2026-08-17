@@ -1,19 +1,19 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:podway:schema:job-result:v3",
-  "title": "Podway Job Status and Wait Result v3",
+  "$id": "urn:podway:schema:job-result:v4",
+  "title": "Podway Job Status and Wait Result v4",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "job"],
   "properties": {
-    "schema": { "const": "podway.job-result/v3" },
+    "schema": { "const": "podway.job-result/v4" },
     "job": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/terminalResponse" }] }
   },
   "$defs": {
     "terminalSuccessResponse": {
       "allOf": [
         { "$ref": "urn:podway:schema:output:v3#/$defs/terminalMutationOutput" },
-        { "properties": { "command": { "enum": ["workspace.init", "workspace.reset_all", "session.start", "session.start_replace", "session.complete", "session.skip", "session.retry", "session.block", "session.unblock", "session.cancel", "session.reset", "session.decide", "session.rework", "goal.define", "goal.revise", "goal.assess_criterion", "item.check", "item.uncheck", "item.set", "item.add", "item.remove", "item.attach", "item.clear", "item.record_many"] } } }
+        { "properties": { "command": { "enum": ["workspace.init", "workspace.reset_all", "session.start", "session.start_replace", "session.begin", "session.terminal_disposition", "session.complete", "session.skip", "session.retry", "session.block", "session.unblock", "session.cancel", "session.reset", "session.decide", "session.rework", "goal.define", "goal.revise", "goal.assess_criterion", "item.check", "item.uncheck", "item.set", "item.add", "item.remove", "item.attach", "item.clear", "item.record_many"] } } }
       ]
     },
     "terminalErrorResponse": {
@@ -26,7 +26,7 @@
             "enum": ["schema", "request_id", "command", "generated_at", "code", "message", "retryable", "exit_code", "workspace", "details"]
           },
           "properties": {
-            "command": { "enum": ["workspace.init", "workspace.reset_all", "session.start", "session.start_replace", "session.complete", "session.skip", "session.retry", "session.block", "session.unblock", "session.cancel", "session.reset", "session.decide", "session.rework", "goal.define", "goal.revise", "goal.assess_criterion", "item.check", "item.uncheck", "item.set", "item.add", "item.remove", "item.attach", "item.clear", "item.record_many"] },
+            "command": { "enum": ["workspace.init", "workspace.reset_all", "session.start", "session.start_replace", "session.begin", "session.terminal_disposition", "session.complete", "session.skip", "session.retry", "session.block", "session.unblock", "session.cancel", "session.reset", "session.decide", "session.rework", "goal.define", "goal.revise", "goal.assess_criterion", "item.check", "item.uncheck", "item.set", "item.add", "item.remove", "item.attach", "item.clear", "item.record_many"] },
             "message": { "type": "string", "minLength": 1, "maxLength": 512 },
             "workspace": {
               "type": "object",

@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:podway:schema:job-lookup-result:v3",
-  "title": "Podway Job Lookup Result v3",
+  "$id": "urn:podway:schema:job-lookup-result:v4",
+  "title": "Podway Job Lookup Result v4",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "found"],
   "properties": {
-    "schema": { "const": "podway.job-lookup-result/v3" },
+    "schema": { "const": "podway.job-lookup-result/v4" },
     "found": { "type": "boolean" },
     "job": {
           "type": "object", "additionalProperties": false,
@@ -17,9 +17,9 @@
             "submitted_at": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/timestamp" },
             "claimed_at": { "oneOf": [{ "type": "null" }, { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/timestamp" }] },
             "finished_at": { "oneOf": [{ "type": "null" }, { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/timestamp" }] },
-            "command": { "enum": ["workspace.init", "workspace.reset_all", "session.start", "session.start_replace", "session.complete", "session.skip", "session.retry", "session.block", "session.unblock", "session.cancel", "session.reset", "session.decide", "session.rework", "goal.define", "goal.revise", "goal.assess_criterion", "item.check", "item.uncheck", "item.set", "item.add", "item.remove", "item.attach", "item.clear", "item.record_many"] },
+            "command": { "enum": ["workspace.init", "workspace.reset_all", "session.start", "session.start_replace", "session.begin", "session.terminal_disposition", "session.complete", "session.skip", "session.retry", "session.block", "session.unblock", "session.cancel", "session.reset", "session.decide", "session.rework", "goal.define", "goal.revise", "goal.assess_criterion", "item.check", "item.uncheck", "item.set", "item.add", "item.remove", "item.attach", "item.clear", "item.record_many"] },
             "request_digest": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/digest" },
-            "terminal_response": { "oneOf": [{ "type": "null" }, { "$ref": "urn:podway:schema:job-result:v3#/$defs/terminalResponse" }] }
+            "terminal_response": { "oneOf": [{ "type": "null" }, { "$ref": "urn:podway:schema:job-result:v4#/$defs/terminalResponse" }] }
           },
           "allOf": [
             {
@@ -42,7 +42,7 @@
               "then": {
                 "properties": {
                   "finished_at": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/timestamp" },
-                  "terminal_response": { "$ref": "urn:podway:schema:job-result:v3#/$defs/terminalSuccessResponse" }
+                  "terminal_response": { "$ref": "urn:podway:schema:job-result:v4#/$defs/terminalSuccessResponse" }
                 }
               }
             },
@@ -51,7 +51,7 @@
               "then": {
                 "properties": {
                   "finished_at": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/timestamp" },
-                  "terminal_response": { "$ref": "urn:podway:schema:job-result:v3#/$defs/terminalErrorResponse" }
+                  "terminal_response": { "$ref": "urn:podway:schema:job-result:v4#/$defs/terminalErrorResponse" }
                 }
               }
             },
@@ -60,7 +60,7 @@
               "then": {
                 "properties": {
                   "finished_at": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/timestamp" },
-                  "terminal_response": { "$ref": "urn:podway:schema:job-result:v3#/$defs/cancelledResponse" }
+                  "terminal_response": { "$ref": "urn:podway:schema:job-result:v4#/$defs/cancelledResponse" }
                 }
               }
             }

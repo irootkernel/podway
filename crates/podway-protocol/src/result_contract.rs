@@ -274,6 +274,16 @@ pub const EXISTING_ROUTE_RESULT_SCHEMAS_V2: &[ResultSchemaContractV2] = &[
         "schemas/job-result-v3.schema.json",
         &["job.status", "job.wait"],
     ),
+    result_schema_v2(
+        "podway.job-lookup-result/v4",
+        "schemas/job-lookup-result-v4.schema.json",
+        &["job.lookup"],
+    ),
+    result_schema_v2(
+        "podway.job-result/v4",
+        "schemas/job-result-v4.schema.json",
+        &["job.status", "job.wait"],
+    ),
 ];
 
 /// The shared Procedure v2 authoring diagnostics family.
@@ -431,35 +441,47 @@ fn validate_result_correlations_v2(schema: &str, result: &Map<String, Value>) ->
                     .is_some_and(|(projected, recorded)| projected == recorded)
             })
         }
-        "podway.job-result/v3" => {
+        "podway.job-result/v3" | "podway.job-result/v4" => {
+            let command_is_supported = if schema == "podway.job-result/v3" {
+                is_durable_job_command_v3
+            } else {
+                is_durable_job_command_v4
+            };
             terminal_response_command_v2(result.get("job"))
-                .is_some_and(|command| command.is_none_or(is_durable_job_command_v3))
+                .is_some_and(|command| command.is_none_or(command_is_supported))
                 && result
                     .get("job")
                     .is_some_and(validate_terminal_response_typed_v2)
         }
-        "podway.job-lookup-result/v3" => match result.get("found") {
-            Some(Value::Bool(false)) => !result.contains_key("job"),
-            Some(Value::Bool(true)) => {
-                let Some(job) = result.get("job").and_then(Value::as_object) else {
-                    return false;
-                };
-                let Some(job_command) = job.get("command").and_then(Value::as_str) else {
-                    return false;
-                };
-                is_durable_job_command_v3(job_command)
-                    && terminal_response_command_v2(job.get("terminal_response")).is_some_and(
-                        |terminal_command| {
-                            terminal_command.is_none_or(|value| value == job_command)
-                        },
-                    )
-                    && terminal_response_identity_matches_job_v2(job)
-                    && job
-                        .get("terminal_response")
-                        .is_some_and(validate_terminal_response_typed_v2)
+        "podway.job-lookup-result/v3" | "podway.job-lookup-result/v4" => {
+            match result.get("found") {
+                Some(Value::Bool(false)) => !result.contains_key("job"),
+                Some(Value::Bool(true)) => {
+                    let Some(job) = result.get("job").and_then(Value::as_object) else {
+                        return false;
+                    };
+                    let Some(job_command) = job.get("command").and_then(Value::as_str) else {
+                        return false;
+                    };
+                    let command_is_supported = if schema == "podway.job-lookup-result/v3" {
+                        is_durable_job_command_v3(job_command)
+                    } else {
+                        is_durable_job_command_v4(job_command)
+                    };
+                    command_is_supported
+                        && terminal_response_command_v2(job.get("terminal_response")).is_some_and(
+                            |terminal_command| {
+                                terminal_command.is_none_or(|value| value == job_command)
+                            },
+                        )
+                        && terminal_response_identity_matches_job_v2(job)
+                        && job
+                            .get("terminal_response")
+                            .is_some_and(validate_terminal_response_typed_v2)
+                }
+                _ => false,
             }
-            _ => false,
-        },
+        }
         _ => true,
     }
 }
@@ -583,7 +605,10 @@ fn terminal_response_identity_matches_job_v2(job: &Map<String, Value>) -> bool {
 }
 
 fn validate_job_result_output_v2(output: &OutputEnvelopeV3) -> bool {
-    if output.result.get("schema").and_then(Value::as_str) != Some("podway.job-result/v3") {
+    if !matches!(
+        output.result.get("schema").and_then(Value::as_str),
+        Some("podway.job-result/v3" | "podway.job-result/v4")
+    ) {
         return true;
     }
     let Some(job) = output.job.as_ref() else {
@@ -634,6 +659,12 @@ pub(crate) fn is_v2_mutation_contract_command(command: &str) -> bool {
 }
 
 fn is_durable_job_command_v3(command: &str) -> bool {
+    matches!(command, "workspace.init" | "workspace.reset_all")
+        || (is_v2_mutation_contract_command(command)
+            && !matches!(command, "session.begin" | "session.terminal_disposition"))
+}
+
+fn is_durable_job_command_v4(command: &str) -> bool {
     matches!(command, "workspace.init" | "workspace.reset_all")
         || is_v2_mutation_contract_command(command)
 }
@@ -794,8 +825,8 @@ fn required_result_fields_v2(schema: &str) -> &'static [&'static str] {
             "revision",
             "items",
         ],
-        "podway.job-lookup-result/v3" => &["schema", "found"],
-        "podway.job-result/v3" => &["schema", "job"],
+        "podway.job-lookup-result/v3" | "podway.job-lookup-result/v4" => &["schema", "found"],
+        "podway.job-result/v3" | "podway.job-result/v4" => &["schema", "job"],
         "podway.procedure-source-result/v1" => &[
             "schema",
             "operation",
@@ -1101,8 +1132,10 @@ fn allowed_result_fields_v2(schema: &str) -> &'static [&'static str] {
             "revision",
             "items",
         ],
-        "podway.job-lookup-result/v3" => &["schema", "found", "job"],
-        "podway.job-result/v3" => &["schema", "job"],
+        "podway.job-lookup-result/v3" | "podway.job-lookup-result/v4" => {
+            &["schema", "found", "job"]
+        }
+        "podway.job-result/v3" | "podway.job-result/v4" => &["schema", "job"],
         "podway.procedure-source-result/v1" => &[
             "schema",
             "operation",

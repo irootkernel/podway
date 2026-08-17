@@ -1757,7 +1757,12 @@ where
     ) -> Result<ResponseEnvelopeV2, DispatchFailureV1> {
         if matches!(
             result.get("schema").and_then(Value::as_str),
-            Some("podway.job-result/v3" | "podway.job-lookup-result/v3")
+            Some(
+                "podway.job-result/v3"
+                    | "podway.job-lookup-result/v3"
+                    | "podway.job-result/v4"
+                    | "podway.job-lookup-result/v4",
+            )
         ) {
             return OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
                 request_id: request.request_id().clone(),

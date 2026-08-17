@@ -28,8 +28,10 @@ disjoint cursor-free prepared result. Prepared status uses null cursor, attempt,
 goal, and readiness projections; prepared observation has no active items and
 contains only bounded lifecycle guidance and applicable fenced templates.
 Existing released closed schemas are not widened in place.
-`job status`, `job wait`, and `job lookup` use their v3 wrapper schemas so an embedded
-terminal success is a non-recursive `podway.output/v3` document.
+Released v3 job wrappers remain closed over their original command set. `job status`,
+`job wait`, and `job lookup` emit v4 wrappers, which add prepared-lifecycle commands
+while keeping an embedded terminal success as a non-recursive `podway.output/v3`
+document. The output envelope accepts both wrapper generations for compatibility.
 
 The error envelope contains a catalogued `code`, summary, retryability, exit code,
 request correlation, command, and closed code-specific details. Human messages are

@@ -2063,12 +2063,12 @@ def command_qualify_v2rel003(
         waited = require_output_result(
             qualification_command(snap_cli, paths, ["job", "wait", job_id], label="detached wait"),
             command="job.wait",
-            result_schema="podway.job-result/v3",
+            result_schema="podway.job-result/v4",
         )
         detached_status = require_output_result(
             qualification_command(snap_cli, paths, ["job", "status", job_id], label="detached status"),
             command="job.status",
-            result_schema="podway.job-result/v3",
+            result_schema="podway.job-result/v4",
         )
         if detached_status.get("job") != waited.get("job"):
             fail("terminal detached job.status changed the waited durable job receipt")
@@ -2077,7 +2077,7 @@ def command_qualify_v2rel003(
                 snap_cli, paths, ["--idempotency-key", "v2rel003-detached", "job", "lookup"], label="detached lookup"
             ),
             command="job.lookup",
-            result_schema="podway.job-lookup-result/v3",
+            result_schema="podway.job-lookup-result/v4",
         )
         if (
             lookup.get("job", {}).get("terminal_response") != waited.get("job")
@@ -2154,7 +2154,7 @@ def command_qualify_v2rel003(
                 snap_cli, paths, ["--idempotency-key", loss_key, "job", "lookup"], label="response-loss lookup"
             ),
             command="job.lookup",
-            result_schema="podway.job-lookup-result/v3",
+            result_schema="podway.job-lookup-result/v4",
         )
         terminal_response = loss_lookup.get("job", {}).get("terminal_response")
         if terminal_response != discarded_envelope:

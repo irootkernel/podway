@@ -795,21 +795,21 @@ impl ProductionReadServiceV1 {
     }
 }
 
-fn job_lookup_missing_result_v3() -> Map<String, Value> {
+fn job_lookup_missing_result_v4() -> Map<String, Value> {
     Map::from_iter([
         (
             "schema".to_owned(),
-            Value::String("podway.job-lookup-result/v3".to_owned()),
+            Value::String("podway.job-lookup-result/v4".to_owned()),
         ),
         ("found".to_owned(), Value::Bool(false)),
     ])
 }
 
-fn job_lookup_found_result_v3(job: Value) -> Map<String, Value> {
+fn job_lookup_found_result_v4(job: Value) -> Map<String, Value> {
     Map::from_iter([
         (
             "schema".to_owned(),
-            Value::String("podway.job-lookup-result/v3".to_owned()),
+            Value::String("podway.job-lookup-result/v4".to_owned()),
         ),
         ("found".to_owned(), Value::Bool(true)),
         ("job".to_owned(), job),
@@ -859,7 +859,7 @@ impl DispatcherReadServiceV1<ProductionWorkspaceV1> for ProductionReadServiceV1 
             ReadonlyReconciliationResolutionV1::Missing => {
                 return Ok(DispatcherReconciliationOutputV1::new(
                     None,
-                    job_lookup_missing_result_v3(),
+                    job_lookup_missing_result_v4(),
                     Vec::new(),
                 ));
             }
@@ -867,7 +867,7 @@ impl DispatcherReadServiceV1<ProductionWorkspaceV1> for ProductionReadServiceV1 
                 if marker.idempotency_key() != &key {
                     return Ok(DispatcherReconciliationOutputV1::new(
                         None,
-                        job_lookup_missing_result_v3(),
+                        job_lookup_missing_result_v4(),
                         Vec::new(),
                     ));
                 }
@@ -902,7 +902,7 @@ impl DispatcherReadServiceV1<ProductionWorkspaceV1> for ProductionReadServiceV1 
                 job.insert("terminal_response".to_owned(), Value::Null);
                 return Ok(DispatcherReconciliationOutputV1::new(
                     Some(workspace),
-                    job_lookup_found_result_v3(Value::Object(job.clone())),
+                    job_lookup_found_result_v4(Value::Object(job.clone())),
                     Vec::new(),
                 ));
             }
@@ -938,7 +938,7 @@ impl DispatcherReadServiceV1<ProductionWorkspaceV1> for ProductionReadServiceV1 
         let Some(binding) = snapshot.lookup() else {
             return Ok(DispatcherReconciliationOutputV1::new(
                 Some(workspace),
-                job_lookup_missing_result_v3(),
+                job_lookup_missing_result_v4(),
                 Vec::new(),
             ));
         };
@@ -962,7 +962,7 @@ impl DispatcherReadServiceV1<ProductionWorkspaceV1> for ProductionReadServiceV1 
             "request_digest".to_owned(),
             Value::String(binding.request_digest().as_str().to_owned()),
         );
-        let result = job_lookup_found_result_v3(Value::Object(job.clone()));
+        let result = job_lookup_found_result_v4(Value::Object(job.clone()));
         Ok(DispatcherReconciliationOutputV1::new(
             Some(workspace),
             result,
@@ -985,7 +985,7 @@ impl DispatcherReadServiceV1<ProductionWorkspaceV1> for ProductionReadServiceV1 
         let result = Map::from_iter([
             (
                 "schema".to_owned(),
-                Value::String("podway.job-result/v3".to_owned()),
+                Value::String("podway.job-result/v4".to_owned()),
             ),
             ("job".to_owned(), result),
         ]);
@@ -5813,16 +5813,16 @@ mod tests {
     }
 
     #[test]
-    fn reset_marker_lookup_key_match_and_mismatch_emit_v3_results() {
-        let mismatched_key = job_lookup_missing_result_v3();
+    fn reset_marker_lookup_key_match_and_mismatch_emit_v4_results() {
+        let mismatched_key = job_lookup_missing_result_v4();
         assert_eq!(
             mismatched_key.get("schema"),
-            Some(&json!("podway.job-lookup-result/v3"))
+            Some(&json!("podway.job-lookup-result/v4"))
         );
         assert_eq!(mismatched_key.get("found"), Some(&Value::Bool(false)));
         assert!(podway_protocol::decode_result_schema_contract_v2(&mismatched_key).is_some());
 
-        let matched_key = job_lookup_found_result_v3(json!({
+        let matched_key = job_lookup_found_result_v4(json!({
             "id": "00000000-0000-4000-8000-000000000071",
             "sequence": 1,
             "state": "running",
@@ -5835,7 +5835,7 @@ mod tests {
         }));
         assert_eq!(
             matched_key.get("schema"),
-            Some(&json!("podway.job-lookup-result/v3"))
+            Some(&json!("podway.job-lookup-result/v4"))
         );
         assert_eq!(matched_key.get("found"), Some(&Value::Bool(true)));
         assert!(podway_protocol::decode_result_schema_contract_v2(&matched_key).is_some());
@@ -6070,7 +6070,7 @@ mod tests {
                 let lookup = Map::from_iter([
                     (
                         "schema".to_owned(),
-                        Value::String("podway.job-lookup-result/v3".to_owned()),
+                        Value::String("podway.job-lookup-result/v4".to_owned()),
                     ),
                     ("found".to_owned(), Value::Bool(true)),
                     ("job".to_owned(), job),

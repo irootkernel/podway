@@ -630,7 +630,7 @@ commands:
   session_mutation: false
   destructive_confirmation: false
   result_schemas:
-  - podway.job-lookup-result/v3
+  - podway.job-lookup-result/v4
 - name: job.status
   availability: executable
   cli:
@@ -642,7 +642,7 @@ commands:
   session_mutation: false
   destructive_confirmation: false
   result_schemas:
-  - podway.job-result/v3
+  - podway.job-result/v4
 - name: job.wait
   availability: executable
   cli:
@@ -654,7 +654,7 @@ commands:
   session_mutation: false
   destructive_confirmation: false
   result_schemas:
-  - podway.job-result/v3
+  - podway.job-result/v4
 - name: job.cancel
   availability: executable
   cli:

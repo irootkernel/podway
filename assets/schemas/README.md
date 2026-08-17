@@ -30,6 +30,8 @@ These JSON Schema Draft 2020-12 files define Podway's versioned structural contr
 - `detached-admission-result-v1.schema.json`: detached workspace initialization admission.
 - `job-result-v3.schema.json`: job status/wait wrapper and terminal response.
 - `job-lookup-result-v3.schema.json`: idempotency-key reconciliation result.
+- `job-result-v4.schema.json`: lifecycle-aware job status/wait wrapper and terminal response.
+- `job-lookup-result-v4.schema.json`: lifecycle-aware idempotency-key reconciliation result.
 - `procedure-validation-result-v2.schema.json`: metadata-only Procedure v2 validation success.
 - `detached-admission-result-v2.schema.json`: Procedure v2 durable mutation admission.
 - `session-start-result-v2.schema.json`: Procedure v2 dry-run and live start outcomes.

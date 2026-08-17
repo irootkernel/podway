@@ -196,6 +196,14 @@ fn examples() -> BTreeMap<&'static str, Value> {
             json!({"schema":"podway.job-result/v3","job":null}),
         ),
         (
+            "podway.job-lookup-result/v4",
+            json!({"schema":"podway.job-lookup-result/v4","found":false}),
+        ),
+        (
+            "podway.job-result/v4",
+            json!({"schema":"podway.job-result/v4","job":null}),
+        ),
+        (
             "podway.procedure-source-result/v1",
             json!({"schema":"podway.procedure-source-result/v1","operation":"format","target_schema":"podway.procedure/v2","document":"schema: podway.procedure/v2\n","target_digest":DIGEST,"file":"workflow.yaml","mode":"stdout","changed":false}),
         ),
@@ -334,7 +342,7 @@ fn v2grf_preview_uses_one_closed_result_family_for_every_document_outcome() {
 
 #[test]
 fn v2ctr003_registry_is_versioned_and_covers_exactly_the_v2_authoring_routes() {
-    assert_eq!(EXISTING_ROUTE_RESULT_SCHEMAS_V2.len(), 14);
+    assert_eq!(EXISTING_ROUTE_RESULT_SCHEMAS_V2.len(), 16);
     assert_eq!(NEW_ROUTE_RESULT_SCHEMAS_V1.len(), 15);
     assert!(
         EXISTING_ROUTE_RESULT_SCHEMAS_V2
@@ -489,7 +497,10 @@ fn v2ctr003_output_v2_validates_every_registered_command_result_pair() {
             });
             if output["result"].get("admission").is_some() {
                 add_admitted_envelope_metadata(&mut output);
-            } else if contract.schema == "podway.job-result/v3" {
+            } else if matches!(
+                contract.schema,
+                "podway.job-result/v3" | "podway.job-result/v4"
+            ) {
                 add_queued_job_envelope_metadata(&mut output);
             }
             assert_valid("schemas/output-v3.schema.json", &output);
@@ -521,7 +532,10 @@ fn v2plt006_production_codec_round_trips_every_registered_command_result_pair() 
             });
             if expected["result"].get("admission").is_some() {
                 add_admitted_envelope_metadata(&mut expected);
-            } else if contract.schema == "podway.job-result/v3" {
+            } else if matches!(
+                contract.schema,
+                "podway.job-result/v3" | "podway.job-result/v4"
+            ) {
                 add_queued_job_envelope_metadata(&mut expected);
             }
 
@@ -982,6 +996,72 @@ fn v2cut_workspace_jobs_reconcile_through_v3_terminal_wrappers() {
 }
 
 #[test]
+fn v2lif006_versions_lifecycle_job_wrappers_without_widening_v3() {
+    let mut terminal_success = json!({
+        "schema": OUTPUT_SCHEMA_V3,
+        "request_id": UUID,
+        "command": "session.begin",
+        "generated_at": "2026-08-04T00:00:00.002Z",
+        "result": examples()["podway.session-begin-result/v1"].clone(),
+        "warnings": [],
+    });
+    add_admitted_envelope_metadata(&mut terminal_success);
+
+    let v3_result = json!({
+        "schema": "podway.job-result/v3",
+        "job": terminal_success.clone(),
+    });
+    assert_invalid("schemas/job-result-v3.schema.json", &v3_result);
+    assert!(decode_result_schema_contract_v2(v3_result.as_object().unwrap()).is_none());
+
+    let v4_result = json!({
+        "schema": "podway.job-result/v4",
+        "job": terminal_success.clone(),
+    });
+    assert_valid("schemas/job-result-v4.schema.json", &v4_result);
+    assert!(decode_result_schema_contract_v2(v4_result.as_object().unwrap()).is_some());
+
+    let job = json!({
+        "id": UUID,
+        "sequence": 1,
+        "state": "succeeded",
+        "submitted_at": "2026-08-04T00:00:00.000Z",
+        "claimed_at": "2026-08-04T00:00:00.001Z",
+        "finished_at": "2026-08-04T00:00:00.002Z",
+        "command": "session.begin",
+        "request_digest": DIGEST,
+        "terminal_response": terminal_success,
+    });
+    let v3_lookup = json!({
+        "schema": "podway.job-lookup-result/v3",
+        "found": true,
+        "job": job.clone(),
+    });
+    assert_invalid("schemas/job-lookup-result-v3.schema.json", &v3_lookup);
+    assert!(decode_result_schema_contract_v2(v3_lookup.as_object().unwrap()).is_none());
+
+    let v4_lookup = json!({
+        "schema": "podway.job-lookup-result/v4",
+        "found": true,
+        "job": job,
+    });
+    assert_valid("schemas/job-lookup-result-v4.schema.json", &v4_lookup);
+    assert!(decode_result_schema_contract_v2(v4_lookup.as_object().unwrap()).is_some());
+
+    let mut output = json!({
+        "schema": OUTPUT_SCHEMA_V3,
+        "request_id": UUID,
+        "command": "job.status",
+        "generated_at": "2026-08-04T00:00:00.003Z",
+        "result": v4_result,
+        "warnings": [],
+    });
+    add_admitted_envelope_metadata(&mut output);
+    assert_valid("schemas/output-v3.schema.json", &output);
+    assert!(serde_json::from_value::<OutputEnvelopeV3>(output).is_ok());
+}
+
+#[test]
 fn v2cut_workspace_init_detached_preserves_its_procedure_independent_v1_result() {
     let job = JobOutputV1::new(
         podway_core::JobId::new(UUID).unwrap(),
@@ -1239,7 +1319,7 @@ fn v2ctr003_decoder_rejects_missing_non_string_and_unregistered_discriminators()
             .iter()
             .filter(|entry| entry.schema.starts_with("podway.job-"))
             .count(),
-        2
+        4
     );
     let mut incomplete = examples()["podway.next-result/v2"].clone();
     incomplete.as_object_mut().unwrap().remove("node");
@@ -1354,7 +1434,7 @@ fn v2lif002_prepared_result_families_enforce_the_reserved_lifecycle_boundary() {
 
     for command in ["session.begin", "session.terminal_disposition"] {
         let queued_job = json!({
-            "schema":"podway.job-lookup-result/v3",
+            "schema":"podway.job-lookup-result/v4",
             "found":true,
             "job":{
                 "id":UUID,
@@ -1367,7 +1447,7 @@ fn v2lif002_prepared_result_families_enforce_the_reserved_lifecycle_boundary() {
                 "terminal_response":null
             }
         });
-        assert_valid("schemas/job-lookup-result-v3.schema.json", &queued_job);
+        assert_valid("schemas/job-lookup-result-v4.schema.json", &queued_job);
         assert!(
             decode_result_schema_contract_v2(queued_job.as_object().unwrap()).is_some(),
             "reserved durable job command was rejected: {command}"

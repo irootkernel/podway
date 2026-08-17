@@ -1727,7 +1727,7 @@ fn aut_t_id_and_recon_reject_conflicts_and_recover_an_admitted_timeout() {
         ],
     );
     assert_eq!(missing["result"]["found"], false);
-    assert_eq!(missing["result"]["schema"], "podway.job-lookup-result/v3");
+    assert_eq!(missing["result"]["schema"], "podway.job-lookup-result/v4");
 
     let digest_mismatch = assert_json_error(
         fixture.run(
