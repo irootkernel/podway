@@ -245,7 +245,7 @@ commands:
   - podway.session-start-result/v3
   - podway.detached-admission-result/v2
 - name: session.begin
-  availability: reserved_contract
+  availability: executable
   cli:
   - begin
   operation: mutate
@@ -433,7 +433,7 @@ commands:
   - podway.session-reset-result/v1
   - podway.detached-admission-result/v2
 - name: session.terminal_disposition
-  availability: reserved_contract
+  availability: executable
   cli:
   - disposition
   operation: mutate

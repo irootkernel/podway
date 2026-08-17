@@ -550,6 +550,8 @@ fn store_v1_constructs_every_typed_error_variant() {
                 assert_eq!(reason, StoreUnavailableReasonV1::Locked);
             }
             StoreErrorV1::LegacyProcedureStateUnsupportedV1 => {}
+            StoreErrorV1::SessionResetNotEligibleV1 { .. } => {}
+            StoreErrorV1::TerminalDispositionAlreadyRecordedV1 { .. } => {}
         }
     }
 }

@@ -448,8 +448,20 @@ pub struct SessionStartV1 {
 #[serde(deny_unknown_fields)]
 pub struct SessionStartReplaceV1 {
     pub start: SessionStartV1,
-    pub confirmed: bool,
+    pub mode: SessionDeletionModeV1,
     pub preconditions: SessionIdentityPreconditionsWireV1,
+}
+
+/// The only two deletion authorities accepted for reset and replacement.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SessionDeletionModeV1 {
+    Eligible,
+    Force {
+        progress_summary: String,
+    },
+    #[doc(hidden)]
+    LegacyConfirmed,
 }
 
 /// A query wait is deliberately exclusive: callers may wait for queue idleness or one job, not both.
@@ -694,7 +706,7 @@ pub struct SessionCancelV1 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionResetV1 {
-    pub confirmed: bool,
+    pub mode: SessionDeletionModeV1,
     pub dry_run: bool,
     pub preconditions: SessionIdentityPreconditionsWireV1,
 }
@@ -760,7 +772,6 @@ pub struct InitialGoalWireV2 {
 #[serde(deny_unknown_fields)]
 pub struct ProcedureV2SessionStartV1 {
     pub start: SessionStartV1,
-    pub initial_goal: Option<InitialGoalWireV2>,
 }
 
 /// A closed Procedure v2 replacement-start payload decoded for typed dispatch.
@@ -768,7 +779,7 @@ pub struct ProcedureV2SessionStartV1 {
 #[serde(deny_unknown_fields)]
 pub struct ProcedureV2SessionStartReplaceV1 {
     pub start: ProcedureV2SessionStartV1,
-    pub confirmed: bool,
+    pub mode: SessionDeletionModeV1,
     pub preconditions: SessionIdentityPreconditionsWireV1,
 }
 
@@ -885,8 +896,32 @@ pub struct GoalAssessCriterionV2 {
     pub expected_goal_revision: u64,
 }
 
-/// The five typed daemon mutation routes owned by the Procedure v2 contract.
-pub const RESERVED_V2_MUTATION_COMMAND_NAMES_V1: [&str; 5] = [
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionBeginV1 {
+    pub initial_goal: Option<InitialGoalWireV2>,
+    pub preconditions: SessionIdentityPreconditionsWireV1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TerminalDispositionInputV1 {
+    HandedOff { summary: String, reference: String },
+    NotRequired { reason: String },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionTerminalDispositionV1 {
+    pub disposition: TerminalDispositionInputV1,
+    pub actor: Option<String>,
+    pub preconditions: SessionIdentityPreconditionsWireV1,
+}
+
+/// The seven typed daemon mutation routes owned by the Procedure v2 contract.
+pub const RESERVED_V2_MUTATION_COMMAND_NAMES_V1: [&str; 7] = [
+    "session.begin",
+    "session.terminal_disposition",
     "session.decide",
     "session.rework",
     "goal.define",
@@ -898,6 +933,8 @@ pub const RESERVED_V2_MUTATION_COMMAND_NAMES_V1: [&str; 5] = [
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProcedureV2MutationCommandV1 {
+    SessionBegin(SessionBeginV1),
+    SessionTerminalDisposition(SessionTerminalDispositionV1),
     SessionDecide(SessionDecideV2),
     SessionRework(SessionReworkV2),
     GoalDefine(GoalDefineV2),
@@ -908,6 +945,8 @@ pub enum ProcedureV2MutationCommandV1 {
 impl ProcedureV2MutationCommandV1 {
     pub const fn command_name(&self) -> &'static str {
         match self {
+            Self::SessionBegin(_) => "session.begin",
+            Self::SessionTerminalDisposition(_) => "session.terminal_disposition",
             Self::SessionDecide(_) => "session.decide",
             Self::SessionRework(_) => "session.rework",
             Self::GoalDefine(_) => "goal.define",
@@ -1183,17 +1222,12 @@ impl SliceRequestV1 {
                 require_dry_run_envelope(envelope, "session.start_replace", payload.dry_run)?;
                 let preconditions =
                     require_session_identity_preconditions(envelope.preconditions())?;
-                let confirmed = match (payload.dry_run, payload.confirmed) {
-                    (true, None) => false,
-                    (true, Some(_)) => {
-                        return Err(SliceErrorV1::InvalidValue { field: "confirmed" });
-                    }
-                    (false, confirmed) => {
-                        let confirmed = confirmed.unwrap_or(false);
-                        require_confirmation(confirmed)?;
-                        confirmed
-                    }
-                };
+                let mode = validated_deletion_mode(
+                    payload.dry_run,
+                    payload.replace_eligible,
+                    payload.confirmed,
+                    payload.progress_summary,
+                )?;
                 let start = validated_start(
                     payload.preset,
                     payload.procedure,
@@ -1205,7 +1239,7 @@ impl SliceRequestV1 {
                     payload.selector,
                     SliceCommandV1::SessionStartReplace(SessionStartReplaceV1 {
                         start,
-                        confirmed,
+                        mode,
                         preconditions,
                     }),
                 )
@@ -1346,21 +1380,16 @@ impl SliceRequestV1 {
                 require_dry_run_envelope(envelope, "session.reset", payload.dry_run)?;
                 let preconditions =
                     require_session_identity_preconditions(envelope.preconditions())?;
-                let confirmed = match (payload.dry_run, payload.confirmed) {
-                    (true, None) => false,
-                    (true, Some(_)) => {
-                        return Err(SliceErrorV1::InvalidValue { field: "confirmed" });
-                    }
-                    (false, confirmed) => {
-                        let confirmed = confirmed.unwrap_or(false);
-                        require_confirmation(confirmed)?;
-                        confirmed
-                    }
-                };
+                let mode = validated_deletion_mode(
+                    payload.dry_run,
+                    false,
+                    payload.confirmed,
+                    payload.progress_summary,
+                )?;
                 (
                     payload.selector,
                     SliceCommandV1::SessionReset(SessionResetV1 {
-                        confirmed,
+                        mode,
                         dry_run: payload.dry_run,
                         preconditions,
                     }),
@@ -1595,6 +1624,70 @@ impl TryFrom<&RequestEnvelopeV1> for SliceRequestV1 {
 impl ProcedureV2MutationRequestV1 {
     pub fn from_envelope(envelope: &RequestEnvelopeV1) -> Result<Self, SliceErrorV1> {
         let (selector, command) = match envelope.command().as_str() {
+            "session.begin" => {
+                require_envelope(envelope, "session.begin", OperationV1::Mutate, true)?;
+                let preconditions =
+                    require_session_identity_preconditions(envelope.preconditions())?;
+                let payload: SessionBeginPayloadV1 = parse_payload(envelope)?;
+                let initial_goal =
+                    validated_initial_goal_v2(payload.goal, payload.criteria, payload.actor)?;
+                (
+                    payload.selector,
+                    ProcedureV2MutationCommandV1::SessionBegin(SessionBeginV1 {
+                        initial_goal,
+                        preconditions,
+                    }),
+                )
+            }
+            "session.terminal_disposition" => {
+                require_envelope(
+                    envelope,
+                    "session.terminal_disposition",
+                    OperationV1::Mutate,
+                    true,
+                )?;
+                let preconditions =
+                    require_session_identity_preconditions(envelope.preconditions())?;
+                let payload: SessionTerminalDispositionPayloadV1 = parse_payload(envelope)?;
+                validate_actor_v2(payload.actor.as_deref())?;
+                let disposition = match payload.kind.as_str() {
+                    "handed_off" => {
+                        let summary = payload
+                            .summary
+                            .ok_or(SliceErrorV1::InvalidValue { field: "summary" })?;
+                        let reference = payload
+                            .reference
+                            .ok_or(SliceErrorV1::InvalidValue { field: "reference" })?;
+                        if payload.reason.is_some() {
+                            return Err(SliceErrorV1::InvalidValue { field: "reason" });
+                        }
+                        validate_lifecycle_text(&summary, "summary")?;
+                        validate_lifecycle_text(&reference, "reference")?;
+                        TerminalDispositionInputV1::HandedOff { summary, reference }
+                    }
+                    "not_required" => {
+                        let reason = payload
+                            .reason
+                            .ok_or(SliceErrorV1::InvalidValue { field: "reason" })?;
+                        if payload.summary.is_some() || payload.reference.is_some() {
+                            return Err(SliceErrorV1::InvalidValue { field: "kind" });
+                        }
+                        validate_lifecycle_text(&reason, "reason")?;
+                        TerminalDispositionInputV1::NotRequired { reason }
+                    }
+                    _ => return Err(SliceErrorV1::InvalidValue { field: "kind" }),
+                };
+                (
+                    payload.selector,
+                    ProcedureV2MutationCommandV1::SessionTerminalDisposition(
+                        SessionTerminalDispositionV1 {
+                            disposition,
+                            actor: payload.actor,
+                            preconditions,
+                        },
+                    ),
+                )
+            }
             "session.decide" => {
                 require_envelope(envelope, "session.decide", OperationV1::Mutate, true)?;
                 let preconditions = require_session_preconditions_v2(envelope.preconditions())?;
@@ -1746,14 +1839,9 @@ impl ProcedureV2StartRequestV1 {
                     payload.task_title,
                     payload.dry_run,
                 )?;
-                let initial_goal =
-                    validated_initial_goal_v2(payload.goal, payload.criteria, payload.actor)?;
                 (
                     payload.selector,
-                    ProcedureV2StartCommandV1::SessionStart(ProcedureV2SessionStartV1 {
-                        start,
-                        initial_goal,
-                    }),
+                    ProcedureV2StartCommandV1::SessionStart(ProcedureV2SessionStartV1 { start }),
                 )
             }
             "session.start_replace" => {
@@ -1761,17 +1849,12 @@ impl ProcedureV2StartRequestV1 {
                 require_dry_run_envelope(envelope, "session.start_replace", payload.dry_run)?;
                 let preconditions =
                     require_session_identity_preconditions(envelope.preconditions())?;
-                let confirmed = match (payload.dry_run, payload.confirmed) {
-                    (true, None) => false,
-                    (true, Some(_)) => {
-                        return Err(SliceErrorV1::InvalidValue { field: "confirmed" });
-                    }
-                    (false, confirmed) => {
-                        let confirmed = confirmed.unwrap_or(false);
-                        require_confirmation(confirmed)?;
-                        confirmed
-                    }
-                };
+                let mode = validated_deletion_mode(
+                    payload.dry_run,
+                    payload.replace_eligible,
+                    payload.confirmed,
+                    payload.progress_summary,
+                )?;
                 let start = validated_start(
                     payload.preset,
                     payload.procedure,
@@ -1779,17 +1862,12 @@ impl ProcedureV2StartRequestV1 {
                     payload.task_title,
                     payload.dry_run,
                 )?;
-                let initial_goal =
-                    validated_initial_goal_v2(payload.goal, payload.criteria, payload.actor)?;
                 (
                     payload.selector,
                     ProcedureV2StartCommandV1::SessionStartReplace(
                         ProcedureV2SessionStartReplaceV1 {
-                            start: ProcedureV2SessionStartV1 {
-                                start,
-                                initial_goal,
-                            },
-                            confirmed,
+                            start: ProcedureV2SessionStartV1 { start },
+                            mode,
                             preconditions,
                         },
                     ),
@@ -1911,8 +1989,12 @@ struct SessionStartReplacePayloadV1 {
     #[serde(default, deserialize_with = "deserialize_optional_non_null")]
     expected_procedure_digest: Option<Sha256Digest>,
     task_title: String,
+    #[serde(default)]
+    replace_eligible: bool,
     #[serde(default, deserialize_with = "deserialize_optional_non_null")]
     confirmed: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    progress_summary: Option<String>,
     #[serde(default)]
     dry_run: bool,
 }
@@ -1930,12 +2012,6 @@ struct ProcedureV2SessionStartPayloadV1 {
     task_title: String,
     #[serde(default)]
     dry_run: bool,
-    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
-    goal: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
-    criteria: Option<Vec<GoalCriterionWireV2>>,
-    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
-    actor: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1949,16 +2025,14 @@ struct ProcedureV2SessionStartReplacePayloadV1 {
     #[serde(default, deserialize_with = "deserialize_optional_non_null")]
     expected_procedure_digest: Option<Sha256Digest>,
     task_title: String,
+    #[serde(default)]
+    replace_eligible: bool,
     #[serde(default, deserialize_with = "deserialize_optional_non_null")]
     confirmed: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    progress_summary: Option<String>,
     #[serde(default)]
     dry_run: bool,
-    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
-    goal: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
-    criteria: Option<Vec<GoalCriterionWireV2>>,
-    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
-    actor: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -2017,8 +2091,37 @@ struct SessionResetPayloadV1 {
     selector: WorktreeSelectorWireV1,
     #[serde(default, deserialize_with = "deserialize_optional_non_null")]
     confirmed: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    progress_summary: Option<String>,
     #[serde(default)]
     dry_run: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SessionBeginPayloadV1 {
+    selector: WorktreeSelectorWireV1,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    goal: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    criteria: Option<Vec<GoalCriterionWireV2>>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    actor: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SessionTerminalDispositionPayloadV1 {
+    selector: WorktreeSelectorWireV1,
+    kind: String,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    summary: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    reference: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    reason: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    actor: Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2384,6 +2487,46 @@ fn validate_reason_v2(value: &str) -> Result<(), SliceErrorV1> {
     ReasonV2::new(value.to_owned())
         .map(drop)
         .map_err(domain_value_error_v2)
+}
+
+fn validate_lifecycle_text(value: &str, field: &'static str) -> Result<(), SliceErrorV1> {
+    if value.trim().is_empty() {
+        return Err(SliceErrorV1::InvalidValue { field });
+    }
+    validate_scalar_bound(value, 4_000, field)
+}
+
+fn validated_deletion_mode(
+    dry_run: bool,
+    eligible: bool,
+    confirmed: Option<bool>,
+    progress_summary: Option<String>,
+) -> Result<SessionDeletionModeV1, SliceErrorV1> {
+    if eligible && confirmed.is_some() {
+        return Err(SliceErrorV1::InvalidValue { field: "confirmed" });
+    }
+    if dry_run {
+        if confirmed.is_some() || progress_summary.is_some() {
+            return Err(SliceErrorV1::InvalidValue { field: "dry_run" });
+        }
+        return Ok(SessionDeletionModeV1::Eligible);
+    }
+    if eligible || confirmed.is_none() {
+        if progress_summary.is_some() {
+            return Err(SliceErrorV1::InvalidValue {
+                field: "progress_summary",
+            });
+        }
+        return Ok(SessionDeletionModeV1::Eligible);
+    }
+    require_confirmation(confirmed.unwrap_or(false))?;
+    let summary = progress_summary.ok_or(SliceErrorV1::InvalidValue {
+        field: "progress_summary",
+    })?;
+    validate_lifecycle_text(&summary, "progress_summary")?;
+    Ok(SessionDeletionModeV1::Force {
+        progress_summary: summary,
+    })
 }
 
 fn validate_actor_v2(value: Option<&str>) -> Result<(), SliceErrorV1> {
@@ -3113,6 +3256,17 @@ pub fn canonical_procedure_v2_mutation_identity_v1(
     resolved_workspace_id: &WorkspaceId,
 ) -> Result<String, SliceErrorV1> {
     let (preconditions, payload) = match request.command() {
+        ProcedureV2MutationCommandV1::SessionBegin(command) => (
+            session_identity_preconditions_json(&command.preconditions),
+            json!({ "initial_goal": &command.initial_goal }),
+        ),
+        ProcedureV2MutationCommandV1::SessionTerminalDisposition(command) => (
+            session_identity_preconditions_json(&command.preconditions),
+            json!({
+                "disposition": &command.disposition,
+                "actor": &command.actor,
+            }),
+        ),
         ProcedureV2MutationCommandV1::SessionDecide(command) => (
             {
                 let mut preconditions = session_preconditions_json(&command.preconditions);
@@ -3221,7 +3375,11 @@ pub fn canonical_mutation_identity_v1(
         SliceCommandV1::SessionStartReplace(start) => {
             (session_identity_preconditions_json(&start.preconditions), {
                 let mut payload = start_payload_json_v1(&start.start);
-                insert_canonical_field_v1(&mut payload, "confirmed", json!(start.confirmed))?;
+                insert_canonical_field_v1(
+                    &mut payload,
+                    "deletion",
+                    deletion_mode_json(&start.mode),
+                )?;
                 payload
             })
         }
@@ -3251,7 +3409,7 @@ pub fn canonical_mutation_identity_v1(
         ),
         SliceCommandV1::SessionReset(session) => (
             session_identity_preconditions_json(&session.preconditions),
-            json!({"confirmed": session.confirmed}),
+            json!({"deletion": deletion_mode_json(&session.mode)}),
         ),
         SliceCommandV1::WorkspaceResetAll(workspace) => (
             workspace_reset_all_preconditions_json(&workspace.preconditions),
@@ -3368,9 +3526,7 @@ pub fn canonical_start_mutation_identity_v1(
 
 /// Canonical semantic identity for a typed Procedure v2 start.
 ///
-/// The identity is byte-identical to the retained start identity when no initial goal is present.
-/// A supplied revision 1 definition is encoded in authored criterion order and therefore changes
-/// the identity without exposing the request through the executable v1 slice.
+/// Start creates only a prepared session, so the identity contains no attempt or goal material.
 pub fn canonical_procedure_v2_start_identity_v1(
     request: &ProcedureV2StartRequestV1,
     resolved_workspace_id: &WorkspaceId,
@@ -3382,26 +3538,18 @@ pub fn canonical_procedure_v2_start_identity_v1(
         });
     }
 
-    let (start, initial_goal, preconditions, confirmed) = match &request.command {
-        ProcedureV2StartCommandV1::SessionStart(start) => {
-            (&start.start, &start.initial_goal, json!({}), None)
-        }
+    let (start, preconditions, deletion) = match &request.command {
+        ProcedureV2StartCommandV1::SessionStart(start) => (&start.start, json!({}), None),
         ProcedureV2StartCommandV1::SessionStartReplace(replace) => (
             &replace.start.start,
-            &replace.start.initial_goal,
             session_identity_preconditions_json(&replace.preconditions),
-            Some(replace.confirmed),
+            Some(deletion_mode_json(&replace.mode)),
         ),
     };
 
     let mut payload = start_payload_json_v1(start);
-    if let Some(initial_goal) = initial_goal {
-        insert_canonical_field_v1(&mut payload, "goal", json!(&initial_goal.goal))?;
-        insert_canonical_field_v1(&mut payload, "criteria", json!(&initial_goal.criteria))?;
-        insert_canonical_field_v1(&mut payload, "actor", json!(&initial_goal.actor))?;
-    }
-    if let Some(confirmed) = confirmed {
-        insert_canonical_field_v1(&mut payload, "confirmed", json!(confirmed))?;
+    if let Some(deletion) = deletion {
+        insert_canonical_field_v1(&mut payload, "deletion", deletion)?;
     }
 
     let mut preconditions = preconditions;
@@ -3487,6 +3635,17 @@ fn start_payload_json_v1(start: &SessionStartV1) -> Value {
         "source": start_source_json(&start.source),
         "task_title": &start.task_title,
     })
+}
+
+fn deletion_mode_json(mode: &SessionDeletionModeV1) -> Value {
+    match mode {
+        SessionDeletionModeV1::Eligible => json!({ "mode": "eligible" }),
+        SessionDeletionModeV1::Force { progress_summary } => json!({
+            "mode": "force",
+            "progress_summary": progress_summary,
+        }),
+        SessionDeletionModeV1::LegacyConfirmed => json!({ "mode": "legacy_confirmed" }),
+    }
 }
 
 fn insert_canonical_field_v1(

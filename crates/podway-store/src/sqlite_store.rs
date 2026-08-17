@@ -12,13 +12,13 @@ use std::sync::Mutex;
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, TransactionBehavior, params};
 
 use crate::codec::{
-    PersistedDomainCommandV1, PersistedGraphMutationFailureV2, PersistedGraphTerminalOperationV2,
-    PersistedGraphTerminalSessionProjectionV2, PersistedStartIdentityV1,
-    PersistedTerminalJobProjectionV1, PersistedTerminalJobStateV1, PersistedTerminalReceiptV1,
-    PersistedTerminalResultV1, decode_command_v1, decode_response_context_v1,
-    decode_terminal_receipt_v1, encode_command_v1, encode_persisted_terminal_receipt_v1,
-    encode_response_context_v1, validate_persisted_terminal_result_for_command_v1,
-    validate_terminal_result_for_command_v1,
+    PersistedDomainCommandV1, PersistedDomainResultV1, PersistedGraphMutationFailureV2,
+    PersistedGraphTerminalOperationV2, PersistedGraphTerminalSessionProjectionV2,
+    PersistedStartIdentityV1, PersistedTerminalJobProjectionV1, PersistedTerminalJobStateV1,
+    PersistedTerminalReceiptV1, PersistedTerminalResultV1, decode_command_v1,
+    decode_response_context_v1, decode_terminal_receipt_v1, encode_command_v1,
+    encode_persisted_terminal_receipt_v1, encode_response_context_v1,
+    validate_persisted_terminal_result_for_command_v1, validate_terminal_result_for_command_v1,
 };
 use crate::schema::{
     DatabasePathStateV1, canonical_database_path_v1, inspect_database_path_v1,
@@ -235,6 +235,30 @@ impl SqliteStoreV1 {
             checked_at,
         )
         .map(|(view, _)| view)
+    }
+
+    pub fn inspect_current_terminal_disposition_v2(
+        path: impl AsRef<Path>,
+        expected_identity: &DurableWorktreeIdentityV1,
+        options: &SqliteStoreOptionsV1,
+        checked_at: EpochMillisV1,
+    ) -> Result<bool, StoreErrorV1> {
+        let database_path = canonical_database_path_v1(path.as_ref())?;
+        inspect_database_snapshot_unbound_v1(&database_path, options, |connection| {
+            verify_inspection_integrity_connection_v1(
+                connection,
+                expected_identity,
+                options,
+                IntegrityModeV1::Fast,
+                checked_at,
+            )?;
+            let state = load_graph_session_connection_v2(connection)?
+                .ok_or_else(|| invariant(StoreInvariantV1::ProcedureV2GraphState))?;
+            let dispositions = load_terminal_dispositions_connection_v2(connection, &state)?;
+            Ok(dispositions.last().is_some_and(|disposition| {
+                disposition.terminal_session_revision() == state.trace().revision()
+            }))
+        })
     }
 
     /// Reads one coherent Procedure v2 graph view and optional named job state from a disposable
@@ -631,6 +655,15 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
             GraphStartCurrentTaskV2::Exact {
                 session_id,
                 session_revision,
+            }
+            | GraphStartCurrentTaskV2::Eligible {
+                session_id,
+                session_revision,
+            }
+            | GraphStartCurrentTaskV2::Force {
+                session_id,
+                session_revision,
+                ..
             } => Some((session_id.clone(), *session_revision)),
         };
         if actual != expected {
@@ -652,15 +685,56 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
             }
         }
         let replacing = matches!(execution.command(), crate::CommandV1::SessionStartReplace);
+        let start_execution_version =
+            serde_json::from_str::<serde_json::Value>(execution.canonical_execution().as_str())
+                .ok()
+                .and_then(|document| {
+                    document
+                        .get("execution_version")
+                        .and_then(serde_json::Value::as_u64)
+                })
+                .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+        let expected_new_revision = match start_execution_version {
+            17 => RevisionV1::ZERO,
+            6 | 12 => RevisionV1::new(1),
+            _ => return Err(invariant(StoreInvariantV1::TransitionMutationShape)),
+        };
         if replacing != !matches!(expected_current, GraphStartCurrentTaskV2::Absent)
             || state.workspace_revision() != RevisionV1::new(1)
-            || state.trace().revision() != RevisionV1::new(1)
+            || state.trace().revision() != expected_new_revision
         {
             return Err(invariant(StoreInvariantV1::TransitionMutationShape));
+        }
+        if let Some(current) = &current_v2 {
+            let dispositions = load_terminal_dispositions_connection_v2(&transaction, current)?;
+            let current_disposition = dispositions.last().is_some_and(|disposition| {
+                disposition.terminal_session_revision() == current.trace().revision()
+            });
+            if matches!(expected_current, GraphStartCurrentTaskV2::Eligible { .. })
+                && !graph_session_is_reset_eligible_v2(current, current_disposition)
+            {
+                return Err(StoreErrorV1::SessionResetNotEligibleV1 {
+                    lifecycle: current.trace().lifecycle(),
+                    current_terminal_disposition: current_disposition,
+                });
+            }
+            if let GraphStartCurrentTaskV2::Force {
+                progress_summary, ..
+            } = &expected_current
+                && (progress_summary.trim().is_empty() || progress_summary.chars().count() > 4_000)
+            {
+                return Err(invariant(StoreInvariantV1::TransitionMutationShape));
+            }
         }
         let revision_before = match &expected_current {
             GraphStartCurrentTaskV2::Absent => RevisionV1::ZERO,
             GraphStartCurrentTaskV2::Exact {
+                session_revision, ..
+            }
+            | GraphStartCurrentTaskV2::Eligible {
+                session_revision, ..
+            }
+            | GraphStartCurrentTaskV2::Force {
                 session_revision, ..
             } => *session_revision,
         };
@@ -858,7 +932,9 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
             || command_name_v1(execution.command()) != row.command_name
             || !matches!(
                 execution.command(),
-                crate::CommandV1::SessionComplete
+                crate::CommandV1::SessionBegin
+                    | crate::CommandV1::SessionTerminalDisposition
+                    | crate::CommandV1::SessionComplete
                     | crate::CommandV1::SessionDecide
                     | crate::CommandV1::SessionRework
                     | crate::CommandV1::GoalDefine
@@ -904,6 +980,20 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
         ) {
             return Err(corrupt(StoreRecordKindV1::Job));
         }
+        if let PersistedGraphTerminalOperationV2::Reset { mode, .. } = &operation {
+            let dispositions = load_terminal_dispositions_connection_v2(&transaction, &current)?;
+            let current_disposition = dispositions.last().is_some_and(|disposition| {
+                disposition.terminal_session_revision() == current.trace().revision()
+            });
+            if *mode == crate::PersistedGraphResetModeV2::Eligible
+                && !graph_session_is_reset_eligible_v2(&current, current_disposition)
+            {
+                return Err(StoreErrorV1::SessionResetNotEligibleV1 {
+                    lifecycle: current.trace().lifecycle(),
+                    current_terminal_disposition: current_disposition,
+                });
+            }
+        }
         validate_graph_mutation_terminal_shape_v2(
             &execution,
             &current,
@@ -912,6 +1002,9 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
             &operation,
             now,
         )?;
+        if let Some(disposition) = terminal_disposition_from_operation_v2(&operation)? {
+            record_terminal_disposition_transaction_v2(&transaction, &disposition)?;
+        }
         let reset_session_id = matches!(operation, PersistedGraphTerminalOperationV2::Reset { .. })
             .then(|| current.trace().session_id().as_str().to_owned());
         if reset_session_id.is_none() {
@@ -1081,6 +1174,98 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
             now,
         )
     }
+
+    fn commit_graph_smart_reset_terminal_v2(
+        &self,
+        claim: ClaimTokenV1,
+        expected_workspace_revision: RevisionV1,
+        expected_session_revision: RevisionV1,
+        session_id: podway_core::SessionId,
+        mode: crate::PersistedGraphResetModeV2,
+        progress_summary: Option<String>,
+        now: EpochMillisV1,
+    ) -> Result<TerminalReceiptV1, StoreErrorV1> {
+        let result = TerminalResultV1::Success(podway_core::DomainResult::SessionChanged {
+            session_id: session_id.clone(),
+            revision_before: expected_session_revision,
+            revision_after: expected_session_revision,
+            changed: true,
+        });
+        let operation =
+            PersistedGraphTerminalOperationV2::smart_reset(session_id, mode, progress_summary)
+                .map_err(|_| invariant(StoreInvariantV1::TransitionMutationShape))?;
+        self.commit_graph_mutation_terminal_v2(
+            claim,
+            expected_workspace_revision,
+            expected_session_revision,
+            None,
+            result,
+            operation,
+            now,
+        )
+    }
+}
+
+fn graph_session_is_reset_eligible_v2(
+    state: &GraphSessionStateV2,
+    current_terminal_disposition: bool,
+) -> bool {
+    match state.trace().lifecycle() {
+        podway_core::SessionLifecycle::Prepared => true,
+        podway_core::SessionLifecycle::Running => false,
+        podway_core::SessionLifecycle::Completed | podway_core::SessionLifecycle::Cancelled => {
+            current_terminal_disposition
+        }
+    }
+}
+
+fn terminal_disposition_from_operation_v2(
+    operation: &PersistedGraphTerminalOperationV2,
+) -> Result<Option<podway_core::TerminalDispositionV2>, StoreErrorV1> {
+    let PersistedGraphTerminalOperationV2::TerminalDisposition {
+        session_id,
+        terminal_session_revision,
+        disposition_kind,
+        summary,
+        stable_reference,
+        reason,
+        actor,
+        recorded_at_ms,
+    } = operation
+    else {
+        return Ok(None);
+    };
+    let actor = actor
+        .clone()
+        .map(podway_core::ActorAttributionV2::new)
+        .transpose()
+        .map_err(|_| invariant(StoreInvariantV1::TransitionMutationShape))?;
+    let disposition = match disposition_kind.as_str() {
+        "handed_off" => podway_core::TerminalDispositionV2::handed_off(
+            session_id.clone(),
+            *terminal_session_revision,
+            summary
+                .clone()
+                .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?,
+            stable_reference
+                .clone()
+                .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?,
+            actor,
+            podway_core::UnixMillis::new(*recorded_at_ms),
+        ),
+        "not_required" => podway_core::TerminalDispositionV2::not_required(
+            session_id.clone(),
+            *terminal_session_revision,
+            reason
+                .clone()
+                .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?,
+            actor,
+            podway_core::UnixMillis::new(*recorded_at_ms),
+        ),
+        _ => return Err(invariant(StoreInvariantV1::TransitionMutationShape)),
+    }
+    .map_err(|_| invariant(StoreInvariantV1::TransitionMutationShape))?;
+    Ok(Some(disposition))
 }
 
 impl StoreContractV1 for SqliteStoreV1 {
@@ -1100,7 +1285,9 @@ impl StoreContractV1 for SqliteStoreV1 {
         let is_v2 = request.execution_flavor() == DurableExecutionFlavorV1::ProcedureV2;
         let is_v2_action_runtime = matches!(
             request.command(),
-            crate::CommandV1::SessionComplete
+            crate::CommandV1::SessionBegin
+                | crate::CommandV1::SessionTerminalDisposition
+                | crate::CommandV1::SessionComplete
                 | crate::CommandV1::SessionDecide
                 | crate::CommandV1::SessionRework
                 | crate::CommandV1::GoalDefine
@@ -1186,6 +1373,22 @@ impl StoreContractV1 for SqliteStoreV1 {
             });
         }
         if is_v2 && is_v2_action_runtime {
+            if matches!(
+                request.command(),
+                crate::CommandV1::SessionTerminalDisposition
+            ) {
+                let current = current_graph
+                    .as_ref()
+                    .ok_or_else(|| corrupt(StoreRecordKindV1::Session))?;
+                let dispositions = load_terminal_dispositions_connection_v2(&transaction, current)?;
+                if dispositions.last().is_some_and(|disposition| {
+                    disposition.terminal_session_revision() == current.trace().revision()
+                }) {
+                    return Err(StoreErrorV1::TerminalDispositionAlreadyRecordedV1 {
+                        session_revision: current.trace().revision(),
+                    });
+                }
+            }
             validate_procedure_v2_action_admission_v1(
                 &request,
                 current_graph
@@ -1834,6 +2037,60 @@ fn validate_procedure_v2_action_admission_v1(
         .active_attempt()
         .map(podway_core::SessionAttemptV2::attempt_id);
     let reject = |failure| StoreErrorV1::ProcedureV2PreconditionFailedV1 { failure };
+
+    if matches!(request.command(), crate::CommandV1::SessionBegin) {
+        let expected_revision = preconditions
+            .expected_session_revision()
+            .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+        if preconditions.expected_attempt_id().is_some()
+            || preconditions.expected_item_id().is_some()
+            || preconditions.expected_item_revision().is_some()
+        {
+            return Err(invariant(StoreInvariantV1::TransitionMutationShape));
+        }
+        if expected_revision != current_revision {
+            return Err(reject(
+                PersistedGraphMutationFailureV2::SessionRevisionConflict {
+                    expected: expected_revision,
+                    actual: current_revision,
+                },
+            ));
+        }
+        if current.trace().lifecycle() != podway_core::SessionLifecycle::Prepared {
+            return Err(reject(PersistedGraphMutationFailureV2::SessionNotRunning));
+        }
+        return Ok(());
+    }
+
+    if matches!(
+        request.command(),
+        crate::CommandV1::SessionTerminalDisposition
+    ) {
+        let expected_revision = preconditions
+            .expected_session_revision()
+            .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+        if preconditions.expected_attempt_id().is_some()
+            || preconditions.expected_item_id().is_some()
+            || preconditions.expected_item_revision().is_some()
+        {
+            return Err(invariant(StoreInvariantV1::TransitionMutationShape));
+        }
+        if expected_revision != current_revision {
+            return Err(reject(
+                PersistedGraphMutationFailureV2::SessionRevisionConflict {
+                    expected: expected_revision,
+                    actual: current_revision,
+                },
+            ));
+        }
+        if !matches!(
+            current.trace().lifecycle(),
+            podway_core::SessionLifecycle::Completed | podway_core::SessionLifecycle::Cancelled
+        ) {
+            return Err(reject(PersistedGraphMutationFailureV2::SessionNotTerminal));
+        }
+        return Ok(());
+    }
 
     if matches!(
         request.command(),
@@ -3983,7 +4240,7 @@ fn procedure_v2_operation_payload_v1(
         &v8_keys[..]
     } else if version == 13 {
         &v13_keys[..]
-    } else if matches!(version, 9..=12 | 14) {
+    } else if matches!(version, 9..=12 | 14 | 18) {
         &v9_keys[..]
     } else {
         &v7_keys[..]
@@ -3995,7 +4252,7 @@ fn procedure_v2_operation_payload_v1(
             .get("execution_version")
             .and_then(serde_json::Value::as_u64)
             != Some(version)
-        || (!matches!(version, 9..=14)
+        || (!matches!(version, 9..=14 | 18)
             && !object
                 .get("attached_artifact")
                 .is_some_and(serde_json::Value::is_null))
@@ -4766,6 +5023,121 @@ fn validate_graph_mutation_terminal_shape_v2(
     let preconditions = execution.preconditions();
     let valid = match (execution.command(), result, operation) {
         (
+            crate::CommandV1::SessionBegin,
+            TerminalResultV1::Success(podway_core::DomainResult::SessionChanged {
+                session_id,
+                revision_before,
+                revision_after,
+                changed,
+            }),
+            PersistedGraphTerminalOperationV2::Begin {
+                attempt_id,
+                goal_revision,
+            },
+        ) => {
+            let (_, payload) = procedure_v2_operation_payload_v1(execution, "session.begin", 18)?;
+            let next = next.ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            let active = next
+                .trace()
+                .active_attempt()
+                .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            *changed
+                && current.trace().lifecycle() == podway_core::SessionLifecycle::Prepared
+                && next.trace().lifecycle() == podway_core::SessionLifecycle::Running
+                && session_id == current.trace().session_id()
+                && next.trace().session_id() == current.trace().session_id()
+                && *revision_before == RevisionV1::ZERO
+                && *revision_after == RevisionV1::new(1)
+                && next.trace().revision() == RevisionV1::new(1)
+                && attempt_id == active.attempt_id()
+                && *goal_revision
+                    == next
+                        .goal_state()
+                        .current_revision()
+                        .map(podway_core::GoalRevisionNumberV2::get)
+                && payload.len() == 1
+                && payload.contains_key("initial_goal")
+                && preconditions.expected_session_revision() == Some(RevisionV1::ZERO)
+                && preconditions.expected_attempt_id().is_none()
+                && preconditions.expected_item_id().is_none()
+                && preconditions.expected_item_revision().is_none()
+        }
+        (
+            crate::CommandV1::SessionTerminalDisposition,
+            TerminalResultV1::Success(podway_core::DomainResult::SessionChanged {
+                session_id,
+                revision_before,
+                revision_after,
+                changed,
+            }),
+            PersistedGraphTerminalOperationV2::TerminalDisposition {
+                session_id: operation_session_id,
+                terminal_session_revision,
+                disposition_kind,
+                summary,
+                stable_reference,
+                reason,
+                actor,
+                recorded_at_ms,
+            },
+        ) => {
+            let (_, payload) =
+                procedure_v2_operation_payload_v1(execution, "session.terminal_disposition", 18)?;
+            *changed
+                && next.is_none()
+                && matches!(
+                    current.trace().lifecycle(),
+                    podway_core::SessionLifecycle::Completed
+                        | podway_core::SessionLifecycle::Cancelled
+                )
+                && session_id == current.trace().session_id()
+                && operation_session_id == current.trace().session_id()
+                && *terminal_session_revision == current.trace().revision()
+                && *revision_before == current.trace().revision()
+                && *revision_after == current.trace().revision()
+                && *recorded_at_ms == now.get()
+                && payload.len() == 2
+                && payload.get("actor").is_some_and(|value| match actor {
+                    Some(actor) => value.as_str() == Some(actor.as_str()),
+                    None => value.is_null(),
+                })
+                && payload
+                    .get("disposition")
+                    .and_then(serde_json::Value::as_object)
+                    .is_some_and(|disposition| match disposition_kind.as_str() {
+                        "handed_off" => {
+                            disposition.len() == 3
+                                && disposition.get("kind").and_then(serde_json::Value::as_str)
+                                    == Some("handed_off")
+                                && disposition
+                                    .get("summary")
+                                    .and_then(serde_json::Value::as_str)
+                                    == summary.as_deref()
+                                && disposition
+                                    .get("reference")
+                                    .and_then(serde_json::Value::as_str)
+                                    == stable_reference.as_deref()
+                                && reason.is_none()
+                        }
+                        "not_required" => {
+                            disposition.len() == 2
+                                && disposition.get("kind").and_then(serde_json::Value::as_str)
+                                    == Some("not_required")
+                                && disposition
+                                    .get("reason")
+                                    .and_then(serde_json::Value::as_str)
+                                    == reason.as_deref()
+                                && summary.is_none()
+                                && stable_reference.is_none()
+                        }
+                        _ => false,
+                    })
+                && preconditions.expected_session_revision() == Some(current.trace().revision())
+                && preconditions.expected_attempt_id().is_none()
+                && preconditions.expected_item_id().is_none()
+                && preconditions.expected_item_revision().is_none()
+        }
+        (
             crate::CommandV1::GoalDefine,
             TerminalResultV1::Success(podway_core::DomainResult::SessionChanged {
                 session_id,
@@ -5162,15 +5534,37 @@ fn validate_graph_mutation_terminal_shape_v2(
             }),
             PersistedGraphTerminalOperationV2::Reset {
                 session_id: operation_session_id,
+                mode,
+                progress_summary,
             },
         ) => {
             let (_, payload) = procedure_v2_operation_payload_v1(execution, "session.reset", 8)?;
+            let mode_matches = match mode {
+                crate::PersistedGraphResetModeV2::LegacyConfirmed => {
+                    payload.len() == 1
+                        && payload
+                            .get("confirmed")
+                            .and_then(serde_json::Value::as_bool)
+                            == Some(true)
+                        && progress_summary.is_none()
+                }
+                crate::PersistedGraphResetModeV2::Eligible => {
+                    payload.len() == 1
+                        && payload.get("mode").and_then(serde_json::Value::as_str)
+                            == Some("eligible")
+                        && progress_summary.is_none()
+                }
+                crate::PersistedGraphResetModeV2::Force => {
+                    payload.len() == 2
+                        && payload.get("mode").and_then(serde_json::Value::as_str) == Some("force")
+                        && payload
+                            .get("progress_summary")
+                            .and_then(serde_json::Value::as_str)
+                            == progress_summary.as_deref()
+                }
+            };
             *changed
-                && payload.len() == 1
-                && payload
-                    .get("confirmed")
-                    .and_then(serde_json::Value::as_bool)
-                    == Some(true)
+                && mode_matches
                 && next.is_none()
                 && session_id == current.trace().session_id()
                 && operation_session_id == current.trace().session_id()
@@ -6127,6 +6521,25 @@ fn graph_mutation_failure_matches_v2(
                     && current.trace().revision() == *actual
                     && expected != actual
             }
+            PersistedGraphMutationFailureV2::SessionResetNotEligible {
+                lifecycle,
+                current_terminal_disposition,
+            } => {
+                let actual_lifecycle = match current.trace().lifecycle() {
+                    podway_core::SessionLifecycle::Prepared => "prepared",
+                    podway_core::SessionLifecycle::Running => "running",
+                    podway_core::SessionLifecycle::Completed => "completed",
+                    podway_core::SessionLifecycle::Cancelled => "cancelled",
+                };
+                !*current_terminal_disposition
+                    && actual_lifecycle == lifecycle
+                    && matches!(
+                        current.trace().lifecycle(),
+                        podway_core::SessionLifecycle::Running
+                            | podway_core::SessionLifecycle::Completed
+                            | podway_core::SessionLifecycle::Cancelled
+                    )
+            }
             _ => false,
         },
         crate::CommandV1::ItemRecordMany => match error {
@@ -6563,10 +6976,15 @@ fn validate_persisted_terminal_for_execution_v2(
     execution: &ClaimedExecutionV1,
     terminal: &PersistedTerminalReceiptV1,
 ) -> Result<(), StoreErrorV1> {
-    let graph_reset = execution.command() == &crate::CommandV1::SessionReset
-        && crate::codec::persisted_graph_reset_receipt_is_exact_v2(terminal);
-    if graph_reset {
-        Ok(())
+    let successful_reset = execution.command() == &crate::CommandV1::SessionReset
+        && matches!(
+            terminal.result(),
+            PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged { .. })
+        );
+    if successful_reset {
+        crate::codec::persisted_graph_reset_receipt_is_exact_v2(terminal)
+            .then_some(())
+            .ok_or_else(|| corrupt(StoreRecordKindV1::Job))
     } else {
         validate_persisted_terminal_result_for_command_v1(execution.command(), terminal.result())
             .map_err(|_| corrupt(StoreRecordKindV1::Job))

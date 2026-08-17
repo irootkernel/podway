@@ -185,7 +185,7 @@
     },
     {
       "command": "session.begin",
-      "availability": "reserved_contract",
+      "availability": "executable",
       "owner": "podway-daemon",
       "path": ["podway-cli", "podway-protocol", "podway-daemon"],
       "execution": "daemon",
@@ -273,7 +273,7 @@
     },
     {
       "command": "session.terminal_disposition",
-      "availability": "reserved_contract",
+      "availability": "executable",
       "owner": "podway-daemon",
       "path": ["podway-cli", "podway-protocol", "podway-daemon"],
       "execution": "daemon",

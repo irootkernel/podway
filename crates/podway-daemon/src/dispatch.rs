@@ -46,6 +46,13 @@ pub struct DispatchErrorDetailsV1 {
     outcome_unknown_key: Option<Box<IdempotencyKeyV1>>,
     maximum_open_blockers: Option<Box<usize>>,
     v2_runtime: Option<Box<V2RuntimeErrorDetailsV1>>,
+    session_reset_not_eligible: Option<Box<SessionResetNotEligibleDetailsV1>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SessionResetNotEligibleDetailsV1 {
+    lifecycle: &'static str,
+    required_action: &'static str,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -154,6 +161,22 @@ enum V2RuntimeErrorDetailsV1 {
 }
 
 impl DispatchErrorDetailsV1 {
+    pub fn with_session_reset_not_eligible(
+        mut self,
+        lifecycle: podway_core::SessionLifecycle,
+    ) -> Self {
+        let (lifecycle, required_action) = match lifecycle {
+            podway_core::SessionLifecycle::Running => ("running", "force"),
+            podway_core::SessionLifecycle::Completed => ("completed", "record_disposition"),
+            podway_core::SessionLifecycle::Cancelled => ("cancelled", "record_disposition"),
+            podway_core::SessionLifecycle::Prepared => ("prepared", "none"),
+        };
+        self.session_reset_not_eligible = Some(Box::new(SessionResetNotEligibleDetailsV1 {
+            lifecycle,
+            required_action,
+        }));
+        self
+    }
     pub fn with_unknown_outcome(mut self, idempotency_key: IdempotencyKeyV1) -> Self {
         self.outcome_unknown_key = Some(Box::new(idempotency_key));
         self
@@ -466,6 +489,18 @@ impl DispatchErrorDetailsV1 {
     }
 
     pub(crate) fn into_json(self, requires_admission: bool) -> Map<String, Value> {
+        if let Some(details) = self.session_reset_not_eligible {
+            return json!({
+                "schema": "podway.session-reset-not-eligible-details/v1",
+                "lifecycle": details.lifecycle,
+                "current_terminal_disposition": false,
+                "required_action": details.required_action,
+                "admission": admission_value_v1(self.job_id.as_ref(), self.job_sequence),
+            })
+            .as_object()
+            .expect("reset eligibility details are an object")
+            .clone();
+        }
         if let Some(runtime) = self.v2_runtime {
             let admission = admission_value_v1(self.job_id.as_ref(), self.job_sequence);
             let value = match *runtime {
@@ -832,6 +867,8 @@ pub enum DispatchFailureKindV1 {
     SessionIdMismatch,
     SessionAlreadyExists,
     SessionNotRunning,
+    SessionNotTerminal,
+    SessionResetNotEligible,
     SessionCancelled,
     SessionRevisionConflict,
     AttemptNotCurrent,
@@ -908,6 +945,7 @@ impl DispatchFailureV1 {
                 outcome_unknown_key: None,
                 maximum_open_blockers: None,
                 v2_runtime: None,
+                session_reset_not_eligible: None,
             }),
         }
     }
@@ -2422,6 +2460,18 @@ fn catalog_error_spec_v1(kind: DispatchFailureKindV1) -> (&'static str, &'static
         DispatchFailureKindV1::SessionNotRunning => (
             "SESSION_NOT_RUNNING",
             "The command requires a running session.",
+            false,
+            1,
+        ),
+        DispatchFailureKindV1::SessionNotTerminal => (
+            "SESSION_NOT_TERMINAL",
+            "The command requires a completed or cancelled session.",
+            false,
+            1,
+        ),
+        DispatchFailureKindV1::SessionResetNotEligible => (
+            "SESSION_RESET_NOT_ELIGIBLE",
+            "The current session is not eligible for automatic deletion.",
             false,
             1,
         ),

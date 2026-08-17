@@ -205,6 +205,7 @@ enum Command {
         command: WorkspaceCommand,
     },
     Start(StartArgs),
+    Begin(BeginArgs),
     Status(StatusArgs),
     Next(ReadArgs),
     Observe(ReadArgs),
@@ -240,6 +241,10 @@ enum Command {
     Cancel {
         #[arg(long, value_name = "TEXT")]
         reason: String,
+    },
+    Disposition {
+        #[command(subcommand)]
+        command: DispositionCommand,
     },
     Reset(ResetArgs),
     Check {
@@ -309,16 +314,42 @@ struct StartArgs {
     expect_procedure_digest: Option<String>,
     #[arg(long, value_name = "TITLE")]
     task: String,
+    #[arg(long, action = ArgAction::SetTrue, conflicts_with = "replace_eligible")]
+    replace: bool,
+    #[arg(long, action = ArgAction::SetTrue, conflicts_with = "replace")]
+    replace_eligible: bool,
+    #[arg(long, value_name = "TEXT", requires = "replace")]
+    progress_summary: Option<String>,
+    #[arg(long, action = ArgAction::SetTrue)]
+    dry_run: bool,
+}
+
+#[derive(Debug, Args)]
+struct BeginArgs {
     #[arg(long, value_name = "TEXT", requires = "criterion")]
     goal: Option<String>,
     #[arg(long, value_name = "ID=STATEMENT", action = ArgAction::Append, requires = "goal")]
     criterion: Vec<String>,
     #[arg(long, value_name = "TEXT", requires = "goal")]
     actor: Option<String>,
-    #[arg(long, action = ArgAction::SetTrue)]
-    replace: bool,
-    #[arg(long, action = ArgAction::SetTrue)]
-    dry_run: bool,
+}
+
+#[derive(Debug, Subcommand)]
+enum DispositionCommand {
+    HandedOff {
+        #[arg(long, value_name = "TEXT")]
+        summary: String,
+        #[arg(long, value_name = "TEXT")]
+        reference: String,
+        #[arg(long, value_name = "TEXT")]
+        actor: Option<String>,
+    },
+    NotRequired {
+        #[arg(long, value_name = "TEXT")]
+        reason: String,
+        #[arg(long, value_name = "TEXT")]
+        actor: Option<String>,
+    },
 }
 
 #[derive(Debug, Args, Default)]
@@ -427,6 +458,8 @@ struct ResetArgs {
     all: bool,
     #[arg(long, action = ArgAction::SetTrue)]
     force: bool,
+    #[arg(long, value_name = "TEXT")]
+    progress_summary: Option<String>,
     #[arg(long, action = ArgAction::SetTrue)]
     dry_run: bool,
 }
@@ -603,8 +636,11 @@ impl Command {
             Self::Workspace {
                 command: WorkspaceCommand::Repair,
             } => Some("workspace.repair"),
-            Self::Start(args) if args.replace => Some("session.start_replace"),
+            Self::Start(args) if args.replace || args.replace_eligible => {
+                Some("session.start_replace")
+            }
             Self::Start(_) => Some("session.start"),
+            Self::Begin(_) => Some("session.begin"),
             Self::Status(_) | Self::CompleteDynamic { .. } => Some("session.status"),
             Self::Next(_) => Some("session.next"),
             Self::Observe(_) => Some("session.observe"),
@@ -625,6 +661,7 @@ impl Command {
             Self::Block { .. } => Some("session.block"),
             Self::Unblock { .. } => Some("session.unblock"),
             Self::Cancel { .. } => Some("session.cancel"),
+            Self::Disposition { .. } => Some("session.terminal_disposition"),
             Self::Reset(args) if args.all => Some("workspace.reset_all"),
             Self::Reset(_) => Some("session.reset"),
             Self::Check { .. } => Some("item.check"),
@@ -714,6 +751,7 @@ impl Command {
         match self {
             Self::Init { .. }
             | Self::Complete
+            | Self::Begin(_)
             | Self::Decide(_)
             | Self::Rework(_)
             | Self::Goal { .. }
@@ -722,6 +760,7 @@ impl Command {
             | Self::Block { .. }
             | Self::Unblock { .. }
             | Self::Cancel { .. }
+            | Self::Disposition { .. }
             | Self::Check { .. }
             | Self::Uncheck { .. }
             | Self::Set(_)
@@ -739,6 +778,7 @@ impl Command {
     const fn needs_preflight(&self) -> bool {
         match self {
             Self::Complete
+            | Self::Begin(_)
             | Self::Decide(_)
             | Self::Rework(_)
             | Self::Goal { .. }
@@ -747,6 +787,7 @@ impl Command {
             | Self::Block { .. }
             | Self::Unblock { .. }
             | Self::Cancel { .. }
+            | Self::Disposition { .. }
             | Self::Check { .. }
             | Self::Uncheck { .. }
             | Self::Set(_)
@@ -755,7 +796,7 @@ impl Command {
             | Self::Attach(_)
             | Self::Clear { .. }
             | Self::Record(_) => true,
-            Self::Start(args) => args.replace,
+            Self::Start(args) => args.replace || args.replace_eligible,
             Self::Reset(args) => !args.all,
             _ => false,
         }
@@ -778,6 +819,7 @@ impl Command {
         matches!(
             self,
             Self::Start(_)
+                | Self::Begin(_)
                 | Self::Status(_)
                 | Self::Next(_)
                 | Self::Observe(_)
@@ -790,6 +832,7 @@ impl Command {
                 | Self::Block { .. }
                 | Self::Unblock { .. }
                 | Self::Cancel { .. }
+                | Self::Disposition { .. }
                 | Self::Reset(_)
                 | Self::Check { .. }
                 | Self::Uncheck { .. }
@@ -803,37 +846,39 @@ impl Command {
     }
 
     const fn accepts_session_identity(&self) -> bool {
-        matches!(
-            self,
-            Self::Start(StartArgs { replace: true, .. })
-                | Self::Status(_)
-                | Self::Next(_)
-                | Self::Observe(_)
-                | Self::Complete
-                | Self::Decide(_)
-                | Self::Rework(_)
-                | Self::Goal { .. }
-                | Self::Skip { .. }
-                | Self::Retry { .. }
-                | Self::Block { .. }
-                | Self::Unblock { .. }
-                | Self::Cancel { .. }
-                | Self::Reset(ResetArgs { all: false, .. })
-                | Self::Check { .. }
-                | Self::Uncheck { .. }
-                | Self::Set(_)
-                | Self::Add { .. }
-                | Self::Remove { .. }
-                | Self::Attach(_)
-                | Self::Clear { .. }
-                | Self::Record(_)
-        )
+        match self {
+            Self::Start(args) => args.replace || args.replace_eligible,
+            Self::Begin(_)
+            | Self::Status(_)
+            | Self::Next(_)
+            | Self::Observe(_)
+            | Self::Complete
+            | Self::Decide(_)
+            | Self::Rework(_)
+            | Self::Goal { .. }
+            | Self::Skip { .. }
+            | Self::Retry { .. }
+            | Self::Block { .. }
+            | Self::Unblock { .. }
+            | Self::Cancel { .. }
+            | Self::Disposition { .. }
+            | Self::Reset(ResetArgs { all: false, .. })
+            | Self::Check { .. }
+            | Self::Uncheck { .. }
+            | Self::Set(_)
+            | Self::Add { .. }
+            | Self::Remove { .. }
+            | Self::Attach(_)
+            | Self::Clear { .. }
+            | Self::Record(_) => true,
+            _ => false,
+        }
     }
 
     const fn is_destructive(&self) -> bool {
         match self {
             Self::Start(args) => args.replace && !args.dry_run,
-            Self::Reset(args) => !args.dry_run,
+            Self::Reset(args) => !args.dry_run && (args.all || args.progress_summary.is_some()),
             _ => false,
         }
     }
@@ -890,7 +935,10 @@ struct StatusPreflight {
 impl StatusPreflight {
     fn from_output_v2(output: &OutputEnvelopeV3) -> Result<Self, LocalFailure> {
         let result = output.result();
-        if result.get("schema").and_then(Value::as_str) != Some("podway.status-result/v2") {
+        if !matches!(
+            result.get("schema").and_then(Value::as_str),
+            Some("podway.status-result/v2" | "podway.status-result/v3")
+        ) {
             return Err(LocalFailure::response_invalid(
                 "status preflight did not return the standard Procedure v2 status result",
             ));
@@ -1060,7 +1108,10 @@ impl StatusFacts {
                 ),
             );
         }
-        if matches!(command, Command::Start(StartArgs { replace: true, .. })) {
+        if matches!(command, Command::Begin(_) | Command::Disposition { .. }) {
+            return self.v2_preconditions(session_id, session_revision, None, false, None);
+        }
+        if matches!(command, Command::Start(args) if args.replace || args.replace_eligible) {
             return PreconditionsV1::new(
                 Some(session_id),
                 Some(session_revision),
@@ -1350,26 +1401,6 @@ impl LocalFailure {
         failure
     }
 
-    fn goal_tracking_not_enabled(command: &str) -> Self {
-        let mut failure = Self::catalog(
-            "GOAL_TRACKING_NOT_ENABLED",
-            "The Procedure does not enable session-goal tracking.",
-            command,
-        );
-        failure.details = Map::from_iter([
-            (
-                "schema".to_owned(),
-                Value::String("podway.v2-runtime-error-details/v1".to_owned()),
-            ),
-            (
-                "kind".to_owned(),
-                Value::String("GOAL_TRACKING_NOT_ENABLED".to_owned()),
-            ),
-            ("admission".to_owned(), json!({"admitted": false})),
-        ]);
-        failure
-    }
-
     fn with_command(mut self, command: &str) -> Self {
         self.command = command.to_owned();
         self
@@ -1495,13 +1526,14 @@ fn parse_failure_command_context_from_matches(
             &[("show", "workspace.show"), ("repair", "workspace.repair")],
         )?,
         "start" => ParseFailureCommandContext::new(
-            if matches.get_flag("replace") {
+            if matches.get_flag("replace") || matches.get_flag("replace_eligible") {
                 "session.start_replace"
             } else {
                 "session.start"
             },
             !matches.get_flag("dry_run"),
         ),
+        "begin" => ParseFailureCommandContext::new("session.begin", true),
         "status" => ParseFailureCommandContext::new("session.status", false),
         "next" => ParseFailureCommandContext::new("session.next", false),
         "observe" => ParseFailureCommandContext::new("session.observe", false),
@@ -1525,6 +1557,7 @@ fn parse_failure_command_context_from_matches(
         "block" => ParseFailureCommandContext::new("session.block", true),
         "unblock" => ParseFailureCommandContext::new("session.unblock", true),
         "cancel" => ParseFailureCommandContext::new("session.cancel", true),
+        "disposition" => ParseFailureCommandContext::new("session.terminal_disposition", true),
         "reset" => ParseFailureCommandContext::new(
             if matches.get_flag("all") {
                 "workspace.reset_all"
@@ -1760,29 +1793,14 @@ fn requires_idempotency_key(operation: OperationV1) -> bool {
 }
 
 fn fully_fenced_start_replace(command: &Command, explicit: &ExplicitPreconditions) -> bool {
-    matches!(
-        command,
-        Command::Start(StartArgs {
-            replace: true,
-            dry_run: false,
-            ..
-        })
-    ) && explicit.workspace_id.is_some()
+    matches!(command, Command::Start(args) if !args.dry_run && (args.replace || args.replace_eligible))
+        && explicit.workspace_id.is_some()
         && explicit.session_id.is_some()
         && explicit.session_revision.is_some()
 }
 
 fn fully_fenced_v2_start_replace(command: &Command, explicit: &ExplicitPreconditions) -> bool {
-    matches!(
-        command,
-        Command::Start(StartArgs {
-            replace: true,
-            goal: Some(_),
-            ..
-        })
-    ) && explicit.workspace_id.is_some()
-        && explicit.session_id.is_some()
-        && explicit.session_revision.is_some()
+    fully_fenced_start_replace(command, explicit)
 }
 
 fn fully_fenced_v2_mutation(command: &Command, explicit: &ExplicitPreconditions) -> bool {
@@ -1793,6 +1811,7 @@ fn fully_fenced_v2_mutation(command: &Command, explicit: &ExplicitPreconditions)
         return false;
     }
     match command {
+        Command::Begin(_) | Command::Disposition { .. } => true,
         Command::Decide(_) => explicit.attempt_id.is_some(),
         Command::Goal {
             command: GoalCommand::AssessCriterion(_),
@@ -1855,25 +1874,26 @@ fn direct_preconditions(
     explicit: &ExplicitPreconditions,
 ) -> Result<PreconditionsV1, LocalFailure> {
     match command {
-        Command::Start(StartArgs {
-            replace: true,
-            dry_run: false,
-            ..
-        }) => PreconditionsV1::new(
-            explicit.session_id.clone(),
-            explicit.session_revision,
-            None,
-            None,
-            None,
-            None,
-        )
-        .map_err(|_| LocalFailure::request_invalid("start-replace preconditions are invalid")),
+        Command::Start(StartArgs { dry_run: false, .. }) if matches!(command, Command::Start(args) if args.replace || args.replace_eligible) => {
+            PreconditionsV1::new(
+                explicit.session_id.clone(),
+                explicit.session_revision,
+                None,
+                None,
+                None,
+                None,
+            )
+            .map_err(|_| LocalFailure::request_invalid("start-replace preconditions are invalid"))
+        }
         Command::Status(_) | Command::Next(_) | Command::Observe(_) => {
             PreconditionsV1::new(explicit.session_id.clone(), None, None, None, None, None).map_err(
                 |_| LocalFailure::request_invalid("session identity precondition is invalid"),
             )
         }
         Command::Decide(_) => v2_session_preconditions(explicit, true, false),
+        Command::Begin(_) | Command::Disposition { .. } => {
+            v2_session_preconditions(explicit, false, false)
+        }
         Command::Rework(_) => v2_session_preconditions(explicit, false, false),
         Command::Retry { .. } => v2_session_preconditions(explicit, true, false),
         Command::Skip { .. } => v2_session_preconditions(explicit, true, false),
@@ -1959,20 +1979,20 @@ fn execute_start_dry_run(cli: &Cli) -> Result<RunResult, LocalFailure> {
         let admitted = preset
             .validate()
             .map_err(|error| preset_failure(error).with_command("session.start"))?;
-        if args.goal.is_some() && admitted.parsed().goal_tracking().is_none() {
-            return Err(LocalFailure::goal_tracking_not_enabled("session.start"));
-        }
         let command = cli
             .command
             .daemon_wire_name()
             .ok_or_else(|| LocalFailure::request_invalid("invalid start command"))?;
         let result = json!({
-            "schema": "podway.session-start-result/v2",
+            "schema": "podway.session-start-result/v3",
             "procedure_schema": PROCEDURE_SCHEMA_V2,
             "procedure_digest": admitted.digest().as_str(),
             "dry_run": true,
             "goal_tracking": admitted.parsed().goal_tracking().is_some(),
-            "goal_defined": args.goal.is_some(),
+            "session_state": "prepared",
+            "goal_defined": false,
+            "active_attempt": Value::Null,
+            "goal_revision": Value::Null,
         })
         .as_object()
         .cloned()
@@ -2038,20 +2058,20 @@ fn execute_start_dry_run_v2(
             "session.start",
         ));
     }
-    if args.goal.is_some() && validated.parsed().goal_tracking().is_none() {
-        return Err(LocalFailure::goal_tracking_not_enabled("session.start"));
-    }
     let command = cli
         .command
         .daemon_wire_name()
         .ok_or_else(|| LocalFailure::request_invalid("invalid start command"))?;
     let result = json!({
-        "schema": "podway.session-start-result/v2",
+        "schema": "podway.session-start-result/v3",
         "procedure_schema": PROCEDURE_SCHEMA_V2,
         "procedure_digest": validated.digest().as_str(),
         "dry_run": true,
         "goal_tracking": validated.parsed().goal_tracking().is_some(),
-        "goal_defined": args.goal.is_some(),
+        "session_state": "prepared",
+        "goal_defined": false,
+        "active_attempt": Value::Null,
+        "goal_revision": Value::Null,
     })
     .as_object()
     .cloned()
@@ -4781,7 +4801,14 @@ fn validate_daemon_flags(cli: &Cli) -> Result<(), LocalFailure> {
     if cli.if_attempt.is_some()
         && matches!(
             command,
-            Command::Start(StartArgs { replace: true, .. }) | Command::Reset(_)
+            Command::Start(StartArgs { replace: true, .. })
+                | Command::Start(StartArgs {
+                    replace_eligible: true,
+                    ..
+                })
+                | Command::Begin(_)
+                | Command::Disposition { .. }
+                | Command::Reset(_)
         )
     {
         return Err(LocalFailure::request_invalid(
@@ -4826,6 +4853,18 @@ fn validate_daemon_flags(cli: &Cli) -> Result<(), LocalFailure> {
         _ => {}
     }
     match command {
+        Command::Start(args) if args.replace && args.progress_summary.is_none() => {
+            return Err(LocalFailure::request_invalid(
+                "--replace --yes requires --progress-summary",
+            ));
+        }
+        Command::Reset(args)
+            if !args.all && !args.dry_run && cli.yes && args.progress_summary.is_none() =>
+        {
+            return Err(LocalFailure::request_invalid(
+                "reset --yes requires --progress-summary",
+            ));
+        }
         Command::Reset(args) if args.force && !args.all => {
             return Err(LocalFailure::request_invalid(
                 "--force applies only to reset --all",
@@ -4867,8 +4906,29 @@ fn validate_command_shape(command: &Command) -> Result<(), LocalFailure> {
     }
     match command {
         Command::Start(args) => {
+            validate_optional_lifecycle_text(args.progress_summary.as_deref(), "progress summary")?;
+        }
+        Command::Reset(args) => {
+            validate_optional_lifecycle_text(args.progress_summary.as_deref(), "progress summary")?;
+        }
+        Command::Begin(args) => {
             validate_optional_goal(&args.goal, &args.criterion, args.actor.as_deref())?;
         }
+        Command::Disposition { command } => match command {
+            DispositionCommand::HandedOff {
+                summary,
+                reference,
+                actor,
+            } => {
+                validate_lifecycle_text_cli(summary, "summary")?;
+                validate_lifecycle_text_cli(reference, "reference")?;
+                validate_actor(actor.as_deref())?;
+            }
+            DispositionCommand::NotRequired { reason, actor } => {
+                validate_lifecycle_text_cli(reason, "reason")?;
+                validate_actor(actor.as_deref())?;
+            }
+        },
         Command::Decide(args) => {
             OptionId::new(args.option.clone()).map_err(invalid_v2_value)?;
             ReasonV2::new(args.reason.clone()).map_err(invalid_v2_value)?;
@@ -4921,6 +4981,19 @@ fn validate_command_shape(command: &Command) -> Result<(), LocalFailure> {
 
 fn invalid_v2_value(error: impl std::fmt::Display) -> LocalFailure {
     LocalFailure::request_invalid(error.to_string())
+}
+
+fn validate_lifecycle_text_cli(value: &str, field: &str) -> Result<(), LocalFailure> {
+    if value.trim().is_empty() || value.chars().count() > 4_000 {
+        return Err(LocalFailure::request_invalid(format!(
+            "{field} must contain 1..=4000 Unicode scalars"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_optional_lifecycle_text(value: Option<&str>, field: &str) -> Result<(), LocalFailure> {
+    value.map_or(Ok(()), |value| validate_lifecycle_text_cli(value, field))
 }
 
 fn validate_actor(actor: Option<&str>) -> Result<(), LocalFailure> {
@@ -5063,20 +5136,30 @@ fn daemon_payload(
                     Value::String(digest.clone()),
                 );
             }
+            if args.dry_run {
+                payload.insert("dry_run".to_owned(), Value::Bool(true));
+            } else if args.replace {
+                payload.insert("confirmed".to_owned(), Value::Bool(true));
+                payload.insert(
+                    "progress_summary".to_owned(),
+                    Value::String(
+                        args.progress_summary
+                            .clone()
+                            .expect("validated force replacement summary"),
+                    ),
+                );
+            } else if args.replace_eligible {
+                payload.insert("replace_eligible".to_owned(), Value::Bool(true));
+            }
+        }
+        Command::Begin(args) => {
             if let Some(goal) = &args.goal {
                 payload.insert("goal".to_owned(), Value::String(goal.clone()));
                 payload.insert(
                     "criteria".to_owned(),
                     Value::Array(criteria_json(&args.criterion)),
                 );
-                if let Some(actor) = &args.actor {
-                    payload.insert("actor".to_owned(), Value::String(actor.clone()));
-                }
-            }
-            if args.dry_run {
-                payload.insert("dry_run".to_owned(), Value::Bool(true));
-            } else if args.replace {
-                payload.insert("confirmed".to_owned(), Value::Bool(true));
+                insert_actor(&mut payload, args.actor.as_deref());
             }
         }
         Command::Status(args) => {
@@ -5163,11 +5246,32 @@ fn daemon_payload(
             }
             payload.insert("all".to_owned(), Value::Bool(*all));
         }
+        Command::Disposition { command } => match command {
+            DispositionCommand::HandedOff {
+                summary,
+                reference,
+                actor,
+            } => {
+                payload.insert("kind".to_owned(), Value::String("handed_off".to_owned()));
+                payload.insert("summary".to_owned(), Value::String(summary.clone()));
+                payload.insert("reference".to_owned(), Value::String(reference.clone()));
+                insert_actor(&mut payload, actor.as_deref());
+            }
+            DispositionCommand::NotRequired { reason, actor } => {
+                payload.insert("kind".to_owned(), Value::String("not_required".to_owned()));
+                payload.insert("reason".to_owned(), Value::String(reason.clone()));
+                insert_actor(&mut payload, actor.as_deref());
+            }
+        },
         Command::Reset(args) => {
             if args.dry_run {
                 payload.insert("dry_run".to_owned(), Value::Bool(true));
-            } else {
+            } else if let Some(summary) = &args.progress_summary {
                 payload.insert("confirmed".to_owned(), Value::Bool(true));
+                payload.insert(
+                    "progress_summary".to_owned(),
+                    Value::String(summary.clone()),
+                );
             }
         }
         Command::Check { item_id } | Command::Uncheck { item_id } | Command::Clear { item_id } => {
@@ -6161,7 +6265,10 @@ fn empty_dynamic_completion() -> RunResult {
 }
 
 fn dynamic_candidates_v2(result: &Map<String, Value>, kind: &str) -> Vec<String> {
-    if result.get("schema").and_then(Value::as_str) != Some("podway.status-result/v2") {
+    if !matches!(
+        result.get("schema").and_then(Value::as_str),
+        Some("podway.status-result/v2" | "podway.status-result/v3")
+    ) {
         return Vec::new();
     }
     match kind {
@@ -6435,13 +6542,13 @@ mod tests {
 
     use super::{
         Cli, Command, LocalEnvelopeClock, LocalFailure, ParseFailureCommandContext,
-        build_identity_v1, local_generated_at, local_result, map_service_error,
+        build_identity_v1, daemon_payload, local_generated_at, local_result, map_service_error,
         parse_failure_command_context, parse_timeout_millis, probe_daemon_identity,
         probe_daemon_identity_with_runner, render_local_failure_with_clock_and_writers,
         render_result_with_clock_and_writers, resolve_daemon_executable,
         resolve_implicit_daemon_executable_from, resolve_installed_service_endpoint,
         service_outcome_result, service_status_result, stream_log_follow_update,
-        system_service_clock,
+        system_service_clock, validate_daemon_flags,
     };
     use clap::{Parser, error::ErrorKind};
     use serde_json::json;
@@ -6733,6 +6840,124 @@ mod tests {
             ])
             .is_ok()
         );
+    }
+
+    #[test]
+    fn v2lif004_parser_owns_prepared_lifecycle_mutation_forms() {
+        assert!(
+            Cli::try_parse_from([
+                "podway",
+                "start",
+                "--preset",
+                "sw-dev-v2",
+                "--task",
+                "task",
+                "--goal",
+                "no longer accepted",
+            ])
+            .is_err()
+        );
+
+        let mut begin = Cli::try_parse_from([
+            "podway",
+            "begin",
+            "--goal",
+            "Ship safely.",
+            "--criterion",
+            "tests=The focused tests pass.",
+            "--actor",
+            "agent",
+        ])
+        .unwrap();
+        assert_eq!(begin.command.daemon_wire_name(), Some("session.begin"));
+        let (_, begin_payload) = daemon_payload(&mut begin.command, None).unwrap();
+        assert_eq!(begin_payload["goal"], "Ship safely.");
+        assert_eq!(begin_payload["criteria"][0]["criterion_id"], "tests");
+
+        for arguments in [
+            vec![
+                "podway",
+                "disposition",
+                "handed-off",
+                "--summary",
+                "Handoff complete.",
+                "--reference",
+                "local:handoff",
+            ],
+            vec![
+                "podway",
+                "disposition",
+                "not-required",
+                "--reason",
+                "No external handoff exists.",
+            ],
+        ] {
+            let disposition = Cli::try_parse_from(arguments).unwrap();
+            assert_eq!(
+                disposition.command.daemon_wire_name(),
+                Some("session.terminal_disposition")
+            );
+        }
+
+        let eligible = Cli::try_parse_from([
+            "podway",
+            "start",
+            "--preset",
+            "sw-dev-v2",
+            "--task",
+            "task",
+            "--replace-eligible",
+        ])
+        .unwrap();
+        assert_eq!(
+            eligible.command.daemon_wire_name(),
+            Some("session.start_replace")
+        );
+        assert!(
+            Cli::try_parse_from([
+                "podway",
+                "start",
+                "--preset",
+                "sw-dev-v2",
+                "--task",
+                "task",
+                "--replace",
+                "--replace-eligible",
+            ])
+            .is_err()
+        );
+
+        for arguments in [
+            vec![
+                "podway",
+                "--if-attempt",
+                "0198b91d-7ea3-7d94-bf78-e18ca8d34970",
+                "begin",
+            ],
+            vec![
+                "podway",
+                "--if-attempt",
+                "0198b91d-7ea3-7d94-bf78-e18ca8d34970",
+                "disposition",
+                "not-required",
+                "--reason",
+                "No handoff is required.",
+            ],
+            vec![
+                "podway",
+                "--if-attempt",
+                "0198b91d-7ea3-7d94-bf78-e18ca8d34970",
+                "start",
+                "--preset",
+                "sw-dev-v2",
+                "--task",
+                "task",
+                "--replace-eligible",
+            ],
+        ] {
+            let cli = Cli::try_parse_from(arguments).unwrap();
+            assert!(validate_daemon_flags(&cli).is_err());
+        }
     }
 
     #[test]

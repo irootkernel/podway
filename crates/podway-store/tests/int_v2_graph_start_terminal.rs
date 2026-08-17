@@ -2197,7 +2197,7 @@ fn graph_reset_clear_receipt_and_failpoint_are_one_atomic_boundary() {
         .unwrap()
         .clone();
     assert!(
-        matches!(receipt.graph_session_projection().unwrap().operation(), Some(PersistedGraphTerminalOperationV2::Reset { session_id }) if session_id == current.trace().session_id())
+        matches!(receipt.graph_session_projection().unwrap().operation(), Some(PersistedGraphTerminalOperationV2::Reset { session_id, .. }) if session_id == current.trace().session_id())
     );
     drop(reopened);
     let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 37);

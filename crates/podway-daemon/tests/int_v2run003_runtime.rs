@@ -260,9 +260,13 @@ fn request_with_options(
         payload,
     })
     .unwrap();
-    let slice = SliceRequestV1::from_envelope(&envelope).unwrap();
     let daemon = DaemonRequestV1::from_envelope(&envelope).unwrap();
-    assert_eq!(slice.command().command_name(), command);
+    if matches!(command, "session.begin" | "session.terminal_disposition") {
+        assert!(matches!(daemon, DaemonRequestV1::ProcedureV2Mutation(_)));
+    } else {
+        let slice = SliceRequestV1::from_envelope(&envelope).unwrap();
+        assert_eq!(slice.command().command_name(), command);
+    }
     (envelope, daemon)
 }
 
@@ -1238,4 +1242,375 @@ fn v2run003_production_actions_mutate_complete_read_back_restart_and_replay() {
     let finished = v2_result(dispatch(&restarted, &complete_finish), "session.complete");
     assert_eq!(finished["from_graph_node_id"], "finish");
     assert_eq!(finished["session_state"], "completed");
+}
+
+#[test]
+fn v2lif004_prepared_begin_disposition_and_eligible_reset_form_one_runtime_flow() {
+    let fixture = support_phase4_workspace::git_worktrees();
+    make_runtime_private(fixture.main());
+    fs::write(
+        fixture.main().join("lifecycle.yaml"),
+        ACTION_READBACK_PROCEDURE,
+    )
+    .unwrap();
+    let ParsedProcedure::V2(parsed) = parse_procedure_document(
+        ACTION_READBACK_PROCEDURE.as_bytes(),
+        ProcedureDocumentFormat::Yaml,
+    )
+    .unwrap();
+    let digest = validate_procedure_v2(parsed).unwrap().digest().clone();
+    let selector = selector(fixture.main());
+    let manager = Arc::new(manager(fixture.temporary_path()));
+    let production = dispatcher(Arc::clone(&manager), "v2lif004-runtime");
+
+    let initialize = request(
+        140_001,
+        "workspace.init",
+        &selector,
+        Map::new(),
+        "v2lif004-init",
+        PreconditionsV1::default(),
+    );
+    assert!(matches!(
+        dispatch(&production, &initialize),
+        ResponseEnvelopeV2::OutputV2(_)
+    ));
+
+    let start = request(
+        140_002,
+        "session.start",
+        &selector,
+        json!({
+            "procedure": "lifecycle.yaml",
+            "expected_procedure_digest": digest,
+            "task_title": "Exercise prepared lifecycle"
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+        "v2lif004-start",
+        PreconditionsV1::default(),
+    );
+    let started = v2_result(dispatch(&production, &start), "session.start");
+    assert_eq!(started["schema"], "podway.session-start-result/v3");
+    assert_eq!(started["session_state"], "prepared");
+    assert_eq!(started["revision"], 0);
+    assert!(started["active_attempt"].is_null());
+    let session_id = SessionId::new(started["session_id"].as_str().unwrap()).unwrap();
+
+    let prepared = status(&production, &selector, 140_003, session_id.as_str());
+    assert_eq!(prepared["session"]["lifecycle"], "prepared");
+    assert!(prepared["current"].is_null());
+
+    let identity_fence = PreconditionsV1::new(
+        Some(session_id.clone()),
+        Some(Revision::ZERO),
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    let begin = request(
+        140_004,
+        "session.begin",
+        &selector,
+        Map::new(),
+        "v2lif004-begin",
+        identity_fence,
+    );
+    let begun = v2_result(dispatch(&production, &begin), "session.begin");
+    assert_eq!(begun["schema"], "podway.session-begin-result/v1");
+    assert_eq!(begun["session_state"], "running");
+    assert_eq!(begun["revision"], 1);
+    assert_eq!(begun["goal_defined"], false);
+
+    let running = status(&production, &selector, 140_005, session_id.as_str());
+    let running_identity_fence = PreconditionsV1::new(
+        Some(session_id.clone()),
+        Some(Revision::new(
+            running["session"]["revision"].as_u64().unwrap(),
+        )),
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    let rejected_disposition = request(
+        140_006,
+        "session.terminal_disposition",
+        &selector,
+        json!({"kind":"not_required","reason":"Running is not terminal."})
+            .as_object()
+            .unwrap()
+            .clone(),
+        "v2lif004-running-disposition",
+        running_identity_fence.clone(),
+    );
+    let ResponseEnvelopeV2::Error(rejected_disposition) =
+        dispatch(&production, &rejected_disposition)
+    else {
+        panic!("terminal disposition must reject a running session");
+    };
+    assert_eq!(rejected_disposition.code().as_str(), "SESSION_NOT_TERMINAL");
+
+    let rejected_reset = request(
+        140_007,
+        "session.reset",
+        &selector,
+        Map::new(),
+        "v2lif004-running-reset",
+        running_identity_fence,
+    );
+    let ResponseEnvelopeV2::Error(rejected_reset) = dispatch(&production, &rejected_reset) else {
+        panic!("eligible reset must reject a running session");
+    };
+    assert_eq!(rejected_reset.code().as_str(), "SESSION_RESET_NOT_ELIGIBLE");
+
+    let cancel = request(
+        140_008,
+        "session.cancel",
+        &selector,
+        json!({"reason":"Exercise terminal disposition."})
+            .as_object()
+            .unwrap()
+            .clone(),
+        "v2lif004-cancel",
+        session_preconditions(&running),
+    );
+    let cancelled = v2_result(dispatch(&production, &cancel), "session.cancel");
+    assert_eq!(cancelled["session_state"], "cancelled");
+    let terminal_revision = cancelled["revision"].as_u64().unwrap();
+
+    let terminal_fence = PreconditionsV1::new(
+        Some(session_id.clone()),
+        Some(Revision::new(terminal_revision)),
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    let disposition = request(
+        140_009,
+        "session.terminal_disposition",
+        &selector,
+        json!({"kind":"not_required","reason":"The test owns no external handoff."})
+            .as_object()
+            .unwrap()
+            .clone(),
+        "v2lif004-disposition",
+        terminal_fence.clone(),
+    );
+    let disposed = v2_result(
+        dispatch(&production, &disposition),
+        "session.terminal_disposition",
+    );
+    assert_eq!(disposed["schema"], "podway.terminal-disposition-result/v1");
+    assert_eq!(disposed["disposition"]["kind"], "not_required");
+
+    let duplicate_disposition = request(
+        140_010,
+        "session.terminal_disposition",
+        &selector,
+        json!({"kind":"not_required","reason":"A second assertion is forbidden."})
+            .as_object()
+            .unwrap()
+            .clone(),
+        "v2lif004-duplicate-disposition",
+        terminal_fence.clone(),
+    );
+    let ResponseEnvelopeV2::Error(duplicate_disposition) =
+        dispatch(&production, &duplicate_disposition)
+    else {
+        panic!("one terminal revision must admit only one immutable disposition");
+    };
+    assert_eq!(duplicate_disposition.code().as_str(), "REQUEST_INVALID");
+
+    let reset = request(
+        140_011,
+        "session.reset",
+        &selector,
+        Map::new(),
+        "v2lif004-reset",
+        terminal_fence,
+    );
+    let reset = v2_result(dispatch(&production, &reset), "session.reset");
+    assert_eq!(reset["schema"], "podway.session-reset-result/v1");
+    assert_eq!(reset["mode"], "eligible");
+    assert_eq!(reset["reset"], true);
+}
+
+#[test]
+fn v2lif004_eligible_and_force_replacement_then_force_reset_are_atomic() {
+    let fixture = support_phase4_workspace::git_worktrees();
+    make_runtime_private(fixture.main());
+    fs::write(
+        fixture.main().join("replacement.yaml"),
+        ACTION_READBACK_PROCEDURE,
+    )
+    .unwrap();
+    let ParsedProcedure::V2(parsed) = parse_procedure_document(
+        ACTION_READBACK_PROCEDURE.as_bytes(),
+        ProcedureDocumentFormat::Yaml,
+    )
+    .unwrap();
+    let digest = validate_procedure_v2(parsed).unwrap().digest().clone();
+    let selector = selector(fixture.main());
+    let manager = Arc::new(manager(fixture.temporary_path()));
+    let production = dispatcher(Arc::clone(&manager), "v2lif004-replacement");
+
+    let initialize = request(
+        141_001,
+        "workspace.init",
+        &selector,
+        Map::new(),
+        "v2lif004-replacement-init",
+        PreconditionsV1::default(),
+    );
+    assert!(matches!(
+        dispatch(&production, &initialize),
+        ResponseEnvelopeV2::OutputV2(_)
+    ));
+
+    let start_payload = |title: &str| {
+        json!({
+            "procedure": "replacement.yaml",
+            "expected_procedure_digest": digest,
+            "task_title": title
+        })
+        .as_object()
+        .unwrap()
+        .clone()
+    };
+    let start = request(
+        141_002,
+        "session.start",
+        &selector,
+        start_payload("Prepared A"),
+        "v2lif004-replacement-start",
+        PreconditionsV1::default(),
+    );
+    let started = v2_result(dispatch(&production, &start), "session.start");
+    let first_session = SessionId::new(started["session_id"].as_str().unwrap()).unwrap();
+
+    let mut eligible_payload = start_payload("Prepared B");
+    eligible_payload.insert("replace_eligible".to_owned(), Value::Bool(true));
+    let eligible_replace = request(
+        141_003,
+        "session.start_replace",
+        &selector,
+        eligible_payload,
+        "v2lif004-eligible-replace",
+        PreconditionsV1::new(
+            Some(first_session.clone()),
+            Some(Revision::ZERO),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let replaced = v2_result(
+        dispatch(&production, &eligible_replace),
+        "session.start_replace",
+    );
+    assert_eq!(replaced["session_state"], "prepared");
+    let second_session = SessionId::new(replaced["session_id"].as_str().unwrap()).unwrap();
+    assert_ne!(second_session, first_session);
+
+    let begin = request(
+        141_004,
+        "session.begin",
+        &selector,
+        Map::new(),
+        "v2lif004-replacement-begin",
+        PreconditionsV1::new(
+            Some(second_session.clone()),
+            Some(Revision::ZERO),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let begun = v2_result(dispatch(&production, &begin), "session.begin");
+    assert_eq!(begun["session_state"], "running");
+
+    let mut force_payload = start_payload("Prepared C");
+    force_payload.insert("confirmed".to_owned(), Value::Bool(true));
+    force_payload.insert(
+        "progress_summary".to_owned(),
+        Value::String("The runtime test intentionally discards its isolated work.".to_owned()),
+    );
+    let force_replace = request(
+        141_005,
+        "session.start_replace",
+        &selector,
+        force_payload,
+        "v2lif004-force-replace",
+        PreconditionsV1::new(
+            Some(second_session),
+            Some(Revision::new(1)),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let force_replaced = v2_result(
+        dispatch(&production, &force_replace),
+        "session.start_replace",
+    );
+    assert_eq!(force_replaced["session_state"], "prepared");
+    let third_session = SessionId::new(force_replaced["session_id"].as_str().unwrap()).unwrap();
+
+    let begin = request(
+        141_006,
+        "session.begin",
+        &selector,
+        Map::new(),
+        "v2lif004-force-reset-begin",
+        PreconditionsV1::new(
+            Some(third_session.clone()),
+            Some(Revision::ZERO),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let _ = v2_result(dispatch(&production, &begin), "session.begin");
+
+    let force_reset = request(
+        141_007,
+        "session.reset",
+        &selector,
+        json!({
+            "confirmed": true,
+            "progress_summary": "The runtime test intentionally discards its isolated work."
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+        "v2lif004-force-reset",
+        PreconditionsV1::new(
+            Some(third_session),
+            Some(Revision::new(1)),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let reset = v2_result(dispatch(&production, &force_reset), "session.reset");
+    assert_eq!(reset["mode"], "force");
+    assert_eq!(reset["lifecycle"], "running");
+    assert_eq!(reset["reset"], true);
 }

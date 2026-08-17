@@ -31,7 +31,7 @@ pub mod v2_memory;
 pub mod v2_state;
 
 pub use codec::{
-    PersistedGraphItemMutationV2, PersistedGraphMutationFailureV2,
+    PersistedGraphItemMutationV2, PersistedGraphMutationFailureV2, PersistedGraphResetModeV2,
     PersistedGraphTerminalOperationV2, PersistedGraphTerminalSessionProjectionV2,
     PersistedResponseContextV1, PersistedStartIdentityV1, PersistedTerminalJobProjectionV1,
     PersistedTerminalJobStateV1, PersistedTerminalReceiptV1, PersistedTerminalSessionProjectionV1,
@@ -101,6 +101,8 @@ pub(crate) fn command_name_v1(command: &CommandV1) -> &'static str {
         CommandV1::WorkspaceResetAll => "workspace.reset_all",
         CommandV1::SessionStart => "session.start",
         CommandV1::SessionStartReplace => "session.start_replace",
+        CommandV1::SessionBegin => "session.begin",
+        CommandV1::SessionTerminalDisposition => "session.terminal_disposition",
         CommandV1::SessionComplete => "session.complete",
         CommandV1::SessionSkip => "session.skip",
         CommandV1::SessionRetry => "session.retry",
@@ -1934,6 +1936,13 @@ pub enum StoreErrorV1 {
     SessionIdentityConflictV1 {
         expected: Option<SessionId>,
         actual: Option<SessionId>,
+    },
+    SessionResetNotEligibleV1 {
+        lifecycle: podway_core::SessionLifecycle,
+        current_terminal_disposition: bool,
+    },
+    TerminalDispositionAlreadyRecordedV1 {
+        session_revision: RevisionV1,
     },
     StorageIntegrityV1 {
         check: StoreIntegrityCheckV1,

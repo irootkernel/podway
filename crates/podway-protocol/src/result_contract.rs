@@ -137,6 +137,8 @@ pub struct ResultSchemaContractV2 {
 pub const V2_MUTATION_COMMANDS: &[&str] = &[
     "session.start",
     "session.start_replace",
+    "session.begin",
+    "session.terminal_disposition",
     "session.complete",
     "session.skip",
     "session.retry",
@@ -158,8 +160,6 @@ pub const V2_MUTATION_COMMANDS: &[&str] = &[
     "item.clear",
     "item.record_many",
 ];
-
-const V2_RESERVED_MUTATION_COMMANDS: &[&str] = &["session.begin", "session.terminal_disposition"];
 
 /// Result families for existing routes whose v2-session shape breaks from v1.
 pub const EXISTING_ROUTE_RESULT_SCHEMAS_V2: &[ResultSchemaContractV2] = &[
@@ -628,7 +628,7 @@ fn is_v2_mutation_command(command: &str) -> bool {
 }
 
 pub(crate) fn is_v2_mutation_contract_command(command: &str) -> bool {
-    is_v2_mutation_command(command) || V2_RESERVED_MUTATION_COMMANDS.contains(&command)
+    is_v2_mutation_command(command)
 }
 
 fn is_durable_job_command_v3(command: &str) -> bool {

@@ -371,14 +371,9 @@ fn reserved_v2_cases() -> Vec<(&'static str, Value, Value, &'static str)> {
             json!({
                 "selector": selector.clone(),
                 "procedure": "workflow.yaml",
-                "task_title": "Exercise the v2 boundary",
-                "goal": "Keep unsupported admission fail-closed.",
-                "criteria": [{
-                    "criterion_id": "closed",
-                    "statement": "The daemon returns the registered compatibility error."
-                }]
+                "task_title": "Exercise the v2 boundary"
             }),
-            "podway.session-start-result/v2",
+            "podway.session-start-result/v3",
         ),
         (
             "session.start_replace",
@@ -387,14 +382,9 @@ fn reserved_v2_cases() -> Vec<(&'static str, Value, Value, &'static str)> {
                 "selector": selector.clone(),
                 "procedure": "workflow.yaml",
                 "task_title": "Exercise replacement at the v2 boundary",
-                "confirmed": true,
-                "goal": "Keep replacement admission fail-closed.",
-                "criteria": [{
-                    "criterion_id": "closed",
-                    "statement": "The daemon returns the registered compatibility error."
-                }]
+                "replace_eligible": true
             }),
-            "podway.session-start-result/v2",
+            "podway.session-start-result/v3",
         ),
         (
             "session.decide",

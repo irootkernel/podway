@@ -9,7 +9,9 @@ use std::{sync::Arc, time::Instant};
 
 #[cfg(test)]
 use podway_core::DomainError;
-use podway_core::{Revision, SessionId, Sha256Digest, TraceSequenceV2, UnixMillis};
+use podway_core::{
+    Revision, SessionId, SessionLifecycle, Sha256Digest, TraceSequenceV2, UnixMillis,
+};
 use podway_git::{
     Base64UrlPathBytesV1, DiagnosticPathDisplayV1, LosslessPathV1, WORKTREE_SELECTOR_VERSION_V1,
     WorktreeSelectorV1,
@@ -55,8 +57,8 @@ use crate::{
         DaemonExecutionEngineV1, ExecutionClockV1, ExecutionErrorV1, ExecutionIdSourceV1,
         ProcedureV2SourceAdmissionErrorV1, ProcedureV2StartPreparationErrorV1,
         ResetAllPreparationOutcomeV1, admitted_procedure_v2_start_projection_v1,
-        admitted_start_procedure_digest_v1, bind_initial_goal_for_start_v2,
-        prepare_custom_procedure_v2_start, prepare_preset_procedure_v2_start,
+        admitted_start_procedure_digest_v1, prepare_custom_procedure_v2_start,
+        prepare_preset_procedure_v2_start,
     },
     native_execution::{
         NativeArtifactVerifierV1, NativeExecutionIdSourceV1, NativeProcedureProviderV1,
@@ -111,7 +113,9 @@ fn is_shared_v2_automation_mutation(command: &str) -> bool {
 fn is_typed_v2_automation_mutation(command: &str) -> bool {
     matches!(
         command,
-        "session.decide"
+        "session.begin"
+            | "session.terminal_disposition"
+            | "session.decide"
             | "session.rework"
             | "goal.define"
             | "goal.revise"
@@ -1421,6 +1425,7 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                 return Ok(None);
             }
             let terminal_kind = match typed_request.command().command_name() {
+                "session.begin" | "session.terminal_disposition" => TerminalCommandKindV1::Other,
                 "session.decide" => TerminalCommandKindV1::Decision,
                 "session.rework" => TerminalCommandKindV1::Rework,
                 "goal.define" => TerminalCommandKindV1::GoalDefinition,
@@ -1517,23 +1522,34 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
         }
         if let DaemonRequestV1::ProcedureV2Start(typed_request) = daemon_request {
             if !typed_request.command().is_mutation() {
-                let (start, initial_goal, expected_current) = match typed_request.command() {
-                    podway_protocol::ProcedureV2StartCommandV1::SessionStart(input) => (
-                        &input.start,
-                        input.initial_goal.as_ref(),
-                        GraphStartCurrentTaskV2::Absent,
-                    ),
+                let (start, expected_current) = match typed_request.command() {
+                    podway_protocol::ProcedureV2StartCommandV1::SessionStart(input) => {
+                        (&input.start, GraphStartCurrentTaskV2::Absent)
+                    }
                     podway_protocol::ProcedureV2StartCommandV1::SessionStartReplace(input) => (
                         &input.start.start,
-                        input.start.initial_goal.as_ref(),
-                        GraphStartCurrentTaskV2::Exact {
-                            session_id: input.preconditions.expected_session_id.clone(),
-                            session_revision: input.preconditions.expected_session_revision,
+                        match &input.mode {
+                            podway_protocol::SessionDeletionModeV1::Eligible => {
+                                GraphStartCurrentTaskV2::Eligible {
+                                    session_id: input.preconditions.expected_session_id.clone(),
+                                    session_revision: input.preconditions.expected_session_revision,
+                                }
+                            }
+                            podway_protocol::SessionDeletionModeV1::Force { progress_summary } => {
+                                GraphStartCurrentTaskV2::Force {
+                                    session_id: input.preconditions.expected_session_id.clone(),
+                                    session_revision: input.preconditions.expected_session_revision,
+                                    progress_summary: progress_summary.clone(),
+                                }
+                            }
+                            podway_protocol::SessionDeletionModeV1::LegacyConfirmed => {
+                                GraphStartCurrentTaskV2::Exact {
+                                    session_id: input.preconditions.expected_session_id.clone(),
+                                    session_revision: input.preconditions.expected_session_revision,
+                                }
+                            }
                         },
                     ),
-                };
-                let Some(initial_goal) = initial_goal else {
-                    return Ok(None);
                 };
                 let selector = selector_from_wire(typed_request.selector())?;
                 let readonly = self
@@ -1574,8 +1590,6 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                 let Some(state) = state else {
                     return Ok(None);
                 };
-                let state = bind_initial_goal_for_start_v2(state, initial_goal, now)
-                    .map_err(map_procedure_v2_start_preparation_error)?;
                 let actual_current = SqliteStoreV1::inspect_graph_start_current_task_v2(
                     readonly.database_path(),
                     readonly.binding().identity(),
@@ -1585,9 +1599,10 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                 .map_err(map_store_error)?;
                 validate_graph_start_dry_run_fence_v2(&expected_current, &actual_current)?;
                 let result = json!({
-                    "schema":"podway.session-start-result/v2", "procedure_schema":"podway.procedure/v2",
+                    "schema":"podway.session-start-result/v3", "procedure_schema":"podway.procedure/v2",
                     "procedure_digest":state.snapshot().digest(), "dry_run":true,
-                    "goal_tracking":state.snapshot().goal_tracking(), "goal_defined":true,
+                    "session_state":"prepared", "goal_tracking":state.snapshot().goal_tracking(),
+                    "goal_defined":false, "active_attempt":Value::Null, "goal_revision":Value::Null,
                 });
                 return OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
                     request_id: request.request_id().clone(),
@@ -1731,6 +1746,36 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                         ),
                 );
             }
+            let current_terminal_disposition =
+                SqliteStoreV1::inspect_current_terminal_disposition_v2(
+                    readonly.database_path(),
+                    readonly.binding().identity(),
+                    readonly.store_options(),
+                    EpochMillisV1::new(self.clock.now().get()),
+                )
+                .map_err(map_store_error)?;
+            let (lifecycle, eligible, required_action) = match state.trace().lifecycle() {
+                SessionLifecycle::Prepared => ("prepared", true, "none"),
+                SessionLifecycle::Running => ("running", false, "force"),
+                SessionLifecycle::Completed => (
+                    "completed",
+                    current_terminal_disposition,
+                    if current_terminal_disposition {
+                        "none"
+                    } else {
+                        "record_disposition"
+                    },
+                ),
+                SessionLifecycle::Cancelled => (
+                    "cancelled",
+                    current_terminal_disposition,
+                    if current_terminal_disposition {
+                        "none"
+                    } else {
+                        "record_disposition"
+                    },
+                ),
+            };
             let workspace = WorkspaceOutputV1::new(
                 view.identity().workspace_uuid().clone(),
                 readonly
@@ -1743,11 +1788,16 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
             )
             .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?;
             let result = json!({
-                "schema": "podway.stage-transition-result/v2",
-                "admission": { "admitted": false },
-                "transition": "reset",
-                "reset": true,
-                "revision": state.trace().revision(),
+                "schema": "podway.session-reset-result/v1",
+                "dry_run": true,
+                "mode": "eligible",
+                "session_id": state.trace().session_id(),
+                "session_revision": state.trace().revision(),
+                "lifecycle": lifecycle,
+                "current_terminal_disposition": current_terminal_disposition,
+                "eligible": eligible,
+                "required_action": required_action,
+                "reset": false,
             });
             return OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
                 request_id: request.request_id().clone(),
@@ -2090,7 +2140,7 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
             .map_err(map_store_error)?;
             validate_graph_start_dry_run_fence_v2(&expected_current, &actual_current)?;
             let result = json!({
-                "schema": "podway.session-start-result/v2",
+                "schema": "podway.session-start-result/v3",
                 "procedure_schema": "podway.procedure/v2",
                 "procedure_digest": state.snapshot().digest(),
                 "dry_run": true,
@@ -2399,7 +2449,7 @@ fn map_preview_procedure_error(
 fn unsupported_v2_capability_failure(capability: &'static str) -> DispatchFailureV1 {
     DispatchFailureV1::new(DispatchFailureKindV1::UnsupportedV2Capability).with_details(
         DispatchErrorDetailsV1::default()
-            .with_unsupported_v2_capability(capability, "podway.session-start-result/v2"),
+            .with_unsupported_v2_capability(capability, "podway.session-start-result/v3"),
     )
 }
 
@@ -2717,6 +2767,8 @@ fn durable_command_name(command: &podway_store::CommandV1) -> &'static str {
         podway_store::CommandV1::WorkspaceResetAll => "workspace.reset_all",
         podway_store::CommandV1::SessionStart => "session.start",
         podway_store::CommandV1::SessionStartReplace => "session.start_replace",
+        podway_store::CommandV1::SessionBegin => "session.begin",
+        podway_store::CommandV1::SessionTerminalDisposition => "session.terminal_disposition",
         podway_store::CommandV1::SessionComplete => "session.complete",
         podway_store::CommandV1::SessionSkip => "session.skip",
         podway_store::CommandV1::SessionRetry => "session.retry",
@@ -2776,6 +2828,8 @@ fn validate_terminal_receipt_projection(
         return match (graph.operation(), receipt.result()) {
             (
                 None
+                | Some(PersistedGraphTerminalOperationV2::Begin { .. })
+                | Some(PersistedGraphTerminalOperationV2::TerminalDisposition { .. })
                 | Some(PersistedGraphTerminalOperationV2::Decide { .. })
                 | Some(PersistedGraphTerminalOperationV2::Rework { .. })
                 | Some(PersistedGraphTerminalOperationV2::GoalDefine { .. })
@@ -2986,6 +3040,8 @@ fn validate_frozen_terminal_error(
         }
         Some(
             PersistedGraphTerminalOperationV2::Decide { .. }
+            | PersistedGraphTerminalOperationV2::Begin { .. }
+            | PersistedGraphTerminalOperationV2::TerminalDisposition { .. }
             | PersistedGraphTerminalOperationV2::Rework { .. }
             | PersistedGraphTerminalOperationV2::GoalDefine { .. }
             | PersistedGraphTerminalOperationV2::GoalRevise { .. }
@@ -3058,7 +3114,7 @@ fn validate_frozen_v2_result_projection(
                 && result.get("revision").and_then(Value::as_u64) == Some(revision.get())
         }
         (
-            Some("podway.session-start-result/v2"),
+            Some("podway.session-start-result/v3"),
             PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
                 session_id,
                 revision_after,
@@ -3083,6 +3139,105 @@ fn validate_frozen_v2_result_projection(
                             == Some(projection.goal_defined())
                 }))
         }
+        (
+            Some("podway.session-begin-result/v1"),
+            PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
+                session_id,
+                revision_after,
+                ..
+            }),
+        ) => graph_session.is_some_and(|projection| {
+            let Some(PersistedGraphTerminalOperationV2::Begin {
+                attempt_id,
+                goal_revision,
+            }) = projection.operation()
+            else {
+                return false;
+            };
+            projection.session_id() == session_id
+                && projection.lifecycle() == PersistedSessionLifecycleV1::Running
+                && projection.revision_after() == *revision_after
+                && result.get("session_id").and_then(Value::as_str) == Some(session_id.as_str())
+                && result.get("revision").and_then(Value::as_u64) == Some(revision_after.get())
+                && result
+                    .get("attempt")
+                    .and_then(Value::as_object)
+                    .is_some_and(|attempt| {
+                        attempt.get("attempt_id").and_then(Value::as_str)
+                            == Some(attempt_id.as_str())
+                            && attempt.get("attempt_number").and_then(Value::as_u64) == Some(1)
+                    })
+                && result.get("goal_revision").and_then(Value::as_u64) == *goal_revision
+                && result.get("goal_defined").and_then(Value::as_bool)
+                    == Some(goal_revision.is_some())
+        }),
+        (
+            Some("podway.terminal-disposition-result/v1"),
+            PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
+                session_id,
+                revision_after,
+                ..
+            }),
+        ) => graph_session.is_some_and(|projection| {
+            let Some(PersistedGraphTerminalOperationV2::TerminalDisposition {
+                session_id: operation_session_id,
+                terminal_session_revision,
+                disposition_kind,
+                ..
+            }) = projection.operation()
+            else {
+                return false;
+            };
+            projection.session_id() == session_id
+                && operation_session_id == session_id
+                && terminal_session_revision == revision_after
+                && result.get("session_id").and_then(Value::as_str) == Some(session_id.as_str())
+                && result.get("session_revision").and_then(Value::as_u64)
+                    == Some(revision_after.get())
+                && result
+                    .get("disposition")
+                    .and_then(Value::as_object)
+                    .and_then(|disposition| disposition.get("kind"))
+                    .and_then(Value::as_str)
+                    == Some(disposition_kind.as_str())
+        }),
+        (
+            Some("podway.session-reset-result/v1"),
+            PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
+                session_id,
+                revision_after,
+                ..
+            }),
+        ) => graph_session.is_some_and(|projection| {
+            let Some(PersistedGraphTerminalOperationV2::Reset {
+                session_id: operation_session_id,
+                mode,
+                ..
+            }) = projection.operation()
+            else {
+                return false;
+            };
+            let lifecycle = match projection.lifecycle() {
+                PersistedSessionLifecycleV1::Prepared => "prepared",
+                PersistedSessionLifecycleV1::Running => "running",
+                PersistedSessionLifecycleV1::Completed => "completed",
+                PersistedSessionLifecycleV1::Cancelled => "cancelled",
+            };
+            let mode_name = match mode {
+                podway_store::PersistedGraphResetModeV2::Eligible => "eligible",
+                podway_store::PersistedGraphResetModeV2::Force
+                | podway_store::PersistedGraphResetModeV2::LegacyConfirmed => "force",
+            };
+            projection.session_id() == session_id
+                && operation_session_id == session_id
+                && projection.revision_after() == *revision_after
+                && result.get("session_id").and_then(Value::as_str) == Some(session_id.as_str())
+                && result.get("session_revision").and_then(Value::as_u64)
+                    == Some(revision_after.get())
+                && result.get("lifecycle").and_then(Value::as_str) == Some(lifecycle)
+                && result.get("mode").and_then(Value::as_str) == Some(mode_name)
+                && result.get("reset").and_then(Value::as_bool) == Some(true)
+        }),
         (
             Some("podway.decision-result/v1"),
             PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
@@ -3273,12 +3428,11 @@ fn validate_frozen_v2_result_projection(
                                     == Some(attempt_id.as_str())
                                 && result.get("reason").is_none()
                         }
-                        Some(PersistedGraphTerminalOperationV2::Reset { session_id }) => {
+                        Some(PersistedGraphTerminalOperationV2::Reset { session_id, .. }) => {
                             graph_session
                                 .is_some_and(|projection| projection.session_id() == session_id)
-                                && result.get("revision").and_then(Value::as_u64)
+                                && result.get("session_revision").and_then(Value::as_u64)
                                     == Some(revision_after.get())
-                                && result.get("transition").and_then(Value::as_str) == Some("reset")
                                 && result.get("reset").and_then(Value::as_bool) == Some(true)
                                 && result.get("session_state").is_none()
                         }
@@ -3507,6 +3661,8 @@ fn expected_stage_transition_v2(command: &PersistedDomainCommandV1) -> Option<&'
         | PersistedDomainCommandV1::WorkspaceResetAll
         | PersistedDomainCommandV1::SessionStart
         | PersistedDomainCommandV1::SessionStartReplace
+        | PersistedDomainCommandV1::SessionBegin
+        | PersistedDomainCommandV1::SessionTerminalDisposition
         | PersistedDomainCommandV1::SessionDecide
         | PersistedDomainCommandV1::SessionRework
         | PersistedDomainCommandV1::GoalDefine
@@ -3554,6 +3710,76 @@ fn graph_terminal_envelope_v2(
     match graph.operation() {
         None => serde_json::to_value(graph_start_terminal_envelope_v2(receipt)?)
             .map_err(|_| terminal_replay_integrity_failure()),
+        Some(PersistedGraphTerminalOperationV2::Begin {
+            attempt_id,
+            goal_revision,
+        }) => {
+            let result = json!({
+                "schema": "podway.session-begin-result/v1",
+                "procedure_schema": "podway.procedure/v2",
+                "procedure_digest": graph.procedure_digest(),
+                "session_id": graph.session_id(),
+                "revision": graph.revision_after(),
+                "session_state": "running",
+                "entry_graph_node_id": graph.entry_graph_node_id(),
+                "attempt": {
+                    "attempt_id": attempt_id,
+                    "attempt_number": 1,
+                },
+                "goal_tracking": graph.goal_tracking(),
+                "goal_defined": goal_revision.is_some(),
+                "goal_revision": goal_revision,
+                "admission": graph_admission_value_v2(receipt)?,
+            })
+            .as_object()
+            .expect("begin result is an object")
+            .clone();
+            graph_success_terminal_envelope_v2(receipt, result)
+        }
+        Some(PersistedGraphTerminalOperationV2::TerminalDisposition {
+            session_id,
+            terminal_session_revision,
+            disposition_kind,
+            summary,
+            stable_reference,
+            reason,
+            actor,
+            recorded_at_ms,
+        }) => {
+            let mut disposition = match disposition_kind.as_str() {
+                "handed_off" => json!({
+                    "kind": "handed_off",
+                    "summary": summary,
+                    "reference": stable_reference,
+                    "session_revision": terminal_session_revision,
+                    "recorded_at": rfc3339_millis(EpochMillisV1::new(*recorded_at_ms))?,
+                }),
+                "not_required" => json!({
+                    "kind": "not_required",
+                    "reason": reason,
+                    "session_revision": terminal_session_revision,
+                    "recorded_at": rfc3339_millis(EpochMillisV1::new(*recorded_at_ms))?,
+                }),
+                _ => return Err(terminal_replay_integrity_failure()),
+            };
+            if let Some(actor) = actor {
+                disposition
+                    .as_object_mut()
+                    .expect("disposition is an object")
+                    .insert("actor".to_owned(), Value::String(actor.clone()));
+            }
+            let result = json!({
+                "schema": "podway.terminal-disposition-result/v1",
+                "session_id": session_id,
+                "session_revision": terminal_session_revision,
+                "disposition": disposition,
+                "admission": graph_admission_value_v2(receipt)?,
+            })
+            .as_object()
+            .expect("terminal disposition result is an object")
+            .clone();
+            graph_success_terminal_envelope_v2(receipt, result)
+        }
         Some(PersistedGraphTerminalOperationV2::Decide {
             record,
             target_attempt_id,
@@ -3861,12 +4087,37 @@ fn graph_terminal_envelope_v2(
             .clone();
             graph_success_terminal_envelope_v2(receipt, result)
         }
-        Some(PersistedGraphTerminalOperationV2::Reset { .. }) => {
+        Some(PersistedGraphTerminalOperationV2::Reset {
+            session_id, mode, ..
+        }) => {
+            let lifecycle = match graph.lifecycle() {
+                PersistedSessionLifecycleV1::Prepared => "prepared",
+                PersistedSessionLifecycleV1::Running => "running",
+                PersistedSessionLifecycleV1::Completed => "completed",
+                PersistedSessionLifecycleV1::Cancelled => "cancelled",
+            };
+            let mode_name = match mode {
+                podway_store::PersistedGraphResetModeV2::Eligible => "eligible",
+                podway_store::PersistedGraphResetModeV2::Force
+                | podway_store::PersistedGraphResetModeV2::LegacyConfirmed => "force",
+            };
+            let current_terminal_disposition = *mode
+                == podway_store::PersistedGraphResetModeV2::Eligible
+                && matches!(
+                    graph.lifecycle(),
+                    PersistedSessionLifecycleV1::Completed | PersistedSessionLifecycleV1::Cancelled
+                );
             let result = json!({
-                "schema": "podway.stage-transition-result/v2",
-                "transition": "reset",
+                "schema": "podway.session-reset-result/v1",
+                "dry_run": false,
+                "mode": mode_name,
+                "session_id": session_id,
+                "session_revision": graph.revision_after(),
+                "lifecycle": lifecycle,
+                "current_terminal_disposition": current_terminal_disposition,
+                "eligible": *mode == podway_store::PersistedGraphResetModeV2::Eligible,
+                "required_action": "none",
                 "reset": true,
-                "revision": graph.revision_after(),
                 "admission": graph_admission_value_v2(receipt)?,
             })
             .as_object()
@@ -4024,12 +4275,15 @@ fn graph_start_terminal_envelope_v2(
         .ok_or_else(terminal_replay_integrity_failure)?;
     let job = job_output_from_terminal_receipt(receipt)?;
     let result = json!({
-        "schema": "podway.session-start-result/v2",
+        "schema": "podway.session-start-result/v3",
         "procedure_schema": "podway.procedure/v2",
         "procedure_digest": graph.procedure_digest(),
         "dry_run": false,
         "goal_tracking": graph.goal_tracking(),
-        "goal_defined": graph.goal_defined(),
+        "session_state": "prepared",
+        "goal_defined": false,
+        "active_attempt": Value::Null,
+        "goal_revision": Value::Null,
         "admission": {
             "admitted": true,
             "job_id": job.id(),
@@ -4438,6 +4692,23 @@ fn map_graph_mutation_failure_v2(error: &PersistedGraphMutationFailureV2) -> Dis
         PersistedGraphMutationFailureV2::SessionNotRunning => {
             DispatchFailureV1::new(DispatchFailureKindV1::SessionNotRunning)
         }
+        PersistedGraphMutationFailureV2::SessionNotTerminal => {
+            DispatchFailureV1::new(DispatchFailureKindV1::SessionNotTerminal)
+        }
+        PersistedGraphMutationFailureV2::SessionResetNotEligible {
+            lifecycle,
+            current_terminal_disposition: _,
+        } => {
+            let lifecycle = match lifecycle.as_str() {
+                "running" => SessionLifecycle::Running,
+                "completed" => SessionLifecycle::Completed,
+                "cancelled" => SessionLifecycle::Cancelled,
+                _ => return DispatchFailureV1::new(DispatchFailureKindV1::Internal),
+            };
+            DispatchFailureV1::new(DispatchFailureKindV1::SessionResetNotEligible).with_details(
+                DispatchErrorDetailsV1::default().with_session_reset_not_eligible(lifecycle),
+            )
+        }
         PersistedGraphMutationFailureV2::SessionCancelled => {
             DispatchFailureV1::new(DispatchFailureKindV1::SessionCancelled)
         }
@@ -4791,51 +5062,44 @@ fn validate_graph_start_dry_run_fence_v2(
     expected: &GraphStartCurrentTaskV2,
     actual: &GraphStartCurrentTaskV2,
 ) -> Result<(), DispatchFailureV1> {
-    if expected == actual {
-        return Ok(());
-    }
-    match (expected, actual) {
-        (GraphStartCurrentTaskV2::Absent, GraphStartCurrentTaskV2::Exact { .. }) => Err(
-            DispatchFailureV1::new(DispatchFailureKindV1::SessionAlreadyExists),
-        ),
-        (
-            GraphStartCurrentTaskV2::Exact {
-                session_id: expected_id,
-                session_revision: expected_revision,
-            },
-            GraphStartCurrentTaskV2::Exact {
-                session_id: actual_id,
-                session_revision: actual_revision,
-            },
-        ) if expected_id == actual_id => Err(DispatchFailureV1::new(
-            DispatchFailureKindV1::SessionRevisionConflict,
-        )
-        .with_details(
-            DispatchErrorDetailsV1::default()
-                .with_expected_revision(*expected_revision)
-                .with_current_revision(*actual_revision),
+    let identity = |value: &GraphStartCurrentTaskV2| match value {
+        GraphStartCurrentTaskV2::Absent => None,
+        GraphStartCurrentTaskV2::Exact {
+            session_id,
+            session_revision,
+        }
+        | GraphStartCurrentTaskV2::Eligible {
+            session_id,
+            session_revision,
+        }
+        | GraphStartCurrentTaskV2::Force {
+            session_id,
+            session_revision,
+            ..
+        } => Some((session_id.clone(), *session_revision)),
+    };
+    match (identity(expected), identity(actual)) {
+        (None, None) => Ok(()),
+        (None, Some(_)) => Err(DispatchFailureV1::new(
+            DispatchFailureKindV1::SessionAlreadyExists,
         )),
-        (
-            GraphStartCurrentTaskV2::Exact {
-                session_id: expected_id,
-                ..
-            },
-            GraphStartCurrentTaskV2::Exact {
-                session_id: actual_id,
-                ..
-            },
-        ) => Err(session_id_mismatch_failure(
-            expected_id.clone(),
-            Some(actual_id.clone()),
-        )),
-        (
-            GraphStartCurrentTaskV2::Exact {
-                session_id: expected_id,
-                ..
-            },
-            GraphStartCurrentTaskV2::Absent,
-        ) => Err(session_id_mismatch_failure(expected_id.clone(), None)),
-        (GraphStartCurrentTaskV2::Absent, GraphStartCurrentTaskV2::Absent) => Ok(()),
+        (Some((expected_id, _)), None) => Err(session_id_mismatch_failure(expected_id, None)),
+        (Some((expected_id, _)), Some((actual_id, _))) if expected_id != actual_id => {
+            Err(session_id_mismatch_failure(expected_id, Some(actual_id)))
+        }
+        (Some((_, expected_revision)), Some((_, actual_revision)))
+            if expected_revision != actual_revision =>
+        {
+            Err(
+                DispatchFailureV1::new(DispatchFailureKindV1::SessionRevisionConflict)
+                    .with_details(
+                        DispatchErrorDetailsV1::default()
+                            .with_expected_revision(expected_revision)
+                            .with_current_revision(actual_revision),
+                    ),
+            )
+        }
+        _ => Ok(()),
     }
 }
 
@@ -5076,6 +5340,15 @@ fn map_store_error(error: StoreErrorV1) -> DispatchFailureV1 {
             expected: None,
             actual: None,
         } => DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceStateUnreadable),
+        StoreErrorV1::SessionResetNotEligibleV1 {
+            lifecycle,
+            current_terminal_disposition: _,
+        } => DispatchFailureV1::new(DispatchFailureKindV1::SessionResetNotEligible).with_details(
+            DispatchErrorDetailsV1::default().with_session_reset_not_eligible(lifecycle),
+        ),
+        StoreErrorV1::TerminalDispositionAlreadyRecordedV1 { .. } => {
+            DispatchFailureV1::new(DispatchFailureKindV1::RequestInvalid)
+        }
         StoreErrorV1::NewerStateV1 { .. } => {
             DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceSchemaUnsupported)
         }
@@ -5321,7 +5594,7 @@ mod tests {
             "schema": "podway.v2-runtime-error-details/v1",
             "kind": "UNSUPPORTED_V2_CAPABILITY",
             "capability": "session.start",
-            "required_result_schema": "podway.session-start-result/v2",
+            "required_result_schema": "podway.session-start-result/v3",
             "contract_manifest_digest": podway_protocol::build_identity_v1()
                 .contract_manifest_digest(),
             "admission": {"admitted": false},
@@ -5343,7 +5616,7 @@ mod tests {
         let admission = map_worker_error(WorkerErrorV1::Execution(
             crate::execution::ExecutionErrorV1::UnsupportedV2Capability {
                 capability: "session.start",
-                required_result_schema: "podway.session-start-result/v2",
+                required_result_schema: "podway.session-start-result/v3",
             },
         ));
         assert_eq!(

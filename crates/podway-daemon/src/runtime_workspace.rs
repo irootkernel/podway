@@ -478,6 +478,29 @@ impl StoreGraphMutationContractV2 for WorkspaceStoreSlotV1 {
             )
         })
     }
+
+    fn commit_graph_smart_reset_terminal_v2(
+        &self,
+        claim: ClaimTokenV1,
+        expected_workspace_revision: RevisionV1,
+        expected_session_revision: RevisionV1,
+        session_id: podway_core::SessionId,
+        mode: podway_store::PersistedGraphResetModeV2,
+        progress_summary: Option<String>,
+        now: podway_store::EpochMillisV1,
+    ) -> Result<TerminalReceiptV1, StoreErrorV1> {
+        self.with_open_store(|store| {
+            store.commit_graph_smart_reset_terminal_v2(
+                claim,
+                expected_workspace_revision,
+                expected_session_revision,
+                session_id,
+                mode,
+                progress_summary,
+                now,
+            )
+        })
+    }
 }
 
 impl StoreGraphReadContractV2 for WorkspaceStoreSlotV1 {
@@ -2815,6 +2838,8 @@ fn reset_seed_requires_fixed_replacement(error: &StoreErrorV1) -> bool {
         | StoreErrorV1::PreconditionConflictV1 { .. }
         | StoreErrorV1::ProcedureV2PreconditionFailedV1 { .. }
         | StoreErrorV1::SessionIdentityConflictV1 { .. }
+        | StoreErrorV1::SessionResetNotEligibleV1 { .. }
+        | StoreErrorV1::TerminalDispositionAlreadyRecordedV1 { .. }
         | StoreErrorV1::StorageUnavailableV1 { .. } => false,
     }
 }

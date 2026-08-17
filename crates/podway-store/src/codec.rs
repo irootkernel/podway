@@ -186,6 +186,8 @@ pub enum PersistedDomainCommandV1 {
     WorkspaceResetAll,
     SessionStart,
     SessionStartReplace,
+    SessionBegin,
+    SessionTerminalDisposition,
     SessionComplete,
     SessionSkip,
     SessionRetry,
@@ -215,6 +217,8 @@ impl PersistedDomainCommandV1 {
             CommandV1::WorkspaceResetAll => Self::WorkspaceResetAll,
             CommandV1::SessionStart => Self::SessionStart,
             CommandV1::SessionStartReplace => Self::SessionStartReplace,
+            CommandV1::SessionBegin => Self::SessionBegin,
+            CommandV1::SessionTerminalDisposition => Self::SessionTerminalDisposition,
             CommandV1::SessionComplete => Self::SessionComplete,
             CommandV1::SessionSkip => Self::SessionSkip,
             CommandV1::SessionRetry => Self::SessionRetry,
@@ -258,6 +262,8 @@ impl PersistedDomainCommandV1 {
             Self::WorkspaceResetAll => CommandV1::WorkspaceResetAll,
             Self::SessionStart => CommandV1::SessionStart,
             Self::SessionStartReplace => CommandV1::SessionStartReplace,
+            Self::SessionBegin => CommandV1::SessionBegin,
+            Self::SessionTerminalDisposition => CommandV1::SessionTerminalDisposition,
             Self::SessionComplete => CommandV1::SessionComplete,
             Self::SessionSkip => CommandV1::SessionSkip,
             Self::SessionRetry => CommandV1::SessionRetry,
@@ -291,6 +297,8 @@ impl PersistedDomainCommandV1 {
             Self::WorkspaceResetAll => "workspace.reset_all",
             Self::SessionStart => "session.start",
             Self::SessionStartReplace => "session.start_replace",
+            Self::SessionBegin => "session.begin",
+            Self::SessionTerminalDisposition => "session.terminal_disposition",
             Self::SessionComplete => "session.complete",
             Self::SessionSkip => "session.skip",
             Self::SessionRetry => "session.retry",
@@ -541,6 +549,8 @@ fn procedure_v2_runtime_command(command: &CommandV1) -> bool {
         command,
         CommandV1::SessionStart
             | CommandV1::SessionStartReplace
+            | CommandV1::SessionBegin
+            | CommandV1::SessionTerminalDisposition
             | CommandV1::SessionComplete
             | CommandV1::SessionRetry
             | CommandV1::SessionSkip
@@ -567,7 +577,9 @@ fn procedure_v2_runtime_command(command: &CommandV1) -> bool {
 fn procedure_v2_current_session_command(command: &CommandV1) -> bool {
     matches!(
         command,
-        CommandV1::SessionComplete
+        CommandV1::SessionBegin
+            | CommandV1::SessionTerminalDisposition
+            | CommandV1::SessionComplete
             | CommandV1::SessionRetry
             | CommandV1::SessionSkip
             | CommandV1::SessionBlock
@@ -634,7 +646,9 @@ fn procedure_v2_preconditions_match(
                 && preconditions.expected_item_id().is_none()
                 && preconditions.expected_item_revision().is_none()
         }
-        CommandV1::SessionReset => {
+        CommandV1::SessionBegin
+        | CommandV1::SessionTerminalDisposition
+        | CommandV1::SessionReset => {
             preconditions.expected_session_revision().is_some()
                 && preconditions.expected_attempt_id().is_none()
                 && preconditions.expected_item_id().is_none()
@@ -670,6 +684,8 @@ pub enum PersistedDomainCommandKindV1 {
     WorkspaceResetAll,
     SessionStart,
     SessionStartReplace,
+    SessionBegin,
+    SessionTerminalDisposition,
     SessionComplete,
     SessionSkip,
     SessionRetry,
@@ -699,6 +715,8 @@ impl From<DomainCommandKind> for PersistedDomainCommandKindV1 {
             DomainCommandKind::WorkspaceResetAll => Self::WorkspaceResetAll,
             DomainCommandKind::SessionStart => Self::SessionStart,
             DomainCommandKind::SessionStartReplace => Self::SessionStartReplace,
+            DomainCommandKind::SessionBegin => Self::SessionBegin,
+            DomainCommandKind::SessionTerminalDisposition => Self::SessionTerminalDisposition,
             DomainCommandKind::SessionComplete => Self::SessionComplete,
             DomainCommandKind::SessionSkip => Self::SessionSkip,
             DomainCommandKind::SessionRetry => Self::SessionRetry,
@@ -1133,6 +1151,25 @@ impl PersistedTerminalSessionProjectionV1 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PersistedGraphTerminalOperationV2 {
+    Begin {
+        attempt_id: AttemptId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        goal_revision: Option<u64>,
+    },
+    TerminalDisposition {
+        session_id: SessionId,
+        terminal_session_revision: RevisionV1,
+        disposition_kind: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        summary: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stable_reference: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        actor: Option<String>,
+        recorded_at_ms: u64,
+    },
     GoalDefine {
         record: Value,
     },
@@ -1193,6 +1230,10 @@ pub enum PersistedGraphTerminalOperationV2 {
     },
     Reset {
         session_id: SessionId,
+        #[serde(default)]
+        mode: PersistedGraphResetModeV2,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        progress_summary: Option<String>,
     },
     ItemMutation {
         graph_node_id: GraphNodeId,
@@ -1211,6 +1252,19 @@ pub enum PersistedGraphTerminalOperationV2 {
     Failure {
         error: PersistedGraphMutationFailureV2,
     },
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PersistedGraphResetModeV2 {
+    Eligible,
+    Force,
+    #[default]
+    LegacyConfirmed,
+}
+
+fn valid_lifecycle_text_v2(value: &str) -> bool {
+    !value.trim().is_empty() && value.chars().count() <= 4_000
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1281,6 +1335,11 @@ pub enum PersistedGraphMutationFailureV2 {
     },
     ReactivationFlagRequired,
     SessionNotRunning,
+    SessionNotTerminal,
+    SessionResetNotEligible {
+        lifecycle: String,
+        current_terminal_disposition: bool,
+    },
     SessionCancelled,
     SessionRevisionConflict {
         expected: RevisionV1,
@@ -2109,6 +2168,43 @@ fn criterion_assessment_record_projection_shape_v2(record: &Value) -> bool {
 }
 
 impl PersistedGraphTerminalOperationV2 {
+    pub fn begin(
+        attempt_id: AttemptId,
+        goal_revision: Option<u64>,
+    ) -> Result<Self, StoreCodecErrorV1> {
+        let operation = Self::Begin {
+            attempt_id,
+            goal_revision,
+        };
+        operation.validate()?;
+        Ok(operation)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn terminal_disposition(
+        session_id: SessionId,
+        terminal_session_revision: RevisionV1,
+        kind: impl Into<String>,
+        summary: Option<String>,
+        stable_reference: Option<String>,
+        reason: Option<String>,
+        actor: Option<String>,
+        recorded_at_ms: u64,
+    ) -> Result<Self, StoreCodecErrorV1> {
+        let operation = Self::TerminalDisposition {
+            session_id,
+            terminal_session_revision,
+            disposition_kind: kind.into(),
+            summary,
+            stable_reference,
+            reason,
+            actor,
+            recorded_at_ms,
+        };
+        operation.validate()?;
+        Ok(operation)
+    }
+
     pub fn goal_define(record: Value) -> Result<Self, StoreCodecErrorV1> {
         let operation = Self::GoalDefine { record };
         operation.validate()?;
@@ -2279,7 +2375,25 @@ impl PersistedGraphTerminalOperationV2 {
     }
 
     pub fn reset(session_id: SessionId) -> Result<Self, StoreCodecErrorV1> {
-        let operation = Self::Reset { session_id };
+        let operation = Self::Reset {
+            session_id,
+            mode: PersistedGraphResetModeV2::LegacyConfirmed,
+            progress_summary: None,
+        };
+        operation.validate()?;
+        Ok(operation)
+    }
+
+    pub fn smart_reset(
+        session_id: SessionId,
+        mode: PersistedGraphResetModeV2,
+        progress_summary: Option<String>,
+    ) -> Result<Self, StoreCodecErrorV1> {
+        let operation = Self::Reset {
+            session_id,
+            mode,
+            progress_summary,
+        };
         operation.validate()?;
         Ok(operation)
     }
@@ -2292,6 +2406,36 @@ impl PersistedGraphTerminalOperationV2 {
 
     fn validate(&self) -> Result<(), StoreCodecErrorV1> {
         let valid = match self {
+            Self::Begin { goal_revision, .. } => goal_revision.is_none_or(|revision| revision == 1),
+            Self::TerminalDisposition {
+                terminal_session_revision,
+                disposition_kind,
+                summary,
+                stable_reference,
+                reason,
+                actor,
+                ..
+            } => {
+                *terminal_session_revision > RevisionV1::ZERO
+                    && actor.as_ref().is_none_or(|value| {
+                        !value.trim().is_empty() && value.chars().count() <= 256
+                    })
+                    && match disposition_kind.as_str() {
+                        "handed_off" => {
+                            summary.as_deref().is_some_and(valid_lifecycle_text_v2)
+                                && stable_reference
+                                    .as_deref()
+                                    .is_some_and(valid_lifecycle_text_v2)
+                                && reason.is_none()
+                        }
+                        "not_required" => {
+                            reason.as_deref().is_some_and(valid_lifecycle_text_v2)
+                                && summary.is_none()
+                                && stable_reference.is_none()
+                        }
+                        _ => false,
+                    }
+            }
             Self::GoalDefine { record } => goal_revision_record_projection_shape_v2(record, true),
             Self::GoalRevise {
                 record,
@@ -2391,7 +2535,19 @@ impl PersistedGraphTerminalOperationV2 {
                         == blocker_ids.len()
             }
             Self::Cancel { reason, .. } => ReasonV2::new(reason.clone()).is_ok(),
-            Self::Reset { .. } => true,
+            Self::Reset {
+                mode,
+                progress_summary,
+                ..
+            } => match mode {
+                PersistedGraphResetModeV2::Eligible
+                | PersistedGraphResetModeV2::LegacyConfirmed => progress_summary.is_none(),
+                PersistedGraphResetModeV2::Force => {
+                    progress_summary.as_ref().is_some_and(|value| {
+                        !value.trim().is_empty() && value.chars().count() <= 4_000
+                    })
+                }
+            },
             Self::ItemMutation { attempt_number, .. } => *attempt_number > 0,
             Self::ItemMutations {
                 attempt_number,
@@ -2491,7 +2647,15 @@ impl PersistedGraphMutationFailureV2 {
                         .len()
                         == allowed_option_ids.len()
             }
+            Self::SessionResetNotEligible {
+                lifecycle,
+                current_terminal_disposition,
+            } => {
+                !*current_terminal_disposition
+                    && matches!(lifecycle.as_str(), "running" | "completed" | "cancelled")
+            }
             Self::SessionNotRunning
+            | Self::SessionNotTerminal
             | Self::GoalTrackingNotEnabled
             | Self::GoalRevisionTargetNotAllowed { .. }
             | Self::GoalRevisionTargetNotRevisionSafe { .. }
@@ -2623,11 +2787,15 @@ impl PersistedGraphTerminalSessionProjectionV2 {
     }
 
     fn validate(&self) -> Result<(), StoreCodecErrorV1> {
+        let prepared_projection = self.lifecycle == PersistedSessionLifecycleV1::Prepared
+            && self.revision_after == RevisionV1::ZERO
+            && !self.goal_defined;
         if self.task_title.trim().is_empty()
             || self.task_title.chars().count() > 500
-            || self.revision_after == RevisionV1::ZERO
+            || (self.revision_after == RevisionV1::ZERO && !prepared_projection)
             || (self.goal_defined && !self.goal_tracking)
             || (self.revision_after < self.revision_before
+                && !prepared_projection
                 && !(self.revision_after == RevisionV1::new(1)
                     && self.revision_before > RevisionV1::ZERO))
         {
@@ -3046,6 +3214,8 @@ impl PersistedTerminalReceiptV1 {
             match (graph.operation(), &self.result) {
                 (
                     None
+                    | Some(PersistedGraphTerminalOperationV2::Begin { .. })
+                    | Some(PersistedGraphTerminalOperationV2::TerminalDisposition { .. })
                     | Some(PersistedGraphTerminalOperationV2::GoalDefine { .. })
                     | Some(PersistedGraphTerminalOperationV2::GoalRevise { .. })
                     | Some(PersistedGraphTerminalOperationV2::GoalAssessCriterion { .. })
@@ -3222,9 +3392,18 @@ impl PersistedTerminalReceiptV1 {
                 field: "terminal lookup command",
             })?
             .command();
-        let graph_reset =
-            command == CommandV1::SessionReset && persisted_graph_reset_receipt_is_exact_v2(self);
-        if !graph_reset {
+        let successful_reset = command == CommandV1::SessionReset
+            && matches!(
+                self.result(),
+                PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged { .. })
+            );
+        if successful_reset {
+            if !persisted_graph_reset_receipt_is_exact_v2(self) {
+                return Err(StoreCodecErrorV1::InvalidValue {
+                    field: "Procedure v2 reset terminal projection",
+                });
+            }
+        } else {
             validate_persisted_terminal_result_for_command_v1(&command, &self.result)?;
         }
         Ok(())
@@ -3284,13 +3463,12 @@ pub(crate) fn persisted_graph_reset_receipt_is_exact_v2(
             }),
         ) if matches!(
             graph.operation(),
-            Some(PersistedGraphTerminalOperationV2::Reset { session_id })
+            Some(PersistedGraphTerminalOperationV2::Reset { session_id, .. })
                 if session_id == graph.session_id() && session_id == result_session_id
         )
             && graph.revision_before() == *revision_before
             && graph.revision_after() == *revision_after
             && *revision_before == *revision_after
-            && *revision_before > RevisionV1::ZERO
     )
 }
 
@@ -3989,7 +4167,7 @@ fn validate_success_result_for_command_v1(
                 ..
             },
         ) => {
-            monotonic_revisions_are_possible(*revision_before, *revision_after, *changed)
+            (*changed && *revision_after == RevisionV1::ZERO)
                 || fresh_replacement_revisions_are_possible(
                     *revision_before,
                     *revision_after,
@@ -4004,12 +4182,31 @@ fn validate_success_result_for_command_v1(
                 changed,
                 ..
             },
+        ) => *changed && *revision_before == *revision_after,
+        (
+            CommandV1::SessionStart,
+            PersistedDomainResultV1::SessionChanged {
+                revision_before,
+                revision_after,
+                changed,
+                ..
+            },
         ) => {
-            revisions_are_possible(*revision_before, *revision_after, *changed)
-                && *revision_after == RevisionV1::ZERO
+            *changed
+                && *revision_before == RevisionV1::ZERO
+                && matches!(revision_after.get(), 0 | 1)
         }
         (
-            CommandV1::SessionStart
+            CommandV1::SessionTerminalDisposition,
+            PersistedDomainResultV1::SessionChanged {
+                revision_before,
+                revision_after,
+                changed,
+                ..
+            },
+        ) => *changed && *revision_before > RevisionV1::ZERO && *revision_before == *revision_after,
+        (
+            CommandV1::SessionBegin
             | CommandV1::SessionComplete
             | CommandV1::SessionDecide
             | CommandV1::SessionRework

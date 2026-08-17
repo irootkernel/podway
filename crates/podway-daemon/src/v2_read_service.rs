@@ -88,8 +88,8 @@ pub fn project_graph_status_v2(
 
     let mut result = Map::new();
     let schema = match tier {
-        GraphStatusTierV2::Compact => "podway.compact-status-result/v2",
-        GraphStatusTierV2::Standard | GraphStatusTierV2::Verbose => "podway.status-result/v2",
+        GraphStatusTierV2::Compact => "podway.compact-status-result/v3",
+        GraphStatusTierV2::Standard | GraphStatusTierV2::Verbose => "podway.status-result/v3",
     };
     result.insert("schema".to_owned(), json!(schema));
     if tier != GraphStatusTierV2::Compact {
@@ -200,6 +200,9 @@ pub fn project_graph_next_v2(
     view: &GraphWorkspaceViewV2,
 ) -> Result<Map<String, Value>, GraphViewErrorV2> {
     let state = graph_state(view)?;
+    if state.trace().lifecycle() == SessionLifecycle::Prepared {
+        return Ok(project_prepared_next_v1(view, state));
+    }
     let procedure = rehydrate_snapshot(state)?;
     let current = CurrentProjection::derive(state, &procedure)?
         .ok_or(GraphViewErrorV2::TerminalSessionHasNoNext)?;
@@ -332,14 +335,14 @@ pub fn project_graph_observation_v1(
     let procedure = rehydrate_snapshot(state)?;
     let current = CurrentProjection::derive(state, &procedure)?;
     let status = project_graph_status_v2(view, GraphStatusTierV2::Standard, None)?;
-    let guidance = if current.is_some() {
+    let guidance = if current.is_some() || state.trace().lifecycle() == SessionLifecycle::Prepared {
         Value::Object(project_graph_next_v2(view)?)
     } else {
         Value::Null
     };
 
     let mut result = Map::new();
-    result.insert("schema".to_owned(), json!("podway.observation-result/v1"));
+    result.insert("schema".to_owned(), json!("podway.observation-result/v2"));
     result.insert("status".to_owned(), Value::Object(status));
     result.insert("guidance".to_owned(), guidance);
     result.insert(
@@ -351,16 +354,97 @@ pub fn project_graph_observation_v1(
                 .unwrap_or_default(),
         ),
     );
+    let mutation_templates = if state.trace().lifecycle() == SessionLifecycle::Prepared {
+        lifecycle_mutation_templates(view, state, true)
+    } else if matches!(
+        state.trace().lifecycle(),
+        SessionLifecycle::Completed | SessionLifecycle::Cancelled
+    ) {
+        lifecycle_mutation_templates(view, state, false)
+    } else {
+        current
+            .as_ref()
+            .map(|current| current.mutation_templates(view, state, &procedure))
+            .unwrap_or_default()
+    };
     result.insert(
         "mutation_templates".to_owned(),
-        Value::Array(
-            current
-                .as_ref()
-                .map(|current| current.mutation_templates(view, state, &procedure))
-                .unwrap_or_default(),
-        ),
+        Value::Array(mutation_templates),
     );
     Ok(result)
+}
+
+fn project_prepared_next_v1(
+    view: &GraphWorkspaceViewV2,
+    state: &GraphSessionStateV2,
+) -> Map<String, Value> {
+    json!({
+        "schema": "podway.prepared-next-result/v1",
+        "procedure_schema": "podway.procedure/v2",
+        "procedure_digest": state.snapshot().digest().as_str(),
+        "session_id": state.trace().session_id(),
+        "session_state": "prepared",
+        "revision": 0,
+        "goal_tracking": state.snapshot().goal_tracking(),
+        "goal_defined": false,
+        "trace_length": 0,
+        "queue": queue(view),
+        "allowed_actions": ["session.begin", "session.reset", "session.start_replace"],
+        "suggestions": [
+            {"command":"session.begin","argv":["podway","begin"]},
+            {"command":"session.reset","argv":["podway","reset"]},
+            {"command":"session.start_replace","argv":["podway","start","--replace-eligible"]},
+        ],
+    })
+    .as_object()
+    .expect("prepared next is an object")
+    .clone()
+}
+
+fn lifecycle_mutation_templates(
+    view: &GraphWorkspaceViewV2,
+    state: &GraphSessionStateV2,
+    prepared: bool,
+) -> Vec<Value> {
+    let template = |command: &str, argv: Vec<&str>, explicit: bool| {
+        json!({
+            "command": command,
+            "argv": argv,
+            "preconditions": {
+                "workspace_uuid": view.identity().workspace_uuid(),
+                "session_id": state.trace().session_id(),
+                "session_revision": state.trace().revision(),
+            },
+            "authority": "optimistic_concurrency_only",
+            "idempotency_key_required": true,
+            "requires_explicit_authorization": explicit,
+        })
+    };
+    if prepared {
+        vec![
+            template("session.begin", vec!["podway", "begin"], false),
+            template("session.reset", vec!["podway", "reset"], false),
+            template(
+                "session.start_replace",
+                vec!["podway", "start", "--replace-eligible"],
+                false,
+            ),
+        ]
+    } else {
+        vec![
+            template(
+                "session.terminal_disposition",
+                vec!["podway", "disposition"],
+                false,
+            ),
+            template("session.reset", vec!["podway", "reset"], false),
+            template(
+                "session.start_replace",
+                vec!["podway", "start", "--replace-eligible"],
+                false,
+            ),
+        ]
+    }
 }
 
 fn graph_state(view: &GraphWorkspaceViewV2) -> Result<&GraphSessionStateV2, GraphViewErrorV2> {
@@ -1212,6 +1296,9 @@ fn session_identity(state: &GraphSessionStateV2) -> Value {
 }
 
 fn counters(state: &GraphSessionStateV2) -> Value {
+    if state.trace().lifecycle() == SessionLifecycle::Prepared {
+        return Value::Array(Vec::new());
+    }
     Value::Array(
         state
             .counters()

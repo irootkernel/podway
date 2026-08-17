@@ -430,8 +430,10 @@ impl DaemonRequestV1 {
     pub fn required_result_schema(&self) -> Option<&'static str> {
         match self {
             Self::Legacy(_) => None,
-            Self::ProcedureV2Start(_) => Some("podway.session-start-result/v2"),
+            Self::ProcedureV2Start(_) => Some("podway.session-start-result/v3"),
             Self::ProcedureV2Mutation(request) => Some(match request.command().command_name() {
+                "session.begin" => "podway.session-begin-result/v1",
+                "session.terminal_disposition" => "podway.terminal-disposition-result/v1",
                 "session.decide" => "podway.decision-result/v1",
                 "session.rework" => "podway.rework-result/v1",
                 "goal.define" => "podway.goal-definition-result/v1",

@@ -3,7 +3,7 @@ use podway_protocol::{
     ProcedureV2MutationCommandV1, ProcedureV2MutationRequestV1, ProcedureV2StartRequestV1,
     RequestEnvelopeV1, SliceRequestV1, V2_MUTATION_COMMANDS, canonical_mutation_identity_v1,
     canonical_procedure_v2_mutation_identity_v1, canonical_procedure_v2_start_identity_v1,
-    canonical_start_mutation_identity_v1, decode_initial_goal_v2,
+    canonical_start_mutation_identity_v1,
 };
 use serde_json::{Value, json};
 
@@ -82,7 +82,7 @@ fn v2rel003_all_mutations_admit_common_transport_with_applicable_revision_fences
         (
             "session.start_replace",
             session_identity.clone(),
-            json!({"procedure":"workflow.yaml","expected_procedure_digest":digest,"task_title":"Replace safely.","confirmed":true}),
+            json!({"procedure":"workflow.yaml","expected_procedure_digest":digest,"task_title":"Replace safely.","replace_eligible":true}),
         ),
         ("session.complete", session.clone(), json!({})),
         (
@@ -106,11 +106,7 @@ fn v2rel003_all_mutations_admit_common_transport_with_applicable_revision_fences
             session.clone(),
             json!({"reason":"Cancelled safely."}),
         ),
-        (
-            "session.reset",
-            session_identity.clone(),
-            json!({"confirmed":true}),
-        ),
+        ("session.reset", session_identity.clone(), json!({})),
         ("item.check", item.clone(), json!({"item_id":"proof"})),
         ("item.uncheck", item.clone(), json!({"item_id":"proof"})),
         (
@@ -157,6 +153,16 @@ fn v2rel003_all_mutations_admit_common_transport_with_applicable_revision_fences
 
     let typed = [
         (
+            "session.begin",
+            session_identity.clone(),
+            json!({"goal":"Ship safely.","criteria":criteria()}),
+        ),
+        (
+            "session.terminal_disposition",
+            session_identity.clone(),
+            json!({"kind":"not_required","reason":"No external handoff is required."}),
+        ),
+        (
             "session.decide",
             session.clone(),
             json!({"option_id":"accept","reason":"Evidence supports this route."}),
@@ -201,18 +207,20 @@ fn v2rel003_all_mutations_admit_common_transport_with_applicable_revision_fences
 }
 
 #[test]
-fn v2lif002_reserved_mutations_are_not_admitted_before_runtime_implementation() {
-    for command in ["session.begin", "session.terminal_disposition"] {
-        let request = envelope(
-            command,
-            json!({"session_id":SESSION_ID,"session_revision":7}),
-            json!({}),
-        );
-        assert!(
-            ProcedureV2MutationRequestV1::from_envelope(&request).is_err(),
-            "reserved mutation was admitted early: {command}"
-        );
-    }
+fn v2lif004_lifecycle_mutations_are_admitted_with_closed_payloads() {
+    let begin = envelope(
+        "session.begin",
+        json!({"session_id":SESSION_ID,"session_revision":0}),
+        json!({}),
+    );
+    assert!(ProcedureV2MutationRequestV1::from_envelope(&begin).is_ok());
+
+    let disposition = envelope(
+        "session.terminal_disposition",
+        json!({"session_id":SESSION_ID,"session_revision":7}),
+        json!({"kind":"handed_off","summary":"Completed.","reference":"local:handoff"}),
+    );
+    assert!(ProcedureV2MutationRequestV1::from_envelope(&disposition).is_ok());
 }
 
 #[test]
@@ -578,7 +586,7 @@ fn v2plt006_canonical_identity_excludes_transport_metadata_and_binds_semantics()
 }
 
 #[test]
-fn v2plt006_start_initial_goal_uses_typed_boundary_and_preserves_legacy_identity() {
+fn v2lif004_start_prepares_and_begin_owns_the_initial_goal() {
     let base = envelope(
         "session.start",
         json!({}),
@@ -600,15 +608,8 @@ fn v2plt006_start_initial_goal_uses_typed_boundary_and_preserves_legacy_identity
         json!({}),
         json!({"procedure":"workflow.yaml","task_title":"Implement protocol","goal":"Ship safely.","criteria":criteria(),"actor":"agent"}),
     );
-    let initial_goal = decode_initial_goal_v2(with_goal.payload())
-        .unwrap()
-        .unwrap();
-    assert_eq!(initial_goal.goal, "Ship safely.");
-    assert_eq!(initial_goal.criteria.len(), 1);
     assert!(SliceRequestV1::from_envelope(&with_goal).is_err());
-    let typed = ProcedureV2StartRequestV1::from_envelope(&with_goal).unwrap();
-    let goal_identity =
-        canonical_procedure_v2_start_identity_v1(&typed, &workspace, &procedure_digest).unwrap();
+    assert!(ProcedureV2StartRequestV1::from_envelope(&with_goal).is_err());
 
     let no_goal = envelope(
         "session.start",
@@ -626,39 +627,36 @@ fn v2plt006_start_initial_goal_uses_typed_boundary_and_preserves_legacy_identity
         )
         .unwrap()
     );
+    let begin = ProcedureV2MutationRequestV1::from_envelope(&envelope(
+        "session.begin",
+        json!({"session_id":SESSION_ID,"session_revision":0}),
+        json!({"goal":"Ship safely.","criteria":criteria(),"actor":"agent"}),
+    ))
+    .unwrap();
+    let begin_without_goal = ProcedureV2MutationRequestV1::from_envelope(&envelope(
+        "session.begin",
+        json!({"session_id":SESSION_ID,"session_revision":0}),
+        json!({}),
+    ))
+    .unwrap();
     assert_ne!(
-        goal_identity,
-        canonical_procedure_v2_start_identity_v1(&typed_no_goal, &workspace, &procedure_digest,)
-            .unwrap()
-    );
-
-    let mut replay_value = serde_json::to_value(&with_goal).unwrap();
-    replay_value["request_id"] = json!("00000000-0000-4000-8000-000000000099");
-    replay_value["options"] = json!({"detach":true,"wait_timeout_ms":1});
-    let replay: RequestEnvelopeV1 = serde_json::from_value(replay_value).unwrap();
-    assert_eq!(
-        goal_identity,
-        canonical_procedure_v2_start_identity_v1(
-            &ProcedureV2StartRequestV1::from_envelope(&replay).unwrap(),
-            &workspace,
-            &procedure_digest,
-        )
-        .unwrap()
+        canonical_procedure_v2_mutation_identity_v1(&begin, &workspace).unwrap(),
+        canonical_procedure_v2_mutation_identity_v1(&begin_without_goal, &workspace).unwrap(),
     );
 
     let open = envelope(
         "session.start",
         json!({}),
-        json!({"procedure":"workflow.yaml","task_title":"Implement protocol","goal":"Ship safely.","criteria":criteria(),"unknown":true}),
+        json!({"procedure":"workflow.yaml","task_title":"Implement protocol","unknown":true}),
     );
     assert!(ProcedureV2StartRequestV1::from_envelope(&open).is_err());
 
     let replace = envelope(
         "session.start_replace",
         json!({"session_id":SESSION_ID,"session_revision":7}),
-        json!({"procedure":"workflow.yaml","task_title":"Implement protocol","goal":"Ship safely.","criteria":criteria(),"confirmed":true}),
+        json!({"procedure":"workflow.yaml","task_title":"Implement protocol","replace_eligible":true}),
     );
-    assert!(SliceRequestV1::from_envelope(&replace).is_err());
+    assert!(SliceRequestV1::from_envelope(&replace).is_ok());
     assert!(
         canonical_procedure_v2_start_identity_v1(
             &ProcedureV2StartRequestV1::from_envelope(&replace).unwrap(),
@@ -667,22 +665,6 @@ fn v2plt006_start_initial_goal_uses_typed_boundary_and_preserves_legacy_identity
         )
         .is_ok()
     );
-
-    let incomplete = envelope(
-        "session.start",
-        json!({}),
-        json!({"procedure":"workflow.yaml","task_title":"Implement protocol","goal":"Ship safely."}),
-    );
-    assert!(decode_initial_goal_v2(incomplete.payload()).is_err());
-    assert!(SliceRequestV1::from_envelope(&incomplete).is_err());
-
-    let overlong = envelope(
-        "session.start",
-        json!({}),
-        json!({"procedure":"workflow.yaml","task_title":"Implement protocol","goal":"x".repeat(1_001),"criteria":criteria()}),
-    );
-    assert!(decode_initial_goal_v2(overlong.payload()).is_err());
-    assert!(ProcedureV2StartRequestV1::from_envelope(&overlong).is_err());
 }
 
 #[test]

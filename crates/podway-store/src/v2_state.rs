@@ -3312,9 +3312,19 @@ pub trait StoreTerminalDispositionContractV2: Send + Sync {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum GraphStartCurrentTaskV2 {
     Absent,
+    /// Retained for executing durable jobs admitted by pre-v0.2.4 binaries.
     Exact {
         session_id: SessionId,
         session_revision: Revision,
+    },
+    Eligible {
+        session_id: SessionId,
+        session_revision: Revision,
+    },
+    Force {
+        session_id: SessionId,
+        session_revision: Revision,
+        progress_summary: String,
     },
 }
 
@@ -3347,6 +3357,18 @@ pub trait StoreGraphMutationContractV2: Send + Sync {
         expected_workspace_revision: Revision,
         expected_session_revision: Revision,
         session_id: SessionId,
+        now: crate::EpochMillisV1,
+    ) -> Result<crate::TerminalReceiptV1, StoreErrorV1>;
+
+    #[allow(clippy::too_many_arguments)]
+    fn commit_graph_smart_reset_terminal_v2(
+        &self,
+        claim: crate::ClaimTokenV1,
+        expected_workspace_revision: Revision,
+        expected_session_revision: Revision,
+        session_id: SessionId,
+        mode: crate::PersistedGraphResetModeV2,
+        progress_summary: Option<String>,
         now: crate::EpochMillisV1,
     ) -> Result<crate::TerminalReceiptV1, StoreErrorV1>;
 }
@@ -3400,6 +3422,27 @@ where
             expected_workspace_revision,
             expected_session_revision,
             session_id,
+            now,
+        )
+    }
+
+    fn commit_graph_smart_reset_terminal_v2(
+        &self,
+        claim: crate::ClaimTokenV1,
+        expected_workspace_revision: Revision,
+        expected_session_revision: Revision,
+        session_id: SessionId,
+        mode: crate::PersistedGraphResetModeV2,
+        progress_summary: Option<String>,
+        now: crate::EpochMillisV1,
+    ) -> Result<crate::TerminalReceiptV1, StoreErrorV1> {
+        (**self).commit_graph_smart_reset_terminal_v2(
+            claim,
+            expected_workspace_revision,
+            expected_session_revision,
+            session_id,
+            mode,
+            progress_summary,
             now,
         )
     }
@@ -4362,6 +4405,14 @@ pub(crate) fn record_terminal_disposition_transaction_v2(
     }
     if disposition.recorded_at() < state.created_at() {
         return Err(invalid_store("terminal disposition timestamp regressed"));
+    }
+    let dispositions = load_terminal_dispositions_connection_v2(transaction, &state)?;
+    if dispositions.last().is_some_and(|current| {
+        current.terminal_session_revision() == disposition.terminal_session_revision()
+    }) {
+        return Err(StoreErrorV1::TerminalDispositionAlreadyRecordedV1 {
+            session_revision: disposition.terminal_session_revision(),
+        });
     }
     let (kind, summary, reference, reason) = match disposition.kind() {
         TerminalDispositionKindV2::HandedOff => (

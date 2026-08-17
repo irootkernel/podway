@@ -1011,9 +1011,18 @@ fn verify_job_codecs_v1(connection: &Connection) -> Result<(), StoreErrorV1> {
                     .map_err(|_| integrity_error(StoreIntegrityCheckV1::InternalCodec))?;
                 let canonical_terminal = encode_persisted_terminal_receipt_v1(&receipt)
                     .map_err(|_| integrity_error(StoreIntegrityCheckV1::InternalCodec))?;
-                let graph_reset = execution.command() == &crate::CommandV1::SessionReset
-                    && crate::codec::persisted_graph_reset_receipt_is_exact_v2(&receipt);
-                if !graph_reset {
+                let successful_reset = execution.command() == &crate::CommandV1::SessionReset
+                    && matches!(
+                        receipt.result(),
+                        PersistedTerminalResultV1::Success(
+                            PersistedDomainResultV1::SessionChanged { .. }
+                        )
+                    );
+                if successful_reset {
+                    if !crate::codec::persisted_graph_reset_receipt_is_exact_v2(&receipt) {
+                        return Err(integrity_error(StoreIntegrityCheckV1::InternalCodec));
+                    }
+                } else {
                     validate_persisted_terminal_result_for_command_v1(
                         execution.command(),
                         receipt.result(),
