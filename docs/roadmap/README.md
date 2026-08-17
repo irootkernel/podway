@@ -280,10 +280,10 @@ This completed recovery task shipped in the immutable
 
 ## Procedure Evidence and Reference Quality
 
-The next minor product line is implemented through four sequential epics:
+The next product line is implemented through five sequential epics:
 
 ```text
-V2SCL -> V2AST -> V2GRD -> V2REF
+V2LIF -> V2SCL -> V2AST -> V2GRD -> V2REF
 ```
 
 Within each epic, tasks execute in numeric order. An epic remains entirely
@@ -298,14 +298,26 @@ deletes the completed dossier before marking the epic `Completed`. Completed TOD
 dossiers are not moved to `docs/roadmap/archive/`; roadmap archival is separate
 maintenance performed only when historical roadmap content needs compaction.
 
-## V2SCL — Bounded Evidence Scale and Read-back
+## V2LIF — Prepared Session Lifecycle
 
 Dependencies: completed `V2REC` epic.
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
+| `V2LIF-001` | Adopt the prepared session lifecycle authority | Planned | Adopt the ADR and normative lifecycle, ownership, reset, replacement, and compatibility contracts. | [V2LIF dossier](../todo/TODO-podway-prepared-session-lifecycle.md#3-accepted-design-and-public-interfaces) |
+| `V2LIF-002` | Reserve prepared lifecycle contracts | Planned | Register prepared-aware result schemas, begin and disposition routes, reset and replacement results, SQLite v5, public errors, manifest digests, and compatibility fixtures without premature runtime admission. | [V2LIF dossier](../todo/TODO-podway-prepared-session-lifecycle.md#34-read-models-and-compatibility-sensitive-inventory) |
+| `V2LIF-003` | Persist prepared session lifecycle | Planned | Add prepared domain invariants, SQLite v5 migration and storage, terminal disposition persistence, and exact reconstruction while preserving every existing v4 session state. | [V2LIF dossier](../todo/TODO-podway-prepared-session-lifecycle.md#31-lifecycle-model) |
+| `V2LIF-004` | Expose smart session reset and replacement | Planned | Make start prepare, add atomic begin and terminal disposition, delete eligible sessions by default, preserve explicit summarized force deletion, and expose eligible replacement across daemon and CLI. | [V2LIF dossier](../todo/TODO-podway-prepared-session-lifecycle.md#32-cli-and-command-routes) |
+| `V2LIF-005` | Close prepared lifecycle conformance | Planned | Prove migration, restart, replay, stale fencing, deletion eligibility, observation, help, completion, and E2E behavior; promote durable documentation; remove the completed dossier; and pass the development gate. | [V2LIF dossier](../todo/TODO-podway-prepared-session-lifecycle.md#6-verification-and-acceptance) |
+
+## V2SCL — Bounded Evidence Scale and Read-back
+
+Dependencies: completed `V2LIF` epic.
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
 | `V2SCL-001` | Adopt the bounded evidence scale authority | Planned | Adopt the ADR and normative scale, paging, compatibility, and diagnostic contracts. | [V2SCL dossier](../todo/TODO-podway-evidence-scaling.md#3-accepted-design-and-public-interfaces) |
-| `V2SCL-002` | Reserve pageable evidence read contracts | Planned | Register `evidence.read`, `next-result/v3`, `observation-result/v2`, the closed `output-v3` branch, shared and record-many schema bounds, public errors, command routes, manifest digests, and compatibility fixtures without premature runtime admission. | [V2SCL dossier](../todo/TODO-podway-evidence-scaling.md#32-pageable-evidence-reads) |
+| `V2SCL-002` | Reserve pageable evidence read contracts | Planned | Register `evidence.read`, `next-result/v3`, `observation-result/v3`, the closed `output-v3` branch, shared and record-many schema bounds, public errors, command routes, manifest digests, and compatibility fixtures without premature runtime admission. | [V2SCL dossier](../todo/TODO-podway-evidence-scaling.md#32-pageable-evidence-reads) |
 | `V2SCL-003` | Align item limits and structured diagnostics | Planned | Unify authoring and runtime limits, protocol slices, total-list and attempt bounds, re-pin the rotated preset digests, and report exact exceeded fields and maxima. | [V2SCL dossier](../todo/TODO-podway-evidence-scaling.md#31-scale-envelope) |
 | `V2SCL-004` | Implement snapshot-bound evidence paging | Planned | Serve deterministic bounded text and list pages under current evidence identity, freshness, page-token, metadata, and IPC constraints. | [V2SCL dossier](../todo/TODO-podway-evidence-scaling.md#32-pageable-evidence-reads) |
 | `V2SCL-005` | Integrate observation budgets and close conformance | Planned | Prove the compact-status observation composition, its five component windows and truncation semantics, promote durable documentation, remove the completed dossier, and pass the development gate. | [V2SCL dossier](../todo/TODO-podway-evidence-scaling.md#6-verification-and-acceptance) |
@@ -317,7 +329,7 @@ Dependencies: completed `V2SCL` epic.
 | id | title | status | goal | references |
 |---|---|---|---|---|
 | `V2AST-001` | Adopt the external check result authority | Planned | Adopt the extending ADR and normative item, trust, storage, protocol, and compatibility contracts. | [V2AST dossier](../todo/TODO-podway-assurance-typing.md#3-accepted-design-and-public-interfaces) |
-| `V2AST-002` | Reserve check-result contracts and storage | Planned | Reserve the closed schemas, observation windows, canonical SQLite v5 DDL and migration identity, manifest changes, and compatibility fixtures without runtime admission. | [V2AST dossier](../todo/TODO-podway-assurance-typing.md#35-compatibility-sensitive-contract-inventory) |
+| `V2AST-002` | Reserve check-result contracts and storage | Planned | Reserve the closed schemas, observation windows, canonical SQLite v6 DDL and migration identity, manifest changes, and compatibility fixtures without runtime admission. | [V2AST dossier](../todo/TODO-podway-assurance-typing.md#35-compatibility-sensitive-contract-inventory) |
 | `V2AST-003` | Add the check-result domain and authoring model | Planned | Add bounded declarations, complete values, satisfaction, parsing, diagnostics, and canonicalization while preserving existing Procedure digests. | [V2AST dossier](../todo/TODO-podway-assurance-typing.md#32-procedure-declaration) |
 | `V2AST-004` | Migrate, decode, and record check results | Planned | Rebuild the constrained item table, add bounded protocol decoding and atomic frame-sized record-many support, and prove replay, restart, idempotency, and downgrade protection. | [V2AST dossier](../todo/TODO-podway-assurance-typing.md#33-recorded-value) |
 | `V2AST-005` | Expose check-result guidance and read-back | Planned | Add allowed actions, suggestions, the bounded structured projection and stdin template, single-page evidence read-back, CLI guidance, and honest rendering. | [V2AST dossier](../todo/TODO-podway-assurance-typing.md#34-recording-and-observation) |

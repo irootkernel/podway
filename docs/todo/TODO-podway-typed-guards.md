@@ -185,8 +185,8 @@ truncation fields make the reduction explicit.
 ### 3.6 Compatibility-sensitive contract inventory
 
 V2GRD adds its fields in place to the already reserved `next-result/v3` and
-`observation-result/v2` families because V2SCL, V2AST, and V2GRD ship together in
-v0.3.0. It does not introduce v4 or observation v3. The reservation task updates
+`observation-result/v3` families because V2SCL, V2AST, and V2GRD ship together in
+v0.3.0. It does not introduce v4 or observation v4. The reservation task updates
 `procedure-v2.schema.json`, `procedure-preview-result-v1`, the two result
 families, `authoring-diagnostics.json`, `error-codes.json`, the closed
 `v2-runtime-error-details-v1` branch, protocol code tables, fixtures, and every

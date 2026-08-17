@@ -173,10 +173,10 @@ cannot be read as current evidence or satisfy current progression.
 
 The reservation task updates `procedure-v2.schema.json` with the declaration;
 `v2-result-components-v1` with disjoint complete-value, preview, read-back, and
-compact item shapes; `observation-result-v2` with the type, declaration
+compact item shapes; `observation-result-v3` with the type, declaration
 constraints, five-field projection, and conditional `stdin_template`; and
 `item-record-many-input-v1` and `item-record-many-result-v1` with the closed
-record variant. It also reserves the canonical SQLite v5 DDL and named migration
+record variant. It also reserves the canonical SQLite v6 DDL and named migration
 step and updates every affected contract-manifest digest.
 
 The complete check-result object and `artifactValue` remain disjoint `oneOf`
@@ -190,11 +190,11 @@ mismatches, migration failure, and unsupported downgrade state.
 
 - Procedure schema remains `podway.procedure/v2`; older peers reject the changed
   exact contract manifest rather than ignoring the new item type.
-- SQLite schema v5 adds `check_result` to the closed item discriminator. Because
+- SQLite schema v6 adds `check_result` to the closed item discriminator. Because
   the discriminator is a `CHECK` constraint, migration rebuilds
   `v2_item_slots` and preserves every existing `value_json` byte-for-byte; no
-  stored value is reinterpreted. The migration ships canonical v5 DDL, advances
-  the current-version constant, registers a named v4-to-v5 step, and retains
+  stored value is reinterpreted. The migration ships canonical v6 DDL, advances
+  the current-version constant, registers a named v5-to-v6 step, and retains
   downgrade protection.
 - Existing sessions, procedures, result records, and six item types retain their
   behavior and are classified as assertions only in documentation.
@@ -226,7 +226,7 @@ attempt-suffix invalidation supplies attempt-scoped freshness and nothing more.
   extension metadata, plus the normative domain, interface, storage, and
   trust-boundary specifications.
 - `V2AST-002` reserves the public schema shapes, observation windows, exact
-  manifest changes, canonical SQLite v5 DDL, named migration, and compatibility
+  manifest changes, canonical SQLite v6 DDL, named migration, and compatibility
   fixtures without runtime admission.
 - `V2AST-003` adds the pure domain values, declaration, satisfaction,
   canonicalization, parser, and authoring diagnostics.

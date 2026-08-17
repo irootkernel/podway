@@ -150,7 +150,7 @@ a token.
 ### 3.3 Observation and budget behavior
 
 `session.next` changes to `podway.next-result/v3`, and `session.observe` changes
-to `podway.observation-result/v2`. Their evidence projections carry source and
+to `podway.observation-result/v3`. Their evidence projections carry source and
 item identity, full digest, total size, bounded preview state, and the first
 continuation page token when a preview is present. An omitted evidence item
 selector means metadata-only. Explicit selectors receive previews in declaration
@@ -225,7 +225,7 @@ item projection even when decision options consume the suggestion window.
 ### 3.4 Compatibility-sensitive contract inventory
 
 The work updates `procedure-v2.schema.json`, `v2-result-components-v1`,
-`item-record-many-input-v1`, `next-result-v3`, `observation-result-v2`, and the
+`item-record-many-input-v1`, `next-result-v3`, `observation-result-v3`, and the
 closed `output-v3` selection. It also registers `evidence.read` in
 `contracts/command-routes.json`, updates the contract manifest digests, and
 updates the public error catalog and protocol tables. Existing shared v1 schema
@@ -233,9 +233,10 @@ families whose structure is unchanged receive bounded in-place constraint
 updates under manifest fail-closed compatibility; materially changed next and
 observation payloads receive the versions above.
 
-`observation-result/v2` intentionally changes its `status` member from standard
-`status-result/v2` to value-free `compact-status-result/v2`, because observation
-is the current-state guidance surface rather than a history surface. History
+`observation-result/v3` retains the prepared-aware lifecycle and template
+semantics introduced by V2LIF while changing its status member to a bounded,
+value-free compact-status projection, because observation is the current-state
+guidance surface rather than a history surface. History
 consumers use `session.status --verbose`. Its `guidance` remains
 `next-result/v3`; evidence metadata total and truncation fields are always
 present, are invariantly non-truncated for `session.next`, and may be truncated
@@ -292,7 +293,7 @@ use `podway.v2-runtime-error-details/v1`.
 
 ## 5. Roadmap ownership and dependencies
 
-`V2SCL` depends on completed `V2REC` and precedes `V2AST`.
+`V2SCL` depends on completed `V2LIF` and precedes `V2AST`.
 
 - `V2SCL-001` adopts the ADR and normative scale/read-back specifications.
 - `V2SCL-002` registers the query route, versioned results, schemas, errors, and
