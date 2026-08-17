@@ -2228,6 +2228,9 @@ fn validate_procedure_v2_action_admission_v1(
                 },
             ));
         }
+        if current.trace().lifecycle() == podway_core::SessionLifecycle::Prepared {
+            return Err(reject(PersistedGraphMutationFailureV2::SessionNotRunning));
+        }
         if active_attempt != Some(expected_attempt) {
             return Err(reject(PersistedGraphMutationFailureV2::AttemptNotCurrent {
                 expected: expected_attempt.clone(),
@@ -2237,6 +2240,9 @@ fn validate_procedure_v2_action_admission_v1(
         return Ok(());
     }
 
+    if current.trace().lifecycle() == podway_core::SessionLifecycle::Prepared {
+        return Err(reject(PersistedGraphMutationFailureV2::SessionNotRunning));
+    }
     let expected_attempt = preconditions
         .expected_attempt_id()
         .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;

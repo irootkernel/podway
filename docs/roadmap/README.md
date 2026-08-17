@@ -311,7 +311,7 @@ Dependencies: completed `V2REC` epic.
 | `V2LIF-005` | Close prepared lifecycle conformance | Completed | Prove migration, restart, replay, stale fencing, deletion eligibility, observation, help, completion, and E2E behavior; promote durable documentation; remove the completed dossier; and pass the development gate. | [requirements traceability](../specs/quality/requirements-traceability.md), [Procedure v2 workflow](../examples/v2-workflow.md) |
 | `V2LIF-006` | Version lifecycle-aware durable job wrappers | Completed | Preserve the released v3 job-wrapper command set and emit new closed v4 wrappers for prepared-lifecycle commands. | [JSON contract](../specs/interfaces/json-contract.md) |
 | `V2LIF-007` | Restore complete durable job read-back | Completed | Keep workspace initialization and lifecycle job receipts readable individually and as one ordered bounded job list. | [automation client contract](../specs/interfaces/automation-client-contract.md) |
-| `V2LIF-008` | Enforce prepared item mutation failures | Planned | Reject every prepared item mutation with `SESSION_NOT_RUNNING` before attempt or item fences and without state change. | [automation client contract](../specs/interfaces/automation-client-contract.md) |
+| `V2LIF-008` | Enforce prepared item mutation failures | Completed | Reject every prepared item mutation with `SESSION_NOT_RUNNING` before attempt or item fences and without state change. | [automation client contract](../specs/interfaces/automation-client-contract.md) |
 
 ## V2SCL — Bounded Evidence Scale and Read-back
 

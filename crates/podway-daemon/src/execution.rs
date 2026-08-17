@@ -3745,6 +3745,12 @@ where
                 }
                 .into());
             }
+            if state.trace().lifecycle() == SessionLifecycle::Prepared {
+                return Err(StoreErrorV1::ProcedureV2PreconditionFailedV1 {
+                    failure: PersistedGraphMutationFailureV2::SessionNotRunning,
+                }
+                .into());
+            }
             let actual_attempt = state
                 .trace()
                 .active_attempt()

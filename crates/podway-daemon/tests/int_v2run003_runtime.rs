@@ -890,6 +890,208 @@ fn v2lif007_workspace_and_lifecycle_jobs_remain_readable_after_cold_reopen() {
 }
 
 #[test]
+fn v2lif008_prepared_item_mutations_fail_before_attempt_and_item_fences() {
+    let fixture = support_phase4_workspace::git_worktrees();
+    make_runtime_private(fixture.main());
+    fs::write(
+        fixture.main().join("v2lif008-prepared-items.yaml"),
+        ACTION_READBACK_PROCEDURE,
+    )
+    .unwrap();
+    fs::write(fixture.main().join("report.txt"), b"prepared report\n").unwrap();
+    let ParsedProcedure::V2(parsed) = parse_procedure_document(
+        ACTION_READBACK_PROCEDURE.as_bytes(),
+        ProcedureDocumentFormat::Yaml,
+    )
+    .unwrap() else {
+        unreachable!()
+    };
+    let procedure_digest = validate_procedure_v2(parsed).unwrap().digest().clone();
+    let workspace_selector = selector(fixture.main());
+    let runtime_manager = Arc::new(manager(fixture.temporary_path()));
+    let production = dispatcher(Arc::clone(&runtime_manager), "v2lif008-prepared-items");
+
+    let initialize = request(
+        29_061,
+        "workspace.init",
+        &workspace_selector,
+        Map::new(),
+        "v2lif008-initialize",
+        PreconditionsV1::default(),
+    );
+    assert!(matches!(
+        dispatch(&production, &initialize),
+        ResponseEnvelopeV2::OutputV2(_)
+    ));
+    let start = request(
+        29_062,
+        "session.start",
+        &workspace_selector,
+        json!({
+            "procedure": "v2lif008-prepared-items.yaml",
+            "expected_procedure_digest": procedure_digest,
+            "task_title": "Reject prepared item mutations"
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+        "v2lif008-start",
+        PreconditionsV1::default(),
+    );
+    let started = v2_result(dispatch(&production, &start), "session.start");
+    let session_id = SessionId::new(started["session_id"].as_str().unwrap()).unwrap();
+    let prepared_before = status(
+        &production,
+        &workspace_selector,
+        29_063,
+        session_id.as_str(),
+    );
+    let stale_attempt = AttemptId::new("00000000-0000-4000-8000-000000000099").unwrap();
+
+    let mutations = [
+        ("item.check", json!({"item_id":"confirmed"})),
+        ("item.uncheck", json!({"item_id":"confirmed"})),
+        ("item.set", json!({"item_id":"summary","value":"prepared"})),
+        ("item.add", json!({"item_id":"findings","value":"prepared"})),
+        (
+            "item.remove",
+            json!({"item_id":"findings","value":"prepared","ignore_missing":false}),
+        ),
+        (
+            "item.attach",
+            json!({"item_id":"report","path":"report.txt","media_type":"text/plain"}),
+        ),
+        ("item.clear", json!({"item_id":"summary"})),
+    ];
+    for (offset, (command, payload)) in mutations.into_iter().enumerate() {
+        let mutation = request(
+            29_064 + u64::try_from(offset).unwrap(),
+            command,
+            &workspace_selector,
+            payload.as_object().unwrap().clone(),
+            &format!("v2lif008-prepared-{command}"),
+            PreconditionsV1::new(
+                Some(session_id.clone()),
+                None,
+                Some(stale_attempt.clone()),
+                Some(Revision::new(99)),
+                None,
+                None,
+            )
+            .unwrap(),
+        );
+        let ResponseEnvelopeV2::Error(error) = dispatch(&production, &mutation) else {
+            panic!("{command} must fail before durable admission in prepared lifecycle");
+        };
+        assert_eq!(error.code().as_str(), "SESSION_NOT_RUNNING", "{command}");
+        assert_eq!(error.details()["admission"]["admitted"], false, "{command}");
+    }
+
+    let record_many = request(
+        29_071,
+        "item.record_many",
+        &workspace_selector,
+        json!({"operations":[{
+            "item_id":"confirmed",
+            "expected_item_revision":99,
+            "record":{"type":"confirm","value":true}
+        }]})
+        .as_object()
+        .unwrap()
+        .clone(),
+        "v2lif008-prepared-record-many",
+        PreconditionsV1::new(
+            Some(session_id.clone()),
+            Some(Revision::ZERO),
+            Some(stale_attempt.clone()),
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let ResponseEnvelopeV2::Error(error) = dispatch(&production, &record_many) else {
+        panic!("item.record_many must fail before durable admission in prepared lifecycle");
+    };
+    assert_eq!(error.code().as_str(), "SESSION_NOT_RUNNING");
+    assert_eq!(error.details()["admission"]["admitted"], false);
+
+    let prepared_after = status(
+        &production,
+        &workspace_selector,
+        29_072,
+        session_id.as_str(),
+    );
+    assert_eq!(prepared_after, prepared_before);
+    let list = request(
+        29_073,
+        "job.list",
+        &workspace_selector,
+        Map::new(),
+        "unused-v2lif008-list",
+        PreconditionsV1::default(),
+    );
+    assert_eq!(
+        v2_result(dispatch(&production, &list), "job.list")["jobs"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    begin(
+        &production,
+        &workspace_selector,
+        29_074,
+        session_id.as_str(),
+        Map::new(),
+        "v2lif008-begin",
+    );
+    for (request_number, command, payload, session_revision, item_revision) in [
+        (
+            29_075,
+            "item.check",
+            json!({"item_id":"confirmed"}),
+            None,
+            Some(Revision::new(99)),
+        ),
+        (
+            29_076,
+            "item.record_many",
+            json!({"operations":[{
+                "item_id":"confirmed",
+                "expected_item_revision":99,
+                "record":{"type":"confirm","value":true}
+            }]}),
+            Some(Revision::new(1)),
+            None,
+        ),
+    ] {
+        let mutation = request(
+            request_number,
+            command,
+            &workspace_selector,
+            payload.as_object().unwrap().clone(),
+            &format!("v2lif008-running-{command}"),
+            PreconditionsV1::new(
+                Some(session_id.clone()),
+                session_revision,
+                Some(stale_attempt.clone()),
+                item_revision,
+                None,
+                None,
+            )
+            .unwrap(),
+        );
+        let ResponseEnvelopeV2::Error(error) = dispatch(&production, &mutation) else {
+            panic!("{command} must preserve its running stale-attempt fence");
+        };
+        assert_eq!(error.code().as_str(), "ATTEMPT_NOT_CURRENT", "{command}");
+        assert_eq!(error.details()["admission"]["admitted"], false, "{command}");
+    }
+}
+
+#[test]
 fn v2rel003_detached_start_lookup_and_terminal_replay_use_common_automation_pipeline() {
     let fixture = support_phase4_workspace::git_worktrees();
     make_runtime_private(fixture.main());
