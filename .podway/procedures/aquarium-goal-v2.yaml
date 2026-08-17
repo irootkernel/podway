@@ -1,7 +1,7 @@
 schema: podway.procedure/v2
-id: root-kernel-goal-v2
+id: aquarium-goal-v2
 version: "1"
-name: Root Kernel Goal
+name: Aquarium Goal
 purpose: Deliver one epic member, remediation, or closeout goal with current evidence.
 description: A flexible goal-centered Podway procedure for epic-handler work.
 goal_tracking: true

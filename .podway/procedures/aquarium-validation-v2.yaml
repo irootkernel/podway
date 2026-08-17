@@ -1,7 +1,7 @@
 schema: podway.procedure/v2
-id: root-kernel-validation-v2
+id: aquarium-validation-v2
 version: "1"
-name: Root Kernel Validation
+name: Aquarium Validation
 purpose: Audit and remediate one completed epic until current evidence supports validation.
 description: A convergent Podway procedure for epic-wide direct audit, remediation, re-audit, review, and validation closeout.
 goal_tracking: true

@@ -1,8 +1,8 @@
 schema: podway.procedure/v2
-id: root-kernel-task-v2
+id: aquarium-task-v2
 version: "1"
-name: Root Kernel Task
-purpose: Deliver one approved roadmap task through the complete Root Kernel evidence workflow.
+name: Aquarium Task
+purpose: Deliver one approved roadmap task through the complete Aquarium evidence workflow.
 description: A Podway record of task-handler planning, implementation, verification, refinement, documentation, review, approval, and closeout.
 goal_tracking: true
 node_definitions:
