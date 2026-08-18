@@ -243,6 +243,10 @@ def fixture_provenance() -> dict[str, Any]:
 def fixture_patch_provenance() -> dict[str, Any]:
     provenance = fixture_provenance()
     provenance.pop("packaged_conformance")
+    provenance["patch_gate"] = {
+        "prior_make_test_passed": True,
+        "tested_baseline_commit": "5" * 40,
+    }
     provenance["release_gate"] = release_evidence.PATCH_RELEASE_GATE
     provenance["schema"] = release_evidence.PATCH_PROVENANCE_SCHEMA
     return provenance
@@ -303,6 +307,7 @@ def self_test() -> dict[str, Any]:
     if (
         patch_handoff.get("schema") != release_evidence.PATCH_HANDOFF_SCHEMA
         or "packaged_conformance" in patch_handoff
+        or patch_handoff.get("patch_gate") != patch_provenance["patch_gate"]
     ):
         fail("patch handoff contains full-gate conformance claims")
     release_evidence.validate_handoff(
@@ -314,6 +319,45 @@ def self_test() -> dict[str, Any]:
         adapter_catalog_sha256,
     )
     sentinels += 2
+    for mutation, label in (
+        (lambda value: value.pop("patch_gate"), "missing patch gate"),
+        (
+            lambda value: value["patch_gate"].update({"prior_make_test_passed": False}),
+            "negative prior make-test confirmation",
+        ),
+        (
+            lambda value: value["patch_gate"].update({"tested_baseline_commit": "HEAD~1"}),
+            "symbolic tested baseline",
+        ),
+    ):
+        changed = json.loads(json.dumps(patch_provenance))
+        mutation(changed)
+        expect_rejection(
+            lambda changed=changed: release_evidence.validate_provenance(
+                changed,
+                version=VERSION,
+                target=TARGET,
+                commit="1" * 40,
+                tree="2" * 40,
+                conformance_result=None,
+            ),
+            label,
+        )
+        sentinels += 1
+    changed_handoff = json.loads(json.dumps(patch_handoff))
+    changed_handoff["patch_gate"]["tested_baseline_commit"] = "6" * 40
+    expect_rejection(
+        lambda: release_evidence.validate_handoff(
+            changed_handoff,
+            patch_provenance,
+            "provenance.json",
+            "3" * 64,
+            adapter,
+            adapter_catalog_sha256,
+        ),
+        "patch handoff baseline drift",
+    )
+    sentinels += 1
     expect_rejection(
         lambda: release_evidence.validate_provenance(
             patch_provenance,

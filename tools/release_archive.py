@@ -21,6 +21,7 @@ from typing import Any, Callable
 
 import repository_assets
 import release_evidence
+import verify_patch_release
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -746,12 +747,28 @@ def write_json(path: Path, value: Any) -> None:
 def package(arguments: argparse.Namespace) -> dict[str, Any]:
     validate_package_mode(arguments.artifact_class, arguments.allow_dirty)
     gate = getattr(arguments, "gate", "full")
+    patch_base = getattr(arguments, "patch_base_commit", None)
+    prior_make_test_passed = getattr(arguments, "prior_make_test_passed", None)
     if arguments.artifact_class != "distribution" and gate != "full":
         fail("patch gate is valid only for distribution artifacts")
+    if gate == "full" and (patch_base is not None or prior_make_test_passed is not None):
+        fail("full release evidence must not carry patch-gate inputs")
     require_native_host()
     dirty = require_clean_tree(arguments.allow_dirty)
     source_commit = run(["git", "rev-parse", "HEAD"], label="source commit probe").decode().strip()
     source_tree = run(["git", "rev-parse", "HEAD^{tree}"], label="source tree probe").decode().strip()
+    patch_gate = None
+    if gate == "patch":
+        if not isinstance(patch_base, str) or not isinstance(prior_make_test_passed, str):
+            fail("patch packaging requires baseline and prior make-test inputs")
+        try:
+            eligibility = verify_patch_release.check(patch_base, prior_make_test_passed)
+        except verify_patch_release.PatchReleaseError as error:
+            fail(f"patch packaging eligibility failed: {error}")
+        patch_gate = {
+            "prior_make_test_passed": eligibility["prior_make_test_passed"],
+            "tested_baseline_commit": eligibility["base_commit"],
+        }
     with tempfile.TemporaryDirectory(prefix="podway-release-") as temporary_name:
         temporary = Path(temporary_name)
         podway = require_native_binary(
@@ -827,6 +844,9 @@ def package(arguments: argparse.Namespace) -> dict[str, Any]:
                 "result": release_evidence.PENDING,
                 "scenarios": release_evidence.PACKAGED_CONFORMANCE_SCENARIOS,
             }
+        else:
+            assert patch_gate is not None
+            provenance["patch_gate"] = patch_gate
     if arguments.artifact_class == "distribution":
         try:
             release_evidence.validate_provenance(
@@ -879,6 +899,8 @@ def main() -> int:
         "--artifact-class", choices=("test-fixture", "distribution"), required=True
     )
     package_parser.add_argument("--gate", choices=("full", "patch"), default="full")
+    package_parser.add_argument("--patch-base-commit")
+    package_parser.add_argument("--prior-make-test-passed")
     package_parser.add_argument("--output-dir", type=Path, required=True)
     package_parser.add_argument("--allow-dirty", action="store_true", help="test-only: package an uncommitted tree")
     subparsers.add_parser("preflight", help="verify release host and Git worktree state")

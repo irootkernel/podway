@@ -97,6 +97,8 @@ REQUIRED_PATCH_RELEASE_COMMANDS = (
     "$(MAKE) release-version-check",
     "tools/release_archive.py package",
     "--gate patch",
+    "--patch-base-commit",
+    "--prior-make-test-passed",
     "tools/create_dolgorae_handoff.py create",
     "tools/verify_release_bundle.py verify",
 )

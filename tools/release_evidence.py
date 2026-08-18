@@ -31,7 +31,7 @@ PACKAGED_CONFORMANCE_SCENARIOS = [
 RELEASE_STATUS = {"notarization": "not-attempted", "signing": "unsigned"}
 SHA256 = re.compile(r"[0-9a-f]{64}")
 IDENTITY_SHA256 = re.compile(r"sha256:[0-9a-f]{64}")
-GIT_OBJECT = re.compile(r"[0-9a-f]{40,64}")
+GIT_OBJECT = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 
 PROVENANCE_KEYS = {
     "archive",
@@ -73,8 +73,8 @@ HANDOFF_KEYS = {
     "toolchain",
     "version",
 }
-PATCH_PROVENANCE_KEYS = PROVENANCE_KEYS - {"packaged_conformance"}
-PATCH_HANDOFF_KEYS = HANDOFF_KEYS - {"packaged_conformance"}
+PATCH_PROVENANCE_KEYS = (PROVENANCE_KEYS - {"packaged_conformance"}) | {"patch_gate"}
+PATCH_HANDOFF_KEYS = (HANDOFF_KEYS - {"packaged_conformance"}) | {"patch_gate"}
 
 
 class EvidenceError(RuntimeError):
@@ -175,6 +175,21 @@ def validate_release_status(value: Any) -> None:
     _exact_object(value, RELEASE_STATUS, "release_status")
 
 
+def validate_patch_gate(value: Any) -> None:
+    if not isinstance(value, dict):
+        fail("patch_gate must be an object")
+    _exact_keys(
+        value,
+        {"prior_make_test_passed", "tested_baseline_commit"},
+        "patch_gate",
+    )
+    if value["prior_make_test_passed"] is not True:
+        fail("patch_gate prior_make_test_passed must be the boolean true")
+    baseline = value["tested_baseline_commit"]
+    if not isinstance(baseline, str) or GIT_OBJECT.fullmatch(baseline) is None:
+        fail("patch_gate tested_baseline_commit must be a full Git identity")
+
+
 def validate_provenance(
     value: dict[str, Any],
     *,
@@ -235,7 +250,9 @@ def validate_provenance(
         fail("provenance contract manifest schema is invalid")
     _string(value["toolchain"], "provenance toolchain")
     validate_release_status(value["release_status"])
-    if not patch:
+    if patch:
+        validate_patch_gate(value["patch_gate"])
+    else:
         assert conformance_result is not None
         validate_packaged_conformance(value["packaged_conformance"], conformance_result)
 
@@ -279,7 +296,9 @@ def handoff_from_provenance(
         },
         "version": provenance["version"],
     }
-    if not patch:
+    if patch:
+        handoff["patch_gate"] = provenance["patch_gate"]
+    else:
         handoff["packaged_conformance"] = provenance["packaged_conformance"]
     return handoff
 

@@ -7,8 +7,10 @@ import argparse
 import json
 from pathlib import Path
 import re
+import stat
 import subprocess
 import sys
+import tempfile
 import tomllib
 from typing import Any
 
@@ -34,6 +36,7 @@ PRODUCT_PACKAGES = {
     "podway-store",
 }
 VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
+GIT_OBJECT = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 
 
 class PatchReleaseError(RuntimeError):
@@ -44,10 +47,10 @@ def fail(message: str) -> None:
     raise PatchReleaseError(message)
 
 
-def git(*arguments: str) -> str:
+def git_at(root: Path, *arguments: str) -> str:
     completed = subprocess.run(
         ["git", *arguments],
-        cwd=ROOT,
+        cwd=root,
         check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -126,22 +129,76 @@ def normalize_lock(data: bytes, version: str, label: str) -> dict[str, Any]:
     return value
 
 
-def changed_paths(base: str) -> set[str]:
-    output = git("diff", "--name-only", "--diff-filter=ACMRTD", f"{base}..HEAD")
+def changed_paths(root: Path, base: str) -> set[str]:
+    output = git_at(root, "diff", "--name-only", "--diff-filter=ACMRTD", f"{base}..HEAD")
     return {line for line in output.splitlines() if line}
 
 
-def baseline_bytes(base: str, path: str) -> bytes:
+def revision_bytes(root: Path, revision: str, path: str) -> bytes:
     completed = subprocess.run(
-        ["git", "show", f"{base}:{path}"],
-        cwd=ROOT,
+        ["git", "show", f"{revision}:{path}"],
+        cwd=root,
         check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
     if completed.returncode != 0:
-        fail(f"tested baseline does not contain {path}")
+        fail(f"{revision} does not contain {path}")
     return completed.stdout
+
+
+def git_entry(root: Path, revision: str, path: str) -> tuple[str, str] | None:
+    completed = subprocess.run(
+        ["git", "ls-tree", "-z", revision, "--", path],
+        cwd=root,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if completed.returncode != 0:
+        fail(completed.stderr.decode(errors="replace").strip() or f"cannot inspect {revision}:{path}")
+    if not completed.stdout:
+        return None
+    entries = [entry for entry in completed.stdout.split(b"\0") if entry]
+    if len(entries) != 1:
+        fail(f"{revision}:{path} does not resolve to exactly one Git entry")
+    try:
+        metadata, entry_path = entries[0].split(b"\t", 1)
+        mode, kind, _object_id = metadata.decode("ascii").split(" ", 2)
+        decoded_path = entry_path.decode("utf-8")
+    except (UnicodeError, ValueError) as error:
+        fail(f"cannot decode Git entry for {revision}:{path}: {error}")
+    if decoded_path != path:
+        fail(f"Git entry path mismatch for {revision}:{path}")
+    return mode, kind
+
+
+def require_regular_git_file(root: Path, revision: str, path: str) -> tuple[str, str]:
+    entry = git_entry(root, revision, path)
+    if entry is None:
+        fail(f"{revision} does not contain {path}")
+    if entry != ("100644", "blob"):
+        fail(f"{revision}:{path} must be a non-executable regular Git blob, found {entry}")
+    return entry
+
+
+def require_regular_worktree_file(root: Path, path: str) -> None:
+    candidate = root / path
+    try:
+        mode = candidate.lstat().st_mode
+    except OSError as error:
+        fail(f"current {path} is not readable: {error}")
+    if not stat.S_ISREG(mode):
+        fail(f"current {path} must be a regular non-symlink file")
+
+
+def current_manifest_paths(root: Path) -> list[str]:
+    output = git_at(root, "ls-tree", "-r", "--name-only", "HEAD", "--", "crates")
+    return sorted(
+        path
+        for path in output.splitlines()
+        if path.startswith("crates/") and path.endswith("/Cargo.toml")
+    )
 
 
 def validate_version_bound_file(path: str, base: bytes, current: bytes, old: str, new: str) -> None:
@@ -174,22 +231,27 @@ def validate_version_bound_file(path: str, base: bytes, current: bytes, old: str
     fail(f"unsupported version-bound path: {path}")
 
 
-def check(base: str, confirmed: str) -> dict[str, Any]:
+def check(base: str, confirmed: str, root: Path = ROOT) -> dict[str, Any]:
     if confirmed != "yes":
         fail("PRIOR_MAKE_TEST_PASSED must equal yes")
-    if git("status", "--porcelain=v1", "--untracked-files=normal"):
+    if git_at(root, "status", "--porcelain=v1", "--untracked-files=normal"):
         fail("patch release eligibility requires a clean Git worktree")
-    git("rev-parse", "--verify", f"{base}^{{commit}}")
+    resolved_base = git_at(root, "rev-parse", "--verify", f"{base}^{{commit}}")
+    if GIT_OBJECT.fullmatch(base) is None or base != resolved_base:
+        fail("PATCH_BASE_COMMIT must be the full immutable commit identity")
     if subprocess.run(
-        ["git", "merge-base", "--is-ancestor", base, "HEAD"], cwd=ROOT, check=False
+        ["git", "merge-base", "--is-ancestor", resolved_base, "HEAD"], cwd=root, check=False
     ).returncode != 0:
         fail("PATCH_BASE_COMMIT must be an ancestor of HEAD")
 
-    old = workspace_version(baseline_bytes(base, "Cargo.toml"), "baseline Cargo.toml")
-    new = workspace_version((ROOT / "Cargo.toml").read_bytes(), "current Cargo.toml")
+    require_regular_git_file(root, resolved_base, "Cargo.toml")
+    require_regular_git_file(root, "HEAD", "Cargo.toml")
+    require_regular_worktree_file(root, "Cargo.toml")
+    old = workspace_version(revision_bytes(root, resolved_base, "Cargo.toml"), "baseline Cargo.toml")
+    new = workspace_version(revision_bytes(root, "HEAD", "Cargo.toml"), "current Cargo.toml")
     require_patch_bump(old, new)
 
-    paths = changed_paths(base)
+    paths = changed_paths(root, resolved_base)
     allowed = ALWAYS_ALLOWED | VERSION_BOUND
     allowed.update(
         path
@@ -199,31 +261,116 @@ def check(base: str, confirmed: str) -> dict[str, Any]:
     unexpected = sorted(paths - allowed)
     if unexpected:
         fail(f"tested candidate has non-release changes: {unexpected}")
+    for path in sorted(paths):
+        current_entry = require_regular_git_file(root, "HEAD", path)
+        require_regular_worktree_file(root, path)
+        baseline_entry = git_entry(root, resolved_base, path)
+        if baseline_entry is not None and baseline_entry != current_entry:
+            fail(f"{path} changes Git object type or mode")
+        if baseline_entry is None and path not in ALWAYS_ALLOWED:
+            fail(f"tested baseline does not contain {path}")
     required = {"Cargo.toml", "contracts/contract-manifest-v1.json", "tools/release_archive.py"}
     missing = sorted(required - paths)
     if missing:
         fail(f"patch release omits required version-bound changes: {missing}")
-    for manifest in sorted((ROOT / "crates").glob("*/Cargo.toml")):
+    for manifest in current_manifest_paths(root):
+        require_regular_git_file(root, "HEAD", manifest)
+        require_regular_worktree_file(root, manifest)
         normalize_manifest(
-            manifest.read_bytes(),
+            revision_bytes(root, "HEAD", manifest),
             new,
-            f"current {manifest.relative_to(ROOT).as_posix()}",
+            f"current {manifest}",
         )
-    for lock_path in (ROOT / "Cargo.lock", ROOT / "fuzz/Cargo.lock"):
+    for lock_path in ("Cargo.lock", "fuzz/Cargo.lock"):
+        require_regular_git_file(root, "HEAD", lock_path)
+        require_regular_worktree_file(root, lock_path)
         normalize_lock(
-            lock_path.read_bytes(),
+            revision_bytes(root, "HEAD", lock_path),
             new,
-            f"current {lock_path.relative_to(ROOT).as_posix()}",
+            f"current {lock_path}",
         )
     for path in sorted(paths & (VERSION_BOUND | {p for p in paths if p.endswith("/Cargo.toml")})):
         validate_version_bound_file(
             path,
-            baseline_bytes(base, path),
-            (ROOT / path).read_bytes(),
+            revision_bytes(root, resolved_base, path),
+            revision_bytes(root, "HEAD", path),
             old,
             new,
         )
-    return {"base_commit": base, "mode": "check", "ok": True, "version": new}
+    return {
+        "base_commit": resolved_base,
+        "mode": "check",
+        "ok": True,
+        "prior_make_test_passed": True,
+        "version": new,
+    }
+
+
+def write_fixture_version(root: Path, version: str) -> None:
+    lock = f'[[package]]\nname = "podway-core"\nversion = "{version}"\n'
+    (root / "Cargo.toml").write_text(
+        f'[workspace.package]\nversion = "{version}"\n', encoding="utf-8"
+    )
+    (root / "Cargo.lock").write_text(lock, encoding="utf-8")
+    (root / "fuzz/Cargo.lock").write_text(lock, encoding="utf-8")
+    (root / "crates/podway-core/Cargo.toml").write_text(
+        f'[package]\nname = "podway-core"\nversion = "{version}"\n', encoding="utf-8"
+    )
+    (root / "contracts/contract-manifest-v1.json").write_text(
+        json.dumps({"digest": f"sha256:{version}", "product_version": version}) + "\n",
+        encoding="utf-8",
+    )
+    (root / "tools/release_archive.py").write_text(
+        f'PRODUCT_VERSION = "{version}"\n', encoding="utf-8"
+    )
+
+
+def patch_release_fixture(root: Path, mutation: str = "valid") -> str:
+    for directory in (
+        "contracts",
+        "crates/podway-core",
+        "fuzz",
+        "tools",
+    ):
+        (root / directory).mkdir(parents=True, exist_ok=True)
+    git_at(root, "init", "--quiet")
+    git_at(root, "config", "user.email", "patch-release@example.invalid")
+    git_at(root, "config", "user.name", "Patch Release Fixture")
+    (root / "README.md").write_text("fixture\n", encoding="utf-8")
+    (root / "RELEASE_NOTES.md").write_text("fixture\n", encoding="utf-8")
+    write_fixture_version(root, "1.2.3")
+    git_at(root, "add", "--all")
+    git_at(root, "commit", "--quiet", "-m", "baseline")
+    baseline = git_at(root, "rev-parse", "HEAD")
+
+    write_fixture_version(root, "1.2.4")
+    if mutation == "lock-symlink":
+        external = root.parent / f"{root.name}-external-Cargo.lock"
+        external.write_text(
+            '[[package]]\nname = "podway-core"\nversion = "1.2.4"\n',
+            encoding="utf-8",
+        )
+        (root / "Cargo.lock").unlink()
+        (root / "Cargo.lock").symlink_to(external)
+    elif mutation == "archive-executable":
+        (root / "tools/release_archive.py").chmod(0o755)
+    elif mutation == "unexpected-source":
+        source = root / "crates/podway-core/src/lib.rs"
+        source.parent.mkdir(parents=True)
+        source.write_text("pub fn unexpected() {}\n", encoding="utf-8")
+    elif mutation != "valid":
+        fail(f"unknown patch release fixture mutation: {mutation}")
+    git_at(root, "add", "--all")
+    git_at(root, "commit", "--quiet", "-m", "release candidate")
+    return baseline
+
+
+def expect_patch_rejection(action: Any, label: str) -> None:
+    try:
+        action()
+    except PatchReleaseError:
+        return
+    fail(f"patch release self-test accepted {label}")
 
 
 def self_test() -> dict[str, Any]:
@@ -268,7 +415,41 @@ def self_test() -> dict[str, Any]:
             current_version,
             lock_path.relative_to(ROOT).as_posix(),
         )
-    return {"mode": "self-test", "ok": True, "sentinels": 21}
+    with tempfile.TemporaryDirectory(prefix="podway-patch-release-") as temporary:
+        fixture_root = Path(temporary)
+        valid = fixture_root / "valid"
+        valid.mkdir()
+        baseline = patch_release_fixture(valid)
+        result = check(baseline, "yes", valid)
+        if result["base_commit"] != baseline or result["prior_make_test_passed"] is not True:
+            fail("valid patch release fixture returned incomplete gate identity")
+        expect_patch_rejection(
+            lambda: check("HEAD~1", "yes", valid),
+            "a symbolic baseline",
+        )
+        expect_patch_rejection(
+            lambda: check(baseline[:12], "yes", valid),
+            "an abbreviated baseline",
+        )
+        expect_patch_rejection(
+            lambda: check(baseline, "no", valid),
+            "a missing prior make-test confirmation",
+        )
+        for name, mutation in (
+            ("lock-symlink", "lock-symlink"),
+            ("archive-executable", "archive-executable"),
+            ("unexpected-source", "unexpected-source"),
+        ):
+            fixture = fixture_root / name
+            fixture.mkdir()
+            mutated_baseline = patch_release_fixture(fixture, mutation)
+            expect_patch_rejection(
+                lambda fixture=fixture, mutated_baseline=mutated_baseline: check(
+                    mutated_baseline, "yes", fixture
+                ),
+                mutation,
+            )
+    return {"mode": "self-test", "ok": True, "sentinels": 28}
 
 
 def main() -> int:

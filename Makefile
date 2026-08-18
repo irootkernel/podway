@@ -184,6 +184,8 @@ dist-patch:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/release_archive.py package \
 		--artifact-class distribution \
 		--gate patch \
+		--patch-base-commit "$(PATCH_BASE_COMMIT)" \
+		--prior-make-test-passed "$(PRIOR_MAKE_TEST_PASSED)" \
 		--podway target/release/podway \
 		--podwayd target/release/podwayd \
 		--output-dir $(DIST_DIR)
