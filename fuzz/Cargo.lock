@@ -707,7 +707,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "podway-config"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "podway-core",
  "serde",
@@ -720,7 +720,7 @@ dependencies = [
 
 [[package]]
 name = "podway-core"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "serde",
  "serde_json",
@@ -741,7 +741,7 @@ dependencies = [
 
 [[package]]
 name = "podway-git"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "podway-core",
  "rustix",
@@ -751,7 +751,7 @@ dependencies = [
 
 [[package]]
 name = "podway-protocol"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "jsonschema",
  "podway-core",
