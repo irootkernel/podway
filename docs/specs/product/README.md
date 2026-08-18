@@ -10,7 +10,8 @@ rework paths explicit without executing the work itself.
 
 ```text
 initialize a worktree
-  -> start one Procedure v2 session
+  -> start one cursor-free prepared Procedure v2 session
+  -> begin it at the unique graph entry, optionally defining the initial goal
   -> define or revise the goal and criteria when the Procedure enables them
   -> satisfy the active action node
   -> complete, retry, decide, or follow declared rework
