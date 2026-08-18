@@ -2301,6 +2301,167 @@ fn v2lif003_cold_read_migrates_released_v4_and_rebuilds_missing_registry_once() 
 }
 
 #[test]
+fn v2lif007_migrated_eligible_reset_keeps_terminal_job_readback() {
+    let fixture = support_phase4_workspace::git_worktrees();
+    make_runtime_private(fixture.main());
+    fs::write(
+        fixture.main().join("v2lif007-reset-readback.yaml"),
+        ACTION_READBACK_PROCEDURE,
+    )
+    .unwrap();
+    let ParsedProcedure::V2(parsed) = parse_procedure_document(
+        ACTION_READBACK_PROCEDURE.as_bytes(),
+        ProcedureDocumentFormat::Yaml,
+    )
+    .unwrap() else {
+        unreachable!()
+    };
+    let digest = validate_procedure_v2(parsed).unwrap().digest().clone();
+    let workspace_selector = selector(fixture.main());
+    let original_manager = Arc::new(manager(fixture.temporary_path()));
+    let original = dispatcher(Arc::clone(&original_manager), "v2lif007-reset-original");
+
+    let initialize = request(
+        143_101,
+        "workspace.init",
+        &workspace_selector,
+        Map::new(),
+        "v2lif007-reset-init",
+        PreconditionsV1::default(),
+    );
+    assert!(matches!(
+        dispatch(&original, &initialize),
+        ResponseEnvelopeV2::OutputV2(_)
+    ));
+    let start_payload = |title: &str| {
+        json!({
+            "procedure": "v2lif007-reset-readback.yaml",
+            "expected_procedure_digest": digest,
+            "task_title": title
+        })
+        .as_object()
+        .unwrap()
+        .clone()
+    };
+    let reset_source = request(
+        143_102,
+        "session.start",
+        &workspace_selector,
+        start_payload("Create a released reset receipt"),
+        "v2lif007-reset-source",
+        PreconditionsV1::default(),
+    );
+    let reset_source = v2_result(dispatch(&original, &reset_source), "session.start");
+    let reset_session_id = SessionId::new(reset_source["session_id"].as_str().unwrap()).unwrap();
+    let reset = request(
+        143_103,
+        "session.reset",
+        &workspace_selector,
+        Map::new(),
+        "v2lif007-reset-terminal",
+        PreconditionsV1::new(
+            Some(reset_session_id),
+            Some(Revision::ZERO),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let ResponseEnvelopeV2::OutputV2(reset_output) = dispatch(&original, &reset) else {
+        panic!("eligible reset must succeed");
+    };
+    assert_eq!(reset_output.result()["mode"], "eligible");
+    let reset_job_id = reset_output.job().unwrap().id().clone();
+    let reset_terminal = serde_json::to_value(&reset_output).unwrap();
+
+    let retained_start = request(
+        143_104,
+        "session.start",
+        &workspace_selector,
+        start_payload("Retain a running session across migration"),
+        "v2lif007-retained-start",
+        PreconditionsV1::default(),
+    );
+    let retained_start = v2_result(dispatch(&original, &retained_start), "session.start");
+    let retained_session_id = retained_start["session_id"].as_str().unwrap().to_owned();
+    begin(
+        &original,
+        &workspace_selector,
+        143_105,
+        &retained_session_id,
+        Map::new(),
+        "v2lif007-retained-begin",
+    );
+    let expected_status = status(
+        &original,
+        &workspace_selector,
+        143_106,
+        &retained_session_id,
+    );
+    let database_path = fixture.main().join(".podway/runtime/state.sqlite3");
+    drop(original);
+    drop(original_manager);
+
+    podway_store::test_support::downgrade_to_schema_v4(&database_path).unwrap();
+    podway_store::test_support::rewrite_reset_terminal_without_mode(&database_path, &reset_job_id)
+        .unwrap();
+
+    let cold_manager = Arc::new(manager(
+        &fixture.temporary_path().join("v2lif007-reset-cold"),
+    ));
+    let cold = dispatcher(Arc::clone(&cold_manager), "v2lif007-reset-cold");
+    assert_eq!(
+        status(&cold, &workspace_selector, 143_107, &retained_session_id,),
+        expected_status
+    );
+
+    let job_status = request(
+        143_108,
+        "job.status",
+        &workspace_selector,
+        json!({"job_id": reset_job_id}).as_object().unwrap().clone(),
+        "unused-v2lif007-reset-status",
+        PreconditionsV1::default(),
+    );
+    let job_status = v2_result(dispatch_after_cold_reopen(&cold, &job_status), "job.status");
+    assert_eq!(job_status["job"], reset_terminal);
+
+    let lookup = request(
+        143_109,
+        "job.lookup",
+        &workspace_selector,
+        json!({"idempotency_key": "v2lif007-reset-terminal"})
+            .as_object()
+            .unwrap()
+            .clone(),
+        "unused-v2lif007-reset-lookup",
+        PreconditionsV1::default(),
+    );
+    let lookup = v2_result(dispatch_after_cold_reopen(&cold, &lookup), "job.lookup");
+    assert_eq!(lookup["found"], true);
+    assert_eq!(lookup["job"]["terminal_response"], reset_terminal);
+
+    let list = request(
+        143_110,
+        "job.list",
+        &workspace_selector,
+        Map::new(),
+        "unused-v2lif007-reset-list",
+        PreconditionsV1::default(),
+    );
+    let list = v2_result(dispatch_after_cold_reopen(&cold, &list), "job.list");
+    let listed = list["jobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|job| job["id"] == reset_job_id.as_str())
+        .expect("the migrated reset job must remain listed");
+    assert_eq!(listed["terminal_response"], reset_terminal);
+}
+
+#[test]
 fn v2lif005_eligible_replacement_dry_run_uses_current_reset_eligibility() {
     let fixture = support_phase4_workspace::git_worktrees();
     make_runtime_private(fixture.main());

@@ -4103,6 +4103,7 @@ pub(crate) fn normalize_terminal_receipt_for_schema_v4_v1(
 ) -> Result<(PersistedTerminalReceiptV1, String), StoreCodecErrorV1> {
     let mut document: Value =
         serde_json::from_str(value).map_err(|_| StoreCodecErrorV1::InvalidJson)?;
+    normalize_released_reset_mode_v1(&mut document)?;
     let envelope = document
         .get_mut("public_terminal_envelope")
         .and_then(Value::as_object_mut);
@@ -4145,6 +4146,51 @@ pub(crate) fn normalize_terminal_receipt_for_schema_v4_v1(
         });
     }
     Ok((receipt, normalized))
+}
+
+fn normalize_released_reset_mode_v1(document: &mut Value) -> Result<(), StoreCodecErrorV1> {
+    let public_reset_result = document
+        .get("public_terminal_envelope")
+        .and_then(|envelope| envelope.get("result"))
+        .filter(|result| {
+            result.get("schema").and_then(Value::as_str) == Some("podway.session-reset-result/v1")
+        });
+    let public_mode = public_reset_result
+        .map(|result| {
+            result
+                .get("mode")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .ok_or(StoreCodecErrorV1::InvalidValue {
+                    field: "reset terminal mode",
+                })
+        })
+        .transpose()?;
+    let Some(operation) = document
+        .get_mut("graph_session_projection")
+        .and_then(Value::as_object_mut)
+        .and_then(|projection| projection.get_mut("operation"))
+        .and_then(Value::as_object_mut)
+        .filter(|operation| {
+            operation.get("kind").and_then(Value::as_str) == Some("reset")
+                && !operation.contains_key("mode")
+        })
+    else {
+        return Ok(());
+    };
+    let has_progress_summary = operation.get("progress_summary").is_some();
+    let mode = match (public_mode.as_deref(), has_progress_summary) {
+        (Some("eligible"), false) => "eligible",
+        (Some("force"), true) => "force",
+        (Some("force") | None, false) => "legacy_confirmed",
+        _ => {
+            return Err(StoreCodecErrorV1::InvalidValue {
+                field: "reset terminal mode",
+            });
+        }
+    };
+    operation.insert("mode".to_owned(), Value::String(mode.to_owned()));
+    Ok(())
 }
 pub(crate) fn validate_terminal_result_for_command_v1(
     command: &CommandV1,
@@ -4434,6 +4480,95 @@ mod tests {
             normalize_terminal_receipt_for_schema_v4_v1(&released, None).unwrap();
         assert_eq!(decoded, receipt);
         assert_eq!(normalized, encoded);
+    }
+
+    #[test]
+    fn released_eligible_reset_mode_is_recovered_from_the_frozen_public_envelope() {
+        let legacy = encode_persisted_terminal_receipt_v1(&reset_receipt()).unwrap();
+        let mut current: Value = serde_json::from_str(&legacy).unwrap();
+        current["graph_session_projection"]["operation"]["mode"] = json!("eligible");
+        current["public_terminal_envelope"] = json!({
+            "schema": "podway.output/v3",
+            "request_id": "00000000-0000-4000-8000-000000000303",
+            "command": "session.reset",
+            "result": {
+                "schema": "podway.session-reset-result/v1",
+                "mode": "eligible"
+            }
+        });
+        let current = serde_json::to_string(&canonicalize_json(current)).unwrap();
+        let expected = decode_terminal_receipt_v1(&current).unwrap();
+        let mut released: Value = serde_json::from_str(&current).unwrap();
+        released["graph_session_projection"]["operation"]
+            .as_object_mut()
+            .unwrap()
+            .remove("mode");
+        let released = serde_json::to_string(&canonicalize_json(released)).unwrap();
+
+        let (decoded, normalized) =
+            normalize_terminal_receipt_for_schema_v4_v1(&released, None).unwrap();
+        assert_eq!(decoded, expected);
+        assert_eq!(normalized, current);
+    }
+
+    #[test]
+    fn released_force_reset_mode_is_recovered_with_its_progress_summary() {
+        let legacy = encode_persisted_terminal_receipt_v1(&reset_receipt()).unwrap();
+        let mut current: Value = serde_json::from_str(&legacy).unwrap();
+        current["graph_session_projection"]["operation"]["mode"] = json!("force");
+        current["graph_session_projection"]["operation"]["progress_summary"] =
+            json!("Preserve the force-reset justification.");
+        current["public_terminal_envelope"] = json!({
+            "schema": "podway.output/v3",
+            "request_id": "00000000-0000-4000-8000-000000000303",
+            "command": "session.reset",
+            "result": {
+                "schema": "podway.session-reset-result/v1",
+                "mode": "force"
+            }
+        });
+        let current = serde_json::to_string(&canonicalize_json(current)).unwrap();
+        let expected = decode_terminal_receipt_v1(&current).unwrap();
+        let mut released: Value = serde_json::from_str(&current).unwrap();
+        released["graph_session_projection"]["operation"]
+            .as_object_mut()
+            .unwrap()
+            .remove("mode");
+        let released = serde_json::to_string(&canonicalize_json(released)).unwrap();
+
+        let (decoded, normalized) =
+            normalize_terminal_receipt_for_schema_v4_v1(&released, None).unwrap();
+        assert_eq!(decoded, expected);
+        assert_eq!(normalized, current);
+    }
+
+    #[test]
+    fn released_reset_mode_rejects_a_public_mode_that_conflicts_with_progress() {
+        let encoded = encode_persisted_terminal_receipt_v1(&reset_receipt()).unwrap();
+        let mut released: Value = serde_json::from_str(&encoded).unwrap();
+        released["graph_session_projection"]["operation"]
+            .as_object_mut()
+            .unwrap()
+            .remove("mode");
+        released["graph_session_projection"]["operation"]["progress_summary"] =
+            json!("Forced reset evidence.");
+        released["public_terminal_envelope"] = json!({
+            "schema": "podway.output/v3",
+            "request_id": "00000000-0000-4000-8000-000000000303",
+            "command": "session.reset",
+            "result": {
+                "schema": "podway.session-reset-result/v1",
+                "mode": "eligible"
+            }
+        });
+        let released = serde_json::to_string(&canonicalize_json(released)).unwrap();
+
+        assert!(matches!(
+            normalize_terminal_receipt_for_schema_v4_v1(&released, None),
+            Err(StoreCodecErrorV1::InvalidValue {
+                field: "reset terminal mode"
+            })
+        ));
     }
 
     #[test]
