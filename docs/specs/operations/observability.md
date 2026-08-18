@@ -66,11 +66,15 @@ Default structured-log rotation:
 
 A logging failure must not corrupt task state. Sink failures and dropped records are accounted internally; daemon status has no logging-warning field.
 
-The LaunchAgent directs standard output and standard error to the separate
-`podwayd-bootstrap.log` stream. Bootstrap records are JSON Lines and use a 1 MiB
-per-file limit with 5 files total (`podwayd-bootstrap.log` plus `.1` through
-`.4`). The daemon's rotating structured sink is the only writer to `podwayd.log`,
-so launchd never retains a descriptor to a rotated structured-log file.
+The LaunchAgent directs standard output and standard error to `/dev/null`.
+The daemon is the only writer to the separate `podwayd-bootstrap.log` stream.
+Bootstrap records are JSON Lines and use a 1 MiB per-file limit with 5 files
+total (`podwayd-bootstrap.log` plus `.1` through `.4`). They retain the fixed
+`podway.daemon-bootstrap-log/v1` keys, keep `message` as `null`, and use only
+closed stage and error-kind values. Launchd never retains a descriptor to either
+rotated log stream. On first open after an upgrade, the sink discards only exact
+effective-user-owned bootstrap files that already exceed the per-file limit;
+unrelated files, symlinks, and foreign-owned files are not followed or removed.
 
 ## Daemon status
 

@@ -10,8 +10,8 @@ use std::{
 };
 
 use podway_daemon::observability::{
-    FALLBACK_CAPACITY_V1, ObservabilityFinalizationV1, PRIMARY_CAPACITY_V1, RETAINED_ROTATIONS_V1,
-    ROTATION_BYTES_V1,
+    BOOTSTRAP_RETAINED_ROTATIONS_V1, FALLBACK_CAPACITY_V1, ObservabilityFinalizationV1,
+    PRIMARY_CAPACITY_V1, RETAINED_ROTATIONS_V1, ROTATION_BYTES_V1,
 };
 use podway_daemon::{
     ClockErrorV1, ClockV1, EventOperationV1, EventOutcomeV1, EventRecordV1, LogSinkV1,
@@ -502,6 +502,58 @@ fn rotation_owns_exactly_canonical_numbered_files() {
             .iter()
             .all(|entry| fs::metadata(entry).unwrap().len() <= ROTATION_BYTES_V1)
     );
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
+fn bootstrap_rotation_retains_five_bounded_daemon_owned_files() {
+    let path = temporary_path("bootstrap-rotation");
+    let sink = RotatingFileSinkV1::open_bootstrap(&path).unwrap();
+    let event = format!("{}\n", "b".repeat(8 * 1024 - 1));
+    for _ in 0..=(ROTATION_BYTES_V1 as usize / event.len()) * (BOOTSTRAP_RETAINED_ROTATIONS_V1 + 1)
+    {
+        sink.write_event(&event).unwrap();
+    }
+    sink.flush().unwrap();
+
+    let retained = std::iter::once(path.clone())
+        .chain(
+            (1..=BOOTSTRAP_RETAINED_ROTATIONS_V1)
+                .map(|index| path.with_extension(format!("log.{index}"))),
+        )
+        .collect::<Vec<_>>();
+    assert!(retained.iter().all(|entry| entry.exists()));
+    assert!(
+        !path
+            .with_extension(format!("log.{}", BOOTSTRAP_RETAINED_ROTATIONS_V1 + 1))
+            .exists()
+    );
+    assert!(
+        retained
+            .iter()
+            .all(|entry| fs::metadata(entry).unwrap().len() <= ROTATION_BYTES_V1)
+    );
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
+fn bootstrap_open_discards_only_oversized_owned_stream_files() {
+    let path = temporary_path("bootstrap-oversized");
+    fs::write(&path, vec![b'a'; ROTATION_BYTES_V1 as usize + 1]).unwrap();
+    fs::write(
+        path.with_extension("log.1"),
+        vec![b'b'; ROTATION_BYTES_V1 as usize + 1],
+    )
+    .unwrap();
+    fs::write(path.with_extension("log.keep"), "neighbor").unwrap();
+
+    let sink = RotatingFileSinkV1::open_bootstrap(&path).unwrap();
+    sink.write_event("{}\n").unwrap();
+    sink.flush().unwrap();
+
+    assert_eq!(fs::read_to_string(&path).unwrap(), "{}\n");
+    assert!(!path.with_extension("log.1").exists());
+    assert!(path.with_extension("log.keep").exists());
     let _ = fs::remove_dir_all(path.parent().unwrap());
 }
 

@@ -219,10 +219,11 @@ Defaults:
 
 `podway daemon logs` prints the resolved log path and recent content. `--follow` streams appended lines.
 
-The LaunchAgent sends standard output and standard error to
-`podwayd-bootstrap.log`, not to the daemon sink. That stream retains 5 files
-total at 1 MiB each. Explicit log purge removes both owned streams and their
-numbered rotations.
+The LaunchAgent sends standard output and standard error to `/dev/null`.
+The daemon writes closed startup records directly to `podwayd-bootstrap.log`
+through a synchronous rotating sink. That stream retains 5 files total at 1 MiB
+each, keeps `message` as `null`, and excludes raw error strings. Explicit log
+purge removes both daemon-owned streams and their numbered rotations.
 
 ## Upgrade behavior
 

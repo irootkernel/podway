@@ -40,6 +40,8 @@ const MAX_EMIT_QUEUE_WAIT_V1: Duration = Duration::from_millis(5);
 pub const ROTATION_BYTES_V1: u64 = 1024 * 1024;
 pub const RETAINED_FILES_V1: usize = 10;
 pub const RETAINED_ROTATIONS_V1: usize = RETAINED_FILES_V1 - 1;
+pub const BOOTSTRAP_RETAINED_FILES_V1: usize = 5;
+pub const BOOTSTRAP_RETAINED_ROTATIONS_V1: usize = BOOTSTRAP_RETAINED_FILES_V1 - 1;
 const ADMISSION_RUNNING_V1: u64 = 0;
 const ADMISSION_STOPPING_V1: u64 = 1;
 const ADMISSION_FROZEN_V1: u64 = 2;
@@ -937,6 +939,8 @@ fn format_event(
 pub struct RotatingFileSinkV1 {
     directory: OwnedFd,
     name: OsString,
+    rotation_bytes: u64,
+    retained_rotations: usize,
     state: Mutex<FileState>,
 }
 struct FileState {
@@ -945,6 +949,22 @@ struct FileState {
 }
 impl RotatingFileSinkV1 {
     pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
+        Self::open_with_policy(path, ROTATION_BYTES_V1, RETAINED_ROTATIONS_V1, false)
+    }
+    pub fn open_bootstrap(path: impl AsRef<Path>) -> io::Result<Self> {
+        Self::open_with_policy(
+            path,
+            ROTATION_BYTES_V1,
+            BOOTSTRAP_RETAINED_ROTATIONS_V1,
+            true,
+        )
+    }
+    fn open_with_policy(
+        path: impl AsRef<Path>,
+        rotation_bytes: u64,
+        retained_rotations: usize,
+        discard_oversized: bool,
+    ) -> io::Result<Self> {
         let path = path.as_ref().to_path_buf();
         let parent = path
             .parent()
@@ -956,12 +976,23 @@ impl RotatingFileSinkV1 {
             })?
             .to_os_string();
         let directory = open_private_log_directory(parent)?;
-        retain_exact_rotations(&directory, &name, RETAINED_ROTATIONS_V1)?;
-        let file = open_private_log(&directory, &name)?;
-        let bytes = file.metadata()?.len();
+        retain_exact_rotations(&directory, &name, retained_rotations)?;
+        if discard_oversized {
+            remove_oversized_rotations(&directory, &name, retained_rotations, rotation_bytes)?;
+        }
+        let mut file = open_private_log(&directory, &name)?;
+        let mut bytes = file.metadata()?.len();
+        if discard_oversized && bytes > rotation_bytes {
+            drop(file);
+            remove_if_present(&directory, &name)?;
+            file = open_private_log(&directory, &name)?;
+            bytes = 0;
+        }
         Ok(Self {
             directory,
             name,
+            rotation_bytes,
+            retained_rotations,
             state: Mutex::new(FileState { file, bytes }),
         })
     }
@@ -969,13 +1000,13 @@ impl RotatingFileSinkV1 {
         state.file.flush()?;
         remove_if_present(
             &self.directory,
-            &rotated_log_name(&self.name, RETAINED_ROTATIONS_V1 + 1),
+            &rotated_log_name(&self.name, self.retained_rotations + 1),
         )?;
         remove_if_present(
             &self.directory,
-            &rotated_log_name(&self.name, RETAINED_ROTATIONS_V1),
+            &rotated_log_name(&self.name, self.retained_rotations),
         )?;
-        for index in (1..RETAINED_ROTATIONS_V1).rev() {
+        for index in (1..self.retained_rotations).rev() {
             let from = rotated_log_name(&self.name, index);
             let to = rotated_log_name(&self.name, index + 1);
             match renameat(
@@ -1003,7 +1034,7 @@ impl RotatingFileSinkV1 {
         }
         state.file = open_private_log(&self.directory, &self.name)?;
         state.bytes = 0;
-        retain_exact_rotations(&self.directory, &self.name, RETAINED_ROTATIONS_V1)?;
+        retain_exact_rotations(&self.directory, &self.name, self.retained_rotations)?;
         Ok(())
     }
 }
@@ -1149,6 +1180,29 @@ fn retain_exact_rotations(
     Ok(())
 }
 
+fn remove_oversized_rotations(
+    directory: &OwnedFd,
+    name: &OsStr,
+    retained_rotations: usize,
+    maximum_bytes: u64,
+) -> io::Result<()> {
+    for index in 1..=retained_rotations {
+        let rotated = rotated_log_name(name, index);
+        let metadata = match fstatat(directory, rotated.as_os_str(), AtFlags::AT_SYMLINK_NOFOLLOW) {
+            Ok(metadata) => metadata,
+            Err(Errno::ENOENT) => continue,
+            Err(error) => return Err(nix_io_error(error)),
+        };
+        if SFlag::from_bits_truncate(metadata.st_mode) & SFlag::S_IFMT == SFlag::S_IFREG
+            && metadata.st_uid == geteuid().as_raw()
+            && metadata.st_size > maximum_bytes as i64
+        {
+            remove_if_present(directory, &rotated)?;
+        }
+    }
+    Ok(())
+}
+
 fn nix_io_error(error: Errno) -> io::Error {
     io::Error::from_raw_os_error(error as i32)
 }
@@ -1164,7 +1218,7 @@ impl LogSinkV1 for RotatingFileSinkV1 {
             .state
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        if state.bytes.saturating_add(event.len() as u64) > ROTATION_BYTES_V1 {
+        if state.bytes.saturating_add(event.len() as u64) > self.rotation_bytes {
             self.rotate(&mut state)?;
         }
         state.file.write_all(event.as_bytes())?;

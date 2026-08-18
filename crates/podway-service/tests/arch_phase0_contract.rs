@@ -1093,7 +1093,7 @@ fn phase6_install_emits_complete_authenticated_plist_for_xml_sensitive_paths() {
             .replace('\'', "&apos;")
     };
     let escaped_bootstrap_log = xml_escape(paths.bootstrap_log_path().as_path());
-    assert!(plist.contains(&format!("<string>{escaped_bootstrap_log}</string>")));
+    assert!(!plist.contains(&escaped_bootstrap_log));
     assert!(plist.contains("<key>Label</key>\n  <string>dev.podway.podwayd</string>"));
     assert!(plist.contains("<key>RunAtLoad</key>\n  <true/>"));
     assert!(
@@ -1104,11 +1104,9 @@ fn phase6_install_emits_complete_authenticated_plist_for_xml_sensitive_paths() {
     assert!(plist.contains("<key>ThrottleInterval</key>\n  <integer>5</integer>"));
     assert!(plist.contains("<key>ProcessType</key>\n  <string>Background</string>"));
     assert_eq!(
-        plist
-            .match_indices(&format!("<string>{escaped_bootstrap_log}</string>"))
-            .count(),
+        plist.match_indices("<string>/dev/null</string>").count(),
         2,
-        "both standard output and error paths must use the escaped bootstrap log path"
+        "launchd output must not own the daemon-managed bootstrap log"
     );
 
     let receipt: serde_json::Value = serde_json::from_slice(
@@ -1154,8 +1152,7 @@ fn phase6_install_emits_complete_authenticated_plist_for_xml_sensitive_paths() {
         )
         .replace("__PODWAYD_SHA256__", daemon_identity)
         .replace("__PODWAYD_ABSOLUTE_PATH__", &escaped_installed_binary)
-        .replace("__PODWAYD_SOCKET_PATH__", &escaped_socket)
-        .replace("__PODWAYD_BOOTSTRAP_LOG_PATH__", &escaped_bootstrap_log);
+        .replace("__PODWAYD_SOCKET_PATH__", &escaped_socket);
     assert_eq!(
         plist, expected_plist,
         "the reference template keys and static values must exactly match installed output"

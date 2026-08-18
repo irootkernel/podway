@@ -4009,18 +4009,17 @@ pub fn launch_agent_plist_v1(binary: &Path, socket_path: &Path, log_path: &Path)
 fn launch_agent_plist_with_generation_v1(
     binary: &Path,
     socket_path: &Path,
-    log_path: &Path,
+    _log_path: &Path,
     generation: Option<&str>,
     daemon_identity: Option<&str>,
 ) -> Vec<u8> {
-    let bootstrap_log_path = log_path.with_file_name("podwayd-bootstrap.log");
     let generation = generation.map_or_else(String::new, |value| {
         format!("\n  <key>PodwayGeneration</key>\n  <string>{value}</string>\n")
     });
     let daemon_identity = daemon_identity.map_or_else(String::new, |value| {
         format!("\n  <key>PodwayDaemonSha256</key>\n  <string>{value}</string>\n")
     });
-    format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n  <key>Label</key>\n  <string>{SERVICE_LABEL_V1}</string>{generation}{daemon_identity}\n  <key>ProgramArguments</key>\n  <array>\n    <string>{}</string>\n    <string>--service</string>\n    <string>--socket</string>\n    <string>{}</string>\n  </array>\n\n  <key>RunAtLoad</key>\n  <true/>\n\n  <key>KeepAlive</key>\n  <dict>\n    <key>SuccessfulExit</key>\n    <false/>\n  </dict>\n\n  <key>ThrottleInterval</key>\n  <integer>5</integer>\n\n  <key>ProcessType</key>\n  <string>Background</string>\n\n  <key>StandardOutPath</key>\n  <string>{}</string>\n\n  <key>StandardErrorPath</key>\n  <string>{}</string>\n</dict>\n</plist>\n", xml_escape(&binary.display().to_string()), xml_escape(&socket_path.display().to_string()), xml_escape(&bootstrap_log_path.display().to_string()), xml_escape(&bootstrap_log_path.display().to_string())).into_bytes()
+    format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n  <key>Label</key>\n  <string>{SERVICE_LABEL_V1}</string>{generation}{daemon_identity}\n  <key>ProgramArguments</key>\n  <array>\n    <string>{}</string>\n    <string>--service</string>\n    <string>--socket</string>\n    <string>{}</string>\n  </array>\n\n  <key>RunAtLoad</key>\n  <true/>\n\n  <key>KeepAlive</key>\n  <dict>\n    <key>SuccessfulExit</key>\n    <false/>\n  </dict>\n\n  <key>ThrottleInterval</key>\n  <integer>5</integer>\n\n  <key>ProcessType</key>\n  <string>Background</string>\n\n  <key>StandardOutPath</key>\n  <string>/dev/null</string>\n\n  <key>StandardErrorPath</key>\n  <string>/dev/null</string>\n</dict>\n</plist>\n", xml_escape(&binary.display().to_string()), xml_escape(&socket_path.display().to_string())).into_bytes()
 }
 
 fn xml_escape(value: &str) -> String {

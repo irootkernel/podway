@@ -6,8 +6,8 @@ use nix::unistd::geteuid;
 #[cfg(all(feature = "development-v2-admission", debug_assertions))]
 use podway_daemon::managed_dev::ManagedDevPurposeV2;
 use podway_daemon::{
-    ObservabilityCountersV1, ObservabilityFinalizationV1, ObservabilityV1, RotatingFileSinkV1,
-    SystemClockV1,
+    LogSinkV1, ObservabilityCountersV1, ObservabilityFinalizationV1, ObservabilityV1,
+    RotatingFileSinkV1, SystemClockV1,
     managed_dev::ManagedDevRuntimeV2,
     runtime::{ProductionDaemonRuntimeConfigV1, ProductionDaemonRuntimeV1},
     server::{
@@ -29,52 +29,101 @@ use uuid::Uuid;
 const MAXIMUM_IN_FLIGHT_CONNECTIONS_V1: usize = 64;
 
 fn main() {
-    if let Err(error) = run() {
-        write_bootstrap_event(
-            "failed",
-            None,
-            "process",
-            Some("startup_failure"),
-            Some(&error.to_string()),
-        );
+    if run().is_err() {
+        write_bootstrap_stderr("failed", None, "process", Some("startup_failure"));
         process::exit(1);
     }
 }
 
-fn write_bootstrap_event(
+fn bootstrap_event(
     outcome: &'static str,
     daemon_id: Option<&str>,
     stage: &'static str,
     error_kind: Option<&'static str>,
-    message: Option<&str>,
-) {
+) -> String {
     let timestamp = daemon_id.map(|_| {
         SystemResponseMetadataSourceV1::default()
             .generated_at()
             .into_inner()
     });
-    eprintln!(
-        "{}",
-        serde_json::json!({
-            "schema": "podway.daemon-bootstrap-log/v1",
-            "ts": timestamp,
-            "daemon_id": daemon_id,
-            "seq": 0,
-            "operation": "daemon_bootstrap",
-            "outcome": outcome,
-            "command": null,
-            "workspace_uuid": null,
-            "session_id": null,
-            "request_id": null,
-            "job_id": null,
-            "stage": stage,
-            "error_kind": error_kind,
-            "integrity_check": null,
-            "reason": null,
-            "diagnostic_id": null,
-            "message": message,
-        })
-    );
+    serde_json::json!({
+        "schema": "podway.daemon-bootstrap-log/v1",
+        "ts": timestamp,
+        "daemon_id": daemon_id,
+        "seq": 0,
+        "operation": "daemon_bootstrap",
+        "outcome": outcome,
+        "command": null,
+        "workspace_uuid": null,
+        "session_id": null,
+        "request_id": null,
+        "job_id": null,
+        "stage": stage,
+        "error_kind": error_kind,
+        "integrity_check": null,
+        "reason": null,
+        "diagnostic_id": null,
+        "message": null,
+    })
+    .to_string()
+}
+
+fn write_bootstrap_stderr(
+    outcome: &'static str,
+    daemon_id: Option<&str>,
+    stage: &'static str,
+    error_kind: Option<&'static str>,
+) {
+    eprintln!("{}", bootstrap_event(outcome, daemon_id, stage, error_kind));
+}
+
+fn write_bootstrap_file(
+    path: &std::path::Path,
+    outcome: &'static str,
+    daemon_id: Option<&str>,
+    stage: &'static str,
+    error_kind: Option<&'static str>,
+) {
+    let Ok(sink) = RotatingFileSinkV1::open_bootstrap(path) else {
+        return;
+    };
+    let mut event = bootstrap_event(outcome, daemon_id, stage, error_kind);
+    event.push('\n');
+    let _ = sink.write_event(&event).and_then(|()| sink.flush());
+}
+
+struct BootstrapFailureGuardV1 {
+    path: PathBuf,
+    daemon_id: String,
+    armed: bool,
+}
+
+impl BootstrapFailureGuardV1 {
+    fn new(path: PathBuf, daemon_id: String) -> Self {
+        Self {
+            path,
+            daemon_id,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for BootstrapFailureGuardV1 {
+    fn drop(&mut self) {
+        if self.armed {
+            write_bootstrap_file(
+                &self.path,
+                "failed",
+                Some(&self.daemon_id),
+                "process",
+                Some("startup_failure"),
+            );
+        }
+    }
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -184,7 +233,15 @@ fn run_service(
         paths.socket_path().as_path(),
     )?;
     let daemon_id = process_identity.process_id().as_str().to_owned();
-    write_bootstrap_event("succeeded", Some(&daemon_id), "process", None, None);
+    let bootstrap_log_path = paths.bootstrap_log_path().as_path().to_path_buf();
+    write_bootstrap_file(
+        &bootstrap_log_path,
+        "succeeded",
+        Some(&daemon_id),
+        "process",
+        None,
+    );
+    let mut bootstrap_failure = BootstrapFailureGuardV1::new(bootstrap_log_path, daemon_id.clone());
     let mut configuration = ProductionDaemonRuntimeConfigV1::new(
         WorkerIdV1::new(format!("podwayd-{}", process::id()))?,
         NonZeroUsize::new(MAXIMUM_IN_FLIGHT_CONNECTIONS_V1)
@@ -262,13 +319,17 @@ fn run_service(
     let relay_result = relay.join();
     let observability_result = finalize_observability(observability);
 
-    runtime_completion(
+    let outcome = runtime_completion(
         runtime_result
             .map(|_| ())
             .map_err(|error| error.to_string()),
         relay_result.map_err(|_| "signal relay panicked".to_owned()),
         observability_result.map_err(|error| error.to_string()),
-    )
+    );
+    if outcome.is_ok() {
+        bootstrap_failure.disarm();
+    }
+    outcome
 }
 
 fn effective_service_paths(

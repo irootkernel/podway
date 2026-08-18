@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-08-18
 - Extends: [ADR-0012](0012-explicit-daemon-endpoint-and-canonical-per-user-podway-home.md)
+- Superseded in part by: [ADR-0023](0023-daemon-owned-bootstrap-log.md)
 
 ## Context
 

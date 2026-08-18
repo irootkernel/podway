@@ -126,6 +126,18 @@ fn bootstrap_event(stderr: &[u8]) -> Value {
     serde_json::from_str(lines[0]).expect("bootstrap stderr must be valid JSON")
 }
 
+fn bootstrap_file_event(paths: &ServiceRuntimePathsV1) -> Value {
+    let log = fs::read_to_string(paths.bootstrap_log_path().as_path())
+        .expect("daemon-managed bootstrap log must be readable");
+    let lines = log.lines().collect::<Vec<_>>();
+    assert_eq!(
+        lines.len(),
+        1,
+        "bootstrap file must contain one JSONL record"
+    );
+    serde_json::from_str(lines[0]).expect("bootstrap file must contain valid JSON")
+}
+
 #[test]
 fn podwayd_sigterm_drains_and_removes_its_owned_socket() {
     let fixture = ProcessFixtureV1::new();
@@ -160,7 +172,8 @@ fn podwayd_sigterm_drains_and_removes_its_owned_socket() {
         !socket.exists(),
         "graceful shutdown must remove only the socket owned by this process"
     );
-    let startup = bootstrap_event(&output.stderr);
+    assert!(output.stderr.is_empty());
+    let startup = bootstrap_file_event(&fixture.paths);
     assert_eq!(startup["schema"], "podway.daemon-bootstrap-log/v1");
     assert_eq!(startup["operation"], "daemon_bootstrap");
     assert_eq!(startup["outcome"], "succeeded");
@@ -344,12 +357,7 @@ fn podwayd_service_and_version_modes_are_explicit() {
     assert!(fatal["ts"].is_null());
     assert!(fatal["daemon_id"].is_null());
     assert_eq!(fatal["seq"], 0);
-    assert!(
-        fatal["message"]
-            .as_str()
-            .unwrap()
-            .contains("usage: podwayd")
-    );
+    assert!(fatal["message"].is_null());
 
     let relative_socket = Command::new(env!("CARGO_BIN_EXE_podwayd"))
         .args(["--service", "--socket", "relative.sock"])
@@ -358,10 +366,6 @@ fn podwayd_service_and_version_modes_are_explicit() {
         .output()
         .expect("podwayd explicit socket validation process must run");
     assert!(!relative_socket.status.success());
-    assert!(
-        bootstrap_event(&relative_socket.stderr)["message"]
-            .as_str()
-            .unwrap()
-            .contains("must be absolute")
-    );
+    assert!(bootstrap_event(&relative_socket.stderr)["message"].is_null());
+    assert!(!String::from_utf8_lossy(&relative_socket.stderr).contains("relative.sock"));
 }

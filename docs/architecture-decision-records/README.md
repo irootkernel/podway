@@ -36,3 +36,4 @@ narrative architecture and specifications when sources conflict.
 - [ADR-0020](0020-managed-dev-runtime-isolation.md): isolated managed `--dev` runtimes
 - [ADR-0021](0021-separate-session-preparation-from-execution.md): separate session preparation from execution
 - [ADR-0022](0022-bounded-correlated-daemon-logs.md): bounded correlated daemon and bootstrap logs
+- [ADR-0023](0023-daemon-owned-bootstrap-log.md): daemon-owned bounded bootstrap logging
