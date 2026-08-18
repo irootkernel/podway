@@ -239,6 +239,18 @@ Apply these distinctions as well:
 - A successful reduced gate establishes patch release readiness through its own
   provenance and handoff contract. Do not claim that omitted fuzzing or packaged
   runtime qualification ran, and do not add a `skipped` result to patch evidence.
+- Full-gate packaged qualification must use the repository-owned isolated
+  `release-qualification` runtime described in the
+  [release workflow](docs/implementation-tips/release.md#runtime-isolation-and-cleanup).
+  Leave any installed production LaunchAgent untouched; never stop, repoint, or
+  reuse its account root, lock, socket, registry, logs, or worktree for
+  qualification.
+- Treat isolated runtime cleanup as part of the full gate. Success requires no
+  qualification daemon process or socket to remain. After failure or interruption,
+  reconcile only the exact helper-owned temporary state before retrying; never
+  broadly delete `/private/tmp`. Report a cleanup blocker with its exact process or
+  recoverable path. For a persistent contributor runtime, stop its foreground
+  daemon and use `python3 tools/dev_runtime.py clean --yes`.
 
 - Run an exact focused test first when practical. Cargo integration tests are
   aggregated through each crate's `int_suite`; follow the documented exact-test
