@@ -506,6 +506,38 @@ fn rotation_owns_exactly_canonical_numbered_files() {
 }
 
 #[test]
+fn multiple_sinks_refresh_the_active_file_before_rotation() {
+    let path = temporary_path("multiple-sinks");
+    let first = RotatingFileSinkV1::open(&path).unwrap();
+    let event = "x".repeat(8 * 1024);
+    for _ in 0..127 {
+        first.write_event(&event).unwrap();
+    }
+    let second = RotatingFileSinkV1::open(&path).unwrap();
+    second.write_event("secondary-writer\n").unwrap();
+    first.write_event(&event).unwrap();
+    second.write_event("after-rotation\n").unwrap();
+    first.flush().unwrap();
+    second.flush().unwrap();
+
+    let retained = std::iter::once(path.clone())
+        .chain((1..=RETAINED_ROTATIONS_V1).map(|index| path.with_extension(format!("log.{index}"))))
+        .filter(|entry| entry.exists())
+        .collect::<Vec<_>>();
+    assert_eq!(retained.len(), 2);
+    assert!(
+        retained
+            .iter()
+            .all(|entry| fs::metadata(entry).unwrap().len() <= ROTATION_BYTES_V1)
+    );
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        format!("{event}after-rotation\n")
+    );
+    let _ = fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
 fn bootstrap_rotation_retains_five_bounded_daemon_owned_files() {
     let path = temporary_path("bootstrap-rotation");
     let sink = RotatingFileSinkV1::open_bootstrap(&path).unwrap();

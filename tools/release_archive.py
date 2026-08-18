@@ -25,7 +25,7 @@ import verify_patch_release
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PRODUCT_VERSION = "0.2.5"
+PRODUCT_VERSION = "0.2.4"
 TARGET = "aarch64-apple-darwin"
 ARCHIVE_ROOT = f"podway-{PRODUCT_VERSION}-{TARGET}"
 MACHO_64_LITTLE_ENDIAN = b"\xcf\xfa\xed\xfe"
@@ -717,12 +717,12 @@ def rust_toolchain() -> str:
 def release_status() -> dict[str, str]:
     notes = (ROOT / "RELEASE_NOTES.md").read_text(encoding="utf-8")
     required = (
-        "Podway 0.2.5 is a release candidate and has not been published",
+        "Podway 0.2.4 is a release candidate and has not been published",
         "## Changes since",
         "three built-in Procedure v2 presets",
         "fails closed with `LEGACY_PROCEDURE_STATE_UNSUPPORTED`",
-        "podway-0.2.5-aarch64-apple-darwin.tar.gz.sha256",
-        "podway-0.2.5-aarch64-apple-darwin.dolgorae-handoff.json",
+        "podway-0.2.4-aarch64-apple-darwin.tar.gz.sha256",
+        "podway-0.2.4-aarch64-apple-darwin.dolgorae-handoff.json",
         "native Apple Silicon macOS",
         "same-user local tool",
         "release candidate admits Procedure v2 sessions normally",

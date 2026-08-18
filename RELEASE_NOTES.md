@@ -1,21 +1,28 @@
-# Podway 0.2.5 release candidate notes
+# Podway 0.2.4 release candidate notes
 
-Podway 0.2.5 is a release candidate and has not been published. These notes do
-not claim a publication date or an existing `v0.2.5` tag.
+Podway 0.2.4 is a release candidate and has not been published. These notes do
+not claim a publication date or an existing `v0.2.4` tag.
 
-## Changes since 0.2.4
+## Changes since 0.2.3
 
-- Preserve eligible and force reset modes when released schema-v4 terminal
-  receipts are migrated to schema-v5, keeping retained job status, lookup, list,
-  and replay readable after cold reopen.
-- Replace legacy three-field daemon text logs with fixed-schema
-  `podway.daemon-log/v1` JSONL, add bounded request, workspace, session, job, and
-  diagnostic correlation, and retain at most ten 1-MiB files without raw paths
-  or caller-provided values.
-- Move service bootstrap diagnostics to a daemon-owned bounded rotating stream
-  and redirect LaunchAgent standard output and error descriptors to `/dev/null`.
-- Keep bootstrap failures machine-readable while excluding filesystem paths and
-  other raw internal error text from their public `message` field.
+- Separate session preparation from execution: `start` now creates a prepared
+  revision-0 session, while `begin` atomically creates attempt 1 and an optional
+  initial goal.
+- Add terminal ownership dispositions and make default reset or replacement
+  eligible only for prepared sessions or terminal revisions with a current
+  disposition.
+- Preserve explicitly confirmed force reset and force replacement with bounded
+  progress summaries, plus read-only eligibility previews with exact fences.
+- Emit prepared-lifecycle durable jobs through closed v4 wrappers while keeping
+  released v3 wrappers unchanged, and restore complete job status, list, lookup,
+  and cold-reopen read-back.
+- Reject individual and batched item mutations against prepared sessions with
+  `SESSION_NOT_RUNNING` before attempt or item fences and without durable
+  admission or state changes.
+- Migrate released schema-v3 and schema-v4 workspaces to schema-v5 on cold access
+  and rebuild missing registry metadata through the sole-writer activation path.
+- Bind reduced patch-release evidence to the exact immutable commit that passed
+  `make test` and reject symbolic baselines or non-regular release inputs.
 
 ## Compatibility and migration
 
@@ -42,10 +49,10 @@ Podway remains a same-user local tool rather than a multi-user security boundary
 
 The qualified, unpublished distribution contains these exact top-level artifacts:
 
-- `podway-0.2.5-aarch64-apple-darwin.tar.gz`;
-- `podway-0.2.5-aarch64-apple-darwin.tar.gz.sha256`;
-- `podway-0.2.5-aarch64-apple-darwin.provenance.json`;
-- `podway-0.2.5-aarch64-apple-darwin.dolgorae-handoff.json`.
+- `podway-0.2.4-aarch64-apple-darwin.tar.gz`;
+- `podway-0.2.4-aarch64-apple-darwin.tar.gz.sha256`;
+- `podway-0.2.4-aarch64-apple-darwin.provenance.json`;
+- `podway-0.2.4-aarch64-apple-darwin.dolgorae-handoff.json`.
 
 The archive contains both binaries, shell completions, and three built-in Procedure v2 presets:
 `bug-fix-v2`, `small-change-v2`, and `sw-dev-v2`. It also contains public schemas
@@ -70,7 +77,7 @@ installed service with `podway daemon install` only after installing the matchin
 
 ## Signing and known limitations
 
-The Podway 0.2.5 Apple Silicon release candidate is unsigned and not notarized.
+The Podway 0.2.4 Apple Silicon release candidate is unsigned and not notarized.
 Users must verify the attached SHA-256 checksum before installing a published
 artifact.
 

@@ -253,7 +253,7 @@ closed `details.recovery` recipe containing only a bounded read-only command.
 Automation must validate that recipe and must never treat it as authorization
 for a lifecycle action or mutation.
 
-Podway v0.2.5 implements an evidence-gated, goal-directed workflow memory:
+Podway v0.2.4 implements an evidence-gated, goal-directed workflow memory:
 Procedure v2 documents are declarative graphs with recorded decisions, selected
 evidence read-back, explicit rework, goal revision, and goal assessment, still with
 exactly one active attempt. Static authoring and inspection are available in the

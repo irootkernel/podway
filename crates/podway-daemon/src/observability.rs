@@ -9,7 +9,7 @@ use std::{
     fs::File,
     io::{self, Write},
     os::{
-        fd::OwnedFd,
+        fd::{AsFd, OwnedFd},
         unix::{ffi::OsStrExt, fs::MetadataExt},
     },
     path::Path,
@@ -25,7 +25,7 @@ use std::{
 use nix::{
     dir::Dir,
     errno::Errno,
-    fcntl::{AtFlags, OFlag, open, openat, renameat},
+    fcntl::{AtFlags, Flock, FlockArg, OFlag, open, openat, renameat},
     sys::stat::{Mode, SFlag, fchmod, fstat, fstatat, mkdirat},
     unistd::{UnlinkatFlags, geteuid, unlinkat},
 };
@@ -1037,6 +1037,34 @@ impl RotatingFileSinkV1 {
         retain_exact_rotations(&self.directory, &self.name, self.retained_rotations)?;
         Ok(())
     }
+
+    fn lock_directory(&self) -> io::Result<Flock<File>> {
+        let descriptor = self.directory.as_fd().try_clone_to_owned()?;
+        Flock::lock(File::from(descriptor), FlockArg::LockExclusive)
+            .map_err(|(_, error)| nix_io_error(error))
+    }
+
+    fn refresh_active_file(&self, state: &mut FileState) -> io::Result<()> {
+        let active = match fstatat(
+            &self.directory,
+            self.name.as_os_str(),
+            AtFlags::AT_SYMLINK_NOFOLLOW,
+        ) {
+            Ok(metadata) => metadata,
+            Err(Errno::ENOENT) => {
+                state.file = open_private_log(&self.directory, &self.name)?;
+                state.bytes = 0;
+                return Ok(());
+            }
+            Err(error) => return Err(nix_io_error(error)),
+        };
+        let opened = fstat(&state.file).map_err(nix_io_error)?;
+        if opened.st_dev != active.st_dev || opened.st_ino != active.st_ino {
+            state.file = open_private_log(&self.directory, &self.name)?;
+        }
+        state.bytes = state.file.metadata()?.len();
+        Ok(())
+    }
 }
 
 fn open_private_log_directory(path: &Path) -> io::Result<OwnedFd> {
@@ -1218,6 +1246,8 @@ impl LogSinkV1 for RotatingFileSinkV1 {
             .state
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
+        let _directory_lock = self.lock_directory()?;
+        self.refresh_active_file(&mut state)?;
         if state.bytes.saturating_add(event.len() as u64) > self.rotation_bytes {
             self.rotate(&mut state)?;
         }
