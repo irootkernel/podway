@@ -8,6 +8,10 @@ not claim a publication date or an existing `v0.2.5` tag.
 - Preserve eligible and force reset modes when released schema-v4 terminal
   receipts are migrated to schema-v5, keeping retained job status, lookup, list,
   and replay readable after cold reopen.
+- Replace legacy three-field daemon text logs with fixed-schema
+  `podway.daemon-log/v1` JSONL, add bounded request, workspace, session, job, and
+  diagnostic correlation, and retain at most ten 1-MiB files without raw paths
+  or caller-provided values.
 - Move service bootstrap diagnostics to a daemon-owned bounded rotating stream
   and redirect LaunchAgent standard output and error descriptors to `/dev/null`.
 - Keep bootstrap failures machine-readable while excluding filesystem paths and
