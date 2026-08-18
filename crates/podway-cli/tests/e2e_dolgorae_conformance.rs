@@ -1134,11 +1134,17 @@ fn aut_t_obs_installed_service_returns_compact_quiescent_status_on_the_explicit_
         .output()
         .expect("duplicate daemon probe must execute");
     assert!(!duplicate.status.success());
-    assert!(
-        String::from_utf8_lossy(&duplicate.stderr).contains("cannot acquire daemon endpoint"),
-        "duplicate daemon stderr={}",
-        String::from_utf8_lossy(&duplicate.stderr)
-    );
+    let duplicate_error: Value =
+        serde_json::from_slice(&duplicate.stderr).unwrap_or_else(|error| {
+            panic!(
+                "duplicate daemon stderr must be bounded JSON: {error}; stderr={}",
+                String::from_utf8_lossy(&duplicate.stderr)
+            )
+        });
+    assert_eq!(duplicate_error["schema"], "podway.daemon-bootstrap-log/v1");
+    assert_eq!(duplicate_error["outcome"], "failed");
+    assert_eq!(duplicate_error["error_kind"], "startup_failure");
+    assert_eq!(duplicate_error["message"], Value::Null);
     assert!(!alternate_socket.exists());
 
     let worktree = fixture.root.join("observation/worktree");
