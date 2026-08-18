@@ -359,6 +359,13 @@ pub(crate) fn verify_binding_inspection_schema_v1(
     }
 }
 
+pub(crate) fn binding_inspection_requires_migration_v1(
+    connection: &Connection,
+) -> Result<bool, StoreErrorV1> {
+    verify_binding_inspection_schema_v1(connection)?;
+    Ok(read_user_version_v1(connection)? != SQLITE_SCHEMA_VERSION_CURRENT)
+}
+
 pub(crate) fn verify_reset_binding_inspection_schema_v1(
     connection: &Connection,
 ) -> Result<(), StoreErrorV1> {

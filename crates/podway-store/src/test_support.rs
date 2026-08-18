@@ -6,6 +6,66 @@ use podway_core::JobId;
 use rusqlite::{Connection, params};
 use serde_json::Value;
 
+/// Restores the exact released schema-v4 shape while preserving Procedure v2 state.
+pub fn downgrade_to_schema_v4(database_path: &Path) -> Result<(), String> {
+    let connection = Connection::open(database_path).map_err(|error| error.to_string())?;
+    let reference = Connection::open_in_memory().map_err(|error| error.to_string())?;
+    reference
+        .execute_batch(crate::schema::sqlite_v1_ddl())
+        .map_err(|error| error.to_string())?;
+    reference
+        .execute_batch(crate::schema::sqlite_v2_ddl())
+        .map_err(|error| error.to_string())?;
+    reference
+        .execute_batch(crate::schema::sqlite_v3_ddl())
+        .map_err(|error| error.to_string())?;
+    reference
+        .execute_batch(crate::schema::sqlite_v4_ddl())
+        .map_err(|error| error.to_string())?;
+    let session_table_sql: String = reference
+        .query_row(
+            "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'v2_task_sessions'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute_batch(
+            "PRAGMA foreign_keys = OFF;
+             DROP TABLE v2_terminal_dispositions;
+             PRAGMA legacy_alter_table = ON;
+             ALTER TABLE v2_task_sessions RENAME TO v2_task_sessions_v5;",
+        )
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute_batch(&session_table_sql)
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute_batch(
+            "INSERT INTO v2_task_sessions (
+                    singleton, session_id, task_title, procedure_snapshot_id, lifecycle,
+                    session_revision, latest_trace_sequence, active_graph_node_id,
+                    active_attempt_id, active_trace_sequence, goal_tracking,
+                    current_goal_revision, created_at_ms, completed_at_ms, cancelled_at_ms,
+                    cancel_reason
+             ) SELECT
+                    singleton, session_id, task_title, procedure_snapshot_id, lifecycle,
+                    session_revision, latest_trace_sequence, active_graph_node_id,
+                    active_attempt_id, active_trace_sequence, goal_tracking,
+                    current_goal_revision, created_at_ms, completed_at_ms, cancelled_at_ms,
+                    cancel_reason
+               FROM v2_task_sessions_v5;
+             DROP TABLE v2_task_sessions_v5;
+             PRAGMA legacy_alter_table = OFF;
+             DELETE FROM schema_migrations WHERE version = 5;",
+        )
+        .map_err(|error| error.to_string())?;
+    connection
+        .pragma_update(None, "user_version", 4)
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 /// Restores the schema-v3 legacy tables and inserts one Procedure v1 snapshot.
 pub fn downgrade_to_schema_v3_with_legacy_snapshot(
     database_path: &Path,

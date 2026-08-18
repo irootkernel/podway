@@ -168,6 +168,28 @@ impl SqliteStoreV1 {
         Ok(Some(binding))
     }
 
+    /// Classifies an existing, validated workspace database without touching authoritative files.
+    ///
+    /// A supported migration predecessor returns `true`; the current schema returns `false`.
+    /// Legacy, corrupt, and newer schemas remain errors and cannot trigger Store activation.
+    pub fn inspect_workspace_migration_required(
+        path: impl AsRef<Path>,
+        expected_identity: &DurableWorktreeIdentityV1,
+        options: &SqliteStoreOptionsV1,
+    ) -> Result<bool, StoreErrorV1> {
+        let database_path = canonical_database_path_v1(path.as_ref())?;
+        inspect_database_snapshot_unbound_v1(&database_path, options, |connection| {
+            let requires_migration =
+                crate::schema::binding_inspection_requires_migration_v1(connection)?;
+            crate::schema::verify_binding_inspection_identity_v1(
+                connection,
+                expected_identity,
+                options,
+            )?;
+            Ok(requires_migration)
+        })
+    }
+
     /// Reads reconciliation state from a disposable snapshot without touching authoritative files.
     pub fn inspect_reconciliation_snapshot(
         path: impl AsRef<Path>,

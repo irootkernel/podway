@@ -2128,6 +2128,179 @@ fn v2lif005_prepared_session_dry_run_and_eligible_reset_need_no_force_summary() 
 }
 
 #[test]
+fn v2lif003_cold_read_migrates_released_v4_and_rebuilds_missing_registry_once() {
+    let fixture = support_phase4_workspace::git_worktrees();
+    make_runtime_private(fixture.main());
+    fs::write(
+        fixture.main().join("v2lif003-cold-reactivation.yaml"),
+        ACTION_READBACK_PROCEDURE,
+    )
+    .unwrap();
+    let ParsedProcedure::V2(parsed) = parse_procedure_document(
+        ACTION_READBACK_PROCEDURE.as_bytes(),
+        ProcedureDocumentFormat::Yaml,
+    )
+    .unwrap() else {
+        unreachable!()
+    };
+    let digest = validate_procedure_v2(parsed).unwrap().digest().clone();
+    let workspace_selector = selector(fixture.main());
+    let original_manager = Arc::new(manager(fixture.temporary_path()));
+    let original = dispatcher(Arc::clone(&original_manager), "v2lif003-original");
+
+    let initialize = request(
+        143_001,
+        "workspace.init",
+        &workspace_selector,
+        Map::new(),
+        "v2lif003-initialize",
+        PreconditionsV1::default(),
+    );
+    assert!(matches!(
+        dispatch(&original, &initialize),
+        ResponseEnvelopeV2::OutputV2(_)
+    ));
+    let start = request(
+        143_002,
+        "session.start",
+        &workspace_selector,
+        json!({
+            "procedure": "v2lif003-cold-reactivation.yaml",
+            "expected_procedure_digest": digest,
+            "task_title": "Cold-reactivate released state"
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+        "v2lif003-start",
+        PreconditionsV1::default(),
+    );
+    let started = v2_result(dispatch(&original, &start), "session.start");
+    let session_id = started["session_id"].as_str().unwrap().to_owned();
+    begin(
+        &original,
+        &workspace_selector,
+        143_003,
+        &session_id,
+        Map::new(),
+        "v2lif003-begin",
+    );
+    let expected_status = status(&original, &workspace_selector, 143_004, &session_id);
+    let scheduler = original_manager
+        .resolve_existing(git_selector(fixture.main()), None, observation())
+        .unwrap();
+    let workspace_identity = scheduler.context_snapshot().binding().identity().clone();
+    let database_path = fixture.main().join(".podway/runtime/state.sqlite3");
+    drop(scheduler);
+    drop(original);
+    drop(original_manager);
+
+    podway_store::test_support::downgrade_to_schema_v4(&database_path).unwrap();
+    assert!(
+        SqliteStoreV1::inspect_workspace_migration_required(
+            &database_path,
+            &workspace_identity,
+            &SqliteStoreOptionsV1::new(8).unwrap(),
+        )
+        .unwrap()
+    );
+
+    let cold_root = fixture.temporary_path().join("v2lif003-cold-account");
+    let cold_manager = Arc::new(manager(&cold_root));
+    let registry_path = cold_manager.registry().registry_path().to_path_buf();
+    assert!(!registry_path.exists());
+    let first_request = request(
+        143_005,
+        "session.status",
+        &workspace_selector,
+        Map::new(),
+        "unused-v2lif003-first",
+        PreconditionsV1::new(
+            Some(SessionId::new(&session_id).unwrap()),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let second_request = request(
+        143_006,
+        "session.status",
+        &workspace_selector,
+        Map::new(),
+        "unused-v2lif003-second",
+        PreconditionsV1::new(
+            Some(SessionId::new(&session_id).unwrap()),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let first = {
+        let manager = Arc::clone(&cold_manager);
+        let barrier = Arc::clone(&barrier);
+        thread::spawn(move || {
+            let production = dispatcher(manager, "v2lif003-cold-first");
+            barrier.wait();
+            v2_result(
+                dispatch_after_cold_reopen(&production, &first_request),
+                "session.status",
+            )
+        })
+    };
+    let second = {
+        let manager = Arc::clone(&cold_manager);
+        let barrier = Arc::clone(&barrier);
+        thread::spawn(move || {
+            let production = dispatcher(manager, "v2lif003-cold-second");
+            barrier.wait();
+            v2_result(
+                dispatch_after_cold_reopen(&production, &second_request),
+                "session.status",
+            )
+        })
+    };
+    assert_eq!(first.join().unwrap(), expected_status);
+    assert_eq!(second.join().unwrap(), expected_status);
+    assert!(
+        cold_manager
+            .registry()
+            .lookup(workspace_identity.workspace_uuid())
+            .unwrap()
+            .is_some()
+    );
+    assert!(registry_path.exists());
+    assert!(
+        !SqliteStoreV1::inspect_workspace_migration_required(
+            &database_path,
+            &workspace_identity,
+            &SqliteStoreOptionsV1::new(8).unwrap(),
+        )
+        .unwrap()
+    );
+    drop(cold_manager);
+
+    let current_root = fixture.temporary_path().join("v2lif003-current-account");
+    let current_manager = Arc::new(manager(&current_root));
+    let current_registry_path = current_manager.registry().registry_path().to_path_buf();
+    let current = dispatcher(Arc::clone(&current_manager), "v2lif003-current-readonly");
+    assert_eq!(
+        status(&current, &workspace_selector, 143_007, &session_id),
+        expected_status
+    );
+    assert!(
+        !current_registry_path.exists(),
+        "a current-schema cold read must not rebuild registry metadata"
+    );
+}
+
+#[test]
 fn v2lif005_eligible_replacement_dry_run_uses_current_reset_eligibility() {
     let fixture = support_phase4_workspace::git_worktrees();
     make_runtime_private(fixture.main());

@@ -1825,7 +1825,10 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
             let selector = selector_from_wire(slice_request.selector())?;
             let readonly = self
                 .manager
-                .resolve_existing_readonly(selector, slice_request.selector().expected_uuid())
+                .resolve_existing_readonly(
+                    selector.clone(),
+                    slice_request.selector().expected_uuid(),
+                )
                 .map_err(map_runtime_error)?;
             let (wait, expected_session_id) = match slice_request.command() {
                 SliceCommandV1::SessionStatus(input) => (
@@ -1851,7 +1854,31 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                 ),
                 _ => unreachable!("non-read requests returned above"),
             };
-            let view = if let Some(scheduler) = readonly.active_scheduler().cloned() {
+            let scheduler = if let Some(scheduler) = readonly.active_scheduler().cloned() {
+                Some(scheduler)
+            } else if SqliteStoreV1::inspect_workspace_migration_required(
+                readonly.database_path(),
+                readonly.binding().identity(),
+                readonly.store_options(),
+            )
+            .map_err(map_store_error)?
+            {
+                Some(
+                    self.manager
+                        .resolve_existing(
+                            selector,
+                            slice_request.selector().expected_uuid(),
+                            WorkspaceRuntimeObservationV1::new(
+                                self.clock.now(),
+                                self.clock.generated_at(),
+                            ),
+                        )
+                        .map_err(map_runtime_error)?,
+                )
+            } else {
+                None
+            };
+            let view = if let Some(scheduler) = scheduler {
                 let context = scheduler.context_snapshot();
                 AuthoritativeReadServiceV1::new(
                     context.store(),
