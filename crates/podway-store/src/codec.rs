@@ -3806,6 +3806,18 @@ pub fn decode_terminal_receipt_v1(
         .and_then(|projection| projection.get("goal_defined"))
         .and_then(Value::as_bool)
         == Some(true);
+    let legacy_reset_mode_absent = matches!(
+        schema.as_str(),
+        STORE_GRAPH_TERMINAL_SCHEMA_V2 | STORE_GRAPH_TERMINAL_SCHEMA_V3
+    ) && document
+        .get("graph_session_projection")
+        .and_then(Value::as_object)
+        .and_then(|projection| projection.get("operation"))
+        .and_then(Value::as_object)
+        .is_some_and(|operation| {
+            operation.get("kind").and_then(Value::as_str) == Some("reset")
+                && !operation.contains_key("mode")
+        });
     let receipt = match schema.as_str() {
         STORE_TERMINAL_SCHEMA_V0 => {
             let envelope: TerminalEnvelopeV0 =
@@ -4051,9 +4063,27 @@ pub fn decode_terminal_receipt_v1(
     } else {
         None
     };
+    let legacy_reset_canonical = if legacy_reset_mode_absent {
+        let mut document: Value =
+            serde_json::from_str(&encoded).map_err(|_| StoreCodecErrorV1::InvalidJson)?;
+        document
+            .get_mut("graph_session_projection")
+            .and_then(Value::as_object_mut)
+            .and_then(|projection| projection.get_mut("operation"))
+            .and_then(Value::as_object_mut)
+            .ok_or(StoreCodecErrorV1::InvalidJson)?
+            .remove("mode");
+        Some(
+            serde_json::to_string(&canonicalize_json(document))
+                .map_err(|_| StoreCodecErrorV1::InvalidJson)?,
+        )
+    } else {
+        None
+    };
     if encoded != value
         && legacy_canonical.as_deref() != Some(value)
         && legacy_explicit_canonical.as_deref() != Some(value)
+        && legacy_reset_canonical.as_deref() != Some(value)
     {
         return Err(StoreCodecErrorV1::InvalidValue {
             field: "canonical terminal receipt",
@@ -4101,7 +4131,7 @@ pub(crate) fn normalize_terminal_receipt_for_schema_v4_v1(
         receipt = receipt.with_procedure_v2_execution()?;
         encode_persisted_terminal_receipt_v1(&receipt)?
     } else {
-        normalized
+        encode_persisted_terminal_receipt_v1(&receipt)?
     };
 
     if let (Some(context), Some(envelope)) = (
@@ -4332,6 +4362,78 @@ mod tests {
 
     fn digest(nibble: char) -> Sha256Digest {
         Sha256Digest::new(format!("sha256:{}", nibble.to_string().repeat(64))).unwrap()
+    }
+
+    fn reset_receipt() -> PersistedTerminalReceiptV1 {
+        let session_id = SessionId::new("00000000-0000-4000-8000-000000000301").unwrap();
+        PersistedTerminalReceiptV1::new_with_graph_projection(
+            JobReceiptV1::new(
+                1,
+                JobId::new("00000000-0000-4000-8000-000000000302").unwrap(),
+                digest('e'),
+            ),
+            PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
+                session_id: session_id.clone(),
+                revision_before: RevisionV1::new(7),
+                revision_after: RevisionV1::new(7),
+                changed: true,
+            }),
+            PersistedTerminalJobProjectionV1::new(
+                PersistedTerminalJobStateV1::Succeeded,
+                EpochMillisV1::new(1),
+                Some(EpochMillisV1::new(1)),
+                EpochMillisV1::new(2),
+            )
+            .unwrap(),
+            PersistedGraphTerminalSessionProjectionV2::new(
+                session_id.clone(),
+                "Reset fixture".to_owned(),
+                PersistedSessionLifecycleV1::Completed,
+                RevisionV1::new(7),
+                RevisionV1::new(7),
+                digest('f'),
+                GraphNodeId::new("work").unwrap(),
+                false,
+                false,
+            )
+            .unwrap()
+            .with_operation(PersistedGraphTerminalOperationV2::reset(session_id).unwrap())
+            .unwrap(),
+        )
+        .unwrap()
+        .with_lookup_command(PersistedDomainCommandV1::SessionReset)
+        .unwrap()
+        .with_response_context(
+            PersistedResponseContextV1::new(
+                "00000000-0000-4000-8000-000000000303",
+                "session.reset",
+                WorkspaceId::new("00000000-0000-4000-8000-000000000304").unwrap(),
+                "/fixture/worktree",
+                7,
+            )
+            .unwrap(),
+        )
+        .unwrap()
+        .with_procedure_v2_execution()
+        .unwrap()
+    }
+
+    #[test]
+    fn released_reset_receipt_without_mode_decodes_and_normalizes() {
+        let receipt = reset_receipt();
+        let encoded = encode_persisted_terminal_receipt_v1(&receipt).unwrap();
+        let mut released: Value = serde_json::from_str(&encoded).unwrap();
+        released["graph_session_projection"]["operation"]
+            .as_object_mut()
+            .unwrap()
+            .remove("mode");
+        let released = serde_json::to_string(&canonicalize_json(released)).unwrap();
+
+        assert_eq!(decode_terminal_receipt_v1(&released).unwrap(), receipt);
+        let (decoded, normalized) =
+            normalize_terminal_receipt_for_schema_v4_v1(&released, None).unwrap();
+        assert_eq!(decoded, receipt);
+        assert_eq!(normalized, encoded);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! Bounded, non-authoritative daemon diagnostics.
 //!
-//! Event records are closed, typed, and carry no caller-provided strings or identifiers.
+//! Event records are closed, typed, and carry only bounded correlation identifiers.
 
 use std::{
     collections::VecDeque,
@@ -29,6 +29,7 @@ use nix::{
     sys::stat::{Mode, SFlag, fchmod, fstat, fstatat, mkdirat},
     unistd::{UnlinkatFlags, geteuid, unlinkat},
 };
+use serde::Serialize;
 
 pub const MAX_EVENT_BYTES_V1: usize = 8 * 1024;
 pub const PRIMARY_CAPACITY_V1: usize = 4096;
@@ -36,8 +37,9 @@ pub const FALLBACK_CAPACITY_V1: usize = 256;
 pub const MAX_WRITER_CYCLE_V1: Duration = Duration::from_millis(50);
 pub const MAX_SHUTDOWN_FLUSH_V1: Duration = Duration::from_secs(2);
 const MAX_EMIT_QUEUE_WAIT_V1: Duration = Duration::from_millis(5);
-pub const ROTATION_BYTES_V1: u64 = 10 * 1024 * 1024;
-pub const RETAINED_ROTATIONS_V1: usize = 5;
+pub const ROTATION_BYTES_V1: u64 = 1024 * 1024;
+pub const RETAINED_FILES_V1: usize = 10;
+pub const RETAINED_ROTATIONS_V1: usize = RETAINED_FILES_V1 - 1;
 const ADMISSION_RUNNING_V1: u64 = 0;
 const ADMISSION_STOPPING_V1: u64 = 1;
 const ADMISSION_FROZEN_V1: u64 = 2;
@@ -118,20 +120,87 @@ impl EventOutcomeV1 {
 }
 
 /// The only event accepted by the observability queue.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EventRecordV1 {
     operation: EventOperationV1,
     outcome: EventOutcomeV1,
+    command: Option<String>,
+    workspace_uuid: Option<String>,
+    session_id: Option<String>,
+    request_id: Option<String>,
+    job_id: Option<String>,
+    stage: Option<&'static str>,
+    error_kind: Option<&'static str>,
+    integrity_check: Option<&'static str>,
+    reason: Option<&'static str>,
+    diagnostic_id: Option<String>,
 }
 impl EventRecordV1 {
     pub const fn new(operation: EventOperationV1, outcome: EventOutcomeV1) -> Self {
-        Self { operation, outcome }
+        Self {
+            operation,
+            outcome,
+            command: None,
+            workspace_uuid: None,
+            session_id: None,
+            request_id: None,
+            job_id: None,
+            stage: None,
+            error_kind: None,
+            integrity_check: None,
+            reason: None,
+            diagnostic_id: None,
+        }
     }
-    pub const fn operation(self) -> EventOperationV1 {
+    pub const fn operation(&self) -> EventOperationV1 {
         self.operation
     }
-    pub const fn outcome(self) -> EventOutcomeV1 {
+    pub const fn outcome(&self) -> EventOutcomeV1 {
         self.outcome
+    }
+
+    pub fn with_command(mut self, command: impl ToString) -> Self {
+        self.command = Some(command.to_string());
+        self
+    }
+
+    pub fn with_workspace_uuid(mut self, workspace_uuid: impl ToString) -> Self {
+        self.workspace_uuid = Some(workspace_uuid.to_string());
+        self
+    }
+
+    pub fn with_session_id(mut self, session_id: impl ToString) -> Self {
+        self.session_id = Some(session_id.to_string());
+        self
+    }
+
+    pub fn with_request_id(mut self, request_id: impl ToString) -> Self {
+        self.request_id = Some(request_id.to_string());
+        self
+    }
+
+    pub fn with_job_id(mut self, job_id: impl ToString) -> Self {
+        self.job_id = Some(job_id.to_string());
+        self
+    }
+
+    pub fn with_failure(
+        mut self,
+        stage: &'static str,
+        error_kind: &'static str,
+        integrity_check: Option<&'static str>,
+        reason: Option<&'static str>,
+    ) -> Self {
+        self.stage = Some(stage);
+        self.error_kind = Some(error_kind);
+        self.integrity_check = integrity_check;
+        self.reason = reason;
+        self
+    }
+
+    pub fn with_diagnostic_id(mut self, diagnostic_id: impl ToString) -> Self {
+        self.diagnostic_id = Some(diagnostic_id.to_string());
+        self
     }
 }
 
@@ -143,6 +212,11 @@ pub enum ClockErrorV1 {
 /// Wall-clock boundary. A clock failure is a value; only a clock panic is caught as a panic.
 pub trait ClockV1: Send + Sync + 'static {
     fn unix_seconds(&self) -> Result<u64, ClockErrorV1>;
+
+    fn unix_millis(&self) -> Result<u64, ClockErrorV1> {
+        self.unix_seconds()
+            .map(|seconds| seconds.saturating_mul(1000))
+    }
 }
 #[derive(Default)]
 pub struct SystemClockV1;
@@ -151,6 +225,13 @@ impl ClockV1 for SystemClockV1 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_secs())
+            .map_err(|_| ClockErrorV1::BeforeUnixEpoch)
+    }
+
+    fn unix_millis(&self) -> Result<u64, ClockErrorV1> {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
             .map_err(|_| ClockErrorV1::BeforeUnixEpoch)
     }
 }
@@ -326,8 +407,8 @@ impl Counters {
 }
 
 struct Queue {
-    primary: VecDeque<EventRecordV1>,
-    fallback: VecDeque<EventRecordV1>,
+    primary: VecDeque<(u64, EventRecordV1)>,
+    fallback: VecDeque<(u64, EventRecordV1)>,
     stopping: bool,
 }
 struct Lifecycle {
@@ -342,6 +423,8 @@ struct Shared {
     counters: Counters,
     sink: Option<Arc<dyn LogSinkV1>>,
     clock: Arc<dyn ClockV1>,
+    daemon_id: String,
+    next_event_sequence: AtomicU64,
     in_flight: AtomicU64,
     emitting: AtomicU64,
     degraded: bool,
@@ -371,10 +454,17 @@ pub struct ObservabilityV1 {
 
 impl ObservabilityV1 {
     pub fn start(sink: Arc<dyn LogSinkV1>, clock: Arc<dyn ClockV1>) -> Self {
-        Self::start_inner(Some(sink), clock)
+        Self::start_with_daemon_id(sink, clock, "unknown")
+    }
+    pub fn start_with_daemon_id(
+        sink: Arc<dyn LogSinkV1>,
+        clock: Arc<dyn ClockV1>,
+        daemon_id: impl Into<String>,
+    ) -> Self {
+        Self::start_inner(Some(sink), clock, daemon_id.into())
     }
     pub fn start_degraded(clock: Arc<dyn ClockV1>) -> Self {
-        let observability = Self::start_inner(None, clock);
+        let observability = Self::start_inner(None, clock, "unknown".to_owned());
         observability
             .emitter
             .shared
@@ -382,7 +472,11 @@ impl ObservabilityV1 {
             .add(&observability.emitter.shared.counters.sink_failures, 1);
         observability
     }
-    fn start_inner(sink: Option<Arc<dyn LogSinkV1>>, clock: Arc<dyn ClockV1>) -> Self {
+    fn start_inner(
+        sink: Option<Arc<dyn LogSinkV1>>,
+        clock: Arc<dyn ClockV1>,
+        daemon_id: String,
+    ) -> Self {
         let degraded = sink.is_none();
         let shared = Arc::new(Shared {
             queue: Mutex::new(Queue {
@@ -394,6 +488,8 @@ impl ObservabilityV1 {
             counters: Counters::default(),
             sink,
             clock,
+            daemon_id,
+            next_event_sequence: AtomicU64::new(1),
             in_flight: AtomicU64::new(0),
             emitting: AtomicU64::new(0),
             admission: AtomicU64::new(ADMISSION_RUNNING_V1),
@@ -509,6 +605,10 @@ impl ObservabilityEmitterV1 {
     /// Performs one non-blocking queue try-lock. Contention loses this event immediately.
     /// After the shutdown report is frozen, emits are ignored without mutating its counters.
     pub fn emit(&self, event: EventRecordV1) {
+        let sequence = self
+            .shared
+            .next_event_sequence
+            .fetch_add(1, Ordering::Relaxed);
         self.shared.emitting.fetch_add(1, Ordering::Acquire);
         let _emission = EmissionGuardV1 {
             shared: Arc::clone(&self.shared),
@@ -560,13 +660,13 @@ impl ObservabilityEmitterV1 {
                 } else if self.shared.admission.load(Ordering::Acquire) == ADMISSION_FROZEN_V1 {
                     // Frozen admission drops the event without counting.
                 } else if queue.primary.len() < PRIMARY_CAPACITY_V1 {
-                    queue.primary.push_back(event);
+                    queue.primary.push_back((sequence, event));
                     self.shared.counters.record_enqueue();
                     self.shared.available.notify_one();
                 } else if event.outcome.uses_fallback()
                     && queue.fallback.len() < FALLBACK_CAPACITY_V1.saturating_sub(1)
                 {
-                    queue.fallback.push_back(event);
+                    queue.fallback.push_back((sequence, event));
                     self.shared.counters.record_enqueue();
                     self.shared.available.notify_one();
                 } else if queue.fallback.len() < FALLBACK_CAPACITY_V1
@@ -576,9 +676,16 @@ impl ObservabilityEmitterV1 {
                         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
                         .is_ok()
                 {
-                    queue.fallback.push_back(EventRecordV1::new(
-                        EventOperationV1::QueueSaturation,
-                        EventOutcomeV1::Saturated,
+                    let saturation_sequence = self
+                        .shared
+                        .next_event_sequence
+                        .fetch_add(1, Ordering::Relaxed);
+                    queue.fallback.push_back((
+                        saturation_sequence,
+                        EventRecordV1::new(
+                            EventOperationV1::QueueSaturation,
+                            EventOutcomeV1::Saturated,
+                        ),
                     ));
                     self.shared.counters.record_enqueue();
                     if event.outcome.uses_fallback() {
@@ -710,24 +817,30 @@ fn writer_loop(shared: Arc<Shared>) {
             if primary_relieved {
                 shared.queue_saturated.store(false, Ordering::Release);
             }
-            (event, event.is_some())
+            let dequeued = event.is_some();
+            (event, dequeued)
         };
         if dequeued {
             shared.account(Counters::record_dequeue_for_write);
         }
         match event {
-            Some(event) => {
+            Some((sequence, event)) => {
                 shared.in_flight.store(1, Ordering::Release);
                 match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    shared.clock.unix_seconds()
+                    shared.clock.unix_millis()
                 })) {
-                    Ok(Ok(seconds)) => {
+                    Ok(Ok(timestamp_millis)) => {
                         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                             shared
                                 .sink
                                 .as_ref()
                                 .expect("writer sink")
-                                .write_event(&format_event(seconds, event))
+                                .write_event(&format_event(
+                                    timestamp_millis,
+                                    &shared.daemon_id,
+                                    sequence,
+                                    &event,
+                                ))
                         })) {
                             Ok(Ok(())) => shared.account(Counters::record_write_success),
                             Ok(Err(_)) | Err(_) => shared.account(|counters| {
@@ -770,17 +883,57 @@ fn writer_loop(shared: Arc<Shared>) {
         }
     }
 }
-fn format_event(seconds: u64, event: EventRecordV1) -> String {
-    let formatted = format!(
-        "ts={seconds} operation={} outcome={}\n",
-        event.operation.name(),
-        event.outcome.name()
-    );
+#[derive(Serialize)]
+struct FormattedEventV1<'a> {
+    schema: &'static str,
+    ts: u64,
+    daemon_id: &'a str,
+    seq: u64,
+    operation: &'static str,
+    outcome: &'static str,
+    command: Option<&'a str>,
+    workspace_uuid: Option<&'a str>,
+    session_id: Option<&'a str>,
+    request_id: Option<&'a str>,
+    job_id: Option<&'a str>,
+    stage: Option<&'static str>,
+    error_kind: Option<&'static str>,
+    integrity_check: Option<&'static str>,
+    reason: Option<&'static str>,
+    diagnostic_id: Option<&'a str>,
+}
+
+fn format_event(
+    timestamp_millis: u64,
+    daemon_id: &str,
+    sequence: u64,
+    event: &EventRecordV1,
+) -> String {
+    let mut formatted = serde_json::to_string(&FormattedEventV1 {
+        schema: "podway.daemon-log/v1",
+        ts: timestamp_millis,
+        daemon_id,
+        seq: sequence,
+        operation: event.operation.name(),
+        outcome: event.outcome.name(),
+        command: event.command.as_deref(),
+        workspace_uuid: event.workspace_uuid.as_deref(),
+        session_id: event.session_id.as_deref(),
+        request_id: event.request_id.as_deref(),
+        job_id: event.job_id.as_deref(),
+        stage: event.stage,
+        error_kind: event.error_kind,
+        integrity_check: event.integrity_check,
+        reason: event.reason,
+        diagnostic_id: event.diagnostic_id.as_deref(),
+    })
+    .expect("closed daemon log event must serialize");
+    formatted.push('\n');
     debug_assert!(formatted.len() <= MAX_EVENT_BYTES_V1);
     formatted
 }
 
-/// Local file sink with fixed-size rotation. Only this sink's five numbered files are owned.
+/// Local file sink with fixed-size rotation. The active file counts toward total retention.
 pub struct RotatingFileSinkV1 {
     directory: OwnedFd,
     name: OsString,
@@ -803,7 +956,7 @@ impl RotatingFileSinkV1 {
             })?
             .to_os_string();
         let directory = open_private_log_directory(parent)?;
-        retain_exact_rotations(&directory, &name)?;
+        retain_exact_rotations(&directory, &name, RETAINED_ROTATIONS_V1)?;
         let file = open_private_log(&directory, &name)?;
         let bytes = file.metadata()?.len();
         Ok(Self {
@@ -850,7 +1003,7 @@ impl RotatingFileSinkV1 {
         }
         state.file = open_private_log(&self.directory, &self.name)?;
         state.bytes = 0;
-        retain_exact_rotations(&self.directory, &self.name)?;
+        retain_exact_rotations(&self.directory, &self.name, RETAINED_ROTATIONS_V1)?;
         Ok(())
     }
 }
@@ -955,7 +1108,11 @@ fn remove_if_present(directory: &OwnedFd, name: &OsStr) -> io::Result<()> {
     }
 }
 
-fn retain_exact_rotations(directory: &OwnedFd, name: &OsStr) -> io::Result<()> {
+fn retain_exact_rotations(
+    directory: &OwnedFd,
+    name: &OsStr,
+    retained_rotations: usize,
+) -> io::Result<()> {
     let name = name.to_string_lossy();
     let prefix = format!("{name}.");
     let mut entries = Dir::openat(
@@ -976,7 +1133,9 @@ fn retain_exact_rotations(directory: &OwnedFd, name: &OsStr) -> io::Result<()> {
         let Some(suffix) = suffix else { continue };
         if !suffix.is_empty()
             && suffix.bytes().all(|byte| byte.is_ascii_digit())
-            && !matches!(suffix.as_str(), "1" | "2" | "3" | "4" | "5")
+            && suffix.parse::<usize>().is_ok_and(|index| {
+                index == 0 || index > retained_rotations || suffix.starts_with('0')
+            })
         {
             let metadata = fstatat(directory, candidate, AtFlags::AT_SYMLINK_NOFOLLOW)
                 .map_err(nix_io_error)?;

@@ -22,7 +22,8 @@ use crate::codec::{
 };
 use crate::schema::{
     DatabasePathStateV1, canonical_database_path_v1, inspect_database_path_v1,
-    inspect_database_snapshot_unbound_v1, inspect_database_snapshot_v1, open_or_initialize_v1,
+    inspect_database_snapshot_unbound_v1, inspect_database_snapshot_v1,
+    inspect_existing_store_openability_v1, open_or_initialize_v1,
     open_or_initialize_with_temporary_cleanup_arm_v1, recover_interrupted_publication_v1,
     validate_database_parent_path_v1, validate_existing_database_path_v1,
     validate_existing_regular_private_file_metadata_v1, validate_existing_regular_private_file_v1,
@@ -160,9 +161,15 @@ impl SqliteStoreV1 {
                 let last_validated_root =
                     ValidatedWorkspaceRootV1::from_encoded(last_validated_root)
                         .map_err(|_| corrupt(StoreRecordKindV1::Workspace))?;
-                crate::schema::verify_binding_inspection_identity_v1(
-                    connection, &identity, options,
-                )?;
+                if reset_identity_only {
+                    crate::schema::verify_reset_binding_inspection_identity_v1(
+                        connection, &identity, options,
+                    )?;
+                } else {
+                    crate::schema::verify_binding_inspection_identity_v1(
+                        connection, &identity, options,
+                    )?;
+                }
                 Ok(WorkspaceBindingV1::new(identity, last_validated_root))
             })?;
         Ok(Some(binding))
@@ -188,6 +195,17 @@ impl SqliteStoreV1 {
             )?;
             Ok(requires_migration)
         })
+    }
+
+    /// Verifies that an existing Store can complete the normal supported migration and fast
+    /// integrity path using only a disposable snapshot.
+    pub fn inspect_existing_openability(
+        path: impl AsRef<Path>,
+        expected_identity: &DurableWorktreeIdentityV1,
+        options: &SqliteStoreOptionsV1,
+    ) -> Result<(), StoreErrorV1> {
+        let database_path = canonical_database_path_v1(path.as_ref())?;
+        inspect_existing_store_openability_v1(&database_path, expected_identity, options)
     }
 
     /// Reads reconciliation state from a disposable snapshot without touching authoritative files.

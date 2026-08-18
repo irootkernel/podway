@@ -110,12 +110,37 @@ const SERVICE_FAILED: EventRecordV1 = EventRecordV1::new(
 #[test]
 fn event_records_are_closed_bounded_and_private() {
     let sink = Arc::new(Sink::default());
-    let observability = ObservabilityV1::start(sink.clone(), Arc::new(FixedClock(42)));
-    observability.emit(ADMISSION_OK);
+    let observability = ObservabilityV1::start_with_daemon_id(
+        sink.clone(),
+        Arc::new(FixedClock(42)),
+        "daemon-fixture",
+    );
+    observability.emit(
+        EventRecordV1::new(EventOperationV1::JobAdmission, EventOutcomeV1::Failed)
+            .with_command("session.reset")
+            .with_workspace_uuid("workspace-fixture")
+            .with_session_id("session-fixture")
+            .with_request_id("request-fixture")
+            .with_job_id("job-fixture")
+            .with_failure(
+                "store_open",
+                "storage_integrity",
+                Some("internal_codec"),
+                Some("integrity_validation_failed"),
+            )
+            .with_diagnostic_id("diagnostic-fixture"),
+    );
     observability.shutdown();
     assert_eq!(
-        sink.events.lock().unwrap().as_slice(),
-        ["ts=42 operation=job_admission outcome=succeeded\n"]
+        serde_json::from_str::<serde_json::Value>(&sink.events.lock().unwrap()[0]).unwrap(),
+        serde_json::json!({
+            "schema":"podway.daemon-log/v1","ts":42000,"daemon_id":"daemon-fixture","seq":1,
+            "operation":"job_admission","outcome":"failed","command":"session.reset",
+            "workspace_uuid":"workspace-fixture","session_id":"session-fixture",
+            "request_id":"request-fixture","job_id":"job-fixture","stage":"store_open",
+            "error_kind":"storage_integrity","integrity_check":"internal_codec",
+            "reason":"integrity_validation_failed","diagnostic_id":"diagnostic-fixture"
+        })
     );
 }
 
@@ -129,8 +154,8 @@ fn saturated_outcome_is_stably_serialized_and_uses_priority_queue() {
     ));
     observability.shutdown();
     assert_eq!(
-        sink.events.lock().unwrap().as_slice(),
-        ["ts=7 operation=queue_saturation outcome=saturated\n"]
+        serde_json::from_str::<serde_json::Value>(&sink.events.lock().unwrap()[0]).unwrap()["operation"],
+        "queue_saturation"
     );
 }
 
@@ -162,8 +187,8 @@ fn sink_write_errors_preserve_output_and_are_accounted() {
     let report = observability.shutdown();
     let counters = report.counters();
     assert_eq!(
-        sink.events.lock().unwrap().as_slice(),
-        ["ts=42 operation=job_admission outcome=succeeded\n"]
+        serde_json::from_str::<serde_json::Value>(&sink.events.lock().unwrap()[0]).unwrap()["operation"],
+        "job_admission"
     );
     assert_eq!(
         (
@@ -278,7 +303,10 @@ fn failure_only_saturation_storm_reserves_marker_capacity_and_accounts_trigger()
         .lock()
         .unwrap()
         .iter()
-        .filter(|event| event.as_str() == "ts=1 operation=queue_saturation outcome=saturated\n")
+        .filter(|event| {
+            serde_json::from_str::<serde_json::Value>(event).unwrap()["operation"]
+                == "queue_saturation"
+        })
         .count();
     assert_eq!(markers, 1);
     assert_eq!(report.counters().accepted, report.counters().written);
@@ -396,7 +424,10 @@ fn each_queue_saturation_episode_emits_one_marker_after_real_primary_relief() {
         .lock()
         .unwrap()
         .iter()
-        .filter(|event| event.as_str() == "ts=1 operation=queue_saturation outcome=saturated\n")
+        .filter(|event| {
+            serde_json::from_str::<serde_json::Value>(event).unwrap()["operation"]
+                == "queue_saturation"
+        })
         .count();
     assert_eq!(markers, 2);
 }
@@ -425,7 +456,7 @@ fn temporary_path(name: &str) -> PathBuf {
 #[test]
 fn rotation_owns_exactly_canonical_numbered_files() {
     let path = temporary_path("retention");
-    for suffix in ["0", "00", "01", "6", "99", "000000000000000000000"] {
+    for suffix in ["0", "00", "01", "10", "99", "000000000000000000000"] {
         fs::write(
             path.with_extension(format!("log.{suffix}")),
             "obsolete rotation",
@@ -458,10 +489,19 @@ fn rotation_owns_exactly_canonical_numbered_files() {
             0o600
         );
     }
-    for suffix in ["0", "00", "01", "6", "99", "000000000000000000000"] {
+    for suffix in ["0", "00", "01", "10", "99", "000000000000000000000"] {
         assert!(!path.with_extension(format!("log.{suffix}")).exists());
     }
     assert!(path.with_extension("log.keep").exists());
+    let retained = std::iter::once(path.clone())
+        .chain((1..=RETAINED_ROTATIONS_V1).map(|index| path.with_extension(format!("log.{index}"))))
+        .collect::<Vec<_>>();
+    assert_eq!(retained.len(), 10);
+    assert!(
+        retained
+            .iter()
+            .all(|entry| fs::metadata(entry).unwrap().len() <= ROTATION_BYTES_V1)
+    );
     let _ = fs::remove_dir_all(path.parent().unwrap());
 }
 

@@ -17,7 +17,7 @@ use podway_git::{
     DiagnosticPathDisplayV1, LosslessPathV1, WORKTREE_SELECTOR_VERSION_V1, WorktreeSelectorV1,
 };
 use podway_service::ServiceRuntimePathsV1;
-use podway_store::{SqliteStoreOptionsV1, WorkerIdV1};
+use podway_store::{SqliteStoreOptionsV1, StoreErrorV1, StoreIntegrityCheckV1, WorkerIdV1};
 
 use crate::{
     development_v2::{DevelopmentV2AdmissionGateV1, ProcedureV2AdmissionGateV1},
@@ -39,7 +39,7 @@ use crate::{
         ServerTransportTimeoutsV1, ShutdownAdmissionV1, UnixServerTransportV1,
     },
     worker::WorkerErrorV1,
-    workspace::WorkspaceResolutionErrorV1,
+    workspace::{WorkspaceBindingInspectionErrorV1, WorkspaceResolutionErrorV1},
 };
 
 /// Bounded production settings for one daemon process.
@@ -529,6 +529,59 @@ fn emit_observation(
         observability.emit(EventRecordV1::new(operation, outcome));
     }
 }
+
+fn emit_runtime_failure(
+    observability: &Option<ObservabilityEmitterV1>,
+    workspace_uuid: &WorkspaceId,
+    error: &WorkspaceRuntimeErrorV1,
+) {
+    let store_error = match error {
+        WorkspaceRuntimeErrorV1::Store(error) => Some(error),
+        WorkspaceRuntimeErrorV1::Resolution(WorkspaceResolutionErrorV1::BindingInspection {
+            source: WorkspaceBindingInspectionErrorV1::Store(error),
+        }) => Some(error),
+        WorkspaceRuntimeErrorV1::ResetAdmitted { source, .. } => {
+            return emit_runtime_failure(observability, workspace_uuid, source);
+        }
+        _ => None,
+    };
+    let (error_kind, integrity_check, reason) = match store_error {
+        Some(StoreErrorV1::StorageIntegrityV1 { check }) => (
+            "storage_integrity",
+            Some(integrity_check_name(check)),
+            Some("integrity_validation_failed"),
+        ),
+        Some(StoreErrorV1::StorageUnavailableV1 { .. }) => ("storage_unavailable", None, None),
+        _ => return,
+    };
+    if let Some(observability) = observability {
+        observability.emit(
+            EventRecordV1::new(EventOperationV1::IntegrityCheck, EventOutcomeV1::Failed)
+                .with_workspace_uuid(workspace_uuid)
+                .with_failure("store_open", error_kind, integrity_check, reason),
+        );
+    }
+}
+
+const fn integrity_check_name(check: &StoreIntegrityCheckV1) -> &'static str {
+    match check {
+        StoreIntegrityCheckV1::WorkspaceIdentity => "workspace_identity",
+        StoreIntegrityCheckV1::SnapshotDigest => "snapshot_digest",
+        StoreIntegrityCheckV1::SessionCursor => "session_cursor",
+        StoreIntegrityCheckV1::ActiveAttempt => "active_attempt",
+        StoreIntegrityCheckV1::JobQueue => "job_queue",
+        StoreIntegrityCheckV1::SchemaVersion => "schema_version",
+        StoreIntegrityCheckV1::MigrationChecksum => "migration_checksum",
+        StoreIntegrityCheckV1::RequiredSchemaObjects => "required_schema_objects",
+        StoreIntegrityCheckV1::ConnectionPragmas => "connection_pragmas",
+        StoreIntegrityCheckV1::SqliteQuickCheck => "sqlite_quick_check",
+        StoreIntegrityCheckV1::SqliteDeepCheck => "sqlite_deep_check",
+        StoreIntegrityCheckV1::ForeignKeys => "foreign_keys",
+        StoreIntegrityCheckV1::InternalCodec => "internal_codec",
+        StoreIntegrityCheckV1::IdempotencyReceipt => "idempotency_receipt",
+        StoreIntegrityCheckV1::ClaimOwnership => "claim_ownership",
+    }
+}
 const fn daemon_stop_outcome(
     accept_loop_succeeded: bool,
     endpoint_shutdown_succeeded: bool,
@@ -612,12 +665,15 @@ fn recover_registered_workspaces(
                                 scheduler,
                             ));
                         }
-                        Err(error) => outcomes.push(Some(WorkspaceRecoveryEntryV1::Unavailable(
-                            UnavailableWorkspaceReportV1::new(
-                                workspace_uuid,
-                                unavailable_reason_from_runtime_error(error),
-                            ),
-                        ))),
+                        Err(error) => {
+                            emit_runtime_failure(observability, &workspace_uuid, &error);
+                            outcomes.push(Some(WorkspaceRecoveryEntryV1::Unavailable(
+                                UnavailableWorkspaceReportV1::new(
+                                    workspace_uuid,
+                                    unavailable_reason_from_runtime_error(error),
+                                ),
+                            )))
+                        }
                     }
                 }
                 Ok(None) => {
@@ -632,12 +688,15 @@ fn recover_registered_workspaces(
                             outcomes.push(None);
                             recovered.push((index, workspace_uuid, requeued_job_count, scheduler));
                         }
-                        Err(error) => outcomes.push(Some(WorkspaceRecoveryEntryV1::Unavailable(
-                            UnavailableWorkspaceReportV1::new(
-                                workspace_uuid,
-                                unavailable_reason_from_runtime_error(error),
-                            ),
-                        ))),
+                        Err(error) => {
+                            emit_runtime_failure(observability, &workspace_uuid, &error);
+                            outcomes.push(Some(WorkspaceRecoveryEntryV1::Unavailable(
+                                UnavailableWorkspaceReportV1::new(
+                                    workspace_uuid,
+                                    unavailable_reason_from_runtime_error(error),
+                                ),
+                            )))
+                        }
                     }
                 }
                 Err(error) => outcomes.push(Some(WorkspaceRecoveryEntryV1::Unavailable(
@@ -821,7 +880,41 @@ fn unavailable_reason_from_worker_error(
 
 #[cfg(test)]
 mod tests {
-    use super::{EventOutcomeV1, daemon_stop_outcome};
+    use std::{
+        io,
+        sync::{Arc, Mutex},
+    };
+
+    use podway_core::WorkspaceId;
+    use podway_store::{StoreErrorV1, StoreIntegrityCheckV1};
+
+    use crate::observability::{ClockErrorV1, ClockV1, LogSinkV1, ObservabilityV1};
+
+    use super::{
+        EventOutcomeV1, WorkspaceRuntimeErrorV1, daemon_stop_outcome, emit_runtime_failure,
+    };
+
+    #[derive(Default)]
+    struct CaptureSink(Mutex<Vec<String>>);
+
+    impl LogSinkV1 for CaptureSink {
+        fn write_event(&self, event: &str) -> io::Result<()> {
+            self.0.lock().expect("capture lock").push(event.to_owned());
+            Ok(())
+        }
+
+        fn flush(&self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct FixedClock;
+
+    impl ClockV1 for FixedClock {
+        fn unix_seconds(&self) -> Result<u64, ClockErrorV1> {
+            Ok(42)
+        }
+    }
 
     #[test]
     fn daemon_stop_requires_complete_runtime_success() {
@@ -836,5 +929,34 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn store_open_integrity_failure_emits_closed_workspace_diagnostic() {
+        let sink = Arc::new(CaptureSink::default());
+        let observability = ObservabilityV1::start_with_daemon_id(
+            sink.clone(),
+            Arc::new(FixedClock),
+            "daemon-runtime-fixture",
+        );
+        let workspace = WorkspaceId::new("00000000-0000-4000-8000-000000000981").unwrap();
+        let error = WorkspaceRuntimeErrorV1::Store(StoreErrorV1::StorageIntegrityV1 {
+            check: StoreIntegrityCheckV1::InternalCodec,
+        });
+
+        emit_runtime_failure(&Some(observability.emitter()), &workspace, &error);
+        observability.shutdown();
+
+        let events = sink.0.lock().expect("capture lock");
+        let event: serde_json::Value = serde_json::from_str(&events[0]).unwrap();
+        assert_eq!(event["operation"], "integrity_check");
+        assert_eq!(event["outcome"], "failed");
+        assert_eq!(event["workspace_uuid"], workspace.as_str());
+        assert_eq!(event["stage"], "store_open");
+        assert_eq!(event["error_kind"], "storage_integrity");
+        assert_eq!(event["integrity_check"], "internal_codec");
+        assert_eq!(event["reason"], "integrity_validation_failed");
+        assert!(!events[0].contains("state.sqlite3"));
+        assert!(!events[0].contains("source"));
     }
 }

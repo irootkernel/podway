@@ -44,18 +44,41 @@ use podway_store::{
     ActiveItemMutationRequestV2, ActiveItemMutationV2, AdmissionSessionIdentityV1, AdmitOutcomeV1,
     AdmitRequestV1, AttemptMetadataV2, CanonicalExecutionJsonV1, ClaimedJobV1,
     DurableWorktreeIdentityV1, GraphInitialGoalV2, GraphMutationErrorV2, GraphNodeCounterV2,
-    GraphSessionStateV2, GraphStartCurrentTaskV2, IdempotencyKeyV1, PersistedGraphItemMutationV2,
-    PersistedGraphMutationFailureV2, PersistedGraphResetModeV2, PersistedGraphTerminalOperationV2,
-    PersistedResponseContextV1, ProcedureSnapshotV2, RevisionAttemptItemPreconditionsV1,
-    StateTransitionV1, StoreContractV1, StoreErrorV1, StoreGraphMutationContractV2,
-    StoreGraphReadContractV2, StoreIdempotencyReadContractV1, StoreValueErrorV1, TerminalReceiptV1,
-    TerminalResultV1, WorkerIdV1, WorkflowMemoryStateV2, WorkspaceBindingV1,
+    GraphSessionStateV2, GraphStartCurrentTaskV2, IdempotencyKeyV1, JobReceiptOrTerminalV1,
+    PersistedGraphItemMutationV2, PersistedGraphMutationFailureV2, PersistedGraphResetModeV2,
+    PersistedGraphTerminalOperationV2, PersistedResponseContextV1, ProcedureSnapshotV2,
+    RevisionAttemptItemPreconditionsV1, StateTransitionV1, StoreContractV1, StoreErrorV1,
+    StoreGraphMutationContractV2, StoreGraphReadContractV2, StoreIdempotencyReadContractV1,
+    StoreValueErrorV1, TerminalReceiptV1, TerminalResultV1, WorkerIdV1, WorkflowMemoryStateV2,
+    WorkspaceBindingV1,
 };
 use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
 
 const EXECUTION_DOCUMENT_VERSION_V5: u8 = 5;
 const EXECUTION_DOCUMENT_VERSION_V6: u8 = 6;
+
+fn terminal_outcome(receipt: &TerminalReceiptV1) -> EventOutcomeV1 {
+    match receipt.result() {
+        TerminalResultV1::Success(_) => EventOutcomeV1::Succeeded,
+        TerminalResultV1::Failure(_) => EventOutcomeV1::Failed,
+    }
+}
+
+fn correlated_job_event(
+    operation: EventOperationV1,
+    outcome: EventOutcomeV1,
+    workspace: &DurableWorktreeIdentityV1,
+    claimed: &ClaimedJobV1,
+) -> EventRecordV1 {
+    let mut event = EventRecordV1::new(operation, outcome)
+        .with_workspace_uuid(workspace.workspace_uuid())
+        .with_job_id(claimed.job().job_id());
+    if let AdmissionSessionIdentityV1::Exact(session_id) = claimed.execution().session_identity() {
+        event = event.with_session_id(session_id);
+    }
+    event
+}
 const EXECUTION_DOCUMENT_VERSION_V7: u8 = 7;
 const EXECUTION_DOCUMENT_VERSION_V8: u8 = 8;
 const EXECUTION_DOCUMENT_VERSION_V9: u8 = 9;
@@ -3135,10 +3158,7 @@ where
             .map_err(ExecutionErrorV1::from_boundary)?;
         let now = self.clock.now();
         let claimed = match self.store.claim_next(workspace.identity(), worker, now) {
-            Ok(Some(claimed)) => {
-                self.emit(EventOperationV1::JobClaim, EventOutcomeV1::Succeeded);
-                claimed
-            }
+            Ok(Some(claimed)) => claimed,
             Ok(None) => {
                 self.emit(EventOperationV1::JobClaim, EventOutcomeV1::Rejected);
                 return Ok(None);
@@ -3148,13 +3168,26 @@ where
                 return Err(error.into());
             }
         };
-        self.execute_claimed(&workspace, claimed, now).map(Some)
+        self.emit_job(
+            EventOperationV1::JobClaim,
+            EventOutcomeV1::Succeeded,
+            workspace.identity(),
+            &claimed,
+        );
+        let receipt = self.execute_claimed(&workspace, &claimed, now)?;
+        self.emit_job(
+            EventOperationV1::JobTerminal,
+            terminal_outcome(&receipt),
+            workspace.identity(),
+            &claimed,
+        );
+        Ok(Some(receipt))
     }
 
     fn execute_claimed(
         &self,
         workspace: &WorkspaceBindingV1,
-        claimed: ClaimedJobV1,
+        claimed: &ClaimedJobV1,
         now: UnixMillis,
     ) -> Result<TerminalReceiptV1, ExecutionErrorV1> {
         let (_execution_version, _selector, workspace_id, command, resolution) =
@@ -3187,7 +3220,7 @@ where
             });
         }
 
-        self.commit_workspace_initialization(&claimed, now)
+        self.commit_workspace_initialization(claimed, now)
     }
 
     fn commit_workspace_initialization(
@@ -3211,7 +3244,6 @@ where
                 now,
             )
             .map_err(ExecutionErrorV1::from)?;
-        self.emit(EventOperationV1::JobTerminal, EventOutcomeV1::Succeeded);
         Ok(receipt)
     }
 
@@ -3232,7 +3264,6 @@ where
                 now,
             )
             .map_err(ExecutionErrorV1::from)?;
-        self.emit(EventOperationV1::JobTerminal, EventOutcomeV1::Failed);
         Ok(receipt)
     }
 
@@ -3267,12 +3298,37 @@ where
             ),
             Err(_) => (EventOperationV1::JobAdmission, EventOutcomeV1::Rejected),
         };
-        self.emit(operation, outcome);
+        let mut event = EventRecordV1::new(operation, outcome);
+        if let Ok(admission) = result {
+            let receipt = match admission {
+                AdmitOutcomeV1::New(receipt)
+                | AdmitOutcomeV1::Existing(JobReceiptOrTerminalV1::JobReceipt(receipt)) => receipt,
+                AdmitOutcomeV1::Existing(JobReceiptOrTerminalV1::TerminalReceipt(receipt)) => {
+                    receipt.job()
+                }
+            };
+            event = event.with_job_id(receipt.job_id());
+        }
+        self.emit_record(event);
     }
 
     fn emit(&self, operation: EventOperationV1, outcome: EventOutcomeV1) {
+        self.emit_record(EventRecordV1::new(operation, outcome));
+    }
+
+    fn emit_job(
+        &self,
+        operation: EventOperationV1,
+        outcome: EventOutcomeV1,
+        workspace: &DurableWorktreeIdentityV1,
+        claimed: &ClaimedJobV1,
+    ) {
+        self.emit_record(correlated_job_event(operation, outcome, workspace, claimed));
+    }
+
+    fn emit_record(&self, event: EventRecordV1) {
         if let Some(observability) = &self.observability {
-            observability.emit(EventRecordV1::new(operation, outcome));
+            observability.emit(event);
         }
     }
 
@@ -4636,10 +4692,7 @@ where
             .map_err(ExecutionErrorV1::from_boundary)?;
         let now = self.clock.now();
         let claimed = match self.store.claim_next(workspace.identity(), worker, now) {
-            Ok(Some(claimed)) => {
-                self.emit(EventOperationV1::JobClaim, EventOutcomeV1::Succeeded);
-                claimed
-            }
+            Ok(Some(claimed)) => claimed,
             Ok(None) => {
                 self.emit(EventOperationV1::JobClaim, EventOutcomeV1::Rejected);
                 return Ok(None);
@@ -4649,10 +4702,23 @@ where
                 return Err(error.into());
             }
         };
+        self.emit_job(
+            EventOperationV1::JobClaim,
+            EventOutcomeV1::Succeeded,
+            workspace.identity(),
+            &claimed,
+        );
         if claimed.execution().execution_flavor()
             == podway_store::DurableExecutionFlavorV1::LegacyV1
         {
-            return self.execute_claimed(&workspace, claimed, now).map(Some);
+            let receipt = self.execute_claimed(&workspace, &claimed, now)?;
+            self.emit_job(
+                EventOperationV1::JobTerminal,
+                terminal_outcome(&receipt),
+                workspace.identity(),
+                &claimed,
+            );
+            return Ok(Some(receipt));
         }
         if workspace.identity() != claimed.claim().identity() {
             return Err(invalid_execution_v1(
@@ -4753,6 +4819,12 @@ where
                 ));
             }
         };
+        self.emit_job(
+            EventOperationV1::JobTerminal,
+            terminal_outcome(&receipt),
+            workspace.identity(),
+            &claimed,
+        );
         Ok(Some(receipt))
     }
 
@@ -7087,7 +7159,36 @@ fn sha256_hex_v1(input: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        io,
+        sync::{Arc, Mutex},
+    };
+
+    use crate::observability::{ClockErrorV1, ClockV1, LogSinkV1, ObservabilityV1};
+
     use super::*;
+
+    #[derive(Default)]
+    struct CaptureSink(Mutex<Vec<String>>);
+
+    impl LogSinkV1 for CaptureSink {
+        fn write_event(&self, event: &str) -> io::Result<()> {
+            self.0.lock().unwrap().push(event.to_owned());
+            Ok(())
+        }
+
+        fn flush(&self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct FixedClock;
+
+    impl ClockV1 for FixedClock {
+        fn unix_seconds(&self) -> Result<u64, ClockErrorV1> {
+            Ok(42)
+        }
+    }
 
     #[test]
     fn sha256_matches_the_standard_empty_and_short_vectors() {
@@ -7099,6 +7200,65 @@ mod tests {
             sha256_hex_v1(b"abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+    }
+
+    #[test]
+    fn durable_job_events_preserve_identity_and_order_from_claim_to_terminal() {
+        let digest = |value: char| {
+            Sha256Digest::new(format!("sha256:{}", value.to_string().repeat(64))).unwrap()
+        };
+        let workspace_id = WorkspaceId::new("00000000-0000-4000-8000-000000000971").unwrap();
+        let session_id = SessionId::new("00000000-0000-4000-8000-000000000972").unwrap();
+        let job_id = JobId::new("00000000-0000-4000-8000-000000000973").unwrap();
+        let identity =
+            DurableWorktreeIdentityV1::new(digest('a'), workspace_id.clone(), digest('b'));
+        let claimed = ClaimedJobV1::new_persisted(
+            podway_store::ClaimTokenV1::new(
+                identity.clone(),
+                job_id.clone(),
+                Revision::new(1),
+                WorkerIdV1::new("worker-fixture").unwrap(),
+            ),
+            podway_store::JobReceiptV1::new(1, job_id.clone(), digest('c')),
+            podway_store::ClaimedExecutionV1::new_procedure_v2(
+                DomainCommand::SessionComplete,
+                RevisionAttemptItemPreconditionsV1::new(Some(Revision::new(1)), None, None, None)
+                    .unwrap(),
+                CanonicalExecutionJsonV1::new("{}").unwrap(),
+                AdmissionSessionIdentityV1::Exact(session_id.clone()),
+            ),
+        );
+        let sink = Arc::new(CaptureSink::default());
+        let observability = ObservabilityV1::start_with_daemon_id(
+            sink.clone(),
+            Arc::new(FixedClock),
+            "daemon-job-fixture",
+        );
+
+        observability.emit(correlated_job_event(
+            EventOperationV1::JobClaim,
+            EventOutcomeV1::Succeeded,
+            &identity,
+            &claimed,
+        ));
+        observability.emit(correlated_job_event(
+            EventOperationV1::JobTerminal,
+            EventOutcomeV1::Succeeded,
+            &identity,
+            &claimed,
+        ));
+        observability.shutdown();
+
+        let events = sink.0.lock().unwrap();
+        assert_eq!(events.len(), 2);
+        for (index, expected_operation) in ["job_claim", "job_terminal"].iter().enumerate() {
+            let event: Value = serde_json::from_str(&events[index]).unwrap();
+            assert_eq!(event["seq"], u64::try_from(index + 1).unwrap());
+            assert_eq!(event["operation"], *expected_operation);
+            assert_eq!(event["workspace_uuid"], workspace_id.as_str());
+            assert_eq!(event["session_id"], session_id.as_str());
+            assert_eq!(event["job_id"], job_id.as_str());
+        }
     }
 
     #[test]

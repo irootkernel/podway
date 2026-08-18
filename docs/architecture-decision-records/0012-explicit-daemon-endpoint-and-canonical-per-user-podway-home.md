@@ -7,6 +7,9 @@ The statement below that every daemon instance contends on the production lock i
 superseded for validated managed `--dev` runtimes by
 [ADR-0020](0020-managed-dev-runtime-isolation.md).
 
+The logging portion of the user-global layout is extended by
+[ADR-0022](0022-bounded-correlated-daemon-logs.md).
+
 ## Context
 
 Podway currently derives service paths from ambient `HOME` and `TMPDIR` values,

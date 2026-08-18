@@ -2263,6 +2263,29 @@ fn graph_reset_clear_receipt_and_failpoint_are_one_atomic_boundary() {
     );
     drop(reopened);
 
+    podway_store::test_support::downgrade_to_schema_v4(&database_path(&temporary)).unwrap();
+    podway_store::test_support::rewrite_reset_terminal_without_mode(
+        &database_path(&temporary),
+        &job_id,
+    )
+    .unwrap();
+    SqliteStoreV1::inspect_existing_openability(
+        database_path(&temporary),
+        &identity(),
+        &SqliteStoreOptionsV1::new(8).unwrap(),
+    )
+    .unwrap();
+    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 38);
+    let normalized = reopened
+        .read_job(&identity(), &job_id)
+        .unwrap()
+        .unwrap()
+        .terminal_receipt()
+        .unwrap()
+        .clone();
+    assert_eq!(normalized, receipt);
+    drop(reopened);
+
     let mut forged: serde_json::Value =
         serde_json::from_str(&encode_persisted_terminal_receipt_v1(&receipt).unwrap()).unwrap();
     forged["graph_session_projection"]["operation"]["session_id"] =
@@ -2291,6 +2314,100 @@ fn graph_reset_clear_receipt_and_failpoint_are_one_atomic_boundary() {
             UnixMillis::new(38),
         )
         .is_err()
+    );
+}
+
+#[test]
+fn v4_missing_reset_mode_migrates_without_discarding_the_current_completed_session() {
+    let temporary = TempDir::new().unwrap();
+    let reset_state = graph_state(750, 760, 10);
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
+    store
+        .create_graph_session_v2(&identity(), reset_state.clone())
+        .unwrap();
+    let reset_claim = admit_reset_and_claim(&store, &reset_state, "v4-retained-reset", 770);
+    let reset_job_id = reset_claim.job().job_id().clone();
+    store
+        .commit_graph_reset_terminal_v2(
+            reset_claim.claim().clone(),
+            reset_state.workspace_revision(),
+            reset_state.trace().revision(),
+            reset_state.trace().session_id().clone(),
+            UnixMillis::new(33),
+        )
+        .unwrap();
+    let reset_receipt = store
+        .read_job(&identity(), &reset_job_id)
+        .unwrap()
+        .unwrap()
+        .terminal_receipt()
+        .unwrap()
+        .clone();
+
+    let retained = graph_state(780, 790, 40);
+    store
+        .create_graph_session_v2(&identity(), retained.clone())
+        .unwrap();
+    let complete_claim = admit_complete_and_claim(&store, &retained, "v4-retained-complete", 800);
+    let completion = retained
+        .complete_active_action_v2(
+            retained.trace().revision(),
+            retained.trace().active_attempt().unwrap().attempt_id(),
+            None,
+            UnixMillis::new(41),
+        )
+        .unwrap();
+    let operation = PersistedGraphTerminalOperationV2::complete(
+        completion.from_graph_node_id().clone(),
+        completion.from_attempt_id().clone(),
+        None,
+        None,
+    )
+    .unwrap();
+    let completed = completion.into_state();
+    store
+        .commit_graph_mutation_terminal_v2(
+            complete_claim.claim().clone(),
+            retained.workspace_revision(),
+            retained.trace().revision(),
+            Some(completed.clone()),
+            TerminalResultV1::Success(DomainResult::SessionChanged {
+                session_id: retained.trace().session_id().clone(),
+                revision_before: retained.trace().revision(),
+                revision_after: completed.trace().revision(),
+                changed: true,
+            }),
+            operation,
+            UnixMillis::new(42),
+        )
+        .unwrap();
+    drop(store);
+
+    podway_store::test_support::downgrade_to_schema_v4(&database_path(&temporary)).unwrap();
+    podway_store::test_support::rewrite_reset_terminal_without_mode(
+        &database_path(&temporary),
+        &reset_job_id,
+    )
+    .unwrap();
+    SqliteStoreV1::inspect_existing_openability(
+        database_path(&temporary),
+        &identity(),
+        &SqliteStoreOptionsV1::new(8).unwrap(),
+    )
+    .unwrap();
+
+    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 43);
+    assert_eq!(
+        reopened.read_graph_session_v2(&identity()).unwrap(),
+        Some(completed)
+    );
+    assert_eq!(
+        reopened
+            .read_job(&identity(), &reset_job_id)
+            .unwrap()
+            .unwrap()
+            .terminal_receipt(),
+        Some(&reset_receipt)
     );
 }
 

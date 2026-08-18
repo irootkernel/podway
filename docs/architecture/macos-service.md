@@ -209,9 +209,9 @@ The daemon writes structured local logs under
 Defaults:
 
 - log file: `podwayd.log`;
-- maximum file size: 10 MiB;
-- retained rotated files: 5;
-- exact record form: `ts=<seconds> operation=<name> outcome=<name>`;
+- maximum file size: 1 MiB;
+- retained files: 10 total, including the active file;
+- exact record form: one `podway.daemon-log/v1` JSON object per line with fixed correlation keys;
 - bounded event queues account for dropped records;
 - no log levels or runtime log-level configuration in v0.1.0;
 - no item values, task titles, artifact locations, or full request payloads in normal logs;
@@ -219,7 +219,10 @@ Defaults:
 
 `podway daemon logs` prints the resolved log path and recent content. `--follow` streams appended lines.
 
-The LaunchAgent sends both standard output and standard error to the same `podwayd.log` path used by the rotating daemon sink. There is no separate bootstrap log in v0.1.0; after sink rotation, launchd may retain an older file descriptor until the service restarts.
+The LaunchAgent sends standard output and standard error to
+`podwayd-bootstrap.log`, not to the daemon sink. That stream retains 5 files
+total at 1 MiB each. Explicit log purge removes both owned streams and their
+numbered rotations.
 
 ## Upgrade behavior
 

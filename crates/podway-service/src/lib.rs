@@ -43,8 +43,10 @@ use std::{
 
 pub const SERVICE_LABEL_V1: &str = "dev.podway.podwayd";
 pub const SERVICE_METADATA_VERSION_V1: u16 = 1;
-pub const SERVICE_LOG_MAX_BYTES_V1: u64 = 10 * 1024 * 1024;
-pub const SERVICE_LOG_RETAINED_FILES_V1: u8 = 5;
+pub const SERVICE_LOG_MAX_BYTES_V1: u64 = 1024 * 1024;
+pub const SERVICE_LOG_RETAINED_FILES_V1: u8 = 10;
+pub const SERVICE_BOOTSTRAP_LOG_MAX_BYTES_V1: u64 = 1024 * 1024;
+pub const SERVICE_BOOTSTRAP_LOG_RETAINED_FILES_V1: u8 = 5;
 pub const SERVICE_METADATA_MAX_BYTES_V1: usize = 16 * 1024;
 pub const SERVICE_PLIST_MAX_BYTES_V1: usize = 64 * 1024;
 pub const SERVICE_DAEMON_BINARY_MAX_BYTES_V1: usize = 128 * 1024 * 1024;
@@ -229,6 +231,7 @@ pub struct ServiceRuntimePathsV1 {
     global_lock_path: LocalPlatformPathV1,
     launch_agent_path: LocalPlatformPathV1,
     log_path: LocalPlatformPathV1,
+    bootstrap_log_path: LocalPlatformPathV1,
     metadata_index_path: LocalPlatformPathV1,
     workspace_registry_path: LocalPlatformPathV1,
     socket_path: LocalPlatformPathV1,
@@ -267,6 +270,9 @@ impl ServiceRuntimePathsV1 {
                 dev_home.join("LaunchAgents/dev.podway.podwayd.plist"),
             )?,
             log_path: LocalPlatformPathV1::service_global(logs_directory.join("podwayd.log"))?,
+            bootstrap_log_path: LocalPlatformPathV1::service_global(
+                logs_directory.join("podwayd-bootstrap.log"),
+            )?,
             metadata_index_path: LocalPlatformPathV1::service_global(
                 state_directory.join("service.json"),
             )?,
@@ -317,6 +323,9 @@ impl ServiceRuntimePathsV1 {
                 launch_agents_directory.join(format!("{SERVICE_LABEL_V1}.plist")),
             )?,
             log_path: LocalPlatformPathV1::new(log_directory.join("podwayd.log"))?,
+            bootstrap_log_path: LocalPlatformPathV1::new(
+                log_directory.join("podwayd-bootstrap.log"),
+            )?,
             metadata_index_path: LocalPlatformPathV1::new(
                 application_support_directory.join("service.json"),
             )?,
@@ -357,6 +366,9 @@ impl ServiceRuntimePathsV1 {
                     .join(format!("{SERVICE_LABEL_V1}.plist")),
             )?,
             log_path: LocalPlatformPathV1::service_global(logs_directory.join("podwayd.log"))?,
+            bootstrap_log_path: LocalPlatformPathV1::service_global(
+                logs_directory.join("podwayd-bootstrap.log"),
+            )?,
             metadata_index_path: LocalPlatformPathV1::service_global(
                 state_directory.join("service.json"),
             )?,
@@ -381,6 +393,10 @@ impl ServiceRuntimePathsV1 {
 
     pub fn log_path(&self) -> &LocalPlatformPathV1 {
         &self.log_path
+    }
+
+    pub fn bootstrap_log_path(&self) -> &LocalPlatformPathV1 {
+        &self.bootstrap_log_path
     }
 
     pub fn metadata_index_path(&self) -> &LocalPlatformPathV1 {
@@ -3530,8 +3546,20 @@ where
     ) -> Result<(), ServiceErrorV1> {
         let log = paths.log_path().as_path();
         self.filesystem
-            .rotate_file(log, SERVICE_LOG_MAX_BYTES_V1, SERVICE_LOG_RETAINED_FILES_V1)
+            .rotate_file(
+                log,
+                SERVICE_LOG_MAX_BYTES_V1,
+                SERVICE_LOG_RETAINED_FILES_V1 - 1,
+            )
             .map_err(|error| self.fs_error(op, log, error))?;
+        let bootstrap_log = paths.bootstrap_log_path().as_path();
+        self.filesystem
+            .rotate_file(
+                bootstrap_log,
+                SERVICE_BOOTSTRAP_LOG_MAX_BYTES_V1,
+                SERVICE_BOOTSTRAP_LOG_RETAINED_FILES_V1 - 1,
+            )
+            .map_err(|error| self.fs_error(op, bootstrap_log, error))?;
         self.observe(ServiceObservationV1::LogRotationCompleted);
         Ok(())
     }
@@ -3711,15 +3739,22 @@ where
                 .map_err(|e| self.fs_error(ServiceOperationV1::Uninstall, metadata, e))?;
         }
         if options.purge_logs() {
-            let log = paths.log_path().as_path();
-            self.filesystem
-                .remove_file(log)
-                .map_err(|e| self.fs_error(ServiceOperationV1::Uninstall, log, e))?;
-            for index in 1..=SERVICE_LOG_RETAINED_FILES_V1 {
-                let rotated = PathBuf::from(format!("{}.{}", log.display(), index));
+            for (log, retained_files) in [
+                (paths.log_path().as_path(), SERVICE_LOG_RETAINED_FILES_V1),
+                (
+                    paths.bootstrap_log_path().as_path(),
+                    SERVICE_BOOTSTRAP_LOG_RETAINED_FILES_V1,
+                ),
+            ] {
                 self.filesystem
-                    .remove_file(&rotated)
-                    .map_err(|e| self.fs_error(ServiceOperationV1::Uninstall, &rotated, e))?;
+                    .remove_file(log)
+                    .map_err(|e| self.fs_error(ServiceOperationV1::Uninstall, log, e))?;
+                for index in 1..retained_files {
+                    let rotated = PathBuf::from(format!("{}.{}", log.display(), index));
+                    self.filesystem
+                        .remove_file(&rotated)
+                        .map_err(|e| self.fs_error(ServiceOperationV1::Uninstall, &rotated, e))?;
+                }
             }
             self.observe(ServiceObservationV1::UninstallLogsPurged);
         } else {
@@ -3978,13 +4013,14 @@ fn launch_agent_plist_with_generation_v1(
     generation: Option<&str>,
     daemon_identity: Option<&str>,
 ) -> Vec<u8> {
+    let bootstrap_log_path = log_path.with_file_name("podwayd-bootstrap.log");
     let generation = generation.map_or_else(String::new, |value| {
         format!("\n  <key>PodwayGeneration</key>\n  <string>{value}</string>\n")
     });
     let daemon_identity = daemon_identity.map_or_else(String::new, |value| {
         format!("\n  <key>PodwayDaemonSha256</key>\n  <string>{value}</string>\n")
     });
-    format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n  <key>Label</key>\n  <string>{SERVICE_LABEL_V1}</string>{generation}{daemon_identity}\n  <key>ProgramArguments</key>\n  <array>\n    <string>{}</string>\n    <string>--service</string>\n    <string>--socket</string>\n    <string>{}</string>\n  </array>\n\n  <key>RunAtLoad</key>\n  <true/>\n\n  <key>KeepAlive</key>\n  <dict>\n    <key>SuccessfulExit</key>\n    <false/>\n  </dict>\n\n  <key>ThrottleInterval</key>\n  <integer>5</integer>\n\n  <key>ProcessType</key>\n  <string>Background</string>\n\n  <key>StandardOutPath</key>\n  <string>{}</string>\n\n  <key>StandardErrorPath</key>\n  <string>{}</string>\n</dict>\n</plist>\n", xml_escape(&binary.display().to_string()), xml_escape(&socket_path.display().to_string()), xml_escape(&log_path.display().to_string()), xml_escape(&log_path.display().to_string())).into_bytes()
+    format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n  <key>Label</key>\n  <string>{SERVICE_LABEL_V1}</string>{generation}{daemon_identity}\n  <key>ProgramArguments</key>\n  <array>\n    <string>{}</string>\n    <string>--service</string>\n    <string>--socket</string>\n    <string>{}</string>\n  </array>\n\n  <key>RunAtLoad</key>\n  <true/>\n\n  <key>KeepAlive</key>\n  <dict>\n    <key>SuccessfulExit</key>\n    <false/>\n  </dict>\n\n  <key>ThrottleInterval</key>\n  <integer>5</integer>\n\n  <key>ProcessType</key>\n  <string>Background</string>\n\n  <key>StandardOutPath</key>\n  <string>{}</string>\n\n  <key>StandardErrorPath</key>\n  <string>{}</string>\n</dict>\n</plist>\n", xml_escape(&binary.display().to_string()), xml_escape(&socket_path.display().to_string()), xml_escape(&bootstrap_log_path.display().to_string()), xml_escape(&bootstrap_log_path.display().to_string())).into_bytes()
 }
 
 fn xml_escape(value: &str) -> String {

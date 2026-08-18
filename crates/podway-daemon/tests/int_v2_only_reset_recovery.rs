@@ -4,10 +4,16 @@ use super::{int_v2run003_runtime as runtime, support_phase4_workspace};
 
 use std::{fs, os::unix::fs::PermissionsExt, path::Path, sync::Arc};
 
-use podway_core::{UnixMillis, WorkspaceId, canonicalize_json_v1};
+use podway_core::{
+    DomainCommand, JobId, Revision, Sha256Digest, UnixMillis, WorkspaceId, canonicalize_json_v1,
+};
 use podway_daemon::{execution::ResetStoreInspectionV1, workspace::ResetMarkerV1};
 use podway_protocol::{PreconditionsV1, RequestIdV1, ResponseEnvelopeV2, WorktreeSelectorWireV1};
-use podway_store::{CanonicalRequestDigestV1, IdempotencyKeyV1, JobIdV1};
+use podway_store::{
+    AdmissionSessionIdentityV1, AdmitRequestV1, CancelOutcomeV1, CanonicalExecutionJsonV1,
+    CanonicalRequestDigestV1, IdempotencyKeyV1, JobIdV1, RevisionAttemptItemPreconditionsV1,
+    SqliteStoreOptionsV1, SqliteStoreV1, StoreContractV1, StoreReadContractV1,
+};
 use serde_json::{Map, json};
 
 fn selector_with_workspace(path: &Path, workspace: WorkspaceId) -> WorktreeSelectorWireV1 {
@@ -150,6 +156,154 @@ fn reset_marker_resume_accepts_an_exact_root_with_detached_git_identity() {
         authority.store_inspection(),
         ResetStoreInspectionV1::GitIdentityDetached
     ));
+}
+
+#[test]
+fn reset_all_recovers_when_full_store_openability_fails_internal_codec() {
+    let fixture = support_phase4_workspace::git_worktrees();
+    runtime::make_runtime_private(fixture.main());
+    let manager = Arc::new(runtime::manager(fixture.temporary_path()));
+    let initialized = manager
+        .bootstrap(
+            support_phase4_workspace::selector(fixture.main()),
+            runtime::observation(),
+        )
+        .unwrap();
+    let binding = initialized.context_snapshot().binding().clone();
+    let old_workspace = binding.identity().workspace_uuid().clone();
+    let database_path = fixture.main().join(".podway/runtime/state.sqlite3");
+    drop(initialized);
+    drop(manager);
+
+    let store = SqliteStoreV1::open(
+        &database_path,
+        binding.last_validated_root(),
+        binding.identity().clone(),
+        SqliteStoreOptionsV1::new(8).unwrap(),
+        UnixMillis::new(10),
+    )
+    .unwrap();
+    let job_id = JobId::new("00000000-0000-4000-8000-000000009920").unwrap();
+    let execution = CanonicalExecutionJsonV1::new(
+        canonicalize_json_v1(&json!({
+            "command": "session.start",
+            "execution_version": 6,
+            "procedure": {"canonical": true}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    store
+        .admit(
+            binding.identity(),
+            AdmitRequestV1::new_with_canonical_execution(
+                DomainCommand::SessionStart,
+                IdempotencyKeyV1::new("reset-openability-codec").unwrap(),
+                job_id.clone(),
+                RevisionAttemptItemPreconditionsV1::new(None, None, None, None).unwrap(),
+                Sha256Digest::new(format!("sha256:{}", "a".repeat(64))).unwrap(),
+                UnixMillis::new(11),
+                execution,
+            )
+            .with_procedure_v2_execution()
+            .with_session_identity(AdmissionSessionIdentityV1::Absent),
+        )
+        .unwrap();
+    assert!(matches!(
+        store
+            .cancel_before_claim(
+                binding.identity(),
+                job_id.clone(),
+                Revision::new(1),
+                UnixMillis::new(12),
+            )
+            .unwrap(),
+        CancelOutcomeV1::Cancelled(_)
+    ));
+    drop(store);
+    podway_store::test_support::rewrite_terminal_as_noncanonical(&database_path, &job_id).unwrap();
+
+    let manager = Arc::new(runtime::manager(fixture.temporary_path()));
+    let authority = manager
+        .registered_reset_source_authority(support_phase4_workspace::selector(fixture.main()))
+        .expect("the exact binding must remain reset authority");
+    assert!(matches!(
+        authority.store_inspection(),
+        ResetStoreInspectionV1::Unreadable(podway_store::StoreErrorV1::StorageIntegrityV1 {
+            check: podway_store::StoreIntegrityCheckV1::InternalCodec
+        })
+    ));
+
+    let dispatcher = runtime::dispatcher(Arc::clone(&manager), "codec-reset-recovery");
+    let reset = runtime::request(
+        95_020,
+        "workspace.reset_all",
+        &selector_with_workspace(fixture.main(), old_workspace.clone()),
+        json!({
+            "confirmed": true,
+            "expected_workspace_uuid": old_workspace,
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+        "codec-reset-confirmed",
+        PreconditionsV1::default(),
+    );
+    let response = runtime::dispatch(&dispatcher, &reset);
+    let ResponseEnvelopeV2::OutputV2(output) = response else {
+        panic!(
+            "confirmed reset-all must replace a Store that fails full openability: {response:?}"
+        );
+    };
+    let new_workspace = output.workspace().unwrap().uuid().clone();
+    assert_eq!(output.command().as_str(), "workspace.reset_all");
+    assert_ne!(new_workspace, old_workspace);
+    assert!(
+        manager
+            .registry()
+            .load()
+            .unwrap()
+            .lookup(&old_workspace)
+            .is_none()
+    );
+    drop(dispatcher);
+    drop(manager);
+
+    let manager = Arc::new(runtime::manager(fixture.temporary_path()));
+    let reopened = manager
+        .resolve_existing(
+            support_phase4_workspace::selector(fixture.main()),
+            Some(&new_workspace),
+            runtime::observation(),
+        )
+        .expect("reset replacement must cold-reopen");
+    let binding = reopened.context_snapshot().binding().clone();
+    assert_eq!(binding.identity().workspace_uuid(), &new_workspace);
+    let authority = manager
+        .registered_reset_source_authority(support_phase4_workspace::selector(fixture.main()))
+        .expect("replacement binding must remain readable reset authority");
+    assert!(matches!(
+        authority.store_inspection(),
+        ResetStoreInspectionV1::Readable
+    ));
+    drop(reopened);
+    drop(manager);
+
+    let store = SqliteStoreV1::open(
+        &database_path,
+        binding.last_validated_root(),
+        binding.identity().clone(),
+        SqliteStoreOptionsV1::new(8).unwrap(),
+        UnixMillis::new(13),
+    )
+    .expect("replacement Store must open normally");
+    assert!(
+        store
+            .read_job(binding.identity(), &job_id)
+            .unwrap()
+            .is_none(),
+        "reset replacement must not retain the corrupted predecessor job"
+    );
 }
 
 #[test]

@@ -30,9 +30,51 @@ const MAXIMUM_IN_FLIGHT_CONNECTIONS_V1: usize = 64;
 
 fn main() {
     if let Err(error) = run() {
-        eprintln!("{error}");
+        write_bootstrap_event(
+            "failed",
+            None,
+            "process",
+            Some("startup_failure"),
+            Some(&error.to_string()),
+        );
         process::exit(1);
     }
+}
+
+fn write_bootstrap_event(
+    outcome: &'static str,
+    daemon_id: Option<&str>,
+    stage: &'static str,
+    error_kind: Option<&'static str>,
+    message: Option<&str>,
+) {
+    let timestamp = daemon_id.map(|_| {
+        SystemResponseMetadataSourceV1::default()
+            .generated_at()
+            .into_inner()
+    });
+    eprintln!(
+        "{}",
+        serde_json::json!({
+            "schema": "podway.daemon-bootstrap-log/v1",
+            "ts": timestamp,
+            "daemon_id": daemon_id,
+            "seq": 0,
+            "operation": "daemon_bootstrap",
+            "outcome": outcome,
+            "command": null,
+            "workspace_uuid": null,
+            "session_id": null,
+            "request_id": null,
+            "job_id": null,
+            "stage": stage,
+            "error_kind": error_kind,
+            "integrity_check": null,
+            "reason": null,
+            "diagnostic_id": null,
+            "message": message,
+        })
+    );
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -141,6 +183,8 @@ fn run_service(
         paths.socket_path().as_path(),
         paths.socket_path().as_path(),
     )?;
+    let daemon_id = process_identity.process_id().as_str().to_owned();
+    write_bootstrap_event("succeeded", Some(&daemon_id), "process", None, None);
     let mut configuration = ProductionDaemonRuntimeConfigV1::new(
         WorkerIdV1::new(format!("podwayd-{}", process::id()))?,
         NonZeroUsize::new(MAXIMUM_IN_FLIGHT_CONNECTIONS_V1)
@@ -171,7 +215,7 @@ fn run_service(
     let signal_control = signals.handle();
     let clock = Arc::new(SystemClockV1);
     let observability = match RotatingFileSinkV1::open(paths.log_path().as_path()) {
-        Ok(sink) => ObservabilityV1::start(Arc::new(sink), clock.clone()),
+        Ok(sink) => ObservabilityV1::start_with_daemon_id(Arc::new(sink), clock.clone(), daemon_id),
         Err(_) => ObservabilityV1::start_degraded(clock),
     };
     let runtime = match ProductionDaemonRuntimeV1::bind_with_observability(

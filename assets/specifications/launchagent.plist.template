@@ -34,9 +34,9 @@
   <string>Background</string>
 
   <key>StandardOutPath</key>
-  <string>__PODWAYD_LOG_PATH__</string>
+  <string>__PODWAYD_BOOTSTRAP_LOG_PATH__</string>
 
   <key>StandardErrorPath</key>
-  <string>__PODWAYD_LOG_PATH__</string>
+  <string>__PODWAYD_BOOTSTRAP_LOG_PATH__</string>
 </dict>
 </plist>

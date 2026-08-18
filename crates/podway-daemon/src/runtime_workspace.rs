@@ -1800,12 +1800,25 @@ impl WorkspaceRuntimeManagerV1 {
                     if resolved.store_identity().workspace_uuid()
                         == marker.previous_workspace_uuid() =>
                 {
-                    (
-                        registered,
-                        resolved.store_identity().clone(),
-                        Some(resolved.store_identity().clone()),
-                        ResetStoreInspectionV1::Readable,
-                    )
+                    let identity = resolved.store_identity().clone();
+                    match SqliteStoreV1::inspect_existing_openability(
+                        reset.database_path(),
+                        &identity,
+                        &self.inspection_options,
+                    ) {
+                        Ok(()) => (
+                            registered,
+                            identity.clone(),
+                            Some(identity),
+                            ResetStoreInspectionV1::Readable,
+                        ),
+                        Err(error) => (
+                            registered,
+                            identity,
+                            None,
+                            ResetStoreInspectionV1::Unreadable(error),
+                        ),
+                    }
                 }
                 Ok(resolved)
                     if resolved.store_identity().workspace_uuid()
@@ -1910,12 +1923,24 @@ impl WorkspaceRuntimeManagerV1 {
             }
             let routing_identity = binding.identity().clone();
             match self.resolver.resolve_existing(selector, Some(&registered)) {
-                Ok(resolved) => (
-                    registered,
-                    routing_identity,
-                    Some(resolved.store_identity().clone()),
-                    ResetStoreInspectionV1::Readable,
-                ),
+                Ok(resolved) => match SqliteStoreV1::inspect_existing_openability(
+                    reset.database_path(),
+                    resolved.store_identity(),
+                    &self.inspection_options,
+                ) {
+                    Ok(()) => (
+                        registered,
+                        routing_identity,
+                        Some(resolved.store_identity().clone()),
+                        ResetStoreInspectionV1::Readable,
+                    ),
+                    Err(error) => (
+                        registered,
+                        routing_identity,
+                        None,
+                        ResetStoreInspectionV1::Unreadable(error),
+                    ),
+                },
                 Err(WorkspaceResolutionErrorV1::ExistingBindingMissing) => {
                     return Err(WorkspaceRuntimeErrorV1::ResetSourceAmbiguous);
                 }

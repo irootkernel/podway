@@ -185,49 +185,36 @@ pub(crate) fn open_or_initialize_with_temporary_cleanup_arm_v1(
     validate_existing_database_path_v1(&path)?;
     apply_connection_pragmas_v1(&connection, options.busy_timeout_ms())?;
 
-    match read_user_version_v1(&connection)? {
-        0 => {
-            if user_schema_object_count_v1(&connection)? != 0 {
-                return Err(integrity_error(
-                    StoreIntegrityCheckV1::RequiredSchemaObjects,
-                ));
-            }
-            if let Some(
-                failpoint @ (StoreFailpointV1::SchemaAfterPragmas
-                | StoreFailpointV1::SchemaAfterPragmasAndTemporaryCleanup),
-            ) = options.failpoint()
+    let schema_version = read_user_version_v1(&connection)?;
+    if schema_version == 0 {
+        if user_schema_object_count_v1(&connection)? != 0 {
+            return Err(integrity_error(
+                StoreIntegrityCheckV1::RequiredSchemaObjects,
+            ));
+        }
+        if let Some(
+            failpoint @ (StoreFailpointV1::SchemaAfterPragmas
+            | StoreFailpointV1::SchemaAfterPragmasAndTemporaryCleanup),
+        ) = options.failpoint()
+        {
+            if let (StoreFailpointV1::SchemaAfterPragmasAndTemporaryCleanup, Some(armed)) =
+                (failpoint, temporary_cleanup_armed)
             {
-                if let (StoreFailpointV1::SchemaAfterPragmasAndTemporaryCleanup, Some(armed)) =
-                    (failpoint, temporary_cleanup_armed)
-                {
-                    *armed = true;
-                }
-                options.trigger_failpoint(failpoint)?;
+                *armed = true;
             }
-            run_schema_migration_v1(&mut connection, |connection| {
-                initialize_empty_schema_v1(connection, root, identity, options, now)
-            })?;
+            options.trigger_failpoint(failpoint)?;
         }
-        SQLITE_SCHEMA_VERSION_V1 => run_schema_migration_v1(&mut connection, |connection| {
-            migrate_schema_v1_to_v5(connection, identity, options, now)
-        })?,
-        SQLITE_SCHEMA_VERSION_V2 => run_schema_migration_v1(&mut connection, |connection| {
-            migrate_schema_v2_to_v5(connection, identity, options, now)
-        })?,
-        SQLITE_SCHEMA_VERSION_V3 => run_schema_migration_v1(&mut connection, |connection| {
-            migrate_schema_v3_to_v5(connection, identity, options, now)
-        })?,
-        SQLITE_SCHEMA_VERSION_V4 => run_schema_migration_v1(&mut connection, |connection| {
-            migrate_schema_v4_to_v5(connection, identity, options, now)
-        })?,
-        SQLITE_SCHEMA_VERSION_V5 => {}
-        found if found > SQLITE_SCHEMA_VERSION_CURRENT => {
-            return Err(StoreErrorV1::NewerStateV1 {
-                found_schema_version: found,
-                supported_schema_version: SQLITE_SCHEMA_VERSION_CURRENT,
-            });
-        }
-        _ => return Err(integrity_error(StoreIntegrityCheckV1::SchemaVersion)),
+        run_schema_migration_v1(&mut connection, |connection| {
+            initialize_empty_schema_v1(connection, root, identity, options, now)
+        })?;
+    } else {
+        migrate_existing_schema_to_current_v1(
+            &mut connection,
+            schema_version,
+            identity,
+            options,
+            now,
+        )?;
     }
 
     let _report = verify_integrity_connection_v1(
@@ -245,6 +232,38 @@ pub(crate) fn open_or_initialize_with_temporary_cleanup_arm_v1(
     }
     validate_existing_database_path_v1(&path)?;
     Ok(connection)
+}
+
+fn migrate_existing_schema_to_current_v1(
+    connection: &mut Connection,
+    schema_version: u32,
+    identity: &DurableWorktreeIdentityV1,
+    options: &SqliteStoreOptionsV1,
+    now: EpochMillisV1,
+) -> Result<(), StoreErrorV1> {
+    match schema_version {
+        SQLITE_SCHEMA_VERSION_V1 => run_schema_migration_v1(connection, |connection| {
+            migrate_schema_v1_to_v5(connection, identity, options, now)
+        })?,
+        SQLITE_SCHEMA_VERSION_V2 => run_schema_migration_v1(connection, |connection| {
+            migrate_schema_v2_to_v5(connection, identity, options, now)
+        })?,
+        SQLITE_SCHEMA_VERSION_V3 => run_schema_migration_v1(connection, |connection| {
+            migrate_schema_v3_to_v5(connection, identity, options, now)
+        })?,
+        SQLITE_SCHEMA_VERSION_V4 => run_schema_migration_v1(connection, |connection| {
+            migrate_schema_v4_to_v5(connection, identity, options, now)
+        })?,
+        SQLITE_SCHEMA_VERSION_V5 => {}
+        found if found > SQLITE_SCHEMA_VERSION_CURRENT => {
+            return Err(StoreErrorV1::NewerStateV1 {
+                found_schema_version: found,
+                supported_schema_version: SQLITE_SCHEMA_VERSION_CURRENT,
+            });
+        }
+        _ => return Err(integrity_error(StoreIntegrityCheckV1::SchemaVersion)),
+    }
+    Ok(())
 }
 
 /// Applies the required SQLite durability and safety pragmas and verifies their exact values.
@@ -407,6 +426,15 @@ pub(crate) fn verify_binding_inspection_identity_v1(
     Ok(())
 }
 
+pub(crate) fn verify_reset_binding_inspection_identity_v1(
+    connection: &Connection,
+    expected_identity: &DurableWorktreeIdentityV1,
+    options: &SqliteStoreOptionsV1,
+) -> Result<(), StoreErrorV1> {
+    verify_connection_pragmas_v1(connection, options.busy_timeout_ms())?;
+    verify_workspace_identity_v1(connection, expected_identity)
+}
+
 /// Inspects an existing database through a disposable byte-for-byte clone.
 ///
 /// Bound integrity inspection finalizes a proven Store-owned interrupted publication before cloning.
@@ -480,6 +508,35 @@ pub(crate) fn inspect_database_snapshot_unbound_v1<T>(
     .map_err(storage_error)?;
     apply_inspection_pragmas_v1(&connection, options.busy_timeout_ms())?;
     inspect(&mut connection)
+}
+
+pub(crate) fn inspect_existing_store_openability_v1(
+    path: &Path,
+    expected_identity: &DurableWorktreeIdentityV1,
+    options: &SqliteStoreOptionsV1,
+) -> Result<(), StoreErrorV1> {
+    inspect_database_snapshot_unbound_v1(path, options, |connection| {
+        connection
+            .pragma_update(None, "query_only", "OFF")
+            .map_err(storage_error)?;
+        apply_connection_pragmas_v1(connection, options.busy_timeout_ms())?;
+        let schema_version = read_user_version_v1(connection)?;
+        migrate_existing_schema_to_current_v1(
+            connection,
+            schema_version,
+            expected_identity,
+            options,
+            EpochMillisV1::new(0),
+        )?;
+        verify_integrity_connection_v1(
+            connection,
+            expected_identity,
+            options,
+            IntegrityModeV1::Fast,
+            EpochMillisV1::new(0),
+        )?;
+        Ok(())
+    })
 }
 /// Verifies an already-configured disposable inspection connection without changing its pragmas.
 pub(crate) fn verify_inspection_integrity_connection_v1(
@@ -1570,6 +1627,7 @@ fn migrate_schema_v4_to_v5(
         .map_err(storage_error)?;
     verify_migration_predecessor_v1(&transaction, SQLITE_SCHEMA_VERSION_V4)?;
     verify_v2_graph_state_connection_v2(&transaction)?;
+    normalize_schema_v3_terminal_receipts_v1(&transaction)?;
     apply_schema_v5_migration_v1(
         &transaction,
         sqlite_integer_v1(now.get(), "migration timestamp")?,

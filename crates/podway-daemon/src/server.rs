@@ -730,10 +730,12 @@ where
         if request.client().product() != identity.product()
             || request.client().contract_manifest_digest() != identity.contract_manifest_digest()
         {
-            emit_observation(
+            emit_correlated_observation(
                 &self.observability,
                 EventOperationV1::TransportServiceRequest,
                 EventOutcomeV1::Rejected,
+                Some(&request),
+                None,
             );
             let response = self.contract_mismatch_response(&request)?;
             return self.write_response(&mut connection, &response);
@@ -747,10 +749,12 @@ where
                 );
             }
             let Some(process_identity) = self.process_identity.as_ref() else {
-                emit_observation(
+                emit_correlated_observation(
                     &self.observability,
                     EventOperationV1::ServiceDispatch,
                     EventOutcomeV1::Failed,
+                    Some(&request),
+                    None,
                 );
                 return self.write_transport_error(
                     &mut connection,
@@ -759,10 +763,12 @@ where
                 );
             };
             let response = self.daemon_status_response(&request, process_identity)?;
-            emit_observation(
+            emit_correlated_observation(
                 &self.observability,
                 EventOperationV1::ServiceDispatch,
                 EventOutcomeV1::Succeeded,
+                Some(&request),
+                Some(&response),
             );
             return self.write_response(&mut connection, &response);
         }
@@ -785,10 +791,12 @@ where
         let daemon_request = match DaemonRequestV1::from_envelope(&request) {
             Ok(daemon_request) => daemon_request,
             Err(_) => {
-                emit_observation(
+                emit_correlated_observation(
                     &self.observability,
                     EventOperationV1::TransportServiceRequest,
                     EventOutcomeV1::Rejected,
+                    Some(&request),
+                    None,
                 );
                 return self.write_transport_error(
                     &mut connection,
@@ -803,10 +811,12 @@ where
             let payload = match encode_response_payload_v2(&response) {
                 Ok(payload) => payload,
                 Err(_) => {
-                    emit_observation(
+                    emit_correlated_observation(
                         &self.observability,
                         EventOperationV1::ServiceDispatch,
                         EventOutcomeV1::Failed,
+                        Some(&request),
+                        Some(&response),
                     );
                     let response =
                         self.invalid_dispatcher_response(RequestContextV1::from_request(&request))?;
@@ -814,21 +824,25 @@ where
                     return Err(ServerConnectionErrorV1::InvalidDispatcherResponse);
                 }
             };
-            emit_observation(
+            emit_correlated_observation(
                 &self.observability,
                 EventOperationV1::ServiceDispatch,
                 match &response {
                     ResponseEnvelopeV2::OutputV2(_) => EventOutcomeV1::Succeeded,
                     ResponseEnvelopeV2::Error(_) => EventOutcomeV1::Rejected,
                 },
+                Some(&request),
+                Some(&response),
             );
-            return self.write_encoded_response(&mut connection, &payload);
+            return self.write_encoded_response(&mut connection, &payload, Some(&response));
         }
 
-        emit_observation(
+        emit_correlated_observation(
             &self.observability,
             EventOperationV1::ServiceDispatch,
             EventOutcomeV1::Failed,
+            Some(&request),
+            Some(&response),
         );
         let response =
             self.invalid_dispatcher_response(RequestContextV1::from_request(&request))?;
@@ -1102,20 +1116,23 @@ where
         response: &ResponseEnvelopeV2,
     ) -> Result<(), ServerConnectionErrorV1> {
         let payload = encode_response_payload_v2(response).map_err(|error| {
-            emit_observation(
+            emit_correlated_observation(
                 &self.observability,
                 EventOperationV1::ResponseWrite,
                 EventOutcomeV1::Failed,
+                None,
+                Some(response),
             );
             ServerConnectionErrorV1::ResponseEncode(error)
         })?;
-        self.write_encoded_response(connection, &payload)
+        self.write_encoded_response(connection, &payload, Some(response))
     }
 
     fn write_encoded_response(
         &self,
         connection: &mut UnixStream,
         payload: &[u8],
+        response: Option<&ResponseEnvelopeV2>,
     ) -> Result<(), ServerConnectionErrorV1> {
         let result = (|| {
             write_frame_v1(connection, payload).map_err(ServerConnectionErrorV1::ResponseWrite)?;
@@ -1124,10 +1141,12 @@ where
                 .map_err(ServerConnectionErrorV1::ResponseFlush)
         })();
         if result.is_err() {
-            emit_observation(
+            emit_correlated_observation(
                 &self.observability,
                 EventOperationV1::ResponseWrite,
                 EventOutcomeV1::Failed,
+                None,
+                response,
             );
         }
         result
@@ -1285,6 +1304,58 @@ fn emit_observation(
     if let Some(observability) = observability {
         observability.emit(EventRecordV1::new(operation, outcome));
     }
+}
+
+fn emit_correlated_observation(
+    observability: &Option<ObservabilityEmitterV1>,
+    operation: EventOperationV1,
+    outcome: EventOutcomeV1,
+    request: Option<&RequestEnvelopeV1>,
+    response: Option<&ResponseEnvelopeV2>,
+) {
+    let Some(observability) = observability else {
+        return;
+    };
+    let mut event = EventRecordV1::new(operation, outcome);
+    if let Some(request) = request {
+        event = event
+            .with_command(request.command().as_str())
+            .with_request_id(request.request_id());
+        if let Some(session_id) = request.preconditions().session_id() {
+            event = event.with_session_id(session_id);
+        }
+    }
+    if let Some(response) = response {
+        event = match response {
+            ResponseEnvelopeV2::OutputV2(output) => {
+                let mut event = event
+                    .with_command(output.command().as_str())
+                    .with_request_id(output.request_id());
+                if let Some(workspace) = output.workspace() {
+                    event = event.with_workspace_uuid(workspace.uuid());
+                }
+                if let Some(session) = output.session() {
+                    event = event.with_session_id(session.id());
+                }
+                if let Some(job) = output.job() {
+                    event = event.with_job_id(job.id());
+                }
+                event
+            }
+            ResponseEnvelopeV2::Error(error) => {
+                let mut event = event
+                    .with_command(error.command().as_str())
+                    .with_request_id(error.request_id());
+                if let Some(diagnostic_id) =
+                    error.details().get("diagnostic_id").and_then(Value::as_str)
+                {
+                    event = event.with_diagnostic_id(diagnostic_id);
+                }
+                event
+            }
+        };
+    }
+    observability.emit(event);
 }
 /// Failures that invalidate the admission invariant.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

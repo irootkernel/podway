@@ -26,13 +26,27 @@ Default macOS directory:
 The directory is derived from the effective OS account and does not use ambient
 home-directory environment variables.
 
-Each record is one structured line with exactly three fields:
+Each record is one JSON object followed by a newline. Every record has the same
+keys:
 
-```text
-ts=<seconds> operation=<name> outcome=<name>
+```json
+{"schema":"podway.daemon-log/v1","ts":1700000000123,"daemon_id":"...","seq":42,"operation":"integrity_check","outcome":"failed","command":null,"workspace_uuid":"...","session_id":null,"request_id":null,"job_id":null,"stage":"store_open","error_kind":"storage_integrity","integrity_check":"internal_codec","reason":"integrity_validation_failed","diagnostic_id":null}
 ```
 
-Operation and outcome are closed internal categories. The record cannot carry task titles, item values, artifact locations, procedure content, or full requests.
+`ts` is UTC Unix milliseconds. `daemon_id` identifies one daemon lifetime and
+`seq` is assigned when an event is emitted. Sequence gaps reveal dropped events;
+records from one lifetime are ordered by `seq`. Correlation keys are always
+present and use `null` when the operation has no corresponding identity.
+Request correlation is attached after typed envelope decoding. Workspace,
+session, and job correlation uses the durable identity available at the owning
+runtime boundary or the validated response projection; events emitted before
+that boundary retain `null` rather than copying workspace paths or arbitrary
+payload fields.
+
+Operation, outcome, stage, error kind, integrity check, and reason are closed
+internal categories. Records cannot carry task titles, item values, artifact
+locations, procedure content, full requests, idempotency keys, filesystem paths,
+or raw error source chains.
 
 ## Queueing and configuration
 
@@ -42,17 +56,21 @@ Podway v0.1.0 has no log levels, filtering, or runtime log configuration.
 
 ## Rotation
 
-Default rotation:
+Default structured-log rotation:
 
-- 10 MiB maximum active file;
-- 5 rotated files;
+- 1 MiB maximum per file;
+- 10 files total (`podwayd.log` plus `.1` through `.9`);
 - atomic rename and reopen;
 - no compression requirement;
 - oldest file removed first.
 
 A logging failure must not corrupt task state. Sink failures and dropped records are accounted internally; daemon status has no logging-warning field.
 
-The LaunchAgent also directs standard output and standard error to `podwayd.log`, so launchd and the rotating sink can hold separate descriptors for that path. After rotation, launchd-originated output may continue in an older file until the service restarts; v0.1.0 has no separate bootstrap log.
+The LaunchAgent directs standard output and standard error to the separate
+`podwayd-bootstrap.log` stream. Bootstrap records are JSON Lines and use a 1 MiB
+per-file limit with 5 files total (`podwayd-bootstrap.log` plus `.1` through
+`.4`). The daemon's rotating structured sink is the only writer to `podwayd.log`,
+so launchd never retains a descriptor to a rotated structured-log file.
 
 ## Daemon status
 
@@ -125,7 +143,9 @@ Entries contain summaries and IDs, not item values. The journal has no public lo
 
 ## Diagnostic IDs
 
-Unexpected internal errors generate an opaque diagnostic UUID in the public error details. The three-field event log does not carry diagnostic IDs or internal source-chain text in v0.1.0.
+The fixed log schema includes `diagnostic_id`; an originating boundary that has
+an opaque diagnostic UUID copies it into the corresponding record. Logs retain
+typed failure categories, not raw internal source-chain text.
 
 ## Doctor output
 

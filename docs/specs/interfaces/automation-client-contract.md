@@ -63,7 +63,7 @@ and treats stable IDs and structured fields rather than text as the interface.
 | ID | Normative requirement |
 |---|---|
 | `AUT-HOME-001` | PODWAY_HOME MUST resolve from the effective operating-system account home and MUST NOT require `HOME`, `TMPDIR`, or `XDG_*`. |
-| `AUT-HOME-002` | The user-global layout MUST be `run/{podwayd.sock,podwayd.lock}`, `state/{service.json,workspaces.json}`, and `logs/podwayd.log` below PODWAY_HOME. |
+| `AUT-HOME-002` | The user-global layout MUST be `run/{podwayd.sock,podwayd.lock}`, `state/{service.json,workspaces.json}`, and `logs/{podwayd.log,podwayd-bootstrap.log}` below PODWAY_HOME. |
 | `AUT-HOME-003` | The LaunchAgent plist MUST remain under the effective user's `Library/LaunchAgents/dev.podway.podwayd.plist`. |
 
 ## 9. Worktree-local state boundary (AUT-HOME-004)

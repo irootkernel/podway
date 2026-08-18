@@ -16,11 +16,13 @@ use podway_service::{
     DaemonContractVerifierV1, FixedServiceClockV1, InstallSpecV1, LaunchctlOutputV1,
     LaunchctlRunnerV1, LocalPlatformPathV1, LogLocationV1, LogQueryV1,
     MacosServiceCommandRunnerV1 as ProductionMacosServiceCommandRunnerV1, PodwayHomeV1,
-    RecordingServiceCommandRunnerV1, RecordingServiceManagerV1, SERVICE_METADATA_MAX_BYTES_V1,
-    ServiceClockV1, ServiceCommandResultV1, ServiceCommandRunnerV1, ServiceCommandV1,
-    ServiceErrorV1, ServiceFilesystemErrorV1, ServiceFilesystemV1, ServiceLogStreamV1,
-    ServiceManagerContractV1, ServiceOperationV1, ServiceOutcomeV1, ServicePathErrorV1,
-    ServiceRunningV1, ServiceRuntimePathsV1, ServiceStatusV1, ServiceStoppedV1, UninstallOptionsV1,
+    RecordingServiceCommandRunnerV1, RecordingServiceManagerV1, SERVICE_BOOTSTRAP_LOG_MAX_BYTES_V1,
+    SERVICE_BOOTSTRAP_LOG_RETAINED_FILES_V1, SERVICE_LOG_MAX_BYTES_V1,
+    SERVICE_LOG_RETAINED_FILES_V1, SERVICE_METADATA_MAX_BYTES_V1, ServiceClockV1,
+    ServiceCommandResultV1, ServiceCommandRunnerV1, ServiceCommandV1, ServiceErrorV1,
+    ServiceFilesystemErrorV1, ServiceFilesystemV1, ServiceLogStreamV1, ServiceManagerContractV1,
+    ServiceOperationV1, ServiceOutcomeV1, ServicePathErrorV1, ServiceRunningV1,
+    ServiceRuntimePathsV1, ServiceStatusV1, ServiceStoppedV1, UninstallOptionsV1,
     install_socket_path_from_metadata_v1, installed_socket_path_from_metadata_v1,
 };
 
@@ -147,6 +149,10 @@ fn arc_008_service_v1_exposes_exact_global_runtime_paths() {
     assert_eq!(
         paths.log_path().as_path(),
         std::path::Path::new("/Users/podway/.podway/logs/podwayd.log")
+    );
+    assert_eq!(
+        paths.bootstrap_log_path().as_path(),
+        std::path::Path::new("/Users/podway/.podway/logs/podwayd-bootstrap.log")
     );
     assert_eq!(
         paths.runtime_directory().as_path(),
@@ -841,8 +847,16 @@ impl ServiceFilesystemV1 for Phase6Filesystem {
         Ok(())
     }
 
-    fn rotate_file(&self, path: &Path, _: u64, _: u8) -> Result<(), ServiceFilesystemErrorV1> {
-        self.record(format!("rotate:{}", path.display()));
+    fn rotate_file(
+        &self,
+        path: &Path,
+        maximum_bytes: u64,
+        retained_rotations: u8,
+    ) -> Result<(), ServiceFilesystemErrorV1> {
+        self.record(format!(
+            "rotate:{}:{maximum_bytes}:{retained_rotations}",
+            path.display()
+        ));
         Ok(())
     }
 }
@@ -1078,8 +1092,8 @@ fn phase6_install_emits_complete_authenticated_plist_for_xml_sensitive_paths() {
             .replace('"', "&quot;")
             .replace('\'', "&apos;")
     };
-    let escaped_log = xml_escape(paths.log_path().as_path());
-    assert!(plist.contains(&format!("<string>{escaped_log}</string>")));
+    let escaped_bootstrap_log = xml_escape(paths.bootstrap_log_path().as_path());
+    assert!(plist.contains(&format!("<string>{escaped_bootstrap_log}</string>")));
     assert!(plist.contains("<key>Label</key>\n  <string>dev.podway.podwayd</string>"));
     assert!(plist.contains("<key>RunAtLoad</key>\n  <true/>"));
     assert!(
@@ -1091,10 +1105,10 @@ fn phase6_install_emits_complete_authenticated_plist_for_xml_sensitive_paths() {
     assert!(plist.contains("<key>ProcessType</key>\n  <string>Background</string>"));
     assert_eq!(
         plist
-            .match_indices(&format!("<string>{escaped_log}</string>"))
+            .match_indices(&format!("<string>{escaped_bootstrap_log}</string>"))
             .count(),
         2,
-        "both standard output and error paths must use the escaped log path"
+        "both standard output and error paths must use the escaped bootstrap log path"
     );
 
     let receipt: serde_json::Value = serde_json::from_slice(
@@ -1141,7 +1155,7 @@ fn phase6_install_emits_complete_authenticated_plist_for_xml_sensitive_paths() {
         .replace("__PODWAYD_SHA256__", daemon_identity)
         .replace("__PODWAYD_ABSOLUTE_PATH__", &escaped_installed_binary)
         .replace("__PODWAYD_SOCKET_PATH__", &escaped_socket)
-        .replace("__PODWAYD_LOG_PATH__", &escaped_log);
+        .replace("__PODWAYD_BOOTSTRAP_LOG_PATH__", &escaped_bootstrap_log);
     assert_eq!(
         plist, expected_plist,
         "the reference template keys and static values must exactly match installed output"
@@ -1174,6 +1188,24 @@ fn phase6_install_orders_atomic_plist_bootstrap_and_metadata() {
         ))
     ));
     let events = filesystem.events.lock().expect("test lock").clone();
+    assert!(events.iter().any(|event| {
+        event
+            == &format!(
+                "rotate:{}:{}:{}",
+                service_paths().log_path().as_path().display(),
+                SERVICE_LOG_MAX_BYTES_V1,
+                SERVICE_LOG_RETAINED_FILES_V1 - 1
+            )
+    }));
+    assert!(events.iter().any(|event| {
+        event
+            == &format!(
+                "rotate:{}:{}:{}",
+                service_paths().bootstrap_log_path().as_path().display(),
+                SERVICE_BOOTSTRAP_LOG_MAX_BYTES_V1,
+                SERVICE_BOOTSTRAP_LOG_RETAINED_FILES_V1 - 1
+            )
+    }));
     let plist = service_paths()
         .launch_agent_path()
         .as_path()
@@ -2035,6 +2067,7 @@ fn phase6_uninstall_preserves_registry_and_logs_unless_purge_is_explicit() {
         service_paths().global_lock_path().as_path(),
         service_paths().workspace_registry_path().as_path(),
         service_paths().log_path().as_path(),
+        service_paths().bootstrap_log_path().as_path(),
     ] {
         filesystem
             .files
@@ -2042,11 +2075,20 @@ fn phase6_uninstall_preserves_registry_and_logs_unless_purge_is_explicit() {
             .expect("test lock")
             .insert(path.to_path_buf(), Vec::new());
     }
-    for index in 1..=5 {
+    for index in 1..10 {
         filesystem.files.lock().expect("test lock").insert(
             PathBuf::from(format!(
                 "{}.{index}",
                 service_paths().log_path().as_path().display()
+            )),
+            Vec::new(),
+        );
+    }
+    for index in 1..5 {
+        filesystem.files.lock().expect("test lock").insert(
+            PathBuf::from(format!(
+                "{}.{index}",
+                service_paths().bootstrap_log_path().as_path().display()
             )),
             Vec::new(),
         );
@@ -2063,6 +2105,7 @@ fn phase6_uninstall_preserves_registry_and_logs_unless_purge_is_explicit() {
     let files = filesystem.files.lock().expect("test lock");
     assert!(files.contains_key(service_paths().workspace_registry_path().as_path()));
     assert!(files.contains_key(service_paths().log_path().as_path()));
+    assert!(files.contains_key(service_paths().bootstrap_log_path().as_path()));
     drop(files);
     assert!(matches!(
         runner.run(ServiceCommandV1::UninstallWithOptions {
@@ -2078,12 +2121,29 @@ fn phase6_uninstall_preserves_registry_and_logs_unless_purge_is_explicit() {
     assert!(events.iter().any(|event| {
         event == &format!("remove:{}", service_paths().log_path().as_path().display())
     }));
-    for index in 1..=5 {
+    for index in 1..10 {
         assert!(events.iter().any(|event| {
             event
                 == &format!(
                     "remove:{}.{}",
                     service_paths().log_path().as_path().display(),
+                    index
+                )
+        }));
+    }
+    assert!(events.iter().any(|event| {
+        event
+            == &format!(
+                "remove:{}",
+                service_paths().bootstrap_log_path().as_path().display()
+            )
+    }));
+    for index in 1..5 {
+        assert!(events.iter().any(|event| {
+            event
+                == &format!(
+                    "remove:{}.{}",
+                    service_paths().bootstrap_log_path().as_path().display(),
                     index
                 )
         }));

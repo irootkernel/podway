@@ -232,3 +232,74 @@ pub fn rewrite_start_terminal_as_legacy(
     }
     transaction.commit().map_err(|error| error.to_string())
 }
+
+/// Rewrites one reset terminal receipt to the released pre-mode shape in both durable copies.
+pub fn rewrite_reset_terminal_without_mode(
+    database_path: &Path,
+    job_id: &JobId,
+) -> Result<(), String> {
+    let mut connection = Connection::open(database_path).map_err(|error| error.to_string())?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
+    let encoded: String = transaction
+        .query_row(
+            "SELECT terminal_response_json FROM jobs WHERE job_id = ?1",
+            [job_id.as_str()],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    let mut released: Value = serde_json::from_str(&encoded).map_err(|error| error.to_string())?;
+    released
+        .get_mut("graph_session_projection")
+        .and_then(Value::as_object_mut)
+        .and_then(|projection| projection.get_mut("operation"))
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| "reset terminal operation must be an object".to_owned())?
+        .remove("mode");
+    let released =
+        podway_core::canonicalize_json_v1(&released).map_err(|error| error.to_string())?;
+    for table in ["jobs", "idempotency_records"] {
+        let statement = format!("UPDATE {table} SET terminal_response_json = ?1 WHERE job_id = ?2");
+        let changed = transaction
+            .execute(&statement, params![released.as_str(), job_id.as_str()])
+            .map_err(|error| error.to_string())?;
+        if changed != 1 {
+            return Err(format!(
+                "expected one {table} reset terminal receipt, changed {changed}"
+            ));
+        }
+    }
+    transaction.commit().map_err(|error| error.to_string())
+}
+
+/// Makes both durable copies of one terminal receipt valid JSON but non-canonical.
+pub fn rewrite_terminal_as_noncanonical(
+    database_path: &Path,
+    job_id: &JobId,
+) -> Result<(), String> {
+    let mut connection = Connection::open(database_path).map_err(|error| error.to_string())?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
+    let encoded: String = transaction
+        .query_row(
+            "SELECT terminal_response_json FROM jobs WHERE job_id = ?1",
+            [job_id.as_str()],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    let noncanonical = format!("{encoded} ");
+    for table in ["jobs", "idempotency_records"] {
+        let statement = format!("UPDATE {table} SET terminal_response_json = ?1 WHERE job_id = ?2");
+        let changed = transaction
+            .execute(&statement, params![noncanonical.as_str(), job_id.as_str()])
+            .map_err(|error| error.to_string())?;
+        if changed != 1 {
+            return Err(format!(
+                "expected one {table} terminal receipt, changed {changed}"
+            ));
+        }
+    }
+    transaction.commit().map_err(|error| error.to_string())
+}

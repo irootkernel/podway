@@ -115,6 +115,17 @@ fn query_status(socket: &Path) -> Value {
     }
 }
 
+fn bootstrap_event(stderr: &[u8]) -> Value {
+    let stderr = String::from_utf8_lossy(stderr);
+    let lines = stderr.lines().collect::<Vec<_>>();
+    assert_eq!(
+        lines.len(),
+        1,
+        "bootstrap stderr must contain one JSONL record"
+    );
+    serde_json::from_str(lines[0]).expect("bootstrap stderr must be valid JSON")
+}
+
 #[test]
 fn podwayd_sigterm_drains_and_removes_its_owned_socket() {
     let fixture = ProcessFixtureV1::new();
@@ -149,6 +160,14 @@ fn podwayd_sigterm_drains_and_removes_its_owned_socket() {
         !socket.exists(),
         "graceful shutdown must remove only the socket owned by this process"
     );
+    let startup = bootstrap_event(&output.stderr);
+    assert_eq!(startup["schema"], "podway.daemon-bootstrap-log/v1");
+    assert_eq!(startup["operation"], "daemon_bootstrap");
+    assert_eq!(startup["outcome"], "succeeded");
+    assert!(startup["ts"].as_str().is_some());
+    assert!(startup["daemon_id"].as_str().is_some());
+    assert_eq!(startup["seq"], 0);
+    assert!(startup["session_id"].is_null());
 }
 
 #[test]
@@ -307,12 +326,30 @@ fn podwayd_service_and_version_modes_are_explicit() {
         serde_json::json!(["podway.ipc/v1"])
     );
 
-    let invalid = Command::new(env!("CARGO_BIN_EXE_podwayd"))
-        .arg("--unknown")
-        .output()
-        .expect("podwayd invalid-argument process must run");
+    let run_invalid = || {
+        Command::new(env!("CARGO_BIN_EXE_podwayd"))
+            .arg("--unknown")
+            .output()
+            .expect("podwayd invalid-argument process must run")
+    };
+    let invalid = run_invalid();
+    let invalid_again = run_invalid();
     assert!(!invalid.status.success());
-    assert!(String::from_utf8_lossy(&invalid.stderr).contains("usage: podwayd"));
+    assert!(!invalid_again.status.success());
+    assert_eq!(invalid.stderr, invalid_again.stderr);
+    let fatal = bootstrap_event(&invalid.stderr);
+    assert_eq!(fatal["schema"], "podway.daemon-bootstrap-log/v1");
+    assert_eq!(fatal["operation"], "daemon_bootstrap");
+    assert_eq!(fatal["outcome"], "failed");
+    assert!(fatal["ts"].is_null());
+    assert!(fatal["daemon_id"].is_null());
+    assert_eq!(fatal["seq"], 0);
+    assert!(
+        fatal["message"]
+            .as_str()
+            .unwrap()
+            .contains("usage: podwayd")
+    );
 
     let relative_socket = Command::new(env!("CARGO_BIN_EXE_podwayd"))
         .args(["--service", "--socket", "relative.sock"])
@@ -321,5 +358,10 @@ fn podwayd_service_and_version_modes_are_explicit() {
         .output()
         .expect("podwayd explicit socket validation process must run");
     assert!(!relative_socket.status.success());
-    assert!(String::from_utf8_lossy(&relative_socket.stderr).contains("must be absolute"));
+    assert!(
+        bootstrap_event(&relative_socket.stderr)["message"]
+            .as_str()
+            .unwrap()
+            .contains("must be absolute")
+    );
 }

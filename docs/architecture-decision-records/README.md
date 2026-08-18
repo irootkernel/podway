@@ -35,3 +35,4 @@ narrative architecture and specifications when sources conflict.
 - [ADR-0019](0019-procedure-v2-only-product.md): Procedure v2-only product and unified success envelope
 - [ADR-0020](0020-managed-dev-runtime-isolation.md): isolated managed `--dev` runtimes
 - [ADR-0021](0021-separate-session-preparation-from-execution.md): separate session preparation from execution
+- [ADR-0022](0022-bounded-correlated-daemon-logs.md): bounded correlated daemon and bootstrap logs

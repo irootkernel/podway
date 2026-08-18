@@ -67,6 +67,31 @@ impl LogSinkV1 for CapturingObservabilitySink {
     }
 }
 
+fn observed_event_is(event: &str, operation: &str, outcome: &str) -> bool {
+    serde_json::from_str::<Value>(event)
+        .is_ok_and(|event| event["operation"] == operation && event["outcome"] == outcome)
+}
+
+fn observed_inventory(events: &[String]) -> BTreeMap<(String, String), usize> {
+    events.iter().fold(BTreeMap::new(), |mut inventory, event| {
+        let event: Value = serde_json::from_str(event).expect("observability event JSON");
+        let key = (
+            event["operation"].as_str().unwrap().to_owned(),
+            event["outcome"].as_str().unwrap().to_owned(),
+        );
+        *inventory.entry(key).or_insert(0) += 1;
+        inventory
+    })
+}
+
+fn observed_event(events: &[String], operation: &str) -> Value {
+    events
+        .iter()
+        .map(|event| serde_json::from_str::<Value>(event).expect("observability event JSON"))
+        .find(|event| event["operation"] == operation)
+        .unwrap_or_else(|| panic!("missing {operation} observability event"))
+}
+
 struct FixedObservabilityClock;
 
 impl ClockV1 for FixedObservabilityClock {
@@ -520,6 +545,25 @@ fn transport(
         dispatcher,
         timeouts,
         metadata(),
+    ))
+}
+
+fn transport_with_observability(
+    dispatcher: TestDispatcher,
+    observability: Option<podway_daemon::observability::ObservabilityEmitterV1>,
+) -> Arc<
+    UnixServerTransportV1<
+        FixedPeerCredentialSourceV1,
+        TestDispatcher,
+        FixedResponseMetadataSourceV1,
+    >,
+> {
+    Arc::new(UnixServerTransportV1::with_metadata_and_observability(
+        PeerUidVerifierV1::new(EXPECTED_UID, FixedPeerCredentialSourceV1::uid(EXPECTED_UID)),
+        dispatcher,
+        ServerTransportTimeoutsV1::default(),
+        metadata(),
+        observability,
     ))
 }
 
@@ -1406,14 +1450,15 @@ fn disconnected_client_response_failure_is_emitted_or_explicitly_accounted() {
         .lock()
         .expect("observability events lock must not be poisoned")
         .clone();
-    assert_eq!(
-        events.first().map(String::as_str),
-        Some("ts=42 operation=service_dispatch outcome=succeeded\n")
-    );
+    assert!(events.first().is_some_and(|event| observed_event_is(
+        event,
+        "service_dispatch",
+        "succeeded"
+    )));
     let counters = report.counters();
     match events.as_slice() {
         [_, response] => {
-            assert_eq!(response, "ts=42 operation=response_write outcome=failed\n");
+            assert!(observed_event_is(response, "response_write", "failed"));
             assert_eq!(counters.fallback_dropped, 0);
         }
         [_] => assert_eq!(counters.fallback_dropped, 1),
@@ -1424,6 +1469,51 @@ fn disconnected_client_response_failure_is_emitted_or_explicitly_accounted() {
         counters.written.saturating_add(counters.fallback_dropped),
         2
     );
+}
+
+#[test]
+fn decoded_request_correlates_service_dispatch_without_logging_workspace_paths() {
+    let sink = Arc::new(CapturingObservabilitySink::default());
+    let observability = ObservabilityV1::start_with_daemon_id(
+        sink.clone(),
+        Arc::new(FixedObservabilityClock),
+        "daemon-correlation-fixture",
+    );
+    let calls = Arc::new(AtomicUsize::new(0));
+    let transport = transport_with_observability(
+        TestDispatcher::new(DispatcherOutcome::Success, Arc::clone(&calls)),
+        Some(observability.emitter()),
+    );
+    let (mut client, server) =
+        UnixStream::pair().expect("Unix stream fixture pair must be created");
+    let mut request = serde_json::to_value(request()).expect("request fixture must serialize");
+    let session_id = "00000000-0000-4000-8000-000000000104";
+    request["preconditions"] = json!({"session_id": session_id});
+    let request: RequestEnvelopeV1 =
+        serde_json::from_value(request).expect("session-scoped status request must decode");
+    let handler = {
+        let transport = Arc::clone(&transport);
+        thread::spawn(move || transport.handle_connection(server))
+    };
+
+    send_and_half_close(&mut client, &request_frame(&request));
+    let _ = read_response_v2(&mut client);
+    assert!(handler.join().expect("handler must not panic").is_ok());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    observability.shutdown();
+
+    let events = sink
+        .events
+        .lock()
+        .expect("observability events lock must not be poisoned");
+    let event = observed_event(&events, "service_dispatch");
+    assert_eq!(event["daemon_id"], "daemon-correlation-fixture");
+    assert_eq!(event["request_id"], REQUEST_ID);
+    assert_eq!(event["command"], "session.status");
+    assert_eq!(event["session_id"], session_id);
+    assert!(event["workspace_uuid"].is_null());
+    assert!(event["job_id"].is_null());
+    assert!(!event.to_string().contains("/tmp/podway-worktree"));
 }
 #[test]
 fn accept_loop_does_not_add_a_service_failure_for_handler_completion() {
@@ -1480,20 +1570,21 @@ fn accept_loop_does_not_add_a_service_failure_for_handler_completion() {
         .events
         .lock()
         .expect("observability events lock must not be poisoned");
-    assert_eq!(
-        events.first().map(String::as_str),
-        Some("ts=42 operation=connection_accepted outcome=succeeded\n")
-    );
+    assert!(events.first().is_some_and(|event| observed_event_is(
+        event,
+        "connection_accepted",
+        "succeeded"
+    )));
     assert!(
         events
             .iter()
-            .any(|event| event == "ts=42 operation=service_dispatch outcome=succeeded\n")
+            .any(|event| observed_event_is(event, "service_dispatch", "succeeded"))
     );
-    assert!(
-        !events
-            .iter()
-            .any(|event| event == "ts=42 operation=transport_service_request outcome=failed\n")
-    );
+    assert!(!events.iter().any(|event| observed_event_is(
+        event,
+        "transport_service_request",
+        "failed"
+    )));
     let counters = report.counters();
     assert_eq!(
         counters.fallback_dropped, 0,
@@ -1590,24 +1681,21 @@ fn accept_loop_rejects_queued_connections_at_capacity_with_one_saturation_event(
         .events
         .lock()
         .expect("observability events lock must not be poisoned");
-    let inventory = events.iter().fold(BTreeMap::new(), |mut inventory, event| {
-        *inventory.entry(event.as_str()).or_insert(0_usize) += 1;
-        inventory
-    });
+    let inventory = observed_inventory(&events);
     assert_eq!(
         inventory,
         BTreeMap::from([
             (
-                "ts=42 operation=connection_accepted outcome=succeeded\n",
-                2_usize,
+                ("connection_accepted".to_owned(), "succeeded".to_owned()),
+                2_usize
             ),
             (
-                "ts=42 operation=admission_saturation outcome=saturated\n",
-                1_usize,
+                ("admission_saturation".to_owned(), "saturated".to_owned()),
+                1_usize
             ),
             (
-                "ts=42 operation=service_dispatch outcome=succeeded\n",
-                1_usize,
+                ("service_dispatch".to_owned(), "succeeded".to_owned()),
+                1_usize
             ),
         ]),
         "capacity saturation emits only the closed expected inventory"
@@ -1671,23 +1759,23 @@ fn accept_loop_records_peer_rejection_without_service_failure() {
         .expect("observability events lock must not be poisoned")
         .clone();
     let counters = report.counters();
-    let actual_inventory = events.iter().fold(BTreeMap::new(), |mut inventory, event| {
-        *inventory.entry(event.as_str()).or_insert(0_usize) += 1;
-        inventory
-    });
+    let actual_inventory = observed_inventory(&events);
     let expected_inventory = BTreeMap::from([
-        ("ts=42 operation=connection_accepted outcome=succeeded\n", 1),
-        ("ts=42 operation=peer_admission outcome=rejected\n", 1),
+        (
+            ("connection_accepted".to_owned(), "succeeded".to_owned()),
+            1,
+        ),
+        (("peer_admission".to_owned(), "rejected".to_owned()), 1),
     ]);
     assert_eq!(
-        actual_inventory.get("ts=42 operation=peer_admission outcome=rejected\n"),
+        actual_inventory.get(&("peer_admission".to_owned(), "rejected".to_owned())),
         Some(&1),
         "the legitimate fallback rejection must reach the sink"
     );
     assert!(
         actual_inventory.iter().all(|(event, count)| {
             expected_inventory
-                .get(*event)
+                .get(event)
                 .is_some_and(|expected| count <= expected)
         }),
         "peer rejection must not emit an unexpected service failure"
@@ -1780,13 +1868,13 @@ fn shutdown_stops_new_admission_and_waits_for_an_admitted_handler_to_finish() {
     assert!(
         events
             .iter()
-            .any(|event| event.contains("operation=connection_accepted outcome=succeeded")),
+            .any(|event| observed_event_is(event, "connection_accepted", "succeeded")),
         "the real accept boundary must emit accepted-connection evidence"
     );
     assert!(
         events
             .iter()
-            .any(|event| event.contains("operation=service_dispatch outcome=succeeded")),
+            .any(|event| observed_event_is(event, "service_dispatch", "succeeded")),
         "the real dispatch boundary must emit service outcome evidence"
     );
     assert!(
