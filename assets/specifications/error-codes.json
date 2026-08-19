@@ -594,6 +594,34 @@
       "exit_code": 3,
       "retryable": false,
       "summary": "The registered v2 command or result family is not supported by this build."
+    },
+    {
+      "code": "EVIDENCE_NOT_AVAILABLE",
+      "details_schema": "podway.v2-runtime-error-details/v1",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The declared evidence reference is unresolved or skipped, so the item has no readable page."
+    },
+    {
+      "code": "ATTEMPT_CONTENT_LIMIT_EXCEEDED",
+      "details_schema": "podway.v2-runtime-error-details/v1",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "Recorded text and list content for the attempt would exceed the per-attempt aggregate."
+    },
+    {
+      "code": "EVIDENCE_PAGE_TOKEN_EXHAUSTED",
+      "details_schema": "podway.v2-runtime-error-details/v1",
+      "exit_code": 2,
+      "retryable": false,
+      "summary": "The evidence page token offset is at or past the logical end of the value."
+    },
+    {
+      "code": "EVIDENCE_PAGE_TOKEN_STALE",
+      "details_schema": "podway.recoverable-v2-runtime-error-details/v1",
+      "exit_code": 4,
+      "retryable": true,
+      "summary": "The evidence page token no longer matches the current consumer, source value, or session identity."
     }
   ]
 }

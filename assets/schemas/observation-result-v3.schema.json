@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:observation-result:v3",
+  "title": "Podway Observation Result v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "status", "guidance", "active_items", "active_items_total", "active_items_truncated", "mutation_templates", "mutation_templates_total", "mutation_templates_truncated"],
+  "properties": {
+    "schema": { "const": "podway.observation-result/v3" },
+    "status": { "$ref": "urn:podway:schema:v2-result-components:v3#/$defs/observationStatus" },
+    "guidance": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "urn:podway:schema:next-result:v3" },
+        { "$ref": "urn:podway:schema:prepared-next-result:v1" }
+      ]
+    },
+    "active_items": {
+      "type": "array",
+      "maxItems": 128,
+      "items": { "$ref": "#/$defs/activeItem" }
+    },
+    "active_items_total": { "type": "integer", "minimum": 0, "maximum": 128 },
+    "active_items_truncated": { "type": "boolean" },
+    "mutation_templates": {
+      "type": "array",
+      "maxItems": 384,
+      "items": { "$ref": "urn:podway:schema:v2-result-components:v3#/$defs/mutationTemplate" }
+    },
+    "mutation_templates_total": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+    "mutation_templates_truncated": { "type": "boolean" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "properties": { "session": { "properties": { "lifecycle": { "const": "running" } }, "required": ["lifecycle"] } }, "required": ["session"] } }, "required": ["status"] },
+      "then": { "properties": { "guidance": { "allOf": [{ "$ref": "urn:podway:schema:next-result:v3" }, { "$ref": "#/$defs/metadataOnlyGuidance" }] } } }
+    },
+    {
+      "if": { "properties": { "status": { "properties": { "session": { "properties": { "lifecycle": { "const": "prepared" } }, "required": ["lifecycle"] } }, "required": ["session"] } }, "required": ["status"] },
+      "then": {
+        "properties": {
+          "guidance": { "$ref": "urn:podway:schema:prepared-next-result:v1" },
+          "active_items": { "maxItems": 0 },
+          "active_items_total": { "const": 0 },
+          "active_items_truncated": { "const": false },
+          "mutation_templates_total": { "const": 3 },
+          "mutation_templates_truncated": { "const": false },
+          "mutation_templates": {
+            "minItems": 3,
+            "maxItems": 3,
+            "allOf": [
+              { "contains": { "properties": { "command": { "const": "session.begin" } }, "required": ["command"] }, "minContains": 1, "maxContains": 1 },
+              { "contains": { "properties": { "command": { "const": "session.reset" } }, "required": ["command"] }, "minContains": 1, "maxContains": 1 },
+              { "contains": { "properties": { "command": { "const": "session.start_replace" } }, "required": ["command"] }, "minContains": 1, "maxContains": 1 }
+            ],
+            "items": {
+              "allOf": [
+                { "$ref": "urn:podway:schema:v2-result-components:v3#/$defs/mutationTemplate" },
+                {
+                  "properties": {
+                    "command": { "enum": ["session.begin", "session.reset", "session.start_replace"] },
+                    "preconditions": { "properties": { "session_revision": { "const": 0 } } }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "status": { "properties": { "session": { "properties": { "lifecycle": { "enum": ["completed", "cancelled"] } }, "required": ["lifecycle"] } }, "required": ["session"] } }, "required": ["status"] },
+      "then": {
+        "properties": {
+          "guidance": { "type": "null" },
+          "active_items": { "maxItems": 0 },
+          "active_items_total": { "const": 0 },
+          "active_items_truncated": { "const": false },
+          "mutation_templates_truncated": { "const": false },
+          "mutation_templates": {
+            "oneOf": [
+              {
+                "minItems": 1,
+                "maxItems": 1,
+                "items": {
+                  "allOf": [
+                    { "$ref": "urn:podway:schema:v2-result-components:v3#/$defs/mutationTemplate" },
+                    { "properties": { "command": { "const": "session.terminal_disposition" } } }
+                  ]
+                }
+              },
+              {
+                "minItems": 2,
+                "maxItems": 2,
+                "allOf": [
+                  { "contains": { "properties": { "command": { "const": "session.reset" } }, "required": ["command"] }, "minContains": 1, "maxContains": 1 },
+                  { "contains": { "properties": { "command": { "const": "session.start_replace" } }, "required": ["command"] }, "minContains": 1, "maxContains": 1 }
+                ],
+                "items": {
+                  "allOf": [
+                    { "$ref": "urn:podway:schema:v2-result-components:v3#/$defs/mutationTemplate" },
+                    { "properties": { "command": { "enum": ["session.reset", "session.start_replace"] } } }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        "oneOf": [
+          { "properties": { "mutation_templates": { "maxItems": 1 }, "mutation_templates_total": { "const": 1 } } },
+          { "properties": { "mutation_templates": { "minItems": 2 }, "mutation_templates_total": { "const": 2 } } }
+        ]
+      }
+    },
+    { "if": { "properties": { "active_items_truncated": { "const": false } }, "required": ["active_items_truncated"] }, "then": { "properties": { "active_items_total": { "maximum": 128 } } } },
+    { "if": { "properties": { "mutation_templates_truncated": { "const": false } }, "required": ["mutation_templates_truncated"] }, "then": { "properties": { "mutation_templates_total": { "maximum": 384 } } } }
+  ],
+  "$defs": {
+    "metadataOnlyGuidance": {
+      "properties": {
+        "readback": {
+          "items": {
+            "properties": {
+              "items": {
+                "items": {
+                  "not": { "anyOf": [{ "required": ["preview"] }, { "required": ["preview_truncated"] }, { "required": ["next_page_token"] }] }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "activeItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["item_id", "type", "prompt", "required", "satisfied", "revision", "constraints", "value", "value_truncated"],
+      "properties": {
+        "item_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" },
+        "type": { "enum": ["confirm", "text", "choice", "integer", "list", "artifact"] },
+        "prompt": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "help": { "type": "string", "maxLength": 1000 },
+        "required": { "type": "boolean" },
+        "satisfied": { "type": "boolean" },
+        "revision": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/revision" },
+        "constraints": { "$ref": "urn:podway:schema:v2-result-components:v3#/$defs/itemConstraints" },
+        "value": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/itemValue" }
+          ]
+        },
+        "value_truncated": { "type": "boolean" }
+      }
+    }
+  }
+}

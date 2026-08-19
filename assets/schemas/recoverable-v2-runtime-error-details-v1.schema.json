@@ -4,7 +4,8 @@
   "title": "Podway Recoverable Procedure v2 Runtime Error Details v1",
   "oneOf": [
     { "$ref": "#/$defs/evidenceReferenceStale" },
-    { "$ref": "#/$defs/goalRevisionStale" }
+    { "$ref": "#/$defs/goalRevisionStale" },
+    { "$ref": "#/$defs/evidencePageTokenStale" }
   ],
   "$defs": {
     "base": {
@@ -48,6 +49,10 @@
           }
         }
       ],
+      "unevaluatedProperties": false
+    },
+    "evidencePageTokenStale": {
+      "allOf": [{ "$ref": "#/$defs/base" }, { "required": ["graph_node_id", "source_graph_node_id", "item_id", "expected_value_digest", "current_value_digest"], "properties": { "kind": { "const": "EVIDENCE_PAGE_TOKEN_STALE" }, "graph_node_id": { "$ref": "#/$defs/identifier" }, "source_graph_node_id": { "$ref": "#/$defs/identifier" }, "item_id": { "$ref": "#/$defs/identifier" }, "expected_value_digest": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/digest" }, "current_value_digest": { "oneOf": [{ "type": "null" }, { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/digest" }] } } }],
       "unevaluatedProperties": false
     }
   }

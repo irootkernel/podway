@@ -140,7 +140,7 @@ not create a contract mismatch.
 
 `podway record --stdin` consumes only closed
 `podway.item-record-many-input/v1` JSON bounded to 1 MiB and, once `V2SCL-003`
-raises the shipped 1..64 bound, 1..128 unique item
+raises the decoder that still enforces 1..64, 1..128 unique item
 operations. Each operation contains exactly one typed complete record value or
 `clear: true`. Operations and per-item outcomes are canonicalized by item ID.
 The command uses the normal durable admission, detached execution, idempotent

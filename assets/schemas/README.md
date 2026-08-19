@@ -61,7 +61,11 @@ These JSON Schema Draft 2020-12 files define Podway's versioned structural contr
 - `criterion-assessment-result-v1.schema.json`: one criterion assessment outcome.
 - `v2-result-components-v1.schema.json`: shared closed and bounded Procedure v2 result components.
 - `v2-result-components-v2.schema.json`: shared prepared lifecycle, disposition, reset, and guidance components.
+- `v2-result-components-v3.schema.json`: shared bounded evidence metadata, page-token, observation status, item constraint, and mutation template components.
 - `observation-result-v2.schema.json`: prepared-aware coherent status, guidance, item, and mutation-template observation.
+- `next-result-v3.schema.json`: bounded progression guidance with evidence metadata, previews, and continuation tokens.
+- `observation-result-v3.schema.json`: prepared-aware observation composing a compact status projection, guidance, and byte-budgeted item and template windows.
+- `evidence-read-result-v1.schema.json`: one bounded snapshot-fenced page of a selected evidence item.
 - `session-reset-not-eligible-details-v1.schema.json`: closed smart-reset eligibility failure details.
 - `v2-runtime-error-details-v1.schema.json`: closed code-bound details for registered Procedure v2 runtime errors.
 - `recoverable-v2-runtime-error-details-v1.schema.json`: stale evidence and goal-revision details with state-refresh recovery.

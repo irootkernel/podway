@@ -200,8 +200,8 @@
       "oneOf": [
         { "type": "boolean" },
         { "type": "integer", "minimum": -9223372036854775808, "maximum": 9223372036854775807 },
-        { "type": "string", "maxLength": 16384 },
-        { "type": "array", "maxItems": 200, "items": { "type": "string", "maxLength": 1000 } },
+        { "type": "string", "maxLength": 65536 },
+        { "type": "array", "maxItems": 1000, "items": { "type": "string", "maxLength": 8192 } },
         { "$ref": "#/$defs/artifactValue" }
       ]
     },
@@ -211,10 +211,10 @@
       "properties": { "item_id": { "$ref": "#/$defs/identifier" }, "type": { "enum": ["confirm", "text", "choice", "integer", "list", "artifact"] }, "value": { "$ref": "#/$defs/itemValue" } },
       "allOf": [
         { "if": { "properties": { "type": { "const": "confirm" } }, "required": ["type"] }, "then": { "properties": { "value": { "type": "boolean" } } } },
-        { "if": { "properties": { "type": { "const": "text" } }, "required": ["type"] }, "then": { "properties": { "value": { "type": "string", "maxLength": 16384 } } } },
+        { "if": { "properties": { "type": { "const": "text" } }, "required": ["type"] }, "then": { "properties": { "value": { "type": "string", "maxLength": 65536 } } } },
         { "if": { "properties": { "type": { "const": "choice" } }, "required": ["type"] }, "then": { "properties": { "value": { "type": "string", "maxLength": 120 } } } },
         { "if": { "properties": { "type": { "const": "integer" } }, "required": ["type"] }, "then": { "properties": { "value": { "type": "integer", "minimum": -9223372036854775808, "maximum": 9223372036854775807 } } } },
-        { "if": { "properties": { "type": { "const": "list" } }, "required": ["type"] }, "then": { "properties": { "value": { "type": "array", "maxItems": 200, "items": { "type": "string", "maxLength": 1000 } } } } },
+        { "if": { "properties": { "type": { "const": "list" } }, "required": ["type"] }, "then": { "properties": { "value": { "type": "array", "maxItems": 1000, "items": { "type": "string", "maxLength": 8192 } } } } },
         { "if": { "properties": { "type": { "const": "artifact" } }, "required": ["type"] }, "then": { "properties": { "value": { "$ref": "#/$defs/artifactValue" } } } }
       ]
     },
@@ -288,7 +288,7 @@
         "source_graph_node_id": { "$ref": "#/$defs/identifier" }, "source_title": { "type": "string", "minLength": 1, "maxLength": 120 },
         "source_attempt_id": { "type": "string", "format": "uuid" }, "source_attempt_number": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 }, "items_digest": { "$ref": "#/$defs/digest" },
         "state": { "enum": ["resolved", "unresolved", "skipped"] },
-        "items": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/readbackItem" } },
+        "items": { "type": "array", "maxItems": 128, "items": { "$ref": "#/$defs/readbackItem" } },
         "decision_record": { "$ref": "#/$defs/decisionRecord" }
       },
       "allOf": [

@@ -10,7 +10,7 @@ Action definitions may contain `confirm`, `text`, `choice`, `integer`, `list`, a
 
 ## Item bounds
 
-[ADR-0024](../../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md) owns the scale envelope. Every length counts Unicode scalar values, not bytes, and one set of numbers binds authoring validation, runtime recording, persistence reconstruction, and protocol request slices. `V2SCL-003` raises every layer to the values below and adds `max_total_length`; until it lands, `procedure-v2.schema.json` and the domain constants still enforce the superseded envelope of 64 items, 16,384 text scalars, 200 list entries, and 1,000 scalars per entry.
+[ADR-0024](../../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md) owns the scale envelope. Every length counts Unicode scalar values, not bytes, and one set of numbers binds authoring validation, runtime recording, persistence reconstruction, and protocol request slices. `V2SCL-002` raised the shared result and record-many input schemas to these values. `V2SCL-003` raises the remaining layers and adds `max_total_length`; until it lands, `procedure-v2.schema.json` and the domain constants still enforce the superseded envelope of 64 items, 16,384 text scalars, 200 list entries, and 1,000 scalars per entry.
 
 | Dimension | Hard maximum | Default |
 |---|---:|---:|

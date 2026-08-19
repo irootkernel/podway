@@ -341,6 +341,7 @@
       "session.status",
       "session.next",
       "session.observe",
+      "evidence.read",
       "session.complete",
       "session.skip",
       "session.retry",
@@ -961,6 +962,34 @@
         "exit_code": 3,
         "retryable": false,
         "summary": "The registered v2 command or result family is not supported by this build."
+      },
+      {
+        "code": "EVIDENCE_NOT_AVAILABLE",
+        "details_schema": "podway.v2-runtime-error-details/v1",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The declared evidence reference is unresolved or skipped, so the item has no readable page."
+      },
+      {
+        "code": "ATTEMPT_CONTENT_LIMIT_EXCEEDED",
+        "details_schema": "podway.v2-runtime-error-details/v1",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "Recorded text and list content for the attempt would exceed the per-attempt aggregate."
+      },
+      {
+        "code": "EVIDENCE_PAGE_TOKEN_EXHAUSTED",
+        "details_schema": "podway.v2-runtime-error-details/v1",
+        "exit_code": 2,
+        "retryable": false,
+        "summary": "The evidence page token offset is at or past the logical end of the value."
+      },
+      {
+        "code": "EVIDENCE_PAGE_TOKEN_STALE",
+        "details_schema": "podway.recoverable-v2-runtime-error-details/v1",
+        "exit_code": 4,
+        "retryable": true,
+        "summary": "The evidence page token no longer matches the current consumer, source value, or session identity."
       }
     ],
     "schema_pins": [
@@ -1050,6 +1079,11 @@
         "sha256": "sha256:bde25746accfef3b44e30e77f1bc9c9211a90fa921098c581f469f0de133c7ec"
       },
       {
+        "id": "urn:podway:schema:evidence-read-result:v1",
+        "path": "schemas/evidence-read-result-v1.schema.json",
+        "sha256": "sha256:e6d62012a69fee689c4e537e65372dfb536876ddf3af2bb5c8c8c85b3b7fd728"
+      },
+      {
         "id": "urn:podway:schema:goal-definition-result:v1",
         "path": "schemas/goal-definition-result-v1.schema.json",
         "sha256": "sha256:7b26c7ccb1d3302a2876a9d3851e94b82feadcfe1d6b06cdefa2c30d26d91279"
@@ -1077,7 +1111,7 @@
       {
         "id": "urn:podway:schema:item-record-many-input:v1",
         "path": "schemas/item-record-many-input-v1.schema.json",
-        "sha256": "sha256:af8919610c39bc923c937223ae2011c154434dd8b274e414e98c938d03f1f503"
+        "sha256": "sha256:7ebb732ac206901e66a9c34e111561fd0e201c3f1d1065aaf811c845ec7c8eb7"
       },
       {
         "id": "urn:podway:schema:item-record-many-result:v1",
@@ -1120,6 +1154,11 @@
         "sha256": "sha256:ef64559c7ede43ea11c64de1dcd60dea46539da92113fc20734aa2c006d4aa26"
       },
       {
+        "id": "urn:podway:schema:next-result:v3",
+        "path": "schemas/next-result-v3.schema.json",
+        "sha256": "sha256:442e13d2aa81c5aebaaf5a8e6c79a63752c6b9459fb6e3167d02fb98cb82a718"
+      },
+      {
         "id": "urn:podway:schema:observation-result:v1",
         "path": "schemas/observation-result-v1.schema.json",
         "sha256": "sha256:159a649dfd698805d33f4cea6aaaf60622519f1e84c6df08bb923cc360e7362c"
@@ -1130,9 +1169,14 @@
         "sha256": "sha256:894b3ec2f3d84a8219c825c86ac72c0891aeb47c6e2f5f2e630d3f66e94e14e0"
       },
       {
+        "id": "urn:podway:schema:observation-result:v3",
+        "path": "schemas/observation-result-v3.schema.json",
+        "sha256": "sha256:58d8edbe0d768c44b4c237a29b4755f844f92d139cfd8a93187f1229080b6e7f"
+      },
+      {
         "id": "urn:podway:schema:output:v3",
         "path": "schemas/output-v3.schema.json",
-        "sha256": "sha256:2297c48235d0a95cd7fc6f17cc974dc3f274c5d96da892cf81fce85c0dab9a49"
+        "sha256": "sha256:1de826ec00b305cad19316f1dc7bba6eec3edec2f84f71dc9159d67331158d45"
       },
       {
         "id": "urn:podway:schema:prepared-next-result:v1",
@@ -1172,7 +1216,7 @@
       {
         "id": "urn:podway:schema:recoverable-v2-runtime-error-details:v1",
         "path": "schemas/recoverable-v2-runtime-error-details-v1.schema.json",
-        "sha256": "sha256:66db39a40c9454425d8e04d0096151a4db7b0c1b99c11b2ffefffeeb354e1c2a"
+        "sha256": "sha256:d51fee69610b437515056bb458989bbc6cf433ac7813f870bc23cf9d6b656065"
       },
       {
         "id": "urn:podway:schema:recovery-recipe:v1",
@@ -1252,7 +1296,7 @@
       {
         "id": "urn:podway:schema:v2-result-components:v1",
         "path": "schemas/v2-result-components-v1.schema.json",
-        "sha256": "sha256:6596fd6f7eaf47cd55604addeed927e7bff4c092a64b7453efc204ee037915d6"
+        "sha256": "sha256:28b8ff3a08c13d703ea7e865915609aa16aff89038a415fa13aa2cde20e7f7a2"
       },
       {
         "id": "urn:podway:schema:v2-result-components:v2",
@@ -1260,9 +1304,14 @@
         "sha256": "sha256:e20c147d02bcf9ce4c0555ed95b9407abcc33062d40ceb770355992d58665251"
       },
       {
+        "id": "urn:podway:schema:v2-result-components:v3",
+        "path": "schemas/v2-result-components-v3.schema.json",
+        "sha256": "sha256:860f7fee50bfcbe4103d706943e065069f23be7dbc0988adbbd397c2378318b8"
+      },
+      {
         "id": "urn:podway:schema:v2-runtime-error-details:v1",
         "path": "schemas/v2-runtime-error-details-v1.schema.json",
-        "sha256": "sha256:7d6f76444e8219a43dda97b53d2562f83c2374870720d28d529c813f6158c366"
+        "sha256": "sha256:50dd437993614b8af419bf032c0be46bf440a31661a1d66fdaf9859f66acb02e"
       },
       {
         "id": "urn:podway:schema:version-result:v1",
@@ -1293,9 +1342,9 @@
   },
   "current_surface_counts": {
     "authoring_diagnostics": 53,
-    "routes": 60,
-    "runtime_errors": 90,
-    "schemas": 65
+    "routes": 61,
+    "runtime_errors": 94,
+    "schemas": 69
   },
   "migration_boundary": {
     "adapter_database_access": "forbidden",

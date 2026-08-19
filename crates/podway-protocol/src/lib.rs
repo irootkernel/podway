@@ -1788,6 +1788,26 @@ const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
         exit_code: 3,
         retryable: false,
     },
+    ErrorCodeCatalogEntryV1 {
+        code: "EVIDENCE_NOT_AVAILABLE",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "ATTEMPT_CONTENT_LIMIT_EXCEEDED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "EVIDENCE_PAGE_TOKEN_EXHAUSTED",
+        exit_code: 2,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "EVIDENCE_PAGE_TOKEN_STALE",
+        exit_code: 4,
+        retryable: true,
+    },
 ];
 /// Returns the complete frozen public error catalog in wire order.
 pub fn error_code_catalog_v1() -> impl ExactSizeIterator<Item = (&'static str, u8, bool)> {
@@ -2260,6 +2280,10 @@ pub const V2_RUNTIME_ERROR_CODES_V1: &[&str] = &[
     "GOAL_ASSESSMENT_OUTCOME_NOT_ALLOWED",
     "DIGEST_CONFIRMATION_REQUIRED",
     "UNSUPPORTED_V2_CAPABILITY",
+    "EVIDENCE_NOT_AVAILABLE",
+    "ATTEMPT_CONTENT_LIMIT_EXCEEDED",
+    "EVIDENCE_PAGE_TOKEN_EXHAUSTED",
+    "EVIDENCE_PAGE_TOKEN_STALE",
 ];
 
 fn is_v2_runtime_error_code_v1(code: &str) -> bool {
@@ -2330,9 +2354,38 @@ fn validate_v2_runtime_error_details_v1(code: &str, details: &Map<String, Value>
         ],
         "DIGEST_CONFIRMATION_REQUIRED" => &[("procedure_digest", validate_digest_value_v1)],
         "UNSUPPORTED_V2_CAPABILITY" => &[("capability", validate_bounded_text_128_v1)],
+        "EVIDENCE_NOT_AVAILABLE" => &[
+            ("graph_node_id", validate_v2_identifier_value_v1),
+            ("source_graph_node_id", validate_v2_identifier_value_v1),
+            ("item_id", validate_v2_identifier_value_v1),
+            ("reference_state", validate_unavailable_reference_state_v1),
+        ],
+        "ATTEMPT_CONTENT_LIMIT_EXCEEDED" => &[
+            ("field", validate_bound_field_path_v1),
+            ("actual", validate_bound_magnitude_v1),
+            ("maximum", validate_bound_magnitude_v1),
+            ("unit", validate_scalar_bound_unit_v1),
+        ],
+        "EVIDENCE_PAGE_TOKEN_EXHAUSTED" => &[
+            ("source_graph_node_id", validate_v2_identifier_value_v1),
+            ("item_id", validate_v2_identifier_value_v1),
+            ("offset", validate_bound_magnitude_v1),
+            ("total_size", validate_bound_magnitude_v1),
+            ("unit", validate_bound_unit_v1),
+        ],
+        "EVIDENCE_PAGE_TOKEN_STALE" => &[
+            ("graph_node_id", validate_v2_identifier_value_v1),
+            ("source_graph_node_id", validate_v2_identifier_value_v1),
+            ("item_id", validate_v2_identifier_value_v1),
+            ("expected_value_digest", validate_digest_value_v1),
+            ("current_value_digest", validate_nullable_digest_value_v1),
+        ],
         _ => return false,
     };
-    let recoverable = matches!(code, "EVIDENCE_REFERENCE_STALE" | "GOAL_REVISION_STALE");
+    let recoverable = matches!(
+        code,
+        "EVIDENCE_REFERENCE_STALE" | "GOAL_REVISION_STALE" | "EVIDENCE_PAGE_TOKEN_STALE"
+    );
     let expected_schema = if recoverable {
         "podway.recoverable-v2-runtime-error-details/v1"
     } else {
@@ -2370,6 +2423,35 @@ fn validate_v2_runtime_error_details_v1(code: &str, details: &Map<String, Value>
                 .is_none_or(validate_digest_value_v1);
     }
     true
+}
+
+fn validate_unavailable_reference_state_v1(value: &Value) -> bool {
+    matches!(value.as_str(), Some("unresolved") | Some("skipped"))
+}
+
+fn validate_bound_field_path_v1(value: &Value) -> bool {
+    value
+        .as_str()
+        .is_some_and(|value| !value.is_empty() && value.chars().count() <= 256)
+}
+
+fn validate_bound_magnitude_v1(value: &Value) -> bool {
+    value.as_u64().is_some()
+}
+
+fn validate_scalar_bound_unit_v1(value: &Value) -> bool {
+    value.as_str() == Some("scalars")
+}
+
+fn validate_bound_unit_v1(value: &Value) -> bool {
+    matches!(
+        value.as_str(),
+        Some("scalars") | Some("entries") | Some("items") | Some("operations")
+    )
+}
+
+fn validate_nullable_digest_value_v1(value: &Value) -> bool {
+    value.is_null() || validate_digest_value_v1(value)
 }
 
 fn validate_v2_identifier_value_v1(value: &Value) -> bool {
@@ -2730,6 +2812,7 @@ const RECOVERY_ERROR_CODES_V1: &[&str] = &[
     "MUTATION_OUTCOME_UNKNOWN",
     "EVIDENCE_REFERENCE_STALE",
     "GOAL_REVISION_STALE",
+    "EVIDENCE_PAGE_TOKEN_STALE",
 ];
 
 fn recovery_recipe_v1(code: &str, details: &Map<String, Value>) -> Option<Value> {
@@ -2754,6 +2837,7 @@ fn recovery_recipe_v1(code: &str, details: &Map<String, Value>) -> Option<Value>
         | "ATTEMPT_NOT_CURRENT"
         | "ITEM_REVISION_CONFLICT"
         | "EVIDENCE_REFERENCE_STALE"
+        | "EVIDENCE_PAGE_TOKEN_STALE"
         | "GOAL_REVISION_STALE" => (
             "refresh_state",
             "session.observe",

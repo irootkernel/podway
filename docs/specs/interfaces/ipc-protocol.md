@@ -179,7 +179,7 @@ Protocol-level failures use the same error envelope where possible. If the reque
 
 ## Evidence paging
 
-This section is adopted authority, not shipped behavior. `V2SCL-002` reserves the route, result schema, and error codes; `V2SCL-004` implements and serves them.
+`V2SCL-002` has reserved the route, the `podway.evidence-read-result/v1` family, and the error codes; `V2SCL-004` implements and serves them, so this section is a reserved contract rather than shipped behavior.
 
 `evidence.read` is a `query` that reads one item selected by a currently resolved, declared evidence reference of the current consumer attempt. It cannot browse arbitrary attempts or stale history, it creates no durable job or session revision, and it is fenced by workspace UUID, session ID, and consumer attempt ID. Its closed result is `podway.evidence-read-result/v1` and carries consumer, source node, source attempt, and item identities; item type, item revision, complete-value digest, and total logical size; a typed page; `truncated`; a nullable `next_page_token`; and the page-token version with the logical page offset.
 
@@ -273,7 +273,7 @@ unknown fields or downgrade a Procedure. A route absent from a build retains tha
 or usage behavior; the exact contract-manifest digest is the machine-readable
 capability signal.
 
-The version-aware result registry reserves the complete Procedure v2 family set. Every route in the v2 delta is registered, `availability` records which of them the current build serves, and a peer must reject a registered route it cannot serve with a structured compatibility error rather than ignoring it. `evidence.read` is not yet registered: `V2SCL-002` adds it as a `reserved_contract` route and `V2SCL-004` makes it executable. The production decoder validates
+The version-aware result registry reserves the complete Procedure v2 family set. Every route in the v2 delta is registered, `availability` records which of them the current build serves, and a peer must reject a registered route it cannot serve with a structured compatibility error rather than ignoring it. `evidence.read` is registered as a `reserved_contract` route by `V2SCL-002`; `V2SCL-004` makes it executable. The production decoder validates
 each selected family and the complete envelope, including nested terminal job
 responses, against the embedded canonical schemas after enforcing the frame and
 JSON-depth bounds. V2 producers also enforce the bounded-warning guard defined
@@ -346,7 +346,7 @@ In addition to the frame limit, and counting Unicode scalar values wherever a le
 A wire value bound is never narrower than the corresponding domain hard maximum defined by
 [ADR-0024](../../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md). The 1 MiB request frame remains an independent transport bound, so every valid list is reachable through bounded `item.add` mutations while a maximal list cannot be replaced atomically through one `item.record_many` frame.
 
-`V2SCL-003` raises the list-entry, record-many, and item-count slices to these values, aligns the text-item slice with the new 65,536-scalar domain maximum, and updates `item-record-many-input-v1.schema.json`. Until it lands, that schema and the domain text cap still enforce the superseded numbers. The page-token bound applies only to `evidence.read`, which `V2SCL-002` reserves and `V2SCL-004` serves.
+`V2SCL-002` has already raised `item-record-many-input-v1.schema.json` and the shared result components to these values. The text slice already admits 65,536 scalars, but the `item.record_many` operation count and the list-entry slices still enforce 64, 200, and 1,000, and `podway-core` still caps a recorded text value at 16,384. `V2SCL-003` closes those three gaps; until it lands, a request at the raised list or operation bounds is rejected by the decoder and a 65,536-scalar text value is rejected by the domain. The page-token bound applies only to `evidence.read`, which `V2SCL-004` serves.
 
 ## Socket shutdown behavior
 

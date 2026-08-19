@@ -360,6 +360,10 @@ const FROZEN_ERROR_CATALOG: &[(&str, u8, bool)] = &[
     ("GOAL_ASSESSMENT_OUTCOME_NOT_ALLOWED", 1, false),
     ("DIGEST_CONFIRMATION_REQUIRED", 2, false),
     ("UNSUPPORTED_V2_CAPABILITY", 3, false),
+    ("EVIDENCE_NOT_AVAILABLE", 1, false),
+    ("ATTEMPT_CONTENT_LIMIT_EXCEEDED", 1, false),
+    ("EVIDENCE_PAGE_TOKEN_EXHAUSTED", 2, false),
+    ("EVIDENCE_PAGE_TOKEN_STALE", 4, true),
 ];
 
 fn v2_runtime_error_details(code: &str) -> Option<Map<String, Value>> {
@@ -408,6 +412,22 @@ fn v2_runtime_error_details(code: &str) -> Option<Map<String, Value>> {
         "UNSUPPORTED_V2_CAPABILITY" => {
             json!({"capability":"session.decide","required_result_schema":"podway.decision-result/v1"})
         }
+        "EVIDENCE_NOT_AVAILABLE" => {
+            json!({"graph_node_id":"review","source_graph_node_id":"implement","item_id":"notes","reference_state":"skipped"})
+        }
+        "ATTEMPT_CONTENT_LIMIT_EXCEEDED" => {
+            json!({"field":"items.notes.value","actual":16_777_217,"maximum":16_777_216,"unit":"scalars"})
+        }
+        "EVIDENCE_PAGE_TOKEN_EXHAUSTED" => {
+            json!({"source_graph_node_id":"implement","item_id":"notes","offset":4_000,"total_size":4_000,"unit":"scalars"})
+        }
+        "EVIDENCE_PAGE_TOKEN_STALE" => json!({
+            "graph_node_id":"review",
+            "source_graph_node_id":"implement",
+            "item_id":"notes",
+            "expected_value_digest":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "current_value_digest":"sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+        }),
         _ => return None,
     };
     Some(fields.as_object().unwrap().clone())

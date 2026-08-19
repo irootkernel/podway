@@ -242,3 +242,68 @@ fn v2agt004_route_is_durable_and_semantically_item_order_independent() {
         canonical_mutation_identity_v1(&right, &workspace).unwrap()
     );
 }
+
+#[test]
+fn v2scl002_reserved_record_many_bounds_lead_the_decoder_until_v2scl003() {
+    let schema: Value = serde_json::from_slice(include_bytes!(
+        "../../../assets/schemas/item-record-many-input-v1.schema.json"
+    ))
+    .unwrap();
+    assert_eq!(schema["properties"]["operations"]["maxItems"], 128);
+    let record_variants = schema["$defs"]["recordValue"]["oneOf"].as_array().unwrap();
+    let text = record_variants
+        .iter()
+        .find(|variant| variant["properties"]["type"]["const"] == "text")
+        .unwrap();
+    assert_eq!(text["properties"]["value"]["maxLength"], 65_536);
+    let list = record_variants
+        .iter()
+        .find(|variant| variant["properties"]["type"]["const"] == "list")
+        .unwrap();
+    assert_eq!(list["properties"]["value"]["maxItems"], 1_000);
+    assert_eq!(list["properties"]["value"]["items"]["maxLength"], 8_192);
+
+    // V2SCL-002 reserves the wider input contract; V2SCL-003 raises the decoder that
+    // still enforces the superseded bounds, so the gap is explicit rather than silent.
+    let operations = Value::Array(
+        (0..65)
+            .map(|index| {
+                json!({
+                    "item_id": format!("item-{index:02}"),
+                    "expected_item_revision": 0,
+                    "clear": true
+                })
+            })
+            .collect(),
+    );
+    assert!(decode_item_record_many_input_v1(&input(operations)).is_err());
+    let entries =
+        Value::Array((0..201).map(|index| json!(format!("entry-{index}"))).collect());
+    assert!(
+        decode_item_record_many_input_v1(&input(json!([{
+            "item_id": "notes",
+            "expected_item_revision": 0,
+            "record": {"type": "list", "value": entries}
+        }])))
+        .is_err()
+    );
+    assert!(
+        decode_item_record_many_input_v1(&input(json!([{
+            "item_id": "notes",
+            "expected_item_revision": 0,
+            "record": {"type": "list", "value": ["x".repeat(1_001)]}
+        }])))
+        .is_err()
+    );
+
+    // The text slice already admits the full 65,536-scalar reserved bound; the 16,384-scalar
+    // domain cap that still rejects such a value lives in podway-core and moves in V2SCL-003.
+    assert!(
+        decode_item_record_many_input_v1(&input(json!([{
+            "item_id": "notes",
+            "expected_item_revision": 0,
+            "record": {"type": "text", "value": "x".repeat(65_536)}
+        }])))
+        .is_ok()
+    );
+}

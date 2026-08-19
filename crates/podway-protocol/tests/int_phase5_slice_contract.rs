@@ -1315,3 +1315,22 @@ fn g006_terminal_job_responses_are_protocol_owned_typed_projections() {
         json!({"kind": "cancelled", "payload": {"cancelled": true}})
     );
 }
+
+#[test]
+fn v2scl002_reserved_evidence_read_is_not_admitted_before_runtime_implementation() {
+    let request = envelope(
+        "evidence.read",
+        OperationV1::Query,
+        false,
+        json!({
+            "selector": selector(),
+            "source": "implement",
+            "item": "notes",
+        }),
+        PreconditionsV1::default(),
+    );
+    assert!(
+        SliceRequestV1::from_envelope(&request).is_err(),
+        "the reserved evidence.read route must not decode before its owning task lands"
+    );
+}

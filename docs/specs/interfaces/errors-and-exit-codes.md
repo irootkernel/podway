@@ -194,7 +194,7 @@ including the mandatory stable codes
 
 ## Bounded evidence scale failures
 
-[ADR-0024](../../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md) adopts four codes. `V2SCL-002` adds them to `error-codes.json`, the closed details schemas, and the protocol catalog; until it lands the machine registries contain none of them.
+[ADR-0024](../../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md) adopts four codes. `V2SCL-002` registered them in `error-codes.json`, the closed details schemas, and the protocol catalog. No route raises them yet; `V2SCL-003` and `V2SCL-004` add the enforcement that produces them.
 
 | Code | Exit | Retryable | Meaning |
 |---|---:|---|---|

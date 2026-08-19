@@ -179,6 +179,7 @@ V2_ROUTE_DELTA = {
     "procedure.graph", "procedure.preview", "procedure.scaffold",
     "session.decide", "session.rework", "goal.define", "goal.revise",
     "goal.assess_criterion", "session.begin", "session.terminal_disposition",
+    "evidence.read",
 }
 # V2_ROUTE_DELTA members whose owning task has landed. The delta itself never shrinks: a route
 # stays registered forever, and this set records only which of them the build now serves.
@@ -248,6 +249,10 @@ V2_RUNTIME_ERROR_CODES = {
     "CRITERION_RESULT_MISSING", "CRITERION_NOT_FOUND", "FRESH_GOAL_ASSESSMENT_MISSING",
     "GOAL_ASSESSMENT_OUTCOME_NOT_ALLOWED", "DIGEST_CONFIRMATION_REQUIRED",
     "UNSUPPORTED_V2_CAPABILITY",
+    "EVIDENCE_NOT_AVAILABLE",
+    "ATTEMPT_CONTENT_LIMIT_EXCEEDED",
+    "EVIDENCE_PAGE_TOKEN_EXHAUSTED",
+    "EVIDENCE_PAGE_TOKEN_STALE",
 }
 V2_AUTHORING_DIAGNOSTIC_CODES = {
     "AUTHORING_SCHEMA_INVALID", "SOURCE_CONSTRUCT_UNSUPPORTED", "FORMAT_NOT_CANONICAL",
@@ -376,13 +381,28 @@ def validate_v2_only_surface(root: Path) -> int:
     return checked
 
 
+def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Reject duplicate object keys, which JSON parsers otherwise resolve silently.
+
+    A duplicated key in a closed contract asset drops the earlier occurrence without any
+    parse error, so a constraint block can disappear from a schema while the file still
+    validates as JSON.
+    """
+    seen: set[str] = set()
+    for key, _ in pairs:
+        if key in seen:
+            fail(f"duplicate JSON object key: {key}")
+        seen.add(key)
+    return dict(pairs)
+
+
 def read_json(root: Path, relative: Path, label: str) -> dict[str, Any]:
     path = repository_assets.checked_path(root, relative, label)
     if not path.is_file():
         fail(f"{label} is missing: {relative.as_posix()}")
     try:
         with path.open(encoding="utf-8") as handle:
-            value = json.load(handle)
+            value = json.load(handle, object_pairs_hook=reject_duplicate_keys)
     except (OSError, json.JSONDecodeError) as error:
         fail(f"cannot parse {label}: {error}")
     if not isinstance(value, dict):
@@ -443,7 +463,7 @@ def validate_v2_catalog_delta(root: Path) -> int:
     if set(runtime) != {"schema", "exit_codes", "errors"}:
         fail("error catalog has unexpected or missing top-level fields")
     entries = runtime.get("errors")
-    if not isinstance(entries, list) or len(entries) != 90:
+    if not isinstance(entries, list) or len(entries) != 94:
         fail("runtime error catalog must contain the v2-only error set")
     runtime_codes = [entry.get("code") for entry in entries if isinstance(entry, dict)]
     if len(runtime_codes) != len(entries) or len(set(runtime_codes)) != len(runtime_codes):
@@ -468,7 +488,7 @@ def validate_v2_catalog_delta(root: Path) -> int:
     expected_v2_details_schemas = dict.fromkeys(
         V2_RUNTIME_ERROR_CODES, "podway.v2-runtime-error-details/v1"
     )
-    for code in ("EVIDENCE_REFERENCE_STALE", "GOAL_REVISION_STALE"):
+    for code in ("EVIDENCE_REFERENCE_STALE", "GOAL_REVISION_STALE", "EVIDENCE_PAGE_TOKEN_STALE"):
         expected_v2_details_schemas[code] = "podway.recoverable-v2-runtime-error-details/v1"
     if v2_details_schemas != expected_v2_details_schemas:
         fail("every v2 runtime error must bind the closed v2 details schema")
@@ -487,6 +507,7 @@ def validate_v2_catalog_delta(root: Path) -> int:
         "MUTATION_OUTCOME_UNKNOWN": "podway.mutation-outcome-unknown-details/v2",
         "EVIDENCE_REFERENCE_STALE": "podway.recoverable-v2-runtime-error-details/v1",
         "GOAL_REVISION_STALE": "podway.recoverable-v2-runtime-error-details/v1",
+        "EVIDENCE_PAGE_TOKEN_STALE": "podway.recoverable-v2-runtime-error-details/v1",
         "SESSION_RESET_NOT_ELIGIBLE": "podway.session-reset-not-eligible-details/v1",
     }
     actual_recovery_schemas = {
@@ -540,7 +561,9 @@ def validate_contract_identifiers(root: Path) -> int:
     for relative_name in schema_files:
         path = repository_assets.checked_path(root, Path(relative_name), "schema")
         try:
-            schema = json.loads(path.read_text(encoding="utf-8"))
+            schema = json.loads(
+                path.read_text(encoding="utf-8"), object_pairs_hook=reject_duplicate_keys
+            )
         except (OSError, json.JSONDecodeError) as error:
             fail(f"cannot parse schema {relative_name}: {error}")
         match = re.fullmatch(r"(.+)-v([1-9][0-9]*)\.schema\.json", Path(relative_name).name)
@@ -692,7 +715,7 @@ def validate_routes(root: Path) -> int:
     if not isinstance(prohibited, list) or set(prohibited) != PROHIBITED_CAPABILITIES or len(prohibited) != len(PROHIBITED_CAPABILITIES):
         fail("command route contract must prohibit command_runner, git_mutation, and network")
     routes = contract["routes"]
-    if not isinstance(routes, list) or len(routes) != 60:
+    if not isinstance(routes, list) or len(routes) != 61:
         fail("command route contract routes must be a list")
 
     expected_commands = catalog_commands(root) | {"completions"}

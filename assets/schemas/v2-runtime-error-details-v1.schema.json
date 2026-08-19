@@ -28,7 +28,10 @@
     { "$ref": "#/$defs/freshGoalAssessmentMissing" },
     { "$ref": "#/$defs/goalAssessmentOutcomeNotAllowed" },
     { "$ref": "#/$defs/digestConfirmationRequired" },
-    { "$ref": "#/$defs/unsupportedV2Capability" }
+    { "$ref": "#/$defs/unsupportedV2Capability" },
+    { "$ref": "#/$defs/evidenceNotAvailable" },
+    { "$ref": "#/$defs/attemptContentLimitExceeded" },
+    { "$ref": "#/$defs/evidencePageTokenExhausted" }
   ],
   "$defs": {
     "base": {
@@ -138,6 +141,21 @@
     },
     "unsupportedV2Capability": {
       "allOf": [{ "$ref": "#/$defs/base" }, { "required": ["capability"], "properties": { "kind": { "const": "UNSUPPORTED_V2_CAPABILITY" }, "capability": { "type": "string", "minLength": 1, "maxLength": 128 }, "required_result_schema": { "type": "string", "minLength": 1, "maxLength": 128 }, "contract_manifest_digest": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/digest" } } }],
+      "unevaluatedProperties": false
+    },
+    "boundUnit": { "enum": ["scalars", "entries", "items", "operations"] },
+    "boundMagnitude": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+    "fieldPath": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "evidenceNotAvailable": {
+      "allOf": [{ "$ref": "#/$defs/base" }, { "required": ["graph_node_id", "source_graph_node_id", "item_id", "reference_state"], "properties": { "kind": { "const": "EVIDENCE_NOT_AVAILABLE" }, "graph_node_id": { "$ref": "#/$defs/identifier" }, "source_graph_node_id": { "$ref": "#/$defs/identifier" }, "item_id": { "$ref": "#/$defs/identifier" }, "reference_state": { "enum": ["unresolved", "skipped"] } } }],
+      "unevaluatedProperties": false
+    },
+    "attemptContentLimitExceeded": {
+      "allOf": [{ "$ref": "#/$defs/base" }, { "required": ["field", "actual", "maximum", "unit"], "properties": { "kind": { "const": "ATTEMPT_CONTENT_LIMIT_EXCEEDED" }, "field": { "$ref": "#/$defs/fieldPath" }, "actual": { "$ref": "#/$defs/boundMagnitude" }, "maximum": { "$ref": "#/$defs/boundMagnitude" }, "unit": { "const": "scalars" } } }],
+      "unevaluatedProperties": false
+    },
+    "evidencePageTokenExhausted": {
+      "allOf": [{ "$ref": "#/$defs/base" }, { "required": ["source_graph_node_id", "item_id", "offset", "total_size", "unit"], "properties": { "kind": { "const": "EVIDENCE_PAGE_TOKEN_EXHAUSTED" }, "source_graph_node_id": { "$ref": "#/$defs/identifier" }, "item_id": { "$ref": "#/$defs/identifier" }, "offset": { "$ref": "#/$defs/boundMagnitude" }, "total_size": { "$ref": "#/$defs/boundMagnitude" }, "unit": { "$ref": "#/$defs/boundUnit" } } }],
       "unevaluatedProperties": false
     }
   }

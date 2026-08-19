@@ -290,6 +290,7 @@ commands:
   - session_id_optional
   result_schemas:
   - podway.next-result/v2
+  - podway.next-result/v3
   - podway.prepared-next-result/v1
 - name: session.observe
   availability: executable
@@ -305,6 +306,21 @@ commands:
   result_schemas:
   - podway.observation-result/v1
   - podway.observation-result/v2
+  - podway.observation-result/v3
+- name: evidence.read
+  availability: reserved_contract
+  cli:
+  - evidence
+  - read
+  operation: query
+  workspace_required: true
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+  preconditions:
+  - session_id_optional
+  result_schemas:
+  - podway.evidence-read-result/v1
 - name: session.complete
   availability: executable
   cli:

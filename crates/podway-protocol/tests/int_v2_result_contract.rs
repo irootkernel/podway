@@ -9,7 +9,8 @@ use std::{
 use jsonschema::{Retrieve, Uri};
 use podway_core::{AuthoringDiagnostic, AuthoringDiagnosticCode, SourceLocation};
 use podway_protocol::{
-    CommandNameV1, EXISTING_ROUTE_RESULT_SCHEMAS_V2, ErrorEnvelopeV1, JobOutputV1, JobStateV1,
+    CommandNameV1, DAEMON_COMMAND_NAMES_V1, EXISTING_ROUTE_RESULT_SCHEMAS_V2, ErrorEnvelopeV1,
+    JobOutputV1, JobStateV1,
     MAX_V2_OUTPUT_WARNINGS, MAX_V2_RUNTIME_ERROR_MESSAGE_CHARS_V1, MAX_V2_TERMINAL_ERROR_BYTES,
     NEW_ROUTE_RESULT_SCHEMAS_V1, OUTPUT_SCHEMA_V3, OutputEnvelopeInputV3, OutputEnvelopeV3,
     PROCEDURE_DIAGNOSTICS_RESULT_SCHEMA_V1, ProtocolError, RequestIdV1, ResponseEnvelopeV2,
@@ -256,7 +257,10 @@ fn examples() -> BTreeMap<&'static str, Value> {
     .unwrap();
     for schema in [
         "podway.compact-status-result/v3",
+        "podway.evidence-read-result/v1",
+        "podway.next-result/v3",
         "podway.observation-result/v2",
+        "podway.observation-result/v3",
         "podway.prepared-next-result/v1",
         "podway.session-begin-result/v1",
         "podway.session-reset-result/v1",
@@ -271,7 +275,7 @@ fn examples() -> BTreeMap<&'static str, Value> {
 
 #[test]
 fn v2run003_readback_schema_accepts_the_declared_list_maximum() {
-    let values = (0..200)
+    let values = (0..1000)
         .map(|index| format!("value-{index}"))
         .collect::<Vec<_>>();
     let mut next = examples()["podway.next-result/v2"].clone();
@@ -342,8 +346,8 @@ fn v2grf_preview_uses_one_closed_result_family_for_every_document_outcome() {
 
 #[test]
 fn v2ctr003_registry_is_versioned_and_covers_exactly_the_v2_authoring_routes() {
-    assert_eq!(EXISTING_ROUTE_RESULT_SCHEMAS_V2.len(), 16);
-    assert_eq!(NEW_ROUTE_RESULT_SCHEMAS_V1.len(), 15);
+    assert_eq!(EXISTING_ROUTE_RESULT_SCHEMAS_V2.len(), 17);
+    assert_eq!(NEW_ROUTE_RESULT_SCHEMAS_V1.len(), 17);
     assert!(
         EXISTING_ROUTE_RESULT_SCHEMAS_V2
             .iter()
@@ -385,9 +389,10 @@ fn v2ctr003_registry_is_versioned_and_covers_exactly_the_v2_authoring_routes() {
             "goal.revise",
             "goal.assess_criterion",
             "item.record_many",
+            "evidence.read",
         ])
     );
-    assert_eq!(routes.len(), 18);
+    assert_eq!(routes.len(), 19);
 }
 
 #[test]
@@ -674,7 +679,7 @@ fn v2ctr004_v2_runtime_error_catalog_is_schema_and_decoder_bound() {
 
     assert_eq!(catalog_codes, decoder_codes);
     assert_eq!(schema_codes, decoder_codes);
-    assert_eq!(decoder_codes.len(), 26);
+    assert_eq!(decoder_codes.len(), 30);
 }
 
 #[test]
@@ -1330,6 +1335,305 @@ fn v2ctr003_decoder_rejects_missing_non_string_and_unregistered_discriminators()
 }
 
 #[test]
+fn v2scl002_evidence_read_is_a_reserved_contract_without_runtime_admission() {
+    let registered: Vec<_> = EXISTING_ROUTE_RESULT_SCHEMAS_V2
+        .iter()
+        .chain(NEW_ROUTE_RESULT_SCHEMAS_V1)
+        .filter(|contract| contract.commands.contains(&"evidence.read"))
+        .collect();
+    assert_eq!(
+        registered.len(),
+        1,
+        "evidence.read must bind exactly one reserved result family"
+    );
+    assert_eq!(registered[0].schema, "podway.evidence-read-result/v1");
+
+    let result = examples()["podway.evidence-read-result/v1"].clone();
+    assert_valid("schemas/evidence-read-result-v1.schema.json", &result);
+    let output = json!({
+        "schema": OUTPUT_SCHEMA_V3,
+        "request_id": UUID,
+        "command": "evidence.read",
+        "generated_at": "2026-08-19T00:00:00.000Z",
+        "result": result,
+        "warnings": []
+    });
+    assert_valid("schemas/output-v3.schema.json", &output);
+
+    assert!(
+        !DAEMON_COMMAND_NAMES_V1.contains(&"evidence.read"),
+        "the reserved evidence.read route must not be admitted to daemon request decoding"
+    );
+}
+
+#[test]
+fn v2scl002_evidence_read_result_conditional_branches_are_satisfiable_and_closed() {
+    let base = examples()["podway.evidence-read-result/v1"].clone();
+
+    let mut terminal_page = base.clone();
+    terminal_page["page"] = json!({"offset": 7, "size": 5, "data": "final"});
+    terminal_page["truncated"] = json!(false);
+    terminal_page["next_page_token"] = Value::Null;
+    assert_valid("schemas/evidence-read-result-v1.schema.json", &terminal_page);
+
+    let mut token_without_truncation = terminal_page.clone();
+    token_without_truncation["next_page_token"] = json!("AQIDBAUGBwgJCgsMDQ4PEA");
+    assert_invalid(
+        "schemas/evidence-read-result-v1.schema.json",
+        &token_without_truncation,
+    );
+
+    let mut truncated_without_token = base.clone();
+    truncated_without_token["next_page_token"] = Value::Null;
+    assert_invalid(
+        "schemas/evidence-read-result-v1.schema.json",
+        &truncated_without_token,
+    );
+
+    let mut list_page = base.clone();
+    list_page["item"] = json!({"item_id":"values","type":"list","revision":1});
+    list_page["size_unit"] = json!("entries");
+    list_page["total_size"] = json!(1000);
+    list_page["page"] = json!({"offset": 0, "size": 2, "data": ["first", "second"]});
+    assert_valid("schemas/evidence-read-result-v1.schema.json", &list_page);
+
+    let mut list_page_with_text = list_page.clone();
+    list_page_with_text["page"]["data"] = json!("not a list");
+    assert_invalid(
+        "schemas/evidence-read-result-v1.schema.json",
+        &list_page_with_text,
+    );
+
+    let mut confirm_page = base.clone();
+    confirm_page["item"] = json!({"item_id":"reviewed","type":"confirm","revision":1});
+    confirm_page["size_unit"] = json!("value");
+    confirm_page["total_size"] = json!(1);
+    confirm_page["page"] = json!({"offset": 0, "size": 1, "data": true});
+    confirm_page["truncated"] = json!(false);
+    confirm_page["next_page_token"] = Value::Null;
+    assert_valid("schemas/evidence-read-result-v1.schema.json", &confirm_page);
+
+    let mut truncated_scalar = confirm_page.clone();
+    truncated_scalar["truncated"] = json!(true);
+    truncated_scalar["next_page_token"] = json!("AQIDBAUGBwgJCgsMDQ4PEA");
+    assert_invalid(
+        "schemas/evidence-read-result-v1.schema.json",
+        &truncated_scalar,
+    );
+
+    for (item_type, data, invalid) in [
+        ("integer", json!(42), json!("42")),
+        ("choice", json!("accepted"), json!(1)),
+        (
+            "artifact",
+            json!({
+                "location_type": "reference",
+                "location": "reports/review.md",
+                "sha256_digest": DIGEST,
+                "size_bytes": 1024,
+                "media_type": "text/markdown"
+            }),
+            json!("reports/review.md"),
+        ),
+    ] {
+        let mut page = base.clone();
+        page["item"] = json!({"item_id":"value","type":item_type,"revision":1});
+        page["size_unit"] = json!("value");
+        page["total_size"] = json!(1);
+        page["truncated"] = json!(false);
+        page["next_page_token"] = Value::Null;
+        page["page"] = json!({"offset": 0, "size": 1, "data": data});
+        assert_valid("schemas/evidence-read-result-v1.schema.json", &page);
+        page["page"]["data"] = invalid;
+        assert_invalid("schemas/evidence-read-result-v1.schema.json", &page);
+    }
+
+    let mut unknown_field = base.clone();
+    unknown_field["page_bytes"] = json!(64);
+    assert_invalid("schemas/evidence-read-result-v1.schema.json", &unknown_field);
+}
+
+#[test]
+fn v2scl002_next_result_v3_evidence_window_is_exact_and_never_truncated() {
+    let mut next = examples()["podway.next-result/v3"].clone();
+    next["readback"] = json!([{
+        "source_graph_node_id": "source",
+        "source_title": "Source",
+        "source_attempt_id": UUID,
+        "source_attempt_number": 1,
+        "items_digest": DIGEST,
+        "state": "resolved",
+        "items": [{
+            "item_id": "notes", "type": "text", "revision": 1,
+            "value_digest": DIGEST, "total_size": 12, "size_unit": "scalars",
+            "preview": "first", "preview_truncated": true,
+            "next_page_token": "AQIDBAUGBwgJCgsMDQ4PEA"
+        }],
+        "items_total": 1,
+        "items_truncated": false
+    }]);
+    next["readback_items_total"] = json!(1);
+    assert_valid("schemas/next-result-v3.schema.json", &next);
+
+    let mut truncated_window = next.clone();
+    truncated_window["readback_items_truncated"] = json!(true);
+    assert_invalid("schemas/next-result-v3.schema.json", &truncated_window);
+
+    let mut truncated_reference = next.clone();
+    truncated_reference["readback"][0]["items_truncated"] = json!(true);
+    assert_invalid("schemas/next-result-v3.schema.json", &truncated_reference);
+
+    let mut token_without_preview = next.clone();
+    token_without_preview["readback"][0]["items"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("preview");
+    assert_invalid("schemas/next-result-v3.schema.json", &token_without_preview);
+
+    let mut oversized_window = next.clone();
+    oversized_window["readback_items_total"] = json!(129);
+    assert_invalid("schemas/next-result-v3.schema.json", &oversized_window);
+
+    let mut stale_state = next.clone();
+    stale_state["readback"][0]["state"] = json!("stale");
+    assert_invalid("schemas/next-result-v3.schema.json", &stale_state);
+
+    let mut missing_truncation_flag = next.clone();
+    missing_truncation_flag
+        .as_object_mut()
+        .unwrap()
+        .remove("missing_required_items_truncated");
+    assert_invalid(
+        "schemas/next-result-v3.schema.json",
+        &missing_truncation_flag,
+    );
+}
+
+#[test]
+fn v2scl002_observation_result_v3_pins_every_lifecycle_window() {
+    let prepared = examples()["podway.observation-result/v3"].clone();
+    assert_valid("schemas/observation-result-v3.schema.json", &prepared);
+
+    let mut wrong_prepared_total = prepared.clone();
+    wrong_prepared_total["mutation_templates_total"] = json!(2);
+    assert_invalid(
+        "schemas/observation-result-v3.schema.json",
+        &wrong_prepared_total,
+    );
+
+    let mut status_with_values = prepared.clone();
+    status_with_values["status"]["item_values"] = json!([]);
+    assert_invalid(
+        "schemas/observation-result-v3.schema.json",
+        &status_with_values,
+    );
+
+    let mut terminal = prepared.clone();
+    terminal["status"]["session"] = json!({"id":UUID,"lifecycle":"completed","revision":4});
+    terminal["guidance"] = Value::Null;
+    terminal["mutation_templates"] = json!([{
+        "command": "session.terminal_disposition",
+        "argv": ["podway", "disposition"],
+        "preconditions": {"workspace_uuid": UUID, "session_id": UUID, "session_revision": 4},
+        "authority": "optimistic_concurrency_only",
+        "idempotency_key_required": true,
+        "requires_explicit_authorization": false
+    }]);
+    terminal["mutation_templates_total"] = json!(1);
+    assert_valid("schemas/observation-result-v3.schema.json", &terminal);
+
+    let mut terminal_total_mismatch = terminal.clone();
+    terminal_total_mismatch["mutation_templates_total"] = json!(2);
+    assert_invalid(
+        "schemas/observation-result-v3.schema.json",
+        &terminal_total_mismatch,
+    );
+
+    let mut terminal_with_guidance = terminal.clone();
+    terminal_with_guidance["guidance"] = examples()["podway.next-result/v3"].clone();
+    assert_invalid(
+        "schemas/observation-result-v3.schema.json",
+        &terminal_with_guidance,
+    );
+
+    let mut oversized_argv = terminal.clone();
+    oversized_argv["mutation_templates"][0]["argv"] = json!(["podway", "x".repeat(4_097)]);
+    assert_invalid("schemas/observation-result-v3.schema.json", &oversized_argv);
+
+    let disposed_template = |command: &str| {
+        json!({
+            "command": command,
+            "argv": ["podway", "reset"],
+            "preconditions": {"workspace_uuid": UUID, "session_id": UUID, "session_revision": 4},
+            "authority": "optimistic_concurrency_only",
+            "idempotency_key_required": true,
+            "requires_explicit_authorization": true
+        })
+    };
+    let mut cancelled = terminal.clone();
+    cancelled["status"]["session"] = json!({"id":UUID,"lifecycle":"cancelled","revision":4});
+    cancelled["mutation_templates"] = json!([
+        disposed_template("session.reset"),
+        disposed_template("session.start_replace")
+    ]);
+    cancelled["mutation_templates_total"] = json!(2);
+    assert_valid("schemas/observation-result-v3.schema.json", &cancelled);
+
+    let mut cancelled_total_mismatch = cancelled.clone();
+    cancelled_total_mismatch["mutation_templates_total"] = json!(1);
+    assert_invalid(
+        "schemas/observation-result-v3.schema.json",
+        &cancelled_total_mismatch,
+    );
+
+    let mut running = prepared.clone();
+    running["status"]["session"] = json!({"id":UUID,"lifecycle":"running","revision":4});
+    running["status"]["current"] = json!({
+        "node": {"node_definition_id":"work","graph_node_id":"work","node_type":"action"},
+        "attempt": {"attempt_id":UUID,"attempt_number":1},
+        "readiness": {"items_satisfied":true,"unblocked":true,"goal_ready":true,"can_advance":true},
+        "missing_required_item_count": 0,
+        "blockers_total": 0
+    });
+    running["status"]["trace_length"] = json!(1);
+    running["guidance"] = examples()["podway.next-result/v3"].clone();
+    running["mutation_templates"] = json!([disposed_template("session.reset")]);
+    running["mutation_templates_total"] = json!(1);
+    assert_valid("schemas/observation-result-v3.schema.json", &running);
+
+    let mut guidance_with_preview = running.clone();
+    guidance_with_preview["guidance"]["readback"] = json!([{
+        "source_graph_node_id": "source",
+        "source_title": "Source",
+        "source_attempt_id": UUID,
+        "source_attempt_number": 1,
+        "items_digest": DIGEST,
+        "state": "resolved",
+        "items": [{
+            "item_id": "notes", "type": "text", "revision": 1,
+            "value_digest": DIGEST, "total_size": 12, "size_unit": "scalars",
+            "preview": "first", "preview_truncated": false
+        }],
+        "items_total": 1,
+        "items_truncated": false
+    }]);
+    guidance_with_preview["guidance"]["readback_items_total"] = json!(1);
+    assert_invalid(
+        "schemas/observation-result-v3.schema.json",
+        &guidance_with_preview,
+    );
+
+    let mut guidance_metadata_only = guidance_with_preview.clone();
+    let item = &mut guidance_metadata_only["guidance"]["readback"][0]["items"][0];
+    item.as_object_mut().unwrap().remove("preview");
+    item.as_object_mut().unwrap().remove("preview_truncated");
+    assert_valid(
+        "schemas/observation-result-v3.schema.json",
+        &guidance_metadata_only,
+    );
+}
+
+#[test]
 fn v2lif002_prepared_result_families_enforce_the_reserved_lifecycle_boundary() {
     let fixtures = examples();
 
@@ -1904,7 +2208,10 @@ fn maximum_runtime_error_details(code: &str) -> Value {
         "kind":code,
         "admission":{"admitted":true,"job_id":UUID,"workspace_sequence":u64::MAX}
     });
-    if matches!(code, "EVIDENCE_REFERENCE_STALE" | "GOAL_REVISION_STALE") {
+    if matches!(
+        code,
+        "EVIDENCE_REFERENCE_STALE" | "GOAL_REVISION_STALE" | "EVIDENCE_PAGE_TOKEN_STALE"
+    ) {
         details["schema"] = json!("podway.recoverable-v2-runtime-error-details/v1");
         details["recovery"] = refresh_state_recovery();
     }
@@ -1982,6 +2289,32 @@ fn maximum_runtime_error_details(code: &str) -> Value {
             details["contract_manifest_digest"] = json!(DIGEST);
         }
         "GOAL_TRACKING_NOT_ENABLED" | "SESSION_GOAL_MISSING" | "REACTIVATION_FLAG_REQUIRED" => {}
+        "EVIDENCE_NOT_AVAILABLE" => {
+            details["graph_node_id"] = json!(identifier);
+            details["source_graph_node_id"] = json!(maximum_identifier(1));
+            details["item_id"] = json!(maximum_identifier(2));
+            details["reference_state"] = json!("skipped");
+        }
+        "ATTEMPT_CONTENT_LIMIT_EXCEEDED" => {
+            details["field"] = json!(escape_heavy(256));
+            details["actual"] = json!(u64::MAX);
+            details["maximum"] = json!(u64::MAX - 1);
+            details["unit"] = json!("scalars");
+        }
+        "EVIDENCE_PAGE_TOKEN_EXHAUSTED" => {
+            details["source_graph_node_id"] = json!(identifier);
+            details["item_id"] = json!(maximum_identifier(1));
+            details["offset"] = json!(u64::MAX);
+            details["total_size"] = json!(u64::MAX);
+            details["unit"] = json!("scalars");
+        }
+        "EVIDENCE_PAGE_TOKEN_STALE" => {
+            details["graph_node_id"] = json!(identifier);
+            details["source_graph_node_id"] = json!(maximum_identifier(1));
+            details["item_id"] = json!(maximum_identifier(2));
+            details["expected_value_digest"] = json!(DIGEST);
+            details["current_value_digest"] = json!(DIGEST);
+        }
         unexpected => panic!("unhandled v2 runtime error code {unexpected}"),
     }
     details
@@ -2108,14 +2441,18 @@ fn v2rel002_largest_terminal_error_receipt_round_trips_once_in_job_reads() {
     let mut direct = Vec::new();
     for code in V2_RUNTIME_ERROR_CODES_V1 {
         let (exit_code, retryable) = match *code {
-            "EVIDENCE_REFERENCE_STALE" | "GOAL_REVISION_STALE" => (4, true),
-            "DIGEST_CONFIRMATION_REQUIRED" => (2, false),
+            "EVIDENCE_REFERENCE_STALE" | "GOAL_REVISION_STALE" | "EVIDENCE_PAGE_TOKEN_STALE" => {
+                (4, true)
+            }
+            "DIGEST_CONFIRMATION_REQUIRED" | "EVIDENCE_PAGE_TOKEN_EXHAUSTED" => (2, false),
             "UNSUPPORTED_V2_CAPABILITY" => (3, false),
             _ => (1, false),
         };
         let details = maximum_runtime_error_details(code);
-        let details_schema = if matches!(*code, "EVIDENCE_REFERENCE_STALE" | "GOAL_REVISION_STALE")
-        {
+        let details_schema = if matches!(
+            *code,
+            "EVIDENCE_REFERENCE_STALE" | "GOAL_REVISION_STALE" | "EVIDENCE_PAGE_TOKEN_STALE"
+        ) {
             "schemas/recoverable-v2-runtime-error-details-v1.schema.json"
         } else {
             "schemas/v2-runtime-error-details-v1.schema.json"
@@ -2150,7 +2487,7 @@ fn v2rel002_largest_terminal_error_receipt_round_trips_once_in_job_reads() {
         assert_eq!(decode_single_frame_v1(&frame).unwrap(), payload);
         direct.push((payload.len(), error));
     }
-    assert_eq!(direct.len(), 26);
+    assert_eq!(direct.len(), 30);
     let largest_direct_length = direct.iter().map(|(length, _)| *length).max().unwrap();
     let (_, largest) = direct
         .into_iter()
