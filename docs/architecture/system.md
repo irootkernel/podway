@@ -225,15 +225,18 @@ podway-config + podway-protocol + podway-presets
 
 Podway is optimized for local task state, not bulk workflow data.
 
-Design limits:
+Design limits are owned by [ADR-0024](../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md). Every length below counts Unicode scalar values, not bytes. The `V2SCL` epic makes the implementation conform; until `V2SCL-003` lands, the shipped item bounds are 64 items per definition, 16,384 text scalars, 200 list entries, and 1,000 scalars per entry, and until `V2SCL-004` lands there is no `evidence.read` route.
 
 - at most one session per workspace;
 - at most 64 graph placements per procedure;
-- at most 128 items per node definition;
+- at most 128 items per node definition and per attempt;
 - at most 256 queued jobs by default per workspace;
 - IPC frame size at most 1 MiB;
-- text item size at most 8 KiB by default and 64 KiB hard maximum;
-- list item at most 1,000 entries hard maximum;
+- text item at most 4,000 scalars by default and 65,536 scalars hard maximum;
+- list item at most 1,000 entries hard maximum, 8,192 scalars per entry, and 1,000,000 scalars of total content;
+- at most 16,777,216 scalars of recorded text and list content per attempt;
 - artifact hashing is streaming and does not load the entire file into memory.
+
+Selected evidence is read one bounded page at a time through `evidence.read` rather than embedded whole in a progression response. A page carries at most 256 KiB of encoded data inside a response of at most 320 KiB, and `session.next` and `session.observe` carry evidence identity, digest, and size with bounded previews instead of complete values. Response composition is a closed set of named byte allocations; every windowed collection reports its exact total and whether it was truncated.
 
 Normal status and non-artifact mutations SHOULD complete fast enough for interactive use. Artifact digest time is proportional to file size and is reported separately in diagnostics.

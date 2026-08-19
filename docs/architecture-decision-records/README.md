@@ -37,3 +37,4 @@ narrative architecture and specifications when sources conflict.
 - [ADR-0021](0021-separate-session-preparation-from-execution.md): separate session preparation from execution
 - [ADR-0022](0022-bounded-correlated-daemon-logs.md): bounded correlated daemon and bootstrap logs
 - [ADR-0023](0023-daemon-owned-bootstrap-log.md): daemon-owned bounded bootstrap logging
+- [ADR-0024](0024-bounded-evidence-scale-and-paged-read-back.md): bounded evidence scale and paged read-back

@@ -16,15 +16,43 @@ procedure-independent service/workspace families whose own first-version IDs rem
 Procedure runtime results identify `procedure_schema: podway.procedure/v2`.
 Prepared-aware routes use `session-start-result/v3`,
 `session-begin-result/v1`, `terminal-disposition-result/v1`,
-`session-reset-result/v1`, `status-result/v3`, `compact-status-result/v3`,
-`prepared-next-result/v1`, and `observation-result/v2`. Running next retains its
-v2 family until the separately adopted evidence-scale contract introduces
-`next-result/v3`. Item and graph-transition families retain their current
-versions, and decision, rework, goal, authoring, and platform results remain
-first-version families where their shapes do not change.
+`session-reset-result/v1`, `status-result/v3`, `compact-status-result/v3`, and
+`prepared-next-result/v1`, and observation currently uses `observation-result/v2`.
+The bounded evidence scale contract moves running next to `next-result/v3` and
+observation to `observation-result/v3`, and adds `evidence-read-result/v1` for the
+`evidence.read` query; `V2SCL-002` reserves all three families and `V2SCL-004` and
+`V2SCL-005` serve them. Item and graph-transition
+families retain their current versions, and decision, rework, goal, authoring, and
+platform results remain first-version families where their shapes do not change.
+
+`next-result/v3` and `observation-result/v3` are new versions because their evidence
+payloads change materially: an evidence projection carries source and item identity,
+the complete-value digest, and the total logical size instead of the complete value.
+`next-result/v3` adds bounded preview state and a continuation token; observation
+guidance carries metadata only.
+`observation-result/v3` retains the prepared-aware lifecycle and template semantics
+while reducing its status member from the standard tier to a bounded, value-free
+compact projection, because observation is the current-state guidance surface and its
+own guidance and active-item windows already carry what a mutation needs. A caller
+that wants the standard or verbose status projection, including trace history, uses
+`session.status`. Evidence metadata total and truncation fields are always present,
+are invariantly non-truncated for `session.next`, and may be truncated only in the
+observation-specific projection; observation guidance carries no preview data and no
+page token.
+
+Adding a result family to the `output-v3` command-to-result selection is not widening
+a released closed schema: each released result schema keeps its own identifier, field
+set, and unknown-field closure. Within the manifest fail-closed gate, a released shared
+family may also receive a bounded in-place numeric constraint update or an additional
+closed `kind` variant, because neither alters an existing variant's field set or its
+unknown-field closure, and a peer with a different manifest digest already fails closed
+on the whole contract set rather than silently accepting a wider value. A materially
+changed payload shape still requires a new version, as `next-result/v3` and
+`observation-result/v3` do.
 
 The output-v3 `session.next` branch accepts the running next result or the
-disjoint cursor-free prepared result. Prepared status uses null cursor, attempt,
+disjoint cursor-free prepared result. `V2SCL-002` adds an `evidence.read` branch,
+which is procedure-independent and carries no durable job. Prepared status uses null cursor, attempt,
 goal, and readiness projections; prepared observation has no active items and
 contains only bounded lifecycle guidance and applicable fenced templates.
 Existing released closed schemas are not widened in place.

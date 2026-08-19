@@ -10,8 +10,8 @@ human-readable text or one JSON document. It never writes SQLite directly.
   `reset --all`.
 - Procedures: `preset list|show|explain` and `procedure
   validate|show|format|vet|graph|preview|lint|check|scaffold`.
-- Session reads: `status`, `next`, `observe`, and
-  `job list|status|wait|lookup|cancel`.
+- Session reads: `status`, `next`, `observe`, `evidence read` (added by `V2SCL-004`),
+  and `job list|status|wait|lookup|cancel`.
 - Session mutations: `start`, `begin`, `complete`, `skip`, `retry`, `block`,
   `unblock`, `cancel`, `disposition handed-off|not-required`, `reset`, `decide`,
   `rework`, `goal define|revise|assess-criterion`,
@@ -39,6 +39,14 @@ prepared session and never accepts or creates initial goal state.
 prepared session, and atomically creates the first running attempt. Goal input is
 allowed only when the admitted Procedure enables goal tracking and retains the
 existing goal and criterion bounds.
+
+## Evidence reads
+
+`V2SCL-004` adds this command and its grammar, help, and completion entries; the shipped catalog and CLI do not yet contain it.
+
+`evidence read --source <graph-node-id> --item <item-id> [--page-token <token>]` returns one bounded page of an item selected by a currently resolved, declared evidence reference of the current consumer attempt. It is a query: it creates no durable job, no session revision, and no state change, and it cannot browse arbitrary attempts or stale history.
+
+A read without a token starts at the beginning of the value. A response carries the complete-value digest, the total logical size, the page, a `truncated` flag, and a nullable continuation token. Text offsets and sizes count Unicode scalar values, list offsets and sizes count entries, and scalar item types return one terminal page. The token is opaque, bounded to 256 base64url characters, and is not an authentication or authorization credential.
 
 ## Mutation rules
 
@@ -68,8 +76,8 @@ progress-summary rule. Every deletion or replacement remains fully fenced.
 
 `record --stdin` is the only multi-item mutation grammar. It reads at most 1 MiB
 of closed `podway.item-record-many-input/v1` JSON. The document supplies the
-workspace, session revision, active attempt, idempotency key, and 1..64 unique
-item-local revision fences. The daemon canonicalizes operations by item ID and
+workspace, session revision, active attempt, idempotency key, and 1..128 unique
+item-local revision fences, raised from 1..64 by `V2SCL-003`. The daemon canonicalizes operations by item ID and
 records or clears the complete set atomically without advancing the cursor.
 Identity, revision, and idempotency flags must not duplicate the stdin fields.
 

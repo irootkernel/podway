@@ -319,7 +319,7 @@ Dependencies: completed `V2LIF` epic.
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `V2SCL-001` | Adopt the bounded evidence scale authority | Planned | Adopt the ADR and normative scale, paging, compatibility, and diagnostic contracts. | [V2SCL dossier](../todo/TODO-podway-evidence-scaling.md#3-accepted-design-and-public-interfaces) |
+| `V2SCL-001` | Adopt the bounded evidence scale authority | Completed | Adopt the ADR and normative scale, paging, compatibility, and diagnostic contracts. | [ADR-0024](../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md), [item bounds](../specs/domain/procedure-and-item-specification.md#item-bounds) |
 | `V2SCL-002` | Reserve pageable evidence read contracts | Planned | Register `evidence.read`, `next-result/v3`, `observation-result/v3`, the closed `output-v3` branch, shared and record-many schema bounds, public errors, command routes, manifest digests, and compatibility fixtures without premature runtime admission. | [V2SCL dossier](../todo/TODO-podway-evidence-scaling.md#32-pageable-evidence-reads) |
 | `V2SCL-003` | Align item limits and structured diagnostics | Planned | Unify authoring and runtime limits, protocol slices, total-list and attempt bounds, re-pin the rotated preset digests, and report exact exceeded fields and maxima. | [V2SCL dossier](../todo/TODO-podway-evidence-scaling.md#31-scale-envelope) |
 | `V2SCL-004` | Implement snapshot-bound evidence paging | Planned | Serve deterministic bounded text and list pages under current evidence identity, freshness, page-token, metadata, and IPC constraints. | [V2SCL dossier](../todo/TODO-podway-evidence-scaling.md#32-pageable-evidence-reads) |

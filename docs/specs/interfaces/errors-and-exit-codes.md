@@ -172,10 +172,11 @@ remain registered defensive domain results rather than expected outcomes from a
 coherent current public request.
 
 Registered v2 runtime codes use closed code-bound details inside the retained
-`podway.error/v1` envelope. `EVIDENCE_REFERENCE_STALE` and
-`GOAL_REVISION_STALE` use
-`podway.recoverable-v2-runtime-error-details/v1`; the other 24 codes retain
-`podway.v2-runtime-error-details/v1`. The required `kind` exactly equals the
+`podway.error/v1` envelope. `EVIDENCE_REFERENCE_STALE` and `GOAL_REVISION_STALE` use
+`podway.recoverable-v2-runtime-error-details/v1`; every other registered code uses
+`podway.v2-runtime-error-details/v1`. `V2SCL-002` adds `EVIDENCE_PAGE_TOKEN_STALE`
+to the recoverable family and the other three bounded-evidence codes to the
+non-recoverable one, extending both closed `kind` unions. The required `kind` exactly equals the
 outer error code; code-specific fields are bounded, unknown fields are rejected,
 and optional `admission` retains the ordinary admission metadata contract. V2
 runtime error messages remain bounded to 512 characters.
@@ -190,6 +191,21 @@ including the mandatory stable codes
 `NO_REACTIVATION_PATH`.
 
 `INTERNAL_ERROR` is never marked retryable, and its details include a diagnostic ID. A client may make an out-of-band retry decision, but the daemon does not prove that an unexpected failure committed no mutation.
+
+## Bounded evidence scale failures
+
+[ADR-0024](../../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md) adopts four codes. `V2SCL-002` adds them to `error-codes.json`, the closed details schemas, and the protocol catalog; until it lands the machine registries contain none of them.
+
+| Code | Exit | Retryable | Meaning |
+|---|---:|---|---|
+| `EVIDENCE_NOT_AVAILABLE` | 1 | no | A no-token `evidence.read` names a declared reference that is unresolved or skipped. |
+| `ATTEMPT_CONTENT_LIMIT_EXCEEDED` | 1 | no | Recorded text and list content for the attempt would exceed the per-attempt aggregate. |
+| `EVIDENCE_PAGE_TOKEN_EXHAUSTED` | 2 | no | The token offset is at or past the logical end of the value. The daemon never issues such a token. |
+| `EVIDENCE_PAGE_TOKEN_STALE` | 4 | yes | A previously valid token no longer matches the current consumer, source value, reference validity, or session identity. |
+
+`EVIDENCE_PAGE_TOKEN_STALE` uses the state-refresh recovery recipe, matching `EVIDENCE_REFERENCE_STALE`, and `EVIDENCE_PAGE_TOKEN_EXHAUSTED` is a usage failure because the daemon never issues a token past the logical end. A genuinely stale reference keeps `EVIDENCE_REFERENCE_STALE`; `EVIDENCE_NOT_AVAILABLE` never substitutes for it. Malformed, oversized, cross-session, and wrong-binding tokens are decoding failures and return `REQUEST_INVALID` before any state comparison. No evidence-read failure changes state.
+
+Bound failures carry structured details containing `field`, `actual`, `maximum`, and `unit`, and name the constraint actually violated: entry count, per-entry length, total list content, or the per-attempt aggregate. A generic message such as `invalid constraints` is not sufficient when the exact exceeded limit is known. `REQUEST_TOO_LARGE` is the intentional exception, because frame decoding precedes JSON parsing and no field path exists.
 
 ## Prepared lifecycle failures
 
@@ -305,7 +321,7 @@ code, retryability, exit class, and admission facts:
 | `SESSION_ID_MISMATCH` | `podway.session-id-mismatch-details/v2` | `session.observe` |
 | `SESSION_REVISION_CONFLICT`, `ITEM_REVISION_CONFLICT` | `podway.revision-conflict-details/v2` | `session.observe` |
 | `ATTEMPT_NOT_CURRENT` | `podway.attempt-conflict-details/v2` | `session.observe` |
-| `EVIDENCE_REFERENCE_STALE`, `GOAL_REVISION_STALE` | `podway.recoverable-v2-runtime-error-details/v1` | `session.observe` |
+| `EVIDENCE_REFERENCE_STALE`, `GOAL_REVISION_STALE`, `EVIDENCE_PAGE_TOKEN_STALE` | `podway.recoverable-v2-runtime-error-details/v1` | `session.observe` |
 | `MUTATION_OUTCOME_UNKNOWN` | `podway.mutation-outcome-unknown-details/v2` | `job.lookup` |
 | `JOB_WAIT_TIMEOUT` | `podway.job-wait-timeout-details/v2` | `job.wait` when the job ID is known, otherwise `session.observe` |
 

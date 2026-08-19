@@ -139,7 +139,8 @@ not create a contract mismatch.
 | `AUT-ID-009` | `begin`, terminal disposition, eligible or force replacement, and eligible or force reset MUST enforce the exact observed workspace UUID, session ID, and session revision; begin and disposition MUST NOT accept an attempt fence. |
 
 `podway record --stdin` consumes only closed
-`podway.item-record-many-input/v1` JSON bounded to 1 MiB and 1..64 unique item
+`podway.item-record-many-input/v1` JSON bounded to 1 MiB and, once `V2SCL-003`
+raises the shipped 1..64 bound, 1..128 unique item
 operations. Each operation contains exactly one typed complete record value or
 `clear: true`. Operations and per-item outcomes are canonicalized by item ID.
 The command uses the normal durable admission, detached execution, idempotent
@@ -211,17 +212,34 @@ not replace, the session revision or active-attempt fence.
 |---|---|
 | `AUT-OBS-002` | `status --wait-for-idle --compact` MUST return workspace and queue identity, Procedure identity, session lifecycle and revision, and lifecycle-valid cursor, readiness, item, and blocker projections; every cursor-bearing projection MUST be null or empty for prepared state. |
 | `AUT-OBS-003` | Compact status MUST omit instructions, prompts, task titles, previous-attempt narratives, and item values unless a value is strictly required to form a valid mutation. |
-| `AUT-OBS-004` | Compact status MUST use a closed schema and the complete serialized JSON envelope MUST NOT exceed 262,144 UTF-8 bytes. |
+| `AUT-OBS-004` | Compact status MUST use a closed schema and the complete serialized JSON envelope of a standalone `status --compact` response MUST NOT exceed 262,144 UTF-8 bytes. The compact projection nested inside an observation is budgeted separately by `AUT-OBS-009`. |
 
-### Self-contained observation (AUT-OBS-005–009)
+### Self-contained observation (AUT-OBS-005–011)
+
+`V2SCL-005` delivers the `observation-result/v3` requirements below; the current build serves `observation-result/v2` with a standard-tier status member.
 
 | ID | Normative requirement |
 |---|---|
 | `AUT-OBS-005` | `observe`, `observe --wait-for-idle`, and `observe --after-job <job-id>` MUST use the same immediate and queue-barrier semantics as the existing read routes and MUST return one coherent Store observation. |
-| `AUT-OBS-006` | A prepared or running observation MUST return closed `podway.observation-result/v2`. Running contains prepared-aware status, current next guidance, active item declarations with type-specific constraints and bounded typed value projections, and applicable mutation templates. Prepared contains prepared-aware status, cursor-free prepared guidance, no active items, and only begin, eligible-reset, and eligible-replacement templates. |
+| `AUT-OBS-006` | A prepared or running observation MUST return closed `podway.observation-result/v3`. Running contains a bounded value-free compact status projection, current next guidance, active item declarations with type-specific constraints and bounded typed value projections, and applicable mutation templates. Prepared contains the same compact status projection, cursor-free prepared guidance, no active items, and only begin, eligible-reset, and eligible-replacement templates. |
 | `AUT-OBS-007` | Every mutation template MUST carry exact current workspace, session, and applicable revision/attempt/item/goal fences, mark the idempotency-key requirement, and classify whether an explicit user request is required. Templates MUST NOT invent semantic values or an idempotency key, and fences MUST NOT be represented as authentication or authorization. |
 | `AUT-OBS-008` | A completed or cancelled observation MUST succeed with prepared-aware terminal status, null guidance, no active items, and only a terminal-disposition template when the current terminal revision has no disposition; a disposed terminal state MUST instead offer only eligible reset and replacement templates. Existing `next` terminal behavior remains unchanged. |
-| `AUT-OBS-009` | Observation MUST omit history, bound every projected item value and lifecycle template, and leave the existing 65,536-byte envelope reserve within the 1,048,576-byte frame for the admitted maximum Procedure fixture. |
+| `AUT-OBS-009` | Observation MUST omit history and compose five independent byte-budgeted windows within the 1,048,576-byte frame: compact status at 131,072 bytes, `next-result/v3` guidance at 655,360 bytes, the active item window at 131,072 bytes, the mutation template window at 65,536 bytes, and 65,536 bytes of serialization and outer-envelope reserve. Every window MUST report its exact total and whether it was truncated. |
+| `AUT-OBS-010` | Observation guidance MUST emit evidence metadata only, with no preview data and no page token. Active-item choice constraints MUST expose at most eight choices with the exact choice count and a truncation flag, and template argv elements MUST NOT exceed 4,096 Unicode scalars. |
+| `AUT-OBS-011` | Reducing the observation status member from the standard tier to the compact projection removes `purpose`, `item_values`, and the other standard-only fields from observation. Current progression guidance and active-item mutation information MUST remain self-contained in observation; a consumer that needs the removed fields, or trace history, MUST use `session.status`. |
+
+### Bounded evidence scale and paging (AUT-EVR-001–008)
+
+| ID | Normative requirement |
+|---|---|
+| `AUT-EVR-001` | Authoring validation, runtime recording, persistence reconstruction, protocol request slices, and documentation MUST enforce one scale envelope in Unicode scalar values: text 65,536, list 1,000 entries, 8,192 per entry, 1,000,000 total list content, 16,777,216 recorded text and list content per attempt, and 128 items per node definition and attempt. |
+| `AUT-EVR-002` | A wire value bound MUST NOT be narrower than the corresponding domain hard maximum, and the 1,048,576-byte request frame MUST remain an independent transport bound. |
+| `AUT-EVR-003` | `evidence.read` MUST read only an item selected by a currently resolved, declared evidence reference of the current consumer attempt, MUST be fenced by workspace UUID, session ID, and consumer attempt ID, and MUST create no durable job, session revision, or state change. |
+| `AUT-EVR-004` | An `evidence.read` page MUST end only at a Unicode scalar boundary for text and at an entry boundary for lists, MUST carry at most 262,144 bytes of encoded page data, and its complete encoded response including one token MUST NOT exceed 327,680 bytes. |
+| `AUT-EVR-005` | The page token MUST be opaque, at most 256 base64url characters, and validated field by field against current authoritative state on every read. It MUST NOT be represented as an authentication or authorization credential. |
+| `AUT-EVR-006` | Malformed, oversized, cross-session, and wrong-binding tokens MUST fail as `REQUEST_INVALID` before state comparison; an unresolved or skipped reference read without a token MUST fail with `EVIDENCE_NOT_AVAILABLE`; a changed bound snapshot MUST fail retryably with `EVIDENCE_PAGE_TOKEN_STALE`; and an offset at or past the logical end MUST fail with `EVIDENCE_PAGE_TOKEN_EXHAUSTED`, which the daemon MUST never issue a token for. |
+| `AUT-EVR-007` | `session.next` MUST compose six named byte allocations within the frame, MUST supply complete evidence metadata for every item in an admitted projection, and MUST NOT mark its evidence metadata window truncated. Explicit selectors receive previews in declaration order for at most 32 items, and at most 128 item metadata records may appear in one response. |
+| `AUT-EVR-008` | Every bound failure MUST report `field`, `actual`, `maximum`, and `unit` and name the constraint actually violated. `REQUEST_TOO_LARGE` is the only exception, because frame decoding precedes JSON parsing. |
 
 ## 21. Command-specific JSON schemas (AUT-JSON-001–004)
 
@@ -278,6 +296,7 @@ env -i PATH="<release-bin>:/usr/bin:/bin" \
 | `AUT-T-LIF` | prepared reconstruction, begin with and without a goal, forbidden prepared mutations, terminal disposition currentness, eligible and force reset/replacement, restart, replay, and stale fences | `V2LIF-002`–`005` |
 | `AUT-T-RECON` | disconnect before/after admission, wait timeout, lookup in every state, domain failure, pruning, missing key, key reuse | `RECON001`–`RECON005` |
 | `AUT-T-OBS` | idle barrier invariants, closed compact schema, maximum envelope size | `MCONT004`, `MCONT006`, `DOLGI002` |
+| `AUT-T-EVR` | every bound at and one above its boundary, worst-case Unicode escaping, an incrementally built 1,000-entry list, framed `item.record_many` acceptance and rejection, total-list and attempt-aggregate overflow, reconstruction, 128 item definitions, multi-page text and list reads, stable token replay, restart, selector diagnostics, every response allocation, each of the four token failure distinctions separately (`REQUEST_INVALID` before state comparison for malformed, oversized, cross-session, and wrong-binding tokens; `EVIDENCE_NOT_AVAILABLE` for an unresolved or skipped reference read without a token; `EVIDENCE_PAGE_TOKEN_STALE` for a changed bound snapshot; `EVIDENCE_PAGE_TOKEN_EXHAUSTED` for an end-of-value offset), the one-time preset digest rotation and its `DIGEST_CONFIRMATION_REQUIRED` boundary, and the five observation windows with their totals, truncation flags, and metadata-only guidance | `V2SCL-002`–`005` |
 | `AUT-T-JSON` | every result/detail fixture validates its discriminator and rejects unknown or malformed fields | `MCONT001`–`MCONT006` |
 | `AUT-T-DIST` | `make dist` packages the native release-profile archive once, verifies its identity and layout, then runs packaged lifecycle, conflict, timeout, response-loss, reconciliation, identity, termination, and socket-cleanup checks through isolated foreground dev mode | `DOLGI005`, `REL10001`–`REL10004` |
 
@@ -311,7 +330,8 @@ Preview and other authoring reads remain side-effect free.
 | `AUT-START-001`–`004` | `PSTRT001`–`PSTRT005` | `AUT-T-START` |
 | `AUT-LIF-001`–`010` | `V2LIF-002`–`005` | `AUT-T-LIF`, `AUT-T-OBS`, `AUT-T-JSON` |
 | `AUT-ADMIT-001`–`003`, `AUT-RECON-001`–`004` | `RECON001`–`RECON005` | `AUT-T-RECON` |
-| `AUT-OBS-001`–`009` | `MCONT004`, `MCONT006`, `DOLGI002`, `V2LIF-004`–`005` | `AUT-T-OBS`, `AUT-T-LIF` |
+| `AUT-OBS-001`–`011` | `MCONT004`, `MCONT006`, `DOLGI002`, `V2LIF-004`–`005`, `V2SCL-005` | `AUT-T-OBS`, `AUT-T-LIF`, `AUT-T-EVR` |
+| `AUT-EVR-001`–`008` | `V2SCL-002`–`005` | `AUT-T-EVR`, `AUT-T-JSON` |
 | `AUT-JSON-001`–`004`, `AUT-ERR-001`–`005` | `CASID004`, `MCONT001`–`MCONT006`, `V2AGT-005` | `AUT-T-JSON` |
 | `AUT-REL-001`–`004` | `DOLGI005`, `REL10001`–`REL10005` | `AUT-T-DIST`, repository-local `make dist` |
 

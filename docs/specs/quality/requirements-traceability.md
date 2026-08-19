@@ -11,6 +11,9 @@
 | Default deletion uses only prepared state or current terminal disposition; force deletion requires confirmation and progress summary | ADR-0021; lifecycle and automation specs | `V2LIF-004` reset/replacement and `V2LIF-005` E2E tests |
 | Schema v5 preserves v4 sessions while adding prepared state and terminal disposition | SQLite model; sqlite-v5 DDL | `V2LIF-003` migration, reconstruction, restart, and downgrade tests |
 | Workspace UUID and root ownership remain unique while confirmed reset converges proven legacy duplicate-root metadata | Recovery, retention, and maintenance; SQLite model | `V2REC-001` registry and reset-recovery integration tests |
+| One Unicode-scalar scale envelope binds authoring, runtime, persistence, protocol, and documentation | ADR-0024; Procedure and item specification | `V2SCL-003` domain, config, schema-equality, and protocol slice tests |
+| Declared current evidence is readable one bounded page at a time without raising the 1 MiB frame | ADR-0024; IPC protocol | `V2SCL-002` reserved-contract and `V2SCL-004` store, daemon, CLI, and token tests |
+| Every windowed response collection reports an exact total and its truncation state | ADR-0024; IPC response budgets | `V2SCL-005` budget, observation-composition, and maximum-size tests |
 | Exactly three v2 presets ship with pinned identity | Built-in preset spec | Preset embedding, digest, CLI, and production tests |
 | Public assets and documentation agree | Contract manifest; docs precedence | Contract, quality, documentation, and architecture checks |
 

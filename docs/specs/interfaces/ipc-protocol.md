@@ -177,6 +177,49 @@ The response frame contains one `podway.output/v3` success or one
 
 Protocol-level failures use the same error envelope where possible. If the request is too malformed to recover `request_id`, the response generates a new ID and includes `details.request_id_recovered=false`.
 
+## Evidence paging
+
+This section is adopted authority, not shipped behavior. `V2SCL-002` reserves the route, result schema, and error codes; `V2SCL-004` implements and serves them.
+
+`evidence.read` is a `query` that reads one item selected by a currently resolved, declared evidence reference of the current consumer attempt. It cannot browse arbitrary attempts or stale history, it creates no durable job or session revision, and it is fenced by workspace UUID, session ID, and consumer attempt ID. Its closed result is `podway.evidence-read-result/v1` and carries consumer, source node, source attempt, and item identities; item type, item revision, complete-value digest, and total logical size; a typed page; `truncated`; a nullable `next_page_token`; and the page-token version with the logical page offset.
+
+Text sizes and offsets count Unicode scalar values, list sizes and offsets count entries, and scalar item types use a single-page unit. Text pages end only at scalar boundaries and list pages contain complete entries, so no page splits an entry. Encoded page data is at most 256 KiB and the complete encoded response, including one token and its envelope, is at most 320 KiB.
+
+The opaque page token is at most 256 base64url characters. Its canonical payload is fixed-order binary containing a one-byte version, 16-byte session UUID, 16-byte consumer attempt UUID, 16-byte source attempt UUID, length-prefixed item ID, 32-byte SHA-256 value digest, and unsigned 64-bit logical offset, encoded with unpadded base64url. It is not an authentication or authorization token, and the daemon validates every field against current authoritative state on each read.
+
+Failure ordering is fixed. Malformed, oversized, cross-session, and wrong-binding tokens fail as `REQUEST_INVALID` before any state comparison. A no-token read of an unresolved or skipped reference fails non-retryably with `EVIDENCE_NOT_AVAILABLE`, while a genuinely stale reference retains `EVIDENCE_REFERENCE_STALE`. A previously valid token whose bound snapshot changed fails retryably with `EVIDENCE_PAGE_TOKEN_STALE` rather than silently returning another snapshot. An offset at or past the logical end fails non-retryably with `EVIDENCE_PAGE_TOKEN_EXHAUSTED`; the daemon never issues such a token. No failure changes state.
+
+Storage may decode a bounded complete value internally, but no public response may exceed the page or frame budget.
+
+## Response budgets
+
+`V2SCL-004` and `V2SCL-005` deliver these compositions; the current build still uses the superseded two-bucket authoring budget. `session.next` and `session.observe` each have a closed byte composition proved against the 1,048,576-byte frame. Every windowed collection reports its exact total and whether it was truncated; silent truncation is forbidden.
+
+| `session.next` allocation | Maximum |
+|---|---:|
+| Procedure and runtime static content | 256 KiB |
+| Complete decision records | 272 KiB |
+| Reference and item metadata, at most 128 items | 208 KiB |
+| Preview data | 176 KiB |
+| Up to 32 page tokens | 64 KiB |
+| Serialization and envelope safety | 48 KiB |
+| **Total** | **1 MiB** |
+
+| `session.observe` component | Maximum |
+|---|---:|
+| Compact status | 128 KiB |
+| Bounded `next-result/v3` guidance | 640 KiB |
+| Active item window | 128 KiB |
+| Mutation template window | 64 KiB |
+| Serialization and outer-envelope safety | 64 KiB |
+| **Total** | **1 MiB** |
+
+An omitted evidence item selector means metadata-only. Explicit selectors receive previews in declaration order for at most 32 items, and later admitted items remain metadata-only. At most 128 item metadata records may appear across all references in one response, and graph vetting rejects a larger declared selection while recommending the smallest useful selectors. Metadata remains complete for every item in an admitted `session.next` projection, so that response never marks its evidence metadata window truncated.
+
+Observation composes its own budget rather than embedding an unbounded duplicate of `session.next`. Its guidance emits evidence metadata only, with no previews or page tokens, and its evidence metadata window may be truncated. Compact-status items, active items, and mutation templates are independent byte-budgeted declaration-order windows. Active-item choice constraints expose at most eight choices plus the exact choice count and a truncation flag, while the complete declaration remains available from the Procedure inspection routes. Template argv elements are limited to 4,096 scalars.
+
+`missing_required_item_count` remains exact while `missing_required_items` returns at most 64 entries plus a truncation flag. Suggestions remain capped at 128, expose exact total and truncation fields, and order currently actionable session-level suggestions before item suggestions in item declaration order.
+
 ## Peer validation
 
 Before processing a frame, the daemon obtains local peer credentials when available and verifies that peer UID equals daemon UID. A mismatch closes the connection and may log an access denial. No workspace token or access key is used.
@@ -230,11 +273,7 @@ unknown fields or downgrade a Procedure. A route absent from a build retains tha
 or usage behavior; the exact contract-manifest digest is the machine-readable
 capability signal.
 
-The version-aware result registry reserves the complete Procedure v2 family set
-without registering five routes from the thirteen-route v2 delta;
-`procedure.format`, `procedure.vet`, `procedure.graph`, `procedure.preview`,
-`procedure.lint`, `procedure.check`, and `procedure.scaffold` are registered and
-served. The production decoder validates
+The version-aware result registry reserves the complete Procedure v2 family set. Every route in the v2 delta is registered, `availability` records which of them the current build serves, and a peer must reject a registered route it cannot serve with a structured compatibility error rather than ignoring it. `evidence.read` is not yet registered: `V2SCL-002` adds it as a `reserved_contract` route and `V2SCL-004` makes it executable. The production decoder validates
 each selected family and the complete envelope, including nested terminal job
 responses, against the embedded canonical schemas after enforcing the frame and
 JSON-depth bounds. V2 producers also enforce the bounded-warning guard defined
@@ -291,16 +330,23 @@ Thus a retry may change timeout or detached behavior while referring to the same
 
 ## Request limits
 
-In addition to the frame limit:
+In addition to the frame limit, and counting Unicode scalar values wherever a length is stated:
 
 - command name maximum 128 bytes;
 - idempotency key maximum 256 bytes;
-- task title maximum 500 Unicode scalar values;
-- reason maximum 4000 characters;
-- individual CLI text item constrained by procedure and hard limit;
-- list mutation value maximum 4000 characters;
-- external reference maximum 4000 characters;
+- task title maximum 500;
+- reason maximum 4,000;
+- individual CLI text item constrained by procedure and the 65,536 hard limit;
+- list mutation entry maximum 8,192;
+- external reference maximum 4,000;
+- `item.record_many` at most 128 operations, 1,000 list entries per operation, and 8,192 per entry;
+- evidence page token maximum 256 base64url characters;
 - no recursive JSON beyond depth 64.
+
+A wire value bound is never narrower than the corresponding domain hard maximum defined by
+[ADR-0024](../../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md). The 1 MiB request frame remains an independent transport bound, so every valid list is reachable through bounded `item.add` mutations while a maximal list cannot be replaced atomically through one `item.record_many` frame.
+
+`V2SCL-003` raises the list-entry, record-many, and item-count slices to these values, aligns the text-item slice with the new 65,536-scalar domain maximum, and updates `item-record-many-input-v1.schema.json`. Until it lands, that schema and the domain text cap still enforce the superseded numbers. The page-token bound applies only to `evidence.read`, which `V2SCL-002` reserves and `V2SCL-004` serves.
 
 ## Socket shutdown behavior
 
