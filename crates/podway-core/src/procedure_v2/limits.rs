@@ -45,6 +45,44 @@ pub const MAX_ATTEMPT_CONTENT_SCALARS_V2: u64 = 16_777_216;
 /// The maximum items one node definition may declare and one attempt may record.
 pub const MAX_ITEMS_PER_DEFINITION_V2: usize = 128;
 
+/// The bytes one Unicode scalar may occupy once JSON-escaped in the worst case.
+///
+/// A control scalar escapes to `\uXXXX`, so every byte budget derived from a scalar count charges
+/// this factor. Authoring validation, page slicing, and preview admission all consume it, which is
+/// what keeps the response frame proof and the authoring budget describing the same bytes.
+pub const EVIDENCE_SCALAR_BYTES_V2: usize = 6;
+
+/// The bytes one array element adds beyond its own content: two quotes, a separator, and slack.
+pub const EVIDENCE_ENTRY_OVERHEAD_BYTES_V2: usize = 8;
+
+/// The maximum encoded bytes one `evidence.read` page may carry.
+pub const MAX_EVIDENCE_PAGE_BYTES_V2: usize = 262_144;
+
+/// The maximum evidence items that may carry a preview in one `session.next` response.
+pub const MAX_EVIDENCE_PREVIEW_SLOTS_V2: usize = 32;
+
+/// The maximum Unicode scalars one evidence preview may carry.
+///
+/// ADR-0024 allocates 176 KiB of preview data across the slots above, which leaves at least 938
+/// worst-case scalars per preview once escaping is charged at six bytes per scalar.
+///
+/// Admission charges bytes rather than scalars through [`MAX_EVIDENCE_PREVIEW_BYTES_V2`], so a
+/// preview of many tiny list entries cannot outgrow the allocation this scalar count describes.
+pub const MAX_EVIDENCE_PREVIEW_SCALARS_V2: usize = 938;
+
+/// The encoded bytes one evidence preview may occupy.
+///
+/// This is the scalar budget above charged at its worst-case escaping, and it is what preview
+/// admission actually spends: a value's own content plus whatever structure encoding it adds.
+pub const MAX_EVIDENCE_PREVIEW_BYTES_V2: usize =
+    MAX_EVIDENCE_PREVIEW_SCALARS_V2 * EVIDENCE_SCALAR_BYTES_V2;
+
+/// The maximum missing-item details one response carries; the exact count stays separate.
+pub const MAX_MISSING_ITEM_WINDOW_V2: usize = 64;
+
+/// The maximum choice values one observation active item exposes; the exact count stays separate.
+pub const MAX_OBSERVATION_CHOICE_WINDOW_V2: usize = 8;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -59,11 +97,41 @@ mod tests {
     }
 
     #[test]
+    fn v2scl004_every_preview_slot_fits_inside_the_preview_allocation() {
+        // ADR-0024 allocates 176 KiB to preview data. Every slot charged at its worst case must
+        // stay inside it, or one maximal response could pass the 1 MiB frame.
+        const PREVIEW_ALLOCATION_BYTES: usize = 176 * 1024;
+        // Admission spends the byte budget, so the allocation must bound bytes. Charging scalars
+        // alone would miss the per-entry structure a list preview also encodes.
+        let worst_case = MAX_EVIDENCE_PREVIEW_SLOTS_V2 * MAX_EVIDENCE_PREVIEW_BYTES_V2;
+        assert!(
+            worst_case <= PREVIEW_ALLOCATION_BYTES,
+            "worst-case preview bytes {worst_case} exceed the {PREVIEW_ALLOCATION_BYTES}-byte allocation"
+        );
+        // One maximal list entry alone exceeds a preview slot, so entry-wise admission must be
+        // able to admit nothing rather than admitting one oversized entry.
+        assert!(
+            MAX_LIST_ENTRY_SCALARS_V2 as usize * EVIDENCE_SCALAR_BYTES_V2
+                > MAX_EVIDENCE_PREVIEW_BYTES_V2
+        );
+        // A page holds at least one maximal entry, so page admission never has to split one.
+        assert!(
+            EVIDENCE_ENTRY_OVERHEAD_BYTES_V2
+                + MAX_LIST_ENTRY_SCALARS_V2 as usize * EVIDENCE_SCALAR_BYTES_V2
+                <= MAX_EVIDENCE_PAGE_BYTES_V2
+        );
+    }
+
+    #[test]
     fn v2scl003_defaults_stay_inside_their_hard_maxima() {
-        assert!(DEFAULT_TEXT_MAX_SCALARS_V2 <= MAX_TEXT_SCALARS_V2);
-        assert!(DEFAULT_LIST_MAX_ITEMS_V2 <= MAX_LIST_ENTRIES_V2);
-        assert!(DEFAULT_LIST_MAX_ITEM_SCALARS_V2 <= MAX_LIST_ENTRY_SCALARS_V2);
-        assert!(DEFAULT_LIST_MAX_TOTAL_SCALARS_V2 <= MAX_LIST_TOTAL_SCALARS_V2);
+        // These are compile-time relations, so a violation must fail the build rather than wait
+        // for someone to run the test.
+        const {
+            assert!(DEFAULT_TEXT_MAX_SCALARS_V2 <= MAX_TEXT_SCALARS_V2);
+            assert!(DEFAULT_LIST_MAX_ITEMS_V2 <= MAX_LIST_ENTRIES_V2);
+            assert!(DEFAULT_LIST_MAX_ITEM_SCALARS_V2 <= MAX_LIST_ENTRY_SCALARS_V2);
+            assert!(DEFAULT_LIST_MAX_TOTAL_SCALARS_V2 <= MAX_LIST_TOTAL_SCALARS_V2);
+        }
     }
 
     #[test]

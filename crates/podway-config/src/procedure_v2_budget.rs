@@ -16,9 +16,11 @@ pub const NEXT_STATIC_BUDGET: u64 = 262_144;
 /// Maximum resolved evidence read-back in one `next` result.
 pub const READBACK_BUDGET: u64 = 524_288;
 
-const STRING_BYTE_FACTOR: u64 = 6;
+/// Worst-case escaped bytes per Unicode scalar, owned by the domain so the authoring charge and
+/// the runtime page and preview bounds describe the same bytes.
+const STRING_BYTE_FACTOR: u64 = podway_core::EVIDENCE_SCALAR_BYTES_V2 as u64;
 const FIELD_OVERHEAD: u64 = 64;
-const ARRAY_ELEMENT_OVERHEAD: u64 = 8;
+const ARRAY_ELEMENT_OVERHEAD: u64 = podway_core::EVIDENCE_ENTRY_OVERHEAD_BYTES_V2 as u64;
 const MAX_IDENTIFIER_CHARS: u64 = 64;
 const MAX_DEFINITION_TITLE_CHARS: u64 = 120;
 const MAX_UUID_CHARS: u64 = 36;

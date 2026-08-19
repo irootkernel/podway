@@ -1054,7 +1054,7 @@ fn v2drw006_generated_cycle_counts_have_no_runtime_traversal_limit_and_stay_boun
         assert_eq!(compact["schema"], "podway.compact-status-result/v3");
         assert_eq!(standard["tier"], "standard");
         assert_eq!(verbose["tier"], "verbose");
-        assert_eq!(next["schema"], "podway.next-result/v2");
+        assert_eq!(next["schema"], "podway.next-result/v3");
         assert_history_window(&verbose["decision_history"], completed_cycles, 1);
         assert_history_window(&verbose["rework_history"], completed_cycles, 6);
 

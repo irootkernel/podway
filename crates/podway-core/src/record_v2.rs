@@ -981,7 +981,10 @@ mod tests {
 
         let confirm =
             RecordedItemV2::new(ItemId::new("done").unwrap(), RecordedItemValueV2::confirm());
-        assert_eq!(attempt_content_scalars_v2(std::slice::from_ref(&confirm)), 0);
+        assert_eq!(
+            attempt_content_scalars_v2(std::slice::from_ref(&confirm)),
+            0
+        );
 
         // 128 maximal text values stay inside the aggregate, so text alone can never trip it.
         let maximal_text: Vec<RecordedItemV2> = (0..MAX_RECORDED_ITEMS_PER_ATTEMPT)

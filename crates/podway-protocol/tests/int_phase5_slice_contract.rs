@@ -340,6 +340,17 @@ fn route_cases() -> Vec<RouteCase> {
             preconditions: PreconditionsV1::default(),
         },
         RouteCase {
+            command: "evidence.read",
+            operation: OperationV1::Query,
+            durable: false,
+            payload: json!({
+                "selector": selector.clone(),
+                "source": "implement",
+                "item_id": "notes"
+            }),
+            preconditions: PreconditionsV1::default(),
+        },
+        RouteCase {
             command: "session.complete",
             operation: OperationV1::Mutate,
             durable: true,
@@ -496,10 +507,10 @@ fn route_cases() -> Vec<RouteCase> {
 }
 
 #[test]
-fn recon001_exhaustively_admits_only_the_30_canonical_daemon_routes() {
+fn recon001_exhaustively_admits_only_the_31_canonical_daemon_routes() {
     let cases = route_cases();
-    assert_eq!(cases.len(), 30);
-    assert_eq!(DAEMON_COMMAND_NAMES_V1.len(), 30);
+    assert_eq!(cases.len(), 31);
+    assert_eq!(DAEMON_COMMAND_NAMES_V1.len(), 31);
     assert_eq!(
         cases.iter().map(|case| case.command).collect::<Vec<_>>(),
         DAEMON_COMMAND_NAMES_V1.to_vec(),
@@ -1316,21 +1327,71 @@ fn g006_terminal_job_responses_are_protocol_owned_typed_projections() {
     );
 }
 
+/// V2SCL-004: the route is now served, so decoding admits a well-formed read and still refuses a
+/// malformed page token at the request boundary, before any state comparison.
 #[test]
-fn v2scl002_reserved_evidence_read_is_not_admitted_before_runtime_implementation() {
-    let request = envelope(
-        "evidence.read",
-        OperationV1::Query,
-        false,
-        json!({
+fn v2scl004_evidence_read_decodes_and_rejects_a_malformed_page_token() {
+    let read = |payload| {
+        SliceRequestV1::from_envelope(&envelope(
+            "evidence.read",
+            OperationV1::Query,
+            false,
+            payload,
+            PreconditionsV1::default(),
+        ))
+    };
+
+    let request = read(json!({
+        "selector": selector(),
+        "source": "implement",
+        "item_id": "notes",
+    }))
+    .expect("a well-formed evidence read decodes");
+    assert_eq!(request.command().command_name(), "evidence.read");
+    assert!(!request.command().is_mutation());
+    assert_eq!(request.command().operation(), OperationV1::Query);
+
+    let token = podway_protocol::EvidencePageTokenV1::new(
+        "00000000-0000-4000-8000-000000000001",
+        "00000000-0000-4000-8000-000000000002",
+        "00000000-0000-4000-8000-000000000003",
+        "notes",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        7,
+    )
+    .expect("a canonical token is constructible")
+    .encode();
+    assert!(
+        read(json!({
             "selector": selector(),
             "source": "implement",
-            "item": "notes",
-        }),
-        PreconditionsV1::default(),
+            "item_id": "notes",
+            "page_token": token,
+        }))
+        .is_ok()
     );
+
+    for malformed in ["", "not a token", &"A".repeat(257)] {
+        assert!(
+            read(json!({
+                "selector": selector(),
+                "source": "implement",
+                "item_id": "notes",
+                "page_token": malformed,
+            }))
+            .is_err(),
+            "a malformed page token must be refused at the request boundary"
+        );
+    }
+
+    // An unknown field is still refused: the payload is closed.
     assert!(
-        SliceRequestV1::from_envelope(&request).is_err(),
-        "the reserved evidence.read route must not decode before its owning task lands"
+        read(json!({
+            "selector": selector(),
+            "source": "implement",
+            "item_id": "notes",
+            "offset": 4,
+        }))
+        .is_err()
     );
 }

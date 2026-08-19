@@ -158,6 +158,7 @@ enum Reply {
     StatusV2Verbose,
     SharedMutationV2,
     SessionReset,
+    EvidenceRead,
 }
 
 struct RecordingDaemon {
@@ -387,6 +388,31 @@ fn response_for(request: &RequestEnvelopeV1, reply: Reply) -> Value {
             "result": verbose_status_result(),
             "warnings": []
         }),
+        Reply::EvidenceRead => {
+            let fixture: Value = serde_json::from_str(include_str!(
+                "../../../tests/fixtures/v2/protocol/result-families.json"
+            ))
+            .expect("v2 result fixtures must parse");
+            let mut result = fixture["fixtures"]["podway.evidence-read-result/v1"].clone();
+            result["item"]["item_id"] = request.payload()["item_id"].clone();
+            result["source"]["graph_node_id"] = request.payload()["source"].clone();
+            json!({
+                "schema": "podway.output/v3",
+                "request_id": request.request_id().as_str(),
+                "command": request.command().as_str(),
+                "generated_at": "2026-08-09T12:34:56.789Z",
+                "workspace": {
+                    "uuid": WORKSPACE_ID,
+                    "root": request
+                        .workspace()
+                        .map(|workspace| workspace.root().to_owned())
+                        .unwrap_or_else(|| "/missing-workspace".to_owned()),
+                    "latest_workspace_sequence": 8
+                },
+                "result": result,
+                "warnings": []
+            })
+        }
         Reply::SharedMutationV2 => {
             let mut fixture: Value = serde_json::from_str(include_str!(
                 "../../../tests/fixtures/v2/protocol/result-families.json"
@@ -835,6 +861,76 @@ fn typed_v2_commands_shape_exact_requests_and_preserve_capability_errors() {
         );
         assert_eq!(request["preconditions"], expected_preconditions);
     }
+}
+
+#[test]
+fn v2scl004_evidence_read_shapes_a_fenced_query_without_an_idempotency_key() {
+    let fixture = Fixture::new();
+    let daemon = RecordingDaemon::start(&fixture.socket, Reply::EvidenceRead);
+    let arguments = vec![
+        "--json".to_owned(),
+        "--socket".to_owned(),
+        fixture.socket.display().to_string(),
+        "--worktree".to_owned(),
+        fixture.root.display().to_string(),
+        "--if-session-id".to_owned(),
+        SESSION_ID.to_owned(),
+        "evidence".to_owned(),
+        "read".to_owned(),
+        "--source".to_owned(),
+        "implement".to_owned(),
+        "--item".to_owned(),
+        "implementation-log".to_owned(),
+    ];
+
+    let output = fixture.run(&arguments);
+    assert!(output.status.success(), "{output:?}");
+    let served = one_json(&output);
+    assert_eq!(served["result"]["schema"], "podway.evidence-read-result/v1");
+    assert_eq!(served["result"]["item"]["item_id"], "implementation-log");
+    let request = daemon.finish();
+    // A page read answers from current state directly: it needs no status preflight, and as a
+    // query it must not carry an idempotency key that would imply a durable job.
+    assert_eq!(request["command"], "evidence.read");
+    assert_eq!(request["operation"], "query");
+    assert_eq!(request["payload"]["source"], "implement");
+    assert_eq!(request["payload"]["item_id"], "implementation-log");
+    assert!(request["payload"].get("page_token").is_none());
+    assert_eq!(request["preconditions"]["session_id"], SESSION_ID);
+    assert!(request.get("idempotency_key").is_none());
+
+    // A continuation passes the token through verbatim: the CLI never rewrites or re-derives it.
+    let fixture = Fixture::new();
+    let daemon = RecordingDaemon::start(&fixture.socket, Reply::EvidenceRead);
+    let token = podway_protocol::EvidencePageTokenV1::new(
+        SESSION_ID,
+        ATTEMPT_ID,
+        ATTEMPT_ID,
+        "implementation-log",
+        &format!("sha256:{}", "a".repeat(64)),
+        938,
+    )
+    .unwrap()
+    .encode();
+    let arguments = vec![
+        "--json".to_owned(),
+        "--socket".to_owned(),
+        fixture.socket.display().to_string(),
+        "--worktree".to_owned(),
+        fixture.root.display().to_string(),
+        "evidence".to_owned(),
+        "read".to_owned(),
+        "--source".to_owned(),
+        "implement".to_owned(),
+        "--item".to_owned(),
+        "implementation-log".to_owned(),
+        "--page-token".to_owned(),
+        token.clone(),
+    ];
+    let output = fixture.run(&arguments);
+    assert!(output.status.success(), "{output:?}");
+    let request = daemon.finish();
+    assert_eq!(request["payload"]["page_token"], token);
 }
 
 #[test]
@@ -2093,6 +2189,8 @@ fn help_and_every_completion_target_publish_the_v2_routes_and_flags() {
             "assess-criterion",
             "if-goal-revision",
             "small-change-v2",
+            "evidence",
+            "page-token",
         ] {
             assert!(script.contains(token), "{shell} completion omits {token}");
         }

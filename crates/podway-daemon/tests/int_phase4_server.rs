@@ -2049,12 +2049,20 @@ fn oversized_v2_response(request: &RequestEnvelopeV1) -> ResponseEnvelopeV2 {
             json!({
                 "item_id": format!("item-{index}"),
                 "type": "text",
-                "value": "\0".repeat(16_384)
+                "revision": 1,
+                "value_digest": format!("sha256:{}", "a".repeat(64)),
+                "total_size": 65_536,
+                "size_unit": "scalars",
+                // Preview data is the only value-bearing part of next-result/v3, so it is the
+                // surface that can still push a schema-valid projection past the frame bound.
+                "preview": "\0".repeat(16_384),
+                "preview_truncated": true,
+                "next_page_token": "A".repeat(256)
             })
         })
         .collect::<Vec<_>>();
     let result = json!({
-        "schema": "podway.next-result/v2",
+        "schema": "podway.next-result/v3",
         "procedure_schema": "podway.procedure/v2",
         "procedure_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "goal_tracking": false,
@@ -2071,10 +2079,13 @@ fn oversized_v2_response(request: &RequestEnvelopeV1) -> ResponseEnvelopeV2 {
         "instructions": [],
         "missing_required_item_count": 0,
         "missing_required_items": [],
+        "missing_required_items_truncated": false,
         "terminal": true,
         "allowed_manual_rework_targets": [],
         "allowed_actions": [],
         "suggestions": [],
+        "suggestions_total": 0,
+        "suggestions_truncated": false,
         "references": [{
             "source_graph_node_id":"source",
             "source_title":"Source",
@@ -2090,8 +2101,12 @@ fn oversized_v2_response(request: &RequestEnvelopeV1) -> ResponseEnvelopeV2 {
             "source_attempt_number":1,
             "items_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             "state":"resolved",
-            "items":items
+            "items":items,
+            "items_total":64,
+            "items_truncated":false
         }],
+        "readback_items_total": 64,
+        "readback_items_truncated": false,
         "blockers_total": 0,
         "blockers": [],
         "blockers_truncated": false

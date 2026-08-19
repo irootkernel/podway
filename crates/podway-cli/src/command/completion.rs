@@ -201,6 +201,14 @@ const AFTER_JOB: Flag = Flag {
     long: "after-job",
     takes_value: true,
 };
+const SOURCE: Flag = Flag {
+    long: "source",
+    takes_value: true,
+};
+const PAGE_TOKEN: Flag = Flag {
+    long: "page-token",
+    takes_value: true,
+};
 const REASON: Flag = Flag {
     long: "reason",
     takes_value: true,
@@ -627,6 +635,25 @@ const ROUTES: &[Route] = &[
             &IF_SESSION_ID,
             &WAIT_FOR_IDLE,
             &AFTER_JOB,
+        ],
+        values: "",
+        dynamic: None,
+    },
+    Route {
+        words: "evidence read",
+        flags: &[
+            &JSON,
+            &DEV,
+            &WORKTREE,
+            &TIMEOUT,
+            &SOCKET,
+            &NO_COLOR,
+            &QUIET,
+            &IF_WORKSPACE_UUID,
+            &IF_SESSION_ID,
+            &SOURCE,
+            &ITEM,
+            &PAGE_TOKEN,
         ],
         values: "",
         dynamic: None,

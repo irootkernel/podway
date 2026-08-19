@@ -209,6 +209,11 @@ enum Command {
     Status(StatusArgs),
     Next(ReadArgs),
     Observe(ReadArgs),
+    /// Read one bounded page of a selected evidence item.
+    Evidence {
+        #[command(subcommand)]
+        command: EvidenceCommand,
+    },
     Complete,
     Decide(DecideArgs),
     Rework(ReworkArgs),
@@ -350,6 +355,22 @@ enum DispositionCommand {
         #[arg(long, value_name = "TEXT")]
         actor: Option<String>,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum EvidenceCommand {
+    /// Read one bounded page of an item selected by a declared evidence reference.
+    Read(EvidenceReadArgs),
+}
+
+#[derive(Debug, Args)]
+struct EvidenceReadArgs {
+    #[arg(long, value_name = "GRAPH_NODE_ID")]
+    source: String,
+    #[arg(long, value_name = "ITEM_ID")]
+    item: String,
+    #[arg(long, value_name = "TOKEN")]
+    page_token: Option<String>,
 }
 
 #[derive(Debug, Args, Default)]
@@ -644,6 +665,7 @@ impl Command {
             Self::Status(_) | Self::CompleteDynamic { .. } => Some("session.status"),
             Self::Next(_) => Some("session.next"),
             Self::Observe(_) => Some("session.observe"),
+            Self::Evidence { .. } => Some("evidence.read"),
             Self::Complete => Some("session.complete"),
             Self::Decide(_) => Some("session.decide"),
             Self::Rework(_) => Some("session.rework"),
@@ -823,6 +845,7 @@ impl Command {
                 | Self::Status(_)
                 | Self::Next(_)
                 | Self::Observe(_)
+                | Self::Evidence { .. }
                 | Self::Complete
                 | Self::Decide(_)
                 | Self::Rework(_)
@@ -852,6 +875,7 @@ impl Command {
             | Self::Status(_)
             | Self::Next(_)
             | Self::Observe(_)
+            | Self::Evidence { .. }
             | Self::Complete
             | Self::Decide(_)
             | Self::Rework(_)
@@ -1537,6 +1561,7 @@ fn parse_failure_command_context_from_matches(
         "status" => ParseFailureCommandContext::new("session.status", false),
         "next" => ParseFailureCommandContext::new("session.next", false),
         "observe" => ParseFailureCommandContext::new("session.observe", false),
+        "evidence" => ParseFailureCommandContext::new("evidence.read", false),
         "complete" => ParseFailureCommandContext::new("session.complete", true),
         "decide" => ParseFailureCommandContext::new("session.decide", true),
         "rework" => ParseFailureCommandContext::new("session.rework", true),
@@ -1886,7 +1911,7 @@ fn direct_preconditions(
             )
             .map_err(|_| LocalFailure::request_invalid("start-replace preconditions are invalid"))
         }
-        Command::Status(_) | Command::Next(_) | Command::Observe(_) => {
+        Command::Status(_) | Command::Next(_) | Command::Observe(_) | Command::Evidence { .. } => {
             PreconditionsV1::new(explicit.session_id.clone(), None, None, None, None, None).map_err(
                 |_| LocalFailure::request_invalid("session identity precondition is invalid"),
             )
@@ -5194,6 +5219,15 @@ fn daemon_payload(
         }
         Command::Next(args) => read_payload(&mut payload, args),
         Command::Observe(args) => read_payload(&mut payload, args),
+        Command::Evidence {
+            command: EvidenceCommand::Read(args),
+        } => {
+            payload.insert("source".to_owned(), Value::String(args.source.clone()));
+            payload.insert("item_id".to_owned(), Value::String(args.item.clone()));
+            if let Some(token) = &args.page_token {
+                payload.insert("page_token".to_owned(), Value::String(token.clone()));
+            }
+        }
         Command::Complete => {}
         Command::Decide(args) => {
             payload.insert("option_id".to_owned(), Value::String(args.option.clone()));
@@ -6370,7 +6404,7 @@ fn candidate_strings(result: &Map<String, Value>, collection: &str) -> Vec<Strin
 fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
     let text = match topic.unwrap_or("overview") {
         "overview" => {
-            "Podway coordinates durable worktree-local procedures.\n\nTrust boundary:\n  Podway trusts same-user processes connecting through its local socket.\n  It provides no authentication or workspace access key.\n  It does not protect against malicious same-user processes.\n  It records caller assertions and does not judge their semantic truth.\n\nDaemon endpoint:\n  Daemon-backed commands accept --socket <absolute-path>.\n  Without --socket, Podway selects the installed or default per-user endpoint.\n\nUsage:\n  podway help <route>\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'add retry backoff'\n  podway begin\n  podway status --json\n  podway observe --json\n\nProcedure v2 routes:\n  procedure format|vet|lint|check|graph|preview|scaffold\n  session.begin, session.terminal_disposition, session.decide, session.rework\n  goal.define, goal.revise, goal.assess_criterion\n\nShipped presets: bug-fix-v2, small-change-v2, sw-dev-v2. Start prepares a session; begin creates its first active attempt. Contributors may use the managed disposable runtime documented by help workflow for isolated development."
+            "Podway coordinates durable worktree-local procedures.\n\nTrust boundary:\n  Podway trusts same-user processes connecting through its local socket.\n  It provides no authentication or workspace access key.\n  It does not protect against malicious same-user processes.\n  It records caller assertions and does not judge their semantic truth.\n\nDaemon endpoint:\n  Daemon-backed commands accept --socket <absolute-path>.\n  Without --socket, Podway selects the installed or default per-user endpoint.\n\nUsage:\n  podway help <route>\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'add retry backoff'\n  podway begin\n  podway status --json\n  podway observe --json\n\nProcedure v2 routes:\n  procedure format|vet|lint|check|graph|preview|scaffold\n  session.begin, session.terminal_disposition, session.decide, session.rework\n  goal.define, goal.revise, goal.assess_criterion\n  evidence read\n\nShipped presets: bug-fix-v2, small-change-v2, sw-dev-v2. Start prepares a session; begin creates its first active attempt. Contributors may use the managed disposable runtime documented by help workflow for isolated development."
         }
         "workflow" => {
             "Procedure v2 workflow:\n  podway init\n  podway --json preset show bug-fix-v2\n  podway --json start --preset bug-fix-v2 --task 'inspect the workflow'\n  podway --json begin --goal 'Verify the requested behavior.' --criterion verified='Relevant checks pass.' --actor developer\n  podway --json observe --wait-for-idle\n\nAdd --dry-run to start for read-only Procedure inspection without creating a session. A successful start creates a prepared session; begin atomically creates the first attempt and optional goal. Follow the allowed item, option, evidence, and rework identifiers returned by observe. Contributors can use python3 tools/dev_runtime.py for an isolated disposable daemon and sandbox. See docs/examples/v2-workflow.md for the complete executable sequence. Podway records caller assertions; it does not establish their semantic truth."
@@ -6487,6 +6521,9 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
         }
         "session.observe" => {
             "Usage:\n  podway observe [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--wait-for-idle | --after-job <uuid>]\n\nReturns one bounded, self-contained status and guidance observation with typed active-item descriptors and fenced mutation templates.\n\nExample:\n  podway --json observe --wait-for-idle"
+        }
+        "evidence.read" => {
+            "Usage:\n  podway evidence read --source <graph-node-id> --item <item-id> [--page-token <token>] [--if-workspace-uuid <uuid>] [--if-session-id <uuid>]\n\nReturns one bounded page of an item selected by a currently resolved, declared evidence reference of the current attempt. It creates no durable job and no session revision. Text offsets count Unicode scalars, list offsets count entries, and other item types return one terminal page. The page token is opaque and is not an authorization credential.\n\nExample:\n  podway --json evidence read --source implement --item notes"
         }
         "session.complete" => {
             "Usage:\n  podway complete [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>] [--if-attempt <uuid>]\n\nExample:\n  podway complete --if-session-revision 12 --if-attempt <uuid>"

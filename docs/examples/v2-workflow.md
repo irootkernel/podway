@@ -61,7 +61,7 @@ podway --json observe --wait-for-idle
 ```
 
 Automation uses the JSON contract, never human-readable text. The observation
-returns `podway.observation-result/v2`; read these stable fields:
+returns `podway.observation-result/v3`; read these stable fields:
 
 | JSON field | CLI precondition or use |
 |---|---|
@@ -74,6 +74,21 @@ returns `podway.observation-result/v2`; read these stable fields:
 | `result.guidance.allowed_actions[]` | legal current mutations |
 | `result.guidance.allowed_manual_rework_targets[]` | legal `rework --to` values |
 | `result.status.queue.pending_mutations` | false after the requested queue barrier |
+
+`result.guidance.readback[].items[]` carries each selected evidence item's identity,
+digest, and total size. Observation guidance is metadata only: it never carries a
+`preview` or a `next_page_token`, which appear only in `podway next`. Read the value
+itself through the paged query and follow `next_page_token` until `truncated` is `false`:
+
+```bash
+podway --json evidence read --source reproduce --item reproduction-log
+podway --json evidence read --source reproduce --item reproduction-log \
+  --page-token <next-page-token>
+```
+
+`podway.evidence-read-result/v1` reports `total_size` with its `size_unit`, so a caller
+knows how much remains before requesting the next page. `EVIDENCE_PAGE_TOKEN_STALE` means
+the recorded value changed: re-read observe and restart that item from its first page.
 
 `result.mutation_templates[]` supplies the applicable optimistic-concurrency
 fences and states whether explicit authorization is required. Templates still

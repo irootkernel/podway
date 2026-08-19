@@ -225,7 +225,7 @@ podway-config + podway-protocol + podway-presets
 
 Podway is optimized for local task state, not bulk workflow data.
 
-Design limits are owned by [ADR-0024](../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md). Every length below counts Unicode scalar values, not bytes. `V2SCL-003` made the implementation conform; until `V2SCL-004` lands there is no `evidence.read` route.
+Design limits are owned by [ADR-0024](../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md). Every length below counts Unicode scalar values, not bytes.
 
 - at most one session per workspace;
 - at most 64 graph placements per procedure;

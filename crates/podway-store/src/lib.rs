@@ -40,9 +40,10 @@ pub use sqlite_store::SqliteStoreV1;
 pub use v2_goal::{AttemptCriterionAssessmentStateV2, CriterionAssessmentStateV2, GoalStateV2};
 pub use v2_memory::{
     ActiveItemMutationRequestV2, ActiveItemMutationV2, AttemptWorkflowMemoryV2, BlockerStateV2,
-    EvidenceReadbackV2, EvidenceResolutionStateV2, GraphMutationErrorV2, ItemSlotStateV2,
-    MAX_ACTIVE_ITEM_MUTATIONS_V2, MAX_OPEN_BLOCKERS_V2, WorkflowMemoryStateV2,
-    canonical_recorded_items_json_v2, recorded_items_digest_v2,
+    EvidenceLookupErrorV2, EvidenceReadbackV2, EvidenceResolutionStateV2, GraphMutationErrorV2,
+    ItemSlotStateV2, MAX_ACTIVE_ITEM_MUTATIONS_V2, MAX_OPEN_BLOCKERS_V2, SelectedEvidenceItemV2,
+    WorkflowMemoryStateV2, canonical_recorded_items_json_v2, recorded_items_digest_v2,
+    recorded_value_digest_v2,
 };
 pub use v2_state::{
     AttemptMetadataV2, GraphActionCompletionOutcomeV2, GraphActionSkipOutcomeV2,

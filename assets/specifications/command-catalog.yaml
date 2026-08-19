@@ -308,7 +308,7 @@ commands:
   - podway.observation-result/v2
   - podway.observation-result/v3
 - name: evidence.read
-  availability: reserved_contract
+  availability: executable
   cli:
   - evidence
   - read

@@ -17,11 +17,9 @@ Procedure runtime results identify `procedure_schema: podway.procedure/v2`.
 Prepared-aware routes use `session-start-result/v3`,
 `session-begin-result/v1`, `terminal-disposition-result/v1`,
 `session-reset-result/v1`, `status-result/v3`, `compact-status-result/v3`, and
-`prepared-next-result/v1`, and observation currently uses `observation-result/v2`.
-The bounded evidence scale contract moves running next to `next-result/v3` and
-observation to `observation-result/v3`, and adds `evidence-read-result/v1` for the
-`evidence.read` query; `V2SCL-002` reserves all three families and `V2SCL-004` and
-`V2SCL-005` serve them. Item and graph-transition
+`prepared-next-result/v1`. Running next uses `next-result/v3` and observation uses
+`observation-result/v3`, and the contract adds `evidence-read-result/v1` for the
+`evidence.read` query. All three families are served. Item and graph-transition
 families retain their current versions, and decision, rework, goal, authoring, and
 platform results remain first-version families where their shapes do not change.
 
@@ -51,8 +49,8 @@ changed payload shape still requires a new version, as `next-result/v3` and
 `observation-result/v3` do.
 
 The output-v3 `session.next` branch accepts the running next result or the
-disjoint cursor-free prepared result. `V2SCL-002` adds an `evidence.read` branch,
-which is procedure-independent and carries no durable job. Prepared status uses null cursor, attempt,
+disjoint cursor-free prepared result. The `evidence.read` branch is
+procedure-independent and carries no durable job. Prepared status uses null cursor, attempt,
 goal, and readiness projections; prepared observation has no active items and
 contains only bounded lifecycle guidance and applicable fenced templates.
 Existing released closed schemas are not widened in place.

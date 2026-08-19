@@ -22,8 +22,8 @@ use podway_daemon::{
         workspace_procedure_snapshot_from_bytes_v2,
     },
     v2_read_service::{
-        GraphStatusTierV2, project_graph_next_v2, project_graph_observation_v1,
-        project_graph_status_v2,
+        EvidenceReadErrorV2, GraphStatusTierV2, project_evidence_read_v1, project_graph_next_v2,
+        project_graph_observation_v1, project_graph_status_v2,
     },
 };
 use podway_protocol::{
@@ -411,7 +411,7 @@ fn v2run002_fresh_action_projects_closed_compact_standard_verbose_and_next_views
     assert_eq!(standard["tier"], "standard");
     assert_eq!(verbose["schema"], "podway.status-result/v3");
     assert_eq!(verbose["tier"], "verbose");
-    assert_eq!(next["schema"], "podway.next-result/v2");
+    assert_eq!(next["schema"], "podway.next-result/v3");
 
     for projection in [&compact, &standard, &verbose, &next] {
         assert_eq!(projection["trace_length"], 1);
@@ -555,7 +555,7 @@ fn v2agt002_observation_projects_typed_items_and_fenced_templates() {
     let view = view(fresh_state("applicability.json", APPLICABILITY_PROCEDURE));
     let observation = project_graph_observation_v1(&view).unwrap();
 
-    assert_eq!(observation["schema"], "podway.observation-result/v2");
+    assert_eq!(observation["schema"], "podway.observation-result/v3");
     assert_eq!(observation["status"]["session"]["lifecycle"], "running");
     assert_eq!(observation["guidance"]["node"]["graph_node_id"], "work");
     let items = observation["active_items"].as_array().unwrap();
@@ -2444,67 +2444,34 @@ fn maximum_next_readback() -> (Vec<Value>, Vec<Value>) {
         })
         .collect::<Vec<_>>();
 
-    const READBACK_BUDGET: usize = 524_288;
-    for item_index in 0..64 {
+    // V2SCL-004 moved complete values out of the readback surface, so the maximum is no longer a
+    // byte-packing problem: the response carries at most 128 item metadata records across all
+    // references. V2SCL-005 owns proving the new six-bucket allocation table against this fixture.
+    const READBACK_ITEM_METADATA_MAX: usize = 128;
+    for item_index in 0..READBACK_ITEM_METADATA_MAX {
         let source_index = item_index % readback.len();
-        let candidate = json!({
-            "item_id": item_identifier(item_index),
-            "type": "text",
-            "value": "\0".repeat(16_384)
-        });
         readback[source_index]["items"]
             .as_array_mut()
             .unwrap()
-            .push(candidate);
-        let charged = conservative_json_charge(&json!({
-            "references": references,
-            "readback": readback
-        }));
-        if charged <= READBACK_BUDGET {
-            continue;
-        }
-        readback[source_index]["items"]
-            .as_array_mut()
+            .push(json!({
+                "item_id": item_identifier(item_index),
+                "type": "text",
+                "revision": u64::MAX,
+                "value_digest": format!("sha256:{}", "a".repeat(64)),
+                "total_size": 65_536,
+                "size_unit": "scalars"
+            }));
+    }
+    for reference in &mut readback {
+        let total = reference["items"].as_array().unwrap().len();
+        reference
+            .as_object_mut()
             .unwrap()
-            .pop();
-
-        let mut low: usize = 0;
-        let mut high: usize = 16_384;
-        while low < high {
-            let middle = (low + high).div_ceil(2);
-            readback[source_index]["items"]
-                .as_array_mut()
-                .unwrap()
-                .push(json!({
-                    "item_id": item_identifier(item_index),
-                    "type": "text",
-                    "value": "\0".repeat(middle)
-                }));
-            let fits = conservative_json_charge(&json!({
-                "references": references,
-                "readback": readback
-            })) <= READBACK_BUDGET;
-            readback[source_index]["items"]
-                .as_array_mut()
-                .unwrap()
-                .pop();
-            if fits {
-                low = middle;
-            } else {
-                high = middle - 1;
-            }
-        }
-        if low > 0 {
-            readback[source_index]["items"]
-                .as_array_mut()
-                .unwrap()
-                .push(json!({
-                    "item_id": item_identifier(item_index),
-                    "type": "text",
-                    "value": "\0".repeat(low)
-                }));
-        }
-        break;
+            .insert("items_total".into(), json!(total));
+        reference
+            .as_object_mut()
+            .unwrap()
+            .insert("items_truncated".into(), json!(false));
     }
     (references, readback)
 }
@@ -2579,7 +2546,7 @@ fn complete_maximum_next_result() -> Map<String, Value> {
         .collect::<Vec<_>>();
 
     json!({
-        "schema": "podway.next-result/v2",
+        "schema": "podway.next-result/v3",
         "procedure_schema": "podway.procedure/v2",
         "procedure_digest": IDENTITY_DIGEST,
         "goal_tracking": true,
@@ -2643,9 +2610,14 @@ fn complete_maximum_next_result() -> Map<String, Value> {
             .map(|index| maximum_payload_identifier('n', index))
             .collect::<Vec<_>>(),
         "allowed_actions": allowed_actions,
+        "missing_required_items_truncated": false,
         "suggestions": suggestions,
+        "suggestions_total": 128,
+        "suggestions_truncated": false,
         "references": references,
         "readback": readback,
+        "readback_items_total": 128,
+        "readback_items_truncated": false,
         "blockers_total": 64,
         "blockers": blockers,
         "blockers_truncated": true
@@ -2730,13 +2702,18 @@ fn v2rel002_complete_maximum_next_binds_component_charges_to_production_framing(
         "reason_policy",
         "missing_required_item_count",
         "missing_required_items",
+        "missing_required_items_truncated",
         "options",
         "evidence_guidance",
         "allowed_manual_rework_targets",
         "allowed_actions",
         "suggestions",
+        "suggestions_total",
+        "suggestions_truncated",
         "references",
         "readback",
+        "readback_items_total",
+        "readback_items_truncated",
         "blockers_total",
         "blockers",
         "blockers_truncated",
@@ -2764,6 +2741,10 @@ fn v2rel002_complete_maximum_next_binds_component_charges_to_production_framing(
             "revision",
             "missing_required_item_count",
             "readiness",
+            "suggestions_total",
+            "suggestions_truncated",
+            "readback_items_total",
+            "readback_items_truncated",
         ],
     );
     let mut static_fields = component(
@@ -2774,6 +2755,7 @@ fn v2rel002_complete_maximum_next_binds_component_charges_to_production_framing(
             "description",
             "evidence_guidance",
             "missing_required_items",
+            "missing_required_items_truncated",
             "objective",
             "options",
             "prompt",
@@ -2893,7 +2875,11 @@ fn v2rel002_complete_maximum_next_binds_component_charges_to_production_framing(
         );
     }
     assert!(BUDGETS[1] - conservative_json_charge(&components[1].1) < 16_384);
-    assert!(BUDGETS[2] - conservative_json_charge(&components[2].1) < 128);
+    // The readback surface no longer carries values, so it cannot fill the superseded 512 KiB
+    // value budget and a tight-fit assertion here would be meaningless. Every component is still
+    // proved within budget above, and the composed frame is proved below. V2SCL-005 owns
+    // re-deriving the six named allocations ADR-0024 defines and asserting tightness against them.
+    assert!(conservative_json_charge(&components[2].1) <= BUDGETS[2]);
 
     let response = ResponseEnvelopeV2::OutputV2(output);
     let encoded = encode_response_payload_v2(&response).unwrap();
@@ -2926,6 +2912,488 @@ const SELECTED_READBACK_ITEM_IDS: [&str; 16] = [
     "selected-08",
     "selected-09",
 ];
+
+/// Assemble a completed `source` attempt and an active `consume` attempt into one session state.
+///
+/// Every read-back fixture needs the same two-attempt shape, so only the recorded values and the
+/// evidence selection differ between them.
+fn source_and_consumer_state(
+    base: &GraphSessionStateV2,
+    source_memory: AttemptWorkflowMemoryV2,
+    consumer_memory: AttemptWorkflowMemoryV2,
+) -> GraphSessionStateV2 {
+    source_and_consumer_state_with_validity(
+        base,
+        source_memory,
+        consumer_memory,
+        AttemptValidityV2::Valid,
+    )
+}
+
+/// The same shape with the source attempt's validity chosen by the caller.
+///
+/// An invalidated source attempt is how a declared reference goes stale, which the read path must
+/// classify differently from a page token that lost its snapshot.
+fn source_and_consumer_state_with_validity(
+    base: &GraphSessionStateV2,
+    source_memory: AttemptWorkflowMemoryV2,
+    consumer_memory: AttemptWorkflowMemoryV2,
+    source_validity: AttemptValidityV2,
+) -> GraphSessionStateV2 {
+    let source_attempt_id = AttemptId::new(ATTEMPT_ID).unwrap();
+    let consumer_attempt_id = second_attempt_id();
+    let trace = SessionTraceV2::from_parts(
+        SessionId::new(SESSION_ID).unwrap(),
+        SessionLifecycle::Running,
+        Revision::new(2),
+        vec![
+            SessionAttemptV2::new(
+                source_attempt_id.clone(),
+                GraphNodeId::new("source").unwrap(),
+                AttemptNumberV2::FIRST,
+                TraceSequenceV2::FIRST,
+                AttemptLifecycle::Completed,
+                source_validity,
+                None,
+            )
+            .unwrap(),
+            SessionAttemptV2::new(
+                consumer_attempt_id.clone(),
+                GraphNodeId::new("consume").unwrap(),
+                AttemptNumberV2::FIRST,
+                TraceSequenceV2::new(2),
+                AttemptLifecycle::Active,
+                AttemptValidityV2::Valid,
+                None,
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    GraphSessionStateV2::new_with_goal_state(
+        Revision::new(2),
+        base.task_title(),
+        base.snapshot().clone(),
+        trace,
+        vec![
+            GraphNodeCounterV2::new(GraphNodeId::new("source").unwrap(), 1, 0),
+            GraphNodeCounterV2::new(GraphNodeId::new("consume").unwrap(), 1, 0),
+        ],
+        vec![
+            AttemptMetadataV2::new(
+                source_attempt_id,
+                UnixMillis::new(1_700_000_000_000),
+                Some(UnixMillis::new(1_700_000_000_010)),
+                None,
+            )
+            .unwrap(),
+            AttemptMetadataV2::new(
+                consumer_attempt_id,
+                UnixMillis::new(1_700_000_000_010),
+                None,
+                None,
+            )
+            .unwrap(),
+        ],
+        WorkflowMemoryStateV2::new(vec![source_memory, consumer_memory], Vec::new(), Vec::new())
+            .unwrap(),
+        base.goal_state().clone(),
+        base.created_at(),
+        None,
+        None,
+        None,
+    )
+    .unwrap()
+}
+
+/// One text item large enough that a single page cannot carry it.
+///
+/// The maximum-selected fixture caps text at 16,384 scalars, which is terminal in one page, so the
+/// multi-page continuation of a text value needs its own minimal Procedure.
+fn paged_text_readback_source() -> Vec<u8> {
+    serde_json::to_vec(&json!({
+        "schema": "podway.procedure/v2",
+        "id": "paged-text-readback",
+        "version": "2",
+        "name": "Paged text read-back",
+        "purpose": "Exercise multi-page continuation of one text value.",
+        "node_definitions": {
+            "source": {
+                "type": "action",
+                "title": "Record source",
+                "intent": "Record one maximal text value.",
+                "items": [
+                    {"id": "text", "type": "text", "prompt": "Text.", "required": true, "max_length": 65_536}
+                ]
+            },
+            "consume": {
+                "type": "action",
+                "title": "Consume source",
+                "intent": "Read the recorded text one page at a time."
+            }
+        },
+        "graph": {
+            "entry": "source",
+            "nodes": [
+                {"id": "source", "use": "source", "next": "consume"},
+                {
+                    "id": "consume",
+                    "use": "consume",
+                    "evidence_from": [{"node": "source", "required": true, "items": ["text"]}],
+                    "terminal": true
+                }
+            ]
+        }
+    }))
+    .unwrap()
+}
+
+fn paged_text_readback_state(source: &[u8], text: &str) -> GraphSessionStateV2 {
+    paged_text_readback_state_with_validity(source, text, AttemptValidityV2::Valid)
+}
+
+fn paged_text_readback_state_with_validity(
+    source: &[u8],
+    text: &str,
+    source_validity: AttemptValidityV2,
+) -> GraphSessionStateV2 {
+    let base = fresh_state("paged-text-readback.json", source);
+    let source_attempt_id = AttemptId::new(ATTEMPT_ID).unwrap();
+    let consumer_attempt_id = second_attempt_id();
+    let slot = base
+        .workflow_memory()
+        .attempts()
+        .first()
+        .unwrap()
+        .item_slots()
+        .first()
+        .unwrap()
+        .clone();
+    let source_memory = AttemptWorkflowMemoryV2::new(
+        source_attempt_id.clone(),
+        vec![
+            ItemSlotStateV2::new(
+                source_attempt_id.clone(),
+                slot.item_id().clone(),
+                slot.item_type(),
+                Revision::new(1),
+                Some(RecordedItemValueV2::text(text).unwrap()),
+                slot.created_at(),
+                UnixMillis::new(slot.created_at().get() + 1),
+            )
+            .unwrap(),
+        ],
+        Vec::new(),
+        Vec::new(),
+    )
+    .unwrap();
+    let source_digest = source_memory.recorded_items_digest().unwrap();
+    let consumer_memory = AttemptWorkflowMemoryV2::new(
+        consumer_attempt_id,
+        Vec::new(),
+        Vec::new(),
+        vec![
+            EvidenceResolutionStateV2::new(
+                0,
+                true,
+                vec![ItemId::new("text").unwrap()],
+                ResolvedEvidenceReferenceV2::resolved(
+                    EvidenceReferenceSnapshotV2::new(
+                        GraphNodeId::new("source").unwrap(),
+                        source_attempt_id,
+                        AttemptNumberV2::FIRST,
+                        source_digest,
+                        UnixMillis::new(1_700_000_000_010),
+                    )
+                    .unwrap(),
+                ),
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    source_and_consumer_state_with_validity(&base, source_memory, consumer_memory, source_validity)
+}
+
+/// One running attempt at a node declaring `items`, with nothing recorded.
+///
+/// The bounded windows (`missing_required_items`, observation choices) are properties of the
+/// current node, so proving they truncate needs a node wider than the window itself.
+fn wide_node_state(source: &[u8]) -> GraphSessionStateV2 {
+    let base = fresh_state("wide-node.json", source);
+    let attempt = SessionAttemptV2::new(
+        AttemptId::new(ATTEMPT_ID).unwrap(),
+        GraphNodeId::new("work").unwrap(),
+        AttemptNumberV2::FIRST,
+        TraceSequenceV2::FIRST,
+        AttemptLifecycle::Active,
+        AttemptValidityV2::Valid,
+        None,
+    )
+    .unwrap();
+    let trace = SessionTraceV2::from_parts(
+        SessionId::new(SESSION_ID).unwrap(),
+        SessionLifecycle::Running,
+        Revision::new(1),
+        vec![attempt],
+    )
+    .unwrap();
+    GraphSessionStateV2::new_with_goal_state(
+        base.workspace_revision(),
+        base.task_title(),
+        base.snapshot().clone(),
+        trace,
+        base.counters().to_vec(),
+        base.attempt_metadata().to_vec(),
+        base.workflow_memory().clone(),
+        base.goal_state().clone(),
+        base.created_at(),
+        None,
+        None,
+        None,
+    )
+    .unwrap()
+}
+
+/// Three evidence references carrying 36 selected text items plus one list of oversized entries.
+///
+/// One reference selects at most 16 items, so the 32-slot preview budget is only reachable across
+/// several references — and the maximum-selected fixture deliberately stays inside one.
+const WIDE_SELECTION_SOURCES: [&str; 3] = ["source-a", "source-b", "source-c"];
+const WIDE_SELECTION_ITEMS_PER_SOURCE: usize = 12;
+
+fn wide_selection_item_ids(source_index: usize) -> Vec<String> {
+    let mut ids: Vec<String> = (0..WIDE_SELECTION_ITEMS_PER_SOURCE)
+        .map(|index| format!("wide-{source_index}-{index:02}"))
+        .collect();
+    if source_index == 0 {
+        ids.push("wide-list".to_owned());
+    }
+    ids
+}
+
+fn wide_selection_readback_source() -> Vec<u8> {
+    let mut definitions = Map::new();
+    let mut nodes = Vec::new();
+    for (source_index, source) in WIDE_SELECTION_SOURCES.iter().enumerate() {
+        let items: Vec<Value> = wide_selection_item_ids(source_index)
+            .into_iter()
+            .map(|id| {
+                if id == "wide-list" {
+                    json!({
+                        "id": id,
+                        "type": "list",
+                        "prompt": "Record entries.",
+                        "required": true,
+                        "max_items": 8,
+                        "max_item_length": 1_000,
+                        "unique": false
+                    })
+                } else {
+                    json!({
+                        "id": id,
+                        "type": "text",
+                        "prompt": "Record text.",
+                        "required": true,
+                        "max_length": 64
+                    })
+                }
+            })
+            .collect();
+        definitions.insert(
+            (*source).to_owned(),
+            json!({
+                "type": "action",
+                "title": "Record source",
+                "intent": "Record selected values.",
+                "items": items
+            }),
+        );
+        let next = WIDE_SELECTION_SOURCES
+            .get(source_index + 1)
+            .copied()
+            .unwrap_or("consume");
+        nodes.push(json!({"id": source, "use": source, "next": next}));
+    }
+    definitions.insert(
+        "consume".to_owned(),
+        json!({
+            "type": "action",
+            "title": "Consume sources",
+            "intent": "Read every selected value."
+        }),
+    );
+    let references: Vec<Value> = WIDE_SELECTION_SOURCES
+        .iter()
+        .enumerate()
+        .map(|(source_index, source)| {
+            json!({
+                "node": source,
+                "required": true,
+                "items": wide_selection_item_ids(source_index)
+            })
+        })
+        .collect();
+    nodes.push(json!({
+        "id": "consume",
+        "use": "consume",
+        "evidence_from": references,
+        "terminal": true
+    }));
+    serde_json::to_vec(&json!({
+        "schema": "podway.procedure/v2",
+        "id": "wide-selection-readback",
+        "version": "2",
+        "name": "Wide selection read-back",
+        "purpose": "Exercise the preview slot count and the per-slot byte budget.",
+        "node_definitions": definitions,
+        "graph": {"entry": WIDE_SELECTION_SOURCES[0], "nodes": nodes}
+    }))
+    .unwrap()
+}
+
+fn wide_selection_readback_state(source: &[u8], text: &str, entry: &str) -> GraphSessionStateV2 {
+    let base = fresh_state("wide-selection-readback.json", source);
+    let consumer_attempt_id = second_attempt_id();
+    let created_at = UnixMillis::new(1_700_000_000_000);
+    let mut attempt_ids = Vec::new();
+    let mut memories = Vec::new();
+    let mut references = Vec::new();
+    let mut trace_attempts = Vec::new();
+    let mut counters = Vec::new();
+    let mut metadata = Vec::new();
+    for (source_index, source_node) in WIDE_SELECTION_SOURCES.iter().enumerate() {
+        let attempt_id =
+            AttemptId::new(format!("00000000-0000-4000-8000-00000000300{source_index}")).unwrap();
+        let ids = wide_selection_item_ids(source_index);
+        let slots = ids
+            .iter()
+            .map(|id| {
+                let value = if id == "wide-list" {
+                    RecordedItemValueV2::list(vec![entry.to_owned(); 4]).unwrap()
+                } else {
+                    RecordedItemValueV2::text(text).unwrap()
+                };
+                ItemSlotStateV2::new(
+                    attempt_id.clone(),
+                    ItemId::new(id).unwrap(),
+                    value.item_type(),
+                    Revision::new(1),
+                    Some(value),
+                    created_at,
+                    UnixMillis::new(created_at.get() + 1),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let memory =
+            AttemptWorkflowMemoryV2::new(attempt_id.clone(), slots, Vec::new(), Vec::new())
+                .unwrap();
+        references.push(
+            EvidenceResolutionStateV2::new(
+                source_index as u32,
+                true,
+                ids.iter().map(|id| ItemId::new(id).unwrap()).collect(),
+                ResolvedEvidenceReferenceV2::resolved(
+                    EvidenceReferenceSnapshotV2::new(
+                        GraphNodeId::new(*source_node).unwrap(),
+                        attempt_id.clone(),
+                        AttemptNumberV2::FIRST,
+                        memory.recorded_items_digest().unwrap(),
+                        UnixMillis::new(1_700_000_000_010),
+                    )
+                    .unwrap(),
+                ),
+            )
+            .unwrap(),
+        );
+        trace_attempts.push(
+            SessionAttemptV2::new(
+                attempt_id.clone(),
+                GraphNodeId::new(*source_node).unwrap(),
+                AttemptNumberV2::FIRST,
+                TraceSequenceV2::new(source_index as u64 + 1),
+                AttemptLifecycle::Completed,
+                AttemptValidityV2::Valid,
+                None,
+            )
+            .unwrap(),
+        );
+        counters.push(GraphNodeCounterV2::new(
+            GraphNodeId::new(*source_node).unwrap(),
+            1,
+            0,
+        ));
+        metadata.push(
+            AttemptMetadataV2::new(
+                attempt_id.clone(),
+                created_at,
+                Some(UnixMillis::new(1_700_000_000_010)),
+                None,
+            )
+            .unwrap(),
+        );
+        attempt_ids.push(attempt_id);
+        memories.push(memory);
+    }
+    memories.push(
+        AttemptWorkflowMemoryV2::new(
+            consumer_attempt_id.clone(),
+            Vec::new(),
+            Vec::new(),
+            references,
+        )
+        .unwrap(),
+    );
+    trace_attempts.push(
+        SessionAttemptV2::new(
+            consumer_attempt_id.clone(),
+            GraphNodeId::new("consume").unwrap(),
+            AttemptNumberV2::FIRST,
+            TraceSequenceV2::new(WIDE_SELECTION_SOURCES.len() as u64 + 1),
+            AttemptLifecycle::Active,
+            AttemptValidityV2::Valid,
+            None,
+        )
+        .unwrap(),
+    );
+    counters.push(GraphNodeCounterV2::new(
+        GraphNodeId::new("consume").unwrap(),
+        1,
+        0,
+    ));
+    metadata.push(
+        AttemptMetadataV2::new(
+            consumer_attempt_id,
+            UnixMillis::new(1_700_000_000_010),
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let trace = SessionTraceV2::from_parts(
+        SessionId::new(SESSION_ID).unwrap(),
+        SessionLifecycle::Running,
+        Revision::new(WIDE_SELECTION_SOURCES.len() as u64 + 1),
+        trace_attempts,
+    )
+    .unwrap();
+    GraphSessionStateV2::new_with_goal_state(
+        Revision::new(WIDE_SELECTION_SOURCES.len() as u64 + 1),
+        base.task_title(),
+        base.snapshot().clone(),
+        trace,
+        counters,
+        metadata,
+        WorkflowMemoryStateV2::new(memories, Vec::new(), Vec::new()).unwrap(),
+        base.goal_state().clone(),
+        base.created_at(),
+        None,
+        None,
+        None,
+    )
+    .unwrap()
+}
 
 fn maximum_selected_readback_source() -> Vec<u8> {
     let choice_value = "\0".repeat(120);
@@ -3064,68 +3532,7 @@ fn maximum_selected_readback_state(source: &[u8]) -> GraphSessionStateV2 {
         ],
     )
     .unwrap();
-    let trace = SessionTraceV2::from_parts(
-        SessionId::new(SESSION_ID).unwrap(),
-        SessionLifecycle::Running,
-        Revision::new(2),
-        vec![
-            SessionAttemptV2::new(
-                source_attempt_id.clone(),
-                GraphNodeId::new("source").unwrap(),
-                AttemptNumberV2::FIRST,
-                TraceSequenceV2::FIRST,
-                AttemptLifecycle::Completed,
-                AttemptValidityV2::Valid,
-                None,
-            )
-            .unwrap(),
-            SessionAttemptV2::new(
-                consumer_attempt_id.clone(),
-                GraphNodeId::new("consume").unwrap(),
-                AttemptNumberV2::FIRST,
-                TraceSequenceV2::new(2),
-                AttemptLifecycle::Active,
-                AttemptValidityV2::Valid,
-                None,
-            )
-            .unwrap(),
-        ],
-    )
-    .unwrap();
-    GraphSessionStateV2::new_with_goal_state(
-        Revision::new(2),
-        base.task_title(),
-        base.snapshot().clone(),
-        trace,
-        vec![
-            GraphNodeCounterV2::new(GraphNodeId::new("source").unwrap(), 1, 0),
-            GraphNodeCounterV2::new(GraphNodeId::new("consume").unwrap(), 1, 0),
-        ],
-        vec![
-            AttemptMetadataV2::new(
-                source_attempt_id,
-                UnixMillis::new(1_700_000_000_000),
-                Some(UnixMillis::new(1_700_000_000_010)),
-                None,
-            )
-            .unwrap(),
-            AttemptMetadataV2::new(
-                consumer_attempt_id,
-                UnixMillis::new(1_700_000_000_010),
-                None,
-                None,
-            )
-            .unwrap(),
-        ],
-        WorkflowMemoryStateV2::new(vec![source_memory, consumer_memory], Vec::new(), Vec::new())
-            .unwrap(),
-        base.goal_state().clone(),
-        base.created_at(),
-        None,
-        None,
-        None,
-    )
-    .unwrap()
+    source_and_consumer_state(&base, source_memory, consumer_memory)
 }
 
 #[test]
@@ -3177,37 +3584,52 @@ fn v2rel002_selected_readback_respects_value_and_wire_bounds() {
             .find(|item| item["item_id"] == id)
             .unwrap_or_else(|| panic!("selected item {id} is absent"))
     };
-    assert_eq!(item("confirm")["value"], true);
-    assert_eq!(
-        item("text")["value"].as_str().unwrap().chars().count(),
-        16_384
-    );
-    assert_eq!(
-        item("choice")["value"].as_str().unwrap().chars().count(),
-        120
-    );
-    assert_eq!(item("integer")["value"], i64::MAX);
-    let list = item("list")["value"].as_array().unwrap();
-    assert_eq!(list.len(), 200);
+    // V2SCL-004 replaced the complete value with identity, digest, and size. Every item still
+    // reports its exact logical size, so a caller knows what a page read will yield before asking.
+    for id in [
+        "confirm",
+        "text",
+        "choice",
+        "integer",
+        "list",
+        "artifact",
+        "selected-00",
+    ] {
+        let metadata = item(id);
+        assert!(metadata.get("value").is_none(), "{id} must carry no value");
+        assert!(
+            metadata["value_digest"]
+                .as_str()
+                .unwrap()
+                .starts_with("sha256:")
+        );
+        assert!(metadata["revision"].is_number());
+    }
+    assert_eq!(item("confirm")["total_size"], 1);
+    assert_eq!(item("confirm")["size_unit"], "value");
+    assert_eq!(item("text")["total_size"], 16_384);
+    assert_eq!(item("text")["size_unit"], "scalars");
+    assert_eq!(item("choice")["total_size"], 1);
+    assert_eq!(item("integer")["total_size"], 1);
+    assert_eq!(item("list")["total_size"], 200);
+    assert_eq!(item("list")["size_unit"], "entries");
+    assert_eq!(item("artifact")["total_size"], 1);
+
+    // The reference names its items explicitly, so the first 32 receive a bounded preview and a
+    // truncated preview carries the token that resumes exactly where it stopped.
+    let text_preview = item("text")["preview"].as_str().unwrap();
+    assert_eq!(text_preview.chars().count(), 938);
+    assert_eq!(item("text")["preview_truncated"], true);
     assert!(
-        list.iter()
-            .all(|entry| entry.as_str().unwrap().chars().count() == 308)
+        item("text")["next_page_token"]
+            .as_str()
+            .unwrap()
+            .chars()
+            .count()
+            <= 256
     );
-    let artifact = &item("artifact")["value"];
-    assert_eq!(artifact["location_type"], "reference");
-    assert_eq!(
-        artifact["location"].as_str().unwrap().chars().count(),
-        4_000
-    );
-    assert_eq!(
-        artifact["sha256_digest"].as_str().unwrap().chars().count(),
-        71
-    );
-    assert_eq!(artifact["size_bytes"], u64::MAX);
-    assert_eq!(
-        artifact["media_type"].as_str().unwrap().chars().count(),
-        255
-    );
+    assert_eq!(item("confirm")["preview_truncated"], false);
+    assert!(item("confirm").get("next_page_token").is_none());
 
     let readback_component = json!({
         "references": next["references"].clone(),
@@ -4234,6 +4656,556 @@ fn v2run002_exhaustive_reachable_applicability_classes_close_actions_and_suggest
         assert!(
             registered.contains(command),
             "projector action route {command} is unregistered"
+        );
+    }
+}
+
+/// V2SCL-004: a selected evidence item is readable one bounded page at a time, and every rejected
+/// read names its exact reason without changing state.
+#[test]
+fn v2scl004_evidence_read_pages_deterministically_and_fails_exactly() {
+    let source = maximum_selected_readback_source();
+    let state = maximum_selected_readback_state(&source);
+    let session_view = view(state);
+    let node = GraphNodeId::new("source").unwrap();
+    let text = ItemId::new("text").unwrap();
+
+    let first = project_evidence_read_v1(&session_view, &node, &text, None)
+        .expect("the first page of a selected text item is readable");
+    assert_eq!(first["schema"], "podway.evidence-read-result/v1");
+    assert_eq!(first["item"]["item_id"], "text");
+    assert_eq!(first["item"]["type"], "text");
+    assert_eq!(first["size_unit"], "scalars");
+    assert_eq!(first["total_size"], 16_384);
+    assert_eq!(first["page"]["offset"], 0);
+    assert_eq!(first["page_token_version"], 1);
+
+    // 16,384 scalars fit inside one 256 KiB page, so this value is terminal in a single read and
+    // the daemon issues no token a caller could resume from.
+    assert_eq!(first["truncated"], false);
+    assert_eq!(first["next_page_token"], Value::Null);
+    assert_eq!(
+        first["page"]["data"].as_str().unwrap().chars().count(),
+        16_384
+    );
+    assert_eq!(first["page"]["size"], 16_384);
+
+    // Reading is a pure query: the same request answers identically.
+    let repeated = project_evidence_read_v1(&session_view, &node, &text, None).unwrap();
+    assert_eq!(repeated, first);
+
+    // A list item reports entries, not scalars. Its 200 entries of 308 scalars exceed one page, so
+    // the read continues through a token and every page carries whole entries.
+    let list = ItemId::new("list").unwrap();
+    let first_list = project_evidence_read_v1(&session_view, &node, &list, None).unwrap();
+    assert_eq!(first_list["size_unit"], "entries");
+    assert_eq!(first_list["total_size"], 200);
+    assert_eq!(first_list["truncated"], true);
+    assert_eq!(first_list["page"]["offset"], 0);
+    let first_entries = first_list["page"]["data"].as_array().unwrap();
+    assert!(first_entries.iter().all(|entry| entry.is_string()));
+    let first_size = first_entries.len();
+    assert_eq!(first_list["page"]["size"], first_size);
+    assert!(first_size > 0 && first_size < 200);
+
+    let continuation = podway_protocol::EvidencePageTokenV1::decode(
+        first_list["next_page_token"].as_str().unwrap(),
+    )
+    .expect("the continuation token decodes");
+    assert_eq!(continuation.offset(), first_size as u64);
+    let second_list =
+        project_evidence_read_v1(&session_view, &node, &list, Some(&continuation)).unwrap();
+    assert_eq!(second_list["page"]["offset"], first_size);
+    assert_eq!(second_list["truncated"], false);
+    assert_eq!(second_list["next_page_token"], Value::Null);
+    let second_entries = second_list["page"]["data"].as_array().unwrap();
+    assert_eq!(first_size + second_entries.len(), 200);
+
+    // Concatenating the pages reproduces the value exactly: no entry is split, dropped, or repeated.
+    let mut rejoined = first_entries.clone();
+    rejoined.extend(second_entries.iter().cloned());
+    assert_eq!(rejoined.len(), 200);
+    assert!(
+        rejoined
+            .iter()
+            .all(|entry| entry.as_str().unwrap().chars().count() == 308),
+        "every rejoined entry must be a whole 308-scalar entry, never a split one"
+    );
+
+    // A token replays the same page while its snapshot is current.
+    let replayed =
+        project_evidence_read_v1(&session_view, &node, &list, Some(&continuation)).unwrap();
+    assert_eq!(replayed, second_list);
+
+    // An item the reference does not select is not readable, and neither is an undeclared source.
+    let unselected = ItemId::new("unselected-secret").unwrap();
+    assert!(matches!(
+        project_evidence_read_v1(&session_view, &node, &unselected, None),
+        Err(EvidenceReadErrorV2::NotAvailable { .. })
+    ));
+    let undeclared = GraphNodeId::new("elsewhere").unwrap();
+    assert!(matches!(
+        project_evidence_read_v1(&session_view, &undeclared, &text, None),
+        Err(EvidenceReadErrorV2::NotAvailable { .. })
+    ));
+
+    // A token bound to another session, consumer, or item never reaches a state comparison.
+    let digest = first["value_digest"].as_str().unwrap();
+    let consumer = first["consumer"]["attempt_id"].as_str().unwrap();
+    let source_attempt = first["source"]["attempt_id"].as_str().unwrap();
+    let session_id = "00000000-0000-4000-8000-0000000000ff";
+    let foreign = podway_protocol::EvidencePageTokenV1::new(
+        session_id,
+        consumer,
+        source_attempt,
+        "text",
+        digest,
+        0,
+    )
+    .unwrap();
+    assert!(matches!(
+        project_evidence_read_v1(&session_view, &node, &text, Some(&foreign)),
+        Err(EvidenceReadErrorV2::TokenNotBound)
+    ));
+
+    // A token whose bound value digest moved is a recoverable conflict, not a silent other page.
+    let status = project_graph_status_v2(&session_view, GraphStatusTierV2::Standard, None).unwrap();
+    let live_session = status["session"]["id"].as_str().unwrap().to_owned();
+    let stale = podway_protocol::EvidencePageTokenV1::new(
+        &live_session,
+        consumer,
+        source_attempt,
+        "text",
+        &format!("sha256:{}", "b".repeat(64)),
+        0,
+    )
+    .unwrap();
+    assert!(matches!(
+        project_evidence_read_v1(&session_view, &node, &text, Some(&stale)),
+        Err(EvidenceReadErrorV2::TokenStale { .. })
+    ));
+
+    // An offset at or past the logical end is exhausted; the daemon never issues such a token.
+    let exhausted = podway_protocol::EvidencePageTokenV1::new(
+        &live_session,
+        consumer,
+        source_attempt,
+        "text",
+        digest,
+        16_384,
+    )
+    .unwrap();
+    assert!(matches!(
+        project_evidence_read_v1(&session_view, &node, &text, Some(&exhausted)),
+        Err(EvidenceReadErrorV2::TokenExhausted { .. })
+    ));
+}
+
+#[test]
+fn v2scl004_bounded_windows_report_their_exact_total_when_they_truncate() {
+    // 70 required items exceed the 64-entry detail window, and 9 choices exceed the 8-choice
+    // observation window. ADR-0024 forbids a silent cut, so each window must publish the exact
+    // total and say it was truncated.
+    let mut items: Vec<Value> = (0..70)
+        .map(|index| {
+            json!({
+                "id": format!("required-{index:02}"),
+                "type": "text",
+                "prompt": format!("Record value {index}."),
+                "required": true,
+                "max_length": 64
+            })
+        })
+        .collect();
+    items.push(json!({
+        "id": "wide-choice",
+        "type": "choice",
+        "prompt": "Choose one.",
+        "required": true,
+        "choices": (0..9).map(|index| format!("choice-{index}")).collect::<Vec<_>>()
+    }));
+    let source = serde_json::to_vec(&json!({
+        "schema": "podway.procedure/v2",
+        "id": "wide-node",
+        "version": "2",
+        "name": "Wide node",
+        "purpose": "Exercise the bounded missing-item and choice windows.",
+        "node_definitions": {
+            "work": {
+                "type": "action",
+                "title": "Record work",
+                "intent": "Record more items than one window can carry.",
+                "items": items
+            }
+        },
+        "graph": {
+            "entry": "work",
+            "nodes": [{"id": "work", "use": "work", "terminal": true}]
+        }
+    }))
+    .unwrap();
+    let session_view = view(wide_node_state(&source));
+
+    let next = project_graph_next_v2(&session_view).unwrap();
+    // The exact count stays exact; only the detail array is windowed.
+    assert_eq!(next["missing_required_item_count"], 71);
+    assert_eq!(next["missing_required_items"].as_array().unwrap().len(), 64);
+    assert_eq!(next["missing_required_items_truncated"], true);
+
+    let observation = project_graph_observation_v1(&session_view).unwrap();
+    let choice = observation["active_items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["item_id"] == "wide-choice")
+        .expect("the choice item is active");
+    assert_eq!(
+        choice["constraints"]["choices"].as_array().unwrap().len(),
+        8
+    );
+    assert_eq!(choice["constraints"]["choices_total"], 9);
+    assert_eq!(choice["constraints"]["choices_truncated"], true);
+}
+
+#[test]
+fn v2scl004_previews_stop_at_the_slot_budget_and_at_the_slot_count() {
+    // 40 selected text items exceed the 32 preview slots, and one list entry alone exceeds a
+    // slot's byte budget. Both cases must still publish complete metadata.
+    let text = "\0".repeat(64);
+    let entry = "\0".repeat(1_000);
+    let source = wide_selection_readback_source();
+    let session_view = view(wide_selection_readback_state(&source, &text, &entry));
+    let next = project_graph_next_v2(&session_view).unwrap();
+    let references = next["readback"].as_array().unwrap();
+    assert_eq!(references.len(), 3);
+    // Previews are spent in declaration order across every reference, so the budget is a property
+    // of the response rather than of one reference.
+    let items = references
+        .iter()
+        .flat_map(|reference| reference["items"].as_array().unwrap().iter())
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(items.len(), 37);
+
+    let previewed = items
+        .iter()
+        .filter(|item| item.get("preview").is_some())
+        .count();
+    assert_eq!(
+        previewed, 32,
+        "the preview slot budget must stop preview emission"
+    );
+    // Slots are spent in order, so once the budget runs out no later item carries an excerpt.
+    let last_previewed = items
+        .iter()
+        .rposition(|item| item.get("preview").is_some())
+        .expect("some item carries a preview");
+    // Every item past the budget keeps its identity, digest, and size: only the excerpt is gone.
+    for item in items.iter().skip(last_previewed + 1) {
+        assert!(item.get("preview").is_none());
+        assert!(item.get("preview_truncated").is_none());
+        assert!(item.get("next_page_token").is_none());
+        assert!(
+            item["value_digest"]
+                .as_str()
+                .unwrap()
+                .starts_with("sha256:")
+        );
+        assert!(item["total_size"].is_number());
+    }
+    assert!(
+        last_previewed + 1 < items.len(),
+        "the fixture must be wider than the preview budget"
+    );
+
+    // A list whose first entry alone exceeds the slot admits nothing, and an empty excerpt is
+    // published as no preview at all rather than spending a slot on nothing.
+    let list = items
+        .iter()
+        .find(|item| item["item_id"] == "wide-list")
+        .expect("the list item is selected");
+    assert!(list.get("preview").is_none());
+    assert_eq!(list["total_size"], 4);
+    assert_eq!(list["size_unit"], "entries");
+}
+
+#[test]
+fn v2scl004_an_empty_recorded_value_reads_as_one_empty_terminal_page() {
+    // A text item with no minimum may legally record the empty string. Refusing to serve it would
+    // make a recorded value unreadable and would report a token failure for a tokenless request.
+    let source = paged_text_readback_source();
+    let session_view = view(paged_text_readback_state(&source, ""));
+    let node = GraphNodeId::new("source").unwrap();
+    let item = ItemId::new("text").unwrap();
+
+    let page = project_evidence_read_v1(&session_view, &node, &item, None).unwrap();
+    assert_eq!(page["total_size"], 0);
+    assert_eq!(page["size_unit"], "scalars");
+    assert_eq!(page["page"]["offset"], 0);
+    assert_eq!(page["page"]["size"], 0);
+    assert_eq!(page["page"]["data"], "");
+    assert_eq!(page["truncated"], false);
+    assert_eq!(page["next_page_token"], Value::Null);
+
+    // There is still no second page, so a token past the end stays exhausted.
+    let status = project_graph_status_v2(&session_view, GraphStatusTierV2::Standard, None).unwrap();
+    let beyond = podway_protocol::EvidencePageTokenV1::new(
+        status["session"]["id"].as_str().unwrap(),
+        page["consumer"]["attempt_id"].as_str().unwrap(),
+        page["source"]["attempt_id"].as_str().unwrap(),
+        "text",
+        page["value_digest"].as_str().unwrap(),
+        1,
+    )
+    .unwrap();
+    assert!(matches!(
+        project_evidence_read_v1(&session_view, &node, &item, Some(&beyond)),
+        Err(EvidenceReadErrorV2::TokenExhausted { .. })
+    ));
+
+    // An empty value has nothing to excerpt, so it carries no preview and spends no slot.
+    let next = project_graph_next_v2(&session_view).unwrap();
+    let metadata = &next["readback"].as_array().unwrap()[0]["items"]
+        .as_array()
+        .unwrap()[0];
+    assert_eq!(metadata["total_size"], 0);
+    assert!(metadata.get("preview").is_none());
+    assert!(metadata.get("next_page_token").is_none());
+}
+
+#[test]
+fn v2scl004_evidence_read_separates_a_stale_reference_from_a_stale_token() {
+    let text = "\0".repeat(1_024);
+    let source = paged_text_readback_source();
+    let node = GraphNodeId::new("source").unwrap();
+    let item = ItemId::new("text").unwrap();
+
+    let live = view(paged_text_readback_state(&source, &text));
+    let page = project_evidence_read_v1(&live, &node, &item, None).unwrap();
+    let consumer = page["consumer"]["attempt_id"].as_str().unwrap().to_owned();
+    let source_attempt = page["source"]["attempt_id"].as_str().unwrap().to_owned();
+    let digest = page["value_digest"].as_str().unwrap().to_owned();
+    let status = project_graph_status_v2(&live, GraphStatusTierV2::Standard, None).unwrap();
+    let session_id = status["session"]["id"].as_str().unwrap().to_owned();
+
+    // A valid consumer holding a stale source is not a representable persisted state, so the
+    // reference-stale arm is fail-closed defense rather than a reachable outcome. Proving the
+    // invariant is what keeps it that way.
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let stale_source = std::panic::catch_unwind(|| {
+        paged_text_readback_state_with_validity(&source, &text, AttemptValidityV2::Stale)
+    });
+    std::panic::set_hook(previous_hook);
+    assert!(
+        stale_source.is_err(),
+        "a valid consumer must not be able to hold a stale evidence source"
+    );
+
+    // A token bound to a different item never reaches a state comparison, so an invented token
+    // cannot report whether some other item exists.
+    let wrong_item = podway_protocol::EvidencePageTokenV1::new(
+        &session_id,
+        &consumer,
+        &source_attempt,
+        "some-other-item",
+        &digest,
+        0,
+    )
+    .unwrap();
+    assert!(matches!(
+        project_evidence_read_v1(&live, &node, &item, Some(&wrong_item)),
+        Err(EvidenceReadErrorV2::TokenNotBound)
+    ));
+
+    // A token from an earlier consumer attempt is a moved snapshot, not a forged token: the caller
+    // re-reads state and restarts the item, so it is recoverable rather than malformed.
+    let earlier_consumer = podway_protocol::EvidencePageTokenV1::new(
+        &session_id,
+        ATTEMPT_ID,
+        &source_attempt,
+        "text",
+        &digest,
+        0,
+    )
+    .unwrap();
+    assert!(matches!(
+        project_evidence_read_v1(&live, &node, &item, Some(&earlier_consumer)),
+        Err(EvidenceReadErrorV2::TokenStale { .. })
+    ));
+}
+
+#[test]
+fn v2scl004_evidence_read_continues_a_multi_page_text_value() {
+    // Worst-case escaping charges six bytes per scalar, so a 256 KiB page carries 43,690 of them
+    // and a maximal 65,536-scalar text needs exactly two pages.
+    let text = "\0".repeat(65_536);
+    let source = paged_text_readback_source();
+    let session_view = view(paged_text_readback_state(&source, &text));
+    let node = GraphNodeId::new("source").unwrap();
+    let item = ItemId::new("text").unwrap();
+
+    let first = project_evidence_read_v1(&session_view, &node, &item, None).unwrap();
+    assert_eq!(first["total_size"], 65_536);
+    assert_eq!(first["size_unit"], "scalars");
+    assert_eq!(first["page"]["offset"], 0);
+    assert_eq!(first["truncated"], true);
+    let first_page = first["page"]["data"].as_str().unwrap().to_owned();
+    assert_eq!(first_page.chars().count(), 43_690);
+    assert_eq!(first["page"]["size"], 43_690);
+
+    let token =
+        podway_protocol::EvidencePageTokenV1::decode(first["next_page_token"].as_str().unwrap())
+            .unwrap();
+    assert_eq!(token.offset(), 43_690);
+    let second = project_evidence_read_v1(&session_view, &node, &item, Some(&token)).unwrap();
+    assert_eq!(second["page"]["offset"], 43_690);
+    assert_eq!(second["truncated"], false);
+    assert_eq!(second["next_page_token"], Value::Null);
+    let second_page = second["page"]["data"].as_str().unwrap().to_owned();
+    assert_eq!(second_page.chars().count(), 65_536 - 43_690);
+
+    // The pages concatenate back to the recorded value with nothing split, dropped, or repeated.
+    assert_eq!(format!("{first_page}{second_page}"), text);
+    assert_eq!(first["value_digest"], second["value_digest"]);
+
+    // The preview token published in the progression response resumes the same value, so a caller
+    // never has to re-read a page it already saw.
+    let next = project_graph_next_v2(&session_view).unwrap();
+    let metadata = &next["readback"].as_array().unwrap()[0]["items"]
+        .as_array()
+        .unwrap()[0];
+    assert_eq!(metadata["preview"].as_str().unwrap().chars().count(), 938);
+    assert_eq!(metadata["preview_truncated"], true);
+    let preview_token =
+        podway_protocol::EvidencePageTokenV1::decode(metadata["next_page_token"].as_str().unwrap())
+            .unwrap();
+    assert_eq!(preview_token.offset(), 938);
+    let resumed =
+        project_evidence_read_v1(&session_view, &node, &item, Some(&preview_token)).unwrap();
+    assert_eq!(resumed["page"]["offset"], 938);
+    assert_eq!(
+        resumed["page"]["data"].as_str().unwrap().chars().count(),
+        43_690
+    );
+}
+
+#[test]
+fn v2scl004_evidence_read_answers_indivisible_values_in_one_terminal_page() {
+    let source = maximum_selected_readback_source();
+    let session_view = view(maximum_selected_readback_state(&source));
+    let node = GraphNodeId::new("source").unwrap();
+
+    // A confirm, choice, integer, or artifact value has no interior boundary to page at, so each
+    // one answers completely at offset zero and publishes no continuation token.
+    for (id, expected) in [
+        ("confirm", json!(true)),
+        ("choice", json!("\0".repeat(120))),
+        ("integer", json!(i64::MAX)),
+    ] {
+        let item = ItemId::new(id).unwrap();
+        let page = project_evidence_read_v1(&session_view, &node, &item, None).unwrap();
+        assert_eq!(page["size_unit"], "value", "{id}");
+        assert_eq!(page["total_size"], 1, "{id}");
+        assert_eq!(page["page"]["offset"], 0, "{id}");
+        assert_eq!(page["page"]["size"], 1, "{id}");
+        assert_eq!(page["truncated"], false, "{id}");
+        assert_eq!(page["next_page_token"], Value::Null, "{id}");
+        assert_eq!(page["page"]["data"], expected, "{id}");
+
+        // There is no second page to ask for: any non-zero offset is exhausted, never empty.
+        let status =
+            project_graph_status_v2(&session_view, GraphStatusTierV2::Standard, None).unwrap();
+        let beyond = podway_protocol::EvidencePageTokenV1::new(
+            status["session"]["id"].as_str().unwrap(),
+            page["consumer"]["attempt_id"].as_str().unwrap(),
+            page["source"]["attempt_id"].as_str().unwrap(),
+            id,
+            page["value_digest"].as_str().unwrap(),
+            1,
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                project_evidence_read_v1(&session_view, &node, &item, Some(&beyond)),
+                Err(EvidenceReadErrorV2::TokenExhausted { .. })
+            ),
+            "{id} accepted an offset past its only page"
+        );
+    }
+
+    let artifact = ItemId::new("artifact").unwrap();
+    let page = project_evidence_read_v1(&session_view, &node, &artifact, None).unwrap();
+    assert_eq!(page["item"]["type"], "artifact");
+    assert_eq!(page["total_size"], 1);
+    assert_eq!(page["truncated"], false);
+    assert_eq!(page["next_page_token"], Value::Null);
+    // The artifact page carries the complete descriptor, which is what makes it worth reading.
+    assert_eq!(page["page"]["data"]["location_type"], "reference");
+    assert_eq!(
+        page["page"]["data"]["sha256_digest"],
+        format!("sha256:{}", "f".repeat(64))
+    );
+    assert_eq!(page["page"]["data"]["size_bytes"], u64::MAX);
+    assert_eq!(
+        page["page"]["data"]["location"]
+            .as_str()
+            .unwrap()
+            .chars()
+            .count(),
+        4_000
+    );
+}
+
+#[test]
+fn v2scl004_evidence_previews_admit_only_whole_entries_inside_the_slot() {
+    let source = maximum_selected_readback_source();
+    let next = project_graph_next_v2(&view(maximum_selected_readback_state(&source))).unwrap();
+    let items = next["readback"].as_array().unwrap()[0]["items"]
+        .as_array()
+        .unwrap();
+    let list = items
+        .iter()
+        .find(|item| item["item_id"] == "list")
+        .expect("the list item is selected");
+
+    // Entries are 308 scalars, so three fit inside the 938-scalar slot and a fourth would exceed
+    // it. A preview never splits an entry, so it stops at three rather than charging 1,232.
+    let preview = list["preview"].as_array().unwrap();
+    assert_eq!(preview.len(), 3);
+    assert!(
+        preview
+            .iter()
+            .all(|entry| entry.as_str().unwrap().chars().count() == 308)
+    );
+    assert_eq!(list["preview_truncated"], true);
+    let token =
+        podway_protocol::EvidencePageTokenV1::decode(list["next_page_token"].as_str().unwrap())
+            .unwrap();
+    assert_eq!(token.offset(), 3);
+
+    // Every published preview stays inside the slot, which is what keeps the response bounded.
+    for item in items {
+        let Some(preview) = item.get("preview") else {
+            continue;
+        };
+        let scalars = match preview {
+            Value::String(text) => text.chars().count(),
+            Value::Array(entries) => entries
+                .iter()
+                .map(|entry| {
+                    entry
+                        .as_str()
+                        .map(|entry| entry.chars().count())
+                        .unwrap_or(0)
+                })
+                .sum(),
+            _ => 0,
+        };
+        assert!(
+            scalars <= 938,
+            "preview for {} charged {scalars} scalars",
+            item["item_id"]
         );
     }
 }

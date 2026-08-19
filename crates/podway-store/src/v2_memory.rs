@@ -9,13 +9,13 @@ use podway_core::{
     AttemptNumberV2, AttemptValidityV2, BlockerId, BlockerState, CriterionAssessmentModeV2,
     CriterionCitationV2, CriterionId, CriterionStatusV2, DecisionRecordInputV2, DecisionRecordV2,
     EvidenceReferenceSnapshotV2, GoalOutcome, GoalRevisionNumberV2, GraphNodeId, ItemCommonV2,
-    ItemId, ItemSpecV2, ItemTypeV1, NodeDefinitionId, OptionId, ProcedureSnapshotId, ReasonV2,
-    RecordedItemSetV2, RecordedItemV2, RecordedItemValueV2, ResolvedEvidenceReferenceV2,
-    ResolvedEvidenceSetV2, Revision, ReworkKindV2, ReworkRecordInputV2, ReworkRecordV2,
-    MAX_ATTEMPT_CONTENT_SCALARS_V2, MAX_ITEMS_PER_DEFINITION_V2, SessionAttemptV2, SessionId,
+    ItemId, ItemSpecV2, ItemTypeV1, MAX_ATTEMPT_CONTENT_SCALARS_V2, MAX_ITEMS_PER_DEFINITION_V2,
+    NodeDefinitionId, OptionId, ProcedureSnapshotId, ReasonV2, RecordedItemSetV2, RecordedItemV2,
+    RecordedItemValueV2, ResolvedEvidenceReferenceV2, ResolvedEvidenceSetV2, Revision,
+    ReworkKindV2, ReworkRecordInputV2, ReworkRecordV2, SessionAttemptV2, SessionId,
     SessionLifecycle, SessionTraceV2, Sha256Digest, TraceSequenceV2, TransitionEffectV2,
-    UnixMillis, attempt_content_bound_error_v2,
-    canonicalize_json_v1, recorded_content_scalars_v2, verify_canonical_json_v1,
+    UnixMillis, attempt_content_bound_error_v2, canonicalize_json_v1, recorded_content_scalars_v2,
+    verify_canonical_json_v1,
 };
 use rusqlite::{Connection, Transaction, params};
 use serde_json::{Value, json};
@@ -1078,9 +1078,9 @@ impl WorkflowMemoryStateV2 {
         // learns the exact field, observed value, and maximum on the mutation that crosses it.
         let content = recorded_content_scalars_v2(slots.iter().filter_map(ItemSlotStateV2::value));
         if content > MAX_ATTEMPT_CONTENT_SCALARS_V2 {
-            return Err(GraphMutationErrorV2::Domain(attempt_content_bound_error_v2(
-                content,
-            )));
+            return Err(GraphMutationErrorV2::Domain(
+                attempt_content_bound_error_v2(content),
+            ));
         }
         attempts[attempt_index] = AttemptWorkflowMemoryV2::new(
             active_memory.attempt_id.clone(),
@@ -1797,6 +1797,105 @@ impl WorkflowMemoryStateV2 {
         Self::new(attempts, Vec::new(), Vec::new())
     }
 
+    /// Locates one item selected by a currently resolved, declared evidence reference of the
+    /// consumer attempt.
+    ///
+    /// The lookup is deliberately narrow: it cannot reach an attempt the consumer does not declare,
+    /// a source node outside its `evidence_from`, an item outside that reference's selector, or a
+    /// stale source. `evidence.read` is a read of current declared evidence, never a history query.
+    pub(crate) fn selected_evidence_item(
+        &self,
+        trace: &SessionTraceV2,
+        consumer_attempt_id: &AttemptId,
+        source_node: &GraphNodeId,
+        item_id: &ItemId,
+    ) -> Result<Result<SelectedEvidenceItemV2, EvidenceLookupErrorV2>, StoreValueErrorV1> {
+        let consumer = self
+            .attempts
+            .iter()
+            .find(|memory| memory.attempt_id() == consumer_attempt_id)
+            .ok_or_else(|| invalid("Procedure v2 evidence consumer is absent"))?;
+        let consumer_attempt = trace
+            .attempts()
+            .iter()
+            .find(|attempt| attempt.attempt_id() == consumer_attempt_id)
+            .ok_or_else(|| invalid("Procedure v2 evidence consumer trace is absent"))?;
+
+        let Some(reference) = consumer
+            .evidence()
+            .iter()
+            .find(|reference| reference.resolution().source_node() == source_node)
+        else {
+            return Ok(Err(EvidenceLookupErrorV2::ReferenceNotDeclared));
+        };
+        // An empty selector selects every recorded item of the source, which is the declared
+        // meaning of an omitted `items` list.
+        if !reference.selected_item_ids().is_empty()
+            && !reference
+                .selected_item_ids()
+                .iter()
+                .any(|selected| selected == item_id)
+        {
+            return Ok(Err(EvidenceLookupErrorV2::ItemNotSelected));
+        }
+        let snapshot = match reference.resolution() {
+            ResolvedEvidenceReferenceV2::Resolved(snapshot) => snapshot,
+            ResolvedEvidenceReferenceV2::Skipped(_) => {
+                return Ok(Err(EvidenceLookupErrorV2::NotAvailable {
+                    reference_state: "skipped",
+                }));
+            }
+            ResolvedEvidenceReferenceV2::Unresolved { .. } => {
+                return Ok(Err(EvidenceLookupErrorV2::NotAvailable {
+                    reference_state: "unresolved",
+                }));
+            }
+        };
+
+        let source_attempt = trace
+            .attempts()
+            .iter()
+            .find(|attempt| attempt.attempt_id() == snapshot.source_attempt_id())
+            .ok_or_else(|| invalid("Procedure v2 evidence source trace is absent"))?;
+        if consumer_attempt.validity() != AttemptValidityV2::Valid
+            || source_attempt.validity() != AttemptValidityV2::Valid
+        {
+            return Ok(Err(EvidenceLookupErrorV2::Stale {
+                source_attempt_id: snapshot.source_attempt_id().clone(),
+            }));
+        }
+
+        let source = self
+            .attempts
+            .iter()
+            .find(|memory| memory.attempt_id() == snapshot.source_attempt_id())
+            .ok_or_else(|| invalid("Procedure v2 evidence source is absent"))?;
+        let Some(slot) = source
+            .item_slots()
+            .iter()
+            .find(|slot| slot.item_id() == item_id)
+        else {
+            return Ok(Err(EvidenceLookupErrorV2::ItemNotSelected));
+        };
+        let Some(value) = slot.value() else {
+            return Ok(Err(EvidenceLookupErrorV2::ValueAbsent));
+        };
+
+        Ok(Ok(SelectedEvidenceItemV2 {
+            consumer_graph_node_id: consumer_attempt.graph_node_id().clone(),
+            consumer_attempt_id: consumer_attempt.attempt_id().clone(),
+            consumer_attempt_number: consumer_attempt.number(),
+            source_graph_node_id: source_attempt.graph_node_id().clone(),
+            source_attempt_id: source_attempt.attempt_id().clone(),
+            source_attempt_number: source_attempt.number(),
+            items_digest: snapshot.items_digest().clone(),
+            item_id: slot.item_id().clone(),
+            item_revision: slot.revision(),
+            value: value.clone(),
+            value_digest: recorded_value_digest_v2(value)?,
+        }))
+    }
+
     pub(crate) fn selected_readback(
         &self,
         trace: &SessionTraceV2,
@@ -2064,6 +2163,96 @@ fn resolve_evidence_at_activation_v2(
             .map_err(Into::into)
         })
         .collect()
+}
+
+/// Why one selected evidence item could not be read.
+///
+/// ADR-0024 separates a reference that never produced a value from one whose snapshot moved. The
+/// first is a permanent property of the current attempt; the second is recoverable by re-reading
+/// state, so the daemon maps them to different public codes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EvidenceLookupErrorV2 {
+    /// The consumer attempt declares no evidence reference naming this source node.
+    ReferenceNotDeclared,
+    /// The named item is not selected by that reference's declared selector.
+    ItemNotSelected,
+    /// The reference resolved to no readable value because it is unresolved or skipped.
+    NotAvailable { reference_state: &'static str },
+    /// The reference resolved, but its source attempt is no longer valid.
+    ///
+    /// The snapshot's source attempt travels with the error so a caller learns which attempt the
+    /// reference expected rather than being told about its own.
+    Stale { source_attempt_id: AttemptId },
+    /// The selected item exists in the declaration but holds no recorded value.
+    ValueAbsent,
+}
+
+/// One selected evidence item located under the current consumer attempt.
+///
+/// This is the read-side identity `evidence.read` fences on: the consumer that may read it, the
+/// source attempt it was resolved from, and the exact value with its revision and digest. Slicing
+/// the value into pages is a projection concern and stays out of persistence.
+#[derive(Clone, Debug)]
+pub struct SelectedEvidenceItemV2 {
+    consumer_graph_node_id: GraphNodeId,
+    consumer_attempt_id: AttemptId,
+    consumer_attempt_number: AttemptNumberV2,
+    source_graph_node_id: GraphNodeId,
+    source_attempt_id: AttemptId,
+    source_attempt_number: AttemptNumberV2,
+    items_digest: Sha256Digest,
+    item_id: ItemId,
+    item_revision: Revision,
+    value: RecordedItemValueV2,
+    value_digest: Sha256Digest,
+}
+
+impl SelectedEvidenceItemV2 {
+    pub fn consumer_graph_node_id(&self) -> &GraphNodeId {
+        &self.consumer_graph_node_id
+    }
+    pub fn consumer_attempt_id(&self) -> &AttemptId {
+        &self.consumer_attempt_id
+    }
+    pub const fn consumer_attempt_number(&self) -> AttemptNumberV2 {
+        self.consumer_attempt_number
+    }
+    pub fn source_graph_node_id(&self) -> &GraphNodeId {
+        &self.source_graph_node_id
+    }
+    pub fn source_attempt_id(&self) -> &AttemptId {
+        &self.source_attempt_id
+    }
+    pub const fn source_attempt_number(&self) -> AttemptNumberV2 {
+        self.source_attempt_number
+    }
+    pub fn items_digest(&self) -> &Sha256Digest {
+        &self.items_digest
+    }
+    pub fn item_id(&self) -> &ItemId {
+        &self.item_id
+    }
+    pub const fn item_revision(&self) -> Revision {
+        self.item_revision
+    }
+    pub fn value(&self) -> &RecordedItemValueV2 {
+        &self.value
+    }
+    pub fn value_digest(&self) -> &Sha256Digest {
+        &self.value_digest
+    }
+}
+
+/// The SHA-256 digest of one recorded value's canonical JSON.
+///
+/// A page token binds this digest so a continuation can prove it still describes the same value.
+pub fn recorded_value_digest_v2(
+    value: &RecordedItemValueV2,
+) -> Result<Sha256Digest, StoreValueErrorV1> {
+    let canonical = canonicalize_json_v1(&item_value_json_v2(value)?)
+        .map_err(|_| invalid("Procedure v2 recorded value is not canonicalizable"))?;
+    Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes())))
+        .map_err(|_| invalid("Procedure v2 recorded value digest is invalid"))
 }
 
 /// SHA-256 over canonical JSON of complete recorded values in Procedure author order.

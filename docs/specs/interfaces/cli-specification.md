@@ -10,8 +10,8 @@ human-readable text or one JSON document. It never writes SQLite directly.
   `reset --all`.
 - Procedures: `preset list|show|explain` and `procedure
   validate|show|format|vet|graph|preview|lint|check|scaffold`.
-- Session reads: `status`, `next`, `observe`, `evidence read` (added by `V2SCL-004`),
-  and `job list|status|wait|lookup|cancel`.
+- Session reads: `status`, `next`, `observe`, `evidence read`, and
+  `job list|status|wait|lookup|cancel`.
 - Session mutations: `start`, `begin`, `complete`, `skip`, `retry`, `block`,
   `unblock`, `cancel`, `disposition handed-off|not-required`, `reset`, `decide`,
   `rework`, `goal define|revise|assess-criterion`,
@@ -41,8 +41,6 @@ allowed only when the admitted Procedure enables goal tracking and retains the
 existing goal and criterion bounds.
 
 ## Evidence reads
-
-`V2SCL-002` reserved the `evidence.read` route and its result family. `V2SCL-004` adds the CLI grammar, help, and completion entries; the shipped CLI does not yet contain the command.
 
 `evidence read --source <graph-node-id> --item <item-id> [--page-token <token>]` returns one bounded page of an item selected by a currently resolved, declared evidence reference of the current consumer attempt. It is a query: it creates no durable job, no session revision, and no state change, and it cannot browse arbitrary attempts or stale history.
 

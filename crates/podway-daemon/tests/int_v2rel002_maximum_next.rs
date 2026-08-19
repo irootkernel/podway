@@ -452,6 +452,10 @@ const ENVELOPE_SELECTORS: &[&str] = &[
     "revision",
     "missing_required_item_count",
     "readiness",
+    "suggestions_total",
+    "suggestions_truncated",
+    "readback_items_total",
+    "readback_items_truncated",
 ];
 const STATIC_SELECTORS: &[&str] = &[
     "allowed_actions",
@@ -461,6 +465,7 @@ const STATIC_SELECTORS: &[&str] = &[
     "instructions",
     "intent",
     "missing_required_items",
+    "missing_required_items_truncated",
     "next_graph_node_id",
     "objective",
     "options",

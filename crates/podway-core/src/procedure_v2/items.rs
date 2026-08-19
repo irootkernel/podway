@@ -465,7 +465,10 @@ impl ItemSpecV2 {
             }),
             Self::List(specification) => value.as_list().is_some_and(|values| {
                 let length = values.len();
-                let total: u64 = values.iter().map(|value| value.chars().count() as u64).sum();
+                let total: u64 = values
+                    .iter()
+                    .map(|value| value.chars().count() as u64)
+                    .sum();
                 length >= specification.min_items() as usize
                     && length <= specification.max_items() as usize
                     && values.iter().all(|value| {

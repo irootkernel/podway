@@ -152,6 +152,26 @@ enum V2RuntimeErrorDetailsV1 {
         maximum: u64,
         unit: String,
     },
+    EvidenceNotAvailable {
+        graph_node_id: String,
+        source_graph_node_id: String,
+        item_id: String,
+        reference_state: String,
+    },
+    EvidencePageTokenExhausted {
+        source_graph_node_id: String,
+        item_id: String,
+        offset: u64,
+        total_size: u64,
+        unit: String,
+    },
+    EvidencePageTokenStale {
+        graph_node_id: String,
+        source_graph_node_id: String,
+        item_id: String,
+        expected_value_digest: String,
+        current_value_digest: Option<String>,
+    },
     EvidenceReferenceStale {
         graph_node_id: GraphNodeId,
         source_graph_node_id: GraphNodeId,
@@ -464,6 +484,60 @@ impl DispatchErrorDetailsV1 {
         self
     }
 
+    pub fn with_evidence_not_available(
+        mut self,
+        graph_node_id: String,
+        source_graph_node_id: String,
+        item_id: String,
+        reference_state: String,
+    ) -> Self {
+        self.v2_runtime = Some(Box::new(V2RuntimeErrorDetailsV1::EvidenceNotAvailable {
+            graph_node_id,
+            source_graph_node_id,
+            item_id,
+            reference_state,
+        }));
+        self
+    }
+
+    pub fn with_evidence_page_token_exhausted(
+        mut self,
+        source_graph_node_id: String,
+        item_id: String,
+        offset: u64,
+        total_size: u64,
+        unit: String,
+    ) -> Self {
+        self.v2_runtime = Some(Box::new(
+            V2RuntimeErrorDetailsV1::EvidencePageTokenExhausted {
+                source_graph_node_id,
+                item_id,
+                offset,
+                total_size,
+                unit,
+            },
+        ));
+        self
+    }
+
+    pub fn with_evidence_page_token_stale(
+        mut self,
+        graph_node_id: String,
+        source_graph_node_id: String,
+        item_id: String,
+        expected_value_digest: String,
+        current_value_digest: Option<String>,
+    ) -> Self {
+        self.v2_runtime = Some(Box::new(V2RuntimeErrorDetailsV1::EvidencePageTokenStale {
+            graph_node_id,
+            source_graph_node_id,
+            item_id,
+            expected_value_digest,
+            current_value_digest,
+        }));
+        self
+    }
+
     pub fn with_attempt_content_limit_exceeded(
         mut self,
         field: String,
@@ -646,6 +720,40 @@ impl DispatchErrorDetailsV1 {
                 V2RuntimeErrorDetailsV1::DecisionReasonMissing { graph_node_id } => json!({
                     "schema": "podway.v2-runtime-error-details/v1", "kind": "DECISION_REASON_MISSING",
                     "graph_node_id": graph_node_id, "admission": admission,
+                }),
+                V2RuntimeErrorDetailsV1::EvidenceNotAvailable {
+                    graph_node_id,
+                    source_graph_node_id,
+                    item_id,
+                    reference_state,
+                } => json!({
+                    "schema": "podway.v2-runtime-error-details/v1", "kind": "EVIDENCE_NOT_AVAILABLE",
+                    "graph_node_id": graph_node_id, "source_graph_node_id": source_graph_node_id,
+                    "item_id": item_id, "reference_state": reference_state, "admission": admission,
+                }),
+                V2RuntimeErrorDetailsV1::EvidencePageTokenExhausted {
+                    source_graph_node_id,
+                    item_id,
+                    offset,
+                    total_size,
+                    unit,
+                } => json!({
+                    "schema": "podway.v2-runtime-error-details/v1", "kind": "EVIDENCE_PAGE_TOKEN_EXHAUSTED",
+                    "source_graph_node_id": source_graph_node_id, "item_id": item_id,
+                    "offset": offset, "total_size": total_size, "unit": unit,
+                    "admission": admission,
+                }),
+                V2RuntimeErrorDetailsV1::EvidencePageTokenStale {
+                    graph_node_id,
+                    source_graph_node_id,
+                    item_id,
+                    expected_value_digest,
+                    current_value_digest,
+                } => json!({
+                    "schema": "podway.recoverable-v2-runtime-error-details/v1", "kind": "EVIDENCE_PAGE_TOKEN_STALE",
+                    "graph_node_id": graph_node_id, "source_graph_node_id": source_graph_node_id,
+                    "item_id": item_id, "expected_value_digest": expected_value_digest,
+                    "current_value_digest": current_value_digest, "admission": admission,
                 }),
                 V2RuntimeErrorDetailsV1::AttemptContentLimitExceeded {
                     field,
@@ -912,6 +1020,9 @@ pub enum DispatchFailureKindV1 {
     DecisionReasonMissing,
     EvidenceReferenceUnresolved,
     AttemptContentLimitExceeded,
+    EvidenceNotAvailable,
+    EvidencePageTokenExhausted,
+    EvidencePageTokenStale,
     EvidenceReferenceStale,
     ManualReworkTargetNotAllowed,
     ManualReworkTargetNotOnTrace,
@@ -2152,6 +2263,7 @@ where
                     | SliceCommandV1::SessionStatus(_)
                     | SliceCommandV1::SessionNext(_)
                     | SliceCommandV1::SessionObserve(_)
+                    | SliceCommandV1::EvidenceRead(_)
                     | SliceCommandV1::SessionComplete(_)
                     | SliceCommandV1::SessionSkip(_)
                     | SliceCommandV1::SessionRetry(_)
@@ -2565,6 +2677,24 @@ fn catalog_error_spec_v1(kind: DispatchFailureKindV1) -> (&'static str, &'static
             "Recorded text and list content exceeds the per-attempt aggregate.",
             false,
             1,
+        ),
+        DispatchFailureKindV1::EvidenceNotAvailable => (
+            "EVIDENCE_NOT_AVAILABLE",
+            "The declared evidence reference has no readable value.",
+            false,
+            1,
+        ),
+        DispatchFailureKindV1::EvidencePageTokenExhausted => (
+            "EVIDENCE_PAGE_TOKEN_EXHAUSTED",
+            "The evidence page token offset is at or past the end of the value.",
+            false,
+            2,
+        ),
+        DispatchFailureKindV1::EvidencePageTokenStale => (
+            "EVIDENCE_PAGE_TOKEN_STALE",
+            "The evidence page token no longer matches current state.",
+            true,
+            4,
         ),
         DispatchFailureKindV1::EvidenceReferenceStale => (
             "EVIDENCE_REFERENCE_STALE",

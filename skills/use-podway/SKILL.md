@@ -34,7 +34,7 @@ Enter a worktree only after explicit activation for the current workflow.
    podway observe --json --wait-for-idle
    ```
 
-4. Require `result.schema` to identify `podway.observation-result/v2`.
+4. Require `result.schema` to identify `podway.observation-result/v3`.
 5. Treat the returned observation as authoritative. Do not rely on chat memory. Read identity and queue facts from `status`, current guidance from `guidance`, item declarations and bounded values from `active_items`, and fenced mutation recipes from `mutation_templates`. Add any CLI-required semantic subcommand or value described by command help; the template deliberately does not invent them. Prepared guidance has no cursor and offers begin, eligible reset, and eligible replacement. A null `guidance` means the session is completed or cancelled: an undisposed terminal revision offers only terminal disposition, while a disposed terminal revision offers eligible reset and replacement. Use `status --verbose` only when history is needed and `next` only for compatibility with callers that need its narrower result.
 6. If no active session exists, continue the user's work without creating one unless the user explicitly asks to start or manage a Podway session.
 
@@ -68,6 +68,7 @@ Active-session item updates and justified progression do not require a separate 
 - The goal commands are `goal define`, `goal revise`, and `goal assess-criterion`, and they require the Procedure to opt into goal tracking. `define` is accepted exactly once and requires the applicable workspace, session identity, and session revision fences, but no goal revision fence. `revise` and `assess-criterion` additionally require the exact current goal revision through `--if-goal-revision`.
 - Define or revise the session goal only with explicit user intent. Assess a criterion only on the active goal-assessment decision attempt, and only after performing the cited work.
 - Read `references[].state` and `readback[].state` together with the `readiness` fields `items_satisfied`, `unblocked`, `goal_ready`, and `can_advance`. Required evidence must be resolved and fresh. An unresolved optional reference is normal and never blocks readiness, `complete`, or `decide`; do not rework solely because it is unresolved. On `EVIDENCE_REFERENCE_STALE`, re-read state and rework the source only when the current graph requires it.
+- Treat every `readback[].items[].preview` as a bounded excerpt, never the complete value. Read the whole value with `podway evidence read --json --source <graph-node-id> --item <item-id>`, then follow `next_page_token` until `truncated` is `false`. A page read is a query: it creates no job and no revision. On `EVIDENCE_PAGE_TOKEN_STALE` the snapshot moved, so re-read observe and restart the item from its first page; never repair a token by hand.
 - Re-read state after retry or rework. Historical attempts remain inspectable but do not satisfy the fresh active attempt.
 
 For deciding whether to track a session goal, writing its statement and criteria, assessing a criterion, or revising the goal, read [references/goal.md](references/goal.md) before acting.

@@ -79,8 +79,8 @@ use crate::{
     scheduler::WorkspaceSchedulerV1,
     server::{DaemonRequestV1, ResponseMetadataSourceV1, SystemResponseMetadataSourceV1},
     v2_read_service::{
-        GraphStatusTierV2, GraphViewErrorV2, project_graph_next_v2, project_graph_observation_v1,
-        project_graph_status_v2,
+        EvidenceReadErrorV2, GraphStatusTierV2, GraphViewErrorV2, project_evidence_read_v1,
+        project_graph_next_v2, project_graph_observation_v1, project_graph_status_v2,
     },
     worker::{
         DaemonWorkerV1, WorkerClockV1, WorkerCompletionModeV1, WorkerErrorV1, WorkerExecutionV1,
@@ -1821,6 +1821,7 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
             SliceCommandV1::SessionStatus(_)
                 | SliceCommandV1::SessionNext(_)
                 | SliceCommandV1::SessionObserve(_)
+                | SliceCommandV1::EvidenceRead(_)
         ) {
             let selector = selector_from_wire(slice_request.selector())?;
             let readonly = self
@@ -1850,6 +1851,12 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                         &input.wait,
                         request.options().wait_timeout_ms(),
                     ),
+                    input.preconditions.expected_session_id.as_ref(),
+                ),
+                // A page read answers from the current authoritative state and declares no queue
+                // barrier of its own, so it reads immediately rather than waiting for idle.
+                SliceCommandV1::EvidenceRead(input) => (
+                    RequestReadWaitV1::Immediate,
                     input.preconditions.expected_session_id.as_ref(),
                 ),
                 _ => unreachable!("non-read requests returned above"),
@@ -1971,12 +1978,27 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                         tier,
                         input.history_before.map(TraceSequenceV2::new),
                     )
+                    .map_err(map_graph_view_error_v2)
                 }
-                SliceCommandV1::SessionNext(_) => project_graph_next_v2(&view),
-                SliceCommandV1::SessionObserve(_) => project_graph_observation_v1(&view),
+                SliceCommandV1::SessionNext(_) => {
+                    project_graph_next_v2(&view).map_err(map_graph_view_error_v2)
+                }
+                SliceCommandV1::SessionObserve(_) => {
+                    project_graph_observation_v1(&view).map_err(map_graph_view_error_v2)
+                }
+                SliceCommandV1::EvidenceRead(input) => {
+                    // The request boundary already proved the token is one canonical payload, and
+                    // the command carries it decoded, so there is nothing left to re-validate.
+                    project_evidence_read_v1(
+                        &view,
+                        &input.source,
+                        &input.item_id,
+                        input.page_token.as_ref(),
+                    )
+                    .map_err(map_evidence_read_error_v2)
+                }
                 _ => unreachable!("non-read requests returned above"),
-            }
-            .map_err(map_graph_view_error_v2)?;
+            }?;
             let workspace = WorkspaceOutputV1::new(
                 view.identity().workspace_uuid().clone(),
                 readonly
@@ -5247,6 +5269,88 @@ fn map_read_error(error: ReadServiceErrorV1) -> DispatchFailureV1 {
         | ReadServiceErrorV1::InconsistentState { .. } => {
             DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceStateUnreadable)
         }
+    }
+}
+
+/// Maps one bounded evidence read failure onto its exact public code.
+///
+/// Every variant carries the identities the closed details require, so a caller learns which
+/// reference, item, and snapshot the failure is about without the daemon leaking anything else.
+fn map_evidence_read_error_v2(error: EvidenceReadErrorV2) -> DispatchFailureV1 {
+    match error {
+        EvidenceReadErrorV2::View(view) => map_graph_view_error_v2(view),
+        // A token that decoded but binds another session, consumer, or item never reaches a state
+        // comparison, so it is a malformed request rather than a conflict.
+        EvidenceReadErrorV2::TokenNotBound => {
+            DispatchFailureV1::new(DispatchFailureKindV1::RequestInvalid)
+        }
+        EvidenceReadErrorV2::NotAvailable {
+            graph_node_id,
+            source_graph_node_id,
+            item_id,
+            reference_state,
+        } => DispatchFailureV1::new(DispatchFailureKindV1::EvidenceNotAvailable).with_details(
+            DispatchErrorDetailsV1::default().with_evidence_not_available(
+                graph_node_id,
+                source_graph_node_id,
+                item_id,
+                reference_state.to_owned(),
+            ),
+        ),
+        EvidenceReadErrorV2::ReferenceStale {
+            graph_node_id,
+            source_graph_node_id,
+            expected_source_attempt_id,
+        } => {
+            let details = (|| {
+                Some(
+                    DispatchErrorDetailsV1::default().with_evidence_reference_stale(
+                        podway_core::GraphNodeId::new(&graph_node_id).ok()?,
+                        podway_core::GraphNodeId::new(&source_graph_node_id).ok()?,
+                        podway_core::AttemptId::new(&expected_source_attempt_id).ok()?,
+                        None,
+                    ),
+                )
+            })();
+            match details {
+                Some(details) => {
+                    DispatchFailureV1::new(DispatchFailureKindV1::EvidenceReferenceStale)
+                        .with_details(details)
+                }
+                None => DispatchFailureV1::new(DispatchFailureKindV1::Internal),
+            }
+        }
+        EvidenceReadErrorV2::TokenStale {
+            graph_node_id,
+            source_graph_node_id,
+            item_id,
+            expected_value_digest,
+            current_value_digest,
+        } => DispatchFailureV1::new(DispatchFailureKindV1::EvidencePageTokenStale).with_details(
+            DispatchErrorDetailsV1::default().with_evidence_page_token_stale(
+                graph_node_id,
+                source_graph_node_id,
+                item_id,
+                expected_value_digest,
+                current_value_digest,
+            ),
+        ),
+        EvidenceReadErrorV2::TokenExhausted {
+            source_graph_node_id,
+            item_id,
+            offset,
+            total_size,
+            unit,
+        } => DispatchFailureV1::new(DispatchFailureKindV1::EvidencePageTokenExhausted)
+            .with_details(
+                DispatchErrorDetailsV1::default().with_evidence_page_token_exhausted(
+                    source_graph_node_id,
+                    item_id,
+                    offset,
+                    total_size,
+                    unit.to_owned(),
+                ),
+            ),
     }
 }
 

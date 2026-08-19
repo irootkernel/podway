@@ -1986,7 +1986,7 @@ def command_qualify_v2rel003(
         next_result = require_output_result(
             qualification_command(snap_cli, paths, ["next"], label="next action suggestion"),
             command="session.next",
-            result_schema="podway.next-result/v2",
+            result_schema="podway.next-result/v3",
         )
         set_suggestion = next(
             (entry for entry in next_result.get("suggestions", []) if entry.get("command") == "item.set"),
@@ -2189,7 +2189,7 @@ def command_qualify_v2rel003(
         complete_next = require_output_result(
             qualification_command(snap_cli, paths, ["next"], label="next complete suggestion"),
             command="session.next",
-            result_schema="podway.next-result/v2",
+            result_schema="podway.next-result/v3",
         )
         complete_suggestions = [
             entry for entry in complete_next.get("suggestions", []) if entry.get("command") == "session.complete"
@@ -2205,7 +2205,7 @@ def command_qualify_v2rel003(
         decision_next = require_output_result(
             qualification_command(snap_cli, paths, ["next"], label="next decision suggestion"),
             command="session.next",
-            result_schema="podway.next-result/v2",
+            result_schema="podway.next-result/v3",
         )
         assessment_suggestions = [
             entry for entry in decision_next.get("suggestions", []) if entry.get("command") == "goal.assess_criterion"
@@ -2228,7 +2228,7 @@ def command_qualify_v2rel003(
         assessed_next = require_output_result(
             qualification_command(snap_cli, paths, ["next"], label="next assessed decision"),
             command="session.next",
-            result_schema="podway.next-result/v2",
+            result_schema="podway.next-result/v3",
         )
         decision_suggestions = [
             entry for entry in assessed_next.get("suggestions", []) if entry.get("command") == "session.decide"
@@ -2269,7 +2269,7 @@ def command_qualify_v2rel003(
         close_next = require_output_result(
             qualification_command(snap_cli, paths, ["next"], label="next close suggestions"),
             command="session.next",
-            result_schema="podway.next-result/v2",
+            result_schema="podway.next-result/v3",
         )
         close_set = next(entry for entry in close_next["suggestions"] if entry.get("command") == "item.set")
         close_argv = [
@@ -2282,7 +2282,7 @@ def command_qualify_v2rel003(
         close_ready = require_output_result(
             qualification_command(snap_cli, paths, ["next"], label="next close complete"),
             command="session.next",
-            result_schema="podway.next-result/v2",
+            result_schema="podway.next-result/v3",
         )
         close_complete = next(
             entry for entry in close_ready["suggestions"] if entry.get("command") == "session.complete"

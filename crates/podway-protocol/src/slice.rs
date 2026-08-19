@@ -10,8 +10,8 @@ use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
 
 use crate::{
-    ErrorCodeV1, ExitCodeV1, IdempotencyKeyV1, OperationV1, PreconditionsV1, RequestEnvelopeV1,
-    SessionOutputV1,
+    ErrorCodeV1, EvidencePageTokenV1, ExitCodeV1, IdempotencyKeyV1, OperationV1, PreconditionsV1,
+    RequestEnvelopeV1, SessionOutputV1,
 };
 
 /// The only selector representation accepted by the G006 daemon boundary.
@@ -25,14 +25,12 @@ pub const MAX_SLICE_REASON_SCALARS_V1: usize = 4_000;
 /// disposition summary, or disposition reason.
 pub const MAX_SLICE_LIFECYCLE_TEXT_SCALARS_V1: usize = 4_000;
 pub const MAX_SLICE_ITEM_TEXT_SCALARS_V1: usize = podway_core::MAX_TEXT_SCALARS_V2 as usize;
-pub const MAX_SLICE_LIST_VALUE_SCALARS_V1: usize =
-    podway_core::MAX_LIST_ENTRY_SCALARS_V2 as usize;
+pub const MAX_SLICE_LIST_VALUE_SCALARS_V1: usize = podway_core::MAX_LIST_ENTRY_SCALARS_V2 as usize;
 pub const MAX_SLICE_ARTIFACT_PATH_SCALARS_V1: usize = 4_000;
 pub const MAX_SLICE_MEDIA_TYPE_BYTES_V1: usize = 255;
 pub const ITEM_RECORD_MANY_INPUT_SCHEMA_V1: &str = "podway.item-record-many-input/v1";
 pub const MAX_ITEM_RECORD_MANY_OPERATIONS_V1: usize = podway_core::MAX_ITEMS_PER_DEFINITION_V2;
-pub const MAX_ITEM_RECORD_MANY_LIST_ENTRIES_V1: usize =
-    podway_core::MAX_LIST_ENTRIES_V2 as usize;
+pub const MAX_ITEM_RECORD_MANY_LIST_ENTRIES_V1: usize = podway_core::MAX_LIST_ENTRIES_V2 as usize;
 pub const MAX_ITEM_RECORD_MANY_LIST_ENTRY_SCALARS_V1: usize =
     podway_core::MAX_LIST_ENTRY_SCALARS_V2 as usize;
 pub const MAX_ITEM_RECORD_MANY_CHOICE_SCALARS_V1: usize = 120;
@@ -504,6 +502,25 @@ pub struct SessionObserveV1 {
     pub preconditions: SessionReadPreconditionsWireV1,
 }
 
+/// One bounded read of a selected evidence item.
+///
+/// The request names only what the consumer already declares: a source graph node, an item that
+/// reference selects, and an optional continuation token. It carries no attempt or offset of its
+/// own, because both come from current state or from a token the daemon itself issued.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceReadV1 {
+    pub source: GraphNodeId,
+    pub item_id: ItemId,
+    /// The decoded continuation token, if the request carried one.
+    ///
+    /// Holding the decoded form rather than its text makes "this token is one canonical payload"
+    /// a property of the type: refusal happens once, at the request boundary, and no later path
+    /// can reach the daemon with a token that was never validated.
+    pub page_token: Option<EvidencePageTokenV1>,
+    pub preconditions: SessionReadPreconditionsWireV1,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ItemCheckV1 {
@@ -971,7 +988,7 @@ pub struct ProcedureV2MutationRequestV1 {
 }
 
 /// The authoritative G006 daemon route set. No aliases are admitted at the protocol boundary.
-pub const DAEMON_COMMAND_NAMES_V1: [&str; 30] = [
+pub const DAEMON_COMMAND_NAMES_V1: [&str; 31] = [
     "workspace.init",
     "workspace.doctor",
     "workspace.show",
@@ -981,6 +998,7 @@ pub const DAEMON_COMMAND_NAMES_V1: [&str; 30] = [
     "session.status",
     "session.next",
     "session.observe",
+    "evidence.read",
     "session.complete",
     "session.skip",
     "session.retry",
@@ -1017,6 +1035,7 @@ pub enum SliceCommandV1 {
     SessionStatus(SessionStatusV1),
     SessionNext(SessionNextV1),
     SessionObserve(SessionObserveV1),
+    EvidenceRead(EvidenceReadV1),
     SessionComplete(SessionCompleteV1),
     SessionSkip(SessionSkipV1),
     SessionRetry(SessionRetryV1),
@@ -1052,6 +1071,7 @@ impl SliceCommandV1 {
             Self::SessionStatus(_) => "session.status",
             Self::SessionNext(_) => "session.next",
             Self::SessionObserve(_) => "session.observe",
+            Self::EvidenceRead(_) => "evidence.read",
             Self::SessionComplete(_) => "session.complete",
             Self::SessionSkip(_) => "session.skip",
             Self::SessionRetry(_) => "session.retry",
@@ -1106,6 +1126,7 @@ impl SliceCommandV1 {
             | Self::SessionStatus(_)
             | Self::SessionNext(_)
             | Self::SessionObserve(_)
+            | Self::EvidenceRead(_)
             | Self::JobList(_)
             | Self::JobLookup(_)
             | Self::JobStatus(_)
@@ -1296,6 +1317,31 @@ impl SliceRequestV1 {
                     payload.selector,
                     SliceCommandV1::SessionObserve(SessionObserveV1 {
                         wait: validated_query_wait(payload.wait_for_idle, payload.after_job_id)?,
+                        preconditions,
+                    }),
+                )
+            }
+            "evidence.read" => {
+                require_envelope(envelope, "evidence.read", OperationV1::Query, false)?;
+                let preconditions = require_session_read_preconditions(envelope.preconditions())?;
+                let payload: EvidenceReadPayloadV1 = parse_payload(envelope)?;
+                // Decoding here refuses a malformed or oversized token at the request boundary,
+                // before the daemon compares anything against current state.
+                let page_token = payload
+                    .page_token
+                    .as_deref()
+                    .map(|token| {
+                        EvidencePageTokenV1::decode(token).map_err(|_| SliceErrorV1::InvalidValue {
+                            field: "page token",
+                        })
+                    })
+                    .transpose()?;
+                (
+                    payload.selector,
+                    SliceCommandV1::EvidenceRead(EvidenceReadV1 {
+                        source: payload.source,
+                        item_id: payload.item_id,
+                        page_token,
                         preconditions,
                     }),
                 )
@@ -2065,6 +2111,16 @@ struct SessionNextPayloadV1 {
     wait_for_idle: bool,
     #[serde(default, deserialize_with = "deserialize_optional_non_null")]
     after_job_id: Option<JobId>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EvidenceReadPayloadV1 {
+    selector: WorktreeSelectorWireV1,
+    source: GraphNodeId,
+    item_id: ItemId,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    page_token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -3463,6 +3519,7 @@ pub fn canonical_mutation_identity_v1(
         | SliceCommandV1::SessionStatus(_)
         | SliceCommandV1::SessionNext(_)
         | SliceCommandV1::SessionObserve(_)
+        | SliceCommandV1::EvidenceRead(_)
         | SliceCommandV1::JobList(_)
         | SliceCommandV1::JobLookup(_)
         | SliceCommandV1::JobStatus(_)

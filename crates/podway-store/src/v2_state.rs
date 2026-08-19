@@ -23,10 +23,10 @@ use crate::v2_goal::{
     validate_goal_revision_target_v2, validate_goal_state_successor_v2, validate_goal_state_v2,
 };
 use crate::v2_memory::{
-    ActiveItemMutationRequestV2, ActiveItemMutationV2, EvidenceReadbackV2, GraphMutationErrorV2,
-    WorkflowGoalTransitionV2, WorkflowMemoryStateV2, insert_workflow_memory_v2,
-    load_workflow_memory_v2, replace_workflow_memory_v2, validate_workflow_memory_successor_v2,
-    validate_workflow_memory_v2,
+    ActiveItemMutationRequestV2, ActiveItemMutationV2, EvidenceLookupErrorV2, EvidenceReadbackV2,
+    GraphMutationErrorV2, SelectedEvidenceItemV2, WorkflowGoalTransitionV2, WorkflowMemoryStateV2,
+    insert_workflow_memory_v2, load_workflow_memory_v2, replace_workflow_memory_v2,
+    validate_workflow_memory_successor_v2, validate_workflow_memory_v2,
 };
 use crate::{
     DurableWorktreeIdentityV1, EpochMillisV1, JobIdV1, RusqliteErrorContextV1, StoreErrorV1,
@@ -1421,6 +1421,22 @@ impl GraphSessionStateV2 {
     ) -> Result<Vec<EvidenceReadbackV2>, StoreValueErrorV1> {
         self.workflow_memory
             .selected_readback(&self.trace, attempt_id)
+    }
+
+    /// One item selected by a currently resolved, declared evidence reference of the consumer
+    /// attempt, or the exact reason it cannot be read.
+    pub fn selected_evidence_item(
+        &self,
+        consumer_attempt_id: &AttemptId,
+        source_node: &GraphNodeId,
+        item_id: &ItemId,
+    ) -> Result<Result<SelectedEvidenceItemV2, EvidenceLookupErrorV2>, StoreValueErrorV1> {
+        self.workflow_memory.selected_evidence_item(
+            &self.trace,
+            consumer_attempt_id,
+            source_node,
+            item_id,
+        )
     }
     pub const fn created_at(&self) -> UnixMillis {
         self.created_at

@@ -199,6 +199,7 @@ V2_EXECUTABLE_ROUTES = frozenset(
         "goal.assess_criterion",
         "session.begin",
         "session.terminal_disposition",
+        "evidence.read",
     }
 )
 PROCEDURE_INDEPENDENT_EXECUTABLE_ROUTES = {

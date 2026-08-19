@@ -10,14 +10,41 @@ use podway_config::{
     goal_revision_safe_targets_v2, parse_procedure_document, validate_procedure_v2,
 };
 use podway_core::{
-    ArtifactLocationKindV1, AttemptLifecycle, AttemptValidityV2, BlockerState, CriterionCitationV2,
-    CriterionStatusV2, GoalOutcome, GraphPlacementV2, ItemSpecV2, ItemTypeV1, RecordedItemValueV2,
-    ResolvedEvidenceReferenceV2, SessionAttemptV2, SessionLifecycle, TraceSequenceV2, UnixMillis,
+    ArtifactLocationKindV1,
+    AttemptLifecycle,
+    AttemptValidityV2,
+    BlockerState,
+    CriterionCitationV2,
+    CriterionStatusV2,
+    // Worst-case escaping and per-element structure are what make a page or preview bound provable,
+    // and the authoring budget charges the same two factors.
+    EVIDENCE_ENTRY_OVERHEAD_BYTES_V2 as EVIDENCE_ENTRY_OVERHEAD_BYTES,
+    EVIDENCE_SCALAR_BYTES_V2 as EVIDENCE_SCALAR_BYTES,
+    GoalOutcome,
+    GraphNodeId,
+    GraphPlacementV2,
+    ItemId,
+    ItemSpecV2,
+    ItemTypeV1,
+    MAX_EVIDENCE_PAGE_BYTES_V2,
+    MAX_EVIDENCE_PREVIEW_BYTES_V2,
+    MAX_EVIDENCE_PREVIEW_SCALARS_V2,
+    MAX_EVIDENCE_PREVIEW_SLOTS_V2,
+    MAX_MISSING_ITEM_WINDOW_V2,
+    MAX_OBSERVATION_CHOICE_WINDOW_V2,
+    PROCEDURE_SCHEMA_V2,
+    RecordedItemValueV2,
+    ResolvedEvidenceReferenceV2,
+    SessionAttemptV2,
+    SessionLifecycle,
+    TraceSequenceV2,
+    UnixMillis,
     canonicalize_json_v1,
 };
+use podway_protocol::{EVIDENCE_PAGE_TOKEN_VERSION_V1, EvidencePageTokenV1};
 use podway_store::{
-    AttemptWorkflowMemoryV2, EvidenceReadbackV2, EvidenceResolutionStateV2, GraphSessionStateV2,
-    GraphWorkspaceViewV2,
+    AttemptWorkflowMemoryV2, EvidenceLookupErrorV2, EvidenceReadbackV2, EvidenceResolutionStateV2,
+    GraphSessionStateV2, GraphWorkspaceViewV2, recorded_value_digest_v2,
 };
 use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
@@ -196,6 +223,340 @@ pub fn project_graph_status_v2(
     Ok(result)
 }
 
+/// Why one bounded evidence read could not be served.
+///
+/// Each variant maps to exactly one public code, so the daemon never has to guess which failure a
+/// caller met. Nothing here changes state.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EvidenceReadErrorV2 {
+    View(GraphViewErrorV2),
+    /// The declared reference resolved to no readable value.
+    NotAvailable {
+        graph_node_id: String,
+        source_graph_node_id: String,
+        item_id: String,
+        reference_state: &'static str,
+    },
+    /// A previously valid token no longer describes current state.
+    TokenStale {
+        graph_node_id: String,
+        source_graph_node_id: String,
+        item_id: String,
+        expected_value_digest: String,
+        current_value_digest: Option<String>,
+    },
+    /// The token offset is at or past the logical end of the value.
+    TokenExhausted {
+        source_graph_node_id: String,
+        item_id: String,
+        offset: u64,
+        total_size: u64,
+        unit: &'static str,
+    },
+    /// The token decoded but binds another session or another item.
+    ///
+    /// ADR-0024 refuses these before any state comparison, so an invented token can never reveal
+    /// whether a session, attempt, or item exists.
+    TokenNotBound,
+    /// The declared reference resolved to a source attempt that is no longer valid.
+    ///
+    /// This is the reference itself going stale rather than a token losing its snapshot, so it
+    /// keeps the pre-existing `EVIDENCE_REFERENCE_STALE` classification.
+    ///
+    /// Persistence validation refuses a valid consumer attempt that holds a stale evidence source,
+    /// so this arm is fail-closed defense rather than a reachable outcome today. Classifying it
+    /// correctly costs nothing and keeps the published code honest if that invariant ever moves.
+    ReferenceStale {
+        graph_node_id: String,
+        source_graph_node_id: String,
+        expected_source_attempt_id: String,
+    },
+}
+
+impl From<GraphViewErrorV2> for EvidenceReadErrorV2 {
+    fn from(error: GraphViewErrorV2) -> Self {
+        Self::View(error)
+    }
+}
+
+/// Serves one bounded page of a selected evidence item under the current consumer attempt.
+///
+/// The read is fenced by the session, the consumer attempt, the declared reference, and, when a
+/// token is supplied, the exact value digest the token was issued against. A token never widens
+/// what may be read: it only names where a previous page stopped.
+pub fn project_evidence_read_v1(
+    view: &GraphWorkspaceViewV2,
+    source: &GraphNodeId,
+    item_id: &ItemId,
+    token: Option<&EvidencePageTokenV1>,
+) -> Result<Map<String, Value>, EvidenceReadErrorV2> {
+    let state = graph_state(view)?;
+    let active = state
+        .trace()
+        .active_attempt()
+        .ok_or(GraphViewErrorV2::TerminalSessionHasNoNext)?;
+
+    if let Some(token) = token {
+        // Cross-session and wrong-item tokens never reach a state comparison.
+        if token.session_id() != state.trace().session_id().as_str()
+            || token.item_id() != item_id.as_str()
+        {
+            return Err(EvidenceReadErrorV2::TokenNotBound);
+        }
+        // A changed consumer attempt is a moved snapshot, not a forged token: ADR-0024 makes it
+        // retryable so a caller re-reads state and continues rather than treating it as malformed.
+        if token.consumer_attempt_id() != active.attempt_id().as_str() {
+            return Err(EvidenceReadErrorV2::TokenStale {
+                graph_node_id: active.graph_node_id().as_str().to_owned(),
+                source_graph_node_id: source.as_str().to_owned(),
+                item_id: item_id.as_str().to_owned(),
+                expected_value_digest: token.value_digest(),
+                current_value_digest: None,
+            });
+        }
+    }
+
+    let selected = state
+        .selected_evidence_item(active.attempt_id(), source, item_id)
+        .map_err(|_| GraphViewErrorV2::InconsistentState("evidence lookup failed"))?;
+    let selected = match selected {
+        Ok(selected) => selected,
+        Err(EvidenceLookupErrorV2::NotAvailable { reference_state }) => {
+            return Err(EvidenceReadErrorV2::NotAvailable {
+                graph_node_id: active.graph_node_id().as_str().to_owned(),
+                source_graph_node_id: source.as_str().to_owned(),
+                item_id: item_id.as_str().to_owned(),
+                reference_state,
+            });
+        }
+        Err(EvidenceLookupErrorV2::Stale { source_attempt_id }) => {
+            // Without a token there is no page-token snapshot to be stale, so this is the
+            // reference itself and keeps the code the specification already publishes for it.
+            return Err(match token {
+                Some(token) => EvidenceReadErrorV2::TokenStale {
+                    graph_node_id: active.graph_node_id().as_str().to_owned(),
+                    source_graph_node_id: source.as_str().to_owned(),
+                    item_id: item_id.as_str().to_owned(),
+                    expected_value_digest: token.value_digest(),
+                    current_value_digest: None,
+                },
+                None => EvidenceReadErrorV2::ReferenceStale {
+                    graph_node_id: active.graph_node_id().as_str().to_owned(),
+                    source_graph_node_id: source.as_str().to_owned(),
+                    expected_source_attempt_id: source_attempt_id.as_str().to_owned(),
+                },
+            });
+        }
+        // A reference the consumer does not declare, an item its selector excludes, and a declared
+        // item that holds no value are all "there is nothing here to read" for this attempt.
+        Err(EvidenceLookupErrorV2::ReferenceNotDeclared)
+        | Err(EvidenceLookupErrorV2::ItemNotSelected)
+        | Err(EvidenceLookupErrorV2::ValueAbsent) => {
+            return Err(EvidenceReadErrorV2::NotAvailable {
+                graph_node_id: active.graph_node_id().as_str().to_owned(),
+                source_graph_node_id: source.as_str().to_owned(),
+                item_id: item_id.as_str().to_owned(),
+                reference_state: "unresolved",
+            });
+        }
+    };
+
+    let mut offset = 0u64;
+    if let Some(token) = token {
+        if token.source_attempt_id() != selected.source_attempt_id().as_str()
+            || token.value_digest() != selected.value_digest().as_str()
+        {
+            return Err(EvidenceReadErrorV2::TokenStale {
+                graph_node_id: selected.consumer_graph_node_id().as_str().to_owned(),
+                source_graph_node_id: selected.source_graph_node_id().as_str().to_owned(),
+                item_id: selected.item_id().as_str().to_owned(),
+                expected_value_digest: token.value_digest(),
+                current_value_digest: Some(selected.value_digest().as_str().to_owned()),
+            });
+        }
+        offset = token.offset();
+    }
+
+    let page = evidence_page_v1(selected.value(), offset).ok_or_else(|| {
+        let (total, unit) = evidence_logical_size_v1(selected.value());
+        EvidenceReadErrorV2::TokenExhausted {
+            source_graph_node_id: selected.source_graph_node_id().as_str().to_owned(),
+            item_id: selected.item_id().as_str().to_owned(),
+            offset,
+            total_size: total,
+            unit,
+        }
+    })?;
+
+    let (total_size, size_unit) = evidence_logical_size_v1(selected.value());
+    let next_page_token = if page.truncated {
+        Some(
+            EvidencePageTokenV1::new(
+                state.trace().session_id().as_str(),
+                selected.consumer_attempt_id().as_str(),
+                selected.source_attempt_id().as_str(),
+                selected.item_id().as_str(),
+                selected.value_digest().as_str(),
+                offset + page.size,
+            )
+            .map_err(|_| GraphViewErrorV2::InconsistentState("page token is not constructible"))?
+            .encode(),
+        )
+    } else {
+        None
+    };
+
+    let mut result = Map::new();
+    result.insert("schema".to_owned(), json!("podway.evidence-read-result/v1"));
+    result.insert("procedure_schema".to_owned(), json!(PROCEDURE_SCHEMA_V2));
+    result.insert(
+        "consumer".to_owned(),
+        json!({
+            "graph_node_id": selected.consumer_graph_node_id().as_str(),
+            "attempt_id": selected.consumer_attempt_id().as_str(),
+            "attempt_number": selected.consumer_attempt_number().get(),
+        }),
+    );
+    result.insert(
+        "source".to_owned(),
+        json!({
+            "graph_node_id": selected.source_graph_node_id().as_str(),
+            "title": definition_title_for_node(
+                &rehydrate_snapshot(state)?,
+                selected.source_graph_node_id().as_str(),
+            )
+            .ok_or(GraphViewErrorV2::InconsistentState(
+                "evidence source definition is absent",
+            ))?,
+            "attempt_id": selected.source_attempt_id().as_str(),
+            "attempt_number": selected.source_attempt_number().get(),
+            "items_digest": selected.items_digest().as_str(),
+        }),
+    );
+    result.insert(
+        "item".to_owned(),
+        json!({
+            "item_id": selected.item_id().as_str(),
+            "type": item_type(selected.value().item_type()),
+            "revision": selected.item_revision().get(),
+        }),
+    );
+    result.insert(
+        "value_digest".to_owned(),
+        json!(selected.value_digest().as_str()),
+    );
+    result.insert("total_size".to_owned(), json!(total_size));
+    result.insert("size_unit".to_owned(), json!(size_unit));
+    result.insert(
+        "page".to_owned(),
+        json!({"offset": offset, "size": page.size, "data": page.data}),
+    );
+    result.insert("truncated".to_owned(), json!(page.truncated));
+    result.insert(
+        "next_page_token".to_owned(),
+        next_page_token.map_or(Value::Null, Value::String),
+    );
+    result.insert(
+        "page_token_version".to_owned(),
+        json!(EVIDENCE_PAGE_TOKEN_VERSION_V1),
+    );
+    Ok(result)
+}
+
+struct EvidencePageV1 {
+    size: u64,
+    data: Value,
+    truncated: bool,
+}
+
+/// The logical size of a recorded value and the unit that size counts.
+fn evidence_logical_size_v1(value: &RecordedItemValueV2) -> (u64, &'static str) {
+    if let Some(text) = value.as_text() {
+        (text.chars().count() as u64, "scalars")
+    } else if let Some(entries) = value.as_list() {
+        (entries.len() as u64, "entries")
+    } else {
+        (1, "value")
+    }
+}
+
+/// Slices one recorded value into the page starting at `offset`, or `None` when the offset is at or
+/// past the logical end.
+///
+/// Text pages end only at a Unicode scalar boundary and list pages carry whole entries, so a page
+/// can always be concatenated with its successors to reproduce the value exactly.
+fn evidence_page_v1(value: &RecordedItemValueV2, offset: u64) -> Option<EvidencePageV1> {
+    if let Some(text) = value.as_text() {
+        let scalars: Vec<char> = text.chars().collect();
+        let start = usize::try_from(offset).ok()?;
+        // An empty value is complete at offset zero. Refusing it would make a legally recorded
+        // value unreadable and would report a token failure to a caller that supplied no token.
+        if scalars.is_empty() && start == 0 {
+            return Some(EvidencePageV1 {
+                size: 0,
+                data: Value::String(String::new()),
+                truncated: false,
+            });
+        }
+        if start >= scalars.len() {
+            return None;
+        }
+        // At least one scalar always fits, so a page can never be empty and stall a caller.
+        let capacity = (MAX_EVIDENCE_PAGE_BYTES_V2 / EVIDENCE_SCALAR_BYTES).max(1);
+        let end = scalars.len().min(start + capacity);
+        let page: String = scalars[start..end].iter().collect();
+        return Some(EvidencePageV1 {
+            size: (end - start) as u64,
+            data: Value::String(page),
+            truncated: end < scalars.len(),
+        });
+    }
+    if let Some(entries) = value.as_list() {
+        let start = usize::try_from(offset).ok()?;
+        if entries.is_empty() && start == 0 {
+            return Some(EvidencePageV1 {
+                size: 0,
+                data: Value::Array(Vec::new()),
+                truncated: false,
+            });
+        }
+        if start >= entries.len() {
+            return None;
+        }
+        let mut charged = 0usize;
+        let mut end = start;
+        while end < entries.len() {
+            let cost = EVIDENCE_ENTRY_OVERHEAD_BYTES
+                + entries[end].chars().count() * EVIDENCE_SCALAR_BYTES;
+            // The first entry is always admitted: one maximal entry is bounded well inside a page.
+            if end > start && charged + cost > MAX_EVIDENCE_PAGE_BYTES_V2 {
+                break;
+            }
+            charged += cost;
+            end += 1;
+        }
+        return Some(EvidencePageV1 {
+            size: (end - start) as u64,
+            data: Value::Array(
+                entries[start..end]
+                    .iter()
+                    .map(|entry| json!(entry))
+                    .collect(),
+            ),
+            truncated: end < entries.len(),
+        });
+    }
+    // Confirm, choice, integer, and artifact values are indivisible single-page reads.
+    if offset != 0 {
+        return None;
+    }
+    Some(EvidencePageV1 {
+        size: 1,
+        data: typed_item_value(value),
+        truncated: false,
+    })
+}
+
 pub fn project_graph_next_v2(
     view: &GraphWorkspaceViewV2,
 ) -> Result<Map<String, Value>, GraphViewErrorV2> {
@@ -207,7 +568,7 @@ pub fn project_graph_next_v2(
     let current = CurrentProjection::derive(state, &procedure)?
         .ok_or(GraphViewErrorV2::TerminalSessionHasNoNext)?;
     let mut result = Map::new();
-    result.insert("schema".to_owned(), json!("podway.next-result/v2"));
+    result.insert("schema".to_owned(), json!("podway.next-result/v3"));
     result.insert("procedure_schema".to_owned(), json!("podway.procedure/v2"));
     result.insert(
         "procedure_digest".to_owned(),
@@ -239,9 +600,15 @@ pub fn project_graph_next_v2(
         "missing_required_item_count".to_owned(),
         json!(current.missing_required.len()),
     );
+    let missing_items = current.missing_items();
+    let missing_total = current.missing_required.len();
+    result.insert(
+        "missing_required_items_truncated".to_owned(),
+        json!(missing_items.len() < missing_total),
+    );
     result.insert(
         "missing_required_items".to_owned(),
-        Value::Array(current.missing_items()),
+        Value::Array(missing_items),
     );
     result.insert(
         "blockers_total".to_owned(),
@@ -254,10 +621,16 @@ pub fn project_graph_next_v2(
         "references".to_owned(),
         Value::Array(current.reference_metadata(&procedure)?),
     );
+    let (readback_values, readback_items_total) = readback(state, &current, &procedure)?;
+    result.insert("readback".to_owned(), Value::Array(readback_values));
     result.insert(
-        "readback".to_owned(),
-        Value::Array(readback(state, &current, &procedure)?),
+        "readback_items_total".to_owned(),
+        json!(readback_items_total),
     );
+    // The projection emits every selected item's metadata and truncates nothing, so this flag is
+    // false by construction. It stays in the contract because V2SCL-005 derives the metadata
+    // window from the response budget, and a window is only honest when it can say it was cut.
+    result.insert("readback_items_truncated".to_owned(), json!(false));
     result.insert(
         "allowed_manual_rework_targets".to_owned(),
         manual_rework_targets(state, &procedure),
@@ -320,10 +693,12 @@ pub fn project_graph_next_v2(
     }
     let actions = current.allowed_actions(state, &procedure);
     result.insert("allowed_actions".to_owned(), json!(actions));
-    result.insert(
-        "suggestions".to_owned(),
-        Value::Array(current.suggestions(state, &actions)),
-    );
+    let suggestions = current.suggestions(state, &actions);
+    // The window and its total are equal today because the suggestion builder truncates to the
+    // same cap; both are emitted so a later widening cannot truncate silently.
+    result.insert("suggestions_total".to_owned(), json!(suggestions.len()));
+    result.insert("suggestions_truncated".to_owned(), json!(false));
+    result.insert("suggestions".to_owned(), Value::Array(suggestions));
     Ok(result)
 }
 
@@ -334,26 +709,29 @@ pub fn project_graph_observation_v1(
     let state = graph_state(view)?;
     let procedure = rehydrate_snapshot(state)?;
     let current = CurrentProjection::derive(state, &procedure)?;
-    let status = project_graph_status_v2(view, GraphStatusTierV2::Standard, None)?;
+    // ADR-0024 reduces the observation status member to a value-free compact projection: guidance
+    // and the active-item window already carry what a mutation needs, and a caller that wants the
+    // standard or verbose status projection calls `session.status`.
+    let status = observation_status_v1(view, state, current.as_ref())?;
     let guidance = if current.is_some() || state.trace().lifecycle() == SessionLifecycle::Prepared {
-        Value::Object(project_graph_next_v2(view)?)
+        let mut next = project_graph_next_v2(view)?;
+        strip_evidence_previews_v1(&mut next);
+        Value::Object(next)
     } else {
         Value::Null
     };
 
     let mut result = Map::new();
-    result.insert("schema".to_owned(), json!("podway.observation-result/v2"));
+    result.insert("schema".to_owned(), json!("podway.observation-result/v3"));
     result.insert("status".to_owned(), Value::Object(status));
     result.insert("guidance".to_owned(), guidance);
-    result.insert(
-        "active_items".to_owned(),
-        Value::Array(
-            current
-                .as_ref()
-                .map(CurrentProjection::active_item_descriptors)
-                .unwrap_or_default(),
-        ),
-    );
+    let active_items = current
+        .as_ref()
+        .map(CurrentProjection::active_item_descriptors)
+        .unwrap_or_default();
+    result.insert("active_items_total".to_owned(), json!(active_items.len()));
+    result.insert("active_items_truncated".to_owned(), json!(false));
+    result.insert("active_items".to_owned(), Value::Array(active_items));
     let mutation_templates = if state.trace().lifecycle() == SessionLifecycle::Prepared {
         prepared_mutation_templates(view, state)
     } else if matches!(
@@ -368,10 +746,82 @@ pub fn project_graph_observation_v1(
             .unwrap_or_default()
     };
     result.insert(
+        "mutation_templates_total".to_owned(),
+        json!(mutation_templates.len()),
+    );
+    result.insert("mutation_templates_truncated".to_owned(), json!(false));
+    result.insert(
         "mutation_templates".to_owned(),
         Value::Array(mutation_templates),
     );
     Ok(result)
+}
+
+/// The observation-scoped compact status projection.
+///
+/// It is compact-status shaped but deliberately not `compact-status-result/v3`: that family forces
+/// an idle queue, and `observe` without `--wait-for-idle` must still answer. It also carries the
+/// item window's exact total and truncation state, which the released compact family cannot gain
+/// without becoming a new version.
+fn observation_status_v1(
+    view: &GraphWorkspaceViewV2,
+    state: &GraphSessionStateV2,
+    current: Option<&CurrentProjection<'_>>,
+) -> Result<Map<String, Value>, GraphViewErrorV2> {
+    let mut status = Map::new();
+    status.insert("procedure".to_owned(), procedure_identity(state));
+    status.insert("session".to_owned(), session_identity(state));
+    status.insert(
+        "current".to_owned(),
+        current
+            .map(CurrentProjection::identity)
+            .unwrap_or(Value::Null),
+    );
+    status.insert(
+        "goal_tracking".to_owned(),
+        json!(state.snapshot().goal_tracking()),
+    );
+    status.insert(
+        "goal_defined".to_owned(),
+        json!(state.goal_state().current_revision().is_some()),
+    );
+    add_goal_summary(&mut status, state);
+    status.insert(
+        "trace_length".to_owned(),
+        json!(state.trace().attempts().len()),
+    );
+    status.insert("counters".to_owned(), counters(state));
+    let items = current
+        .map(CurrentProjection::compact_items)
+        .unwrap_or_default();
+    status.insert("items_total".to_owned(), json!(items.len()));
+    status.insert("items_truncated".to_owned(), json!(false));
+    status.insert("items".to_owned(), Value::Array(items));
+    status.insert("queue".to_owned(), queue(view));
+    Ok(status)
+}
+
+/// Removes preview data and continuation tokens from an embedded next projection.
+///
+/// ADR-0024 makes observation guidance metadata-only: a caller that wants content pages it through
+/// `evidence.read`, so observation never spends its budget carrying value bytes.
+fn strip_evidence_previews_v1(next: &mut Map<String, Value>) {
+    let Some(readback) = next.get_mut("readback").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for reference in readback {
+        let Some(items) = reference.get_mut("items").and_then(Value::as_array_mut) else {
+            continue;
+        };
+        for item in items {
+            let Some(item) = item.as_object_mut() else {
+                continue;
+            };
+            item.remove("preview");
+            item.remove("preview_truncated");
+            item.remove("next_page_token");
+        }
+    }
 }
 
 fn project_prepared_next_v1(
@@ -694,9 +1144,15 @@ impl<'a> CurrentProjection<'a> {
             .collect()
     }
 
+    /// The bounded missing-item detail window.
+    ///
+    /// ADR-0024 keeps `missing_required_item_count` exact while this window stops at 64 entries, so
+    /// raising items per node to 128 cannot make the detail array unbounded. The caller learns of
+    /// the cut from `missing_required_items_truncated`, never silently.
     fn missing_items(&self) -> Vec<Value> {
         self.missing_required
             .iter()
+            .take(MAX_MISSING_ITEM_WINDOW_V2)
             .map(|item| {
                 json!({
                     "item_id": item.id().as_str(),
@@ -1213,35 +1669,66 @@ fn push_recipe_unique(recipes: &mut Vec<Value>, recipe: Value) {
     }
 }
 
+/// The bounded constraint projection carried by one observation active item.
+///
+/// ADR-0024 caps the exposed choices at eight while keeping the exact count and a truncation flag,
+/// so a wide choice set never inflates an observation. The complete declaration stays available
+/// from the Procedure inspection routes.
 fn item_constraints(spec: &ItemSpecV2) -> Value {
+    let mut constraints = Map::new();
+    let mut choices_total = 0usize;
     match spec {
-        ItemSpecV2::Confirm(_) => json!({}),
-        ItemSpecV2::Text(spec) => json!({
-            "min_length": spec.min_length(),
-            "max_length": spec.max_length(),
-            "multiline": spec.multiline(),
-        }),
-        ItemSpecV2::Choice(spec) => json!({"choices": spec.choices()}),
+        ItemSpecV2::Confirm(_) => {}
+        ItemSpecV2::Text(spec) => {
+            constraints.insert("min_length".to_owned(), json!(spec.min_length()));
+            constraints.insert("max_length".to_owned(), json!(spec.max_length()));
+            constraints.insert("multiline".to_owned(), json!(spec.multiline()));
+        }
+        ItemSpecV2::Choice(spec) => {
+            choices_total = spec.choices().len();
+            if choices_total > 0 {
+                constraints.insert(
+                    "choices".to_owned(),
+                    json!(
+                        spec.choices()
+                            .iter()
+                            .take(MAX_OBSERVATION_CHOICE_WINDOW_V2)
+                            .collect::<Vec<_>>()
+                    ),
+                );
+            }
+        }
         ItemSpecV2::Integer(spec) => {
-            let mut constraints = Map::new();
             if let Some(minimum) = spec.minimum() {
                 constraints.insert("minimum".to_owned(), json!(minimum));
             }
             if let Some(maximum) = spec.maximum() {
                 constraints.insert("maximum".to_owned(), json!(maximum));
             }
-            Value::Object(constraints)
         }
-        ItemSpecV2::List(spec) => json!({
-            "min_items": spec.min_items(),
-            "max_items": spec.max_items(),
-            "max_item_length": spec.max_item_length(),
-            "unique": spec.unique(),
-        }),
+        ItemSpecV2::List(spec) => {
+            constraints.insert("min_items".to_owned(), json!(spec.min_items()));
+            constraints.insert("max_items".to_owned(), json!(spec.max_items()));
+            constraints.insert("max_item_length".to_owned(), json!(spec.max_item_length()));
+            constraints.insert(
+                "max_total_length".to_owned(),
+                json!(spec.max_total_length()),
+            );
+            constraints.insert("unique".to_owned(), json!(spec.unique()));
+        }
         ItemSpecV2::Artifact(spec) => {
-            json!({"allowed_media_types": spec.allowed_media_types()})
+            constraints.insert(
+                "allowed_media_types".to_owned(),
+                json!(spec.allowed_media_types()),
+            );
         }
     }
+    constraints.insert("choices_total".to_owned(), json!(choices_total));
+    constraints.insert(
+        "choices_truncated".to_owned(),
+        json!(choices_total > MAX_OBSERVATION_CHOICE_WINDOW_V2),
+    );
+    Value::Object(constraints)
 }
 
 fn project_observation_item_value(value: &RecordedItemValueV2) -> (Value, bool) {
@@ -1662,24 +2149,43 @@ fn reference_metadata(
     Ok(Value::Object(value))
 }
 
+/// The evidence surface of `next-result/v3`: identity, digest, and size for every selected item,
+/// with a bounded preview only where the Procedure named specific items.
+///
+/// ADR-0024 moved complete values out of progression guidance. A caller that needs content pages it
+/// through `evidence.read` using the continuation token a preview carries.
 fn readback(
     state: &GraphSessionStateV2,
     current: &CurrentProjection<'_>,
     procedure: &ParsedProcedureV2,
-) -> Result<Vec<Value>, GraphViewErrorV2> {
-    state
+) -> Result<(Vec<Value>, u64), GraphViewErrorV2> {
+    let entries = state
         .selected_evidence_readback(current.attempt.attempt_id())
-        .map_err(|_| GraphViewErrorV2::InconsistentState("selected evidence readback is invalid"))?
-        .iter()
-        .map(|readback| readback_value(state, readback, procedure))
-        .collect()
+        .map_err(|_| {
+            GraphViewErrorV2::InconsistentState("selected evidence readback is invalid")
+        })?;
+    let mut previews_remaining = MAX_EVIDENCE_PREVIEW_SLOTS_V2;
+    let mut items_total = 0u64;
+    let mut values = Vec::with_capacity(entries.len());
+    for entry in &entries {
+        let (value, count) = readback_value(state, entry, procedure, &mut previews_remaining)?;
+        items_total += count;
+        values.push(value);
+    }
+    Ok((values, items_total))
 }
 
+/// One evidence reference projected as metadata, with bounded previews for explicitly selected
+/// items while preview slots remain.
+///
+/// Returns the projection and the number of item metadata records it contributed, so the caller can
+/// report the exact response-wide total.
 fn readback_value(
     state: &GraphSessionStateV2,
     readback: &EvidenceReadbackV2,
     procedure: &ParsedProcedureV2,
-) -> Result<Value, GraphViewErrorV2> {
+    previews_remaining: &mut usize,
+) -> Result<(Value, u64), GraphViewErrorV2> {
     let resolution = readback.reference().resolution();
     let source = resolution.source_node();
     let source_title = definition_title_for_node(procedure, source.as_str())
@@ -1693,23 +2199,87 @@ fn readback_value(
     value.insert("source_graph_node_id".to_owned(), json!(source.as_str()));
     value.insert("source_title".to_owned(), json!(source_title));
     value.insert("state".to_owned(), json!(reference_state));
-    value.insert(
-        "items".to_owned(),
-        Value::Array(
-            readback
-                .items()
-                .items()
-                .iter()
-                .map(|item| {
-                    json!({
-                        "item_id": item.id().as_str(),
-                        "type": item_type(item.value().item_type()),
-                        "value": typed_item_value(item.value()),
-                    })
-                })
-                .collect(),
-        ),
-    );
+
+    // An omitted selector means metadata-only: the Procedure did not name which items matter, so
+    // guidance does not guess by previewing all of them.
+    let explicit_selector = !readback.reference().selected_item_ids().is_empty();
+    let source_slots = resolution.snapshot().and_then(|snapshot| {
+        state
+            .workflow_memory()
+            .attempts()
+            .iter()
+            .find(|memory| memory.attempt_id() == snapshot.source_attempt_id())
+    });
+
+    let mut items = Vec::with_capacity(readback.items().items().len());
+    for item in readback.items().items() {
+        let revision = source_slots
+            .and_then(|memory| {
+                memory
+                    .item_slots()
+                    .iter()
+                    .find(|slot| slot.item_id() == item.id())
+            })
+            .map(|slot| slot.revision())
+            .ok_or(GraphViewErrorV2::InconsistentState(
+                "an evidence item has no source slot",
+            ))?;
+        let digest = recorded_value_digest_v2(item.value()).map_err(|_| {
+            GraphViewErrorV2::InconsistentState("an evidence value is not digestible")
+        })?;
+        let (total_size, size_unit) = evidence_logical_size_v1(item.value());
+        let mut metadata = Map::new();
+        metadata.insert("item_id".to_owned(), json!(item.id().as_str()));
+        metadata.insert(
+            "type".to_owned(),
+            json!(item_type(item.value().item_type())),
+        );
+        metadata.insert("revision".to_owned(), json!(revision.get()));
+        metadata.insert("value_digest".to_owned(), json!(digest.as_str()));
+        metadata.insert("total_size".to_owned(), json!(total_size));
+        metadata.insert("size_unit".to_owned(), json!(size_unit));
+
+        if explicit_selector
+            && *previews_remaining > 0
+            && let Some(preview) = evidence_preview_v1(item.value())
+        {
+            *previews_remaining -= 1;
+            metadata.insert("preview".to_owned(), preview.data);
+            metadata.insert("preview_truncated".to_owned(), json!(preview.truncated));
+            if preview.truncated {
+                let snapshot = resolution
+                    .snapshot()
+                    .ok_or(GraphViewErrorV2::InconsistentState(
+                        "a resolved reference must carry its snapshot",
+                    ))?;
+                // The consumer attempt binds the token, not the source node: a continuation is
+                // only valid for the attempt that may currently read this evidence.
+                let consumer = state
+                    .trace()
+                    .active_attempt()
+                    .ok_or(GraphViewErrorV2::TerminalSessionHasNoNext)?;
+                let token = EvidencePageTokenV1::new(
+                    state.trace().session_id().as_str(),
+                    consumer.attempt_id().as_str(),
+                    snapshot.source_attempt_id().as_str(),
+                    item.id().as_str(),
+                    digest.as_str(),
+                    preview.size,
+                )
+                .map_err(|_| {
+                    GraphViewErrorV2::InconsistentState("a page token is not constructible")
+                })?;
+                metadata.insert("next_page_token".to_owned(), json!(token.encode()));
+            }
+        }
+        items.push(Value::Object(metadata));
+    }
+
+    let items_total = items.len() as u64;
+    value.insert("items".to_owned(), Value::Array(items));
+    value.insert("items_total".to_owned(), json!(items_total));
+    value.insert("items_truncated".to_owned(), json!(false));
+
     if let Some(snapshot) = resolution.snapshot() {
         value.insert(
             "source_attempt_id".to_owned(),
@@ -1730,7 +2300,90 @@ fn readback_value(
             decision_readback_projection(state, decision)?,
         );
     }
-    Ok(Value::Object(value))
+    Ok((Value::Object(value), items_total))
+}
+
+/// One bounded preview of a recorded value for `next-result/v3`.
+///
+/// The preview is deliberately small: it exists so a caller can recognise a value, not consume it.
+/// When it truncates, the accompanying token names exactly where a page read should resume.
+fn evidence_preview_v1(value: &RecordedItemValueV2) -> Option<EvidencePageV1> {
+    if let Some(text) = value.as_text() {
+        let scalars: Vec<char> = text.chars().collect();
+        if scalars.is_empty() {
+            return None;
+        }
+        let end = scalars.len().min(MAX_EVIDENCE_PREVIEW_SCALARS_V2);
+        return Some(EvidencePageV1 {
+            size: end as u64,
+            data: Value::String(scalars[..end].iter().collect()),
+            truncated: end < scalars.len(),
+        });
+    }
+    if let Some(entries) = value.as_list() {
+        // A list preview carries whole entries only, and charges the bytes each one encodes to
+        // rather than its scalars alone: many one-scalar entries cost mostly structure. One
+        // maximal entry is wider than a whole slot, so admitting nothing is a real outcome — and
+        // an empty preview is worth no slot, so it is published as no preview at all.
+        let mut charged = 0usize;
+        let mut end = 0usize;
+        while end < entries.len() {
+            let cost = EVIDENCE_ENTRY_OVERHEAD_BYTES
+                + entries[end].chars().count() * EVIDENCE_SCALAR_BYTES;
+            if charged + cost > MAX_EVIDENCE_PREVIEW_BYTES_V2 {
+                break;
+            }
+            charged += cost;
+            end += 1;
+        }
+        if end == 0 {
+            return None;
+        }
+        return Some(EvidencePageV1 {
+            size: end as u64,
+            data: Value::Array(entries[..end].iter().map(|entry| json!(entry)).collect()),
+            truncated: end < entries.len(),
+        });
+    }
+    // Confirm, choice, integer, and artifact values are indivisible, so a preview of one is either
+    // complete or absent. An artifact projection can exceed a preview slot on its own, and its
+    // metadata already describes it, so it is left to `evidence.read` rather than truncated.
+    let projected = typed_item_value(value);
+    if projected_preview_bytes_v1(&projected) > MAX_EVIDENCE_PREVIEW_BYTES_V2 {
+        return None;
+    }
+    Some(EvidencePageV1 {
+        size: 1,
+        data: projected,
+        truncated: false,
+    })
+}
+
+/// The encoded bytes a projected indivisible value would contribute to a preview.
+///
+/// Keys, quoting, and the widest decimal a number can render to are all charged: a preview slot
+/// bounds what the response actually serializes, not what its content alone would measure.
+fn projected_preview_bytes_v1(value: &Value) -> usize {
+    /// The bytes the widest `i64` renders to, sign included.
+    const NUMBER_BYTES: usize = 20;
+    /// Quotes, a separator, and slack for one member or element.
+    const MEMBER_OVERHEAD_BYTES: usize = EVIDENCE_ENTRY_OVERHEAD_BYTES;
+    match value {
+        Value::String(text) => text.chars().count() * EVIDENCE_SCALAR_BYTES,
+        Value::Object(fields) => fields
+            .iter()
+            .map(|(key, member)| {
+                MEMBER_OVERHEAD_BYTES
+                    + key.chars().count() * EVIDENCE_SCALAR_BYTES
+                    + projected_preview_bytes_v1(member)
+            })
+            .sum::<usize>(),
+        Value::Array(members) => members
+            .iter()
+            .map(|member| MEMBER_OVERHEAD_BYTES + projected_preview_bytes_v1(member))
+            .sum::<usize>(),
+        _ => NUMBER_BYTES,
+    }
 }
 
 fn definition_title_for_node<'a>(

@@ -328,9 +328,22 @@ fn v2run004_production_retry_is_clean_durable_replayable_and_re_resolves_evidenc
         decision_before_next["readback"][0]["source_attempt_id"],
         new_action_attempt
     );
+    // The readback surface carries identity and size, not the value; the value itself is reached
+    // through `evidence.read`. Re-resolution is proved by the source attempt and the item's digest
+    // and size changing with the second attempt's recorded content.
+    let readback_item = &decision_before_next["readback"][0]["items"][0];
+    assert_eq!(readback_item["item_id"], "result");
+    assert_eq!(readback_item["type"], "text");
     assert_eq!(
-        decision_before_next["readback"][0]["items"][0]["value"],
-        "durable second-attempt value"
+        readback_item["total_size"],
+        "durable second-attempt value".chars().count()
+    );
+    assert_eq!(readback_item["size_unit"], "scalars");
+    assert!(
+        readback_item["value_digest"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:")
     );
     runtime::mutate_item(
         &production,

@@ -244,7 +244,9 @@ fn request_with_options(
         match command {
             "workspace.init" | "workspace.reset_all" => OperationV1::Bootstrap,
             "workspace.show" | "session.status" | "session.next" | "session.observe"
-            | "job.list" | "job.lookup" | "job.status" | "job.wait" => OperationV1::Query,
+            | "evidence.read" | "job.list" | "job.lookup" | "job.status" | "job.wait" => {
+                OperationV1::Query
+            }
             _ => OperationV1::Mutate,
         }
     };
@@ -1577,12 +1579,33 @@ fn v2run003_production_actions_mutate_complete_read_back_restart_and_replay() {
         .unwrap(),
     );
     let observation = v2_result(dispatch(&production, &observe), "session.observe");
-    assert_eq!(observation["schema"], "podway.observation-result/v2");
+    assert_eq!(observation["schema"], "podway.observation-result/v3");
     assert_eq!(observation["status"]["session"]["id"], session_id);
-    assert_eq!(
-        observation["guidance"]["readback"],
-        next_before_restart["readback"]
-    );
+    // ADR-0024 makes observation guidance metadata-only: it carries the same evidence identity as
+    // `session.next` but never preview data or a continuation token.
+    let observed_readback = observation["guidance"]["readback"].as_array().unwrap();
+    let next_readback = next_before_restart["readback"].as_array().unwrap();
+    assert_eq!(observed_readback.len(), next_readback.len());
+    for (observed, expected) in observed_readback.iter().zip(next_readback) {
+        assert_eq!(
+            observed["source_graph_node_id"],
+            expected["source_graph_node_id"]
+        );
+        let observed_items = observed["items"].as_array().unwrap();
+        let expected_items = expected["items"].as_array().unwrap();
+        assert_eq!(observed_items.len(), expected_items.len());
+        for (observed_item, expected_item) in observed_items.iter().zip(expected_items) {
+            for field in ["item_id", "type", "revision", "value_digest", "total_size"] {
+                assert_eq!(observed_item[field], expected_item[field], "{field}");
+            }
+            for absent in ["preview", "preview_truncated", "next_page_token"] {
+                assert!(
+                    observed_item.get(absent).is_none(),
+                    "observation guidance must not carry {absent}"
+                );
+            }
+        }
+    }
     assert_eq!(observation["active_items"].as_array().unwrap().len(), 1);
     assert!(
         observation["mutation_templates"]

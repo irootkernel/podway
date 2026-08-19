@@ -10,6 +10,7 @@ use podway_core::{
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
 mod codec;
+mod evidence_page;
 mod framing;
 mod identity;
 #[cfg(feature = "release-contract-verifier")]
@@ -20,6 +21,9 @@ mod slice;
 pub use codec::{
     PayloadCodecErrorV1, ResponseEnvelopeV2, decode_request_payload_v1, decode_response_payload_v2,
     encode_request_payload_v1, encode_response_payload_v2,
+};
+pub use evidence_page::{
+    EVIDENCE_PAGE_TOKEN_VERSION_V1, EvidencePageTokenV1, MAX_EVIDENCE_PAGE_TOKEN_CHARS_V1,
 };
 pub use framing::{
     FrameErrorV1, FrameIoPhaseV1, decode_single_frame_v1, encode_frame_v1, read_single_frame_v1,
@@ -94,6 +98,11 @@ pub enum ProtocolError {
         actual_exit_code: u8,
         actual_retryable: bool,
     },
+    /// An `evidence.read` page token is malformed, oversized, or not exactly one canonical payload.
+    ///
+    /// This is a decoding failure, refused before any comparison against current state, so a token
+    /// a caller invented can never reveal whether a session, attempt, or item exists.
+    InvalidEvidencePageToken,
     InvalidIdentityConflictDetails,
     InvalidProcedureDigestMismatchDetails,
     InvalidMutationOutcomeUnknownDetails,
@@ -142,6 +151,10 @@ impl fmt::Display for ProtocolError {
                 formatter,
                 "unsupported protocol {received:?}; supported protocols: {}",
                 supported.join(", ")
+            ),
+            Self::InvalidEvidencePageToken => write!(
+                formatter,
+                "the evidence page token is not exactly one canonical bounded payload"
             ),
             Self::InvalidUuid { field } => write!(formatter, "{field} must be a canonical UUID"),
             Self::EmptyValue { field } => write!(formatter, "{field} must not be empty"),

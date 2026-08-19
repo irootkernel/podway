@@ -215,7 +215,7 @@ not replace, the session revision or active-attempt fence.
 
 ### Self-contained observation (AUT-OBS-005–011)
 
-`V2SCL-005` delivers the `observation-result/v3` requirements below; the current build serves `observation-result/v2` with a standard-tier status member.
+`V2SCL-004` moved `session.observe` onto `observation-result/v3` and reduced its status member to the compact-shaped observation projection described below, so the standard-only members are already gone. `V2SCL-005` derives the component byte budgets and proves the composition.
 
 | ID | Normative requirement |
 |---|---|

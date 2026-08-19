@@ -105,7 +105,7 @@ For a small project-wide policy, add this template to the project's `AGENTS.md`:
 ## Podway
 
 - Podway supports Procedure v2 only. Treat `LEGACY_PROCEDURE_STATE_UNSUPPORTED` as a backup-and-reset boundary; do not edit the database or attempt conversion.
-- When `.podway/config.yaml` exists, read `podway observe --json --wait-for-idle` before task work. Require `podway.observation-result/v2`, and re-read it after every mutation.
+- When `.podway/config.yaml` exists, read `podway observe --json --wait-for-idle` before task work. Require `podway.observation-result/v3`, and re-read it after every mutation.
 - Treat the active Podway graph node and attempt as the current work boundary. Perform the work before recording an item. Side work may run outside Podway, but record only conclusions supported by current evidence on the active attempt.
 - Use JSON fields, stable error codes, explicit preconditions, and idempotency keys for mutations. Never parse human-readable output as an API.
 - You may update items and advance an existing active v2 session when the work supports it. Do not run `podway init`, start or replace a session, cancel or reset state, control the daemon, or reactivate a completed session through `rework` or `goal revise --reactivate` unless the user explicitly requests it.
@@ -212,6 +212,11 @@ podway procedure validate .podway/procedures/custom.yaml
 podway start --procedure .podway/procedures/custom.yaml --task "review queue behavior"
 podway begin
 ```
+
+Selected evidence is read one bounded page at a time. `podway next --json` and
+`podway observe --json` carry each item's identity, digest, and total size with at most a
+short preview; `podway evidence read --source <graph-node-id> --item <item-id>` returns the
+complete value, following `next_page_token` until `truncated` is `false`.
 
 Rework is part of the normal lifecycle:
 

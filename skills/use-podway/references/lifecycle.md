@@ -33,7 +33,7 @@ Read this reference only when the user asks to initialize Podway, start or repla
 
 Use this flow only when the user explicitly asks to remove, discard, clear, or reset the current session. Do not decide that a session is stale merely because it is old, incomplete, or unrelated to the current task.
 
-1. Run `podway observe --json --wait-for-idle` and require `podway.observation-result/v2`. Summarize the Procedure ID and purpose, lifecycle, current node and attempt when present, session ID and revision, current terminal disposition when present, recorded progress, and queue state.
+1. Run `podway observe --json --wait-for-idle` and require `podway.observation-result/v3`. Summarize the Procedure ID and purpose, lifecycle, current node and attempt when present, session ID and revision, current terminal disposition when present, recorded progress, and queue state.
 2. If observation returns `SESSION_NOT_FOUND`, report that no current session exists and stop successfully. Do not escalate to `reset --all`.
 3. Explain the requested disposition. `cancel` terminally abandons a running task but preserves the current session and its history. `reset` deletes the current session and all session-scoped history while preserving workspace initialization. When deletion or freeing the worktree's session slot is the stated goal, use `reset` directly; do not cancel first because the following reset would erase that cancellation record.
 4. Read `podway help session.reset`. Preview the exact observed target with `podway reset --dry-run`, passing the latest workspace UUID, session ID, and session revision fences. Do not pass `--yes`, `--detach`, an idempotency key, or a progress summary to the dry run.

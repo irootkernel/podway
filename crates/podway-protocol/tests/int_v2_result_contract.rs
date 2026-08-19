@@ -10,14 +10,13 @@ use jsonschema::{Retrieve, Uri};
 use podway_core::{AuthoringDiagnostic, AuthoringDiagnosticCode, SourceLocation};
 use podway_protocol::{
     CommandNameV1, DAEMON_COMMAND_NAMES_V1, EXISTING_ROUTE_RESULT_SCHEMAS_V2, ErrorEnvelopeV1,
-    JobOutputV1, JobStateV1,
-    MAX_V2_OUTPUT_WARNINGS, MAX_V2_RUNTIME_ERROR_MESSAGE_CHARS_V1, MAX_V2_TERMINAL_ERROR_BYTES,
-    NEW_ROUTE_RESULT_SCHEMAS_V1, OUTPUT_SCHEMA_V3, OutputEnvelopeInputV3, OutputEnvelopeV3,
-    PROCEDURE_DIAGNOSTICS_RESULT_SCHEMA_V1, ProtocolError, RequestIdV1, ResponseEnvelopeV2,
-    Rfc3339MillisV1, V2_RUNTIME_ERROR_CODES_V1, WorkspaceOutputV1, decode_response_payload_v2,
-    decode_result_schema_contract_v2, decode_single_frame_v1, encode_frame_v1,
-    encode_response_payload_v2, result_schema_top_level_fields_v2, validate_command_result_v2,
-    validate_frame_payload_length, validate_v2_output_warnings,
+    JobOutputV1, JobStateV1, MAX_V2_OUTPUT_WARNINGS, MAX_V2_RUNTIME_ERROR_MESSAGE_CHARS_V1,
+    MAX_V2_TERMINAL_ERROR_BYTES, NEW_ROUTE_RESULT_SCHEMAS_V1, OUTPUT_SCHEMA_V3,
+    OutputEnvelopeInputV3, OutputEnvelopeV3, PROCEDURE_DIAGNOSTICS_RESULT_SCHEMA_V1, ProtocolError,
+    RequestIdV1, ResponseEnvelopeV2, Rfc3339MillisV1, V2_RUNTIME_ERROR_CODES_V1, WorkspaceOutputV1,
+    decode_response_payload_v2, decode_result_schema_contract_v2, decode_single_frame_v1,
+    encode_frame_v1, encode_response_payload_v2, result_schema_top_level_fields_v2,
+    validate_command_result_v2, validate_frame_payload_length, validate_v2_output_warnings,
 };
 use serde_json::{Map, Value, json};
 
@@ -1335,7 +1334,7 @@ fn v2ctr003_decoder_rejects_missing_non_string_and_unregistered_discriminators()
 }
 
 #[test]
-fn v2scl002_evidence_read_is_a_reserved_contract_without_runtime_admission() {
+fn v2scl004_evidence_read_binds_one_result_family_and_is_admitted() {
     let registered: Vec<_> = EXISTING_ROUTE_RESULT_SCHEMAS_V2
         .iter()
         .chain(NEW_ROUTE_RESULT_SCHEMAS_V1)
@@ -1361,8 +1360,8 @@ fn v2scl002_evidence_read_is_a_reserved_contract_without_runtime_admission() {
     assert_valid("schemas/output-v3.schema.json", &output);
 
     assert!(
-        !DAEMON_COMMAND_NAMES_V1.contains(&"evidence.read"),
-        "the reserved evidence.read route must not be admitted to daemon request decoding"
+        DAEMON_COMMAND_NAMES_V1.contains(&"evidence.read"),
+        "V2SCL-004 admits evidence.read to daemon request decoding"
     );
 }
 
@@ -1374,7 +1373,10 @@ fn v2scl002_evidence_read_result_conditional_branches_are_satisfiable_and_closed
     terminal_page["page"] = json!({"offset": 7, "size": 5, "data": "final"});
     terminal_page["truncated"] = json!(false);
     terminal_page["next_page_token"] = Value::Null;
-    assert_valid("schemas/evidence-read-result-v1.schema.json", &terminal_page);
+    assert_valid(
+        "schemas/evidence-read-result-v1.schema.json",
+        &terminal_page,
+    );
 
     let mut token_without_truncation = terminal_page.clone();
     token_without_truncation["next_page_token"] = json!("AQIDBAUGBwgJCgsMDQ4PEA");
@@ -1450,7 +1452,10 @@ fn v2scl002_evidence_read_result_conditional_branches_are_satisfiable_and_closed
 
     let mut unknown_field = base.clone();
     unknown_field["page_bytes"] = json!(64);
-    assert_invalid("schemas/evidence-read-result-v1.schema.json", &unknown_field);
+    assert_invalid(
+        "schemas/evidence-read-result-v1.schema.json",
+        &unknown_field,
+    );
 }
 
 #[test]

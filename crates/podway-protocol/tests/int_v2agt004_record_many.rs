@@ -265,7 +265,11 @@ fn v2scl003_record_many_schema_and_decoder_share_the_scale_envelope() {
 
     // V2SCL-002 reserved the wider input contract and V2SCL-003 raised the decoder onto the same
     // domain constants, so the schema and the decoder now accept and reject exactly together.
-    let entries = Value::Array((0..1_000).map(|index| json!(format!("entry-{index}"))).collect());
+    let entries = Value::Array(
+        (0..1_000)
+            .map(|index| json!(format!("entry-{index}")))
+            .collect(),
+    );
     assert!(
         decode_item_record_many_input_v1(&input(json!([{
             "item_id": "notes",
@@ -274,8 +278,11 @@ fn v2scl003_record_many_schema_and_decoder_share_the_scale_envelope() {
         }])))
         .is_ok()
     );
-    let over_entries =
-        Value::Array((0..1_001).map(|index| json!(format!("entry-{index}"))).collect());
+    let over_entries = Value::Array(
+        (0..1_001)
+            .map(|index| json!(format!("entry-{index}")))
+            .collect(),
+    );
     assert!(
         decode_item_record_many_input_v1(&input(json!([{
             "item_id": "notes",

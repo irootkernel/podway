@@ -732,3 +732,233 @@ fn v2drw005_production_readback_is_bounded_immutable_pageable_and_cold_stable() 
     );
     assert_eq!(reopened_next, durable_next);
 }
+
+#[test]
+fn v2scl004_production_dispatch_serves_and_fences_evidence_read() {
+    let workspace = support_phase4_workspace::git_worktrees();
+    runtime::make_runtime_private(workspace.main());
+    fs::write(
+        workspace.main().join("decision-readback.yaml"),
+        READBACK_PROCEDURE,
+    )
+    .unwrap();
+    let ParsedProcedure::V2(parsed) =
+        parse_procedure_document(READBACK_PROCEDURE.as_bytes(), ProcedureDocumentFormat::Yaml)
+            .unwrap()
+    else {
+        unreachable!()
+    };
+    let digest = validate_procedure_v2(parsed).unwrap().digest().clone();
+    let selector = runtime::selector(workspace.main());
+    let manager_root = workspace.temporary_path().to_path_buf();
+    let manager = Arc::new(runtime::manager(&manager_root));
+    let production = runtime::dispatcher(Arc::clone(&manager), "v2scl004-production");
+    let mut number = 96_500;
+
+    let initialize = runtime::request(
+        next_number(&mut number),
+        "workspace.init",
+        &selector,
+        Map::new(),
+        "v2scl004-init",
+        PreconditionsV1::default(),
+    );
+    assert!(matches!(
+        runtime::dispatch(&production, &initialize),
+        ResponseEnvelopeV2::OutputV2(_)
+    ));
+    let start = runtime::request(
+        next_number(&mut number),
+        "session.start",
+        &selector,
+        json!({
+            "procedure": "decision-readback.yaml",
+            "expected_procedure_digest": digest,
+            "task_title": "V2SCL-004 production evidence read"
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+        "v2scl004-start",
+        PreconditionsV1::default(),
+    );
+    let session_id = result(runtime::dispatch(&production, &start), "session.start")["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    runtime::begin(
+        &production,
+        &selector,
+        next_number(&mut number),
+        &session_id,
+        Map::new(),
+        "v2scl004-begin",
+    );
+    set_item(
+        &production,
+        &selector,
+        &session_id,
+        &mut number,
+        "result",
+        "recorded evidence for the paged read",
+    );
+    let completed = complete(&production, &selector, &session_id, &mut number);
+    assert_eq!(completed["to_graph_node_id"], "review");
+
+    // The route answers through production dispatch, not only through the projection helper.
+    let page = query(
+        &production,
+        &selector,
+        &session_id,
+        &mut number,
+        "evidence.read",
+        json!({"source": "work", "item_id": "result"})
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+    assert_eq!(page["schema"], "podway.evidence-read-result/v1");
+    assert_eq!(page["procedure_schema"], "podway.procedure/v2");
+    assert_eq!(page["item"]["item_id"], "result");
+    assert_eq!(page["item"]["type"], "text");
+    assert_eq!(page["source"]["graph_node_id"], "work");
+    assert_eq!(page["size_unit"], "scalars");
+    assert_eq!(page["total_size"], 36);
+    assert_eq!(page["truncated"], false);
+    assert_eq!(page["next_page_token"], Value::Null);
+    assert_eq!(page["page"]["data"], "recorded evidence for the paged read");
+
+    // A query creates no revision and no durable job, so the session is exactly where it was.
+    let after = status(&production, &selector, &session_id, &mut number);
+    assert_eq!(after["current"]["node"]["graph_node_id"], "review");
+    let repeated = query(
+        &production,
+        &selector,
+        &session_id,
+        &mut number,
+        "evidence.read",
+        json!({"source": "work", "item_id": "result"})
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+    assert_eq!(repeated, page);
+
+    // An item outside the reference selector is not readable through the route either.
+    let request = runtime::request(
+        next_number(&mut number),
+        "evidence.read",
+        &selector,
+        json!({"source": "work", "item_id": "note"})
+            .as_object()
+            .unwrap()
+            .clone(),
+        "unused-v2scl004-query-key",
+        PreconditionsV1::new(
+            Some(SessionId::new(&session_id).unwrap()),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let response = runtime::dispatch(&production, &request);
+    assert_bounded_response(&response);
+    let ResponseEnvelopeV2::Error(error) = &response else {
+        panic!("an unselected item must fail: {response:?}")
+    };
+    let error = serde_json::to_value(error).unwrap();
+    assert_eq!(error["code"], "EVIDENCE_NOT_AVAILABLE");
+    assert_eq!(error["exit_code"], 1);
+    assert_eq!(error["retryable"], false);
+
+    // A token from an earlier consumer attempt is the recoverable case: the caller re-reads state
+    // and restarts the item, so the public envelope must say retryable with the state-refresh exit
+    // rather than reporting a malformed request.
+    let source_attempt = page["source"]["attempt_id"].as_str().unwrap().to_owned();
+    let stale = podway_protocol::EvidencePageTokenV1::new(
+        &session_id,
+        &source_attempt,
+        &source_attempt,
+        "result",
+        page["value_digest"].as_str().unwrap(),
+        0,
+    )
+    .unwrap()
+    .encode();
+    let request = runtime::request(
+        next_number(&mut number),
+        "evidence.read",
+        &selector,
+        json!({"source": "work", "item_id": "result", "page_token": stale})
+            .as_object()
+            .unwrap()
+            .clone(),
+        "unused-v2scl004-stale-key",
+        PreconditionsV1::new(
+            Some(SessionId::new(&session_id).unwrap()),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let response = runtime::dispatch(&production, &request);
+    assert_bounded_response(&response);
+    let ResponseEnvelopeV2::Error(error) = &response else {
+        panic!("a moved snapshot must fail: {response:?}")
+    };
+    let error = serde_json::to_value(error).unwrap();
+    assert_eq!(error["code"], "EVIDENCE_PAGE_TOKEN_STALE");
+    assert_eq!(error["retryable"], true);
+    assert_eq!(error["exit_code"], 4);
+    assert_eq!(
+        error["details"]["schema"],
+        "podway.recoverable-v2-runtime-error-details/v1"
+    );
+    assert_eq!(error["details"]["kind"], "EVIDENCE_PAGE_TOKEN_STALE");
+    assert_eq!(error["details"]["item_id"], "result");
+    assert_eq!(error["details"]["source_graph_node_id"], "work");
+    // The recovery recipe must send the caller back to a read, never to another mutation.
+    assert_eq!(error["details"]["recovery"]["command"], "session.observe");
+
+    // A malformed page token never reaches dispatch at all: the request decoder refuses it, which
+    // `v2scl004_evidence_read_decodes_and_rejects_a_malformed_page_token` proves at that boundary.
+    let envelope = RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
+        request_id: RequestIdV1::new(format!(
+            "00000000-0000-4000-8000-{:012x}",
+            next_number(&mut number)
+        ))
+        .unwrap(),
+        client: ClientInfoV1::new("v2scl004-test", "1", 1).unwrap(),
+        operation: OperationV1::Query,
+        command: CommandNameV1::new("evidence.read").unwrap(),
+        workspace: Some(WorkspaceContextV1::new(selector.display(), None).unwrap()),
+        idempotency_key: None,
+        preconditions: PreconditionsV1::new(
+            Some(SessionId::new(&session_id).unwrap()),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+        options: RequestOptionsV1::new(false, runtime::TEST_WAIT_TIMEOUT_MILLIS).unwrap(),
+        payload: json!({
+            "selector": selector,
+            "source": "work",
+            "item_id": "result",
+            "page_token": "not-a-token"
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+    })
+    .unwrap();
+    assert!(podway_protocol::SliceRequestV1::from_envelope(&envelope).is_err());
+}

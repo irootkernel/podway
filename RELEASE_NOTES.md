@@ -34,8 +34,12 @@ A database containing legacy Procedure v1 state fails closed with `LEGACY_PROCED
 Podway does not convert or discard that state automatically. After any desired
 backup, recovery requires an explicit confirmed `podway reset --all`.
 
-The observation contract advances to `podway.observation-result/v2`, compact
-status to `podway.status-result/v3`, and prepared-aware lifecycle jobs use
+Selected evidence is no longer embedded whole in a progression response. `session.next`
+advances to `podway.next-result/v3` and `session.observe` to `podway.observation-result/v3`,
+both carrying evidence identity, digest, and total size with at most a bounded preview.
+The new `evidence read` query returns one bounded page of a selected item and pages through
+`next_page_token`; observation guidance carries metadata only, with no previews or tokens.
+Compact status advances to `podway.status-result/v3`, and prepared-aware lifecycle jobs use
 `podway.job-result/v4` and `podway.job-lookup-result/v4`. Released result versions
 remain registered for compatibility and fail closed outside their declared
 command families.
