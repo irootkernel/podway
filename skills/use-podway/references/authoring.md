@@ -25,7 +25,7 @@ Read this reference when the user asks to create, review, visualize, or use a cu
    ```
 
 5. Use `podway procedure graph <file> --format mermaid` or another supported format only as a review projection. Treat the YAML or JSON Procedure and its canonical digest as authoritative.
-6. Review purpose, action instructions, required and optional items, decisions, declared routes, manual rework targets, skip policy, resource bounds, and goal settings. Keep exactly one active cursor and attempt.
+6. Review purpose, action instructions, required and optional items, decisions, declared routes, manual rework targets, skip policy, resource bounds, and goal settings. Give every decision option `criteria` guidance that states when a decision-maker picks that option; `WEAK_CRITERIA_GUIDANCE` reports only guidance that is absent, one word, or a marked placeholder, never mere vagueness, and these declared option criteria are Procedure structure, not the session goal criteria recorded at runtime. Keep exactly one active cursor and attempt.
 7. Review the declared recorded-item references and their read-back selection: which prior placement each consumer reads back, and which item IDs that reference selects. A required evidence source must dominate its consumer and cannot be skippable; branch-specific references are optional.
 8. Start the custom Procedure only after explicit user intent, using the exact digest from the reviewed preview or validation output.
 

@@ -42,10 +42,7 @@ Enter a worktree only after explicit activation for the current workflow.
 
 For initialization, session creation or replacement, daemon control, reset, cancel, or workspace repair, read [references/lifecycle.md](references/lifecycle.md) before acting.
 
-When the user explicitly asks to start a session, prefer `small-change-v2` for a
-bounded change that needs inspection, implementation, verification, review, and
-closeout but no tracked goal. Use the fuller goal-tracked presets when their
-assessment and evidence requirements match the task.
+When the user explicitly asks to start a session, prefer `small-change-v2` for a bounded change that needs inspection, implementation, verification, review, and closeout but no tracked goal. Use the fuller goal-tracked presets when their assessment and evidence requirements match the task.
 
 ## Advance an active session
 
@@ -72,6 +69,8 @@ Active-session item updates and justified progression do not require a separate 
 - Define or revise the session goal only with explicit user intent. Assess a criterion only on the active goal-assessment decision attempt, and only after performing the cited work.
 - Read `references[].state` and `readback[].state` together with the `readiness` fields `items_satisfied`, `unblocked`, `goal_ready`, and `can_advance`. Required evidence must be resolved and fresh. An unresolved optional reference is normal and never blocks readiness, `complete`, or `decide`; do not rework solely because it is unresolved. On `EVIDENCE_REFERENCE_STALE`, re-read state and rework the source only when the current graph requires it.
 - Re-read state after retry or rework. Historical attempts remain inspectable but do not satisfy the fresh active attempt.
+
+For deciding whether to track a session goal, writing its statement and criteria, assessing a criterion, or revising the goal, read [references/goal.md](references/goal.md) before acting.
 
 For creating or reviewing a custom Procedure, read [references/authoring.md](references/authoring.md) before acting.
 

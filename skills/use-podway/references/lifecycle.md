@@ -17,7 +17,7 @@ Read this reference only when the user asks to initialize Podway, start or repla
 - Dry-run a start when its task, Procedure, or replacement effect needs review.
 - Use `--dry-run` for `reset` or `start --replace-eligible` when the corresponding command help exposes it. A dry run may become stale immediately, so the real command still revalidates.
 - Never use `start --replace` unless the user explicitly authorizes replacing the identified current session after seeing its latest status.
-- A successful `start` or replacement creates a prepared session at revision 0 without an active attempt or goal. Re-read `podway observe --json --wait-for-idle`, then use its fenced `session.begin` template to create attempt 1. Supply the optional initial goal, criteria, and actor only to `begin`.
+- A successful `start` or replacement creates a prepared session at revision 0 without an active attempt or goal. Re-read `podway observe --json --wait-for-idle`, then use its fenced `session.begin` template to create attempt 1. Supply the optional initial goal, criteria, and actor only to `begin`, and supply a goal only with explicit user intent; when it is omitted, a goal-tracking Procedure still accepts `goal define` once later.
 
 ## Manage terminal and destructive operations
 

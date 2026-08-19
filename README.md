@@ -121,13 +121,13 @@ mkdir -p "$podway_skill_dir/references"
 curl -fsSLo "$podway_skill_dir/SKILL.md" \
   https://raw.githubusercontent.com/irootkernel/podway/main/skills/use-podway/SKILL.md
 
-for reference in lifecycle authoring recovery; do
+for reference in lifecycle goal authoring recovery; do
   curl -fsSLo "$podway_skill_dir/references/$reference.md" \
     "https://raw.githubusercontent.com/irootkernel/podway/main/skills/use-podway/references/$reference.md"
 done
 ```
 
-The skill covers the active-session loop and loads separate references only for less frequent lifecycle, Procedure-authoring, or recovery work. Consult the agent's documentation for its skill reload requirements. The commands require network access and `curl`, and overwrite existing files with the same names. Replace `main` with a release tag or commit SHA when a reproducible, pinned skill version is required.
+The skill covers the active-session loop and loads separate references only for less frequent lifecycle, session-goal, Procedure-authoring, or recovery work. Consult the agent's documentation for its skill reload requirements. The commands require network access and `curl`, and overwrite existing files with the same names. Replace `main` with a release tag or commit SHA when a reproducible, pinned skill version is required.
 
 ## Build from source
 
