@@ -34,11 +34,16 @@ fn item_specs_enforce_v2_bounds() {
         invalid("item help")
     );
 
-    // text max length hard cap is 16_384; one over fails.
-    assert!(TextItemSpecV2::new(common("t"), 0, 16_384, true).is_ok());
+    // text max length hard cap is 65_536; one over fails.
+    assert!(TextItemSpecV2::new(common("t"), 0, 65_536, true).is_ok());
     assert_eq!(
-        TextItemSpecV2::new(common("t"), 0, 16_385, true).unwrap_err(),
-        invalid("invalid text length constraints")
+        TextItemSpecV2::new(common("t"), 0, 65_537, true).unwrap_err(),
+        crate::DomainError::BoundExceeded {
+            field: "text max_length",
+            actual: 65_537,
+            maximum: 65_536,
+            unit: crate::BoundUnitV2::Scalars,
+        }
     );
 
     // choice count cap is 32; one over fails.
@@ -57,16 +62,49 @@ fn item_specs_enforce_v2_bounds() {
         invalid("choice")
     );
 
-    // list bounds cap at 200 entries of 1_000 characters.
-    assert!(ListItemSpecV2::new(common("l"), 0, 200, 1_000, true).is_ok());
+    // list bounds cap at 1_000 entries of 8_192 scalars with 1_000_000 scalars of total content.
+    assert!(ListItemSpecV2::new(common("l"), 0, 1_000, 8_192, 1_000_000, true).is_ok());
     assert_eq!(
-        ListItemSpecV2::new(common("l"), 0, 201, 500, true).unwrap_err(),
-        invalid("invalid list item count constraints")
+        ListItemSpecV2::new(common("l"), 0, 1_001, 500, 1_000_000, true).unwrap_err(),
+        crate::DomainError::BoundExceeded {
+            field: "list max_items",
+            actual: 1_001,
+            maximum: 1_000,
+            unit: crate::BoundUnitV2::Entries,
+        }
     );
     assert_eq!(
-        ListItemSpecV2::new(common("l"), 0, 50, 1_001, true).unwrap_err(),
-        invalid("invalid list entry length constraint")
+        ListItemSpecV2::new(common("l"), 0, 50, 8_193, 1_000_000, true).unwrap_err(),
+        crate::DomainError::BoundExceeded {
+            field: "list max_item_length",
+            actual: 8_193,
+            maximum: 8_192,
+            unit: crate::BoundUnitV2::Scalars,
+        }
     );
+    assert_eq!(
+        ListItemSpecV2::new(common("l"), 0, 50, 500, 1_000_001, true).unwrap_err(),
+        crate::DomainError::BoundExceeded {
+            field: "list max_total_length",
+            actual: 1_000_001,
+            maximum: 1_000_000,
+            unit: crate::BoundUnitV2::Scalars,
+        }
+    );
+    assert_eq!(
+        ListItemSpecV2::new(common("l"), 0, 50, 500, 0, true).unwrap_err(),
+        invalid("invalid list total content constraint")
+    );
+    // A non-empty entry needs at least one scalar, so min_items may not exceed the total ceiling.
+    assert_eq!(
+        ListItemSpecV2::new(common("l"), 10, 50, 500, 9, true).unwrap_err(),
+        invalid("invalid list total content constraint")
+    );
+    // The effective ceiling is the tighter of the entry product and the declared total.
+    let tight = ListItemSpecV2::new(common("l"), 0, 50, 500, 1_000, true).expect("tight total");
+    assert_eq!(tight.effective_total_length(), 1_000);
+    let loose = ListItemSpecV2::new(common("l"), 0, 50, 500, 1_000_000, true).expect("loose total");
+    assert_eq!(loose.effective_total_length(), 25_000);
 
     // Procedure v2 reuses the current first-version item contract taxonomy.
     assert_eq!(item("confirm").item_type(), ItemTypeV1::Confirm);
@@ -128,12 +166,21 @@ fn item_specs_admit_only_recorded_values_that_satisfy_the_declaration() {
     assert!(integer.admits_recorded_value(&RecordedItemValueV2::integer(3)));
     assert!(!integer.admits_recorded_value(&RecordedItemValueV2::integer(5)));
 
-    let list = ItemSpecV2::list(common("list"), 1, 2, 3, true).unwrap();
+    let list = ItemSpecV2::list(common("list"), 1, 2, 3, 1_000_000, true).unwrap();
     assert!(list.admits_recorded_value(
         &RecordedItemValueV2::list(vec!["one".to_owned(), "two".to_owned()]).unwrap()
     ));
     assert!(!list.admits_recorded_value(
         &RecordedItemValueV2::list(vec!["one".to_owned(), "one".to_owned()]).unwrap()
+    ));
+
+    // A recorded list must satisfy the total-content ceiling as well as the per-entry ceiling.
+    let bounded_total = ItemSpecV2::list(common("list"), 1, 4, 8, 5, true).unwrap();
+    assert!(bounded_total.admits_recorded_value(
+        &RecordedItemValueV2::list(vec!["ab".to_owned(), "cde".to_owned()]).unwrap()
+    ));
+    assert!(!bounded_total.admits_recorded_value(
+        &RecordedItemValueV2::list(vec!["abc".to_owned(), "defg".to_owned()]).unwrap()
     ));
 
     let artifact = ItemSpecV2::artifact(common("artifact"), vec!["text/plain".to_owned()]).unwrap();

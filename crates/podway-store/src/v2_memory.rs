@@ -12,8 +12,10 @@ use podway_core::{
     ItemId, ItemSpecV2, ItemTypeV1, NodeDefinitionId, OptionId, ProcedureSnapshotId, ReasonV2,
     RecordedItemSetV2, RecordedItemV2, RecordedItemValueV2, ResolvedEvidenceReferenceV2,
     ResolvedEvidenceSetV2, Revision, ReworkKindV2, ReworkRecordInputV2, ReworkRecordV2,
-    SessionAttemptV2, SessionId, SessionLifecycle, SessionTraceV2, Sha256Digest, TraceSequenceV2,
-    TransitionEffectV2, UnixMillis, canonicalize_json_v1, verify_canonical_json_v1,
+    MAX_ATTEMPT_CONTENT_SCALARS_V2, MAX_ITEMS_PER_DEFINITION_V2, SessionAttemptV2, SessionId,
+    SessionLifecycle, SessionTraceV2, Sha256Digest, TraceSequenceV2, TransitionEffectV2,
+    UnixMillis, attempt_content_bound_error_v2,
+    canonicalize_json_v1, recorded_content_scalars_v2, verify_canonical_json_v1,
 };
 use rusqlite::{Connection, Transaction, params};
 use serde_json::{Value, json};
@@ -26,7 +28,7 @@ use crate::{
 };
 
 pub const MAX_OPEN_BLOCKERS_V2: usize = 64;
-pub const MAX_ACTIVE_ITEM_MUTATIONS_V2: usize = 64;
+pub const MAX_ACTIVE_ITEM_MUTATIONS_V2: usize = MAX_ITEMS_PER_DEFINITION_V2;
 const MAX_BLOCKER_REASON_CHARS_V2: usize = 1_000;
 
 fn invalid(reason: &'static str) -> StoreValueErrorV1 {
@@ -695,6 +697,11 @@ impl AttemptWorkflowMemoryV2 {
         &self.evidence
     }
 
+    /// The recorded text and list content this attempt holds, in Unicode scalars.
+    pub fn content_scalars(&self) -> u64 {
+        recorded_content_scalars_v2(self.item_slots.iter().filter_map(ItemSlotStateV2::value))
+    }
+
     pub fn recorded_items(&self) -> Result<RecordedItemSetV2, StoreValueErrorV1> {
         RecordedItemSetV2::new(
             self.item_slots
@@ -1066,6 +1073,15 @@ impl WorkflowMemoryStateV2 {
         let active_memory = &self.attempts[attempt_index];
         let mut slots = active_memory.item_slots.clone();
         slots[slot_index] = next_slot;
+        // ADR-0024 bounds the recorded text and list content one attempt may accumulate. The check
+        // belongs on the write path, not only where the terminal snapshot is built, so a caller
+        // learns the exact field, observed value, and maximum on the mutation that crosses it.
+        let content = recorded_content_scalars_v2(slots.iter().filter_map(ItemSlotStateV2::value));
+        if content > MAX_ATTEMPT_CONTENT_SCALARS_V2 {
+            return Err(GraphMutationErrorV2::Domain(attempt_content_bound_error_v2(
+                content,
+            )));
+        }
         attempts[attempt_index] = AttemptWorkflowMemoryV2::new(
             active_memory.attempt_id.clone(),
             slots,
@@ -2324,7 +2340,7 @@ fn parse_item_spec_v2(
         ItemTypeV1::Text => ItemSpecV2::text(
             common,
             optional_u32(item, "min_length", 0)?,
-            optional_u32(item, "max_length", 4_000)?,
+            optional_u32(item, "max_length", podway_core::DEFAULT_TEXT_MAX_SCALARS_V2)?,
             item.get("multiline")
                 .and_then(Value::as_bool)
                 .unwrap_or(true),
@@ -2351,8 +2367,17 @@ fn parse_item_spec_v2(
         ItemTypeV1::List => ItemSpecV2::list(
             common,
             optional_u16(item, "min_items", 0)?,
-            optional_u16(item, "max_items", 50)?,
-            optional_u16(item, "max_item_length", 500)?,
+            optional_u16(item, "max_items", podway_core::DEFAULT_LIST_MAX_ITEMS_V2)?,
+            optional_u16(
+                item,
+                "max_item_length",
+                podway_core::DEFAULT_LIST_MAX_ITEM_SCALARS_V2,
+            )?,
+            optional_u32(
+                item,
+                "max_total_length",
+                podway_core::DEFAULT_LIST_MAX_TOTAL_SCALARS_V2,
+            )?,
             item.get("unique").and_then(Value::as_bool).unwrap_or(true),
         ),
         ItemTypeV1::Artifact => ItemSpecV2::artifact(

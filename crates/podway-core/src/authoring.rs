@@ -124,6 +124,7 @@ authoring_diagnostic_catalog! {
     EvidenceSelectorUnknownItem => ("EVIDENCE_SELECTOR_UNKNOWN_ITEM", Error),
     ReadbackBudgetExceeded => ("READBACK_BUDGET_EXCEEDED", Error),
     NextStaticBudgetExceeded => ("NEXT_STATIC_BUDGET_EXCEEDED", Error),
+    AttemptContentBudgetExceeded => ("ATTEMPT_CONTENT_BUDGET_EXCEEDED", Warning),
     DecisionSkipNotAllowed => ("DECISION_SKIP_NOT_ALLOWED", Error),
     GraphCycleInvalid => ("GRAPH_CYCLE_INVALID", Error),
     ReworkTargetNotDominating => ("REWORK_TARGET_NOT_DOMINATING", Error),
@@ -411,8 +412,8 @@ mod tests {
             );
             assert_eq!(code.severity(), (*code).severity());
         }
-        assert_eq!(codes.len(), 53);
-        assert_eq!(AuthoringDiagnosticCode::ALL.len(), 53);
+        assert_eq!(codes.len(), 54);
+        assert_eq!(AuthoringDiagnosticCode::ALL.len(), 54);
     }
 
     #[test]
@@ -426,7 +427,7 @@ mod tests {
             .filter(|code| code.severity() == AuthoringSeverity::Warning)
             .count();
         assert_eq!(errors, 30);
-        assert_eq!(warnings, 23);
+        assert_eq!(warnings, 24);
     }
 
     #[test]

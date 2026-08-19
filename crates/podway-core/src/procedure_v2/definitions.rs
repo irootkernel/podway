@@ -3,10 +3,10 @@
 
 use std::collections::BTreeSet;
 
-use crate::{DomainError, NodeDefinitionId, OptionId, validate_text};
+use crate::{BoundUnitV2, DomainError, NodeDefinitionId, OptionId, validate_text};
 
 use super::invalid;
-use super::{ItemSpecV2, NodeKindV2};
+use super::{ItemSpecV2, MAX_ITEMS_PER_DEFINITION_V2, NodeKindV2};
 
 const MAX_DEFINITION_TITLE_CHARS: usize = 120;
 const MAX_ACTION_INTENT_CHARS: usize = 300;
@@ -19,7 +19,7 @@ const MAX_OPTION_LABEL_CHARS: usize = 120;
 const MAX_OPTION_CRITERIA_CHARS: usize = 500;
 const MAX_EVIDENCE_GUIDANCE_ENTRY_CHARS: usize = 200;
 const MAX_INSTRUCTIONS_PER_DEFINITION: usize = 16;
-pub const MAX_ITEMS_PER_DEFINITION_V2: usize = 64;
+
 const MIN_OPTIONS_PER_DECISION: usize = 1;
 const MAX_OPTIONS_PER_DECISION: usize = 8;
 const MAX_EVIDENCE_GUIDANCE_ENTRIES: usize = 8;
@@ -44,7 +44,12 @@ fn validate_instructions(instructions: &[String]) -> Result<(), DomainError> {
 
 fn validate_item_specs(items: &[ItemSpecV2]) -> Result<(), DomainError> {
     if items.len() > MAX_ITEMS_PER_DEFINITION_V2 {
-        return Err(invalid("too many definition items"));
+        return Err(DomainError::BoundExceeded {
+            field: "definition items",
+            actual: items.len() as u64,
+            maximum: MAX_ITEMS_PER_DEFINITION_V2 as u64,
+            unit: BoundUnitV2::Items,
+        });
     }
     let mut seen = BTreeSet::new();
     for item in items {

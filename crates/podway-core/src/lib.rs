@@ -30,6 +30,30 @@ pub const MAX_PROCEDURE_IDENTIFIER_BYTES: usize = 64;
 /// Maximum UTF-8 byte length of an admitted canonical procedure document.
 pub const MAX_PROCEDURE_DOCUMENT_BYTES: usize = 1_048_576;
 
+/// The unit a Procedure v2 bound counts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BoundUnitV2 {
+    /// Unicode scalar values.
+    Scalars,
+    /// List entries.
+    Entries,
+    /// Recorded or declared items.
+    Items,
+    /// Atomic record operations in one request.
+    Operations,
+}
+
+impl BoundUnitV2 {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Scalars => "scalars",
+            Self::Entries => "entries",
+            Self::Items => "items",
+            Self::Operations => "operations",
+        }
+    }
+}
+
 /// A typed failure raised while constructing or applying a domain contract.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DomainError {
@@ -53,6 +77,17 @@ pub enum DomainError {
     },
     InvalidState {
         reason: &'static str,
+    },
+    /// A declared or recorded value exceeded an exact bound of the Procedure v2 scale envelope.
+    ///
+    /// ADR-0024 requires a bound failure to name the constraint it actually violated together with
+    /// the observed value, the maximum, and the unit, so a caller never has to guess which of the
+    /// entry-count, per-entry, total-content, or per-attempt ceilings rejected the value.
+    BoundExceeded {
+        field: &'static str,
+        actual: u64,
+        maximum: u64,
+        unit: BoundUnitV2,
     },
     RequiredItemsMissing,
     BlockersPresent,
@@ -93,6 +128,16 @@ impl fmt::Display for DomainError {
             } => write!(
                 formatter,
                 "{field} exceeds its maximum of {maximum} bytes (received {actual})"
+            ),
+            Self::BoundExceeded {
+                field,
+                actual,
+                maximum,
+                unit,
+            } => write!(
+                formatter,
+                "{field} exceeds its maximum of {maximum} {} (received {actual})",
+                unit.as_str()
             ),
             Self::InvalidUuid { field } => write!(formatter, "{field} must be a canonical UUID"),
             Self::InvalidIdentifier { field } => {

@@ -73,7 +73,7 @@ fn v2agt004_stdin_rejects_duplicates_invalid_dispositions_unknown_fields_and_ove
 }
 
 #[test]
-fn v2agt004_stdin_accepts_exactly_64_operations_and_rejects_65() {
+fn v2agt004_stdin_accepts_exactly_128_operations_and_rejects_129() {
     let operations = |count: usize| {
         Value::Array(
             (0..count)
@@ -89,13 +89,13 @@ fn v2agt004_stdin_accepts_exactly_64_operations_and_rejects_65() {
     };
 
     assert_eq!(
-        decode_item_record_many_input_v1(&input(operations(64)))
+        decode_item_record_many_input_v1(&input(operations(128)))
             .unwrap()
             .operations
             .len(),
-        64
+        128
     );
-    assert!(decode_item_record_many_input_v1(&input(operations(65))).is_err());
+    assert!(decode_item_record_many_input_v1(&input(operations(129))).is_err());
 }
 
 #[test]
@@ -244,7 +244,7 @@ fn v2agt004_route_is_durable_and_semantically_item_order_independent() {
 }
 
 #[test]
-fn v2scl002_reserved_record_many_bounds_lead_the_decoder_until_v2scl003() {
+fn v2scl003_record_many_schema_and_decoder_share_the_scale_envelope() {
     let schema: Value = serde_json::from_slice(include_bytes!(
         "../../../assets/schemas/item-record-many-input-v1.schema.json"
     ))
@@ -263,41 +263,43 @@ fn v2scl002_reserved_record_many_bounds_lead_the_decoder_until_v2scl003() {
     assert_eq!(list["properties"]["value"]["maxItems"], 1_000);
     assert_eq!(list["properties"]["value"]["items"]["maxLength"], 8_192);
 
-    // V2SCL-002 reserves the wider input contract; V2SCL-003 raises the decoder that
-    // still enforces the superseded bounds, so the gap is explicit rather than silent.
-    let operations = Value::Array(
-        (0..65)
-            .map(|index| {
-                json!({
-                    "item_id": format!("item-{index:02}"),
-                    "expected_item_revision": 0,
-                    "clear": true
-                })
-            })
-            .collect(),
-    );
-    assert!(decode_item_record_many_input_v1(&input(operations)).is_err());
-    let entries =
-        Value::Array((0..201).map(|index| json!(format!("entry-{index}"))).collect());
+    // V2SCL-002 reserved the wider input contract and V2SCL-003 raised the decoder onto the same
+    // domain constants, so the schema and the decoder now accept and reject exactly together.
+    let entries = Value::Array((0..1_000).map(|index| json!(format!("entry-{index}"))).collect());
     assert!(
         decode_item_record_many_input_v1(&input(json!([{
             "item_id": "notes",
             "expected_item_revision": 0,
             "record": {"type": "list", "value": entries}
         }])))
+        .is_ok()
+    );
+    let over_entries =
+        Value::Array((0..1_001).map(|index| json!(format!("entry-{index}"))).collect());
+    assert!(
+        decode_item_record_many_input_v1(&input(json!([{
+            "item_id": "notes",
+            "expected_item_revision": 0,
+            "record": {"type": "list", "value": over_entries}
+        }])))
         .is_err()
     );
     assert!(
         decode_item_record_many_input_v1(&input(json!([{
             "item_id": "notes",
             "expected_item_revision": 0,
-            "record": {"type": "list", "value": ["x".repeat(1_001)]}
+            "record": {"type": "list", "value": ["x".repeat(8_192)]}
+        }])))
+        .is_ok()
+    );
+    assert!(
+        decode_item_record_many_input_v1(&input(json!([{
+            "item_id": "notes",
+            "expected_item_revision": 0,
+            "record": {"type": "list", "value": ["x".repeat(8_193)]}
         }])))
         .is_err()
     );
-
-    // The text slice already admits the full 65,536-scalar reserved bound; the 16,384-scalar
-    // domain cap that still rejects such a value lives in podway-core and moves in V2SCL-003.
     assert!(
         decode_item_record_many_input_v1(&input(json!([{
             "item_id": "notes",
@@ -305,5 +307,13 @@ fn v2scl002_reserved_record_many_bounds_lead_the_decoder_until_v2scl003() {
             "record": {"type": "text", "value": "x".repeat(65_536)}
         }])))
         .is_ok()
+    );
+    assert!(
+        decode_item_record_many_input_v1(&input(json!([{
+            "item_id": "notes",
+            "expected_item_revision": 0,
+            "record": {"type": "text", "value": "x".repeat(65_537)}
+        }])))
+        .is_err()
     );
 }

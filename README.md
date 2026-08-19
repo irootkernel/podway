@@ -245,7 +245,7 @@ podway observe --json --wait-for-idle
 
 Automation must use JSON fields and stable error codes, never parse human output. Mutations support idempotency keys, revision preconditions, detached admission, job lookup, and durable outcome reconciliation.
 `podway record --stdin` accepts one closed, at-most-1-MiB JSON document to
-record or clear 1..64 uniquely identified active-attempt items atomically. The
+record or clear 1..128 uniquely identified active-attempt items atomically. The
 document carries every workspace, session, attempt, item-revision, and
 idempotency fence; see the [Procedure v2 walkthrough](docs/examples/v2-workflow.md).
 Common stale-state, uncertain-outcome, daemon, and workspace failures include a

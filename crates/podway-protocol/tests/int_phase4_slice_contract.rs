@@ -476,7 +476,7 @@ fn g005_enforces_workspace_and_command_text_reason_and_path_bounds() {
     let overlong_list_value = envelope(
         "item.add",
         OperationV1::Mutate,
-        json!({"selector": selector.clone(), "item_id": "files", "value": "x".repeat(4_001)}),
+        json!({"selector": selector.clone(), "item_id": "files", "value": "x".repeat(8_193)}),
         item_preconditions(),
         EnvelopeTransport {
             detach: false,

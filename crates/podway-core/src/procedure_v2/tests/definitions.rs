@@ -64,7 +64,7 @@ fn action_definition_accepts_at_limit_scalars_and_collections() {
     let intent = "i".repeat(300);
     let description = "d".repeat(1000);
     let instructions = vec!["x".repeat(1000); 16];
-    let mut items: Vec<ItemSpecV2> = (0..64)
+    let mut items: Vec<ItemSpecV2> = (0..128)
         .map(|index| item(&format!("item-{index}")))
         .collect();
     let at_limit = ActionDefinitionV2::new(
@@ -80,7 +80,7 @@ fn action_definition_accepts_at_limit_scalars_and_collections() {
     assert_eq!(at_limit.intent(), intent);
     assert_eq!(at_limit.description(), Some(description.as_str()));
     assert_eq!(at_limit.instructions().len(), 16);
-    assert_eq!(at_limit.items().len(), 64);
+    assert_eq!(at_limit.items().len(), 128);
     assert_eq!(at_limit.node_kind(), NodeKindV2::Action);
 
     assert_eq!(
@@ -119,7 +119,12 @@ fn action_definition_accepts_at_limit_scalars_and_collections() {
     items.push(item("extra-item"));
     assert_eq!(
         ActionDefinitionV2::new(def_id("act"), "title", "intent", None, Vec::new(), items,),
-        Err(invalid("too many definition items"))
+        Err(crate::DomainError::BoundExceeded {
+            field: "definition items",
+            actual: 129,
+            maximum: 128,
+            unit: crate::BoundUnitV2::Items,
+        })
     );
     // instruction count one-over the sixteen-entry ceiling.
     let seventeen_instructions = vec!["x".repeat(1000); 17];

@@ -1377,12 +1377,23 @@ fn bound_case(
     }
 }
 
-/// Every v2 constructor surfaces a bound violation through `DomainError::InvalidState`, whose
+/// Most v2 constructors surface a bound violation through `DomainError::InvalidState`, whose
 /// static reason the parser preserves verbatim under a single `procedure v2` field.
 const fn bound_violation(reason: &'static str) -> ConfigError {
     ConfigError::InvalidValue {
         field: "procedure v2",
         reason,
+    }
+}
+
+/// The scale-envelope bounds of ADR-0024 instead surface `DomainError::BoundExceeded`, which the
+/// parser preserves as an exact field, maximum, and observed value rather than a static sentence.
+const fn scale_bound_violation(field: &'static str, max: usize, actual: usize) -> ConfigError {
+    ConfigError::OutOfBounds {
+        field,
+        min: 0,
+        max,
+        actual,
     }
 }
 
@@ -1614,9 +1625,9 @@ fn document_bound_cases() -> Vec<BoundCase> {
         ),
         bound_case(
             "items per definition",
-            64,
-            65,
-            bound_violation("too many definition items"),
+            128,
+            129,
+            scale_bound_violation("definition items", 128, 129),
             |count| {
                 let items: String = (0..count)
                 .map(|index| format!("      - id: i{index}\n        type: confirm\n        prompt: Done?\n        required: true\n"))
@@ -1650,9 +1661,9 @@ fn document_bound_cases() -> Vec<BoundCase> {
         ),
         bound_case(
             "text item max_length",
-            16_384,
-            16_385,
-            bound_violation("invalid text length constraints"),
+            65_536,
+            65_537,
+            scale_bound_violation("text max_length", 65_536, 65_537),
             |maximum| {
                 item_document(&format!(
                     "        type: text\n        prompt: Note?\n        required: true\n        max_length: {maximum}\n",
@@ -1661,9 +1672,9 @@ fn document_bound_cases() -> Vec<BoundCase> {
         ),
         bound_case(
             "list entries",
-            200,
-            201,
-            bound_violation("invalid list item count constraints"),
+            1_000,
+            1_001,
+            scale_bound_violation("list max_items", 1_000, 1_001),
             |maximum| {
                 item_document(&format!(
                     "        type: list\n        prompt: Findings?\n        required: false\n        max_items: {maximum}\n",
@@ -1672,12 +1683,23 @@ fn document_bound_cases() -> Vec<BoundCase> {
         ),
         bound_case(
             "list entry characters",
-            1_000,
-            1_001,
-            bound_violation("invalid list entry length constraint"),
+            8_192,
+            8_193,
+            scale_bound_violation("list max_item_length", 8_192, 8_193),
             |maximum| {
                 item_document(&format!(
                     "        type: list\n        prompt: Findings?\n        required: false\n        max_item_length: {maximum}\n",
+                ))
+            },
+        ),
+        bound_case(
+            "list total content",
+            1_000_000,
+            1_000_001,
+            scale_bound_violation("list max_total_length", 1_000_000, 1_000_001),
+            |maximum| {
+                item_document(&format!(
+                    "        type: list\n        prompt: Findings?\n        required: false\n        max_total_length: {maximum}\n",
                 ))
             },
         ),
@@ -1902,8 +1924,8 @@ fn every_fixture_bound_dimension_is_exercised_here_or_named_elsewhere() {
     let fixture = malformed_fixture();
     assert_eq!(
         fixture.boundary_cases.len(),
-        33,
-        "the fixture declares 33 bound dimensions"
+        34,
+        "the fixture declares 34 bound dimensions"
     );
 
     let mut exercised: Vec<(&str, usize, usize)> = document_bound_cases()
@@ -1954,5 +1976,65 @@ fn every_fixture_bound_dimension_is_exercised_here_or_named_elsewhere() {
         exercised_names.len() + referenced.len(),
         fixture.boundary_cases.len(),
         "coverage must account for every declared bound dimension exactly once",
+    );
+}
+
+/// ADR-0024 keeps one scale envelope in `podway-core` and requires the canonical schema, which
+/// cannot import a Rust constant, to be proved equal to it rather than merely reviewed.
+#[test]
+fn v2scl003_procedure_schema_bounds_equal_the_domain_scale_envelope() {
+    let schema: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../assets/schemas/procedure-v2.schema.json"
+    ))
+    .expect("procedure schema parses");
+    let defs = &schema["$defs"];
+
+    let text = &defs["text_item"]["properties"];
+    assert_eq!(
+        text["max_length"]["maximum"],
+        podway_core::MAX_TEXT_SCALARS_V2
+    );
+    assert_eq!(
+        text["min_length"]["maximum"],
+        podway_core::MAX_TEXT_SCALARS_V2
+    );
+    assert_eq!(
+        text["max_length"]["default"],
+        podway_core::DEFAULT_TEXT_MAX_SCALARS_V2
+    );
+
+    let list = &defs["list_item"]["properties"];
+    assert_eq!(
+        list["max_items"]["maximum"],
+        podway_core::MAX_LIST_ENTRIES_V2
+    );
+    assert_eq!(
+        list["min_items"]["maximum"],
+        podway_core::MAX_LIST_ENTRIES_V2
+    );
+    assert_eq!(
+        list["max_items"]["default"],
+        podway_core::DEFAULT_LIST_MAX_ITEMS_V2
+    );
+    assert_eq!(
+        list["max_item_length"]["maximum"],
+        podway_core::MAX_LIST_ENTRY_SCALARS_V2
+    );
+    assert_eq!(
+        list["max_item_length"]["default"],
+        podway_core::DEFAULT_LIST_MAX_ITEM_SCALARS_V2
+    );
+    assert_eq!(
+        list["max_total_length"]["maximum"],
+        podway_core::MAX_LIST_TOTAL_SCALARS_V2
+    );
+    assert_eq!(
+        list["max_total_length"]["default"],
+        podway_core::DEFAULT_LIST_MAX_TOTAL_SCALARS_V2
+    );
+
+    assert_eq!(
+        defs["items"]["maxItems"],
+        podway_core::MAX_ITEMS_PER_DEFINITION_V2
     );
 }

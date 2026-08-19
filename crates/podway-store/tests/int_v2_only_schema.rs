@@ -1191,3 +1191,28 @@ fn schema_v3_orphaned_v1_idempotency_receipt_is_rejected_without_mutation() {
         .unwrap();
     assert_eq!((version, receipts), (3, 1));
 }
+
+/// V2SCL-003: the structured scale rejection survives persistence, and a reconstructed list item
+/// takes the canonical `max_total_length` default when a stored snapshot predates the field.
+#[test]
+fn v2scl003_bound_exceeded_round_trips_and_list_reconstruction_defaults_the_total() {
+    let error = podway_core::attempt_content_bound_error_v2(20_000_000);
+    let persisted = podway_store::codec::PersistedDomainErrorV1::from_domain(&error);
+    let encoded = serde_json::to_value(&persisted).expect("persisted error serializes");
+    let decoded: podway_store::codec::PersistedDomainErrorV1 =
+        serde_json::from_value(encoded).expect("persisted error deserializes");
+    match decoded {
+        podway_store::codec::PersistedDomainErrorV1::BoundExceeded {
+            field,
+            actual,
+            maximum,
+            unit,
+        } => {
+            assert_eq!(field, podway_core::ATTEMPT_CONTENT_FIELD_V2);
+            assert_eq!(actual, 20_000_000);
+            assert_eq!(maximum, podway_core::MAX_ATTEMPT_CONTENT_SCALARS_V2);
+            assert_eq!(unit, podway_core::BoundUnitV2::Scalars.as_str());
+        }
+        other => panic!("the structured bound rejection did not survive persistence: {other:?}"),
+    }
+}

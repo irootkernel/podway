@@ -3,18 +3,18 @@
 use std::collections::BTreeSet;
 
 use crate::procedure::validate_media_type;
-use crate::{DomainError, ItemId, ItemTypeV1, RecordedItemValueV2, validate_text};
+use crate::{BoundUnitV2, DomainError, ItemId, ItemTypeV1, RecordedItemValueV2, validate_text};
 
 use super::invalid;
+use super::{
+    MAX_LIST_ENTRIES_V2, MAX_LIST_ENTRY_SCALARS_V2, MAX_LIST_TOTAL_SCALARS_V2, MAX_TEXT_SCALARS_V2,
+};
 
 const MAX_ITEM_PROMPT_CHARS: usize = 300;
 const MAX_ITEM_HELP_CHARS: usize = 1000;
-const MAX_V2_TEXT_LENGTH: u32 = 16_384;
 const MIN_V2_CHOICE_COUNT: usize = 1;
 const MAX_V2_CHOICE_COUNT: usize = 32;
 const MAX_V2_CHOICE_VALUE_CHARS: usize = 120;
-const MAX_V2_LIST_ENTRIES: u16 = 200;
-const MAX_V2_LIST_ENTRY_CHARS: u16 = 1_000;
 const MAX_V2_ARTIFACT_MEDIA_TYPES: usize = 64;
 
 /// The reusable node contract kind.
@@ -109,7 +109,15 @@ impl TextItemSpecV2 {
         max_length: u32,
         multiline: bool,
     ) -> Result<Self, DomainError> {
-        if min_length > max_length || max_length > MAX_V2_TEXT_LENGTH {
+        if max_length > MAX_TEXT_SCALARS_V2 {
+            return Err(DomainError::BoundExceeded {
+                field: "text max_length",
+                actual: u64::from(max_length),
+                maximum: u64::from(MAX_TEXT_SCALARS_V2),
+                unit: BoundUnitV2::Scalars,
+            });
+        }
+        if min_length > max_length {
             return Err(invalid("invalid text length constraints"));
         }
         Ok(Self {
@@ -209,6 +217,7 @@ pub struct ListItemSpecV2 {
     min_items: u16,
     max_items: u16,
     max_item_length: u16,
+    max_total_length: u32,
     unique: bool,
 }
 
@@ -218,24 +227,63 @@ impl ListItemSpecV2 {
         min_items: u16,
         max_items: u16,
         max_item_length: u16,
+        max_total_length: u32,
         unique: bool,
     ) -> Result<Self, DomainError> {
-        if max_items == 0 || max_items > MAX_V2_LIST_ENTRIES {
+        if max_items > MAX_LIST_ENTRIES_V2 {
+            return Err(DomainError::BoundExceeded {
+                field: "list max_items",
+                actual: u64::from(max_items),
+                maximum: u64::from(MAX_LIST_ENTRIES_V2),
+                unit: BoundUnitV2::Entries,
+            });
+        }
+        if max_items == 0 || min_items > max_items {
             return Err(invalid("invalid list item count constraints"));
         }
-        if min_items > max_items {
-            return Err(invalid("invalid list item count constraints"));
+        if max_item_length > MAX_LIST_ENTRY_SCALARS_V2 {
+            return Err(DomainError::BoundExceeded {
+                field: "list max_item_length",
+                actual: u64::from(max_item_length),
+                maximum: u64::from(MAX_LIST_ENTRY_SCALARS_V2),
+                unit: BoundUnitV2::Scalars,
+            });
         }
-        if max_item_length == 0 || max_item_length > MAX_V2_LIST_ENTRY_CHARS {
+        if max_item_length == 0 {
             return Err(invalid("invalid list entry length constraint"));
+        }
+        if max_total_length > MAX_LIST_TOTAL_SCALARS_V2 {
+            return Err(DomainError::BoundExceeded {
+                field: "list max_total_length",
+                actual: u64::from(max_total_length),
+                maximum: u64::from(MAX_LIST_TOTAL_SCALARS_V2),
+                unit: BoundUnitV2::Scalars,
+            });
+        }
+        // List entries are non-empty, so a declaration is satisfiable only when the total content
+        // ceiling admits at least one scalar per required entry.
+        if max_total_length == 0 || u32::from(min_items) > max_total_length {
+            return Err(invalid("invalid list total content constraint"));
         }
         Ok(Self {
             common,
             min_items,
             max_items,
             max_item_length,
+            max_total_length,
             unique,
         })
+    }
+
+    /// The effective total-content ceiling, which is the tighter of the declared total and the
+    /// product of the entry-count and per-entry ceilings.
+    pub const fn effective_total_length(&self) -> u32 {
+        let product = (self.max_items as u32).saturating_mul(self.max_item_length as u32);
+        if product < self.max_total_length {
+            product
+        } else {
+            self.max_total_length
+        }
     }
 
     pub fn common(&self) -> &ItemCommonV2 {
@@ -252,6 +300,10 @@ impl ListItemSpecV2 {
 
     pub const fn max_item_length(&self) -> u16 {
         self.max_item_length
+    }
+
+    pub const fn max_total_length(&self) -> u32 {
+        self.max_total_length
     }
 
     pub const fn unique(&self) -> bool {
@@ -342,6 +394,7 @@ impl ItemSpecV2 {
         min_items: u16,
         max_items: u16,
         max_item_length: u16,
+        max_total_length: u32,
         unique: bool,
     ) -> Result<Self, DomainError> {
         Ok(Self::List(ListItemSpecV2::new(
@@ -349,6 +402,7 @@ impl ItemSpecV2 {
             min_items,
             max_items,
             max_item_length,
+            max_total_length,
             unique,
         )?))
     }
@@ -411,11 +465,13 @@ impl ItemSpecV2 {
             }),
             Self::List(specification) => value.as_list().is_some_and(|values| {
                 let length = values.len();
+                let total: u64 = values.iter().map(|value| value.chars().count() as u64).sum();
                 length >= specification.min_items() as usize
                     && length <= specification.max_items() as usize
                     && values.iter().all(|value| {
                         value.chars().count() <= specification.max_item_length() as usize
                     })
+                    && total <= u64::from(specification.max_total_length())
                     && (!specification.unique()
                         || values.iter().collect::<BTreeSet<_>>().len() == values.len())
             }),

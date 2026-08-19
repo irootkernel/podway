@@ -17,11 +17,11 @@ pub const SMALL_CHANGE_V2_YAML: &str = include_str!("../../../assets/presets/sma
 pub const SW_DEV_V2_YAML: &str = include_str!("../../../assets/presets/sw-dev-v2.yaml");
 
 pub const BUG_FIX_V2_SHIPPED_DIGEST: &str =
-    "sha256:53e249a158bdbec6e8437595378509a35cb05288b48db9505cad25d04ef8f768";
+    "sha256:b07aa6c5a60da44b0ce1171f0de304b74602f38e2d12574ff36e923543583630";
 pub const SMALL_CHANGE_V2_SHIPPED_DIGEST: &str =
     "sha256:7b9855f12f85d7fb895dad592e8f0ed6ce46bf2bab34c4fcf7113dd91b111e96";
 pub const SW_DEV_V2_SHIPPED_DIGEST: &str =
-    "sha256:810d438bde83d3055d5d8ab49eec59d60f0c3de61610f74e73c5815fd0087854";
+    "sha256:23638c8bd9dc0f8b555e8c5f1d4bdeee1824e5d30c13b47e4faa3f4a4c70a492";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct PresetMetadata {

@@ -865,6 +865,12 @@ pub enum PersistedDomainErrorV1 {
         maximum: u64,
         actual: u64,
     },
+    BoundExceeded {
+        field: String,
+        actual: u64,
+        maximum: u64,
+        unit: String,
+    },
     InvalidUuid {
         field: String,
     },
@@ -920,6 +926,17 @@ impl PersistedDomainErrorV1 {
                 field: (*field).to_owned(),
                 maximum: u64::try_from(*maximum).expect("usize fits in u64"),
                 actual: u64::try_from(*actual).expect("usize fits in u64"),
+            },
+            DomainError::BoundExceeded {
+                field,
+                actual,
+                maximum,
+                unit,
+            } => Self::BoundExceeded {
+                field: (*field).to_owned(),
+                actual: *actual,
+                maximum: *maximum,
+                unit: unit.as_str().to_owned(),
             },
             DomainError::InvalidUuid { field } => Self::InvalidUuid {
                 field: (*field).to_owned(),

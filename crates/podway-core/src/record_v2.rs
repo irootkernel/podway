@@ -14,23 +14,26 @@ use std::fmt;
 
 use crate::aggregate::ArtifactValueV1;
 use crate::procedure::{ItemTypeV1, validate_text};
-use crate::procedure_v2::TransitionEffectV2;
+use crate::procedure_v2::{
+    MAX_ATTEMPT_CONTENT_SCALARS_V2, MAX_ITEMS_PER_DEFINITION_V2, MAX_LIST_ENTRIES_V2,
+    MAX_LIST_ENTRY_SCALARS_V2, MAX_TEXT_SCALARS_V2, TransitionEffectV2,
+};
 use crate::session_v2::{AttemptNumberV2, GoalRevisionNumberV2, TraceSequenceV2};
 use crate::{
-    AttemptId, DomainError, GraphNodeId, ItemId, NodeDefinitionId, OptionId, ProcedureSnapshotId,
-    Revision, SessionId, Sha256Digest, UnixMillis,
+    AttemptId, BoundUnitV2, DomainError, GraphNodeId, ItemId, NodeDefinitionId, OptionId,
+    ProcedureSnapshotId, Revision, SessionId, Sha256Digest, UnixMillis,
 };
 
 // Scalar bounds fixed by dossier sections 5.1 and 6.4.
 const MAX_RECORD_REASON_CHARS: usize = 2_000;
 const MAX_ACTOR_ATTRIBUTION_CHARS: usize = 256;
 
-// Recorded-item bounds fixed by dossier section 5.1 (v2 hard limits).
-const MAX_RECORDED_TEXT_CHARS: usize = 16_384;
+// Recorded-item bounds come from the single scale envelope owned by `procedure_v2::limits`.
+const MAX_RECORDED_TEXT_CHARS: usize = MAX_TEXT_SCALARS_V2 as usize;
 const MAX_RECORDED_CHOICE_CHARS: usize = 120;
-const MAX_RECORDED_LIST_ENTRIES: usize = 200;
-const MAX_RECORDED_LIST_ENTRY_CHARS: usize = 1_000;
-const MAX_RECORDED_ITEMS_PER_ATTEMPT: usize = 64;
+const MAX_RECORDED_LIST_ENTRIES: usize = MAX_LIST_ENTRIES_V2 as usize;
+const MAX_RECORDED_LIST_ENTRY_CHARS: usize = MAX_LIST_ENTRY_SCALARS_V2 as usize;
+const MAX_RECORDED_ITEMS_PER_ATTEMPT: usize = MAX_ITEMS_PER_DEFINITION_V2;
 
 // Evidence and record collection bounds fixed by dossier sections 5.1 and 6.4.
 const MAX_RESOLVED_REFERENCES: usize = 8;
@@ -274,7 +277,12 @@ pub struct RecordedItemSetV2 {
 impl RecordedItemSetV2 {
     pub fn new(items: Vec<RecordedItemV2>) -> Result<Self, DomainError> {
         if items.len() > MAX_RECORDED_ITEMS_PER_ATTEMPT {
-            return Err(invalid("an attempt holds at most 64 recorded items"));
+            return Err(DomainError::BoundExceeded {
+                field: "attempt recorded items",
+                actual: items.len() as u64,
+                maximum: MAX_RECORDED_ITEMS_PER_ATTEMPT as u64,
+                unit: BoundUnitV2::Items,
+            });
         }
         let mut seen = std::collections::BTreeSet::new();
         for item in &items {
@@ -282,13 +290,68 @@ impl RecordedItemSetV2 {
                 return Err(invalid("recorded item identifiers must be unique"));
             }
         }
+        let content = attempt_content_scalars_v2(&items);
+        if content > MAX_ATTEMPT_CONTENT_SCALARS_V2 {
+            return Err(attempt_content_bound_error_v2(content));
+        }
         Ok(Self { items })
     }
 
     pub fn items(&self) -> &[RecordedItemV2] {
         &self.items
     }
+
+    /// The recorded text and list-entry content this set accumulates, in Unicode scalars.
+    pub fn content_scalars(&self) -> u64 {
+        attempt_content_scalars_v2(&self.items)
+    }
 }
+
+/// The recorded text and list-entry content of one attempt, in Unicode scalars.
+///
+/// Only text values and list entries count. Reasons, blockers, goal criteria, choice values,
+/// integers, and artifact metadata are excluded, so the aggregate measures exactly the content a
+/// consumer may later page back through `evidence.read`.
+pub fn attempt_content_scalars_v2(items: &[RecordedItemV2]) -> u64 {
+    recorded_content_scalars_v2(items.iter().map(RecordedItemV2::value))
+}
+
+/// The recorded text and list-entry content of any sequence of recorded values, in Unicode scalars.
+///
+/// Persistence holds item values in slots rather than in a [`RecordedItemSetV2`], so both the live
+/// mutation path and the reconstruction path measure the aggregate through this one rule.
+pub fn recorded_content_scalars_v2<'value>(
+    values: impl IntoIterator<Item = &'value RecordedItemValueV2>,
+) -> u64 {
+    values
+        .into_iter()
+        .map(|value| {
+            if let Some(text) = value.as_text() {
+                text.chars().count() as u64
+            } else if let Some(entries) = value.as_list() {
+                entries
+                    .iter()
+                    .map(|entry| entry.chars().count() as u64)
+                    .sum()
+            } else {
+                0
+            }
+        })
+        .sum()
+}
+
+/// The exact structured rejection for an attempt whose recorded content exceeds the aggregate.
+pub const fn attempt_content_bound_error_v2(actual: u64) -> DomainError {
+    DomainError::BoundExceeded {
+        field: ATTEMPT_CONTENT_FIELD_V2,
+        actual,
+        maximum: MAX_ATTEMPT_CONTENT_SCALARS_V2,
+        unit: BoundUnitV2::Scalars,
+    }
+}
+
+/// The exact field name the per-attempt content aggregate reports.
+pub const ATTEMPT_CONTENT_FIELD_V2: &str = "attempt recorded content";
 
 /// The shared resolved snapshot data for a resolved or skipped evidence reference: the source
 /// attempt identity, the digest attesting to its complete recorded item values, and the resolution
@@ -828,9 +891,9 @@ mod tests {
     #[test]
     fn recorded_text_accepts_empty_and_at_limit_but_not_over() {
         assert!(RecordedItemValueV2::text("").is_ok());
-        assert!(RecordedItemValueV2::text("t".repeat(16_384)).is_ok());
+        assert!(RecordedItemValueV2::text("t".repeat(65_536)).is_ok());
         assert_eq!(
-            RecordedItemValueV2::text("t".repeat(16_385)).unwrap_err(),
+            RecordedItemValueV2::text("t".repeat(65_537)).unwrap_err(),
             invalid("recorded text value")
         );
     }
@@ -847,18 +910,18 @@ mod tests {
             invalid("recorded choice value")
         );
         assert!(RecordedItemValueV2::list(Vec::new()).is_ok());
-        assert!(RecordedItemValueV2::list(vec!["x".to_owned(); 200]).is_ok());
+        assert!(RecordedItemValueV2::list(vec!["x".to_owned(); 1_000]).is_ok());
         assert_eq!(
-            RecordedItemValueV2::list(vec!["x".to_owned(); 201]).unwrap_err(),
+            RecordedItemValueV2::list(vec!["x".to_owned(); 1_001]).unwrap_err(),
             invalid("recorded list value exceeds the v2 entry maximum")
         );
         assert_eq!(
             RecordedItemValueV2::list(vec!["".to_owned()]).unwrap_err(),
             invalid("recorded list entry")
         );
-        assert!(RecordedItemValueV2::list(vec!["x".repeat(1_000)]).is_ok());
+        assert!(RecordedItemValueV2::list(vec!["x".repeat(8_192)]).is_ok());
         assert_eq!(
-            RecordedItemValueV2::list(vec!["x".repeat(1_001)]).unwrap_err(),
+            RecordedItemValueV2::list(vec!["x".repeat(8_193)]).unwrap_err(),
             invalid("recorded list entry")
         );
     }
@@ -883,11 +946,78 @@ mod tests {
             RecordedItemSetV2::new(vec![make("dup"), make("dup")]).unwrap_err(),
             invalid("recorded item identifiers must be unique")
         );
-        let too_many: Vec<RecordedItemV2> = (0..65).map(|i| make(&format!("i-{i}"))).collect();
+        let too_many: Vec<RecordedItemV2> = (0..129).map(|i| make(&format!("i-{i}"))).collect();
         assert_eq!(
             RecordedItemSetV2::new(too_many).unwrap_err(),
-            invalid("an attempt holds at most 64 recorded items")
+            DomainError::BoundExceeded {
+                field: "attempt recorded items",
+                actual: 129,
+                maximum: 128,
+                unit: BoundUnitV2::Items,
+            }
         );
+    }
+
+    #[test]
+    fn v2scl003_recorded_item_set_enforces_the_per_attempt_content_aggregate() {
+        let text_item = |id: &str, scalars: usize| {
+            RecordedItemV2::new(
+                ItemId::new(id).unwrap(),
+                RecordedItemValueV2::text("x".repeat(scalars)).unwrap(),
+            )
+        };
+        let list_item = |id: &str, entries: usize, scalars: usize| {
+            RecordedItemV2::new(
+                ItemId::new(id).unwrap(),
+                RecordedItemValueV2::list(vec!["y".repeat(scalars); entries]).unwrap(),
+            )
+        };
+
+        // Only text values and list entries count toward the aggregate.
+        let counted = vec![text_item("note", 10), list_item("values", 3, 4)];
+        assert_eq!(attempt_content_scalars_v2(&counted), 22);
+        let set = RecordedItemSetV2::new(counted).expect("aggregate within bounds");
+        assert_eq!(set.content_scalars(), 22);
+
+        let confirm =
+            RecordedItemV2::new(ItemId::new("done").unwrap(), RecordedItemValueV2::confirm());
+        assert_eq!(attempt_content_scalars_v2(std::slice::from_ref(&confirm)), 0);
+
+        // 128 maximal text values stay inside the aggregate, so text alone can never trip it.
+        let maximal_text: Vec<RecordedItemV2> = (0..MAX_RECORDED_ITEMS_PER_ATTEMPT)
+            .map(|index| text_item(&format!("item-{index}"), MAX_RECORDED_TEXT_CHARS))
+            .collect();
+        assert!(attempt_content_scalars_v2(&maximal_text) <= MAX_ATTEMPT_CONTENT_SCALARS_V2);
+        assert!(RecordedItemSetV2::new(maximal_text).is_ok());
+
+        // Maximal lists do exceed it: three of them alone pass the 16,777,216-scalar aggregate.
+        let over: Vec<RecordedItemV2> = (0..3)
+            .map(|index| {
+                list_item(
+                    &format!("list-{index}"),
+                    MAX_RECORDED_LIST_ENTRIES,
+                    MAX_RECORDED_LIST_ENTRY_CHARS,
+                )
+            })
+            .collect();
+        assert!(attempt_content_scalars_v2(&over) > MAX_ATTEMPT_CONTENT_SCALARS_V2);
+        assert_eq!(
+            RecordedItemSetV2::new(over).unwrap_err(),
+            attempt_content_bound_error_v2(3 * 1_000 * 8_192)
+        );
+
+        // Two maximal lists remain admissible, so the boundary is exercised from both sides.
+        let under: Vec<RecordedItemV2> = (0..2)
+            .map(|index| {
+                list_item(
+                    &format!("list-{index}"),
+                    MAX_RECORDED_LIST_ENTRIES,
+                    MAX_RECORDED_LIST_ENTRY_CHARS,
+                )
+            })
+            .collect();
+        assert!(attempt_content_scalars_v2(&under) <= MAX_ATTEMPT_CONTENT_SCALARS_V2);
+        assert!(RecordedItemSetV2::new(under).is_ok());
     }
 
     #[test]

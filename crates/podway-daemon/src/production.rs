@@ -2483,6 +2483,26 @@ fn unsupported_v2_capability_failure(capability: &'static str) -> DispatchFailur
 #[cfg(test)]
 fn map_preview_domain_error(error: DomainError, _command: &SliceCommandV1) -> DispatchFailureV1 {
     match error {
+        DomainError::BoundExceeded {
+            field,
+            actual,
+            maximum,
+            unit,
+        } if field == podway_core::ATTEMPT_CONTENT_FIELD_V2
+            && unit == podway_core::BoundUnitV2::Scalars =>
+        {
+            DispatchFailureV1::new(DispatchFailureKindV1::AttemptContentLimitExceeded).with_details(
+                DispatchErrorDetailsV1::default().with_attempt_content_limit_exceeded(
+                    field.to_owned(),
+                    actual,
+                    maximum,
+                    unit.as_str().to_owned(),
+                ),
+            )
+        }
+        DomainError::BoundExceeded { .. } => {
+            DispatchFailureV1::new(DispatchFailureKindV1::ItemConstraintFailed)
+        }
         DomainError::PreconditionFailed { expected, actual } => {
             DispatchFailureV1::new(DispatchFailureKindV1::SessionRevisionConflict).with_details(
                 DispatchErrorDetailsV1::default()
@@ -4644,6 +4664,30 @@ fn map_terminal_domain_error(
                     .with_attempt_mismatch(expected.clone(), actual.clone()),
             )
         }
+        // Only the per-attempt content aggregate maps to ATTEMPT_CONTENT_LIMIT_EXCEEDED, whose
+        // closed details fix `unit` to scalars. Every other scale bound is a declaration-time
+        // rejection that a coherent admitted snapshot cannot reach, so it stays a constraint
+        // failure rather than borrowing a code whose schema it would violate.
+        PersistedDomainErrorV1::BoundExceeded {
+            field,
+            actual,
+            maximum,
+            unit,
+        } if field == podway_core::ATTEMPT_CONTENT_FIELD_V2
+            && unit == podway_core::BoundUnitV2::Scalars.as_str() =>
+        {
+            DispatchFailureV1::new(DispatchFailureKindV1::AttemptContentLimitExceeded).with_details(
+                DispatchErrorDetailsV1::default().with_attempt_content_limit_exceeded(
+                    field.clone(),
+                    *actual,
+                    *maximum,
+                    unit.clone(),
+                ),
+            )
+        }
+        PersistedDomainErrorV1::BoundExceeded { .. } => {
+            DispatchFailureV1::new(DispatchFailureKindV1::ItemConstraintFailed)
+        }
         PersistedDomainErrorV1::ItemNotFound { .. } => {
             DispatchFailureV1::new(DispatchFailureKindV1::ItemNotFound)
         }
@@ -5520,6 +5564,60 @@ mod tests {
         PersistedResponseContextV1, PersistedTerminalJobProjectionV1, PersistedTerminalJobStateV1,
         PersistedTerminalSessionProjectionV1, RevisionAttemptItemPreconditionsV1,
     };
+
+    /// V2SCL-003: only the per-attempt content aggregate becomes ATTEMPT_CONTENT_LIMIT_EXCEEDED,
+    /// whose closed details fix `unit` to scalars. Any other scale bound would violate that schema,
+    /// so it stays a constraint failure.
+    #[test]
+    fn v2scl003_only_the_attempt_aggregate_surfaces_the_content_limit_code() {
+        let aggregate = podway_store::codec::PersistedDomainErrorV1::from_domain(
+            &podway_core::attempt_content_bound_error_v2(20_000_000),
+        );
+        let failure = map_terminal_domain_error(&aggregate, TerminalCommandKindV1::ItemMutation);
+        assert_eq!(
+            failure.kind(),
+            DispatchFailureKindV1::AttemptContentLimitExceeded
+        );
+
+        let details = DispatchErrorDetailsV1::default()
+            .with_attempt_content_limit_exceeded(
+                podway_core::ATTEMPT_CONTENT_FIELD_V2.to_owned(),
+                20_000_000,
+                podway_core::MAX_ATTEMPT_CONTENT_SCALARS_V2,
+                podway_core::BoundUnitV2::Scalars.as_str().to_owned(),
+            )
+            .into_json(false);
+        assert_eq!(
+            details["schema"],
+            json!("podway.v2-runtime-error-details/v1")
+        );
+        assert_eq!(details["kind"], json!("ATTEMPT_CONTENT_LIMIT_EXCEEDED"));
+        assert_eq!(details["unit"], json!("scalars"));
+        assert_eq!(details["actual"], json!(20_000_000u64));
+        assert_eq!(
+            details["maximum"],
+            json!(podway_core::MAX_ATTEMPT_CONTENT_SCALARS_V2)
+        );
+        assert_eq!(
+            details["field"],
+            json!(podway_core::ATTEMPT_CONTENT_FIELD_V2)
+        );
+
+        let declaration = podway_store::codec::PersistedDomainErrorV1::from_domain(
+            &podway_core::DomainError::BoundExceeded {
+                field: "list max_items",
+                actual: 1_001,
+                maximum: 1_000,
+                unit: podway_core::BoundUnitV2::Entries,
+            },
+        );
+        let other = map_terminal_domain_error(&declaration, TerminalCommandKindV1::ItemMutation);
+        assert_ne!(
+            other.kind(),
+            DispatchFailureKindV1::AttemptContentLimitExceeded
+        );
+        assert_eq!(other.kind(), DispatchFailureKindV1::ItemConstraintFailed);
+    }
 
     fn fixture_job(sequence: u64) -> JobReceiptV1 {
         JobReceiptV1::new(

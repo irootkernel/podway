@@ -139,8 +139,7 @@ not create a contract mismatch.
 | `AUT-ID-009` | `begin`, terminal disposition, eligible or force replacement, and eligible or force reset MUST enforce the exact observed workspace UUID, session ID, and session revision; begin and disposition MUST NOT accept an attempt fence. |
 
 `podway record --stdin` consumes only closed
-`podway.item-record-many-input/v1` JSON bounded to 1 MiB and, once `V2SCL-003`
-raises the decoder that still enforces 1..64, 1..128 unique item
+`podway.item-record-many-input/v1` JSON bounded to 1 MiB and 1..128 unique item
 operations. Each operation contains exactly one typed complete record value or
 `clear: true`. Operations and per-item outcomes are canonicalized by item ID.
 The command uses the normal durable admission, detached execution, idempotent

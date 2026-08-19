@@ -72,7 +72,8 @@
                 "REWORK_TOPOLOGY_CONFUSING",
                 "NO_REACTIVATION_PATH",
                 "GOAL_REVISION_TARGET_UNSAFE",
-                "MULTIPLE_GOAL_ASSESSMENT_SOURCES"
+                "MULTIPLE_GOAL_ASSESSMENT_SOURCES",
+                "ATTEMPT_CONTENT_BUDGET_EXCEEDED"
               ]
             },
             "severity": { "const": "warning" }

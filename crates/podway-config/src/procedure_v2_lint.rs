@@ -29,8 +29,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use podway_core::{
-    AuthoringDiagnostic, AuthoringDiagnosticCode, DecisionDefinitionV2, DecisionPlacementV2,
-    GraphPlacementV2, TransitionEffectV2,
+    ActionDefinitionV2, AuthoringDiagnostic, AuthoringDiagnosticCode, DecisionDefinitionV2,
+    DecisionPlacementV2, GraphPlacementV2, ItemSpecV2, MAX_ATTEMPT_CONTENT_SCALARS_V2,
+    TransitionEffectV2,
 };
 
 use crate::procedure_v2_authoring::{
@@ -165,6 +166,7 @@ impl<'a> Lint<'a, '_> {
         self.no_reactivation_path();
         self.goal_revision_target_unsafe();
         self.multiple_goal_assessment_sources();
+        self.attempt_content_budget();
 
         let mut findings = self.findings;
         findings.sort_by(|left, right| {
@@ -655,6 +657,52 @@ impl<'a> Lint<'a, '_> {
     // Rule 16: LARGE_OPTION_SET
     // -----------------------------------------------------------------------------------------
 
+    /// Warns when an action definition's declared worst-case recorded content exceeds the
+    /// per-attempt aggregate of ADR-0024, and names the items that dominate it.
+    ///
+    /// This is advisory rather than a vet finding: the aggregate is a runtime ceiling, a real
+    /// attempt rarely records every declared maximum, and a vet finding would make `session.start`
+    /// reject the Procedure outright, which ADR-0024 explicitly does not want.
+    fn attempt_content_budget(&mut self) {
+        for (id, action) in self.action_definitions() {
+            let mut charges: Vec<(u64, &str)> = action
+                .items()
+                .iter()
+                .filter_map(|item| match item {
+                    ItemSpecV2::Text(text) => {
+                        Some((u64::from(text.max_length()), item.id().as_str()))
+                    }
+                    ItemSpecV2::List(list) => {
+                        Some((u64::from(list.effective_total_length()), item.id().as_str()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            let total: u64 = charges.iter().map(|(charge, _)| *charge).sum();
+            if total <= MAX_ATTEMPT_CONTENT_SCALARS_V2 {
+                continue;
+            }
+            charges.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(right.1)));
+            let contributors = charges
+                .iter()
+                .take(3)
+                .map(|(charge, item)| format!("`{item}` at {charge}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let path = definition_path(id).child_key("items");
+            let finding = self
+                .diagnostic(
+                    AuthoringDiagnosticCode::AttemptContentBudgetExceeded,
+                    &path,
+                    format!(
+                        "The action definition `{id}` declares {total} scalars of worst-case recorded content, over the {MAX_ATTEMPT_CONTENT_SCALARS_V2}-scalar per-attempt aggregate. The largest contributors are {contributors}."
+                    ),
+                )
+                .with_node_definition_id(id);
+            self.findings.push(finding);
+        }
+    }
+
     fn large_option_sets(&mut self) {
         for (id, decision) in self.decision_definitions() {
             let count = decision.options().len();
@@ -1019,6 +1067,17 @@ impl<'a> Lint<'a, '_> {
     }
 
     /// Decision definitions in author order, with their identifiers.
+    fn action_definitions(&self) -> Vec<(&'a str, &'a ActionDefinitionV2)> {
+        self.parsed
+            .node_definitions()
+            .iter()
+            .filter_map(|definition| match definition {
+                ParsedNodeDefinition::Action(action) => Some((definition.id().as_str(), action)),
+                ParsedNodeDefinition::Decision(_) => None,
+            })
+            .collect()
+    }
+
     fn decision_definitions(&self) -> Vec<(&'a str, &'a DecisionDefinitionV2)> {
         self.parsed
             .node_definitions()

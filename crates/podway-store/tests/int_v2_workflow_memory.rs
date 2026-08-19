@@ -3693,7 +3693,7 @@ fn active_item_batch_is_bounded_ordered_atomic_and_advances_the_session_once() {
         .collect::<Vec<_>>();
     assert!(matches!(
         next.mutate_active_items_v2(&attempt_id(1), &excessive, UnixMillis::new(12)),
-        Err(GraphMutationErrorV2::TooManyItemMutations { maximum: 64 })
+        Err(GraphMutationErrorV2::TooManyItemMutations { maximum: 128 })
     ));
 }
 
@@ -3907,4 +3907,60 @@ fn skipped_optional_evidence_round_trips_as_empty_recorded_state() {
         ResolvedEvidenceReferenceV2::Skipped(_)
     ));
     assert!(readback[0].items().items().is_empty());
+}
+
+/// V2SCL-003: the per-attempt content aggregate is measured over the post-mutation slot set, so a
+/// recorded text value and list entries are counted while a confirm, choice, integer, or artifact
+/// value is not. The rejection itself is one comparison of this measurement against the shared
+/// maximum, and the comparison's operand is what this test pins.
+#[test]
+fn v2scl003_attempt_content_is_measured_over_the_post_mutation_slots() {
+    let mut state = initial_state();
+    let mutations: Vec<(&str, ActiveItemMutationV2)> = vec![
+        (
+            "z-summary",
+            ActiveItemMutationV2::Set {
+                value: "abcdefghij".to_owned(),
+            },
+        ),
+        (
+            "m-tags",
+            ActiveItemMutationV2::Add {
+                value: "alpha".to_owned(),
+            },
+        ),
+        (
+            "m-tags",
+            ActiveItemMutationV2::Add {
+                value: "beta".to_owned(),
+            },
+        ),
+        ("c-confirm", ActiveItemMutationV2::Check),
+        (
+            "b-choice",
+            ActiveItemMutationV2::Set {
+                value: "green".to_owned(),
+            },
+        ),
+    ];
+    let mut revisions = std::collections::BTreeMap::<&str, Revision>::new();
+    for (offset, (item_id, mutation)) in mutations.into_iter().enumerate() {
+        let expected = revisions.get(item_id).copied().unwrap_or(Revision::ZERO);
+        let outcome = state
+            .mutate_active_item_v2(
+                &attempt_id(1),
+                &item(item_id),
+                expected,
+                mutation,
+                UnixMillis::new(11 + u64::try_from(offset).unwrap()),
+            )
+            .expect("each bounded mutation is admitted");
+        revisions.insert(item_id, outcome.item_revision());
+        state = outcome.into_state();
+    }
+
+    // 10 text scalars plus the 5 and 4 scalar list entries. The confirm and choice values
+    // contribute nothing, exactly as the aggregate's definition requires.
+    let attempt = &state.workflow_memory().attempts()[0];
+    assert_eq!(attempt.content_scalars(), 19);
 }

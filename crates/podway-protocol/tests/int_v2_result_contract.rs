@@ -1272,7 +1272,7 @@ fn v2ctr003_authoring_diagnostic_is_standalone_closed_and_bounded() {
         })
         .collect::<BTreeSet<_>>();
     assert_eq!(schema_pairs, catalog_pairs);
-    assert_eq!(schema_pairs.len(), 53);
+    assert_eq!(schema_pairs.len(), 54);
 
     for (code, severity) in &catalog_pairs {
         diagnostic["code"] = json!(code);

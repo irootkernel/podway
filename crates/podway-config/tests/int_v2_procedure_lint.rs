@@ -634,7 +634,7 @@ fn v2aut004_every_emitted_diagnostic_is_a_catalog_warning_with_a_valid_shape() {
         .filter(|code| code.severity() == AuthoringSeverity::Warning)
         .map(|code| code.as_str())
         .collect::<BTreeSet<_>>();
-    assert_eq!(warnings.len(), 23);
+    assert_eq!(warnings.len(), 24);
 
     let mut seen = BTreeSet::new();
     for source in every_firing_document() {
@@ -643,7 +643,7 @@ fn v2aut004_every_emitted_diagnostic_is_a_catalog_warning_with_a_valid_shape() {
             assert_eq!(diagnostic.severity(), AuthoringSeverity::Warning);
             assert!(
                 warnings.contains(diagnostic.code().as_str()),
-                "{} is not one of the 23 lint warnings",
+                "{} is not one of the 24 lint warnings",
                 diagnostic.code().as_str()
             );
             assert_eq!(diagnostic.source_path(), "workflow.yaml");
@@ -748,7 +748,25 @@ fn every_firing_document() -> Vec<String> {
         ),
         unsafe_revision_target_document(),
         multiple_assessment_sources_document(2),
+        attempt_content_budget_document(),
     ]
+}
+
+/// One action definition whose declared worst-case recorded content passes the per-attempt
+/// aggregate. Each list charges its effective total of 1,000,000 scalars, so 17 lists is the
+/// smallest count that crosses 16,777,216; the fixture uses 21 to stay clear of the boundary.
+fn attempt_content_budget_document() -> String {
+    let items: String = (0..21)
+        .map(|index| {
+            format!(
+                "      - id: findings-{index:02}\n        type: list\n        prompt: Record every finding.\n        required: false\n        max_items: 1000\n        max_item_length: 8192\n        max_total_length: 1000000\n"
+            )
+        })
+        .collect();
+    CLEAN_YAML.replace(
+        "    items:\n      - id: notes\n        type: text\n        prompt: Record the gathered notes.\n        required: true\n",
+        &format!("    items:\n{items}"),
+    )
 }
 
 // ---------------------------------------------------------------------------------------------

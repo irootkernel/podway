@@ -390,12 +390,16 @@ fn readback_item_charge(item: &ItemSpecV2) -> u64 {
         }
         ItemSpecV2::Integer(_) => ("integer", fixed_field(MAX_I64_BYTES)),
         ItemSpecV2::List(list) => {
+            // The effective content ceiling is the tighter of the entry-count product and the
+            // declared total, so a loose `max_total_length` never inflates the charge and a tight
+            // one never under-charges the per-entry overhead that still applies to every entry.
             let entries = u64::from(list.max_items());
-            let one = add(
-                ARRAY_ELEMENT_OVERHEAD,
-                string_bytes(u64::from(list.max_item_length())),
-            );
-            ("list", add(array_field(), entries.saturating_mul(one)))
+            let content = u64::from(list.effective_total_length());
+            let overhead = entries.saturating_mul(ARRAY_ELEMENT_OVERHEAD);
+            (
+                "list",
+                add(array_field(), add(overhead, string_bytes(content))),
+            )
         }
         ItemSpecV2::Artifact(_) => ("artifact", artifact_value_charge()),
     };
@@ -541,6 +545,35 @@ mod tests {
     }
 
     #[test]
+    fn v2scl003_a_binding_total_length_lowers_the_list_charge() {
+        // A loose total leaves the entry product binding, so the charge equals the historical
+        // per-entry accumulation. A tight total binds instead and must charge strictly less.
+        let loose = ItemSpecV2::list(common("list"), 0, 50, 500, 1_000_000, true).expect("loose");
+        let tight = ItemSpecV2::list(common("list"), 0, 50, 500, 1_000, true).expect("tight");
+        let loose_charge = readback_item_charge(&loose);
+        let tight_charge = readback_item_charge(&tight);
+        assert!(tight_charge < loose_charge);
+
+        // The loose charge reproduces the superseded formula exactly, so raising the bound did not
+        // silently re-price any Procedure whose total ceiling does not bind.
+        let entries = 50_u64;
+        let superseded = add(
+            ARRAY_ELEMENT_OVERHEAD,
+            add(
+                string_field(MAX_IDENTIFIER_CHARS),
+                add(
+                    string_field(actual_chars("list")),
+                    add(
+                        array_field(),
+                        entries.saturating_mul(add(ARRAY_ELEMENT_OVERHEAD, string_bytes(500))),
+                    ),
+                ),
+            ),
+        );
+        assert_eq!(loose_charge, superseded);
+    }
+
+    #[test]
     fn v2dog001_sw_dev_preset_records_budget_headroom() {
         let source = include_bytes!("../../../assets/presets/sw-dev-v2.yaml");
         let ParsedProcedure::V2(parsed) =
@@ -622,7 +655,7 @@ mod tests {
         let choice = ItemSpecV2::choice(common("choice"), vec!["x".into(), "zz".into()])
             .expect("choice item");
         let integer = ItemSpecV2::integer(common("integer"), None, None).expect("integer item");
-        let list = ItemSpecV2::list(common("list"), 0, 2, 3, false).expect("list item");
+        let list = ItemSpecV2::list(common("list"), 0, 2, 3, 1_000_000, false).expect("list item");
         let artifact = ItemSpecV2::artifact(common("artifact"), Vec::new()).expect("artifact item");
 
         assert_eq!(readback_item_charge(&confirm), 631);

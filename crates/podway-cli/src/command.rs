@@ -6537,7 +6537,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Usage:\n  podway clear <item-id> [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-attempt <uuid>] [--if-item-revision <n>]\n\nExample:\n  podway clear constraints"
         }
         "item.record_many" => {
-            "Usage:\n  podway record --stdin [--worktree <path>] [--json] [--detach]\n\nThe closed JSON stdin document supplies workspace_uuid, session_id, session_revision, attempt_id, idempotency_key, and 1..64 unique typed operations.\n\nExample:\n  podway record --stdin < record.json"
+            "Usage:\n  podway record --stdin [--worktree <path>] [--json] [--detach]\n\nThe closed JSON stdin document supplies workspace_uuid, session_id, session_revision, attempt_id, idempotency_key, and 1..128 unique typed operations.\n\nExample:\n  podway record --stdin < record.json"
         }
         "job.list" => {
             "Usage:\n  podway job list [--state <queued|running|succeeded|failed|cancelled>]\n\nExample:\n  podway job list --state queued"

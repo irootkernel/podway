@@ -317,11 +317,13 @@ fn item_value(item: &ItemSpecV2) -> AuthoringValue {
         ItemSpecV2::List(specification) => {
             value.text("type", "list");
             common_item_fields(&mut value, item.common());
-            // Materialized defaults: min_items 0, max_items 50, max_item_length 500, unique true.
+            // Materialized defaults: min_items 0, max_items 50, max_item_length 500,
+            // max_total_length 1,000,000, unique true.
             value
                 .integer("min_items", specification.min_items())
                 .integer("max_items", specification.max_items())
                 .integer("max_item_length", specification.max_item_length())
+                .integer("max_total_length", specification.max_total_length())
                 .flag("unique", specification.unique());
         }
         ItemSpecV2::Artifact(specification) => {

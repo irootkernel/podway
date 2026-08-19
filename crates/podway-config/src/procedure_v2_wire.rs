@@ -15,12 +15,17 @@ use serde::de::{Deserializer, MapAccess, Visitor};
 /// The exact Procedure v2 schema identifier.
 pub(crate) const PROCEDURE_SCHEMA_V2: &str = podway_core::PROCEDURE_SCHEMA_V2;
 
-const DEFAULT_TEXT_MAX_LENGTH: u32 = 4_000;
-const DEFAULT_LIST_MAX_ITEMS: u16 = 50;
-const DEFAULT_LIST_MAX_ITEM_LENGTH: u16 = 500;
+const DEFAULT_TEXT_MAX_LENGTH: u32 = podway_core::DEFAULT_TEXT_MAX_SCALARS_V2;
+const DEFAULT_LIST_MAX_ITEMS: u16 = podway_core::DEFAULT_LIST_MAX_ITEMS_V2;
+const DEFAULT_LIST_MAX_ITEM_LENGTH: u16 = podway_core::DEFAULT_LIST_MAX_ITEM_SCALARS_V2;
+const DEFAULT_LIST_MAX_TOTAL_LENGTH: u32 = podway_core::DEFAULT_LIST_MAX_TOTAL_SCALARS_V2;
 
 const fn default_text_max_length() -> u32 {
     DEFAULT_TEXT_MAX_LENGTH
+}
+
+const fn default_list_max_total_length() -> u32 {
+    DEFAULT_LIST_MAX_TOTAL_LENGTH
 }
 const fn default_list_max_items() -> u16 {
     DEFAULT_LIST_MAX_ITEMS
@@ -194,6 +199,8 @@ pub(crate) enum ItemWire {
         max_items: u16,
         #[serde(default = "default_list_max_item_length")]
         max_item_length: u16,
+        #[serde(default = "default_list_max_total_length")]
+        max_total_length: u32,
         #[serde(default = "default_true")]
         unique: bool,
     },

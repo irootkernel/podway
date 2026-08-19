@@ -12,11 +12,13 @@ mod definitions;
 mod goal;
 mod graph;
 mod items;
+mod limits;
 
 pub use definitions::*;
 pub use goal::*;
 pub use graph::*;
 pub use items::*;
+pub use limits::*;
 
 use crate::DomainError;
 

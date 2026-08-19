@@ -249,6 +249,20 @@ fn map_domain_error(error: DomainError) -> ConfigError {
             field: DOMAIN_SENTINEL_FIELD,
             reason,
         },
+        // ADR-0024 requires a bound failure to name the constraint it violated with the observed
+        // value and the maximum, so the structured domain rejection keeps those numbers instead of
+        // collapsing into a static sentence.
+        DomainError::BoundExceeded {
+            field,
+            actual,
+            maximum,
+            ..
+        } => ConfigError::OutOfBounds {
+            field,
+            min: 0,
+            max: usize::try_from(maximum).unwrap_or(usize::MAX),
+            actual: usize::try_from(actual).unwrap_or(usize::MAX),
+        },
         other => ConfigError::InvalidDocument {
             reason: other.to_string(),
         },
@@ -463,12 +477,14 @@ fn map_item(wire: ItemWire) -> Result<ItemSpecV2, ConfigError> {
             min_items,
             max_items,
             max_item_length,
+            max_total_length,
             unique,
         } => ItemSpecV2::list(
             item_common(id, prompt, help, required)?,
             min_items,
             max_items,
             max_item_length,
+            max_total_length,
             unique,
         )
         .map_err(map_domain_error),

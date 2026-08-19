@@ -146,6 +146,12 @@ enum V2RuntimeErrorDetailsV1 {
         graph_node_id: GraphNodeId,
         source_graph_node_ids: Vec<GraphNodeId>,
     },
+    AttemptContentLimitExceeded {
+        field: String,
+        actual: u64,
+        maximum: u64,
+        unit: String,
+    },
     EvidenceReferenceStale {
         graph_node_id: GraphNodeId,
         source_graph_node_id: GraphNodeId,
@@ -458,6 +464,24 @@ impl DispatchErrorDetailsV1 {
         self
     }
 
+    pub fn with_attempt_content_limit_exceeded(
+        mut self,
+        field: String,
+        actual: u64,
+        maximum: u64,
+        unit: String,
+    ) -> Self {
+        self.v2_runtime = Some(Box::new(
+            V2RuntimeErrorDetailsV1::AttemptContentLimitExceeded {
+                field,
+                actual,
+                maximum,
+                unit,
+            },
+        ));
+        self
+    }
+
     pub fn with_evidence_reference_unresolved(
         mut self,
         graph_node_id: GraphNodeId,
@@ -622,6 +646,16 @@ impl DispatchErrorDetailsV1 {
                 V2RuntimeErrorDetailsV1::DecisionReasonMissing { graph_node_id } => json!({
                     "schema": "podway.v2-runtime-error-details/v1", "kind": "DECISION_REASON_MISSING",
                     "graph_node_id": graph_node_id, "admission": admission,
+                }),
+                V2RuntimeErrorDetailsV1::AttemptContentLimitExceeded {
+                    field,
+                    actual,
+                    maximum,
+                    unit,
+                } => json!({
+                    "schema": "podway.v2-runtime-error-details/v1", "kind": "ATTEMPT_CONTENT_LIMIT_EXCEEDED",
+                    "field": field, "actual": actual, "maximum": maximum, "unit": unit,
+                    "admission": admission,
                 }),
                 V2RuntimeErrorDetailsV1::EvidenceReferenceUnresolved {
                     graph_node_id,
@@ -877,6 +911,7 @@ pub enum DispatchFailureKindV1 {
     RouteNotAllowed,
     DecisionReasonMissing,
     EvidenceReferenceUnresolved,
+    AttemptContentLimitExceeded,
     EvidenceReferenceStale,
     ManualReworkTargetNotAllowed,
     ManualReworkTargetNotOnTrace,
@@ -2522,6 +2557,12 @@ fn catalog_error_spec_v1(kind: DispatchFailureKindV1) -> (&'static str, &'static
         DispatchFailureKindV1::EvidenceReferenceUnresolved => (
             "EVIDENCE_REFERENCE_UNRESOLVED",
             "A required evidence reference is unresolved.",
+            false,
+            1,
+        ),
+        DispatchFailureKindV1::AttemptContentLimitExceeded => (
+            "ATTEMPT_CONTENT_LIMIT_EXCEEDED",
+            "Recorded text and list content exceeds the per-attempt aggregate.",
             false,
             1,
         ),

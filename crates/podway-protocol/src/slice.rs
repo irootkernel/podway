@@ -21,14 +21,20 @@ pub const MAX_WORKTREE_SELECTOR_COMPONENT_BYTES_V1: usize = 16 * 1024;
 /// Core-compatible maximums for command text admitted at the wire boundary.
 pub const MAX_SLICE_TASK_TITLE_SCALARS_V1: usize = 500;
 pub const MAX_SLICE_REASON_SCALARS_V1: usize = 4_000;
-pub const MAX_SLICE_ITEM_TEXT_SCALARS_V1: usize = 65_536;
-pub const MAX_SLICE_LIST_VALUE_SCALARS_V1: usize = 4_000;
+/// Maximum Unicode scalars for a bounded lifecycle assertion such as a progress summary,
+/// disposition summary, or disposition reason.
+pub const MAX_SLICE_LIFECYCLE_TEXT_SCALARS_V1: usize = 4_000;
+pub const MAX_SLICE_ITEM_TEXT_SCALARS_V1: usize = podway_core::MAX_TEXT_SCALARS_V2 as usize;
+pub const MAX_SLICE_LIST_VALUE_SCALARS_V1: usize =
+    podway_core::MAX_LIST_ENTRY_SCALARS_V2 as usize;
 pub const MAX_SLICE_ARTIFACT_PATH_SCALARS_V1: usize = 4_000;
 pub const MAX_SLICE_MEDIA_TYPE_BYTES_V1: usize = 255;
 pub const ITEM_RECORD_MANY_INPUT_SCHEMA_V1: &str = "podway.item-record-many-input/v1";
-pub const MAX_ITEM_RECORD_MANY_OPERATIONS_V1: usize = 64;
-pub const MAX_ITEM_RECORD_MANY_LIST_ENTRIES_V1: usize = 200;
-pub const MAX_ITEM_RECORD_MANY_LIST_ENTRY_SCALARS_V1: usize = 1_000;
+pub const MAX_ITEM_RECORD_MANY_OPERATIONS_V1: usize = podway_core::MAX_ITEMS_PER_DEFINITION_V2;
+pub const MAX_ITEM_RECORD_MANY_LIST_ENTRIES_V1: usize =
+    podway_core::MAX_LIST_ENTRIES_V2 as usize;
+pub const MAX_ITEM_RECORD_MANY_LIST_ENTRY_SCALARS_V1: usize =
+    podway_core::MAX_LIST_ENTRY_SCALARS_V2 as usize;
 pub const MAX_ITEM_RECORD_MANY_CHOICE_SCALARS_V1: usize = 120;
 
 /// Validation failures for the G006 protocol slice.
@@ -2493,7 +2499,7 @@ fn validate_lifecycle_text(value: &str, field: &'static str) -> Result<(), Slice
     if value.trim().is_empty() {
         return Err(SliceErrorV1::InvalidValue { field });
     }
-    validate_scalar_bound(value, 4_000, field)
+    validate_scalar_bound(value, MAX_SLICE_LIFECYCLE_TEXT_SCALARS_V1, field)
 }
 
 fn validated_deletion_mode(

@@ -194,7 +194,7 @@ including the mandatory stable codes
 
 ## Bounded evidence scale failures
 
-[ADR-0024](../../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md) adopts four codes. `V2SCL-002` registered them in `error-codes.json`, the closed details schemas, and the protocol catalog. No route raises them yet; `V2SCL-003` and `V2SCL-004` add the enforcement that produces them.
+[ADR-0024](../../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md) adopts four codes. `V2SCL-002` registered them in `error-codes.json`, the closed details schemas, and the protocol catalog. `V2SCL-003` made `ATTEMPT_CONTENT_LIMIT_EXCEEDED` reachable on the item mutation path and at persisted-state reconstruction. The three evidence-read codes are raised only by `evidence.read`, which `V2SCL-004` serves.
 
 | Code | Exit | Retryable | Meaning |
 |---|---:|---|---|
@@ -203,7 +203,7 @@ including the mandatory stable codes
 | `EVIDENCE_PAGE_TOKEN_EXHAUSTED` | 2 | no | The token offset is at or past the logical end of the value. The daemon never issues such a token. |
 | `EVIDENCE_PAGE_TOKEN_STALE` | 4 | yes | A previously valid token no longer matches the current consumer, source value, reference validity, or session identity. |
 
-`EVIDENCE_PAGE_TOKEN_STALE` uses the state-refresh recovery recipe, matching `EVIDENCE_REFERENCE_STALE`, and `EVIDENCE_PAGE_TOKEN_EXHAUSTED` is a usage failure because the daemon never issues a token past the logical end. A genuinely stale reference keeps `EVIDENCE_REFERENCE_STALE`; `EVIDENCE_NOT_AVAILABLE` never substitutes for it. Malformed, oversized, cross-session, and wrong-binding tokens are decoding failures and return `REQUEST_INVALID` before any state comparison. No evidence-read failure changes state.
+`EVIDENCE_PAGE_TOKEN_STALE` uses the state-refresh recovery recipe, matching `EVIDENCE_REFERENCE_STALE`, and `EVIDENCE_PAGE_TOKEN_EXHAUSTED` is a usage failure because the daemon never issues a token past the logical end. Only the per-attempt aggregate maps to `ATTEMPT_CONTENT_LIMIT_EXCEEDED`; every other scale bound is a declaration-time rejection and keeps its own constraint failure. A genuinely stale reference keeps `EVIDENCE_REFERENCE_STALE`; `EVIDENCE_NOT_AVAILABLE` never substitutes for it. Malformed, oversized, cross-session, and wrong-binding tokens are decoding failures and return `REQUEST_INVALID` before any state comparison. No evidence-read failure changes state.
 
 Bound failures carry structured details containing `field`, `actual`, `maximum`, and `unit`, and name the constraint actually violated: entry count, per-entry length, total list content, or the per-attempt aggregate. A generic message such as `invalid constraints` is not sufficient when the exact exceeded limit is known. `REQUEST_TOO_LARGE` is the intentional exception, because frame decoding precedes JSON parsing and no field path exists.
 

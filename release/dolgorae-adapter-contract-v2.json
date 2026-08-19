@@ -174,6 +174,11 @@
         "summary": "Procedure-static next content exceeds its bounded budget."
       },
       {
+        "code": "ATTEMPT_CONTENT_BUDGET_EXCEEDED",
+        "severity": "warning",
+        "summary": "Declared worst-case recorded content for the placement exceeds the per-attempt aggregate."
+      },
+      {
         "code": "DECISION_SKIP_NOT_ALLOWED",
         "severity": "error",
         "summary": "A decision placement declares a skip policy."
@@ -1006,7 +1011,7 @@
       {
         "id": "urn:podway:schema:authoring-diagnostic:v1",
         "path": "schemas/authoring-diagnostic-v1.schema.json",
-        "sha256": "sha256:660d2d1e1e7a1decc8f0bc4fbdf713edb01bcc0f6599a659f80385ffebb723e4"
+        "sha256": "sha256:ffca69cebb7a52bf32dadd707f8cbedc7a5532dd774fcc5cda3d3e0b1cb5bfb9"
       },
       {
         "id": "urn:podway:schema:blocker-limit-details:v1",
@@ -1206,7 +1211,7 @@
       {
         "id": "urn:podway:schema:procedure:v2",
         "path": "schemas/procedure-v2.schema.json",
-        "sha256": "sha256:f83b217827be587238b20cf553e41bcf71ebdae116310566151ce8bcda7f4344"
+        "sha256": "sha256:f70335150e4e977bed9fa7914775b07acb8b59468a35e579db50c35ebd59cd2e"
       },
       {
         "id": "urn:podway:schema:procedure-validation-result:v2",
@@ -1341,7 +1346,7 @@
     ]
   },
   "current_surface_counts": {
-    "authoring_diagnostics": 53,
+    "authoring_diagnostics": 54,
     "routes": 61,
     "runtime_errors": 94,
     "schemas": 69

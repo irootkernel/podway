@@ -733,6 +733,9 @@ pub(crate) const fn diagnostic_hint(code: AuthoringDiagnosticCode) -> &'static s
         Code::NextStaticBudgetExceeded => {
             "Shorten the node's instructions, prompts, and help text."
         }
+        Code::AttemptContentBudgetExceeded => {
+            "Lower the declared max_length, max_items, or max_total_length of the largest items."
+        }
         Code::DecisionSkipNotAllowed => "Remove the skip policy from the decision placement.",
         Code::GraphCycleInvalid => {
             "Reduce the region to the single rework cycle the v2 graph rule allows."

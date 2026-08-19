@@ -77,7 +77,7 @@ progress-summary rule. Every deletion or replacement remains fully fenced.
 `record --stdin` is the only multi-item mutation grammar. It reads at most 1 MiB
 of closed `podway.item-record-many-input/v1` JSON. The document supplies the
 workspace, session revision, active attempt, idempotency key, and 1..128 unique
-item-local revision fences. `V2SCL-002` raised the input schema to that bound; `V2SCL-003` raises the decoder that still enforces 1..64. The daemon canonicalizes operations by item ID and
+item-local revision fences. The daemon canonicalizes operations by item ID and
 records or clears the complete set atomically without advancing the cursor.
 Identity, revision, and idempotency flags must not duplicate the stdin fields.
 

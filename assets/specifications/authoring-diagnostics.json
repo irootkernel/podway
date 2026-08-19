@@ -26,6 +26,11 @@
     {"code": "EVIDENCE_SELECTOR_UNKNOWN_ITEM", "severity": "error", "summary": "An evidence selector names an item absent from its source definition."},
     {"code": "READBACK_BUDGET_EXCEEDED", "severity": "error", "summary": "Worst-case evidence read-back exceeds the bounded next budget."},
     {"code": "NEXT_STATIC_BUDGET_EXCEEDED", "severity": "error", "summary": "Procedure-static next content exceeds its bounded budget."},
+    {
+      "code": "ATTEMPT_CONTENT_BUDGET_EXCEEDED",
+      "severity": "warning",
+      "summary": "Declared worst-case recorded content for the placement exceeds the per-attempt aggregate."
+    },
     {"code": "DECISION_SKIP_NOT_ALLOWED", "severity": "error", "summary": "A decision placement declares a skip policy."},
     {"code": "GRAPH_CYCLE_INVALID", "severity": "error", "summary": "A graph cycle violates the single v2 cycle rule."},
     {"code": "REWORK_TARGET_NOT_DOMINATING", "severity": "error", "summary": "A declared rework target does not dominate its decision placement."},

@@ -346,7 +346,7 @@ In addition to the frame limit, and counting Unicode scalar values wherever a le
 A wire value bound is never narrower than the corresponding domain hard maximum defined by
 [ADR-0024](../../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md). The 1 MiB request frame remains an independent transport bound, so every valid list is reachable through bounded `item.add` mutations while a maximal list cannot be replaced atomically through one `item.record_many` frame.
 
-`V2SCL-002` has already raised `item-record-many-input-v1.schema.json` and the shared result components to these values. The text slice already admits 65,536 scalars, but the `item.record_many` operation count and the list-entry slices still enforce 64, 200, and 1,000, and `podway-core` still caps a recorded text value at 16,384. `V2SCL-003` closes those three gaps; until it lands, a request at the raised list or operation bounds is rejected by the decoder and a 65,536-scalar text value is rejected by the domain. The page-token bound applies only to `evidence.read`, which `V2SCL-004` serves.
+`V2SCL-002` raised `item-record-many-input-v1.schema.json` and the shared result components, and `V2SCL-003` raised the protocol slices and the domain constants they now consume, so the schema and the decoder agree. The page-token bound applies only to `evidence.read`, which `V2SCL-004` serves.
 
 ## Socket shutdown behavior
 
