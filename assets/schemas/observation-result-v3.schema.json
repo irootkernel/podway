@@ -137,7 +137,7 @@
       "required": ["item_id", "type", "prompt", "required", "satisfied", "revision", "constraints", "value", "value_truncated"],
       "properties": {
         "item_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" },
-        "type": { "enum": ["confirm", "text", "choice", "integer", "list", "artifact"] },
+        "type": { "enum": ["confirm", "text", "choice", "integer", "list", "artifact", "check_result"] },
         "prompt": { "type": "string", "minLength": 1, "maxLength": 300 },
         "help": { "type": "string", "maxLength": 1000 },
         "required": { "type": "boolean" },
@@ -151,7 +151,18 @@
           ]
         },
         "value_truncated": { "type": "boolean" }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "check_result" } }, "required": ["type"] },
+          "then": {
+            "properties": {
+              "value": { "oneOf": [{ "type": "null" }, { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/checkResultPreview" }] },
+              "value_truncated": { "const": false }
+            }
+          }
+        }
+      ]
     }
   }
 }

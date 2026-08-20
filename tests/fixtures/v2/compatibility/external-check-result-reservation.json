@@ -1,0 +1,39 @@
+{
+  "schema": "podway.v2-fixture-recipe/v1",
+  "fixture_class": "compatibility",
+  "evidence_level": "canonical-contract",
+  "implementation_status": "reserved",
+  "production_proof_required": true,
+  "cases": [
+    {
+      "id": "closed-public-shapes",
+      "operation": "validate the declaration, complete value, five-field projection, read-back, stdin record, and record result branches",
+      "expected": "accepted-only-with-the-complete-closed-shape",
+      "proof_task": "V2AST-002"
+    },
+    {
+      "id": "artifact-disjointness",
+      "operation": "validate complete artifact and external check-result values against the shared exact-one union",
+      "expected": "exactly-one-branch-matches",
+      "proof_task": "V2AST-002"
+    },
+    {
+      "id": "storage-reservation",
+      "operation": "apply schema-5-external-check-result-items using canonical sqlite-v6.sql",
+      "expected": "version-6-preserves-existing-value-json-bytes-and-admits-check-result",
+      "proof_task": "V2AST-002"
+    },
+    {
+      "id": "runtime-non-admission",
+      "operation": "submit a check_result Procedure and item.record_many value before V2AST runtime implementation",
+      "expected": "rejected-before-state-mutation",
+      "proof_task": "V2AST-002"
+    },
+    {
+      "id": "identity-stability",
+      "operation": "compare canonical Procedure and built-in preset digests before and after contract reservation",
+      "expected": "existing-identities-unchanged",
+      "proof_task": "V2AST-002"
+    }
+  ]
+}

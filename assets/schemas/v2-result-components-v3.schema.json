@@ -3,7 +3,7 @@
   "$id": "urn:podway:schema:v2-result-components:v3",
   "title": "Podway V2 Result Components v3",
   "$defs": {
-    "sizeUnit": { "enum": ["scalars", "entries", "value"] },
+    "sizeUnit": { "enum": ["scalars", "entries", "value", "bytes"] },
     "logicalSize": { "type": "integer", "minimum": 0, "maximum": 65536 },
     "logicalOffset": { "type": "integer", "minimum": 0, "maximum": 65536 },
     "pageToken": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9_-]+$" },
@@ -13,7 +13,7 @@
       "required": ["item_id", "type", "revision", "value_digest", "total_size", "size_unit"],
       "properties": {
         "item_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" },
-        "type": { "enum": ["confirm", "text", "choice", "integer", "list", "artifact"] },
+        "type": { "enum": ["confirm", "text", "choice", "integer", "list", "artifact", "check_result"] },
         "revision": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/revision" },
         "value_digest": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/digest" },
         "total_size": { "$ref": "#/$defs/logicalSize" },
@@ -27,7 +27,8 @@
         { "if": { "required": ["next_page_token"] }, "then": { "required": ["preview", "preview_truncated"], "properties": { "preview_truncated": { "const": true } } } },
         { "if": { "properties": { "type": { "enum": ["confirm", "choice", "integer", "artifact"] } }, "required": ["type"] }, "then": { "properties": { "size_unit": { "const": "value" }, "total_size": { "const": 1 }, "preview_truncated": { "const": false } }, "not": { "required": ["next_page_token"] } } },
         { "if": { "properties": { "type": { "const": "text" } }, "required": ["type"] }, "then": { "properties": { "size_unit": { "const": "scalars" } } } },
-        { "if": { "properties": { "type": { "const": "list" } }, "required": ["type"] }, "then": { "properties": { "size_unit": { "const": "entries" }, "total_size": { "maximum": 1000 } } } }
+        { "if": { "properties": { "type": { "const": "list" } }, "required": ["type"] }, "then": { "properties": { "size_unit": { "const": "entries" }, "total_size": { "maximum": 1000 } } } },
+        { "if": { "properties": { "type": { "const": "check_result" } }, "required": ["type"] }, "then": { "properties": { "size_unit": { "const": "bytes" }, "total_size": { "maximum": 32768 }, "preview": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/checkResultPreview" }, "preview_truncated": { "const": false } }, "not": { "required": ["next_page_token"] } } }
       ]
     },
     "evidenceReadback": {
@@ -118,7 +119,10 @@
         "max_item_length": { "type": "integer", "minimum": 1, "maximum": 8192 },
         "max_total_length": { "type": "integer", "minimum": 1, "maximum": 1000000 },
         "unique": { "type": "boolean" },
-        "allowed_media_types": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 255 } }
+        "allowed_media_types": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 255 } },
+        "operation_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" },
+        "operation_digest": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/digest" },
+        "accepted_outcomes": { "type": "array", "minItems": 1, "maxItems": 3, "uniqueItems": true, "items": { "enum": ["pass", "fail", "inconclusive"] } }
       },
       "allOf": [
         { "if": { "properties": { "choices_truncated": { "const": false } }, "required": ["choices_truncated"] }, "then": { "properties": { "choices_total": { "maximum": 8 } } } },
@@ -150,10 +154,12 @@
         },
         "authority": { "const": "optimistic_concurrency_only" },
         "idempotency_key_required": { "const": true },
-        "requires_explicit_authorization": { "type": "boolean" }
+        "requires_explicit_authorization": { "type": "boolean" },
+        "stdin_template": { "type": "string", "minLength": 1, "maxLength": 16384 }
       },
       "allOf": [
-        { "if": { "properties": { "command": { "pattern": "^item\\." } }, "required": ["command"] }, "then": { "properties": { "preconditions": { "required": ["workspace_uuid", "session_id", "attempt_id", "item_revision"] } } }, "else": { "properties": { "preconditions": { "required": ["workspace_uuid", "session_id", "session_revision"] } } } }
+        { "if": { "properties": { "command": { "pattern": "^item\\." } }, "required": ["command"] }, "then": { "properties": { "preconditions": { "required": ["workspace_uuid", "session_id", "attempt_id", "item_revision"] } } }, "else": { "properties": { "preconditions": { "required": ["workspace_uuid", "session_id", "session_revision"] } } } },
+        { "if": { "properties": { "command": { "const": "item.record_many" } }, "required": ["command"] }, "else": { "not": { "required": ["stdin_template"] } } }
       ]
     }
   }

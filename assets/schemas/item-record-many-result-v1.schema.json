@@ -18,16 +18,31 @@
       "minItems": 1,
       "maxItems": 128,
       "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["item_id", "expected_item_revision", "changed", "item_revision"],
-        "properties": {
-          "item_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" },
-          "expected_item_revision": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
-          "changed": { "type": "boolean" },
-          "item_revision": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
-          "value_digest": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/digest" }
-        }
+        "oneOf": [
+          {
+            "type": "object", "additionalProperties": false,
+            "required": ["item_id", "expected_item_revision", "changed", "item_revision"],
+            "properties": {
+              "item_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" },
+              "expected_item_revision": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+              "changed": { "type": "boolean" },
+              "item_revision": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+              "value_digest": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/digest" }
+            }
+          },
+          {
+            "type": "object", "additionalProperties": false,
+            "required": ["item_id", "expected_item_revision", "changed", "item_revision", "type", "value_digest"],
+            "properties": {
+              "item_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" },
+              "expected_item_revision": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+              "changed": { "type": "boolean" },
+              "item_revision": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+              "type": { "const": "check_result" },
+              "value_digest": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/digest" }
+            }
+          }
+        ]
       }
     }
   }

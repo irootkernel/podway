@@ -5,6 +5,7 @@
 - `sqlite-v3.sql`: parallel Procedure v2 relational state and recovery migration.
 - `sqlite-v4.sql`: v2-only migration with fail-closed legacy Procedure state rejection.
 - `sqlite-v5.sql`: prepared-session and terminal-disposition migration reservation.
+- `sqlite-v6.sql`: external check-result item discriminator migration reservation.
 - `launchagent.plist.template`: reference macOS user LaunchAgent.
 - `error-codes.json`: stable public error and exit-code catalog.
 - `authoring-diagnostics.json`: stable authoring-time diagnostic catalog.

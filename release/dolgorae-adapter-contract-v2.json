@@ -1106,7 +1106,7 @@
       {
         "id": "urn:podway:schema:evidence-read-result:v1",
         "path": "schemas/evidence-read-result-v1.schema.json",
-        "sha256": "sha256:e6d62012a69fee689c4e537e65372dfb536876ddf3af2bb5c8c8c85b3b7fd728"
+        "sha256": "sha256:1d14fbc0f218e5e3be6f33a88a7c25bce5c9c0120ffaded9fb46e899ec3f8a63"
       },
       {
         "id": "urn:podway:schema:goal-definition-result:v1",
@@ -1136,12 +1136,12 @@
       {
         "id": "urn:podway:schema:item-record-many-input:v1",
         "path": "schemas/item-record-many-input-v1.schema.json",
-        "sha256": "sha256:7ebb732ac206901e66a9c34e111561fd0e201c3f1d1065aaf811c845ec7c8eb7"
+        "sha256": "sha256:712264e50a585674874229fad54f63292387749f1e96416c642ea88318e7f9b6"
       },
       {
         "id": "urn:podway:schema:item-record-many-result:v1",
         "path": "schemas/item-record-many-result-v1.schema.json",
-        "sha256": "sha256:3c15aaa42b9317ae7cac72e17c5ca03d8ac58fd95e5a199a2dc2b2fb2ede9090"
+        "sha256": "sha256:06f39cb0020534847182250b7a11cee49ec20c7e5c0bd487e28ab7d1c0605bfc"
       },
       {
         "id": "urn:podway:schema:job-lookup-result:v3",
@@ -1196,7 +1196,7 @@
       {
         "id": "urn:podway:schema:observation-result:v3",
         "path": "schemas/observation-result-v3.schema.json",
-        "sha256": "sha256:58d8edbe0d768c44b4c237a29b4755f844f92d139cfd8a93187f1229080b6e7f"
+        "sha256": "sha256:1cbef977baa84f1f500b25c17342088c26ba14447b7fdb4f9e8dfe38ac3962d9"
       },
       {
         "id": "urn:podway:schema:output:v3",
@@ -1231,7 +1231,7 @@
       {
         "id": "urn:podway:schema:procedure:v2",
         "path": "schemas/procedure-v2.schema.json",
-        "sha256": "sha256:f70335150e4e977bed9fa7914775b07acb8b59468a35e579db50c35ebd59cd2e"
+        "sha256": "sha256:6af658a95bb0f8a0e05096418e5932c8053201dd6079f2be21aa6cbc2527b361"
       },
       {
         "id": "urn:podway:schema:procedure-validation-result:v2",
@@ -1321,7 +1321,7 @@
       {
         "id": "urn:podway:schema:v2-result-components:v1",
         "path": "schemas/v2-result-components-v1.schema.json",
-        "sha256": "sha256:28b8ff3a08c13d703ea7e865915609aa16aff89038a415fa13aa2cde20e7f7a2"
+        "sha256": "sha256:7f7062ad9c7c9776fa21c5c732c32b3cdf3c1a307a6f6f02fabcdbb593b59082"
       },
       {
         "id": "urn:podway:schema:v2-result-components:v2",
@@ -1331,7 +1331,7 @@
       {
         "id": "urn:podway:schema:v2-result-components:v3",
         "path": "schemas/v2-result-components-v3.schema.json",
-        "sha256": "sha256:2622c2159a28ae8f5c61c86b05bff5ca626ac2dbc38fd04299367bedc4b43028"
+        "sha256": "sha256:dfc95d485097b5e948687d0acb4356e078254a7f72b7f7054f6a514a7a1bf4c6"
       },
       {
         "id": "urn:podway:schema:v2-runtime-error-details:v1",

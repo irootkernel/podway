@@ -752,3 +752,37 @@ fn v2_rejects_empty_node_definitions_map() {
             if field == "node_definitions" && actual == 0
     ));
 }
+
+#[test]
+fn v2ast002_reserved_check_result_is_not_admitted_before_domain_implementation() {
+    let yaml = concat!(
+        "schema: podway.procedure/v2\n",
+        "id: p\n",
+        "version: \"1\"\n",
+        "name: P\n",
+        "purpose: P.\n",
+        "node_definitions:\n",
+        "  work:\n",
+        "    type: action\n",
+        "    title: Work\n",
+        "    intent: Record the external check.\n",
+        "    items:\n",
+        "      - id: verification\n",
+        "        type: check_result\n",
+        "        prompt: Record the result.\n",
+        "        required: true\n",
+        "        operation_id: make-test\n",
+        "        operation_digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+        "        accepted_outcomes: [pass]\n",
+        "graph:\n",
+        "  entry: work\n",
+        "  nodes:\n",
+        "    - id: work\n",
+        "      use: work\n",
+        "      terminal: true\n",
+    );
+    assert!(
+        v2(yaml).is_err(),
+        "the contract reservation must not enable runtime authoring admission"
+    );
+}

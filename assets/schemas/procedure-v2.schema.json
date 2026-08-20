@@ -478,6 +478,9 @@
         },
         {
           "$ref": "#/$defs/artifact_item"
+        },
+        {
+          "$ref": "#/$defs/check_result_item"
         }
       ]
     },
@@ -723,6 +726,39 @@
           }
         }
       }
+    },
+    "check_result_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "type",
+        "prompt",
+        "required",
+        "operation_id",
+        "operation_digest",
+        "accepted_outcomes"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "type": { "const": "check_result" },
+        "prompt": { "$ref": "#/$defs/item_prompt" },
+        "help": { "$ref": "#/$defs/item_help" },
+        "required": { "type": "boolean" },
+        "operation_id": { "$ref": "#/$defs/identifier" },
+        "operation_digest": { "$ref": "#/$defs/sha256_digest" },
+        "accepted_outcomes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": { "enum": ["pass", "fail", "inconclusive"] }
+        }
+      }
+    },
+    "sha256_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
     },
     "item_prompt": {
       "type": "string",

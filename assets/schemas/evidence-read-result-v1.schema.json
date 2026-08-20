@@ -32,7 +32,7 @@
       "required": ["item_id", "type", "revision"],
       "properties": {
         "item_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" },
-        "type": { "enum": ["confirm", "text", "choice", "integer", "list", "artifact"] },
+        "type": { "enum": ["confirm", "text", "choice", "integer", "list", "artifact", "check_result"] },
         "revision": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/revision" }
       }
     },
@@ -51,7 +51,8 @@
             { "type": "integer", "minimum": -9223372036854775808, "maximum": 9223372036854775807 },
             { "type": "string", "maxLength": 262144 },
             { "type": "array", "maxItems": 1000, "items": { "type": "string", "minLength": 1, "maxLength": 8192 } },
-            { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/artifactValue" }
+            { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/artifactValue" },
+            { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/checkResultValue" }
           ]
         }
       }
@@ -73,6 +74,7 @@
     { "if": { "properties": { "item": { "properties": { "type": { "const": "confirm" } }, "required": ["type"] } }, "required": ["item"] }, "then": { "properties": { "page": { "properties": { "data": { "type": "boolean" } } } } } },
     { "if": { "properties": { "item": { "properties": { "type": { "const": "integer" } }, "required": ["type"] } }, "required": ["item"] }, "then": { "properties": { "page": { "properties": { "data": { "type": "integer" } } } } } },
     { "if": { "properties": { "item": { "properties": { "type": { "const": "choice" } }, "required": ["type"] } }, "required": ["item"] }, "then": { "properties": { "page": { "properties": { "data": { "type": "string", "maxLength": 120 } } } } } },
-    { "if": { "properties": { "item": { "properties": { "type": { "const": "artifact" } }, "required": ["type"] } }, "required": ["item"] }, "then": { "properties": { "page": { "properties": { "data": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/artifactValue" } } } } } }
+    { "if": { "properties": { "item": { "properties": { "type": { "const": "artifact" } }, "required": ["type"] } }, "required": ["item"] }, "then": { "properties": { "page": { "properties": { "data": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/artifactValue" } } } } } },
+    { "if": { "properties": { "item": { "properties": { "type": { "const": "check_result" } }, "required": ["type"] } }, "required": ["item"] }, "then": { "properties": { "size_unit": { "const": "bytes" }, "total_size": { "maximum": 32768 }, "truncated": { "const": false }, "next_page_token": { "type": "null" }, "page": { "properties": { "offset": { "const": 0 }, "size": { "maximum": 32768 }, "data": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/checkResultValue" } } } } } }
   ]
 }

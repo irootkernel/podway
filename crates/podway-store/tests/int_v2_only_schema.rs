@@ -529,6 +529,125 @@ fn seed_populated_v2_schema_v3(
     (state, job_id, receipt)
 }
 
+#[test]
+fn v2ast002_sqlite_v6_reservation_preserves_values_and_extends_only_the_item_discriminator() {
+    let mut connection = canonical_schema_v4("running");
+    apply_reserved_schema_v5(&mut connection);
+    let preserved = [
+        ("confirmation", "confirm", "true"),
+        ("notes", "text", "\"kept byte for byte\""),
+        (
+            "artifact",
+            "artifact",
+            "{ \"location_type\": \"reference\" }",
+        ),
+    ];
+    for (item_id, item_type, value_json) in preserved {
+        connection
+            .execute(
+                "INSERT INTO v2_item_slots (
+                    attempt_id, item_id, item_type, item_revision, value_json,
+                    created_at_ms, updated_at_ms
+                 ) VALUES ('attempt', ?1, ?2, 7, ?3, 11, 12)",
+                params![item_id, item_type, value_json],
+            )
+            .unwrap();
+    }
+    let before = connection
+        .prepare("SELECT item_id, item_type, item_revision, value_json, created_at_ms, updated_at_ms FROM v2_item_slots ORDER BY item_id")
+        .unwrap()
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+            ))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+
+    connection
+        .pragma_update(None, "foreign_keys", false)
+        .unwrap();
+    let transaction = connection.transaction().unwrap();
+    transaction
+        .execute_batch(include_str!("../../../assets/specifications/sqlite-v6.sql"))
+        .unwrap();
+    assert_eq!(
+        transaction
+            .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+        0
+    );
+    transaction.commit().unwrap();
+    connection
+        .pragma_update(None, "foreign_keys", true)
+        .unwrap();
+
+    let after = connection
+        .prepare("SELECT item_id, item_type, item_revision, value_json, created_at_ms, updated_at_ms FROM v2_item_slots ORDER BY item_id")
+        .unwrap()
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+            ))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        after, before,
+        "the reservation must preserve exact value_json text"
+    );
+    assert_eq!(
+        connection
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        6
+    );
+
+    connection
+        .execute(
+            "INSERT INTO v2_item_slots (
+                attempt_id, item_id, item_type, item_revision, value_json,
+                created_at_ms, updated_at_ms
+             ) VALUES ('attempt', 'verification', 'check_result', 0, NULL, 13, 13)",
+            [],
+        )
+        .unwrap();
+    assert!(
+        connection
+            .execute(
+                "INSERT INTO v2_item_slots (
+                    attempt_id, item_id, item_type, item_revision, value_json,
+                    created_at_ms, updated_at_ms
+                 ) VALUES ('attempt', 'unknown', 'receipt', 0, NULL, 13, 13)",
+                [],
+            )
+            .is_err()
+    );
+
+    let recipe: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/v2/compatibility/external-check-result-reservation.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        recipe["cases"][2]["operation"],
+        json!("apply schema-5-external-check-result-items using canonical sqlite-v6.sql")
+    );
+}
+
 fn seed_schema_v3(temporary: &TempDir, with_legacy_state: bool) {
     let path = temporary.path().join("state.sqlite3");
     let connection = Connection::open(path).unwrap();

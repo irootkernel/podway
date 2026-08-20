@@ -144,6 +144,42 @@ fn assert_invalid(schema_path: &str, value: &Value) {
     );
 }
 
+fn assert_ref_valid(reference: &str, value: &Value) {
+    let schema = json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$ref": reference
+    });
+    let validator = jsonschema::draft202012::options()
+        .with_retriever(local_schemas())
+        .should_validate_formats(true)
+        .build(&schema)
+        .unwrap();
+    let errors = validator
+        .iter_errors(value)
+        .map(|error| error.to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        errors.is_empty(),
+        "{reference} rejected fixture: {errors:#?}"
+    );
+}
+
+fn assert_ref_invalid(reference: &str, value: &Value) {
+    let schema = json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$ref": reference
+    });
+    let validator = jsonschema::draft202012::options()
+        .with_retriever(local_schemas())
+        .should_validate_formats(true)
+        .build(&schema)
+        .unwrap();
+    assert!(
+        !validator.is_valid(value),
+        "{reference} accepted invalid fixture"
+    );
+}
+
 fn examples() -> BTreeMap<&'static str, Value> {
     let node = json!({"node_definition_id":"work","graph_node_id":"work","node_type":"action"});
     let attempt = json!({"attempt_id":UUID,"attempt_number":1});
@@ -3846,4 +3882,192 @@ fn v2aut001_validate_command_result_v2_binds_registered_families_to_their_routes
     let mut missing = source;
     missing.remove("schema");
     assert!(validate_command_result_v2("procedure.format", &missing).is_err());
+}
+
+fn check_result_value() -> Value {
+    json!({
+        "operation_id": "make-test",
+        "operation_digest": DIGEST,
+        "input_basis": {"descriptor": "HEAD and dirty-tree snapshot", "digest": DIGEST},
+        "executor": {"name": "gaori", "version": "1.0.0"},
+        "outcome": "pass",
+        "summary": "The complete development gate passed.",
+        "output_digest": DIGEST
+    })
+}
+
+fn check_result_preview() -> Value {
+    json!({
+        "operation_id": "make-test",
+        "outcome": "pass",
+        "operation_digest": DIGEST,
+        "input_basis": {"digest": DIGEST},
+        "output_digest": DIGEST
+    })
+}
+
+#[test]
+fn v2ast002_reserves_closed_check_result_declaration_and_record_shapes() {
+    let procedure = json!({
+        "schema": "podway.procedure/v2",
+        "id": "check-workflow",
+        "version": "1",
+        "name": "Check workflow",
+        "purpose": "Reserve an external check result.",
+        "node_definitions": {
+            "work": {
+                "type": "action",
+                "title": "Work",
+                "intent": "Record the external check.",
+                "items": [{
+                    "id": "verification",
+                    "type": "check_result",
+                    "prompt": "Record the current external verification result.",
+                    "required": true,
+                    "operation_id": "make-test",
+                    "operation_digest": DIGEST,
+                    "accepted_outcomes": ["pass"]
+                }]
+            }
+        },
+        "graph": {"entry": "work", "nodes": [{"id": "work", "use": "work", "terminal": true}]}
+    });
+    assert_valid("schemas/procedure-v2.schema.json", &procedure);
+
+    let mut duplicate_outcome = procedure.clone();
+    duplicate_outcome["node_definitions"]["work"]["items"][0]["accepted_outcomes"] =
+        json!(["pass", "pass"]);
+    assert_invalid("schemas/procedure-v2.schema.json", &duplicate_outcome);
+    let mut unknown_declaration_field = procedure;
+    unknown_declaration_field["node_definitions"]["work"]["items"][0]["command"] =
+        json!("make test");
+    assert_invalid(
+        "schemas/procedure-v2.schema.json",
+        &unknown_declaration_field,
+    );
+
+    let mut record = check_result_value();
+    record["type"] = json!("check_result");
+    let input = json!({
+        "schema": "podway.item-record-many-input/v1",
+        "workspace_uuid": UUID,
+        "session_id": UUID,
+        "session_revision": 1,
+        "attempt_id": UUID,
+        "idempotency_key": "v2ast-002",
+        "operations": [{"item_id": "verification", "expected_item_revision": 0, "record": record}]
+    });
+    assert_valid("schemas/item-record-many-input-v1.schema.json", &input);
+    let mut missing_executor = input.clone();
+    missing_executor["operations"][0]["record"]
+        .as_object_mut()
+        .unwrap()
+        .remove("executor");
+    assert_invalid(
+        "schemas/item-record-many-input-v1.schema.json",
+        &missing_executor,
+    );
+}
+
+#[test]
+fn v2ast002_complete_preview_readback_and_artifact_branches_are_disjoint() {
+    let complete = check_result_value();
+    assert_ref_valid(
+        "urn:podway:schema:v2-result-components:v1#/$defs/checkResultValue",
+        &complete,
+    );
+    assert_ref_valid(
+        "urn:podway:schema:v2-result-components:v1#/$defs/itemValue",
+        &complete,
+    );
+    assert_ref_invalid(
+        "urn:podway:schema:v2-result-components:v1#/$defs/artifactValue",
+        &complete,
+    );
+
+    let artifact = json!({
+        "location_type": "reference", "location": "artifact:1", "sha256_digest": DIGEST,
+        "size_bytes": 1, "media_type": "application/json"
+    });
+    assert_ref_valid(
+        "urn:podway:schema:v2-result-components:v1#/$defs/artifactValue",
+        &artifact,
+    );
+    assert_ref_invalid(
+        "urn:podway:schema:v2-result-components:v1#/$defs/checkResultValue",
+        &artifact,
+    );
+
+    let preview = check_result_preview();
+    assert_ref_valid(
+        "urn:podway:schema:v2-result-components:v1#/$defs/checkResultPreview",
+        &preview,
+    );
+    assert_ref_invalid(
+        "urn:podway:schema:v2-result-components:v1#/$defs/checkResultPreview",
+        &complete,
+    );
+    assert_ref_valid(
+        "urn:podway:schema:v2-result-components:v1#/$defs/readbackItem",
+        &json!({"item_id":"verification", "type":"check_result", "value":complete}),
+    );
+}
+
+#[test]
+fn v2ast002_reserves_observation_constraints_and_stdin_template_only_for_record_many() {
+    let constraints = json!({
+        "choices_total": 0,
+        "choices_truncated": false,
+        "operation_id": "make-test",
+        "operation_digest": DIGEST,
+        "accepted_outcomes": ["pass"]
+    });
+    assert_ref_valid(
+        "urn:podway:schema:v2-result-components:v3#/$defs/itemConstraints",
+        &constraints,
+    );
+
+    let template = json!({
+        "command": "item.record_many",
+        "argv": ["podway", "record", "--stdin"],
+        "preconditions": {
+            "workspace_uuid": UUID,
+            "session_id": UUID,
+            "attempt_id": UUID,
+            "item_revision": 0
+        },
+        "authority": "optimistic_concurrency_only",
+        "idempotency_key_required": true,
+        "requires_explicit_authorization": false,
+        "stdin_template": "{\"schema\":\"podway.item-record-many-input/v1\"}"
+    });
+    assert_ref_valid(
+        "urn:podway:schema:v2-result-components:v3#/$defs/mutationTemplate",
+        &template,
+    );
+    let mut wrong_command = template;
+    wrong_command["command"] = json!("item.set");
+    assert_ref_invalid(
+        "urn:podway:schema:v2-result-components:v3#/$defs/mutationTemplate",
+        &wrong_command,
+    );
+
+    let result = json!({
+        "schema": "podway.item-record-many-result/v1",
+        "admission": admission(),
+        "changed": true,
+        "graph_node_id": "work",
+        "attempt_id": UUID,
+        "attempt_number": 1,
+        "revision": 2,
+        "items": [{
+            "item_id": "verification",
+            "expected_item_revision": 0,
+            "changed": true,
+            "item_revision": 1,
+            "type": "check_result",
+            "value_digest": DIGEST
+        }]
+    });
+    assert_valid("schemas/item-record-many-result-v1.schema.json", &result);
 }

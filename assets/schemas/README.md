@@ -47,8 +47,8 @@ These JSON Schema Draft 2020-12 files define Podway's versioned structural contr
 - `prepared-next-result-v1.schema.json`: cursor-free prepared-session guidance.
 - `stage-transition-result-v2.schema.json`: Procedure v2 action and administrative transitions.
 - `item-mutation-result-v2.schema.json`: Procedure v2 item mutation outcome.
-- `item-record-many-input-v1.schema.json`: closed JSON stdin contract for bounded atomic item recording.
-- `item-record-many-result-v1.schema.json`: item-ID-ordered atomic recording outcome.
+- `item-record-many-input-v1.schema.json`: closed JSON stdin contract for bounded atomic item recording, including structurally bound external check results.
+- `item-record-many-result-v1.schema.json`: item-ID-ordered atomic recording outcome with a disjoint external check-result record branch.
 - `authoring-diagnostic-v1.schema.json`: standalone bounded authoring diagnostic.
 - `procedure-source-result-v1.schema.json`: format and scaffold source output.
 - `procedure-diagnostics-result-v1.schema.json`: shared bounded diagnostics for every Procedure v2 authoring command.
@@ -59,7 +59,7 @@ These JSON Schema Draft 2020-12 files define Podway's versioned structural contr
 - `goal-definition-result-v1.schema.json`: initial session goal record.
 - `goal-revision-result-v1.schema.json`: revised session goal and rework outcome.
 - `criterion-assessment-result-v1.schema.json`: one criterion assessment outcome.
-- `v2-result-components-v1.schema.json`: shared closed and bounded Procedure v2 result components.
+- `v2-result-components-v1.schema.json`: shared closed and bounded Procedure v2 result components, including complete and projected external check results.
 - `v2-result-components-v2.schema.json`: shared prepared lifecycle, disposition, reset, and guidance components.
 - `v2-result-components-v3.schema.json`: shared bounded evidence metadata, page-token, observation status, item constraint, and mutation template components.
 - `observation-result-v2.schema.json`: prepared-aware coherent status, guidance, item, and mutation-template observation.
