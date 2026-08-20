@@ -3006,6 +3006,62 @@ fn source_and_consumer_state_with_validity(
     .unwrap()
 }
 
+/// Two references to one source node, each selecting a different item.
+fn duplicate_source_readback_state(source: &[u8]) -> GraphSessionStateV2 {
+    let base = fresh_state("duplicate-source-readback.json", source);
+    let source_attempt_id = AttemptId::new(ATTEMPT_ID).unwrap();
+    let consumer_attempt_id = second_attempt_id();
+    let slots = base.workflow_memory().attempts()[0]
+        .item_slots()
+        .iter()
+        .map(|slot| {
+            ItemSlotStateV2::new(
+                source_attempt_id.clone(),
+                slot.item_id().clone(),
+                slot.item_type(),
+                Revision::new(1),
+                Some(
+                    RecordedItemValueV2::text(format!("value-{}", slot.item_id().as_str()))
+                        .unwrap(),
+                ),
+                slot.created_at(),
+                UnixMillis::new(slot.created_at().get() + 1),
+            )
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let source_memory =
+        AttemptWorkflowMemoryV2::new(source_attempt_id.clone(), slots, Vec::new(), Vec::new())
+            .unwrap();
+    let source_digest = source_memory.recorded_items_digest().unwrap();
+    let reference = |ordinal: u32, item: &str| {
+        EvidenceResolutionStateV2::new(
+            ordinal,
+            true,
+            vec![ItemId::new(item).unwrap()],
+            ResolvedEvidenceReferenceV2::resolved(
+                EvidenceReferenceSnapshotV2::new(
+                    GraphNodeId::new("source").unwrap(),
+                    source_attempt_id.clone(),
+                    AttemptNumberV2::FIRST,
+                    source_digest.clone(),
+                    UnixMillis::new(1_700_000_000_010),
+                )
+                .unwrap(),
+            ),
+        )
+        .unwrap()
+    };
+    let consumer_memory = AttemptWorkflowMemoryV2::new(
+        consumer_attempt_id,
+        Vec::new(),
+        Vec::new(),
+        vec![reference(0, "first"), reference(1, "second")],
+    )
+    .unwrap();
+    source_and_consumer_state(&base, source_memory, consumer_memory)
+}
+
 /// One text item large enough that a single page cannot carry it.
 ///
 /// The maximum-selected fixture caps text at 16,384 scalars, which is terminal in one page, so the
@@ -5191,6 +5247,81 @@ fn v2scl004_an_empty_recorded_value_reads_as_one_empty_terminal_page() {
     assert_eq!(metadata["total_size"], 0);
     assert!(metadata.get("preview").is_none());
     assert!(metadata.get("next_page_token").is_none());
+}
+
+#[test]
+fn v2scl004_a_second_reference_to_one_source_stays_readable() {
+    // Nothing forbids two evidence references to the same source node with different selectors,
+    // and read-back publishes metadata for both. A lookup that consulted only the first would make
+    // evidence the same response just advertised unreadable, which is the contradiction this
+    // guards against.
+    let source = serde_json::to_vec(&json!({
+        "schema": "podway.procedure/v2",
+        "id": "duplicate-source-readback",
+        "version": "2",
+        "name": "Duplicate source read-back",
+        "purpose": "Exercise two references to one source node.",
+        "node_definitions": {
+            "source": {
+                "type": "action",
+                "title": "Record source",
+                "intent": "Record two values.",
+                "items": [
+                    {"id": "first", "type": "text", "prompt": "First.", "required": true, "max_length": 64},
+                    {"id": "second", "type": "text", "prompt": "Second.", "required": true, "max_length": 64}
+                ]
+            },
+            "consume": {
+                "type": "action",
+                "title": "Consume source",
+                "intent": "Read both values."
+            }
+        },
+        "graph": {
+            "entry": "source",
+            "nodes": [
+                {"id": "source", "use": "source", "next": "consume"},
+                {
+                    "id": "consume",
+                    "use": "consume",
+                    "evidence_from": [
+                        {"node": "source", "required": true, "items": ["first"]},
+                        {"node": "source", "required": true, "items": ["second"]}
+                    ],
+                    "terminal": true
+                }
+            ]
+        }
+    }))
+    .unwrap();
+    let session_view = view(duplicate_source_readback_state(&source));
+    let node = GraphNodeId::new("source").unwrap();
+
+    // Both references publish metadata, so both items must answer a read.
+    let next = project_graph_next_v2(&session_view).unwrap();
+    let advertised: Vec<&str> = next["readback"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|reference| reference["items"].as_array().unwrap().iter())
+        .map(|item| item["item_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(advertised, vec!["first", "second"]);
+
+    for item_id in ["first", "second"] {
+        let item = ItemId::new(item_id).unwrap();
+        let page = project_evidence_read_v1(&session_view, &node, &item, None)
+            .unwrap_or_else(|error| panic!("{item_id} was advertised but unreadable: {error:?}"));
+        assert_eq!(page["item"]["item_id"], item_id);
+        assert_eq!(page["page"]["data"], format!("value-{item_id}"));
+    }
+
+    // An item neither reference selects is still refused.
+    let absent = ItemId::new("third").unwrap();
+    assert!(matches!(
+        project_evidence_read_v1(&session_view, &node, &absent, None),
+        Err(EvidenceReadErrorV2::NotAvailable { .. })
+    ));
 }
 
 #[test]

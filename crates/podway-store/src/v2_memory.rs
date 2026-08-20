@@ -1821,23 +1821,34 @@ impl WorkflowMemoryStateV2 {
             .find(|attempt| attempt.attempt_id() == consumer_attempt_id)
             .ok_or_else(|| invalid("Procedure v2 evidence consumer trace is absent"))?;
 
-        let Some(reference) = consumer
+        // Nothing forbids a placement from declaring two references to the same source node with
+        // different selectors, and read-back publishes metadata for every one of them. Consulting
+        // only the first would make evidence the same response just advertised unreadable, so the
+        // lookup considers every reference naming this source.
+        let declared: Vec<&EvidenceResolutionStateV2> = consumer
             .evidence()
             .iter()
-            .find(|reference| reference.resolution().source_node() == source_node)
-        else {
+            .filter(|reference| reference.resolution().source_node() == source_node)
+            .collect();
+        if declared.is_empty() {
             return Ok(Err(EvidenceLookupErrorV2::ReferenceNotDeclared));
-        };
+        }
         // An empty selector selects every recorded item of the source, which is the declared
         // meaning of an omitted `items` list.
-        if !reference.selected_item_ids().is_empty()
-            && !reference
-                .selected_item_ids()
-                .iter()
-                .any(|selected| selected == item_id)
-        {
+        let selects = |reference: &EvidenceResolutionStateV2| {
+            reference.selected_item_ids().is_empty()
+                || reference
+                    .selected_item_ids()
+                    .iter()
+                    .any(|selected| selected == item_id)
+        };
+        let Some(reference) = declared
+            .iter()
+            .copied()
+            .find(|reference| selects(reference))
+        else {
             return Ok(Err(EvidenceLookupErrorV2::ItemNotSelected));
-        }
+        };
         let snapshot = match reference.resolution() {
             ResolvedEvidenceReferenceV2::Resolved(snapshot) => snapshot,
             ResolvedEvidenceReferenceV2::Skipped(_) => {

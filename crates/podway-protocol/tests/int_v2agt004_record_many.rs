@@ -250,6 +250,23 @@ fn v2scl003_record_many_schema_and_decoder_share_the_scale_envelope() {
     ))
     .unwrap();
     assert_eq!(schema["properties"]["operations"]["maxItems"], 128);
+    assert_eq!(
+        schema["properties"]["operations"]["maxItems"],
+        podway_core::MAX_ITEMS_PER_DEFINITION_V2,
+        "the input ceiling is the items one definition declares"
+    );
+
+    // The result family has to answer every operation the input admits. It emits one outcome per
+    // operation and cannot be cut — the replay-integrity check requires the counts to match — so a
+    // narrower result ceiling would let an admitted batch commit and then answer contract-invalid.
+    let result: Value = serde_json::from_slice(include_bytes!(
+        "../../../assets/schemas/item-record-many-result-v1.schema.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        result["properties"]["items"]["maxItems"], schema["properties"]["operations"]["maxItems"],
+        "the result must hold one outcome for every operation the input admits"
+    );
     let record_variants = schema["$defs"]["recordValue"]["oneOf"].as_array().unwrap();
     let text = record_variants
         .iter()

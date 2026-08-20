@@ -445,6 +445,117 @@ fn v2run003_action_readback_fixture_is_valid_and_vetted() {
 }
 
 #[test]
+fn v2scl003_record_many_answers_every_operation_the_input_admits() {
+    // The input accepts 128 operations because a definition declares 128 items. The result emits
+    // one outcome per operation and cannot be cut, so a batch past 64 is where a narrower result
+    // ceiling would let a mutation commit and then answer contract-invalid. The envelope is
+    // validated on the way out, so this is what proves the two ceilings agree.
+    const OPERATIONS: usize = 70;
+    let items: String = (0..OPERATIONS)
+        .map(|index| {
+            format!(
+                "      - id: item-{index:03}\n        type: confirm\n        prompt: Confirm {index}.\n        required: false\n"
+            )
+        })
+        .collect();
+    let procedure = format!(
+        "schema: podway.procedure/v2\nid: wide-record-many\nversion: \"2\"\nname: Wide record many\npurpose: Record more operations than the former result ceiling held.\nnode_definitions:\n  work:\n    type: action\n    title: Record work\n    intent: Record many items at once.\n    items:\n{items}graph:\n  entry: work\n  nodes:\n    - id: work\n      use: work\n      terminal: true\n"
+    );
+
+    let fixture = support_phase4_workspace::git_worktrees();
+    make_runtime_private(fixture.main());
+    fs::write(fixture.main().join("wide-record-many.yaml"), &procedure).unwrap();
+    let ParsedProcedure::V2(parsed) =
+        parse_procedure_document(procedure.as_bytes(), ProcedureDocumentFormat::Yaml).unwrap()
+    else {
+        unreachable!()
+    };
+    let procedure_digest = validate_procedure_v2(parsed).unwrap().digest().clone();
+    let workspace_selector = selector(fixture.main());
+    let runtime_manager = Arc::new(manager(fixture.temporary_path()));
+    let production = dispatcher(Arc::clone(&runtime_manager), "v2scl003-wide-record-many");
+
+    let initialize = request(
+        29_001,
+        "workspace.init",
+        &workspace_selector,
+        Map::new(),
+        "v2scl003-initialize",
+        PreconditionsV1::default(),
+    );
+    assert!(matches!(
+        dispatch(&production, &initialize),
+        ResponseEnvelopeV2::OutputV2(_)
+    ));
+    let start = request(
+        29_002,
+        "session.start",
+        &workspace_selector,
+        json!({
+            "procedure": "wide-record-many.yaml",
+            "expected_procedure_digest": procedure_digest,
+            "task_title": "V2SCL-003 wide record many"
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+        "v2scl003-start",
+        PreconditionsV1::default(),
+    );
+    let started = v2_result(dispatch(&production, &start), "session.start");
+    let session_id = started["session_id"].as_str().unwrap().to_owned();
+    begin(
+        &production,
+        &workspace_selector,
+        29_003,
+        &session_id,
+        Map::new(),
+        "v2scl003-begin",
+    );
+
+    let before = status(&production, &workspace_selector, 29_004, &session_id);
+    let operations: Vec<Value> = (0..OPERATIONS)
+        .map(|index| {
+            json!({
+                "item_id": format!("item-{index:03}"),
+                "expected_item_revision": 0,
+                "record": {"type": "confirm", "value": true}
+            })
+        })
+        .collect();
+    let batch = request(
+        29_005,
+        "item.record_many",
+        &workspace_selector,
+        json!({ "operations": operations })
+            .as_object()
+            .unwrap()
+            .clone(),
+        "v2scl003-wide-batch",
+        session_preconditions(&before),
+    );
+    let response = dispatch(&production, &batch);
+    // Encoding validates the response against its published schema, so a result carrying more
+    // outcomes than that schema admits would fail here rather than reach a caller.
+    let encoded = podway_protocol::encode_response_payload_v2(&response).unwrap();
+    assert!(encoded.len() <= podway_protocol::MAX_FRAME_PAYLOAD_BYTES_V1);
+    let result = v2_result(response, "item.record_many");
+    assert_eq!(result["schema"], "podway.item-record-many-result/v1");
+    assert_eq!(result["changed"], true);
+    assert_eq!(
+        result["items"].as_array().unwrap().len(),
+        OPERATIONS,
+        "one outcome per admitted operation, with nothing cut"
+    );
+
+    let after = status(&production, &workspace_selector, 29_006, &session_id);
+    assert_eq!(
+        after["session"]["revision"].as_u64().unwrap(),
+        before["session"]["revision"].as_u64().unwrap() + 1
+    );
+}
+
+#[test]
 fn v2agt004_record_many_updates_all_item_types_atomically_and_replays_terminal_receipt() {
     let fixture = support_phase4_workspace::git_worktrees();
     make_runtime_private(fixture.main());

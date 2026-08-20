@@ -1141,7 +1141,7 @@
       {
         "id": "urn:podway:schema:item-record-many-result:v1",
         "path": "schemas/item-record-many-result-v1.schema.json",
-        "sha256": "sha256:ec3029ef014b1673db17d06ca6942b1c77f220afc98e036e2a3b2948dcd7e000"
+        "sha256": "sha256:3c15aaa42b9317ae7cac72e17c5ca03d8ac58fd95e5a199a2dc2b2fb2ede9090"
       },
       {
         "id": "urn:podway:schema:job-lookup-result:v3",
