@@ -4989,18 +4989,20 @@ fn v2scl004_bounded_windows_report_their_exact_total_when_they_truncate() {
     assert_eq!(next["missing_required_items"].as_array().unwrap().len(), 64);
     assert_eq!(next["missing_required_items_truncated"], true);
 
-    // The standard status tier publishes the same missing set as identifiers. Its schema caps that
-    // array at 64, so raising items per definition to 128 made it able to violate its own contract.
+    // The standard status tier publishes the same missing set as identifiers. Its schema capped
+    // that array at 64, so raising items per definition to 128 made it able to violate its own
+    // contract. `status-result/v3` is released and served since v0.2.4, so the cap was raised to
+    // what a definition can declare rather than the array being windowed: windowing it would have
+    // needed a new required member, and a released family never grows one.
     let status = project_graph_status_v2(&session_view, GraphStatusTierV2::Standard, None).unwrap();
-    assert_eq!(status["missing_required_item_count"], 71);
     assert_eq!(
         status["missing_required_item_ids"]
             .as_array()
             .unwrap()
             .len(),
-        64
+        71,
+        "the identifier array carries every missing item rather than being cut"
     );
-    assert_eq!(status["missing_required_item_ids_truncated"], true);
     // The same count also travels inside `current`, whose shared definition capped it at 64. The
     // envelope validates the published schemas, so this is what proves the audit reached that
     // copy too rather than only the top-level field.
@@ -5226,6 +5228,19 @@ fn v2scl004_evidence_read_continues_a_multi_page_text_value() {
     // The pages concatenate back to the recorded value with nothing split, dropped, or repeated.
     assert_eq!(format!("{first_page}{second_page}"), text);
     assert_eq!(first["value_digest"], second["value_digest"]);
+
+    // AUT-EVR-004 bounds the complete encoded response, including its token and envelope, not only
+    // the page data. A maximal page is the widest response there is, so this is where that bound
+    // has to hold.
+    for page in [&first, &second] {
+        let response = ResponseEnvelopeV2::OutputV2(output("evidence.read", page.clone()));
+        let encoded = encode_response_payload_v2(&response).unwrap();
+        assert!(
+            encoded.len() <= 320 * 1_024,
+            "an evidence read response encoded to {} bytes",
+            encoded.len()
+        );
+    }
 
     // The preview token published in the progression response resumes the same value, so a caller
     // never has to re-read a page it already saw.

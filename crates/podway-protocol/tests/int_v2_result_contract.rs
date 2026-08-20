@@ -1334,6 +1334,55 @@ fn v2ctr003_decoder_rejects_missing_non_string_and_unregistered_discriminators()
 }
 
 #[test]
+fn v2scl002_evidence_schema_bounds_equal_the_domain_scale_envelope() {
+    // ADR-0024 requires executable tests proving exact equality between a schema literal and the
+    // domain constant it repeats, because a JSON Schema cannot import one. The evidence schemas
+    // were registered without that binding, so a drift in any of these literals caught nothing.
+    let result: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../assets/schemas/evidence-read-result-v1.schema.json"
+    ))
+    .expect("the evidence read result schema parses");
+    let data = &result["properties"]["page"]["properties"]["data"]["oneOf"];
+
+    // Page data is measured in JSON characters here and in encoded bytes in the daemon. The
+    // schema bound is the weaker of the two, so stating the relation is what keeps them honest:
+    // a character can never encode to fewer than one byte, so a payload inside the byte bound is
+    // always inside this character bound.
+    assert_eq!(
+        data[2]["maxLength"],
+        podway_core::MAX_EVIDENCE_PAGE_BYTES_V2,
+        "text page data must repeat the page byte bound as its character ceiling"
+    );
+    assert_eq!(data[3]["maxItems"], podway_core::MAX_LIST_ENTRIES_V2);
+    assert_eq!(
+        data[3]["items"]["maxLength"],
+        podway_core::MAX_LIST_ENTRY_SCALARS_V2
+    );
+
+    let components: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../assets/schemas/v2-result-components-v3.schema.json"
+    ))
+    .expect("the v3 result components schema parses");
+    assert_eq!(
+        components["$defs"]["pageToken"]["maxLength"],
+        podway_core::MAX_EVIDENCE_PAGE_TOKEN_CHARS_V2
+    );
+    assert_eq!(
+        components["$defs"]["pageTokenVersion"]["minimum"],
+        u64::from(podway_protocol::EVIDENCE_PAGE_TOKEN_VERSION_V1)
+    );
+    assert_eq!(
+        components["$defs"]["evidenceItemMetadata"]["properties"]["total_size"]["$ref"],
+        "#/$defs/logicalSize"
+    );
+    assert_eq!(
+        components["$defs"]["logicalSize"]["maximum"],
+        podway_core::MAX_TEXT_SCALARS_V2,
+        "a logical size is measured in scalars, entries, or one value, so the widest is text"
+    );
+}
+
+#[test]
 fn v2scl004_evidence_read_binds_one_result_family_and_is_admitted() {
     let registered: Vec<_> = EXISTING_ROUTE_RESULT_SCHEMAS_V2
         .iter()

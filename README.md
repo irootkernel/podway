@@ -213,10 +213,11 @@ podway start --procedure .podway/procedures/custom.yaml --task "review queue beh
 podway begin
 ```
 
-Selected evidence is read one bounded page at a time. `podway next --json` and
-`podway observe --json` carry each item's identity, digest, and total size with at most a
-short preview; `podway evidence read --source <graph-node-id> --item <item-id>` returns the
-complete value, following `next_page_token` until `truncated` is `false`.
+Selected evidence is read one bounded page at a time. `podway next --json` carries each
+item's identity, digest, and total size, and may add a short preview with a continuation
+token. `podway observe --json` carries the same metadata but never a preview or a token.
+`podway evidence read --source <graph-node-id> --item <item-id>` returns the complete value,
+following `next_page_token` until `truncated` is `false`.
 
 Rework is part of the normal lifecycle:
 

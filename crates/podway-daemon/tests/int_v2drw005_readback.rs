@@ -926,6 +926,49 @@ fn v2scl004_production_dispatch_serves_and_fences_evidence_read() {
     // The recovery recipe must send the caller back to a read, never to another mutation.
     assert_eq!(error["details"]["recovery"]["command"], "session.observe");
 
+    // A token naming another session is refused before any state comparison, so an invented token
+    // cannot reveal whether a session exists. That ordering is a property of the dispatch path,
+    // not only of the projection helper, so it is asserted on the public envelope.
+    let foreign = podway_protocol::EvidencePageTokenV1::new(
+        "00000000-0000-4000-8000-0000000000ff",
+        &source_attempt,
+        &source_attempt,
+        "result",
+        page["value_digest"].as_str().unwrap(),
+        0,
+    )
+    .unwrap()
+    .encode();
+    let request = runtime::request(
+        next_number(&mut number),
+        "evidence.read",
+        &selector,
+        json!({"source": "work", "item_id": "result", "page_token": foreign})
+            .as_object()
+            .unwrap()
+            .clone(),
+        "unused-v2scl004-foreign-key",
+        PreconditionsV1::new(
+            Some(SessionId::new(&session_id).unwrap()),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let response = runtime::dispatch(&production, &request);
+    assert_bounded_response(&response);
+    let ResponseEnvelopeV2::Error(error) = &response else {
+        panic!("a cross-session token must fail: {response:?}")
+    };
+    let error = serde_json::to_value(error).unwrap();
+    assert_eq!(error["code"], "REQUEST_INVALID");
+    assert_eq!(error["retryable"], false);
+    // Nothing about the named session, attempt, or item may leak into the refusal.
+    assert_eq!(error["details"], json!({}));
+
     // A malformed page token never reaches dispatch at all: the request decoder refuses it, which
     // `v2scl004_evidence_read_decodes_and_rejects_a_malformed_page_token` proves at that boundary.
     let envelope = RequestEnvelopeV1::new(RequestEnvelopeInputV1 {

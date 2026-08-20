@@ -31,6 +31,7 @@ use podway_core::{
     MAX_EVIDENCE_PREVIEW_BYTES_V2,
     MAX_EVIDENCE_PREVIEW_SCALARS_V2,
     MAX_EVIDENCE_PREVIEW_SLOTS_V2,
+    MAX_EVIDENCE_RESPONSE_BYTES_V2,
     MAX_MISSING_ITEM_WINDOW_V2,
     MAX_MUTATION_TEMPLATE_WINDOW_V2,
     MAX_OBSERVATION_ACTIVE_ITEM_BYTES_V2,
@@ -173,21 +174,14 @@ pub fn project_graph_status_v2(
     }
 
     result.insert("purpose".to_owned(), json!(state.snapshot().purpose()));
-    let (missing_ids, missing_total, missing_truncated) = current
-        .as_ref()
-        .map(CurrentProjection::missing_ids)
-        .unwrap_or_default();
-    result.insert(
-        "missing_required_item_count".to_owned(),
-        json!(missing_total),
-    );
-    result.insert(
-        "missing_required_item_ids_truncated".to_owned(),
-        json!(missing_truncated),
-    );
     result.insert(
         "missing_required_item_ids".to_owned(),
-        Value::Array(missing_ids),
+        Value::Array(
+            current
+                .as_ref()
+                .map(CurrentProjection::missing_ids)
+                .unwrap_or_default(),
+        ),
     );
     let (blockers, blockers_truncated) = current
         .as_ref()
@@ -473,6 +467,18 @@ pub fn project_evidence_read_v1(
         "page_token_version".to_owned(),
         json!(EVIDENCE_PAGE_TOKEN_VERSION_V1),
     );
+
+    // ADR-0024 and AUT-EVR-004 bound the complete response, not only its page data. That bound sits
+    // far below the 1 MiB frame, so the frame cannot prove it and it is measured here. A page is
+    // built to fit, so exceeding this is an inconsistency rather than something to trim: trimming
+    // would contradict the size and offset the same response publishes.
+    if serialized_bytes_v1(&Value::Object(result.clone())) > MAX_EVIDENCE_RESPONSE_BYTES_V2 {
+        return Err(EvidenceReadErrorV2::View(
+            GraphViewErrorV2::InconsistentState(
+                "an evidence read response exceeded its published byte bound",
+            ),
+        ));
+    }
     Ok(result)
 }
 
@@ -1287,21 +1293,18 @@ impl<'a> CurrentProjection<'a> {
             .collect()
     }
 
-    /// The bounded missing-item identifier window.
+    /// The complete missing-item identifier set.
     ///
     /// Raising items per definition to 128 made this array able to exceed the 64 its own schema
-    /// publishes, so it is windowed like every other derived collection: the exact count travels
-    /// with it and the cut is never silent.
-    fn missing_ids(&self) -> (Vec<Value>, usize, bool) {
-        let total = self.missing_required.len();
-        let ids: Vec<Value> = self
-            .missing_required
+    /// published. `status-result/v3` is a released, served family, so the schema was corrected to
+    /// hold what a definition can declare rather than the array being windowed: windowing it would
+    /// have needed a new required member, and a released family never grows one. Identifiers are
+    /// small, so carrying all 128 costs less than the count and flag that would describe a cut.
+    fn missing_ids(&self) -> Vec<Value> {
+        self.missing_required
             .iter()
-            .take(MAX_MISSING_ITEM_WINDOW_V2)
             .map(|item| json!(item.id().as_str()))
-            .collect();
-        let truncated = ids.len() < total;
-        (ids, total, truncated)
+            .collect()
     }
 
     /// The bounded missing-item detail window.

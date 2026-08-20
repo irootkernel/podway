@@ -58,6 +58,13 @@ pub const EVIDENCE_ENTRY_OVERHEAD_BYTES_V2: usize = 8;
 /// The maximum encoded bytes one `evidence.read` page may carry.
 pub const MAX_EVIDENCE_PAGE_BYTES_V2: usize = 262_144;
 
+/// The maximum encoded bytes one complete `evidence.read` response may occupy.
+///
+/// ADR-0024 and `AUT-EVR-004` publish this as a normative bound on the whole response, not only on
+/// its page data: the page, its identity metadata, one continuation token, and the envelope
+/// together must fit. It is far below the 1 MiB frame, so the frame cannot prove it.
+pub const MAX_EVIDENCE_RESPONSE_BYTES_V2: usize = 320 * 1_024;
+
 /// The maximum evidence items that may carry a preview in one `session.next` response.
 pub const MAX_EVIDENCE_PREVIEW_SLOTS_V2: usize = 32;
 
@@ -161,6 +168,19 @@ mod tests {
                 + MAX_LIST_ENTRY_SCALARS_V2 as usize * EVIDENCE_SCALAR_BYTES_V2
                 <= MAX_EVIDENCE_PAGE_BYTES_V2
         );
+    }
+
+    #[test]
+    fn v2scl004_an_evidence_response_holds_its_page_with_room_for_identity_and_a_token() {
+        // The response bound has to exceed the page bound by enough for identity metadata and one
+        // continuation token, or the published page size would be unreachable in practice.
+        const {
+            assert!(MAX_EVIDENCE_RESPONSE_BYTES_V2 > MAX_EVIDENCE_PAGE_BYTES_V2);
+            assert!(
+                MAX_EVIDENCE_RESPONSE_BYTES_V2 - MAX_EVIDENCE_PAGE_BYTES_V2
+                    > MAX_EVIDENCE_PAGE_TOKEN_CHARS_V2
+            );
+        }
     }
 
     #[test]

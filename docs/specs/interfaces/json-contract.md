@@ -53,7 +53,7 @@ disjoint cursor-free prepared result. The `evidence.read` branch is
 procedure-independent and carries no durable job. Prepared status uses null cursor, attempt,
 goal, and readiness projections; prepared observation has no active items and
 contains only bounded lifecycle guidance and applicable fenced templates.
-Existing released closed schemas are not widened in place.
+Existing released closed schemas are not widened in place, apart from the bounded numeric constraint updates and closed `kind` additions described above, which change no field set and no unknown-field closure.
 Released v3 job wrappers remain closed over their original command set. `job status`,
 `job wait`, and `job lookup` emit v4 wrappers, which add prepared-lifecycle commands
 while keeping an embedded terminal success as a non-recursive `podway.output/v3`

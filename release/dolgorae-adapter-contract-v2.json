@@ -1311,7 +1311,7 @@
       {
         "id": "urn:podway:schema:status-result:v3",
         "path": "schemas/status-result-v3.schema.json",
-        "sha256": "sha256:fae04f1d6f4059f6b52acb1195512000122b451dadda6de6fb83f4997759ac63"
+        "sha256": "sha256:ed255005238b19df2f1564911259ebd74ba1dc3b3db139e94af213f6dac0b97d"
       },
       {
         "id": "urn:podway:schema:terminal-disposition-result:v1",
