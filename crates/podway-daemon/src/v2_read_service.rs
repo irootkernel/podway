@@ -469,9 +469,12 @@ pub fn project_evidence_read_v1(
     );
 
     // ADR-0024 and AUT-EVR-004 bound the complete response, not only its page data. That bound sits
-    // far below the 1 MiB frame, so the frame cannot prove it and it is measured here. A page is
-    // built to fit, so exceeding this is an inconsistency rather than something to trim: trimming
-    // would contradict the size and offset the same response publishes.
+    // far below the 1 MiB frame, so the frame cannot prove it and it is measured here. What is
+    // measured is the result member; the outer envelope adds a request id, command, workspace, and
+    // warnings, which the 64 KiB between the page bound and this one covers many times over, and a
+    // test asserts the encoded envelope on a maximal page. A page is built to fit, so exceeding
+    // this is an inconsistency rather than something to trim: trimming would contradict the size
+    // and offset the same response publishes.
     if serialized_bytes_v1(&Value::Object(result.clone())) > MAX_EVIDENCE_RESPONSE_BYTES_V2 {
         return Err(EvidenceReadErrorV2::View(
             GraphViewErrorV2::InconsistentState(

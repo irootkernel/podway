@@ -33,7 +33,7 @@ node_definitions:
         prompt: Record the result.
         required: true
         min_length: 1
-        max_length: 200
+        max_length: 65536
         multiline: false
   review:
     type: decision
@@ -873,6 +873,74 @@ fn v2scl004_production_dispatch_serves_and_fences_evidence_read() {
     assert_eq!(error["code"], "EVIDENCE_NOT_AVAILABLE");
     assert_eq!(error["exit_code"], 1);
     assert_eq!(error["retryable"], false);
+
+    // A value wider than one page must page over the real wire, not only through the projection
+    // helper: the continuation the caller receives has to survive encoding, decoding, and the
+    // request boundary that re-validates it.
+    let wide = "w".repeat(50_000);
+    set_item(
+        &production,
+        &selector,
+        &session_id,
+        &mut number,
+        "note",
+        "decision note",
+    );
+    let reworked = decide(
+        &production,
+        &selector,
+        &session_id,
+        &mut number,
+        "reject",
+        "Reject so the work node can record a value wider than one page.",
+    );
+    assert_eq!(reworked["record"]["option_id"], "reject");
+    let back_at_work = status(&production, &selector, &session_id, &mut number);
+    assert_eq!(back_at_work["current"]["node"]["graph_node_id"], "work");
+    set_item(
+        &production,
+        &selector,
+        &session_id,
+        &mut number,
+        "result",
+        &wide,
+    );
+    let completed = complete(&production, &selector, &session_id, &mut number);
+    assert_eq!(completed["to_graph_node_id"], "review");
+
+    let first_wide = query(
+        &production,
+        &selector,
+        &session_id,
+        &mut number,
+        "evidence.read",
+        json!({"source": "work", "item_id": "result"})
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+    assert_eq!(first_wide["total_size"], 50_000);
+    assert_eq!(first_wide["truncated"], true);
+    let first_chunk = first_wide["page"]["data"].as_str().unwrap().to_owned();
+    assert_eq!(first_chunk.chars().count(), 43_690);
+    let continuation = first_wide["next_page_token"].as_str().unwrap().to_owned();
+
+    let second_wide = query(
+        &production,
+        &selector,
+        &session_id,
+        &mut number,
+        "evidence.read",
+        json!({"source": "work", "item_id": "result", "page_token": continuation})
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+    assert_eq!(second_wide["page"]["offset"], 43_690);
+    assert_eq!(second_wide["truncated"], false);
+    assert_eq!(second_wide["next_page_token"], Value::Null);
+    let second_chunk = second_wide["page"]["data"].as_str().unwrap().to_owned();
+    assert_eq!(format!("{first_chunk}{second_chunk}"), wide);
 
     // A token from an earlier consumer attempt is the recoverable case: the caller re-reads state
     // and restarts the item, so the public envelope must say retryable with the state-refresh exit

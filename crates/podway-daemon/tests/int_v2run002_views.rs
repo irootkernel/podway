@@ -3115,6 +3115,50 @@ fn paged_text_readback_state_with_validity(
     source_and_consumer_state_with_validity(&base, source_memory, consumer_memory, source_validity)
 }
 
+/// The wide node with every item recorded, so the value-bearing collections are at their widest.
+fn wide_node_state_with_recorded_values(source: &[u8]) -> GraphSessionStateV2 {
+    let base = wide_node_state(source);
+    let attempt_id = AttemptId::new(ATTEMPT_ID).unwrap();
+    let slots = base.workflow_memory().attempts()[0]
+        .item_slots()
+        .iter()
+        .map(|slot| {
+            let value = match slot.item_type() {
+                podway_core::ItemTypeV1::Choice => {
+                    RecordedItemValueV2::choice("choice-0".to_owned()).unwrap()
+                }
+                _ => RecordedItemValueV2::text("recorded").unwrap(),
+            };
+            ItemSlotStateV2::new(
+                attempt_id.clone(),
+                slot.item_id().clone(),
+                slot.item_type(),
+                Revision::new(1),
+                Some(value),
+                slot.created_at(),
+                UnixMillis::new(slot.created_at().get() + 1),
+            )
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let memory = AttemptWorkflowMemoryV2::new(attempt_id, slots, Vec::new(), Vec::new()).unwrap();
+    GraphSessionStateV2::new_with_goal_state(
+        base.workspace_revision(),
+        base.task_title(),
+        base.snapshot().clone(),
+        base.trace().clone(),
+        base.counters().to_vec(),
+        base.attempt_metadata().to_vec(),
+        WorkflowMemoryStateV2::new(vec![memory], Vec::new(), Vec::new()).unwrap(),
+        base.goal_state().clone(),
+        base.created_at(),
+        None,
+        None,
+        None,
+    )
+    .unwrap()
+}
+
 /// One running attempt at a node declaring `items`, with nothing recorded.
 ///
 /// The bounded windows (`missing_required_items`, observation choices) are properties of the
@@ -5011,6 +5055,22 @@ fn v2scl004_bounded_windows_report_their_exact_total_when_they_truncate() {
     let compact = project_graph_status_v2(&session_view, GraphStatusTierV2::Compact, None).unwrap();
     assert_eq!(compact["current"]["missing_required_item_count"], 71);
     assert_output_v2("session.status", compact);
+
+    // The same widening applies to recorded values. `item_values` is bounded by bytes rather than
+    // by count, so 128 small values all reach the response, and `items_total` describes them; both
+    // had ceilings a 128-item definition can exceed. Validating the envelope is what proves the
+    // corrected ceilings agree with what the daemon emits.
+    let recorded = view(wide_node_state_with_recorded_values(&source));
+    let recorded_status =
+        project_graph_status_v2(&recorded, GraphStatusTierV2::Standard, None).unwrap();
+    assert_eq!(recorded_status["items_total"], 71);
+    assert_eq!(
+        recorded_status["item_values"].as_array().unwrap().len(),
+        71,
+        "every recorded value reaches the response, so its ceiling must hold them"
+    );
+    assert_eq!(recorded_status["items_truncated"], false);
+    assert_output_v2("session.status", recorded_status);
 
     let observation = project_graph_observation_v1(&session_view).unwrap();
     let choice = observation["active_items"]
