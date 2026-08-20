@@ -10,7 +10,7 @@
 - Candidate scale: release-program scale, comparable to `PV2GA` or larger
 - Repository scope: Podway only
 - Research and planning baseline: August 17, 2026
-- Related adopted dossier: [Podway External Check Assurance Typing](TODO-podway-assurance-typing.md), epic `V2AST`
+- Related implemented authority: [ADR-0025](../architecture-decision-records/0025-structurally-bound-external-check-results.md), epic `V2AST`
 
 This document is the single repository location for the research, working
 decisions, rejected directions, unresolved questions, and promotion conditions
@@ -304,8 +304,8 @@ recorded assertions.
 
 Unlike the parallelism boundary described next, this is a defect in the shipped
 product rather than a limit whose cost has yet to be demonstrated. It is
-therefore owned by the adopted dossier
-[Podway External Check Assurance Typing](TODO-podway-assurance-typing.md), so
+therefore owned by the implemented
+[structurally bound external check-result authority](../architecture-decision-records/0025-structurally-bound-external-check-results.md), so
 that its remedy does not depend on the topology proposed here.
 
 ### 5.5 Current parallelism boundary
@@ -611,9 +611,9 @@ minutes and a one-hour maximum as examples, not accepted constants.
 
 ## 9. Improvement theme B: separate assertion from mechanical verification
 
-This theme is owned by the adopted dossier
-[Podway External Check Assurance Typing](TODO-podway-assurance-typing.md), which
-holds epic `V2AST` and targets v0.3.0.
+This theme is owned by
+[ADR-0025](../architecture-decision-records/0025-structurally-bound-external-check-results.md),
+implemented by epic `V2AST`.
 
 The reason for the split was evidence status, not lack of importance. The gap it
 describes exists in the shipped product, as section 5.4 records: a `confirm` item
@@ -624,11 +624,11 @@ or a parallel frontier. Keeping it inside this document would have made the
 cheapest and best-evidenced improvement wait behind the most expensive and
 least-evidenced one.
 
-That dossier owns the assurance classes, the receipt binding, and the honest
-statement of what a receipt does not prove. It has also settled the question this
-document previously left open. A `check_receipt` binds to a declared operation
+That authority owns the assurance classes, the result binding, and the honest
+statement of what a result does not prove. It has also settled the question this
+document previously left open. A `check_result` binds to a declared operation
 identity and an exact input basis with no work-unit, map-instance, or lease
-identity, so the receipt is useful without any of them and the two documents do
+identity, so the result is useful without any of them and the two documents do
 not merge back together.
 
 The fan-specific identities are therefore a conditional extension rather than a
@@ -958,8 +958,8 @@ rules, and compatibility consequences require a separate decision.
 ## 12. Integrated conceptual model
 
 The improvement themes reinforce one another. Assurance typing appears here
-because the combined picture is easier to read with it, but it is owned by the
-adopted [Podway External Check Assurance Typing](TODO-podway-assurance-typing.md)
+because the combined picture is easier to read with it, but it is owned by
+[ADR-0025](../architecture-decision-records/0025-structurally-bound-external-check-results.md)
 and does not depend on the rest of this diagram:
 
 ```text
@@ -1158,16 +1158,16 @@ Each candidate feature needs its own verdict before a version decision is made:
 
 | Feature | Contracts it touches | Breaking for existing v2 consumers? |
 |---|---|---|
-| Assurance kind on recorded evidence | Item contracts, recording route, observation results | Decided by `V2AST`: additive through a new `check_receipt` item type, with the Procedure schema remaining `podway.procedure/v2` |
-| Mechanical receipt record | Existing `item.record_many` route, SQLite v5 item discriminator | Decided by `V2AST`: additive, with no separate result family and no second receipt table or lifecycle |
+| Assurance kind on recorded evidence | Item contracts, recording route, observation results | Decided by `V2AST`: additive through a new `check_result` item type, with the Procedure schema remaining `podway.procedure/v2` |
+| Mechanical result record | Existing `item.record_many` route, SQLite v6 item discriminator | Decided by `V2AST`: additive, with no separate result family and no second result table or lifecycle |
 | Work claim, lease, and report routes | New routes, new result families, daemon behavior | Additive at the protocol level; no v2 document changes |
 | Fan placement and effects | Procedure schema topology, vetting, cursor semantics | Breaking; changes what a placement is |
 | Dynamic map expansion | Procedure schema, vetting, resource budgets, storage | Breaking; changes admission-time boundedness proofs |
 | Join and group outcome | Cursor semantics, transitions, terminal derivation | Breaking; changes when and how the cursor moves |
 | `failed` session lifecycle | Session status set, observation, receipts, consumers | Breaking; extends a closed enumeration |
 
-The first two rows are no longer open. They are owned by the adopted dossier
-[Podway External Check Assurance Typing](TODO-podway-assurance-typing.md), which
+The first two rows are no longer open. They are owned by
+[ADR-0025](../architecture-decision-records/0025-structurally-bound-external-check-results.md), which
 settled them additively without requiring a procedure generation. The remaining
 rows record the shape of the question rather than answers, and filling them in is
 prerequisite work.
@@ -1234,7 +1234,7 @@ has adopted it.
 |---|---|---|
 | Product role | Durable graph authority, not executor | Preserves a narrow product and composes with mature runtimes |
 | Integration | Versioned CLI/JSON with thin adapters | Keeps one generic public surface and avoids provider coupling |
-| Assurance | Not a direction of this candidate; decided by the adopted [Podway External Check Assurance Typing](TODO-podway-assurance-typing.md) | Listed only as a pointer, because a Candidate holds no preferred direction over adopted authority |
+| Assurance | Not a direction of this candidate; decided by [ADR-0025](../architecture-decision-records/0025-structurally-bound-external-check-results.md) | Listed only as a pointer, because a Candidate holds no preferred direction over implemented authority |
 | Trust | Structural and freshness assurance only | Matches the same-user trust model and avoids false security claims |
 | Lease expiry | Lazy evaluation inside the state transaction that next touches the unit, with a daemon-recorded instant, rather than a timer | Keeps the property that no domain state changes without a request, fixes one explicit evaluation point instead of two, and makes replay stable through the stored outcome |
 | Snapshot | Executor-owned immutable snapshot descriptor | Keeps snapshot bytes and execution infrastructure outside Podway |
@@ -1282,9 +1282,9 @@ experiment in section 20.1 is real. A negative result does not reorder the list
 below; it removes it. The numbered decisions are the ones that would matter if
 that question is answered affirmatively.
 
-Three decisions previously listed here have been removed because the adopted
-[Podway External Check Assurance Typing](TODO-podway-assurance-typing.md) decided
-them: the exact receipt schema, canonical digest, and size bounds; whether an
+Three decisions previously listed here have been removed because
+[ADR-0025](../architecture-decision-records/0025-structurally-bound-external-check-results.md) decided
+them: the exact check-result schema, canonical digest, and size bounds; whether an
 operation definition carries only an opaque identifier and digest; and whether
 human approval is a third assurance class.
 
@@ -1368,8 +1368,8 @@ section 20.1 and is bounded by condition 1 of section 21, which bars wholesale
 promotion while material shapes remain unexercised.
 
 Assurance and receipt items appear below only where a fan group changes them.
-The base assurance work is owned by the adopted
-[Podway External Check Assurance Typing](TODO-podway-assurance-typing.md) and
+The base assurance work is owned by
+[ADR-0025](../architecture-decision-records/0025-structurally-bound-external-check-results.md) and
 must not be counted twice.
 
 - **Architecture authority:** new ADRs for executor neutrality and receipts,
@@ -1725,7 +1725,7 @@ Current authority and implementation context:
 
 - [Contributor Documentation](../README.md)
 - [TODO and Adopted Design Dossiers](README.md)
-- [Podway External Check Assurance Typing](TODO-podway-assurance-typing.md)
+- [ADR-0025: Structurally Bound External Check Results](../architecture-decision-records/0025-structurally-bound-external-check-results.md)
 - [ADR-0001: Focus on One Current Task Session](../architecture-decision-records/0001-current-task-session-focus.md)
 - [ADR-0002: Keep One Active Stage](../architecture-decision-records/0002-single-active-stage.md)
 - [ADR-0003: Use the Daemon as the Sole Normal Writer](../architecture-decision-records/0003-daemon-single-writer.md)

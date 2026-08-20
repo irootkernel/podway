@@ -84,8 +84,6 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 
 ## Current adopted dossiers
 
-- [Podway External Check Result Typing](TODO-podway-assurance-typing.md)
-  owns `V2AST`.
 - [Podway Typed Guards and Authoring Diagnostics](TODO-podway-typed-guards.md)
   owns `V2GRD`.
 - [Podway Reference Procedures and Authoring Guidance](TODO-podway-reference-procedures.md)

@@ -36,6 +36,25 @@ fn check_result_record() -> Value {
     })
 }
 
+fn maximal_check_result_record() -> Value {
+    json!({
+        "type": "check_result",
+        "operation_id": "o".repeat(64),
+        "operation_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "input_basis": {
+            "descriptor": "\u{10ffff}".repeat(512),
+            "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "executor": {
+            "name": "\u{10ffff}".repeat(128),
+            "version": "\u{10ffff}".repeat(64)
+        },
+        "outcome": "inconclusive",
+        "summary": "\u{10ffff}".repeat(2_000),
+        "output_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    })
+}
+
 #[test]
 fn v2agt004_stdin_accepts_all_typed_values_and_canonicalizes_item_order() {
     let decoded = decode_item_record_many_input_v1(&input(json!([
@@ -187,6 +206,54 @@ fn v2agt004_stdin_accepts_exactly_128_operations_and_rejects_129() {
         128
     );
     assert!(decode_item_record_many_input_v1(&input(operations(129))).is_err());
+}
+
+#[test]
+fn v2ast006_maximal_check_results_require_frame_sized_split_batches() {
+    let operations = |start: usize, count: usize| {
+        Value::Array(
+            (start..start + count)
+                .map(|index| {
+                    json!({
+                        "item_id": format!("check-{index:03}"),
+                        "expected_item_revision": 0,
+                        "record": maximal_check_result_record()
+                    })
+                })
+                .collect(),
+        )
+    };
+
+    // The split count follows the current scalar maxima encoded as UTF-8, not the independent
+    // 32 KiB per-value ceiling. Keep that coupling explicit if any scalar bound changes.
+    let maximal_record_bytes = serde_json::to_vec(&maximal_check_result_record())
+        .unwrap()
+        .len();
+    assert!(maximal_record_bytes <= podway_core::MAX_CHECK_RESULT_VALUE_BYTES_V2);
+    assert!(maximal_record_bytes * 64 < MAX_FRAME_PAYLOAD_BYTES_V1);
+    assert!(maximal_record_bytes * 128 > MAX_FRAME_PAYLOAD_BYTES_V1);
+
+    let complete_attempt = input(operations(0, 128));
+    assert!(complete_attempt.len() > MAX_FRAME_PAYLOAD_BYTES_V1);
+    assert!(decode_item_record_many_input_v1(&complete_attempt).is_err());
+
+    for half in [operations(0, 64), operations(64, 64)] {
+        let batch = input(half);
+        assert!(batch.len() <= MAX_FRAME_PAYLOAD_BYTES_V1);
+        assert_eq!(
+            decode_item_record_many_input_v1(&batch)
+                .unwrap()
+                .operations
+                .len(),
+            64
+        );
+    }
+
+    assert_eq!(
+        podway_core::MAX_CHECK_RESULT_VALUE_BYTES_V2 * podway_core::MAX_ITEMS_PER_DEFINITION_V2,
+        4 * 1_024 * 1_024,
+        "the per-value ceiling derives the documented 4 MiB attempt product"
+    );
 }
 
 #[test]

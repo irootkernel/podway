@@ -1,39 +1,51 @@
 {
   "schema": "podway.v2-fixture-recipe/v1",
   "fixture_class": "compatibility",
-  "evidence_level": "canonical-contract",
-  "implementation_status": "reserved",
-  "production_proof_required": true,
+  "evidence_level": "production-serialization",
+  "implementation_status": "automated",
+  "production_proof_required": false,
   "cases": [
     {
       "id": "closed-public-shapes",
       "operation": "validate the declaration, complete value, five-field projection, read-back, stdin record, and record result branches",
       "expected": "accepted-only-with-the-complete-closed-shape",
-      "proof_task": "V2AST-002"
+      "proof_task": "V2AST-006",
+      "proof": {"kind": "cargo-test-set", "members": [{"kind": "cargo-test", "path": "crates/podway-protocol/tests/int_v2_result_contract.rs", "function": "v2ast002_reserves_closed_check_result_declaration_and_record_shapes", "command": "cargo test -p podway-protocol --test int_suite int_v2_result_contract::v2ast002_reserves_closed_check_result_declaration_and_record_shapes --locked -- --exact"}, {"kind": "cargo-test", "path": "crates/podway-protocol/tests/int_v2agt004_record_many.rs", "function": "v2ast004_check_result_decoder_enforces_closed_shape_and_scalar_bounds", "command": "cargo test -p podway-protocol --test int_suite int_v2agt004_record_many::v2ast004_check_result_decoder_enforces_closed_shape_and_scalar_bounds --locked -- --exact"}]}
     },
     {
       "id": "artifact-disjointness",
       "operation": "validate complete artifact and external check-result values against the shared exact-one union",
       "expected": "exactly-one-branch-matches",
-      "proof_task": "V2AST-002"
+      "proof_task": "V2AST-006",
+      "proof": {"kind": "cargo-test", "path": "crates/podway-protocol/tests/int_v2_result_contract.rs", "function": "v2ast002_complete_preview_readback_and_artifact_branches_are_disjoint", "command": "cargo test -p podway-protocol --test int_suite int_v2_result_contract::v2ast002_complete_preview_readback_and_artifact_branches_are_disjoint --locked -- --exact"}
     },
     {
       "id": "storage-reservation",
       "operation": "apply schema-5-external-check-result-items using canonical sqlite-v6.sql",
       "expected": "version-6-preserves-existing-value-json-bytes-and-admits-check-result",
-      "proof_task": "V2AST-002"
+      "proof_task": "V2AST-006",
+      "proof": {"kind": "cargo-test-set", "members": [{"kind": "cargo-test", "path": "crates/podway-store/tests/int_v2_only_schema.rs", "function": "v2ast002_sqlite_v6_reservation_preserves_values_and_extends_only_the_item_discriminator", "command": "cargo test -p podway-store --test int_suite int_v2_only_schema::v2ast002_sqlite_v6_reservation_preserves_values_and_extends_only_the_item_discriminator --locked -- --exact"}, {"kind": "cargo-test", "path": "crates/podway-store/tests/int_v2_only_schema.rs", "function": "v2ast004_runtime_migrates_v5_to_v6_without_reencoding_item_values", "command": "cargo test -p podway-store --test int_suite int_v2_only_schema::v2ast004_runtime_migrates_v5_to_v6_without_reencoding_item_values --locked -- --exact"}]}
     },
     {
-      "id": "runtime-non-admission",
-      "operation": "submit a check_result Procedure and item.record_many value before V2AST runtime implementation",
-      "expected": "rejected-before-state-mutation",
-      "proof_task": "V2AST-002"
+      "id": "runtime-admission-and-recovery",
+      "operation": "submit, replay, restart, retry, and read back a structurally bound check_result through production dispatch",
+      "expected": "atomic-record-replay-restart-retry-and-readback-conformant",
+      "proof_task": "V2AST-006",
+      "proof": {"kind": "cargo-test-set", "members": [{"kind": "cargo-test", "path": "crates/podway-daemon/tests/int_v2run003_runtime.rs", "function": "v2ast004_check_results_record_atomically_replay_restart_and_expire_on_retry", "command": "cargo test -p podway-daemon --test int_suite int_v2run003_runtime::v2ast004_check_results_record_atomically_replay_restart_and_expire_on_retry --locked -- --exact"}, {"kind": "cargo-test", "path": "crates/podway-daemon/tests/int_v2run002_views.rs", "function": "v2ast006_maximal_check_result_readback_is_one_complete_bounded_page", "command": "cargo test -p podway-daemon --test int_suite int_v2run002_views::v2ast006_maximal_check_result_readback_is_one_complete_bounded_page --locked -- --exact"}]}
+    },
+    {
+      "id": "frame-sized-batches",
+      "operation": "record the scalar-maximal check-result set through frame-sized item.record_many batches",
+      "expected": "oversized-complete-batch-rejected-and-two-halves-accepted",
+      "proof_task": "V2AST-006",
+      "proof": {"kind": "cargo-test", "path": "crates/podway-protocol/tests/int_v2agt004_record_many.rs", "function": "v2ast006_maximal_check_results_require_frame_sized_split_batches", "command": "cargo test -p podway-protocol --test int_suite int_v2agt004_record_many::v2ast006_maximal_check_results_require_frame_sized_split_batches --locked -- --exact"}
     },
     {
       "id": "identity-stability",
-      "operation": "compare canonical Procedure and built-in preset digests before and after contract reservation",
+      "operation": "validate canonical YAML and JSON equivalence and pinned built-in preset identities",
       "expected": "existing-identities-unchanged",
-      "proof_task": "V2AST-002"
+      "proof_task": "V2AST-006",
+      "proof": {"kind": "cargo-test-set", "members": [{"kind": "cargo-test", "path": "crates/podway-config/tests/int_v2_procedure_canonical.rs", "function": "v2ast003_check_result_yaml_and_json_share_one_canonical_declaration", "command": "cargo test -p podway-config --test int_suite int_v2_procedure_canonical::v2ast003_check_result_yaml_and_json_share_one_canonical_declaration --locked -- --exact"}, {"kind": "cargo-test", "path": "crates/podway-presets/tests/int_v2dog003_preset_identity.rs", "function": "v2_presets_embed_the_exact_canonical_sources_and_pinned_digests", "command": "cargo test -p podway-presets --test int_suite int_v2dog003_preset_identity::v2_presets_embed_the_exact_canonical_sources_and_pinned_digests --locked -- --exact"}]}
     }
   ]
 }

@@ -287,8 +287,8 @@ or truncation rules so accumulated history cannot break the 1 MiB frame contract
 
 ### 5.2 External check result typing
 
-[Podway External Check Result Typing](TODO-podway-assurance-typing.md) is largely
-compatible. A `check_result` remains an attempt-local, structurally bound external
+[ADR-0025](../architecture-decision-records/0025-structurally-bound-external-check-results.md)
+is compatible. A `check_result` remains an attempt-local, structurally bound external
 result whose operation and input basis belong to an immutable group definition and
 activation. A successor may extend its runtime binding with continuation,
 fan-group, work-unit, map-instance, or lease identity without changing its honest
@@ -469,7 +469,7 @@ narrowed to the smallest independently motivated mechanism.
 - [TODO and Adopted Design Dossiers](README.md)
 - [Podway Graph Engineering Evolution](TODO-podway-graph-engineering-evolution.md)
 - [ADR-0024: Bounded Evidence Scale and Paged Read-back](../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md)
-- [Podway External Check Result Typing](TODO-podway-assurance-typing.md)
+- [ADR-0025: Structurally Bound External Check Results](../architecture-decision-records/0025-structurally-bound-external-check-results.md)
 - [Podway Typed Guards and Authoring Diagnostics](TODO-podway-typed-guards.md)
 - [Podway Reference Procedures and Authoring Guidance](TODO-podway-reference-procedures.md)
 - [ADR-0017: Permit Single-Cursor Convergence](../architecture-decision-records/0017-single-cursor-convergence.md)

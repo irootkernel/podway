@@ -1,12 +1,12 @@
 # SQLite Model
 
-The implemented canonical DDL history is `sqlite-v1.sql` through `sqlite-v5.sql`
+The implemented canonical DDL history is `sqlite-v1.sql` through `sqlite-v6.sql`
 under `assets/specifications/`. New databases currently apply that ordered
-history in one transaction and finish at schema version 5. The v5 contract is
+history in one transaction and finish at schema version 6. The v5 contract is
 normative under ADR-0021; `V2LIF-002` reserved its exact canonical DDL and
-`V2LIF-003` admitted it in runtime. ADR-0025 requires schema v6 for external
-check results; `V2AST-002` reserves its canonical DDL and named migration before
-`V2AST-004` admits it in runtime.
+`V2LIF-003` admitted it in runtime. ADR-0025 owns schema v6 for external check
+results; `V2AST-002` reserved its canonical DDL and named migration, and
+`V2AST-004` admitted it in runtime.
 
 Schema v6 rebuilds `v2_item_slots` so its closed item discriminator additionally
 admits `check_result`. The v5-to-v6 migration preserves every existing

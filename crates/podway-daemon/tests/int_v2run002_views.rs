@@ -11,11 +11,11 @@ use podway_core::{
     CriterionAssessmentResultV2, CriterionCitationV2, CriterionId, CriterionStatusV2,
     DecisionRecordInputV2, DecisionRecordV2, EvidenceReferenceSnapshotV2, GoalAssessmentRecordV2,
     GoalCriterionV2, GoalDefinitionV2, GoalOutcome, GoalRevisionNumberV2, GoalRevisionReasonV2,
-    GoalRevisionRecordV2, GoalStatementV2, GraphNodeId, ItemId, NodeDefinitionId, OperationId,
-    OptionId, ProcedureSnapshotId, ReasonV2, RecordedItemValueV2, ResolvedEvidenceReferenceV2,
-    ResolvedEvidenceSetV2, Revision, SessionAttemptV2, SessionId, SessionLifecycle, SessionTraceV2,
-    Sha256Digest, TraceSequenceV2, TransitionEffectV2, UnixMillis, WorkspaceId,
-    canonicalize_json_v1,
+    GoalRevisionRecordV2, GoalStatementV2, GraphNodeId, ItemId, MAX_CHECK_RESULT_VALUE_BYTES_V2,
+    MAX_EVIDENCE_RESPONSE_BYTES_V2, NodeDefinitionId, OperationId, OptionId, ProcedureSnapshotId,
+    ReasonV2, RecordedItemValueV2, ResolvedEvidenceReferenceV2, ResolvedEvidenceSetV2, Revision,
+    SessionAttemptV2, SessionId, SessionLifecycle, SessionTraceV2, Sha256Digest, TraceSequenceV2,
+    TransitionEffectV2, UnixMillis, WorkspaceId, canonicalize_json_v1,
 };
 use podway_daemon::{
     execution::{
@@ -28,9 +28,9 @@ use podway_daemon::{
     },
 };
 use podway_protocol::{
-    CommandNameV1, OutputEnvelopeInputV3, OutputEnvelopeV3, RequestIdV1, ResponseEnvelopeV2,
-    Rfc3339MillisV1, SessionLifecycleV1, SessionOutputV1, WorkspaceOutputV1,
-    decode_response_payload_v2, decode_single_frame_v1, encode_frame_v1,
+    CommandNameV1, MAX_FRAME_PAYLOAD_BYTES_V1, OutputEnvelopeInputV3, OutputEnvelopeV3,
+    RequestIdV1, ResponseEnvelopeV2, Rfc3339MillisV1, SessionLifecycleV1, SessionOutputV1,
+    WorkspaceOutputV1, decode_response_payload_v2, decode_single_frame_v1, encode_frame_v1,
     encode_response_payload_v2, validate_frame_payload_length,
 };
 use podway_store::{
@@ -3889,11 +3889,17 @@ fn check_result_readback_source() -> Vec<u8> {
 }
 
 fn check_result_readback_state(source: &[u8]) -> GraphSessionStateV2 {
+    check_result_readback_state_with_value(source, recorded_check_result())
+}
+
+fn check_result_readback_state_with_value(
+    source: &[u8],
+    value: RecordedItemValueV2,
+) -> GraphSessionStateV2 {
     let base = fresh_state("check-result-readback.json", source);
     let source_attempt_id = AttemptId::new(ATTEMPT_ID).unwrap();
     let consumer_attempt_id = second_attempt_id();
     let original = &base.workflow_memory().attempts()[0].item_slots()[0];
-    let value = recorded_check_result();
     let slot = ItemSlotStateV2::new(
         source_attempt_id.clone(),
         original.item_id().clone(),
@@ -3969,6 +3975,34 @@ fn recorded_check_result_with_outcome(outcome: CheckResultOutcomeV2) -> Recorded
 
 fn recorded_check_result() -> RecordedItemValueV2 {
     recorded_check_result_with_outcome(CheckResultOutcomeV2::Pass)
+}
+
+fn maximal_recorded_check_result() -> RecordedItemValueV2 {
+    RecordedItemValueV2::check_result(
+        CheckResultValueV2::new(
+            OperationId::new("make-test").unwrap(),
+            Sha256Digest::new(
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            )
+            .unwrap(),
+            CheckResultInputBasisV2::new(
+                "\u{10ffff}".repeat(512),
+                Sha256Digest::new(
+                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+            CheckResultExecutorV2::new("\u{10ffff}".repeat(128), "\u{10ffff}".repeat(64)).unwrap(),
+            CheckResultOutcomeV2::Pass,
+            "\u{10ffff}".repeat(2_000),
+            Sha256Digest::new(
+                "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            )
+            .unwrap(),
+        )
+        .unwrap(),
+    )
 }
 
 fn guidance_state_with_required_check_result(outcome: CheckResultOutcomeV2) -> GraphSessionStateV2 {
@@ -4141,6 +4175,39 @@ fn v2ast005_check_result_preview_and_readback_separate_projection_from_complete_
     assert_eq!(read["next_page_token"], Value::Null);
     assert_output_v2("session.next", next);
     assert_output_v2("evidence.read", read);
+}
+
+#[test]
+fn v2ast006_maximal_check_result_readback_is_one_complete_bounded_page() {
+    let source = check_result_readback_source();
+    let value = maximal_recorded_check_result();
+    let complete =
+        canonicalize_json_v1(&serde_json::to_value(value.as_check_result().unwrap()).unwrap())
+            .unwrap();
+    assert!(complete.len() <= MAX_CHECK_RESULT_VALUE_BYTES_V2);
+
+    let session_view = view(check_result_readback_state_with_value(&source, value));
+    let read = project_evidence_read_v1(
+        &session_view,
+        &GraphNodeId::new("source").unwrap(),
+        &ItemId::new("verification").unwrap(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(read["total_size"], complete.len());
+    assert_eq!(read["page"]["size"], complete.len());
+    assert_eq!(read["page"]["offset"], 0);
+    assert_eq!(
+        read["page"]["data"],
+        serde_json::from_str::<Value>(&complete).unwrap()
+    );
+    assert_eq!(read["truncated"], false);
+    assert_eq!(read["next_page_token"], Value::Null);
+
+    let response = ResponseEnvelopeV2::OutputV2(output("evidence.read", read));
+    let encoded = encode_response_payload_v2(&response).unwrap();
+    assert!(encoded.len() <= MAX_EVIDENCE_RESPONSE_BYTES_V2);
+    assert!(encoded.len() <= MAX_FRAME_PAYLOAD_BYTES_V1);
 }
 
 #[test]
