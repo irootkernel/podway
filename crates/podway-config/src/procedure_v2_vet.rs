@@ -15,7 +15,9 @@ use crate::procedure_v2_authoring::{
     definition_path, node_path, placement_definition_id, placement_evidence_from,
 };
 use crate::procedure_v2_budget::{
-    NEXT_STATIC_BUDGET, READBACK_BUDGET, exceeds_budget, placement_budget,
+    DECISION_RECORD_BUDGET, EVIDENCE_PREVIEW_BUDGET, NEXT_FRAME_BUDGET, NEXT_SERIALIZATION_RESERVE,
+    NEXT_STATIC_BUDGET, PAGE_TOKEN_BUDGET, READBACK_BUDGET, READBACK_RECORD_BUDGET, exceeds_budget,
+    placement_budget,
 };
 use crate::procedure_v2_diagnostics::{AuthoringContext, diagnostic_hint};
 use crate::procedure_v2_document::{AuthoringValue, authoring_document_value};
@@ -358,7 +360,7 @@ impl<'a> Vet<'a, '_> {
                         AuthoringDiagnosticCode::NextStaticBudgetExceeded,
                         &node_path(node),
                         format!(
-                            "Graph node `{graph_node_id}` charges {} bytes of procedure-static next content, over the {NEXT_STATIC_BUDGET}-byte budget.",
+                            "Graph node `{graph_node_id}` charges {} bytes of procedure-static next content, over the {NEXT_STATIC_BUDGET}-byte allocation.",
                             budget.next_static,
                         ),
                     )
@@ -367,15 +369,85 @@ impl<'a> Vet<'a, '_> {
                 self.findings.push(finding);
             }
 
-            if exceeds_budget(budget.readback, READBACK_BUDGET) {
-                let path = node_path(node).child_key("evidence_from");
+            // Each evidence-derived allocation reports separately, so an author learns which one
+            // they exceeded and can act on it: fewer sources, fewer selected items, or a narrower
+            // selector are different remedies for different allocations.
+            let evidence_path = node_path(node).child_key("evidence_from");
+            for (charged, allocation, code, what) in [
+                (
+                    budget.decision_records,
+                    DECISION_RECORD_BUDGET,
+                    AuthoringDiagnosticCode::DecisionRecordBudgetExceeded,
+                    "complete decision records",
+                ),
+                (
+                    budget.readback,
+                    READBACK_BUDGET,
+                    AuthoringDiagnosticCode::ReadbackBudgetExceeded,
+                    "evidence reference and item metadata",
+                ),
+                (
+                    budget.evidence_preview,
+                    EVIDENCE_PREVIEW_BUDGET,
+                    AuthoringDiagnosticCode::EvidencePreviewBudgetExceeded,
+                    "evidence previews",
+                ),
+                (
+                    budget.page_tokens,
+                    PAGE_TOKEN_BUDGET,
+                    AuthoringDiagnosticCode::PageTokenBudgetExceeded,
+                    "continuation tokens",
+                ),
+            ] {
+                if !exceeds_budget(charged, allocation) {
+                    continue;
+                }
+                let finding = self
+                    .diagnostic(
+                        code,
+                        &evidence_path,
+                        format!(
+                            "Graph node `{graph_node_id}` charges {charged} bytes of worst-case {what}, over the {allocation}-byte allocation.",
+                        ),
+                    )
+                    .with_graph_node_id(graph_node_id.clone())
+                    .with_node_definition_id(definition_id.clone())
+                    .with_related_graph_node_ids(related_sources.clone());
+                self.findings.push(finding);
+            }
+
+            // Metadata is value-independent, so a wide selection of small items charges few bytes
+            // while still exceeding the record ceiling `next-result/v3` publishes. No byte
+            // allocation implies that ceiling, so it is checked on its own.
+            if budget.readback_records > READBACK_RECORD_BUDGET {
                 let finding = self
                     .diagnostic(
                         AuthoringDiagnosticCode::ReadbackBudgetExceeded,
-                        &path,
+                        &evidence_path,
                         format!(
-                            "Graph node `{graph_node_id}` charges {} bytes of worst-case evidence read-back, over the {READBACK_BUDGET}-byte budget.",
-                            budget.readback,
+                            "Graph node `{graph_node_id}` selects {} evidence item metadata records, over the {READBACK_RECORD_BUDGET} one response may carry.",
+                            budget.readback_records,
+                        ),
+                    )
+                    .with_graph_node_id(graph_node_id.clone())
+                    .with_node_definition_id(definition_id.clone())
+                    .with_related_graph_node_ids(related_sources.clone());
+                self.findings.push(finding);
+            }
+
+            // The five caps sum to exactly the admissible frame, so passing all five implies
+            // passing this. It is defence for the day a cap is raised without re-deriving the
+            // table: the frame is the bound the response actually has to satisfy, and it should
+            // not be reachable only through the parts.
+            let charged_total = budget.charged_total();
+            let admissible = NEXT_FRAME_BUDGET.saturating_sub(NEXT_SERIALIZATION_RESERVE);
+            if exceeds_budget(charged_total, admissible) {
+                let finding = self
+                    .diagnostic(
+                        AuthoringDiagnosticCode::NextFrameBudgetExceeded,
+                        &node_path(node),
+                        format!(
+                            "Graph node `{graph_node_id}` charges {charged_total} bytes across every next allocation, over the {admissible} bytes that remain once the {NEXT_SERIALIZATION_RESERVE}-byte serialization reserve is held back.",
                         ),
                     )
                     .with_graph_node_id(graph_node_id)

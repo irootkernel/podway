@@ -3636,23 +3636,35 @@ fn v2rel002_selected_readback_respects_value_and_wire_bounds() {
         "readback": readback,
     });
     let encoded_readback = serde_json::to_vec(&readback_component).unwrap();
+    // The authoring charge is only useful if it is a real upper bound on what the runtime emits.
+    // V2SCL-005 dropped the old tightness claim, which measured a charge that carried complete
+    // values; what has to hold now is that the metadata charge still covers the metadata, that
+    // the preview and token allocations cover what previews actually emit, and that each stays
+    // inside its published ceiling.
+    let previews: usize = readback
+        .iter()
+        .flat_map(|reference| reference["items"].as_array().unwrap().iter())
+        .filter_map(|item| item.get("preview"))
+        .map(|preview| serde_json::to_vec(preview).unwrap().len())
+        .sum();
+    let tokens: usize = readback
+        .iter()
+        .flat_map(|reference| reference["items"].as_array().unwrap().iter())
+        .filter_map(|item| item.get("next_page_token"))
+        .map(|token| serde_json::to_vec(token).unwrap().len())
+        .sum();
     assert!(
-        production_budget.readback() > 490_000,
-        "selected read-back did not exercise the production charge boundary: {}",
+        u64::try_from(encoded_readback.len() - previews - tokens).unwrap()
+            <= production_budget.readback(),
+        "metadata charge under-counted the serialized projection: encoded={}, charged={}",
+        encoded_readback.len() - previews - tokens,
         production_budget.readback(),
     );
-    assert!(
-        u64::try_from(encoded_readback.len()).unwrap() <= production_budget.readback(),
-        "production read-back charge under-counted serialized projection: encoded={}, charged={}",
-        encoded_readback.len(),
-        production_budget.readback(),
-    );
-    assert!(
-        production_budget.readback() <= podway_config::READBACK_BUDGET,
-        "admitted read-back charge {} exceeded {}",
-        production_budget.readback(),
-        podway_config::READBACK_BUDGET,
-    );
+    assert!(u64::try_from(previews).unwrap() <= production_budget.evidence_preview());
+    assert!(u64::try_from(tokens).unwrap() <= production_budget.page_tokens());
+    assert!(production_budget.readback() <= podway_config::READBACK_BUDGET);
+    assert!(production_budget.evidence_preview() <= podway_config::EVIDENCE_PREVIEW_BUDGET);
+    assert!(production_budget.page_tokens() <= podway_config::PAGE_TOKEN_BUDGET);
 
     let response = ResponseEnvelopeV2::OutputV2(output("session.next", next.clone()));
     let encoded = encode_response_payload_v2(&response).unwrap();
@@ -3814,9 +3826,16 @@ fn v2agt007_dense_observation_templates_fit_the_public_schema_and_frame() {
     let observation = project_graph_observation_v1(&view(maximum_satisfied_confirm_state()))
         .expect("maximum dense observation must project");
     let templates = observation["mutation_templates"].as_array().unwrap();
+    let templates_total = observation["mutation_templates_total"].as_u64().unwrap() as usize;
+    // V2SCL-005 bounds this window by bytes, so a dense fixture now cuts. The exact total still
+    // exercises the former under-sized schema limit, and the flag reports the cut.
     assert!(
-        templates.len() > 192,
+        templates_total > 192,
         "the fixture must exercise the former under-sized schema limit"
+    );
+    assert_eq!(
+        observation["mutation_templates_truncated"],
+        json!(templates.len() < templates_total)
     );
     let schema: Value = serde_json::from_slice(include_bytes!(
         "../../../assets/schemas/observation-result-v1.schema.json"
@@ -4802,6 +4821,124 @@ fn v2scl004_evidence_read_pages_deterministically_and_fails_exactly() {
 }
 
 #[test]
+fn v2scl005_observation_windows_are_bounded_by_bytes_and_report_their_exact_total() {
+    // 128 optional items with maximal prompts is the widest active-item window a vetted definition
+    // can produce: the source projection budget refuses a wider document, and the static
+    // allocation refuses the same items as required, because each one then also charges a
+    // missing-item detail. The byte window is therefore sized to hold every admissible
+    // definition, and this one reports a complete, exact total.
+    let items: Vec<Value> = (0..128)
+        .map(|index| {
+            json!({
+                "id": format!("wide-{index:03}"),
+                "type": "text",
+                "prompt": "p".repeat(300),
+                "help": "h".repeat(300),
+                "required": false,
+                "max_length": 64
+            })
+        })
+        .collect();
+    let source = serde_json::to_vec(&json!({
+        "schema": "podway.procedure/v2",
+        "id": "wide-observation",
+        "version": "2",
+        "name": "Wide observation",
+        "purpose": "Exercise the observation active-item window.",
+        "node_definitions": {
+            "work": {
+                "type": "action",
+                "title": "Record work",
+                "intent": "Record many wide items.",
+                "items": items
+            }
+        },
+        "graph": {
+            "entry": "work",
+            "nodes": [{"id": "work", "use": "work", "terminal": true}]
+        }
+    }))
+    .unwrap();
+    let session_view = view(wide_node_state(&source));
+
+    let observation = project_graph_observation_v1(&session_view).unwrap();
+    let active_items = observation["active_items"].as_array().unwrap();
+    let total = observation["active_items_total"].as_u64().unwrap() as usize;
+    assert_eq!(total, 128, "the exact count must survive the window");
+    assert_eq!(
+        active_items.len(),
+        total,
+        "the widest admissible definition must fit the active-item allocation"
+    );
+    assert_eq!(observation["active_items_truncated"], json!(false));
+    // 128 items generate more templates than the template allocation holds, so this window does
+    // cut. The exact total stays exact and the flag says so: that is the contract.
+    let templates = observation["mutation_templates"].as_array().unwrap();
+    let templates_total = observation["mutation_templates_total"].as_u64().unwrap() as usize;
+    assert_eq!(templates_total, 133);
+    assert!(
+        templates.len() < templates_total,
+        "the template window must cut at its allocation"
+    );
+    assert_eq!(observation["mutation_templates_truncated"], json!(true));
+    let charged: usize = templates
+        .iter()
+        .map(|template| serde_json::to_vec(template).unwrap().len() + 8)
+        .sum();
+    assert!(
+        charged <= 64 * 1_024,
+        "the template window charged {charged} bytes"
+    );
+
+    // The admitted window must fit its allocation, and the response must fit the frame.
+    let admitted: usize = active_items
+        .iter()
+        .map(|item| serde_json::to_vec(item).unwrap().len() + 8)
+        .sum();
+    assert!(
+        admitted <= 128 * 1_024,
+        "the active-item window charged {admitted} bytes"
+    );
+    let response = ResponseEnvelopeV2::OutputV2(output("session.observe", observation.clone()));
+    let encoded = podway_protocol::encode_response_payload_v2(&response).unwrap();
+    assert!(
+        encoded.len() <= 1_048_576,
+        "observation encoded to {} bytes",
+        encoded.len()
+    );
+
+    // Every observation member fits its own published allocation, which is what makes the
+    // composition a proof rather than a description.
+    for (member, allocation) in [
+        ("status", 32 * 1_024),
+        ("guidance", 736 * 1_024),
+        ("active_items", 128 * 1_024),
+        ("mutation_templates", 64 * 1_024),
+    ] {
+        let encoded = serde_json::to_vec(&observation[member]).unwrap().len();
+        assert!(
+            encoded <= allocation,
+            "{member} charged {encoded} bytes against {allocation}"
+        );
+    }
+
+    // 128 active items exceed the 64 the compact tiers used to publish, so validating the whole
+    // observation against `observation-result/v3` is what proves the raised ceilings agree.
+    assert_output_v2("session.observe", observation.clone());
+
+    // Every template argv element stays inside its published scalar bound.
+    for template in observation["mutation_templates"].as_array().unwrap() {
+        for element in template["argv"].as_array().unwrap() {
+            assert!(
+                element.as_str().unwrap().chars().count()
+                    <= podway_core::MAX_TEMPLATE_ARGV_SCALARS_V2,
+                "template argv element exceeded its bound: {element}"
+            );
+        }
+    }
+}
+
+#[test]
 fn v2scl004_bounded_windows_report_their_exact_total_when_they_truncate() {
     // 70 required items exceed the 64-entry detail window, and 9 choices exceed the 8-choice
     // observation window. ADR-0024 forbids a silent cut, so each window must publish the exact
@@ -4851,6 +4988,27 @@ fn v2scl004_bounded_windows_report_their_exact_total_when_they_truncate() {
     assert_eq!(next["missing_required_item_count"], 71);
     assert_eq!(next["missing_required_items"].as_array().unwrap().len(), 64);
     assert_eq!(next["missing_required_items_truncated"], true);
+
+    // The standard status tier publishes the same missing set as identifiers. Its schema caps that
+    // array at 64, so raising items per definition to 128 made it able to violate its own contract.
+    let status = project_graph_status_v2(&session_view, GraphStatusTierV2::Standard, None).unwrap();
+    assert_eq!(status["missing_required_item_count"], 71);
+    assert_eq!(
+        status["missing_required_item_ids"]
+            .as_array()
+            .unwrap()
+            .len(),
+        64
+    );
+    assert_eq!(status["missing_required_item_ids_truncated"], true);
+    // The same count also travels inside `current`, whose shared definition capped it at 64. The
+    // envelope validates the published schemas, so this is what proves the audit reached that
+    // copy too rather than only the top-level field.
+    assert_eq!(status["current"]["missing_required_item_count"], 71);
+    assert_output_v2("session.status", status.clone());
+    let compact = project_graph_status_v2(&session_view, GraphStatusTierV2::Compact, None).unwrap();
+    assert_eq!(compact["current"]["missing_required_item_count"], 71);
+    assert_output_v2("session.status", compact);
 
     let observation = project_graph_observation_v1(&session_view).unwrap();
     let choice = observation["active_items"]

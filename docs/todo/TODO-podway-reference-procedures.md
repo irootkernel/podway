@@ -295,8 +295,8 @@ goal assessment within four nodes of every terminal, matching
 - `crates/podway-config/src/procedure_v2_budget.rs` known-answer values are updated
   per preset in the task that changes that preset.
 - Every preset must fit the V2SCL `session.next` static allocation of 256 KiB,
-  complete-decision-record allocation of 272 KiB, evidence metadata allocation
-  of 208 KiB, observation active-item allocation of 128 KiB, and the V2GRD
+  complete-decision-record allocation of 264 KiB, evidence metadata allocation
+  of 216 KiB, observation active-item allocation of 128 KiB, and the V2GRD
   guard-status sub-maximum of 95,888 bytes.
 - Every preset must pass validate, vet, lint, check with warnings as errors,
   projection equivalence, embedding, packaging, and isolated runtime path tests.

@@ -224,6 +224,10 @@ const VET_SUBSET: &[AuthoringDiagnosticCode] = &[
     AuthoringDiagnosticCode::ReworkTargetNotDominating,
     AuthoringDiagnosticCode::ReadbackBudgetExceeded,
     AuthoringDiagnosticCode::NextStaticBudgetExceeded,
+    AuthoringDiagnosticCode::DecisionRecordBudgetExceeded,
+    AuthoringDiagnosticCode::EvidencePreviewBudgetExceeded,
+    AuthoringDiagnosticCode::PageTokenBudgetExceeded,
+    AuthoringDiagnosticCode::NextFrameBudgetExceeded,
 ];
 
 // ---------------------------------------------------------------------------------------------
@@ -427,7 +431,7 @@ fn v2grf002_the_check_pipeline_runs_the_complete_vet_rule_set() {
         .iter()
         .map(|code| AuthoringDiagnosticCode::as_str(*code))
         .collect();
-    assert_eq!(codes_owned.len(), 11, "vet owns eleven blocking codes");
+    assert_eq!(codes_owned.len(), 15, "vet owns fifteen blocking codes");
 
     let source = MINIMAL_YAML.replace(
         "    - id: only\n",

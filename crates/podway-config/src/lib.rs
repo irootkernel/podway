@@ -38,7 +38,9 @@ pub use parser::{
     parse_workspace_config_v1_with_limits, sniff_procedure_schema,
 };
 pub use procedure_v2_budget::{
-    NEXT_STATIC_BUDGET, ProcedurePlacementBudgetV2, READBACK_BUDGET, procedure_placement_budget_v2,
+    DECISION_RECORD_BUDGET, EVIDENCE_PREVIEW_BUDGET, NEXT_FRAME_BUDGET, NEXT_SERIALIZATION_RESERVE,
+    NEXT_STATIC_BUDGET, PAGE_TOKEN_BUDGET, ProcedurePlacementBudgetV2, READBACK_BUDGET,
+    procedure_placement_budget_v2,
 };
 pub use procedure_v2_check::{ProcedureCheckReport, check_procedure_v2};
 pub use procedure_v2_diagnostics::{

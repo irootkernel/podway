@@ -166,7 +166,27 @@
       {
         "code": "READBACK_BUDGET_EXCEEDED",
         "severity": "error",
-        "summary": "Worst-case evidence read-back exceeds the bounded next budget."
+        "summary": "Worst-case evidence reference and item metadata exceeds its next allocation."
+      },
+      {
+        "code": "DECISION_RECORD_BUDGET_EXCEEDED",
+        "severity": "error",
+        "summary": "Worst-case complete decision records exceed their next allocation."
+      },
+      {
+        "code": "EVIDENCE_PREVIEW_BUDGET_EXCEEDED",
+        "severity": "error",
+        "summary": "Worst-case evidence previews exceed their next allocation."
+      },
+      {
+        "code": "PAGE_TOKEN_BUDGET_EXCEEDED",
+        "severity": "error",
+        "summary": "Worst-case continuation tokens exceed their next allocation."
+      },
+      {
+        "code": "NEXT_FRAME_BUDGET_EXCEEDED",
+        "severity": "error",
+        "summary": "The charged next allocations together exceed the frame payload."
       },
       {
         "code": "NEXT_STATIC_BUDGET_EXCEEDED",
@@ -1011,7 +1031,7 @@
       {
         "id": "urn:podway:schema:authoring-diagnostic:v1",
         "path": "schemas/authoring-diagnostic-v1.schema.json",
-        "sha256": "sha256:ffca69cebb7a52bf32dadd707f8cbedc7a5532dd774fcc5cda3d3e0b1cb5bfb9"
+        "sha256": "sha256:120de9cb1ad265f4ca6a0472ef9f2b65f4a9a6f980f4df7fd668f386c23ce823"
       },
       {
         "id": "urn:podway:schema:blocker-limit-details:v1",
@@ -1026,7 +1046,7 @@
       {
         "id": "urn:podway:schema:compact-status-result:v3",
         "path": "schemas/compact-status-result-v3.schema.json",
-        "sha256": "sha256:32a3cd28d1df85b739b3fe69959edd6e924f34de5db9a5e805aebd8d64b01511"
+        "sha256": "sha256:af33e62ed6de8a7b0f8b79147828f0c07fd3b652b059f4ac194e6c1bfaf7f05a"
       },
       {
         "id": "urn:podway:schema:contract-manifest:v1",
@@ -1291,7 +1311,7 @@
       {
         "id": "urn:podway:schema:status-result:v3",
         "path": "schemas/status-result-v3.schema.json",
-        "sha256": "sha256:f3daa02a6521fa1f45461a4644873d6a76920f12ef5e678839c30539a3a7300d"
+        "sha256": "sha256:fae04f1d6f4059f6b52acb1195512000122b451dadda6de6fb83f4997759ac63"
       },
       {
         "id": "urn:podway:schema:terminal-disposition-result:v1",
@@ -1311,7 +1331,7 @@
       {
         "id": "urn:podway:schema:v2-result-components:v3",
         "path": "schemas/v2-result-components-v3.schema.json",
-        "sha256": "sha256:860f7fee50bfcbe4103d706943e065069f23be7dbc0988adbbd397c2378318b8"
+        "sha256": "sha256:2622c2159a28ae8f5c61c86b05bff5ca626ac2dbc38fd04299367bedc4b43028"
       },
       {
         "id": "urn:podway:schema:v2-runtime-error-details:v1",
@@ -1346,7 +1366,7 @@
     ]
   },
   "current_surface_counts": {
-    "authoring_diagnostics": 54,
+    "authoring_diagnostics": 58,
     "routes": 61,
     "runtime_errors": 94,
     "schemas": 69

@@ -512,10 +512,22 @@ fn v2rel002_admitted_maximum_next_uses_the_production_projector_and_frame() {
     );
     let production_budget =
         procedure_placement_budget_v2(&validated, &GraphNodeId::new("consume").unwrap()).unwrap();
+    // V2SCL-005 replaced the two-bucket model with the six published allocations. The fixture's
+    // purpose is to sit just inside the static allocation, which is the one authored text can
+    // actually exhaust; the evidence allocations are sized to hold the schema maximum, so what
+    // they must show here is that they stay inside it rather than that they approach it.
     assert!(production_budget.next_static() <= podway_config::NEXT_STATIC_BUDGET);
     assert!(production_budget.next_static() >= 260_000);
+    assert!(production_budget.decision_records() <= podway_config::DECISION_RECORD_BUDGET);
     assert!(production_budget.readback() <= podway_config::READBACK_BUDGET);
-    assert!(production_budget.readback() >= 490_000);
+    assert!(production_budget.evidence_preview() <= podway_config::EVIDENCE_PREVIEW_BUDGET);
+    assert!(production_budget.page_tokens() <= podway_config::PAGE_TOKEN_BUDGET);
+    assert!(
+        production_budget.charged_total()
+            <= podway_config::NEXT_FRAME_BUDGET - podway_config::NEXT_SERIALIZATION_RESERVE,
+        "the maximum fixture charges {} bytes across every allocation",
+        production_budget.charged_total()
+    );
 
     let rejected_source = maximum_source_with_item_padding(42);
     let ParsedProcedure::V2(rejected) =
@@ -553,6 +565,20 @@ fn v2rel002_admitted_maximum_next_uses_the_production_projector_and_frame() {
         observation_bytes <= 983_040,
         "maximum observation exceeds the frame minus 64 KiB envelope reserve: {observation_bytes} bytes"
     );
+    // The frame bound alone would let one component overflow while another under-fills, so the
+    // maximum fixture also has to show every published component allocation holding on its own.
+    for (member, allocation) in [
+        ("status", 32 * 1_024),
+        ("guidance", 736 * 1_024),
+        ("active_items", 128 * 1_024),
+        ("mutation_templates", 64 * 1_024),
+    ] {
+        let encoded = serde_json::to_vec(&observation[member]).unwrap().len();
+        assert!(
+            encoded <= allocation,
+            "the maximum observation charged {encoded} bytes of {member} against {allocation}"
+        );
+    }
     assert_eq!(next["node"]["node_type"], "decision");
     assert_eq!(next["missing_required_items"].as_array().unwrap().len(), 64);
     assert_eq!(next["goal"]["criteria"].as_array().unwrap().len(), 16);

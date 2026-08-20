@@ -124,6 +124,10 @@ authoring_diagnostic_catalog! {
     EvidenceSelectorUnknownItem => ("EVIDENCE_SELECTOR_UNKNOWN_ITEM", Error),
     ReadbackBudgetExceeded => ("READBACK_BUDGET_EXCEEDED", Error),
     NextStaticBudgetExceeded => ("NEXT_STATIC_BUDGET_EXCEEDED", Error),
+    DecisionRecordBudgetExceeded => ("DECISION_RECORD_BUDGET_EXCEEDED", Error),
+    EvidencePreviewBudgetExceeded => ("EVIDENCE_PREVIEW_BUDGET_EXCEEDED", Error),
+    PageTokenBudgetExceeded => ("PAGE_TOKEN_BUDGET_EXCEEDED", Error),
+    NextFrameBudgetExceeded => ("NEXT_FRAME_BUDGET_EXCEEDED", Error),
     AttemptContentBudgetExceeded => ("ATTEMPT_CONTENT_BUDGET_EXCEEDED", Warning),
     DecisionSkipNotAllowed => ("DECISION_SKIP_NOT_ALLOWED", Error),
     GraphCycleInvalid => ("GRAPH_CYCLE_INVALID", Error),
@@ -412,8 +416,8 @@ mod tests {
             );
             assert_eq!(code.severity(), (*code).severity());
         }
-        assert_eq!(codes.len(), 54);
-        assert_eq!(AuthoringDiagnosticCode::ALL.len(), 54);
+        assert_eq!(codes.len(), 58);
+        assert_eq!(AuthoringDiagnosticCode::ALL.len(), 58);
     }
 
     #[test]
@@ -426,7 +430,8 @@ mod tests {
             .iter()
             .filter(|code| code.severity() == AuthoringSeverity::Warning)
             .count();
-        assert_eq!(errors, 30);
+        // V2SCL-005 added the four remaining `session.next` allocation diagnostics, all blocking.
+        assert_eq!(errors, 34);
         assert_eq!(warnings, 24);
     }
 

@@ -51,6 +51,17 @@
         { "if": { "properties": { "items_truncated": { "const": false } }, "required": ["items_truncated"] }, "then": { "properties": { "items_total": { "maximum": 128 } } } }
       ]
     },
+    "currentIdentity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["node", "attempt", "readiness", "missing_required_item_count", "blockers_total"],
+      "properties": {
+        "node": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/nodeIdentity" },
+        "attempt": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/attemptIdentity" },
+        "readiness": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/readiness" },
+        "missing_required_item_count": { "type": "integer", "minimum": 0, "maximum": 128 },
+        "blockers_total": { "type": "integer", "minimum": 0, "maximum": 64 }
+      }
+    },
     "observationStatus": {
       "type": "object", "additionalProperties": false,
       "required": ["procedure", "session", "current", "goal_tracking", "goal_defined", "trace_length", "counters", "items", "items_total", "items_truncated", "queue"],
@@ -69,7 +80,7 @@
         "current": {
           "oneOf": [
             { "type": "null" },
-            { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/currentIdentity" }
+            { "$ref": "urn:podway:schema:v2-result-components:v3#/$defs/currentIdentity" }
           ]
         },
         "goal_tracking": { "type": "boolean" }, "goal_defined": { "type": "boolean" },
@@ -83,7 +94,7 @@
         "queue": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/queue" }
       },
       "allOf": [
-        { "if": { "properties": { "session": { "properties": { "lifecycle": { "const": "running" } }, "required": ["lifecycle"] } }, "required": ["session"] }, "then": { "properties": { "current": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/currentIdentity" } } }, "else": { "properties": { "current": { "type": "null" }, "items": { "maxItems": 0 }, "items_total": { "const": 0 }, "items_truncated": { "const": false } } } },
+        { "if": { "properties": { "session": { "properties": { "lifecycle": { "const": "running" } }, "required": ["lifecycle"] } }, "required": ["session"] }, "then": { "properties": { "current": { "$ref": "urn:podway:schema:v2-result-components:v3#/$defs/currentIdentity" } } }, "else": { "properties": { "current": { "type": "null" }, "items": { "maxItems": 0 }, "items_total": { "const": 0 }, "items_truncated": { "const": false } } } },
         { "if": { "properties": { "session": { "properties": { "lifecycle": { "const": "prepared" } }, "required": ["lifecycle"] } }, "required": ["session"] }, "then": { "properties": { "goal_defined": { "const": false }, "trace_length": { "const": 0 }, "counters": { "maxItems": 0 } } } },
         { "if": { "properties": { "goal_tracking": { "const": false } }, "required": ["goal_tracking"] }, "then": { "properties": { "goal_defined": { "const": false } }, "not": { "anyOf": [{ "required": ["goal_revision"] }, { "required": ["latest_goal_outcome"] }] } } },
         { "if": { "properties": { "goal_defined": { "const": false } }, "required": ["goal_defined"] }, "then": { "not": { "anyOf": [{ "required": ["goal_revision"] }, { "required": ["latest_goal_outcome"] }] } } },

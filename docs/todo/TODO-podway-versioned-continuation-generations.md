@@ -273,8 +273,9 @@ relationship between a future successor's presets and group templates is open.
 
 ### 5.1 Bounded evidence scale and read-back
 
-[Podway Bounded Evidence Scale and Read-back](TODO-podway-evidence-scaling.md)
-provides useful current-evidence paging and response-budget foundations while
+[ADR-0024](../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md)
+and the [IPC evidence paging](../specs/interfaces/ipc-protocol.md#evidence-paging)
+specification provide current-evidence paging and response-budget foundations while
 preserving one session, cursor, and active attempt. A generation design must not
 widen its `evidence.read` route into arbitrary stale history. It needs separate
 bounds for generation count, total retained attempts and work units, lineage
@@ -467,7 +468,7 @@ narrowed to the smallest independently motivated mechanism.
 
 - [TODO and Adopted Design Dossiers](README.md)
 - [Podway Graph Engineering Evolution](TODO-podway-graph-engineering-evolution.md)
-- [Podway Bounded Evidence Scale and Read-back](TODO-podway-evidence-scaling.md)
+- [ADR-0024: Bounded Evidence Scale and Paged Read-back](../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md)
 - [Podway External Check Result Typing](TODO-podway-assurance-typing.md)
 - [Podway Typed Guards and Authoring Diagnostics](TODO-podway-typed-guards.md)
 - [Podway Reference Procedures and Authoring Guidance](TODO-podway-reference-procedures.md)

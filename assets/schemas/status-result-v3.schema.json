@@ -4,12 +4,12 @@
   "title": "Podway Status Result v3",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "tier", "procedure", "session", "current", "purpose", "goal_tracking", "goal_defined", "trace_length", "counters", "items", "queue", "missing_required_item_ids", "blocker_window", "blockers_truncated", "item_values", "items_total", "items_truncated", "references", "allowed_option_ids", "allowed_manual_rework_targets"],
+  "required": ["schema", "tier", "procedure", "session", "current", "purpose", "goal_tracking", "goal_defined", "trace_length", "counters", "items", "queue", "missing_required_item_ids", "missing_required_item_count", "missing_required_item_ids_truncated", "blocker_window", "blockers_truncated", "item_values", "items_total", "items_truncated", "references", "allowed_option_ids", "allowed_manual_rework_targets"],
   "properties": {
     "schema": { "const": "podway.status-result/v3" }, "tier": { "enum": ["standard", "verbose"] },
     "procedure": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/procedureIdentity" },
     "session": { "$ref": "urn:podway:schema:v2-result-components:v2#/$defs/sessionIdentity" },
-    "current": { "oneOf": [{ "type": "null" }, { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/currentIdentity" }] },
+    "current": { "oneOf": [{ "type": "null" }, { "$ref": "urn:podway:schema:v2-result-components:v3#/$defs/currentIdentity" }] },
     "purpose": { "type": "string", "minLength": 1, "maxLength": 500 },
     "goal_tracking": { "type": "boolean" }, "goal_defined": { "type": "boolean" },
     "goal_revision": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 },
@@ -17,8 +17,10 @@
     "goal": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/goalDisplay" },
     "trace_length": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
     "counters": { "type": "array", "maxItems": 64, "items": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/counter" } },
-    "items": { "type": "array", "maxItems": 64, "items": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/compactItem" } },
+    "items": { "type": "array", "maxItems": 128, "items": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/compactItem" } },
     "queue": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/queue" },
+    "missing_required_item_count": { "type": "integer", "minimum": 0, "maximum": 128 },
+    "missing_required_item_ids_truncated": { "type": "boolean" },
     "missing_required_item_ids": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" } },
     "blocker_window": { "type": "array", "maxItems": 64, "items": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/blocker" } },
     "blockers_truncated": { "type": "boolean" },
@@ -39,7 +41,7 @@
   "allOf": [
     { "if": { "properties": { "tier": { "const": "verbose" } }, "required": ["tier"] }, "then": { "required": ["current_trace_history", "stale_attempt_history", "decision_history", "rework_history", "stale_goal_revision_history", "stale_goal_assessment_history"] } },
     { "if": { "properties": { "tier": { "const": "standard" } }, "required": ["tier"] }, "then": { "not": { "anyOf": [{ "required": ["current_trace_history"] }, { "required": ["stale_attempt_history"] }, { "required": ["decision_history"] }, { "required": ["rework_history"] }, { "required": ["stale_goal_revision_history"] }, { "required": ["stale_goal_assessment_history"] }] } } },
-    { "if": { "properties": { "session": { "properties": { "lifecycle": { "const": "running" } }, "required": ["lifecycle"] } }, "required": ["session"] }, "then": { "properties": { "current": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/currentIdentity" } } }, "else": { "properties": { "current": { "type": "null" }, "items": { "maxItems": 0 }, "missing_required_item_ids": { "maxItems": 0 }, "blocker_window": { "maxItems": 0 }, "item_values": { "maxItems": 0 }, "allowed_option_ids": { "maxItems": 0 } }, "not": { "anyOf": [{ "required": ["next_graph_node_id"] }, { "required": ["terminal"] }, { "required": ["skip"] }] } } },
+    { "if": { "properties": { "session": { "properties": { "lifecycle": { "const": "running" } }, "required": ["lifecycle"] } }, "required": ["session"] }, "then": { "properties": { "current": { "$ref": "urn:podway:schema:v2-result-components:v3#/$defs/currentIdentity" } } }, "else": { "properties": { "current": { "type": "null" }, "items": { "maxItems": 0 }, "missing_required_item_ids": { "maxItems": 0 }, "missing_required_item_count": { "const": 0 }, "missing_required_item_ids_truncated": { "const": false }, "blocker_window": { "maxItems": 0 }, "item_values": { "maxItems": 0 }, "allowed_option_ids": { "maxItems": 0 } }, "not": { "anyOf": [{ "required": ["next_graph_node_id"] }, { "required": ["terminal"] }, { "required": ["skip"] }] } } },
     {
       "if": { "properties": { "session": { "properties": { "lifecycle": { "const": "prepared" } }, "required": ["lifecycle"] } }, "required": ["session"] },
       "then": {

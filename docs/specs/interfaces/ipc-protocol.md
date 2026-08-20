@@ -193,30 +193,36 @@ Storage may decode a bounded complete value internally, but no public response m
 
 ## Response budgets
 
-`V2SCL-005` derives these allocations in the authoring budget; the current build still vets against the superseded two-bucket model while the runtime already emits the bounded windows below. `session.next` and `session.observe` each have a closed byte composition proved against the 1,048,576-byte frame. Every windowed collection reports its exact total and whether it was truncated; silent truncation is forbidden.
+`session.next` and `session.observe` each have a closed byte composition proved against the 1,048,576-byte frame. Authoring validation charges every allocation separately and names the one an author exceeded, because the remedies differ. Every windowed collection reports its exact total and whether it was truncated; silent truncation is forbidden.
 
 | `session.next` allocation | Maximum |
 |---|---:|
 | Procedure and runtime static content | 256 KiB |
-| Complete decision records | 272 KiB |
-| Reference and item metadata, at most 128 items | 208 KiB |
-| Preview data | 176 KiB |
+| Complete decision records | 264 KiB |
+| Reference and item metadata, at most 128 items | 216 KiB |
+| Preview data, at most 32 slots | 176 KiB |
 | Up to 32 page tokens | 64 KiB |
 | Serialization and envelope safety | 48 KiB |
 | **Total** | **1 MiB** |
 
+The preview and page-token allocations hold the widest selection a selector can request — thirty-two slots and one token per slot — however many items the reference names, so a Procedure cannot exceed them. The other three bind. Authored text binds the static allocation. One complete goal-assessment record nearly fills its allocation, so a placement may read back from at most one goal-assessment decision source. A decision record without an assessment is an order of magnitude smaller, so several of those fit. And metadata binds through selector-less references: an omitted selector requests every item of its source, so a reference to a 128-item definition charges far more than the sixteen items an explicit selector may name, and two such references exceed the metadata allocation.
+
 | `session.observe` component | Maximum |
 |---|---:|
-| Compact status | 128 KiB |
-| Bounded `next-result/v3` guidance | 640 KiB |
+| Compact status | 32 KiB |
+| Bounded `next-result/v3` guidance | 736 KiB |
 | Active item window | 128 KiB |
 | Mutation template window | 64 KiB |
 | Serialization and outer-envelope safety | 64 KiB |
 | **Total** | **1 MiB** |
 
-An omitted evidence item selector means metadata-only. Explicit selectors receive previews in declaration order for at most 32 items, and later admitted items remain metadata-only. At most 128 item metadata records may appear across all references in one response, and graph vetting rejects a larger declared selection while recommending the smallest useful selectors. Metadata remains complete for every item in an admitted `session.next` projection, so that response never marks its evidence metadata window truncated.
+Guidance carries `next-result/v3` without its previews or page tokens, so its allocation is exactly the sum of the three `session.next` allocations that remain. Sizing it lower would make a Procedure that `session.next` admits into one `session.observe` cannot answer. Status and guidance are single structured members rather than windows — there is no honest way to return half a status — so they are measured against their allocations and a member that outgrows one fails closed. The active-item and template windows are cut, in declaration order, and publish what they cut.
+
+An omitted evidence item selector means metadata-only. Explicit selectors receive previews in declaration order for at most 32 items, and later admitted items remain metadata-only. At most 128 item metadata records may appear across all references in one response. Metadata costs the same for every item kind, so the byte allocation does not imply that ceiling: a wide selection of small items can stay inside the allocation and still exceed it. Graph vetting therefore counts records as well as bytes and rejects a larger declared selection, recommending the smallest useful selectors. Metadata remains complete for every item in an admitted `session.next` projection, so that response never marks its evidence metadata window truncated.
 
 Observation composes its own budget rather than embedding an unbounded duplicate of `session.next`. Its guidance emits evidence metadata only, with no previews or page tokens, and its evidence metadata window may be truncated. Compact-status items, active items, and mutation templates are independent byte-budgeted declaration-order windows. Active-item choice constraints expose at most eight choices plus the exact choice count and a truncation flag, while the complete declaration remains available from the Procedure inspection routes. Template argv elements are limited to 4,096 scalars.
+
+Every derived collection was audited against the declaration it projects. A collection whose ceiling equals its declaration's own ceiling is complete and carries no truncation flag: decision options, evidence guidance, instructions, allowed actions, graph counters, and manual rework targets are all of this kind. A collection that can be narrower than what a declaration may produce is a window, and a window always publishes its exact total and whether it was cut. Raising items per definition to 128 turned `missing_required_item_ids` in the standard status tier into a window, so it now reports `missing_required_item_count` and `missing_required_item_ids_truncated` alongside its 64 identifiers.
 
 `missing_required_item_count` remains exact while `missing_required_items` returns at most 64 entries plus a truncation flag. Suggestions remain capped at 128, expose exact total and truncation fields, and order currently actionable session-level suggestions before item suggestions in item declaration order.
 

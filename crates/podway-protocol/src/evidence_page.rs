@@ -13,7 +13,7 @@ use crate::ProtocolError;
 pub const EVIDENCE_PAGE_TOKEN_VERSION_V1: u8 = 1;
 
 /// Maximum base64url characters an encoded page token may occupy.
-pub const MAX_EVIDENCE_PAGE_TOKEN_CHARS_V1: usize = 256;
+pub const MAX_EVIDENCE_PAGE_TOKEN_CHARS_V1: usize = podway_core::MAX_EVIDENCE_PAGE_TOKEN_CHARS_V2;
 
 const UUID_BYTES: usize = 16;
 const DIGEST_BYTES: usize = 32;

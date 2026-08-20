@@ -728,7 +728,19 @@ pub(crate) const fn diagnostic_hint(code: AuthoringDiagnosticCode) -> &'static s
             "Select an item the source placement's definition declares."
         }
         Code::ReadbackBudgetExceeded => {
-            "Select fewer evidence items, or shorten the recorded items they read back."
+            "Select fewer evidence items, or read back from fewer source nodes."
+        }
+        Code::DecisionRecordBudgetExceeded => {
+            "Read back from fewer decision sources, or shorten their reason and criteria text."
+        }
+        Code::EvidencePreviewBudgetExceeded => {
+            "Name fewer items in the evidence selector; an omitted selector requests no preview."
+        }
+        Code::PageTokenBudgetExceeded => {
+            "Name fewer items in the evidence selector, so fewer previews publish a continuation token."
+        }
+        Code::NextFrameBudgetExceeded => {
+            "Reduce whichever allocation this node charges most: node text, decision sources, selected items, or previews."
         }
         Code::NextStaticBudgetExceeded => {
             "Shorten the node's instructions, prompts, and help text."

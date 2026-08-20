@@ -10,7 +10,14 @@ use crate::{
 };
 
 static SUPPORTED_RESPONSE_SCHEMAS_V2: &[&str] = &[OUTPUT_SCHEMA_V3, ERROR_SCHEMA_V1];
-const COMPACT_STATUS_RESULT_SCHEMA_V2: &str = "podway.compact-status-result/v2";
+/// Every compact-status result family.
+///
+/// The 256 KiB compact envelope guard is a property of the compact projection, not of one version
+/// of it, so a new family must be added here or it silently inherits only the 1 MiB frame bound.
+const COMPACT_STATUS_RESULT_SCHEMAS_V2: [&str; 2] = [
+    "podway.compact-status-result/v2",
+    "podway.compact-status-result/v3",
+];
 
 /// A response envelope carried by Procedure v2-only clients.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -174,7 +181,10 @@ fn validate_compact_status_result_payload_v2(
 }
 
 fn is_compact_status_result_v2(result: &serde_json::Map<String, Value>) -> bool {
-    result.get("schema").and_then(Value::as_str) == Some(COMPACT_STATUS_RESULT_SCHEMA_V2)
+    result
+        .get("schema")
+        .and_then(Value::as_str)
+        .is_some_and(|schema| COMPACT_STATUS_RESULT_SCHEMAS_V2.contains(&schema))
 }
 
 fn response_is_compact_status_v2(response: &ResponseEnvelopeV2) -> bool {

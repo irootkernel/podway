@@ -77,6 +77,47 @@ pub const MAX_EVIDENCE_PREVIEW_SCALARS_V2: usize = 938;
 pub const MAX_EVIDENCE_PREVIEW_BYTES_V2: usize =
     MAX_EVIDENCE_PREVIEW_SCALARS_V2 * EVIDENCE_SCALAR_BYTES_V2;
 
+/// The maximum active items one observation carries; the exact count stays separate.
+///
+/// This equals the items one definition may declare, so the count window never cuts before the
+/// byte allocation does.
+pub const MAX_ACTIVE_ITEM_WINDOW_V2: usize = MAX_ITEMS_PER_DEFINITION_V2;
+
+/// The maximum mutation templates one observation carries; the exact count stays separate.
+pub const MAX_MUTATION_TEMPLATE_WINDOW_V2: usize = 384;
+
+/// The bytes one `session.observe` compact-status member may occupy.
+///
+/// The compact projection carries no item values, so this holds the widest counter and compact
+/// item set a graph can declare with room to spare.
+pub const MAX_OBSERVATION_STATUS_BYTES_V2: usize = 32 * 1_024;
+
+/// The bytes one `session.observe` guidance member may occupy.
+///
+/// Guidance is `next-result/v3` with previews and page tokens removed, so its worst case is the
+/// three remaining `session.next` allocations. Sizing it below their sum would make a legitimate
+/// maximal Procedure unobservable, so the allocation is exactly that sum.
+pub const MAX_OBSERVATION_GUIDANCE_BYTES_V2: usize = 736 * 1_024;
+
+/// The bytes the `session.observe` active-item window may occupy.
+pub const MAX_OBSERVATION_ACTIVE_ITEM_BYTES_V2: usize = 128 * 1_024;
+
+/// The bytes the `session.observe` mutation-template window may occupy.
+pub const MAX_OBSERVATION_TEMPLATE_BYTES_V2: usize = 64 * 1_024;
+
+/// Bytes reserved for serializing one `session.observe` response and its envelope.
+pub const OBSERVATION_SERIALIZATION_RESERVE_V2: usize = 64 * 1_024;
+
+/// The maximum characters one mutation-template argv element may occupy.
+pub const MAX_TEMPLATE_ARGV_SCALARS_V2: usize = 4_096;
+
+/// The maximum characters one encoded evidence page token may occupy.
+///
+/// The token is unpadded base64url, so this is both its character and its byte bound. It lives in
+/// the envelope because the authoring budget charges a token per preview slot and must agree with
+/// what the protocol will actually emit.
+pub const MAX_EVIDENCE_PAGE_TOKEN_CHARS_V2: usize = 256;
+
 /// The maximum missing-item details one response carries; the exact count stays separate.
 pub const MAX_MISSING_ITEM_WINDOW_V2: usize = 64;
 
@@ -119,6 +160,26 @@ mod tests {
             EVIDENCE_ENTRY_OVERHEAD_BYTES_V2
                 + MAX_LIST_ENTRY_SCALARS_V2 as usize * EVIDENCE_SCALAR_BYTES_V2
                 <= MAX_EVIDENCE_PAGE_BYTES_V2
+        );
+    }
+
+    #[test]
+    fn v2scl005_the_observation_components_exactly_fill_the_frame() {
+        // Observation composes its own budget rather than embedding an unbounded duplicate of
+        // `session.next`, so its components have to add up on their own.
+        const FRAME_BYTES: usize = 1_024 * 1_024;
+        let total = MAX_OBSERVATION_STATUS_BYTES_V2
+            + MAX_OBSERVATION_GUIDANCE_BYTES_V2
+            + MAX_OBSERVATION_ACTIVE_ITEM_BYTES_V2
+            + MAX_OBSERVATION_TEMPLATE_BYTES_V2
+            + OBSERVATION_SERIALIZATION_RESERVE_V2;
+        assert_eq!(total, FRAME_BYTES);
+        // Guidance must hold every `session.next` allocation it still carries, or a Procedure that
+        // `next` admits would be one `observe` cannot answer.
+        assert_eq!(
+            MAX_OBSERVATION_GUIDANCE_BYTES_V2,
+            (256 + 264 + 216) * 1_024,
+            "guidance must hold the static, decision-record, and metadata allocations"
         );
     }
 

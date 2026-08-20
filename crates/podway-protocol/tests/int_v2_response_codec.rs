@@ -233,20 +233,40 @@ fn v2plt006_v2_aware_decoder_keeps_schema_dispatch_closed() {
 
 #[test]
 fn v2plt006_compact_v2_decode_counts_the_json_newline() {
-    let mut value = diagnostics_output_v2();
-    value["command"] = json!("session.status");
-    value["result"] = json!({"schema": "podway.compact-status-result/v2"});
-    value["future_padding"] = json!("");
-    let base_length = serde_json::to_vec(&value).unwrap().len() + 1;
-    value["future_padding"] =
-        json!("x".repeat(MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1 - base_length + 1));
-    let input = serde_json::to_vec(&value).unwrap();
+    // The compact envelope guard belongs to the compact projection, not to one version of it, so
+    // every registered compact-status family must be held to the same 256 KiB bound. The list is
+    // taken from the result-schema registry rather than written out here: a future family that is
+    // registered but missing from the codec's guard is exactly the defect this closes, and it has
+    // to fail a test rather than a production bound.
+    let families: Vec<&str> = podway_protocol::EXISTING_ROUTE_RESULT_SCHEMAS_V2
+        .iter()
+        .chain(podway_protocol::NEW_ROUTE_RESULT_SCHEMAS_V1)
+        .map(|contract| contract.schema)
+        .filter(|schema| schema.starts_with("podway.compact-status-result/"))
+        .collect();
+    assert!(
+        families.len() >= 2,
+        "the registry must list every compact-status family: {families:?}"
+    );
+    for schema in families {
+        let mut value = diagnostics_output_v2();
+        value["command"] = json!("session.status");
+        value["result"] = json!({ "schema": schema });
+        value["future_padding"] = json!("");
+        let base_length = serde_json::to_vec(&value).unwrap().len() + 1;
+        value["future_padding"] =
+            json!("x".repeat(MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1 - base_length + 1));
+        let input = serde_json::to_vec(&value).unwrap();
 
-    assert!(matches!(
-        decode_response_payload_v2(&input),
-        Err(PayloadCodecErrorV1::JsonContract(
-            ProtocolError::CompactStatusEnvelopeTooLarge { length, maximum }
-        )) if length == MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1 + 1
-            && maximum == MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1
-    ));
+        assert!(
+            matches!(
+                decode_response_payload_v2(&input),
+                Err(PayloadCodecErrorV1::JsonContract(
+                    ProtocolError::CompactStatusEnvelopeTooLarge { length, maximum }
+                )) if length == MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1 + 1
+                    && maximum == MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1
+            ),
+            "{schema} bypassed the compact envelope bound"
+        );
+    }
 }

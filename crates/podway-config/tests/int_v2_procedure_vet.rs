@@ -140,6 +140,156 @@ fn oversized_static_document() -> String {
     )
 }
 
+/// The charges for the `consumer` placement of a vetted document.
+fn placement_charges(source: &str) -> podway_config::ProcedurePlacementBudgetV2 {
+    let ParsedProcedure::V2(parsed) =
+        parse_procedure_document(source.as_bytes(), ProcedureDocumentFormat::Yaml)
+            .expect("the fixture must parse");
+    let validated = validate_procedure_v2(parsed).expect("the fixture must validate");
+    podway_config::procedure_placement_budget_v2(
+        &validated,
+        &podway_core::GraphNodeId::new("consumer").unwrap(),
+    )
+    .expect("the fixture declares a consumer placement")
+}
+
+/// `sources` selector-less references to definitions of `items` confirm items each.
+///
+/// Confirm items are the cheapest metadata there is, so this shape separates the record ceiling
+/// from the byte allocation: it can pass one and fail the other.
+fn narrow_selectorless_document(sources: usize, items: usize) -> String {
+    let mut definitions = String::new();
+    let mut nodes = String::new();
+    let mut evidence = String::new();
+    for source in 0..sources {
+        let declared = (0..items)
+            .map(|item| {
+                format!(
+                    "      - id: item-{source}-{item:03}\n        type: confirm\n        prompt: Confirm it.\n        required: false\n"
+                )
+            })
+            .collect::<String>();
+        definitions.push_str(&format!(
+            "  source-{source}:\n    type: action\n    title: Source {source}\n    intent: Record values.\n    items:\n{declared}"
+        ));
+        let next = if source + 1 == sources {
+            "consumer".to_owned()
+        } else {
+            format!("source-{}", source + 1)
+        };
+        nodes.push_str(&format!(
+            "    - id: source-{source}\n      use: source-{source}\n      next: {next}\n"
+        ));
+        evidence.push_str(&format!(
+            "        - node: source-{source}\n          required: true\n"
+        ));
+    }
+    format!(
+        "schema: podway.procedure/v2\nid: narrow-selectorless\nversion: \"1\"\nname: Narrow selectorless\npurpose: Separate the record ceiling from the byte allocation.\nnode_definitions:\n{definitions}  consumer:\n    type: action\n    title: Consumer\n    intent: Read every recorded value.\ngraph:\n  entry: source-0\n  nodes:\n{nodes}    - id: consumer\n      use: consumer\n      evidence_from:\n{evidence}      terminal: true\n"
+    )
+}
+
+/// A consumer reading back from `sources` selector-less references to 128-item definitions.
+///
+/// An omitted selector means every item of the source, so this is the widest metadata a schema
+/// valid document can demand — far wider than the 8x16 explicit-selector case.
+fn selectorless_evidence_document(sources: usize) -> String {
+    let mut definitions = String::new();
+    let mut nodes = String::new();
+    let mut evidence = String::new();
+    for source in 0..sources {
+        let items = (0..128)
+            .map(|item| {
+                format!(
+                    "      - id: item-{source}-{item:03}\n        type: artifact\n        prompt: Attach the artifact.\n        required: false\n"
+                )
+            })
+            .collect::<String>();
+        definitions.push_str(&format!(
+            "  source-{source}:\n    type: action\n    title: Source {source}\n    intent: Record values.\n    items:\n{items}"
+        ));
+        let next = if source + 1 == sources {
+            "consumer".to_owned()
+        } else {
+            format!("source-{}", source + 1)
+        };
+        nodes.push_str(&format!(
+            "    - id: source-{source}\n      use: source-{source}\n      next: {next}\n"
+        ));
+        evidence.push_str(&format!(
+            "        - node: source-{source}\n          required: true\n"
+        ));
+    }
+    format!(
+        "schema: podway.procedure/v2\nid: selectorless-evidence\nversion: \"1\"\nname: Selectorless evidence\npurpose: Charge the widest selector-less evidence declaration.\nnode_definitions:\n{definitions}  consumer:\n    type: action\n    title: Consumer\n    intent: Read every recorded value.\ngraph:\n  entry: source-0\n  nodes:\n{nodes}    - id: consumer\n      use: consumer\n      evidence_from:\n{evidence}      terminal: true\n"
+    )
+}
+
+/// The widest evidence declaration the schema admits: eight references of sixteen items each.
+fn widest_evidence_document() -> String {
+    let mut definitions = String::new();
+    let mut nodes = String::new();
+    let mut evidence = String::new();
+    for source in 0..8 {
+        let items = (0..16)
+            .map(|item| {
+                format!(
+                    "      - id: item-{source}-{item:02}\n        type: artifact\n        prompt: Attach the artifact.\n        required: false\n"
+                )
+            })
+            .collect::<String>();
+        definitions.push_str(&format!(
+            "  source-{source}:\n    type: action\n    title: Source {source}\n    intent: Record values.\n    items:\n{items}"
+        ));
+        let next = if source == 7 {
+            "consumer".to_owned()
+        } else {
+            format!("source-{}", source + 1)
+        };
+        nodes.push_str(&format!(
+            "    - id: source-{source}\n      use: source-{source}\n      next: {next}\n"
+        ));
+        let selected = (0..16)
+            .map(|item| format!("            - item-{source}-{item:02}\n"))
+            .collect::<String>();
+        evidence.push_str(&format!(
+            "        - node: source-{source}\n          required: true\n          items:\n{selected}"
+        ));
+    }
+    format!(
+        "schema: podway.procedure/v2\nid: widest-evidence\nversion: \"1\"\nname: Widest evidence\npurpose: Charge the widest evidence declaration the schema admits.\nnode_definitions:\n{definitions}  consumer:\n    type: action\n    title: Consumer\n    intent: Read every selected value.\ngraph:\n  entry: source-0\n  nodes:\n{nodes}    - id: consumer\n      use: consumer\n      evidence_from:\n{evidence}      terminal: true\n"
+    )
+}
+
+/// A consumer reading back from `sources` decision nodes, each carrying a goal assessment.
+///
+/// One complete goal-assessment record nearly fills its allocation, so this is the shape that
+/// makes the decision-record allocation bind.
+fn decision_readback_document(sources: usize) -> String {
+    let mut definitions = String::new();
+    let mut nodes = String::new();
+    let mut evidence = String::new();
+    for index in 0..sources {
+        definitions.push_str(&format!(
+            "  review-{index}:\n    type: decision\n    title: Review {index}\n    objective: Judge the work.\n    prompt: What is the outcome?\n    options:\n      - id: achieved\n        label: Achieved\n      - id: not-achieved\n        label: Not achieved\n      - id: superseded\n        label: Superseded\n    reason:\n      required: true\n    assessment:\n      target: session_goal\n      outcomes:\n        achieved: achieved\n        not-achieved: not_achieved\n        superseded: superseded\n"
+        ));
+        let next = if index + 1 == sources {
+            "consumer".to_owned()
+        } else {
+            format!("review-{}", index + 1)
+        };
+        nodes.push_str(&format!(
+            "    - id: review-{index}\n      use: review-{index}\n      routes:\n        achieved:\n          to: {next}\n          effect: advance\n        not-achieved:\n          to: {next}\n          effect: advance\n        superseded:\n          to: {next}\n          effect: advance\n"
+        ));
+        evidence.push_str(&format!(
+            "        - node: review-{index}\n          required: true\n"
+        ));
+    }
+    format!(
+        "schema: podway.procedure/v2\nid: decision-readback\nversion: \"1\"\nname: Decision readback\npurpose: Exercise the decision-record allocation.\ngoal_tracking: true\nnode_definitions:\n{definitions}  consumer:\n    type: action\n    title: Consumer\n    intent: Read the decision records.\ngraph:\n  entry: review-0\n  nodes:\n{nodes}    - id: consumer\n      use: consumer\n      evidence_from:\n{evidence}      terminal: true\n"
+    )
+}
+
 fn readback_document(selector: Option<&str>, required: bool, unreachable_consumer: bool) -> String {
     let evidence = match selector {
         Some(item) => format!(
@@ -154,22 +304,6 @@ fn readback_document(selector: Option<&str>, required: bool, unreachable_consume
     };
     format!(
         "schema: podway.procedure/v2\nid: readback-budget\nversion: \"1\"\nname: Readback budget\npurpose: Exercise worst-case selected item read-back accounting.\nnode_definitions:\n  producer:\n    type: action\n    title: Producer\n    intent: Record bounded source values.\n    items:\n      - id: huge-list\n        type: list\n        prompt: Record the list.\n        required: false\n        max_items: 200\n        max_item_length: 1000\n      - id: small-confirm\n        type: confirm\n        prompt: Confirm the result.\n        required: false\n  consumer:\n    type: action\n    title: Consumer\n    intent: Read the selected source values.\ngraph:\n  entry: source\n  nodes:\n    - id: source\n      use: producer\n{source_outcome}    - id: consumer\n      use: consumer\n      evidence_from:\n{evidence}      terminal: true\n"
-    )
-}
-
-fn exact_readback_boundary_document(last_item_max_length: u32) -> String {
-    let maxima = [16_384, 16_384, 16_384, 16_384, 16_384, last_item_max_length];
-    let items = maxima
-        .iter()
-        .enumerate()
-        .map(|(index, maximum)| {
-            format!(
-                "      - id: text-{index}\n        type: text\n        prompt: Value {index}.\n        required: false\n        max_length: {maximum}\n"
-            )
-        })
-        .collect::<String>();
-    format!(
-        "schema: podway.procedure/v2\nid: readback-boundary\nversion: \"1\"\nname: Readback boundary\npurpose: Pin exact per-placement read-back accounting at the accepted limit.\nnode_definitions:\n  producer:\n    type: action\n    title: Producer\n    intent: Record six bounded text values.\n    items:\n{items}  consumer:\n    type: action\n    title: Consumer\n    intent: Read every recorded source value.\ngraph:\n  entry: source\n  nodes:\n    - id: source\n      use: producer\n      next: consumer\n    - id: consumer\n      use: consumer\n      evidence_from:\n        - node: source\n      terminal: true\n"
     )
 }
 
@@ -365,42 +499,130 @@ fn v2grf002_rejects_a_placement_whose_complete_static_next_content_is_too_large(
 }
 
 #[test]
-fn v2grf002_readback_charges_all_items_without_a_selector_and_only_selected_items_with_one() {
-    let all_items = readback_document(None, true, false);
-    let finding = vet(&all_items)
-        .into_iter()
-        .find(|finding| finding.code() == AuthoringDiagnosticCode::ReadbackBudgetExceeded)
-        .expect("a 200 by 1000 list cannot fit in read-back");
-    assert_eq!(finding.graph_node_id(), Some("consumer"));
-    assert_eq!(finding.node_definition_id(), Some("consumer"));
-    assert_eq!(finding.field(), "graph.nodes[consumer].evidence_from");
-    assert_eq!(finding.related_graph_node_ids(), ["source"]);
-
-    let selected = readback_document(Some("small-confirm"), true, false);
+fn v2scl005_a_selector_narrows_the_evidence_allocations_it_charges() {
+    // ADR-0024 charges metadata per selected item and a preview slot only for an explicit
+    // selector, so a selector must lower both charges. Neither can overflow here: both
+    // allocations are sized to hold the schema maximum, which the unreachability test proves.
+    let all_items = placement_charges(&readback_document(None, true, false));
+    let selected = placement_charges(&readback_document(Some("small-confirm"), true, false));
     assert!(
-        !codes(&selected).contains(&"READBACK_BUDGET_EXCEEDED"),
-        "a selector excludes the unselected maximal list value"
+        selected.readback() < all_items.readback(),
+        "a selector must charge less metadata than reading every item"
+    );
+    assert_eq!(
+        all_items.evidence_preview(),
+        0,
+        "an omitted selector requests no preview"
+    );
+    assert!(
+        selected.evidence_preview() > 0 && selected.page_tokens() > 0,
+        "an explicit selector spends a preview slot and publishes a continuation token"
     );
 }
 
 #[test]
-fn v2grf002_accepts_an_exact_readback_budget_and_rejects_the_next_authored_scalar() {
-    // Required array/metadata fields charge 4,604 bytes. Each text item charges 608 bytes plus
-    // six times max_length. Six maxima summing to 86,006 therefore charge exactly 524,288.
-    let exact = exact_readback_boundary_document(4_086);
+fn v2scl005_the_preview_and_token_allocations_hold_every_slot_a_selector_can_ask_for() {
+    // A selector caps previews at 32 slots and one token per slot however wide the selection is,
+    // so these two allocations hold the maximum by construction. Metadata does not: see the
+    // selector-less case below.
+    let widest = placement_charges(&widest_evidence_document());
+    assert!(widest.evidence_preview() <= podway_config::EVIDENCE_PREVIEW_BUDGET);
+    assert!(widest.page_tokens() <= podway_config::PAGE_TOKEN_BUDGET);
+    let codes = codes(&widest_evidence_document());
     assert!(
-        !codes(&exact).contains(&"READBACK_BUDGET_EXCEEDED"),
-        "equality with READBACK_BUDGET must be accepted"
+        widest.charged_total()
+            <= podway_config::NEXT_FRAME_BUDGET - podway_config::NEXT_SERIALIZATION_RESERVE
     );
+    for unreachable in [
+        "EVIDENCE_PREVIEW_BUDGET_EXCEEDED",
+        "PAGE_TOKEN_BUDGET_EXCEEDED",
+        "READBACK_BUDGET_EXCEEDED",
+        "NEXT_FRAME_BUDGET_EXCEEDED",
+    ] {
+        assert!(
+            !codes.contains(&unreachable),
+            "{unreachable} fired on the widest explicit selection"
+        );
+    }
+}
 
-    let over = exact_readback_boundary_document(4_087);
-    assert_has(&over, AuthoringDiagnosticCode::ReadbackBudgetExceeded);
+#[test]
+fn v2scl005_a_wide_selection_cannot_exceed_the_published_record_ceiling() {
+    // Metadata costs the same for every item kind, so many small items charge few bytes while
+    // still publishing more records than `next-result/v3` admits. The byte allocation cannot
+    // catch that, which is why the record ceiling is enforced on its own.
+    let inside = placement_charges(&narrow_selectorless_document(3, 42));
+    assert_eq!(inside.readback_records(), 126);
+    assert!(inside.readback() <= podway_config::READBACK_BUDGET);
+    assert!(!codes(&narrow_selectorless_document(3, 42)).contains(&"READBACK_BUDGET_EXCEEDED"));
+
+    let over = placement_charges(&narrow_selectorless_document(3, 43));
+    assert_eq!(over.readback_records(), 129);
+    assert!(
+        over.readback() <= podway_config::READBACK_BUDGET,
+        "the byte allocation must not be what rejects this: {} bytes",
+        over.readback()
+    );
+    let findings = vet(&narrow_selectorless_document(3, 43));
+    let finding = findings
+        .iter()
+        .find(|finding| finding.code() == AuthoringDiagnosticCode::ReadbackBudgetExceeded)
+        .expect("129 metadata records exceed what one response may carry");
+    assert!(finding.message().contains("129"));
+    assert_eq!(finding.field(), "graph.nodes[consumer].evidence_from");
+}
+
+#[test]
+fn v2scl005_a_selectorless_reference_can_exceed_the_metadata_allocation() {
+    // An omitted selector means every item of the source, so a reference to a 128-item definition
+    // charges far more metadata than the eight-by-sixteen explicit maximum. One such reference
+    // fits its allocation and two do not, which is what makes READBACK_BUDGET_EXCEEDED a live
+    // diagnostic rather than fail-closed defense.
+    let one = placement_charges(&selectorless_evidence_document(1));
+    assert!(
+        one.readback() <= podway_config::READBACK_BUDGET,
+        "one selector-less reference charges {} bytes of metadata",
+        one.readback()
+    );
+    assert!(!codes(&selectorless_evidence_document(1)).contains(&"READBACK_BUDGET_EXCEEDED"));
+
+    let two = placement_charges(&selectorless_evidence_document(2));
+    assert_eq!(two.readback(), 367_736);
+    assert!(two.readback() > podway_config::READBACK_BUDGET);
+    let findings = vet(&selectorless_evidence_document(2));
+    let finding = findings
+        .iter()
+        .find(|finding| finding.code() == AuthoringDiagnosticCode::ReadbackBudgetExceeded)
+        .expect("two selector-less 128-item references cannot fit the metadata allocation");
+    assert_eq!(finding.graph_node_id(), Some("consumer"));
+    assert_eq!(finding.field(), "graph.nodes[consumer].evidence_from");
+}
+
+#[test]
+fn v2scl005_a_second_decision_source_exceeds_the_decision_record_allocation() {
+    // One complete goal-assessment record nearly fills its allocation, so reading back from a
+    // second decision source is the evidence declaration that actually fails.
+    assert!(
+        !codes(&decision_readback_document(1)).contains(&"DECISION_RECORD_BUDGET_EXCEEDED"),
+        "one decision source must fit its allocation"
+    );
+    let findings = vet(&decision_readback_document(2));
+    let finding = findings
+        .iter()
+        .find(|finding| finding.code() == AuthoringDiagnosticCode::DecisionRecordBudgetExceeded)
+        .expect("two complete decision records cannot fit their allocation");
+    assert_eq!(finding.graph_node_id(), Some("consumer"));
+    assert_eq!(finding.field(), "graph.nodes[consumer].evidence_from");
+    assert_eq!(finding.related_graph_node_ids(), ["review-0", "review-1"]);
 }
 
 #[test]
 fn v2grf002_optional_and_unreachable_readback_is_still_charged_at_its_worst_case() {
-    let optional = readback_document(None, false, false);
-    assert_has(&optional, AuthoringDiagnosticCode::ReadbackBudgetExceeded);
+    // An optional or unreachable consumer is charged exactly like a required, reachable one: the
+    // budget bounds what the response could carry, not what this run happens to reach.
+    let required = placement_charges(&readback_document(None, true, false));
+    let optional = placement_charges(&readback_document(None, false, false));
+    assert_eq!(optional.readback(), required.readback());
 
     let unreachable = readback_document(None, false, true);
     let findings = vet(&unreachable);
@@ -408,10 +630,11 @@ fn v2grf002_optional_and_unreachable_readback_is_still_charged_at_its_worst_case
         finding.code() == AuthoringDiagnosticCode::UnreachableGraphNode
             && finding.graph_node_id() == Some("consumer")
     }));
-    assert!(findings.iter().any(|finding| {
-        finding.code() == AuthoringDiagnosticCode::ReadbackBudgetExceeded
-            && finding.graph_node_id() == Some("consumer")
-    }));
+    assert_eq!(
+        placement_charges(&unreachable).readback(),
+        required.readback(),
+        "an unreachable consumer is still charged at its worst case"
+    );
 }
 
 #[test]

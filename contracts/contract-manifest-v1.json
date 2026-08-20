@@ -33,7 +33,7 @@
     {
       "kind": "catalog",
       "path": "release/dolgorae-adapter-contract-v2.json",
-      "sha256": "sha256:fc250f725d4c613ba8226ba7a1b6bfe522276ccac80ae2743d5e298cb5793763"
+      "sha256": "sha256:815176898231c9663e4cc213e68e4de03ccbaa35e64beeba6b94bd69b9563cdb"
     },
     {
       "kind": "schema",
@@ -48,7 +48,7 @@
     {
       "kind": "schema",
       "path": "schemas/authoring-diagnostic-v1.schema.json",
-      "sha256": "sha256:ffca69cebb7a52bf32dadd707f8cbedc7a5532dd774fcc5cda3d3e0b1cb5bfb9"
+      "sha256": "sha256:120de9cb1ad265f4ca6a0472ef9f2b65f4a9a6f980f4df7fd668f386c23ce823"
     },
     {
       "kind": "schema",
@@ -63,7 +63,7 @@
     {
       "kind": "schema",
       "path": "schemas/compact-status-result-v3.schema.json",
-      "sha256": "sha256:32a3cd28d1df85b739b3fe69959edd6e924f34de5db9a5e805aebd8d64b01511"
+      "sha256": "sha256:af33e62ed6de8a7b0f8b79147828f0c07fd3b652b059f4ac194e6c1bfaf7f05a"
     },
     {
       "kind": "schema",
@@ -328,7 +328,7 @@
     {
       "kind": "schema",
       "path": "schemas/status-result-v3.schema.json",
-      "sha256": "sha256:f3daa02a6521fa1f45461a4644873d6a76920f12ef5e678839c30539a3a7300d"
+      "sha256": "sha256:fae04f1d6f4059f6b52acb1195512000122b451dadda6de6fb83f4997759ac63"
     },
     {
       "kind": "schema",
@@ -348,7 +348,7 @@
     {
       "kind": "schema",
       "path": "schemas/v2-result-components-v3.schema.json",
-      "sha256": "sha256:860f7fee50bfcbe4103d706943e065069f23be7dbc0988adbbd397c2378318b8"
+      "sha256": "sha256:2622c2159a28ae8f5c61c86b05bff5ca626ac2dbc38fd04299367bedc4b43028"
     },
     {
       "kind": "schema",
@@ -383,7 +383,7 @@
     {
       "kind": "catalog",
       "path": "spec/authoring-diagnostics.json",
-      "sha256": "sha256:922e29d36bc6c506ff90f475fa637385fafa30b40714c0199fe18d4b622e5cba"
+      "sha256": "sha256:9c8247d4576c271577df8c3c3eea2d25a825e1a1a957cf7535452516233f4b0d"
     },
     {
       "kind": "canonicalization_rules",
@@ -473,10 +473,10 @@
     {
       "kind": "known_answer_fixture",
       "path": "tests/fixtures/v2/protocol/result-families.json",
-      "sha256": "sha256:e70969429d39ca556f21df864e7487547f440b140fda3b46c025e87157b17c6b"
+      "sha256": "sha256:2b09ed09bbf20b56ab5292ead02f5e79732f5b34d167334683b0a7a98ef179e1"
     }
   ],
-  "digest": "sha256:d11d5c67557cb9826f086c7c6a4ba178ca639480db3f6c06320765e06ec6f753",
+  "digest": "sha256:5466dc796f217fed80f9f6f4cb022ae336e4926dda616338ddc4eac50ab6118c",
   "product": "podway",
   "product_version": "0.2.5",
   "schema_version": "podway.contract-manifest/v1",

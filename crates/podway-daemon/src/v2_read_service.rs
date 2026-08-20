@@ -26,12 +26,18 @@ use podway_core::{
     ItemId,
     ItemSpecV2,
     ItemTypeV1,
+    MAX_ACTIVE_ITEM_WINDOW_V2,
     MAX_EVIDENCE_PAGE_BYTES_V2,
     MAX_EVIDENCE_PREVIEW_BYTES_V2,
     MAX_EVIDENCE_PREVIEW_SCALARS_V2,
     MAX_EVIDENCE_PREVIEW_SLOTS_V2,
     MAX_MISSING_ITEM_WINDOW_V2,
+    MAX_MUTATION_TEMPLATE_WINDOW_V2,
+    MAX_OBSERVATION_ACTIVE_ITEM_BYTES_V2,
     MAX_OBSERVATION_CHOICE_WINDOW_V2,
+    MAX_OBSERVATION_GUIDANCE_BYTES_V2,
+    MAX_OBSERVATION_STATUS_BYTES_V2,
+    MAX_OBSERVATION_TEMPLATE_BYTES_V2,
     PROCEDURE_SCHEMA_V2,
     RecordedItemValueV2,
     ResolvedEvidenceReferenceV2,
@@ -167,14 +173,21 @@ pub fn project_graph_status_v2(
     }
 
     result.insert("purpose".to_owned(), json!(state.snapshot().purpose()));
+    let (missing_ids, missing_total, missing_truncated) = current
+        .as_ref()
+        .map(CurrentProjection::missing_ids)
+        .unwrap_or_default();
+    result.insert(
+        "missing_required_item_count".to_owned(),
+        json!(missing_total),
+    );
+    result.insert(
+        "missing_required_item_ids_truncated".to_owned(),
+        json!(missing_truncated),
+    );
     result.insert(
         "missing_required_item_ids".to_owned(),
-        Value::Array(
-            current
-                .as_ref()
-                .map(CurrentProjection::missing_ids)
-                .unwrap_or_default(),
-        ),
+        Value::Array(missing_ids),
     );
     let (blockers, blockers_truncated) = current
         .as_ref()
@@ -627,9 +640,9 @@ pub fn project_graph_next_v2(
         "readback_items_total".to_owned(),
         json!(readback_items_total),
     );
-    // The projection emits every selected item's metadata and truncates nothing, so this flag is
-    // false by construction. It stays in the contract because V2SCL-005 derives the metadata
-    // window from the response budget, and a window is only honest when it can say it was cut.
+    // Vetting refuses a declaration whose selection exceeds the published record ceiling, so an
+    // admitted Procedure always fits and this flag is false by construction. It stays in the
+    // contract because a window is only honest when it can say it was cut.
     result.insert("readback_items_truncated".to_owned(), json!(false));
     result.insert(
         "allowed_manual_rework_targets".to_owned(),
@@ -721,16 +734,34 @@ pub fn project_graph_observation_v1(
         Value::Null
     };
 
+    // Status and guidance are single structured members, not windows: there is no honest way to
+    // trim half a status or half a guidance object, and their own collections are already
+    // bounded. So they are measured rather than cut, and a member that outgrows its allocation is
+    // an inconsistency in the composition rather than something to silently ship over budget.
+    let status = Value::Object(status);
+    admit_member_within_bytes_v1(&status, MAX_OBSERVATION_STATUS_BYTES_V2)?;
+    admit_member_within_bytes_v1(&guidance, MAX_OBSERVATION_GUIDANCE_BYTES_V2)?;
+
     let mut result = Map::new();
     result.insert("schema".to_owned(), json!("podway.observation-result/v3"));
-    result.insert("status".to_owned(), Value::Object(status));
+    result.insert("status".to_owned(), status);
     result.insert("guidance".to_owned(), guidance);
     let active_items = current
         .as_ref()
         .map(CurrentProjection::active_item_descriptors)
         .unwrap_or_default();
-    result.insert("active_items_total".to_owned(), json!(active_items.len()));
-    result.insert("active_items_truncated".to_owned(), json!(false));
+    // Each window keeps its exact total and admits entries in declaration order until its byte
+    // allocation is spent. ADR-0024 forbids a silent cut, so the flag travels with the count.
+    let (active_items, active_items_total) = admit_within_bytes_v1(
+        active_items,
+        MAX_OBSERVATION_ACTIVE_ITEM_BYTES_V2,
+        MAX_ACTIVE_ITEM_WINDOW_V2,
+    );
+    result.insert("active_items_total".to_owned(), json!(active_items_total));
+    result.insert(
+        "active_items_truncated".to_owned(),
+        json!(active_items.len() < active_items_total),
+    );
     result.insert("active_items".to_owned(), Value::Array(active_items));
     let mutation_templates = if state.trace().lifecycle() == SessionLifecycle::Prepared {
         prepared_mutation_templates(view, state)
@@ -745,16 +776,135 @@ pub fn project_graph_observation_v1(
             .map(|current| current.mutation_templates(view, state, &procedure))
             .unwrap_or_default()
     };
+    let (mutation_templates, mutation_templates_total) = admit_templates_within_bytes_v1(
+        mutation_templates,
+        MAX_OBSERVATION_TEMPLATE_BYTES_V2,
+        MAX_MUTATION_TEMPLATE_WINDOW_V2,
+    )?;
     result.insert(
         "mutation_templates_total".to_owned(),
-        json!(mutation_templates.len()),
+        json!(mutation_templates_total),
     );
-    result.insert("mutation_templates_truncated".to_owned(), json!(false));
+    result.insert(
+        "mutation_templates_truncated".to_owned(),
+        json!(mutation_templates.len() < mutation_templates_total),
+    );
     result.insert(
         "mutation_templates".to_owned(),
         Value::Array(mutation_templates),
     );
     Ok(result)
+}
+
+/// Measures one whole observation member against its allocation.
+///
+/// A member is not a window: there is no honest way to return half a status or half a guidance
+/// object, and their own collections are already bounded. So a member that outgrows its allocation
+/// is an inconsistency in the composition rather than something to ship over budget.
+fn admit_member_within_bytes_v1(member: &Value, allocation: usize) -> Result<(), GraphViewErrorV2> {
+    if serialized_bytes_v1(member) > allocation {
+        return Err(GraphViewErrorV2::InconsistentState(
+            "an observation member exceeded its published byte allocation",
+        ));
+    }
+    Ok(())
+}
+
+/// Admits window entries in declaration order until either allocation is spent.
+///
+/// Returns the admitted entries and the exact total the caller must publish alongside them. The
+/// first entry is always admitted: a window that can answer nothing tells a caller less than a
+/// window that answers once and says it was cut.
+fn admit_within_bytes_v1(entries: Vec<Value>, budget: usize, window: usize) -> (Vec<Value>, usize) {
+    let total = entries.len();
+    let mut charged = 0usize;
+    let mut admitted = 0usize;
+    for entry in entries.iter().take(window) {
+        let cost = serialized_bytes_v1(entry);
+        if admitted > 0 && charged.saturating_add(cost) > budget {
+            break;
+        }
+        charged = charged.saturating_add(cost);
+        admitted += 1;
+    }
+    let mut entries = entries;
+    entries.truncate(admitted);
+    (entries, total)
+}
+
+/// Admits mutation templates, keeping one per command before spending the rest of the allocation.
+///
+/// Guidance publishes `allowed_actions`, and a caller turns each one into a request by finding its
+/// template. Cutting purely in declaration order can therefore leave an allowed action with no
+/// template at all, which reads as a contradiction rather than as a truncated window. Reserving
+/// the first template of each command keeps the window's cut confined to repetition.
+fn admit_templates_within_bytes_v1(
+    templates: Vec<Value>,
+    budget: usize,
+    window: usize,
+) -> Result<(Vec<Value>, usize), GraphViewErrorV2> {
+    let total = templates.len();
+    let mut seen: Vec<&str> = Vec::new();
+    let mut reserved = vec![false; total];
+    for (index, template) in templates.iter().enumerate() {
+        let Some(command) = template.get("command").and_then(Value::as_str) else {
+            continue;
+        };
+        if !seen.contains(&command) {
+            seen.push(command);
+            reserved[index] = true;
+        }
+    }
+
+    // The reservation is admitted whole, because dropping it would leave an `allowed_actions`
+    // entry with no template — a contradiction, not a truncation. It is still charged: the command
+    // set is closed and small, so it fits by construction, and if it ever stopped fitting that is
+    // an inconsistency in the composition rather than something to silently ship over budget.
+    let mut charged = 0usize;
+    let mut admitted = 0usize;
+    let mut keep = reserved.clone();
+    for (index, template) in templates.iter().enumerate() {
+        if !reserved[index] {
+            continue;
+        }
+        charged = charged.saturating_add(serialized_bytes_v1(template));
+        admitted += 1;
+    }
+    if charged > budget || admitted > window {
+        return Err(GraphViewErrorV2::InconsistentState(
+            "one template per command does not fit the template allocation",
+        ));
+    }
+    for (index, template) in templates.iter().enumerate() {
+        if keep[index] {
+            continue;
+        }
+        if admitted >= window {
+            break;
+        }
+        let cost = serialized_bytes_v1(template);
+        if charged.saturating_add(cost) > budget {
+            continue;
+        }
+        charged = charged.saturating_add(cost);
+        admitted += 1;
+        keep[index] = true;
+    }
+
+    let admitted_templates = templates
+        .into_iter()
+        .zip(keep)
+        .filter_map(|(template, keep)| keep.then_some(template))
+        .collect();
+    Ok((admitted_templates, total))
+}
+
+/// The bytes one projected value serializes to, plus its array-element structure.
+fn serialized_bytes_v1(value: &Value) -> usize {
+    serde_json::to_vec(value)
+        .map(|encoded| encoded.len())
+        .unwrap_or(usize::MAX)
+        .saturating_add(EVIDENCE_ENTRY_OVERHEAD_BYTES)
 }
 
 /// The observation-scoped compact status projection.
@@ -1137,11 +1287,21 @@ impl<'a> CurrentProjection<'a> {
             .collect()
     }
 
-    fn missing_ids(&self) -> Vec<Value> {
-        self.missing_required
+    /// The bounded missing-item identifier window.
+    ///
+    /// Raising items per definition to 128 made this array able to exceed the 64 its own schema
+    /// publishes, so it is windowed like every other derived collection: the exact count travels
+    /// with it and the cut is never silent.
+    fn missing_ids(&self) -> (Vec<Value>, usize, bool) {
+        let total = self.missing_required.len();
+        let ids: Vec<Value> = self
+            .missing_required
             .iter()
+            .take(MAX_MISSING_ITEM_WINDOW_V2)
             .map(|item| json!(item.id().as_str()))
-            .collect()
+            .collect();
+        let truncated = ids.len() < total;
+        (ids, total, truncated)
     }
 
     /// The bounded missing-item detail window.
@@ -2190,6 +2350,18 @@ fn readback_value(
     let source = resolution.source_node();
     let source_title = definition_title_for_node(procedure, source.as_str())
         .ok_or(GraphViewErrorV2::InvalidSnapshot)?;
+    // A stale read-back must never be published as resolved. `next-result/v3` deliberately admits
+    // only the three live states, because progression guidance projects the current attempt and a
+    // current attempt is valid; a stale entry reaching here means the trace disagrees with itself,
+    // so this fails closed rather than mislabelling evidence the caller would then trust.
+    // Reachable only if that invariant is ever relaxed, which is why no test drives this arm;
+    // `v2scl004_evidence_read_separates_a_stale_reference_from_a_stale_token` proves the state
+    // cannot be constructed today.
+    if readback.stale() {
+        return Err(GraphViewErrorV2::InconsistentState(
+            "progression guidance cannot read back stale evidence",
+        ));
+    }
     let reference_state = match resolution {
         ResolvedEvidenceReferenceV2::Resolved(_) => "resolved",
         ResolvedEvidenceReferenceV2::Skipped(_) => "skipped",
@@ -3081,4 +3253,90 @@ fn civil_date_from_unix_days(days: u64) -> (i128, i128, i128) {
         year += 1;
     }
     (year, month, day)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(width: usize) -> Value {
+        json!({ "id": "x".repeat(width) })
+    }
+
+    #[test]
+    fn v2scl005_a_byte_window_cuts_and_reports_the_exact_total() {
+        // Every admissible active-item set fits its allocation today, so this is the only place the
+        // cutting branch is exercised. A window that stops silently is the defect ADR-0024 forbids,
+        // so what the branch must produce is a short array beside an unchanged total.
+        let entries: Vec<Value> = (0..8).map(|_| entry(100)).collect();
+        let budget = serialized_bytes_v1(&entries[0]) * 3;
+        let (admitted, total) = admit_within_bytes_v1(entries, budget, 64);
+        assert_eq!(total, 8);
+        assert_eq!(admitted.len(), 3);
+
+        // A window bounded by its count rather than its bytes cuts the same way.
+        let entries: Vec<Value> = (0..8).map(|_| entry(1)).collect();
+        let (admitted, total) = admit_within_bytes_v1(entries, usize::MAX, 5);
+        assert_eq!((admitted.len(), total), (5, 8));
+
+        // One entry wider than the whole allocation is still admitted: a window that can answer
+        // nothing tells a caller less than one that answers once and says it was cut.
+        let entries = vec![entry(4_096), entry(1)];
+        let (admitted, total) = admit_within_bytes_v1(entries, 16, 64);
+        assert_eq!((admitted.len(), total), (1, 2));
+    }
+
+    #[test]
+    fn v2scl005_an_observation_member_over_its_allocation_fails_closed() {
+        // Status and guidance are measured rather than cut, and the composition makes the breach
+        // unreachable, so this drives the comparison directly: a member over its allocation must
+        // refuse rather than ship, because shipping it would break the frame proof silently.
+        let oversized = json!({ "padding": "x".repeat(MAX_OBSERVATION_STATUS_BYTES_V2) });
+        assert!(matches!(
+            admit_member_within_bytes_v1(&oversized, MAX_OBSERVATION_STATUS_BYTES_V2),
+            Err(GraphViewErrorV2::InconsistentState(_))
+        ));
+        assert!(
+            admit_member_within_bytes_v1(
+                &json!({ "padding": "x" }),
+                MAX_OBSERVATION_STATUS_BYTES_V2
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn v2scl005_a_template_window_never_drops_a_command_it_would_have_offered() {
+        // The reservation is what keeps `allowed_actions` answerable under truncation.
+        let templates: Vec<Value> = ["item.set", "item.set", "item.check", "session.complete"]
+            .iter()
+            .map(|command| json!({ "command": command, "argv": ["podway", "x".repeat(64)] }))
+            .collect();
+        // Exactly the three distinct commands fit, so the duplicate `item.set` is what gets cut.
+        let budget: usize = [0usize, 2, 3]
+            .iter()
+            .map(|index| serialized_bytes_v1(&templates[*index]))
+            .sum();
+        let (admitted, total) = admit_templates_within_bytes_v1(templates, budget, 64).unwrap();
+        assert_eq!(total, 4);
+        assert_eq!(admitted.len(), 3);
+        let commands: Vec<&str> = admitted
+            .iter()
+            .map(|template| template["command"].as_str().unwrap())
+            .collect();
+        for command in ["item.set", "item.check", "session.complete"] {
+            assert!(commands.contains(&command), "{command} lost its template");
+        }
+
+        // A reservation that cannot fit is refused rather than trimmed, because trimming it is
+        // exactly the contradiction the reservation exists to prevent.
+        let templates: Vec<Value> = (0..8)
+            .map(|index| json!({ "command": format!("item.kind-{index}"), "argv": ["podway"] }))
+            .collect();
+        let budget = serialized_bytes_v1(&templates[0]) * 2;
+        assert!(matches!(
+            admit_templates_within_bytes_v1(templates, budget, 64),
+            Err(GraphViewErrorV2::InconsistentState(_))
+        ));
+    }
 }
