@@ -20,11 +20,20 @@ Not trusted as proof of correctness:
 - a checked confirmation;
 - user-supplied text;
 - external artifact metadata;
+- recorded external check results and their caller-supplied input basis,
+  executor, outcome, summary, and digests;
 - task-worker exit status;
 - procedure authorship;
 - local state against malicious same-user modification.
 
 Podway enforces procedural completeness, not truth.
+
+A `check_result` is structurally bound, not verified or attested. Podway checks
+that its required fields, bounds, digests, operation identity, and accepted
+outcome relationship are well formed. It does not compare the input basis with
+worktree state, fetch input or output bytes, execute the operation, authenticate
+the executor, or decide whether the summary is true. Attempt-suffix invalidation
+provides ordinary attempt-scoped freshness and no stronger assurance.
 
 ## Why there is no workspace access key
 

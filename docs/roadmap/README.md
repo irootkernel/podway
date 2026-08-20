@@ -331,7 +331,7 @@ Dependencies: completed `V2SCL` epic.
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `V2AST-001` | Adopt the external check result authority | Planned | Adopt the extending ADR and normative item, trust, storage, protocol, and compatibility contracts. | [V2AST dossier](../todo/TODO-podway-assurance-typing.md#3-accepted-design-and-public-interfaces) |
+| `V2AST-001` | Adopt the external check result authority | Completed | Adopt the extending ADR and normative item, trust, storage, protocol, and compatibility contracts. | [ADR-0025](../architecture-decision-records/0025-structurally-bound-external-check-results.md), [item specification](../specs/domain/procedure-and-item-specification.md#external-check-results) |
 | `V2AST-002` | Reserve check-result contracts and storage | Planned | Reserve the closed schemas, observation windows, canonical SQLite v6 DDL and migration identity, manifest changes, and compatibility fixtures without runtime admission. | [V2AST dossier](../todo/TODO-podway-assurance-typing.md#35-compatibility-sensitive-contract-inventory) |
 | `V2AST-003` | Add the check-result domain and authoring model | Planned | Add bounded declarations, complete values, satisfaction, parsing, diagnostics, and canonicalization while preserving existing Procedure digests. | [V2AST dossier](../todo/TODO-podway-assurance-typing.md#32-procedure-declaration) |
 | `V2AST-004` | Migrate, decode, and record check results | Planned | Rebuild the constrained item table, add bounded protocol decoding and atomic frame-sized record-many support, and prove replay, restart, idempotency, and downgrade protection. | [V2AST dossier](../todo/TODO-podway-assurance-typing.md#33-recorded-value) |

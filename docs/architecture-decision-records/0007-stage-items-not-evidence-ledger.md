@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-07-13
-- Extended by: [ADR-0016](0016-recorded-item-workflow-memory.md)
+- Extended by: [ADR-0016](0016-recorded-item-workflow-memory.md), [ADR-0025](0025-structurally-bound-external-check-results.md)
 
 ## Context
 

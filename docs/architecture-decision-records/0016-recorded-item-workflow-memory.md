@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-08-04
 - Extends: [ADR-0007](0007-stage-items-not-evidence-ledger.md)
+- Extended by: [ADR-0025](0025-structurally-bound-external-check-results.md)
 
 ## Context
 

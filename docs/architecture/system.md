@@ -118,7 +118,8 @@ The store owns:
 - workspace metadata;
 - procedure snapshots;
 - session state;
-- attempts, item values, blockers, and artifact references;
+- attempts, item values, blockers, artifact references, and structurally bound
+  external check-result values as ordinary attempt-local item values;
 - durable job admission and claiming;
 - idempotency records;
 - bounded operational journal;
@@ -234,6 +235,8 @@ Design limits are owned by [ADR-0024](../architecture-decision-records/0024-boun
 - IPC frame size at most 1 MiB;
 - text item at most 4,000 scalars by default and 65,536 scalars hard maximum;
 - list item at most 1,000 entries hard maximum, 8,192 scalars per entry, and 1,000,000 scalars of total content;
+- one complete external check result at most 32 KiB canonical JSON, yielding a
+  4 MiB derived product across 128 items;
 - at most 16,777,216 scalars of recorded text and list content per attempt;
 - artifact hashing is streaming and does not load the entire file into memory.
 

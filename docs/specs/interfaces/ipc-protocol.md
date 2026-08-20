@@ -191,6 +191,34 @@ Failure ordering is fixed. Malformed, oversized, cross-session, and wrong-bindin
 
 Storage may decode a bounded complete value internally, but no public response may exceed the page or frame budget.
 
+## External check result recording
+
+[ADR-0025](../../architecture-decision-records/0025-structurally-bound-external-check-results.md)
+adds `check_result` as a closed `item.record_many` record variant; it adds no
+command route or error code. The request carries the complete bounded value and
+the existing workspace, session, attempt, item-revision, and idempotency fences.
+One request remains atomic and frame-bounded. A node containing many maximal
+values may require several requests, and those requests are not atomic as a
+group.
+
+An unsatisfied required check result exposes `item.record_many` in
+`allowed_actions` and a suggestion whose argv is `podway record --stdin`.
+`session.observe` may attach one closed `stdin_template`, at most 16 KiB, only to
+the `item.record_many` mutation template. It targets the first unsatisfied check
+result in declaration order, prioritizing required items, and supplies observed
+identity and revision fields plus placeholders for caller-supplied result data
+and the idempotency key. Accepted outcomes remain declaration constraints and are
+not inserted into the mutation body. No other template may carry
+`stdin_template`.
+
+Next, observation, preview, and compact-item projections expose only
+`operation_id`, `outcome`, `operation_digest`, `input_basis.digest`, and
+`output_digest`. Those fields are pattern-constrained ASCII and are never
+character-truncated. Descriptor, executor, and summary text is omitted from the
+projection. `evidence.read` returns the complete check-result value in one
+terminal page because its 32 KiB encoded ceiling is below the 256 KiB page-data
+limit.
+
 ## Response budgets
 
 `session.next` and `session.observe` each have a closed byte composition proved against the 1,048,576-byte frame. Authoring validation charges every allocation separately and names the one an author exceeded, because the remedies differ. Every windowed collection reports its exact total and whether it was truncated; silent truncation is forbidden.

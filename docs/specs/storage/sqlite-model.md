@@ -1,10 +1,21 @@
 # SQLite Model
 
-The canonical DDL history is `sqlite-v1.sql` through `sqlite-v5.sql` under
-`assets/specifications/`. New databases apply the ordered history in one
-transaction and finish at schema version 5. The v5 contract is normative under
-ADR-0021; `V2LIF-002` reserves its exact canonical DDL and `V2LIF-003` admits it
-in runtime.
+The implemented canonical DDL history is `sqlite-v1.sql` through `sqlite-v5.sql`
+under `assets/specifications/`. New databases currently apply that ordered
+history in one transaction and finish at schema version 5. The v5 contract is
+normative under ADR-0021; `V2LIF-002` reserved its exact canonical DDL and
+`V2LIF-003` admitted it in runtime. ADR-0025 requires schema v6 for external
+check results; `V2AST-002` reserves its canonical DDL and named migration before
+`V2AST-004` admits it in runtime.
+
+Schema v6 rebuilds `v2_item_slots` so its closed item discriminator additionally
+admits `check_result`. The v5-to-v6 migration preserves every existing
+`value_json` byte-for-byte and does not reinterpret any existing declaration,
+slot, value, attempt, or session. It applies the canonical rebuild and foreign-key
+check atomically, advances `user_version` and the migration ledger together, and
+rolls both back on any invalid predecessor row. Opening a database newer than the
+implemented current version remains an unsupported downgrade and performs no
+mutation.
 
 Schema v4 is the Procedure v2-only model. It preserves shared operational tables
 for workspace identity, durable jobs, idempotency receipts, and the bounded journal.

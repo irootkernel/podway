@@ -19,3 +19,10 @@ arbitrary workflow engine, plugin host, remote collaboration service, artifact
 store, long-term evidence archive, AI runtime, or same-user security boundary. It
 does not execute configured commands, access the network, mutate Git, or store
 artifact bytes.
+
+Podway may record a structurally bound external check result whose closed fields
+identify an operation, caller-supplied input basis, executor, outcome, and output.
+This prevents omission of those identities; it does not prove that the external
+check ran, that its executor was honest, or that any supplied digest describes the
+claimed bytes. Podway never calls the external operation or promotes the recorded
+value into an attestation, trusted receipt, or security boundary.

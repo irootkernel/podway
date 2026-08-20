@@ -243,6 +243,19 @@ The active-item allocation holds the widest definition vetting admits, so in pra
 | `AUT-EVR-007` | `session.next` MUST compose six named byte allocations within the frame, MUST supply complete evidence metadata for every item in an admitted projection, and MUST NOT mark its evidence metadata window truncated. Explicit selectors receive previews in declaration order for at most 32 items, and at most 128 item metadata records may appear in one response. |
 | `AUT-EVR-008` | Every bound failure MUST report `field`, `actual`, `maximum`, and `unit` and name the constraint actually violated. `REQUEST_TOO_LARGE` is the only exception, because frame decoding precedes JSON parsing. |
 
+### Structurally bound external check results (AUT-CHK-001–008)
+
+| ID | Normative requirement |
+|---|---|
+| `AUT-CHK-001` | Procedure v2 MUST admit a closed `check_result` declaration with one operation ID, one lowercase SHA-256 operation digest, and one to three unique accepted outcomes from `pass`, `fail`, and `inconclusive`. |
+| `AUT-CHK-002` | `item.record_many` MUST admit a closed complete check-result value with required operation, input-basis, executor, outcome, summary, and output-digest fields and MUST reject malformed, unknown, or over-bound content before partial mutation. |
+| `AUT-CHK-003` | A check-result item MUST be satisfied only when operation ID and digest equal the declaration and the recorded outcome is accepted; a valid mismatch MAY be stored but MUST remain unsatisfied. |
+| `AUT-CHK-004` | Every complete check-result value MUST fit within 32 KiB canonical encoded JSON; 128 such values derive a 4 MiB per-attempt product without adding an aggregate error or a second storage lifecycle. |
+| `AUT-CHK-005` | Next, observation, preview, and compact-item projections MUST expose exactly operation ID, outcome, operation digest, input-basis digest, and output digest and MUST omit free-text descriptor, executor, and summary fields. |
+| `AUT-CHK-006` | Observation MAY expose one `stdin_template` of at most 16 KiB only on the `item.record_many` template for the first unsatisfied check result, prioritizing required declarations; no template may execute the operation or invent caller-supplied result values. |
+| `AUT-CHK-007` | `evidence.read` MUST return a complete check-result value in one terminal page under the existing current-reference and freshness rules. |
+| `AUT-CHK-008` | Podway MUST treat every check-result field as caller supplied and MUST NOT claim factual verification, authenticate the executor, inspect external bytes, compare the input basis with the worktree, execute a command, or store logs. |
+
 ## 21. Command-specific JSON schemas (AUT-JSON-001–004)
 
 | ID | Normative requirement |
@@ -299,6 +312,7 @@ env -i PATH="<release-bin>:/usr/bin:/bin" \
 | `AUT-T-RECON` | disconnect before/after admission, wait timeout, lookup in every state, domain failure, pruning, missing key, key reuse | `RECON001`–`RECON005` |
 | `AUT-T-OBS` | idle barrier invariants, closed compact schema, maximum envelope size | `MCONT004`, `MCONT006`, `DOLGI002` |
 | `AUT-T-EVR` | every bound at and one above its boundary, worst-case Unicode escaping, an incrementally built 1,000-entry list, framed `item.record_many` acceptance and rejection, total-list and attempt-aggregate overflow, reconstruction, 128 item definitions, multi-page text and list reads, stable token replay, restart, selector diagnostics, every response allocation, each of the four token failure distinctions separately (`REQUEST_INVALID` before state comparison for malformed, oversized, cross-session, and wrong-binding tokens; `EVIDENCE_NOT_AVAILABLE` for an unresolved or skipped reference read without a token; `EVIDENCE_PAGE_TOKEN_STALE` for a changed bound snapshot; `EVIDENCE_PAGE_TOKEN_EXHAUSTED` for an end-of-value offset), the one-time preset digest rotation and its `DIGEST_CONFIRMATION_REQUIRED` boundary, and the five observation windows with their totals, truncation flags, and metadata-only guidance | `V2SCL-002`–`005` |
+| `AUT-T-CHK` | declaration and value bounds, YAML/JSON equivalence, digest stability, all outcomes, operation mismatch, atomic framed recording, migration and restart, stale retry/rework behavior, five-field projections, stdin-template bounds, one-page read-back, and trust-language checks | `V2AST-002`–`006` |
 | `AUT-T-JSON` | every result/detail fixture validates its discriminator and rejects unknown or malformed fields | `MCONT001`–`MCONT006` |
 | `AUT-T-DIST` | `make dist` packages the native release-profile archive once, verifies its identity and layout, then runs packaged lifecycle, conflict, timeout, response-loss, reconciliation, identity, termination, and socket-cleanup checks through isolated foreground dev mode | `DOLGI005`, `REL10001`–`REL10004` |
 
@@ -334,6 +348,7 @@ Preview and other authoring reads remain side-effect free.
 | `AUT-ADMIT-001`–`003`, `AUT-RECON-001`–`004` | `RECON001`–`RECON005` | `AUT-T-RECON` |
 | `AUT-OBS-001`–`011` | `MCONT004`, `MCONT006`, `DOLGI002`, `V2LIF-004`–`005`, `V2SCL-005` | `AUT-T-OBS`, `AUT-T-LIF`, `AUT-T-EVR` |
 | `AUT-EVR-001`–`008` | `V2SCL-002`–`005` | `AUT-T-EVR`, `AUT-T-JSON` |
+| `AUT-CHK-001`–`008` | `V2AST-002`–`006` | `AUT-T-CHK`, `AUT-T-JSON` |
 | `AUT-JSON-001`–`004`, `AUT-ERR-001`–`005` | `CASID004`, `MCONT001`–`MCONT006`, `V2AGT-005` | `AUT-T-JSON` |
 | `AUT-REL-001`–`004` | `DOLGI005`, `REL10001`–`REL10005` | `AUT-T-DIST`, repository-local `make dist` |
 

@@ -79,6 +79,14 @@ item-local revision fences. The daemon canonicalizes operations by item ID and
 records or clears the complete set atomically without advancing the cursor.
 Identity, revision, and idempotency flags must not duplicate the stdin fields.
 
+A `check_result` record uses this same stdin grammar and has no single-item CLI
+alias. Observation may provide one copyable closed stdin template for the first
+unsatisfied check-result item, but the caller must replace its result and
+idempotency placeholders after performing the external check. Podway does not
+invoke the operation named by the declaration. Human output calls the value a
+recorded or structurally bound external check result and never describes it as
+verified, trusted, attested, or secure evidence.
+
 ## Output and exits
 
 Successful JSON output uses `podway.output/v3`; failures use `podway.error/v1`.

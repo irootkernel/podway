@@ -38,6 +38,20 @@ are invariantly non-truncated for `session.next`, and may be truncated only in t
 observation-specific projection; observation guidance carries no preview data and no
 page token.
 
+ADR-0025 adds a closed `check_result` declaration and complete recorded-value
+variant. The complete value, five-field preview, read-back page, compact item,
+and observation constraints are distinct schema definitions; a complete value is
+never substituted where a bounded projection is promised. The complete
+check-result and artifact value branches remain disjoint under exact-one `oneOf`
+validation because both are closed and require non-overlapping field sets.
+
+`item-record-many-input-v1` and `item-record-many-result-v1` admit the new closed
+record kind, and `observation-result/v3` admits the declaration constraints,
+five-field value projection, and conditional `stdin_template`. These are closed
+kind additions within the exact manifest compatibility gate, not new command
+families. Existing variants retain their field sets and unknown-field closure;
+peers with a different manifest reject the complete contract set.
+
 Adding a result family to the `output-v3` command-to-result selection is not widening
 a released closed schema: each released result schema keeps its own identifier, field
 set, and unknown-field closure. Within the manifest fail-closed gate, a released shared
