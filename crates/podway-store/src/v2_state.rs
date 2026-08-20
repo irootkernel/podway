@@ -184,8 +184,18 @@ fn schema_string_matches_v2(schema: &serde_json::Map<String, Value>, text: &str)
         Some("^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*$") => {
             media_type_pattern_matches_v2(text)
         }
+        Some("^sha256:[0-9a-f]{64}$") => sha256_digest_pattern_matches_v2(text),
         Some(_) => false,
     }
+}
+
+fn sha256_digest_pattern_matches_v2(text: &str) -> bool {
+    text.strip_prefix("sha256:").is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
 }
 
 fn identifier_pattern_matches_v2(text: &str) -> bool {

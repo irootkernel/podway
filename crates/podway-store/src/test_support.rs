@@ -29,11 +29,28 @@ pub fn downgrade_to_schema_v4(database_path: &Path) -> Result<(), String> {
             |row| row.get(0),
         )
         .map_err(|error| error.to_string())?;
+    let item_table_sql: String = reference
+        .query_row(
+            "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'v2_item_slots'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
     connection
         .execute_batch(
             "PRAGMA foreign_keys = OFF;
              DROP TABLE v2_terminal_dispositions;
              PRAGMA legacy_alter_table = ON;
+             ALTER TABLE v2_item_slots RENAME TO v2_item_slots_v6;",
+        )
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute_batch(&item_table_sql)
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute_batch(
+            "INSERT INTO v2_item_slots SELECT * FROM v2_item_slots_v6;
+             DROP TABLE v2_item_slots_v6;
              ALTER TABLE v2_task_sessions RENAME TO v2_task_sessions_v5;",
         )
         .map_err(|error| error.to_string())?;
@@ -57,7 +74,7 @@ pub fn downgrade_to_schema_v4(database_path: &Path) -> Result<(), String> {
                FROM v2_task_sessions_v5;
              DROP TABLE v2_task_sessions_v5;
              PRAGMA legacy_alter_table = OFF;
-             DELETE FROM schema_migrations WHERE version = 5;",
+             DELETE FROM schema_migrations WHERE version IN (5, 6);",
         )
         .map_err(|error| error.to_string())?;
     connection
@@ -71,6 +88,7 @@ pub fn downgrade_to_schema_v3_with_legacy_snapshot(
     database_path: &Path,
     legacy_schema_id: &str,
 ) -> Result<(), String> {
+    downgrade_to_schema_v4(database_path)?;
     let connection = Connection::open(database_path).map_err(|error| error.to_string())?;
     let reference = Connection::open_in_memory().map_err(|error| error.to_string())?;
     reference
@@ -81,31 +99,6 @@ pub fn downgrade_to_schema_v3_with_legacy_snapshot(
         .map_err(|error| error.to_string())?;
     reference
         .execute_batch(crate::schema::sqlite_v3_ddl())
-        .map_err(|error| error.to_string())?;
-    let session_table_sql: String = reference
-        .query_row(
-            "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'v2_task_sessions'",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|error| error.to_string())?;
-    connection
-        .execute_batch(
-            "PRAGMA foreign_keys = OFF;
-             DROP TABLE v2_terminal_dispositions;
-             PRAGMA legacy_alter_table = ON;
-             ALTER TABLE v2_task_sessions RENAME TO v2_task_sessions_v5;",
-        )
-        .map_err(|error| error.to_string())?;
-    connection
-        .execute_batch(&session_table_sql)
-        .map_err(|error| error.to_string())?;
-    connection
-        .execute_batch(
-            "INSERT INTO v2_task_sessions SELECT * FROM v2_task_sessions_v5;
-             DROP TABLE v2_task_sessions_v5;
-             PRAGMA legacy_alter_table = OFF;",
-        )
         .map_err(|error| error.to_string())?;
     let mut statement = reference
         .prepare(
@@ -128,7 +121,7 @@ pub fn downgrade_to_schema_v3_with_legacy_snapshot(
             .map_err(|error| error.to_string())?;
     }
     connection
-        .execute("DELETE FROM schema_migrations WHERE version IN (4, 5)", [])
+        .execute("DELETE FROM schema_migrations WHERE version = 4", [])
         .map_err(|error| error.to_string())?;
     connection
         .pragma_update(None, "user_version", 3)

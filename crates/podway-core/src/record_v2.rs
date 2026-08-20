@@ -13,6 +13,8 @@
 use std::fmt;
 use std::str::FromStr;
 
+use serde::Serialize;
+
 use crate::aggregate::ArtifactValueV1;
 use crate::procedure::{ItemTypeV1, validate_text};
 use crate::procedure_v2::{
@@ -124,7 +126,8 @@ impl fmt::Display for ActorAttributionV2 {
 }
 
 /// The closed outcome vocabulary for a structurally bound external check result.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CheckResultOutcomeV2 {
     Pass,
     Fail,
@@ -155,7 +158,8 @@ impl FromStr for CheckResultOutcomeV2 {
 }
 
 /// Caller-supplied identity of the exact input basis used by an external operation.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CheckResultInputBasisV2 {
     descriptor: String,
     digest: Sha256Digest,
@@ -184,7 +188,8 @@ impl CheckResultInputBasisV2 {
 }
 
 /// Bounded caller-supplied attribution for the external executor.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CheckResultExecutorV2 {
     name: String,
     version: String,
@@ -222,7 +227,8 @@ impl CheckResultExecutorV2 {
 
 /// One complete structurally bound external check result. Podway validates this closed shape but
 /// does not attest that the operation ran or that any digest describes caller-owned bytes.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CheckResultValueV2 {
     operation_id: OperationId,
     operation_digest: Sha256Digest,

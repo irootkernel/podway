@@ -1,10 +1,12 @@
 use std::fmt;
+use std::str::FromStr;
 
 use podway_core::{
-    ActorAttributionV2, AttemptId, BlockerId, CriterionAssessmentReasonV2, CriterionId,
+    ActorAttributionV2, AttemptId, BlockerId, CheckResultExecutorV2, CheckResultInputBasisV2,
+    CheckResultOutcomeV2, CheckResultValueV2, CriterionAssessmentReasonV2, CriterionId,
     CriterionStatusV2, GoalCriterionV2, GoalDefinitionV2, GoalRevisionNumberV2,
-    GoalRevisionReasonV2, GoalStatementV2, GraphNodeId, ItemId, JobId, OptionId, ReasonV2,
-    Revision, SessionId, Sha256Digest, WorkspaceId, canonicalize_json_v1,
+    GoalRevisionReasonV2, GoalStatementV2, GraphNodeId, ItemId, JobId, OperationId, OptionId,
+    ReasonV2, Revision, SessionId, Sha256Digest, WorkspaceId, canonicalize_json_v1,
 };
 use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
@@ -621,6 +623,10 @@ pub enum ItemRecordValueV1 {
         size_bytes: Option<u64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         media_type: Option<String>,
+    },
+    CheckResult {
+        #[serde(flatten)]
+        value: CheckResultValueV2,
     },
 }
 
@@ -2266,6 +2272,29 @@ enum RawItemRecordValueV1 {
         #[serde(default, deserialize_with = "deserialize_optional_non_null")]
         media_type: Option<String>,
     },
+    CheckResult {
+        operation_id: OperationId,
+        operation_digest: Sha256Digest,
+        input_basis: RawCheckResultInputBasisV1,
+        executor: RawCheckResultExecutorV1,
+        outcome: String,
+        summary: String,
+        output_digest: Sha256Digest,
+    },
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawCheckResultInputBasisV1 {
+    descriptor: String,
+    digest: Sha256Digest,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawCheckResultExecutorV1 {
+    name: String,
+    version: String,
 }
 
 #[derive(Deserialize)]
@@ -2447,6 +2476,62 @@ fn validate_item_record_value_v1(
                 media_type: Some(media_type),
             },
         },
+        RawItemRecordValueV1::CheckResult {
+            operation_id,
+            operation_digest,
+            input_basis,
+            executor,
+            outcome,
+            summary,
+            output_digest,
+        } => {
+            let input_basis =
+                CheckResultInputBasisV2::new(input_basis.descriptor, input_basis.digest).map_err(
+                    |_| SliceErrorV1::InvalidValue {
+                        field: "check result input_basis",
+                    },
+                )?;
+            let executor =
+                CheckResultExecutorV2::new(executor.name, executor.version).map_err(|_| {
+                    SliceErrorV1::InvalidValue {
+                        field: "check result executor",
+                    }
+                })?;
+            let outcome = CheckResultOutcomeV2::from_str(&outcome).map_err(|_| {
+                SliceErrorV1::InvalidValue {
+                    field: "check result outcome",
+                }
+            })?;
+            let value = CheckResultValueV2::new(
+                operation_id,
+                operation_digest,
+                input_basis,
+                executor,
+                outcome,
+                summary,
+                output_digest,
+            )
+            .map_err(|_| SliceErrorV1::InvalidValue {
+                field: "check result summary",
+            })?;
+            let canonical =
+                canonicalize_json_v1(&serde_json::to_value(&value).map_err(|error| {
+                    SliceErrorV1::InvalidPayload {
+                        message: error.to_string(),
+                    }
+                })?)
+                .map_err(|error| SliceErrorV1::InvalidPayload {
+                    message: error.to_string(),
+                })?;
+            if canonical.len() > podway_core::MAX_CHECK_RESULT_VALUE_BYTES_V2 {
+                return Err(SliceErrorV1::ValueTooLong {
+                    field: "check result value",
+                    maximum: podway_core::MAX_CHECK_RESULT_VALUE_BYTES_V2,
+                    actual: canonical.len(),
+                });
+            }
+            ItemRecordValueV1::CheckResult { value }
+        }
     })
 }
 

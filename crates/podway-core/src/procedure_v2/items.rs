@@ -559,11 +559,19 @@ impl ItemSpecV2 {
                         .iter()
                         .any(|media_type| media_type == value.media_type())
             }),
+            Self::CheckResult(_) => value.item_type() == ItemTypeV1::CheckResult,
+        }
+    }
+
+    /// Reports whether one admitted value satisfies this declaration's progression constraints.
+    pub fn is_satisfied_by(&self, value: &RecordedItemValueV2) -> bool {
+        match self {
             Self::CheckResult(specification) => value.as_check_result().is_some_and(|value| {
                 value.operation_id() == specification.operation_id()
                     && value.operation_digest() == specification.operation_digest()
                     && specification.accepted_outcomes().contains(&value.outcome())
             }),
+            _ => self.admits_recorded_value(value),
         }
     }
 }

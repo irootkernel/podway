@@ -1171,7 +1171,7 @@ impl<'a> CurrentProjection<'a> {
                 (spec.common().required()
                     && !slot
                         .value()
-                        .is_some_and(|value| spec.admits_recorded_value(value)))
+                        .is_some_and(|value| spec.is_satisfied_by(value)))
                 .then_some(spec)
             })
             .collect::<Vec<_>>();
@@ -1182,7 +1182,7 @@ impl<'a> CurrentProjection<'a> {
                 !spec.common().required()
                     || slot
                         .value()
-                        .is_some_and(|value| spec.admits_recorded_value(value))
+                        .is_some_and(|value| spec.is_satisfied_by(value))
             });
         let open_blockers = memory
             .blockers()
@@ -1290,7 +1290,7 @@ impl<'a> CurrentProjection<'a> {
                     "item_id": spec.id().as_str(),
                     "type": item_type(spec.item_type()),
                     "required": spec.common().required(),
-                    "satisfied": slot.value().is_some_and(|value| spec.admits_recorded_value(value)),
+                    "satisfied": slot.value().is_some_and(|value| spec.is_satisfied_by(value)),
                     "revision": slot.revision().get(),
                 })
             })
@@ -1381,7 +1381,7 @@ impl<'a> CurrentProjection<'a> {
                     "satisfied".to_owned(),
                     json!(
                         slot.value()
-                            .is_some_and(|value| spec.admits_recorded_value(value))
+                            .is_some_and(|value| spec.is_satisfied_by(value))
                     ),
                 );
                 descriptor.insert("revision".to_owned(), json!(slot.revision().get()));

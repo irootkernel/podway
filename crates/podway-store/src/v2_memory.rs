@@ -6,14 +6,14 @@ use std::str::FromStr;
 
 use podway_core::{
     ActorAttributionV2, ArtifactLocationKindV1, ArtifactValueV1, AttemptId, AttemptLifecycle,
-    AttemptNumberV2, AttemptValidityV2, BlockerId, BlockerState, CheckResultOutcomeV2,
-    CriterionAssessmentModeV2, CriterionCitationV2, CriterionId, CriterionStatusV2,
-    DecisionRecordInputV2, DecisionRecordV2, EvidenceReferenceSnapshotV2, GoalOutcome,
-    GoalRevisionNumberV2, GraphNodeId, ItemCommonV2, ItemId, ItemSpecV2, ItemTypeV1,
-    MAX_ATTEMPT_CONTENT_SCALARS_V2, MAX_ITEMS_PER_DEFINITION_V2, NodeDefinitionId, OperationId,
-    OptionId, ProcedureSnapshotId, ReasonV2, RecordedItemSetV2, RecordedItemV2,
-    RecordedItemValueV2, ResolvedEvidenceReferenceV2, ResolvedEvidenceSetV2, Revision,
-    ReworkKindV2, ReworkRecordInputV2, ReworkRecordV2, SessionAttemptV2, SessionId,
+    AttemptNumberV2, AttemptValidityV2, BlockerId, BlockerState, CheckResultExecutorV2,
+    CheckResultInputBasisV2, CheckResultOutcomeV2, CheckResultValueV2, CriterionAssessmentModeV2,
+    CriterionCitationV2, CriterionId, CriterionStatusV2, DecisionRecordInputV2, DecisionRecordV2,
+    EvidenceReferenceSnapshotV2, GoalOutcome, GoalRevisionNumberV2, GraphNodeId, ItemCommonV2,
+    ItemId, ItemSpecV2, ItemTypeV1, MAX_ATTEMPT_CONTENT_SCALARS_V2, MAX_ITEMS_PER_DEFINITION_V2,
+    NodeDefinitionId, OperationId, OptionId, ProcedureSnapshotId, ReasonV2, RecordedItemSetV2,
+    RecordedItemV2, RecordedItemValueV2, ResolvedEvidenceReferenceV2, ResolvedEvidenceSetV2,
+    Revision, ReworkKindV2, ReworkRecordInputV2, ReworkRecordV2, SessionAttemptV2, SessionId,
     SessionLifecycle, SessionTraceV2, Sha256Digest, TraceSequenceV2, TransitionEffectV2,
     UnixMillis, attempt_content_bound_error_v2, canonicalize_json_v1, recorded_content_scalars_v2,
     verify_canonical_json_v1,
@@ -63,6 +63,7 @@ pub enum ActiveItemMutationV2 {
     Add { value: String },
     Remove { value: String, ignore_missing: bool },
     Attach { value: ArtifactValueV1 },
+    RecordCheckResult { value: CheckResultValueV2 },
     Clear,
 }
 
@@ -1134,7 +1135,7 @@ impl WorkflowMemoryStateV2 {
                 specification.common().required()
                     && !slot
                         .value()
-                        .is_some_and(|value| specification.admits_recorded_value(value))
+                        .is_some_and(|value| specification.is_satisfied_by(value))
             })
             .map(|(specification, _)| specification.id().clone())
             .collect::<Vec<_>>();
@@ -1396,7 +1397,7 @@ impl WorkflowMemoryStateV2 {
                 item.common().required()
                     && !slot
                         .value()
-                        .is_some_and(|value| item.admits_recorded_value(value))
+                        .is_some_and(|value| item.is_satisfied_by(value))
             })
             .map(|(item, _)| item.id().clone())
             .collect::<Vec<_>>();
@@ -2099,6 +2100,12 @@ fn mutate_item_value_v2(
                 return Err(GraphMutationErrorV2::ItemTypeMismatch);
             }
             Some(RecordedItemValueV2::artifact(value))
+        }
+        ActiveItemMutationV2::RecordCheckResult { value } => {
+            if specification.item_type() != ItemTypeV1::CheckResult {
+                return Err(GraphMutationErrorV2::ItemTypeMismatch);
+            }
+            Some(RecordedItemValueV2::check_result(value))
         }
         ActiveItemMutationV2::Clear => None,
     };
@@ -2840,6 +2847,54 @@ fn decode_item_value_v2(
             .map_err(|_| corrupt(StoreRecordKindV1::Item))?;
             RecordedItemValueV2::artifact(artifact)
         }
+        "check_result"
+            if exact_keys(
+                object,
+                &[
+                    "kind",
+                    "operation_id",
+                    "operation_digest",
+                    "input_basis",
+                    "executor",
+                    "outcome",
+                    "summary",
+                    "output_digest",
+                ],
+            ) =>
+        {
+            let input_basis = required_json_object(object, "input_basis")?;
+            if !exact_keys(input_basis, &["descriptor", "digest"]) {
+                return Err(corrupt(StoreRecordKindV1::Item));
+            }
+            let executor = required_json_object(object, "executor")?;
+            if !exact_keys(executor, &["name", "version"]) {
+                return Err(corrupt(StoreRecordKindV1::Item));
+            }
+            let value = CheckResultValueV2::new(
+                OperationId::new(required_json_text(object, "operation_id")?)
+                    .map_err(|_| corrupt(StoreRecordKindV1::Item))?,
+                Sha256Digest::new(required_json_text(object, "operation_digest")?)
+                    .map_err(|_| corrupt(StoreRecordKindV1::Item))?,
+                CheckResultInputBasisV2::new(
+                    required_json_text(input_basis, "descriptor")?,
+                    Sha256Digest::new(required_json_text(input_basis, "digest")?)
+                        .map_err(|_| corrupt(StoreRecordKindV1::Item))?,
+                )
+                .map_err(|_| corrupt(StoreRecordKindV1::Item))?,
+                CheckResultExecutorV2::new(
+                    required_json_text(executor, "name")?,
+                    required_json_text(executor, "version")?,
+                )
+                .map_err(|_| corrupt(StoreRecordKindV1::Item))?,
+                CheckResultOutcomeV2::from_str(&required_json_text(object, "outcome")?)
+                    .map_err(|_| corrupt(StoreRecordKindV1::Item))?,
+                required_json_text(object, "summary")?,
+                Sha256Digest::new(required_json_text(object, "output_digest")?)
+                    .map_err(|_| corrupt(StoreRecordKindV1::Item))?,
+            )
+            .map_err(|_| corrupt(StoreRecordKindV1::Item))?;
+            RecordedItemValueV2::check_result(value)
+        }
         _ => return Err(corrupt(StoreRecordKindV1::Item)),
     };
     if encode_item_value_v2(&decoded)? != encoded {
@@ -2850,6 +2905,16 @@ fn decode_item_value_v2(
 
 fn exact_keys(object: &serde_json::Map<String, Value>, keys: &[&str]) -> bool {
     object.len() == keys.len() && keys.iter().all(|key| object.contains_key(*key))
+}
+
+fn required_json_object<'a>(
+    object: &'a serde_json::Map<String, Value>,
+    key: &'static str,
+) -> Result<&'a serde_json::Map<String, Value>, StoreErrorV1> {
+    object
+        .get(key)
+        .and_then(Value::as_object)
+        .ok_or_else(|| corrupt(StoreRecordKindV1::Item))
 }
 
 fn required_json_text(
@@ -2960,7 +3025,12 @@ pub(crate) fn validate_workflow_memory_v2(
                 .item_slots()
                 .iter()
                 .zip(&specification.items)
-                .any(|(slot, item)| item.common().required() && slot.value().is_none())
+                .any(|(slot, item)| {
+                    item.common().required()
+                        && !slot
+                            .value()
+                            .is_some_and(|value| item.is_satisfied_by(value))
+                })
         {
             return Err(invalid(
                 "completed Procedure v2 attempt is missing a required item",

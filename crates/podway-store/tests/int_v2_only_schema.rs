@@ -66,11 +66,27 @@ fn restore_schema_v4_shape(connection: &Connection) {
             |row| row.get(0),
         )
         .unwrap();
+    let item_table_sql: String = reference
+        .query_row(
+            "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'v2_item_slots'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
     connection
         .execute_batch(
             "PRAGMA foreign_keys = ON;
              PRAGMA foreign_keys = OFF;
              DROP TABLE v2_terminal_dispositions;
+             PRAGMA legacy_alter_table = ON;
+             ALTER TABLE v2_item_slots RENAME TO v2_item_slots_v6;",
+        )
+        .unwrap();
+    connection.execute_batch(&item_table_sql).unwrap();
+    connection
+        .execute_batch(
+            "INSERT INTO v2_item_slots SELECT * FROM v2_item_slots_v6;
+             DROP TABLE v2_item_slots_v6;
              PRAGMA legacy_alter_table = ON;
              ALTER TABLE v2_task_sessions RENAME TO v2_task_sessions_v5;",
         )
@@ -84,7 +100,7 @@ fn restore_schema_v4_shape(connection: &Connection) {
         )
         .unwrap();
     connection
-        .execute("DELETE FROM schema_migrations WHERE version = 5", [])
+        .execute("DELETE FROM schema_migrations WHERE version IN (5, 6)", [])
         .unwrap();
     connection.pragma_update(None, "user_version", 4).unwrap();
 }
@@ -648,6 +664,131 @@ fn v2ast002_sqlite_v6_reservation_preserves_values_and_extends_only_the_item_dis
     );
 }
 
+#[test]
+fn v2ast004_runtime_migrates_v5_to_v6_without_reencoding_item_values() {
+    let temporary = TempDir::new().unwrap();
+    let path = temporary.path().join("state.sqlite3");
+    let expected_state = populated_graph_state();
+    let store = SqliteStoreV1::open(
+        &path,
+        &root(),
+        identity(),
+        SqliteStoreOptionsV1::new(8).unwrap(),
+        UnixMillis::new(1),
+    )
+    .unwrap();
+    store
+        .create_graph_session_v2(&identity(), expected_state.clone())
+        .unwrap();
+    drop(store);
+
+    let mut connection = Connection::open(&path).unwrap();
+    restore_schema_v4_shape(&connection);
+    apply_reserved_schema_v5(&mut connection);
+    connection
+        .execute(
+            "INSERT INTO schema_migrations (version, name, checksum, applied_at_ms) \
+             VALUES (5, ?1, ?2, 1)",
+            params![
+                podway_store::schema::SQLITE_PREPARED_LIFECYCLE_MIGRATION_NAME_V5,
+                podway_store::schema::sqlite_v5_ddl_checksum(),
+            ],
+        )
+        .unwrap();
+    let before = connection
+        .prepare(
+            "SELECT attempt_id, item_id, item_type, item_revision, value_json, created_at_ms, updated_at_ms \
+             FROM v2_item_slots ORDER BY attempt_id, item_id",
+        )
+        .unwrap()
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
+            ))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    drop(connection);
+
+    let migrated = SqliteStoreV1::open(
+        &path,
+        &root(),
+        identity(),
+        SqliteStoreOptionsV1::new(8).unwrap(),
+        UnixMillis::new(2),
+    )
+    .unwrap();
+    assert_eq!(
+        migrated.read_graph_session_v2(&identity()).unwrap(),
+        Some(expected_state.clone())
+    );
+    drop(migrated);
+
+    let connection = Connection::open(&path).unwrap();
+    let after = connection
+        .prepare(
+            "SELECT attempt_id, item_id, item_type, item_revision, value_json, created_at_ms, updated_at_ms \
+             FROM v2_item_slots ORDER BY attempt_id, item_id",
+        )
+        .unwrap()
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
+            ))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(after, before, "v6 must preserve exact value_json bytes");
+    let migration: (String, String) = connection
+        .query_row(
+            "SELECT name, checksum FROM schema_migrations WHERE version = 6",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        migration,
+        (
+            podway_store::schema::SQLITE_EXTERNAL_CHECK_RESULT_MIGRATION_NAME_V6.to_owned(),
+            podway_store::schema::sqlite_v6_ddl_checksum(),
+        )
+    );
+    assert_eq!(
+        connection
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        6
+    );
+    drop(connection);
+
+    let reopened = SqliteStoreV1::open(
+        &path,
+        &root(),
+        identity(),
+        SqliteStoreOptionsV1::new(8).unwrap(),
+        UnixMillis::new(3),
+    )
+    .unwrap();
+    assert_eq!(
+        reopened.read_graph_session_v2(&identity()).unwrap(),
+        Some(expected_state)
+    );
+}
+
 fn seed_schema_v3(temporary: &TempDir, with_legacy_state: bool) {
     let path = temporary.path().join("state.sqlite3");
     let connection = Connection::open(path).unwrap();
@@ -721,7 +862,7 @@ fn seed_schema_v3(temporary: &TempDir, with_legacy_state: bool) {
 }
 
 #[test]
-fn empty_schema_v4_inspects_read_only_then_migrates_to_v5() {
+fn empty_schema_v4_inspects_read_only_then_migrates_to_v6() {
     let temporary = TempDir::new().unwrap();
     let path = temporary.path().join("state.sqlite3");
     drop(
@@ -769,11 +910,11 @@ fn empty_schema_v4_inspects_read_only_then_migrates_to_v5() {
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!((version, disposition_table_count), (5, 1));
+    assert_eq!((version, disposition_table_count), (6, 1));
 }
 
 #[test]
-fn schema_v3_without_legacy_state_migrates_to_prepared_lifecycle_schema_v5() {
+fn schema_v3_without_legacy_state_migrates_to_external_check_result_schema_v6() {
     let temporary = TempDir::new().unwrap();
     seed_schema_v3(&temporary, false);
     let path = temporary.path().join("state.sqlite3");
@@ -801,7 +942,7 @@ fn schema_v3_without_legacy_state_migrates_to_prepared_lifecycle_schema_v5() {
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 5);
+    assert_eq!(version, 6);
     let legacy_tables: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name IN \
@@ -815,7 +956,7 @@ fn schema_v3_without_legacy_state_migrates_to_prepared_lifecycle_schema_v5() {
 }
 
 #[test]
-fn schema_v3_v2_state_and_terminal_receipt_survive_v5_migration_and_reopen() {
+fn schema_v3_v2_state_and_terminal_receipt_survive_v6_migration_and_reopen() {
     let temporary = TempDir::new().unwrap();
     let (expected_state, job_id, expected_receipt) = seed_populated_v2_schema_v3(&temporary);
     let path = temporary.path().join("state.sqlite3");
@@ -865,7 +1006,7 @@ fn schema_v3_v2_state_and_terminal_receipt_survive_v5_migration_and_reopen() {
         .unwrap();
     let migration: i64 = connection
         .query_row(
-            "SELECT COUNT(*) FROM schema_migrations WHERE version IN (4, 5)",
+            "SELECT COUNT(*) FROM schema_migrations WHERE version IN (4, 5, 6)",
             [],
             |row| row.get(0),
         )
@@ -912,7 +1053,7 @@ fn schema_v3_v2_state_and_terminal_receipt_survive_v5_migration_and_reopen() {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
-    assert_eq!((version, migration, legacy_tables), (5, 2, 0));
+    assert_eq!((version, migration, legacy_tables), (6, 3, 0));
     assert_eq!(receipts.0, receipts.1);
 }
 

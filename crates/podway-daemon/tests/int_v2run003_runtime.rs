@@ -17,12 +17,13 @@ use podway_config::{
     AuthoringContext, ParsedProcedure, ProcedureDocumentFormat, parse_procedure_document,
     validate_procedure_v2, vet_procedure_v2,
 };
-use podway_core::{AttemptId, Revision, SessionId, UnixMillis};
+use podway_core::{AttemptId, ProcedureSnapshotId, Revision, SessionId, UnixMillis};
 use podway_daemon::{
     dispatch::{
         CatalogDispatchErrorMapperV1, DispatcherWorkspaceOutputV1, ProcedureV2AdmissionProofV1,
         RequestDispatcherV1Adapter, WorkspaceRuntimeV1,
     },
+    execution::workspace_procedure_snapshot_from_bytes_v2,
     production::{
         NativeProductionClockV1, ProductionControlServiceV1, ProductionMutationWorkerV1,
         ProductionPreviewServiceV1, ProductionReadServiceV1, ProductionWorkspaceRuntimeV1,
@@ -721,6 +722,310 @@ fn v2agt004_record_many_updates_all_item_types_atomically_and_replays_terminal_r
     assert_eq!(error.code().as_str(), "SESSION_REVISION_CONFLICT");
     let unchanged = status(&production, &workspace_selector, 28_009, session_id);
     assert_eq!(unchanged["session"]["revision"], revision_before + 1);
+}
+
+#[test]
+fn v2ast004_check_results_record_atomically_replay_restart_and_expire_on_retry() {
+    const PROCEDURE: &str = r#"schema: podway.procedure/v2
+id: check-result-runtime
+version: "2"
+name: Check result runtime
+purpose: Prove durable external check result recording.
+node_definitions:
+  verify:
+    type: action
+    title: Verify
+    intent: Record structurally bound external results.
+    items:
+      - id: passed
+        type: check_result
+        prompt: Record a passing check.
+        required: true
+        operation_id: pass-check
+        operation_digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        accepted_outcomes: [pass]
+      - id: failed
+        type: check_result
+        prompt: Record a failing check.
+        required: true
+        operation_id: fail-check
+        operation_digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        accepted_outcomes: [fail]
+      - id: inconclusive
+        type: check_result
+        prompt: Record an inconclusive check.
+        required: true
+        operation_id: inconclusive-check
+        operation_digest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+        accepted_outcomes: [inconclusive]
+      - id: identity
+        type: check_result
+        prompt: Record a result bound to this operation.
+        required: true
+        operation_id: identity-check
+        operation_digest: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+        accepted_outcomes: [pass]
+graph:
+  entry: verify
+  nodes:
+    - id: verify
+      use: verify
+      terminal: true
+"#;
+
+    let result = |operation_id: &str, operation_digest: char, outcome: &str| {
+        json!({
+            "type": "check_result",
+            "operation_id": operation_id,
+            "operation_digest": format!("sha256:{}", operation_digest.to_string().repeat(64)),
+            "input_basis": {
+                "descriptor": "HEAD and dirty-tree snapshot",
+                "digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+            },
+            "executor": {"name": "gaori", "version": "1.0.0"},
+            "outcome": outcome,
+            "summary": format!("The external operation reported {outcome}."),
+            "output_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        })
+    };
+
+    let fixture = support_phase4_workspace::git_worktrees();
+    make_runtime_private(fixture.main());
+    fs::write(fixture.main().join("check-results.yaml"), PROCEDURE).unwrap();
+    let ParsedProcedure::V2(parsed) =
+        parse_procedure_document(PROCEDURE.as_bytes(), ProcedureDocumentFormat::Yaml).unwrap()
+    else {
+        unreachable!()
+    };
+    let validated = validate_procedure_v2(parsed).unwrap();
+    let diagnostics = vet_procedure_v2(
+        &validated,
+        &AuthoringContext::new(
+            "check-results.yaml",
+            PROCEDURE,
+            ProcedureDocumentFormat::Yaml,
+        ),
+    );
+    assert!(
+        diagnostics.is_empty(),
+        "fixture diagnostics: {diagnostics:?}"
+    );
+    let procedure_digest = validated.digest().clone();
+    workspace_procedure_snapshot_from_bytes_v2(
+        "check-results.yaml",
+        PROCEDURE.as_bytes(),
+        ProcedureSnapshotId::new("00000000-0000-4000-8000-000000000004").unwrap(),
+        UnixMillis::new(1),
+    )
+    .unwrap();
+    let workspace_selector = selector(fixture.main());
+    let runtime_manager = Arc::new(manager(fixture.temporary_path()));
+    let production = dispatcher(Arc::clone(&runtime_manager), "v2ast004-check-result");
+
+    let initialize = request(
+        31_001,
+        "workspace.init",
+        &workspace_selector,
+        Map::new(),
+        "v2ast004-initialize",
+        PreconditionsV1::default(),
+    );
+    assert!(matches!(
+        dispatch(&production, &initialize),
+        ResponseEnvelopeV2::OutputV2(_)
+    ));
+    let start = request(
+        31_002,
+        "session.start",
+        &workspace_selector,
+        json!({
+            "procedure": "check-results.yaml",
+            "expected_procedure_digest": procedure_digest,
+            "task_title": "V2AST-004 check result recording"
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+        "v2ast004-start",
+        PreconditionsV1::default(),
+    );
+    let started = v2_result(dispatch(&production, &start), "session.start");
+    let session_id = started["session_id"].as_str().unwrap().to_owned();
+    begin(
+        &production,
+        &workspace_selector,
+        31_003,
+        &session_id,
+        Map::new(),
+        "v2ast004-begin",
+    );
+
+    let before = status(&production, &workspace_selector, 31_004, &session_id);
+    let first_batch = request(
+        31_005,
+        "item.record_many",
+        &workspace_selector,
+        json!({"operations": [
+            {"item_id":"passed","expected_item_revision":0,"record":result("pass-check", 'a', "pass")},
+            {"item_id":"failed","expected_item_revision":0,"record":result("fail-check", 'b', "fail")},
+            {"item_id":"inconclusive","expected_item_revision":0,"record":result("inconclusive-check", 'c', "inconclusive")},
+            {"item_id":"identity","expected_item_revision":0,"record":result("wrong-operation", 'd', "pass")}
+        ]})
+        .as_object()
+        .unwrap()
+        .clone(),
+        "v2ast004-first-batch",
+        session_preconditions(&before),
+    );
+    let first_response = dispatch(&production, &first_batch);
+    let first = v2_result(first_response.clone(), "item.record_many");
+    assert_eq!(first["changed"], true);
+    assert_eq!(first["items"].as_array().unwrap().len(), 4);
+    assert_eq!(
+        without_request_id(&dispatch(&production, &first_batch)),
+        without_request_id(&first_response),
+        "the durable terminal receipt must replay exactly"
+    );
+
+    let after_first = status(&production, &workspace_selector, 31_006, &session_id);
+    for item_id in ["passed", "failed", "inconclusive"] {
+        assert!(
+            after_first["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["item_id"] == item_id)
+                .is_some_and(|item| item["satisfied"] == true),
+            "{item_id} must accept its declared outcome"
+        );
+    }
+    let mismatched = after_first["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["item_id"] == "identity")
+        .unwrap();
+    assert_eq!(mismatched["satisfied"], false);
+
+    let invalid = request(
+        31_007,
+        "item.record_many",
+        &workspace_selector,
+        json!({"operations": [
+            {"item_id":"identity","expected_item_revision":1,"record":result("identity-check", 'd', "pass")},
+            {"item_id":"passed","expected_item_revision":0,"clear":true}
+        ]})
+        .as_object()
+        .unwrap()
+        .clone(),
+        "v2ast004-atomic-conflict",
+        session_preconditions(&after_first),
+    );
+    let ResponseEnvelopeV2::Error(error) = dispatch(&production, &invalid) else {
+        panic!("one stale item fence must reject the whole check-result batch")
+    };
+    assert_eq!(error.code().as_str(), "ITEM_REVISION_CONFLICT");
+    let after_invalid = status(&production, &workspace_selector, 31_008, &session_id);
+    assert_eq!(
+        after_invalid["session"]["revision"],
+        after_first["session"]["revision"]
+    );
+    assert_eq!(
+        after_invalid["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["item_id"] == "passed")
+            .unwrap()["satisfied"],
+        true
+    );
+
+    let repair = request(
+        31_009,
+        "item.record_many",
+        &workspace_selector,
+        json!({"operations": [
+            {"item_id":"identity","expected_item_revision":1,"record":result("identity-check", 'd', "pass")}
+        ]})
+        .as_object()
+        .unwrap()
+        .clone(),
+        "v2ast004-repair-identity",
+        session_preconditions(&after_invalid),
+    );
+    v2_result(dispatch(&production, &repair), "item.record_many");
+    let durable = status(&production, &workspace_selector, 31_010, &session_id);
+    assert!(
+        durable["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["satisfied"] == true)
+    );
+
+    drop(production);
+    drop(runtime_manager);
+    let restarted_manager = Arc::new(manager(fixture.temporary_path()));
+    let restarted = dispatcher(Arc::clone(&restarted_manager), "v2ast004-restarted");
+    let reopened = status(&restarted, &workspace_selector, 31_011, &session_id);
+    assert_eq!(reopened["items"], durable["items"]);
+    let runtime = restarted_manager
+        .resolve_existing(git_selector(fixture.main()), None, observation())
+        .unwrap();
+    let context = runtime.context_snapshot();
+    let store = SqliteStoreV1::open(
+        context.database_path(),
+        context.workspace_root(),
+        context.binding().identity().clone(),
+        context.store_options().clone(),
+        UnixMillis::new(1),
+    )
+    .unwrap();
+    let graph = store
+        .read_graph_session_v2(context.binding().identity())
+        .unwrap()
+        .unwrap();
+    let identity_value = graph
+        .workflow_memory()
+        .attempts()
+        .last()
+        .unwrap()
+        .item_slots()
+        .iter()
+        .find(|slot| slot.item_id().as_str() == "identity")
+        .unwrap()
+        .value()
+        .unwrap()
+        .as_check_result()
+        .unwrap();
+    assert_eq!(identity_value.operation_id().as_str(), "identity-check");
+    assert_eq!(
+        identity_value.summary(),
+        "The external operation reported pass."
+    );
+    drop(store);
+    drop(runtime);
+
+    let retry = request(
+        31_012,
+        "session.retry",
+        &workspace_selector,
+        json!({"reason": "prove stale attempt-local results are not current"})
+            .as_object()
+            .unwrap()
+            .clone(),
+        "v2ast004-retry",
+        session_preconditions(&reopened),
+    );
+    v2_result(dispatch(&restarted, &retry), "session.retry");
+    let retried = status(&restarted, &workspace_selector, 31_013, &session_id);
+    assert_ne!(
+        retried["current"]["attempt"]["attempt_id"],
+        reopened["current"]["attempt"]["attempt_id"]
+    );
+    assert!(retried["items"].as_array().unwrap().iter().all(|item| {
+        item["revision"] == 0 && item["satisfied"] == false && item.get("value").is_none()
+    }));
 }
 
 #[test]

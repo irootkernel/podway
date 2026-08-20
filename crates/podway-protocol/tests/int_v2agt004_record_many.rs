@@ -20,6 +20,22 @@ fn input(operations: Value) -> Vec<u8> {
     .unwrap()
 }
 
+fn check_result_record() -> Value {
+    json!({
+        "type": "check_result",
+        "operation_id": "make-test",
+        "operation_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "input_basis": {
+            "descriptor": "HEAD and dirty-tree snapshot",
+            "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "executor": {"name": "gaori", "version": "1.0.0"},
+        "outcome": "pass",
+        "summary": "The complete development gate passed.",
+        "output_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    })
+}
+
 #[test]
 fn v2agt004_stdin_accepts_all_typed_values_and_canonicalizes_item_order() {
     let decoded = decode_item_record_many_input_v1(&input(json!([
@@ -29,6 +45,7 @@ fn v2agt004_stdin_accepts_all_typed_values_and_canonicalizes_item_order() {
         {"item_id":"integer","expected_item_revision":0,"record":{"type":"integer","value":42}},
         {"item_id":"confirm","expected_item_revision":0,"record":{"type":"confirm","value":true}},
         {"item_id":"choice","expected_item_revision":0,"record":{"type":"choice","value":"ship"}},
+        {"item_id":"check-result","expected_item_revision":0,"record":check_result_record()},
         {"item_id":"clear","expected_item_revision":3,"clear":true}
     ])))
     .unwrap();
@@ -40,7 +57,14 @@ fn v2agt004_stdin_accepts_all_typed_values_and_canonicalizes_item_order() {
             .map(|operation| operation.item_id.as_str())
             .collect::<Vec<_>>(),
         [
-            "artifact", "choice", "clear", "confirm", "integer", "list", "text"
+            "artifact",
+            "check-result",
+            "choice",
+            "clear",
+            "confirm",
+            "integer",
+            "list",
+            "text"
         ]
     );
     assert!(matches!(
@@ -50,9 +74,76 @@ fn v2agt004_stdin_accepts_all_typed_values_and_canonicalizes_item_order() {
         }
     ));
     assert!(matches!(
-        decoded.operations[2].disposition,
+        decoded.operations[1].disposition,
+        ItemRecordManyDispositionV1::Record {
+            record: ItemRecordValueV1::CheckResult { .. }
+        }
+    ));
+    assert!(matches!(
+        decoded.operations[3].disposition,
         ItemRecordManyDispositionV1::Clear { clear: true }
     ));
+}
+
+#[test]
+fn v2ast004_check_result_decoder_enforces_closed_shape_and_scalar_bounds() {
+    let decode = |record: Value| {
+        decode_item_record_many_input_v1(&input(json!([{
+            "item_id": "verification",
+            "expected_item_revision": 0,
+            "record": record
+        }])))
+    };
+    assert!(decode(check_result_record()).is_ok());
+
+    for path in ["record", "input_basis", "executor"] {
+        let mut record = check_result_record();
+        let target = match path {
+            "record" => &mut record,
+            "input_basis" => &mut record["input_basis"],
+            "executor" => &mut record["executor"],
+            _ => unreachable!(),
+        };
+        target["unexpected"] = json!(true);
+        assert!(decode(record).is_err(), "{path} must be closed");
+    }
+
+    for (pointer, valid, invalid) in [
+        ("/input_basis/descriptor", "d".repeat(512), "d".repeat(513)),
+        ("/executor/name", "n".repeat(128), "n".repeat(129)),
+        ("/executor/version", "v".repeat(64), "v".repeat(65)),
+        ("/summary", "s".repeat(2_000), "s".repeat(2_001)),
+    ] {
+        let mut record = check_result_record();
+        *record.pointer_mut(pointer).unwrap() = json!(valid);
+        assert!(decode(record).is_ok(), "{pointer} must accept its maximum");
+
+        let mut record = check_result_record();
+        *record.pointer_mut(pointer).unwrap() = json!(invalid);
+        assert!(
+            decode(record).is_err(),
+            "{pointer} must reject over its maximum"
+        );
+
+        let mut record = check_result_record();
+        *record.pointer_mut(pointer).unwrap() = json!("   ");
+        assert!(decode(record).is_err(), "{pointer} must reject blank text");
+    }
+
+    for (pointer, invalid) in [
+        ("/operation_id", json!("bad operation")),
+        ("/operation_digest", json!("sha256:AAAA")),
+        ("/input_basis/digest", json!("sha256:short")),
+        ("/outcome", json!("unknown")),
+        ("/output_digest", json!("sha256:short")),
+    ] {
+        let mut record = check_result_record();
+        *record.pointer_mut(pointer).unwrap() = invalid;
+        assert!(
+            decode(record).is_err(),
+            "{pointer} must reject malformed input"
+        );
+    }
 }
 
 #[test]

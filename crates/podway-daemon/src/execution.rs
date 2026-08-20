@@ -2483,6 +2483,11 @@ fn prepare_procedure_v2_item_mutations_v1(
                             value: resolved.artifact.clone(),
                         }
                     }
+                    ItemRecordValueV1::CheckResult { value } => {
+                        ActiveItemMutationV2::RecordCheckResult {
+                            value: value.clone(),
+                        }
+                    }
                 },
             };
             Ok(ActiveItemMutationRequestV2::new(

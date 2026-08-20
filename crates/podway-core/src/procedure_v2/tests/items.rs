@@ -293,13 +293,13 @@ fn item_specs_admit_only_recorded_values_that_satisfy_the_declaration() {
         ],
     )
     .unwrap();
-    assert!(check.admits_recorded_value(&check_result("make-test", CheckResultOutcomeV2::Pass)));
-    assert!(check.admits_recorded_value(&check_result(
+    assert!(check.is_satisfied_by(&check_result("make-test", CheckResultOutcomeV2::Pass)));
+    assert!(check.is_satisfied_by(&check_result(
         "make-test",
         CheckResultOutcomeV2::Inconclusive
     )));
-    assert!(!check.admits_recorded_value(&check_result("make-test", CheckResultOutcomeV2::Fail)));
-    assert!(!check.admits_recorded_value(&check_result("other-test", CheckResultOutcomeV2::Pass)));
+    assert!(!check.is_satisfied_by(&check_result("make-test", CheckResultOutcomeV2::Fail)));
+    assert!(!check.is_satisfied_by(&check_result("other-test", CheckResultOutcomeV2::Pass)));
     let wrong_digest = RecordedItemValueV2::check_result(
         CheckResultValueV2::new(
             OperationId::new("make-test").unwrap(),
@@ -312,5 +312,6 @@ fn item_specs_admit_only_recorded_values_that_satisfy_the_declaration() {
         )
         .unwrap(),
     );
-    assert!(!check.admits_recorded_value(&wrong_digest));
+    assert!(!check.is_satisfied_by(&wrong_digest));
+    assert!(check.admits_recorded_value(&wrong_digest));
 }
