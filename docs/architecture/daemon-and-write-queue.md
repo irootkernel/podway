@@ -160,8 +160,8 @@ Different items may update concurrently because they do not require an unchanged
 
 Same-item conflicts return `ITEM_REVISION_CONFLICT`.
 
-The internal multi-item recording path is bounded to 64 unique current-attempt
-items. It additionally fences the observed session revision, canonicalizes the
+The internal multi-item recording path is bounded to 128 unique current-attempt
+items, matching the items one node definition may declare. It additionally fences the observed session revision, canonicalizes the
 operations by item ID, and produces one durable job effect. Its pure state
 transition validates and applies the complete set or returns no successor; a
 changed set increments the session revision once and never advances the cursor.

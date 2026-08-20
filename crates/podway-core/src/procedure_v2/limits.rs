@@ -95,8 +95,12 @@ pub const MAX_MUTATION_TEMPLATE_WINDOW_V2: usize = 384;
 
 /// The bytes one `session.observe` compact-status member may occupy.
 ///
-/// The compact projection carries no item values, so this holds the widest counter and compact
-/// item set a graph can declare with room to spare.
+/// The compact projection carries no item values. Its widest reachable form — 128 items and 64
+/// placements, all with maximal identifiers — measures 27,628 bytes, which a test pins. The
+/// schema permits u64 counter magnitudes that would push it further, but state validation ties
+/// every counter to the trace, so those are not independently reachable. The remaining headroom
+/// is thin by design: this allocation was sized last, after guidance was fixed at the sum of the
+/// three `session.next` allocations it carries.
 pub const MAX_OBSERVATION_STATUS_BYTES_V2: usize = 32 * 1_024;
 
 /// The bytes one `session.observe` guidance member may occupy.
@@ -124,6 +128,11 @@ pub const MAX_TEMPLATE_ARGV_SCALARS_V2: usize = 4_096;
 /// the envelope because the authoring budget charges a token per preview slot and must agree with
 /// what the protocol will actually emit.
 pub const MAX_EVIDENCE_PAGE_TOKEN_CHARS_V2: usize = 256;
+
+/// The maximum suggestions one `session.next` response carries; the exact count stays separate.
+///
+/// Suggestions are driven by per-item work, so the window is the items one definition declares.
+pub const MAX_SUGGESTION_WINDOW_V2: usize = MAX_ITEMS_PER_DEFINITION_V2;
 
 /// The maximum missing-item details one response carries; the exact count stays separate.
 pub const MAX_MISSING_ITEM_WINDOW_V2: usize = 64;

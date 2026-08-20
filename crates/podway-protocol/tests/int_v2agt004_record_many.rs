@@ -272,13 +272,22 @@ fn v2scl003_record_many_schema_and_decoder_share_the_scale_envelope() {
         .iter()
         .find(|variant| variant["properties"]["type"]["const"] == "text")
         .unwrap();
-    assert_eq!(text["properties"]["value"]["maxLength"], 65_536);
+    assert_eq!(
+        text["properties"]["value"]["maxLength"],
+        podway_core::MAX_TEXT_SCALARS_V2
+    );
     let list = record_variants
         .iter()
         .find(|variant| variant["properties"]["type"]["const"] == "list")
         .unwrap();
-    assert_eq!(list["properties"]["value"]["maxItems"], 1_000);
-    assert_eq!(list["properties"]["value"]["items"]["maxLength"], 8_192);
+    assert_eq!(
+        list["properties"]["value"]["maxItems"],
+        podway_core::MAX_LIST_ENTRIES_V2
+    );
+    assert_eq!(
+        list["properties"]["value"]["items"]["maxLength"],
+        podway_core::MAX_LIST_ENTRY_SCALARS_V2
+    );
 
     // V2SCL-002 reserved the wider input contract and V2SCL-003 raised the decoder onto the same
     // domain constants, so the schema and the decoder now accept and reject exactly together.

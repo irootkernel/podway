@@ -120,7 +120,7 @@ it describes released behavior.
 ### 3.1 Externally parallel work is already recordable
 
 `podway record --stdin` consumes closed `podway.item-record-many-input/v1` JSON
-bounded to 1 MiB and 1 to 64 unique current-attempt item operations, and returns
+bounded to 1 MiB and 1 to 128 unique current-attempt item operations, and returns
 `podway.item-record-many-result/v1`. Requirement `AUT-ID-008` in the
 [Automation Client Contract](../specs/interfaces/automation-client-contract.md)
 requires the route to fence the workspace UUID, session ID, session revision,

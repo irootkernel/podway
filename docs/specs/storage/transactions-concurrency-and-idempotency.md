@@ -158,7 +158,7 @@ The session revision may change between unrelated item updates without causing a
 ### Atomic multi-item concurrency
 
 The internal `item.record_many` command fences the observed session revision and
-active attempt, while each of its 1 to 64 unique operations fences its own item
+active attempt, while each of its 1 to 128 unique operations fences its own item
 revision. Operations are normalized into item-ID order before evaluation. Every
 target, type, constraint, prepared artifact value, and item revision must validate
 against one current state; otherwise the pure transition returns no successor and

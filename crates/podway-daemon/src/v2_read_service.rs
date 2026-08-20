@@ -39,6 +39,7 @@ use podway_core::{
     MAX_OBSERVATION_GUIDANCE_BYTES_V2,
     MAX_OBSERVATION_STATUS_BYTES_V2,
     MAX_OBSERVATION_TEMPLATE_BYTES_V2,
+    MAX_SUGGESTION_WINDOW_V2,
     PROCEDURE_SCHEMA_V2,
     RecordedItemValueV2,
     ResolvedEvidenceReferenceV2,
@@ -1819,7 +1820,7 @@ impl<'a> CurrentProjection<'a> {
                 }));
             }
         }
-        suggestions.truncate(128);
+        suggestions.truncate(MAX_SUGGESTION_WINDOW_V2);
         suggestions
     }
 }

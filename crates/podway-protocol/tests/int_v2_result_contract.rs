@@ -1375,6 +1375,22 @@ fn v2scl002_evidence_schema_bounds_equal_the_domain_scale_envelope() {
         components["$defs"]["evidenceItemMetadata"]["properties"]["total_size"]["$ref"],
         "#/$defs/logicalSize"
     );
+    // The suggestion window is driven by per-item work, so its schema ceiling and the projection's
+    // truncation are one number. Binding them here is what the epic kept having to learn.
+    let next: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../assets/schemas/next-result-v3.schema.json"
+    ))
+    .expect("the next result schema parses");
+    assert_eq!(
+        next["properties"]["suggestions"]["maxItems"],
+        podway_core::MAX_SUGGESTION_WINDOW_V2
+    );
+    assert_eq!(
+        next["properties"]["suggestions_total"]["maximum"],
+        u64::MAX,
+        "the exact total is unbounded; only the window is capped"
+    );
+
     assert_eq!(
         components["$defs"]["logicalSize"]["maximum"],
         podway_core::MAX_TEXT_SCALARS_V2,

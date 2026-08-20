@@ -3215,6 +3215,43 @@ fn wide_node_state_with_recorded_values(source: &[u8]) -> GraphSessionStateV2 {
     .unwrap()
 }
 
+/// One running attempt at the named placement of a multi-placement graph.
+fn wide_graph_state(source: &[u8], placement: &str) -> GraphSessionStateV2 {
+    let base = fresh_state("wide-graph.json", source);
+    let attempt = SessionAttemptV2::new(
+        AttemptId::new(ATTEMPT_ID).unwrap(),
+        GraphNodeId::new(placement).unwrap(),
+        AttemptNumberV2::FIRST,
+        TraceSequenceV2::FIRST,
+        AttemptLifecycle::Active,
+        AttemptValidityV2::Valid,
+        None,
+    )
+    .unwrap();
+    let trace = SessionTraceV2::from_parts(
+        SessionId::new(SESSION_ID).unwrap(),
+        SessionLifecycle::Running,
+        Revision::new(1),
+        vec![attempt],
+    )
+    .unwrap();
+    GraphSessionStateV2::new_with_goal_state(
+        base.workspace_revision(),
+        base.task_title(),
+        base.snapshot().clone(),
+        trace,
+        base.counters().to_vec(),
+        base.attempt_metadata().to_vec(),
+        base.workflow_memory().clone(),
+        base.goal_state().clone(),
+        base.created_at(),
+        None,
+        None,
+        None,
+    )
+    .unwrap()
+}
+
 /// One running attempt at a node declaring `items`, with nothing recorded.
 ///
 /// The bounded windows (`missing_required_items`, observation choices) are properties of the
@@ -4921,6 +4958,83 @@ fn v2scl004_evidence_read_pages_deterministically_and_fails_exactly() {
 }
 
 #[test]
+fn v2scl005_the_widest_compact_status_fits_its_allocation() {
+    // The 32 KiB status allocation is the tightest of the five, and its rationale was a comment
+    // rather than a measurement. The widest a definition can make it is 128 items with maximal
+    // identifiers on a graph with the most placements it may declare, so that is what is measured.
+    let items: Vec<Value> = (0..128)
+        .map(|index| {
+            json!({
+                "id": format!("{}{index:03}", "i".repeat(61)),
+                "type": "artifact",
+                "prompt": "Attach.",
+                "required": true
+            })
+        })
+        .collect();
+    let source = serde_json::to_vec(&json!({
+        "schema": "podway.procedure/v2",
+        "id": "widest-compact-status",
+        "version": "2",
+        "name": "Widest compact status",
+        "purpose": "Measure the widest compact status a definition can produce.",
+        "node_definitions": {
+            "work": {
+                "type": "action",
+                "title": "Record work",
+                "intent": "Record items with maximal identifiers.",
+                "items": items
+            }
+        },
+        "graph": {
+            "entry": format!("{}000", "n".repeat(61)),
+            "nodes": (0..64)
+                .map(|index| {
+                    let id = format!("{}{index:03}", "n".repeat(61));
+                    if index == 63 {
+                        json!({"id": id, "use": "work", "terminal": true})
+                    } else {
+                        json!({
+                            "id": id,
+                            "use": "work",
+                            "next": format!("{}{:03}", "n".repeat(61), index + 1)
+                        })
+                    }
+                })
+                .collect::<Vec<_>>()
+        }
+    }))
+    .unwrap();
+    // Counters are the other half of the widest case: a graph declares at most 64 placements and
+    // their identifiers reach 64 scalars. Their counts cannot be made adversarially large — state
+    // validation ties every counter to the trace, so the schema's u64 ceiling is not independently
+    // reachable — but the identifier width and the placement count are, and both are present here.
+    let session_view = view(wide_graph_state(&source, &format!("{}000", "n".repeat(61))));
+
+    let compact = project_graph_status_v2(&session_view, GraphStatusTierV2::Compact, None).unwrap();
+    assert_eq!(compact["items"].as_array().unwrap().len(), 128);
+    assert_eq!(compact["counters"].as_array().unwrap().len(), 64);
+    let charged = serde_json::to_vec(&compact).unwrap().len();
+    // Pinned so a widening of the item or placement ceiling shows up here as a number rather than
+    // as an observation that suddenly cannot be answered.
+    assert_eq!(charged, 27_628);
+    assert!(
+        charged <= podway_core::MAX_OBSERVATION_STATUS_BYTES_V2,
+        "the widest compact status charged {charged} bytes against {}",
+        podway_core::MAX_OBSERVATION_STATUS_BYTES_V2
+    );
+
+    // The same member inside an observation must fit the same allocation.
+    let observation = project_graph_observation_v1(&session_view).unwrap();
+    let embedded = serde_json::to_vec(&observation["status"]).unwrap().len();
+    assert!(
+        embedded <= podway_core::MAX_OBSERVATION_STATUS_BYTES_V2,
+        "the embedded status charged {embedded} bytes"
+    );
+    assert_output_v2("session.observe", observation);
+}
+
+#[test]
 fn v2scl005_observation_windows_are_bounded_by_bytes_and_report_their_exact_total() {
     // 128 optional items with maximal prompts is the widest active-item window a vetted definition
     // can produce: the source projection budget refuses a wider document, and the static
@@ -5005,6 +5119,15 @@ fn v2scl005_observation_windows_are_bounded_by_bytes_and_report_their_exact_tota
         encoded.len() <= 1_048_576,
         "observation encoded to {} bytes",
         encoded.len()
+    );
+
+    // The compact status member is the tightest allocation of the five, so its worst case is
+    // measured rather than described. Identifiers reach 64 scalars and a graph declares 64
+    // placements, which is the widest status a definition can produce.
+    let widest_status = serde_json::to_vec(&observation["status"]).unwrap().len();
+    assert!(
+        widest_status <= 32 * 1_024,
+        "the widest compact status charged {widest_status} bytes against its 32 KiB allocation"
     );
 
     // Every observation member fits its own published allocation, which is what makes the

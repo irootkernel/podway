@@ -1076,6 +1076,12 @@ impl WorkflowMemoryStateV2 {
         // ADR-0024 bounds the recorded text and list content one attempt may accumulate. The check
         // belongs on the write path, not only where the terminal snapshot is built, so a caller
         // learns the exact field, observed value, and maximum on the mutation that crosses it.
+        //
+        // No test crosses it here. A single text value caps at 65,536 scalars and 128 of them
+        // reach only half the aggregate, so tripping this needs 128 wide list items — about 17 MB
+        // of recorded content. The equivalent check in `RecordedItemSetV2::new` is tested from
+        // both sides, and this one is a duplicate placed on the write path for the error's timing,
+        // not for a different rule.
         let content = recorded_content_scalars_v2(slots.iter().filter_map(ItemSlotStateV2::value));
         if content > MAX_ATTEMPT_CONTENT_SCALARS_V2 {
             return Err(GraphMutationErrorV2::Domain(

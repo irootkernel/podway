@@ -40,7 +40,7 @@ with a disposition for the current terminal revision. Running and undisposed
 terminal sessions require the explicit force mode and bounded progress summary.
 Rejected eligibility, missing force data, or a stale fence writes no domain state.
 
-An atomic item mutation contains 1 to 64 unique current-attempt item operations.
+An atomic item mutation contains 1 to 128 unique current-attempt item operations, matching the items one node definition may declare.
 The domain rejects duplicates before sorting operations by item ID, validates the
 complete set against one input state, and returns either one successor or no
 successor. Changed item revisions advance independently, while the workspace and
