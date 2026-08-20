@@ -1046,7 +1046,7 @@
       {
         "id": "urn:podway:schema:compact-status-result:v3",
         "path": "schemas/compact-status-result-v3.schema.json",
-        "sha256": "sha256:af33e62ed6de8a7b0f8b79147828f0c07fd3b652b059f4ac194e6c1bfaf7f05a"
+        "sha256": "sha256:1911f5b2afd922e82a15fa430f864b5f52692d6f510e973c432da0247d018969"
       },
       {
         "id": "urn:podway:schema:contract-manifest:v1",
@@ -1196,7 +1196,7 @@
       {
         "id": "urn:podway:schema:observation-result:v3",
         "path": "schemas/observation-result-v3.schema.json",
-        "sha256": "sha256:1cbef977baa84f1f500b25c17342088c26ba14447b7fdb4f9e8dfe38ac3962d9"
+        "sha256": "sha256:84a3bf9961463508453dd6b0289d58a60d28450e5a082346dc56b63e77b66c29"
       },
       {
         "id": "urn:podway:schema:output:v3",
@@ -1331,7 +1331,7 @@
       {
         "id": "urn:podway:schema:v2-result-components:v3",
         "path": "schemas/v2-result-components-v3.schema.json",
-        "sha256": "sha256:dfc95d485097b5e948687d0acb4356e078254a7f72b7f7054f6a514a7a1bf4c6"
+        "sha256": "sha256:d5f65869fd58757f73964d5885e6ca23cd99c86df4515b3b2d73db14fd95862d"
       },
       {
         "id": "urn:podway:schema:v2-runtime-error-details:v1",

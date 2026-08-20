@@ -6,12 +6,13 @@ use podway_config::{
 };
 use podway_core::{
     ActorAttributionV2, ArtifactValueV1, AttemptId, AttemptLifecycle, AttemptNumberV2,
-    AttemptValidityV2, BlockerId, BlockerState, CriterionAssessmentReasonV2,
+    AttemptValidityV2, BlockerId, BlockerState, CheckResultExecutorV2, CheckResultInputBasisV2,
+    CheckResultOutcomeV2, CheckResultValueV2, CriterionAssessmentReasonV2,
     CriterionAssessmentResultV2, CriterionCitationV2, CriterionId, CriterionStatusV2,
     DecisionRecordInputV2, DecisionRecordV2, EvidenceReferenceSnapshotV2, GoalAssessmentRecordV2,
     GoalCriterionV2, GoalDefinitionV2, GoalOutcome, GoalRevisionNumberV2, GoalRevisionReasonV2,
-    GoalRevisionRecordV2, GoalStatementV2, GraphNodeId, ItemId, NodeDefinitionId, OptionId,
-    ProcedureSnapshotId, ReasonV2, RecordedItemValueV2, ResolvedEvidenceReferenceV2,
+    GoalRevisionRecordV2, GoalStatementV2, GraphNodeId, ItemId, NodeDefinitionId, OperationId,
+    OptionId, ProcedureSnapshotId, ReasonV2, RecordedItemValueV2, ResolvedEvidenceReferenceV2,
     ResolvedEvidenceSetV2, Revision, SessionAttemptV2, SessionId, SessionLifecycle, SessionTraceV2,
     Sha256Digest, TraceSequenceV2, TransitionEffectV2, UnixMillis, WorkspaceId,
     canonicalize_json_v1,
@@ -192,6 +193,41 @@ const APPLICABILITY_PROCEDURE: &[u8] = br#"{
     ]
   },
   "manual_rework":{"allowed_targets":["work"]}
+}"#;
+const CHECK_RESULT_GUIDANCE_PROCEDURE: &[u8] = br#"{
+  "schema":"podway.procedure/v2",
+  "id":"check-result-guidance",
+  "version":"1",
+  "name":"Check result guidance",
+  "purpose":"Project safe recording guidance.",
+  "node_definitions":{
+    "verify":{
+      "type":"action",
+      "title":"Verify",
+      "intent":"Record caller-supplied external check results.",
+      "items":[
+        {
+          "id":"optional-check",
+          "type":"check_result",
+          "prompt":"Optionally record another result.",
+          "required":false,
+          "operation_id":"optional-operation",
+          "operation_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "accepted_outcomes":["inconclusive"]
+        },
+        {
+          "id":"required-check",
+          "type":"check_result",
+          "prompt":"Record the required result.",
+          "required":true,
+          "operation_id":"make-test",
+          "operation_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "accepted_outcomes":["pass","fail"]
+        }
+      ]
+    }
+  },
+  "graph":{"entry":"verify","nodes":[{"id":"verify","use":"verify","terminal":true}]}
 }"#;
 
 #[derive(Clone, Copy)]
@@ -633,6 +669,142 @@ fn v2run002_projection_is_bound_to_the_canonical_snapshot_not_source_encoding() 
         project_graph_next_v2(&yaml).unwrap(),
         project_graph_next_v2(&json).unwrap()
     );
+}
+
+#[test]
+fn v2ast005_check_result_guidance_is_bounded_copyable_and_required_first() {
+    let initial_view = view(fresh_state(
+        "check-result-guidance.json",
+        CHECK_RESULT_GUIDANCE_PROCEDURE,
+    ));
+    let compact = project_graph_status_v2(&initial_view, GraphStatusTierV2::Compact, None).unwrap();
+    assert!(
+        compact["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["type"] == "check_result")
+    );
+    assert_output_v2("session.status", compact);
+    let next = project_graph_next_v2(&initial_view).unwrap();
+    assert!(
+        next["allowed_actions"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("item.record_many"))
+    );
+    let suggestions = next["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|suggestion| suggestion["command"] == "item.record_many")
+        .collect::<Vec<_>>();
+    assert_eq!(suggestions.len(), 1);
+    assert_eq!(
+        suggestions[0]["argv"],
+        json!(["podway", "record", "--stdin"])
+    );
+    assert_eq!(suggestions[0]["item_id"], "required-check");
+
+    let observation = project_graph_observation_v1(&initial_view).unwrap();
+    let active = observation["active_items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["item_id"] == "required-check")
+        .unwrap();
+    assert_eq!(active["constraints"]["operation_id"], "make-test");
+    assert_eq!(
+        active["constraints"]["operation_digest"],
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    );
+    assert_eq!(
+        active["constraints"]["accepted_outcomes"],
+        json!(["pass", "fail"])
+    );
+
+    let templates = observation["mutation_templates"].as_array().unwrap();
+    let record_templates = templates
+        .iter()
+        .filter(|template| template["command"] == "item.record_many")
+        .collect::<Vec<_>>();
+    assert_eq!(record_templates.len(), 1);
+    let template = record_templates[0];
+    assert_eq!(template["argv"], json!(["podway", "record", "--stdin"]));
+    assert_eq!(template["preconditions"]["workspace_uuid"], WORKSPACE_ID);
+    assert_eq!(template["preconditions"]["session_id"], SESSION_ID);
+    assert_eq!(template["preconditions"]["attempt_id"], ATTEMPT_ID);
+    assert_eq!(template["preconditions"]["session_revision"], 1);
+    assert_eq!(template["preconditions"]["item_revision"], 0);
+    let stdin = template["stdin_template"].as_str().unwrap();
+    assert!(stdin.len() <= 16_384);
+    let stdin: Value = serde_json::from_str(stdin).unwrap();
+    assert_eq!(stdin["workspace_uuid"], WORKSPACE_ID);
+    assert_eq!(stdin["session_id"], SESSION_ID);
+    assert_eq!(stdin["session_revision"], 1);
+    assert_eq!(stdin["attempt_id"], ATTEMPT_ID);
+    assert_eq!(stdin["idempotency_key"], "<idempotency-key>");
+    assert_eq!(stdin["operations"][0]["item_id"], "required-check");
+    assert_eq!(stdin["operations"][0]["expected_item_revision"], 0);
+    assert_eq!(stdin["operations"][0]["record"]["type"], "check_result");
+    assert_eq!(
+        stdin["operations"][0]["record"]["operation_id"],
+        "make-test"
+    );
+    assert_eq!(
+        stdin["operations"][0]["record"]["operation_digest"],
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    );
+    assert_eq!(stdin["operations"][0]["record"]["outcome"], "<outcome>");
+    assert!(
+        stdin["operations"][0]["record"]
+            .get("accepted_outcomes")
+            .is_none()
+    );
+    assert!(templates.iter().all(|candidate| {
+        candidate["command"] == "item.record_many" || candidate.get("stdin_template").is_none()
+    }));
+
+    let satisfied_required = view(guidance_state_with_required_check_result(
+        CheckResultOutcomeV2::Pass,
+    ));
+    let satisfied_required_next = project_graph_next_v2(&satisfied_required).unwrap();
+    let fallback = satisfied_required_next["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|suggestion| suggestion["command"] == "item.record_many")
+        .unwrap();
+    assert_eq!(fallback["item_id"], "optional-check");
+
+    let unsatisfied_required = view(guidance_state_with_required_check_result(
+        CheckResultOutcomeV2::Inconclusive,
+    ));
+    let unsatisfied_next = project_graph_next_v2(&unsatisfied_required).unwrap();
+    let retry = unsatisfied_next["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|suggestion| suggestion["command"] == "item.record_many")
+        .unwrap();
+    assert_eq!(retry["item_id"], "required-check");
+    let unsatisfied_observation = project_graph_observation_v1(&unsatisfied_required).unwrap();
+    let retry_template = unsatisfied_observation["mutation_templates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|template| template["command"] == "item.record_many")
+        .unwrap();
+    let retry_stdin: Value =
+        serde_json::from_str(retry_template["stdin_template"].as_str().unwrap()).unwrap();
+    assert_eq!(retry_stdin["operations"][0]["item_id"], "required-check");
+    assert_eq!(retry_stdin["operations"][0]["expected_item_revision"], 1);
+
+    assert_output_v2("session.next", next);
+    assert_output_v2("session.observe", observation);
+    assert_output_v2("session.next", satisfied_required_next);
+    assert_output_v2("session.next", unsatisfied_next);
+    assert_output_v2("session.observe", unsatisfied_observation);
 }
 
 #[test]
@@ -3672,6 +3844,305 @@ fn maximum_selected_readback_state(source: &[u8]) -> GraphSessionStateV2 {
     source_and_consumer_state(&base, source_memory, consumer_memory)
 }
 
+fn check_result_readback_source() -> Vec<u8> {
+    serde_json::to_vec(&json!({
+        "schema": "podway.procedure/v2",
+        "id": "check-result-readback",
+        "version": "1",
+        "name": "Check result read-back",
+        "purpose": "Read one complete structurally bound external result.",
+        "node_definitions": {
+            "source": {
+                "type": "action",
+                "title": "Record result",
+                "intent": "Record the caller-supplied result.",
+                "items": [{
+                    "id": "verification",
+                    "type": "check_result",
+                    "prompt": "Record verification.",
+                    "required": true,
+                    "operation_id": "make-test",
+                    "operation_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "accepted_outcomes": ["pass"]
+                }]
+            },
+            "consume": {
+                "type": "action",
+                "title": "Consume result",
+                "intent": "Read the selected result."
+            }
+        },
+        "graph": {
+            "entry": "source",
+            "nodes": [
+                {"id": "source", "use": "source", "next": "consume"},
+                {
+                    "id": "consume",
+                    "use": "consume",
+                    "evidence_from": [{"node": "source", "required": true, "items": ["verification"]}],
+                    "terminal": true
+                }
+            ]
+        }
+    }))
+    .unwrap()
+}
+
+fn check_result_readback_state(source: &[u8]) -> GraphSessionStateV2 {
+    let base = fresh_state("check-result-readback.json", source);
+    let source_attempt_id = AttemptId::new(ATTEMPT_ID).unwrap();
+    let consumer_attempt_id = second_attempt_id();
+    let original = &base.workflow_memory().attempts()[0].item_slots()[0];
+    let value = recorded_check_result();
+    let slot = ItemSlotStateV2::new(
+        source_attempt_id.clone(),
+        original.item_id().clone(),
+        original.item_type(),
+        Revision::new(1),
+        Some(value),
+        original.created_at(),
+        UnixMillis::new(original.created_at().get() + 1),
+    )
+    .unwrap();
+    let source_memory = AttemptWorkflowMemoryV2::new(
+        source_attempt_id.clone(),
+        vec![slot],
+        Vec::new(),
+        Vec::new(),
+    )
+    .unwrap();
+    let source_digest = source_memory.recorded_items_digest().unwrap();
+    let consumer_memory = AttemptWorkflowMemoryV2::new(
+        consumer_attempt_id,
+        Vec::new(),
+        Vec::new(),
+        vec![
+            EvidenceResolutionStateV2::new(
+                0,
+                true,
+                vec![ItemId::new("verification").unwrap()],
+                ResolvedEvidenceReferenceV2::resolved(
+                    EvidenceReferenceSnapshotV2::new(
+                        GraphNodeId::new("source").unwrap(),
+                        source_attempt_id,
+                        AttemptNumberV2::FIRST,
+                        source_digest,
+                        UnixMillis::new(1_700_000_000_010),
+                    )
+                    .unwrap(),
+                ),
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    source_and_consumer_state(&base, source_memory, consumer_memory)
+}
+
+fn recorded_check_result_with_outcome(outcome: CheckResultOutcomeV2) -> RecordedItemValueV2 {
+    RecordedItemValueV2::check_result(
+        CheckResultValueV2::new(
+            OperationId::new("make-test").unwrap(),
+            Sha256Digest::new(
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            )
+            .unwrap(),
+            CheckResultInputBasisV2::new(
+                "HEAD and dirty-tree snapshot",
+                Sha256Digest::new(
+                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+            CheckResultExecutorV2::new("gaori", "1.0.0").unwrap(),
+            outcome,
+            "The external operation reported pass.",
+            Sha256Digest::new(
+                "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            )
+            .unwrap(),
+        )
+        .unwrap(),
+    )
+}
+
+fn recorded_check_result() -> RecordedItemValueV2 {
+    recorded_check_result_with_outcome(CheckResultOutcomeV2::Pass)
+}
+
+fn guidance_state_with_required_check_result(outcome: CheckResultOutcomeV2) -> GraphSessionStateV2 {
+    let base = fresh_state(
+        "check-result-guidance.json",
+        CHECK_RESULT_GUIDANCE_PROCEDURE,
+    );
+    let original_attempt = &base.workflow_memory().attempts()[0];
+    let slots = original_attempt
+        .item_slots()
+        .iter()
+        .map(|original| {
+            if original.item_id().as_str() != "required-check" {
+                return original.clone();
+            }
+            ItemSlotStateV2::new(
+                original_attempt.attempt_id().clone(),
+                original.item_id().clone(),
+                original.item_type(),
+                Revision::new(1),
+                Some(recorded_check_result_with_outcome(outcome)),
+                original.created_at(),
+                UnixMillis::new(original.created_at().get() + 1),
+            )
+            .unwrap()
+        })
+        .collect();
+    let memory = AttemptWorkflowMemoryV2::new(
+        original_attempt.attempt_id().clone(),
+        slots,
+        Vec::new(),
+        Vec::new(),
+    )
+    .unwrap();
+    GraphSessionStateV2::new_with_goal_state(
+        base.workspace_revision(),
+        base.task_title(),
+        base.snapshot().clone(),
+        base.trace().clone(),
+        base.counters().to_vec(),
+        base.attempt_metadata().to_vec(),
+        WorkflowMemoryStateV2::new(vec![memory], Vec::new(), Vec::new()).unwrap(),
+        base.goal_state().clone(),
+        base.created_at(),
+        None,
+        None,
+        None,
+    )
+    .unwrap()
+}
+
+fn current_recorded_check_result_state(source: &[u8]) -> GraphSessionStateV2 {
+    let base = fresh_state("check-result-readback.json", source);
+    let original_attempt = &base.workflow_memory().attempts()[0];
+    let original = &original_attempt.item_slots()[0];
+    let slot = ItemSlotStateV2::new(
+        original_attempt.attempt_id().clone(),
+        original.item_id().clone(),
+        original.item_type(),
+        Revision::new(1),
+        Some(recorded_check_result()),
+        original.created_at(),
+        UnixMillis::new(original.created_at().get() + 1),
+    )
+    .unwrap();
+    let memory = AttemptWorkflowMemoryV2::new(
+        original_attempt.attempt_id().clone(),
+        vec![slot],
+        Vec::new(),
+        Vec::new(),
+    )
+    .unwrap();
+    GraphSessionStateV2::new_with_goal_state(
+        Revision::new(1),
+        base.task_title(),
+        base.snapshot().clone(),
+        base.trace().clone(),
+        base.counters().to_vec(),
+        base.attempt_metadata().to_vec(),
+        WorkflowMemoryStateV2::new(vec![memory], Vec::new(), Vec::new()).unwrap(),
+        base.goal_state().clone(),
+        base.created_at(),
+        None,
+        None,
+        None,
+    )
+    .unwrap()
+}
+
+#[test]
+fn v2ast005_status_and_observation_use_only_the_fixed_check_result_projection() {
+    let source = check_result_readback_source();
+    let session_view = view(current_recorded_check_result_state(&source));
+    let status = project_graph_status_v2(&session_view, GraphStatusTierV2::Standard, None).unwrap();
+    let status_value = &status["item_values"][0]["value"];
+    assert_eq!(status_value["operation_id"], "make-test");
+    assert_eq!(status_value["outcome"], "pass");
+    assert!(status_value.get("descriptor").is_none());
+    assert!(status_value.get("executor").is_none());
+    assert!(status_value.get("summary").is_none());
+    assert_eq!(status["item_values"][0]["value_truncated"], false);
+
+    let observation = project_graph_observation_v1(&session_view).unwrap();
+    assert_eq!(observation["active_items"][0]["value"], *status_value);
+    assert_eq!(observation["active_items"][0]["value_truncated"], false);
+    assert!(
+        !observation["guidance"]["allowed_actions"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("item.record_many"))
+    );
+    assert!(
+        observation["mutation_templates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|template| template.get("stdin_template").is_none())
+    );
+    assert_output_v2("session.status", status);
+    assert_output_v2("session.observe", observation);
+}
+
+#[test]
+fn v2ast005_check_result_preview_and_readback_separate_projection_from_complete_value() {
+    let source = check_result_readback_source();
+    let session_view = view(check_result_readback_state(&source));
+    let next = project_graph_next_v2(&session_view).unwrap();
+    let metadata = &next["readback"][0]["items"][0];
+    assert_eq!(metadata["type"], "check_result");
+    assert_eq!(metadata["size_unit"], "bytes");
+    assert_eq!(metadata["preview_truncated"], false);
+    assert!(metadata.get("next_page_token").is_none());
+    assert_eq!(
+        metadata["preview"],
+        json!({
+            "operation_id": "make-test",
+            "outcome": "pass",
+            "operation_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "input_basis": {"digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+            "output_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        })
+    );
+    for omitted in ["descriptor", "executor", "summary"] {
+        assert!(!metadata["preview"].to_string().contains(omitted));
+    }
+
+    let read = project_evidence_read_v1(
+        &session_view,
+        &GraphNodeId::new("source").unwrap(),
+        &ItemId::new("verification").unwrap(),
+        None,
+    )
+    .unwrap();
+    let complete = &read["page"]["data"];
+    assert_eq!(
+        complete["input_basis"]["descriptor"],
+        "HEAD and dirty-tree snapshot"
+    );
+    assert_eq!(
+        complete["executor"],
+        json!({"name": "gaori", "version": "1.0.0"})
+    );
+    assert_eq!(complete["summary"], "The external operation reported pass.");
+    let encoded = canonicalize_json_v1(complete).unwrap().len();
+    assert_eq!(read["total_size"], encoded);
+    assert_eq!(read["page"]["size"], encoded);
+    assert_eq!(read["page"]["offset"], 0);
+    assert_eq!(read["size_unit"], "bytes");
+    assert_eq!(read["truncated"], false);
+    assert_eq!(read["next_page_token"], Value::Null);
+    assert_output_v2("session.next", next);
+    assert_output_v2("evidence.read", read);
+}
+
 #[test]
 fn v2rel002_selected_readback_respects_value_and_wire_bounds() {
     const FRAME_MAX: usize = 1_048_576;
@@ -4759,6 +5230,12 @@ fn v2run002_exhaustive_reachable_applicability_classes_close_actions_and_suggest
         assert!(project_graph_next_v2(&view(decided_assessment_state(lifecycle, false))).is_err());
     }
 
+    let check_result_next = project_graph_next_v2(&view(fresh_state(
+        "check-result-guidance.json",
+        CHECK_RESULT_GUIDANCE_PROCEDURE,
+    )))
+    .unwrap();
+
     let observed_actions = [
         &missing_next,
         &ready_next,
@@ -4770,6 +5247,7 @@ fn v2run002_exhaustive_reachable_applicability_classes_close_actions_and_suggest
         &complete,
         &terminal_ready,
         &reactivated_next,
+        &check_result_next,
     ]
     .into_iter()
     .flat_map(|next| next["allowed_actions"].as_array().unwrap())
@@ -4784,6 +5262,7 @@ fn v2run002_exhaustive_reachable_applicability_classes_close_actions_and_suggest
         "item.check",
         "item.clear",
         "item.remove",
+        "item.record_many",
         "item.set",
         "item.uncheck",
         "session.block",

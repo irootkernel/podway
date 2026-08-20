@@ -45,7 +45,7 @@ SANDBOX_NAME = "sandbox"
 SNAPSHOTS_NAME = "snapshots"
 BUILD_TIMEOUT_SECONDS = 600
 COMMAND_TIMEOUT_SECONDS = 60
-DAEMON_READY_TIMEOUT_SECONDS = 15
+DAEMON_READY_TIMEOUT_SECONDS = 30
 FORBIDDEN_RUN_FLAGS = frozenset({"--socket", "--worktree", "--dev"})
 DAEMON_LIFECYCLE_COMMANDS = frozenset(
     {"install", "uninstall", "start", "stop", "restart", "status", "logs"}

@@ -6180,10 +6180,38 @@ fn render_human_output_v2(
             ),
         )?;
     }
+    if contains_check_result_projection_v1(&Value::Object(output.result().clone())) {
+        write_text_line(
+            stdout,
+            format_args!(
+                "note: check_result is a caller-supplied, structurally bound external check result; Podway does not verify or attest it"
+            ),
+        )?;
+    }
     let result = serde_json::to_string_pretty(output.result())
         .map_err(|_| LocalFailure::response_invalid("cannot render Procedure v2 result"))?;
     write_text_line(stdout, format_args!("result: {result}"))?;
     render_warnings(stdout, output.warnings())
+}
+
+fn contains_check_result_projection_v1(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => {
+            object.get("type").and_then(Value::as_str) == Some("check_result")
+                || ([
+                    "operation_id",
+                    "operation_digest",
+                    "input_basis",
+                    "outcome",
+                    "output_digest",
+                ]
+                .into_iter()
+                .all(|field| object.contains_key(field)))
+                || object.values().any(contains_check_result_projection_v1)
+        }
+        Value::Array(values) => values.iter().any(contains_check_result_projection_v1),
+        _ => false,
+    }
 }
 
 fn render_local_failure(failure: LocalFailure, json_output: bool) -> i32 {
@@ -6574,7 +6602,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Usage:\n  podway clear <item-id> [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-attempt <uuid>] [--if-item-revision <n>]\n\nExample:\n  podway clear constraints"
         }
         "item.record_many" => {
-            "Usage:\n  podway record --stdin [--worktree <path>] [--json] [--detach]\n\nThe closed JSON stdin document supplies workspace_uuid, session_id, session_revision, attempt_id, idempotency_key, and 1..128 unique typed operations.\n\nExample:\n  podway record --stdin < record.json"
+            "Usage:\n  podway record --stdin [--worktree <path>] [--json] [--detach]\n\nThe closed JSON stdin document supplies workspace_uuid, session_id, session_revision, attempt_id, idempotency_key, and 1..128 unique typed operations. A check_result is caller supplied and structurally bound; Podway does not execute, verify, or attest the named external operation.\n\nExample:\n  podway record --stdin < record.json"
         }
         "job.list" => {
             "Usage:\n  podway job list [--state <queued|running|succeeded|failed|cancelled>]\n\nExample:\n  podway job list --state queued"
@@ -6607,8 +6635,10 @@ mod tests {
     };
 
     use super::{
-        Cli, Command, LocalEnvelopeClock, LocalFailure, ParseFailureCommandContext,
-        build_identity_v1, daemon_payload, local_generated_at, local_result, map_service_error,
+        Cli, Command, CommandNameV1, LocalEnvelopeClock, LocalFailure, OutputEnvelopeInputV3,
+        OutputEnvelopeV3, ParseFailureCommandContext, RequestIdV1, ResponseEnvelopeV2,
+        Rfc3339MillisV1, RunResult, build_identity_v1, contains_check_result_projection_v1,
+        daemon_payload, local_generated_at, local_result, map_service_error,
         parse_failure_command_context, parse_timeout_millis, probe_daemon_identity,
         probe_daemon_identity_with_runner, render_local_failure_with_clock_and_writers,
         render_result_with_clock_and_writers, resolve_daemon_executable,
@@ -6619,6 +6649,114 @@ mod tests {
     use clap::{Parser, error::ErrorKind};
     use serde_json::json;
     static VERSION_PROBE_SCRIPT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn v2ast005_human_rendering_detects_structurally_bound_check_results() {
+        use podway_core::{JobId, WorkspaceId};
+        use podway_protocol::{JobOutputV1, JobStateV1, WorkspaceOutputV1};
+
+        assert!(contains_check_result_projection_v1(&json!({
+            "operation_id": "make-test",
+            "operation_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "input_basis": {"digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+            "outcome": "pass",
+            "output_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        })));
+        assert!(contains_check_result_projection_v1(&json!({
+            "items": [{"item_id": "verification", "type": "check_result", "value": null}]
+        })));
+        assert!(!contains_check_result_projection_v1(&json!({
+            "type": "artifact",
+            "sha256_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        })));
+
+        let result = json!({
+            "schema": "podway.item-record-many-result/v1",
+            "admission": {
+                "admitted": true,
+                "job_id": "00000000-0000-4000-8000-000000000003",
+                "workspace_sequence": 1
+            },
+            "changed": true,
+            "graph_node_id": "verify",
+            "attempt_id": "00000000-0000-4000-8000-000000000001",
+            "attempt_number": 1,
+            "revision": 2,
+            "items": [{
+                "item_id": "verification",
+                "expected_item_revision": 0,
+                "changed": true,
+                "item_revision": 1,
+                "type": "check_result",
+                "value_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+            }]
+        });
+        let output = OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
+            request_id: RequestIdV1::new("00000000-0000-4000-8000-000000000002").unwrap(),
+            command: CommandNameV1::new("item.record_many").unwrap(),
+            generated_at: Rfc3339MillisV1::new("1970-01-01T00:00:00.012Z").unwrap(),
+            workspace: Some(
+                WorkspaceOutputV1::new(
+                    WorkspaceId::new("00000000-0000-4000-8000-000000000004").unwrap(),
+                    "/tmp/podway-v2ast005-render",
+                    1,
+                )
+                .unwrap(),
+            ),
+            job: Some(
+                JobOutputV1::new(
+                    JobId::new("00000000-0000-4000-8000-000000000003").unwrap(),
+                    1,
+                    JobStateV1::Succeeded,
+                    Rfc3339MillisV1::new("1970-01-01T00:00:00.009Z").unwrap(),
+                    Some(Rfc3339MillisV1::new("1970-01-01T00:00:00.010Z").unwrap()),
+                    Some(Rfc3339MillisV1::new("1970-01-01T00:00:00.011Z").unwrap()),
+                )
+                .unwrap(),
+            ),
+            session: None,
+            result: result.as_object().unwrap().clone(),
+            warnings: Vec::new(),
+        })
+        .unwrap();
+        let result = RunResult::Response(Box::new(ResponseEnvelopeV2::OutputV2(output)));
+        let clock = FixedClock(UNIX_EPOCH + Duration::from_millis(12));
+        let note = "note: check_result is a caller-supplied, structurally bound external check result; Podway does not verify or attest it";
+
+        let mut human = Vec::new();
+        let mut human_stderr = Vec::new();
+        assert_eq!(
+            render_result_with_clock_and_writers(
+                &result,
+                false,
+                false,
+                &clock,
+                &mut human,
+                &mut human_stderr,
+            ),
+            0
+        );
+        let human = String::from_utf8(human).unwrap();
+        assert_eq!(human.matches(note).count(), 1);
+        assert!(human_stderr.is_empty());
+
+        let mut machine = Vec::new();
+        let mut machine_stderr = Vec::new();
+        assert_eq!(
+            render_result_with_clock_and_writers(
+                &result,
+                true,
+                false,
+                &clock,
+                &mut machine,
+                &mut machine_stderr,
+            ),
+            0
+        );
+        let machine = String::from_utf8(machine).unwrap();
+        assert!(!machine.contains(note));
+        assert!(machine_stderr.is_empty());
+    }
 
     struct VersionProbeScript {
         directory: PathBuf,

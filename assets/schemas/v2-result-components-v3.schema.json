@@ -18,7 +18,12 @@
         "value_digest": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/digest" },
         "total_size": { "$ref": "#/$defs/logicalSize" },
         "size_unit": { "$ref": "#/$defs/sizeUnit" },
-        "preview": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/itemValue" },
+        "preview": {
+          "oneOf": [
+            { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/itemValue" },
+            { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/checkResultPreview" }
+          ]
+        },
         "preview_truncated": { "type": "boolean" },
         "next_page_token": { "$ref": "#/$defs/pageToken" }
       },

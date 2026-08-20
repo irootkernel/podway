@@ -498,6 +498,8 @@ fn evidence_logical_size_v1(value: &RecordedItemValueV2) -> (u64, &'static str) 
         (text.chars().count() as u64, "scalars")
     } else if let Some(entries) = value.as_list() {
         (entries.len() as u64, "entries")
+    } else if value.item_type() == ItemTypeV1::CheckResult {
+        (check_result_encoded_bytes_v1(value) as u64, "bytes")
     } else {
         (1, "value")
     }
@@ -567,6 +569,16 @@ fn evidence_page_v1(value: &RecordedItemValueV2, offset: u64) -> Option<Evidence
                     .collect(),
             ),
             truncated: end < entries.len(),
+        });
+    }
+    if value.item_type() == ItemTypeV1::CheckResult {
+        if offset != 0 {
+            return None;
+        }
+        return Some(EvidencePageV1 {
+            size: check_result_encoded_bytes_v1(value) as u64,
+            data: typed_item_value(value),
+            truncated: false,
         });
     }
     // Confirm, choice, integer, and artifact values are indivisible single-page reads.
@@ -1336,6 +1348,13 @@ impl<'a> CurrentProjection<'a> {
             .iter()
             .filter_map(|slot| {
                 slot.value().map(|value| {
+                    if value.item_type() == ItemTypeV1::CheckResult {
+                        return json!({
+                            "item_id": slot.item_id().as_str(),
+                            "value": check_result_preview_v1(value),
+                            "value_truncated": false,
+                        });
+                    }
                     let display = display_item_value(value);
                     let (display, value_truncated) =
                         truncate_chars(&display, ITEM_DISPLAY_CHARS_MAX);
@@ -1547,6 +1566,56 @@ impl<'a> CurrentProjection<'a> {
                         json!(self.attempt.attempt_id().as_str()),
                     );
                     fences.insert("item_revision".to_owned(), json!(slot.revision().get()));
+                    if command == "item.record_many" {
+                        fences.insert(
+                            "session_revision".to_owned(),
+                            json!(state.trace().revision().get()),
+                        );
+                        let ItemSpecV2::CheckResult(specification) = self
+                            .item_specs
+                            .iter()
+                            .find(|specification| specification.id().as_str() == item_id)?
+                        else {
+                            return None;
+                        };
+                        let stdin_template = json!({
+                            "schema": "podway.item-record-many-input/v1",
+                            "workspace_uuid": view.identity().workspace_uuid().as_str(),
+                            "session_id": state.trace().session_id().as_str(),
+                            "session_revision": state.trace().revision().get(),
+                            "attempt_id": self.attempt.attempt_id().as_str(),
+                            "idempotency_key": "<idempotency-key>",
+                            "operations": [{
+                                "item_id": item_id,
+                                "expected_item_revision": slot.revision().get(),
+                                "record": {
+                                    "type": "check_result",
+                                    "operation_id": specification.operation_id().as_str(),
+                                    "operation_digest": specification.operation_digest().as_str(),
+                                    "input_basis": {
+                                        "descriptor": "<input-basis-descriptor>",
+                                        "digest": "<input-basis-digest>",
+                                    },
+                                    "executor": {
+                                        "name": "<executor-name>",
+                                        "version": "<executor-version>",
+                                    },
+                                    "outcome": "<outcome>",
+                                    "summary": "<summary>",
+                                    "output_digest": "<output-digest>",
+                                },
+                            }],
+                        });
+                        return Some(json!({
+                            "command": command,
+                            "argv": ["podway", "record", "--stdin"],
+                            "preconditions": fences,
+                            "authority": "optimistic_concurrency_only",
+                            "idempotency_key_required": true,
+                            "requires_explicit_authorization": false,
+                            "stdin_template": serde_json::to_string_pretty(&stdin_template).ok()?,
+                        }));
+                    }
                 } else {
                     append_flag(
                         &mut argv,
@@ -1698,7 +1767,14 @@ impl<'a> CurrentProjection<'a> {
                     }
                 }
                 ItemSpecV2::Artifact(_) => push_unique(&mut actions, "item.attach"),
-                ItemSpecV2::CheckResult(_) => {}
+                ItemSpecV2::CheckResult(_) => {
+                    if !slot
+                        .value()
+                        .is_some_and(|value| spec.is_satisfied_by(value))
+                    {
+                        push_unique(&mut actions, "item.record_many");
+                    }
+                }
             }
             if slot.value().is_some() {
                 if spec.item_type() == ItemTypeV1::Confirm {
@@ -1753,8 +1829,30 @@ impl<'a> CurrentProjection<'a> {
         actions
     }
 
+    fn check_result_target_index(&self) -> Option<usize> {
+        [true, false].into_iter().find_map(|required| {
+            self.item_specs
+                .iter()
+                .zip(self.memory.item_slots())
+                .position(|(specification, slot)| {
+                    specification.item_type() == ItemTypeV1::CheckResult
+                        && specification.common().required() == required
+                        && !slot
+                            .value()
+                            .is_some_and(|value| specification.is_satisfied_by(value))
+                })
+        })
+    }
+
     fn suggestions(&self, state: &GraphSessionStateV2, actions: &[&str]) -> Vec<Value> {
         let mut suggestions = Vec::new();
+        if let Some(index) = self.check_result_target_index() {
+            suggestions.push(json!({
+                "command": "item.record_many",
+                "argv": ["podway", "record", "--stdin"],
+                "item_id": self.item_specs[index].id().as_str(),
+            }));
+        }
         for item in &self.missing_required {
             if item.item_type() == ItemTypeV1::CheckResult {
                 continue;
@@ -1894,7 +1992,25 @@ fn item_constraints(spec: &ItemSpecV2) -> Value {
                 json!(spec.allowed_media_types()),
             );
         }
-        ItemSpecV2::CheckResult(_) => {}
+        ItemSpecV2::CheckResult(spec) => {
+            constraints.insert(
+                "operation_id".to_owned(),
+                json!(spec.operation_id().as_str()),
+            );
+            constraints.insert(
+                "operation_digest".to_owned(),
+                json!(spec.operation_digest().as_str()),
+            );
+            constraints.insert(
+                "accepted_outcomes".to_owned(),
+                json!(
+                    spec.accepted_outcomes()
+                        .iter()
+                        .map(|outcome| outcome.as_str())
+                        .collect::<Vec<_>>()
+                ),
+            );
+        }
     }
     constraints.insert("choices_total".to_owned(), json!(choices_total));
     constraints.insert(
@@ -1937,17 +2053,8 @@ fn project_observation_item_value(value: &RecordedItemValueV2) -> (Value, bool) 
         truncated |= projected.len() < value.len();
         return (json!(projected), truncated);
     }
-    if let Some(value) = value.as_check_result() {
-        return (
-            json!({
-                "operation_id": value.operation_id().as_str(),
-                "outcome": value.outcome().as_str(),
-                "operation_digest": value.operation_digest().as_str(),
-                "input_basis": { "digest": value.input_basis().digest().as_str() },
-                "output_digest": value.output_digest().as_str(),
-            }),
-            false,
-        );
+    if value.item_type() == ItemTypeV1::CheckResult {
+        return (check_result_preview_v1(value), false);
     }
     let artifact = value
         .as_artifact()
@@ -2540,6 +2647,13 @@ fn evidence_preview_v1(value: &RecordedItemValueV2) -> Option<EvidencePageV1> {
             size: end as u64,
             data: Value::Array(entries[..end].iter().map(|entry| json!(entry)).collect()),
             truncated: end < entries.len(),
+        });
+    }
+    if value.item_type() == ItemTypeV1::CheckResult {
+        return Some(EvidencePageV1 {
+            size: check_result_encoded_bytes_v1(value) as u64,
+            data: check_result_preview_v1(value),
+            truncated: false,
         });
     }
     // Confirm, choice, integer, and artifact values are indivisible, so a preview of one is either
@@ -3218,6 +3332,25 @@ fn typed_item_value(value: &RecordedItemValueV2) -> Value {
             })
         }
     }
+}
+
+fn check_result_preview_v1(value: &RecordedItemValueV2) -> Value {
+    let result = value
+        .as_check_result()
+        .expect("check-result projection requires a check-result value");
+    json!({
+        "operation_id": result.operation_id().as_str(),
+        "outcome": result.outcome().as_str(),
+        "operation_digest": result.operation_digest().as_str(),
+        "input_basis": { "digest": result.input_basis().digest().as_str() },
+        "output_digest": result.output_digest().as_str(),
+    })
+}
+
+fn check_result_encoded_bytes_v1(value: &RecordedItemValueV2) -> usize {
+    canonicalize_json_v1(&typed_item_value(value))
+        .expect("a bounded check-result value is canonical JSON")
+        .len()
 }
 
 fn truncate_chars(value: &str, maximum: usize) -> (String, bool) {

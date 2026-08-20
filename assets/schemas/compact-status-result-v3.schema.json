@@ -36,7 +36,7 @@
         "required": ["item_id", "type", "required", "satisfied", "revision"],
         "properties": {
           "item_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" },
-          "type": { "enum": ["confirm", "text", "choice", "integer", "list", "artifact"] },
+          "type": { "enum": ["confirm", "text", "choice", "integer", "list", "artifact", "check_result"] },
           "required": { "type": "boolean" }, "satisfied": { "type": "boolean" },
           "revision": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/revision" }
         }

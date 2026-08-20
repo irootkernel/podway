@@ -147,7 +147,8 @@
         "value": {
           "oneOf": [
             { "type": "null" },
-            { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/itemValue" }
+            { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/itemValue" },
+            { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/checkResultPreview" }
           ]
         },
         "value_truncated": { "type": "boolean" }
