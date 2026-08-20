@@ -1412,7 +1412,7 @@ impl<'a> CurrentProjection<'a> {
                 ItemTypeV1::Choice => Some(("item.set", "set", "<choice>")),
                 ItemTypeV1::Integer => Some(("item.set", "set", "<integer>")),
                 ItemTypeV1::Artifact => Some(("item.attach", "attach", "<path>")),
-                ItemTypeV1::Confirm | ItemTypeV1::List => None,
+                ItemTypeV1::Confirm | ItemTypeV1::List | ItemTypeV1::CheckResult => None,
             };
             if let Some((command, verb, placeholder)) = set_placeholder {
                 push_recipe_unique(
@@ -1698,6 +1698,7 @@ impl<'a> CurrentProjection<'a> {
                     }
                 }
                 ItemSpecV2::Artifact(_) => push_unique(&mut actions, "item.attach"),
+                ItemSpecV2::CheckResult(_) => {}
             }
             if slot.value().is_some() {
                 if spec.item_type() == ItemTypeV1::Confirm {
@@ -1755,6 +1756,9 @@ impl<'a> CurrentProjection<'a> {
     fn suggestions(&self, state: &GraphSessionStateV2, actions: &[&str]) -> Vec<Value> {
         let mut suggestions = Vec::new();
         for item in &self.missing_required {
+            if item.item_type() == ItemTypeV1::CheckResult {
+                continue;
+            }
             let (command, verb, placeholder) = match item.item_type() {
                 ItemTypeV1::Confirm => ("item.check", "check", None),
                 ItemTypeV1::Text => ("item.set", "set", Some("<text>")),
@@ -1762,6 +1766,7 @@ impl<'a> CurrentProjection<'a> {
                 ItemTypeV1::Integer => ("item.set", "set", Some("<integer>")),
                 ItemTypeV1::List => ("item.add", "add", Some("<value>")),
                 ItemTypeV1::Artifact => ("item.attach", "attach", Some("<path>")),
+                ItemTypeV1::CheckResult => unreachable!("handled above"),
             };
             let mut argv = vec![json!("podway"), json!(verb), json!(item.id().as_str())];
             if let Some(placeholder) = placeholder {
@@ -1889,6 +1894,7 @@ fn item_constraints(spec: &ItemSpecV2) -> Value {
                 json!(spec.allowed_media_types()),
             );
         }
+        ItemSpecV2::CheckResult(_) => {}
     }
     constraints.insert("choices_total".to_owned(), json!(choices_total));
     constraints.insert(
@@ -1930,6 +1936,18 @@ fn project_observation_item_value(value: &RecordedItemValueV2) -> (Value, bool) 
         }
         truncated |= projected.len() < value.len();
         return (json!(projected), truncated);
+    }
+    if let Some(value) = value.as_check_result() {
+        return (
+            json!({
+                "operation_id": value.operation_id().as_str(),
+                "outcome": value.outcome().as_str(),
+                "operation_digest": value.operation_digest().as_str(),
+                "input_basis": { "digest": value.input_basis().digest().as_str() },
+                "output_digest": value.output_digest().as_str(),
+            }),
+            false,
+        );
     }
     let artifact = value
         .as_artifact()
@@ -3151,6 +3169,9 @@ fn display_item_value(value: &RecordedItemValueV2) -> String {
         ItemTypeV1::Artifact => {
             serde_json::to_string(&typed_item_value(value)).unwrap_or_else(|_| "{}".to_owned())
         }
+        ItemTypeV1::CheckResult => {
+            serde_json::to_string(&typed_item_value(value)).unwrap_or_else(|_| "{}".to_owned())
+        }
     }
 }
 
@@ -3174,6 +3195,26 @@ fn typed_item_value(value: &RecordedItemValueV2) -> Value {
                 "sha256_digest": artifact.digest().as_str(),
                 "size_bytes": artifact.size_bytes(),
                 "media_type": artifact.media_type(),
+            })
+        }
+        ItemTypeV1::CheckResult => {
+            let result = value
+                .as_check_result()
+                .expect("check-result type has a check-result value");
+            json!({
+                "operation_id": result.operation_id().as_str(),
+                "operation_digest": result.operation_digest().as_str(),
+                "input_basis": {
+                    "descriptor": result.input_basis().descriptor(),
+                    "digest": result.input_basis().digest().as_str(),
+                },
+                "executor": {
+                    "name": result.executor().name(),
+                    "version": result.executor().version(),
+                },
+                "outcome": result.outcome().as_str(),
+                "summary": result.summary(),
+                "output_digest": result.output_digest().as_str(),
             })
         }
     }
@@ -3200,6 +3241,7 @@ const fn item_type(value: ItemTypeV1) -> &'static str {
         ItemTypeV1::Integer => "integer",
         ItemTypeV1::List => "list",
         ItemTypeV1::Artifact => "artifact",
+        ItemTypeV1::CheckResult => "check_result",
     }
 }
 

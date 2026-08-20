@@ -309,6 +309,17 @@ fn suggestion_charge(placement: &GraphPlacementV2, definition: &ParsedNodeDefini
         ParsedNodeDefinition::Decision(decision) => decision.items(),
     };
     for item in items.iter().filter(|item| item.common().required()) {
+        if matches!(item, ItemSpecV2::CheckResult(_)) {
+            charge = add(
+                charge,
+                suggestion(
+                    "item.record_many",
+                    &["record", "--stdin"],
+                    Some(item.id().as_str()),
+                ),
+            );
+            continue;
+        }
         let (command, verb, placeholder) = match item {
             ItemSpecV2::Confirm(_) => ("item.check", "check", None),
             ItemSpecV2::Text(_) => ("item.set", "set", Some("<text>")),
@@ -316,6 +327,7 @@ fn suggestion_charge(placement: &GraphPlacementV2, definition: &ParsedNodeDefini
             ItemSpecV2::Integer(_) => ("item.set", "set", Some("<integer>")),
             ItemSpecV2::List(_) => ("item.add", "add", Some("<value>")),
             ItemSpecV2::Artifact(_) => ("item.attach", "attach", Some("<path>")),
+            ItemSpecV2::CheckResult(_) => unreachable!("handled above"),
         };
         let mut argv = vec![verb, item.id().as_str()];
         if let Some(placeholder) = placeholder {
@@ -522,6 +534,7 @@ fn readback_item_charge(item: &ItemSpecV2) -> u64 {
         ItemSpecV2::Integer(_) => "integer",
         ItemSpecV2::List(_) => "list",
         ItemSpecV2::Artifact(_) => "artifact",
+        ItemSpecV2::CheckResult(_) => "check_result",
     };
     let mut charge = ARRAY_ELEMENT_OVERHEAD;
     charge = add(charge, string_field(MAX_IDENTIFIER_CHARS)); // item_id

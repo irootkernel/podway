@@ -11,6 +11,7 @@
 //! stores it on the immutable snapshot.
 
 use std::fmt;
+use std::str::FromStr;
 
 use crate::aggregate::ArtifactValueV1;
 use crate::procedure::{ItemTypeV1, validate_text};
@@ -20,8 +21,8 @@ use crate::procedure_v2::{
 };
 use crate::session_v2::{AttemptNumberV2, GoalRevisionNumberV2, TraceSequenceV2};
 use crate::{
-    AttemptId, BoundUnitV2, DomainError, GraphNodeId, ItemId, NodeDefinitionId, OptionId,
-    ProcedureSnapshotId, Revision, SessionId, Sha256Digest, UnixMillis,
+    AttemptId, BoundUnitV2, DomainError, GraphNodeId, ItemId, NodeDefinitionId, OperationId,
+    OptionId, ProcedureSnapshotId, Revision, SessionId, Sha256Digest, UnixMillis,
 };
 
 // Scalar bounds fixed by dossier sections 5.1 and 6.4.
@@ -34,6 +35,13 @@ const MAX_RECORDED_CHOICE_CHARS: usize = 120;
 const MAX_RECORDED_LIST_ENTRIES: usize = MAX_LIST_ENTRIES_V2 as usize;
 const MAX_RECORDED_LIST_ENTRY_CHARS: usize = MAX_LIST_ENTRY_SCALARS_V2 as usize;
 const MAX_RECORDED_ITEMS_PER_ATTEMPT: usize = MAX_ITEMS_PER_DEFINITION_V2;
+
+pub const MAX_CHECK_RESULT_INPUT_DESCRIPTOR_SCALARS_V2: usize = 512;
+pub const MAX_CHECK_RESULT_EXECUTOR_NAME_SCALARS_V2: usize = 128;
+pub const MAX_CHECK_RESULT_EXECUTOR_VERSION_SCALARS_V2: usize = 64;
+pub const MAX_CHECK_RESULT_SUMMARY_SCALARS_V2: usize = 2_000;
+pub const MAX_CHECK_RESULT_VALUE_BYTES_V2: usize = 32 * 1_024;
+pub const UNKNOWN_CHECK_RESULT_OUTCOME_REASON: &str = "unknown external check result outcome";
 
 // Evidence and record collection bounds fixed by dossier sections 5.1 and 6.4.
 const MAX_RESOLVED_REFERENCES: usize = 8;
@@ -115,6 +123,175 @@ impl fmt::Display for ActorAttributionV2 {
     }
 }
 
+/// The closed outcome vocabulary for a structurally bound external check result.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum CheckResultOutcomeV2 {
+    Pass,
+    Fail,
+    Inconclusive,
+}
+
+impl CheckResultOutcomeV2 {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::Fail => "fail",
+            Self::Inconclusive => "inconclusive",
+        }
+    }
+}
+
+impl FromStr for CheckResultOutcomeV2 {
+    type Err = DomainError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "pass" => Ok(Self::Pass),
+            "fail" => Ok(Self::Fail),
+            "inconclusive" => Ok(Self::Inconclusive),
+            _ => Err(invalid(UNKNOWN_CHECK_RESULT_OUTCOME_REASON)),
+        }
+    }
+}
+
+/// Caller-supplied identity of the exact input basis used by an external operation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CheckResultInputBasisV2 {
+    descriptor: String,
+    digest: Sha256Digest,
+}
+
+impl CheckResultInputBasisV2 {
+    pub fn new(descriptor: impl Into<String>, digest: Sha256Digest) -> Result<Self, DomainError> {
+        let descriptor = descriptor.into();
+        validate_text(
+            "check result input descriptor",
+            &descriptor,
+            1,
+            MAX_CHECK_RESULT_INPUT_DESCRIPTOR_SCALARS_V2,
+            true,
+        )?;
+        Ok(Self { descriptor, digest })
+    }
+
+    pub fn descriptor(&self) -> &str {
+        &self.descriptor
+    }
+
+    pub fn digest(&self) -> &Sha256Digest {
+        &self.digest
+    }
+}
+
+/// Bounded caller-supplied attribution for the external executor.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CheckResultExecutorV2 {
+    name: String,
+    version: String,
+}
+
+impl CheckResultExecutorV2 {
+    pub fn new(name: impl Into<String>, version: impl Into<String>) -> Result<Self, DomainError> {
+        let name = name.into();
+        let version = version.into();
+        validate_text(
+            "check result executor name",
+            &name,
+            1,
+            MAX_CHECK_RESULT_EXECUTOR_NAME_SCALARS_V2,
+            true,
+        )?;
+        validate_text(
+            "check result executor version",
+            &version,
+            1,
+            MAX_CHECK_RESULT_EXECUTOR_VERSION_SCALARS_V2,
+            true,
+        )?;
+        Ok(Self { name, version })
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn version(&self) -> &str {
+        &self.version
+    }
+}
+
+/// One complete structurally bound external check result. Podway validates this closed shape but
+/// does not attest that the operation ran or that any digest describes caller-owned bytes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CheckResultValueV2 {
+    operation_id: OperationId,
+    operation_digest: Sha256Digest,
+    input_basis: CheckResultInputBasisV2,
+    executor: CheckResultExecutorV2,
+    outcome: CheckResultOutcomeV2,
+    summary: String,
+    output_digest: Sha256Digest,
+}
+
+impl CheckResultValueV2 {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        operation_id: OperationId,
+        operation_digest: Sha256Digest,
+        input_basis: CheckResultInputBasisV2,
+        executor: CheckResultExecutorV2,
+        outcome: CheckResultOutcomeV2,
+        summary: impl Into<String>,
+        output_digest: Sha256Digest,
+    ) -> Result<Self, DomainError> {
+        let summary = summary.into();
+        validate_text(
+            "check result summary",
+            &summary,
+            1,
+            MAX_CHECK_RESULT_SUMMARY_SCALARS_V2,
+            true,
+        )?;
+        Ok(Self {
+            operation_id,
+            operation_digest,
+            input_basis,
+            executor,
+            outcome,
+            summary,
+            output_digest,
+        })
+    }
+
+    pub fn operation_id(&self) -> &OperationId {
+        &self.operation_id
+    }
+
+    pub fn operation_digest(&self) -> &Sha256Digest {
+        &self.operation_digest
+    }
+
+    pub fn input_basis(&self) -> &CheckResultInputBasisV2 {
+        &self.input_basis
+    }
+
+    pub fn executor(&self) -> &CheckResultExecutorV2 {
+        &self.executor
+    }
+
+    pub const fn outcome(&self) -> CheckResultOutcomeV2 {
+        self.outcome
+    }
+
+    pub fn summary(&self) -> &str {
+        &self.summary
+    }
+
+    pub fn output_digest(&self) -> &Sha256Digest {
+        &self.output_digest
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum RecordedItemValueKindV2 {
     Confirm,
@@ -123,6 +300,7 @@ enum RecordedItemValueKindV2 {
     Integer(i64),
     List(Vec<String>),
     Artifact(ArtifactValueV1),
+    CheckResult(CheckResultValueV2),
 }
 
 /// A typed recorded item value under the v2 hard bounds of section 5.1. An attempt's recorded item
@@ -198,6 +376,12 @@ impl RecordedItemValueV2 {
         }
     }
 
+    pub fn check_result(value: CheckResultValueV2) -> Self {
+        Self {
+            kind: RecordedItemValueKindV2::CheckResult(value),
+        }
+    }
+
     pub const fn item_type(&self) -> ItemTypeV1 {
         match self.kind {
             RecordedItemValueKindV2::Confirm => ItemTypeV1::Confirm,
@@ -206,6 +390,7 @@ impl RecordedItemValueV2 {
             RecordedItemValueKindV2::Integer(_) => ItemTypeV1::Integer,
             RecordedItemValueKindV2::List(_) => ItemTypeV1::List,
             RecordedItemValueKindV2::Artifact(_) => ItemTypeV1::Artifact,
+            RecordedItemValueKindV2::CheckResult(_) => ItemTypeV1::CheckResult,
         }
     }
 
@@ -240,6 +425,13 @@ impl RecordedItemValueV2 {
     pub fn as_artifact(&self) -> Option<&ArtifactValueV1> {
         match &self.kind {
             RecordedItemValueKindV2::Artifact(value) => Some(value),
+            _ => None,
+        }
+    }
+
+    pub fn as_check_result(&self) -> Option<&CheckResultValueV2> {
+        match &self.kind {
+            RecordedItemValueKindV2::CheckResult(value) => Some(value),
             _ => None,
         }
     }

@@ -1,7 +1,9 @@
 use crate::procedure_v2::invalid;
 use crate::{
-    ArtifactItemSpecV2, ArtifactValueV1, ChoiceItemSpecV2, IntegerItemSpecV2, ItemCommonV2, ItemId,
-    ItemSpecV2, ItemTypeV1, ListItemSpecV2, RecordedItemValueV2, Sha256Digest, TextItemSpecV2,
+    ArtifactItemSpecV2, ArtifactValueV1, CheckResultExecutorV2, CheckResultInputBasisV2,
+    CheckResultItemSpecV2, CheckResultOutcomeV2, CheckResultValueV2, ChoiceItemSpecV2,
+    IntegerItemSpecV2, ItemCommonV2, ItemId, ItemSpecV2, ItemTypeV1, ListItemSpecV2, OperationId,
+    RecordedItemValueV2, Sha256Digest, TextItemSpecV2,
 };
 
 use super::helpers::item;
@@ -14,6 +16,25 @@ fn common(id: &str) -> ItemCommonV2 {
         true,
     )
     .unwrap()
+}
+
+fn digest(character: char) -> Sha256Digest {
+    Sha256Digest::new(format!("sha256:{}", character.to_string().repeat(64))).unwrap()
+}
+
+fn check_result(operation_id: &str, outcome: CheckResultOutcomeV2) -> RecordedItemValueV2 {
+    RecordedItemValueV2::check_result(
+        CheckResultValueV2::new(
+            OperationId::new(operation_id).unwrap(),
+            digest('a'),
+            CheckResultInputBasisV2::new("HEAD and dirty-tree snapshot", digest('b')).unwrap(),
+            CheckResultExecutorV2::new("gaori", "1.0.0").unwrap(),
+            outcome,
+            "The complete development gate passed.",
+            digest('c'),
+        )
+        .unwrap(),
+    )
 }
 
 #[test]
@@ -150,6 +171,73 @@ fn artifact_item_spec_enforces_count_format_and_uniqueness() {
 }
 
 #[test]
+fn check_result_declarations_are_closed_bounded_and_unique() {
+    let specification = CheckResultItemSpecV2::new(
+        common("verification"),
+        OperationId::new("make-test").unwrap(),
+        digest('a'),
+        vec![
+            CheckResultOutcomeV2::Pass,
+            CheckResultOutcomeV2::Inconclusive,
+        ],
+    )
+    .unwrap();
+    assert_eq!(specification.operation_id().as_str(), "make-test");
+    assert_eq!(specification.operation_digest(), &digest('a'));
+    assert_eq!(
+        specification.accepted_outcomes(),
+        &[
+            CheckResultOutcomeV2::Pass,
+            CheckResultOutcomeV2::Inconclusive
+        ]
+    );
+    assert_eq!(
+        CheckResultItemSpecV2::new(
+            common("verification"),
+            OperationId::new("make-test").unwrap(),
+            digest('a'),
+            Vec::new(),
+        )
+        .unwrap_err(),
+        invalid("check result accepted outcomes must contain between one and three values")
+    );
+    assert_eq!(
+        CheckResultItemSpecV2::new(
+            common("verification"),
+            OperationId::new("make-test").unwrap(),
+            digest('a'),
+            vec![CheckResultOutcomeV2::Pass, CheckResultOutcomeV2::Pass],
+        )
+        .unwrap_err(),
+        invalid("check result accepted outcomes must be unique")
+    );
+}
+
+#[test]
+fn check_result_values_enforce_every_scalar_bound() {
+    assert!(CheckResultInputBasisV2::new("x".repeat(512), digest('b')).is_ok());
+    assert!(CheckResultInputBasisV2::new("x".repeat(513), digest('b')).is_err());
+    assert!(CheckResultExecutorV2::new("x".repeat(128), "v".repeat(64)).is_ok());
+    assert!(CheckResultExecutorV2::new("x".repeat(129), "v").is_err());
+    assert!(CheckResultExecutorV2::new("runner", "v".repeat(65)).is_err());
+
+    let value = |summary: String| {
+        CheckResultValueV2::new(
+            OperationId::new("make-test").unwrap(),
+            digest('a'),
+            CheckResultInputBasisV2::new("basis", digest('b')).unwrap(),
+            CheckResultExecutorV2::new("gaori", "unknown").unwrap(),
+            CheckResultOutcomeV2::Fail,
+            summary,
+            digest('c'),
+        )
+    };
+    assert!(value("x".repeat(2_000)).is_ok());
+    assert!(value("x".repeat(2_001)).is_err());
+    assert!(CheckResultExecutorV2::new("   ", "unknown").is_err());
+}
+
+#[test]
 fn item_specs_admit_only_recorded_values_that_satisfy_the_declaration() {
     let text = ItemSpecV2::text(common("text"), 2, 4, true).unwrap();
     assert!(text.admits_recorded_value(&RecordedItemValueV2::text("okay").unwrap()));
@@ -194,4 +282,35 @@ fn item_specs_admit_only_recorded_values_that_satisfy_the_declaration() {
         .unwrap(),
     );
     assert!(!artifact.admits_recorded_value(&value));
+
+    let check = ItemSpecV2::check_result(
+        common("verification"),
+        OperationId::new("make-test").unwrap(),
+        digest('a'),
+        vec![
+            CheckResultOutcomeV2::Pass,
+            CheckResultOutcomeV2::Inconclusive,
+        ],
+    )
+    .unwrap();
+    assert!(check.admits_recorded_value(&check_result("make-test", CheckResultOutcomeV2::Pass)));
+    assert!(check.admits_recorded_value(&check_result(
+        "make-test",
+        CheckResultOutcomeV2::Inconclusive
+    )));
+    assert!(!check.admits_recorded_value(&check_result("make-test", CheckResultOutcomeV2::Fail)));
+    assert!(!check.admits_recorded_value(&check_result("other-test", CheckResultOutcomeV2::Pass)));
+    let wrong_digest = RecordedItemValueV2::check_result(
+        CheckResultValueV2::new(
+            OperationId::new("make-test").unwrap(),
+            digest('d'),
+            CheckResultInputBasisV2::new("basis", digest('b')).unwrap(),
+            CheckResultExecutorV2::new("gaori", "1.0.0").unwrap(),
+            CheckResultOutcomeV2::Pass,
+            "Passed.",
+            digest('c'),
+        )
+        .unwrap(),
+    );
+    assert!(!check.admits_recorded_value(&wrong_digest));
 }

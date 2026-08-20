@@ -213,6 +213,17 @@ pub(crate) enum ItemWire {
         #[serde(default)]
         allowed_media_types: Option<Vec<String>>,
     },
+    #[serde(rename = "check_result")]
+    CheckResult {
+        id: String,
+        prompt: String,
+        #[serde(default)]
+        help: Option<String>,
+        required: bool,
+        operation_id: String,
+        operation_digest: String,
+        accepted_outcomes: Vec<String>,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize)]

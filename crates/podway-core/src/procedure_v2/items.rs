@@ -3,7 +3,10 @@
 use std::collections::BTreeSet;
 
 use crate::procedure::validate_media_type;
-use crate::{BoundUnitV2, DomainError, ItemId, ItemTypeV1, RecordedItemValueV2, validate_text};
+use crate::{
+    BoundUnitV2, CheckResultOutcomeV2, DomainError, ItemId, ItemTypeV1, OperationId,
+    RecordedItemValueV2, Sha256Digest, validate_text,
+};
 
 use super::invalid;
 use super::{
@@ -16,6 +19,8 @@ const MIN_V2_CHOICE_COUNT: usize = 1;
 const MAX_V2_CHOICE_COUNT: usize = 32;
 const MAX_V2_CHOICE_VALUE_CHARS: usize = 120;
 const MAX_V2_ARTIFACT_MEDIA_TYPES: usize = 64;
+const MIN_CHECK_RESULT_OUTCOMES: usize = 1;
+const MAX_CHECK_RESULT_OUTCOMES: usize = 3;
 
 /// The reusable node contract kind.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -347,8 +352,60 @@ impl ArtifactItemSpecV2 {
     }
 }
 
-/// An immutable specification for one of the six supported Procedure v2 item types, reusing the v1
-/// item-type taxonomy under the tightened v2 bounds of section 5.1.
+/// Immutable declaration that binds a result slot to one external operation identity and a closed
+/// set of accepted outcomes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CheckResultItemSpecV2 {
+    common: ItemCommonV2,
+    operation_id: OperationId,
+    operation_digest: Sha256Digest,
+    accepted_outcomes: Vec<CheckResultOutcomeV2>,
+}
+
+impl CheckResultItemSpecV2 {
+    pub fn new(
+        common: ItemCommonV2,
+        operation_id: OperationId,
+        operation_digest: Sha256Digest,
+        accepted_outcomes: Vec<CheckResultOutcomeV2>,
+    ) -> Result<Self, DomainError> {
+        if accepted_outcomes.len() < MIN_CHECK_RESULT_OUTCOMES
+            || accepted_outcomes.len() > MAX_CHECK_RESULT_OUTCOMES
+        {
+            return Err(invalid(
+                "check result accepted outcomes must contain between one and three values",
+            ));
+        }
+        if accepted_outcomes.iter().collect::<BTreeSet<_>>().len() != accepted_outcomes.len() {
+            return Err(invalid("check result accepted outcomes must be unique"));
+        }
+        Ok(Self {
+            common,
+            operation_id,
+            operation_digest,
+            accepted_outcomes,
+        })
+    }
+
+    pub fn common(&self) -> &ItemCommonV2 {
+        &self.common
+    }
+
+    pub fn operation_id(&self) -> &OperationId {
+        &self.operation_id
+    }
+
+    pub fn operation_digest(&self) -> &Sha256Digest {
+        &self.operation_digest
+    }
+
+    pub fn accepted_outcomes(&self) -> &[CheckResultOutcomeV2] {
+        &self.accepted_outcomes
+    }
+}
+
+/// An immutable specification for one of the seven supported Procedure v2 item types, reusing the
+/// shared item-type taxonomy under the tightened v2 bounds.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ItemSpecV2 {
     Confirm(ConfirmItemSpecV2),
@@ -357,6 +414,7 @@ pub enum ItemSpecV2 {
     Integer(IntegerItemSpecV2),
     List(ListItemSpecV2),
     Artifact(ArtifactItemSpecV2),
+    CheckResult(CheckResultItemSpecV2),
 }
 
 impl ItemSpecV2 {
@@ -417,6 +475,20 @@ impl ItemSpecV2 {
         )?))
     }
 
+    pub fn check_result(
+        common: ItemCommonV2,
+        operation_id: OperationId,
+        operation_digest: Sha256Digest,
+        accepted_outcomes: Vec<CheckResultOutcomeV2>,
+    ) -> Result<Self, DomainError> {
+        Ok(Self::CheckResult(CheckResultItemSpecV2::new(
+            common,
+            operation_id,
+            operation_digest,
+            accepted_outcomes,
+        )?))
+    }
+
     pub fn common(&self) -> &ItemCommonV2 {
         match self {
             Self::Confirm(specification) => specification.common(),
@@ -425,6 +497,7 @@ impl ItemSpecV2 {
             Self::Integer(specification) => specification.common(),
             Self::List(specification) => specification.common(),
             Self::Artifact(specification) => specification.common(),
+            Self::CheckResult(specification) => specification.common(),
         }
     }
 
@@ -440,6 +513,7 @@ impl ItemSpecV2 {
             Self::Integer(_) => ItemTypeV1::Integer,
             Self::List(_) => ItemTypeV1::List,
             Self::Artifact(_) => ItemTypeV1::Artifact,
+            Self::CheckResult(_) => ItemTypeV1::CheckResult,
         }
     }
 
@@ -484,6 +558,11 @@ impl ItemSpecV2 {
                         .allowed_media_types()
                         .iter()
                         .any(|media_type| media_type == value.media_type())
+            }),
+            Self::CheckResult(specification) => value.as_check_result().is_some_and(|value| {
+                value.operation_id() == specification.operation_id()
+                    && value.operation_digest() == specification.operation_digest()
+                    && specification.accepted_outcomes().contains(&value.outcome())
             }),
         }
     }

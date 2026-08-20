@@ -6,12 +6,12 @@ use std::str::FromStr;
 
 use podway_core::{
     ActionDefinitionV2, ActionOutcomeV2, ActionPlacementV2, AssessmentContractV2,
-    AssessmentOutcomeMappingV2, AssessmentTargetV2, DecisionDefinitionInputV2,
-    DecisionDefinitionV2, DecisionOptionV2, DecisionPlacementV2, DecisionRouteEntryV2,
-    DecisionRouteMapV2, DecisionRouteV2, DomainError, EvidenceFromListV2, EvidenceReferenceV2,
-    GoalOutcome, GoalTrackingOptIn, GraphNodeId, GraphPlacementV2, ItemCommonV2, ItemId,
-    ItemSpecV2, ManualReworkTargetListV2, NodeDefinitionId, OptionId, ProcedureGraphV2,
-    ReasonPolicyV2, SkipPolicyV2, TransitionEffectV2,
+    AssessmentOutcomeMappingV2, AssessmentTargetV2, CheckResultOutcomeV2,
+    DecisionDefinitionInputV2, DecisionDefinitionV2, DecisionOptionV2, DecisionPlacementV2,
+    DecisionRouteEntryV2, DecisionRouteMapV2, DecisionRouteV2, DomainError, EvidenceFromListV2,
+    EvidenceReferenceV2, GoalOutcome, GoalTrackingOptIn, GraphNodeId, GraphPlacementV2,
+    ItemCommonV2, ItemId, ItemSpecV2, ManualReworkTargetListV2, NodeDefinitionId, OperationId,
+    OptionId, ProcedureGraphV2, ReasonPolicyV2, Sha256Digest, SkipPolicyV2, TransitionEffectV2,
 };
 
 use crate::procedure_v2_wire::*;
@@ -502,6 +502,51 @@ fn map_item(wire: ItemWire) -> Result<ItemSpecV2, ConfigError> {
                 allowed_media_types,
             )
             .map_err(map_domain_error)
+        }
+        ItemWire::CheckResult {
+            id,
+            prompt,
+            help,
+            required,
+            operation_id,
+            operation_digest,
+            accepted_outcomes,
+        } => {
+            let operation_id = OperationId::new(operation_id.clone()).map_err(|_| {
+                ConfigError::InvalidIdentifier {
+                    field: "operation_id",
+                    value: operation_id,
+                }
+            })?;
+            let operation_digest = Sha256Digest::new(operation_digest.clone()).map_err(|_| {
+                ConfigError::InvalidScalar {
+                    field: "operation_digest",
+                    value: operation_digest,
+                    reason: "must be a lowercase SHA-256 digest",
+                }
+            })?;
+            let accepted_outcomes = accepted_outcomes
+                .into_iter()
+                .map(|outcome| {
+                    CheckResultOutcomeV2::from_str(&outcome).map_err(|_| {
+                        ConfigError::InvalidScalar {
+                            field: "accepted_outcomes",
+                            value: outcome,
+                            reason: "must contain only pass, fail, or inconclusive",
+                        }
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            ItemSpecV2::check_result(
+                item_common(id, prompt, help, required)?,
+                operation_id,
+                operation_digest,
+                accepted_outcomes,
+            )
+            .map_err(|_| ConfigError::InvalidValue {
+                field: "accepted_outcomes",
+                reason: "must contain one to three unique outcomes",
+            })
         }
     }
 }

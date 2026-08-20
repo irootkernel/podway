@@ -96,6 +96,12 @@ pub enum ConfigError {
         field: &'static str,
         reason: &'static str,
     },
+    #[error("invalid {field} value `{value}`: {reason}")]
+    InvalidScalar {
+        field: &'static str,
+        value: String,
+        reason: &'static str,
+    },
     #[error("{field} length or count {actual} is outside {min}..={max}")]
     OutOfBounds {
         field: &'static str,

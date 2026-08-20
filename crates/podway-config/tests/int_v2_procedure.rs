@@ -1,7 +1,7 @@
 use podway_config::{
     ConfigError, ParsedProcedure, ParsedProcedureV2, parse_procedure_yaml, validate_procedure_v2,
 };
-use podway_core::TransitionEffectV2;
+use podway_core::{CheckResultOutcomeV2, ItemSpecV2, TransitionEffectV2};
 
 fn v2(yaml: &str) -> Result<ParsedProcedureV2, ConfigError> {
     match parse_procedure_yaml(yaml.as_bytes()) {
@@ -754,7 +754,7 @@ fn v2_rejects_empty_node_definitions_map() {
 }
 
 #[test]
-fn v2ast002_reserved_check_result_is_not_admitted_before_domain_implementation() {
+fn v2ast003_check_result_declaration_is_admitted_without_materialized_defaults() {
     let yaml = concat!(
         "schema: podway.procedure/v2\n",
         "id: p\n",
@@ -781,8 +781,41 @@ fn v2ast002_reserved_check_result_is_not_admitted_before_domain_implementation()
         "      use: work\n",
         "      terminal: true\n",
     );
+    let parsed = v2(yaml).expect("the domain and authoring task admits the reserved declaration");
+    let item = match &parsed.node_definitions()[0] {
+        podway_config::ParsedNodeDefinition::Action(action) => &action.items()[0],
+        podway_config::ParsedNodeDefinition::Decision(_) => panic!("expected action"),
+    };
+    let ItemSpecV2::CheckResult(specification) = item else {
+        panic!("expected check-result item");
+    };
+    assert_eq!(specification.operation_id().as_str(), "make-test");
+    assert_eq!(
+        specification.accepted_outcomes(),
+        &[CheckResultOutcomeV2::Pass]
+    );
+}
+
+#[test]
+fn v2ast003_check_result_declaration_rejects_unknown_duplicate_and_empty_outcomes() {
+    let source = concat!(
+        "schema: podway.procedure/v2\n",
+        "id: p\nversion: \"1\"\nname: P\npurpose: P.\n",
+        "node_definitions:\n  work:\n    type: action\n    title: Work\n    intent: Record it.\n",
+        "    items:\n      - id: verification\n        type: check_result\n",
+        "        prompt: Record it.\n        required: true\n        operation_id: make-test\n",
+        "        operation_digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+        "        accepted_outcomes: [pass]\n",
+        "graph:\n  entry: work\n  nodes:\n    - id: work\n      use: work\n      terminal: true\n",
+    );
+    assert!(v2(&source.replace("[pass]", "[unknown]")).is_err());
+    assert!(v2(&source.replace("[pass]", "[pass, pass]")).is_err());
+    assert!(v2(&source.replace("[pass]", "[]")).is_err());
     assert!(
-        v2(yaml).is_err(),
-        "the contract reservation must not enable runtime authoring admission"
+        v2(&source.replace(
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "sha256:ABC"
+        ))
+        .is_err()
     );
 }

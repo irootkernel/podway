@@ -161,6 +161,7 @@ pub enum ItemTypeV1 {
     Integer,
     List,
     Artifact,
+    CheckResult,
 }
 
 pub(crate) fn validate_media_type(value: &str) -> Result<(), DomainError> {

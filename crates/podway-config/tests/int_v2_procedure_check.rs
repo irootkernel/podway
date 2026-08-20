@@ -411,6 +411,41 @@ fn v2aut005_an_unsupported_schema_is_reported_with_no_digest() {
     assert!(!report.valid());
 }
 
+#[test]
+fn v2ast003_invalid_check_result_fields_have_stable_authoring_diagnostics() {
+    let source = r#"schema: podway.procedure/v2
+id: p
+version: "1"
+name: P
+purpose: Record a bound result.
+node_definitions:
+  work:
+    type: action
+    title: Work
+    intent: Record it.
+    items:
+      - id: verification
+        type: check_result
+        prompt: Record it.
+        required: true
+        operation_id: make-test
+        operation_digest: sha256:ABC
+        accepted_outcomes: [pass]
+graph:
+  entry: work
+  nodes:
+    - id: work
+      use: work
+      terminal: true
+"#;
+    let report = check(source);
+    assert_eq!(codes(&report), vec!["AUTHORING_SCHEMA_INVALID"]);
+    let diagnostic = &report.diagnostics()[0];
+    assert_eq!(diagnostic.field(), "operation_digest");
+    assert_eq!(diagnostic.location().line(), 17);
+    assert_eq!(report.digest(), None);
+}
+
 // ---------------------------------------------------------------------------------------------
 // 2. The vet seam
 // ---------------------------------------------------------------------------------------------

@@ -330,6 +330,7 @@ procedure_identifier_newtype!(NodeDefinitionId);
 procedure_identifier_newtype!(GraphNodeId);
 procedure_identifier_newtype!(OptionId);
 procedure_identifier_newtype!(CriterionId);
+procedure_identifier_newtype!(OperationId);
 
 /// An optimistic-concurrency revision. Zero is valid for absent-or-never-written slots.
 #[derive(

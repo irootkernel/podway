@@ -6,11 +6,12 @@ use std::str::FromStr;
 
 use podway_core::{
     ActorAttributionV2, ArtifactLocationKindV1, ArtifactValueV1, AttemptId, AttemptLifecycle,
-    AttemptNumberV2, AttemptValidityV2, BlockerId, BlockerState, CriterionAssessmentModeV2,
-    CriterionCitationV2, CriterionId, CriterionStatusV2, DecisionRecordInputV2, DecisionRecordV2,
-    EvidenceReferenceSnapshotV2, GoalOutcome, GoalRevisionNumberV2, GraphNodeId, ItemCommonV2,
-    ItemId, ItemSpecV2, ItemTypeV1, MAX_ATTEMPT_CONTENT_SCALARS_V2, MAX_ITEMS_PER_DEFINITION_V2,
-    NodeDefinitionId, OptionId, ProcedureSnapshotId, ReasonV2, RecordedItemSetV2, RecordedItemV2,
+    AttemptNumberV2, AttemptValidityV2, BlockerId, BlockerState, CheckResultOutcomeV2,
+    CriterionAssessmentModeV2, CriterionCitationV2, CriterionId, CriterionStatusV2,
+    DecisionRecordInputV2, DecisionRecordV2, EvidenceReferenceSnapshotV2, GoalOutcome,
+    GoalRevisionNumberV2, GraphNodeId, ItemCommonV2, ItemId, ItemSpecV2, ItemTypeV1,
+    MAX_ATTEMPT_CONTENT_SCALARS_V2, MAX_ITEMS_PER_DEFINITION_V2, NodeDefinitionId, OperationId,
+    OptionId, ProcedureSnapshotId, ReasonV2, RecordedItemSetV2, RecordedItemV2,
     RecordedItemValueV2, ResolvedEvidenceReferenceV2, ResolvedEvidenceSetV2, Revision,
     ReworkKindV2, ReworkRecordInputV2, ReworkRecordV2, SessionAttemptV2, SessionId,
     SessionLifecycle, SessionTraceV2, Sha256Digest, TraceSequenceV2, TransitionEffectV2,
@@ -2035,7 +2036,10 @@ fn mutate_item_value_v2(
                     .parse::<i64>()
                     .map_err(|_| GraphMutationErrorV2::ItemConstraintFailed)?,
             ),
-            ItemTypeV1::Confirm | ItemTypeV1::List | ItemTypeV1::Artifact => {
+            ItemTypeV1::Confirm
+            | ItemTypeV1::List
+            | ItemTypeV1::Artifact
+            | ItemTypeV1::CheckResult => {
                 return Err(GraphMutationErrorV2::ItemTypeMismatch);
             }
         }),
@@ -2601,6 +2605,28 @@ fn parse_item_spec_v2(
                         .collect()
                 })?,
         ),
+        ItemTypeV1::CheckResult => ItemSpecV2::check_result(
+            common,
+            OperationId::new(required_text(item, "operation_id")?.to_owned())
+                .map_err(|_| invalid("Procedure v2 check result operation identity is invalid"))?,
+            Sha256Digest::new(required_text(item, "operation_digest")?.to_owned())
+                .map_err(|_| invalid("Procedure v2 check result operation digest is invalid"))?,
+            item.get("accepted_outcomes")
+                .and_then(Value::as_array)
+                .ok_or_else(|| invalid("Procedure v2 check result outcomes are invalid"))?
+                .iter()
+                .map(|outcome| {
+                    outcome
+                        .as_str()
+                        .ok_or_else(|| invalid("Procedure v2 check result outcome is invalid"))
+                        .and_then(|outcome| {
+                            CheckResultOutcomeV2::from_str(outcome).map_err(|_| {
+                                invalid("Procedure v2 check result outcome is invalid")
+                            })
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
     }
     .map_err(|_| invalid("Procedure v2 item declaration is invalid"))
 }
@@ -2649,6 +2675,7 @@ fn parse_item_type(value: &str) -> Result<ItemTypeV1, StoreValueErrorV1> {
         "integer" => Ok(ItemTypeV1::Integer),
         "list" => Ok(ItemTypeV1::List),
         "artifact" => Ok(ItemTypeV1::Artifact),
+        "check_result" => Ok(ItemTypeV1::CheckResult),
         _ => Err(invalid("Procedure v2 item type is invalid")),
     }
 }
@@ -2661,6 +2688,7 @@ fn item_type_text(value: ItemTypeV1) -> &'static str {
         ItemTypeV1::Integer => "integer",
         ItemTypeV1::List => "list",
         ItemTypeV1::Artifact => "artifact",
+        ItemTypeV1::CheckResult => "check_result",
     }
 }
 
@@ -2700,6 +2728,27 @@ fn item_value_json_v2(value: &RecordedItemValueV2) -> Result<Value, StoreValueEr
                 "digest":artifact.digest().as_str(),
                 "size_bytes":artifact.size_bytes(),
                 "media_type":artifact.media_type(),
+            })
+        }
+        ItemTypeV1::CheckResult => {
+            let result = value
+                .as_check_result()
+                .ok_or_else(|| invalid("Procedure v2 check result item value is invalid"))?;
+            json!({
+                "kind":"check_result",
+                "operation_id":result.operation_id().as_str(),
+                "operation_digest":result.operation_digest().as_str(),
+                "input_basis":{
+                    "descriptor":result.input_basis().descriptor(),
+                    "digest":result.input_basis().digest().as_str(),
+                },
+                "executor":{
+                    "name":result.executor().name(),
+                    "version":result.executor().version(),
+                },
+                "outcome":result.outcome().as_str(),
+                "summary":result.summary(),
+                "output_digest":result.output_digest().as_str(),
             })
         }
     })

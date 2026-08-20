@@ -400,6 +400,9 @@ fn classify(error: &ConfigError) -> Classification<'_> {
             Classification::schema_invalid(authored_field(field)).with_value(value.as_str())
         }
         ConfigError::InvalidValue { field, reason } => classify_invalid_value(field, reason),
+        ConfigError::InvalidScalar { field, value, .. } => {
+            Classification::schema_invalid(authored_field(field)).with_value(value.as_str())
+        }
         // The canonical projection bound is a document-level budget, not an authored field, so it
         // reports the document root. `CANONICAL_PROJECTION_FIELD` is shared with the bound check
         // itself so the two cannot drift.

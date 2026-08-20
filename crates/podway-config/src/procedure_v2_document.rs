@@ -337,6 +337,25 @@ fn item_value(item: &ItemSpecV2) -> AuthoringValue {
                     .map(String::as_str),
             );
         }
+        ItemSpecV2::CheckResult(specification) => {
+            value.text("type", "check_result");
+            common_item_fields(&mut value, item.common());
+            value
+                .text("operation_id", specification.operation_id().as_str())
+                .text(
+                    "operation_digest",
+                    specification.operation_digest().as_str(),
+                )
+                .value(
+                    "accepted_outcomes",
+                    strings(
+                        specification
+                            .accepted_outcomes()
+                            .iter()
+                            .map(|outcome| outcome.as_str()),
+                    ),
+                );
+        }
     }
     value.finish()
 }

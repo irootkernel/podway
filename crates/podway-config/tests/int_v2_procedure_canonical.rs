@@ -355,6 +355,38 @@ fn the_fixture_pair_has_one_canonical_form_and_the_contract_digest() {
     );
 }
 
+#[test]
+fn v2ast003_check_result_yaml_and_json_share_one_canonical_declaration() {
+    let yaml_source = concat!(
+        "schema: podway.procedure/v2\n",
+        "id: check-result\nversion: \"1\"\nname: Check result\npurpose: Record a bound result.\n",
+        "node_definitions:\n  work:\n    type: action\n    title: Work\n    intent: Record it.\n",
+        "    items:\n      - id: verification\n        type: check_result\n",
+        "        prompt: Record it.\n        required: true\n        operation_id: make-test\n",
+        "        operation_digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+        "        accepted_outcomes: [pass, inconclusive]\n",
+        "graph:\n  entry: work\n  nodes:\n    - id: work\n      use: work\n      terminal: true\n",
+    );
+    let json_source = serde_json::to_string(
+        &serde_yaml::from_str::<serde_json::Value>(yaml_source).expect("yaml value"),
+    )
+    .expect("json source");
+    let from_yaml = accept(yaml_source, ProcedureDocumentFormat::Yaml);
+    let from_json = accept(&json_source, ProcedureDocumentFormat::Json);
+    assert_eq!(from_yaml.canonical_json(), from_json.canonical_json());
+    assert_eq!(from_yaml.digest(), from_json.digest());
+
+    let canonical: Value = serde_json::from_str(from_yaml.canonical_json().as_str()).unwrap();
+    let declaration = &canonical["node_definitions"]["work"]["items"][0];
+    assert_eq!(declaration["type"], "check_result");
+    assert_eq!(declaration["operation_id"], "make-test");
+    assert_eq!(
+        declaration["accepted_outcomes"],
+        serde_json::json!(["pass", "inconclusive"])
+    );
+    assert!(declaration.get("help").is_none());
+}
+
 // ---------------------------------------------------------------------------------------------
 // 2. Ordering and formatting are not meaning
 // ---------------------------------------------------------------------------------------------
