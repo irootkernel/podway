@@ -194,6 +194,8 @@ pub enum PersistedDomainCommandV1 {
     SessionBlock,
     SessionUnblock,
     SessionCancel,
+    SessionArchive,
+    SessionArchivePurge,
     SessionReset,
     SessionDecide,
     SessionRework,
@@ -225,6 +227,8 @@ impl PersistedDomainCommandV1 {
             CommandV1::SessionBlock => Self::SessionBlock,
             CommandV1::SessionUnblock => Self::SessionUnblock,
             CommandV1::SessionCancel => Self::SessionCancel,
+            CommandV1::SessionArchive => Self::SessionArchive,
+            CommandV1::SessionArchivePurge => Self::SessionArchivePurge,
             CommandV1::SessionReset => Self::SessionReset,
             CommandV1::SessionDecide => Self::SessionDecide,
             CommandV1::SessionRework => Self::SessionRework,
@@ -270,6 +274,8 @@ impl PersistedDomainCommandV1 {
             Self::SessionBlock => CommandV1::SessionBlock,
             Self::SessionUnblock => CommandV1::SessionUnblock,
             Self::SessionCancel => CommandV1::SessionCancel,
+            Self::SessionArchive => CommandV1::SessionArchive,
+            Self::SessionArchivePurge => CommandV1::SessionArchivePurge,
             Self::SessionReset => CommandV1::SessionReset,
             Self::SessionDecide => CommandV1::SessionDecide,
             Self::SessionRework => CommandV1::SessionRework,
@@ -305,6 +311,8 @@ impl PersistedDomainCommandV1 {
             Self::SessionBlock => "session.block",
             Self::SessionUnblock => "session.unblock",
             Self::SessionCancel => "session.cancel",
+            Self::SessionArchive => "session.archive",
+            Self::SessionArchivePurge => "session.archive_purge",
             Self::SessionReset => "session.reset",
             Self::SessionDecide => "session.decide",
             Self::SessionRework => "session.rework",
@@ -557,6 +565,7 @@ fn procedure_v2_runtime_command(command: &CommandV1) -> bool {
             | CommandV1::SessionBlock
             | CommandV1::SessionUnblock
             | CommandV1::SessionCancel
+            | CommandV1::SessionArchive
             | CommandV1::SessionReset
             | CommandV1::SessionDecide
             | CommandV1::SessionRework
@@ -585,6 +594,7 @@ fn procedure_v2_current_session_command(command: &CommandV1) -> bool {
             | CommandV1::SessionBlock
             | CommandV1::SessionUnblock
             | CommandV1::SessionCancel
+            | CommandV1::SessionArchive
             | CommandV1::SessionReset
             | CommandV1::SessionDecide
             | CommandV1::SessionRework
@@ -648,6 +658,7 @@ fn procedure_v2_preconditions_match(
         }
         CommandV1::SessionBegin
         | CommandV1::SessionTerminalDisposition
+        | CommandV1::SessionArchive
         | CommandV1::SessionReset => {
             preconditions.expected_session_revision().is_some()
                 && preconditions.expected_attempt_id().is_none()
@@ -692,6 +703,8 @@ pub enum PersistedDomainCommandKindV1 {
     SessionBlock,
     SessionUnblock,
     SessionCancel,
+    SessionArchive,
+    SessionArchivePurge,
     SessionReset,
     SessionDecide,
     SessionRework,
@@ -723,6 +736,8 @@ impl From<DomainCommandKind> for PersistedDomainCommandKindV1 {
             DomainCommandKind::SessionBlock => Self::SessionBlock,
             DomainCommandKind::SessionUnblock => Self::SessionUnblock,
             DomainCommandKind::SessionCancel => Self::SessionCancel,
+            DomainCommandKind::SessionArchive => Self::SessionArchive,
+            DomainCommandKind::SessionArchivePurge => Self::SessionArchivePurge,
             DomainCommandKind::SessionReset => Self::SessionReset,
             DomainCommandKind::SessionDecide => Self::SessionDecide,
             DomainCommandKind::SessionRework => Self::SessionRework,
@@ -1252,6 +1267,9 @@ pub enum PersistedGraphTerminalOperationV2 {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         progress_summary: Option<String>,
     },
+    Archive {
+        session_id: SessionId,
+    },
     ItemMutation {
         graph_node_id: GraphNodeId,
         attempt_id: AttemptId,
@@ -1354,6 +1372,17 @@ pub enum PersistedGraphMutationFailureV2 {
     SessionNotRunning,
     SessionNotTerminal,
     SessionResetNotEligible {
+        lifecycle: String,
+        current_terminal_disposition: bool,
+    },
+    SessionArchiveNotEligible {
+        lifecycle: String,
+        current_terminal_disposition: bool,
+    },
+    SessionArchiveLimitReached {
+        maximum: u32,
+    },
+    SessionStartStateConflict {
         lifecycle: String,
         current_terminal_disposition: bool,
     },
@@ -2261,6 +2290,12 @@ impl PersistedGraphTerminalOperationV2 {
         Ok(operation)
     }
 
+    pub fn archive(session_id: SessionId) -> Result<Self, StoreCodecErrorV1> {
+        let operation = Self::Archive { session_id };
+        operation.validate()?;
+        Ok(operation)
+    }
+
     pub fn complete(
         from_graph_node_id: GraphNodeId,
         from_attempt_id: AttemptId,
@@ -2565,6 +2600,7 @@ impl PersistedGraphTerminalOperationV2 {
                     })
                 }
             },
+            Self::Archive { .. } => true,
             Self::ItemMutation { attempt_number, .. } => *attempt_number > 0,
             Self::ItemMutations {
                 attempt_number,
@@ -2670,6 +2706,29 @@ impl PersistedGraphMutationFailureV2 {
             } => {
                 !*current_terminal_disposition
                     && matches!(lifecycle.as_str(), "running" | "completed" | "cancelled")
+            }
+            Self::SessionArchiveNotEligible {
+                lifecycle,
+                current_terminal_disposition,
+            } => {
+                !*current_terminal_disposition
+                    && matches!(
+                        lifecycle.as_str(),
+                        "prepared" | "running" | "completed" | "cancelled"
+                    )
+            }
+            Self::SessionArchiveLimitReached { maximum } => {
+                *maximum == crate::MAX_INACTIVE_SESSIONS_V2
+            }
+            Self::SessionStartStateConflict {
+                lifecycle,
+                current_terminal_disposition,
+            } => {
+                matches!(
+                    lifecycle.as_str(),
+                    "prepared" | "running" | "completed" | "cancelled"
+                ) && (!*current_terminal_disposition
+                    || matches!(lifecycle.as_str(), "completed" | "cancelled"))
             }
             Self::SessionNotRunning
             | Self::SessionNotTerminal
@@ -3244,7 +3303,8 @@ impl PersistedTerminalReceiptV1 {
                     | Some(PersistedGraphTerminalOperationV2::Block { .. })
                     | Some(PersistedGraphTerminalOperationV2::Unblock { .. })
                     | Some(PersistedGraphTerminalOperationV2::Cancel { .. })
-                    | Some(PersistedGraphTerminalOperationV2::Reset { .. }),
+                    | Some(PersistedGraphTerminalOperationV2::Reset { .. })
+                    | Some(PersistedGraphTerminalOperationV2::Archive { .. }),
                     PersistedTerminalResultV1::Success(PersistedDomainResultV1::SessionChanged {
                         session_id,
                         revision_before,
@@ -4268,7 +4328,7 @@ fn validate_success_result_for_command_v1(
                 )
         }
         (
-            CommandV1::SessionReset,
+            CommandV1::SessionReset | CommandV1::SessionArchive,
             PersistedDomainResultV1::SessionChanged {
                 revision_before,
                 revision_after,

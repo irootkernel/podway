@@ -85,6 +85,10 @@ const IF_SESSION_ID: Flag = Flag {
     long: "if-session-id",
     takes_value: true,
 };
+const SESSION_ID: Flag = Flag {
+    long: "session-id",
+    takes_value: true,
+};
 const IF_SESSION_REVISION: Flag = Flag {
     long: "if-session-revision",
     takes_value: true,
@@ -165,13 +169,13 @@ const TASK: Flag = Flag {
     long: "task",
     takes_value: true,
 };
-const REPLACE: Flag = Flag {
-    long: "replace",
-    takes_value: false,
+const ON_EXISTING: Flag = Flag {
+    long: "on-existing",
+    takes_value: true,
 };
-const REPLACE_ELIGIBLE: Flag = Flag {
-    long: "replace-eligible",
-    takes_value: false,
+const SUPERSEDE_REASON: Flag = Flag {
+    long: "supersede-reason",
+    takes_value: true,
 };
 const PROGRESS_SUMMARY: Flag = Flag {
     long: "progress-summary",
@@ -350,8 +354,9 @@ const START_FLAGS: &[&Flag] = &[
     &PROCEDURE,
     &EXPECT_PROCEDURE_DIGEST,
     &TASK,
-    &REPLACE,
-    &REPLACE_ELIGIBLE,
+    &ON_EXISTING,
+    &SUPERSEDE_REASON,
+    &ACTOR,
     &PROGRESS_SUMMARY,
     &DRY_RUN,
     &YES,
@@ -930,6 +935,76 @@ const ROUTES: &[Route] = &[
             &IF_SESSION_REVISION,
             &REASON,
             &ACTOR,
+        ],
+        values: "",
+        dynamic: None,
+    },
+    Route {
+        words: "archive",
+        flags: &[
+            &JSON,
+            &DEV,
+            &WORKTREE,
+            &TIMEOUT,
+            &SOCKET,
+            &NO_COLOR,
+            &QUIET,
+            &IDEMPOTENCY_KEY,
+            &DETACH,
+            &IF_WORKSPACE_UUID,
+            &IF_SESSION_ID,
+            &IF_SESSION_REVISION,
+        ],
+        values: "",
+        dynamic: None,
+    },
+    Route {
+        words: "archive list",
+        flags: &[
+            &JSON,
+            &DEV,
+            &WORKTREE,
+            &TIMEOUT,
+            &SOCKET,
+            &NO_COLOR,
+            &QUIET,
+            &IF_WORKSPACE_UUID,
+        ],
+        values: "",
+        dynamic: None,
+    },
+    Route {
+        words: "archive show",
+        flags: &[
+            &JSON,
+            &DEV,
+            &WORKTREE,
+            &TIMEOUT,
+            &SOCKET,
+            &NO_COLOR,
+            &QUIET,
+            &IF_WORKSPACE_UUID,
+            &SESSION_ID,
+            &VERBOSE,
+            &HISTORY_BEFORE,
+        ],
+        values: "",
+        dynamic: None,
+    },
+    Route {
+        words: "archive purge",
+        flags: &[
+            &JSON,
+            &DEV,
+            &WORKTREE,
+            &TIMEOUT,
+            &SOCKET,
+            &NO_COLOR,
+            &QUIET,
+            &IF_WORKSPACE_UUID,
+            &IF_SESSION_REVISION,
+            &SESSION_ID,
+            &YES,
         ],
         values: "",
         dynamic: None,

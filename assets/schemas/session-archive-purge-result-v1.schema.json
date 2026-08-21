@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:session-archive-purge-result:v1",
+  "title": "Podway Session Archive Purge Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "purged", "session"],
+  "properties": {
+    "schema": { "const": "podway.session-archive-purge-result/v1" },
+    "purged": { "const": true },
+    "session": { "$ref": "urn:podway:schema:session-archive-list-result:v1#/$defs/archiveSummary" }
+  }
+}

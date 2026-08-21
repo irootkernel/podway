@@ -33,9 +33,9 @@ use podway_store::{
     RecoveryReportV1, RevisionAttemptItemPreconditionsV1, RevisionV1, SqliteStoreOptionsV1,
     SqliteStoreV1, StateTransitionV1, StoreContractV1, StoreErrorV1, StoreGraphMutationContractV2,
     StoreGraphReadContractV2, StoreIdempotencyReadContractV1, StoreInvariantV1,
-    StoreReadContractV1, StoreReconciliationReadContractV1, StoreUnavailableReasonV1,
-    StoreValueErrorV1, TerminalReceiptV1, TerminalResultV1, ValidatedWorkspaceRootV1, WorkerIdV1,
-    WorkspaceBindingV1, WorkspaceViewV1,
+    StoreReadContractV1, StoreReconciliationReadContractV1, StoreSessionArchiveContractV2,
+    StoreUnavailableReasonV1, StoreValueErrorV1, TerminalReceiptV1, TerminalResultV1,
+    ValidatedWorkspaceRootV1, WorkerIdV1, WorkspaceBindingV1, WorkspaceViewV1,
 };
 
 use crate::{
@@ -479,6 +479,25 @@ impl StoreGraphMutationContractV2 for WorkspaceStoreSlotV1 {
         })
     }
 
+    fn commit_graph_archive_terminal_v2(
+        &self,
+        claim: ClaimTokenV1,
+        expected_workspace_revision: RevisionV1,
+        expected_session_revision: RevisionV1,
+        session_id: podway_core::SessionId,
+        now: podway_store::EpochMillisV1,
+    ) -> Result<TerminalReceiptV1, StoreErrorV1> {
+        self.with_open_store(|store| {
+            store.commit_graph_archive_terminal_v2(
+                claim,
+                expected_workspace_revision,
+                expected_session_revision,
+                session_id,
+                now,
+            )
+        })
+    }
+
     fn commit_graph_smart_reset_terminal_v2(
         &self,
         claim: ClaimTokenV1,
@@ -509,6 +528,61 @@ impl StoreGraphReadContractV2 for WorkspaceStoreSlotV1 {
         identity: &podway_store::DurableWorktreeIdentityV1,
     ) -> Result<GraphWorkspaceViewV2, StoreErrorV1> {
         self.with_open_store(|store| store.read_graph_workspace_view_v2(identity))
+    }
+}
+
+impl StoreSessionArchiveContractV2 for WorkspaceStoreSlotV1 {
+    fn archive_current_session_v2(
+        &self,
+        identity: &podway_store::DurableWorktreeIdentityV1,
+        expected_workspace_revision: RevisionV1,
+        expected_session_revision: RevisionV1,
+        now: podway_store::EpochMillisV1,
+    ) -> Result<podway_store::SessionArchiveSummaryV2, StoreErrorV1> {
+        self.with_open_store(|store| {
+            store.archive_current_session_v2(
+                identity,
+                expected_workspace_revision,
+                expected_session_revision,
+                now,
+            )
+        })
+    }
+
+    fn list_archived_sessions_v2(
+        &self,
+        identity: &podway_store::DurableWorktreeIdentityV1,
+    ) -> Result<Vec<podway_store::SessionArchiveSummaryV2>, StoreErrorV1> {
+        self.with_open_store(|store| store.list_archived_sessions_v2(identity))
+    }
+
+    fn read_archived_session_v2(
+        &self,
+        identity: &podway_store::DurableWorktreeIdentityV1,
+        session_id: &podway_core::SessionId,
+    ) -> Result<Option<GraphSessionStateV2>, StoreErrorV1> {
+        self.with_open_store(|store| store.read_archived_session_v2(identity, session_id))
+    }
+
+    fn read_archived_terminal_dispositions_v2(
+        &self,
+        identity: &podway_store::DurableWorktreeIdentityV1,
+        session_id: &podway_core::SessionId,
+    ) -> Result<Option<Vec<podway_core::TerminalDispositionV2>>, StoreErrorV1> {
+        self.with_open_store(|store| {
+            store.read_archived_terminal_dispositions_v2(identity, session_id)
+        })
+    }
+
+    fn purge_archived_session_v2(
+        &self,
+        identity: &podway_store::DurableWorktreeIdentityV1,
+        session_id: &podway_core::SessionId,
+        expected_session_revision: RevisionV1,
+    ) -> Result<podway_store::SessionArchiveSummaryV2, StoreErrorV1> {
+        self.with_open_store(|store| {
+            store.purge_archived_session_v2(identity, session_id, expected_session_revision)
+        })
     }
 }
 
@@ -2864,6 +2938,10 @@ fn reset_seed_requires_fixed_replacement(error: &StoreErrorV1) -> bool {
         | StoreErrorV1::ProcedureV2PreconditionFailedV1 { .. }
         | StoreErrorV1::SessionIdentityConflictV1 { .. }
         | StoreErrorV1::SessionResetNotEligibleV1 { .. }
+        | StoreErrorV1::SessionArchiveNotEligibleV1 { .. }
+        | StoreErrorV1::SessionArchiveLimitReachedV1 { .. }
+        | StoreErrorV1::SessionStartStateConflictV1 { .. }
+        | StoreErrorV1::SessionArchiveNotFoundV1 { .. }
         | StoreErrorV1::TerminalDispositionAlreadyRecordedV1 { .. }
         | StoreErrorV1::StorageUnavailableV1 { .. } => false,
     }

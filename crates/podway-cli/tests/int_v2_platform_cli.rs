@@ -119,6 +119,30 @@ impl Fixture {
         child.wait_with_output().expect("podway binary must finish")
     }
 
+    fn run_in_pty_with_stdin(&self, arguments: &[String], stdin: &[u8]) -> Output {
+        let mut child = Command::new("/usr/bin/script")
+            .arg("-q")
+            .arg("/dev/null")
+            .arg(env!("CARGO_BIN_EXE_podway"))
+            .args(arguments)
+            .env("PODWAY_TEST_ACCOUNT_ROOT", self.root.join("account"))
+            .env_remove("HOME")
+            .env_remove("TMPDIR")
+            .env_remove("XDG_CONFIG_HOME")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("PTY wrapper must start");
+        child
+            .stdin
+            .take()
+            .expect("PTY stdin must be piped")
+            .write_all(stdin)
+            .expect("PTY stdin must be writable");
+        child.wait_with_output().expect("PTY wrapper must finish")
+    }
+
     fn daemon_arguments(&self, command: &[&str]) -> Vec<String> {
         let mut arguments = vec![
             "--json".to_owned(),
@@ -154,6 +178,11 @@ enum Reply {
     ResetAll,
     GoalDefinition,
     StatusV2,
+    JobLookupFound,
+    JobLookupMissing,
+    NextV3,
+    StatusV3TerminalDisposed,
+    ResetDryRunDisposed,
     StatusV2GoalDefined,
     StatusV2Verbose,
     SharedMutationV2,
@@ -375,6 +404,79 @@ fn response_for(request: &RequestEnvelopeV1, reply: Reply) -> Value {
                 "warnings": []
             })
         }
+        Reply::JobLookupFound | Reply::JobLookupMissing => json!({
+            "schema": "podway.output/v3",
+            "request_id": request.request_id().as_str(),
+            "command": "job.lookup",
+            "generated_at": "2026-08-09T12:34:56.789Z",
+            "workspace": {
+                "uuid": WORKSPACE_ID,
+                "root": request.workspace().expect("lookup selects a workspace").root(),
+                "latest_workspace_sequence": 8
+            },
+            "result": if matches!(reply, Reply::JobLookupFound) {
+                json!({
+                    "schema": "podway.job-lookup-result/v4",
+                    "found": true,
+                    "job": {
+                        "id": JOB_ID,
+                        "sequence": 8,
+                        "state": "queued",
+                        "submitted_at": "2026-08-09T12:34:56.789Z",
+                        "finished_at": null,
+                        "command": "session.start",
+                        "request_digest": PROCEDURE_DIGEST,
+                        "terminal_response": null
+                    }
+                })
+            } else {
+                json!({"schema": "podway.job-lookup-result/v4", "found": false})
+            },
+            "warnings": []
+        }),
+        Reply::StatusV3TerminalDisposed => {
+            let mut fixture: Value = serde_json::from_str(include_str!(
+                "../../../tests/fixtures/v2/protocol/result-families.json"
+            ))
+            .expect("v2 result fixtures must parse");
+            let mut result = fixture["fixtures"]["podway.status-result/v3"].take();
+            result["session"]["id"] = json!(SESSION_ID);
+            result["session"]["lifecycle"] = json!("completed");
+            result["session"]["revision"] = json!(7);
+            json!({
+                "schema": "podway.output/v3",
+                "request_id": request.request_id().as_str(),
+                "command": "session.status",
+                "generated_at": "2026-08-09T12:34:56.789Z",
+                "workspace": {
+                    "uuid": WORKSPACE_ID,
+                    "root": request.workspace().expect("status selects a workspace").root(),
+                    "latest_workspace_sequence": 8
+                },
+                "result": result,
+                "warnings": []
+            })
+        }
+        Reply::NextV3 => {
+            let mut fixture: Value = serde_json::from_str(include_str!(
+                "../../../tests/fixtures/v2/protocol/result-families.json"
+            ))
+            .expect("v2 result fixtures must parse");
+            let result = fixture["fixtures"]["podway.next-result/v3"].take();
+            json!({
+                "schema": "podway.output/v3",
+                "request_id": request.request_id().as_str(),
+                "command": "session.next",
+                "generated_at": "2026-08-09T12:34:56.789Z",
+                "workspace": {
+                    "uuid": WORKSPACE_ID,
+                    "root": request.workspace().expect("next selects a workspace").root(),
+                    "latest_workspace_sequence": 8
+                },
+                "result": result,
+                "warnings": []
+            })
+        }
         Reply::StatusV2Verbose => json!({
             "schema": "podway.output/v3",
             "request_id": request.request_id().as_str(),
@@ -532,6 +634,30 @@ fn response_for(request: &RequestEnvelopeV1, reply: Reply) -> Value {
                 "warnings": []
             })
         }
+        Reply::ResetDryRunDisposed => json!({
+            "schema": "podway.output/v3",
+            "request_id": request.request_id().as_str(),
+            "command": "session.reset",
+            "generated_at": "2026-08-09T12:34:56.789Z",
+            "workspace": {
+                "uuid": WORKSPACE_ID,
+                "root": request.workspace().expect("reset preview selects a workspace").root(),
+                "latest_workspace_sequence": 8
+            },
+            "result": {
+                "schema": "podway.session-reset-result/v1",
+                "dry_run": true,
+                "mode": "eligible",
+                "session_id": SESSION_ID,
+                "session_revision": 7,
+                "lifecycle": "completed",
+                "current_terminal_disposition": true,
+                "eligible": true,
+                "required_action": "none",
+                "reset": false
+            },
+            "warnings": []
+        }),
     }
 }
 
@@ -687,6 +813,10 @@ fn required_result_schema(command: &str) -> &'static str {
     match command {
         "session.start" | "session.start_replace" => "podway.session-start-result/v3",
         "session.begin" => "podway.session-begin-result/v1",
+        "session.archive" => "podway.session-archive-result/v1",
+        "session.archive_list" => "podway.session-archive-list-result/v1",
+        "session.archive_show" => "podway.session-archive-show-result/v1",
+        "session.archive_purge" => "podway.session-archive-purge-result/v1",
         "session.decide" => "podway.decision-result/v1",
         "session.rework" => "podway.rework-result/v1",
         "goal.define" => "podway.goal-definition-result/v1",
@@ -706,7 +836,7 @@ fn one_json(output: &Output) -> Value {
 }
 
 #[test]
-fn eligible_replacement_dry_run_does_not_use_the_local_start_preview() {
+fn existing_policy_dry_run_does_not_use_the_local_start_preview() {
     let fixture = Fixture::new();
     let output = fixture.run(&[
         "--json".to_owned(),
@@ -718,8 +848,9 @@ fn eligible_replacement_dry_run_does_not_use_the_local_start_preview() {
         "--preset".to_owned(),
         "sw-dev-v2".to_owned(),
         "--task".to_owned(),
-        "Preview eligible replacement".to_owned(),
-        "--replace-eligible".to_owned(),
+        "Preview existing-session deletion".to_owned(),
+        "--on-existing".to_owned(),
+        "delete".to_owned(),
         "--dry-run".to_owned(),
     ]);
 
@@ -1634,7 +1765,7 @@ fn goal_bearing_begin_is_typed() {
 }
 
 #[test]
-fn force_start_replace_preflights_omitted_and_partial_identity_fences() {
+fn start_delete_policy_preflights_omitted_and_partial_identity_fences() {
     for explicit_session_id in [false, true] {
         let fixture = Fixture::new();
         let daemon = SequenceRecordingDaemon::start(
@@ -1659,7 +1790,8 @@ fn force_start_replace_preflights_omitted_and_partial_identity_fences() {
             "sw-dev-v2".to_owned(),
             "--task".to_owned(),
             "Replace the current session".to_owned(),
-            "--replace".to_owned(),
+            "--on-existing".to_owned(),
+            "delete".to_owned(),
             "--yes".to_owned(),
             "--progress-summary".to_owned(),
             "Discard the isolated fixture session.".to_owned(),
@@ -1683,12 +1815,249 @@ fn force_start_replace_preflights_omitted_and_partial_identity_fences() {
         assert_eq!(requests[1]["preconditions"]["session_id"], SESSION_ID);
         assert_eq!(requests[1]["preconditions"]["session_revision"], 7);
         assert!(requests[1]["payload"].get("goal").is_none());
-        assert_eq!(requests[1]["payload"]["confirmed"], true);
+        assert_eq!(requests[1]["payload"]["resolution"]["mode"], "delete");
+        assert_eq!(requests[1]["payload"]["resolution"]["confirmed"], true);
         assert_eq!(
-            requests[1]["payload"]["progress_summary"],
+            requests[1]["payload"]["resolution"]["progress_summary"],
             "Discard the isolated fixture session."
         );
     }
+}
+
+#[test]
+fn noninteractive_start_requires_an_explicit_running_session_policy() {
+    let fixture = Fixture::new();
+    let daemon = RecordingDaemon::start(&fixture.socket, Reply::StatusV2);
+    let output = fixture.run(&[
+        "--json".to_owned(),
+        "--socket".to_owned(),
+        fixture.socket.display().to_string(),
+        "--worktree".to_owned(),
+        fixture.root.display().to_string(),
+        "start".to_owned(),
+        "--preset".to_owned(),
+        "small-change-v2".to_owned(),
+        "--task".to_owned(),
+        "Start a successor task".to_owned(),
+    ]);
+    let request = daemon.finish();
+    assert_eq!(request["command"], "session.status");
+    assert_eq!(output.status.code(), Some(5), "{output:?}");
+    let error = one_json(&output);
+    assert_eq!(error["code"], "SESSION_START_DECISION_REQUIRED");
+    assert_eq!(error["details"]["lifecycle"], "running");
+    assert_eq!(
+        error["details"]["allowed_actions"],
+        json!(["continue", "preserve", "delete"])
+    );
+}
+
+#[test]
+fn idempotent_plain_start_replay_reaches_the_daemon_after_existing_session_preflight() {
+    let fixture = Fixture::new();
+    let daemon = SequenceRecordingDaemon::start(
+        &fixture.socket,
+        vec![Reply::StatusV2, Reply::JobLookupFound, Reply::Unsupported],
+    );
+    let output = fixture.run(&[
+        "--json".to_owned(),
+        "--socket".to_owned(),
+        fixture.socket.display().to_string(),
+        "--worktree".to_owned(),
+        fixture.root.display().to_string(),
+        "--idempotency-key".to_owned(),
+        "start-exact-replay".to_owned(),
+        "start".to_owned(),
+        "--preset".to_owned(),
+        "small-change-v2".to_owned(),
+        "--task".to_owned(),
+        "Retry a start after response loss".to_owned(),
+    ]);
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    let requests = daemon.finish();
+    assert_eq!(requests[0]["command"], "session.status");
+    assert_eq!(requests[1]["command"], "job.lookup");
+    assert_eq!(requests[2]["command"], "session.start");
+    assert_eq!(requests[2]["operation"], "mutate");
+    assert_eq!(requests[2]["idempotency_key"], "start-exact-replay");
+}
+
+#[test]
+fn interactive_start_enter_continues_the_running_session_without_creating_one() {
+    let fixture = Fixture::new();
+    let daemon =
+        SequenceRecordingDaemon::start(&fixture.socket, vec![Reply::StatusV2, Reply::NextV3]);
+    let output = fixture.run_in_pty_with_stdin(
+        &[
+            "--socket".to_owned(),
+            fixture.socket.display().to_string(),
+            "--worktree".to_owned(),
+            fixture.root.display().to_string(),
+            "start".to_owned(),
+            "--preset".to_owned(),
+            "small-change-v2".to_owned(),
+            "--task".to_owned(),
+            "Start a successor task".to_owned(),
+        ],
+        b"\n",
+    );
+    let requests = daemon.finish();
+    assert_eq!(requests[0]["command"], "session.status");
+    assert_eq!(requests[1]["command"], "session.next");
+    assert_eq!(requests[1]["payload"]["wait_for_idle"], true);
+    assert!(output.status.success(), "{output:?}");
+    let rendered = String::from_utf8_lossy(&output.stdout);
+    assert!(rendered.contains("A running session already exists."));
+    assert!(rendered.contains("Continue the existing task"));
+    assert!(rendered.contains("No new session was created"));
+    assert!(rendered.contains(SESSION_ID));
+}
+
+#[test]
+fn plain_start_archives_a_disposed_terminal_session_before_starting() {
+    let fixture = Fixture::new();
+    let daemon = SequenceRecordingDaemon::start(
+        &fixture.socket,
+        vec![
+            Reply::StatusV3TerminalDisposed,
+            Reply::JobLookupMissing,
+            Reply::ResetDryRunDisposed,
+            Reply::Unsupported,
+        ],
+    );
+    let output = fixture.run(&[
+        "--json".to_owned(),
+        "--socket".to_owned(),
+        fixture.socket.display().to_string(),
+        "--worktree".to_owned(),
+        fixture.root.display().to_string(),
+        "--idempotency-key".to_owned(),
+        "archive-terminal-on-plain-start".to_owned(),
+        "start".to_owned(),
+        "--preset".to_owned(),
+        "small-change-v2".to_owned(),
+        "--task".to_owned(),
+        "Start the next task".to_owned(),
+    ]);
+
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    let requests = daemon.finish();
+    assert_eq!(requests.len(), 4);
+    assert_eq!(requests[0]["command"], "session.status");
+    assert_eq!(requests[1]["command"], "job.lookup");
+    assert_eq!(requests[2]["command"], "session.reset");
+    assert_eq!(requests[2]["operation"], "query");
+    assert_eq!(requests[3]["command"], "session.start_replace");
+    assert_eq!(requests[3]["preconditions"]["session_id"], SESSION_ID);
+    assert_eq!(requests[3]["preconditions"]["session_revision"], 7);
+    assert_eq!(requests[3]["payload"]["replace_eligible"], true);
+}
+
+#[test]
+fn disposed_terminal_start_rejects_inapplicable_existing_session_policy() {
+    let fixture = Fixture::new();
+    let daemon = SequenceRecordingDaemon::start(
+        &fixture.socket,
+        vec![Reply::StatusV3TerminalDisposed, Reply::ResetDryRunDisposed],
+    );
+    let output = fixture.run(&[
+        "--json".to_owned(),
+        "--socket".to_owned(),
+        fixture.socket.display().to_string(),
+        "--worktree".to_owned(),
+        fixture.root.display().to_string(),
+        "start".to_owned(),
+        "--preset".to_owned(),
+        "small-change-v2".to_owned(),
+        "--task".to_owned(),
+        "Start the next task".to_owned(),
+        "--on-existing".to_owned(),
+        "delete".to_owned(),
+        "--yes".to_owned(),
+    ]);
+
+    let requests = daemon.finish();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0]["command"], "session.status");
+    assert_eq!(requests[1]["command"], "session.reset");
+    assert_eq!(requests[1]["operation"], "query");
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert_eq!(one_json(&output)["code"], "REQUEST_INVALID");
+}
+
+#[test]
+fn archive_commands_shape_bounded_read_and_confirmed_purge_requests() {
+    let cases = [
+        (vec!["archive", "list"], "session.archive_list"),
+        (
+            vec!["archive", "show", "--session-id", SESSION_ID, "--verbose"],
+            "session.archive_show",
+        ),
+    ];
+    for (command, expected) in cases {
+        let fixture = Fixture::new();
+        let daemon = RecordingDaemon::start(&fixture.socket, Reply::Unsupported);
+        let mut arguments = vec![
+            "--json".to_owned(),
+            "--socket".to_owned(),
+            fixture.socket.display().to_string(),
+            "--worktree".to_owned(),
+            fixture.root.display().to_string(),
+        ];
+        arguments.extend(command.into_iter().map(str::to_owned));
+        let output = fixture.run(&arguments);
+        assert_eq!(output.status.code(), Some(3), "{output:?}");
+        assert_eq!(daemon.finish()["command"], expected);
+    }
+
+    let fixture = Fixture::new();
+    let daemon = RecordingDaemon::start(&fixture.socket, Reply::Unsupported);
+    let output = fixture.run(&[
+        "--json".to_owned(),
+        "--socket".to_owned(),
+        fixture.socket.display().to_string(),
+        "--worktree".to_owned(),
+        fixture.root.display().to_string(),
+        "--if-session-revision".to_owned(),
+        "7".to_owned(),
+        "--yes".to_owned(),
+        "archive".to_owned(),
+        "purge".to_owned(),
+        "--session-id".to_owned(),
+        SESSION_ID.to_owned(),
+    ]);
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    let request = daemon.finish();
+    assert_eq!(request["command"], "session.archive_purge");
+    assert_eq!(request["payload"]["session_id"], SESSION_ID);
+    assert_eq!(request["payload"]["expected_session_revision"], 7);
+    assert_eq!(request["payload"]["confirmed"], true);
+}
+
+#[test]
+fn bare_archive_uses_terminal_session_preconditions_without_active_attempt() {
+    let fixture = Fixture::new();
+    let daemon = SequenceRecordingDaemon::start(
+        &fixture.socket,
+        vec![Reply::StatusV3TerminalDisposed, Reply::Unsupported],
+    );
+    let output = fixture.run(&[
+        "--json".to_owned(),
+        "--socket".to_owned(),
+        fixture.socket.display().to_string(),
+        "--worktree".to_owned(),
+        fixture.root.display().to_string(),
+        "archive".to_owned(),
+    ]);
+
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    let requests = daemon.finish();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0]["command"], "session.status");
+    assert_eq!(requests[1]["command"], "session.archive");
+    assert_eq!(requests[1]["preconditions"]["session_id"], SESSION_ID);
+    assert_eq!(requests[1]["preconditions"]["session_revision"], 7);
+    assert!(requests[1]["preconditions"].get("attempt_id").is_none());
 }
 
 #[test]
@@ -2168,8 +2537,8 @@ fn help_and_every_completion_target_publish_the_v2_routes_and_flags() {
         .as_str()
         .unwrap()
         .to_owned();
-    assert!(replacement_help.contains("--replace-eligible"));
-    assert!(replacement_help.contains("--replace --progress-summary <text>"));
+    assert!(replacement_help.contains("no replace command or replace flags"));
+    assert!(replacement_help.contains("--on-existing preserve|delete"));
     assert!(!replacement_help.contains("--goal"));
     for shell in ["bash", "zsh", "fish"] {
         let fixture = Fixture::new();
@@ -2177,11 +2546,14 @@ fn help_and_every_completion_target_publish_the_v2_routes_and_flags() {
         assert!(output.status.success(), "{shell}: {output:?}");
         let script = String::from_utf8(output.stdout).expect("completion must be UTF-8");
         for token in [
+            "archive",
+            "session-id",
             "history-before",
             "observe",
             "begin",
             "disposition",
-            "replace-eligible",
+            "on-existing",
+            "supersede-reason",
             "progress-summary",
             "decide",
             "rework",

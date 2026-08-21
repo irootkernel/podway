@@ -63,6 +63,12 @@ fn add_admitted_envelope_metadata(output: &mut Value) {
     });
 }
 
+fn add_workspace_envelope_metadata(output: &mut Value) {
+    output["workspace"] = json!({
+        "uuid":UUID,"root":"/tmp/podway-v2ctr","latest_workspace_sequence":1
+    });
+}
+
 fn add_queued_job_envelope_metadata(output: &mut Value) {
     output["workspace"] = json!({
         "uuid":UUID,"root":"/tmp/podway-v2ctr","latest_workspace_sequence":1
@@ -299,6 +305,10 @@ fn examples() -> BTreeMap<&'static str, Value> {
         "podway.prepared-next-result/v1",
         "podway.session-begin-result/v1",
         "podway.session-reset-result/v1",
+        "podway.session-archive-result/v1",
+        "podway.session-archive-list-result/v1",
+        "podway.session-archive-show-result/v1",
+        "podway.session-archive-purge-result/v1",
         "podway.session-start-result/v3",
         "podway.status-result/v3",
         "podway.terminal-disposition-result/v1",
@@ -382,7 +392,7 @@ fn v2grf_preview_uses_one_closed_result_family_for_every_document_outcome() {
 #[test]
 fn v2ctr003_registry_is_versioned_and_covers_exactly_the_v2_authoring_routes() {
     assert_eq!(EXISTING_ROUTE_RESULT_SCHEMAS_V2.len(), 17);
-    assert_eq!(NEW_ROUTE_RESULT_SCHEMAS_V1.len(), 17);
+    assert_eq!(NEW_ROUTE_RESULT_SCHEMAS_V1.len(), 21);
     assert!(
         EXISTING_ROUTE_RESULT_SCHEMAS_V2
             .iter()
@@ -417,6 +427,10 @@ fn v2ctr003_registry_is_versioned_and_covers_exactly_the_v2_authoring_routes() {
             "session.decide",
             "session.begin",
             "session.reset",
+            "session.archive",
+            "session.archive_list",
+            "session.archive_show",
+            "session.archive_purge",
             "session.rework",
             "session.observe",
             "session.terminal_disposition",
@@ -427,7 +441,7 @@ fn v2ctr003_registry_is_versioned_and_covers_exactly_the_v2_authoring_routes() {
             "evidence.read",
         ])
     );
-    assert_eq!(routes.len(), 19);
+    assert_eq!(routes.len(), 23);
 }
 
 #[test]
@@ -537,6 +551,8 @@ fn v2ctr003_output_v2_validates_every_registered_command_result_pair() {
             });
             if output["result"].get("admission").is_some() {
                 add_admitted_envelope_metadata(&mut output);
+            } else if command.starts_with("session.archive_") {
+                add_workspace_envelope_metadata(&mut output);
             } else if matches!(
                 contract.schema,
                 "podway.job-result/v3" | "podway.job-result/v4"
@@ -572,6 +588,8 @@ fn v2plt006_production_codec_round_trips_every_registered_command_result_pair() 
             });
             if expected["result"].get("admission").is_some() {
                 add_admitted_envelope_metadata(&mut expected);
+            } else if command.starts_with("session.archive_") {
+                add_workspace_envelope_metadata(&mut expected);
             } else if matches!(
                 contract.schema,
                 "podway.job-result/v3" | "podway.job-result/v4"

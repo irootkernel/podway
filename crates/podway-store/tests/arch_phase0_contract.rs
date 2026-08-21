@@ -551,6 +551,10 @@ fn store_v1_constructs_every_typed_error_variant() {
             }
             StoreErrorV1::LegacyProcedureStateUnsupportedV1 => {}
             StoreErrorV1::SessionResetNotEligibleV1 { .. } => {}
+            StoreErrorV1::SessionArchiveNotEligibleV1 { .. }
+            | StoreErrorV1::SessionArchiveLimitReachedV1 { .. }
+            | StoreErrorV1::SessionStartStateConflictV1 { .. }
+            | StoreErrorV1::SessionArchiveNotFoundV1 { .. } => {}
             StoreErrorV1::TerminalDispositionAlreadyRecordedV1 { .. } => {}
         }
     }

@@ -18,7 +18,18 @@
     "entry_graph_node_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" },
     "admission": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/admitted" },
     "session_id": { "type": "string", "format": "uuid" },
-    "revision": { "const": 0 }
+    "revision": { "const": 0 },
+    "existing_session": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["session_id", "session_revision", "lifecycle", "action"],
+      "properties": {
+        "session_id": { "type": "string", "format": "uuid" },
+        "session_revision": { "$ref": "urn:podway:schema:v2-result-components:v2#/$defs/sessionRevision" },
+        "lifecycle": { "enum": ["prepared", "running", "completed", "cancelled"] },
+        "action": { "enum": ["delete", "archive", "supersede_archive", "dispose_archive"] }
+      }
+    }
   },
   "allOf": [
     {

@@ -34,10 +34,12 @@ use crate::state_rows::load_workspace_state;
 use crate::v2_state::{
     GraphSessionStateV2, GraphStartCurrentTaskV2, GraphWorkspaceViewV2,
     StoreGraphMutationContractV2, StoreGraphReadContractV2, StoreGraphStateContractV2,
-    StoreTerminalDispositionContractV2, clear_graph_session_transaction_v2,
-    create_graph_session_transaction_v2, load_graph_session_connection_v2,
-    load_terminal_dispositions_connection_v2, record_terminal_disposition_transaction_v2,
-    replace_graph_session_transaction_v2,
+    StoreSessionArchiveContractV2, StoreTerminalDispositionContractV2,
+    archive_current_session_transaction_v2, clear_graph_session_transaction_v2,
+    create_graph_session_transaction_v2, list_archived_sessions_connection_v2,
+    load_archived_session_connection_v2, load_graph_session_connection_v2,
+    load_terminal_dispositions_connection_v2, purge_archived_session_transaction_v2,
+    record_terminal_disposition_transaction_v2, replace_graph_session_transaction_v2,
 };
 use crate::{
     AdmitOutcomeV1, AdmitRequestV1, CancelOutcomeV1, CanonicalRequestDigestV1, ClaimTokenV1,
@@ -229,33 +231,6 @@ impl SqliteStoreV1 {
         })
     }
 
-    /// Reads the exact current-task identity from a disposable snapshot without touching the
-    /// authoritative database. This is the read-only fence used by start dry-runs.
-    pub fn inspect_graph_start_current_task_v2(
-        path: impl AsRef<Path>,
-        expected_identity: &DurableWorktreeIdentityV1,
-        options: &SqliteStoreOptionsV1,
-        checked_at: EpochMillisV1,
-    ) -> Result<GraphStartCurrentTaskV2, StoreErrorV1> {
-        let database_path = canonical_database_path_v1(path.as_ref())?;
-        inspect_database_snapshot_unbound_v1(&database_path, options, |connection| {
-            verify_inspection_integrity_connection_v1(
-                connection,
-                expected_identity,
-                options,
-                IntegrityModeV1::Fast,
-                checked_at,
-            )?;
-            let current = load_graph_session_connection_v2(connection)?;
-            Ok(current
-                .map(|state| GraphStartCurrentTaskV2::Exact {
-                    session_id: state.trace().session_id().clone(),
-                    session_revision: state.trace().revision(),
-                })
-                .unwrap_or(GraphStartCurrentTaskV2::Absent))
-        })
-    }
-
     /// Reads one coherent Procedure v2 graph and queue view from a disposable database snapshot.
     ///
     /// The authoritative database and its sidecars are never opened for mutation. This supports
@@ -275,31 +250,6 @@ impl SqliteStoreV1 {
             checked_at,
         )
         .map(|(view, _)| view)
-    }
-
-    pub fn inspect_current_terminal_disposition_v2(
-        path: impl AsRef<Path>,
-        expected_identity: &DurableWorktreeIdentityV1,
-        options: &SqliteStoreOptionsV1,
-        checked_at: EpochMillisV1,
-    ) -> Result<bool, StoreErrorV1> {
-        let database_path = canonical_database_path_v1(path.as_ref())?;
-        inspect_database_snapshot_unbound_v1(&database_path, options, |connection| {
-            verify_inspection_integrity_connection_v1(
-                connection,
-                expected_identity,
-                options,
-                IntegrityModeV1::Fast,
-                checked_at,
-            )?;
-            let state = load_graph_session_connection_v2(connection)?
-                .ok_or_else(|| invariant(StoreInvariantV1::ProcedureV2GraphState))?;
-            let dispositions = load_terminal_dispositions_connection_v2(connection, &state)?;
-            Ok(crate::v2_state::terminal_disposition_is_current_v2(
-                &dispositions,
-                state.trace().revision(),
-            ))
-        })
     }
 
     /// Reads one coherent Procedure v2 graph view and optional named job state from a disposable
@@ -607,6 +557,84 @@ impl StoreTerminalDispositionContractV2 for SqliteStoreV1 {
     }
 }
 
+impl StoreSessionArchiveContractV2 for SqliteStoreV1 {
+    fn archive_current_session_v2(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        expected_workspace_revision: RevisionV1,
+        expected_session_revision: RevisionV1,
+        now: EpochMillisV1,
+    ) -> Result<crate::SessionArchiveSummaryV2, StoreErrorV1> {
+        self.require_identity(identity)?;
+        let mut connection = self.lock_connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage)?;
+        let summary = archive_current_session_transaction_v2(
+            &transaction,
+            expected_workspace_revision,
+            expected_session_revision,
+            now,
+        )?;
+        self.trigger_failpoint(StoreFailpointV1::V2GraphStateBeforeCommit)?;
+        transaction.commit().map_err(storage)?;
+        Ok(summary)
+    }
+
+    fn list_archived_sessions_v2(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+    ) -> Result<Vec<crate::SessionArchiveSummaryV2>, StoreErrorV1> {
+        self.require_identity(identity)?;
+        let connection = self.lock_connection()?;
+        list_archived_sessions_connection_v2(&connection)
+    }
+
+    fn read_archived_session_v2(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        session_id: &podway_core::SessionId,
+    ) -> Result<Option<GraphSessionStateV2>, StoreErrorV1> {
+        self.require_identity(identity)?;
+        let connection = self.lock_connection()?;
+        load_archived_session_connection_v2(&connection, session_id)
+    }
+
+    fn read_archived_terminal_dispositions_v2(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        session_id: &podway_core::SessionId,
+    ) -> Result<Option<Vec<podway_core::TerminalDispositionV2>>, StoreErrorV1> {
+        self.require_identity(identity)?;
+        let connection = self.lock_connection()?;
+        let Some(state) = load_archived_session_connection_v2(&connection, session_id)? else {
+            return Ok(None);
+        };
+        load_terminal_dispositions_connection_v2(&connection, &state).map(Some)
+    }
+
+    fn purge_archived_session_v2(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        session_id: &podway_core::SessionId,
+        expected_session_revision: RevisionV1,
+    ) -> Result<crate::SessionArchiveSummaryV2, StoreErrorV1> {
+        self.require_identity(identity)?;
+        let mut connection = self.lock_connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(storage)?;
+        let summary = purge_archived_session_transaction_v2(
+            &transaction,
+            session_id,
+            expected_session_revision,
+        )?;
+        self.trigger_failpoint(StoreFailpointV1::V2GraphStateBeforeCommit)?;
+        transaction.commit().map_err(storage)?;
+        Ok(summary)
+    }
+}
+
 impl StoreGraphMutationContractV2 for SqliteStoreV1 {
     fn commit_graph_start_terminal_v2(
         &self,
@@ -705,6 +733,21 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
                 session_id,
                 session_revision,
                 ..
+            }
+            | GraphStartCurrentTaskV2::Delete {
+                session_id,
+                session_revision,
+                ..
+            }
+            | GraphStartCurrentTaskV2::Supersede {
+                session_id,
+                session_revision,
+                ..
+            }
+            | GraphStartCurrentTaskV2::DisposeAndArchive {
+                session_id,
+                session_revision,
+                ..
             } => Some((session_id.clone(), *session_revision)),
         };
         if actual != expected {
@@ -736,7 +779,7 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
                 })
                 .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
         let expected_new_revision = match start_execution_version {
-            17 => RevisionV1::ZERO,
+            17 | 19 => RevisionV1::ZERO,
             6 | 12 => RevisionV1::new(1),
             _ => return Err(invariant(StoreInvariantV1::TransitionMutationShape)),
         };
@@ -760,12 +803,84 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
                     current_terminal_disposition: current_disposition,
                 });
             }
+            let resolution_matches_state = match &expected_current {
+                GraphStartCurrentTaskV2::Delete { .. } => matches!(
+                    current.trace().lifecycle(),
+                    podway_core::SessionLifecycle::Prepared
+                        | podway_core::SessionLifecycle::Running
+                ),
+                GraphStartCurrentTaskV2::Supersede { .. } => {
+                    current.trace().lifecycle() == podway_core::SessionLifecycle::Running
+                }
+                GraphStartCurrentTaskV2::DisposeAndArchive { .. } => {
+                    matches!(
+                        current.trace().lifecycle(),
+                        podway_core::SessionLifecycle::Completed
+                            | podway_core::SessionLifecycle::Cancelled
+                    ) && !current_disposition
+                }
+                GraphStartCurrentTaskV2::Absent
+                | GraphStartCurrentTaskV2::Exact { .. }
+                | GraphStartCurrentTaskV2::Eligible { .. }
+                | GraphStartCurrentTaskV2::Force { .. } => true,
+            };
+            if !resolution_matches_state {
+                return Err(StoreErrorV1::SessionStartStateConflictV1 {
+                    lifecycle: current.trace().lifecycle(),
+                    current_terminal_disposition: current_disposition,
+                });
+            }
             if let GraphStartCurrentTaskV2::Force {
                 progress_summary, ..
             } = &expected_current
                 && (progress_summary.trim().is_empty() || progress_summary.chars().count() > 4_000)
             {
                 return Err(invariant(StoreInvariantV1::TransitionMutationShape));
+            }
+            match &expected_current {
+                GraphStartCurrentTaskV2::Delete {
+                    progress_summary, ..
+                } => match current.trace().lifecycle() {
+                    podway_core::SessionLifecycle::Prepared => {
+                        if progress_summary.is_some() {
+                            return Err(invariant(StoreInvariantV1::TransitionMutationShape));
+                        }
+                    }
+                    podway_core::SessionLifecycle::Running => {
+                        let Some(summary) = progress_summary else {
+                            return Err(invariant(StoreInvariantV1::TransitionMutationShape));
+                        };
+                        if summary.trim().is_empty() || summary.chars().count() > 4_000 {
+                            return Err(invariant(StoreInvariantV1::TransitionMutationShape));
+                        }
+                    }
+                    podway_core::SessionLifecycle::Completed
+                    | podway_core::SessionLifecycle::Cancelled => {
+                        return Err(invariant(StoreInvariantV1::TransitionMutationShape));
+                    }
+                },
+                GraphStartCurrentTaskV2::Supersede { reason, .. } => {
+                    if current.trace().lifecycle() != podway_core::SessionLifecycle::Running
+                        || reason.trim().is_empty()
+                        || reason.chars().count() > 4_000
+                    {
+                        return Err(invariant(StoreInvariantV1::TransitionMutationShape));
+                    }
+                }
+                GraphStartCurrentTaskV2::DisposeAndArchive { .. } => {
+                    if !matches!(
+                        current.trace().lifecycle(),
+                        podway_core::SessionLifecycle::Completed
+                            | podway_core::SessionLifecycle::Cancelled
+                    ) || current_disposition
+                    {
+                        return Err(invariant(StoreInvariantV1::TransitionMutationShape));
+                    }
+                }
+                GraphStartCurrentTaskV2::Absent
+                | GraphStartCurrentTaskV2::Exact { .. }
+                | GraphStartCurrentTaskV2::Eligible { .. }
+                | GraphStartCurrentTaskV2::Force { .. } => {}
             }
         }
         let revision_before = match &expected_current {
@@ -778,6 +893,15 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
             }
             | GraphStartCurrentTaskV2::Force {
                 session_revision, ..
+            }
+            | GraphStartCurrentTaskV2::Delete {
+                session_revision, ..
+            }
+            | GraphStartCurrentTaskV2::Supersede {
+                session_revision, ..
+            }
+            | GraphStartCurrentTaskV2::DisposeAndArchive {
+                session_revision, ..
             } => *session_revision,
         };
 
@@ -787,11 +911,121 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
                 row.sequence,
                 current.trace().session_id(),
             )?;
-            clear_graph_session_transaction_v2(
-                &transaction,
-                current.workspace_revision(),
-                current.trace().revision(),
-            )?;
+            match &expected_current {
+                GraphStartCurrentTaskV2::Eligible { .. }
+                    if matches!(
+                        current.trace().lifecycle(),
+                        podway_core::SessionLifecycle::Completed
+                            | podway_core::SessionLifecycle::Cancelled
+                    ) =>
+                {
+                    archive_current_session_transaction_v2(
+                        &transaction,
+                        current.workspace_revision(),
+                        current.trace().revision(),
+                        now,
+                    )?;
+                }
+                GraphStartCurrentTaskV2::Supersede { reason, actor, .. } => {
+                    let active = current
+                        .trace()
+                        .active_attempt()
+                        .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+                    let reason_value = podway_core::ReasonV2::new(reason.clone())
+                        .map_err(|_| invariant(StoreInvariantV1::TransitionMutationShape))?;
+                    let cancelled = current
+                        .cancel_active_session_v2(
+                            current.trace().revision(),
+                            active.attempt_id(),
+                            reason_value,
+                            podway_core::UnixMillis::new(now.get()),
+                        )
+                        .map_err(|_| invariant(StoreInvariantV1::TransitionMutationShape))?
+                        .into_state();
+                    replace_graph_session_transaction_v2(
+                        &transaction,
+                        current.workspace_revision(),
+                        current.trace().revision(),
+                        &cancelled,
+                    )?;
+                    let disposition = podway_core::TerminalDispositionV2::superseded(
+                        cancelled.trace().session_id().clone(),
+                        cancelled.trace().revision(),
+                        reason.clone(),
+                        state.trace().session_id().clone(),
+                        actor.clone(),
+                        podway_core::UnixMillis::new(now.get()),
+                    )
+                    .map_err(|_| invariant(StoreInvariantV1::TransitionMutationShape))?;
+                    record_terminal_disposition_transaction_v2(&transaction, &disposition)?;
+                    archive_current_session_transaction_v2(
+                        &transaction,
+                        cancelled.workspace_revision(),
+                        cancelled.trace().revision(),
+                        now,
+                    )?;
+                }
+                GraphStartCurrentTaskV2::DisposeAndArchive {
+                    disposition_kind,
+                    summary,
+                    stable_reference,
+                    reason,
+                    actor,
+                    ..
+                } => {
+                    let disposition = match disposition_kind {
+                        podway_core::TerminalDispositionKindV2::HandedOff => {
+                            podway_core::TerminalDispositionV2::handed_off(
+                                current.trace().session_id().clone(),
+                                current.trace().revision(),
+                                summary.clone().ok_or_else(|| {
+                                    invariant(StoreInvariantV1::TransitionMutationShape)
+                                })?,
+                                stable_reference.clone().ok_or_else(|| {
+                                    invariant(StoreInvariantV1::TransitionMutationShape)
+                                })?,
+                                actor.clone(),
+                                podway_core::UnixMillis::new(now.get()),
+                            )
+                        }
+                        podway_core::TerminalDispositionKindV2::NotRequired => {
+                            podway_core::TerminalDispositionV2::not_required(
+                                current.trace().session_id().clone(),
+                                current.trace().revision(),
+                                reason.clone().ok_or_else(|| {
+                                    invariant(StoreInvariantV1::TransitionMutationShape)
+                                })?,
+                                actor.clone(),
+                                podway_core::UnixMillis::new(now.get()),
+                            )
+                        }
+                        podway_core::TerminalDispositionKindV2::Superseded => {
+                            return Err(invariant(StoreInvariantV1::TransitionMutationShape));
+                        }
+                    }
+                    .map_err(|_| invariant(StoreInvariantV1::TransitionMutationShape))?;
+                    record_terminal_disposition_transaction_v2(&transaction, &disposition)?;
+                    archive_current_session_transaction_v2(
+                        &transaction,
+                        current.workspace_revision(),
+                        current.trace().revision(),
+                        now,
+                    )?;
+                }
+                GraphStartCurrentTaskV2::Exact { .. }
+                | GraphStartCurrentTaskV2::Eligible { .. }
+                | GraphStartCurrentTaskV2::Force { .. }
+                | GraphStartCurrentTaskV2::Delete { .. } => {
+                    clear_graph_session_transaction_v2(
+                        &transaction,
+                        current.workspace_revision(),
+                        current.trace().revision(),
+                    )?;
+                }
+                GraphStartCurrentTaskV2::Absent => {
+                    return Err(invariant(StoreInvariantV1::TransitionMutationShape));
+                }
+            }
         }
         create_graph_session_transaction_v2(&transaction, &state)?;
         self.trigger_failpoint(
@@ -975,6 +1209,7 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
             || !matches!(
                 execution.command(),
                 crate::CommandV1::SessionBegin
+                    | crate::CommandV1::SessionArchive
                     | crate::CommandV1::SessionTerminalDisposition
                     | crate::CommandV1::SessionComplete
                     | crate::CommandV1::SessionDecide
@@ -1037,6 +1272,19 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
                 });
             }
         }
+        if matches!(operation, PersistedGraphTerminalOperationV2::Archive { .. }) {
+            let dispositions = load_terminal_dispositions_connection_v2(&transaction, &current)?;
+            let current_disposition = crate::v2_state::terminal_disposition_is_current_v2(
+                &dispositions,
+                current.trace().revision(),
+            );
+            if !graph_session_is_reset_eligible_v2(&current, current_disposition) {
+                return Err(StoreErrorV1::SessionArchiveNotEligibleV1 {
+                    lifecycle: current.trace().lifecycle(),
+                    current_terminal_disposition: current_disposition,
+                });
+            }
+        }
         validate_graph_mutation_terminal_shape_v2(
             &execution,
             &current,
@@ -1050,7 +1298,8 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
         }
         let reset_session_id = matches!(operation, PersistedGraphTerminalOperationV2::Reset { .. })
             .then(|| current.trace().session_id().as_str().to_owned());
-        if reset_session_id.is_none() {
+        let graph_archive = matches!(operation, PersistedGraphTerminalOperationV2::Archive { .. });
+        if reset_session_id.is_none() && !graph_archive {
             validate_terminal_result_for_command_v1(execution.command(), &result)
                 .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
         }
@@ -1059,6 +1308,13 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
                 &transaction,
                 expected_workspace_revision,
                 expected_session_revision,
+            )?;
+        } else if graph_archive {
+            archive_current_session_transaction_v2(
+                &transaction,
+                expected_workspace_revision,
+                expected_session_revision,
+                now,
             )?;
         } else if let Some(next_state) = &next_state {
             replace_graph_session_transaction_v2(
@@ -1189,6 +1445,33 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
         transaction.commit().map_err(storage)?;
         self.trigger_failpoint(StoreFailpointV1::TerminalAfterCommitBeforeResponse)?;
         Ok(receipt)
+    }
+
+    fn commit_graph_archive_terminal_v2(
+        &self,
+        claim: ClaimTokenV1,
+        expected_workspace_revision: RevisionV1,
+        expected_session_revision: RevisionV1,
+        session_id: podway_core::SessionId,
+        now: EpochMillisV1,
+    ) -> Result<TerminalReceiptV1, StoreErrorV1> {
+        let result = TerminalResultV1::Success(podway_core::DomainResult::SessionChanged {
+            session_id: session_id.clone(),
+            revision_before: expected_session_revision,
+            revision_after: expected_session_revision,
+            changed: true,
+        });
+        let operation = PersistedGraphTerminalOperationV2::archive(session_id)
+            .map_err(|_| invariant(StoreInvariantV1::TransitionMutationShape))?;
+        self.commit_graph_mutation_terminal_v2(
+            claim,
+            expected_workspace_revision,
+            expected_session_revision,
+            None,
+            result,
+            operation,
+            now,
+        )
     }
 
     fn commit_graph_reset_terminal_v2(
@@ -1338,6 +1621,7 @@ impl StoreContractV1 for SqliteStoreV1 {
                 | crate::CommandV1::SessionBlock
                 | crate::CommandV1::SessionUnblock
                 | crate::CommandV1::SessionCancel
+                | crate::CommandV1::SessionArchive
                 | crate::CommandV1::SessionReset
                 | crate::CommandV1::ItemCheck { .. }
                 | crate::CommandV1::ItemUncheck { .. }
@@ -2129,6 +2413,27 @@ fn validate_procedure_v2_action_admission_v1(
             podway_core::SessionLifecycle::Completed | podway_core::SessionLifecycle::Cancelled
         ) {
             return Err(reject(PersistedGraphMutationFailureV2::SessionNotTerminal));
+        }
+        return Ok(());
+    }
+
+    if matches!(request.command(), crate::CommandV1::SessionArchive) {
+        let expected_revision = preconditions
+            .expected_session_revision()
+            .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+        if preconditions.expected_attempt_id().is_some()
+            || preconditions.expected_item_id().is_some()
+            || preconditions.expected_item_revision().is_some()
+        {
+            return Err(invariant(StoreInvariantV1::TransitionMutationShape));
+        }
+        if expected_revision != current_revision {
+            return Err(reject(
+                PersistedGraphMutationFailureV2::SessionRevisionConflict {
+                    expected: expected_revision,
+                    actual: current_revision,
+                },
+            ));
         }
         return Ok(());
     }
@@ -5628,6 +5933,31 @@ fn validate_graph_mutation_terminal_shape_v2(
                 && preconditions.expected_item_revision().is_none()
         }
         (
+            crate::CommandV1::SessionArchive,
+            TerminalResultV1::Success(podway_core::DomainResult::SessionChanged {
+                session_id,
+                revision_before,
+                revision_after,
+                changed,
+            }),
+            PersistedGraphTerminalOperationV2::Archive {
+                session_id: operation_session_id,
+            },
+        ) => {
+            let (_, payload) = procedure_v2_operation_payload_v1(execution, "session.archive", 8)?;
+            *changed
+                && payload.is_empty()
+                && next.is_none()
+                && session_id == current.trace().session_id()
+                && operation_session_id == current.trace().session_id()
+                && *revision_before == current.trace().revision()
+                && *revision_after == current.trace().revision()
+                && preconditions.expected_session_revision() == Some(current.trace().revision())
+                && preconditions.expected_attempt_id().is_none()
+                && preconditions.expected_item_id().is_none()
+                && preconditions.expected_item_revision().is_none()
+        }
+        (
             crate::CommandV1::SessionComplete,
             TerminalResultV1::Success(podway_core::DomainResult::SessionChanged {
                 session_id,
@@ -6050,6 +6380,9 @@ fn validate_graph_mutation_terminal_shape_v2(
                 }
                 crate::CommandV1::SessionReset => {
                     procedure_v2_operation_payload_v1(execution, "session.reset", 8)?;
+                }
+                crate::CommandV1::SessionArchive => {
+                    procedure_v2_operation_payload_v1(execution, "session.archive", 8)?;
                 }
                 _ => {}
             }
@@ -6606,6 +6939,26 @@ fn graph_mutation_failure_matches_v2(
                 .as_ref()
                 == Some(error)
         }
+        crate::CommandV1::SessionStartReplace => {
+            preconditions.expected_session_revision() == Some(current.trace().revision())
+                && persisted_session_state_failure_matches_v2(current, error)
+                && matches!(
+                    error,
+                    PersistedGraphMutationFailureV2::SessionResetNotEligible { .. }
+                        | PersistedGraphMutationFailureV2::SessionArchiveNotEligible { .. }
+                        | PersistedGraphMutationFailureV2::SessionArchiveLimitReached { .. }
+                        | PersistedGraphMutationFailureV2::SessionStartStateConflict { .. }
+                )
+        }
+        crate::CommandV1::SessionArchive => {
+            preconditions.expected_session_revision() == Some(current.trace().revision())
+                && persisted_session_state_failure_matches_v2(current, error)
+                && matches!(
+                    error,
+                    PersistedGraphMutationFailureV2::SessionArchiveNotEligible { .. }
+                        | PersistedGraphMutationFailureV2::SessionArchiveLimitReached { .. }
+                )
+        }
         crate::CommandV1::SessionReset => match error {
             PersistedGraphMutationFailureV2::SessionRevisionConflict { expected, actual } => {
                 preconditions.expected_session_revision() == Some(*expected)
@@ -6744,6 +7097,36 @@ fn graph_mutation_failure_matches_v2(
                 ),
                 _ => false,
             }
+        }
+        _ => false,
+    }
+}
+
+fn persisted_session_state_failure_matches_v2(
+    current: &crate::GraphSessionStateV2,
+    error: &PersistedGraphMutationFailureV2,
+) -> bool {
+    let lifecycle = match current.trace().lifecycle() {
+        podway_core::SessionLifecycle::Prepared => "prepared",
+        podway_core::SessionLifecycle::Running => "running",
+        podway_core::SessionLifecycle::Completed => "completed",
+        podway_core::SessionLifecycle::Cancelled => "cancelled",
+    };
+    match error {
+        PersistedGraphMutationFailureV2::SessionResetNotEligible {
+            lifecycle: persisted,
+            ..
+        }
+        | PersistedGraphMutationFailureV2::SessionArchiveNotEligible {
+            lifecycle: persisted,
+            ..
+        }
+        | PersistedGraphMutationFailureV2::SessionStartStateConflict {
+            lifecycle: persisted,
+            ..
+        } => persisted == lifecycle,
+        PersistedGraphMutationFailureV2::SessionArchiveLimitReached { maximum } => {
+            *maximum == crate::MAX_INACTIVE_SESSIONS_V2
         }
         _ => false,
     }
@@ -6984,7 +7367,7 @@ fn admission_session_scope(
     }
     transaction
         .query_row(
-            "SELECT session_id FROM v2_task_sessions WHERE singleton = 1",
+            "SELECT session_id FROM v2_task_sessions WHERE activity = 'current'",
             [],
             |row| row.get(0),
         )

@@ -404,6 +404,34 @@ fn route_cases() -> Vec<RouteCase> {
             preconditions: session_identity_preconditions(),
         },
         RouteCase {
+            command: "session.archive",
+            operation: OperationV1::Mutate,
+            durable: true,
+            payload: json!({"selector": selector.clone()}),
+            preconditions: session_identity_preconditions(),
+        },
+        RouteCase {
+            command: "session.archive_list",
+            operation: OperationV1::Query,
+            durable: false,
+            payload: json!({"selector": selector.clone()}),
+            preconditions: PreconditionsV1::default(),
+        },
+        RouteCase {
+            command: "session.archive_show",
+            operation: OperationV1::Query,
+            durable: false,
+            payload: json!({"selector": selector.clone(), "session_id": SESSION_ID}),
+            preconditions: PreconditionsV1::default(),
+        },
+        RouteCase {
+            command: "session.archive_purge",
+            operation: OperationV1::Control,
+            durable: false,
+            payload: json!({"selector": selector.clone(), "session_id": SESSION_ID, "expected_session_revision": 7, "confirmed": true}),
+            preconditions: PreconditionsV1::default(),
+        },
+        RouteCase {
             command: "workspace.reset_all",
             operation: OperationV1::Bootstrap,
             durable: true,
@@ -507,10 +535,10 @@ fn route_cases() -> Vec<RouteCase> {
 }
 
 #[test]
-fn recon001_exhaustively_admits_only_the_31_canonical_daemon_routes() {
+fn recon001_exhaustively_admits_only_the_35_canonical_daemon_routes() {
     let cases = route_cases();
-    assert_eq!(cases.len(), 31);
-    assert_eq!(DAEMON_COMMAND_NAMES_V1.len(), 31);
+    assert_eq!(cases.len(), 35);
+    assert_eq!(DAEMON_COMMAND_NAMES_V1.len(), 35);
     assert_eq!(
         cases.iter().map(|case| case.command).collect::<Vec<_>>(),
         DAEMON_COMMAND_NAMES_V1.to_vec(),

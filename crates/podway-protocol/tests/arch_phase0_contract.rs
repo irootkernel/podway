@@ -304,9 +304,14 @@ const FROZEN_ERROR_CATALOG: &[(&str, u8, bool)] = &[
     ("SESSION_NOT_FOUND", 1, false),
     ("SESSION_ID_MISMATCH", 4, false),
     ("SESSION_ALREADY_EXISTS", 1, false),
+    ("SESSION_START_DECISION_REQUIRED", 5, false),
     ("SESSION_NOT_RUNNING", 1, false),
     ("SESSION_NOT_TERMINAL", 1, false),
     ("SESSION_RESET_NOT_ELIGIBLE", 1, false),
+    ("SESSION_ARCHIVE_NOT_ELIGIBLE", 1, false),
+    ("SESSION_ARCHIVE_LIMIT_REACHED", 1, false),
+    ("SESSION_ARCHIVE_NOT_FOUND", 1, false),
+    ("SESSION_START_STATE_CONFLICT", 4, true),
     ("SESSION_CANCELLED", 1, false),
     ("SESSION_REVISION_CONFLICT", 4, true),
     ("ATTEMPT_NOT_CURRENT", 4, true),
@@ -503,10 +508,53 @@ fn api_004_error_catalog_is_exhaustive_and_error_pairs_fail_closed() {
                 "expected_attempt_id".to_owned(),
                 json!("00000000-0000-4000-8000-000000000019"),
             )]),
+            "SESSION_START_DECISION_REQUIRED" => json!({
+                "schema": "podway.session-start-decision-required-details/v1",
+                "lifecycle": "running",
+                "current_terminal_disposition": false,
+                "allowed_actions": ["continue", "preserve", "delete"],
+                "admission": {"admitted": false}
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
             "SESSION_RESET_NOT_ELIGIBLE" => json!({
                 "lifecycle": "running",
                 "current_terminal_disposition": false,
                 "required_action": "force",
+                "admission": {"admitted": false}
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+            "SESSION_ARCHIVE_NOT_ELIGIBLE" => json!({
+                "lifecycle": "completed",
+                "current_terminal_disposition": false,
+                "required_action": "record_disposition",
+                "admission": {"admitted": false}
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+            "SESSION_ARCHIVE_LIMIT_REACHED" => json!({
+                "maximum": 32,
+                "admission": {"admitted": false}
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+            "SESSION_ARCHIVE_NOT_FOUND" => json!({
+                "session_id": "00000000-0000-4000-8000-000000000020",
+                "admission": {"admitted": false}
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+            "SESSION_START_STATE_CONFLICT" => json!({
+                "schema": "podway.session-start-state-conflict-details/v1",
+                "lifecycle": "completed",
+                "current_terminal_disposition": true,
+                "allowed_actions": ["start"],
                 "admission": {"admitted": false}
             })
             .as_object()
@@ -571,6 +619,34 @@ fn api_004_error_catalog_is_exhaustive_and_error_pairs_fail_closed() {
             .is_err()
         );
     }
+}
+
+#[test]
+fn api_004_start_decision_details_reject_duplicate_allowed_actions() {
+    let details = json!({
+        "schema": "podway.session-start-decision-required-details/v1",
+        "lifecycle": "prepared",
+        "current_terminal_disposition": false,
+        "allowed_actions": ["continue", "continue"],
+        "admission": {"admitted": false}
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+    assert!(
+        ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
+            request_id: RequestIdV1::new(REQUEST_ID).unwrap(),
+            command: CommandNameV1::new("session.start").unwrap(),
+            generated_at: timestamp(),
+            code: ErrorCodeV1::new("SESSION_START_DECISION_REQUIRED").unwrap(),
+            message: "decision required".to_owned(),
+            retryable: false,
+            exit_code: ExitCodeV1::new(5).unwrap(),
+            workspace: None,
+            details,
+        })
+        .is_err()
+    );
 }
 
 #[test]

@@ -1522,6 +1522,11 @@ const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
         retryable: false,
     },
     ErrorCodeCatalogEntryV1 {
+        code: "SESSION_START_DECISION_REQUIRED",
+        exit_code: 5,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
         code: "SESSION_NOT_RUNNING",
         exit_code: 1,
         retryable: false,
@@ -1535,6 +1540,26 @@ const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
         code: "SESSION_RESET_NOT_ELIGIBLE",
         exit_code: 1,
         retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "SESSION_ARCHIVE_NOT_ELIGIBLE",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "SESSION_ARCHIVE_LIMIT_REACHED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "SESSION_ARCHIVE_NOT_FOUND",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "SESSION_START_STATE_CONFLICT",
+        exit_code: 4,
+        retryable: true,
     },
     ErrorCodeCatalogEntryV1 {
         code: "SESSION_CANCELLED",
@@ -2215,7 +2240,14 @@ fn validate_closed_error_details_v1(
             validate_revision_conflict_details_v1(details)
         }
         "ATTEMPT_NOT_CURRENT" => validate_attempt_conflict_details_v1(details),
+        "SESSION_START_DECISION_REQUIRED" => {
+            validate_session_start_decision_required_details_v1(details)
+        }
         "SESSION_RESET_NOT_ELIGIBLE" => validate_session_reset_not_eligible_details_v1(details),
+        "SESSION_ARCHIVE_NOT_ELIGIBLE" => validate_session_archive_not_eligible_details_v1(details),
+        "SESSION_ARCHIVE_LIMIT_REACHED" => validate_session_archive_limit_details_v1(details),
+        "SESSION_ARCHIVE_NOT_FOUND" => validate_session_archive_not_found_details_v1(details),
+        "SESSION_START_STATE_CONFLICT" => validate_session_start_state_conflict_details_v1(details),
         "IDEMPOTENCY_KEY_REUSED" => {
             validate_schema_and_not_admitted_v1(details, "podway.idempotency-key-reused-details/v1")
         }
@@ -2236,6 +2268,120 @@ fn validate_closed_error_details_v1(
             code: code.to_owned(),
         })
     }
+}
+
+fn validate_session_start_decision_required_details_v1(details: &Map<String, Value>) -> bool {
+    if details.len() != 5
+        || details.get("schema").and_then(Value::as_str)
+            != Some("podway.session-start-decision-required-details/v1")
+        || details
+            .get("admission")
+            .is_none_or(|value| validate_admission_metadata_v1(value, true).is_err())
+    {
+        return false;
+    }
+    let lifecycle = details.get("lifecycle").and_then(Value::as_str);
+    let disposition = details
+        .get("current_terminal_disposition")
+        .and_then(Value::as_bool);
+    let actions = details
+        .get("allowed_actions")
+        .filter(|value| validate_string_set_v1(value, 3, validate_session_start_action_v1));
+    matches!(
+        (lifecycle, disposition, actions),
+        (
+            Some("prepared" | "running" | "completed" | "cancelled"),
+            Some(_),
+            Some(_)
+        )
+    )
+}
+
+fn validate_session_start_action_v1(value: &Value) -> bool {
+    matches!(
+        value.as_str(),
+        Some("continue" | "preserve" | "delete" | "record_disposition")
+    )
+}
+
+fn validate_session_archive_not_eligible_details_v1(details: &Map<String, Value>) -> bool {
+    if details.len() != 5
+        || details.get("schema").and_then(Value::as_str)
+            != Some("podway.session-archive-not-eligible-details/v1")
+        || details
+            .get("admission")
+            .is_none_or(|value| validate_admission_metadata_v1(value, true).is_err())
+        || details
+            .get("current_terminal_disposition")
+            .and_then(Value::as_bool)
+            != Some(false)
+    {
+        return false;
+    }
+    matches!(
+        (
+            details.get("lifecycle").and_then(Value::as_str),
+            details.get("required_action").and_then(Value::as_str),
+        ),
+        (Some("prepared" | "running"), Some("complete_or_cancel"))
+            | (Some("completed" | "cancelled"), Some("record_disposition"))
+    )
+}
+
+fn validate_session_archive_limit_details_v1(details: &Map<String, Value>) -> bool {
+    details.len() == 3
+        && details.get("schema").and_then(Value::as_str)
+            == Some("podway.session-archive-limit-details/v1")
+        && details.get("maximum").and_then(Value::as_u64) == Some(32)
+        && details
+            .get("admission")
+            .is_some_and(|value| validate_admission_metadata_v1(value, true).is_ok())
+}
+
+fn validate_session_archive_not_found_details_v1(details: &Map<String, Value>) -> bool {
+    details.len() == 3
+        && details.get("schema").and_then(Value::as_str)
+            == Some("podway.session-archive-not-found-details/v1")
+        && details
+            .get("session_id")
+            .and_then(Value::as_str)
+            .is_some_and(|value| SessionId::new(value).is_ok())
+        && details
+            .get("admission")
+            .is_some_and(|value| validate_admission_metadata_v1(value, true).is_ok())
+}
+
+fn validate_session_start_state_conflict_details_v1(details: &Map<String, Value>) -> bool {
+    if details.len() != 5
+        || details.get("schema").and_then(Value::as_str)
+            != Some("podway.session-start-state-conflict-details/v1")
+        || details
+            .get("admission")
+            .is_none_or(|value| validate_admission_metadata_v1(value, true).is_err())
+    {
+        return false;
+    }
+    let lifecycle = details.get("lifecycle").and_then(Value::as_str);
+    let disposition = details
+        .get("current_terminal_disposition")
+        .and_then(Value::as_bool);
+    let expected_actions: &[&str] = match (lifecycle, disposition) {
+        (Some("prepared"), Some(_)) => &["continue", "delete"],
+        (Some("running"), Some(_)) => &["continue", "preserve", "delete"],
+        (Some("completed" | "cancelled"), Some(false)) => &["continue", "record_disposition"],
+        (Some("completed" | "cancelled"), Some(true)) => &["start"],
+        _ => return false,
+    };
+    details
+        .get("allowed_actions")
+        .and_then(Value::as_array)
+        .is_some_and(|actions| {
+            actions.len() == expected_actions.len()
+                && actions
+                    .iter()
+                    .zip(expected_actions)
+                    .all(|(actual, expected)| actual.as_str() == Some(*expected))
+        })
 }
 
 fn validate_session_reset_not_eligible_details_v1(details: &Map<String, Value>) -> bool {
@@ -2997,7 +3143,12 @@ pub fn ensure_error_details_schema_v1(code: &str, details: &mut Map<String, Valu
             "podway.revision-conflict-details/v2"
         }
         "ATTEMPT_NOT_CURRENT" => "podway.attempt-conflict-details/v2",
+        "SESSION_START_DECISION_REQUIRED" => "podway.session-start-decision-required-details/v1",
+        "SESSION_START_STATE_CONFLICT" => "podway.session-start-state-conflict-details/v1",
         "SESSION_RESET_NOT_ELIGIBLE" => "podway.session-reset-not-eligible-details/v1",
+        "SESSION_ARCHIVE_NOT_ELIGIBLE" => "podway.session-archive-not-eligible-details/v1",
+        "SESSION_ARCHIVE_LIMIT_REACHED" => "podway.session-archive-limit-details/v1",
+        "SESSION_ARCHIVE_NOT_FOUND" => "podway.session-archive-not-found-details/v1",
         "IDEMPOTENCY_KEY_REUSED" => "podway.idempotency-key-reused-details/v1",
         "JOB_WAIT_TIMEOUT" => "podway.job-wait-timeout-details/v2",
         "BLOCKER_LIMIT_REACHED" => "podway.blocker-limit-details/v1",

@@ -43,6 +43,10 @@ These JSON Schema Draft 2020-12 files define Podway's versioned structural contr
 - `status-result-v2.schema.json`: standard status and verbose status with six independently bounded history windows, including decisions and rework.
 - `compact-status-result-v3.schema.json`: prepared-aware bounded value-free status.
 - `status-result-v3.schema.json`: prepared-aware standard and verbose status.
+- `session-archive-result-v1.schema.json`: terminal-session archival mutation result.
+- `session-archive-list-result-v1.schema.json`: bounded inactive-session summaries.
+- `session-archive-show-result-v1.schema.json`: one inactive session with its full read-only status projection.
+- `session-archive-purge-result-v1.schema.json`: confirmed inactive-session deletion result.
 - `next-result-v2.schema.json`: bounded action, decision, and goal-aware machine guidance.
 - `prepared-next-result-v1.schema.json`: cursor-free prepared-session guidance.
 - `stage-transition-result-v2.schema.json`: Procedure v2 action and administrative transitions.
@@ -67,6 +71,11 @@ These JSON Schema Draft 2020-12 files define Podway's versioned structural contr
 - `observation-result-v3.schema.json`: prepared-aware observation composing a compact status projection, guidance, and byte-budgeted item and template windows.
 - `evidence-read-result-v1.schema.json`: one bounded snapshot-fenced page of a selected evidence item.
 - `session-reset-not-eligible-details-v1.schema.json`: closed smart-reset eligibility failure details.
+- `session-start-decision-required-details-v1.schema.json`: closed state-aware start decision conflict details.
+- `session-start-state-conflict-details-v1.schema.json`: retryable start-policy race details.
+- `session-archive-not-eligible-details-v1.schema.json`: closed archive eligibility failure details.
+- `session-archive-limit-details-v1.schema.json`: closed inactive-session capacity failure details.
+- `session-archive-not-found-details-v1.schema.json`: closed missing inactive-session failure details.
 - `v2-runtime-error-details-v1.schema.json`: closed code-bound details for registered Procedure v2 runtime errors.
 - `recoverable-v2-runtime-error-details-v1.schema.json`: stale evidence and goal-revision details with state-refresh recovery.
 - `contract-manifest-v1.schema.json`: deterministic integration contract inventory.

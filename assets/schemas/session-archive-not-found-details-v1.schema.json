@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:session-archive-not-found-details:v1",
+  "title": "Podway Session Archive Not Found Details v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "session_id", "admission"],
+  "properties": {
+    "schema": { "const": "podway.session-archive-not-found-details/v1" },
+    "session_id": { "type": "string", "format": "uuid" },
+    "admission": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/admission" }
+  }
+}

@@ -227,7 +227,7 @@ commands:
   availability: executable
   cli:
   - start
-  - --replace
+  - --on-existing
   operation: mutate
   workspace_required: true
   durable_job: true
@@ -465,6 +465,64 @@ commands:
   result_schemas:
   - podway.terminal-disposition-result/v1
   - podway.detached-admission-result/v2
+- name: session.archive
+  availability: executable
+  cli:
+  - archive
+  operation: mutate
+  workspace_required: true
+  durable_job: true
+  session_mutation: true
+  destructive_confirmation: false
+  preconditions:
+  - workspace_uuid
+  - session_id
+  - session_revision
+  idempotency_scope: workspace
+  maintenance_barrier: true
+  result_schemas:
+  - podway.session-archive-result/v1
+  - podway.detached-admission-result/v2
+- name: session.archive_list
+  availability: executable
+  cli:
+  - archive
+  - list
+  operation: query
+  workspace_required: true
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+  result_schemas:
+  - podway.session-archive-list-result/v1
+- name: session.archive_show
+  availability: executable
+  cli:
+  - archive
+  - show
+  operation: query
+  workspace_required: true
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+  result_schemas:
+  - podway.session-archive-show-result/v1
+- name: session.archive_purge
+  availability: executable
+  cli:
+  - archive
+  - purge
+  operation: control
+  workspace_required: true
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: true
+  preconditions:
+  - workspace_uuid
+  - session_id
+  - session_revision
+  result_schemas:
+  - podway.session-archive-purge-result/v1
 - name: workspace.reset_all
   availability: executable
   cli:

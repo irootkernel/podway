@@ -226,6 +226,13 @@
       "summary": "A task session already exists."
     },
     {
+      "code": "SESSION_START_DECISION_REQUIRED",
+      "details_schema": "podway.session-start-decision-required-details/v1",
+      "exit_code": 5,
+      "retryable": false,
+      "summary": "Starting a successor session requires an explicit decision about the current session."
+    },
+    {
       "code": "SESSION_NOT_RUNNING",
       "exit_code": 1,
       "retryable": false,
@@ -243,6 +250,34 @@
       "exit_code": 1,
       "retryable": false,
       "summary": "The current session is not eligible for default reset or replacement."
+    },
+    {
+      "code": "SESSION_ARCHIVE_NOT_ELIGIBLE",
+      "details_schema": "podway.session-archive-not-eligible-details/v1",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The current session is not eligible for archival."
+    },
+    {
+      "code": "SESSION_ARCHIVE_LIMIT_REACHED",
+      "details_schema": "podway.session-archive-limit-details/v1",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The inactive session archive is full."
+    },
+    {
+      "code": "SESSION_ARCHIVE_NOT_FOUND",
+      "details_schema": "podway.session-archive-not-found-details/v1",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The requested inactive session was not found."
+    },
+    {
+      "code": "SESSION_START_STATE_CONFLICT",
+      "details_schema": "podway.session-start-state-conflict-details/v1",
+      "exit_code": 4,
+      "retryable": true,
+      "summary": "The existing session state changed after the start policy was selected."
     },
     {
       "code": "SESSION_CANCELLED",

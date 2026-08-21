@@ -24,8 +24,9 @@ use podway_store::{
     RevisionAttemptItemPreconditionsV1, SqliteStoreOptionsV1, SqliteStoreV1, StoreContractV1,
     StoreErrorV1, StoreFailpointActionV1, StoreFailpointV1, StoreGraphMutationContractV2,
     StoreGraphReadContractV2, StoreGraphStateContractV2, StoreIdempotencyReadContractV1,
-    StoreInvariantV1, StoreReadContractV1, StoreTerminalDispositionContractV2,
-    StoreUnavailableReasonV1, TerminalResultV1, ValidatedWorkspaceRootV1, WorkerIdV1,
+    StoreInvariantV1, StoreReadContractV1, StoreSessionArchiveContractV2,
+    StoreTerminalDispositionContractV2, StoreUnavailableReasonV1, TerminalResultV1,
+    ValidatedWorkspaceRootV1, WorkerIdV1,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -56,6 +57,12 @@ fn database_path(temporary: &TempDir) -> PathBuf {
     temporary.path().join("state.sqlite3")
 }
 
+fn sidecar(path: &Path, suffix: &str) -> PathBuf {
+    let mut sidecar = path.as_os_str().to_os_string();
+    sidecar.push(suffix);
+    sidecar.into()
+}
+
 fn open(temporary: &TempDir, options: SqliteStoreOptionsV1, now: u64) -> SqliteStoreV1 {
     SqliteStoreV1::open(
         database_path(temporary),
@@ -65,6 +72,38 @@ fn open(temporary: &TempDir, options: SqliteStoreOptionsV1, now: u64) -> SqliteS
         UnixMillis::new(now),
     )
     .unwrap()
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn v2wal001_normal_store_close_checkpoints_an_unlinked_wal() {
+    let temporary = TempDir::new().unwrap();
+    let options = SqliteStoreOptionsV1::new(1_000).unwrap();
+    let state = graph_state(701, 702, 10);
+    let store = open(&temporary, options.clone(), 1);
+    store
+        .create_graph_session_v2(&identity(), state.clone())
+        .unwrap();
+
+    let path = database_path(&temporary);
+    std::fs::remove_file(sidecar(&path, "-wal")).unwrap();
+    std::fs::remove_file(sidecar(&path, "-shm")).unwrap();
+    let filesystem_view = SqliteStoreV1::inspect_graph_workspace_view_v2(
+        &path,
+        &identity(),
+        &options,
+        podway_store::EpochMillisV1::new(11),
+    )
+    .unwrap();
+    assert!(filesystem_view.graph_state().is_none());
+
+    drop(store);
+
+    let reopened = open(&temporary, options, 12);
+    assert_eq!(
+        reopened.read_graph_session_v2(&identity()).unwrap(),
+        Some(state)
+    );
 }
 
 fn uuid(number: u64) -> String {
@@ -990,6 +1029,481 @@ fn admit_reset_and_claim(
         .unwrap()
 }
 
+fn admit_archive_and_claim(
+    store: &SqliteStoreV1,
+    state: &GraphSessionStateV2,
+    key: &str,
+    job_number: u64,
+) -> podway_store::ClaimedJobV1 {
+    let execution = CanonicalExecutionJsonV1::new(
+        canonicalize_json_v1(&json!({
+            "attached_artifact": null,
+            "command": "session.archive",
+            "execution_version": 8,
+            "fresh_attempt_id": null,
+            "fresh_blocker_id": null,
+            "payload": {},
+            "preconditions": {},
+            "selector": {},
+            "workspace_id": identity().workspace_uuid().as_str(),
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let request = AdmitRequestV1::new_with_canonical_execution(
+        DomainCommand::SessionArchive,
+        IdempotencyKeyV1::new(key).unwrap(),
+        podway_core::JobId::new(uuid(job_number)).unwrap(),
+        RevisionAttemptItemPreconditionsV1::new(Some(state.trace().revision()), None, None, None)
+            .unwrap(),
+        digest('8'),
+        UnixMillis::new(40),
+        execution,
+    )
+    .with_procedure_v2_execution()
+    .with_session_identity(AdmissionSessionIdentityV1::Exact(
+        state.trace().session_id().clone(),
+    ))
+    .with_response_context(
+        PersistedResponseContextV1::new(
+            uuid(job_number + 100),
+            "session.archive",
+            identity().workspace_uuid().clone(),
+            "/tmp/podway-v2-graph-start",
+            0,
+        )
+        .unwrap(),
+    );
+    store.admit(&identity(), request).unwrap();
+    store
+        .claim_next(
+            &identity(),
+            WorkerIdV1::new("v2-archive-worker").unwrap(),
+            UnixMillis::new(41),
+        )
+        .unwrap()
+        .unwrap()
+}
+
+#[test]
+fn terminal_archive_preserves_full_state_and_allows_a_new_current_session() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
+    let running = graph_state(8_100, 8_101, 10);
+    store
+        .create_graph_session_v2(&identity(), running.clone())
+        .unwrap();
+    let active = running.trace().active_attempt().unwrap();
+    let completed = running
+        .complete_active_action_v2(
+            running.trace().revision(),
+            active.attempt_id(),
+            None,
+            UnixMillis::new(20),
+        )
+        .unwrap()
+        .into_state();
+    store
+        .replace_graph_session_v2(
+            &identity(),
+            running.workspace_revision(),
+            running.trace().revision(),
+            completed.clone(),
+        )
+        .unwrap();
+    store
+        .record_terminal_disposition_v2(
+            &identity(),
+            TerminalDispositionV2::not_required(
+                completed.trace().session_id().clone(),
+                completed.trace().revision(),
+                "No handoff required",
+                None,
+                UnixMillis::new(21),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+    let claimed = admit_archive_and_claim(&store, &completed, "v2-archive", 8_102);
+    store
+        .commit_graph_archive_terminal_v2(
+            claimed.claim().clone(),
+            completed.workspace_revision(),
+            completed.trace().revision(),
+            completed.trace().session_id().clone(),
+            UnixMillis::new(42),
+        )
+        .unwrap();
+
+    assert!(store.read_graph_session_v2(&identity()).unwrap().is_none());
+    assert_eq!(
+        store
+            .read_archived_session_v2(&identity(), completed.trace().session_id())
+            .unwrap(),
+        Some(completed.clone())
+    );
+    let summaries = store.list_archived_sessions_v2(&identity()).unwrap();
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].archive_slot(), 1);
+
+    let next = graph_state(8_103, 8_104, 50);
+    store
+        .create_graph_session_v2(&identity(), next.clone())
+        .unwrap();
+    assert_eq!(
+        store.read_graph_session_v2(&identity()).unwrap(),
+        Some(next)
+    );
+
+    let purged = store
+        .purge_archived_session_v2(
+            &identity(),
+            completed.trace().session_id(),
+            completed.trace().revision(),
+        )
+        .unwrap();
+    assert_eq!(purged.session_id(), completed.trace().session_id());
+    assert!(
+        store
+            .list_archived_sessions_v2(&identity())
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn terminal_archive_limit_blocks_without_deleting_retained_sessions() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
+    for offset in 0..podway_store::MAX_INACTIVE_SESSIONS_V2 {
+        let running = graph_state(8_200 + u64::from(offset), 8_300 + u64::from(offset), 10);
+        store
+            .create_graph_session_v2(&identity(), running.clone())
+            .unwrap();
+        let active = running.trace().active_attempt().unwrap();
+        let completed = running
+            .complete_active_action_v2(
+                running.trace().revision(),
+                active.attempt_id(),
+                None,
+                UnixMillis::new(20),
+            )
+            .unwrap()
+            .into_state();
+        store
+            .replace_graph_session_v2(
+                &identity(),
+                running.workspace_revision(),
+                running.trace().revision(),
+                completed.clone(),
+            )
+            .unwrap();
+        store
+            .record_terminal_disposition_v2(
+                &identity(),
+                TerminalDispositionV2::not_required(
+                    completed.trace().session_id().clone(),
+                    completed.trace().revision(),
+                    "No handoff required",
+                    None,
+                    UnixMillis::new(21),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        store
+            .archive_current_session_v2(
+                &identity(),
+                completed.workspace_revision(),
+                completed.trace().revision(),
+                podway_store::EpochMillisV1::new(30 + u64::from(offset)),
+            )
+            .unwrap();
+    }
+
+    let running = graph_state(8_900, 8_901, 10);
+    store
+        .create_graph_session_v2(&identity(), running.clone())
+        .unwrap();
+    let active = running.trace().active_attempt().unwrap();
+    let completed = running
+        .complete_active_action_v2(
+            running.trace().revision(),
+            active.attempt_id(),
+            None,
+            UnixMillis::new(20),
+        )
+        .unwrap()
+        .into_state();
+    store
+        .replace_graph_session_v2(
+            &identity(),
+            running.workspace_revision(),
+            running.trace().revision(),
+            completed.clone(),
+        )
+        .unwrap();
+    store
+        .record_terminal_disposition_v2(
+            &identity(),
+            TerminalDispositionV2::not_required(
+                completed.trace().session_id().clone(),
+                completed.trace().revision(),
+                "No handoff required",
+                None,
+                UnixMillis::new(21),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    assert!(matches!(
+        store.archive_current_session_v2(
+            &identity(),
+            completed.workspace_revision(),
+            completed.trace().revision(),
+            podway_store::EpochMillisV1::new(100),
+        ),
+        Err(StoreErrorV1::SessionArchiveLimitReachedV1 { maximum: 32 })
+    ));
+    let claimed = admit_and_claim(
+        &store,
+        DomainCommand::SessionStartReplace,
+        "v2-start-at-archive-limit",
+        8_902,
+        AdmissionSessionIdentityV1::Exact(completed.trace().session_id().clone()),
+        Some(completed.trace().revision()),
+    );
+    assert!(matches!(
+        store.commit_graph_start_terminal_v2(
+            claimed.claim().clone(),
+            GraphStartCurrentTaskV2::Eligible {
+                session_id: completed.trace().session_id().clone(),
+                session_revision: completed.trace().revision(),
+            },
+            graph_state(8_903, 8_904, 110),
+            UnixMillis::new(111),
+        ),
+        Err(StoreErrorV1::SessionArchiveLimitReachedV1 { maximum: 32 })
+    ));
+    assert_eq!(
+        store.list_archived_sessions_v2(&identity()).unwrap().len(),
+        32
+    );
+    assert_eq!(
+        store.read_graph_session_v2(&identity()).unwrap(),
+        Some(completed)
+    );
+}
+
+#[test]
+fn unreadable_archive_does_not_block_store_open_list_or_purge() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
+    let running = graph_state(8_910, 8_911, 10);
+    store
+        .create_graph_session_v2(&identity(), running.clone())
+        .unwrap();
+    let active = running.trace().active_attempt().unwrap();
+    let completed = running
+        .complete_active_action_v2(
+            running.trace().revision(),
+            active.attempt_id(),
+            None,
+            UnixMillis::new(20),
+        )
+        .unwrap()
+        .into_state();
+    store
+        .replace_graph_session_v2(
+            &identity(),
+            running.workspace_revision(),
+            running.trace().revision(),
+            completed.clone(),
+        )
+        .unwrap();
+    store
+        .record_terminal_disposition_v2(
+            &identity(),
+            TerminalDispositionV2::not_required(
+                completed.trace().session_id().clone(),
+                completed.trace().revision(),
+                "No handoff required",
+                None,
+                UnixMillis::new(21),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    store
+        .archive_current_session_v2(
+            &identity(),
+            completed.workspace_revision(),
+            completed.trace().revision(),
+            podway_store::EpochMillisV1::new(30),
+        )
+        .unwrap();
+    drop(store);
+
+    let connection = Connection::open(database_path(&temporary)).unwrap();
+    connection
+        .execute(
+            "UPDATE v2_procedure_snapshots SET canonical_json = '{}' WHERE snapshot_id = ?1",
+            [completed.snapshot().snapshot_id().as_str()],
+        )
+        .unwrap();
+    drop(connection);
+
+    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 40);
+    let summaries = reopened.list_archived_sessions_v2(&identity()).unwrap();
+    assert_eq!(summaries.len(), 1);
+    assert!(
+        reopened
+            .read_archived_session_v2(&identity(), completed.trace().session_id())
+            .is_err()
+    );
+    let purged = reopened
+        .purge_archived_session_v2(
+            &identity(),
+            completed.trace().session_id(),
+            completed.trace().revision(),
+        )
+        .unwrap();
+    assert_eq!(purged.session_id(), completed.trace().session_id());
+    assert!(
+        reopened
+            .list_archived_sessions_v2(&identity())
+            .unwrap()
+            .is_empty()
+    );
+}
+
+fn apply_schema_migration_fixture(
+    connection: &mut Connection,
+    version: i64,
+    name: &str,
+    checksum: String,
+    ddl: &str,
+) {
+    connection
+        .pragma_update(None, "foreign_keys", false)
+        .unwrap();
+    let transaction = connection.transaction().unwrap();
+    transaction.execute_batch(ddl).unwrap();
+    transaction
+        .execute(
+            "INSERT INTO schema_migrations (version, name, checksum, applied_at_ms) \
+             VALUES (?1, ?2, ?3, 1)",
+            (version, name, checksum),
+        )
+        .unwrap();
+    transaction.commit().unwrap();
+    connection
+        .pragma_update(None, "foreign_keys", true)
+        .unwrap();
+}
+
+#[test]
+fn direct_v6_and_v7_upgrades_preserve_terminal_state_and_disposition() {
+    for starting_version in [6_i64, 7_i64] {
+        let temporary = TempDir::new().unwrap();
+        let running = graph_state(
+            8_930 + starting_version as u64,
+            8_940 + starting_version as u64,
+            10,
+        );
+        let active = running.trace().active_attempt().unwrap();
+        let completed = running
+            .complete_active_action_v2(
+                running.trace().revision(),
+                active.attempt_id(),
+                None,
+                UnixMillis::new(20),
+            )
+            .unwrap()
+            .into_state();
+        let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
+        store
+            .create_graph_session_v2(&identity(), running.clone())
+            .unwrap();
+        store
+            .replace_graph_session_v2(
+                &identity(),
+                running.workspace_revision(),
+                running.trace().revision(),
+                completed.clone(),
+            )
+            .unwrap();
+        drop(store);
+
+        let mut connection = Connection::open(database_path(&temporary)).unwrap();
+        crate::int_v2_only_schema::restore_schema_v4_shape(&connection);
+        crate::int_v2_only_schema::apply_reserved_schema_v5(&mut connection);
+        connection
+            .execute(
+                "INSERT INTO schema_migrations (version, name, checksum, applied_at_ms) \
+                 VALUES (5, ?1, ?2, 1)",
+                (
+                    podway_store::schema::SQLITE_PREPARED_LIFECYCLE_MIGRATION_NAME_V5,
+                    podway_store::schema::sqlite_v5_ddl_checksum(),
+                ),
+            )
+            .unwrap();
+        apply_schema_migration_fixture(
+            &mut connection,
+            6,
+            podway_store::schema::SQLITE_EXTERNAL_CHECK_RESULT_MIGRATION_NAME_V6,
+            podway_store::schema::sqlite_v6_ddl_checksum(),
+            include_str!("../../../assets/specifications/sqlite-v6.sql"),
+        );
+        if starting_version == 7 {
+            apply_schema_migration_fixture(
+                &mut connection,
+                7,
+                podway_store::schema::SQLITE_RETAINED_TERMINAL_SESSIONS_MIGRATION_NAME_V7,
+                podway_store::schema::sqlite_v7_ddl_checksum(),
+                include_str!("../../../assets/specifications/sqlite-v7.sql"),
+            );
+        }
+        connection
+            .execute(
+                "INSERT INTO v2_terminal_dispositions (
+                    session_id, terminal_session_revision, kind, summary,
+                    stable_reference, reason, actor, recorded_at_ms
+                 ) VALUES (?1, ?2, 'not_required', NULL, NULL, ?3, NULL, 21)",
+                (
+                    completed.trace().session_id().as_str(),
+                    completed.trace().revision().get(),
+                    "No handoff is required",
+                ),
+            )
+            .unwrap();
+        drop(connection);
+
+        let migrated = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 30);
+        assert_eq!(
+            migrated.read_graph_session_v2(&identity()).unwrap(),
+            Some(completed.clone()),
+            "schema v{starting_version} current terminal state must survive"
+        );
+        let dispositions = migrated.read_terminal_dispositions_v2(&identity()).unwrap();
+        assert_eq!(dispositions.len(), 1);
+        assert_eq!(
+            dispositions[0].kind(),
+            TerminalDispositionKindV2::NotRequired
+        );
+        drop(migrated);
+
+        let connection = Connection::open(database_path(&temporary)).unwrap();
+        assert_eq!(
+            connection
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            8
+        );
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn admit_blocker_command_and_claim(
     store: &SqliteStoreV1,
@@ -1813,6 +2327,118 @@ fn graph_start_replace_atomically_replaces_a_graph_task() {
         store.read_graph_session_v2(&identity()).unwrap(),
         Some(next)
     );
+}
+
+#[test]
+fn graph_start_supersede_cancels_archives_and_creates_successor_atomically() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
+    let previous = graph_state(8_010, 8_011, 10);
+    store
+        .create_graph_session_v2(&identity(), previous.clone())
+        .unwrap();
+    let next = graph_state(8_012, 8_013, 30);
+    let claimed = admit_and_claim(
+        &store,
+        DomainCommand::SessionStartReplace,
+        "v2-start-supersede",
+        8_014,
+        AdmissionSessionIdentityV1::Exact(previous.trace().session_id().clone()),
+        Some(previous.trace().revision()),
+    );
+
+    store
+        .commit_graph_start_terminal_v2(
+            claimed.claim().clone(),
+            GraphStartCurrentTaskV2::Supersede {
+                session_id: previous.trace().session_id().clone(),
+                session_revision: previous.trace().revision(),
+                reason: "The new task supersedes this work".to_owned(),
+                actor: Some(ActorAttributionV2::new("developer").unwrap()),
+            },
+            next.clone(),
+            UnixMillis::new(40),
+        )
+        .unwrap();
+
+    assert_eq!(
+        store.read_graph_session_v2(&identity()).unwrap(),
+        Some(next.clone())
+    );
+    let archived = store
+        .read_archived_session_v2(&identity(), previous.trace().session_id())
+        .unwrap()
+        .unwrap();
+    assert_eq!(archived.trace().lifecycle(), SessionLifecycle::Cancelled);
+    assert_eq!(archived.trace().revision(), Revision::new(2));
+    assert_eq!(
+        archived.cancel_reason(),
+        Some("The new task supersedes this work")
+    );
+
+    drop(store);
+    let connection = Connection::open(database_path(&temporary)).unwrap();
+    let disposition: (String, String, String, String) = connection
+        .query_row(
+            "SELECT kind, reason, successor_session_id, actor \
+             FROM v2_terminal_dispositions WHERE session_id = ?1",
+            [previous.trace().session_id().as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(disposition.0, "superseded");
+    assert_eq!(disposition.1, "The new task supersedes this work");
+    assert_eq!(disposition.2, next.trace().session_id().as_str());
+    assert_eq!(disposition.3, "developer");
+}
+
+#[test]
+fn graph_start_disposition_race_returns_typed_state_conflict_without_mutation() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
+    let current = graph_state(8_020, 8_021, 10);
+    store
+        .create_graph_session_v2(&identity(), current.clone())
+        .unwrap();
+    let claimed = admit_and_claim(
+        &store,
+        DomainCommand::SessionStartReplace,
+        "v2-start-disposition-race",
+        8_022,
+        AdmissionSessionIdentityV1::Exact(current.trace().session_id().clone()),
+        Some(current.trace().revision()),
+    );
+
+    assert!(matches!(
+        store.commit_graph_start_terminal_v2(
+            claimed.claim().clone(),
+            GraphStartCurrentTaskV2::DisposeAndArchive {
+                session_id: current.trace().session_id().clone(),
+                session_revision: current.trace().revision(),
+                disposition_kind: TerminalDispositionKindV2::NotRequired,
+                summary: None,
+                stable_reference: None,
+                reason: Some("No handoff is required".to_owned()),
+                actor: None,
+            },
+            graph_state(8_023, 8_024, 30),
+            UnixMillis::new(40),
+        ),
+        Err(StoreErrorV1::SessionStartStateConflictV1 {
+            lifecycle: SessionLifecycle::Running,
+            current_terminal_disposition: false,
+        })
+    ));
+    assert_eq!(
+        store.read_graph_session_v2(&identity()).unwrap(),
+        Some(current)
+    );
+    let job = store
+        .read_job(&identity(), claimed.job().job_id())
+        .unwrap()
+        .unwrap();
+    assert_eq!(job.state(), JobStateV1::Running);
+    assert!(job.terminal_receipt().is_none());
 }
 
 #[test]

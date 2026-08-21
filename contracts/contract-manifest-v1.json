@@ -3,7 +3,7 @@
     {
       "kind": "catalog",
       "path": "contracts/command-routes.json",
-      "sha256": "sha256:d8b1aafe37289980d6db9222297c5db00c64f4a04204c4fbcb5d1b721da98113"
+      "sha256": "sha256:5d6c176aca82f1b055033a6617cea5517b40e5913e20d0679c90b770439831b6"
     },
     {
       "kind": "known_answer_fixture",
@@ -33,7 +33,7 @@
     {
       "kind": "catalog",
       "path": "release/dolgorae-adapter-contract-v2.json",
-      "sha256": "sha256:e1327dbe88a0b7fbad1832c748d8d7b0a9374db2ad73f33b0880a3b3deda0e40"
+      "sha256": "sha256:274df0081c10a7fb204e5bb72c9fdc9dfb8ad5a1481775ea51a12d0317563902"
     },
     {
       "kind": "schema",
@@ -218,7 +218,7 @@
     {
       "kind": "schema",
       "path": "schemas/output-v3.schema.json",
-      "sha256": "sha256:1de826ec00b305cad19316f1dc7bba6eec3edec2f84f71dc9159d67331158d45"
+      "sha256": "sha256:b8a08fdf59bf2e92e027095d7390ae4e6a1f4fce0592fe6a0c434ae04f569bcf"
     },
     {
       "kind": "schema",
@@ -287,6 +287,41 @@
     },
     {
       "kind": "schema",
+      "path": "schemas/session-archive-limit-details-v1.schema.json",
+      "sha256": "sha256:9920f06643c4cb6eb0062febf1a81fb7d3474272a06127443e16be2241d79322"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/session-archive-list-result-v1.schema.json",
+      "sha256": "sha256:5b426475deb6d4135623ab13307e4ffa20782a1e3074df00e4bbd64b4206f095"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/session-archive-not-eligible-details-v1.schema.json",
+      "sha256": "sha256:d881747f12060b4f9599d25dfb8cfca9009a0d7d632dc797c150d53957c6e8fc"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/session-archive-not-found-details-v1.schema.json",
+      "sha256": "sha256:68867832ea66bcbb607daf7e9aad9a9ba187f5af59f318d8a1dab7ce3fec0249"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/session-archive-purge-result-v1.schema.json",
+      "sha256": "sha256:b3133be3647686c1fc15ebef1591cc32602a73b295f9973441816ed14b363558"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/session-archive-result-v1.schema.json",
+      "sha256": "sha256:0f8d53de0f5a6df9b3765bba42026b8286edc6b2cae4f06aada7457d336fb433"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/session-archive-show-result-v1.schema.json",
+      "sha256": "sha256:142ad6d627625a5241f60dc8bbe649e498431551697254fbc5563e0e68dce96d"
+    },
+    {
+      "kind": "schema",
       "path": "schemas/session-begin-result-v1.schema.json",
       "sha256": "sha256:d311a85c4afc0b4e57e16a50604626bea9d44aa043f8d581daca06ea4781a757"
     },
@@ -302,13 +337,23 @@
     },
     {
       "kind": "schema",
+      "path": "schemas/session-start-decision-required-details-v1.schema.json",
+      "sha256": "sha256:4b54dde97b9be07effa32d0ffdde691dccdaf457d0ce16dfd1d360ff49c0525c"
+    },
+    {
+      "kind": "schema",
       "path": "schemas/session-start-result-v2.schema.json",
       "sha256": "sha256:5f139d4490ced94204f47b32591c0ab319dd2566e690d6d3b82a6b2391df20f7"
     },
     {
       "kind": "schema",
       "path": "schemas/session-start-result-v3.schema.json",
-      "sha256": "sha256:205098ea9ea6732ef39d7e4a021735e739e86ed8a4785b5448e83f476a4ea97c"
+      "sha256": "sha256:f6f32d45d2e16943433445b0ce8a00acb1e5fc89a0e086834d859fda4eaeffc7"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/session-start-state-conflict-details-v1.schema.json",
+      "sha256": "sha256:89106b983e2ae8c584c22e26f1e96e9ba4c428c211e57147cf02b75ceec0b0ca"
     },
     {
       "kind": "schema",
@@ -343,7 +388,7 @@
     {
       "kind": "schema",
       "path": "schemas/v2-result-components-v2.schema.json",
-      "sha256": "sha256:e20c147d02bcf9ce4c0555ed95b9407abcc33062d40ceb770355992d58665251"
+      "sha256": "sha256:8081fc8459128806a9d29e3215099c12f55cf88a698d6f82d3593ffe35905d3d"
     },
     {
       "kind": "schema",
@@ -393,17 +438,17 @@
     {
       "kind": "catalog",
       "path": "spec/command-catalog.yaml",
-      "sha256": "sha256:d7019846bda7be5586d23359f9676c1d08c7ec834c8b782f3da49c5416f876a9"
+      "sha256": "sha256:bb5862a3f86fad4d34c1e7be34d386c498b6a1c2b3363a9d325de0e00c26f0c2"
     },
     {
       "kind": "catalog",
       "path": "spec/error-codes.json",
-      "sha256": "sha256:84130a02f43c0f700a3bbeee0548b481f1b3e51c140eb19422025ff953db5630"
+      "sha256": "sha256:adab5ecd596362ba9ecd73619330548622b834eb6aad6a864de93869593bd39b"
     },
     {
       "kind": "transition_matrix",
       "path": "spec/state-transition-matrix.csv",
-      "sha256": "sha256:69e91669698ede53fae8de5cf533f967bb0e05283a2681d68dad30bea02baf64"
+      "sha256": "sha256:cf32ca8ad099e5877455cc853bbd4629d67c1b8bf82fe7a1bec172b721b10d0b"
     },
     {
       "kind": "known_answer_fixture",
@@ -478,10 +523,10 @@
     {
       "kind": "known_answer_fixture",
       "path": "tests/fixtures/v2/protocol/result-families.json",
-      "sha256": "sha256:e70969429d39ca556f21df864e7487547f440b140fda3b46c025e87157b17c6b"
+      "sha256": "sha256:23423b1060f6a0fedd1097ac458ca8a1cd8cb3c1a2a7e88aa964d514d01a248a"
     }
   ],
-  "digest": "sha256:3821d5c1350a63bc2f7d0689e568b04552e5dbb7afdc88eca892fa5349ee1b2f",
+  "digest": "sha256:b9437d6f8a81cf69ba5fcc81071bdc780add03d23c4ed640cdf5668a77373edd",
   "product": "podway",
   "product_version": "0.2.5",
   "schema_version": "podway.contract-manifest/v1",

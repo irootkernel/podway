@@ -19,7 +19,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use clap::{ArgAction, ArgMatches, Args, CommandFactory, Parser, Subcommand};
+use clap::{ArgAction, ArgMatches, Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use nix::{
     errno::Errno,
     fcntl::{OFlag, open, openat, renameat},
@@ -251,6 +251,10 @@ enum Command {
         #[command(subcommand)]
         command: DispositionCommand,
     },
+    Archive {
+        #[command(subcommand)]
+        command: Option<ArchiveCommand>,
+    },
     Reset(ResetArgs),
     Check {
         #[arg(value_name = "ITEM_ID")]
@@ -294,6 +298,26 @@ enum Command {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+#[value(rename_all = "snake_case")]
+enum ExistingSessionPolicy {
+    Preserve,
+    Delete,
+}
+
+#[derive(Clone, Debug)]
+enum StartTerminalDisposition {
+    HandedOff {
+        summary: String,
+        reference: String,
+        actor: Option<String>,
+    },
+    NotRequired {
+        reason: String,
+        actor: Option<String>,
+    },
+}
+
 #[derive(Debug, Args)]
 struct StartArgs {
     #[arg(
@@ -319,14 +343,22 @@ struct StartArgs {
     expect_procedure_digest: Option<String>,
     #[arg(long, value_name = "TITLE")]
     task: String,
-    #[arg(long, action = ArgAction::SetTrue, conflicts_with = "replace_eligible")]
-    replace: bool,
-    #[arg(long, action = ArgAction::SetTrue, conflicts_with = "replace")]
-    replace_eligible: bool,
-    #[arg(long, value_name = "TEXT", requires = "replace")]
+    #[arg(long, value_enum, value_name = "POLICY")]
+    on_existing: Option<ExistingSessionPolicy>,
+    #[arg(long, value_name = "TEXT")]
+    supersede_reason: Option<String>,
+    #[arg(long, value_name = "TEXT")]
+    actor: Option<String>,
+    #[arg(long, value_name = "TEXT")]
     progress_summary: Option<String>,
     #[arg(long, action = ArgAction::SetTrue)]
     dry_run: bool,
+    #[arg(skip)]
+    auto_archive_terminal: bool,
+    #[arg(skip)]
+    terminal_disposition: Option<StartTerminalDisposition>,
+    #[arg(skip)]
+    delete_confirmed: bool,
 }
 
 #[derive(Debug, Args)]
@@ -626,6 +658,25 @@ enum WorkspaceCommand {
 }
 
 #[derive(Debug, Subcommand)]
+enum ArchiveCommand {
+    List,
+    Show {
+        #[arg(long, value_name = "UUID")]
+        session_id: String,
+        #[arg(long, action = ArgAction::SetTrue)]
+        verbose: bool,
+        #[arg(long, value_name = "N", requires = "verbose")]
+        history_before: Option<u64>,
+    },
+    Purge {
+        #[arg(long, value_name = "UUID")]
+        session_id: String,
+        #[arg(skip)]
+        expected_session_revision: Option<u64>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 enum JobCommand {
     List {
         #[arg(long, value_parser = ["queued", "running", "succeeded", "failed", "cancelled"])]
@@ -657,7 +708,11 @@ impl Command {
             Self::Workspace {
                 command: WorkspaceCommand::Repair,
             } => Some("workspace.repair"),
-            Self::Start(args) if args.replace || args.replace_eligible => {
+            Self::Start(args)
+                if args.on_existing.is_some()
+                    || args.auto_archive_terminal
+                    || args.terminal_disposition.is_some() =>
+            {
                 Some("session.start_replace")
             }
             Self::Start(_) => Some("session.start"),
@@ -686,6 +741,16 @@ impl Command {
             Self::Disposition { .. } => Some("session.terminal_disposition"),
             Self::Reset(args) if args.all => Some("workspace.reset_all"),
             Self::Reset(_) => Some("session.reset"),
+            Self::Archive { command: None } => Some("session.archive"),
+            Self::Archive {
+                command: Some(ArchiveCommand::List),
+            } => Some("session.archive_list"),
+            Self::Archive {
+                command: Some(ArchiveCommand::Show { .. }),
+            } => Some("session.archive_show"),
+            Self::Archive {
+                command: Some(ArchiveCommand::Purge { .. }),
+            } => Some("session.archive_purge"),
             Self::Check { .. } => Some("item.check"),
             Self::Uncheck { .. } => Some("item.uncheck"),
             Self::Set(_) => Some("item.set"),
@@ -783,6 +848,7 @@ impl Command {
             | Self::Unblock { .. }
             | Self::Cancel { .. }
             | Self::Disposition { .. }
+            | Self::Archive { command: None }
             | Self::Check { .. }
             | Self::Uncheck { .. }
             | Self::Set(_)
@@ -810,6 +876,7 @@ impl Command {
             | Self::Unblock { .. }
             | Self::Cancel { .. }
             | Self::Disposition { .. }
+            | Self::Archive { command: None }
             | Self::Check { .. }
             | Self::Uncheck { .. }
             | Self::Set(_)
@@ -818,8 +885,15 @@ impl Command {
             | Self::Attach(_)
             | Self::Clear { .. }
             | Self::Record(_) => true,
-            Self::Start(args) => args.replace || args.replace_eligible,
+            Self::Start(args) => {
+                args.on_existing.is_some()
+                    || args.auto_archive_terminal
+                    || args.terminal_disposition.is_some()
+            }
             Self::Reset(args) => !args.all,
+            Self::Archive {
+                command: Some(ArchiveCommand::Purge { .. }),
+            } => true,
             _ => false,
         }
     }
@@ -856,6 +930,7 @@ impl Command {
                 | Self::Unblock { .. }
                 | Self::Cancel { .. }
                 | Self::Disposition { .. }
+                | Self::Archive { .. }
                 | Self::Reset(_)
                 | Self::Check { .. }
                 | Self::Uncheck { .. }
@@ -870,7 +945,11 @@ impl Command {
 
     const fn accepts_session_identity(&self) -> bool {
         match self {
-            Self::Start(args) => args.replace || args.replace_eligible,
+            Self::Start(args) => {
+                args.on_existing.is_some()
+                    || args.auto_archive_terminal
+                    || args.terminal_disposition.is_some()
+            }
             Self::Begin(_)
             | Self::Status(_)
             | Self::Next(_)
@@ -886,6 +965,7 @@ impl Command {
             | Self::Unblock { .. }
             | Self::Cancel { .. }
             | Self::Disposition { .. }
+            | Self::Archive { command: None }
             | Self::Reset(ResetArgs { all: false, .. })
             | Self::Check { .. }
             | Self::Uncheck { .. }
@@ -901,8 +981,13 @@ impl Command {
 
     const fn is_destructive(&self) -> bool {
         match self {
-            Self::Start(args) => args.replace && !args.dry_run,
+            Self::Start(args) => {
+                !args.dry_run && matches!(args.on_existing, Some(ExistingSessionPolicy::Delete))
+            }
             Self::Reset(args) => !args.dry_run && (args.all || args.progress_summary.is_some()),
+            Self::Archive {
+                command: Some(ArchiveCommand::Purge { .. }),
+            } => true,
             _ => false,
         }
     }
@@ -948,6 +1033,7 @@ struct StatusFacts {
     attempt_id: Option<AttemptId>,
     item_revisions: Vec<(String, Revision)>,
     goal_revision: Option<GoalRevisionNumberV2>,
+    lifecycle: String,
 }
 
 #[derive(Clone, Debug)]
@@ -982,6 +1068,12 @@ impl StatusPreflight {
             .and_then(Value::as_u64)
             .map(Revision::new)
             .ok_or_else(|| LocalFailure::response_invalid("status revision is invalid"))?;
+        let lifecycle = session
+            .get("lifecycle")
+            .and_then(Value::as_str)
+            .filter(|value| matches!(*value, "prepared" | "running" | "completed" | "cancelled"))
+            .map(str::to_owned)
+            .ok_or_else(|| LocalFailure::response_invalid("status lifecycle is invalid"))?;
         let attempt_id = result
             .get("current")
             .and_then(Value::as_object)
@@ -1022,6 +1114,7 @@ impl StatusPreflight {
                 attempt_id,
                 item_revisions,
                 goal_revision,
+                lifecycle,
             },
         })
     }
@@ -1132,10 +1225,14 @@ impl StatusFacts {
                 ),
             );
         }
-        if matches!(command, Command::Begin(_) | Command::Disposition { .. }) {
+        if matches!(
+            command,
+            Command::Begin(_) | Command::Disposition { .. } | Command::Archive { command: None }
+        ) {
             return self.v2_preconditions(session_id, session_revision, None, false, None);
         }
-        if matches!(command, Command::Start(args) if args.replace || args.replace_eligible) {
+        if matches!(command, Command::Start(args) if args.on_existing.is_some() || args.auto_archive_terminal || args.terminal_disposition.is_some())
+        {
             return PreconditionsV1::new(
                 Some(session_id),
                 Some(session_revision),
@@ -1304,6 +1401,7 @@ impl LocalFailure {
             "DIGEST_CONFIRMATION_REQUIRED" => (LOCAL_USAGE_EXIT, false),
             "PROCEDURE_DIGEST_MISMATCH" => (4, false),
             "PATH_OUTSIDE_WORKTREE" => (5, false),
+            "SESSION_START_DECISION_REQUIRED" => (5, false),
             "INTERNAL_ERROR" => (LOCAL_CLIENT_EXIT, false),
             _ => unreachable!("local failures must use a catalogued error code"),
         };
@@ -1340,6 +1438,44 @@ impl LocalFailure {
 
     fn response_invalid(message: impl Into<String>) -> Self {
         Self::catalog("INTERNAL_ERROR", message, "cli")
+    }
+
+    fn internal(message: impl Into<String>) -> Self {
+        Self::catalog("INTERNAL_ERROR", message, "cli")
+    }
+
+    fn session_start_decision_required(
+        lifecycle: &str,
+        current_terminal_disposition: bool,
+        allowed_actions: &[&str],
+    ) -> Self {
+        let mut failure = Self::catalog(
+            "SESSION_START_DECISION_REQUIRED",
+            "starting a new session requires an explicit existing-session decision",
+            "session.start",
+        );
+        failure.details = Map::from_iter([
+            (
+                "schema".to_owned(),
+                Value::String("podway.session-start-decision-required-details/v1".to_owned()),
+            ),
+            ("lifecycle".to_owned(), Value::String(lifecycle.to_owned())),
+            (
+                "current_terminal_disposition".to_owned(),
+                Value::Bool(current_terminal_disposition),
+            ),
+            (
+                "allowed_actions".to_owned(),
+                Value::Array(
+                    allowed_actions
+                        .iter()
+                        .map(|value| Value::String((*value).to_owned()))
+                        .collect(),
+                ),
+            ),
+            ("admission".to_owned(), json!({"admitted": false})),
+        ]);
+        failure
     }
 
     fn mutation_outcome_unknown(idempotency_key: &IdempotencyKeyV1) -> Self {
@@ -1550,7 +1686,7 @@ fn parse_failure_command_context_from_matches(
             &[("show", "workspace.show"), ("repair", "workspace.repair")],
         )?,
         "start" => ParseFailureCommandContext::new(
-            if matches.get_flag("replace") || matches.get_flag("replace_eligible") {
+            if matches.contains_id("on_existing") {
                 "session.start_replace"
             } else {
                 "session.start"
@@ -1583,6 +1719,13 @@ fn parse_failure_command_context_from_matches(
         "unblock" => ParseFailureCommandContext::new("session.unblock", true),
         "cancel" => ParseFailureCommandContext::new("session.cancel", true),
         "disposition" => ParseFailureCommandContext::new("session.terminal_disposition", true),
+        "archive" => match matches.subcommand() {
+            None => ParseFailureCommandContext::new("session.archive", true),
+            Some(("list", _)) => ParseFailureCommandContext::new("session.archive_list", false),
+            Some(("show", _)) => ParseFailureCommandContext::new("session.archive_show", false),
+            Some(("purge", _)) => ParseFailureCommandContext::new("session.archive_purge", false),
+            _ => return None,
+        },
         "reset" => ParseFailureCommandContext::new(
             if matches.get_flag("all") {
                 "workspace.reset_all"
@@ -1681,7 +1824,7 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
     if let Some(local) = execute_local(&cli)? {
         return Ok(local);
     }
-    let wire_name = cli
+    let mut wire_name = cli
         .command
         .daemon_wire_name()
         .ok_or_else(|| LocalFailure::request_invalid("unsupported command"))?;
@@ -1694,8 +1837,7 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
             &cli.command,
             Command::Start(StartArgs {
                 dry_run: true,
-                replace: false,
-                replace_eligible: false,
+                on_existing: None,
                 ..
             })
         )
@@ -1707,8 +1849,165 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
     let target = workspace_target(cli.worktree.take())?;
     let wait_timeout_ms = cli.timeout.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS);
     let explicit = ExplicitPreconditions::parse(&cli)?;
+    apply_archive_purge_revision(&mut cli.command, &explicit)?;
     let client = daemon_client(wait_timeout_ms, cli.socket.as_deref(), cli.dev)
         .map_err(|failure| failure.with_command(wire_name))?;
+
+    let replaying_plain_start = cli.idempotency_key.is_some()
+        && matches!(
+            &cli.command,
+            Command::Start(StartArgs {
+                on_existing: None,
+                auto_archive_terminal: false,
+                terminal_disposition: None,
+                ..
+            })
+        );
+    if matches!(&cli.command, Command::Start(_)) {
+        let status_request = build_request(
+            "session.status",
+            &target,
+            identity_probe_spec(wait_timeout_ms, &explicit)?,
+        )?;
+        match request_daemon(&client, &status_request)
+            .map_err(|failure| failure.with_command(wire_name))?
+        {
+            ResponseEnvelopeV2::OutputV2(status) => {
+                let preflight = StatusPreflight::from_output_v2(&status)
+                    .map_err(|failure| failure.with_command(wire_name))?;
+                if replaying_plain_start
+                    && start_idempotency_key_exists(
+                        &client,
+                        &target,
+                        wait_timeout_ms,
+                        &preflight.transport_workspace_id,
+                        cli.idempotency_key
+                            .as_deref()
+                            .expect("plain start replay has an idempotency key"),
+                    )?
+                {
+                    let (operation, payload) =
+                        daemon_payload(&mut cli.command, cli.idempotency_key.as_deref())?;
+                    let request = build_request(
+                        wire_name,
+                        &target,
+                        RequestSpec {
+                            operation,
+                            expected_uuid: Some(
+                                explicit
+                                    .workspace_id
+                                    .clone()
+                                    .unwrap_or(preflight.transport_workspace_id),
+                            ),
+                            idempotency_key: requires_idempotency_key(operation)
+                                .then(|| mutation_key(cli.idempotency_key))
+                                .transpose()?,
+                            preconditions: direct_preconditions(&cli.command, &explicit)?,
+                            detach: cli.detach,
+                            wait_timeout_ms,
+                            payload,
+                        },
+                    )?;
+                    return request_daemon(&client, &request)
+                        .map(|response| RunResult::Response(Box::new(response)));
+                }
+                let terminal_disposed = if matches!(
+                    preflight.facts.lifecycle.as_str(),
+                    "completed" | "cancelled"
+                ) {
+                    Some(start_terminal_disposition_is_current(
+                        &client,
+                        &target,
+                        wait_timeout_ms,
+                        &preflight,
+                    )?)
+                } else {
+                    None
+                };
+                match resolve_existing_start(&mut cli, &preflight, terminal_disposed)? {
+                    ExistingStartResolution::Continue => {
+                        eprintln!(
+                            "No new session was created. Continuing existing {} session {} at revision {}.",
+                            preflight.facts.lifecycle,
+                            preflight.facts.session_id,
+                            preflight.facts.session_revision.get(),
+                        );
+                        let request = build_request(
+                            "session.next",
+                            &target,
+                            RequestSpec {
+                                operation: OperationV1::Query,
+                                expected_uuid: Some(preflight.transport_workspace_id.clone()),
+                                idempotency_key: None,
+                                preconditions: PreconditionsV1::new(
+                                    Some(preflight.facts.session_id.clone()),
+                                    None,
+                                    None,
+                                    None,
+                                    None,
+                                    None,
+                                )
+                                .map_err(|_| {
+                                    LocalFailure::request_invalid(
+                                        "continued-session guidance fence is invalid",
+                                    )
+                                })?,
+                                detach: false,
+                                wait_timeout_ms,
+                                payload: Map::from_iter([(
+                                    "wait_for_idle".to_owned(),
+                                    Value::Bool(true),
+                                )]),
+                            },
+                        )?;
+                        return request_daemon(&client, &request)
+                            .map(|response| RunResult::Response(Box::new(response)));
+                    }
+                    ExistingStartResolution::Replace => {
+                        wire_name = "session.start_replace";
+                        let (operation, payload) =
+                            daemon_payload(&mut cli.command, cli.idempotency_key.as_deref())?;
+                        let preconditions = preflight
+                            .facts
+                            .preconditions(&cli.command, &explicit)
+                            .map_err(|failure| failure.with_command(wire_name))?;
+                        let request = build_request(
+                            wire_name,
+                            &target,
+                            RequestSpec {
+                                operation,
+                                expected_uuid: Some(
+                                    explicit
+                                        .workspace_id
+                                        .clone()
+                                        .unwrap_or(preflight.transport_workspace_id),
+                                ),
+                                idempotency_key: requires_idempotency_key(operation)
+                                    .then(|| mutation_key(cli.idempotency_key))
+                                    .transpose()?,
+                                preconditions,
+                                detach: cli.detach,
+                                wait_timeout_ms,
+                                payload,
+                            },
+                        )?;
+                        return request_daemon(&client, &request)
+                            .map(|response| RunResult::Response(Box::new(response)));
+                    }
+                }
+            }
+            ResponseEnvelopeV2::Error(error) if error.code().as_str() == "SESSION_NOT_FOUND" => {
+                let Command::Start(args) = &mut cli.command else {
+                    unreachable!("start was checked above")
+                };
+                args.on_existing = None;
+                wire_name = "session.start";
+            }
+            ResponseEnvelopeV2::Error(error) => {
+                return re_correlate_preflight_error(&error, wire_name);
+            }
+        }
+    }
 
     let reset_all_workspace_id =
         if matches!(&cli.command, Command::Reset(ResetArgs { all: true, .. })) {
@@ -1744,6 +2043,7 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
         && !fully_fenced_start_replace(&cli.command, &explicit)
         && !fully_fenced_v2_start_replace(&cli.command, &explicit)
         && !fully_fenced_v2_mutation(&cli.command, &explicit)
+        && !fully_fenced_archive_purge(&cli.command, &explicit)
         && !matches!(cli.command, Command::Record(_))
     {
         let status_request = build_request(
@@ -1814,12 +2114,339 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
     )?;
     request_daemon(&client, &request).map(|response| RunResult::Response(Box::new(response)))
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExistingStartResolution {
+    Continue,
+    Replace,
+}
+
+fn start_terminal_disposition_is_current(
+    client: &DaemonClientV1,
+    target: &WorkspaceTarget,
+    wait_timeout_ms: u64,
+    preflight: &StatusPreflight,
+) -> Result<bool, LocalFailure> {
+    let request = build_request(
+        "session.reset",
+        target,
+        RequestSpec {
+            operation: OperationV1::Query,
+            expected_uuid: Some(preflight.transport_workspace_id.clone()),
+            idempotency_key: None,
+            preconditions: PreconditionsV1::new(
+                Some(preflight.facts.session_id.clone()),
+                Some(preflight.facts.session_revision),
+                None,
+                None,
+                None,
+                None,
+            )
+            .map_err(|_| LocalFailure::request_invalid("start preflight fence is invalid"))?,
+            detach: false,
+            wait_timeout_ms,
+            payload: Map::from_iter([("dry_run".to_owned(), Value::Bool(true))]),
+        },
+    )?;
+    match request_daemon(client, &request)? {
+        ResponseEnvelopeV2::OutputV2(output) => output
+            .result()
+            .get("current_terminal_disposition")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| {
+                LocalFailure::response_invalid("terminal start preflight omitted disposition state")
+            }),
+        ResponseEnvelopeV2::Error(error) => Err(LocalFailure::response_invalid(format!(
+            "terminal start preflight failed with {}",
+            error.code().as_str(),
+        ))),
+    }
+}
+
+fn start_idempotency_key_exists(
+    client: &DaemonClientV1,
+    target: &WorkspaceTarget,
+    wait_timeout_ms: u64,
+    workspace_id: &WorkspaceId,
+    idempotency_key: &str,
+) -> Result<bool, LocalFailure> {
+    let request = build_request(
+        "job.lookup",
+        target,
+        RequestSpec {
+            operation: OperationV1::Query,
+            expected_uuid: Some(workspace_id.clone()),
+            idempotency_key: None,
+            preconditions: PreconditionsV1::default(),
+            detach: false,
+            wait_timeout_ms,
+            payload: Map::from_iter([(
+                "idempotency_key".to_owned(),
+                Value::String(idempotency_key.to_owned()),
+            )]),
+        },
+    )?;
+    match request_daemon(client, &request)? {
+        ResponseEnvelopeV2::OutputV2(output) => output
+            .result()
+            .get("found")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| LocalFailure::response_invalid("job lookup omitted found state")),
+        ResponseEnvelopeV2::Error(error) => Err(LocalFailure::response_invalid(format!(
+            "start replay lookup failed with {}",
+            error.code().as_str(),
+        ))),
+    }
+}
+
+fn resolve_existing_start(
+    cli: &mut Cli,
+    preflight: &StatusPreflight,
+    terminal_disposed: Option<bool>,
+) -> Result<ExistingStartResolution, LocalFailure> {
+    let interactive = !cli.json
+        && !cli.quiet
+        && !cli.detach
+        && io::stdin().is_terminal()
+        && io::stdout().is_terminal();
+    let yes = cli.yes;
+    let Command::Start(args) = &mut cli.command else {
+        unreachable!("existing start resolution requires start")
+    };
+
+    match preflight.facts.lifecycle.as_str() {
+        "prepared" => match args.on_existing {
+            Some(ExistingSessionPolicy::Preserve) => Err(LocalFailure::request_invalid(
+                "--on-existing preserve applies only to a running session",
+            )),
+            Some(ExistingSessionPolicy::Delete) => {
+                if args.progress_summary.is_some()
+                    || args.supersede_reason.is_some()
+                    || args.actor.is_some()
+                {
+                    return Err(LocalFailure::request_invalid(
+                        "deleting a prepared session does not accept progress, reason, or actor fields",
+                    ));
+                }
+                args.delete_confirmed = true;
+                Ok(ExistingStartResolution::Replace)
+            }
+            None if interactive && !args.dry_run => match prompt_start_choice(
+                "A prepared session already exists.",
+                &[
+                    ("1", "Continue the existing task"),
+                    ("2", "Delete it permanently and start the new task"),
+                ],
+            )? {
+                Some("2") => {
+                    args.on_existing = Some(ExistingSessionPolicy::Delete);
+                    args.delete_confirmed = true;
+                    Ok(ExistingStartResolution::Replace)
+                }
+                _ => Ok(ExistingStartResolution::Continue),
+            },
+            None => Err(LocalFailure::session_start_decision_required(
+                "prepared",
+                false,
+                &["continue", "delete"],
+            )),
+        },
+        "running" => match args.on_existing {
+            Some(ExistingSessionPolicy::Preserve) => {
+                if args.progress_summary.is_some() {
+                    return Err(LocalFailure::request_invalid(
+                        "--on-existing preserve does not accept --progress-summary",
+                    ));
+                }
+                if args.supersede_reason.is_none() {
+                    return Err(LocalFailure::request_invalid(
+                        "--on-existing preserve requires --supersede-reason",
+                    ));
+                }
+                Ok(ExistingStartResolution::Replace)
+            }
+            Some(ExistingSessionPolicy::Delete) => {
+                if args.supersede_reason.is_some() || args.actor.is_some() {
+                    return Err(LocalFailure::request_invalid(
+                        "--on-existing delete does not accept supersede fields",
+                    ));
+                }
+                if !args.dry_run && (args.progress_summary.is_none() || !yes) {
+                    return Err(LocalFailure::request_invalid(
+                        "deleting a running session requires --progress-summary and --yes",
+                    ));
+                }
+                args.delete_confirmed = yes;
+                Ok(ExistingStartResolution::Replace)
+            }
+            None if interactive && !args.dry_run => match prompt_start_choice(
+                "A running session already exists.",
+                &[
+                    ("1", "Continue the existing task"),
+                    (
+                        "2",
+                        "Cancel it, preserve it as superseded, and start the new task",
+                    ),
+                    ("3", "Delete it permanently and start the new task"),
+                ],
+            )? {
+                Some("2") => {
+                    let Some(reason) = prompt_required_start_text("Supersede reason")? else {
+                        return Ok(ExistingStartResolution::Continue);
+                    };
+                    let actor = prompt_optional_start_text("Actor (optional)")?;
+                    args.on_existing = Some(ExistingSessionPolicy::Preserve);
+                    args.supersede_reason = Some(reason);
+                    args.actor = actor;
+                    Ok(ExistingStartResolution::Replace)
+                }
+                Some("3") => {
+                    let Some(summary) = prompt_required_start_text("Progress summary")? else {
+                        return Ok(ExistingStartResolution::Continue);
+                    };
+                    args.on_existing = Some(ExistingSessionPolicy::Delete);
+                    args.progress_summary = Some(summary);
+                    args.delete_confirmed = true;
+                    Ok(ExistingStartResolution::Replace)
+                }
+                _ => Ok(ExistingStartResolution::Continue),
+            },
+            None => Err(LocalFailure::session_start_decision_required(
+                "running",
+                false,
+                &["continue", "preserve", "delete"],
+            )),
+        },
+        "completed" | "cancelled" if terminal_disposed == Some(true) => {
+            if args.on_existing.is_some()
+                || args.supersede_reason.is_some()
+                || args.actor.is_some()
+                || args.progress_summary.is_some()
+            {
+                return Err(LocalFailure::request_invalid(
+                    "a disposed terminal session is archived automatically and does not accept existing-session policy fields",
+                ));
+            }
+            args.auto_archive_terminal = true;
+            Ok(ExistingStartResolution::Replace)
+        }
+        "completed" | "cancelled" => {
+            if args.on_existing.is_some() || !interactive || args.dry_run {
+                return Err(LocalFailure::session_start_decision_required(
+                    preflight.facts.lifecycle.as_str(),
+                    false,
+                    &["continue", "record_disposition"],
+                ));
+            }
+            match prompt_start_choice(
+                "A terminal session needs a disposition before it can be archived.",
+                &[
+                    ("1", "Continue without starting a new task"),
+                    ("2", "Record a handoff, archive it, and start the new task"),
+                    (
+                        "3",
+                        "Record that no handoff is required, archive it, and start the new task",
+                    ),
+                ],
+            )? {
+                Some("2") => {
+                    let Some(summary) = prompt_required_start_text("Handoff summary")? else {
+                        return Ok(ExistingStartResolution::Continue);
+                    };
+                    let Some(reference) = prompt_required_start_text("Stable reference")? else {
+                        return Ok(ExistingStartResolution::Continue);
+                    };
+                    let actor = prompt_optional_start_text("Actor (optional)")?;
+                    args.terminal_disposition = Some(StartTerminalDisposition::HandedOff {
+                        summary,
+                        reference,
+                        actor,
+                    });
+                    Ok(ExistingStartResolution::Replace)
+                }
+                Some("3") => {
+                    let Some(reason) = prompt_required_start_text("No-handoff reason")? else {
+                        return Ok(ExistingStartResolution::Continue);
+                    };
+                    let actor = prompt_optional_start_text("Actor (optional)")?;
+                    args.terminal_disposition =
+                        Some(StartTerminalDisposition::NotRequired { reason, actor });
+                    Ok(ExistingStartResolution::Replace)
+                }
+                _ => Ok(ExistingStartResolution::Continue),
+            }
+        }
+        _ => Err(LocalFailure::response_invalid(
+            "start preflight returned an unsupported session lifecycle",
+        )),
+    }
+}
+
+fn prompt_start_choice(
+    heading: &str,
+    choices: &[(&'static str, &'static str)],
+) -> Result<Option<&'static str>, LocalFailure> {
+    let mut stderr = io::stderr().lock();
+    writeln!(stderr, "{heading}")
+        .and_then(|()| {
+            for (key, label) in choices {
+                writeln!(stderr, "  {key}. {label}")?;
+            }
+            write!(stderr, "Choose [1]: ")
+        })
+        .and_then(|()| stderr.flush())
+        .map_err(|_| LocalFailure::internal("cannot write the start interview"))?;
+    let mut input = String::new();
+    let read = io::stdin()
+        .read_line(&mut input)
+        .map_err(|_| LocalFailure::request_invalid("cannot read the start interview"))?;
+    if read == 0 || input.trim().is_empty() {
+        return Ok(None);
+    }
+    let selected = input.trim();
+    choices
+        .iter()
+        .find_map(|(key, _)| (*key == selected).then_some(*key))
+        .map(Some)
+        .ok_or_else(|| LocalFailure::request_invalid("invalid start interview selection"))
+}
+
+fn prompt_required_start_text(label: &str) -> Result<Option<String>, LocalFailure> {
+    let value = prompt_start_text(label)?;
+    match value {
+        None => Ok(None),
+        Some(value) if value.trim().is_empty() => Err(LocalFailure::request_invalid(
+            "required start interview text cannot be blank",
+        )),
+        Some(value) => Ok(Some(value)),
+    }
+}
+
+fn prompt_optional_start_text(label: &str) -> Result<Option<String>, LocalFailure> {
+    Ok(prompt_start_text(label)?.filter(|value| !value.trim().is_empty()))
+}
+
+fn prompt_start_text(label: &str) -> Result<Option<String>, LocalFailure> {
+    let mut stderr = io::stderr().lock();
+    write!(stderr, "{label} (EOF cancels): ")
+        .and_then(|()| stderr.flush())
+        .map_err(|_| LocalFailure::internal("cannot write the start interview"))?;
+    let mut input = String::new();
+    let read = io::stdin()
+        .read_line(&mut input)
+        .map_err(|_| LocalFailure::request_invalid("cannot read the start interview"))?;
+    if read == 0 {
+        return Ok(None);
+    }
+    Ok(Some(input.trim_end_matches(['\r', '\n']).to_owned()))
+}
+
 fn requires_idempotency_key(operation: OperationV1) -> bool {
     matches!(operation, OperationV1::Mutate | OperationV1::Bootstrap)
 }
 
 fn fully_fenced_start_replace(command: &Command, explicit: &ExplicitPreconditions) -> bool {
-    matches!(command, Command::Start(args) if !args.dry_run && (args.replace || args.replace_eligible))
+    matches!(command, Command::Start(args) if args.on_existing.is_some() || args.auto_archive_terminal || args.terminal_disposition.is_some())
         && explicit.workspace_id.is_some()
         && explicit.session_id.is_some()
         && explicit.session_revision.is_some()
@@ -1838,6 +2465,7 @@ fn fully_fenced_v2_mutation(command: &Command, explicit: &ExplicitPreconditions)
     }
     match command {
         Command::Begin(_) | Command::Disposition { .. } => true,
+        Command::Archive { command: None } => true,
         Command::Decide(_) => explicit.attempt_id.is_some(),
         Command::Goal {
             command: GoalCommand::AssessCriterion(_),
@@ -1861,6 +2489,40 @@ fn fully_fenced_v2_mutation(command: &Command, explicit: &ExplicitPreconditions)
         } => explicit.goal_revision.is_some(),
         _ => false,
     }
+}
+
+fn fully_fenced_archive_purge(command: &Command, explicit: &ExplicitPreconditions) -> bool {
+    matches!(
+        command,
+        Command::Archive {
+            command: Some(ArchiveCommand::Purge { .. })
+        }
+    ) && explicit.session_revision.is_some()
+}
+
+fn apply_archive_purge_revision(
+    command: &mut Command,
+    explicit: &ExplicitPreconditions,
+) -> Result<(), LocalFailure> {
+    let Command::Archive {
+        command:
+            Some(ArchiveCommand::Purge {
+                expected_session_revision,
+                ..
+            }),
+    } = command
+    else {
+        return Ok(());
+    };
+    *expected_session_revision = Some(
+        explicit
+            .session_revision
+            .ok_or_else(|| {
+                LocalFailure::request_invalid("archive purge requires --if-session-revision")
+            })?
+            .get(),
+    );
+    Ok(())
 }
 
 fn reset_probe_can_recover(error: &podway_protocol::ErrorEnvelopeV1) -> bool {
@@ -1900,7 +2562,7 @@ fn direct_preconditions(
     explicit: &ExplicitPreconditions,
 ) -> Result<PreconditionsV1, LocalFailure> {
     match command {
-        Command::Start(StartArgs { dry_run: false, .. }) if matches!(command, Command::Start(args) if args.replace || args.replace_eligible) => {
+        Command::Start(_) if matches!(command, Command::Start(args) if args.on_existing.is_some() || args.auto_archive_terminal || args.terminal_disposition.is_some()) => {
             PreconditionsV1::new(
                 explicit.session_id.clone(),
                 explicit.session_revision,
@@ -1920,6 +2582,7 @@ fn direct_preconditions(
         Command::Begin(_) | Command::Disposition { .. } => {
             v2_session_preconditions(explicit, false, false)
         }
+        Command::Archive { command: None } => v2_session_preconditions(explicit, false, false),
         Command::Rework(_) => v2_session_preconditions(explicit, false, false),
         Command::Retry { .. } => v2_session_preconditions(explicit, true, false),
         Command::Skip { .. } => v2_session_preconditions(explicit, true, false),
@@ -4827,14 +5490,7 @@ fn validate_daemon_flags(cli: &Cli) -> Result<(), LocalFailure> {
     if cli.if_attempt.is_some()
         && matches!(
             command,
-            Command::Start(StartArgs { replace: true, .. })
-                | Command::Start(StartArgs {
-                    replace_eligible: true,
-                    ..
-                })
-                | Command::Begin(_)
-                | Command::Disposition { .. }
-                | Command::Reset(_)
+            Command::Start(_) | Command::Begin(_) | Command::Disposition { .. } | Command::Reset(_)
         )
     {
         return Err(LocalFailure::request_invalid(
@@ -4844,6 +5500,17 @@ fn validate_daemon_flags(cli: &Cli) -> Result<(), LocalFailure> {
     if cli.yes && !command.is_destructive() {
         return Err(LocalFailure::request_invalid(
             "--yes applies only to destructive commands",
+        ));
+    }
+    if matches!(
+        command,
+        Command::Archive {
+            command: Some(ArchiveCommand::Purge { .. })
+        }
+    ) && !cli.yes
+    {
+        return Err(LocalFailure::request_invalid(
+            "archive purge requires --yes",
         ));
     }
     if matches!(
@@ -4884,19 +5551,36 @@ fn validate_daemon_flags(cli: &Cli) -> Result<(), LocalFailure> {
         _ => {}
     }
     match command {
-        Command::Start(args) if args.replace && args.dry_run => {
+        Command::Start(args)
+            if args.supersede_reason.is_some()
+                && args.on_existing != Some(ExistingSessionPolicy::Preserve) =>
+        {
             return Err(LocalFailure::request_invalid(
-                "--dry-run supports --replace-eligible, not --replace",
+                "--supersede-reason requires --on-existing preserve",
             ));
         }
-        Command::Start(args) if args.replace && args.progress_summary.is_none() => {
+        Command::Start(args)
+            if args.actor.is_some()
+                && args.on_existing != Some(ExistingSessionPolicy::Preserve) =>
+        {
             return Err(LocalFailure::request_invalid(
-                "--replace requires --progress-summary",
+                "--actor requires --on-existing preserve",
             ));
         }
-        Command::Start(args) if args.replace_eligible && args.progress_summary.is_some() => {
+        Command::Start(args)
+            if args.on_existing == Some(ExistingSessionPolicy::Preserve)
+                && args.supersede_reason.is_none() =>
+        {
             return Err(LocalFailure::request_invalid(
-                "--replace-eligible does not support --progress-summary",
+                "--on-existing preserve requires --supersede-reason",
+            ));
+        }
+        Command::Start(args)
+            if args.progress_summary.is_some()
+                && args.on_existing != Some(ExistingSessionPolicy::Delete) =>
+        {
+            return Err(LocalFailure::request_invalid(
+                "--progress-summary requires --on-existing delete",
             ));
         }
         Command::Reset(args) if args.dry_run && args.progress_summary.is_some() => {
@@ -4951,8 +5635,22 @@ fn validate_command_shape(command: &Command) -> Result<(), LocalFailure> {
         }
     }
     match command {
+        Command::Archive {
+            command: Some(ArchiveCommand::Show { session_id, .. }),
+        }
+        | Command::Archive {
+            command: Some(ArchiveCommand::Purge { session_id, .. }),
+        } => {
+            SessionId::new(session_id.clone())
+                .map_err(|_| LocalFailure::request_invalid("archive session ID is invalid"))?;
+        }
+        _ => {}
+    }
+    match command {
         Command::Start(args) => {
             validate_optional_lifecycle_text(args.progress_summary.as_deref(), "progress summary")?;
+            validate_optional_lifecycle_text(args.supersede_reason.as_deref(), "supersede reason")?;
+            validate_actor(args.actor.as_deref())?;
         }
         Command::Reset(args) => {
             validate_optional_lifecycle_text(args.progress_summary.as_deref(), "progress summary")?;
@@ -5087,6 +5785,9 @@ fn parse_criteria(criteria: &[String]) -> Result<Vec<GoalCriterionV2>, LocalFail
 }
 
 fn confirm_if_required(cli: &Cli, command: &str) -> Result<(), LocalFailure> {
+    if matches!(cli.command, Command::Start(_)) {
+        return Ok(());
+    }
     if !cli.command.is_destructive() || cli.yes {
         return Ok(());
     }
@@ -5144,6 +5845,9 @@ fn daemon_payload(
         }
         | Command::Job {
             command: JobCommand::Cancel { .. },
+        }
+        | Command::Archive {
+            command: Some(ArchiveCommand::Purge { .. }),
         } => OperationV1::Control,
         Command::Init { .. } | Command::Reset(ResetArgs { all: true, .. }) => {
             OperationV1::Bootstrap
@@ -5184,18 +5888,53 @@ fn daemon_payload(
             }
             if args.dry_run {
                 payload.insert("dry_run".to_owned(), Value::Bool(true));
-            } else if args.replace {
-                payload.insert("confirmed".to_owned(), Value::Bool(true));
-                payload.insert(
-                    "progress_summary".to_owned(),
-                    Value::String(
-                        args.progress_summary
-                            .clone()
-                            .expect("validated force replacement summary"),
-                    ),
-                );
-            } else if args.replace_eligible {
+            }
+            if args.auto_archive_terminal {
                 payload.insert("replace_eligible".to_owned(), Value::Bool(true));
+            } else if let Some(disposition) = &args.terminal_disposition {
+                let (disposition, actor) = match disposition {
+                    StartTerminalDisposition::HandedOff {
+                        summary,
+                        reference,
+                        actor,
+                    } => (
+                        json!({
+                            "kind": "handed_off",
+                            "summary": summary,
+                            "reference": reference,
+                        }),
+                        actor,
+                    ),
+                    StartTerminalDisposition::NotRequired { reason, actor } => (
+                        json!({
+                            "kind": "not_required",
+                            "reason": reason,
+                        }),
+                        actor,
+                    ),
+                };
+                payload.insert(
+                    "resolution".to_owned(),
+                    json!({
+                        "mode": "dispose_and_archive",
+                        "disposition": disposition,
+                        "actor": actor,
+                    }),
+                );
+            } else if let Some(policy) = args.on_existing {
+                let resolution = match policy {
+                    ExistingSessionPolicy::Preserve => json!({
+                        "mode": "supersede",
+                        "reason": args.supersede_reason,
+                        "actor": args.actor,
+                    }),
+                    ExistingSessionPolicy::Delete => json!({
+                        "mode": "delete",
+                        "confirmed": args.delete_confirmed,
+                        "progress_summary": args.progress_summary,
+                    }),
+                };
+                payload.insert("resolution".to_owned(), resolution);
             }
         }
         Command::Begin(args) => {
@@ -5331,6 +6070,35 @@ fn daemon_payload(
                 );
             }
         }
+        Command::Archive { command } => match command {
+            None | Some(ArchiveCommand::List) => {}
+            Some(ArchiveCommand::Show {
+                session_id,
+                verbose,
+                history_before,
+            }) => {
+                payload.insert("session_id".to_owned(), Value::String(session_id.clone()));
+                if *verbose {
+                    payload.insert("verbose".to_owned(), Value::Bool(true));
+                }
+                if let Some(history_before) = history_before {
+                    payload.insert("history_before".to_owned(), json!(history_before));
+                }
+            }
+            Some(ArchiveCommand::Purge {
+                session_id,
+                expected_session_revision,
+            }) => {
+                payload.insert("session_id".to_owned(), Value::String(session_id.clone()));
+                payload.insert(
+                    "expected_session_revision".to_owned(),
+                    json!(expected_session_revision.expect(
+                        "archive purge revision was validated before payload construction"
+                    )),
+                );
+                payload.insert("confirmed".to_owned(), Value::Bool(true));
+            }
+        },
         Command::Check { item_id } | Command::Uncheck { item_id } | Command::Clear { item_id } => {
             payload.insert("item_id".to_owned(), Value::String(item_id.clone()));
         }
@@ -6518,7 +7286,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Usage:\n  podway workspace repair\n\nExample:\n  podway workspace repair"
         }
         "session.start" => {
-            "Usage:\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> [--if-workspace-uuid <uuid>] [--dry-run]\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'implement feature'\n  podway start --procedure .podway/procedures/custom.yaml --expect-procedure-digest sha256:<hex> --task 'implement feature'\n  podway start --preset bug-fix-v2 --task 'preview procedure' --dry-run\n\nA successful start creates a prepared session at revision 0 without a cursor, attempt, or goal. Use session.begin to start work. Procedure digests provide content integrity and correlation only; they do not authenticate or authorize a caller."
+            "Usage:\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> [--on-existing <preserve|delete>] [--supersede-reason <text>] [--actor <text>] [--progress-summary <text>] [--dry-run]\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'implement feature'\n  podway start --preset sw-dev-v2 --task 'start successor' --on-existing preserve --supersede-reason 'The successor has priority.'\n  podway start --preset sw-dev-v2 --task 'replace running work' --on-existing delete --progress-summary 'The current progress was reviewed.' --yes\n  podway start --preset bug-fix-v2 --task 'preview deletion' --dry-run --on-existing delete\n\nHuman TTY mode interviews when a nonterminal session already exists; Enter continues it and creates nothing. Noninteractive callers must choose preserve or delete. Disposed terminal sessions archive automatically. A successful start creates a prepared session at revision 0 without a cursor, attempt, or goal."
         }
         "session.begin" => {
             "Usage:\n  podway begin [--goal <text> --criterion <id>=<statement>...] [--actor <text>] [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision 0]\n\nExamples:\n  podway begin\n  podway begin --goal 'Ship safely.' --criterion tested='Tests pass.' --actor developer --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 0\n\nBegin atomically creates attempt 1 at the entry node, optionally creates goal revision 1, and changes the prepared session to running. Omitted fences are filled from a fresh status preflight."
@@ -6539,7 +7307,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Usage:\n  podway goal assess-criterion <criterion-id> --status <satisfied|unsatisfied|not_applicable> --reason <text> [--evidence <graph-node-id>]... [--item <item-id>]... [--actor <text>] --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision <n> --if-attempt <uuid> --if-goal-revision <n>\n\nExample:\n  podway goal assess-criterion tested --status satisfied --reason 'The test passed.' --evidence test --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 7 --if-attempt <uuid> --if-goal-revision 1"
         }
         "session.start_replace" => {
-            "Usage:\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> --replace-eligible --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision <n> [--dry-run]\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> --replace --progress-summary <text> --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision <n> [--yes]\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'replace unused preparation' --replace-eligible --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 0\n  podway start --preset sw-dev-v2 --task 'replace running work' --replace --progress-summary 'Superseded after preserving the current diff.' --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 7 --yes\n\nEligible replacement accepts prepared sessions and terminal sessions with a current disposition and supports read-only dry runs. Force replacement requires an explicit bounded progress summary and does not support dry runs. Every replacement creates a new prepared session."
+            "The session.start_replace wire route remains available for compatible automation, but the CLI has no replace command or replace flags. Use `podway start --on-existing preserve|delete`; see `podway help session.start`."
         }
         "session.status" => {
             "Usage:\n  podway status [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--verbose [--history-before <trace-sequence>]] [--wait-for-idle [--compact] | --after-job <uuid>]\n\nExamples:\n  podway status --verbose\n  podway status --verbose --history-before 42\n  podway status --wait-for-idle --compact"
@@ -6573,6 +7341,18 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
         }
         "session.terminal_disposition" => {
             "Usage:\n  podway disposition handed-off --summary <text> --reference <text> [--actor <text>] [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>]\n  podway disposition not-required --reason <text> [--actor <text>] [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>]\n\nA disposition is valid only for the exact current completed or cancelled revision. It makes that terminal session eligible for default reset or replacement. Omitted fences are filled from a fresh status preflight."
+        }
+        "session.archive" => {
+            "Usage:\n  podway archive [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>]\n\nArchives the current completed or cancelled session after its terminal disposition is current. The session remains immutable and readable with podway archive show."
+        }
+        "session.archive_list" => {
+            "Usage:\n  podway archive list [--if-workspace-uuid <uuid>]\n\nLists inactive sessions retained for this worktree."
+        }
+        "session.archive_show" => {
+            "Usage:\n  podway archive show --session-id <uuid> [--verbose [--history-before <n>]] [--if-workspace-uuid <uuid>]\n\nShows the preserved read-only state of one inactive session."
+        }
+        "session.archive_purge" => {
+            "Usage:\n  podway archive purge --session-id <uuid> --if-session-revision <n> --yes [--if-workspace-uuid <uuid>]\n\nPermanently deletes exactly one inactive session."
         }
         "session.reset" => {
             "Usage:\n  podway reset [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>] [--dry-run]\n  podway reset --progress-summary <text> [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>] [--yes]\n\nExamples:\n  podway reset --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 0\n  podway reset --progress-summary 'Preserved the current diff and verification notes.' --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 7 --yes\n\nDefault reset deletes only a prepared session or a terminal session with a current disposition. A dry run reports eligibility without mutation. Force reset requires a bounded progress summary and explicit confirmation; JSON or non-terminal callers must pass --yes, while an interactive caller may confirm the prompt."
@@ -7120,18 +7900,21 @@ mod tests {
             Some("session.terminal_disposition")
         );
 
-        let eligible = Cli::try_parse_from([
+        let preserve = Cli::try_parse_from([
             "podway",
             "start",
             "--preset",
             "sw-dev-v2",
             "--task",
             "task",
-            "--replace-eligible",
+            "--on-existing",
+            "preserve",
+            "--supersede-reason",
+            "A successor task takes precedence.",
         ])
         .unwrap();
         assert_eq!(
-            eligible.command.daemon_wire_name(),
+            preserve.command.daemon_wire_name(),
             Some("session.start_replace")
         );
         assert!(
@@ -7143,6 +7926,17 @@ mod tests {
                 "--task",
                 "task",
                 "--replace",
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "podway",
+                "start",
+                "--preset",
+                "sw-dev-v2",
+                "--task",
+                "task",
                 "--replace-eligible",
             ])
             .is_err()
@@ -7173,7 +7967,8 @@ mod tests {
                 "sw-dev-v2",
                 "--task",
                 "task",
-                "--replace-eligible",
+                "--on-existing",
+                "delete",
             ],
         ] {
             let cli = Cli::try_parse_from(arguments).unwrap();
@@ -7192,20 +7987,18 @@ mod tests {
         .unwrap();
         assert!(validate_daemon_flags(&reset_all_with_summary).is_err());
 
-        let force_replacement_dry_run = Cli::try_parse_from([
+        let preserve_without_reason = Cli::try_parse_from([
             "podway",
             "start",
             "--preset",
             "sw-dev-v2",
             "--task",
             "task",
-            "--replace",
-            "--progress-summary",
-            "must not be discarded",
-            "--dry-run",
+            "--on-existing",
+            "preserve",
         ])
         .unwrap();
-        assert!(validate_daemon_flags(&force_replacement_dry_run).is_err());
+        assert!(validate_daemon_flags(&preserve_without_reason).is_err());
 
         let force_reset_dry_run = Cli::try_parse_from([
             "podway",
@@ -7217,19 +8010,22 @@ mod tests {
         .unwrap();
         assert!(validate_daemon_flags(&force_reset_dry_run).is_err());
 
-        let eligible_replacement_with_summary = Cli::try_parse_from([
+        let preserve_with_summary = Cli::try_parse_from([
             "podway",
             "start",
             "--preset",
             "sw-dev-v2",
             "--task",
             "task",
-            "--replace-eligible",
+            "--on-existing",
+            "preserve",
+            "--supersede-reason",
+            "A successor takes precedence.",
             "--progress-summary",
             "must not be discarded",
         ])
         .unwrap();
-        assert!(validate_daemon_flags(&eligible_replacement_with_summary).is_err());
+        assert!(validate_daemon_flags(&preserve_with_summary).is_err());
 
         let reset_dry_run_with_confirmation =
             Cli::try_parse_from(["podway", "--yes", "reset", "--dry-run"]).unwrap();
@@ -7295,7 +8091,14 @@ mod tests {
             Some(ParseFailureCommandContext::new("session.start", true))
         );
         assert_eq!(
-            context(&["podway", "start", "--preset", "sw-dev-v2", "--replace"]),
+            context(&[
+                "podway",
+                "start",
+                "--preset",
+                "sw-dev-v2",
+                "--on-existing",
+                "delete",
+            ]),
             Some(ParseFailureCommandContext::new(
                 "session.start_replace",
                 true

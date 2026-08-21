@@ -1015,7 +1015,7 @@ fn project_prepared_next_v1(
         "suggestions": [
             {"command":"session.begin","argv":["podway","begin"]},
             {"command":"session.reset","argv":["podway","reset"]},
-            {"command":"session.start_replace","argv":["podway","start","--replace-eligible"]},
+            {"command":"session.start_replace","argv":["podway","start","--on-existing","delete"]},
         ],
     })
     .as_object()
@@ -1046,7 +1046,7 @@ fn prepared_mutation_templates(
         template("session.reset", vec!["podway", "reset"]),
         template(
             "session.start_replace",
-            vec!["podway", "start", "--replace-eligible"],
+            vec!["podway", "start", "--on-existing", "delete"],
         ),
     ]
 }
@@ -1072,10 +1072,7 @@ fn terminal_mutation_templates(
     if view.current_terminal_disposition() {
         vec![
             template("session.reset", vec!["podway", "reset"]),
-            template(
-                "session.start_replace",
-                vec!["podway", "start", "--replace-eligible"],
-            ),
+            template("session.start_replace", vec!["podway", "start"]),
         ]
     } else {
         vec![template(

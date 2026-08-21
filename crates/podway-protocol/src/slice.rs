@@ -459,12 +459,24 @@ pub struct SessionStartReplaceV1 {
 }
 
 /// The only two deletion authorities accepted for reset and replacement.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SessionDeletionModeV1 {
     Eligible,
     Force {
         progress_summary: String,
+    },
+    Delete {
+        confirmed: bool,
+        progress_summary: Option<String>,
+    },
+    Supersede {
+        reason: String,
+        actor: Option<String>,
+    },
+    DisposeAndArchive {
+        disposition: TerminalDispositionInputV1,
+        actor: Option<String>,
     },
     #[doc(hidden)]
     LegacyConfirmed,
@@ -742,6 +754,32 @@ pub struct SessionResetV1 {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct SessionArchiveV1 {
+    pub preconditions: SessionIdentityPreconditionsWireV1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionArchiveListV1;
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionArchiveShowV1 {
+    pub session_id: SessionId,
+    pub verbose: bool,
+    pub history_before: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionArchivePurgeV1 {
+    pub session_id: SessionId,
+    pub expected_session_revision: Revision,
+    pub confirmed: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct WorkspaceResetAllV1 {
     pub confirmed: bool,
     pub preconditions: WorkspaceResetAllPreconditionsWireV1,
@@ -932,7 +970,7 @@ pub struct SessionBeginV1 {
     pub preconditions: SessionIdentityPreconditionsWireV1,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TerminalDispositionInputV1 {
     HandedOff { summary: String, reference: String },
@@ -994,7 +1032,7 @@ pub struct ProcedureV2MutationRequestV1 {
 }
 
 /// The authoritative G006 daemon route set. No aliases are admitted at the protocol boundary.
-pub const DAEMON_COMMAND_NAMES_V1: [&str; 31] = [
+pub const DAEMON_COMMAND_NAMES_V1: [&str; 35] = [
     "workspace.init",
     "workspace.doctor",
     "workspace.show",
@@ -1012,6 +1050,10 @@ pub const DAEMON_COMMAND_NAMES_V1: [&str; 31] = [
     "session.unblock",
     "session.cancel",
     "session.reset",
+    "session.archive",
+    "session.archive_list",
+    "session.archive_show",
+    "session.archive_purge",
     "workspace.reset_all",
     "item.check",
     "item.uncheck",
@@ -1049,6 +1091,10 @@ pub enum SliceCommandV1 {
     SessionUnblock(SessionUnblockV1),
     SessionCancel(SessionCancelV1),
     SessionReset(SessionResetV1),
+    SessionArchive(SessionArchiveV1),
+    SessionArchiveList(SessionArchiveListV1),
+    SessionArchiveShow(SessionArchiveShowV1),
+    SessionArchivePurge(SessionArchivePurgeV1),
     WorkspaceResetAll(WorkspaceResetAllV1),
     ItemCheck(ItemCheckV1),
     ItemUncheck(ItemUncheckV1),
@@ -1085,6 +1131,10 @@ impl SliceCommandV1 {
             Self::SessionUnblock(_) => "session.unblock",
             Self::SessionCancel(_) => "session.cancel",
             Self::SessionReset(_) => "session.reset",
+            Self::SessionArchive(_) => "session.archive",
+            Self::SessionArchiveList(_) => "session.archive_list",
+            Self::SessionArchiveShow(_) => "session.archive_show",
+            Self::SessionArchivePurge(_) => "session.archive_purge",
             Self::WorkspaceResetAll(_) => "workspace.reset_all",
             Self::ItemCheck(_) => "item.check",
             Self::ItemUncheck(_) => "item.uncheck",
@@ -1125,6 +1175,8 @@ impl SliceCommandV1 {
                     OperationV1::Mutate
                 }
             }
+            Self::SessionArchive(_) => OperationV1::Mutate,
+            Self::SessionArchivePurge(_) => OperationV1::Control,
             Self::WorkspaceInit(_) | Self::WorkspaceResetAll(_) => OperationV1::Bootstrap,
             Self::WorkspaceRepair(_) | Self::JobCancel(_) => OperationV1::Control,
             Self::WorkspaceDoctor(_)
@@ -1132,6 +1184,8 @@ impl SliceCommandV1 {
             | Self::SessionStatus(_)
             | Self::SessionNext(_)
             | Self::SessionObserve(_)
+            | Self::SessionArchiveList(_)
+            | Self::SessionArchiveShow(_)
             | Self::EvidenceRead(_)
             | Self::JobList(_)
             | Self::JobLookup(_)
@@ -1160,6 +1214,7 @@ impl SliceCommandV1 {
             Self::SessionStart(command) => !command.dry_run,
             Self::SessionStartReplace(command) => !command.start.dry_run,
             Self::SessionReset(command) => !command.dry_run,
+            Self::SessionArchive(_) => true,
             _ => matches!(
                 self,
                 Self::WorkspaceInit(_)
@@ -1255,12 +1310,24 @@ impl SliceRequestV1 {
                 require_dry_run_envelope(envelope, "session.start_replace", payload.dry_run)?;
                 let preconditions =
                     require_session_identity_preconditions(envelope.preconditions())?;
-                let mode = validated_deletion_mode(
-                    payload.dry_run,
-                    payload.replace_eligible,
-                    payload.confirmed,
-                    payload.progress_summary,
-                )?;
+                let mode = if let Some(resolution) = payload.resolution {
+                    if payload.replace_eligible
+                        || payload.confirmed.is_some()
+                        || payload.progress_summary.is_some()
+                    {
+                        return Err(SliceErrorV1::InvalidValue {
+                            field: "resolution",
+                        });
+                    }
+                    validated_start_resolution(payload.dry_run, resolution)?
+                } else {
+                    validated_deletion_mode(
+                        payload.dry_run,
+                        payload.replace_eligible,
+                        payload.confirmed,
+                        payload.progress_summary,
+                    )?
+                };
                 let start = validated_start(
                     payload.preset,
                     payload.procedure,
@@ -1450,6 +1517,57 @@ impl SliceRequestV1 {
                         mode,
                         dry_run: payload.dry_run,
                         preconditions,
+                    }),
+                )
+            }
+            "session.archive" => {
+                require_envelope(envelope, "session.archive", OperationV1::Mutate, true)?;
+                let preconditions =
+                    require_session_identity_preconditions(envelope.preconditions())?;
+                let payload: SelectorOnlyPayloadV1 = parse_payload(envelope)?;
+                (
+                    payload.selector,
+                    SliceCommandV1::SessionArchive(SessionArchiveV1 { preconditions }),
+                )
+            }
+            "session.archive_list" => {
+                require_envelope(envelope, "session.archive_list", OperationV1::Query, false)?;
+                require_no_preconditions(envelope.preconditions())?;
+                let payload: SelectorOnlyPayloadV1 = parse_payload(envelope)?;
+                (
+                    payload.selector,
+                    SliceCommandV1::SessionArchiveList(SessionArchiveListV1),
+                )
+            }
+            "session.archive_show" => {
+                require_envelope(envelope, "session.archive_show", OperationV1::Query, false)?;
+                require_no_preconditions(envelope.preconditions())?;
+                let payload: SessionArchiveShowPayloadV1 = parse_payload(envelope)?;
+                (
+                    payload.selector,
+                    SliceCommandV1::SessionArchiveShow(SessionArchiveShowV1 {
+                        session_id: payload.session_id,
+                        verbose: payload.verbose,
+                        history_before: payload.history_before,
+                    }),
+                )
+            }
+            "session.archive_purge" => {
+                require_envelope(
+                    envelope,
+                    "session.archive_purge",
+                    OperationV1::Control,
+                    false,
+                )?;
+                require_no_preconditions(envelope.preconditions())?;
+                let payload: SessionArchivePurgePayloadV1 = parse_payload(envelope)?;
+                require_confirmation(payload.confirmed)?;
+                (
+                    payload.selector,
+                    SliceCommandV1::SessionArchivePurge(SessionArchivePurgeV1 {
+                        session_id: payload.session_id,
+                        expected_session_revision: payload.expected_session_revision,
+                        confirmed: payload.confirmed,
                     }),
                 )
             }
@@ -1907,12 +2025,24 @@ impl ProcedureV2StartRequestV1 {
                 require_dry_run_envelope(envelope, "session.start_replace", payload.dry_run)?;
                 let preconditions =
                     require_session_identity_preconditions(envelope.preconditions())?;
-                let mode = validated_deletion_mode(
-                    payload.dry_run,
-                    payload.replace_eligible,
-                    payload.confirmed,
-                    payload.progress_summary,
-                )?;
+                let mode = if let Some(resolution) = payload.resolution {
+                    if payload.replace_eligible
+                        || payload.confirmed.is_some()
+                        || payload.progress_summary.is_some()
+                    {
+                        return Err(SliceErrorV1::InvalidValue {
+                            field: "resolution",
+                        });
+                    }
+                    validated_start_resolution(payload.dry_run, resolution)?
+                } else {
+                    validated_deletion_mode(
+                        payload.dry_run,
+                        payload.replace_eligible,
+                        payload.confirmed,
+                        payload.progress_summary,
+                    )?
+                };
                 let start = validated_start(
                     payload.preset,
                     payload.procedure,
@@ -2053,6 +2183,8 @@ struct SessionStartReplacePayloadV1 {
     confirmed: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_optional_non_null")]
     progress_summary: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    resolution: Option<SessionDeletionModeV1>,
     #[serde(default)]
     dry_run: bool,
 }
@@ -2089,6 +2221,8 @@ struct ProcedureV2SessionStartReplacePayloadV1 {
     confirmed: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_optional_non_null")]
     progress_summary: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    resolution: Option<SessionDeletionModeV1>,
     #[serde(default)]
     dry_run: bool,
 }
@@ -2163,6 +2297,26 @@ struct SessionResetPayloadV1 {
     progress_summary: Option<String>,
     #[serde(default)]
     dry_run: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SessionArchiveShowPayloadV1 {
+    selector: WorktreeSelectorWireV1,
+    session_id: SessionId,
+    #[serde(default)]
+    verbose: bool,
+    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
+    history_before: Option<u64>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SessionArchivePurgePayloadV1 {
+    selector: WorktreeSelectorWireV1,
+    session_id: SessionId,
+    expected_session_revision: Revision,
+    confirmed: bool,
 }
 
 #[derive(Deserialize)]
@@ -2674,6 +2828,49 @@ fn validated_deletion_mode(
     Ok(SessionDeletionModeV1::Force {
         progress_summary: summary,
     })
+}
+
+fn validated_start_resolution(
+    dry_run: bool,
+    resolution: SessionDeletionModeV1,
+) -> Result<SessionDeletionModeV1, SliceErrorV1> {
+    match &resolution {
+        SessionDeletionModeV1::Delete {
+            confirmed,
+            progress_summary,
+        } => {
+            if !dry_run && !confirmed {
+                require_confirmation(false)?;
+            }
+            if let Some(summary) = progress_summary {
+                validate_lifecycle_text(summary, "progress_summary")?;
+            }
+        }
+        SessionDeletionModeV1::Supersede { reason, actor } => {
+            validate_reason_v2(reason)?;
+            validate_actor_v2(actor.as_deref())?;
+        }
+        SessionDeletionModeV1::DisposeAndArchive { disposition, actor } => {
+            validate_actor_v2(actor.as_deref())?;
+            match disposition {
+                TerminalDispositionInputV1::HandedOff { summary, reference } => {
+                    validate_lifecycle_text(summary, "summary")?;
+                    validate_lifecycle_text(reference, "reference")?;
+                }
+                TerminalDispositionInputV1::NotRequired { reason } => {
+                    validate_lifecycle_text(reason, "reason")?;
+                }
+            }
+        }
+        SessionDeletionModeV1::Eligible
+        | SessionDeletionModeV1::Force { .. }
+        | SessionDeletionModeV1::LegacyConfirmed => {
+            return Err(SliceErrorV1::InvalidValue {
+                field: "resolution",
+            });
+        }
+    }
+    Ok(resolution)
 }
 
 fn validate_actor_v2(value: Option<&str>) -> Result<(), SliceErrorV1> {
@@ -3558,6 +3755,10 @@ pub fn canonical_mutation_identity_v1(
             session_identity_preconditions_json(&session.preconditions),
             json!({"deletion": deletion_mode_json(&session.mode)}),
         ),
+        SliceCommandV1::SessionArchive(session) => (
+            session_identity_preconditions_json(&session.preconditions),
+            json!({}),
+        ),
         SliceCommandV1::WorkspaceResetAll(workspace) => (
             workspace_reset_all_preconditions_json(&workspace.preconditions),
             json!({"confirmed": workspace.confirmed}),
@@ -3604,6 +3805,9 @@ pub fn canonical_mutation_identity_v1(
         | SliceCommandV1::SessionStatus(_)
         | SliceCommandV1::SessionNext(_)
         | SliceCommandV1::SessionObserve(_)
+        | SliceCommandV1::SessionArchiveList(_)
+        | SliceCommandV1::SessionArchiveShow(_)
+        | SliceCommandV1::SessionArchivePurge(_)
         | SliceCommandV1::EvidenceRead(_)
         | SliceCommandV1::JobList(_)
         | SliceCommandV1::JobLookup(_)
@@ -3791,6 +3995,24 @@ fn deletion_mode_json(mode: &SessionDeletionModeV1) -> Value {
         SessionDeletionModeV1::Force { progress_summary } => json!({
             "mode": "force",
             "progress_summary": progress_summary,
+        }),
+        SessionDeletionModeV1::Delete {
+            confirmed,
+            progress_summary,
+        } => json!({
+            "mode": "delete",
+            "confirmed": confirmed,
+            "progress_summary": progress_summary,
+        }),
+        SessionDeletionModeV1::Supersede { reason, actor } => json!({
+            "mode": "supersede",
+            "reason": reason,
+            "actor": actor,
+        }),
+        SessionDeletionModeV1::DisposeAndArchive { disposition, actor } => json!({
+            "mode": "dispose_and_archive",
+            "disposition": disposition,
+            "actor": actor,
         }),
         SessionDeletionModeV1::LegacyConfirmed => json!({ "mode": "legacy_confirmed" }),
     }

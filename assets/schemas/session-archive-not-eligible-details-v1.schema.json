@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:session-archive-not-eligible-details:v1",
+  "title": "Podway Session Archive Not Eligible Details v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "lifecycle", "current_terminal_disposition", "required_action", "admission"],
+  "properties": {
+    "schema": { "const": "podway.session-archive-not-eligible-details/v1" },
+    "lifecycle": { "enum": ["prepared", "running", "completed", "cancelled"] },
+    "current_terminal_disposition": { "const": false },
+    "required_action": { "enum": ["complete_or_cancel", "record_disposition"] },
+    "admission": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/admission" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "lifecycle": { "enum": ["prepared", "running"] } }, "required": ["lifecycle"] },
+      "then": { "properties": { "required_action": { "const": "complete_or_cancel" } } },
+      "else": { "properties": { "required_action": { "const": "record_disposition" } } }
+    }
+  ]
+}

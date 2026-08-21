@@ -210,7 +210,8 @@ PROCEDURE_INDEPENDENT_EXECUTABLE_ROUTES = {
     "session.start", "session.start_replace", "session.status", "session.next",
     "session.observe",
     "session.complete", "session.skip", "session.retry", "session.block",
-    "session.unblock", "session.cancel", "session.reset",
+    "session.unblock", "session.cancel", "session.reset", "session.archive",
+    "session.archive_list", "session.archive_show", "session.archive_purge",
     "workspace.reset_all", "item.check", "item.uncheck", "item.set", "item.add",
     "item.remove", "item.attach", "item.clear", "item.record_many", "job.list", "job.lookup", "job.status",
     "job.wait", "job.cancel",
@@ -228,6 +229,9 @@ PROCEDURE_INDEPENDENT_RUNTIME_ERROR_CODES = (
     "PROCEDURE_SCHEMA_UNSUPPORTED", "PROCEDURE_DIGEST_MISMATCH", "PRESET_NOT_FOUND",
     "SESSION_NOT_FOUND", "SESSION_ID_MISMATCH", "SESSION_ALREADY_EXISTS",
     "SESSION_NOT_RUNNING", "SESSION_NOT_TERMINAL", "SESSION_RESET_NOT_ELIGIBLE",
+    "SESSION_START_DECISION_REQUIRED",
+    "SESSION_START_STATE_CONFLICT", "SESSION_ARCHIVE_NOT_ELIGIBLE",
+    "SESSION_ARCHIVE_LIMIT_REACHED", "SESSION_ARCHIVE_NOT_FOUND",
     "SESSION_CANCELLED", "SESSION_REVISION_CONFLICT",
     "ATTEMPT_NOT_CURRENT", "STAGE_NOT_SKIPPABLE",
     "REQUIRED_ITEMS_MISSING", "BLOCKERS_PRESENT", "BLOCKER_LIMIT_REACHED", "ITEM_NOT_FOUND",
@@ -467,7 +471,7 @@ def validate_v2_catalog_delta(root: Path) -> int:
     if set(runtime) != {"schema", "exit_codes", "errors"}:
         fail("error catalog has unexpected or missing top-level fields")
     entries = runtime.get("errors")
-    if not isinstance(entries, list) or len(entries) != 94:
+    if not isinstance(entries, list) or len(entries) != 99:
         fail("runtime error catalog must contain the v2-only error set")
     runtime_codes = [entry.get("code") for entry in entries if isinstance(entry, dict)]
     if len(runtime_codes) != len(entries) or len(set(runtime_codes)) != len(runtime_codes):
@@ -513,6 +517,11 @@ def validate_v2_catalog_delta(root: Path) -> int:
         "GOAL_REVISION_STALE": "podway.recoverable-v2-runtime-error-details/v1",
         "EVIDENCE_PAGE_TOKEN_STALE": "podway.recoverable-v2-runtime-error-details/v1",
         "SESSION_RESET_NOT_ELIGIBLE": "podway.session-reset-not-eligible-details/v1",
+        "SESSION_START_DECISION_REQUIRED": "podway.session-start-decision-required-details/v1",
+        "SESSION_START_STATE_CONFLICT": "podway.session-start-state-conflict-details/v1",
+        "SESSION_ARCHIVE_NOT_ELIGIBLE": "podway.session-archive-not-eligible-details/v1",
+        "SESSION_ARCHIVE_LIMIT_REACHED": "podway.session-archive-limit-details/v1",
+        "SESSION_ARCHIVE_NOT_FOUND": "podway.session-archive-not-found-details/v1",
     }
     actual_recovery_schemas = {
         entry["code"]: entry.get("details_schema")
@@ -719,7 +728,7 @@ def validate_routes(root: Path) -> int:
     if not isinstance(prohibited, list) or set(prohibited) != PROHIBITED_CAPABILITIES or len(prohibited) != len(PROHIBITED_CAPABILITIES):
         fail("command route contract must prohibit command_runner, git_mutation, and network")
     routes = contract["routes"]
-    if not isinstance(routes, list) or len(routes) != 61:
+    if not isinstance(routes, list) or len(routes) != 65:
         fail("command route contract routes must be a list")
 
     expected_commands = catalog_commands(root) | {"completions"}

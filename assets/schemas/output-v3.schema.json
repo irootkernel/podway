@@ -27,6 +27,10 @@
     { "$ref": "#/$defs/sessionBegin" },
     { "$ref": "#/$defs/terminalDisposition" },
     { "$ref": "#/$defs/sessionReset" },
+    { "$ref": "#/$defs/sessionArchive" },
+    { "$ref": "#/$defs/sessionArchiveList" },
+    { "$ref": "#/$defs/sessionArchiveShow" },
+    { "$ref": "#/$defs/sessionArchivePurge" },
     { "$ref": "#/$defs/status" },
     { "$ref": "#/$defs/compactStatus" },
     { "$ref": "#/$defs/next" },
@@ -117,6 +121,7 @@
         { "$ref": "#/$defs/sessionBegin" },
         { "$ref": "#/$defs/terminalDisposition" },
         { "$ref": "#/$defs/sessionReset" },
+        { "$ref": "#/$defs/sessionArchive" },
         { "$ref": "#/$defs/stageTransition" },
         { "$ref": "#/$defs/itemMutation" },
         { "$ref": "#/$defs/itemRecordMany" },
@@ -145,7 +150,7 @@
     "detachedAdmission": {
       "required": ["workspace", "job"],
       "properties": {
-        "command": { "enum": ["session.start", "session.start_replace", "session.begin", "session.terminal_disposition", "session.complete", "session.skip", "session.retry", "session.block", "session.unblock", "session.cancel", "session.reset", "session.decide", "session.rework", "goal.define", "goal.revise", "goal.assess_criterion", "item.check", "item.uncheck", "item.set", "item.add", "item.remove", "item.attach", "item.clear", "item.record_many"] },
+        "command": { "enum": ["session.start", "session.start_replace", "session.begin", "session.terminal_disposition", "session.complete", "session.skip", "session.retry", "session.block", "session.unblock", "session.cancel", "session.reset", "session.archive", "session.decide", "session.rework", "goal.define", "goal.revise", "goal.assess_criterion", "item.check", "item.uncheck", "item.set", "item.add", "item.remove", "item.attach", "item.clear", "item.record_many"] },
         "result": { "$ref": "urn:podway:schema:detached-admission-result:v2" }
       },
       "allOf": [
@@ -183,6 +188,10 @@
         { "if": { "properties": { "result": { "properties": { "dry_run": { "const": false } }, "required": ["dry_run"] } }, "required": ["result"] }, "then": { "required": ["workspace", "job"] } }
       ]
     },
+    "sessionArchive": { "required": ["workspace", "job"], "properties": { "command": { "const": "session.archive" }, "result": { "$ref": "urn:podway:schema:session-archive-result:v1" } } },
+    "sessionArchiveList": { "required": ["workspace"], "properties": { "command": { "const": "session.archive_list" }, "result": { "$ref": "urn:podway:schema:session-archive-list-result:v1" } }, "not": { "anyOf": [{ "required": ["job"] }, { "required": ["session"] }] } },
+    "sessionArchiveShow": { "required": ["workspace"], "properties": { "command": { "const": "session.archive_show" }, "result": { "$ref": "urn:podway:schema:session-archive-show-result:v1" } }, "not": { "anyOf": [{ "required": ["job"] }, { "required": ["session"] }] } },
+    "sessionArchivePurge": { "required": ["workspace"], "properties": { "command": { "const": "session.archive_purge" }, "result": { "$ref": "urn:podway:schema:session-archive-purge-result:v1" } }, "not": { "anyOf": [{ "required": ["job"] }, { "required": ["session"] }] } },
     "status": { "properties": { "command": { "const": "session.status" }, "result": { "oneOf": [{ "$ref": "urn:podway:schema:status-result:v2" }, { "$ref": "urn:podway:schema:status-result:v3" }] } } },
     "compactStatus": { "properties": { "command": { "const": "session.status" }, "result": { "oneOf": [{ "$ref": "urn:podway:schema:compact-status-result:v2" }, { "$ref": "urn:podway:schema:compact-status-result:v3" }] } } },
     "next": { "properties": { "command": { "const": "session.next" }, "result": { "oneOf": [{ "$ref": "urn:podway:schema:next-result:v2" }, { "$ref": "urn:podway:schema:next-result:v3" }, { "$ref": "urn:podway:schema:prepared-next-result:v1" }] } } },

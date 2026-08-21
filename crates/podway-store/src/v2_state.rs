@@ -13,7 +13,7 @@ use podway_core::{
     SessionTraceV2, Sha256Digest, TerminalDispositionKindV2, TerminalDispositionV2,
     TraceSequenceV2, UnixMillis, canonicalize_json_v1, verify_canonical_json_v1,
 };
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::{Connection, Transaction, params};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
@@ -39,6 +39,7 @@ const PROCEDURE_SCHEMA_DOCUMENT_V2: &str =
 const MAX_GRAPH_NODES_V2: usize = 64;
 const MAX_TASK_TITLE_CHARACTERS_V2: usize = 500;
 const MAX_TERMINAL_REASON_CHARACTERS_V2: usize = 2_000;
+pub const MAX_INACTIVE_SESSIONS_V2: u32 = 32;
 type ActiveCursorColumnsV2<'a> = (Option<&'a str>, Option<&'a str>, Option<i64>);
 
 fn invalid(reason: &'static str) -> StoreValueErrorV1 {
@@ -3345,6 +3346,81 @@ pub trait StoreTerminalDispositionContractV2: Send + Sync {
     ) -> Result<Vec<TerminalDispositionV2>, StoreErrorV1>;
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionArchiveSummaryV2 {
+    session_id: SessionId,
+    task_title: String,
+    lifecycle: SessionLifecycle,
+    session_revision: Revision,
+    archive_slot: u32,
+    archived_at: UnixMillis,
+    archived_workspace_revision: Revision,
+}
+
+impl SessionArchiveSummaryV2 {
+    pub fn session_id(&self) -> &SessionId {
+        &self.session_id
+    }
+
+    pub fn task_title(&self) -> &str {
+        &self.task_title
+    }
+
+    pub fn lifecycle(&self) -> SessionLifecycle {
+        self.lifecycle
+    }
+
+    pub fn session_revision(&self) -> Revision {
+        self.session_revision
+    }
+
+    pub fn archive_slot(&self) -> u32 {
+        self.archive_slot
+    }
+
+    pub fn archived_at(&self) -> UnixMillis {
+        self.archived_at
+    }
+
+    pub fn archived_workspace_revision(&self) -> Revision {
+        self.archived_workspace_revision
+    }
+}
+
+pub trait StoreSessionArchiveContractV2: Send + Sync {
+    fn archive_current_session_v2(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        expected_workspace_revision: Revision,
+        expected_session_revision: Revision,
+        now: EpochMillisV1,
+    ) -> Result<SessionArchiveSummaryV2, StoreErrorV1>;
+
+    fn list_archived_sessions_v2(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+    ) -> Result<Vec<SessionArchiveSummaryV2>, StoreErrorV1>;
+
+    fn read_archived_session_v2(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        session_id: &SessionId,
+    ) -> Result<Option<GraphSessionStateV2>, StoreErrorV1>;
+
+    fn read_archived_terminal_dispositions_v2(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        session_id: &SessionId,
+    ) -> Result<Option<Vec<TerminalDispositionV2>>, StoreErrorV1>;
+
+    fn purge_archived_session_v2(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        session_id: &SessionId,
+        expected_session_revision: Revision,
+    ) -> Result<SessionArchiveSummaryV2, StoreErrorV1>;
+}
+
 /// Exact current-task fence for a Procedure v2 start terminal transaction.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum GraphStartCurrentTaskV2 {
@@ -3362,6 +3438,26 @@ pub enum GraphStartCurrentTaskV2 {
         session_id: SessionId,
         session_revision: Revision,
         progress_summary: String,
+    },
+    Delete {
+        session_id: SessionId,
+        session_revision: Revision,
+        progress_summary: Option<String>,
+    },
+    Supersede {
+        session_id: SessionId,
+        session_revision: Revision,
+        reason: String,
+        actor: Option<ActorAttributionV2>,
+    },
+    DisposeAndArchive {
+        session_id: SessionId,
+        session_revision: Revision,
+        disposition_kind: TerminalDispositionKindV2,
+        summary: Option<String>,
+        stable_reference: Option<String>,
+        reason: Option<String>,
+        actor: Option<ActorAttributionV2>,
     },
 }
 
@@ -3389,6 +3485,15 @@ pub trait StoreGraphMutationContractV2: Send + Sync {
     ) -> Result<crate::TerminalReceiptV1, StoreErrorV1>;
 
     fn commit_graph_reset_terminal_v2(
+        &self,
+        claim: crate::ClaimTokenV1,
+        expected_workspace_revision: Revision,
+        expected_session_revision: Revision,
+        session_id: SessionId,
+        now: crate::EpochMillisV1,
+    ) -> Result<crate::TerminalReceiptV1, StoreErrorV1>;
+
+    fn commit_graph_archive_terminal_v2(
         &self,
         claim: crate::ClaimTokenV1,
         expected_workspace_revision: Revision,
@@ -3463,6 +3568,23 @@ where
         )
     }
 
+    fn commit_graph_archive_terminal_v2(
+        &self,
+        claim: crate::ClaimTokenV1,
+        expected_workspace_revision: Revision,
+        expected_session_revision: Revision,
+        session_id: SessionId,
+        now: crate::EpochMillisV1,
+    ) -> Result<crate::TerminalReceiptV1, StoreErrorV1> {
+        (**self).commit_graph_archive_terminal_v2(
+            claim,
+            expected_workspace_revision,
+            expected_session_revision,
+            session_id,
+            now,
+        )
+    }
+
     fn commit_graph_smart_reset_terminal_v2(
         &self,
         claim: crate::ClaimTokenV1,
@@ -3514,6 +3636,58 @@ where
         identity: &DurableWorktreeIdentityV1,
     ) -> Result<Vec<TerminalDispositionV2>, StoreErrorV1> {
         (**self).read_terminal_dispositions_v2(identity)
+    }
+}
+
+impl<Store> StoreSessionArchiveContractV2 for Arc<Store>
+where
+    Store: StoreSessionArchiveContractV2 + ?Sized,
+{
+    fn archive_current_session_v2(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        expected_workspace_revision: Revision,
+        expected_session_revision: Revision,
+        now: EpochMillisV1,
+    ) -> Result<SessionArchiveSummaryV2, StoreErrorV1> {
+        (**self).archive_current_session_v2(
+            identity,
+            expected_workspace_revision,
+            expected_session_revision,
+            now,
+        )
+    }
+
+    fn list_archived_sessions_v2(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+    ) -> Result<Vec<SessionArchiveSummaryV2>, StoreErrorV1> {
+        (**self).list_archived_sessions_v2(identity)
+    }
+
+    fn read_archived_session_v2(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        session_id: &SessionId,
+    ) -> Result<Option<GraphSessionStateV2>, StoreErrorV1> {
+        (**self).read_archived_session_v2(identity, session_id)
+    }
+
+    fn read_archived_terminal_dispositions_v2(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        session_id: &SessionId,
+    ) -> Result<Option<Vec<TerminalDispositionV2>>, StoreErrorV1> {
+        (**self).read_archived_terminal_dispositions_v2(identity, session_id)
+    }
+
+    fn purge_archived_session_v2(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        session_id: &SessionId,
+        expected_session_revision: Revision,
+    ) -> Result<SessionArchiveSummaryV2, StoreErrorV1> {
+        (**self).purge_archived_session_v2(identity, session_id, expected_session_revision)
     }
 }
 
@@ -3570,37 +3744,38 @@ pub(crate) fn create_graph_session_transaction_v2(
     state: &GraphSessionStateV2,
 ) -> Result<(), StoreErrorV1> {
     let current_v2: i64 = transaction
-        .query_row("SELECT COUNT(*) FROM v2_task_sessions", [], |row| {
-            row.get(0)
-        })
+        .query_row(
+            "SELECT COUNT(*) FROM v2_task_sessions WHERE activity = 'current'",
+            [],
+            |row| row.get(0),
+        )
         .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
     let v2_workspace: i64 = transaction
         .query_row("SELECT COUNT(*) FROM v2_workspace_state", [], |row| {
             row.get(0)
         })
         .map_err(|error| record_error(error, StoreRecordKindV1::Workspace))?;
-    let v2_snapshots: i64 = transaction
-        .query_row("SELECT COUNT(*) FROM v2_procedure_snapshots", [], |row| {
-            row.get(0)
-        })
-        .map_err(|error| record_error(error, StoreRecordKindV1::Snapshot))?;
-    if current_v2 != 0 || v2_workspace != 0 || v2_snapshots != 0 {
+    if current_v2 != 0 || v2_workspace != 0 {
         return Err(invalid_store(
             "a workspace may contain only one current task",
         ));
     }
 
     insert_snapshot_v2(transaction, state.snapshot())?;
+    insert_session_row_v2(transaction, state)?;
     transaction
         .execute(
-            "INSERT INTO v2_workspace_state (singleton, workspace_revision) VALUES (1, ?1)",
-            [sqlite_u64(
-                state.workspace_revision().get(),
-                "Procedure v2 workspace revision",
-            )?],
+            "INSERT INTO v2_workspace_state (singleton, current_session_id, workspace_revision) \
+             VALUES (1, ?1, ?2)",
+            params![
+                state.trace().session_id().as_str(),
+                sqlite_u64(
+                    state.workspace_revision().get(),
+                    "Procedure v2 workspace revision",
+                )?,
+            ],
         )
         .map_err(|error| record_error(error, StoreRecordKindV1::Workspace))?;
-    insert_session_row_v2(transaction, state)?;
     insert_counters_v2(transaction, state)?;
     for (attempt, metadata) in state
         .trace()
@@ -3831,9 +4006,24 @@ pub(crate) fn clear_graph_session_transaction_v2(
         )
         .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
 
+    let deleted_workspace = transaction
+        .execute(
+            "DELETE FROM v2_workspace_state WHERE singleton = 1 AND workspace_revision = ?1",
+            [sqlite_u64(
+                expected_workspace_revision.get(),
+                "Procedure v2 workspace revision",
+            )?],
+        )
+        .map_err(|error| record_error(error, StoreRecordKindV1::Workspace))?;
+    if deleted_workspace != 1 {
+        return Err(StoreErrorV1::InternalInvariantViolationV1 {
+            invariant: StoreInvariantV1::ProcedureV2GraphState,
+        });
+    }
+
     let deleted_session = transaction
         .execute(
-            "DELETE FROM v2_task_sessions WHERE singleton = 1 AND session_id = ?1 \
+            "DELETE FROM v2_task_sessions WHERE activity = 'current' AND session_id = ?1 \
              AND session_revision = ?2",
             params![
                 session_id,
@@ -3856,16 +4046,7 @@ pub(crate) fn clear_graph_session_transaction_v2(
             [snapshot_id],
         )
         .map_err(|error| record_error(error, StoreRecordKindV1::Snapshot))?;
-    let deleted_workspace = transaction
-        .execute(
-            "DELETE FROM v2_workspace_state WHERE singleton = 1 AND workspace_revision = ?1",
-            [sqlite_u64(
-                expected_workspace_revision.get(),
-                "Procedure v2 workspace revision",
-            )?],
-        )
-        .map_err(|error| record_error(error, StoreRecordKindV1::Workspace))?;
-    if deleted_snapshot != 1 || deleted_workspace != 1 {
+    if deleted_snapshot != 1 {
         return Err(StoreErrorV1::InternalInvariantViolationV1 {
             invariant: StoreInvariantV1::ProcedureV2GraphState,
         });
@@ -3876,6 +4057,269 @@ pub(crate) fn clear_graph_session_transaction_v2(
         });
     }
     Ok(())
+}
+
+pub(crate) fn archive_current_session_transaction_v2(
+    transaction: &Transaction<'_>,
+    expected_workspace_revision: Revision,
+    expected_session_revision: Revision,
+    now: EpochMillisV1,
+) -> Result<SessionArchiveSummaryV2, StoreErrorV1> {
+    let current = load_graph_session_connection_v2(transaction)?
+        .ok_or_else(|| invalid_store("no current Procedure v2 graph session exists"))?;
+    if current.workspace_revision() != expected_workspace_revision {
+        return Err(StoreErrorV1::PreconditionConflictV1 {
+            expected: Some(expected_workspace_revision),
+            actual: Some(current.workspace_revision()),
+        });
+    }
+    if current.trace().revision() != expected_session_revision {
+        return Err(StoreErrorV1::PreconditionConflictV1 {
+            expected: Some(expected_session_revision),
+            actual: Some(current.trace().revision()),
+        });
+    }
+    let dispositions = load_terminal_dispositions_connection_v2(transaction, &current)?;
+    let current_disposition =
+        terminal_disposition_is_current_v2(&dispositions, current.trace().revision());
+    if !matches!(
+        current.trace().lifecycle(),
+        SessionLifecycle::Completed | SessionLifecycle::Cancelled
+    ) || !current_disposition
+    {
+        return Err(StoreErrorV1::SessionArchiveNotEligibleV1 {
+            lifecycle: current.trace().lifecycle(),
+            current_terminal_disposition: current_disposition,
+        });
+    }
+
+    let mut used = BTreeSet::new();
+    let mut statement = transaction
+        .prepare(
+            "SELECT archive_slot FROM v2_task_sessions \
+             WHERE activity = 'inactive' ORDER BY archive_slot",
+        )
+        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, i64>(0))
+        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+    for row in rows {
+        used.insert(
+            u32::try_from(row.map_err(|error| record_error(error, StoreRecordKindV1::Session))?)
+                .map_err(|_| corrupt(StoreRecordKindV1::Session))?,
+        );
+    }
+    let archive_slot = (1..=MAX_INACTIVE_SESSIONS_V2)
+        .find(|slot| !used.contains(slot))
+        .ok_or(StoreErrorV1::SessionArchiveLimitReachedV1 {
+            maximum: MAX_INACTIVE_SESSIONS_V2,
+        })?;
+    drop(statement);
+
+    let changed = transaction
+        .execute(
+            "UPDATE v2_task_sessions SET activity = 'inactive', archive_slot = ?1, \
+             archived_at_ms = ?2, archived_workspace_revision = ?3 \
+             WHERE activity = 'current' AND session_id = ?4 AND session_revision = ?5",
+            params![
+                i64::from(archive_slot),
+                sqlite_u64(now.get(), "Procedure v2 archive timestamp")?,
+                sqlite_u64(
+                    current.workspace_revision().get(),
+                    "Procedure v2 archived workspace revision",
+                )?,
+                current.trace().session_id().as_str(),
+                sqlite_u64(
+                    current.trace().revision().get(),
+                    "Procedure v2 session revision",
+                )?,
+            ],
+        )
+        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+    let deleted_workspace = transaction
+        .execute(
+            "DELETE FROM v2_workspace_state WHERE singleton = 1 \
+             AND current_session_id = ?1 AND workspace_revision = ?2",
+            params![
+                current.trace().session_id().as_str(),
+                sqlite_u64(
+                    current.workspace_revision().get(),
+                    "Procedure v2 workspace revision",
+                )?,
+            ],
+        )
+        .map_err(|error| record_error(error, StoreRecordKindV1::Workspace))?;
+    if changed != 1 || deleted_workspace != 1 {
+        return Err(StoreErrorV1::InternalInvariantViolationV1 {
+            invariant: StoreInvariantV1::ProcedureV2GraphState,
+        });
+    }
+    Ok(SessionArchiveSummaryV2 {
+        session_id: current.trace().session_id().clone(),
+        task_title: current.task_title().to_owned(),
+        lifecycle: current.trace().lifecycle(),
+        session_revision: current.trace().revision(),
+        archive_slot,
+        archived_at: UnixMillis::new(now.get()),
+        archived_workspace_revision: current.workspace_revision(),
+    })
+}
+
+pub(crate) fn list_archived_sessions_connection_v2(
+    connection: &Connection,
+) -> Result<Vec<SessionArchiveSummaryV2>, StoreErrorV1> {
+    let mut statement = connection
+        .prepare(
+            "SELECT session_id, task_title, lifecycle, session_revision, archive_slot, \
+             archived_at_ms, archived_workspace_revision FROM v2_task_sessions \
+             WHERE activity = 'inactive' ORDER BY archived_at_ms DESC, session_id DESC",
+        )
+        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
+            ))
+        })
+        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+    rows.map(|row| {
+        let (session_id, task_title, lifecycle, revision, slot, archived_at, workspace_revision) =
+            row.map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+        Ok(SessionArchiveSummaryV2 {
+            session_id: SessionId::new(session_id)
+                .map_err(|_| corrupt(StoreRecordKindV1::Session))?,
+            task_title,
+            lifecycle: parse_session_lifecycle_v2(&lifecycle)?,
+            session_revision: Revision::new(persisted_u64(revision, StoreRecordKindV1::Session)?),
+            archive_slot: u32::try_from(slot).map_err(|_| corrupt(StoreRecordKindV1::Session))?,
+            archived_at: persisted_time_v2(archived_at, StoreRecordKindV1::Session)?,
+            archived_workspace_revision: Revision::new(persisted_u64(
+                workspace_revision,
+                StoreRecordKindV1::Workspace,
+            )?),
+        })
+    })
+    .collect()
+}
+
+pub(crate) fn load_archived_session_connection_v2(
+    connection: &Connection,
+    session_id: &SessionId,
+) -> Result<Option<GraphSessionStateV2>, StoreErrorV1> {
+    let row = connection.query_row(
+        "SELECT archived_workspace_revision, session_id, task_title, procedure_snapshot_id, \
+         lifecycle, session_revision, latest_trace_sequence, active_graph_node_id, \
+         active_attempt_id, active_trace_sequence, goal_tracking, current_goal_revision, \
+         created_at_ms, completed_at_ms, cancelled_at_ms, cancel_reason \
+         FROM v2_task_sessions WHERE activity = 'inactive' AND session_id = ?1",
+        [session_id.as_str()],
+        |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                PersistedSessionV2 {
+                    session_id: row.get(1)?,
+                    task_title: row.get(2)?,
+                    snapshot_id: row.get(3)?,
+                    lifecycle: row.get(4)?,
+                    session_revision: row.get(5)?,
+                    latest_trace: row.get(6)?,
+                    active_node: row.get(7)?,
+                    active_attempt: row.get(8)?,
+                    active_trace: row.get(9)?,
+                    goal_tracking: row.get(10)?,
+                    current_goal_revision: row.get(11)?,
+                    created_at: row.get(12)?,
+                    completed_at: row.get(13)?,
+                    cancelled_at: row.get(14)?,
+                    cancel_reason: row.get(15)?,
+                },
+            ))
+        },
+    );
+    match row {
+        Ok((workspace_revision, persisted)) => {
+            load_present_graph_session_v2(connection, workspace_revision, persisted).map(Some)
+        }
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(error) => Err(record_error(error, StoreRecordKindV1::Session)),
+    }
+}
+
+pub(crate) fn purge_archived_session_transaction_v2(
+    transaction: &Transaction<'_>,
+    session_id: &SessionId,
+    expected_session_revision: Revision,
+) -> Result<SessionArchiveSummaryV2, StoreErrorV1> {
+    let summary = list_archived_sessions_connection_v2(transaction)?
+        .into_iter()
+        .find(|summary| summary.session_id() == session_id)
+        .ok_or_else(|| StoreErrorV1::SessionArchiveNotFoundV1 {
+            session_id: session_id.clone(),
+        })?;
+    if summary.session_revision() != expected_session_revision {
+        return Err(StoreErrorV1::PreconditionConflictV1 {
+            expected: Some(expected_session_revision),
+            actual: Some(summary.session_revision()),
+        });
+    }
+    let snapshot_id: String = transaction
+        .query_row(
+            "SELECT procedure_snapshot_id FROM v2_task_sessions \
+             WHERE activity = 'inactive' AND session_id = ?1",
+            [session_id.as_str()],
+            |row| row.get(0),
+        )
+        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+    transaction
+        .execute(
+            "DELETE FROM v2_resolved_evidence_references WHERE attempt_id IN \
+             (SELECT attempt_id FROM v2_attempts WHERE session_id = ?1)",
+            [session_id.as_str()],
+        )
+        .map_err(|error| record_error(error, StoreRecordKindV1::Attempt))?;
+    transaction
+        .execute(
+            "DELETE FROM v2_goal_assessments WHERE session_id = ?1",
+            [session_id.as_str()],
+        )
+        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+    transaction
+        .execute(
+            "DELETE FROM v2_criterion_assessment_results WHERE session_id = ?1",
+            [session_id.as_str()],
+        )
+        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+    let deleted = transaction
+        .execute(
+            "DELETE FROM v2_task_sessions WHERE activity = 'inactive' \
+             AND session_id = ?1 AND session_revision = ?2",
+            params![
+                session_id.as_str(),
+                sqlite_u64(
+                    expected_session_revision.get(),
+                    "Procedure v2 session revision",
+                )?,
+            ],
+        )
+        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+    let deleted_snapshot = transaction
+        .execute(
+            "DELETE FROM v2_procedure_snapshots WHERE snapshot_id = ?1",
+            [snapshot_id],
+        )
+        .map_err(|error| record_error(error, StoreRecordKindV1::Snapshot))?;
+    if deleted != 1 || deleted_snapshot != 1 {
+        return Err(StoreErrorV1::InternalInvariantViolationV1 {
+            invariant: StoreInvariantV1::ProcedureV2GraphState,
+        });
+    }
+    Ok(summary)
 }
 
 #[derive(Debug)]
@@ -3900,86 +4344,59 @@ struct PersistedSessionV2 {
 pub(crate) fn load_graph_session_connection_v2(
     connection: &Connection,
 ) -> Result<Option<GraphSessionStateV2>, StoreErrorV1> {
-    let workspace_revision = connection
+    let current_count: i64 = connection
         .query_row(
-            "SELECT workspace_revision FROM v2_workspace_state WHERE singleton = 1",
+            "SELECT COUNT(*) FROM v2_task_sessions WHERE activity = 'current'",
             [],
-            |row| row.get::<_, i64>(0),
+            |row| row.get(0),
         )
-        .optional()
+        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+    let workspace_count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM v2_workspace_state", [], |row| {
+            row.get(0)
+        })
         .map_err(|error| record_error(error, StoreRecordKindV1::Workspace))?;
-    let session = connection
+    if current_count == 0 && workspace_count == 0 {
+        return Ok(None);
+    }
+    if current_count != 1 || workspace_count != 1 {
+        return Err(corrupt(StoreRecordKindV1::Session));
+    }
+    let (workspace_revision, session) = connection
         .query_row(
-            "SELECT session_id, task_title, procedure_snapshot_id, lifecycle, session_revision, \
+            "SELECT w.workspace_revision, s.session_id, s.task_title, s.procedure_snapshot_id, \
+             s.lifecycle, s.session_revision, \
              latest_trace_sequence, active_graph_node_id, active_attempt_id, active_trace_sequence, \
              goal_tracking, current_goal_revision, created_at_ms, completed_at_ms, cancelled_at_ms, \
-             cancel_reason FROM v2_task_sessions WHERE singleton = 1",
+             cancel_reason FROM v2_workspace_state w JOIN v2_task_sessions s \
+             ON s.session_id = w.current_session_id \
+             WHERE w.singleton = 1 AND s.activity = 'current'",
             [],
             |row| {
-                Ok(PersistedSessionV2 {
-                    session_id: row.get(0)?,
-                    task_title: row.get(1)?,
-                    snapshot_id: row.get(2)?,
-                    lifecycle: row.get(3)?,
-                    session_revision: row.get(4)?,
-                    latest_trace: row.get(5)?,
-                    active_node: row.get(6)?,
-                    active_attempt: row.get(7)?,
-                    active_trace: row.get(8)?,
-                    goal_tracking: row.get(9)?,
-                    current_goal_revision: row.get(10)?,
-                    created_at: row.get(11)?,
-                    completed_at: row.get(12)?,
-                    cancelled_at: row.get(13)?,
-                    cancel_reason: row.get(14)?,
-                })
+                Ok((
+                    row.get(0)?,
+                    PersistedSessionV2 {
+                        session_id: row.get(1)?,
+                        task_title: row.get(2)?,
+                        snapshot_id: row.get(3)?,
+                        lifecycle: row.get(4)?,
+                        session_revision: row.get(5)?,
+                        latest_trace: row.get(6)?,
+                        active_node: row.get(7)?,
+                        active_attempt: row.get(8)?,
+                        active_trace: row.get(9)?,
+                        goal_tracking: row.get(10)?,
+                        current_goal_revision: row.get(11)?,
+                        created_at: row.get(12)?,
+                        completed_at: row.get(13)?,
+                        cancelled_at: row.get(14)?,
+                        cancel_reason: row.get(15)?,
+                    },
+                ))
             },
         )
-        .optional()
         .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
-
-    match (workspace_revision, session) {
-        (None, None) => {
-            let mut orphan_count: i64 = connection
-                .query_row(
-                    "SELECT (SELECT COUNT(*) FROM v2_procedure_snapshots) + \
-                     (SELECT COUNT(*) FROM v2_graph_nodes) + \
-                     (SELECT COUNT(*) FROM v2_graph_node_counters) + \
-                     (SELECT COUNT(*) FROM v2_attempts) + \
-                     (SELECT COUNT(*) FROM v2_item_slots) + \
-                     (SELECT COUNT(*) FROM v2_blockers) + \
-                    (SELECT COUNT(*) FROM v2_resolved_evidence_references) + \
-                     (SELECT COUNT(*) FROM v2_decision_records) + \
-                     (SELECT COUNT(*) FROM v2_rework_records) + \
-                     (SELECT COUNT(*) FROM v2_goal_revisions) + \
-                     (SELECT COUNT(*) FROM v2_goal_criteria) + \
-                     (SELECT COUNT(*) FROM v2_criterion_assessment_results) + \
-                     (SELECT COUNT(*) FROM v2_criterion_citations) + \
-                     (SELECT COUNT(*) FROM v2_goal_assessments)",
-                    [],
-                    |row| row.get(0),
-                )
-                .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
-            let schema_version: i64 = connection
-                .query_row("PRAGMA user_version", [], |row| row.get(0))
-                .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
-            if schema_version >= 5 {
-                orphan_count += connection
-                    .query_row("SELECT COUNT(*) FROM v2_terminal_dispositions", [], |row| {
-                        row.get::<_, i64>(0)
-                    })
-                    .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
-            }
-            if orphan_count == 0 {
-                return Ok(None);
-            }
-            Err(corrupt(StoreRecordKindV1::Session))
-        }
-        (Some(workspace_revision), Some(session)) => {
-            load_present_graph_session_v2(connection, workspace_revision, session).map(Some)
-        }
-        _ => Err(corrupt(StoreRecordKindV1::Session)),
-    }
+    load_present_graph_session_v2(connection, workspace_revision, session).map(Some)
 }
 
 fn load_present_graph_session_v2(
@@ -3987,14 +4404,6 @@ fn load_present_graph_session_v2(
     workspace_revision: i64,
     persisted: PersistedSessionV2,
 ) -> Result<GraphSessionStateV2, StoreErrorV1> {
-    let snapshot_count: i64 = connection
-        .query_row("SELECT COUNT(*) FROM v2_procedure_snapshots", [], |row| {
-            row.get(0)
-        })
-        .map_err(|error| record_error(error, StoreRecordKindV1::Snapshot))?;
-    if snapshot_count != 1 {
-        return Err(corrupt(StoreRecordKindV1::Session));
-    }
     let snapshot = load_snapshot_v2(connection, &persisted.snapshot_id)?;
     if persisted.goal_tracking != i64::from(snapshot.goal_tracking()) {
         return Err(corrupt(StoreRecordKindV1::Session));
@@ -4319,7 +4728,96 @@ fn load_counters_v2(
 pub(crate) fn verify_v2_graph_state_connection_v2(
     connection: &Connection,
 ) -> Result<(), StoreErrorV1> {
-    load_graph_session_connection_v2(connection).map(|_| ())
+    let schema_version: u32 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .map_err(|error| record_error(error, StoreRecordKindV1::Workspace))?;
+    if schema_version >= 7 {
+        let orphan_snapshot_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM v2_procedure_snapshots p \
+                 LEFT JOIN v2_task_sessions s ON s.procedure_snapshot_id = p.snapshot_id \
+                 WHERE s.session_id IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| record_error(error, StoreRecordKindV1::Snapshot))?;
+        if orphan_snapshot_count != 0 {
+            return Err(corrupt(StoreRecordKindV1::Snapshot));
+        }
+        load_graph_session_connection_v2(connection)?;
+        let archives = list_archived_sessions_connection_v2(connection)?;
+        if archives.len() > MAX_INACTIVE_SESSIONS_V2 as usize {
+            return Err(corrupt(StoreRecordKindV1::Session));
+        }
+        for archive in archives {
+            if archive.archive_slot() == 0
+                || archive.archive_slot() > MAX_INACTIVE_SESSIONS_V2
+                || !matches!(
+                    archive.lifecycle(),
+                    SessionLifecycle::Completed | SessionLifecycle::Cancelled
+                )
+            {
+                return Err(corrupt(StoreRecordKindV1::Session));
+            }
+        }
+        return Ok(());
+    }
+    load_legacy_current_graph_session_connection_v2(connection).map(|_| ())
+}
+
+fn load_legacy_current_graph_session_connection_v2(
+    connection: &Connection,
+) -> Result<Option<GraphSessionStateV2>, StoreErrorV1> {
+    let session_count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM v2_task_sessions", [], |row| {
+            row.get(0)
+        })
+        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+    let workspace_count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM v2_workspace_state", [], |row| {
+            row.get(0)
+        })
+        .map_err(|error| record_error(error, StoreRecordKindV1::Workspace))?;
+    if session_count == 0 && workspace_count == 0 {
+        return Ok(None);
+    }
+    if session_count != 1 || workspace_count != 1 {
+        return Err(corrupt(StoreRecordKindV1::Session));
+    }
+    let (workspace_revision, session) = connection
+        .query_row(
+            "SELECT w.workspace_revision, s.session_id, s.task_title, s.procedure_snapshot_id, \
+             s.lifecycle, s.session_revision, latest_trace_sequence, active_graph_node_id, \
+             active_attempt_id, active_trace_sequence, goal_tracking, current_goal_revision, \
+             created_at_ms, completed_at_ms, cancelled_at_ms, cancel_reason \
+             FROM v2_workspace_state w JOIN v2_task_sessions s ON s.singleton = w.singleton \
+             WHERE w.singleton = 1",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    PersistedSessionV2 {
+                        session_id: row.get(1)?,
+                        task_title: row.get(2)?,
+                        snapshot_id: row.get(3)?,
+                        lifecycle: row.get(4)?,
+                        session_revision: row.get(5)?,
+                        latest_trace: row.get(6)?,
+                        active_node: row.get(7)?,
+                        active_attempt: row.get(8)?,
+                        active_trace: row.get(9)?,
+                        goal_tracking: row.get(10)?,
+                        current_goal_revision: row.get(11)?,
+                        created_at: row.get(12)?,
+                        completed_at: row.get(13)?,
+                        cancelled_at: row.get(14)?,
+                        cancel_reason: row.get(15)?,
+                    },
+                ))
+            },
+        )
+        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+    load_present_graph_session_v2(connection, workspace_revision, session).map(Some)
 }
 
 pub(crate) fn load_terminal_dispositions_connection_v2(
@@ -4334,34 +4832,67 @@ pub(crate) fn load_terminal_dispositions_connection_v2(
         Option<String>,
         Option<String>,
         Option<String>,
+        Option<String>,
         i64,
     );
-    let mut statement = connection
-        .prepare(
-            "SELECT session_id, terminal_session_revision, kind, summary, stable_reference, \
-             reason, actor, recorded_at_ms FROM v2_terminal_dispositions \
-             WHERE session_id = ?1 ORDER BY terminal_session_revision",
-        )
+    let schema_version: i64 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
         .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
-    let rows = statement
-        .query_map([state.trace().session_id().as_str()], |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-                row.get(5)?,
-                row.get(6)?,
-                row.get(7)?,
-            ))
-        })
-        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
-    let persisted = rows
-        .collect::<Result<Vec<PersistedDispositionV2>, _>>()
-        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+    let persisted = if schema_version >= 8 {
+        let mut statement = connection
+            .prepare(
+                "SELECT session_id, terminal_session_revision, kind, summary, stable_reference, \
+                 reason, successor_session_id, actor, recorded_at_ms FROM v2_terminal_dispositions \
+                 WHERE session_id = ?1 ORDER BY terminal_session_revision",
+            )
+            .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+        statement
+            .query_map([state.trace().session_id().as_str()], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                ))
+            })
+            .map_err(|error| record_error(error, StoreRecordKindV1::Session))?
+            .collect::<Result<Vec<PersistedDispositionV2>, _>>()
+            .map_err(|error| record_error(error, StoreRecordKindV1::Session))?
+    } else {
+        let mut statement = connection
+            .prepare(
+                "SELECT session_id, terminal_session_revision, kind, summary, stable_reference, \
+                 reason, actor, recorded_at_ms FROM v2_terminal_dispositions \
+                 WHERE session_id = ?1 ORDER BY terminal_session_revision",
+            )
+            .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+        statement
+            .query_map([state.trace().session_id().as_str()], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    None,
+                    row.get(6)?,
+                    row.get(7)?,
+                ))
+            })
+            .map_err(|error| record_error(error, StoreRecordKindV1::Session))?
+            .collect::<Result<Vec<PersistedDispositionV2>, _>>()
+            .map_err(|error| record_error(error, StoreRecordKindV1::Session))?
+    };
     let mut dispositions = Vec::with_capacity(persisted.len());
-    for (session_id, revision, kind, summary, reference, reason, actor, recorded_at) in persisted {
+    for (session_id, revision, kind, summary, reference, reason, successor, actor, recorded_at) in
+        persisted
+    {
         let session_id =
             SessionId::new(session_id).map_err(|_| corrupt(StoreRecordKindV1::Session))?;
         let revision = Revision::new(persisted_u64(revision, StoreRecordKindV1::Session)?);
@@ -4383,6 +4914,15 @@ pub(crate) fn load_terminal_dispositions_connection_v2(
                 session_id,
                 revision,
                 reason.ok_or_else(|| corrupt(StoreRecordKindV1::Session))?,
+                actor,
+                recorded_at,
+            ),
+            "superseded" => TerminalDispositionV2::superseded(
+                session_id,
+                revision,
+                reason.ok_or_else(|| corrupt(StoreRecordKindV1::Session))?,
+                SessionId::new(successor.ok_or_else(|| corrupt(StoreRecordKindV1::Session))?)
+                    .map_err(|_| corrupt(StoreRecordKindV1::Session))?,
                 actor,
                 recorded_at,
             ),
@@ -4449,22 +4989,30 @@ pub(crate) fn record_terminal_disposition_transaction_v2(
             session_revision: disposition.terminal_session_revision(),
         });
     }
-    let (kind, summary, reference, reason) = match disposition.kind() {
+    let (kind, summary, reference, reason, successor_session_id) = match disposition.kind() {
         TerminalDispositionKindV2::HandedOff => (
             "handed_off",
             disposition.summary(),
             disposition.stable_reference(),
             None,
+            None,
         ),
         TerminalDispositionKindV2::NotRequired => {
-            ("not_required", None, None, disposition.reason())
+            ("not_required", None, None, disposition.reason(), None)
         }
+        TerminalDispositionKindV2::Superseded => (
+            "superseded",
+            None,
+            None,
+            disposition.reason(),
+            disposition.successor_session_id().map(SessionId::as_str),
+        ),
     };
     let inserted = transaction
         .execute(
             "INSERT INTO v2_terminal_dispositions (session_id, terminal_session_revision, kind, \
-             summary, stable_reference, reason, actor, recorded_at_ms) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+             summary, stable_reference, reason, successor_session_id, actor, recorded_at_ms) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 disposition.session_id().as_str(),
                 sqlite_u64(
@@ -4475,6 +5023,7 @@ pub(crate) fn record_terminal_disposition_transaction_v2(
                 summary,
                 reference,
                 reason,
+                successor_session_id,
                 disposition.actor().map(ActorAttributionV2::as_str),
                 sqlite_u64(
                     disposition.recorded_at().get(),
@@ -4828,11 +5377,11 @@ fn insert_session_row_v2(
     let (active_node, active_attempt, active_trace) = active_cursor_values(state.trace())?;
     transaction
         .execute(
-            "INSERT INTO v2_task_sessions (singleton, session_id, task_title, procedure_snapshot_id, \
+            "INSERT INTO v2_task_sessions (session_id, activity, task_title, procedure_snapshot_id, \
              lifecycle, session_revision, latest_trace_sequence, active_graph_node_id, \
              active_attempt_id, active_trace_sequence, goal_tracking, current_goal_revision, \
              created_at_ms, completed_at_ms, cancelled_at_ms, cancel_reason) \
-             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+             VALUES (?1, 'current', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 state.trace().session_id().as_str(),
                 state.task_title(),
@@ -4870,7 +5419,7 @@ fn update_session_row_v2(
             "UPDATE v2_task_sessions SET lifecycle = ?1, session_revision = ?2, \
              latest_trace_sequence = ?3, active_graph_node_id = ?4, active_attempt_id = ?5, \
              active_trace_sequence = ?6, current_goal_revision = ?7, completed_at_ms = ?8, \
-             cancelled_at_ms = ?9, cancel_reason = ?10 WHERE singleton = 1 AND session_id = ?11 \
+             cancelled_at_ms = ?9, cancel_reason = ?10 WHERE activity = 'current' AND session_id = ?11 \
              AND session_revision = ?12 AND current_goal_revision IS ?13",
             params![
                 session_lifecycle_text(next.trace().lifecycle()),

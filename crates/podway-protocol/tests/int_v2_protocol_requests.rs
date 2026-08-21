@@ -1,7 +1,8 @@
 use podway_core::{Sha256Digest, WorkspaceId};
 use podway_protocol::{
-    ProcedureV2MutationCommandV1, ProcedureV2MutationRequestV1, ProcedureV2StartRequestV1,
-    RequestEnvelopeV1, SliceRequestV1, V2_MUTATION_COMMANDS, canonical_mutation_identity_v1,
+    ProcedureV2MutationCommandV1, ProcedureV2MutationRequestV1, ProcedureV2StartCommandV1,
+    ProcedureV2StartRequestV1, RequestEnvelopeV1, SessionDeletionModeV1, SliceRequestV1,
+    V2_MUTATION_COMMANDS, canonical_mutation_identity_v1,
     canonical_procedure_v2_mutation_identity_v1, canonical_procedure_v2_start_identity_v1,
     canonical_start_mutation_identity_v1,
 };
@@ -21,6 +22,49 @@ fn selector() -> Value {
         "display": "/tmp/podway-v2",
         "expected_uuid": WORKSPACE_ID,
     })
+}
+
+#[test]
+fn start_replace_accepts_state_aware_resolution_payloads() {
+    let preconditions = json!({"session_id":SESSION_ID,"session_revision":7});
+    let cases = [
+        json!({
+            "mode":"delete",
+            "confirmed":true,
+            "progress_summary":"Current work was reviewed before deletion."
+        }),
+        json!({
+            "mode":"supersede",
+            "reason":"A new task takes precedence.",
+            "actor":"developer"
+        }),
+        json!({
+            "mode":"dispose_and_archive",
+            "disposition":{"kind":"not_required","reason":"No handoff is needed."},
+            "actor":null
+        }),
+    ];
+    for resolution in cases {
+        let request = ProcedureV2StartRequestV1::from_envelope(&envelope(
+            "session.start_replace",
+            preconditions.clone(),
+            json!({
+                "preset":"small-change-v2",
+                "task_title":"Start the successor task.",
+                "resolution":resolution,
+            }),
+        ))
+        .unwrap();
+        let ProcedureV2StartCommandV1::SessionStartReplace(input) = request.command() else {
+            panic!("expected start replacement")
+        };
+        assert!(matches!(
+            input.mode,
+            SessionDeletionModeV1::Delete { .. }
+                | SessionDeletionModeV1::Supersede { .. }
+                | SessionDeletionModeV1::DisposeAndArchive { .. }
+        ));
+    }
 }
 
 fn envelope(command: &str, preconditions: Value, mut payload: Value) -> RequestEnvelopeV1 {
@@ -107,6 +151,7 @@ fn v2rel003_all_mutations_admit_common_transport_with_applicable_revision_fences
             json!({"reason":"Cancelled safely."}),
         ),
         ("session.reset", session_identity.clone(), json!({})),
+        ("session.archive", session_identity.clone(), json!({})),
         ("item.check", item.clone(), json!({"item_id":"proof"})),
         ("item.uncheck", item.clone(), json!({"item_id":"proof"})),
         (

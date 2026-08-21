@@ -52,8 +52,9 @@ pub use v2_state::{
     GraphInitialGoalV2, GraphItemMutationEntryV2, GraphItemMutationOutcomeV2,
     GraphItemsMutationOutcomeV2, GraphNodeCounterV2, GraphNodeSnapshotV2, GraphRetryOutcomeV2,
     GraphSessionStateV2, GraphStartCurrentTaskV2, GraphUnblockOutcomeV2, GraphWorkspaceViewV2,
-    ProcedureSnapshotV2, StoreGraphMutationContractV2, StoreGraphReadContractV2,
-    StoreGraphStateContractV2, StoreTerminalDispositionContractV2,
+    MAX_INACTIVE_SESSIONS_V2, ProcedureSnapshotV2, SessionArchiveSummaryV2,
+    StoreGraphMutationContractV2, StoreGraphReadContractV2, StoreGraphStateContractV2,
+    StoreSessionArchiveContractV2, StoreTerminalDispositionContractV2,
 };
 
 pub const MAX_IDEMPOTENCY_KEY_BYTES_V1: usize = 256;
@@ -110,6 +111,8 @@ pub(crate) fn command_name_v1(command: &CommandV1) -> &'static str {
         CommandV1::SessionBlock => "session.block",
         CommandV1::SessionUnblock => "session.unblock",
         CommandV1::SessionCancel => "session.cancel",
+        CommandV1::SessionArchive => "session.archive",
+        CommandV1::SessionArchivePurge => "session.archive_purge",
         CommandV1::SessionReset => "session.reset",
         CommandV1::SessionDecide => "session.decide",
         CommandV1::SessionRework => "session.rework",
@@ -1941,6 +1944,20 @@ pub enum StoreErrorV1 {
     SessionResetNotEligibleV1 {
         lifecycle: podway_core::SessionLifecycle,
         current_terminal_disposition: bool,
+    },
+    SessionArchiveNotEligibleV1 {
+        lifecycle: podway_core::SessionLifecycle,
+        current_terminal_disposition: bool,
+    },
+    SessionArchiveLimitReachedV1 {
+        maximum: u32,
+    },
+    SessionStartStateConflictV1 {
+        lifecycle: podway_core::SessionLifecycle,
+        current_terminal_disposition: bool,
+    },
+    SessionArchiveNotFoundV1 {
+        session_id: SessionId,
     },
     TerminalDispositionAlreadyRecordedV1 {
         session_revision: RevisionV1,

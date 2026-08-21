@@ -1497,7 +1497,7 @@ fn goal_revision_failpoint_rolls_back_and_corruption_fails_reopen() {
     let connection = Connection::open(database_path(&temporary)).unwrap();
     connection
         .execute(
-            "UPDATE v2_task_sessions SET current_goal_revision = 1 WHERE singleton = 1",
+            "UPDATE v2_task_sessions SET current_goal_revision = 1 WHERE activity = 'current'",
             [],
         )
         .unwrap();

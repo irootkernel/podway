@@ -280,6 +280,38 @@
       "capabilities": []
     },
     {
+      "command": "session.archive",
+      "availability": "executable",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "session.archive_list",
+      "availability": "executable",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "session.archive_show",
+      "availability": "executable",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "session.archive_purge",
+      "availability": "executable",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
       "command": "session.terminal_disposition",
       "availability": "executable",
       "owner": "podway-daemon",

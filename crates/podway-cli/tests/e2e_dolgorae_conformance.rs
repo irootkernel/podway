@@ -1557,7 +1557,8 @@ fn aut_t_id_custom_procedure_survives_restart_and_completes_the_fenced_lifecycle
             "--if-session-revision",
             &reopened_status.session_revision,
             "start",
-            "--replace",
+            "--on-existing",
+            "delete",
             "--progress-summary",
             "Preserved the reopened lifecycle evidence",
             "--procedure",
@@ -1944,7 +1945,8 @@ fn aut_t_id_and_recon_reject_conflicts_and_recover_an_admitted_timeout() {
                 "--if-session-revision",
                 &stale_revision,
                 "start",
-                "--replace",
+                "--on-existing",
+                "delete",
                 "--progress-summary",
                 "Preserved the running session before stale replacement",
                 "--procedure",
@@ -2004,33 +2006,42 @@ fn aut_t_recon_response_loss_is_reconciled_by_lookup_and_exact_replay() {
     let daemon_socket = socket.clone();
     let relay = thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(10);
-        let mut downstream = loop {
-            match listener.accept() {
-                Ok((stream, _)) => break stream,
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    if Instant::now() >= deadline {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::TimedOut,
-                            "response-loss relay accept timed out",
-                        ));
+        for exchange in 0..2 {
+            let mut downstream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if Instant::now() >= deadline {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::TimedOut,
+                                "response-loss relay accept timed out",
+                            ));
+                        }
+                        thread::sleep(Duration::from_millis(10));
                     }
-                    thread::sleep(Duration::from_millis(10));
+                    Err(error) => return Err(error),
                 }
-                Err(error) => return Err(error),
+            };
+            downstream.set_read_timeout(Some(Duration::from_secs(10)))?;
+            downstream.set_write_timeout(Some(Duration::from_secs(10)))?;
+            let mut request_wire = Vec::new();
+            downstream.read_to_end(&mut request_wire)?;
+            let mut upstream = UnixStream::connect(&daemon_socket)?;
+            upstream.set_read_timeout(Some(Duration::from_secs(10)))?;
+            upstream.set_write_timeout(Some(Duration::from_secs(10)))?;
+            upstream.write_all(&request_wire)?;
+            upstream.shutdown(Shutdown::Write)?;
+            let mut response_wire = Vec::new();
+            upstream.read_to_end(&mut response_wire)?;
+            if exchange == 0 {
+                downstream.write_all(&response_wire)?;
+                downstream.shutdown(Shutdown::Write)?;
+            } else {
+                drop(downstream);
+                return Ok::<_, std::io::Error>((request_wire, response_wire));
             }
-        };
-        downstream.set_read_timeout(Some(Duration::from_secs(10)))?;
-        let mut request_wire = Vec::new();
-        downstream.read_to_end(&mut request_wire)?;
-        let mut upstream = UnixStream::connect(daemon_socket)?;
-        upstream.set_read_timeout(Some(Duration::from_secs(10)))?;
-        upstream.set_write_timeout(Some(Duration::from_secs(10)))?;
-        upstream.write_all(&request_wire)?;
-        upstream.shutdown(Shutdown::Write)?;
-        let mut response_wire = Vec::new();
-        upstream.read_to_end(&mut response_wire)?;
-        drop(downstream);
-        Ok::<_, std::io::Error>((request_wire, response_wire))
+        }
+        unreachable!("the response-loss relay always returns from its mutation exchange")
     });
 
     let proxy_text = proxy_socket

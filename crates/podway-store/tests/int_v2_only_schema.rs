@@ -48,7 +48,7 @@ fn populated_graph_state() -> GraphSessionStateV2 {
     crate::int_v2_goal_state::rich_v2_state_for_schema_migration()
 }
 
-fn restore_schema_v4_shape(connection: &Connection) {
+pub(crate) fn restore_schema_v4_shape(connection: &Connection) {
     let reference = Connection::open_in_memory().unwrap();
     reference
         .execute_batch(include_str!("../../../assets/specifications/sqlite-v1.sql"))
@@ -66,6 +66,13 @@ fn restore_schema_v4_shape(connection: &Connection) {
             |row| row.get(0),
         )
         .unwrap();
+    let workspace_table_sql: String = reference
+        .query_row(
+            "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'v2_workspace_state'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
     let item_table_sql: String = reference
         .query_row(
             "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'v2_item_slots'",
@@ -78,6 +85,8 @@ fn restore_schema_v4_shape(connection: &Connection) {
             "PRAGMA foreign_keys = ON;
              PRAGMA foreign_keys = OFF;
              DROP TABLE v2_terminal_dispositions;
+             PRAGMA legacy_alter_table = ON;
+             ALTER TABLE v2_workspace_state RENAME TO v2_workspace_state_v7;
              PRAGMA legacy_alter_table = ON;
              ALTER TABLE v2_item_slots RENAME TO v2_item_slots_v6;",
         )
@@ -94,13 +103,59 @@ fn restore_schema_v4_shape(connection: &Connection) {
     connection.execute_batch(&session_table_sql).unwrap();
     connection
         .execute_batch(
-            "INSERT INTO v2_task_sessions SELECT * FROM v2_task_sessions_v5;
+            "INSERT INTO v2_task_sessions (
+                 singleton, session_id, task_title, procedure_snapshot_id, lifecycle,
+                 session_revision, latest_trace_sequence, active_graph_node_id,
+                 active_attempt_id, active_trace_sequence, goal_tracking,
+                 current_goal_revision, created_at_ms, completed_at_ms,
+                 cancelled_at_ms, cancel_reason
+             )
+             SELECT
+                 1, session_id, task_title, procedure_snapshot_id, lifecycle,
+                 session_revision, latest_trace_sequence, active_graph_node_id,
+                 active_attempt_id, active_trace_sequence, goal_tracking,
+                 current_goal_revision, created_at_ms, completed_at_ms,
+                 cancelled_at_ms, cancel_reason
+             FROM v2_task_sessions_v5 WHERE activity = 'current';
              DROP TABLE v2_task_sessions_v5;
              PRAGMA legacy_alter_table = OFF;",
         )
         .unwrap();
+    connection.execute_batch(&workspace_table_sql).unwrap();
     connection
-        .execute("DELETE FROM schema_migrations WHERE version IN (5, 6)", [])
+        .execute(
+            "INSERT INTO v2_workspace_state (singleton, workspace_revision)
+             SELECT 1, workspace_revision FROM v2_workspace_state_v7 WHERE singleton = 1",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute_batch("DROP TABLE v2_workspace_state_v7; PRAGMA legacy_alter_table = OFF;")
+        .unwrap();
+    connection
+        .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+        .unwrap();
+    #[cfg(unix)]
+    {
+        let database: String = connection
+            .query_row("PRAGMA database_list", [], |row| row.get(2))
+            .unwrap();
+        for suffix in ["-wal", "-shm"] {
+            let sidecar = format!("{database}{suffix}");
+            if Path::new(&sidecar).exists() {
+                fs::set_permissions(sidecar, fs::Permissions::from_mode(0o600)).unwrap();
+            }
+        }
+    }
+    let quick_check: String = connection
+        .query_row("PRAGMA quick_check", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(quick_check, "ok");
+    connection
+        .execute(
+            "DELETE FROM schema_migrations WHERE version IN (5, 6, 7, 8)",
+            [],
+        )
         .unwrap();
     connection.pragma_update(None, "user_version", 4).unwrap();
 }
@@ -248,7 +303,7 @@ fn canonical_schema_v4(lifecycle: &str) -> Connection {
     connection
 }
 
-fn apply_reserved_schema_v5(connection: &mut Connection) {
+pub(crate) fn apply_reserved_schema_v5(connection: &mut Connection) {
     connection
         .pragma_update(None, "foreign_keys", false)
         .unwrap();
@@ -262,6 +317,64 @@ fn apply_reserved_schema_v5(connection: &mut Connection) {
         })
         .unwrap();
     assert_eq!(foreign_key_violations, 0);
+    transaction.commit().unwrap();
+    connection
+        .pragma_update(None, "foreign_keys", true)
+        .unwrap();
+}
+
+fn apply_schema_v6_or_v7_fixture(connection: &mut Connection, target_version: u32) {
+    assert!(matches!(target_version, 6 | 7));
+    connection
+        .execute(
+            "INSERT INTO schema_migrations (version, name, checksum, applied_at_ms) \
+             VALUES (5, ?1, ?2, 1)",
+            params![
+                podway_store::schema::SQLITE_PREPARED_LIFECYCLE_MIGRATION_NAME_V5,
+                podway_store::schema::sqlite_v5_ddl_checksum(),
+            ],
+        )
+        .unwrap();
+    connection
+        .pragma_update(None, "foreign_keys", false)
+        .unwrap();
+    let transaction = connection.transaction().unwrap();
+    transaction
+        .execute_batch(podway_store::schema::sqlite_v6_ddl())
+        .unwrap();
+    transaction
+        .execute(
+            "INSERT INTO schema_migrations (version, name, checksum, applied_at_ms) \
+             VALUES (6, ?1, ?2, 1)",
+            params![
+                podway_store::schema::SQLITE_EXTERNAL_CHECK_RESULT_MIGRATION_NAME_V6,
+                podway_store::schema::sqlite_v6_ddl_checksum(),
+            ],
+        )
+        .unwrap();
+    if target_version == 7 {
+        transaction
+            .execute_batch(podway_store::schema::sqlite_v7_ddl())
+            .unwrap();
+        transaction
+            .execute(
+                "INSERT INTO schema_migrations (version, name, checksum, applied_at_ms) \
+                 VALUES (7, ?1, ?2, 1)",
+                params![
+                    podway_store::schema::SQLITE_RETAINED_TERMINAL_SESSIONS_MIGRATION_NAME_V7,
+                    podway_store::schema::sqlite_v7_ddl_checksum(),
+                ],
+            )
+            .unwrap();
+    }
+    assert_eq!(
+        transaction
+            .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+        0
+    );
     transaction.commit().unwrap();
     connection
         .pragma_update(None, "foreign_keys", true)
@@ -665,7 +778,7 @@ fn v2ast002_sqlite_v6_reservation_preserves_values_and_extends_only_the_item_dis
 }
 
 #[test]
-fn v2ast004_runtime_migrates_v5_to_v6_without_reencoding_item_values() {
+fn v2ast004_runtime_migrates_v5_to_v7_without_reencoding_item_values() {
     let temporary = TempDir::new().unwrap();
     let path = temporary.path().join("state.sqlite3");
     let expected_state = populated_graph_state();
@@ -771,7 +884,7 @@ fn v2ast004_runtime_migrates_v5_to_v6_without_reencoding_item_values() {
         connection
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        6
+        8
     );
     drop(connection);
 
@@ -787,6 +900,80 @@ fn v2ast004_runtime_migrates_v5_to_v6_without_reencoding_item_values() {
         reopened.read_graph_session_v2(&identity()).unwrap(),
         Some(expected_state)
     );
+}
+
+#[test]
+fn schema_v6_and_v7_upgrade_paths_migrate_to_v8() {
+    for predecessor in [6_u32, 7_u32] {
+        let temporary = TempDir::new().unwrap();
+        let path = temporary.path().join("state.sqlite3");
+        let expected_state = populated_graph_state();
+        let store = SqliteStoreV1::open(
+            &path,
+            &root(),
+            identity(),
+            SqliteStoreOptionsV1::new(8).unwrap(),
+            UnixMillis::new(1),
+        )
+        .unwrap();
+        store
+            .create_graph_session_v2(&identity(), expected_state.clone())
+            .unwrap();
+        drop(store);
+
+        let mut connection = Connection::open(&path).unwrap();
+        restore_schema_v4_shape(&connection);
+        apply_reserved_schema_v5(&mut connection);
+        apply_schema_v6_or_v7_fixture(&mut connection, predecessor);
+        assert_eq!(
+            connection
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))
+                .unwrap(),
+            predecessor
+        );
+        drop(connection);
+
+        let migrated = SqliteStoreV1::open(
+            &path,
+            &root(),
+            identity(),
+            SqliteStoreOptionsV1::new(8).unwrap(),
+            UnixMillis::new(2),
+        )
+        .unwrap();
+        assert_eq!(
+            migrated.read_graph_session_v2(&identity()).unwrap(),
+            Some(expected_state)
+        );
+        drop(migrated);
+
+        let connection = Connection::open(&path).unwrap();
+        let (version, migrations, foreign_key_violations): (u32, i64, i64) = connection
+            .query_row(
+                "SELECT (SELECT user_version FROM pragma_user_version), \
+                        (SELECT COUNT(*) FROM schema_migrations WHERE version BETWEEN 5 AND 8), \
+                        (SELECT COUNT(*) FROM pragma_foreign_key_check)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!((version, migrations, foreign_key_violations), (8, 4, 0));
+        let migration: (String, String) = connection
+            .query_row(
+                "SELECT name, checksum FROM schema_migrations WHERE version = 8",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            migration,
+            (
+                podway_store::schema::SQLITE_SUPERSEDED_SESSION_DISPOSITION_MIGRATION_NAME_V8
+                    .to_owned(),
+                podway_store::schema::sqlite_v8_ddl_checksum(),
+            )
+        );
+    }
 }
 
 fn seed_schema_v3(temporary: &TempDir, with_legacy_state: bool) {
@@ -862,7 +1049,7 @@ fn seed_schema_v3(temporary: &TempDir, with_legacy_state: bool) {
 }
 
 #[test]
-fn empty_schema_v4_inspects_read_only_then_migrates_to_v6() {
+fn empty_schema_v4_inspects_read_only_then_migrates_to_v7() {
     let temporary = TempDir::new().unwrap();
     let path = temporary.path().join("state.sqlite3");
     drop(
@@ -910,11 +1097,11 @@ fn empty_schema_v4_inspects_read_only_then_migrates_to_v6() {
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!((version, disposition_table_count), (6, 1));
+    assert_eq!((version, disposition_table_count), (8, 1));
 }
 
 #[test]
-fn schema_v3_without_legacy_state_migrates_to_external_check_result_schema_v6() {
+fn schema_v3_without_legacy_state_migrates_to_retained_terminal_schema_v7() {
     let temporary = TempDir::new().unwrap();
     seed_schema_v3(&temporary, false);
     let path = temporary.path().join("state.sqlite3");
@@ -942,7 +1129,7 @@ fn schema_v3_without_legacy_state_migrates_to_external_check_result_schema_v6() 
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 6);
+    assert_eq!(version, 8);
     let legacy_tables: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name IN \
@@ -956,7 +1143,7 @@ fn schema_v3_without_legacy_state_migrates_to_external_check_result_schema_v6() 
 }
 
 #[test]
-fn schema_v3_v2_state_and_terminal_receipt_survive_v6_migration_and_reopen() {
+fn schema_v3_v2_state_and_terminal_receipt_survive_v7_migration_and_reopen() {
     let temporary = TempDir::new().unwrap();
     let (expected_state, job_id, expected_receipt) = seed_populated_v2_schema_v3(&temporary);
     let path = temporary.path().join("state.sqlite3");
@@ -1006,7 +1193,7 @@ fn schema_v3_v2_state_and_terminal_receipt_survive_v6_migration_and_reopen() {
         .unwrap();
     let migration: i64 = connection
         .query_row(
-            "SELECT COUNT(*) FROM schema_migrations WHERE version IN (4, 5, 6)",
+            "SELECT COUNT(*) FROM schema_migrations WHERE version IN (4, 5, 6, 7, 8)",
             [],
             |row| row.get(0),
         )
@@ -1053,7 +1240,7 @@ fn schema_v3_v2_state_and_terminal_receipt_survive_v6_migration_and_reopen() {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
-    assert_eq!((version, migration, legacy_tables), (6, 3, 0));
+    assert_eq!((version, migration, legacy_tables), (8, 5, 0));
     assert_eq!(receipts.0, receipts.1);
 }
 

@@ -280,10 +280,10 @@ This completed recovery task shipped in the immutable
 
 ## Procedure Evidence and Reference Quality
 
-The next product line is implemented through five sequential epics:
+The next product line is implemented through seven sequential epics:
 
 ```text
-V2LIF -> V2SCL -> V2AST -> V2GRD -> V2REF
+V2LIF -> V2SCL -> V2AST -> V2WAL -> V2ARC -> V2GRD -> V2REF
 ```
 
 Within each epic, tasks execute in numeric order. An epic remains entirely
@@ -338,9 +338,26 @@ Dependencies: completed `V2SCL` epic.
 | `V2AST-005` | Expose check-result guidance and read-back | Completed | Add allowed actions, suggestions, the bounded structured projection and stdin template, single-page evidence read-back, CLI guidance, and honest rendering. | [automation contract](../specs/interfaces/automation-client-contract.md#structurally-bound-external-check-results-aut-chk-001008), [IPC protocol](../specs/interfaces/ipc-protocol.md#evidence-paging) |
 | `V2AST-006` | Close check-result compatibility and conformance | Completed | Prove compatibility, promote durable documentation, remove the completed dossier, and close trust, migration, recovery, frame, projection, and maximum-size evidence. | [ADR-0025](../architecture-decision-records/0025-structurally-bound-external-check-results.md), [security and trust](../specs/operations/security-and-trust.md), [automation contract](../specs/interfaces/automation-client-contract.md#structurally-bound-external-check-results-aut-chk-001008) |
 
-## V2GRD — Typed Guards and Authoring Diagnostics
+## V2WAL — Runtime State Snapshot Coherence
 
 Dependencies: completed `V2AST` epic.
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `V2WAL-001` | Restore active Store snapshot coherence | Completed | Keep previews on the active Store, detect divergence from disposable snapshots, preserve existing migrations, and prove graceful WAL recovery without discarding current state. | [read consistency](../specs/storage/transactions-concurrency-and-idempotency.md#read-consistency), [doctor checks](../specs/storage/recovery-retention-and-maintenance.md#doctor-checks) |
+
+## V2ARC — Retained Inactive Sessions
+
+Dependencies: completed `V2WAL` epic.
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `V2ARC-001` | Retain disposed terminal sessions | Completed | Add bounded immutable inactive-session retention, atomic terminal replacement, explicit archive reads and purge, SQLite v7 migration, public contracts, operator guidance, and development-gate coverage. | [ADR-0026](../architecture-decision-records/0026-retain-inactive-terminal-sessions.md), [lifecycle specification](../specs/domain/rework-and-lifecycle.md) |
+| `V2ARC-002` | Make session start state-aware | In Progress | Replace public replacement flags with lifecycle-specific human choices and explicit automation policies; preserve superseded work atomically and expose its successor link. | [ADR-0027](../architecture-decision-records/0027-state-aware-session-start.md), [CLI specification](../specs/interfaces/cli-specification.md) |
+
+## V2GRD — Typed Guards and Authoring Diagnostics
+
+Dependencies: completed `V2ARC` epic.
 
 | id | title | status | goal | references |
 |---|---|---|---|---|

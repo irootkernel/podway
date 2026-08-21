@@ -243,6 +243,7 @@ pub enum AdvanceTerminalV2 {
 pub enum TerminalDispositionKindV2 {
     HandedOff,
     NotRequired,
+    Superseded,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -253,6 +254,7 @@ pub struct TerminalDispositionV2 {
     summary: Option<String>,
     stable_reference: Option<String>,
     reason: Option<String>,
+    successor_session_id: Option<SessionId>,
     actor: Option<ActorAttributionV2>,
     recorded_at: UnixMillis,
 }
@@ -275,6 +277,7 @@ impl TerminalDispositionV2 {
             Some(summary),
             Some(stable_reference),
             None,
+            None,
             actor,
             recorded_at,
         )
@@ -295,6 +298,34 @@ impl TerminalDispositionV2 {
             None,
             None,
             Some(reason),
+            None,
+            actor,
+            recorded_at,
+        )
+    }
+
+    pub fn superseded(
+        session_id: SessionId,
+        terminal_session_revision: Revision,
+        reason: impl Into<String>,
+        successor_session_id: SessionId,
+        actor: Option<ActorAttributionV2>,
+        recorded_at: UnixMillis,
+    ) -> Result<Self, DomainError> {
+        if session_id == successor_session_id {
+            return Err(invalid(
+                "superseded disposition requires a distinct successor session",
+            ));
+        }
+        let reason = bounded_disposition_text(reason.into())?;
+        Self::new(
+            session_id,
+            terminal_session_revision,
+            TerminalDispositionKindV2::Superseded,
+            None,
+            None,
+            Some(reason),
+            Some(successor_session_id),
             actor,
             recorded_at,
         )
@@ -308,6 +339,7 @@ impl TerminalDispositionV2 {
         summary: Option<String>,
         stable_reference: Option<String>,
         reason: Option<String>,
+        successor_session_id: Option<SessionId>,
         actor: Option<ActorAttributionV2>,
         recorded_at: UnixMillis,
     ) -> Result<Self, DomainError> {
@@ -321,6 +353,7 @@ impl TerminalDispositionV2 {
             summary,
             stable_reference,
             reason,
+            successor_session_id,
             actor,
             recorded_at,
         })
@@ -348,6 +381,10 @@ impl TerminalDispositionV2 {
 
     pub fn reason(&self) -> Option<&str> {
         self.reason.as_deref()
+    }
+
+    pub fn successor_session_id(&self) -> Option<&SessionId> {
+        self.successor_session_id.as_ref()
     }
 
     pub fn actor(&self) -> Option<&ActorAttributionV2> {
@@ -1151,6 +1188,33 @@ mod tests {
         assert_eq!(handed_off.summary(), Some("Delivered"));
         assert_eq!(handed_off.stable_reference(), Some("commit:abc"));
         assert_eq!(handed_off.reason(), None);
+
+        let successor = SessionId::new("00000000-0000-0000-0000-000000000002").unwrap();
+        let superseded = TerminalDispositionV2::superseded(
+            session(),
+            Revision::new(3),
+            "A successor took priority",
+            successor.clone(),
+            Some(ActorAttributionV2::new("agent").unwrap()),
+            UnixMillis::new(11),
+        )
+        .unwrap();
+        assert_eq!(superseded.kind(), TerminalDispositionKindV2::Superseded);
+        assert_eq!(superseded.reason(), Some("A successor took priority"));
+        assert_eq!(superseded.successor_session_id(), Some(&successor));
+        assert_eq!(
+            TerminalDispositionV2::superseded(
+                session(),
+                Revision::new(3),
+                "invalid successor",
+                session(),
+                None,
+                UnixMillis::new(11),
+            ),
+            Err(invalid(
+                "superseded disposition requires a distinct successor session"
+            ))
+        );
 
         assert_eq!(
             TerminalDispositionV2::not_required(

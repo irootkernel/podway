@@ -54,6 +54,13 @@ fn fixture_runtime_directory(root: &Path) -> std::path::PathBuf {
 }
 
 pub(super) fn manager(root: &Path) -> WorkspaceRuntimeManagerV1 {
+    manager_with_wal_autocheckpoint(root, 8)
+}
+
+fn manager_with_wal_autocheckpoint(
+    root: &Path,
+    wal_autocheckpoint_pages: u32,
+) -> WorkspaceRuntimeManagerV1 {
     let application_support = root.join("Application Support");
     fs::create_dir_all(&application_support).unwrap();
     #[cfg(unix)]
@@ -65,7 +72,16 @@ pub(super) fn manager(root: &Path) -> WorkspaceRuntimeManagerV1 {
         fixture_runtime_directory(root),
     )
     .unwrap();
-    WorkspaceRuntimeManagerV1::new(&paths, SqliteStoreOptionsV1::new(8).unwrap())
+    WorkspaceRuntimeManagerV1::new(
+        &paths,
+        SqliteStoreOptionsV1::new(wal_autocheckpoint_pages).unwrap(),
+    )
+}
+
+fn sqlite_sidecar(path: &Path, suffix: &str) -> std::path::PathBuf {
+    let mut sidecar = path.as_os_str().to_os_string();
+    sidecar.push(suffix);
+    sidecar.into()
 }
 
 pub(super) fn make_runtime_private(root: &Path) {
@@ -244,10 +260,19 @@ fn request_with_options(
     } else {
         match command {
             "workspace.init" | "workspace.reset_all" => OperationV1::Bootstrap,
-            "workspace.show" | "session.status" | "session.next" | "session.observe"
-            | "evidence.read" | "job.list" | "job.lookup" | "job.status" | "job.wait" => {
-                OperationV1::Query
-            }
+            "workspace.show"
+            | "workspace.doctor"
+            | "session.status"
+            | "session.next"
+            | "session.observe"
+            | "session.archive_list"
+            | "session.archive_show"
+            | "evidence.read"
+            | "job.list"
+            | "job.lookup"
+            | "job.status"
+            | "job.wait" => OperationV1::Query,
+            "session.archive_purge" => OperationV1::Control,
             _ => OperationV1::Mutate,
         }
     };
@@ -2566,6 +2591,133 @@ fn v2lif005_prepared_session_dry_run_and_eligible_reset_need_no_force_summary() 
     assert_eq!(status_after_reset.code().as_str(), "SESSION_ID_MISMATCH");
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn v2wal001_previews_use_the_active_store_when_wal_paths_are_unlinked() {
+    let fixture = support_phase4_workspace::git_worktrees();
+    make_runtime_private(fixture.main());
+    fs::write(
+        fixture.main().join("wal-preview.yaml"),
+        ACTION_READBACK_PROCEDURE,
+    )
+    .unwrap();
+    let ParsedProcedure::V2(parsed) = parse_procedure_document(
+        ACTION_READBACK_PROCEDURE.as_bytes(),
+        ProcedureDocumentFormat::Yaml,
+    )
+    .unwrap();
+    let digest = validate_procedure_v2(parsed).unwrap().digest().clone();
+    let workspace_selector = selector(fixture.main());
+    let runtime_manager = Arc::new(manager_with_wal_autocheckpoint(
+        fixture.temporary_path(),
+        1_000,
+    ));
+    let production = dispatcher(Arc::clone(&runtime_manager), "v2wal001-preview");
+
+    let initialize = request(
+        144_001,
+        "workspace.init",
+        &workspace_selector,
+        Map::new(),
+        "v2wal001-preview-init",
+        PreconditionsV1::default(),
+    );
+    assert!(matches!(
+        dispatch(&production, &initialize),
+        ResponseEnvelopeV2::OutputV2(_)
+    ));
+    let start_payload = json!({
+        "procedure": "wal-preview.yaml",
+        "expected_procedure_digest": digest,
+        "task_title": "Keep previews on the live Store"
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+    let start = request(
+        144_002,
+        "session.start",
+        &workspace_selector,
+        start_payload.clone(),
+        "v2wal001-preview-start",
+        PreconditionsV1::default(),
+    );
+    let started = v2_result(dispatch(&production, &start), "session.start");
+    let session_id = SessionId::new(started["session_id"].as_str().unwrap()).unwrap();
+    let prepared_fence = PreconditionsV1::new(
+        Some(session_id.clone()),
+        Some(Revision::ZERO),
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    let scheduler = runtime_manager
+        .resolve_existing(git_selector(fixture.main()), None, observation())
+        .unwrap();
+    let context = scheduler.context_snapshot();
+    let database_path = context.database_path().to_path_buf();
+    fs::remove_file(sqlite_sidecar(&database_path, "-wal")).unwrap();
+    fs::remove_file(sqlite_sidecar(&database_path, "-shm")).unwrap();
+
+    let filesystem_view = SqliteStoreV1::inspect_graph_workspace_view_v2(
+        &database_path,
+        context.binding().identity(),
+        context.store_options(),
+        podway_store::EpochMillisV1::new(1_700_000_000_124),
+    )
+    .unwrap();
+    assert!(
+        filesystem_view.graph_state().is_none(),
+        "the isolated filesystem snapshot must reproduce the stale pre-WAL state"
+    );
+
+    let reset_preview = request(
+        144_003,
+        "session.reset",
+        &workspace_selector,
+        json!({"dry_run":true}).as_object().unwrap().clone(),
+        "unused-v2wal001-reset-preview",
+        prepared_fence.clone(),
+    );
+    let reset_preview = v2_result(dispatch(&production, &reset_preview), "session.reset");
+    assert_eq!(reset_preview["session_revision"], 0);
+    assert_eq!(reset_preview["lifecycle"], "prepared");
+    assert_eq!(reset_preview["eligible"], true);
+
+    let mut replace_payload = start_payload;
+    replace_payload.insert("replace_eligible".to_owned(), Value::Bool(true));
+    replace_payload.insert("dry_run".to_owned(), Value::Bool(true));
+    let replace_preview = request(
+        144_004,
+        "session.start_replace",
+        &workspace_selector,
+        replace_payload,
+        "unused-v2wal001-replace-preview",
+        prepared_fence,
+    );
+    let replace_preview = v2_result(
+        dispatch(&production, &replace_preview),
+        "session.start_replace",
+    );
+    assert_eq!(replace_preview["dry_run"], true);
+
+    let doctor = request(
+        144_005,
+        "workspace.doctor",
+        &workspace_selector,
+        json!({"deep":true}).as_object().unwrap().clone(),
+        "unused-v2wal001-doctor",
+        PreconditionsV1::default(),
+    );
+    let doctor = v2_result(dispatch(&production, &doctor), "workspace.doctor");
+    assert_eq!(doctor["healthy"], false);
+    assert_eq!(doctor["store_snapshot_revalidated"]["outcome"], "diverged");
+    assert_eq!(doctor["findings"][0]["code"], "store_snapshot_diverged");
+}
+
 #[test]
 fn v2lif003_cold_read_migrates_released_v4_and_rebuilds_missing_registry_once() {
     let fixture = support_phase4_workspace::git_worktrees();
@@ -3082,10 +3234,267 @@ fn v2lif005_eligible_replacement_dry_run_uses_current_reset_eligibility() {
     );
 
     let disposed = v2_result(
-        preview(143_010, "Disposed replacement preview", terminal_fence),
+        preview(
+            143_010,
+            "Disposed replacement preview",
+            terminal_fence.clone(),
+        ),
         "session.start_replace",
     );
     assert_eq!(disposed["dry_run"], true);
+
+    let replacement = request(
+        143_011,
+        "session.start_replace",
+        &selector,
+        start_payload("Next prepared session"),
+        "v2arc-terminal-replacement",
+        terminal_fence,
+    );
+    let replacement = v2_result(dispatch(&production, &replacement), "session.start_replace");
+    assert_eq!(replacement["session_state"], "prepared");
+
+    let list = request(
+        143_012,
+        "session.archive_list",
+        &selector,
+        Map::new(),
+        "unused-archive-list-key",
+        PreconditionsV1::default(),
+    );
+    let list = v2_result(dispatch(&production, &list), "session.archive_list");
+    assert_eq!(list["count"], 1);
+    assert_eq!(list["sessions"][0]["session_id"], session_id.as_str());
+    assert_eq!(list["sessions"][0]["session_revision"], terminal_revision);
+
+    let show = request(
+        143_013,
+        "session.archive_show",
+        &selector,
+        json!({"session_id":session_id})
+            .as_object()
+            .unwrap()
+            .clone(),
+        "unused-archive-show-key",
+        PreconditionsV1::default(),
+    );
+    let show = v2_result(dispatch(&production, &show), "session.archive_show");
+    assert_eq!(show["activity"], "inactive");
+    assert_eq!(show["state"]["session"]["id"], session_id.as_str());
+    assert_eq!(show["state"]["session"]["lifecycle"], "cancelled");
+
+    let purge = request(
+        143_014,
+        "session.archive_purge",
+        &selector,
+        json!({
+            "session_id":session_id,
+            "expected_session_revision":terminal_revision,
+            "confirmed":true
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+        "unused-archive-purge-key",
+        PreconditionsV1::default(),
+    );
+    let purge = v2_result(dispatch(&production, &purge), "session.archive_purge");
+    assert_eq!(purge["purged"], true);
+
+    let list = request(
+        143_015,
+        "session.archive_list",
+        &selector,
+        Map::new(),
+        "unused-archive-list-after-purge-key",
+        PreconditionsV1::default(),
+    );
+    let list = v2_result(dispatch(&production, &list), "session.archive_list");
+    assert_eq!(list["count"], 0);
+
+    let missing = request(
+        143_016,
+        "session.archive_show",
+        &selector,
+        json!({"session_id":session_id})
+            .as_object()
+            .unwrap()
+            .clone(),
+        "unused-archive-show-after-purge-key",
+        PreconditionsV1::default(),
+    );
+    let ResponseEnvelopeV2::Error(missing) = dispatch(&production, &missing) else {
+        panic!("a purged archive must not remain readable");
+    };
+    assert_eq!(missing.code().as_str(), "SESSION_ARCHIVE_NOT_FOUND");
+    assert_eq!(missing.details()["session_id"], session_id.as_str());
+}
+
+#[test]
+fn session_archive_is_durably_admitted_and_reaches_the_v8_commit_path() {
+    let fixture = support_phase4_workspace::git_worktrees();
+    make_runtime_private(fixture.main());
+    let selector = selector(fixture.main());
+    let manager = Arc::new(manager(fixture.temporary_path()));
+    let production = dispatcher(Arc::clone(&manager), "session-archive-v8-admission");
+
+    let initialize = request(
+        153_001,
+        "workspace.init",
+        &selector,
+        Map::new(),
+        "session-archive-init",
+        PreconditionsV1::default(),
+    );
+    let _ = v2_result(dispatch(&production, &initialize), "workspace.init");
+    let start = request(
+        153_002,
+        "session.start",
+        &selector,
+        json!({"preset":"small-change-v2","task_title":"Archive this task"})
+            .as_object()
+            .unwrap()
+            .clone(),
+        "session-archive-start",
+        PreconditionsV1::default(),
+    );
+    let started = v2_result(dispatch(&production, &start), "session.start");
+    let session_id = started["session_id"].as_str().unwrap().to_owned();
+    begin(
+        &production,
+        &selector,
+        153_003,
+        &session_id,
+        Map::new(),
+        "session-archive-begin",
+    );
+    let running = status(&production, &selector, 153_004, &session_id);
+    let cancel = request(
+        153_005,
+        "session.cancel",
+        &selector,
+        json!({"reason":"Archive-path regression coverage."})
+            .as_object()
+            .unwrap()
+            .clone(),
+        "session-archive-cancel",
+        session_preconditions(&running),
+    );
+    let cancelled = v2_result(dispatch(&production, &cancel), "session.cancel");
+    let terminal_revision = Revision::new(cancelled["revision"].as_u64().unwrap());
+    let terminal_fence = PreconditionsV1::new(
+        Some(SessionId::new(&session_id).unwrap()),
+        Some(terminal_revision),
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    let disposition = request(
+        153_006,
+        "session.terminal_disposition",
+        &selector,
+        json!({"kind":"not_required","reason":"No handoff is required."})
+            .as_object()
+            .unwrap()
+            .clone(),
+        "session-archive-disposition",
+        terminal_fence.clone(),
+    );
+    let _ = v2_result(
+        dispatch(&production, &disposition),
+        "session.terminal_disposition",
+    );
+    let archive = request(
+        153_007,
+        "session.archive",
+        &selector,
+        Map::new(),
+        "session-archive-mutation",
+        terminal_fence,
+    );
+    let archived = v2_result(dispatch(&production, &archive), "session.archive");
+    assert_eq!(archived["session_id"], session_id);
+    assert_eq!(archived["activity"], "inactive");
+    assert_eq!(archived["lifecycle"], "cancelled");
+    assert_eq!(archived["admission"]["admitted"], true);
+
+    let list = request(
+        153_008,
+        "session.archive_list",
+        &selector,
+        Map::new(),
+        "unused-session-archive-list",
+        PreconditionsV1::default(),
+    );
+    let list = v2_result(dispatch(&production, &list), "session.archive_list");
+    assert_eq!(list["count"], 1);
+    assert_eq!(list["sessions"][0]["session_id"], session_id);
+}
+
+#[test]
+fn ineligible_session_archive_terminalizes_without_poisoning_the_workspace() {
+    let fixture = support_phase4_workspace::git_worktrees();
+    make_runtime_private(fixture.main());
+    let selector = selector(fixture.main());
+    let manager = Arc::new(manager(fixture.temporary_path()));
+    let production = dispatcher(Arc::clone(&manager), "session-archive-ineligible");
+
+    let initialize = request(
+        154_001,
+        "workspace.init",
+        &selector,
+        Map::new(),
+        "session-archive-ineligible-init",
+        PreconditionsV1::default(),
+    );
+    let _ = v2_result(dispatch(&production, &initialize), "workspace.init");
+    let start = request(
+        154_002,
+        "session.start",
+        &selector,
+        json!({"preset":"small-change-v2","task_title":"Keep this prepared task"})
+            .as_object()
+            .unwrap()
+            .clone(),
+        "session-archive-ineligible-start",
+        PreconditionsV1::default(),
+    );
+    let started = v2_result(dispatch(&production, &start), "session.start");
+    let session_id = SessionId::new(started["session_id"].as_str().unwrap()).unwrap();
+    let revision = Revision::new(started["revision"].as_u64().unwrap());
+    let archive = request(
+        154_003,
+        "session.archive",
+        &selector,
+        Map::new(),
+        "session-archive-ineligible-mutation",
+        PreconditionsV1::new(
+            Some(session_id.clone()),
+            Some(revision),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+
+    let response = dispatch(&production, &archive);
+    let ResponseEnvelopeV2::Error(error) = &response else {
+        panic!("a prepared session must not be archived")
+    };
+    assert_eq!(error.code().as_str(), "SESSION_ARCHIVE_NOT_ELIGIBLE");
+    assert_eq!(
+        without_request_id(&dispatch(&production, &archive)),
+        without_request_id(&response),
+        "the failed durable mutation must replay instead of remaining running"
+    );
+
+    let current = status(&production, &selector, 154_004, session_id.as_str());
+    assert_eq!(current["session"]["lifecycle"], "prepared");
+    assert_eq!(current["session"]["revision"], revision.get());
 }
 
 #[test]
@@ -3259,4 +3668,313 @@ fn v2lif004_eligible_and_force_replacement_then_force_reset_are_atomic() {
     assert_eq!(reset["mode"], "force");
     assert_eq!(reset["lifecycle"], "running");
     assert_eq!(reset["reset"], true);
+}
+
+#[test]
+fn start_supersede_atomically_archives_running_session_and_prepares_successor() {
+    let fixture = support_phase4_workspace::git_worktrees();
+    make_runtime_private(fixture.main());
+    let selector = selector(fixture.main());
+    let manager = Arc::new(manager(fixture.temporary_path()));
+    let production = dispatcher(Arc::clone(&manager), "state-aware-start-supersede");
+
+    let initialize = request(
+        151_001,
+        "workspace.init",
+        &selector,
+        Map::new(),
+        "state-aware-start-init",
+        PreconditionsV1::default(),
+    );
+    let _ = v2_result(dispatch(&production, &initialize), "workspace.init");
+    let start = request(
+        151_002,
+        "session.start",
+        &selector,
+        json!({"preset":"small-change-v2","task_title":"Current work"})
+            .as_object()
+            .unwrap()
+            .clone(),
+        "state-aware-start-current",
+        PreconditionsV1::default(),
+    );
+    let started = v2_result(dispatch(&production, &start), "session.start");
+    let current_session = SessionId::new(started["session_id"].as_str().unwrap()).unwrap();
+    let begin = request(
+        151_003,
+        "session.begin",
+        &selector,
+        Map::new(),
+        "state-aware-start-begin",
+        PreconditionsV1::new(
+            Some(current_session.clone()),
+            Some(Revision::ZERO),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let _ = v2_result(dispatch(&production, &begin), "session.begin");
+
+    let resolution = json!({
+        "mode":"supersede",
+        "reason":"The successor task now has priority.",
+        "actor":"developer"
+    });
+    let preview = request(
+        151_004,
+        "session.start_replace",
+        &selector,
+        json!({
+            "preset":"small-change-v2",
+            "task_title":"Successor work",
+            "resolution":resolution,
+            "dry_run":true
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+        "unused-state-aware-start-preview",
+        PreconditionsV1::new(
+            Some(current_session.clone()),
+            Some(Revision::new(1)),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let preview = v2_result(dispatch(&production, &preview), "session.start_replace");
+    assert_eq!(preview["dry_run"], true);
+    assert_eq!(preview["existing_session"]["lifecycle"], "running");
+    assert_eq!(preview["existing_session"]["action"], "supersede_archive");
+
+    let replace = request(
+        151_005,
+        "session.start_replace",
+        &selector,
+        json!({
+            "preset":"small-change-v2",
+            "task_title":"Successor work",
+            "resolution":resolution
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+        "state-aware-start-successor",
+        PreconditionsV1::new(
+            Some(current_session.clone()),
+            Some(Revision::new(1)),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let successor = v2_result(dispatch(&production, &replace), "session.start_replace");
+    assert_eq!(successor["session_state"], "prepared");
+    assert_ne!(successor["session_id"], current_session.as_str());
+
+    let list = request(
+        151_006,
+        "session.archive_list",
+        &selector,
+        Map::new(),
+        "unused-state-aware-archive-list",
+        PreconditionsV1::default(),
+    );
+    let list = v2_result(dispatch(&production, &list), "session.archive_list");
+    assert_eq!(list["count"], 1);
+    assert_eq!(list["sessions"][0]["session_id"], current_session.as_str());
+    assert_eq!(list["sessions"][0]["lifecycle"], "cancelled");
+    assert_eq!(list["sessions"][0]["session_revision"], 2);
+
+    let show = request(
+        151_007,
+        "session.archive_show",
+        &selector,
+        json!({"session_id":current_session})
+            .as_object()
+            .unwrap()
+            .clone(),
+        "unused-state-aware-archive-show",
+        PreconditionsV1::default(),
+    );
+    let show = v2_result(dispatch(&production, &show), "session.archive_show");
+    assert_eq!(show["terminal_disposition"]["kind"], "superseded");
+    assert_eq!(
+        show["terminal_disposition"]["reason"],
+        "The successor task now has priority."
+    );
+    assert_eq!(
+        show["terminal_disposition"]["successor_session_id"],
+        successor["session_id"]
+    );
+    assert_eq!(show["terminal_disposition"]["actor"], "developer");
+}
+
+#[test]
+fn state_aware_start_delete_shape_rejects_before_durable_admission() {
+    let fixture = support_phase4_workspace::git_worktrees();
+    make_runtime_private(fixture.main());
+    let selector = selector(fixture.main());
+    let manager = Arc::new(manager(fixture.temporary_path()));
+    let production = dispatcher(Arc::clone(&manager), "state-aware-start-delete-shape");
+
+    let initialize = request(
+        155_001,
+        "workspace.init",
+        &selector,
+        Map::new(),
+        "state-aware-delete-init",
+        PreconditionsV1::default(),
+    );
+    let _ = v2_result(dispatch(&production, &initialize), "workspace.init");
+    let start = request(
+        155_002,
+        "session.start",
+        &selector,
+        json!({"preset":"small-change-v2","task_title":"Prepared delete source"})
+            .as_object()
+            .unwrap()
+            .clone(),
+        "state-aware-delete-start",
+        PreconditionsV1::default(),
+    );
+    let started = v2_result(dispatch(&production, &start), "session.start");
+    let prepared_session = SessionId::new(started["session_id"].as_str().unwrap()).unwrap();
+    let prepared_fence = PreconditionsV1::new(
+        Some(prepared_session),
+        Some(Revision::ZERO),
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    let prepared_invalid = request(
+        155_003,
+        "session.start_replace",
+        &selector,
+        json!({
+            "preset":"small-change-v2",
+            "task_title":"Prepared replacement",
+            "resolution":{
+                "mode":"delete",
+                "confirmed":true,
+                "progress_summary":"Prepared state has no work to summarize."
+            }
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+        "state-aware-delete-prepared",
+        prepared_fence.clone(),
+    );
+    let ResponseEnvelopeV2::Error(prepared_invalid) = dispatch(&production, &prepared_invalid)
+    else {
+        panic!("prepared delete must reject a progress summary before admission");
+    };
+    assert_eq!(prepared_invalid.code().as_str(), "REQUEST_INVALID");
+    assert_eq!(prepared_invalid.details()["admission"]["admitted"], false);
+
+    let prepared_valid = request(
+        155_004,
+        "session.start_replace",
+        &selector,
+        json!({
+            "preset":"small-change-v2",
+            "task_title":"Prepared replacement",
+            "resolution":{"mode":"delete","confirmed":true}
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+        "state-aware-delete-prepared",
+        prepared_fence,
+    );
+    let prepared_replaced = v2_result(
+        dispatch(&production, &prepared_valid),
+        "session.start_replace",
+    );
+    let running_session =
+        SessionId::new(prepared_replaced["session_id"].as_str().unwrap()).unwrap();
+
+    let begin = request(
+        155_005,
+        "session.begin",
+        &selector,
+        Map::new(),
+        "state-aware-delete-begin",
+        PreconditionsV1::new(
+            Some(running_session.clone()),
+            Some(Revision::ZERO),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let _ = v2_result(dispatch(&production, &begin), "session.begin");
+    let running_fence = PreconditionsV1::new(
+        Some(running_session),
+        Some(Revision::new(1)),
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    let running_invalid = request(
+        155_006,
+        "session.start_replace",
+        &selector,
+        json!({
+            "preset":"small-change-v2",
+            "task_title":"Running replacement",
+            "resolution":{"mode":"delete","confirmed":true}
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+        "state-aware-delete-running",
+        running_fence.clone(),
+    );
+    let ResponseEnvelopeV2::Error(running_invalid) = dispatch(&production, &running_invalid) else {
+        panic!("running delete must require a progress summary before admission");
+    };
+    assert_eq!(running_invalid.code().as_str(), "REQUEST_INVALID");
+    assert_eq!(running_invalid.details()["admission"]["admitted"], false);
+
+    let running_valid = request(
+        155_007,
+        "session.start_replace",
+        &selector,
+        json!({
+            "preset":"small-change-v2",
+            "task_title":"Running replacement",
+            "resolution":{
+                "mode":"delete",
+                "confirmed":true,
+                "progress_summary":"The running work was summarized before deletion."
+            }
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+        "state-aware-delete-running",
+        running_fence,
+    );
+    let running_replaced = v2_result(
+        dispatch(&production, &running_valid),
+        "session.start_replace",
+    );
+    assert_eq!(running_replaced["session_state"], "prepared");
 }

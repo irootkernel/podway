@@ -36,11 +36,19 @@ pub fn downgrade_to_schema_v4(database_path: &Path) -> Result<(), String> {
             |row| row.get(0),
         )
         .map_err(|error| error.to_string())?;
+    let workspace_table_sql: String = reference
+        .query_row(
+            "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'v2_workspace_state'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
     connection
         .execute_batch(
             "PRAGMA foreign_keys = OFF;
              DROP TABLE v2_terminal_dispositions;
              PRAGMA legacy_alter_table = ON;
+             ALTER TABLE v2_workspace_state RENAME TO v2_workspace_state_v7;
              ALTER TABLE v2_item_slots RENAME TO v2_item_slots_v6;",
         )
         .map_err(|error| error.to_string())?;
@@ -66,15 +74,28 @@ pub fn downgrade_to_schema_v4(database_path: &Path) -> Result<(), String> {
                     current_goal_revision, created_at_ms, completed_at_ms, cancelled_at_ms,
                     cancel_reason
              ) SELECT
-                    singleton, session_id, task_title, procedure_snapshot_id, lifecycle,
+                    1, session_id, task_title, procedure_snapshot_id, lifecycle,
                     session_revision, latest_trace_sequence, active_graph_node_id,
                     active_attempt_id, active_trace_sequence, goal_tracking,
                     current_goal_revision, created_at_ms, completed_at_ms, cancelled_at_ms,
                     cancel_reason
-               FROM v2_task_sessions_v5;
+               FROM v2_task_sessions_v5
+              WHERE activity = 'current';
              DROP TABLE v2_task_sessions_v5;
-             PRAGMA legacy_alter_table = OFF;
-             DELETE FROM schema_migrations WHERE version IN (5, 6);",
+             PRAGMA legacy_alter_table = OFF;",
+        )
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute_batch(&workspace_table_sql)
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute_batch(
+            "INSERT INTO v2_workspace_state (singleton, workspace_revision)
+             SELECT 1, workspace_revision
+               FROM v2_workspace_state_v7
+              WHERE singleton = 1;
+             DROP TABLE v2_workspace_state_v7;
+             DELETE FROM schema_migrations WHERE version IN (5, 6, 7, 8);",
         )
         .map_err(|error| error.to_string())?;
     connection

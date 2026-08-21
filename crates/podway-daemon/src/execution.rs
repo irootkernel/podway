@@ -32,10 +32,10 @@ use podway_protocol::{
     ItemAttachSourceV1, ItemAttachV1, ItemCheckV1, ItemClearV1, ItemRecordManyDispositionV1,
     ItemRecordValueV1, ItemRemoveV1, ItemSetV1, ItemUncheckV1, ProcedureV2MutationCommandV1,
     ProcedureV2MutationRequestV1, ProcedureV2StartCommandV1, ProcedureV2StartRequestV1,
-    RequestIdV1, Rfc3339MillisV1, SessionBlockV1, SessionCancelV1, SessionCompleteV1,
-    SessionDecideV2, SessionDeletionModeV1, SessionMutationPreconditionsWireV1, SessionResetV1,
-    SessionRetryV1, SessionReworkV2, SessionSkipV1, SessionStartSourceV1, SessionStartV1,
-    SessionUnblockV1, SliceCommandV1, SliceRequestV1, TerminalDispositionInputV1,
+    RequestIdV1, Rfc3339MillisV1, SessionArchiveV1, SessionBlockV1, SessionCancelV1,
+    SessionCompleteV1, SessionDecideV2, SessionDeletionModeV1, SessionMutationPreconditionsWireV1,
+    SessionResetV1, SessionRetryV1, SessionReworkV2, SessionSkipV1, SessionStartSourceV1,
+    SessionStartV1, SessionUnblockV1, SliceCommandV1, SliceRequestV1, TerminalDispositionInputV1,
     WorktreeSelectorWireV1, canonical_procedure_v2_mutation_identity_v1,
     canonical_procedure_v2_start_identity_v1, canonical_reset_all_identity_v1,
     decode_item_record_many_operations_v1,
@@ -49,8 +49,8 @@ use podway_store::{
     PersistedGraphTerminalOperationV2, PersistedResponseContextV1, ProcedureSnapshotV2,
     RevisionAttemptItemPreconditionsV1, StateTransitionV1, StoreContractV1, StoreErrorV1,
     StoreGraphMutationContractV2, StoreGraphReadContractV2, StoreIdempotencyReadContractV1,
-    StoreValueErrorV1, TerminalReceiptV1, TerminalResultV1, WorkerIdV1, WorkflowMemoryStateV2,
-    WorkspaceBindingV1,
+    StoreSessionArchiveContractV2, StoreValueErrorV1, TerminalReceiptV1, TerminalResultV1,
+    WorkerIdV1, WorkflowMemoryStateV2, WorkspaceBindingV1,
 };
 use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
@@ -91,6 +91,7 @@ const EXECUTION_DOCUMENT_VERSION_V15: u8 = 15;
 const EXECUTION_DOCUMENT_VERSION_V16: u8 = 16;
 const EXECUTION_DOCUMENT_VERSION_V17: u8 = 17;
 const EXECUTION_DOCUMENT_VERSION_V18: u8 = 18;
+const EXECUTION_DOCUMENT_VERSION_V19: u8 = 19;
 
 #[derive(Clone, Debug)]
 enum AdmissionResolutionV1 {
@@ -625,7 +626,7 @@ fn procedure_v2_typed_start_execution_document_v1(
     let expected_current = graph_start_current_task_json_v2(&admitted.expected_current);
     let document = json!({
         "command": request.command().command_name(),
-        "execution_version": EXECUTION_DOCUMENT_VERSION_V17,
+        "execution_version": EXECUTION_DOCUMENT_VERSION_V19,
         "expected_current": expected_current,
         "selector": admitted.selector,
         "session_id": admitted.state.trace().session_id(),
@@ -673,6 +674,50 @@ fn graph_start_current_task_json_v2(expected: &GraphStartCurrentTaskV2) -> Value
             "session_id": session_id,
             "session_revision": session_revision,
         }),
+        GraphStartCurrentTaskV2::Delete {
+            session_id,
+            session_revision,
+            progress_summary,
+        } => json!({
+            "mode": "delete",
+            "progress_summary": progress_summary,
+            "session_id": session_id,
+            "session_revision": session_revision,
+        }),
+        GraphStartCurrentTaskV2::Supersede {
+            session_id,
+            session_revision,
+            reason,
+            actor,
+        } => json!({
+            "mode": "supersede",
+            "reason": reason,
+            "actor": actor.as_ref().map(ActorAttributionV2::as_str),
+            "session_id": session_id,
+            "session_revision": session_revision,
+        }),
+        GraphStartCurrentTaskV2::DisposeAndArchive {
+            session_id,
+            session_revision,
+            disposition_kind,
+            summary,
+            stable_reference,
+            reason,
+            actor,
+        } => json!({
+            "mode": "dispose_and_archive",
+            "kind": match disposition_kind {
+                podway_core::TerminalDispositionKindV2::HandedOff => "handed_off",
+                podway_core::TerminalDispositionKindV2::NotRequired => "not_required",
+                podway_core::TerminalDispositionKindV2::Superseded => "superseded",
+            },
+            "summary": summary,
+            "stable_reference": stable_reference,
+            "reason": reason,
+            "actor": actor.as_ref().map(ActorAttributionV2::as_str),
+            "session_id": session_id,
+            "session_revision": session_revision,
+        }),
     }
 }
 
@@ -698,7 +743,11 @@ fn decode_procedure_v2_start_execution_v1(
             "task_title",
             "workspace_id",
         ][..]
-    } else if execution_version == u64::from(EXECUTION_DOCUMENT_VERSION_V17) {
+    } else if matches!(
+        execution_version,
+        value if value == u64::from(EXECUTION_DOCUMENT_VERSION_V17)
+            || value == u64::from(EXECUTION_DOCUMENT_VERSION_V19)
+    ) {
         &[
             "command",
             "execution_version",
@@ -726,6 +775,7 @@ fn decode_procedure_v2_start_execution_v1(
     if execution_version != u64::from(EXECUTION_DOCUMENT_VERSION_V6)
         && execution_version != u64::from(EXECUTION_DOCUMENT_VERSION_V12)
         && execution_version != u64::from(EXECUTION_DOCUMENT_VERSION_V17)
+        && execution_version != u64::from(EXECUTION_DOCUMENT_VERSION_V19)
     {
         return Err(invalid_execution_v1(
             "Procedure v2 execution version is unsupported",
@@ -792,6 +842,70 @@ fn decode_procedure_v2_start_execution_v1(
                         progress_summary: value_string_v1(expected, "progress_summary")?.to_owned(),
                     }
                 }
+                Some("delete") => {
+                    require_exact_keys_v1(
+                        expected,
+                        &["mode", "progress_summary", "session_id", "session_revision"],
+                    )?;
+                    GraphStartCurrentTaskV2::Delete {
+                        session_id,
+                        session_revision,
+                        progress_summary: optional_string_v1(expected, "progress_summary")?
+                            .map(str::to_owned),
+                    }
+                }
+                Some("supersede") => {
+                    require_exact_keys_v1(
+                        expected,
+                        &["actor", "mode", "reason", "session_id", "session_revision"],
+                    )?;
+                    GraphStartCurrentTaskV2::Supersede {
+                        session_id,
+                        session_revision,
+                        reason: value_string_v1(expected, "reason")?.to_owned(),
+                        actor: optional_string_v1(expected, "actor")?
+                            .map(|value| ActorAttributionV2::new(value.to_owned()))
+                            .transpose()
+                            .map_err(ExecutionErrorV1::BoundaryDomain)?,
+                    }
+                }
+                Some("dispose_and_archive") => {
+                    require_exact_keys_v1(
+                        expected,
+                        &[
+                            "actor",
+                            "kind",
+                            "mode",
+                            "reason",
+                            "session_id",
+                            "session_revision",
+                            "stable_reference",
+                            "summary",
+                        ],
+                    )?;
+                    let disposition_kind = match value_string_v1(expected, "kind")? {
+                        "handed_off" => podway_core::TerminalDispositionKindV2::HandedOff,
+                        "not_required" => podway_core::TerminalDispositionKindV2::NotRequired,
+                        _ => {
+                            return Err(invalid_execution_v1(
+                                "Procedure v2 start disposition kind is invalid",
+                            ));
+                        }
+                    };
+                    GraphStartCurrentTaskV2::DisposeAndArchive {
+                        session_id,
+                        session_revision,
+                        disposition_kind,
+                        summary: optional_string_v1(expected, "summary")?.map(str::to_owned),
+                        stable_reference: optional_string_v1(expected, "stable_reference")?
+                            .map(str::to_owned),
+                        reason: optional_string_v1(expected, "reason")?.map(str::to_owned),
+                        actor: optional_string_v1(expected, "actor")?
+                            .map(|value| ActorAttributionV2::new(value.to_owned()))
+                            .transpose()
+                            .map_err(ExecutionErrorV1::BoundaryDomain)?,
+                    }
+                }
                 _ => {
                     return Err(invalid_execution_v1(
                         "Procedure v2 replacement mode is invalid",
@@ -811,7 +925,11 @@ fn decode_procedure_v2_start_execution_v1(
         "created_at",
     )?);
     let session_id = value_typed_v1(object, "session_id")?;
-    let mut state = if execution_version == u64::from(EXECUTION_DOCUMENT_VERSION_V17) {
+    let mut state = if matches!(
+        execution_version,
+        value if value == u64::from(EXECUTION_DOCUMENT_VERSION_V17)
+            || value == u64::from(EXECUTION_DOCUMENT_VERSION_V19)
+    ) {
         graph_prepared_session_state_from_procedure_v2_snapshot(
             snapshot, task_title, session_id, created_at,
         )
@@ -869,6 +987,7 @@ fn decode_typed_start_replay_execution_v1(
         Some(version)
             if version == u64::from(EXECUTION_DOCUMENT_VERSION_V12)
                 || version == u64::from(EXECUTION_DOCUMENT_VERSION_V17)
+                || version == u64::from(EXECUTION_DOCUMENT_VERSION_V19)
     ) {
         return Ok(None);
     }
@@ -1088,6 +1207,7 @@ fn is_procedure_v2_graph_mutation_v8(command: &SliceCommandV1) -> bool {
         SliceCommandV1::SessionBlock(_)
             | SliceCommandV1::SessionUnblock(_)
             | SliceCommandV1::SessionCancel(_)
+            | SliceCommandV1::SessionArchive(_)
             | SliceCommandV1::SessionReset(_)
     )
 }
@@ -1295,6 +1415,7 @@ fn decode_procedure_v2_mutation_execution_v1(
         SliceCommandV1::SessionUnblock(_)
         | SliceCommandV1::SessionCancel(_)
         | SliceCommandV1::SessionReset(_)
+        | SliceCommandV1::SessionArchive(_)
             if attached_artifact.is_none()
                 && fresh_attempt_id.is_none()
                 && fresh_blocker_id.is_none() => {}
@@ -3360,7 +3481,8 @@ where
     Store: StoreContractV1
         + StoreIdempotencyReadContractV1
         + StoreGraphMutationContractV2
-        + StoreGraphReadContractV2,
+        + StoreGraphReadContractV2
+        + StoreSessionArchiveContractV2,
     Ids: ExecutionIdSourceV1,
     Clock: ExecutionClockV1,
     Procedures: ProcedureProviderV1,
@@ -3510,6 +3632,145 @@ where
             .map_err(ProcedureV2StartPreparationErrorV1::Execution)
     }
 
+    fn validate_typed_start_admission_state_v2(
+        &self,
+        binding: &WorkspaceBindingV1,
+        expected_current: &GraphStartCurrentTaskV2,
+    ) -> Result<(), ProcedureV2StartPreparationErrorV1> {
+        let view = self
+            .store
+            .read_graph_workspace_view_v2(binding.identity())
+            .map_err(ExecutionErrorV1::from)
+            .map_err(ProcedureV2StartPreparationErrorV1::Execution)?;
+        let Some(current) = view.graph_state() else {
+            return Ok(());
+        };
+        let expected_identity = match expected_current {
+            GraphStartCurrentTaskV2::Absent => None,
+            GraphStartCurrentTaskV2::Exact {
+                session_id,
+                session_revision,
+            }
+            | GraphStartCurrentTaskV2::Eligible {
+                session_id,
+                session_revision,
+            }
+            | GraphStartCurrentTaskV2::Force {
+                session_id,
+                session_revision,
+                ..
+            }
+            | GraphStartCurrentTaskV2::Delete {
+                session_id,
+                session_revision,
+                ..
+            }
+            | GraphStartCurrentTaskV2::Supersede {
+                session_id,
+                session_revision,
+                ..
+            }
+            | GraphStartCurrentTaskV2::DisposeAndArchive {
+                session_id,
+                session_revision,
+                ..
+            } => Some((session_id, session_revision)),
+        };
+        if expected_identity.is_none_or(|(session_id, revision)| {
+            session_id != current.trace().session_id() || *revision != current.trace().revision()
+        }) {
+            return Ok(());
+        }
+        let lifecycle = current.trace().lifecycle();
+        let current_terminal_disposition = view.current_terminal_disposition();
+        if let GraphStartCurrentTaskV2::Delete {
+            progress_summary, ..
+        } = expected_current
+        {
+            let invalid_progress_summary = match lifecycle {
+                SessionLifecycle::Prepared => progress_summary.is_some(),
+                SessionLifecycle::Running => progress_summary.is_none(),
+                SessionLifecycle::Completed | SessionLifecycle::Cancelled => false,
+            };
+            if invalid_progress_summary {
+                return Err(ProcedureV2StartPreparationErrorV1::Execution(
+                    ExecutionErrorV1::BoundaryDomain(DomainError::InvalidState {
+                        reason: "session start delete progress summary does not match the current lifecycle",
+                    }),
+                ));
+            }
+        }
+        let rejection = match expected_current {
+            GraphStartCurrentTaskV2::Eligible { .. }
+                if !lifecycle.is_default_reset_eligible(current_terminal_disposition) =>
+            {
+                Some(StoreErrorV1::SessionResetNotEligibleV1 {
+                    lifecycle,
+                    current_terminal_disposition,
+                })
+            }
+            GraphStartCurrentTaskV2::Delete { .. }
+                if !matches!(
+                    lifecycle,
+                    SessionLifecycle::Prepared | SessionLifecycle::Running
+                ) =>
+            {
+                Some(StoreErrorV1::SessionStartStateConflictV1 {
+                    lifecycle,
+                    current_terminal_disposition,
+                })
+            }
+            GraphStartCurrentTaskV2::Supersede { .. } if lifecycle != SessionLifecycle::Running => {
+                Some(StoreErrorV1::SessionStartStateConflictV1 {
+                    lifecycle,
+                    current_terminal_disposition,
+                })
+            }
+            GraphStartCurrentTaskV2::DisposeAndArchive { .. }
+                if !matches!(
+                    lifecycle,
+                    SessionLifecycle::Completed | SessionLifecycle::Cancelled
+                ) || current_terminal_disposition =>
+            {
+                Some(StoreErrorV1::SessionStartStateConflictV1 {
+                    lifecycle,
+                    current_terminal_disposition,
+                })
+            }
+            _ => None,
+        };
+        if let Some(error) = rejection {
+            return Err(ProcedureV2StartPreparationErrorV1::Execution(error.into()));
+        }
+        let archives_current =
+            matches!(
+                expected_current,
+                GraphStartCurrentTaskV2::Supersede { .. }
+                    | GraphStartCurrentTaskV2::DisposeAndArchive { .. }
+            ) || matches!(expected_current, GraphStartCurrentTaskV2::Eligible { .. })
+                && matches!(
+                    lifecycle,
+                    SessionLifecycle::Completed | SessionLifecycle::Cancelled
+                );
+        if archives_current
+            && self
+                .store
+                .list_archived_sessions_v2(binding.identity())
+                .map_err(ExecutionErrorV1::from)
+                .map_err(ProcedureV2StartPreparationErrorV1::Execution)?
+                .len()
+                >= podway_store::MAX_INACTIVE_SESSIONS_V2 as usize
+        {
+            return Err(ProcedureV2StartPreparationErrorV1::Execution(
+                StoreErrorV1::SessionArchiveLimitReachedV1 {
+                    maximum: podway_store::MAX_INACTIVE_SESSIONS_V2,
+                }
+                .into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Durably admits a prepared Procedure v2 session start.
     pub fn admit_procedure_v2_typed_start_for_workspace_with_response_context(
         &self,
@@ -3526,23 +3787,12 @@ where
             ),
             ProcedureV2StartCommandV1::SessionStartReplace(input) => (
                 &input.start.start,
-                match &input.mode {
-                    SessionDeletionModeV1::Eligible => GraphStartCurrentTaskV2::Eligible {
-                        session_id: input.preconditions.expected_session_id.clone(),
-                        session_revision: input.preconditions.expected_session_revision,
-                    },
-                    SessionDeletionModeV1::Force { progress_summary } => {
-                        GraphStartCurrentTaskV2::Force {
-                            session_id: input.preconditions.expected_session_id.clone(),
-                            session_revision: input.preconditions.expected_session_revision,
-                            progress_summary: progress_summary.clone(),
-                        }
-                    }
-                    SessionDeletionModeV1::LegacyConfirmed => GraphStartCurrentTaskV2::Exact {
-                        session_id: input.preconditions.expected_session_id.clone(),
-                        session_revision: input.preconditions.expected_session_revision,
-                    },
-                },
+                graph_start_current_task_from_mode_v2(
+                    &input.mode,
+                    &input.preconditions.expected_session_id,
+                    input.preconditions.expected_session_revision,
+                )
+                .map_err(ProcedureV2StartPreparationErrorV1::Execution)?,
                 DomainCommand::SessionStartReplace,
             ),
         };
@@ -3589,6 +3839,7 @@ where
                 invalid_execution_v1("typed Procedure v2 start workspace identity changed"),
             ));
         }
+        self.validate_typed_start_admission_state_v2(&binding, &expected_current)?;
         let now = self.clock.now();
         let session_id = self.ids.next_session_id();
         let snapshot_id = self.ids.next_procedure_snapshot_id();
@@ -4748,12 +4999,7 @@ where
                     ));
                 }
                 validate_procedure_v2_durable_execution_v1(&admitted, claimed.execution())?;
-                self.store.commit_graph_start_terminal_v2(
-                    claimed.claim().clone(),
-                    admitted.expected_current,
-                    admitted.state,
-                    now,
-                )?
+                self.commit_procedure_v2_start_terminal_v2(&claimed, admitted, now)?
             }
             version
                 if version == u64::from(EXECUTION_DOCUMENT_VERSION_V7)
@@ -4788,7 +5034,8 @@ where
             }
             version
                 if version == u64::from(EXECUTION_DOCUMENT_VERSION_V12)
-                    || version == u64::from(EXECUTION_DOCUMENT_VERSION_V17) =>
+                    || version == u64::from(EXECUTION_DOCUMENT_VERSION_V17)
+                    || version == u64::from(EXECUTION_DOCUMENT_VERSION_V19) =>
             {
                 let admitted = decode_procedure_v2_start_execution_v1(
                     claimed.execution().canonical_execution().as_str(),
@@ -4799,12 +5046,7 @@ where
                     ));
                 }
                 validate_procedure_v2_durable_execution_v1(&admitted, claimed.execution())?;
-                self.store.commit_graph_start_terminal_v2(
-                    claimed.claim().clone(),
-                    admitted.expected_current,
-                    admitted.state,
-                    now,
-                )?
+                self.commit_procedure_v2_start_terminal_v2(&claimed, admitted, now)?
             }
             version if version == u64::from(EXECUTION_DOCUMENT_VERSION_V13) => {
                 let admitted = decode_procedure_v2_criterion_assessment_execution_v1(
@@ -5748,6 +5990,13 @@ where
                     SessionDeletionModeV1::LegacyConfirmed => {
                         (PersistedGraphResetModeV2::LegacyConfirmed, None)
                     }
+                    SessionDeletionModeV1::Delete { .. }
+                    | SessionDeletionModeV1::Supersede { .. }
+                    | SessionDeletionModeV1::DisposeAndArchive { .. } => {
+                        return Err(invalid_execution_v1(
+                            "session reset rejects start resolutions",
+                        ));
+                    }
                 };
                 match self.store.commit_graph_smart_reset_terminal_v2(
                     claimed.claim().clone(),
@@ -5777,6 +6026,36 @@ where
                                 current_terminal_disposition,
                             },
                             now,
+                        )
+                    }
+                    Err(error) => Err(error.into()),
+                }
+            }
+            SliceCommandV1::SessionArchive(input) => {
+                if input.preconditions.expected_session_revision != state.trace().revision() {
+                    return self.commit_persisted_graph_mutation_failure_v2(
+                        claimed,
+                        state,
+                        PersistedGraphMutationFailureV2::SessionRevisionConflict {
+                            expected: input.preconditions.expected_session_revision,
+                            actual: state.trace().revision(),
+                        },
+                        now,
+                    );
+                }
+                match self.store.commit_graph_archive_terminal_v2(
+                    claimed.claim().clone(),
+                    expected_workspace_revision,
+                    expected_session_revision,
+                    state.trace().session_id().clone(),
+                    now,
+                ) {
+                    Ok(receipt) => Ok(receipt),
+                    Err(error @ StoreErrorV1::SessionArchiveNotEligibleV1 { .. })
+                    | Err(error @ StoreErrorV1::SessionArchiveLimitReachedV1 { .. }) => {
+                        let failure = persisted_start_failure_v2(error)?;
+                        self.commit_persisted_graph_mutation_failure_v2(
+                            claimed, state, failure, now,
                         )
                     }
                     Err(error) => Err(error.into()),
@@ -5920,6 +6199,38 @@ where
         }
     }
 
+    fn commit_procedure_v2_start_terminal_v2(
+        &self,
+        claimed: &ClaimedJobV1,
+        admitted: AdmittedProcedureV2StartV1,
+        now: UnixMillis,
+    ) -> Result<TerminalReceiptV1, ExecutionErrorV1> {
+        match self.store.commit_graph_start_terminal_v2(
+            claimed.claim().clone(),
+            admitted.expected_current,
+            admitted.state,
+            now,
+        ) {
+            Ok(receipt) => Ok(receipt),
+            Err(error @ StoreErrorV1::SessionResetNotEligibleV1 { .. })
+            | Err(error @ StoreErrorV1::SessionArchiveNotEligibleV1 { .. })
+            | Err(error @ StoreErrorV1::SessionArchiveLimitReachedV1 { .. })
+            | Err(error @ StoreErrorV1::SessionStartStateConflictV1 { .. }) => {
+                let view = self
+                    .store
+                    .read_graph_workspace_view_v2(claimed.claim().identity())?;
+                let state = view.graph_state().ok_or_else(|| {
+                    invalid_execution_v1(
+                        "Procedure v2 rejected start no longer has a current session",
+                    )
+                })?;
+                let failure = persisted_start_failure_v2(error)?;
+                self.commit_persisted_graph_mutation_failure_v2(claimed, state, failure, now)
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
     fn commit_graph_mutation_failure_v2(
         &self,
         claimed: &ClaimedJobV1,
@@ -5972,6 +6283,49 @@ where
     }
 }
 
+fn lifecycle_label_v1(lifecycle: SessionLifecycle) -> &'static str {
+    match lifecycle {
+        SessionLifecycle::Prepared => "prepared",
+        SessionLifecycle::Running => "running",
+        SessionLifecycle::Completed => "completed",
+        SessionLifecycle::Cancelled => "cancelled",
+    }
+}
+
+fn persisted_start_failure_v2(
+    error: StoreErrorV1,
+) -> Result<PersistedGraphMutationFailureV2, ExecutionErrorV1> {
+    match error {
+        StoreErrorV1::SessionResetNotEligibleV1 {
+            lifecycle,
+            current_terminal_disposition,
+        } => Ok(PersistedGraphMutationFailureV2::SessionResetNotEligible {
+            lifecycle: lifecycle_label_v1(lifecycle).to_owned(),
+            current_terminal_disposition,
+        }),
+        StoreErrorV1::SessionArchiveNotEligibleV1 {
+            lifecycle,
+            current_terminal_disposition,
+        } => Ok(PersistedGraphMutationFailureV2::SessionArchiveNotEligible {
+            lifecycle: lifecycle_label_v1(lifecycle).to_owned(),
+            current_terminal_disposition,
+        }),
+        StoreErrorV1::SessionArchiveLimitReachedV1 { maximum } => {
+            Ok(PersistedGraphMutationFailureV2::SessionArchiveLimitReached { maximum })
+        }
+        StoreErrorV1::SessionStartStateConflictV1 {
+            lifecycle,
+            current_terminal_disposition,
+        } => Ok(PersistedGraphMutationFailureV2::SessionStartStateConflict {
+            lifecycle: lifecycle_label_v1(lifecycle).to_owned(),
+            current_terminal_disposition,
+        }),
+        _ => Err(invalid_execution_v1(
+            "Procedure v2 start rejection is not a persisted domain failure",
+        )),
+    }
+}
+
 fn validate_procedure_v2_durable_execution_v1(
     admitted: &AdmittedProcedureV2StartV1,
     execution: &podway_store::ClaimedExecutionV1,
@@ -6001,6 +6355,21 @@ fn validate_procedure_v2_durable_execution_v1(
                 session_revision: inner_revision,
             }
             | GraphStartCurrentTaskV2::Force {
+                session_id: inner_session_id,
+                session_revision: inner_revision,
+                ..
+            }
+            | GraphStartCurrentTaskV2::Delete {
+                session_id: inner_session_id,
+                session_revision: inner_revision,
+                ..
+            }
+            | GraphStartCurrentTaskV2::Supersede {
+                session_id: inner_session_id,
+                session_revision: inner_revision,
+                ..
+            }
+            | GraphStartCurrentTaskV2::DisposeAndArchive {
                 session_id: inner_session_id,
                 session_revision: inner_revision,
                 ..
@@ -6095,6 +6464,7 @@ fn command_for_admission_v1(command: &SliceCommandV1) -> Result<DomainCommand, E
         SliceCommandV1::SessionUnblock(_) => DomainCommand::SessionUnblock,
         SliceCommandV1::SessionCancel(_) => DomainCommand::SessionCancel,
         SliceCommandV1::SessionReset(_) => DomainCommand::SessionReset,
+        SliceCommandV1::SessionArchive(_) => DomainCommand::SessionArchive,
         SliceCommandV1::ItemCheck(input) => DomainCommand::ItemCheck {
             item_id: input.item_id.clone(),
         },
@@ -6123,6 +6493,9 @@ fn command_for_admission_v1(command: &SliceCommandV1) -> Result<DomainCommand, E
         | SliceCommandV1::SessionStatus(_)
         | SliceCommandV1::SessionNext(_)
         | SliceCommandV1::SessionObserve(_)
+        | SliceCommandV1::SessionArchiveList(_)
+        | SliceCommandV1::SessionArchiveShow(_)
+        | SliceCommandV1::SessionArchivePurge(_)
         | SliceCommandV1::EvidenceRead(_)
         | SliceCommandV1::JobList(_)
         | SliceCommandV1::JobLookup(_)
@@ -6183,6 +6556,9 @@ fn store_preconditions_v1(
         SliceCommandV1::SessionReset(input) => {
             session_revision_store_preconditions_v1(input.preconditions.expected_session_revision)
         }
+        SliceCommandV1::SessionArchive(input) => {
+            session_revision_store_preconditions_v1(input.preconditions.expected_session_revision)
+        }
         SliceCommandV1::WorkspaceInit(_)
         | SliceCommandV1::WorkspaceResetAll(_)
         | SliceCommandV1::SessionStart(_) => (None, None, None, None),
@@ -6192,6 +6568,9 @@ fn store_preconditions_v1(
         | SliceCommandV1::SessionStatus(_)
         | SliceCommandV1::SessionNext(_)
         | SliceCommandV1::SessionObserve(_)
+        | SliceCommandV1::SessionArchiveList(_)
+        | SliceCommandV1::SessionArchiveShow(_)
+        | SliceCommandV1::SessionArchivePurge(_)
         | SliceCommandV1::EvidenceRead(_)
         | SliceCommandV1::JobList(_)
         | SliceCommandV1::JobLookup(_)
@@ -6219,6 +6598,7 @@ fn expected_session_id_v1(command: &SliceCommandV1) -> Option<&SessionId> {
         SliceCommandV1::SessionUnblock(input) => Some(&input.preconditions.expected_session_id),
         SliceCommandV1::SessionCancel(input) => Some(&input.preconditions.expected_session_id),
         SliceCommandV1::SessionReset(input) => Some(&input.preconditions.expected_session_id),
+        SliceCommandV1::SessionArchive(input) => Some(&input.preconditions.expected_session_id),
         SliceCommandV1::ItemCheck(input) => Some(&input.preconditions.expected_session_id),
         SliceCommandV1::ItemUncheck(input) => Some(&input.preconditions.expected_session_id),
         SliceCommandV1::ItemSet(input) => Some(&input.preconditions.expected_session_id),
@@ -6236,6 +6616,9 @@ fn expected_session_id_v1(command: &SliceCommandV1) -> Option<&SessionId> {
         | SliceCommandV1::SessionStatus(_)
         | SliceCommandV1::SessionNext(_)
         | SliceCommandV1::SessionObserve(_)
+        | SliceCommandV1::SessionArchiveList(_)
+        | SliceCommandV1::SessionArchiveShow(_)
+        | SliceCommandV1::SessionArchivePurge(_)
         | SliceCommandV1::EvidenceRead(_)
         | SliceCommandV1::JobList(_)
         | SliceCommandV1::JobLookup(_)
@@ -6533,6 +6916,10 @@ fn execution_components_v1(command: &SliceCommandV1) -> (Value, Value) {
             session_identity_preconditions_value_v1(&input.preconditions),
             session_deletion_mode_value_v1(&input.mode),
         ),
+        SliceCommandV1::SessionArchive(input) => (
+            session_identity_preconditions_value_v1(&input.preconditions),
+            json!({}),
+        ),
         SliceCommandV1::ItemCheck(input) => (
             item_preconditions_value_v1(&input.preconditions),
             json!({"item_id": input.item_id}),
@@ -6578,6 +6965,9 @@ fn execution_components_v1(command: &SliceCommandV1) -> (Value, Value) {
         | SliceCommandV1::SessionStatus(_)
         | SliceCommandV1::SessionNext(_)
         | SliceCommandV1::SessionObserve(_)
+        | SliceCommandV1::SessionArchiveList(_)
+        | SliceCommandV1::SessionArchiveShow(_)
+        | SliceCommandV1::SessionArchivePurge(_)
         | SliceCommandV1::EvidenceRead(_)
         | SliceCommandV1::JobList(_)
         | SliceCommandV1::JobLookup(_)
@@ -6638,7 +7028,111 @@ fn session_deletion_mode_value_v1(mode: &SessionDeletionModeV1) -> Value {
             "mode": "force",
             "progress_summary": progress_summary,
         }),
+        SessionDeletionModeV1::Delete {
+            confirmed,
+            progress_summary,
+        } => json!({
+            "mode": "delete",
+            "confirmed": confirmed,
+            "progress_summary": progress_summary,
+        }),
+        SessionDeletionModeV1::Supersede { reason, actor } => json!({
+            "mode": "supersede",
+            "reason": reason,
+            "actor": actor,
+        }),
+        SessionDeletionModeV1::DisposeAndArchive { disposition, actor } => json!({
+            "mode": "dispose_and_archive",
+            "disposition": disposition,
+            "actor": actor,
+        }),
         SessionDeletionModeV1::LegacyConfirmed => json!({ "confirmed": true }),
+    }
+}
+
+pub(crate) fn graph_start_current_task_from_mode_v2(
+    mode: &SessionDeletionModeV1,
+    session_id: &SessionId,
+    session_revision: Revision,
+) -> Result<GraphStartCurrentTaskV2, ExecutionErrorV1> {
+    let identity = || (session_id.clone(), session_revision);
+    match mode {
+        SessionDeletionModeV1::Eligible => {
+            let (session_id, session_revision) = identity();
+            Ok(GraphStartCurrentTaskV2::Eligible {
+                session_id,
+                session_revision,
+            })
+        }
+        SessionDeletionModeV1::Force { progress_summary } => {
+            let (session_id, session_revision) = identity();
+            Ok(GraphStartCurrentTaskV2::Force {
+                session_id,
+                session_revision,
+                progress_summary: progress_summary.clone(),
+            })
+        }
+        SessionDeletionModeV1::Delete {
+            progress_summary, ..
+        } => {
+            let (session_id, session_revision) = identity();
+            Ok(GraphStartCurrentTaskV2::Delete {
+                session_id,
+                session_revision,
+                progress_summary: progress_summary.clone(),
+            })
+        }
+        SessionDeletionModeV1::Supersede { reason, actor } => {
+            let (session_id, session_revision) = identity();
+            Ok(GraphStartCurrentTaskV2::Supersede {
+                session_id,
+                session_revision,
+                reason: reason.clone(),
+                actor: actor
+                    .clone()
+                    .map(ActorAttributionV2::new)
+                    .transpose()
+                    .map_err(ExecutionErrorV1::BoundaryDomain)?,
+            })
+        }
+        SessionDeletionModeV1::DisposeAndArchive { disposition, actor } => {
+            let (session_id, session_revision) = identity();
+            let actor = actor
+                .clone()
+                .map(ActorAttributionV2::new)
+                .transpose()
+                .map_err(ExecutionErrorV1::BoundaryDomain)?;
+            let (disposition_kind, summary, stable_reference, reason) = match disposition {
+                TerminalDispositionInputV1::HandedOff { summary, reference } => (
+                    podway_core::TerminalDispositionKindV2::HandedOff,
+                    Some(summary.clone()),
+                    Some(reference.clone()),
+                    None,
+                ),
+                TerminalDispositionInputV1::NotRequired { reason } => (
+                    podway_core::TerminalDispositionKindV2::NotRequired,
+                    None,
+                    None,
+                    Some(reason.clone()),
+                ),
+            };
+            Ok(GraphStartCurrentTaskV2::DisposeAndArchive {
+                session_id,
+                session_revision,
+                disposition_kind,
+                summary,
+                stable_reference,
+                reason,
+                actor,
+            })
+        }
+        SessionDeletionModeV1::LegacyConfirmed => {
+            let (session_id, session_revision) = identity();
+            Ok(GraphStartCurrentTaskV2::Exact {
+                session_id,
+                session_revision,
+            })
+        }
     }
 }
 
@@ -6658,6 +7152,32 @@ fn decode_session_deletion_mode_v1(
             require_exact_keys_v1(payload, &["mode", "progress_summary"])?;
             Ok(SessionDeletionModeV1::Force {
                 progress_summary: value_string_v1(payload, "progress_summary")?.to_owned(),
+            })
+        }
+        "delete" => {
+            require_exact_keys_v1(payload, &["confirmed", "mode", "progress_summary"])?;
+            Ok(SessionDeletionModeV1::Delete {
+                confirmed: payload
+                    .get("confirmed")
+                    .and_then(Value::as_bool)
+                    .ok_or_else(|| invalid_execution_v1("delete confirmation is invalid"))?,
+                progress_summary: optional_string_v1(payload, "progress_summary")?
+                    .map(str::to_owned),
+            })
+        }
+        "supersede" => {
+            require_exact_keys_v1(payload, &["actor", "mode", "reason"])?;
+            Ok(SessionDeletionModeV1::Supersede {
+                reason: value_string_v1(payload, "reason")?.to_owned(),
+                actor: optional_string_v1(payload, "actor")?.map(str::to_owned),
+            })
+        }
+        "dispose_and_archive" => {
+            require_exact_keys_v1(payload, &["actor", "disposition", "mode"])?;
+            Ok(SessionDeletionModeV1::DisposeAndArchive {
+                disposition: serde_json::from_value(value_v1(payload, "disposition")?.clone())
+                    .map_err(|_| invalid_execution_v1("terminal disposition is invalid"))?,
+                actor: optional_string_v1(payload, "actor")?.map(str::to_owned),
             })
         }
         _ => Err(invalid_execution_v1("session deletion mode is invalid")),
@@ -6754,7 +7274,8 @@ pub(crate) fn admitted_start_procedure_digest_v1(
         .and_then(|value| value.get("execution_version").and_then(Value::as_u64))
         , Some(version) if version == u64::from(EXECUTION_DOCUMENT_VERSION_V6)
             || version == u64::from(EXECUTION_DOCUMENT_VERSION_V12)
-            || version == u64::from(EXECUTION_DOCUMENT_VERSION_V17))
+            || version == u64::from(EXECUTION_DOCUMENT_VERSION_V17)
+            || version == u64::from(EXECUTION_DOCUMENT_VERSION_V19))
     {
         return decode_procedure_v2_start_execution_v1(execution.as_str())
             .map(|admitted| Some(admitted.state.snapshot().digest().clone()));
@@ -6877,6 +7398,12 @@ fn decode_command_components_v1(
             dry_run: false,
             preconditions: decode_session_identity_preconditions_v1(preconditions)?,
         })),
+        "session.archive" => {
+            require_exact_keys_v1(payload, &[])?;
+            Ok(SliceCommandV1::SessionArchive(SessionArchiveV1 {
+                preconditions: decode_session_identity_preconditions_v1(preconditions)?,
+            }))
+        }
         "item.check" => {
             require_exact_keys_v1(payload, &["item_id"])?;
             Ok(SliceCommandV1::ItemCheck(ItemCheckV1 {

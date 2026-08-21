@@ -40,11 +40,12 @@
       "additionalProperties": false,
       "required": ["kind", "session_revision", "recorded_at"],
       "properties": {
-        "kind": { "enum": ["handed_off", "not_required"] },
+        "kind": { "enum": ["handed_off", "not_required", "superseded"] },
         "session_revision": { "$ref": "#/$defs/runningSessionRevision" },
         "summary": { "type": "string", "minLength": 1, "maxLength": 4000 },
         "reference": { "type": "string", "minLength": 1, "maxLength": 4000 },
         "reason": { "type": "string", "minLength": 1, "maxLength": 4000 },
+        "successor_session_id": { "type": "string", "format": "uuid" },
         "actor": { "type": "string", "minLength": 1, "maxLength": 256 },
         "recorded_at": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/timestamp" }
       },
@@ -52,7 +53,17 @@
         {
           "if": { "properties": { "kind": { "const": "handed_off" } }, "required": ["kind"] },
           "then": { "required": ["summary", "reference"], "not": { "required": ["reason"] } },
-          "else": { "required": ["reason"], "not": { "anyOf": [{ "required": ["summary"] }, { "required": ["reference"] }] } }
+          "else": {
+            "required": ["reason"],
+            "not": { "anyOf": [{ "required": ["summary"] }, { "required": ["reference"] }] },
+            "allOf": [
+              {
+                "if": { "properties": { "kind": { "const": "superseded" } }, "required": ["kind"] },
+                "then": { "required": ["successor_session_id"] },
+                "else": { "not": { "required": ["successor_session_id"] } }
+              }
+            ]
+          }
         }
       ]
     },

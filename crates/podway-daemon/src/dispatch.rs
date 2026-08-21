@@ -47,12 +47,45 @@ pub struct DispatchErrorDetailsV1 {
     maximum_open_blockers: Option<Box<usize>>,
     v2_runtime: Option<Box<V2RuntimeErrorDetailsV1>>,
     session_reset_not_eligible: Option<Box<SessionResetNotEligibleDetailsV1>>,
+    session_archive_failure: Option<Box<SessionArchiveFailureDetailsV1>>,
+    session_start_state_conflict: Option<Box<SessionStartStateConflictDetailsV1>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct SessionResetNotEligibleDetailsV1 {
     lifecycle: &'static str,
     required_action: &'static str,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum SessionArchiveFailureDetailsV1 {
+    NotEligible {
+        lifecycle: &'static str,
+        current_terminal_disposition: bool,
+        required_action: &'static str,
+    },
+    LimitReached {
+        maximum: u32,
+    },
+    NotFound {
+        session_id: SessionId,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SessionStartStateConflictDetailsV1 {
+    lifecycle: &'static str,
+    current_terminal_disposition: bool,
+    allowed_actions: &'static [&'static str],
+}
+
+fn lifecycle_label_v1(lifecycle: podway_core::SessionLifecycle) -> &'static str {
+    match lifecycle {
+        podway_core::SessionLifecycle::Prepared => "prepared",
+        podway_core::SessionLifecycle::Running => "running",
+        podway_core::SessionLifecycle::Completed => "completed",
+        podway_core::SessionLifecycle::Cancelled => "cancelled",
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -200,6 +233,68 @@ impl DispatchErrorDetailsV1 {
         self.session_reset_not_eligible = Some(Box::new(SessionResetNotEligibleDetailsV1 {
             lifecycle,
             required_action,
+        }));
+        self
+    }
+
+    pub fn with_session_archive_not_eligible(
+        mut self,
+        lifecycle: podway_core::SessionLifecycle,
+        current_terminal_disposition: bool,
+    ) -> Self {
+        let (lifecycle, required_action) = match lifecycle {
+            podway_core::SessionLifecycle::Prepared | podway_core::SessionLifecycle::Running => {
+                (lifecycle_label_v1(lifecycle), "complete_or_cancel")
+            }
+            podway_core::SessionLifecycle::Completed | podway_core::SessionLifecycle::Cancelled => {
+                (lifecycle_label_v1(lifecycle), "record_disposition")
+            }
+        };
+        self.session_archive_failure =
+            Some(Box::new(SessionArchiveFailureDetailsV1::NotEligible {
+                lifecycle,
+                current_terminal_disposition,
+                required_action,
+            }));
+        self
+    }
+
+    pub fn with_session_archive_limit(mut self, maximum: u32) -> Self {
+        self.session_archive_failure =
+            Some(Box::new(SessionArchiveFailureDetailsV1::LimitReached {
+                maximum,
+            }));
+        self
+    }
+
+    pub fn with_session_archive_not_found(mut self, session_id: SessionId) -> Self {
+        self.session_archive_failure = Some(Box::new(SessionArchiveFailureDetailsV1::NotFound {
+            session_id,
+        }));
+        self
+    }
+
+    pub fn with_session_start_state_conflict(
+        mut self,
+        lifecycle: podway_core::SessionLifecycle,
+        current_terminal_disposition: bool,
+    ) -> Self {
+        let allowed_actions = match (lifecycle, current_terminal_disposition) {
+            (podway_core::SessionLifecycle::Prepared, _) => &["continue", "delete"][..],
+            (podway_core::SessionLifecycle::Running, _) => &["continue", "preserve", "delete"][..],
+            (
+                podway_core::SessionLifecycle::Completed | podway_core::SessionLifecycle::Cancelled,
+                false,
+            ) => &["continue", "record_disposition"][..],
+            (
+                podway_core::SessionLifecycle::Completed | podway_core::SessionLifecycle::Cancelled,
+                true,
+            ) => &["start"][..],
+        };
+        self.session_start_state_conflict = Some(Box::new(SessionStartStateConflictDetailsV1 {
+            lifecycle: lifecycle_label_v1(lifecycle),
+            current_terminal_disposition,
+            allowed_actions,
         }));
         self
     }
@@ -587,6 +682,48 @@ impl DispatchErrorDetailsV1 {
     }
 
     pub(crate) fn into_json(self, requires_admission: bool) -> Map<String, Value> {
+        if let Some(details) = self.session_archive_failure {
+            let admission = admission_value_v1(self.job_id.as_ref(), self.job_sequence);
+            let value = match *details {
+                SessionArchiveFailureDetailsV1::NotEligible {
+                    lifecycle,
+                    current_terminal_disposition,
+                    required_action,
+                } => json!({
+                    "schema": "podway.session-archive-not-eligible-details/v1",
+                    "lifecycle": lifecycle,
+                    "current_terminal_disposition": current_terminal_disposition,
+                    "required_action": required_action,
+                    "admission": admission,
+                }),
+                SessionArchiveFailureDetailsV1::LimitReached { maximum } => json!({
+                    "schema": "podway.session-archive-limit-details/v1",
+                    "maximum": maximum,
+                    "admission": admission,
+                }),
+                SessionArchiveFailureDetailsV1::NotFound { session_id } => json!({
+                    "schema": "podway.session-archive-not-found-details/v1",
+                    "session_id": session_id,
+                    "admission": admission,
+                }),
+            };
+            return value
+                .as_object()
+                .expect("archive failure details are an object")
+                .clone();
+        }
+        if let Some(details) = self.session_start_state_conflict {
+            return json!({
+                "schema": "podway.session-start-state-conflict-details/v1",
+                "lifecycle": details.lifecycle,
+                "current_terminal_disposition": details.current_terminal_disposition,
+                "allowed_actions": details.allowed_actions,
+                "admission": admission_value_v1(self.job_id.as_ref(), self.job_sequence),
+            })
+            .as_object()
+            .expect("start state conflict details are an object")
+            .clone();
+        }
         if let Some(details) = self.session_reset_not_eligible {
             return json!({
                 "schema": "podway.session-reset-not-eligible-details/v1",
@@ -1011,6 +1148,10 @@ pub enum DispatchFailureKindV1 {
     SessionNotRunning,
     SessionNotTerminal,
     SessionResetNotEligible,
+    SessionArchiveNotEligible,
+    SessionArchiveLimitReached,
+    SessionArchiveNotFound,
+    SessionStartStateConflict,
     SessionCancelled,
     SessionRevisionConflict,
     AttemptNotCurrent,
@@ -1092,6 +1233,8 @@ impl DispatchFailureV1 {
                 maximum_open_blockers: None,
                 v2_runtime: None,
                 session_reset_not_eligible: None,
+                session_archive_failure: None,
+                session_start_state_conflict: None,
             }),
         }
     }
@@ -2271,6 +2414,10 @@ where
                     | SliceCommandV1::SessionUnblock(_)
                     | SliceCommandV1::SessionCancel(_)
                     | SliceCommandV1::SessionReset(_)
+                    | SliceCommandV1::SessionArchive(_)
+                    | SliceCommandV1::SessionArchiveList(_)
+                    | SliceCommandV1::SessionArchiveShow(_)
+                    | SliceCommandV1::SessionArchivePurge(_)
                     | SliceCommandV1::ItemCheck(_)
                     | SliceCommandV1::ItemUncheck(_)
                     | SliceCommandV1::ItemSet(_)
@@ -2291,6 +2438,7 @@ where
                     | SliceCommandV1::SessionUnblock(_)
                     | SliceCommandV1::SessionCancel(_)
                     | SliceCommandV1::SessionReset(_)
+                    | SliceCommandV1::SessionArchive(_)
                     | SliceCommandV1::ItemCheck(_)
                     | SliceCommandV1::ItemUncheck(_)
                     | SliceCommandV1::ItemSet(_)
@@ -2626,6 +2774,30 @@ fn catalog_error_spec_v1(kind: DispatchFailureKindV1) -> (&'static str, &'static
             "The current session is not eligible for automatic deletion.",
             false,
             1,
+        ),
+        DispatchFailureKindV1::SessionArchiveNotEligible => (
+            "SESSION_ARCHIVE_NOT_ELIGIBLE",
+            "The current session is not eligible for archival.",
+            false,
+            1,
+        ),
+        DispatchFailureKindV1::SessionArchiveLimitReached => (
+            "SESSION_ARCHIVE_LIMIT_REACHED",
+            "The inactive session archive is full.",
+            false,
+            1,
+        ),
+        DispatchFailureKindV1::SessionArchiveNotFound => (
+            "SESSION_ARCHIVE_NOT_FOUND",
+            "The requested inactive session was not found.",
+            false,
+            1,
+        ),
+        DispatchFailureKindV1::SessionStartStateConflict => (
+            "SESSION_START_STATE_CONFLICT",
+            "The existing session state changed after the start policy was selected.",
+            true,
+            4,
         ),
         DispatchFailureKindV1::SessionCancelled => {
             ("SESSION_CANCELLED", "The session was cancelled.", false, 1)

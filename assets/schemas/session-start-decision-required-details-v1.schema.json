@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:session-start-decision-required-details:v1",
+  "title": "Podway Session Start Decision Required Details v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "lifecycle", "current_terminal_disposition", "allowed_actions", "admission"],
+  "properties": {
+    "schema": { "const": "podway.session-start-decision-required-details/v1" },
+    "lifecycle": { "enum": ["prepared", "running", "completed", "cancelled"] },
+    "current_terminal_disposition": { "type": "boolean" },
+    "allowed_actions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": { "enum": ["continue", "preserve", "delete", "record_disposition"] }
+    },
+    "admission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["admitted"],
+      "properties": { "admitted": { "const": false } }
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:session-archive-result:v1",
+  "title": "Podway Session Archive Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "session_id", "session_revision", "activity", "lifecycle", "admission"],
+  "properties": {
+    "schema": { "const": "podway.session-archive-result/v1" },
+    "session_id": { "type": "string", "format": "uuid" },
+    "session_revision": { "$ref": "urn:podway:schema:v2-result-components:v2#/$defs/runningSessionRevision" },
+    "activity": { "const": "inactive" },
+    "lifecycle": { "enum": ["completed", "cancelled"] },
+    "admission": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/admitted" }
+  }
+}
