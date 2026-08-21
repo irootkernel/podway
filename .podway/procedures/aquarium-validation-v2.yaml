@@ -1,6 +1,6 @@
 schema: podway.procedure/v2
 id: aquarium-validation-v2
-version: "1"
+version: "2"
 name: Aquarium Validation
 purpose: Audit and remediate one completed epic until current evidence supports validation.
 description: A convergent Podway procedure for epic-wide direct audit, remediation, re-audit, review, and validation closeout.
@@ -18,6 +18,12 @@ node_definitions:
         min_length: 1
         max_length: 5000
         multiline: true
+      - id: plan-handoff-artifact
+        type: artifact
+        prompt: Attach an existing approved epic plan only when the owning epic-handler carries a plan handoff.
+        required: false
+        allowed_media_types:
+          - text/markdown
   audit-record:
     type: action
     title: Audit the epic
@@ -68,9 +74,27 @@ node_definitions:
     title: Record final validation evidence
     intent: Record the latest clean audit and complete whole-epic Mulgae result.
     items:
+      - id: review-round
+        type: integer
+        prompt: Record the positive whole-epic root-review ordinal for the current validation goal revision.
+        required: true
+      - id: review-mode
+        type: choice
+        prompt: Record whether this round may trigger remediation or is confirmation-only.
+        required: true
+        choices:
+          - remediation-eligible
+          - confirmation-only
+      - id: review-run-id
+        type: text
+        prompt: Record the exact committed Mulgae root review run ID.
+        required: true
+        min_length: 1
+        max_length: 128
+        multiline: true
       - id: final-review-summary
         type: text
-        prompt: Record final snapshot, required checks, coverage, publication, findings query, and roadmap consistency.
+        prompt: Record final snapshot, required checks, operational completion, coverage, publication, CI decision, findings query, and roadmap consistency.
         required: true
         min_length: 1
         max_length: 7000
@@ -82,17 +106,18 @@ node_definitions:
   final-review-decision:
     type: decision
     title: Evaluate final validation
-    objective: Only current complete validation evidence may proceed to goal assessment.
+    objective: Route an incomplete or remediation-eligible review to rework, validate only clean evidence, and leave a confirmation-only review with valid findings undecided for user direction.
     prompt: Is the latest epic snapshot ready for validation closeout?
     evidence_guidance:
-      - Read the final audit, required checks, whole-epic Mulgae evidence, and roadmap states.
+      - Read the final audit, required checks, review ordinal and mode, exact Mulgae run, and roadmap states.
+      - Select no option while a confirmation-only review retains a valid finding and the user has not authorized the next action.
     options:
       - id: validated
         label: Validation supported
-        criteria: The fresh audit is clean and complete review has no unresolved valid finding.
+        criteria: The fresh audit is clean, the root review is operationally complete with passing CI, and no unresolved valid finding remains.
       - id: rework-required
         label: Rework required
-        criteria: Evidence is stale or incomplete, or a confirmed gap or valid finding remains.
+        criteria: Evidence is stale or incomplete, CI failed, or a confirmed gap or remediation-eligible valid finding requires correction. Do not select this option for a confirmation-only hold without user authorization.
     reason:
       required: true
       prompt: Explain the selection using the final validation evidence.

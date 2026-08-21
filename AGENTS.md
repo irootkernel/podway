@@ -277,13 +277,14 @@ Apply these distinctions as well:
 - Outside the `$aquarium:task-handler` workflow, use Mulgae only when master
   explicitly requests a review. An explicit task-handler invocation authorizes
   its task-scoped Mulgae review phase.
-- Configure the `logic`, `security`, `maintainability`, `product`,
-  `documentation`, and `testing` roles with ZCode as their only provider and a
-  `60m` provider timeout.
+- Configure the `logic`, `security`, `maintainability`, `product`, and `testing`
+  roles with ZCode as their only provider. Configure the `documentation` role
+  with AGY as its only provider. Use a `60m` provider timeout for both providers.
 - Use `--diff origin/main...HEAD` for a branch or pull request, `--stage` for
   staged changes, `--dirty` for staged and unstaged changes, or `--workspace`
   only when master explicitly requests all tracked files. Preflight the same
-  target and confirm the captured paths and ZCode-only routing before review.
+  target and confirm the captured paths and required provider routing before
+  review.
 - Track `.mulgae/config.yaml` and `.mulgaeignore`. Keep `.mulgae/local.yaml`,
   every other `.mulgae/**` path, provider homes, credentials, raw transcripts,
   diagnostics, and exported review bundles untracked and private.
@@ -352,3 +353,14 @@ trivial changes with no meaningful decision context.
 - Keep completion reports compact: state the outcome, changed files, verification
   performed, and actionable remaining risks or blockers. Distinguish development
   gate success from commit, push, release, installation, and runtime activation.
+
+## Aquarium Workflow References
+
+- Use `$aquarium:task-handler` for one named roadmap task, `$aquarium:epic-handler` for one roadmap epic, and `$aquarium:epic-validator` to cold-validate a completed epic.
+- Use `$aquarium:new-project`, `$aquarium:new-feature`, or `$aquarium:refactor` for explicitly requested Ouroboros-assisted design workflows.
+- Use `$aquarium:war-room` for difficult-bug diagnosis and `$aquarium:design-qa` for local Design Gate lifecycle work.
+- Use `$aquarium:dev-setup` to diagnose or configure development tooling.
+- Use `$use-sanho`, `$use-mulgae`, `$use-gaori`, and `$use-podway` for their respective local tool operations. Aquarium workflow skills retain their stricter roadmap, ownership, and approval rules.
+- Treat `.podway/procedures/aquarium-*-v2.yaml` as the repository-local workflow evidence and routing authority.
+- Use `$lore-commits` for non-trivial commit messages and `$lore-query` to inspect recorded decision context.
+- Use the separately installed upstream `$deslop` skill for task-owned cleanup when an Aquarium workflow requests it.

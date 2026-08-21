@@ -4,6 +4,8 @@ project:
 providers:
   zcode:
     timeout: "60m"
+  agy:
+    timeout: "60m"
 execution:
   workspace_access: "none"
 roles:
@@ -11,7 +13,7 @@ roles:
   security: {enabled: true, primary_provider: "zcode"}
   maintainability: {enabled: true, primary_provider: "zcode"}
   product: {enabled: true, primary_provider: "zcode"}
-  documentation: {enabled: true, primary_provider: "zcode"}
+  documentation: {enabled: true, primary_provider: "agy"}
   testing: {enabled: true, primary_provider: "zcode"}
 review:
   required_roles: ["logic"]
