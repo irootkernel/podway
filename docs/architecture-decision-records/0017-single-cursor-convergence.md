@@ -4,6 +4,7 @@
 - Date: 2026-08-04
 - Supersedes: [ADR-0015](0015-constrained-single-cursor-graph.md)
 - Procedure v1 preservation: Superseded by [ADR-0019](0019-procedure-v2-only-product.md)
+- Preserved by: [ADR-0028](0028-bounded-typed-procedure-guards.md)
 
 ## Context
 

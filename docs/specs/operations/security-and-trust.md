@@ -35,6 +35,12 @@ worktree state, fetch input or output bytes, execute the operation, authenticate
 the executor, or decide whether the summary is true. Attempt-suffix invalidation
 provides ordinary attempt-scoped freshness and no stronger assurance.
 
+Typed predicates and option guards evaluate only bounded recorded values already
+available in the current Procedure state. They enforce formal progression
+conditions, not semantic truth. A met predicate does not authenticate an actor,
+verify check-result claims, inspect artifact bytes, or establish that recorded
+text, choices, integers, or lists are factually correct.
+
 ## Why there is no workspace access key
 
 A worktree access key would be stored in a location readable by the same user that can:

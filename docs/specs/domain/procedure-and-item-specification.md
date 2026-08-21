@@ -48,6 +48,37 @@ older value inspectable through history without allowing it to satisfy current
 progression. Podway records these caller-supplied fields but does not execute or
 verify their external meaning.
 
+## Typed predicates and conditional requirements
+
+[ADR-0028](../../architecture-decision-records/0028-bounded-typed-procedure-guards.md)
+owns the closed predicate vocabulary. `equals` and `not_equals` admit confirm,
+choice, integer, and `check_result.outcome`; `empty` and `non_empty` admit text
+and list; `at_least` and `at_most` admit integer. Every predicate object contains
+exactly one operator. A `check_result` predicate additionally carries the closed
+`field: outcome` selector. Literal types must match their referenced item type.
+
+`required_when` and option `guards` each contain one to four predicates combined
+with logical AND. There is no OR, NOT group, nesting, arbitrary expression,
+regex, substring, locale, floating-point, artifact-content, digest, or semantic
+check. Evaluation returns `met`, `unmet`, or `unevaluable`. Text emptiness trims
+Unicode whitespace; list emptiness counts entries. Text and list status never
+echoes content, only the derived scalar or entry count.
+
+An item with `required_when` must declare `required: false`. Each controller is
+an earlier item in the same definition, is unconditionally required, and has no
+condition of its own. Self-reference, chains, cycles, later controllers, and
+cross-definition or cross-attempt references are invalid. A missing controller
+is `unevaluable` and leaves `required_now` false; that controller's ordinary
+required state already prevents completion. Completion evaluates `required_now`
+and satisfaction from the same active-attempt snapshot.
+
+A decision option guard identifies a selected item of a required
+`evidence_from` reference. The source must satisfy ordinary dominance and
+freshness rules. Guards cannot read unselected items, optional references, the
+current decision record, or another session. An unguarded option is `met` with
+an empty predicate list. Any unmet or unevaluable predicate makes a guarded
+option unavailable without changing recorded state.
+
 ## Item bounds
 
 [ADR-0024](../../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md) owns the scale envelope. Every length counts Unicode scalar values, not bytes. `podway-core` holds these numbers as public constants and configuration, runtime records, persistence reconstruction, protocol request slices, and budget calculation consume them, so one envelope binds every layer.
@@ -91,6 +122,11 @@ Each session stores one immutable admitted Procedure v2 snapshot. Later source o
 preset changes do not alter an existing session.
 
 Adding the literal `max_total_length` default in `V2SCL-003` rotates the canonical digest of every Procedure that declares a list item, exactly once; a Procedure with no list item keeps its digest. The Procedure schema identifier remains `podway.procedure/v2`, and stored sessions continue to use their stored canonical snapshots and digests. Automation that pins a digest receives `DIGEST_CONFIRMATION_REQUIRED` until it re-pins.
+
+The optional `required_when` and `guards` fields have no materialized defaults.
+Procedures that omit them retain their existing canonical bytes and digest, and
+the three built-in preset digests do not rotate. Conditions are part of the
+immutable canonical snapshot and require no runtime-row migration.
 
 `podway procedure validate`, `format`, `vet`, `graph`, `preview`, `lint`, `check`,
 and `scaffold` operate only on Procedure v2 documents. An unsupported schema is

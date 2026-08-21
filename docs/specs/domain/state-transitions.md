@@ -31,6 +31,14 @@ initial goal revision atomically, advances the session revision once, and is
 fenced by workspace UUID, session ID, and session revision. Every other
 cursor-bearing or goal-bearing mutation rejects prepared state.
 
+Conditional required-item evaluation uses the same authoritative item snapshot
+as ordinary satisfaction and completion. A condition cannot be checked before or
+after that snapshot as a separate advisory step. Decision admission validates
+identity and revision fences first, required evidence freshness second, and the
+selected option's typed guards third. Stale evidence therefore retains
+`EVIDENCE_REFERENCE_STALE`; an otherwise unavailable option returns
+`OPTION_GUARD_UNSATISFIED`. Either rejection writes no state.
+
 Terminal disposition is legal only for a completed or cancelled session and is
 bound to its exact current terminal revision. Completed-session reactivation
 advances the revision and makes the earlier disposition non-current. Default

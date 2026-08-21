@@ -14,11 +14,20 @@ versions, unsupported procedure schemas, inconsistent persistence, and unknown
 mutation outcomes. It must expose stable machine contracts and useful text without
 making automation parse prose.
 
+Procedure v2 may derive conditional required items and decision-option
+availability from a closed bounded typed predicate vocabulary over current
+attempt state and selected fresh evidence. These predicates are deterministic
+progression guards, not a general expression or policy engine.
+
 Podway is not a project manager, CI system, command runner, Git mutation layer,
 arbitrary workflow engine, plugin host, remote collaboration service, artifact
 store, long-term evidence archive, AI runtime, or same-user security boundary. It
 does not execute configured commands, access the network, mutate Git, or store
 artifact bytes.
+
+It does not support arbitrary expressions, OR or NOT groups, nested predicates,
+scripts, environment reads, cross-session conditions, dynamic routes, or
+user-defined predicate functions.
 
 Podway may record a structurally bound external check result whose closed fields
 identify an operation, caller-supplied input basis, executor, outcome, and output.

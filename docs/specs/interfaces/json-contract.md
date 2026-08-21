@@ -52,6 +52,20 @@ kind additions within the exact manifest compatibility gate, not new command
 families. Existing variants retain their field sets and unknown-field closure;
 peers with a different manifest reject the complete contract set.
 
+ADR-0028 adds closed typed-predicate definitions to the Procedure and preview
+schemas. `required_when` and option `guards` are optional one-to-four-element
+arrays with no materialized defaults. Running next keeps the complete authored
+option array, adds authoritative `allowed_option_ids`, and conditionally adds
+complete bounded `option_guard_statuses`. Observation active items expose authored
+`required`, derived `required_now`, and bounded condition status. Text and list
+statuses expose only derived counts, never recorded content.
+
+These fields are added to the unreleased `next-result/v3` and
+`observation-result/v3` families under the exact manifest compatibility gate.
+They do not create v4 families or widen a released peer silently. The closed
+`OPTION_GUARD_UNSATISFIED` details branch carries the selected option ID and the
+same bounded predicate-status shape.
+
 Adding a result family to the `output-v3` command-to-result selection is not widening
 a released closed schema: each released result schema keeps its own identifier, field
 set, and unknown-field closure. Within the manifest fail-closed gate, a released shared

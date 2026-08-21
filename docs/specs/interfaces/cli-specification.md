@@ -30,6 +30,12 @@ operation that modifies a file; it validates and renders fully before an atomic
 same-directory replacement. Other procedure commands are read-only. Unsupported
 schemas report `PROCEDURE_SCHEMA_UNSUPPORTED` or `PROCEDURE_INVALID` as appropriate.
 
+Procedure inspection and authoring output preserves optional `required_when` and
+option `guards` structurally. Validation rejects unknown operators, wrong literal
+types, conditional chains, invalid controller order, unselected or optional guard
+sources, and out-of-bound predicate arrays before start. Lint diagnoses ambiguous
+labels and weak criteria rather than warning from option or cycle counts.
+
 Built-in catalog commands expose only `bug-fix-v2`, `small-change-v2`, and
 `sw-dev-v2`. `start` accepts one preset or one safe worktree-local Procedure
 path, an optional expected Procedure digest for file sources, a nonempty task
@@ -58,6 +64,13 @@ outcomes are reconciled with `job lookup --idempotency-key` before retry.
 `retry` remains on the active action node. `rework --to <node>` uses the Procedure
 v2 manual-rework contract. Decisions, goals, and criterion assessments use their
 typed commands. Cursor changes occur only through declared graph effects.
+
+Decision guidance renders the complete authored options and separately marks the
+authoritative allowed option IDs and bounded guard statuses. Human output explains
+unmet and unevaluable predicates without printing text or list content. A guarded
+selection rejected after fresh evidence validation returns
+`OPTION_GUARD_UNSATISFIED`; automation branches on its structured details rather
+than the message.
 
 Prepared sessions expose no cursor-bearing mutations. `disposition handed-off`
 requires summary and reference, while `disposition not-required` requires a

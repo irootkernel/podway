@@ -108,6 +108,12 @@ The loader:
 - computes SHA-256;
 - produces immutable procedure snapshots.
 
+It also validates typed condition structure, controller ordering, and guarded
+evidence selection before admission. The pure domain engine evaluates conditional
+item requirement and option availability from the active immutable snapshot and
+current recorded values; no filesystem, process, network, or plugin lookup is
+part of predicate evaluation.
+
 It never loads remote data or executable plugins.
 
 ### Store

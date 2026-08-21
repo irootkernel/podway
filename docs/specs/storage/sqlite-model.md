@@ -23,6 +23,12 @@ Schema v8 extends terminal dispositions for ADR-0027. It adds the closed
 sets the new successor field to null. A superseded row requires reason and a
 distinct successor ID; other kinds forbid that field.
 
+ADR-0028 adds no SQLite schema generation. Typed conditions are immutable fields
+of the canonical Procedure snapshot already stored with each session, and their
+evaluation uses existing attempt-local item values and selected evidence. Older
+snapshots reconstruct unchanged because omitted condition fields have no
+materialized defaults.
+
 Schema v6 rebuilds `v2_item_slots` so its closed item discriminator additionally
 admits `check_result`. The v5-to-v6 migration preserves every existing
 `value_json` byte-for-byte and does not reinterpret any existing declaration,

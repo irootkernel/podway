@@ -244,6 +244,14 @@ The preview and page-token allocations hold the widest selection a selector can 
 | Serialization and outer-envelope safety | 64 KiB |
 | **Total** | **1 MiB** |
 
+A guarded decision reserves at most 96 KiB inside the existing 256 KiB
+`session.next` static allocation: eight options, four predicates per option, and
+bounded expected and actual values. An unguarded decision omits
+`option_guard_statuses` and incurs no guard-status charge. A conditional active
+item charges about 2.4 KiB for one predicate or 9.5 KiB for four predicates
+inside the existing 128 KiB observation active-item window. The existing exact
+totals and truncation fields remain authoritative when fewer active items fit.
+
 Guidance carries `next-result/v3` without its previews or page tokens, so its allocation is exactly the sum of the three `session.next` allocations that remain. Sizing it lower would make a Procedure that `session.next` admits into one `session.observe` cannot answer. Status and guidance are single structured members rather than windows — there is no honest way to return half a status — so they are measured against their allocations and a member that outgrows one fails closed. The active-item and template windows are cut and publish what they cut.
 
 An omitted evidence item selector means metadata-only. Explicit selectors receive previews in declaration order for at most 32 items, and later admitted items remain metadata-only. At most 128 item metadata records may appear across all references in one response. Metadata costs the same for every item kind, so the byte allocation does not imply that ceiling: a wide selection of small items can stay inside the allocation and still exceed it. Graph vetting therefore counts records as well as bytes and rejects a larger declared selection, recommending the smallest useful selectors. Metadata remains complete for every item in an admitted `session.next` projection, so that response never marks its evidence metadata window truncated.
@@ -314,6 +322,11 @@ JSON-depth bounds. V2 producers also enforce the bounded-warning guard defined
 by the JSON contract and the existing complete frame limit; the open outer v2
 envelope is not permission for unbounded warnings or oversized encoded
 responses.
+
+Typed conditions retain `podway.ipc/v1`, `podway.error/v1`,
+`podway.output/v3`, `next-result/v3`, and `observation-result/v3`. Exact manifest
+identity makes older peers reject the changed closed schema set rather than
+silently accepting or dropping condition fields.
 
 ## Request canonicalization
 

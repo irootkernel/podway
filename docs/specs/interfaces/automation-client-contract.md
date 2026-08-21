@@ -261,6 +261,21 @@ The active-item allocation holds the widest definition vetting admits, so in pra
 | `AUT-CHK-007` | `evidence.read` MUST return a complete check-result value in one terminal page under the existing current-reference and freshness rules. |
 | `AUT-CHK-008` | Podway MUST treat every check-result field as caller supplied and MUST NOT claim factual verification, authenticate the executor, inspect external bytes, compare the input basis with the worktree, execute a command, or store logs. |
 
+### Typed conditions and option guards (AUT-GRD-001–010)
+
+| ID | Normative requirement |
+|---|---|
+| `AUT-GRD-001` | Procedure v2 MUST admit only the closed typed predicate vocabulary, one to four AND-combined predicates per condition, and the operator/item-type pairings defined by ADR-0028. |
+| `AUT-GRD-002` | `required_when` MUST reference only earlier unconditionally required items in the same definition and MUST reject self-reference, chains, cycles, later controllers, and condition-bearing items whose authored `required` is true. |
+| `AUT-GRD-003` | Completion MUST derive `required_now` and satisfaction atomically from one authoritative active-attempt snapshot; a missing required controller MUST make the condition unevaluable and leave `required_now` false. |
+| `AUT-GRD-004` | Option guards MUST read only explicitly selected items from required, dominating, fresh `evidence_from` references and MUST reject optional, unselected, current-decision, cross-attempt, or cross-session sources. |
+| `AUT-GRD-005` | Running next MUST preserve every authored option, publish authoritative `allowed_option_ids`, and, when any guard exists, publish one complete bounded three-valued status for every option. |
+| `AUT-GRD-006` | Observation active items MUST expose authored `required`, derived `required_now`, and bounded predicate status without exposing text or list content. |
+| `AUT-GRD-007` | Decision admission MUST validate identity and revision fences before evidence freshness and evidence freshness before guards; each rejected check MUST write no state. |
+| `AUT-GRD-008` | An unmet or unevaluable selected guard MUST return non-retryable exit-1 `OPTION_GUARD_UNSATISFIED` with closed bounded details, while stale evidence MUST retain retryable `EVIDENCE_REFERENCE_STALE`. |
+| `AUT-GRD-009` | Omitted condition fields MUST preserve existing canonical Procedure bytes, preset digests, stored snapshot reconstruction, and unguarded runtime behavior without a SQLite migration. |
+| `AUT-GRD-010` | Authoring lint MUST replace count-based option and cycle warnings with distinct-label, concrete-criteria, and operationally distinguishable rework-route diagnostics. |
+
 ## 21. Command-specific JSON schemas (AUT-JSON-001–004)
 
 | ID | Normative requirement |
@@ -318,6 +333,7 @@ env -i PATH="<release-bin>:/usr/bin:/bin" \
 | `AUT-T-OBS` | idle barrier invariants, closed compact schema, maximum envelope size | `MCONT004`, `MCONT006`, `DOLGI002` |
 | `AUT-T-EVR` | every bound at and one above its boundary, worst-case Unicode escaping, an incrementally built 1,000-entry list, framed `item.record_many` acceptance and rejection, total-list and attempt-aggregate overflow, reconstruction, 128 item definitions, multi-page text and list reads, stable token replay, restart, selector diagnostics, every response allocation, each of the four token failure distinctions separately (`REQUEST_INVALID` before state comparison for malformed, oversized, cross-session, and wrong-binding tokens; `EVIDENCE_NOT_AVAILABLE` for an unresolved or skipped reference read without a token; `EVIDENCE_PAGE_TOKEN_STALE` for a changed bound snapshot; `EVIDENCE_PAGE_TOKEN_EXHAUSTED` for an end-of-value offset), the one-time preset digest rotation and its `DIGEST_CONFIRMATION_REQUIRED` boundary, and the five observation windows with their totals, truncation flags, and metadata-only guidance | `V2SCL-002`–`005` |
 | `AUT-T-CHK` | declaration and value bounds, YAML/JSON equivalence, digest stability, all outcomes, operation mismatch, atomic framed recording, migration and restart, stale retry/rework behavior, five-field projections, stdin-template bounds, one-page read-back, and trust-language checks | `V2AST-002`–`006` |
+| `AUT-T-GRD` | every operator/type pairing, invalid pairings, Unicode-empty text, integer boundaries, controller order and cycles, optional and stale guard sources, selected-item enforcement, complete options and allowed IDs, check-result outcome guards, mixed three-valued statuses, mutation fence order, response budgets, catalog replacement, and unchanged preset digests | `V2GRD-002`–`006` |
 | `AUT-T-JSON` | every result/detail fixture validates its discriminator and rejects unknown or malformed fields | `MCONT001`–`MCONT006` |
 | `AUT-T-DIST` | `make dist` packages the native release-profile archive once, verifies its identity and layout, then runs packaged lifecycle, conflict, timeout, response-loss, reconciliation, identity, termination, and socket-cleanup checks through isolated foreground dev mode | `DOLGI005`, `REL10001`–`REL10004` |
 
@@ -354,6 +370,7 @@ Preview and other authoring reads remain side-effect free.
 | `AUT-OBS-001`–`011` | `MCONT004`, `MCONT006`, `DOLGI002`, `V2LIF-004`–`005`, `V2SCL-005` | `AUT-T-OBS`, `AUT-T-LIF`, `AUT-T-EVR` |
 | `AUT-EVR-001`–`008` | `V2SCL-002`–`005` | `AUT-T-EVR`, `AUT-T-JSON` |
 | `AUT-CHK-001`–`008` | `V2AST-002`–`006` | `AUT-T-CHK`, `AUT-T-JSON` |
+| `AUT-GRD-001`–`010` | `V2GRD-002`–`006` | `AUT-T-GRD`, `AUT-T-JSON` |
 | `AUT-JSON-001`–`004`, `AUT-ERR-001`–`005` | `CASID004`, `MCONT001`–`MCONT006`, `V2AGT-005` | `AUT-T-JSON` |
 | `AUT-REL-001`–`004` | `DOLGI005`, `REL10001`–`REL10005` | `AUT-T-DIST`, repository-local `make dist` |
 

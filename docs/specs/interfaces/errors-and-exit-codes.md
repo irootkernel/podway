@@ -197,6 +197,20 @@ including the mandatory stable codes
 
 `INTERNAL_ERROR` is never marked retryable, and its details include a diagnostic ID. A client may make an out-of-band retry decision, but the daemon does not prove that an unexpected failure committed no mutation.
 
+## Typed condition failures
+
+ADR-0028 adds `OPTION_GUARD_UNSATISFIED` as a non-retryable exit-1 v2 runtime
+error. Its closed `podway.v2-runtime-error-details/v1` branch identifies the
+selected option and carries bounded predicate statuses. The error is evaluated
+only after identity, revision, and evidence-freshness checks, so a stale required
+source continues to return retryable `EVIDENCE_REFERENCE_STALE` instead.
+
+The authoring catalog replaces `LARGE_OPTION_SET` and `LARGE_CYCLE` with
+`OPTION_LABELS_NOT_DISTINCT` and `OPTION_CRITERIA_WEAK`. Invalid predicate shape,
+type, controller order, source selection, and bounds remain authoring failures
+under stable field-specific diagnostics; runtime errors never substitute for
+invalid Procedure admission.
+
 ## Bounded evidence scale failures
 
 [ADR-0024](../../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md) adopts four codes. `V2SCL-002` registered them in `error-codes.json`, the closed details schemas, and the protocol catalog. `V2SCL-003` made `ATTEMPT_CONTENT_LIMIT_EXCEEDED` reachable on the item mutation path, and `V2SCL-004` made the three evidence-read codes reachable through the `evidence.read` route.
