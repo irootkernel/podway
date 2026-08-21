@@ -10,6 +10,82 @@ fn v2(yaml: &str) -> Result<ParsedProcedureV2, ConfigError> {
     }
 }
 
+#[test]
+fn v2grd002_reserved_typed_conditions_are_not_admitted_before_domain_implementation() {
+    let conditional = concat!(
+        "schema: podway.procedure/v2\n",
+        "id: p\n",
+        "version: \"1\"\n",
+        "name: P\n",
+        "purpose: Reserve a typed condition.\n",
+        "node_definitions:\n",
+        "  work:\n",
+        "    type: action\n",
+        "    title: Work\n",
+        "    intent: Record conditional evidence.\n",
+        "    items:\n",
+        "      - id: mode\n",
+        "        type: choice\n",
+        "        prompt: Select a mode.\n",
+        "        required: true\n",
+        "        choices: [strict, relaxed]\n",
+        "      - id: notes\n",
+        "        type: text\n",
+        "        prompt: Record notes.\n",
+        "        required: false\n",
+        "        required_when:\n",
+        "          - item: mode\n",
+        "            equals: strict\n",
+        "graph:\n",
+        "  entry: work\n",
+        "  nodes:\n",
+        "    - id: work\n",
+        "      use: work\n",
+        "      terminal: true\n",
+    );
+    assert!(
+        v2(conditional).is_err(),
+        "V2GRD-003 owns conditional-item authoring admission"
+    );
+
+    let guarded = concat!(
+        "schema: podway.procedure/v2\n",
+        "id: p\n",
+        "version: \"1\"\n",
+        "name: P\n",
+        "purpose: Reserve an option guard.\n",
+        "node_definitions:\n",
+        "  decide:\n",
+        "    type: decision\n",
+        "    title: Decide\n",
+        "    objective: Select an outcome.\n",
+        "    prompt: What is the outcome?\n",
+        "    options:\n",
+        "      - id: approved\n",
+        "        label: Approved\n",
+        "        guards:\n",
+        "          - evidence:\n",
+        "              node: decide\n",
+        "              item: verdict\n",
+        "            equals: approved\n",
+        "    reason:\n",
+        "      required: true\n",
+        "graph:\n",
+        "  entry: decide\n",
+        "  nodes:\n",
+        "    - id: decide\n",
+        "      use: decide\n",
+        "      routes:\n",
+        "        approved:\n",
+        "          to: decide\n",
+        "          effect: rework\n",
+    );
+    assert!(
+        v2(guarded).is_err(),
+        "V2GRD-004 owns option-guard authoring admission"
+    );
+}
+
 fn err(yaml: &str) -> ConfigError {
     v2(yaml).expect_err("expected a closed failure")
 }

@@ -484,6 +484,13 @@
       "summary": "The selected decision option is not allowed."
     },
     {
+      "code": "OPTION_GUARD_UNSATISFIED",
+      "details_schema": "podway.v2-runtime-error-details/v1",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The selected decision option has an unmet or unevaluable guard."
+    },
+    {
       "code": "ROUTE_NOT_ALLOWED",
       "details_schema": "podway.v2-runtime-error-details/v1",
       "exit_code": 1,

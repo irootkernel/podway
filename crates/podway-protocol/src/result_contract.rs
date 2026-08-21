@@ -1224,6 +1224,8 @@ fn allowed_result_fields_v2(schema: &str) -> &'static [&'static str] {
             "missing_required_items",
             "missing_required_items_truncated",
             "options",
+            "allowed_option_ids",
+            "option_guard_statuses",
             "evidence_guidance",
             "next_graph_node_id",
             "terminal",

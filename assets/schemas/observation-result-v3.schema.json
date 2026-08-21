@@ -141,6 +141,8 @@
         "prompt": { "type": "string", "minLength": 1, "maxLength": 300 },
         "help": { "type": "string", "maxLength": 1000 },
         "required": { "type": "boolean" },
+        "required_now": { "type": "boolean" },
+        "condition_status": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/conditionStatus" },
         "satisfied": { "type": "boolean" },
         "revision": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/revision" },
         "constraints": { "$ref": "urn:podway:schema:v2-result-components:v3#/$defs/itemConstraints" },
@@ -162,7 +164,8 @@
               "value_truncated": { "const": false }
             }
           }
-        }
+        },
+        { "if": { "required": ["condition_status"] }, "then": { "required": ["required_now"] } }
       ]
     }
   }

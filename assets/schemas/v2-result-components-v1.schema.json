@@ -48,6 +48,74 @@
     "text": { "type": "string", "maxLength": 4096 },
     "path": { "type": "string", "minLength": 1, "maxLength": 4096 },
     "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "conditionScalar": {
+      "oneOf": [
+        { "type": "boolean" },
+        { "type": "integer", "minimum": -9223372036854775808, "maximum": 9223372036854775807 },
+        { "type": "string", "minLength": 1, "maxLength": 120 }
+      ]
+    },
+    "conditionSource": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "item_id"],
+      "properties": {
+        "kind": { "enum": ["item", "evidence"] },
+        "graph_node_id": { "$ref": "#/$defs/identifier" },
+        "item_id": { "$ref": "#/$defs/identifier" },
+        "field": { "const": "outcome" }
+      },
+      "allOf": [
+        { "if": { "properties": { "kind": { "const": "evidence" } }, "required": ["kind"] }, "then": { "required": ["graph_node_id"] }, "else": { "not": { "required": ["graph_node_id"] } } }
+      ]
+    },
+    "predicateStatus": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source", "operator", "state"],
+      "properties": {
+        "source": { "$ref": "#/$defs/conditionSource" },
+        "operator": { "enum": ["equals", "not_equals", "empty", "non_empty", "at_least", "at_most"] },
+        "expected": { "$ref": "#/$defs/conditionScalar" },
+        "actual": { "$ref": "#/$defs/conditionScalar" },
+        "actual_count": { "type": "integer", "minimum": 0, "maximum": 65536 },
+        "state": { "enum": ["met", "unmet", "unevaluable"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "operator": { "enum": ["equals", "not_equals", "at_least", "at_most"] } }, "required": ["operator"] },
+          "then": { "required": ["expected"] },
+          "else": { "not": { "required": ["expected"] } }
+        },
+        {
+          "if": { "properties": { "state": { "const": "unevaluable" } }, "required": ["state"] },
+          "then": { "not": { "anyOf": [{ "required": ["actual"] }, { "required": ["actual_count"] }] } },
+          "else": {
+            "if": { "properties": { "operator": { "enum": ["empty", "non_empty"] } }, "required": ["operator"] },
+            "then": { "required": ["actual_count"], "not": { "required": ["actual"] } },
+            "else": { "required": ["actual"], "not": { "required": ["actual_count"] } }
+          }
+        }
+      ]
+    },
+    "conditionStatus": {
+      "type": "object", "additionalProperties": false,
+      "required": ["state", "predicates"],
+      "properties": {
+        "state": { "enum": ["met", "unmet", "unevaluable"] },
+        "predicates": { "type": "array", "minItems": 1, "maxItems": 4, "items": { "$ref": "#/$defs/predicateStatus" } }
+      }
+    },
+    "optionGuardStatus": {
+      "type": "object", "additionalProperties": false,
+      "required": ["option_id", "state", "predicates"],
+      "properties": {
+        "option_id": { "$ref": "#/$defs/identifier" },
+        "state": { "enum": ["met", "unmet", "unevaluable"] },
+        "predicates": { "type": "array", "maxItems": 4, "items": { "$ref": "#/$defs/predicateStatus" } }
+      },
+      "allOf": [
+        { "if": { "properties": { "predicates": { "maxItems": 0 } }, "required": ["predicates"] }, "then": { "properties": { "state": { "const": "met" } } } }
+      ]
+    },
     "admitted": {
       "allOf": [
         { "$ref": "#/$defs/admittedBase" },

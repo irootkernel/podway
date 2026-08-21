@@ -70,6 +70,80 @@
       "minLength": 1,
       "maxLength": 64
     },
+    "predicate_value": {
+      "oneOf": [
+        { "type": "boolean" },
+        { "type": "integer", "minimum": -9223372036854775808, "maximum": 9223372036854775807 },
+        { "type": "string", "minLength": 1, "maxLength": 120 }
+      ]
+    },
+    "item_predicate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["item"],
+      "properties": {
+        "item": { "$ref": "#/$defs/identifier" },
+        "field": { "const": "outcome" },
+        "equals": { "$ref": "#/$defs/predicate_value" },
+        "not_equals": { "$ref": "#/$defs/predicate_value" },
+        "empty": { "const": true },
+        "non_empty": { "const": true },
+        "at_least": { "type": "integer", "minimum": -9223372036854775808, "maximum": 9223372036854775807 },
+        "at_most": { "type": "integer", "minimum": -9223372036854775808, "maximum": 9223372036854775807 }
+      },
+      "oneOf": [
+        { "required": ["equals"] },
+        { "required": ["not_equals"] },
+        { "required": ["empty"] },
+        { "required": ["non_empty"] },
+        { "required": ["at_least"] },
+        { "required": ["at_most"] }
+      ]
+    },
+    "evidence_source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["node", "item"],
+      "properties": {
+        "node": { "$ref": "#/$defs/identifier" },
+        "item": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "evidence_predicate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence"],
+      "properties": {
+        "evidence": { "$ref": "#/$defs/evidence_source" },
+        "field": { "const": "outcome" },
+        "equals": { "$ref": "#/$defs/predicate_value" },
+        "not_equals": { "$ref": "#/$defs/predicate_value" },
+        "empty": { "const": true },
+        "non_empty": { "const": true },
+        "at_least": { "type": "integer", "minimum": -9223372036854775808, "maximum": 9223372036854775807 },
+        "at_most": { "type": "integer", "minimum": -9223372036854775808, "maximum": 9223372036854775807 }
+      },
+      "oneOf": [
+        { "required": ["equals"] },
+        { "required": ["not_equals"] },
+        { "required": ["empty"] },
+        { "required": ["non_empty"] },
+        { "required": ["at_least"] },
+        { "required": ["at_most"] }
+      ]
+    },
+    "required_when": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4,
+      "items": { "$ref": "#/$defs/item_predicate" }
+    },
+    "guards": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4,
+      "items": { "$ref": "#/$defs/evidence_predicate" }
+    },
     "node_definition": {
       "oneOf": [
         {
@@ -214,6 +288,9 @@
         "criteria": {
           "type": "string",
           "maxLength": 500
+        },
+        "guards": {
+          "$ref": "#/$defs/guards"
         }
       }
     },
@@ -511,6 +588,9 @@
         },
         "required": {
           "type": "boolean"
+        },
+        "required_when": {
+          "$ref": "#/$defs/required_when"
         }
       }
     },
@@ -538,6 +618,9 @@
         },
         "required": {
           "type": "boolean"
+        },
+        "required_when": {
+          "$ref": "#/$defs/required_when"
         },
         "min_length": {
           "type": "integer",
@@ -583,6 +666,9 @@
         "required": {
           "type": "boolean"
         },
+        "required_when": {
+          "$ref": "#/$defs/required_when"
+        },
         "choices": {
           "type": "array",
           "minItems": 1,
@@ -621,6 +707,9 @@
         "required": {
           "type": "boolean"
         },
+        "required_when": {
+          "$ref": "#/$defs/required_when"
+        },
         "minimum": {
           "type": "integer",
           "minimum": -9223372036854775808,
@@ -657,6 +746,9 @@
         },
         "required": {
           "type": "boolean"
+        },
+        "required_when": {
+          "$ref": "#/$defs/required_when"
         },
         "min_items": {
           "type": "integer",
@@ -713,6 +805,9 @@
         "required": {
           "type": "boolean"
         },
+        "required_when": {
+          "$ref": "#/$defs/required_when"
+        },
         "allowed_media_types": {
           "type": "array",
           "minItems": 1,
@@ -745,6 +840,7 @@
         "prompt": { "$ref": "#/$defs/item_prompt" },
         "help": { "$ref": "#/$defs/item_help" },
         "required": { "type": "boolean" },
+        "required_when": { "$ref": "#/$defs/required_when" },
         "operation_id": { "$ref": "#/$defs/identifier" },
         "operation_digest": { "$ref": "#/$defs/sha256_digest" },
         "accepted_outcomes": {

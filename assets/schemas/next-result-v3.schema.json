@@ -21,7 +21,9 @@
     "missing_required_item_count": { "type": "integer", "minimum": 0, "maximum": 128 },
     "missing_required_items": { "type": "array", "maxItems": 64, "items": { "type": "object", "additionalProperties": false, "required": ["item_id", "prompt"], "properties": { "item_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" }, "prompt": { "type": "string", "minLength": 1, "maxLength": 300 } } } },
     "missing_required_items_truncated": { "type": "boolean" },
-    "options": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "type": "object", "additionalProperties": false, "required": ["option_id", "label"], "properties": { "option_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" }, "label": { "type": "string", "minLength": 1, "maxLength": 120 }, "criteria": { "type": "string", "maxLength": 500 } } } },
+    "options": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "type": "object", "additionalProperties": false, "required": ["option_id", "label"], "properties": { "option_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" }, "label": { "type": "string", "minLength": 1, "maxLength": 120 }, "criteria": { "type": "string", "maxLength": 500 }, "guards": { "$ref": "urn:podway:schema:procedure:v2#/$defs/guards" } } } },
+    "allowed_option_ids": { "type": "array", "maxItems": 8, "uniqueItems": true, "items": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" } },
+    "option_guard_statuses": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/optionGuardStatus" } },
     "evidence_guidance": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "type": "string", "minLength": 1, "maxLength": 200 } },
     "next_graph_node_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" }, "terminal": { "type": "boolean" },
     "skip": { "type": "object", "additionalProperties": false, "required": ["allowed", "reason_required"], "properties": { "allowed": { "const": true }, "reason_required": { "type": "boolean" } } },
@@ -47,6 +49,7 @@
     { "if": { "properties": { "missing_required_item_count": { "const": 0 } }, "required": ["missing_required_item_count"] }, "then": { "properties": { "missing_required_items": { "maxItems": 0 }, "missing_required_items_truncated": { "const": false } } } },
     { "if": { "properties": { "blockers_total": { "const": 0 } }, "required": ["blockers_total"] }, "then": { "properties": { "blockers": { "maxItems": 0 }, "blockers_truncated": { "const": false } } } },
     { "if": { "properties": { "readback_items_total": { "const": 0 } }, "required": ["readback_items_total"] }, "then": { "properties": { "readback": { "items": { "properties": { "items": { "maxItems": 0 } } } } } } },
-    { "if": { "properties": { "suggestions_truncated": { "const": false } }, "required": ["suggestions_truncated"] }, "then": { "properties": { "suggestions_total": { "maximum": 128 } } } }
+    { "if": { "properties": { "suggestions_truncated": { "const": false } }, "required": ["suggestions_truncated"] }, "then": { "properties": { "suggestions_total": { "maximum": 128 } } } },
+    { "if": { "properties": { "options": { "contains": { "required": ["guards"] }, "minContains": 1 } }, "required": ["options"] }, "then": { "required": ["allowed_option_ids", "option_guard_statuses"] }, "else": { "not": { "required": ["option_guard_statuses"] } } }
   ]
 }

@@ -244,6 +244,16 @@
         "summary": "Decision options have identical effective routes."
       },
       {
+        "code": "OPTION_LABELS_NOT_DISTINCT",
+        "severity": "warning",
+        "summary": "Decision option labels have duplicate normalized fingerprints."
+      },
+      {
+        "code": "OPTION_CRITERIA_WEAK",
+        "severity": "warning",
+        "summary": "Decision option criteria are missing, duplicated, or fail to distinguish equivalent routes."
+      },
+      {
         "code": "WEAK_PURPOSE_GUIDANCE",
         "severity": "warning",
         "summary": "Procedure purpose guidance is missing or weak."
@@ -297,16 +307,6 @@
         "code": "MANUAL_REWORK_TARGETS_BROAD",
         "severity": "warning",
         "summary": "The manual rework target set is unusually broad."
-      },
-      {
-        "code": "LARGE_OPTION_SET",
-        "severity": "warning",
-        "summary": "A decision option set is unusually large."
-      },
-      {
-        "code": "LARGE_CYCLE",
-        "severity": "warning",
-        "summary": "A graph cycle is unusually large."
       },
       {
         "code": "DUPLICATED_NODE_DEFINITION",
@@ -881,6 +881,13 @@
         "summary": "The selected decision option is not allowed."
       },
       {
+        "code": "OPTION_GUARD_UNSATISFIED",
+        "details_schema": "podway.v2-runtime-error-details/v1",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The selected decision option has an unmet or unevaluable guard."
+      },
+      {
         "code": "ROUTE_NOT_ALLOWED",
         "details_schema": "podway.v2-runtime-error-details/v1",
         "exit_code": 1,
@@ -1070,7 +1077,7 @@
       {
         "id": "urn:podway:schema:authoring-diagnostic:v1",
         "path": "schemas/authoring-diagnostic-v1.schema.json",
-        "sha256": "sha256:120de9cb1ad265f4ca6a0472ef9f2b65f4a9a6f980f4df7fd668f386c23ce823"
+        "sha256": "sha256:74f63e9c412905032663ba5be65052a2d91e65bc73e3c55aa3830a22ddfc5cfc"
       },
       {
         "id": "urn:podway:schema:blocker-limit-details:v1",
@@ -1220,7 +1227,7 @@
       {
         "id": "urn:podway:schema:next-result:v3",
         "path": "schemas/next-result-v3.schema.json",
-        "sha256": "sha256:442e13d2aa81c5aebaaf5a8e6c79a63752c6b9459fb6e3167d02fb98cb82a718"
+        "sha256": "sha256:349a01ea496b7354ef76548d43b326c87a8491076929b255f62ef0934c6366ba"
       },
       {
         "id": "urn:podway:schema:observation-result:v1",
@@ -1235,7 +1242,7 @@
       {
         "id": "urn:podway:schema:observation-result:v3",
         "path": "schemas/observation-result-v3.schema.json",
-        "sha256": "sha256:84a3bf9961463508453dd6b0289d58a60d28450e5a082346dc56b63e77b66c29"
+        "sha256": "sha256:0e756ad608251940f0ccd0ed60bb492038934a3f8182bcb26104eb11641d40dd"
       },
       {
         "id": "urn:podway:schema:output:v3",
@@ -1260,7 +1267,7 @@
       {
         "id": "urn:podway:schema:procedure-preview-result:v1",
         "path": "schemas/procedure-preview-result-v1.schema.json",
-        "sha256": "sha256:6c622a6521c91fda0445caa8696071cc5cab7651c0d540fce0da94a5f1340b6d"
+        "sha256": "sha256:9e37b5b5843fcac6f157954cf8c4b85b6cf4beb8071da3c22bbab345c8fb3dcd"
       },
       {
         "id": "urn:podway:schema:procedure-source-result:v1",
@@ -1270,7 +1277,7 @@
       {
         "id": "urn:podway:schema:procedure:v2",
         "path": "schemas/procedure-v2.schema.json",
-        "sha256": "sha256:6af658a95bb0f8a0e05096418e5932c8053201dd6079f2be21aa6cbc2527b361"
+        "sha256": "sha256:1d15bcf4816fd926d85c375c209cd891cd22c9354d5d8a42c283a7861e21ddea"
       },
       {
         "id": "urn:podway:schema:procedure-validation-result:v2",
@@ -1405,7 +1412,7 @@
       {
         "id": "urn:podway:schema:v2-result-components:v1",
         "path": "schemas/v2-result-components-v1.schema.json",
-        "sha256": "sha256:7f7062ad9c7c9776fa21c5c732c32b3cdf3c1a307a6f6f02fabcdbb593b59082"
+        "sha256": "sha256:2dbac7cc25fe93b5e71547083d41dccb105fb885748ee0b6cbdb776f7147a73a"
       },
       {
         "id": "urn:podway:schema:v2-result-components:v2",
@@ -1420,7 +1427,7 @@
       {
         "id": "urn:podway:schema:v2-runtime-error-details:v1",
         "path": "schemas/v2-runtime-error-details-v1.schema.json",
-        "sha256": "sha256:50dd437993614b8af419bf032c0be46bf440a31661a1d66fdaf9859f66acb02e"
+        "sha256": "sha256:ccaccd64d10c93252583fdda630450d27cb024d7fc6efca9184af5a5f2352828"
       },
       {
         "id": "urn:podway:schema:version-result:v1",
@@ -1452,7 +1459,7 @@
   "current_surface_counts": {
     "authoring_diagnostics": 58,
     "routes": 65,
-    "runtime_errors": 99,
+    "runtime_errors": 100,
     "schemas": 78
   },
   "migration_boundary": {

@@ -8,6 +8,7 @@
     { "$ref": "#/$defs/nodeDefinitionNotFound" },
     { "$ref": "#/$defs/graphNodeTypeMismatch" },
     { "$ref": "#/$defs/optionNotAllowed" },
+    { "$ref": "#/$defs/optionGuardUnsatisfied" },
     { "$ref": "#/$defs/routeNotAllowed" },
     { "$ref": "#/$defs/decisionReasonMissing" },
     { "$ref": "#/$defs/evidenceReferenceUnresolved" },
@@ -66,6 +67,22 @@
     },
     "optionNotAllowed": {
       "allOf": [{ "$ref": "#/$defs/base" }, { "required": ["graph_node_id", "option_id", "allowed_option_ids"], "properties": { "kind": { "const": "OPTION_NOT_ALLOWED" }, "graph_node_id": { "$ref": "#/$defs/identifier" }, "option_id": { "$ref": "#/$defs/identifier" }, "allowed_option_ids": { "$ref": "#/$defs/identifierSet8" } } }],
+      "unevaluatedProperties": false
+    },
+    "optionGuardUnsatisfied": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "required": ["graph_node_id", "option_id", "state", "predicates"],
+          "properties": {
+            "kind": { "const": "OPTION_GUARD_UNSATISFIED" },
+            "graph_node_id": { "$ref": "#/$defs/identifier" },
+            "option_id": { "$ref": "#/$defs/identifier" },
+            "state": { "enum": ["unmet", "unevaluable"] },
+            "predicates": { "type": "array", "minItems": 1, "maxItems": 4, "items": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/predicateStatus" } }
+          }
+        }
+      ],
       "unevaluatedProperties": false
     },
     "routeNotAllowed": {

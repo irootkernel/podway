@@ -135,7 +135,18 @@
         "node_definition_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" },
         "node_type": { "enum": ["action", "decision"] },
         "terminal": { "type": "boolean" },
-        "skippable": { "type": "boolean" }
+        "skippable": { "type": "boolean" },
+        "items": { "type": "array", "maxItems": 128, "items": { "$ref": "#/$defs/itemCondition" } }
+      }
+    },
+    "itemCondition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["item_id", "required"],
+      "properties": {
+        "item_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" },
+        "required": { "type": "boolean" },
+        "required_when": { "$ref": "urn:podway:schema:procedure:v2#/$defs/required_when" }
       }
     },
     "graphEdge": {
@@ -146,7 +157,8 @@
         "from_graph_node_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" },
         "to_graph_node_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" },
         "effect": { "enum": ["advance", "rework"] },
-        "option_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" }
+        "option_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" },
+        "guards": { "$ref": "urn:podway:schema:procedure:v2#/$defs/guards" }
       }
     },
     "startSuggestion": {

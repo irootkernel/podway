@@ -9,8 +9,8 @@
 - `sqlite-v7.sql`: retained inactive terminal-session migration and bounded archive slots.
 - `sqlite-v8.sql`: successor-linked superseded terminal-disposition migration.
 - `launchagent.plist.template`: reference macOS user LaunchAgent.
-- `error-codes.json`: stable public error and exit-code catalog.
-- `authoring-diagnostics.json`: stable authoring-time diagnostic catalog.
+- `error-codes.json`: stable public error and exit-code catalog, including reserved typed-guard failures.
+- `authoring-diagnostics.json`: stable authoring-time diagnostic catalog with ambiguity-based option replacements.
 - `command-catalog.yaml`: command classification, queue behavior, and preconditions.
 - `state-transition-matrix.csv`: compact transition reference.
 - `canonicalization-v1.json`: machine-readable canonical JSON and Procedure normalization rules.

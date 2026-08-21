@@ -3,7 +3,7 @@
 These JSON Schema Draft 2020-12 files define Podway's versioned structural contracts.
 
 - `workspace-v1.schema.json`: `.podway/config.yaml` after YAML parsing.
-- `procedure-v2.schema.json`: closed and bounded Procedure v2 YAML/JSON authoring shape.
+- `procedure-v2.schema.json`: closed and bounded Procedure v2 YAML/JSON authoring shape, including optional typed conditions and option guards.
 - `registry-v1.schema.json`: minimal daemon path registry.
 - `ipc-request-v1.schema.json`: framed daemon request payload.
 - `output-v3.schema.json`: unified success envelope with closed command-to-result selection.
@@ -57,18 +57,18 @@ These JSON Schema Draft 2020-12 files define Podway's versioned structural contr
 - `procedure-source-result-v1.schema.json`: format and scaffold source output.
 - `procedure-diagnostics-result-v1.schema.json`: shared bounded diagnostics for every Procedure v2 authoring command.
 - `procedure-graph-result-v1.schema.json`: deterministic graph projection output.
-- `procedure-preview-result-v1.schema.json`: closed read-only preview report with checks, diagnostics, graph, Mermaid, digest, and an admissible start suggestion.
+- `procedure-preview-result-v1.schema.json`: closed read-only preview report with checks, diagnostics, graph, authored item conditions and option guards, Mermaid, digest, and an admissible start suggestion.
 - `decision-result-v1.schema.json`: immutable routed decision outcome.
 - `rework-result-v1.schema.json`: manual rework outcome.
 - `goal-definition-result-v1.schema.json`: initial session goal record.
 - `goal-revision-result-v1.schema.json`: revised session goal and rework outcome.
 - `criterion-assessment-result-v1.schema.json`: one criterion assessment outcome.
-- `v2-result-components-v1.schema.json`: shared closed and bounded Procedure v2 result components, including complete and projected external check results.
+- `v2-result-components-v1.schema.json`: shared closed and bounded Procedure v2 result components, including complete and projected external check results and three-valued predicate statuses.
 - `v2-result-components-v2.schema.json`: shared prepared lifecycle, disposition, reset, and guidance components.
 - `v2-result-components-v3.schema.json`: shared bounded evidence metadata, page-token, observation status, item constraint, and mutation template components.
 - `observation-result-v2.schema.json`: prepared-aware coherent status, guidance, item, and mutation-template observation.
-- `next-result-v3.schema.json`: bounded progression guidance with evidence metadata, previews, and continuation tokens.
-- `observation-result-v3.schema.json`: prepared-aware observation composing a compact status projection, guidance, and byte-budgeted item and template windows.
+- `next-result-v3.schema.json`: bounded progression guidance with evidence metadata, previews, continuation tokens, authoritative allowed option IDs, and guarded-option status.
+- `observation-result-v3.schema.json`: prepared-aware observation composing a compact status projection, guidance, and byte-budgeted item, condition, and template windows.
 - `evidence-read-result-v1.schema.json`: one bounded snapshot-fenced page of a selected evidence item.
 - `session-reset-not-eligible-details-v1.schema.json`: closed smart-reset eligibility failure details.
 - `session-start-decision-required-details-v1.schema.json`: closed state-aware start decision conflict details.

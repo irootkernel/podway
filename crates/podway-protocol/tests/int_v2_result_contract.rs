@@ -730,8 +730,16 @@ fn v2ctr004_v2_runtime_error_catalog_is_schema_and_decoder_bound() {
     })
     .collect::<BTreeSet<_>>();
 
-    assert_eq!(catalog_codes, decoder_codes);
-    assert_eq!(schema_codes, decoder_codes);
+    assert_eq!(catalog_codes, schema_codes);
+    assert!(decoder_codes.is_subset(&catalog_codes));
+    assert_eq!(
+        catalog_codes
+            .difference(&decoder_codes)
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["OPTION_GUARD_UNSATISFIED"]),
+        "V2GRD-002 reserves the closed error before V2GRD-005 admits it"
+    );
     assert_eq!(decoder_codes.len(), 30);
 }
 
@@ -4088,4 +4096,232 @@ fn v2ast002_reserves_observation_constraints_and_stdin_template_only_for_record_
         }]
     });
     assert_valid("schemas/item-record-many-result-v1.schema.json", &result);
+}
+
+fn typed_guard_predicate_status() -> Value {
+    json!({
+        "source": {"kind": "evidence", "graph_node_id": "review", "item_id": "verdict"},
+        "operator": "equals",
+        "expected": "approved",
+        "actual": "approved",
+        "state": "met"
+    })
+}
+
+#[test]
+fn v2grd002_reserves_closed_typed_condition_authoring_and_preview_shapes() {
+    let procedure = json!({
+        "schema": "podway.procedure/v2",
+        "id": "guarded-workflow",
+        "version": "1",
+        "name": "Guarded workflow",
+        "purpose": "Reserve bounded typed conditions.",
+        "node_definitions": {
+            "work": {
+                "type": "action",
+                "title": "Work",
+                "intent": "Record conditional evidence.",
+                "items": [
+                    {"id": "mode", "type": "choice", "prompt": "Select a mode.", "required": true, "choices": ["strict", "relaxed"]},
+                    {"id": "notes", "type": "text", "prompt": "Record notes.", "required": false, "required_when": [{"item": "mode", "equals": "strict"}]}
+                ]
+            },
+            "decide": {
+                "type": "decision",
+                "title": "Decide",
+                "objective": "Select an available outcome.",
+                "prompt": "What is the outcome?",
+                "options": [
+                    {"id": "approved", "label": "Approved", "criteria": "The recorded verdict is approved.", "guards": [{"evidence": {"node": "work", "item": "mode"}, "equals": "strict"}]},
+                    {"id": "rework", "label": "Rework", "criteria": "More work is required."}
+                ],
+                "reason": {"required": true}
+            }
+        },
+        "graph": {
+            "entry": "work",
+            "nodes": [
+                {"id": "work", "use": "work", "next": "decide"},
+                {"id": "decide", "use": "decide", "evidence_from": [{"node": "work", "required": true, "items": ["mode"]}], "routes": {"approved": {"to": "work", "effect": "rework"}, "rework": {"to": "work", "effect": "rework"}}}
+            ]
+        }
+    });
+    assert_valid("schemas/procedure-v2.schema.json", &procedure);
+
+    let mut two_operators = procedure.clone();
+    two_operators["node_definitions"]["work"]["items"][1]["required_when"][0]["not_equals"] =
+        json!("relaxed");
+    assert_invalid("schemas/procedure-v2.schema.json", &two_operators);
+    let mut nested_expression = procedure.clone();
+    nested_expression["node_definitions"]["decide"]["options"][0]["guards"][0]["or"] = json!([]);
+    assert_invalid("schemas/procedure-v2.schema.json", &nested_expression);
+
+    let preview = json!({
+        "schema": "podway.procedure-preview-result/v1",
+        "file": "workflow.yaml",
+        "admissible": true,
+        "procedure_schema": "podway.procedure/v2",
+        "procedure_id": "guarded-workflow",
+        "procedure_version": "1",
+        "purpose": "Reserve bounded typed conditions.",
+        "procedure_digest": DIGEST,
+        "goal_tracking": false,
+        "goal_assessment_graph_node_ids": [],
+        "summary": {"definition_count": 2, "graph_node_count": 2, "action_node_count": 1, "decision_node_count": 1, "route_count": 2, "cycle_count": 1, "evidence_reference_count": 1, "skippable_node_count": 0, "manual_rework_target_count": 0},
+        "checks": {"validate": true, "vet": true, "lint": true},
+        "graph": {
+            "entry_graph_node_id": "work",
+            "terminal_graph_node_ids": ["work"],
+            "nodes": [
+                {"graph_node_id": "work", "node_definition_id": "work", "node_type": "action", "terminal": false, "skippable": false, "items": [{"item_id": "mode", "required": true}, {"item_id": "notes", "required": false, "required_when": [{"item": "mode", "equals": "strict"}]}]},
+                {"graph_node_id": "decide", "node_definition_id": "decide", "node_type": "decision", "terminal": false, "skippable": false}
+            ],
+            "edges": [{"from_graph_node_id": "decide", "to_graph_node_id": "work", "effect": "rework", "option_id": "approved", "guards": [{"evidence": {"node": "work", "item": "mode"}, "equals": "strict"}]}]
+        },
+        "mermaid": "flowchart TD",
+        "start_suggestion": {"command": "session.start", "argv": ["podway", "start", "--procedure", "workflow.yaml"]},
+        "diagnostics": [],
+        "diagnostics_truncated": false,
+        "diagnostics_total": 0
+    });
+    assert_valid("schemas/procedure-preview-result-v1.schema.json", &preview);
+}
+
+#[test]
+fn v2grd002_reserves_bounded_condition_result_and_error_shapes() {
+    let predicate = typed_guard_predicate_status();
+    assert_ref_valid(
+        "urn:podway:schema:v2-result-components:v1#/$defs/predicateStatus",
+        &predicate,
+    );
+    let mut text_echo = predicate.clone();
+    text_echo["recorded_text"] = json!("secret");
+    assert_ref_invalid(
+        "urn:podway:schema:v2-result-components:v1#/$defs/predicateStatus",
+        &text_echo,
+    );
+
+    let mut next = examples()["podway.next-result/v3"].clone();
+    next["node"]["node_type"] = json!("decision");
+    next.as_object_mut().unwrap().remove("intent");
+    next.as_object_mut().unwrap().remove("instructions");
+    next.as_object_mut().unwrap().remove("terminal");
+    next["objective"] = json!("Choose an available outcome.");
+    next["prompt"] = json!("What is the outcome?");
+    next["reason_policy"] = json!({"required": true});
+    next["options"] = json!([
+        {"option_id": "approved", "label": "Approved", "criteria": "The verdict is approved.", "guards": [{"evidence": {"node": "review", "item": "verdict"}, "equals": "approved"}]},
+        {"option_id": "rework", "label": "Rework", "criteria": "More work is required."}
+    ]);
+    next["allowed_option_ids"] = json!(["approved", "rework"]);
+    next["option_guard_statuses"] = json!([
+        {"option_id": "approved", "state": "met", "predicates": [predicate.clone()]},
+        {"option_id": "rework", "state": "met", "predicates": []}
+    ]);
+    assert_valid("schemas/next-result-v3.schema.json", &next);
+
+    let active_item = json!({
+        "item_id": "notes", "type": "text", "prompt": "Record notes.",
+        "required": false, "required_now": true, "satisfied": false, "revision": 0,
+        "condition_status": {"state": "met", "predicates": [{
+            "source": {"kind": "item", "item_id": "mode"},
+            "operator": "equals", "expected": "strict", "actual": "strict", "state": "met"
+        }]},
+        "constraints": {"min_length": 0, "max_length": 4000, "multiline": true, "choices_total": 0, "choices_truncated": false},
+        "value": null, "value_truncated": false
+    });
+    assert_ref_valid(
+        "urn:podway:schema:observation-result:v3#/$defs/activeItem",
+        &active_item,
+    );
+
+    let details = json!({
+        "schema": "podway.v2-runtime-error-details/v1",
+        "kind": "OPTION_GUARD_UNSATISFIED",
+        "admission": admission(),
+        "graph_node_id": "decide",
+        "option_id": "approved",
+        "state": "unmet",
+        "predicates": [{
+            "source": {"kind": "evidence", "graph_node_id": "review", "item_id": "verdict"},
+            "operator": "equals", "expected": "approved", "actual": "changes-requested", "state": "unmet"
+        }]
+    });
+    assert_valid("schemas/v2-runtime-error-details-v1.schema.json", &details);
+    let mut retryable_shape = details;
+    retryable_shape["recovery"] = json!({});
+    assert_invalid(
+        "schemas/v2-runtime-error-details-v1.schema.json",
+        &retryable_shape,
+    );
+}
+
+#[test]
+fn v2grd002_reserves_guard_response_budgets() {
+    let maximal = json!({
+        "source": {"kind": "evidence", "graph_node_id": maximum_identifier(0), "item_id": maximum_identifier(1)},
+        "operator": "equals",
+        "expected": escape_heavy(120),
+        "actual": escape_heavy(120),
+        "state": "met"
+    });
+    assert_ref_valid(
+        "urn:podway:schema:v2-result-components:v1#/$defs/predicateStatus",
+        &maximal,
+    );
+    let statuses = (0..8)
+        .map(|index| json!({"option_id": maximum_identifier(index), "state": "met", "predicates": [maximal.clone(), maximal.clone(), maximal.clone(), maximal.clone()]}))
+        .collect::<Vec<_>>();
+    let guard_bytes = serde_json::to_vec(&statuses).unwrap().len();
+    assert!(
+        guard_bytes <= 96 * 1_024,
+        "guard statuses used {guard_bytes} bytes"
+    );
+
+    let condition = json!({"state": "met", "predicates": [maximal.clone(), maximal.clone(), maximal.clone(), maximal]});
+    let condition_bytes = serde_json::to_vec(&condition).unwrap().len();
+    assert!(
+        condition_bytes < 128 * 1_024,
+        "condition status used {condition_bytes} bytes"
+    );
+}
+
+#[test]
+fn v2grd002_freezes_catalog_replacements_before_runtime_admission() {
+    let authoring: Value = serde_json::from_slice(
+        &fs::read(root().join("assets/specifications/authoring-diagnostics.json")).unwrap(),
+    )
+    .unwrap();
+    let codes = authoring["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["code"].as_str().unwrap())
+        .collect::<BTreeSet<_>>();
+    assert!(codes.contains("OPTION_LABELS_NOT_DISTINCT"));
+    assert!(codes.contains("OPTION_CRITERIA_WEAK"));
+    assert!(!codes.contains("LARGE_OPTION_SET"));
+    assert!(!codes.contains("LARGE_CYCLE"));
+    assert_eq!(codes.len(), 58, "the replacement is exact, not count-only");
+
+    let errors: Value = serde_json::from_slice(
+        &fs::read(root().join("assets/specifications/error-codes.json")).unwrap(),
+    )
+    .unwrap();
+    let guard = errors["errors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["code"] == "OPTION_GUARD_UNSATISFIED")
+        .expect("reserved guard error");
+    assert_eq!(
+        guard["details_schema"],
+        "podway.v2-runtime-error-details/v1"
+    );
+    assert_eq!(guard["exit_code"], 1);
+    assert_eq!(guard["retryable"], false);
+    assert!(
+        !V2_RUNTIME_ERROR_CODES_V1.contains(&"OPTION_GUARD_UNSATISFIED"),
+        "V2GRD-005 owns runtime admission"
+    );
 }
