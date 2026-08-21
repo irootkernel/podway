@@ -1,6 +1,6 @@
 ---
 name: use-podway
-description: Use only when the user explicitly asks to use Podway for the current workflow or to inspect, advance, initialize, start, replace, cancel, discard, reset, author, diagnose, or recover Podway state. Operate Procedure v2 safely by reading authoritative state, recording supported results, following graph transitions, and reconciling uncertain mutations. Do not use merely because Podway is installed or configured, a repository contains Podway files, another skill mentions optional Podway integration, or a session already exists.
+description: Use only when the user explicitly asks to use Podway for the current workflow or to inspect, advance, initialize, start, replace, archive, purge, cancel, discard, reset, author, diagnose, or recover Podway state. Operate Procedure v2 safely by reading authoritative state, recording supported results, following graph transitions, and reconciling uncertain mutations. Do not use merely because Podway is installed or configured, a repository contains Podway files, another skill mentions optional Podway integration, or a session already exists.
 ---
 
 # Use Podway
@@ -35,12 +35,12 @@ Enter a worktree only after explicit activation for the current workflow.
    ```
 
 4. Require `result.schema` to identify `podway.observation-result/v3`.
-5. Treat the returned observation as authoritative. Do not rely on chat memory. Read identity and queue facts from `status`, current guidance from `guidance`, item declarations and bounded values from `active_items`, and fenced mutation recipes from `mutation_templates`. Add any CLI-required semantic subcommand or value described by command help; the template deliberately does not invent them. Prepared guidance has no cursor and offers begin, eligible reset, and eligible replacement. A null `guidance` means the session is completed or cancelled: an undisposed terminal revision offers only terminal disposition, while a disposed terminal revision offers eligible reset and replacement. Use `status --verbose` only when history is needed and `next` only for compatibility with callers that need its narrower result.
+5. Treat the returned observation as authoritative. Do not rely on chat memory. Read identity and queue facts from `status`, current guidance from `guidance`, item declarations and bounded values from `active_items`, and fenced mutation recipes from `mutation_templates`. Add any CLI-required semantic subcommand or value described by command help; the template deliberately does not invent them. Prepared guidance has no cursor and offers begin, eligible reset, and start with explicit deletion policy. A null `guidance` means the session is completed or cancelled: an undisposed terminal revision offers only terminal disposition, while a disposed terminal revision is eligible for archive, reset, or automatic archival by the next start. Use `status --verbose` only when history is needed and `next` only for compatibility with callers that need its narrower result.
 6. If no active session exists, continue the user's work without creating one unless the user explicitly asks to start or manage a Podway session.
 
 `--json` is a global flag on every command. For a non-default invocation, the global endpoint options are `--worktree <path>`, `--socket <absolute-path>`, and `--timeout <duration>`.
 
-For initialization, session creation or replacement, daemon control, reset, cancel, or workspace repair, read [references/lifecycle.md](references/lifecycle.md) before acting.
+For initialization, session creation or replacement, archive or purge, daemon control, reset, cancel, or workspace repair, read [references/lifecycle.md](references/lifecycle.md) before acting.
 
 When the user explicitly asks to start a session, prefer `small-change-v2` for a bounded change that needs inspection, implementation, verification, review, and closeout but no tracked goal. Use the fuller goal-tracked presets when their assessment and evidence requirements match the task.
 
@@ -59,7 +59,7 @@ When the user explicitly asks to start a session, prefer `small-change-v2` for a
    - Skip is a distinct disposition, not a quiet completion. It is legal only where the active placement's declared skip policy allows it; required items and open blockers do not gate it; it atomically clears the attempt's recorded item values; and a terminal skip applies the same goal and fresh-assessment readiness gates as terminal completion.
 7. Stop and report a real external dependency with `podway block` only when the active task cannot progress; do not use a blocker to represent ordinary incomplete work.
 
-Active-session item updates and justified progression do not require a separate confirmation. Session creation, replacement, cancellation, reset, workspace-wide reset, daemon lifecycle changes, repair, and reactivating a completed session through `rework` or `goal revise --reactivate` require an explicit user request.
+Active-session item updates and justified progression do not require a separate confirmation. Session creation, start-time preservation or deletion, archival, purge, cancellation, reset, workspace-wide reset, daemon lifecycle changes, repair, and reactivating a completed session through `rework` or `goal revise --reactivate` require an explicit user request. Starting a new session authorizes the built-in archival of a disposed terminal session, but does not authorize deleting current work or purging inactive history.
 
 ## Follow the Procedure v2 graph
 

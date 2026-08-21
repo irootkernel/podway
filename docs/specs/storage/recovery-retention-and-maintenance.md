@@ -112,13 +112,21 @@ On startup, an existing marker causes the daemon to finish the reset before serv
 
 ### Sessions and attempts
 
-- the current completed or cancelled session remains until reset;
-- all v1 attempts and item slots for that session remain until reset;
-- the complete Procedure v2 current-task state remains until reset, including its immutable
+- the current completed or cancelled session remains until reset or archive;
+- all attempts and item slots for that session remain until reset, archive, or explicit start-time deletion;
+- the complete Procedure v2 current-task state remains together, including its immutable
   snapshot, graph placements, trace, workflow memory, and goal history;
-- a normal session reset removes that complete v1 or v2 current-task state together while
+- a normal session reset removes that complete current-task state together while
   preserving the initialized workspace identity, schema history, and workspace-scoped receipts;
-- no session archive is created;
+- archive retains that complete state as one immutable inactive session and frees
+  the single current-session slot;
+- preserving running work during start atomically cancels and archives it with a
+  superseded disposition that records the reason, optional actor, and successor
+  session identity;
+- at most 32 inactive sessions are retained per worktree; reaching the limit
+  blocks archival and terminal eligible replacement without eviction;
+- confirmed purge deletes exactly one inactive session; inactive sessions cannot
+  be restored or mutated;
 - reset removes session-scoped idempotency records.
 
 ### Jobs
@@ -133,7 +141,7 @@ Default pruning:
 
 ### Idempotency records
 
-- ordinary session mutation jobs and receipts remain until a destructive reset or replace barrier commits;
+- ordinary session mutation jobs and receipts remain until a destructive reset or start-resolution barrier commits;
 - the barrier deletes old-session operational payloads after all earlier jobs are terminal;
 - reset and replace receipts are workspace-scoped and survive deletion of the old session;
 - workspace bootstrap and maintenance records retain the newest 100 or 30 days, whichever is smaller after the minimum set;
@@ -177,6 +185,8 @@ Checks include:
 - queue sequence and running-job recovery state;
 - global registry agreement;
 - Git-to-Store workspace binding revalidation in deep mode.
+- active-Store and disposable-snapshot agreement in deep mode, reported as
+  `store_snapshot_diverged` when the two coherent reads do not match.
 
 Doctor is read-only. It may recommend `init --repair`, `workspace repair`, daemon restart, or destructive reset, but does not perform them automatically.
 

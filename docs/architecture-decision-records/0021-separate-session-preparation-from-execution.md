@@ -4,6 +4,8 @@
 - Date: 2026-08-17
 - Extends: [ADR-0001](0001-current-task-session-focus.md)
 - Extends: [ADR-0017](0017-single-cursor-convergence.md)
+- Extended and superseded in part by: [ADR-0026](0026-retain-inactive-terminal-sessions.md)
+- Extended by: [ADR-0027](0027-state-aware-session-start.md)
 
 ## Context
 

@@ -1,12 +1,27 @@
 # SQLite Model
 
-The implemented canonical DDL history is `sqlite-v1.sql` through `sqlite-v6.sql`
+The implemented canonical DDL history is `sqlite-v1.sql` through `sqlite-v8.sql`
 under `assets/specifications/`. New databases currently apply that ordered
-history in one transaction and finish at schema version 6. The v5 contract is
+history in one transaction and finish at schema version 8. The v5 contract is
 normative under ADR-0021; `V2LIF-002` reserved its exact canonical DDL and
 `V2LIF-003` admitted it in runtime. ADR-0025 owns schema v6 for external check
 results; `V2AST-002` reserved its canonical DDL and named migration, and
 `V2AST-004` admitted it in runtime.
+
+Schema v7 is the retained inactive-session model under ADR-0026. It replaces the
+singleton session ownership column with an explicit `activity` discriminator,
+an optional bounded archive slot, archive time, and archived workspace revision.
+`v2_workspace_state` points to the sole current session; when no current session
+exists its row is absent while inactive session rows and their dependent state
+remain. A partial unique index permits at most one current session, and archive
+slots constrain inactive retention to 32. Migration preserves the predecessor
+session as current and infers no archive.
+
+Schema v8 extends terminal dispositions for ADR-0027. It adds the closed
+`superseded` kind and a successor session ID. The migration preserves v7
+`handed_off` and `not_required` rows byte-for-byte in their existing fields and
+sets the new successor field to null. A superseded row requires reason and a
+distinct successor ID; other kinds forbid that field.
 
 Schema v6 rebuilds `v2_item_slots` so its closed item discriminator additionally
 admits `check_result`. The v5-to-v6 migration preserves every existing
@@ -69,7 +84,7 @@ transaction, applies the canonical v5 DDL with legacy rename behavior, runs
 `foreign_key_check` before commit, and restores enforcement after commit or
 rollback. The DDL does not toggle `foreign_keys` because SQLite ignores that
 pragma inside an open transaction.
-Opening a schema newer than v5 remains an unsupported downgrade and performs no
+Opening a schema newer than v8 remains an unsupported downgrade and performs no
 mutation.
 
 The daemon is the sole normal writer. Foreign keys, strict tables, application ID,

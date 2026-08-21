@@ -162,20 +162,25 @@ not replace, the session revision or active-attempt fence.
 | `AUT-START-003` | An admitted start MUST NOT depend on later source-file reads; deletion, replacement, truncation, symlink change, or daemon restart MUST NOT alter the admitted Procedure. |
 | `AUT-START-004` | The canonical Procedure digest and relevant start preconditions MUST participate in idempotency identity and MUST be returned by start and later session observations. |
 
-### Prepared session lifecycle (AUT-LIF-001–010)
+### Prepared and retained session lifecycle (AUT-LIF-001–013)
 
 | ID | Normative requirement |
 |---|---|
-| `AUT-LIF-001` | `start` and both replacement modes MUST create a `prepared` session at revision 0 with no attempt, cursor, goal revision, item value, or blocker. |
+| `AUT-LIF-001` | Every successful new-session `start` outcome MUST create a `prepared` session at revision 0 with no attempt, cursor, goal revision, item value, or blocker. |
 | `AUT-LIF-002` | `begin` MUST atomically create the entry-node attempt, optionally create and bind initial goal revision 1, change lifecycle to `running`, and advance session revision exactly once. |
 | `AUT-LIF-003` | Prepared sessions MUST reject item, goal, blocker, cursor, completion, cancellation, retry, skip, decision, and rework mutations with `SESSION_NOT_RUNNING` and no state change. |
-| `AUT-LIF-004` | Terminal disposition MUST accept exactly one closed `handed_off` summary/reference or `not_required` reason shape, bind it to the current completed or cancelled session revision, and treat every assertion as caller-supplied. |
+| `AUT-LIF-004` | Public terminal disposition MUST accept exactly one closed `handed_off` summary/reference or `not_required` reason shape, bind it to the current completed or cancelled session revision, and treat every assertion as caller-supplied. State-aware running preservation additionally records the closed internal `superseded` reason, optional actor, and successor session identity. |
 | `AUT-LIF-005` | Reactivating a completed session MUST make every earlier terminal disposition non-current; a later terminal revision MUST require a new disposition for default deletion. |
-| `AUT-LIF-006` | Default reset and `--replace-eligible` MUST delete only prepared sessions or terminal sessions with a disposition for the current revision and MUST evaluate eligibility atomically with deletion. |
-| `AUT-LIF-007` | Force reset and force replacement of a running or undisposed terminal session MUST require destructive confirmation and a non-blank progress summary bounded to 4,000 Unicode scalars. |
+| `AUT-LIF-006` | Default reset MUST delete only prepared sessions or terminal sessions with a disposition for the current revision. Start MUST archive disposed terminal sessions automatically; prepared deletion MUST be an explicit interactive choice or `--on-existing delete`. |
+| `AUT-LIF-007` | Force reset and start-time deletion of a running session MUST require destructive confirmation and a non-blank progress summary bounded to 4,000 Unicode scalars. |
 | `AUT-LIF-008` | Reset eligibility MUST NOT depend on Git cleanliness, roadmap status, process state, external reference reachability, or any network request. |
 | `AUT-LIF-009` | Prepared `status`, compact status, next, and observation MUST expose the lifecycle without inventing cursor, attempt, goal, item, blocker, or history values; observation MUST provide only fenced begin, eligible-reset, and eligible-replacement templates. |
-| `AUT-LIF-010` | Exact idempotent replay and uncertain-outcome reconciliation MUST cover begin, disposition, eligible and force reset, and eligible and force replacement without weakening identity or revision fences. |
+| `AUT-LIF-010` | Exact idempotent replay and uncertain-outcome reconciliation MUST cover begin, disposition, eligible and force reset, and every state-aware start resolution without weakening identity or revision fences. |
+| `AUT-LIF-011` | Archival MUST retain the complete disposed terminal session as immutable inactive state, MUST keep at most 32 inactive sessions per worktree, and MUST fail without eviction when full. |
+| `AUT-LIF-012` | Start MUST atomically archive a disposed terminal current session before creating the new prepared session. Preserving running work MUST atomically cancel it, record a successor-linked `superseded` disposition, archive it, and create the successor; terminal disposition choices MUST likewise disposition, archive, and start atomically. |
+| `AUT-LIF-013` | Inactive sessions MUST support bounded list and full read-only show by session ID including terminal disposition, MUST NOT restore or reactivate, and purge MUST require exact session revision plus destructive confirmation. |
+| `AUT-LIF-014` | Human TTY start MUST offer continue or delete for prepared state; continue, preserve, or delete for running state; and continue, handed-off, or not-required for undisposed terminal state. Enter or EOF MUST continue without creating a session. JSON, quiet, detached, non-TTY, and policy execution MUST never prompt and MUST return `SESSION_START_DECISION_REQUIRED` when no sufficient policy exists. |
+| `AUT-LIF-015` | Automation MUST use `--on-existing preserve|delete`. Preserve applies only to running state and requires a bounded reason; deleting running state additionally requires a bounded progress summary and confirmation. Plain local start dry-run MUST remain Procedure-only, while a policy dry-run MUST report the observed existing-session lifecycle and proposed action without mutation. |
 
 ## 16. Durable mutation admission (AUT-ADMIT-001–002)
 
@@ -260,7 +265,7 @@ The active-item allocation holds the widest definition vetting admits, so in pra
 
 | ID | Normative requirement |
 |---|---|
-| `AUT-JSON-001` | Version, daemon status, Procedure validation, start, begin, terminal disposition, reset, status, running and prepared next, observation, item mutation, graph-node transition, detached admission, job status/wait, and job lookup MUST each have a closed result schema. |
+| `AUT-JSON-001` | Version, daemon status, Procedure validation, start, begin, terminal disposition, reset, archive/list/show/purge, status, running and prepared next, observation, item mutation, graph-node transition, detached admission, job status/wait, and job lookup MUST each have a closed result schema. |
 | `AUT-JSON-002` | Daemon, socket, identity, revision, attempt, digest, idempotency, and timeout failures MUST each have closed error-detail schemas. |
 | `AUT-JSON-003` | Results and error details MUST carry an unambiguous schema identifier or discriminator. |
 | `AUT-JSON-004` | A closed v1 object MUST reject unknown fields; adding fields requires a new schema identifier or discriminator version rather than an undocumented additive-field exception. |

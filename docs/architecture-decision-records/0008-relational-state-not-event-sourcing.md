@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-07-13
+- Extended by: [ADR-0026](0026-retain-inactive-terminal-sessions.md)
 
 ## Context
 

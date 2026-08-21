@@ -10,10 +10,11 @@ human-readable text or one JSON document. It never writes SQLite directly.
   `reset --all`.
 - Procedures: `preset list|show|explain` and `procedure
   validate|show|format|vet|graph|preview|lint|check|scaffold`.
-- Session reads: `status`, `next`, `observe`, `evidence read`, and
+- Session reads: `status`, `next`, `observe`, `evidence read`, `archive list|show`, and
   `job list|status|wait|lookup|cancel`.
 - Session mutations: `start`, `begin`, `complete`, `skip`, `retry`, `block`,
-  `unblock`, `cancel`, `disposition handed-off|not-required`, `reset`, `decide`,
+  `unblock`, `cancel`, `disposition handed-off|not-required`, `reset`, `archive`,
+  `archive purge`, `decide`,
   `rework`, `goal define|revise|assess-criterion`,
   `check|uncheck|set|add|remove|attach|clear`, and `record --stdin`.
 
@@ -32,7 +33,7 @@ schemas report `PROCEDURE_SCHEMA_UNSUPPORTED` or `PROCEDURE_INVALID` as appropri
 Built-in catalog commands expose only `bug-fix-v2`, `small-change-v2`, and
 `sw-dev-v2`. `start` accepts one preset or one safe worktree-local Procedure
 path, an optional expected Procedure digest for file sources, a nonempty task
-title, and the documented replacement and dry-run controls. Start creates a
+title, and the documented existing-session policy and dry-run controls. Start creates a
 prepared session and never accepts or creates initial goal state.
 
 `begin` accepts optional initial goal inputs and actor attribution, fences the
@@ -68,9 +69,37 @@ validate external handoff semantics.
 cancelled session with a disposition for its current revision. `reset --dry-run`
 reports the same current eligibility without mutation. Force reset uses `--yes`
 and requires `--progress-summary` for a running or undisposed terminal session.
-`start --replace-eligible` applies the default eligibility predicate atomically;
-`start --replace --yes` is the force replacement form and applies the same
-progress-summary rule. Every deletion or replacement remains fully fenced.
+`start` first observes the current lifecycle. Human TTY mode offers continue or
+delete for prepared state; continue, preserve as superseded, or delete for
+running state; and continue, handed-off, or not-required for an undisposed
+terminal state. Enter or EOF continues without creating a session. JSON, quiet,
+detached, non-TTY, and policy invocations never prompt. Automation uses
+`--on-existing preserve|delete`; preserve requires `--supersede-reason` and may
+include `--actor`, while deleting a running session requires
+`--progress-summary` and `--yes`. Missing policy returns
+`SESSION_START_DECISION_REQUIRED` with no mutation.
+An interactive continue result performs a fresh idle-barrier `session.next` read
+and renders current guidance after stating that no session was created.
+
+Plain `start` archives a completed or cancelled current session whose disposition
+is current, then creates the new prepared session. That automatic path rejects
+`--on-existing`, supersede, actor, and progress-summary fields instead of silently
+discarding them. Preserving a running session
+atomically cancels it, records `superseded` with the new session ID, archives it,
+and creates the prepared successor. Recording a disposition during terminal
+start resolution, archiving, and successor creation are also atomic. `archive` explicitly
+retains an eligible terminal session as inactive. `archive list` returns at most
+32 summaries; `archive show --session-id <uuid>` returns one immutable status
+projection plus its terminal disposition and accepts the normal verbose history controls. `archive purge`
+requires the inactive session ID, `--if-session-revision`, and `--yes` and deletes
+only that retained session. Purge is a fenced, serialized control-plane deletion,
+not a durable job. If its response is lost, re-read `archive list`; absence proves
+the requested deletion outcome but does not identify which caller completed it.
+No archive command restores or mutates inactive state.
+
+Plain `start --dry-run` without an existing-session policy remains a local
+Procedure preview. A policy dry run consults the daemon and returns the observed
+session identity, revision, lifecycle, and proposed action without mutation.
 
 `record --stdin` is the only multi-item mutation grammar. It reads at most 1 MiB
 of closed `podway.item-record-many-input/v1` JSON. The document supplies the

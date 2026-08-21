@@ -353,7 +353,7 @@ Dependencies: completed `V2WAL` epic.
 | id | title | status | goal | references |
 |---|---|---|---|---|
 | `V2ARC-001` | Retain disposed terminal sessions | Completed | Add bounded immutable inactive-session retention, atomic terminal replacement, explicit archive reads and purge, SQLite v7 migration, public contracts, operator guidance, and development-gate coverage. | [ADR-0026](../architecture-decision-records/0026-retain-inactive-terminal-sessions.md), [lifecycle specification](../specs/domain/rework-and-lifecycle.md) |
-| `V2ARC-002` | Make session start state-aware | In Progress | Replace public replacement flags with lifecycle-specific human choices and explicit automation policies; preserve superseded work atomically and expose its successor link. | [ADR-0027](../architecture-decision-records/0027-state-aware-session-start.md), [CLI specification](../specs/interfaces/cli-specification.md) |
+| `V2ARC-002` | Make session start state-aware | Completed | Replace public replacement flags with lifecycle-specific human choices and explicit automation policies; preserve superseded work atomically and expose its successor link. | [ADR-0027](../architecture-decision-records/0027-state-aware-session-start.md), [CLI specification](../specs/interfaces/cli-specification.md) |
 
 ## V2GRD — Typed Guards and Authoring Diagnostics
 

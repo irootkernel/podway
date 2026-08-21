@@ -97,9 +97,14 @@ unexpected process transition. Automation must not branch on those messages.
 | `SESSION_NOT_FOUND` | 1 | no | Workspace has no current session |
 | `SESSION_ID_MISMATCH` | 4 | no | Authoritative session ID differs from the expected ID, including when no current session exists |
 | `SESSION_ALREADY_EXISTS` | 1 | no | Start requested while a session exists |
+| `SESSION_START_DECISION_REQUIRED` | 5 | no | Noninteractive start needs an explicit lifecycle-specific decision |
+| `SESSION_START_STATE_CONFLICT` | 4 | yes | Existing-session state changed after a start policy was selected |
 | `SESSION_NOT_RUNNING` | 1 | no | Command requires a running session, or `begin` requires a prepared session |
 | `SESSION_NOT_TERMINAL` | 1 | no | Terminal disposition requires a completed or cancelled session |
 | `SESSION_RESET_NOT_ELIGIBLE` | 1 | no | Eligible reset or replacement requires prepared state or a current terminal disposition |
+| `SESSION_ARCHIVE_NOT_ELIGIBLE` | 1 | no | Current session is not terminal with a current disposition |
+| `SESSION_ARCHIVE_LIMIT_REACHED` | 1 | no | Inactive-session archive already contains 32 sessions |
+| `SESSION_ARCHIVE_NOT_FOUND` | 1 | no | Requested inactive session does not exist |
 | `SESSION_CANCELLED` | 1 | no | Cancelled session cannot perform the operation |
 | `SESSION_REVISION_CONFLICT` | 4 | yes | Observed session revision is stale |
 | `ATTEMPT_NOT_CURRENT` | 4 | yes | Observed attempt is no longer active |
@@ -217,12 +222,33 @@ code name as a lifecycle observation. `SESSION_NOT_TERMINAL` applies when a disp
 attempted before completion or cancellation.
 
 `SESSION_RESET_NOT_ELIGIBLE` is a non-retryable domain result for default reset
-and `--replace-eligible`. Its closed details identify the observed lifecycle,
+and the compatible eligible-replacement wire shape. Its closed details identify the observed lifecycle,
 always report `current_terminal_disposition: false`, and identify the required
 next mode as `record_disposition` or `force`. They contain no Git, roadmap, process, external
 reference, item value, or progress-summary data. A caller must reassess ownership
 before choosing a new mutation; the error never recommends force deletion.
 The details use `podway.session-reset-not-eligible-details/v1`.
+
+`SESSION_START_DECISION_REQUIRED` is a non-retryable state conflict for a
+noninteractive `start` that encounters prepared, running, or undisposed terminal
+state without a sufficient `--on-existing` policy. Its closed details report the
+observed lifecycle, whether the terminal disposition is current, the allowed
+actions, and `admission.admitted: false`. The error never prompts and never
+changes state.
+
+`SESSION_START_STATE_CONFLICT` is a retryable fenced-state conflict. It applies
+when an explicit start resolution was valid when selected but lifecycle or
+terminal-disposition state no longer admits that resolution. Its closed details
+report the current lifecycle, disposition state, allowed next actions, and
+whether the failed request had already been durably admitted. Callers must
+re-observe before deriving another start request.
+
+Archive failures use three distinct non-retryable codes. `SESSION_ARCHIVE_NOT_ELIGIBLE`
+reports the current lifecycle, disposition state, and the required lifecycle
+action. `SESSION_ARCHIVE_LIMIT_REACHED` reports the fixed maximum of 32 and never
+evicts retained history. `SESSION_ARCHIVE_NOT_FOUND` reports the exact inactive
+session ID that was not found; after an uncertain purge response, callers
+reconcile with a fresh `archive list` rather than assuming who performed deletion.
 
 Missing or blank force progress summary, incompatible disposition fields, initial
 goal fields supplied to start instead of begin, and unsupported mode combinations

@@ -229,15 +229,44 @@ Rework is part of the normal lifecycle:
 
 `start` creates a disposable prepared session. `begin` creates the first active
 attempt. A prepared session can be reset immediately. A completed or cancelled
-session must first record its current terminal disposition before eligible reset:
+session must first record its current terminal disposition before it can be
+archived or reset:
 
 ```bash
 podway disposition not-required --reason "No external handoff is required."
-podway reset
+podway archive
 ```
 
-Resetting running work requires explicit confirmation and a bounded progress
-summary, for example `podway reset --progress-summary "Preserved the current diff." --yes`.
+Plain `podway start` automatically archives a disposed terminal session before
+creating the next prepared session. If prepared, running, or undisposed terminal
+state exists in a human terminal, `start` first offers lifecycle-specific choices:
+continue without creating a session, preserve the prior work where applicable,
+or delete it. An undisposed terminal session instead offers handed-off and
+not-required disposition choices. Preserving running work cancels and archives it as `superseded`,
+including the reason and successor session ID.
+
+Automation never receives a prompt. Use `--on-existing preserve` with
+`--supersede-reason` to retain running work, or `--on-existing delete` to remove
+prepared or running state. Running deletion additionally requires
+`--progress-summary` and `--yes`. The former `--replace-eligible` and `--replace`
+CLI flags are removed. `reset` remains destructive and never archives implicitly.
+
+Up to 32 inactive sessions are retained per worktree. Podway never evicts one
+automatically; archive or terminal eligible replacement fails when the limit is
+full. Inspect or explicitly remove retained sessions with:
+
+```bash
+podway archive list
+podway archive show --session-id <uuid>
+podway archive show --session-id <uuid> --verbose --history-before <n>
+podway archive purge --session-id <uuid> --if-session-revision <n> --yes
+```
+
+`archive show` includes the immutable terminal disposition, so a superseded
+session identifies why it ended and which prepared session succeeded it.
+
+Inactive sessions preserve their complete read-only Procedure state and cannot
+be restored or mutated. Purge and reset are permanent deletions.
 
 ## Automation
 

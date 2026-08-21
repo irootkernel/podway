@@ -4,6 +4,12 @@
 
 `podwayd` provides one trusted write path, deterministic ordering, durable admission, idempotent retries, and crash recovery. The queue does not create parallel graph execution. It permits independent callers to submit updates safely and permits different worktrees to progress concurrently.
 
+Confirmed `session.archive_purge` is the bounded exception to durable job
+admission. It runs as a fenced control-plane deletion under the same per-worktree
+serialization barrier. A caller that loses the response reconciles through a
+fresh archive list; Podway does not retain purge tombstones or claim which caller
+completed an already-absent deletion.
+
 ## Daemon singleton
 
 There is one daemon per OS user.
@@ -215,7 +221,7 @@ the original idempotency key and a `job.lookup` instruction; it is not cancellat
 
 ## Destructive queue barriers
 
-`reset`, `reset --all`, and `start --replace` are destructive barriers. Once admitted, the daemon rejects later workspace mutation admissions with `WORKSPACE_MAINTENANCE` until the barrier is cancelled or reaches terminal state. Reads remain available.
+`reset`, `reset --all`, and a state-resolving `start` are maintenance barriers. Once admitted, the daemon rejects later workspace mutation admissions with `WORKSPACE_MAINTENANCE` until the barrier is cancelled or reaches terminal state. Reads remain available.
 
 This guarantees that reset can remove old session jobs, requests, and idempotency data without invalidating a later acknowledged mutation. Jobs admitted before the barrier execute first in FIFO order. The barrier job uses a workspace-scoped idempotency record.
 

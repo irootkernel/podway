@@ -39,3 +39,5 @@ narrative architecture and specifications when sources conflict.
 - [ADR-0023](0023-daemon-owned-bootstrap-log.md): daemon-owned bounded bootstrap logging
 - [ADR-0024](0024-bounded-evidence-scale-and-paged-read-back.md): bounded evidence scale and paged read-back
 - [ADR-0025](0025-structurally-bound-external-check-results.md): structurally bound external check results
+- [ADR-0026](0026-retain-inactive-terminal-sessions.md): bounded inactive terminal-session retention
+- [ADR-0027](0027-state-aware-session-start.md): lifecycle-aware interactive and automated session start

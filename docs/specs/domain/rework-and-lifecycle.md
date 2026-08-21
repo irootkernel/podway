@@ -10,7 +10,8 @@ A prepared session binds the immutable Procedure snapshot, digest, task title,
 session identity, and creation metadata. It has revision 0, trace sequence 0, no
 attempts, no active cursor, no goal revisions, no item values, and no blockers.
 Reconstruction rejects any other prepared shape. Prepared sessions permit
-read-only inspection, `begin`, eligible reset, and eligible replacement. Every
+read-only inspection, `begin`, eligible reset, and eligible replacement. Eligible
+replacement deletes a prepared session because it has no execution history. Every
 item, goal, blocker, cursor, completion, retry, skip, decision, rework, and
 cancellation mutation requires a running or terminal shape as defined below and
 fails closed for prepared state.
@@ -48,13 +49,15 @@ session revision. Any disposition recorded for the earlier terminal revision
 becomes historical and is not current reset evidence. Cancelled sessions never
 reactivate.
 
-## Terminal disposition and reset ownership
+## Terminal disposition, archival, and reset ownership
 
 A terminal disposition is an immutable caller assertion bound to one completed
 or cancelled session revision:
 
 - `handed_off` contains a non-blank summary and stable reference;
-- `not_required` contains a non-blank reason.
+- `not_required` contains a non-blank reason;
+- `superseded` is created only by state-aware start preservation and contains a
+  non-blank reason plus the distinct successor session identity.
 
 Each text field is bounded to 4,000 Unicode scalars. The record also carries its
 kind, session identity, terminal revision, optional caller actor label, and
@@ -70,6 +73,14 @@ revision has a disposition. It preserves workspace initialization. A running
 session or a terminal session without a current disposition fails with
 `SESSION_RESET_NOT_ELIGIBLE` and no deletion.
 
+`archive` applies the same terminal eligibility predicate but never accepts a
+prepared or running session. It atomically removes the current-session pointer
+and retains the complete session as immutable inactive state. Inactive sessions
+remain selectable by session ID for bounded list and full read-only status, but
+cannot be restored, reactivated, or mutated. A worktree retains at most 32; a
+full archive blocks without automatic eviction. Confirmed `archive purge`
+permanently removes one inactive session under its exact revision fence.
+
 Force reset requires explicit destructive confirmation (`--yes` for JSON or
 non-terminal callers, or an interactive prompt), a non-blank progress summary
 bounded to 4,000 Unicode scalars, and the same workspace, session, and revision fences. The
@@ -77,9 +88,16 @@ summary is retained only in the bounded durable request and terminal receipt
 that outlive session-row deletion under normal retention rules. It is not a new
 evidence archive.
 
-Eligible replacement applies the same eligibility predicate and atomically
-deletes the eligible current session before creating a new prepared session.
-Force replacement retains explicit confirmation and the progress-summary rule.
+State-aware `start` selects the terminal archival path automatically when the
+current terminal disposition is current. Human TTY mode may continue the current
+session without mutation, explicitly delete prepared or running state, preserve
+running state as superseded, or disposition and archive an undisposed terminal
+state. Preserving running work atomically cancels it, records the successor-linked
+`superseded` disposition, archives it, and creates the successor. Terminal
+disposition choices similarly commit disposition, archive, and successor creation
+as one transaction. Automation selects `preserve` or `delete` explicitly;
+continuation is interactive-only. Running deletion retains explicit confirmation
+and the progress-summary rule.
 Eligibility is derived only from authoritative Podway lifecycle and disposition
 state in the sole-writer transaction; Git cleanliness, roadmap status, process
 state, and external reference reachability never participate.
