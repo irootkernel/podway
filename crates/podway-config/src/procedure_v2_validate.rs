@@ -33,9 +33,11 @@
 use std::collections::BTreeMap;
 
 use podway_core::{
-    ActionOutcomeV2, EvidenceFromListV2, GraphNodeId, GraphPlacementV2, ItemSpecV2,
-    NodeDefinitionId, Sha256Digest,
+    ActionOutcomeV2, CheckResultOutcomeV2, EvidenceFromListV2, GraphNodeId, GraphPlacementV2,
+    ItemPredicateOperatorV2, ItemSpecV2, ItemTypeV1, NodeDefinitionId, PredicateScalarV2,
+    Sha256Digest,
 };
+use std::str::FromStr;
 
 use crate::procedure_v2_canonical::canonical_projection;
 use crate::{CanonicalJsonV1, ConfigError, ParsedNodeDefinition, ParsedProcedureV2};
@@ -139,6 +141,10 @@ pub(crate) const ASSESSMENT_OUTCOME_UNDECLARED_OPTION_REASON: &str =
 /// Check 7b: `GOAL_ASSESSMENT_REQUIRES_GOAL_TRACKING`.
 pub(crate) const ASSESSMENT_REQUIRES_GOAL_TRACKING_REASON: &str =
     "a session-goal assessment requires the procedure to declare goal_tracking: true";
+pub(crate) const REQUIRED_WHEN_CONTROLLER_REASON: &str =
+    "required_when must reference an earlier unconditionally required item in the same definition";
+pub(crate) const REQUIRED_WHEN_OPERATOR_REASON: &str =
+    "required_when operator and literal must match the controller item type";
 
 /// Node definitions indexed by identifier. Read-only lookup: never iterated for diagnostics.
 type DefinitionIndex<'a> = BTreeMap<&'a str, &'a ParsedNodeDefinition>;
@@ -200,6 +206,11 @@ fn validate_definition(
     definition: &ParsedNodeDefinition,
     goal_tracking: bool,
 ) -> Result<(), ConfigError> {
+    let items = match definition {
+        ParsedNodeDefinition::Action(action) => action.items(),
+        ParsedNodeDefinition::Decision(decision) => decision.items(),
+    };
+    validate_required_when(items)?;
     let ParsedNodeDefinition::Decision(decision) = definition else {
         return Ok(());
     };
@@ -234,6 +245,90 @@ fn validate_definition(
         ));
     }
     Ok(())
+}
+
+fn validate_required_when(items: &[ItemSpecV2]) -> Result<(), ConfigError> {
+    for (dependent_index, dependent) in items.iter().enumerate() {
+        let Some(condition) = dependent.common().required_when() else {
+            continue;
+        };
+        for predicate in condition.predicates() {
+            let Some(controller) = items[..dependent_index]
+                .iter()
+                .find(|item| item.id() == predicate.item())
+            else {
+                return Err(shape_mismatch(
+                    "node_definitions.items.required_when.item",
+                    REQUIRED_WHEN_CONTROLLER_REASON,
+                ));
+            };
+            if !controller.common().required() || controller.common().required_when().is_some() {
+                return Err(shape_mismatch(
+                    "node_definitions.items.required_when.item",
+                    REQUIRED_WHEN_CONTROLLER_REASON,
+                ));
+            }
+            if !predicate_matches_controller(predicate, controller) {
+                return Err(shape_mismatch(
+                    "node_definitions.items.required_when",
+                    REQUIRED_WHEN_OPERATOR_REASON,
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn predicate_matches_controller(
+    predicate: &podway_core::ItemPredicateV2,
+    controller: &ItemSpecV2,
+) -> bool {
+    let field_valid =
+        predicate.field_outcome() == (controller.item_type() == ItemTypeV1::CheckResult);
+    if !field_valid {
+        return false;
+    }
+    match (controller, predicate.operator()) {
+        (
+            ItemSpecV2::Confirm(_),
+            ItemPredicateOperatorV2::Equals(PredicateScalarV2::Boolean(_)),
+        )
+        | (
+            ItemSpecV2::Confirm(_),
+            ItemPredicateOperatorV2::NotEquals(PredicateScalarV2::Boolean(_)),
+        ) => true,
+        (
+            ItemSpecV2::Choice(specification),
+            ItemPredicateOperatorV2::Equals(PredicateScalarV2::Text(value)),
+        )
+        | (
+            ItemSpecV2::Choice(specification),
+            ItemPredicateOperatorV2::NotEquals(PredicateScalarV2::Text(value)),
+        ) => specification.choices().contains(value),
+        (
+            ItemSpecV2::Integer(_),
+            ItemPredicateOperatorV2::Equals(PredicateScalarV2::Integer(_)),
+        )
+        | (
+            ItemSpecV2::Integer(_),
+            ItemPredicateOperatorV2::NotEquals(PredicateScalarV2::Integer(_)),
+        )
+        | (ItemSpecV2::Integer(_), ItemPredicateOperatorV2::AtLeast(_))
+        | (ItemSpecV2::Integer(_), ItemPredicateOperatorV2::AtMost(_)) => true,
+        (ItemSpecV2::Text(_), ItemPredicateOperatorV2::Empty)
+        | (ItemSpecV2::Text(_), ItemPredicateOperatorV2::NonEmpty)
+        | (ItemSpecV2::List(_), ItemPredicateOperatorV2::Empty)
+        | (ItemSpecV2::List(_), ItemPredicateOperatorV2::NonEmpty) => true,
+        (
+            ItemSpecV2::CheckResult(_),
+            ItemPredicateOperatorV2::Equals(PredicateScalarV2::Text(value)),
+        )
+        | (
+            ItemSpecV2::CheckResult(_),
+            ItemPredicateOperatorV2::NotEquals(PredicateScalarV2::Text(value)),
+        ) => CheckResultOutcomeV2::from_str(value).is_ok(),
+        _ => false,
+    }
 }
 
 fn validate_placement(

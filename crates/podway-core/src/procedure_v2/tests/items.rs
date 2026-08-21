@@ -2,8 +2,9 @@ use crate::procedure_v2::invalid;
 use crate::{
     ArtifactItemSpecV2, ArtifactValueV1, CheckResultExecutorV2, CheckResultInputBasisV2,
     CheckResultItemSpecV2, CheckResultOutcomeV2, CheckResultValueV2, ChoiceItemSpecV2,
-    IntegerItemSpecV2, ItemCommonV2, ItemId, ItemSpecV2, ItemTypeV1, ListItemSpecV2, OperationId,
-    RecordedItemValueV2, Sha256Digest, TextItemSpecV2,
+    ConditionStateV2, IntegerItemSpecV2, ItemCommonV2, ItemConditionV2, ItemId,
+    ItemPredicateOperatorV2, ItemPredicateV2, ItemSpecV2, ItemTypeV1, ListItemSpecV2, OperationId,
+    PredicateActualV2, PredicateScalarV2, RecordedItemValueV2, Sha256Digest, TextItemSpecV2,
 };
 
 use super::helpers::item;
@@ -129,6 +130,127 @@ fn item_specs_enforce_v2_bounds() {
 
     // Procedure v2 reuses the current first-version item contract taxonomy.
     assert_eq!(item("confirm").item_type(), ItemTypeV1::Confirm);
+}
+
+#[test]
+fn v2grd003_conditions_are_bounded_typed_and_derived_from_one_snapshot() {
+    let condition = ItemConditionV2::new(vec![ItemPredicateV2::new(
+        ItemId::new("mode").unwrap(),
+        false,
+        ItemPredicateOperatorV2::Equals(PredicateScalarV2::text("strict").unwrap()),
+    )])
+    .unwrap();
+    let mode = ItemSpecV2::choice(
+        common("mode"),
+        vec!["strict".to_owned(), "relaxed".to_owned()],
+    )
+    .unwrap();
+    let notes = ItemSpecV2::text(
+        ItemCommonV2::new(ItemId::new("notes").unwrap(), "Notes", None, false)
+            .unwrap()
+            .with_required_when(Some(condition))
+            .unwrap(),
+        1,
+        100,
+        true,
+    )
+    .unwrap();
+    let items = vec![mode, notes];
+
+    let strict = RecordedItemValueV2::choice("strict").unwrap();
+    let strict_values = vec![Some(&strict), None];
+    let status = items[1].condition_status(&items, &strict_values).unwrap();
+    assert_eq!(status.state(), ConditionStateV2::Met);
+    assert!(items[1].required_now(&items, &strict_values));
+
+    let relaxed = RecordedItemValueV2::choice("relaxed").unwrap();
+    let relaxed_values = vec![Some(&relaxed), None];
+    assert_eq!(
+        items[1]
+            .condition_status(&items, &relaxed_values)
+            .unwrap()
+            .state(),
+        ConditionStateV2::Unmet
+    );
+    assert!(!items[1].required_now(&items, &relaxed_values));
+
+    let missing_values = vec![None, None];
+    assert_eq!(
+        items[1]
+            .condition_status(&items, &missing_values)
+            .unwrap()
+            .state(),
+        ConditionStateV2::Unevaluable
+    );
+    assert!(!items[1].required_now(&items, &missing_values));
+
+    assert!(ItemConditionV2::new(Vec::new()).is_err());
+    assert!(
+        ItemConditionV2::new(
+            (0..5)
+                .map(|_| {
+                    ItemPredicateV2::new(
+                        ItemId::new("mode").unwrap(),
+                        false,
+                        ItemPredicateOperatorV2::Empty,
+                    )
+                })
+                .collect(),
+        )
+        .is_err()
+    );
+    assert!(
+        ItemCommonV2::new(ItemId::new("bad").unwrap(), "Bad", None, true)
+            .unwrap()
+            .with_required_when(Some(
+                ItemConditionV2::new(vec![ItemPredicateV2::new(
+                    ItemId::new("mode").unwrap(),
+                    false,
+                    ItemPredicateOperatorV2::Empty,
+                )])
+                .unwrap(),
+            ))
+            .is_err()
+    );
+}
+
+#[test]
+fn v2grd003_predicate_statuses_cover_counts_ranges_and_check_outcomes_without_content_echo() {
+    let text = RecordedItemValueV2::text(" \u{2003} ").unwrap();
+    let empty = ItemPredicateV2::new(
+        ItemId::new("text").unwrap(),
+        false,
+        ItemPredicateOperatorV2::Empty,
+    )
+    .evaluate(Some(&text));
+    assert_eq!(empty.state(), ConditionStateV2::Met);
+    assert_eq!(empty.actual(), &PredicateActualV2::Count(0));
+
+    let integer = RecordedItemValueV2::integer(i64::MIN);
+    let boundary = ItemPredicateV2::new(
+        ItemId::new("count").unwrap(),
+        false,
+        ItemPredicateOperatorV2::AtLeast(i64::MIN),
+    )
+    .evaluate(Some(&integer));
+    assert_eq!(boundary.state(), ConditionStateV2::Met);
+    assert_eq!(
+        boundary.actual(),
+        &PredicateActualV2::Scalar(PredicateScalarV2::Integer(i64::MIN))
+    );
+
+    let result = check_result("make-test", CheckResultOutcomeV2::Inconclusive);
+    let outcome = ItemPredicateV2::new(
+        ItemId::new("verification").unwrap(),
+        true,
+        ItemPredicateOperatorV2::NotEquals(PredicateScalarV2::text("fail").unwrap()),
+    )
+    .evaluate(Some(&result));
+    assert_eq!(outcome.state(), ConditionStateV2::Met);
+    assert_eq!(
+        outcome.actual(),
+        &PredicateActualV2::Scalar(PredicateScalarV2::Text("inconclusive".to_owned()))
+    );
 }
 
 #[test]

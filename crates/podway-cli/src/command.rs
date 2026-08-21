@@ -42,8 +42,8 @@ use podway_config::{
 use podway_core::{
     ActorAttributionV2, AttemptId, CriterionAssessmentReasonV2, CriterionId, GoalCriterionV2,
     GoalDefinitionV2, GoalRevisionNumberV2, GoalRevisionReasonV2, GoalStatementV2, GraphNodeId,
-    ItemId, OptionId, PROCEDURE_SCHEMA_V2, ReasonV2, Revision, SessionId, Sha256Digest, UnixMillis,
-    WorkspaceId,
+    ItemConditionV2, ItemId, ItemPredicateOperatorV2, OptionId, PROCEDURE_SCHEMA_V2,
+    PredicateScalarV2, ReasonV2, Revision, SessionId, Sha256Digest, UnixMillis, WorkspaceId,
 };
 use podway_presets::{PresetError, catalog_v2};
 use podway_protocol::{
@@ -4967,6 +4967,15 @@ fn execute_procedure_preview(file: &Path) -> Result<RunResult, LocalFailure> {
                     "node_type": node.node_type().as_str(),
                     "terminal": node.terminal(),
                     "skippable": node.skippable(),
+                    "items": node.items().iter().map(|item| {
+                        let mut value = Map::new();
+                        value.insert("item_id".to_owned(), json!(item.item_id()));
+                        value.insert("required".to_owned(), json!(item.required()));
+                        if let Some(condition) = item.required_when() {
+                            value.insert("required_when".to_owned(), condition_json(condition));
+                        }
+                        Value::Object(value)
+                    }).collect::<Vec<_>>(),
                 })
             })
             .collect::<Vec<_>>();
@@ -5099,6 +5108,51 @@ fn execute_procedure_preview(file: &Path) -> Result<RunResult, LocalFailure> {
     };
     let exit_code = i32::from(!report.admissible());
     Ok(local_result_v2(NAME, result, text, exit_code))
+}
+
+fn condition_json(condition: &ItemConditionV2) -> Value {
+    Value::Array(
+        condition
+            .predicates()
+            .iter()
+            .map(|predicate| {
+                let mut value = Map::new();
+                value.insert("item".to_owned(), json!(predicate.item().as_str()));
+                if predicate.field_outcome() {
+                    value.insert("field".to_owned(), json!("outcome"));
+                }
+                match predicate.operator() {
+                    ItemPredicateOperatorV2::Equals(expected) => {
+                        value.insert("equals".to_owned(), predicate_scalar_json(expected));
+                    }
+                    ItemPredicateOperatorV2::NotEquals(expected) => {
+                        value.insert("not_equals".to_owned(), predicate_scalar_json(expected));
+                    }
+                    ItemPredicateOperatorV2::Empty => {
+                        value.insert("empty".to_owned(), json!(true));
+                    }
+                    ItemPredicateOperatorV2::NonEmpty => {
+                        value.insert("non_empty".to_owned(), json!(true));
+                    }
+                    ItemPredicateOperatorV2::AtLeast(expected) => {
+                        value.insert("at_least".to_owned(), json!(expected));
+                    }
+                    ItemPredicateOperatorV2::AtMost(expected) => {
+                        value.insert("at_most".to_owned(), json!(expected));
+                    }
+                }
+                Value::Object(value)
+            })
+            .collect(),
+    )
+}
+
+fn predicate_scalar_json(value: &PredicateScalarV2) -> Value {
+    match value {
+        PredicateScalarV2::Boolean(value) => json!(value),
+        PredicateScalarV2::Integer(value) => json!(value),
+        PredicateScalarV2::Text(value) => json!(value),
+    }
 }
 
 fn is_worktree_relative_procedure_path(path: &Path) -> bool {

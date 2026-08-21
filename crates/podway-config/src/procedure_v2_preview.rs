@@ -5,7 +5,9 @@
 //! its required Mermaid projection are admissible. Lint remains advisory and never removes the
 //! start suggestion.
 
-use podway_core::{AuthoringDiagnostic, AuthoringSeverity, Sha256Digest};
+use podway_core::{
+    AuthoringDiagnostic, AuthoringSeverity, ItemConditionV2, ItemSpecV2, Sha256Digest,
+};
 
 use crate::procedure_v2_authoring::placement_evidence_from;
 use crate::procedure_v2_diagnostics::{
@@ -77,6 +79,26 @@ pub struct ProcedurePreviewGraphNodeV2 {
     node_type: GraphProjectionNodeTypeV2,
     terminal: bool,
     skippable: bool,
+    items: Vec<ProcedurePreviewItemConditionV2>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProcedurePreviewItemConditionV2 {
+    item_id: String,
+    required: bool,
+    required_when: Option<ItemConditionV2>,
+}
+
+impl ProcedurePreviewItemConditionV2 {
+    pub fn item_id(&self) -> &str {
+        &self.item_id
+    }
+    pub const fn required(&self) -> bool {
+        self.required
+    }
+    pub const fn required_when(&self) -> Option<&ItemConditionV2> {
+        self.required_when.as_ref()
+    }
 }
 
 impl ProcedurePreviewGraphNodeV2 {
@@ -94,6 +116,9 @@ impl ProcedurePreviewGraphNodeV2 {
     }
     pub const fn skippable(&self) -> bool {
         self.skippable
+    }
+    pub fn items(&self) -> &[ProcedurePreviewItemConditionV2] {
+        &self.items
     }
 }
 
@@ -390,6 +415,14 @@ fn details(
                 node_type: node.node_type(),
                 terminal: node.terminal(),
                 skippable: node.skippable(),
+                items: definition_items(parsed, node.node_definition_id())
+                    .iter()
+                    .map(|item| ProcedurePreviewItemConditionV2 {
+                        item_id: item.id().as_str().to_owned(),
+                        required: item.common().required(),
+                        required_when: item.common().required_when().cloned(),
+                    })
+                    .collect(),
             })
             .collect(),
         edges: graph
@@ -434,6 +467,22 @@ fn details(
             .collect(),
         },
     }
+}
+
+fn definition_items<'a>(parsed: &'a crate::ParsedProcedureV2, id: &str) -> &'a [ItemSpecV2] {
+    parsed
+        .node_definitions()
+        .iter()
+        .find_map(|definition| match definition {
+            crate::ParsedNodeDefinition::Action(definition) if definition.id().as_str() == id => {
+                Some(definition.items())
+            }
+            crate::ParsedNodeDefinition::Decision(definition) if definition.id().as_str() == id => {
+                Some(definition.items())
+            }
+            _ => None,
+        })
+        .expect("normalized graph node references a validated definition")
 }
 
 fn count(value: usize) -> u32 {

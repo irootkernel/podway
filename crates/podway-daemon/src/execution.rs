@@ -2448,12 +2448,17 @@ fn required_local_artifacts_v2(
             "Procedure v2 active items disagree with the snapshot",
         ));
     }
+    let values = memory
+        .item_slots()
+        .iter()
+        .map(|slot| slot.value())
+        .collect::<Vec<_>>();
     Ok(items
         .iter()
         .zip(memory.item_slots())
         .filter_map(|(specification, slot)| {
             let artifact = slot.value().and_then(|value| value.as_artifact())?;
-            (specification.common().required()
+            (specification.required_now(items, &values)
                 && artifact.location_kind() == ArtifactLocationKindV1::LocalPath)
                 .then(|| (slot.item_id().clone(), artifact.clone()))
         })

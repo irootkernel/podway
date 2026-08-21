@@ -10,8 +10,9 @@ use podway_core::{
     DecisionDefinitionInputV2, DecisionDefinitionV2, DecisionOptionV2, DecisionPlacementV2,
     DecisionRouteEntryV2, DecisionRouteMapV2, DecisionRouteV2, DomainError, EvidenceFromListV2,
     EvidenceReferenceV2, GoalOutcome, GoalTrackingOptIn, GraphNodeId, GraphPlacementV2,
-    ItemCommonV2, ItemId, ItemSpecV2, ManualReworkTargetListV2, NodeDefinitionId, OperationId,
-    OptionId, ProcedureGraphV2, ReasonPolicyV2, Sha256Digest, SkipPolicyV2, TransitionEffectV2,
+    ItemCommonV2, ItemConditionV2, ItemId, ItemPredicateOperatorV2, ItemPredicateV2, ItemSpecV2,
+    ManualReworkTargetListV2, NodeDefinitionId, OperationId, OptionId, PredicateScalarV2,
+    ProcedureGraphV2, ReasonPolicyV2, Sha256Digest, SkipPolicyV2, TransitionEffectV2,
 };
 
 use crate::procedure_v2_wire::*;
@@ -434,19 +435,25 @@ fn map_item(wire: ItemWire) -> Result<ItemSpecV2, ConfigError> {
             prompt,
             help,
             required,
+            required_when,
         } => Ok(ItemSpecV2::confirm(item_common(
-            id, prompt, help, required,
+            id,
+            prompt,
+            help,
+            required,
+            required_when,
         )?)),
         ItemWire::Text {
             id,
             prompt,
             help,
             required,
+            required_when,
             min_length,
             max_length,
             multiline,
         } => ItemSpecV2::text(
-            item_common(id, prompt, help, required)?,
+            item_common(id, prompt, help, required, required_when)?,
             min_length,
             max_length,
             multiline,
@@ -457,30 +464,40 @@ fn map_item(wire: ItemWire) -> Result<ItemSpecV2, ConfigError> {
             prompt,
             help,
             required,
+            required_when,
             choices,
-        } => ItemSpecV2::choice(item_common(id, prompt, help, required)?, choices)
-            .map_err(map_domain_error),
+        } => ItemSpecV2::choice(
+            item_common(id, prompt, help, required, required_when)?,
+            choices,
+        )
+        .map_err(map_domain_error),
         ItemWire::Integer {
             id,
             prompt,
             help,
             required,
+            required_when,
             minimum,
             maximum,
-        } => ItemSpecV2::integer(item_common(id, prompt, help, required)?, minimum, maximum)
-            .map_err(map_domain_error),
+        } => ItemSpecV2::integer(
+            item_common(id, prompt, help, required, required_when)?,
+            minimum,
+            maximum,
+        )
+        .map_err(map_domain_error),
         ItemWire::List {
             id,
             prompt,
             help,
             required,
+            required_when,
             min_items,
             max_items,
             max_item_length,
             max_total_length,
             unique,
         } => ItemSpecV2::list(
-            item_common(id, prompt, help, required)?,
+            item_common(id, prompt, help, required, required_when)?,
             min_items,
             max_items,
             max_item_length,
@@ -493,12 +510,13 @@ fn map_item(wire: ItemWire) -> Result<ItemSpecV2, ConfigError> {
             prompt,
             help,
             required,
+            required_when,
             allowed_media_types,
         } => {
             let allowed_media_types =
                 optional_nonempty("allowed_media_types", allowed_media_types)?;
             ItemSpecV2::artifact(
-                item_common(id, prompt, help, required)?,
+                item_common(id, prompt, help, required, required_when)?,
                 allowed_media_types,
             )
             .map_err(map_domain_error)
@@ -508,6 +526,7 @@ fn map_item(wire: ItemWire) -> Result<ItemSpecV2, ConfigError> {
             prompt,
             help,
             required,
+            required_when,
             operation_id,
             operation_digest,
             accepted_outcomes,
@@ -538,7 +557,7 @@ fn map_item(wire: ItemWire) -> Result<ItemSpecV2, ConfigError> {
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             ItemSpecV2::check_result(
-                item_common(id, prompt, help, required)?,
+                item_common(id, prompt, help, required, required_when)?,
                 operation_id,
                 operation_digest,
                 accepted_outcomes,
@@ -556,9 +575,91 @@ fn item_common(
     prompt: String,
     help: Option<String>,
     required: bool,
+    required_when: Option<Vec<ItemPredicateWire>>,
 ) -> Result<ItemCommonV2, ConfigError> {
     let id = ItemId::new(id).map_err(map_domain_error)?;
-    ItemCommonV2::new(id, prompt, help, required).map_err(map_domain_error)
+    let required_when = required_when
+        .map(|predicates| {
+            predicates
+                .into_iter()
+                .map(map_item_predicate)
+                .collect::<Result<Vec<_>, _>>()
+                .and_then(|predicates| ItemConditionV2::new(predicates).map_err(map_domain_error))
+        })
+        .transpose()?;
+    ItemCommonV2::new(id, prompt, help, required)
+        .and_then(|common| common.with_required_when(required_when))
+        .map_err(map_domain_error)
+}
+
+fn map_item_predicate(wire: ItemPredicateWire) -> Result<ItemPredicateV2, ConfigError> {
+    let item = ItemId::new(wire.item).map_err(map_domain_error)?;
+    let field_outcome = match wire.field.as_deref() {
+        None => false,
+        Some("outcome") => true,
+        Some(_) => {
+            return Err(ConfigError::InvalidValue {
+                field: "required_when.field",
+                reason: "must be outcome when present",
+            });
+        }
+    };
+    let mut operators = Vec::new();
+    if let Some(value) = wire.equals {
+        operators.push(ItemPredicateOperatorV2::Equals(map_predicate_scalar(
+            value,
+        )?));
+    }
+    if let Some(value) = wire.not_equals {
+        operators.push(ItemPredicateOperatorV2::NotEquals(map_predicate_scalar(
+            value,
+        )?));
+    }
+    if let Some(value) = wire.empty {
+        if !value {
+            return Err(ConfigError::InvalidValue {
+                field: "required_when.empty",
+                reason: "must be true when present",
+            });
+        }
+        operators.push(ItemPredicateOperatorV2::Empty);
+    }
+    if let Some(value) = wire.non_empty {
+        if !value {
+            return Err(ConfigError::InvalidValue {
+                field: "required_when.non_empty",
+                reason: "must be true when present",
+            });
+        }
+        operators.push(ItemPredicateOperatorV2::NonEmpty);
+    }
+    if let Some(value) = wire.at_least {
+        operators.push(ItemPredicateOperatorV2::AtLeast(value));
+    }
+    if let Some(value) = wire.at_most {
+        operators.push(ItemPredicateOperatorV2::AtMost(value));
+    }
+    if operators.len() != 1 {
+        return Err(ConfigError::InvalidValue {
+            field: "required_when",
+            reason: "each predicate must declare exactly one operator",
+        });
+    }
+    Ok(ItemPredicateV2::new(
+        item,
+        field_outcome,
+        operators.pop().expect("exactly one predicate operator"),
+    ))
+}
+
+fn map_predicate_scalar(value: PredicateScalarWire) -> Result<PredicateScalarV2, ConfigError> {
+    match value {
+        PredicateScalarWire::Boolean(value) => Ok(PredicateScalarV2::Boolean(value)),
+        PredicateScalarWire::Integer(value) => Ok(PredicateScalarV2::Integer(value)),
+        PredicateScalarWire::Text(value) => {
+            PredicateScalarV2::text(value).map_err(map_domain_error)
+        }
+    }
 }
 
 fn map_option(wire: DecisionOptionWire) -> Result<DecisionOptionV2, ConfigError> {

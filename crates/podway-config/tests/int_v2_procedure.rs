@@ -1,5 +1,6 @@
 use podway_config::{
-    ConfigError, ParsedProcedure, ParsedProcedureV2, parse_procedure_yaml, validate_procedure_v2,
+    ConfigError, ParsedProcedure, ParsedProcedureV2, ProcedureDocumentFormat,
+    parse_procedure_document, parse_procedure_yaml, validate_procedure_v2,
 };
 use podway_core::{CheckResultOutcomeV2, ItemSpecV2, TransitionEffectV2};
 
@@ -11,7 +12,7 @@ fn v2(yaml: &str) -> Result<ParsedProcedureV2, ConfigError> {
 }
 
 #[test]
-fn v2grd002_reserved_typed_conditions_are_not_admitted_before_domain_implementation() {
+fn v2grd003_admits_conditional_items_but_keeps_option_guards_reserved() {
     let conditional = concat!(
         "schema: podway.procedure/v2\n",
         "id: p\n",
@@ -43,10 +44,19 @@ fn v2grd002_reserved_typed_conditions_are_not_admitted_before_domain_implementat
         "      use: work\n",
         "      terminal: true\n",
     );
-    assert!(
-        v2(conditional).is_err(),
-        "V2GRD-003 owns conditional-item authoring admission"
-    );
+    let parsed = v2(conditional).expect("V2GRD-003 admits required_when");
+    let validated = validate_procedure_v2(parsed).expect("the condition is statically valid");
+    let canonical = validated.canonical_json().as_str();
+    assert!(canonical.contains("required_when"));
+    let reparsed = match parse_procedure_document(
+        canonical.as_bytes(),
+        ProcedureDocumentFormat::Json,
+    )
+    .unwrap()
+    {
+        ParsedProcedure::V2(parsed) => parsed,
+    };
+    assert_eq!(reparsed, validated.parsed().clone());
 
     let guarded = concat!(
         "schema: podway.procedure/v2\n",
@@ -84,6 +94,42 @@ fn v2grd002_reserved_typed_conditions_are_not_admitted_before_domain_implementat
         v2(guarded).is_err(),
         "V2GRD-004 owns option-guard authoring admission"
     );
+}
+
+#[test]
+fn v2grd003_rejects_invalid_controller_order_requirement_and_operator_pairings() {
+    let valid = concat!(
+        "schema: podway.procedure/v2\n",
+        "id: p\nversion: \"1\"\nname: P\npurpose: Conditions.\n",
+        "node_definitions:\n  work:\n    type: action\n    title: Work\n    intent: Work.\n",
+        "    items:\n",
+        "      - id: mode\n        type: choice\n        prompt: Mode?\n        required: true\n        choices: [strict, relaxed]\n",
+        "      - id: notes\n        type: text\n        prompt: Notes?\n        required: false\n        required_when:\n          - item: mode\n            equals: strict\n",
+        "graph:\n  entry: work\n  nodes:\n    - id: work\n      use: work\n      terminal: true\n",
+    );
+    assert!(validate_procedure_v2(v2(valid).unwrap()).is_ok());
+
+    let optional_controller = valid.replacen("required: true", "required: false", 1);
+    assert!(validate_procedure_v2(v2(&optional_controller).unwrap()).is_err());
+
+    let later_or_unknown = valid.replace("item: mode", "item: later");
+    assert!(validate_procedure_v2(v2(&later_or_unknown).unwrap()).is_err());
+
+    let wrong_operator = valid.replace("equals: strict", "at_least: 1");
+    assert!(validate_procedure_v2(v2(&wrong_operator).unwrap()).is_err());
+
+    let redundant = valid.replacen(
+        "id: notes\n        type: text\n        prompt: Notes?\n        required: false",
+        "id: notes\n        type: text\n        prompt: Notes?\n        required: true",
+        1,
+    );
+    assert!(v2(&redundant).is_err());
+
+    let multiple_operators = valid.replace(
+        "equals: strict",
+        "equals: strict\n            not_equals: relaxed",
+    );
+    assert!(v2(&multiple_operators).is_err());
 }
 
 fn err(yaml: &str) -> ConfigError {

@@ -154,6 +154,8 @@ pub(crate) enum ItemWire {
         #[serde(default)]
         help: Option<String>,
         required: bool,
+        #[serde(default)]
+        required_when: Option<Vec<ItemPredicateWire>>,
     },
     Text {
         id: String,
@@ -161,6 +163,8 @@ pub(crate) enum ItemWire {
         #[serde(default)]
         help: Option<String>,
         required: bool,
+        #[serde(default)]
+        required_when: Option<Vec<ItemPredicateWire>>,
         #[serde(default)]
         min_length: u32,
         #[serde(default = "default_text_max_length")]
@@ -174,6 +178,8 @@ pub(crate) enum ItemWire {
         #[serde(default)]
         help: Option<String>,
         required: bool,
+        #[serde(default)]
+        required_when: Option<Vec<ItemPredicateWire>>,
         choices: Vec<String>,
     },
     Integer {
@@ -182,6 +188,8 @@ pub(crate) enum ItemWire {
         #[serde(default)]
         help: Option<String>,
         required: bool,
+        #[serde(default)]
+        required_when: Option<Vec<ItemPredicateWire>>,
         #[serde(default)]
         minimum: Option<i64>,
         #[serde(default)]
@@ -193,6 +201,8 @@ pub(crate) enum ItemWire {
         #[serde(default)]
         help: Option<String>,
         required: bool,
+        #[serde(default)]
+        required_when: Option<Vec<ItemPredicateWire>>,
         #[serde(default)]
         min_items: u16,
         #[serde(default = "default_list_max_items")]
@@ -211,6 +221,8 @@ pub(crate) enum ItemWire {
         help: Option<String>,
         required: bool,
         #[serde(default)]
+        required_when: Option<Vec<ItemPredicateWire>>,
+        #[serde(default)]
         allowed_media_types: Option<Vec<String>>,
     },
     #[serde(rename = "check_result")]
@@ -220,10 +232,40 @@ pub(crate) enum ItemWire {
         #[serde(default)]
         help: Option<String>,
         required: bool,
+        #[serde(default)]
+        required_when: Option<Vec<ItemPredicateWire>>,
         operation_id: String,
         operation_digest: String,
         accepted_outcomes: Vec<String>,
     },
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum PredicateScalarWire {
+    Boolean(bool),
+    Integer(i64),
+    Text(String),
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ItemPredicateWire {
+    pub(crate) item: String,
+    #[serde(default)]
+    pub(crate) field: Option<String>,
+    #[serde(default)]
+    pub(crate) equals: Option<PredicateScalarWire>,
+    #[serde(default)]
+    pub(crate) not_equals: Option<PredicateScalarWire>,
+    #[serde(default)]
+    pub(crate) empty: Option<bool>,
+    #[serde(default)]
+    pub(crate) non_empty: Option<bool>,
+    #[serde(default)]
+    pub(crate) at_least: Option<i64>,
+    #[serde(default)]
+    pub(crate) at_most: Option<i64>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

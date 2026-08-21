@@ -18,6 +18,7 @@ const MAX_ITEM_HELP_CHARS: usize = 1000;
 const MIN_V2_CHOICE_COUNT: usize = 1;
 const MAX_V2_CHOICE_COUNT: usize = 32;
 const MAX_V2_CHOICE_VALUE_CHARS: usize = 120;
+const MAX_CONDITION_PREDICATES: usize = 4;
 const MAX_V2_ARTIFACT_MEDIA_TYPES: usize = 64;
 const MIN_CHECK_RESULT_OUTCOMES: usize = 1;
 const MAX_CHECK_RESULT_OUTCOMES: usize = 3;
@@ -27,6 +28,281 @@ const MAX_CHECK_RESULT_OUTCOMES: usize = 3;
 pub enum NodeKindV2 {
     Action,
     Decision,
+}
+
+/// One bounded scalar admitted by the typed predicate vocabulary.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PredicateScalarV2 {
+    Boolean(bool),
+    Integer(i64),
+    Text(String),
+}
+
+impl PredicateScalarV2 {
+    pub fn text(value: impl Into<String>) -> Result<Self, DomainError> {
+        let value = value.into();
+        validate_text(
+            "predicate scalar",
+            &value,
+            1,
+            MAX_V2_CHOICE_VALUE_CHARS,
+            true,
+        )?;
+        Ok(Self::Text(value))
+    }
+}
+
+/// The closed operator and expected value for one same-attempt item predicate.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ItemPredicateOperatorV2 {
+    Equals(PredicateScalarV2),
+    NotEquals(PredicateScalarV2),
+    Empty,
+    NonEmpty,
+    AtLeast(i64),
+    AtMost(i64),
+}
+
+impl ItemPredicateOperatorV2 {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Equals(_) => "equals",
+            Self::NotEquals(_) => "not_equals",
+            Self::Empty => "empty",
+            Self::NonEmpty => "non_empty",
+            Self::AtLeast(_) => "at_least",
+            Self::AtMost(_) => "at_most",
+        }
+    }
+
+    pub const fn expected(&self) -> Option<&PredicateScalarV2> {
+        match self {
+            Self::Equals(value) | Self::NotEquals(value) => Some(value),
+            Self::AtLeast(value) | Self::AtMost(value) => {
+                // This branch cannot return a reference to a temporary scalar. Callers that
+                // project numeric range expectations use `integer_expected` instead.
+                let _ = value;
+                None
+            }
+            Self::Empty | Self::NonEmpty => None,
+        }
+    }
+
+    pub const fn integer_expected(&self) -> Option<i64> {
+        match self {
+            Self::AtLeast(value) | Self::AtMost(value) => Some(*value),
+            _ => None,
+        }
+    }
+}
+
+/// One immutable same-attempt predicate declared by `required_when`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ItemPredicateV2 {
+    item: ItemId,
+    field_outcome: bool,
+    operator: ItemPredicateOperatorV2,
+}
+
+impl ItemPredicateV2 {
+    pub const fn new(item: ItemId, field_outcome: bool, operator: ItemPredicateOperatorV2) -> Self {
+        Self {
+            item,
+            field_outcome,
+            operator,
+        }
+    }
+
+    pub fn item(&self) -> &ItemId {
+        &self.item
+    }
+
+    pub const fn field_outcome(&self) -> bool {
+        self.field_outcome
+    }
+
+    pub const fn operator(&self) -> &ItemPredicateOperatorV2 {
+        &self.operator
+    }
+
+    pub fn evaluate(&self, value: Option<&RecordedItemValueV2>) -> PredicateStatusV2 {
+        let Some(value) = value else {
+            return PredicateStatusV2::unevaluable(self.clone());
+        };
+        let (state, actual) =
+            match &self.operator {
+                ItemPredicateOperatorV2::Equals(expected) => scalar_value(value)
+                    .map(|actual| (actual == *expected, PredicateActualV2::Scalar(actual))),
+                ItemPredicateOperatorV2::NotEquals(expected) => scalar_value(value)
+                    .map(|actual| (actual != *expected, PredicateActualV2::Scalar(actual))),
+                ItemPredicateOperatorV2::Empty => collection_count(value)
+                    .map(|count| (count == 0, PredicateActualV2::Count(count))),
+                ItemPredicateOperatorV2::NonEmpty => collection_count(value)
+                    .map(|count| (count != 0, PredicateActualV2::Count(count))),
+                ItemPredicateOperatorV2::AtLeast(expected) => value.as_integer().map(|actual| {
+                    (
+                        actual >= *expected,
+                        PredicateActualV2::Scalar(PredicateScalarV2::Integer(actual)),
+                    )
+                }),
+                ItemPredicateOperatorV2::AtMost(expected) => value.as_integer().map(|actual| {
+                    (
+                        actual <= *expected,
+                        PredicateActualV2::Scalar(PredicateScalarV2::Integer(actual)),
+                    )
+                }),
+            }
+            .unwrap_or((false, PredicateActualV2::Unavailable));
+        match actual {
+            PredicateActualV2::Unavailable => PredicateStatusV2::unevaluable(self.clone()),
+            actual => PredicateStatusV2 {
+                predicate: self.clone(),
+                state: if state {
+                    ConditionStateV2::Met
+                } else {
+                    ConditionStateV2::Unmet
+                },
+                actual,
+            },
+        }
+    }
+}
+
+fn scalar_value(value: &RecordedItemValueV2) -> Option<PredicateScalarV2> {
+    match value.item_type() {
+        ItemTypeV1::Confirm => Some(PredicateScalarV2::Boolean(true)),
+        ItemTypeV1::Choice => value
+            .as_choice()
+            .map(|value| PredicateScalarV2::Text(value.to_owned())),
+        ItemTypeV1::Integer => value.as_integer().map(PredicateScalarV2::Integer),
+        ItemTypeV1::CheckResult => value
+            .as_check_result()
+            .map(|value| PredicateScalarV2::Text(value.outcome().as_str().to_owned())),
+        ItemTypeV1::Text | ItemTypeV1::List | ItemTypeV1::Artifact => None,
+    }
+}
+
+fn collection_count(value: &RecordedItemValueV2) -> Option<u32> {
+    value
+        .as_text()
+        .map(|value| u32::try_from(value.trim().chars().count()).unwrap_or(u32::MAX))
+        .or_else(|| {
+            value
+                .as_list()
+                .map(|value| u32::try_from(value.len()).unwrap_or(u32::MAX))
+        })
+}
+
+/// One to four AND-combined predicates controlling an otherwise optional item.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ItemConditionV2 {
+    predicates: Vec<ItemPredicateV2>,
+}
+
+impl ItemConditionV2 {
+    pub fn new(predicates: Vec<ItemPredicateV2>) -> Result<Self, DomainError> {
+        if predicates.is_empty() || predicates.len() > MAX_CONDITION_PREDICATES {
+            return Err(invalid(
+                "required_when must contain between one and four predicates",
+            ));
+        }
+        Ok(Self { predicates })
+    }
+
+    pub fn predicates(&self) -> &[ItemPredicateV2] {
+        &self.predicates
+    }
+
+    pub fn evaluate<'a, F>(&self, mut value: F) -> ConditionStatusV2
+    where
+        F: FnMut(&ItemId) -> Option<&'a RecordedItemValueV2>,
+    {
+        let predicates = self
+            .predicates
+            .iter()
+            .map(|predicate| predicate.evaluate(value(predicate.item())))
+            .collect::<Vec<_>>();
+        let state = if predicates
+            .iter()
+            .any(|status| status.state() == ConditionStateV2::Unmet)
+        {
+            ConditionStateV2::Unmet
+        } else if predicates
+            .iter()
+            .any(|status| status.state() == ConditionStateV2::Unevaluable)
+        {
+            ConditionStateV2::Unevaluable
+        } else {
+            ConditionStateV2::Met
+        };
+        ConditionStatusV2 { state, predicates }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConditionStateV2 {
+    Met,
+    Unmet,
+    Unevaluable,
+}
+
+impl ConditionStateV2 {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Met => "met",
+            Self::Unmet => "unmet",
+            Self::Unevaluable => "unevaluable",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PredicateActualV2 {
+    Scalar(PredicateScalarV2),
+    Count(u32),
+    Unavailable,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PredicateStatusV2 {
+    predicate: ItemPredicateV2,
+    state: ConditionStateV2,
+    actual: PredicateActualV2,
+}
+
+impl PredicateStatusV2 {
+    fn unevaluable(predicate: ItemPredicateV2) -> Self {
+        Self {
+            predicate,
+            state: ConditionStateV2::Unevaluable,
+            actual: PredicateActualV2::Unavailable,
+        }
+    }
+
+    pub const fn predicate(&self) -> &ItemPredicateV2 {
+        &self.predicate
+    }
+    pub const fn state(&self) -> ConditionStateV2 {
+        self.state
+    }
+    pub const fn actual(&self) -> &PredicateActualV2 {
+        &self.actual
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConditionStatusV2 {
+    state: ConditionStateV2,
+    predicates: Vec<PredicateStatusV2>,
+}
+
+impl ConditionStatusV2 {
+    pub const fn state(&self) -> ConditionStateV2 {
+        self.state
+    }
+    pub fn predicates(&self) -> &[PredicateStatusV2] {
+        &self.predicates
+    }
 }
 
 impl NodeKindV2 {
@@ -45,6 +321,7 @@ pub struct ItemCommonV2 {
     prompt: String,
     help: Option<String>,
     required: bool,
+    required_when: Option<ItemConditionV2>,
 }
 
 impl ItemCommonV2 {
@@ -64,6 +341,7 @@ impl ItemCommonV2 {
             prompt,
             help,
             required,
+            required_when: None,
         })
     }
 
@@ -81,6 +359,23 @@ impl ItemCommonV2 {
 
     pub const fn required(&self) -> bool {
         self.required
+    }
+
+    pub fn with_required_when(
+        mut self,
+        required_when: Option<ItemConditionV2>,
+    ) -> Result<Self, DomainError> {
+        if self.required && required_when.is_some() {
+            return Err(invalid(
+                "an item with required_when must declare required: false",
+            ));
+        }
+        self.required_when = required_when;
+        Ok(self)
+    }
+
+    pub const fn required_when(&self) -> Option<&ItemConditionV2> {
+        self.required_when.as_ref()
     }
 }
 
@@ -503,6 +798,37 @@ impl ItemSpecV2 {
 
     pub fn id(&self) -> &ItemId {
         self.common().id()
+    }
+
+    /// Evaluates this item's authored condition against one complete same-definition item
+    /// snapshot. Static authoring validation guarantees every source is an earlier item; this
+    /// lookup remains total and fail-closed for reconstructed or otherwise inconsistent models.
+    pub fn condition_status(
+        &self,
+        definition_items: &[ItemSpecV2],
+        values: &[Option<&RecordedItemValueV2>],
+    ) -> Option<ConditionStatusV2> {
+        let condition = self.common().required_when()?;
+        Some(condition.evaluate(|source| {
+            definition_items
+                .iter()
+                .position(|item| item.id() == source)
+                .and_then(|index| values.get(index).copied().flatten())
+        }))
+    }
+
+    /// Returns the derived requirement from the same authoritative item snapshot used for
+    /// satisfaction. Unconditional requirements remain true; a conditional item is required only
+    /// when every predicate is met.
+    pub fn required_now(
+        &self,
+        definition_items: &[ItemSpecV2],
+        values: &[Option<&RecordedItemValueV2>],
+    ) -> bool {
+        self.common().required()
+            || self
+                .condition_status(definition_items, values)
+                .is_some_and(|status| status.state() == ConditionStateV2::Met)
     }
 
     pub const fn item_type(&self) -> ItemTypeV1 {

@@ -175,6 +175,27 @@ fn preview<'a>(
 }
 
 #[test]
+fn v2grd003_preview_preserves_authored_required_when_without_materializing_absence() {
+    let source = CLEAN_YAML.replace(
+        "      - id: notes\n        type: text\n        prompt: Record the gathered notes.\n        required: true",
+        "      - id: mode\n        type: choice\n        prompt: Select a mode.\n        required: true\n        choices: [strict, relaxed]\n      - id: notes\n        type: text\n        prompt: Record the gathered notes.\n        required: false\n        required_when:\n          - item: mode\n            equals: strict",
+    );
+    let report = preview(&source, "conditional.yaml", ProcedureDocumentFormat::Yaml);
+    assert!(report.admissible(), "{:?}", report.diagnostics());
+    let graph = report.details().unwrap().graph();
+    let gather = graph
+        .nodes()
+        .iter()
+        .find(|node| node.graph_node_id() == "gather-inputs")
+        .unwrap();
+    assert_eq!(gather.items().len(), 2);
+    assert!(gather.items()[0].required_when().is_none());
+    let condition = gather.items()[1].required_when().unwrap();
+    assert_eq!(condition.predicates().len(), 1);
+    assert_eq!(condition.predicates()[0].item().as_str(), "mode");
+}
+
+#[test]
 fn v2grf007_rich_preview_has_exact_summary_graph_and_confirmed_start_argv() {
     let report = preview(CLEAN_YAML, "workflow.yaml", ProcedureDocumentFormat::Yaml);
     assert!(report.admissible());

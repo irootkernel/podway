@@ -10,10 +10,11 @@ use podway_core::{
     CheckResultInputBasisV2, CheckResultOutcomeV2, CheckResultValueV2, CriterionAssessmentModeV2,
     CriterionCitationV2, CriterionId, CriterionStatusV2, DecisionRecordInputV2, DecisionRecordV2,
     EvidenceReferenceSnapshotV2, GoalOutcome, GoalRevisionNumberV2, GraphNodeId, ItemCommonV2,
-    ItemId, ItemSpecV2, ItemTypeV1, MAX_ATTEMPT_CONTENT_SCALARS_V2, MAX_ITEMS_PER_DEFINITION_V2,
-    NodeDefinitionId, OperationId, OptionId, ProcedureSnapshotId, ReasonV2, RecordedItemSetV2,
-    RecordedItemV2, RecordedItemValueV2, ResolvedEvidenceReferenceV2, ResolvedEvidenceSetV2,
-    Revision, ReworkKindV2, ReworkRecordInputV2, ReworkRecordV2, SessionAttemptV2, SessionId,
+    ItemConditionV2, ItemId, ItemPredicateOperatorV2, ItemPredicateV2, ItemSpecV2, ItemTypeV1,
+    MAX_ATTEMPT_CONTENT_SCALARS_V2, MAX_ITEMS_PER_DEFINITION_V2, NodeDefinitionId, OperationId,
+    OptionId, PredicateScalarV2, ProcedureSnapshotId, ReasonV2, RecordedItemSetV2, RecordedItemV2,
+    RecordedItemValueV2, ResolvedEvidenceReferenceV2, ResolvedEvidenceSetV2, Revision,
+    ReworkKindV2, ReworkRecordInputV2, ReworkRecordV2, SessionAttemptV2, SessionId,
     SessionLifecycle, SessionTraceV2, Sha256Digest, TraceSequenceV2, TransitionEffectV2,
     UnixMillis, attempt_content_bound_error_v2, canonicalize_json_v1, recorded_content_scalars_v2,
     verify_canonical_json_v1,
@@ -34,6 +35,11 @@ const MAX_BLOCKER_REASON_CHARS_V2: usize = 1_000;
 
 fn invalid(reason: &'static str) -> StoreValueErrorV1 {
     StoreValueErrorV1::InvalidProcedureV2State { reason }
+}
+
+fn required_now_v2(items: &[ItemSpecV2], slots: &[ItemSlotStateV2], index: usize) -> bool {
+    let values = slots.iter().map(ItemSlotStateV2::value).collect::<Vec<_>>();
+    items[index].required_now(items, &values)
 }
 
 fn corrupt(record: StoreRecordKindV1) -> StoreErrorV1 {
@@ -1131,13 +1137,17 @@ impl WorkflowMemoryStateV2 {
             .items
             .iter()
             .zip(source_memory.item_slots())
-            .filter(|(specification, slot)| {
-                specification.common().required()
-                    && !slot
-                        .value()
-                        .is_some_and(|value| specification.is_satisfied_by(value))
+            .enumerate()
+            .filter(|(index, (specification, slot))| {
+                required_now_v2(
+                    &source_specification.items,
+                    source_memory.item_slots(),
+                    *index,
+                ) && !slot
+                    .value()
+                    .is_some_and(|value| specification.is_satisfied_by(value))
             })
-            .map(|(specification, _)| specification.id().clone())
+            .map(|(_, (specification, _))| specification.id().clone())
             .collect::<Vec<_>>();
         if !missing.is_empty() {
             return Err(GraphMutationErrorV2::RequiredItemsMissing { item_ids: missing });
@@ -1393,13 +1403,14 @@ impl WorkflowMemoryStateV2 {
             .items
             .iter()
             .zip(active_memory.item_slots())
-            .filter(|(item, slot)| {
-                item.common().required()
+            .enumerate()
+            .filter(|(index, (item, slot))| {
+                required_now_v2(&specification.items, active_memory.item_slots(), *index)
                     && !slot
                         .value()
                         .is_some_and(|value| item.is_satisfied_by(value))
             })
-            .map(|(item, _)| item.id().clone())
+            .map(|(_, (item, _))| item.id().clone())
             .collect::<Vec<_>>();
         if !missing.is_empty() {
             return Err(GraphMutationErrorV2::RequiredItemsMissing { item_ids: missing });
@@ -2540,6 +2551,10 @@ impl SnapshotMemoryModelV2 {
 fn parse_item_spec_v2(
     item: &serde_json::Map<String, Value>,
 ) -> Result<ItemSpecV2, StoreValueErrorV1> {
+    let required_when = item
+        .get("required_when")
+        .map(parse_item_condition_v2)
+        .transpose()?;
     let common = ItemCommonV2::new(
         ItemId::new(required_text(item, "id")?.to_owned())
             .map_err(|_| invalid("Procedure v2 item identity is invalid"))?,
@@ -2551,6 +2566,7 @@ fn parse_item_spec_v2(
             .and_then(Value::as_bool)
             .ok_or_else(|| invalid("Procedure v2 item requirement is invalid"))?,
     )
+    .and_then(|common| common.with_required_when(required_when))
     .map_err(|_| invalid("Procedure v2 item declaration is invalid"))?;
     match parse_item_type(required_text(item, "type")?)? {
         ItemTypeV1::Confirm => Ok(ItemSpecV2::confirm(common)),
@@ -2636,6 +2652,73 @@ fn parse_item_spec_v2(
         ),
     }
     .map_err(|_| invalid("Procedure v2 item declaration is invalid"))
+}
+
+fn parse_item_condition_v2(value: &Value) -> Result<ItemConditionV2, StoreValueErrorV1> {
+    let predicates = value
+        .as_array()
+        .ok_or_else(|| invalid("Procedure v2 required_when declaration is invalid"))?
+        .iter()
+        .map(|value| {
+            let predicate = value
+                .as_object()
+                .ok_or_else(|| invalid("Procedure v2 required_when predicate is invalid"))?;
+            let item = ItemId::new(required_text(predicate, "item")?.to_owned())
+                .map_err(|_| invalid("Procedure v2 required_when item is invalid"))?;
+            let field_outcome = match predicate.get("field").and_then(Value::as_str) {
+                None => false,
+                Some("outcome") => true,
+                Some(_) => return Err(invalid("Procedure v2 required_when field is invalid")),
+            };
+            let mut operators = Vec::new();
+            if let Some(value) = predicate.get("equals") {
+                operators.push(ItemPredicateOperatorV2::Equals(parse_predicate_scalar_v2(
+                    value,
+                )?));
+            }
+            if let Some(value) = predicate.get("not_equals") {
+                operators.push(ItemPredicateOperatorV2::NotEquals(
+                    parse_predicate_scalar_v2(value)?,
+                ));
+            }
+            if predicate.get("empty").and_then(Value::as_bool) == Some(true) {
+                operators.push(ItemPredicateOperatorV2::Empty);
+            }
+            if predicate.get("non_empty").and_then(Value::as_bool) == Some(true) {
+                operators.push(ItemPredicateOperatorV2::NonEmpty);
+            }
+            if let Some(value) = predicate.get("at_least").and_then(Value::as_i64) {
+                operators.push(ItemPredicateOperatorV2::AtLeast(value));
+            }
+            if let Some(value) = predicate.get("at_most").and_then(Value::as_i64) {
+                operators.push(ItemPredicateOperatorV2::AtMost(value));
+            }
+            if operators.len() != 1 {
+                return Err(invalid("Procedure v2 required_when operator is invalid"));
+            }
+            Ok(ItemPredicateV2::new(
+                item,
+                field_outcome,
+                operators.pop().expect("one required_when operator"),
+            ))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    ItemConditionV2::new(predicates)
+        .map_err(|_| invalid("Procedure v2 required_when declaration is invalid"))
+}
+
+fn parse_predicate_scalar_v2(value: &Value) -> Result<PredicateScalarV2, StoreValueErrorV1> {
+    if let Some(value) = value.as_bool() {
+        return Ok(PredicateScalarV2::Boolean(value));
+    }
+    if let Some(value) = value.as_i64() {
+        return Ok(PredicateScalarV2::Integer(value));
+    }
+    if let Some(value) = value.as_str() {
+        return PredicateScalarV2::text(value)
+            .map_err(|_| invalid("Procedure v2 predicate scalar is invalid"));
+    }
+    Err(invalid("Procedure v2 predicate scalar is invalid"))
 }
 
 fn optional_u32(
@@ -3025,8 +3108,9 @@ pub(crate) fn validate_workflow_memory_v2(
                 .item_slots()
                 .iter()
                 .zip(&specification.items)
-                .any(|(slot, item)| {
-                    item.common().required()
+                .enumerate()
+                .any(|(index, (slot, item))| {
+                    required_now_v2(&specification.items, attempt_memory.item_slots(), index)
                         && !slot
                             .value()
                             .is_some_and(|value| item.is_satisfied_by(value))

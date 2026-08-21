@@ -23,7 +23,8 @@
 
 use podway_core::{
     ActionDefinitionV2, ActionOutcomeV2, AssessmentContractV2, DecisionDefinitionV2,
-    EvidenceFromListV2, GraphPlacementV2, ItemCommonV2, ItemSpecV2, ProcedureGraphV2,
+    EvidenceFromListV2, GraphPlacementV2, ItemCommonV2, ItemConditionV2, ItemPredicateOperatorV2,
+    ItemSpecV2, PredicateScalarV2, ProcedureGraphV2,
 };
 use serde_json::{Map, Value};
 
@@ -366,7 +367,53 @@ fn common_item_fields(value: &mut Entries, common: &ItemCommonV2) {
     value
         .text("prompt", common.prompt())
         .optional_text("help", common.help())
-        .flag("required", common.required());
+        .flag("required", common.required())
+        .optional_value("required_when", common.required_when().map(condition_value));
+}
+
+fn condition_value(condition: &ItemConditionV2) -> AuthoringValue {
+    AuthoringValue::Seq(
+        condition
+            .predicates()
+            .iter()
+            .map(|predicate| {
+                let mut value = Entries::new();
+                value.text("item", predicate.item().as_str());
+                if predicate.field_outcome() {
+                    value.text("field", "outcome");
+                }
+                match predicate.operator() {
+                    ItemPredicateOperatorV2::Equals(expected) => {
+                        value.value("equals", predicate_scalar_value(expected));
+                    }
+                    ItemPredicateOperatorV2::NotEquals(expected) => {
+                        value.value("not_equals", predicate_scalar_value(expected));
+                    }
+                    ItemPredicateOperatorV2::Empty => {
+                        value.flag("empty", true);
+                    }
+                    ItemPredicateOperatorV2::NonEmpty => {
+                        value.flag("non_empty", true);
+                    }
+                    ItemPredicateOperatorV2::AtLeast(expected) => {
+                        value.integer("at_least", *expected);
+                    }
+                    ItemPredicateOperatorV2::AtMost(expected) => {
+                        value.integer("at_most", *expected);
+                    }
+                }
+                value.finish()
+            })
+            .collect(),
+    )
+}
+
+fn predicate_scalar_value(value: &PredicateScalarV2) -> AuthoringValue {
+    match value {
+        PredicateScalarV2::Boolean(value) => AuthoringValue::Flag(*value),
+        PredicateScalarV2::Integer(value) => AuthoringValue::Integer(*value),
+        PredicateScalarV2::Text(value) => AuthoringValue::Text(value.clone()),
+    }
 }
 
 fn graph_value(graph: &ProcedureGraphV2) -> AuthoringValue {

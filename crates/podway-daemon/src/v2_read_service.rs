@@ -14,6 +14,7 @@ use podway_core::{
     AttemptLifecycle,
     AttemptValidityV2,
     BlockerState,
+    ConditionStatusV2,
     CriterionCitationV2,
     CriterionStatusV2,
     // Worst-case escaping and per-element structure are what make a page or preview bound provable,
@@ -24,6 +25,7 @@ use podway_core::{
     GraphNodeId,
     GraphPlacementV2,
     ItemId,
+    ItemPredicateOperatorV2,
     ItemSpecV2,
     ItemTypeV1,
     MAX_ACTIVE_ITEM_WINDOW_V2,
@@ -41,6 +43,8 @@ use podway_core::{
     MAX_OBSERVATION_TEMPLATE_BYTES_V2,
     MAX_SUGGESTION_WINDOW_V2,
     PROCEDURE_SCHEMA_V2,
+    PredicateActualV2,
+    PredicateScalarV2,
     RecordedItemValueV2,
     ResolvedEvidenceReferenceV2,
     SessionAttemptV2,
@@ -1173,11 +1177,16 @@ impl<'a> CurrentProjection<'a> {
                 "active item slots disagree with the immutable Procedure snapshot",
             ));
         }
+        let values = memory
+            .item_slots()
+            .iter()
+            .map(|slot| slot.value())
+            .collect::<Vec<_>>();
         let missing_required = item_specs
             .iter()
             .zip(memory.item_slots())
             .filter_map(|(spec, slot)| {
-                (spec.common().required()
+                (spec.required_now(item_specs, &values)
                     && !slot
                         .value()
                         .is_some_and(|value| spec.is_satisfied_by(value)))
@@ -1188,7 +1197,7 @@ impl<'a> CurrentProjection<'a> {
             .iter()
             .zip(memory.item_slots())
             .all(|(spec, slot)| {
-                !spec.common().required()
+                !spec.required_now(item_specs, &values)
                     || slot
                         .value()
                         .is_some_and(|value| spec.is_satisfied_by(value))
@@ -1381,6 +1390,12 @@ impl<'a> CurrentProjection<'a> {
     }
 
     fn active_item_descriptors(&self) -> Vec<Value> {
+        let values = self
+            .memory
+            .item_slots()
+            .iter()
+            .map(|slot| slot.value())
+            .collect::<Vec<_>>();
         self.item_specs
             .iter()
             .zip(self.memory.item_slots())
@@ -1393,6 +1408,16 @@ impl<'a> CurrentProjection<'a> {
                     descriptor.insert("help".to_owned(), json!(help));
                 }
                 descriptor.insert("required".to_owned(), json!(spec.common().required()));
+                descriptor.insert(
+                    "required_now".to_owned(),
+                    json!(spec.required_now(self.item_specs, &values)),
+                );
+                if let Some(status) = spec.condition_status(self.item_specs, &values) {
+                    descriptor.insert(
+                        "condition_status".to_owned(),
+                        condition_status_value_v2(&status),
+                    );
+                }
                 descriptor.insert(
                     "satisfied".to_owned(),
                     json!(
@@ -1827,16 +1852,24 @@ impl<'a> CurrentProjection<'a> {
     }
 
     fn check_result_target_index(&self) -> Option<usize> {
+        let values = self
+            .memory
+            .item_slots()
+            .iter()
+            .map(|slot| slot.value())
+            .collect::<Vec<_>>();
         [true, false].into_iter().find_map(|required| {
             self.item_specs
                 .iter()
                 .zip(self.memory.item_slots())
-                .position(|(specification, slot)| {
-                    specification.item_type() == ItemTypeV1::CheckResult
-                        && specification.common().required() == required
+                .enumerate()
+                .find_map(|(index, (specification, slot))| {
+                    (specification.item_type() == ItemTypeV1::CheckResult
+                        && specification.required_now(self.item_specs, &values) == required
                         && !slot
                             .value()
-                            .is_some_and(|value| specification.is_satisfied_by(value))
+                            .is_some_and(|value| specification.is_satisfied_by(value)))
+                    .then_some(index)
                 })
         })
     }
@@ -1922,6 +1955,54 @@ impl<'a> CurrentProjection<'a> {
         }
         suggestions.truncate(MAX_SUGGESTION_WINDOW_V2);
         suggestions
+    }
+}
+
+fn condition_status_value_v2(status: &ConditionStatusV2) -> Value {
+    json!({
+        "state": status.state().as_str(),
+        "predicates": status.predicates().iter().map(|status| {
+            let predicate = status.predicate();
+            let mut source = Map::new();
+            source.insert("kind".to_owned(), json!("item"));
+            source.insert("item_id".to_owned(), json!(predicate.item().as_str()));
+            if predicate.field_outcome() {
+                source.insert("field".to_owned(), json!("outcome"));
+            }
+            let mut value = Map::new();
+            value.insert("source".to_owned(), Value::Object(source));
+            value.insert("operator".to_owned(), json!(predicate.operator().as_str()));
+            match predicate.operator() {
+                ItemPredicateOperatorV2::Equals(expected)
+                | ItemPredicateOperatorV2::NotEquals(expected) => {
+                    value.insert("expected".to_owned(), predicate_scalar_value_v2(expected));
+                }
+                ItemPredicateOperatorV2::AtLeast(expected)
+                | ItemPredicateOperatorV2::AtMost(expected) => {
+                    value.insert("expected".to_owned(), json!(expected));
+                }
+                ItemPredicateOperatorV2::Empty | ItemPredicateOperatorV2::NonEmpty => {}
+            }
+            match status.actual() {
+                PredicateActualV2::Scalar(actual) => {
+                    value.insert("actual".to_owned(), predicate_scalar_value_v2(actual));
+                }
+                PredicateActualV2::Count(actual) => {
+                    value.insert("actual_count".to_owned(), json!(actual));
+                }
+                PredicateActualV2::Unavailable => {}
+            }
+            value.insert("state".to_owned(), json!(status.state().as_str()));
+            Value::Object(value)
+        }).collect::<Vec<_>>(),
+    })
+}
+
+fn predicate_scalar_value_v2(value: &PredicateScalarV2) -> Value {
+    match value {
+        PredicateScalarV2::Boolean(value) => json!(value),
+        PredicateScalarV2::Integer(value) => json!(value),
+        PredicateScalarV2::Text(value) => json!(value),
     }
 }
 
