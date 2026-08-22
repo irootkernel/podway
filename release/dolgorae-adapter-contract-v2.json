@@ -1227,7 +1227,7 @@
       {
         "id": "urn:podway:schema:next-result:v3",
         "path": "schemas/next-result-v3.schema.json",
-        "sha256": "sha256:349a01ea496b7354ef76548d43b326c87a8491076929b255f62ef0934c6366ba"
+        "sha256": "sha256:0a4c5ac4aaaeb5067aa882bdc426845e467a7802bb89a93c2881ddab0719597c"
       },
       {
         "id": "urn:podway:schema:observation-result:v1",
@@ -1242,7 +1242,7 @@
       {
         "id": "urn:podway:schema:observation-result:v3",
         "path": "schemas/observation-result-v3.schema.json",
-        "sha256": "sha256:0e756ad608251940f0ccd0ed60bb492038934a3f8182bcb26104eb11641d40dd"
+        "sha256": "sha256:fb24818b50156d83575bd0db646bf0de136968fbfae09611a9c7bea661c484e9"
       },
       {
         "id": "urn:podway:schema:output:v3",

@@ -2777,6 +2777,7 @@ fn complete_maximum_next_result() -> Map<String, Value> {
             "label": "\0".repeat(120),
             "criteria": "\0".repeat(500)
         })).collect::<Vec<_>>(),
+        "allowed_option_ids": [],
         "evidence_guidance": vec!["\0".repeat(200); 8],
         "allowed_manual_rework_targets": (0..64)
             .map(|index| maximum_payload_identifier('n', index))
@@ -2876,6 +2877,7 @@ fn v2rel002_complete_maximum_next_binds_component_charges_to_production_framing(
         "missing_required_items",
         "missing_required_items_truncated",
         "options",
+        "allowed_option_ids",
         "evidence_guidance",
         "allowed_manual_rework_targets",
         "allowed_actions",
@@ -2924,6 +2926,7 @@ fn v2rel002_complete_maximum_next_binds_component_charges_to_production_framing(
         &[
             "allowed_actions",
             "allowed_manual_rework_targets",
+            "allowed_option_ids",
             "description",
             "evidence_guidance",
             "missing_required_items",

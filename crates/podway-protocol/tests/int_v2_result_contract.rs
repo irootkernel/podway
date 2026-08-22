@@ -4242,6 +4242,21 @@ fn v2grd002_reserves_bounded_condition_result_and_error_shapes() {
     ]);
     assert_valid("schemas/next-result-v3.schema.json", &next);
 
+    let mut unguarded_next = next.clone();
+    for option in unguarded_next["options"].as_array_mut().unwrap() {
+        option.as_object_mut().unwrap().remove("guards");
+    }
+    unguarded_next
+        .as_object_mut()
+        .unwrap()
+        .remove("option_guard_statuses");
+    assert_valid("schemas/next-result-v3.schema.json", &unguarded_next);
+    unguarded_next
+        .as_object_mut()
+        .unwrap()
+        .remove("allowed_option_ids");
+    assert_invalid("schemas/next-result-v3.schema.json", &unguarded_next);
+
     let active_item = json!({
         "item_id": "notes", "type": "text", "prompt": "Record notes.",
         "required": false, "required_now": true, "satisfied": false, "revision": 0,
@@ -4255,6 +4270,25 @@ fn v2grd002_reserves_bounded_condition_result_and_error_shapes() {
     assert_ref_valid(
         "urn:podway:schema:observation-result:v3#/$defs/activeItem",
         &active_item,
+    );
+
+    let mut unconditional_item = active_item.clone();
+    unconditional_item["required"] = json!(true);
+    unconditional_item
+        .as_object_mut()
+        .unwrap()
+        .remove("condition_status");
+    assert_ref_valid(
+        "urn:podway:schema:observation-result:v3#/$defs/activeItem",
+        &unconditional_item,
+    );
+    unconditional_item
+        .as_object_mut()
+        .unwrap()
+        .remove("required_now");
+    assert_ref_invalid(
+        "urn:podway:schema:observation-result:v3#/$defs/activeItem",
+        &unconditional_item,
     );
 
     let details = json!({

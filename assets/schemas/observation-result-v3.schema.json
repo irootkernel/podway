@@ -134,7 +134,7 @@
     "activeItem": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["item_id", "type", "prompt", "required", "satisfied", "revision", "constraints", "value", "value_truncated"],
+      "required": ["item_id", "type", "prompt", "required", "required_now", "satisfied", "revision", "constraints", "value", "value_truncated"],
       "properties": {
         "item_id": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" },
         "type": { "enum": ["confirm", "text", "choice", "integer", "list", "artifact", "check_result"] },
@@ -164,8 +164,7 @@
               "value_truncated": { "const": false }
             }
           }
-        },
-        { "if": { "required": ["condition_status"] }, "then": { "required": ["required_now"] } }
+        }
       ]
     }
   }
