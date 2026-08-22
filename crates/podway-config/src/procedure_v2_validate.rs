@@ -430,21 +430,17 @@ fn validate_option_guards(
         .filter_map(|option| option.guards())
         .flat_map(|guards| guards.predicates())
     {
-        let Some(reference) = evidence_from
+        let guard_source_is_selected = evidence_from
             .into_iter()
             .flat_map(EvidenceFromListV2::entries)
-            .find(|reference| reference.source_node() == predicate.source_node())
-        else {
-            return Err(shape_mismatch(
-                "node_definitions.options.guards.evidence",
-                OPTION_GUARD_SOURCE_REASON,
-            ));
-        };
-        if !reference.required()
-            || !reference
-                .selected_items()
-                .is_some_and(|items| items.contains(predicate.item()))
-        {
+            .filter(|reference| reference.source_node() == predicate.source_node())
+            .any(|reference| {
+                reference.required()
+                    && reference
+                        .selected_items()
+                        .is_some_and(|items| items.contains(predicate.item()))
+            });
+        if !guard_source_is_selected {
             return Err(shape_mismatch(
                 "node_definitions.options.guards.evidence",
                 OPTION_GUARD_SOURCE_REASON,

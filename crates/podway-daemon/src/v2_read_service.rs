@@ -1785,7 +1785,7 @@ impl<'a> CurrentProjection<'a> {
     fn evidence_value(&self, source: &GraphNodeId, item: &ItemId) -> Option<&RecordedItemValueV2> {
         self.evidence_readback
             .iter()
-            .find(|readback| {
+            .filter(|readback| {
                 !readback.stale()
                     && readback.reference().resolution().source_node() == source
                     && matches!(
@@ -1793,7 +1793,7 @@ impl<'a> CurrentProjection<'a> {
                         ResolvedEvidenceReferenceV2::Resolved(_)
                     )
             })
-            .and_then(|readback| {
+            .find_map(|readback| {
                 readback
                     .items()
                     .items()

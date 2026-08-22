@@ -48,7 +48,52 @@ fn populated_graph_state() -> GraphSessionStateV2 {
     crate::int_v2_goal_state::rich_v2_state_for_schema_migration()
 }
 
+fn restore_schema_v8_shape(connection: &Connection) {
+    let reference = Connection::open_in_memory().unwrap();
+    for ddl in [
+        podway_store::schema::sqlite_v1_ddl(),
+        podway_store::schema::sqlite_v2_ddl(),
+        podway_store::schema::sqlite_v3_ddl(),
+        podway_store::schema::sqlite_v4_ddl(),
+        podway_store::schema::sqlite_v5_ddl(),
+        podway_store::schema::sqlite_v6_ddl(),
+        podway_store::schema::sqlite_v7_ddl(),
+        podway_store::schema::sqlite_v8_ddl(),
+    ] {
+        reference.execute_batch(ddl).unwrap();
+    }
+    let evidence_table_sql: String = reference
+        .query_row(
+            "SELECT sql FROM sqlite_schema WHERE type = 'table' \
+             AND name = 'v2_resolved_evidence_references'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    connection
+        .execute_batch(
+            "PRAGMA foreign_keys = OFF;
+             PRAGMA legacy_alter_table = ON;
+             ALTER TABLE v2_resolved_evidence_references
+                 RENAME TO v2_resolved_evidence_references_v9;",
+        )
+        .unwrap();
+    connection.execute_batch(&evidence_table_sql).unwrap();
+    connection
+        .execute_batch(
+            "INSERT INTO v2_resolved_evidence_references
+             SELECT * FROM v2_resolved_evidence_references_v9;
+             DROP TABLE v2_resolved_evidence_references_v9;
+             DELETE FROM schema_migrations WHERE version = 9;
+             PRAGMA user_version = 8;
+             PRAGMA legacy_alter_table = OFF;
+             PRAGMA foreign_keys = ON;",
+        )
+        .unwrap();
+}
+
 pub(crate) fn restore_schema_v4_shape(connection: &Connection) {
+    restore_schema_v8_shape(connection);
     let reference = Connection::open_in_memory().unwrap();
     reference
         .execute_batch(include_str!("../../../assets/specifications/sqlite-v1.sql"))
@@ -80,6 +125,14 @@ pub(crate) fn restore_schema_v4_shape(connection: &Connection) {
             |row| row.get(0),
         )
         .unwrap();
+    let evidence_table_sql: String = reference
+        .query_row(
+            "SELECT sql FROM sqlite_schema WHERE type = 'table' \
+             AND name = 'v2_resolved_evidence_references'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
     connection
         .execute_batch(
             "PRAGMA foreign_keys = ON;
@@ -88,7 +141,17 @@ pub(crate) fn restore_schema_v4_shape(connection: &Connection) {
              PRAGMA legacy_alter_table = ON;
              ALTER TABLE v2_workspace_state RENAME TO v2_workspace_state_v7;
              PRAGMA legacy_alter_table = ON;
-             ALTER TABLE v2_item_slots RENAME TO v2_item_slots_v6;",
+             ALTER TABLE v2_item_slots RENAME TO v2_item_slots_v6;
+             ALTER TABLE v2_resolved_evidence_references
+                 RENAME TO v2_resolved_evidence_references_v9;",
+        )
+        .unwrap();
+    connection.execute_batch(&evidence_table_sql).unwrap();
+    connection
+        .execute_batch(
+            "INSERT INTO v2_resolved_evidence_references
+             SELECT * FROM v2_resolved_evidence_references_v9;
+             DROP TABLE v2_resolved_evidence_references_v9;",
         )
         .unwrap();
     connection.execute_batch(&item_table_sql).unwrap();
@@ -153,7 +216,7 @@ pub(crate) fn restore_schema_v4_shape(connection: &Connection) {
     assert_eq!(quick_check, "ok");
     connection
         .execute(
-            "DELETE FROM schema_migrations WHERE version IN (5, 6, 7, 8)",
+            "DELETE FROM schema_migrations WHERE version IN (5, 6, 7, 8, 9)",
             [],
         )
         .unwrap();
@@ -884,7 +947,7 @@ fn v2ast004_runtime_migrates_v5_to_v7_without_reencoding_item_values() {
         connection
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        8
+        9
     );
     drop(connection);
 
@@ -903,7 +966,76 @@ fn v2ast004_runtime_migrates_v5_to_v7_without_reencoding_item_values() {
 }
 
 #[test]
-fn schema_v6_and_v7_upgrade_paths_migrate_to_v8() {
+fn schema_v8_evidence_rows_survive_v9_migration_and_reopen() {
+    let temporary = TempDir::new().unwrap();
+    let path = temporary.path().join("state.sqlite3");
+    let expected_state = populated_graph_state();
+    let store = SqliteStoreV1::open(
+        &path,
+        &root(),
+        identity(),
+        SqliteStoreOptionsV1::new(8).unwrap(),
+        UnixMillis::new(1),
+    )
+    .unwrap();
+    store
+        .create_graph_session_v2(&identity(), expected_state.clone())
+        .unwrap();
+    drop(store);
+
+    let connection = Connection::open(&path).unwrap();
+    let before: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM v2_resolved_evidence_references",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(before > 0, "migration fixture must contain evidence rows");
+    restore_schema_v8_shape(&connection);
+    drop(connection);
+
+    let migrated = SqliteStoreV1::open(
+        &path,
+        &root(),
+        identity(),
+        SqliteStoreOptionsV1::new(8).unwrap(),
+        UnixMillis::new(2),
+    )
+    .unwrap();
+    assert_eq!(
+        migrated.read_graph_session_v2(&identity()).unwrap(),
+        Some(expected_state)
+    );
+    drop(migrated);
+
+    let connection = Connection::open(&path).unwrap();
+    let (version, after, migration): (u32, i64, i64) = connection
+        .query_row(
+            "SELECT (SELECT user_version FROM pragma_user_version),
+                    (SELECT COUNT(*) FROM v2_resolved_evidence_references),
+                    (SELECT COUNT(*) FROM schema_migrations WHERE version = 9)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!((version, after, migration), (9, before, 1));
+    let mut primary_key = connection
+        .prepare(
+            "SELECT name FROM pragma_table_info('v2_resolved_evidence_references') \
+             WHERE pk > 0 ORDER BY pk",
+        )
+        .unwrap();
+    let primary_key = primary_key
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(primary_key, ["attempt_id", "reference_ordinal"]);
+}
+
+#[test]
+fn schema_v6_and_v7_upgrade_paths_migrate_to_v9() {
     for predecessor in [6_u32, 7_u32] {
         let temporary = TempDir::new().unwrap();
         let path = temporary.path().join("state.sqlite3");
@@ -951,16 +1083,16 @@ fn schema_v6_and_v7_upgrade_paths_migrate_to_v8() {
         let (version, migrations, foreign_key_violations): (u32, i64, i64) = connection
             .query_row(
                 "SELECT (SELECT user_version FROM pragma_user_version), \
-                        (SELECT COUNT(*) FROM schema_migrations WHERE version BETWEEN 5 AND 8), \
+                        (SELECT COUNT(*) FROM schema_migrations WHERE version BETWEEN 5 AND 9), \
                         (SELECT COUNT(*) FROM pragma_foreign_key_check)",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .unwrap();
-        assert_eq!((version, migrations, foreign_key_violations), (8, 4, 0));
+        assert_eq!((version, migrations, foreign_key_violations), (9, 5, 0));
         let migration: (String, String) = connection
             .query_row(
-                "SELECT name, checksum FROM schema_migrations WHERE version = 8",
+                "SELECT name, checksum FROM schema_migrations WHERE version = 9",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
@@ -968,9 +1100,9 @@ fn schema_v6_and_v7_upgrade_paths_migrate_to_v8() {
         assert_eq!(
             migration,
             (
-                podway_store::schema::SQLITE_SUPERSEDED_SESSION_DISPOSITION_MIGRATION_NAME_V8
+                podway_store::schema::SQLITE_DUPLICATE_EVIDENCE_REFERENCE_MIGRATION_NAME_V9
                     .to_owned(),
-                podway_store::schema::sqlite_v8_ddl_checksum(),
+                podway_store::schema::sqlite_v9_ddl_checksum(),
             )
         );
     }
@@ -1097,7 +1229,7 @@ fn empty_schema_v4_inspects_read_only_then_migrates_to_v7() {
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!((version, disposition_table_count), (8, 1));
+    assert_eq!((version, disposition_table_count), (9, 1));
 }
 
 #[test]
@@ -1129,7 +1261,7 @@ fn schema_v3_without_legacy_state_migrates_to_retained_terminal_schema_v7() {
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 8);
+    assert_eq!(version, 9);
     let legacy_tables: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name IN \
@@ -1193,7 +1325,7 @@ fn schema_v3_v2_state_and_terminal_receipt_survive_v7_migration_and_reopen() {
         .unwrap();
     let migration: i64 = connection
         .query_row(
-            "SELECT COUNT(*) FROM schema_migrations WHERE version IN (4, 5, 6, 7, 8)",
+            "SELECT COUNT(*) FROM schema_migrations WHERE version IN (4, 5, 6, 7, 8, 9)",
             [],
             |row| row.get(0),
         )
@@ -1240,7 +1372,7 @@ fn schema_v3_v2_state_and_terminal_receipt_survive_v7_migration_and_reopen() {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
-    assert_eq!((version, migration, legacy_tables), (8, 5, 0));
+    assert_eq!((version, migration, legacy_tables), (9, 6, 0));
     assert_eq!(receipts.0, receipts.1);
 }
 

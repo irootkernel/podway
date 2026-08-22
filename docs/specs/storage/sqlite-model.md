@@ -1,8 +1,8 @@
 # SQLite Model
 
-The implemented canonical DDL history is `sqlite-v1.sql` through `sqlite-v8.sql`
+The implemented canonical DDL history is `sqlite-v1.sql` through `sqlite-v9.sql`
 under `assets/specifications/`. New databases currently apply that ordered
-history in one transaction and finish at schema version 8. The v5 contract is
+history in one transaction and finish at schema version 9. The v5 contract is
 normative under ADR-0021; `V2LIF-002` reserved its exact canonical DDL and
 `V2LIF-003` admitted it in runtime. ADR-0025 owns schema v6 for external check
 results; `V2AST-002` reserved its canonical DDL and named migration, and
@@ -23,11 +23,19 @@ Schema v8 extends terminal dispositions for ADR-0027. It adds the closed
 sets the new successor field to null. A superseded row requires reason and a
 distinct successor ID; other kinds forbid that field.
 
-ADR-0028 adds no SQLite schema generation. Typed conditions are immutable fields
+Schema v9 corrects the evidence-reference key to match the Procedure v2 contract.
+References remain ordered by their bounded declaration ordinal, and two references
+from one consumer attempt may select different items from the same source node.
+The migration rebuilds only `v2_resolved_evidence_references`, preserves every v8
+row and foreign key, and replaces the source-based primary key with
+`(attempt_id, reference_ordinal)`.
+
+ADR-0028 itself adds no materialized condition state. Typed conditions are immutable fields
 of the canonical Procedure snapshot already stored with each session, and their
 evaluation uses existing attempt-local item values and selected evidence. Older
 snapshots reconstruct unchanged because omitted condition fields have no
-materialized defaults.
+materialized defaults. Schema v9 independently repairs a pre-existing mismatch
+between legal duplicate evidence references and their relational key.
 
 Schema v6 rebuilds `v2_item_slots` so its closed item discriminator additionally
 admits `check_result`. The v5-to-v6 migration preserves every existing
@@ -90,7 +98,7 @@ transaction, applies the canonical v5 DDL with legacy rename behavior, runs
 `foreign_key_check` before commit, and restores enforcement after commit or
 rollback. The DDL does not toggle `foreign_keys` because SQLite ignores that
 pragma inside an open transaction.
-Opening a schema newer than v8 remains an unsupported downgrade and performs no
+Opening a schema newer than v9 remains an unsupported downgrade and performs no
 mutation.
 
 The daemon is the sole normal writer. Foreign keys, strict tables, application ID,

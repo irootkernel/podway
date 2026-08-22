@@ -99,6 +99,9 @@ fn v2grd004_admits_conditional_items_and_required_selected_evidence_guards() {
         "      use: decide\n",
         "      evidence_from:\n",
         "        - node: review\n",
+        "          required: false\n",
+        "          items: [unresolved]\n",
+        "        - node: review\n",
         "          required: true\n",
         "          items: [unresolved]\n",
         "      routes:\n",
@@ -107,16 +110,25 @@ fn v2grd004_admits_conditional_items_and_required_selected_evidence_guards() {
         "          effect: rework\n",
     );
     let parsed = v2(guarded).expect("V2GRD-004 admits option guards");
-    let validated = validate_procedure_v2(parsed).expect("guard source is required and selected");
+    let validated = validate_procedure_v2(parsed)
+        .expect("a later duplicate guard source is required and selected");
     assert!(validated.canonical_json().as_str().contains("guards"));
 
     let optional_reference = guarded.replace(
-        "required: true\n          items",
-        "required: false\n          items",
+        "required: true\n          items: [unresolved]\n      routes",
+        "required: false\n          items: [unresolved]\n      routes",
     );
     assert!(validate_procedure_v2(v2(&optional_reference).unwrap()).is_err());
-    let implicit_selection = guarded.replace("          items: [unresolved]\n", "");
+    let implicit_selection = guarded.replace(
+        "required: true\n          items: [unresolved]\n      routes",
+        "required: true\n      routes",
+    );
     assert!(validate_procedure_v2(v2(&implicit_selection).unwrap()).is_err());
+    let no_evidence_from = guarded.replace(
+        "      evidence_from:\n        - node: review\n          required: false\n          items: [unresolved]\n        - node: review\n          required: true\n          items: [unresolved]\n",
+        "",
+    );
+    assert!(validate_procedure_v2(v2(&no_evidence_from).unwrap()).is_err());
     let wrong_type = guarded.replace("equals: 0", "equals: approved");
     assert!(validate_procedure_v2(v2(&wrong_type).unwrap()).is_err());
 }

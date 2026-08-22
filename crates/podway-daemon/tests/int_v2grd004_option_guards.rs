@@ -89,7 +89,10 @@ graph:
       evidence_from:
         - node: review
           required: true
-          items: [findings, notes]
+          items: [notes]
+        - node: review
+          required: true
+          items: [findings]
       routes:
         approved:
           to: finish
@@ -248,10 +251,11 @@ fn v2grd004_next_keeps_all_options_and_projects_authoritative_guard_statuses() {
         "v2grd004-complete-review",
         int_v2run003_runtime::session_preconditions(&status),
     );
-    assert!(matches!(
-        int_v2run003_runtime::dispatch(&dispatcher, &complete),
-        ResponseEnvelopeV2::OutputV2(_)
-    ));
+    let completed = int_v2run003_runtime::dispatch(&dispatcher, &complete);
+    assert!(
+        matches!(completed, ResponseEnvelopeV2::OutputV2(_)),
+        "unexpected completion response: {completed:?}"
+    );
 
     drop(dispatcher);
     drop(manager);
