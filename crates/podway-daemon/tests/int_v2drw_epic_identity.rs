@@ -7,10 +7,12 @@ use std::{path::PathBuf, sync::Arc};
 use podway_config::{
     ParsedProcedure, ProcedureDocumentFormat, parse_procedure_document, validate_procedure_v2,
 };
-use podway_core::{AttemptId, DomainError, SessionId, UnixMillis};
+use podway_core::{AttemptId, DomainError, Revision, SessionId, TerminalDispositionV2, UnixMillis};
 use podway_daemon::{
     execution::{
-        DaemonExecutionEngineV1, ExecutionClockV1, graph_session_state_from_procedure_v2_snapshot,
+        DaemonExecutionEngineV1, ExecutionClockV1,
+        graph_prepared_session_state_from_procedure_v2_snapshot,
+        graph_session_state_from_procedure_v2_snapshot, workspace_procedure_snapshot_from_bytes_v2,
     },
     native_execution::{
         NativeArtifactVerifierV1, NativeExecutionIdSourceV1, NativeProcedureProviderV1,
@@ -22,13 +24,18 @@ use podway_daemon::{
 use podway_git::NativeGitResolverV1;
 use podway_protocol::{
     ClientInfoV1, CommandNameV1, IdempotencyKeyV1 as ProtocolIdempotencyKeyV1, OperationV1,
-    PreconditionsV1, ProcedureV2MutationRequestV1, RequestEnvelopeInputV1, RequestEnvelopeV1,
-    RequestIdV1, RequestOptionsV1, SliceRequestV1, WorkspaceContextV1, WorktreeSelectorWireV1,
+    PreconditionsV1, ProcedureV2MutationRequestV1, ProcedureV2StartRequestV1,
+    RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, SliceRequestV1,
+    WorkspaceContextV1, WorktreeSelectorWireV1,
 };
 use podway_store::{
-    AdmitOutcomeV1, IdempotencyKeyV1, JobReceiptOrTerminalV1, PersistedResponseContextV1,
-    SqliteStoreOptionsV1, SqliteStoreV1, StoreContractV1, StoreGraphStateContractV2,
-    StoreReadContractV1, TerminalReceiptV1, TerminalResultV1, WorkerIdV1, WorkspaceBindingV1,
+    AdmissionSessionIdentityV1, AdmitOutcomeV1, AdmitRequestV1, CanonicalExecutionJsonV1,
+    CommandV1, IdempotencyKeyV1, JobIdV1, JobReceiptOrTerminalV1, JobStateV1,
+    PersistedGraphMutationFailureV2, PersistedGraphTerminalOperationV2, PersistedResponseContextV1,
+    RevisionAttemptItemPreconditionsV1, SqliteStoreOptionsV1, SqliteStoreV1, StoreContractV1,
+    StoreGraphReadContractV2, StoreGraphStateContractV2, StoreReadContractV1,
+    StoreSessionArchiveContractV2, StoreTerminalDispositionContractV2, TerminalReceiptV1,
+    TerminalResultV1, WorkerIdV1, WorkspaceBindingV1,
 };
 use serde_json::{Map, json};
 
@@ -67,6 +74,24 @@ graph:
 manual_rework:
   allowed_targets:
     - choose
+"#;
+
+const TERMINAL_ACTION_PROCEDURE: &str = r#"schema: podway.procedure/v2
+id: legacy-start-recovery-current
+version: "1"
+name: Legacy start recovery current task
+purpose: Create a terminal current task for the legacy V17 recovery regression.
+node_definitions:
+  work:
+    type: action
+    title: Work
+    intent: Complete the current task.
+graph:
+  entry: work
+  nodes:
+    - id: work
+      use: work
+      terminal: true
 "#;
 
 type NativeGraphEngine = DaemonExecutionEngineV1<
@@ -208,6 +233,39 @@ fn typed_request(
         DaemonRequestV1::from_envelope(&envelope).unwrap()
     else {
         panic!("{command} must decode through the typed Procedure v2 route")
+    };
+    request
+}
+
+fn typed_start_request(
+    number: u64,
+    fixture: &SqliteFixture,
+    payload: Map<String, serde_json::Value>,
+    preconditions: PreconditionsV1,
+) -> ProcedureV2StartRequestV1 {
+    let mut payload = payload;
+    payload.insert(
+        "selector".to_owned(),
+        serde_json::to_value(&fixture.selector).unwrap(),
+    );
+    let envelope = RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
+        request_id: RequestIdV1::new(format!("00000000-0000-4000-8000-{number:012x}")).unwrap(),
+        client: ClientInfoV1::new("v2drw-legacy-start-recovery-test", "1", 1).unwrap(),
+        operation: OperationV1::Mutate,
+        command: CommandNameV1::new("session.start_replace").unwrap(),
+        workspace: Some(WorkspaceContextV1::new(fixture.selector.display(), None).unwrap()),
+        idempotency_key: Some(
+            ProtocolIdempotencyKeyV1::new(format!("typed-start-envelope-{number}")).unwrap(),
+        ),
+        preconditions,
+        options: RequestOptionsV1::new(false, 5_000).unwrap(),
+        payload,
+    })
+    .unwrap();
+    let DaemonRequestV1::ProcedureV2Start(request) =
+        DaemonRequestV1::from_envelope(&envelope).unwrap()
+    else {
+        panic!("session.start_replace must decode through the typed Procedure v2 start route")
     };
     request
 }
@@ -496,6 +554,297 @@ fn assert_cold_replay_slice(
             JobReceiptOrTerminalV1::TerminalReceipt(expected)
         ))
     );
+}
+
+#[test]
+fn legacy_v17_eligible_start_recovery_terminalizes_ineligible_job_once() {
+    let workspace = support_phase4_workspace::git_worktrees();
+    let _terminal_sealer = runtime::dispatcher(
+        Arc::new(runtime::manager(workspace.temporary_path())),
+        "legacy-v17-terminal-sealer",
+    );
+    let mut fixture = sqlite_fixture(workspace.main());
+    let current_session_id = SessionId::new("00000000-0000-4000-8000-000000109001").unwrap();
+    let current_snapshot = workspace_procedure_snapshot_from_bytes_v2(
+        "legacy-start-recovery-current.yaml",
+        TERMINAL_ACTION_PROCEDURE.as_bytes(),
+        podway_core::ProcedureSnapshotId::new("00000000-0000-4000-8000-000000109002").unwrap(),
+        UnixMillis::new(10),
+    )
+    .unwrap();
+    let prepared = graph_prepared_session_state_from_procedure_v2_snapshot(
+        current_snapshot,
+        "Legacy V17 current task",
+        current_session_id.clone(),
+        UnixMillis::new(10),
+    )
+    .unwrap();
+    fixture
+        .store
+        .create_graph_session_v2(fixture.binding.identity(), prepared.clone())
+        .unwrap();
+    let attempt_id = AttemptId::new("00000000-0000-4000-8000-000000109003").unwrap();
+    let running = prepared
+        .begin_v2(
+            Revision::ZERO,
+            attempt_id.clone(),
+            None,
+            UnixMillis::new(11),
+        )
+        .unwrap()
+        .into_state();
+    fixture
+        .store
+        .replace_graph_session_v2(
+            fixture.binding.identity(),
+            prepared.workspace_revision(),
+            prepared.trace().revision(),
+            running.clone(),
+        )
+        .unwrap();
+    let completed = running
+        .complete_active_action_v2(Revision::new(1), &attempt_id, None, UnixMillis::new(12))
+        .unwrap()
+        .into_state();
+    fixture
+        .store
+        .replace_graph_session_v2(
+            fixture.binding.identity(),
+            running.workspace_revision(),
+            running.trace().revision(),
+            completed.clone(),
+        )
+        .unwrap();
+    fixture
+        .store
+        .record_terminal_disposition_v2(
+            fixture.binding.identity(),
+            TerminalDispositionV2::not_required(
+                current_session_id.clone(),
+                Revision::new(2),
+                "Permit the V19 template admission before removing the disposition.",
+                None,
+                UnixMillis::new(13),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+    let replace = typed_start_request(
+        109_010,
+        &fixture,
+        json!({
+            "procedure": "v2drw-identity.yaml",
+            "expected_procedure_digest": fixture.procedure_digest,
+            "task_title": "Replacement admitted by legacy V17",
+            "replace_eligible": true
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+        PreconditionsV1::new(
+            Some(current_session_id.clone()),
+            Some(Revision::new(2)),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let template_key = IdempotencyKeyV1::new("legacy-v19-template-start").unwrap();
+    let admitted = fixture
+        .engine
+        .admit_procedure_v2_typed_start_for_workspace_with_response_context(
+            &fixture.binding,
+            &replace,
+            template_key,
+            Some(response_context(&fixture, 109_010, "session.start_replace")),
+        )
+        .unwrap()
+        .unwrap();
+    let AdmitOutcomeV1::New(job) = admitted else {
+        panic!("the V19 template start must be newly admitted")
+    };
+    let persisted = fixture
+        .store
+        .read_job(fixture.binding.identity(), job.job_id())
+        .unwrap()
+        .unwrap();
+    let mut execution: serde_json::Value =
+        serde_json::from_str(persisted.execution().canonical_execution().as_str()).unwrap();
+    assert_eq!(execution["execution_version"], 19);
+    execution["execution_version"] = json!(17);
+    let legacy_execution = CanonicalExecutionJsonV1::new(execution.to_string()).unwrap();
+    assert!(matches!(
+        fixture
+            .engine
+            .execute_next_with_graph_v2(
+                &fixture.binding,
+                WorkerIdV1::new("legacy-v19-template-worker").unwrap(),
+            )
+            .unwrap()
+            .unwrap()
+            .result(),
+        TerminalResultV1::Success(_)
+    ));
+    let template_state = fixture
+        .store
+        .read_graph_session_v2(fixture.binding.identity())
+        .unwrap()
+        .unwrap();
+    fixture
+        .store
+        .purge_archived_session_v2(
+            fixture.binding.identity(),
+            &current_session_id,
+            Revision::new(2),
+        )
+        .unwrap();
+    fixture
+        .store
+        .clear_graph_session_v2(
+            fixture.binding.identity(),
+            template_state.workspace_revision(),
+            template_state.trace().revision(),
+        )
+        .unwrap();
+    fixture
+        .store
+        .create_graph_session_v2(fixture.binding.identity(), completed.clone())
+        .unwrap();
+
+    let key = IdempotencyKeyV1::new("legacy-v17-eligible-start").unwrap();
+    let legacy_job_id = JobIdV1::new("00000000-0000-4000-8000-000000109004").unwrap();
+    let legacy = AdmitRequestV1::new_with_canonical_execution(
+        CommandV1::SessionStartReplace,
+        key.clone(),
+        legacy_job_id.clone(),
+        RevisionAttemptItemPreconditionsV1::new(Some(Revision::new(2)), None, None, None).unwrap(),
+        job.request_digest().clone(),
+        UnixMillis::new(20),
+        legacy_execution,
+    )
+    .with_procedure_v2_execution()
+    .with_session_identity(AdmissionSessionIdentityV1::Exact(
+        current_session_id.clone(),
+    ))
+    .with_response_context(
+        response_context(&fixture, 109_011, "session.start_replace")
+            .with_frozen_public_terminal_envelope(),
+    );
+    assert!(matches!(
+        fixture.store.admit(fixture.binding.identity(), legacy).unwrap(),
+        AdmitOutcomeV1::New(receipt) if receipt.job_id() == &legacy_job_id
+    ));
+
+    fixture
+        .store
+        .claim_next(
+            fixture.binding.identity(),
+            WorkerIdV1::new("legacy-v17-first-claim").unwrap(),
+            UnixMillis::new(20),
+        )
+        .unwrap()
+        .expect("the admitted legacy start must be claimable");
+
+    fixture = reopen_after_claimed_recovery(fixture);
+    let terminal = fixture
+        .engine
+        .execute_next_with_graph_v2(
+            &fixture.binding,
+            WorkerIdV1::new("legacy-v17-recovery-worker").unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+    assert!(matches!(terminal.result(), TerminalResultV1::Failure(_)));
+    let terminal_job = fixture
+        .store
+        .read_job(fixture.binding.identity(), terminal.job().job_id())
+        .unwrap()
+        .unwrap();
+    assert_eq!(terminal_job.state(), JobStateV1::Failed);
+    let terminal_receipt = terminal_job.terminal_receipt().unwrap();
+    assert!(matches!(
+        terminal_receipt
+            .graph_session_projection()
+            .unwrap()
+            .operation(),
+        Some(PersistedGraphTerminalOperationV2::Failure {
+            error: PersistedGraphMutationFailureV2::SessionResetNotEligible {
+                lifecycle,
+                current_terminal_disposition: false,
+            },
+        }) if lifecycle == "completed"
+    ));
+    assert_eq!(
+        terminal_receipt.public_terminal_envelope().unwrap()["code"],
+        "SESSION_RESET_NOT_ELIGIBLE"
+    );
+    assert_eq!(
+        fixture
+            .store
+            .read_graph_session_v2(fixture.binding.identity())
+            .unwrap(),
+        Some(completed.clone()),
+        "legacy start recovery must not change the undisposed completed session"
+    );
+    let view = fixture
+        .store
+        .read_graph_workspace_view_v2(fixture.binding.identity())
+        .unwrap();
+    assert_eq!(view.queued_job_count(), 0);
+    assert_eq!(view.running_job_id(), None);
+    assert_eq!(
+        fixture
+            .engine
+            .admit_procedure_v2_typed_start_for_workspace_with_response_context(
+                &fixture.binding,
+                &replace,
+                key,
+                Some(
+                    response_context(&fixture, 109_011, "session.start_replace")
+                        .with_frozen_public_terminal_envelope(),
+                ),
+            )
+            .unwrap(),
+        Some(AdmitOutcomeV1::Existing(
+            JobReceiptOrTerminalV1::TerminalReceipt(terminal_receipt.clone())
+        ))
+    );
+
+    let SqliteFixture {
+        selector,
+        binding,
+        database_path,
+        options,
+        store,
+        engine,
+        procedure_digest,
+    } = fixture;
+    drop(engine);
+    drop(store);
+    let reopened = Arc::new(
+        SqliteStoreV1::open(
+            &database_path,
+            binding.last_validated_root(),
+            binding.identity().clone(),
+            options.clone(),
+            UnixMillis::new(50),
+        )
+        .unwrap(),
+    );
+    assert_eq!(reopened.startup_recovery_report().requeued_job_count(), 0);
+    assert_eq!(
+        reopened.read_graph_session_v2(binding.identity()).unwrap(),
+        Some(completed)
+    );
+    let final_view = reopened
+        .read_graph_workspace_view_v2(binding.identity())
+        .unwrap();
+    assert_eq!(final_view.queued_job_count(), 0);
+    assert_eq!(final_view.running_job_id(), None);
+    drop((selector, procedure_digest));
 }
 
 #[test]

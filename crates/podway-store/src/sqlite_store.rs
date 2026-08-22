@@ -1209,6 +1209,7 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
             || !matches!(
                 execution.command(),
                 crate::CommandV1::SessionBegin
+                    | crate::CommandV1::SessionStartReplace
                     | crate::CommandV1::SessionArchive
                     | crate::CommandV1::SessionTerminalDisposition
                     | crate::CommandV1::SessionComplete
