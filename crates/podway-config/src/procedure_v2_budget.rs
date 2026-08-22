@@ -11,7 +11,9 @@
 //! The allocations are charged separately because they fail separately. An author who selects too
 //! much evidence must be told which allocation they exceeded, not that "next is too big".
 
-use podway_core::{GraphNodeId, GraphPlacementV2, ItemSpecV2};
+use podway_core::{
+    GraphNodeId, GraphPlacementV2, ItemPredicateOperatorV2, ItemSpecV2, PredicateScalarV2,
+};
 
 use crate::procedure_v2_authoring::{placement_definition_id, placement_evidence_from};
 use crate::{ParsedNodeDefinition, ParsedProcedureV2, ValidatedProcedureV2};
@@ -70,6 +72,9 @@ const MAX_GOAL_CRITERIA: u64 = 16;
 const MAX_CRITERION_REASON_CHARS: u64 = 2_000;
 const MAX_CITATIONS_PER_CRITERION: u64 = 4;
 const MAX_RECORD_REFERENCES: u64 = 8;
+const MAX_PREDICATE_TEXT_CHARS: u64 = 120;
+const MAX_CONDITION_STATE_CHARS: u64 = 11;
+const MAX_CONDITION_COUNT_BYTES: u64 = 5;
 
 const ALL_ALLOWED_ACTIONS: &[&str] = &[
     "session.complete",
@@ -247,6 +252,23 @@ fn next_static_charge(
                 if let Some(criteria) = option.criteria() {
                     charge = add(charge, string_field(actual_chars(criteria)));
                 }
+                if let Some(guards) = option.guards() {
+                    charge = add(charge, guard_authoring_charge(guards));
+                }
+            }
+            // Every decision publishes the authoritative allowed option identifiers. When any
+            // option is guarded, the result also carries one complete status for every option so
+            // callers never have to infer availability from a filtered option list.
+            charge = add(charge, array_field());
+            for option in decision.options() {
+                charge = add(charge, array_string(actual_chars(option.id().as_str())));
+            }
+            if decision
+                .options()
+                .iter()
+                .any(|option| option.guards().is_some())
+            {
+                charge = add(charge, option_guard_statuses_charge(decision));
             }
             if !decision.evidence_guidance().is_empty() {
                 charge = add(charge, array_field());
@@ -262,7 +284,7 @@ fn next_static_charge(
     // count is a separate required result field from the optional item-detail array.
     charge = add(charge, fixed_field(3)); // missing_required_item_count reaches 128
     charge = add(charge, array_field());
-    for item in items.iter().filter(|item| item.common().required()) {
+    for item in items.iter().filter(|item| potentially_required(item)) {
         charge = add(charge, ARRAY_ELEMENT_OVERHEAD);
         charge = add(charge, string_field(actual_chars(item.id().as_str())));
         charge = add(charge, string_field(actual_chars(item.common().prompt())));
@@ -308,7 +330,7 @@ fn suggestion_charge(placement: &GraphPlacementV2, definition: &ParsedNodeDefini
         ParsedNodeDefinition::Action(action) => action.items(),
         ParsedNodeDefinition::Decision(decision) => decision.items(),
     };
-    for item in items.iter().filter(|item| item.common().required()) {
+    for item in items.iter().filter(|item| potentially_required(item)) {
         if matches!(item, ItemSpecV2::CheckResult(_)) {
             charge = add(
                 charge,
@@ -373,6 +395,127 @@ fn suggestion_charge(placement: &GraphPlacementV2, definition: &ParsedNodeDefini
         _ => return u64::MAX,
     }
     charge
+}
+
+fn potentially_required(item: &ItemSpecV2) -> bool {
+    item.common().required() || item.common().required_when().is_some()
+}
+
+fn guard_authoring_charge(guard: &podway_core::OptionGuardV2) -> u64 {
+    let mut charge = array_field();
+    for predicate in guard.predicates() {
+        charge = add(charge, ARRAY_ELEMENT_OVERHEAD);
+        // The `evidence` field contains a closed source object with node and item identifiers.
+        charge = add(charge, field());
+        charge = add(
+            charge,
+            string_field(actual_chars(predicate.source_node().as_str())),
+        );
+        charge = add(
+            charge,
+            string_field(actual_chars(predicate.item().as_str())),
+        );
+        if predicate.field_outcome() {
+            charge = add(charge, string_field(actual_chars("outcome")));
+        }
+        charge = add(charge, authored_operator_charge(predicate.operator()));
+    }
+    charge
+}
+
+fn authored_operator_charge(operator: &ItemPredicateOperatorV2) -> u64 {
+    match operator {
+        ItemPredicateOperatorV2::Equals(expected)
+        | ItemPredicateOperatorV2::NotEquals(expected) => scalar_field_charge(expected),
+        ItemPredicateOperatorV2::Empty | ItemPredicateOperatorV2::NonEmpty => fixed_field(4),
+        ItemPredicateOperatorV2::AtLeast(expected) | ItemPredicateOperatorV2::AtMost(expected) => {
+            fixed_field(integer_bytes(*expected))
+        }
+    }
+}
+
+fn option_guard_statuses_charge(decision: &podway_core::DecisionDefinitionV2) -> u64 {
+    let mut charge = array_field();
+    for option in decision.options() {
+        charge = add(charge, ARRAY_ELEMENT_OVERHEAD);
+        charge = add(charge, string_field(actual_chars(option.id().as_str())));
+        charge = add(charge, string_field(MAX_CONDITION_STATE_CHARS));
+        charge = add(charge, array_field());
+        if let Some(guards) = option.guards() {
+            for predicate in guards.predicates() {
+                charge = add(charge, predicate_status_charge(predicate));
+            }
+        }
+    }
+    charge
+}
+
+fn predicate_status_charge(predicate: &podway_core::EvidencePredicateV2) -> u64 {
+    let mut charge = ARRAY_ELEMENT_OVERHEAD;
+    // `source` is a closed object containing kind, graph node, item, and optional outcome field.
+    charge = add(charge, field());
+    charge = add(charge, string_field(actual_chars("evidence")));
+    charge = add(
+        charge,
+        string_field(actual_chars(predicate.source_node().as_str())),
+    );
+    charge = add(
+        charge,
+        string_field(actual_chars(predicate.item().as_str())),
+    );
+    if predicate.field_outcome() {
+        charge = add(charge, string_field(actual_chars("outcome")));
+    }
+    charge = add(
+        charge,
+        string_field(actual_chars(predicate.operator().as_str())),
+    );
+    charge = add(charge, predicate_expected_charge(predicate.operator()));
+    charge = add(charge, predicate_actual_charge(predicate.operator()));
+    add(charge, string_field(MAX_CONDITION_STATE_CHARS))
+}
+
+fn predicate_expected_charge(operator: &ItemPredicateOperatorV2) -> u64 {
+    match operator {
+        ItemPredicateOperatorV2::Equals(expected)
+        | ItemPredicateOperatorV2::NotEquals(expected) => scalar_field_charge(expected),
+        ItemPredicateOperatorV2::AtLeast(expected) | ItemPredicateOperatorV2::AtMost(expected) => {
+            fixed_field(integer_bytes(*expected))
+        }
+        ItemPredicateOperatorV2::Empty | ItemPredicateOperatorV2::NonEmpty => 0,
+    }
+}
+
+fn predicate_actual_charge(operator: &ItemPredicateOperatorV2) -> u64 {
+    match operator {
+        ItemPredicateOperatorV2::Equals(PredicateScalarV2::Boolean(_))
+        | ItemPredicateOperatorV2::NotEquals(PredicateScalarV2::Boolean(_)) => {
+            fixed_field(MAX_BOOL_BYTES)
+        }
+        ItemPredicateOperatorV2::Equals(PredicateScalarV2::Integer(_))
+        | ItemPredicateOperatorV2::NotEquals(PredicateScalarV2::Integer(_))
+        | ItemPredicateOperatorV2::AtLeast(_)
+        | ItemPredicateOperatorV2::AtMost(_) => fixed_field(MAX_U64_BYTES),
+        ItemPredicateOperatorV2::Equals(PredicateScalarV2::Text(_))
+        | ItemPredicateOperatorV2::NotEquals(PredicateScalarV2::Text(_)) => {
+            string_field(MAX_PREDICATE_TEXT_CHARS)
+        }
+        ItemPredicateOperatorV2::Empty | ItemPredicateOperatorV2::NonEmpty => {
+            fixed_field(MAX_CONDITION_COUNT_BYTES)
+        }
+    }
+}
+
+fn scalar_field_charge(value: &PredicateScalarV2) -> u64 {
+    match value {
+        PredicateScalarV2::Boolean(value) => fixed_field(if *value { 4 } else { 5 }),
+        PredicateScalarV2::Integer(value) => fixed_field(integer_bytes(*value)),
+        PredicateScalarV2::Text(value) => string_field(actual_chars(value)),
+    }
+}
+
+fn integer_bytes(value: i64) -> u64 {
+    u64::try_from(value.to_string().len()).unwrap_or(u64::MAX)
 }
 
 fn suggestion(command: &str, argv: &[&str], item_id: Option<&str>) -> u64 {
@@ -727,14 +870,14 @@ mod tests {
         // Every shipped preset must sit well inside every allocation. The exact charges are pinned
         // so a change to the charge model shows up here as a number, not as a silent shift.
         let maxima = preset_maxima(include_bytes!("../../../assets/presets/sw-dev-v2.yaml"));
-        assert_eq!(maxima, [8_876, 262_186, 29_393, 5_628, 1_600]);
+        assert_eq!(maxima, [9_144, 262_186, 29_393, 5_628, 1_600]);
         assert_preset_fits("sw-dev-v2", maxima);
     }
 
     #[test]
     fn v2dog002_bug_fix_preset_records_budget_headroom() {
         let maxima = preset_maxima(include_bytes!("../../../assets/presets/bug-fix-v2.yaml"));
-        assert_eq!(maxima, [9_116, 262_186, 29_393, 5_628, 1_600]);
+        assert_eq!(maxima, [9_384, 262_186, 29_393, 5_628, 1_600]);
         assert_preset_fits("bug-fix-v2", maxima);
     }
 

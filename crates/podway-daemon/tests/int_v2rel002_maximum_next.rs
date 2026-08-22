@@ -182,6 +182,59 @@ fn maximum_source_with_item_padding(item_padding: usize) -> Vec<u8> {
     .unwrap()
 }
 
+fn guarded_maximum_source(item_prompt_scalars: usize) -> Vec<u8> {
+    let mut document: Value =
+        serde_json::from_slice(&maximum_source_with_item_padding(41)).unwrap();
+    let decision = document["node_definitions"]["consume"]
+        .as_object_mut()
+        .unwrap();
+    decision.insert(
+        "items".to_owned(),
+        Value::Array(
+            (0..64)
+                .map(|index| {
+                    let mut item = json!({
+                        "id": item_id(index),
+                        "type": "text",
+                        "prompt": "값".repeat(item_prompt_scalars),
+                        "required": index == 0,
+                        "max_length": 16_384,
+                    });
+                    if index != 0 {
+                        item["required_when"] = json!([{
+                            "item": item_id(0),
+                            "non_empty": true,
+                        }]);
+                    }
+                    item
+                })
+                .collect(),
+        ),
+    );
+    decision.insert(
+        "options".to_owned(),
+        Value::Array(
+            ["achieved", "not-achieved", "superseded"]
+                .into_iter()
+                .map(|option_id| {
+                    json!({
+                        "id": option_id,
+                        "label": "값".repeat(120),
+                        "criteria": "값".repeat(500),
+                        "guards": [
+                            {"evidence":{"node":"source","item":"confirm"},"equals":true},
+                            {"evidence":{"node":"source","item":"choice"},"equals":"\0".repeat(120)},
+                            {"evidence":{"node":"source","item":"integer"},"at_least":i64::MIN},
+                            {"evidence":{"node":"source","item":"list"},"non_empty":true}
+                        ]
+                    })
+                })
+                .collect(),
+        ),
+    );
+    serde_json::to_vec(&document).unwrap()
+}
+
 fn source_value(id: &str) -> RecordedItemValueV2 {
     match id {
         "confirm" | "selected-00" | "selected-01" | "selected-02" | "selected-03"
@@ -206,6 +259,10 @@ fn source_value(id: &str) -> RecordedItemValueV2 {
 }
 
 fn maximum_state(source: &[u8]) -> GraphSessionStateV2 {
+    maximum_state_with_controller(source, false)
+}
+
+fn maximum_state_with_controller(source: &[u8], record_controller: bool) -> GraphSessionStateV2 {
     let provider = BytesProcedure(source);
     let snapshot = workspace_procedure_snapshot_from_bytes_v2(
         "maximum-production-next.json",
@@ -291,12 +348,18 @@ fn maximum_state(source: &[u8]) -> GraphSessionStateV2 {
     let source_digest = source_memory.recorded_items_digest().unwrap();
     let consumer_slots = (0..64)
         .map(|index| {
+            let value = (record_controller && index == 0)
+                .then(|| RecordedItemValueV2::text("ready").unwrap());
             ItemSlotStateV2::new(
                 attempt_ids[62].clone(),
                 ItemId::new(item_id(index)).unwrap(),
                 ItemTypeV1::Text,
-                Revision::ZERO,
-                None,
+                if value.is_some() {
+                    Revision::new(1)
+                } else {
+                    Revision::ZERO
+                },
+                value,
                 UnixMillis::new(1_700_000_010_062),
                 UnixMillis::new(1_700_000_010_062),
             )
@@ -469,6 +532,7 @@ const STATIC_SELECTORS: &[&str] = &[
     "missing_required_items_truncated",
     "next_graph_node_id",
     "objective",
+    "option_guard_statuses",
     "options",
     "prompt",
     "reason_policy",
@@ -476,6 +540,87 @@ const STATIC_SELECTORS: &[&str] = &[
     "terminal",
     "title",
 ];
+
+#[test]
+fn v2grd_review_guarded_maximum_is_charged_before_runtime_projection() {
+    let source = guarded_maximum_source(100);
+    let ParsedProcedure::V2(parsed) =
+        parse_procedure_document(&source, ProcedureDocumentFormat::Json).unwrap()
+    else {
+        unreachable!()
+    };
+    let validated = validate_procedure_v2(parsed).unwrap();
+    let source_text = std::str::from_utf8(&source).unwrap();
+    let findings = vet_procedure_v2(
+        &validated,
+        &AuthoringContext::new(
+            "guarded-maximum-production-next.json",
+            source_text,
+            ProcedureDocumentFormat::Json,
+        ),
+    );
+    assert!(
+        findings
+            .iter()
+            .all(|finding| finding.code().severity() != podway_core::AuthoringSeverity::Error),
+        "guarded maximum fixture must pass production vet: {findings:?}"
+    );
+    let budget =
+        procedure_placement_budget_v2(&validated, &GraphNodeId::new("consume").unwrap()).unwrap();
+    assert!(budget.next_static() <= podway_config::NEXT_STATIC_BUDGET);
+
+    let view = GraphWorkspaceViewV2::new(
+        identity(),
+        Some(maximum_state_with_controller(&source, true)),
+        0,
+        None,
+        u64::MAX,
+        UnixMillis::new(1_700_000_030_000),
+    );
+    let next = project_graph_next_v2(&view).unwrap();
+    assert!(next["allowed_option_ids"].is_array());
+    assert_eq!(next["option_guard_statuses"].as_array().unwrap().len(), 3);
+    assert_eq!(next["missing_required_item_count"], 63);
+    let static_suggestions = next["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|suggestion| suggestion["command"] != "goal.assess_criterion")
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut static_component = fields(&next, STATIC_SELECTORS);
+    static_component
+        .as_object_mut()
+        .unwrap()
+        .insert("suggestions".into(), json!(static_suggestions));
+    let static_encoded = serde_json::to_vec(&static_component).unwrap().len();
+    assert!(u64::try_from(static_encoded).unwrap() <= budget.next_static());
+
+    let observation = project_graph_observation_v1(&view).unwrap();
+    assert!(serde_json::to_vec(&observation["guidance"]).unwrap().len() <= 736 * 1_024);
+    assert!(serde_json::to_vec(&observation).unwrap().len() <= 983_040);
+
+    let rejected_source = guarded_maximum_source(300);
+    let ParsedProcedure::V2(rejected) =
+        parse_procedure_document(&rejected_source, ProcedureDocumentFormat::Json).unwrap()
+    else {
+        unreachable!()
+    };
+    let rejected = validate_procedure_v2(rejected).unwrap();
+    let rejected_text = std::str::from_utf8(&rejected_source).unwrap();
+    let rejected_findings = vet_procedure_v2(
+        &rejected,
+        &AuthoringContext::new(
+            "guarded-maximum-production-next-over.json",
+            rejected_text,
+            ProcedureDocumentFormat::Json,
+        ),
+    );
+    assert!(rejected_findings.iter().any(|finding| {
+        finding.code() == AuthoringDiagnosticCode::NextStaticBudgetExceeded
+            && finding.graph_node_id() == Some("consume")
+    }));
+}
 const READBACK_SELECTORS: &[&str] = &["readback", "references"];
 const GOAL_SELECTORS: &[&str] = &[
     "goal",
