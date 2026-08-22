@@ -8,10 +8,31 @@ explicit inspection, verification, review, and closeout but no tracked goal. Use
 Starting creates a prepared session without a cursor or goal. Use `podway begin`
 to create its first attempt, optionally defining the initial goal at the same time.
 
+`podway init` selects `sw-dev-v2` for later new sessions. A newly started built-in
+session admits the exact current embedded source, version, and digest. Updating a
+preset changes only later starts: an already admitted session continues from its
+immutable snapshot and is never migrated or reinterpreted in place.
+
 During a task, read `podway observe`, perform the actual work
 outside Podway, then record only supported evidence on the active attempt. Use typed
 item commands and `complete` to follow an action's declared edge. Use `decide` on a
 decision node and the goal commands for goal-tracked sessions.
+
+Record Procedure definitions, prompts, goal statements and criteria, narrative
+evidence, check-result descriptors and summaries, and transition reasons in
+English. Preserve exact commands, paths, hashes, identifiers, enumerated values,
+and product names verbatim. Summarize non-English logs or source passages in
+English and retain a digest or stable reference. This is an operator and agent
+policy; Podway remains locale-neutral and accepts bounded Unicode.
+
+Use explicit selected evidence items so each consumer reads only what it needs.
+Use `required_when` for same-node typed conditional requiredness and complementary
+guards for evidence-based routing. Manual rework is a declared target allowlist;
+a decision route with `effect: rework` owns one option-specific target. For a
+selected value larger than the first `session.next` preview, follow the opaque
+`next_page_token` with `evidence read` until `truncated` is false, restarting from
+the first page after `EVIDENCE_PAGE_TOKEN_STALE`. The
+[Procedure v2 workflow](../../examples/v2-workflow.md) provides copyable patterns.
 
 If the current attempt must be repeated, use `retry --reason`. If prior work must be
 revisited, use `rework --to <node> --reason` only for a declared manual-rework

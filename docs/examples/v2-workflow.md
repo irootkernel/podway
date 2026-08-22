@@ -7,6 +7,14 @@ declared progression rules, but it does not run checks or decide whether recorde
 claims are true. The local socket trusts same-user processes; actor labels provide
 correlation, not authentication or authorization.
 
+Write Procedure definitions, prompts, goal statements and criteria, narrative
+text and list evidence, check-result descriptors and summaries, and mutation or
+decision reasons in English. Preserve exact commands, paths, hashes, identifiers,
+enumerated values, and product names verbatim. Summarize a non-English log or
+source passage in English and record its digest or stable reference instead of
+copying it into Podway. This is an authoring policy, not runtime validation:
+Podway remains locale-neutral and accepts bounded Unicode.
+
 ## Prepare the workspace
 
 Initialize Podway state, then inspect the shipped preset and its pinned digest:
@@ -48,6 +56,12 @@ podway --json start \
 podway --json begin
 ```
 
+`podway init` configures `sw-dev-v2` as the default for later new sessions; it
+does not reinterpret an existing session. All three shipped presets are version
+3. A newly started preset session admits its exact current embedded bytes and
+digest. A session admitted under an earlier version keeps its immutable snapshot
+until it is explicitly replaced; there is no in-place migration.
+
 Its complete graph is `inspect -> implement -> verify -> review -> closeout`.
 Review option `changes-requested` returns to `implement`; option `ready` advances
 to closeout. Its manual rework targets are `inspect`, `implement`, and `verify`.
@@ -58,23 +72,23 @@ below apply.
 
 Procedure authors can make a later optional item conditionally required from an
 earlier, unconditionally required item in the same definition. Predicates are
-AND-combined and use the closed typed vocabulary; this example makes the commit
-SHA required only in committed mode:
+AND-combined and use the closed typed vocabulary; this example requires a summary
+only when documentation was updated:
 
 ```yaml
 items:
-  - id: commit-state
+  - id: documentation-state
     type: choice
-    prompt: Select the commit state.
+    prompt: Record the documentation state.
     required: true
-    choices: [committed, uncommitted]
-  - id: commit-sha
+    choices: [not-applicable, updated]
+  - id: documentation-summary
     type: text
-    prompt: Record the commit SHA.
+    prompt: Summarize the durable documentation update in English.
     required: false
     required_when:
-      - item: commit-state
-        equals: committed
+      - item: documentation-state
+        equals: updated
 ```
 
 A decision guard can read only an explicitly selected item from a required,
@@ -102,6 +116,11 @@ node_definitions:
       - id: changes-required
         label: Changes required
         criteria: At least one unresolved valid finding remains.
+        guards:
+          - evidence:
+              node: review
+              item: unresolved-valid-findings
+            at_least: 1
     reason:
       required: true
       prompt: Explain the selected review outcome.
@@ -132,6 +151,29 @@ guard exists. An unavailable selection fails with
 `OPTION_GUARD_UNSATISFIED`; stale required evidence retains
 `EVIDENCE_REFERENCE_STALE` precedence.
 
+Text and list guards use `empty` or `non_empty` instead of a comparison value.
+Keep the option set total by authoring complementary routes over the same selected
+required source:
+
+```yaml
+options:
+  - id: clean
+    label: No findings
+    criteria: The selected findings list is empty.
+    guards:
+      - evidence: {node: review, item: findings}
+        empty: true
+  - id: rework
+    label: Findings remain
+    criteria: The selected findings list is non-empty.
+    guards:
+      - evidence: {node: review, item: findings}
+        non_empty: true
+```
+
+The source must still be a dominating `required: true` evidence reference with
+`items: [findings]`; guards never grant access to an undeclared or stale value.
+
 ## Read stable state before each mutation
 
 ```bash
@@ -159,10 +201,13 @@ digest, and total size. Observation guidance is metadata only: it never carries 
 itself through the paged query and follow `next_page_token` until `truncated` is `false`:
 
 ```bash
-podway --json evidence read --source reproduce --item reproduction-log
-podway --json evidence read --source reproduce --item reproduction-log \
+podway --json evidence read --source review --item review-findings
+podway --json evidence read --source review --item review-findings \
   --page-token <next-page-token>
 ```
+
+That selected multi-page item belongs to `sw-dev-v2`; `bug-fix-v2` and
+`small-change-v2` deliberately keep selected lists within one page.
 
 `podway.evidence-read-result/v1` reports `total_size` with its `size_unit`, so a caller
 knows how much remains before requesting the next page. `EVIDENCE_PAGE_TOKEN_STALE` means
@@ -219,6 +264,42 @@ The result schema is `podway.item-record-many-result/v1`. Its `items` array is
 ordered by item ID and reports each item revision; any invalid or stale operation
 leaves the whole set unchanged.
 
+At the `bug-fix-v2` `verify` node, record the structurally bound external result
+through the same atomic route. The operation ID and digest must match the preset;
+the input and output digests bind caller-supplied data but do not prove that the
+operation ran:
+
+```json
+{
+  "schema": "podway.item-record-many-input/v1",
+  "workspace_uuid": "<workspace-uuid>",
+  "session_id": "<session-id>",
+  "session_revision": 12,
+  "attempt_id": "<attempt-id>",
+  "idempotency_key": "bug-42-record-verification",
+  "operations": [{
+    "item_id": "verification-result",
+    "expected_item_revision": 0,
+    "record": {
+      "type": "check_result",
+      "operation_id": "bug-fix-verification",
+      "operation_digest": "sha256:01122b6057efcfa3f22c453aa48fb647ccba9f7db437dd44473a9f32a854a979",
+      "input_basis": {
+        "descriptor": "Current bug-fix candidate and declared regression check",
+        "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "executor": {"name": "repository verification", "version": "1"},
+      "outcome": "pass",
+      "summary": "The declared regression check and surrounding verification passed.",
+      "output_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  }]
+}
+```
+
+Save this document and pass it to `podway --json record --stdin`; JSON shown in a
+documentation block is not shell input by itself.
+
 Re-read observe after every successful mutation and use the returned revisions.
 Do not increment a revision locally or reuse a stale attempt ID.
 
@@ -250,14 +331,14 @@ podway --json retry \
   --idempotency-key bug-42-retry-verify
 ```
 
-At `decide-verification`, select only an ID from
+At `evaluate-verification`, select only an ID from
 `result.allowed_option_ids[]`. The reason is the caller's recorded judgment, not
 a truth determination made by Podway:
 
 ```bash
 podway --json decide \
   --option passed \
-  --reason "The recorded regression and surrounding checks exited successfully." \
+  --reason "The structurally bound result records a passing outcome for the current input basis." \
   --actor verifier \
   --if-workspace-uuid <workspace-uuid> \
   --if-session-id <session-id> \
@@ -287,6 +368,13 @@ podway --json rework \
   --idempotency-key bug-42-review-rework
 ```
 
+Manual rework is allowed only by `manual_rework.allowed_targets`. A decision
+route with `effect: rework` is different: its selected option owns a specific
+target and may be guarded by recorded evidence. Both create a fresh target
+attempt and make the replaced suffix stale; neither executes corrective work.
+In `sw-dev-v2`, review option `implementation-changes` returns to `implement`,
+while `documentation-changes` returns to `document`.
+
 If the desired outcome itself changes, create a new immutable goal revision and
 declare its rework target:
 
@@ -308,7 +396,7 @@ podway --json goal revise \
 
 ## Assess criteria and close out
 
-At `assess-session-goal`, record one assessment per criterion. Evidence and item
+At `assess-goal`, record one assessment per criterion. Evidence and item
 citations identify recorded Podway state; they do not validate an external test:
 
 ```bash

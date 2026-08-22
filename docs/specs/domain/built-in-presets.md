@@ -14,6 +14,14 @@ binary with pinned digests.
 created by `podway init` defaults to `sw-dev-v2`. A preset start admits the exact
 embedded source and fails closed if its shipped digest does not match.
 
+All three current presets declare version `3`. Version is descriptive public
+identity while the canonical digest binds the admitted semantics. New preset
+starts use these current identities; existing sessions retain their earlier
+immutable snapshots. Copyable recording, condition, guard, selector, page-token,
+check-result, and rework patterns live in the
+[Procedure v2 workflow](../../examples/v2-workflow.md), not in duplicate preset
+copies.
+
 Custom Procedure v2 files remain supported through the configured safe relative
 procedure paths. Built-in and custom procedures pass through the same v2 parser,
 validator, canonicalizer, and runtime model.
