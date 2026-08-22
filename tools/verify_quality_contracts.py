@@ -11,6 +11,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 CRASH_PATH = ROOT / "quality/crash-boundaries-v1.json"
+REFERENCE_PATHS = ROOT / "tests/fixtures/v2/presets/reference-paths.json"
 FUNCTION_RE_TEMPLATE = r"\bfn\s+{name}\s*(?:<[^>]*>)?\s*\("
 
 
@@ -101,6 +102,57 @@ def validate_v2_contract_semantics() -> int:
     return 6
 
 
+def validate_reference_paths() -> int:
+    fixture = load_object(REFERENCE_PATHS)
+    if fixture.get("schema") != "podway.v2-fixture-recipe/v1":
+        fail("reference path fixture schema is unsupported")
+    if (
+        fixture.get("fixture_class") != "known-answer"
+        or fixture.get("evidence_level") != "contract-recipe"
+        or fixture.get("implementation_status") != "automated"
+    ):
+        fail("reference path fixture metadata is invalid")
+    cases = fixture.get("cases")
+    if not isinstance(cases, list) or not cases:
+        fail("reference path fixture must contain cases")
+
+    expected = {
+        "small-change-v2": {
+            "small-clean", "small-review-rework", "small-manual-inspect",
+            "small-manual-implement", "small-manual-verify",
+        },
+        "bug-fix-v2": {
+            "bug-clean", "bug-verification-retry", "bug-review-rework",
+            "bug-goal-not-achieved", "bug-goal-superseded",
+            "bug-manual-reproduce", "bug-manual-diagnose",
+            "bug-manual-implement", "bug-manual-verify", "bug-manual-review",
+        },
+        "sw-dev-v2": {
+            "sw-clean", "sw-verification-retry",
+            "sw-review-implementation-rework", "sw-review-documentation-rework",
+            "sw-documentation-updated", "sw-documentation-summary-missing",
+            "sw-verification-observations-missing", "sw-paging-continuation",
+            "sw-paging-stale-token", "sw-goal-not-achieved",
+            "sw-goal-superseded", "sw-manual-plan", "sw-manual-implement",
+            "sw-manual-verify", "sw-manual-document", "sw-manual-review",
+        },
+    }
+    observed = {preset_id: set() for preset_id in expected}
+    required_fields = {"id", "preset_id", "operation", "expected"}
+    for index, case in enumerate(cases):
+        if not isinstance(case, dict) or set(case) != required_fields:
+            fail(f"reference path case {index} has unexpected or missing fields")
+        if any(not isinstance(case[field], str) or not case[field] for field in required_fields):
+            fail(f"reference path case {index} fields must be non-empty strings")
+        preset_id = case["preset_id"]
+        if preset_id not in observed or case["id"] in observed[preset_id]:
+            fail(f"reference path case {index} has an unknown preset or duplicate ID")
+        observed[preset_id].add(case["id"])
+    if observed != expected:
+        fail("reference path fixture does not cover the exact accepted path inventory")
+    return len(cases)
+
+
 def locator_parts(locator: Any, label: str) -> tuple[Path, str]:
     if not isinstance(locator, str) or "::" not in locator:
         fail(f"{label} must be PATH::SYMBOL")
@@ -162,13 +214,15 @@ def validate_crash_registry() -> int:
 def main() -> int:
     try:
         semantic_checks = validate_v2_contract_semantics()
+        reference_paths = validate_reference_paths()
         crash_windows = validate_crash_registry()
     except ContractError as error:
         print(f"quality contract verification failed: {error}")
         return 1
     print(
         "quality contracts verified: "
-        f"{semantic_checks} v2 semantic checks, {crash_windows} crash windows"
+        f"{semantic_checks} v2 semantic checks, {reference_paths} reference paths, "
+        f"{crash_windows} crash windows"
     )
     return 0
 

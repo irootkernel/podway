@@ -1,0 +1,41 @@
+{
+  "schema": "podway.v2-fixture-recipe/v1",
+  "fixture_class": "known-answer",
+  "evidence_level": "contract-recipe",
+  "implementation_status": "automated",
+  "cases": [
+    {"id": "small-clean", "preset_id": "small-change-v2", "operation": "advance inspect, implement, and verify; choose review.ready; complete closeout", "expected": "terminal-achieved-without-goal"},
+    {"id": "small-review-rework", "preset_id": "small-change-v2", "operation": "choose review.changes-requested, repeat implement and verify, then choose review.ready", "expected": "stale-suffix-replaced-and-terminal"},
+    {"id": "small-manual-inspect", "preset_id": "small-change-v2", "operation": "request manual rework to inspect", "expected": "accepted"},
+    {"id": "small-manual-implement", "preset_id": "small-change-v2", "operation": "request manual rework to implement", "expected": "accepted"},
+    {"id": "small-manual-verify", "preset_id": "small-change-v2", "operation": "request manual rework to verify", "expected": "accepted"},
+
+    {"id": "bug-clean", "preset_id": "bug-fix-v2", "operation": "record a passing verification result, choose passed and approved, assess achieved, and complete closeout", "expected": "terminal-achieved"},
+    {"id": "bug-verification-retry", "preset_id": "bug-fix-v2", "operation": "record fail or inconclusive, choose retry, re-record implementation and a passing result, then finish", "expected": "guarded-rework-and-terminal"},
+    {"id": "bug-review-rework", "preset_id": "bug-fix-v2", "operation": "record a positive unresolved finding count, choose changes-requested, rework implementation, then finish with zero findings", "expected": "guarded-rework-and-terminal"},
+    {"id": "bug-goal-not-achieved", "preset_id": "bug-fix-v2", "operation": "finish verification and review, then assess not-achieved", "expected": "terminal-not-achieved"},
+    {"id": "bug-goal-superseded", "preset_id": "bug-fix-v2", "operation": "finish verification and review, then assess superseded", "expected": "terminal-superseded"},
+    {"id": "bug-manual-reproduce", "preset_id": "bug-fix-v2", "operation": "request manual rework to reproduce", "expected": "accepted"},
+    {"id": "bug-manual-diagnose", "preset_id": "bug-fix-v2", "operation": "request manual rework to diagnose", "expected": "accepted"},
+    {"id": "bug-manual-implement", "preset_id": "bug-fix-v2", "operation": "request manual rework to implement", "expected": "accepted"},
+    {"id": "bug-manual-verify", "preset_id": "bug-fix-v2", "operation": "request manual rework to verify", "expected": "accepted"},
+    {"id": "bug-manual-review", "preset_id": "bug-fix-v2", "operation": "request manual rework to review", "expected": "accepted"},
+
+    {"id": "sw-clean", "preset_id": "sw-dev-v2", "operation": "record a passing result, choose acceptable, record documentation not-applicable, approve review, assess achieved, and complete closeout", "expected": "terminal-achieved"},
+    {"id": "sw-verification-retry", "preset_id": "sw-dev-v2", "operation": "record fail or inconclusive with observations, choose retry, re-record implementation and a passing result, then finish", "expected": "conditional-evidence-guarded-rework-and-terminal"},
+    {"id": "sw-review-implementation-rework", "preset_id": "sw-dev-v2", "operation": "record implementation findings, choose implementation-changes, repeat implementation onward, then finish cleanly", "expected": "phase-owner-rework-and-terminal"},
+    {"id": "sw-review-documentation-rework", "preset_id": "sw-dev-v2", "operation": "record zero implementation findings and positive documentation findings, choose documentation-changes, repeat documentation onward, then finish cleanly", "expected": "phase-owner-rework-and-terminal"},
+    {"id": "sw-documentation-updated", "preset_id": "sw-dev-v2", "operation": "record documentation-state updated and its conditionally required summary", "expected": "advance-allowed"},
+    {"id": "sw-documentation-summary-missing", "preset_id": "sw-dev-v2", "operation": "record documentation-state updated without documentation-summary", "expected": "advance-blocked"},
+    {"id": "sw-verification-observations-missing", "preset_id": "sw-dev-v2", "operation": "record a non-pass verification result without verification-observations", "expected": "advance-blocked"},
+    {"id": "sw-paging-continuation", "preset_id": "sw-dev-v2", "operation": "record a multi-page review-findings list and read every page with the returned page token", "expected": "exact-count-digest-and-complete-content"},
+    {"id": "sw-paging-stale-token", "preset_id": "sw-dev-v2", "operation": "obtain a review-findings page token, replace the evidence through rework, then replay the token", "expected": "stale-page-token-rejected"},
+    {"id": "sw-goal-not-achieved", "preset_id": "sw-dev-v2", "operation": "finish verification, documentation, and review, then assess not-achieved", "expected": "terminal-not-achieved"},
+    {"id": "sw-goal-superseded", "preset_id": "sw-dev-v2", "operation": "finish verification, documentation, and review, then assess superseded", "expected": "terminal-superseded"},
+    {"id": "sw-manual-plan", "preset_id": "sw-dev-v2", "operation": "request manual rework to plan", "expected": "accepted"},
+    {"id": "sw-manual-implement", "preset_id": "sw-dev-v2", "operation": "request manual rework to implement", "expected": "accepted"},
+    {"id": "sw-manual-verify", "preset_id": "sw-dev-v2", "operation": "request manual rework to verify", "expected": "accepted"},
+    {"id": "sw-manual-document", "preset_id": "sw-dev-v2", "operation": "request manual rework to document", "expected": "accepted"},
+    {"id": "sw-manual-review", "preset_id": "sw-dev-v2", "operation": "request manual rework to review", "expected": "accepted"}
+  ]
+}

@@ -14,8 +14,10 @@ ordering, crash ambiguity, filesystem boundaries, and public contract stability.
 
 Every valid graph fixture must prove a unique entry, reachable nodes, an acyclic
 advance subgraph, and a finite terminal route when declared rework edges are
-included. Both shipped presets must validate and retain their pinned canonical
-digests.
+included. The executable reference-path fixture must retain the accepted clean,
+failure, guarded, conditional, paging, goal-outcome, and manual-rework inventory
+for all three shipped presets. Every shipped preset must validate and retain its
+pinned canonical digest.
 
 ## Persistence and compatibility
 

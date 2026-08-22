@@ -16,7 +16,7 @@
 | Every windowed response collection reports an exact total and its truncation state | ADR-0024; IPC response budgets | `V2SCL-005` budget, observation-composition, and maximum-size tests |
 | External check results are structurally bound attempt-local items without becoming verification, execution, or a second evidence ledger | ADR-0025; Procedure and item specification | `V2AST-003`–`006` domain, contract, migration, runtime, observation, CLI, and trust-language tests |
 | Typed conditions derive required items and guarded options from bounded current state without adding an expression engine or weakening freshness | ADR-0028; Procedure, transition, automation, and IPC specifications | `V2GRD-002`–`006` schema, domain, authoring, runtime, budget, CLI, and compatibility tests |
-| Exactly three v2 presets ship with pinned identity | Built-in preset spec | Preset embedding, digest, CLI, and production tests |
+| Exactly three distinct v2 presets ship with pinned identity, exact graphs, and bounded path inventories | Built-in preset spec | Preset embedding, digest, CLI, production tests, and executable reference-path fixture |
 | Public assets and documentation agree | Contract manifest; docs precedence | Contract, quality, documentation, and architecture checks |
 
 The active roadmap owns completion state. Test success proves only the scope of the

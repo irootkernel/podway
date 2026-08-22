@@ -394,7 +394,7 @@ Dependencies: completed `V2GRD` epic.
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `V2REF-001` | Adopt the reference procedure quality contract | Planned | Promote the adopted requirement matrix, exact graphs, selection boundaries, and executable path fixtures into durable authorities. | [V2REF dossier](../todo/TODO-podway-reference-procedures.md#3-accepted-preset-designs) |
+| `V2REF-001` | Adopt the reference procedure quality contract | Completed | Promoted the requirement matrix, exact graphs, selection boundaries, compatibility and trust boundaries, and executable path inventory into durable authorities. | [Built-in presets](../specs/domain/built-in-presets.md), [testing and conformance](../specs/quality/testing-and-conformance.md) |
 | `V2REF-002` | Rebuild sw-dev-v2 as the full reference | Planned | Add bounded planning, check results, conditions, guards, paging, artifacts, goals, and phase-owner rework; re-pin the digest and update its budget known answers. | [V2REF dossier](../todo/TODO-podway-reference-procedures.md#33-sw-dev-v2) |
 | `V2REF-003` | Harden bug-fix-v2 and small-change-v2 | Planned | Add guarded fresh bug-fix evidence, preserve the assertion-only small-change boundary, re-pin both digests, and update their budget known answers. | [V2REF dossier](../todo/TODO-podway-reference-procedures.md#3-accepted-preset-designs) |
 | `V2REF-004` | Add English recording and authoring examples | Planned | Document English narrative recording, the new-session default impact, and copyable page-token, check-result, condition, guard, selector, and rework patterns. | [V2REF dossier](../todo/TODO-podway-reference-procedures.md#34-english-recording-policy) |
