@@ -113,8 +113,7 @@ graph:
       evidence_from:
         - node: review
           required: true
-          select:
-            items: [unresolved-valid-findings]
+          items: [unresolved-valid-findings]
       routes:
         approved:
           to: closeout

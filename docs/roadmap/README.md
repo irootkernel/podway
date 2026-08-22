@@ -368,6 +368,26 @@ Dependencies: completed `V2ARC` epic.
 | `V2GRD-005` | Enforce runtime condition gates | Completed | Enforce identity, freshness, and guards in order; expose structured statuses; and register non-retryable `OPTION_GUARD_UNSATISFIED`. | [State transitions](../specs/domain/state-transitions.md), [Errors and exit codes](../specs/interfaces/errors-and-exit-codes.md#typed-condition-failures) |
 | `V2GRD-006` | Repair phase-owner lint and close conformance | Completed | Remove the two count constants and legacy codes, add distinct-label and weak-criteria diagnostics, promote durable documentation, remove the completed dossier, and pass the development gate. | [ADR-0028](../architecture-decision-records/0028-bounded-typed-procedure-guards.md), [Errors and exit codes](../specs/interfaces/errors-and-exit-codes.md#typed-condition-failures), [workflow example](../examples/v2-workflow.md#author-typed-conditions) |
 
+### V2GRD cold-validation record
+
+An independent cold validation on August 22, 2026 audited the complete V2GRD
+implementation and its hardening target from base
+`f8ceefc069793e781ce0fc558a4e515eb9126640` through committed snapshot
+`5fd0206f85339c2afbe2987275a8d24ba932f832` plus the goal-owned working-tree
+changes. It corrected the workflow example's evidence selector, promoted the
+typed-condition compatibility fixture to production automation, and added
+daemon/SQLite cold-restart and runtime failure-precedence coverage. The two
+focused production tests passed, and `gaori --json run full` completed the
+`make test` development gate with exit `0`, artifact status `passed`, and zero
+failures.
+
+Mulgae run `r_01a02855-2db5-7e3b-966f-c976512fbdb7` reviewed target
+`sha256:4272c04e9f17c01ffcd89194f9774965b32e52c13193827698168f32c9f38de0`
+with complete six-role coverage, CI decision `pass`, committed publication, a
+successful low-severity findings query, and zero findings. This validation does
+not claim distribution readiness, upstream publication, installation, or
+runtime activation, and `make dist` was not run.
+
 ## V2REF — Reference Procedures and Authoring Guidance
 
 Dependencies: completed `V2GRD` epic.

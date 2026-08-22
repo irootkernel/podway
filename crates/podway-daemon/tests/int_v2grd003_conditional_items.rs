@@ -94,8 +94,10 @@ fn v2grd003_required_now_and_completion_share_the_authoritative_item_snapshot() 
     .unwrap();
     let digest = validate_procedure_v2(parsed).unwrap().digest().clone();
     let selector = int_v2run003_runtime::selector(fixture.main());
-    let manager = Arc::new(int_v2run003_runtime::manager(fixture.temporary_path()));
-    let dispatcher = int_v2run003_runtime::dispatcher(manager, "v2grd003-conditional-items");
+    let manager_root = fixture.temporary_path().to_path_buf();
+    let manager = Arc::new(int_v2run003_runtime::manager(&manager_root));
+    let dispatcher =
+        int_v2run003_runtime::dispatcher(Arc::clone(&manager), "v2grd003-conditional-items");
 
     let initialize = int_v2run003_runtime::request(
         903_001,
@@ -181,6 +183,12 @@ fn v2grd003_required_now_and_completion_share_the_authoritative_item_snapshot() 
         json!({"value": "strict"}).as_object().unwrap().clone(),
         "v2grd003-strict",
     );
+
+    drop(dispatcher);
+    drop(manager);
+    let reopened_manager = Arc::new(int_v2run003_runtime::manager(&manager_root));
+    let dispatcher =
+        int_v2run003_runtime::dispatcher(reopened_manager, "v2grd003-conditional-items-reopened");
     let strict = observe(&dispatcher, &selector, 903_050, session_id);
     assert_eq!(
         strict["status"]["current"]["missing_required_item_count"],

@@ -39,6 +39,11 @@ node_definitions:
     title: Decide
     objective: Select the supported disposition.
     prompt: Which disposition is supported?
+    items:
+      - id: acknowledgement
+        type: text
+        prompt: Record that the evidence was reviewed.
+        required: true
     options:
       - id: approved
         label: Approved
@@ -179,8 +184,10 @@ fn v2grd004_next_keeps_all_options_and_projects_authoritative_guard_statuses() {
             .unwrap();
     let digest = validate_procedure_v2(parsed).unwrap().digest().clone();
     let selector = int_v2run003_runtime::selector(fixture.main());
-    let manager = Arc::new(int_v2run003_runtime::manager(fixture.temporary_path()));
-    let dispatcher = int_v2run003_runtime::dispatcher(manager, "v2grd004-option-guards");
+    let manager_root = fixture.temporary_path().to_path_buf();
+    let manager = Arc::new(int_v2run003_runtime::manager(&manager_root));
+    let dispatcher =
+        int_v2run003_runtime::dispatcher(Arc::clone(&manager), "v2grd004-option-guards");
 
     let initialize = int_v2run003_runtime::request(
         904_001,
@@ -246,13 +253,15 @@ fn v2grd004_next_keeps_all_options_and_projects_authoritative_guard_statuses() {
         ResponseEnvelopeV2::OutputV2(_)
     ));
 
+    drop(dispatcher);
+    drop(manager);
+    let reopened_manager = Arc::new(int_v2run003_runtime::manager(&manager_root));
+    let dispatcher =
+        int_v2run003_runtime::dispatcher(reopened_manager, "v2grd004-option-guards-reopened");
     let observation = observe(&dispatcher, &selector, 904_030, session_id);
     let guidance = observation["guidance"].as_object().unwrap();
     assert_eq!(guidance["options"].as_array().unwrap().len(), 4);
-    assert_eq!(
-        guidance["allowed_option_ids"],
-        json!(["approved", "fallback"])
-    );
+    assert_eq!(guidance["allowed_option_ids"], json!([]));
     let statuses = guidance["option_guard_statuses"].as_array().unwrap();
     assert_eq!(statuses.len(), 4);
     assert_eq!(statuses[0]["state"], "met");
@@ -267,6 +276,63 @@ fn v2grd004_next_keeps_all_options_and_projects_authoritative_guard_statuses() {
     assert_eq!(
         guidance["options"][0]["guards"][0]["evidence"]["node"],
         "review"
+    );
+
+    let missing_item = decide_request(
+        904_031,
+        &selector,
+        "blocked",
+        "v2grd005-required-item-precedes-guard",
+        int_v2run003_runtime::session_preconditions(
+            observation["status"]
+                .as_object()
+                .expect("observation status"),
+        ),
+    );
+    let ResponseEnvelopeV2::Error(error) =
+        int_v2run003_runtime::dispatch(&dispatcher, &missing_item)
+    else {
+        panic!("a missing required decision item must fail before its option guard")
+    };
+    assert_eq!(error.code().as_str(), "REQUIRED_ITEMS_MISSING");
+    assert_eq!(error.details()["admission"]["admitted"], true);
+
+    int_v2run003_runtime::mutate_item(
+        &dispatcher,
+        &selector,
+        904_032,
+        session_id,
+        "item.set",
+        "acknowledgement",
+        json!({"value": "Evidence reviewed."})
+            .as_object()
+            .unwrap()
+            .clone(),
+        "v2grd004-acknowledgement",
+    );
+    let stale_fence = decide_request(
+        904_033,
+        &selector,
+        "blocked",
+        "v2grd005-stale-fence-precedes-guard",
+        int_v2run003_runtime::session_preconditions(
+            observation["status"]
+                .as_object()
+                .expect("observation status"),
+        ),
+    );
+    let ResponseEnvelopeV2::Error(error) =
+        int_v2run003_runtime::dispatch(&dispatcher, &stale_fence)
+    else {
+        panic!("a stale mutation fence must fail before its option guard")
+    };
+    assert_eq!(error.code().as_str(), "SESSION_REVISION_CONFLICT");
+    assert_eq!(error.details()["admission"]["admitted"], false);
+
+    let refreshed = observe(&dispatcher, &selector, 904_034, session_id);
+    assert_eq!(
+        refreshed["guidance"]["allowed_option_ids"],
+        json!(["approved", "fallback"])
     );
 
     let status = int_v2run003_runtime::status(&dispatcher, &selector, 904_040, session_id);
