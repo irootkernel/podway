@@ -51,6 +51,31 @@ fn v2grd004_option_guards_are_bounded_and_three_valued() {
         ConditionStateV2::Unmet
     );
     assert!(OptionGuardV2::new(Vec::new()).is_err());
+    let predicates = (0..4)
+        .map(|_| {
+            EvidencePredicateV2::new(
+                source.clone(),
+                item.clone(),
+                false,
+                ItemPredicateOperatorV2::Equals(PredicateScalarV2::Integer(0)),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(OptionGuardV2::new(predicates.clone()).is_ok());
+    assert!(
+        OptionGuardV2::new(
+            predicates
+                .into_iter()
+                .chain([EvidencePredicateV2::new(
+                    source,
+                    item,
+                    false,
+                    ItemPredicateOperatorV2::AtMost(0),
+                )])
+                .collect(),
+        )
+        .is_err()
+    );
 }
 
 fn digest(character: char) -> Sha256Digest {

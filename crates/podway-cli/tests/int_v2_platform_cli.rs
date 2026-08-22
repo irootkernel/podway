@@ -12,8 +12,8 @@ use std::{
 
 use podway_core::WorkspaceId;
 use podway_protocol::{
-    RequestEnvelopeV1, WorktreeSelectorWireV1, decode_request_payload_v1, decode_single_frame_v1,
-    encode_frame_v1,
+    RequestEnvelopeV1, WorktreeSelectorWireV1, decode_request_payload_v1,
+    decode_result_schema_contract_v2, decode_single_frame_v1, encode_frame_v1,
 };
 use serde_json::{Value, json};
 
@@ -96,6 +96,18 @@ impl Fixture {
             .env_remove("XDG_CONFIG_HOME")
             .output()
             .expect("podway binary must run")
+    }
+
+    fn run_from_root(&self, arguments: &[String]) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_podway"))
+            .args(arguments)
+            .current_dir(&self.root)
+            .env("PODWAY_TEST_ACCOUNT_ROOT", self.root.join("account"))
+            .env_remove("HOME")
+            .env_remove("TMPDIR")
+            .env_remove("XDG_CONFIG_HOME")
+            .output()
+            .expect("podway binary must run from the fixture root")
     }
 
     fn run_with_stdin(&self, arguments: &[String], stdin: &[u8]) -> Output {
@@ -833,6 +845,122 @@ fn one_json(output: &Output) -> Value {
         "JSON mode must emit one object: {output:?}"
     );
     serde_json::from_slice(&output.stdout).expect("stdout must be JSON")
+}
+
+#[test]
+fn v2grd006_procedure_preview_preserves_typed_guards_in_schema_valid_json() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.root.join("typed-guards.yaml"),
+        r#"schema: podway.procedure/v2
+id: typed-preview
+version: "1"
+name: Typed preview
+purpose: Preserve typed conditions in the local preview.
+node_definitions:
+  collect:
+    type: action
+    title: Collect
+    intent: Record typed evidence.
+    items:
+      - id: mode
+        type: choice
+        prompt: Select the mode.
+        required: true
+        choices: [strict, relaxed]
+      - id: notes
+        type: text
+        prompt: Record strict-mode notes.
+        required: false
+        required_when:
+          - item: mode
+            equals: strict
+  decide:
+    type: decision
+    title: Decide
+    objective: Select an evidence-backed outcome.
+    prompt: Which outcome applies?
+    options:
+      - id: noted
+        label: Notes recorded
+        criteria: Strict-mode notes contain at least one scalar.
+        guards:
+          - evidence:
+              node: collect
+              item: notes
+            non_empty: true
+      - id: continue
+        label: Continue without notes
+        criteria: No strict-mode notes are required for this outcome.
+    reason:
+      required: true
+      prompt: Explain the selected outcome.
+  finish:
+    type: action
+    title: Finish
+    intent: Finish the preview workflow.
+graph:
+  entry: collect
+  nodes:
+    - id: collect
+      use: collect
+      next: decide
+    - id: decide
+      use: decide
+      evidence_from:
+        - node: collect
+          required: true
+          items: [notes]
+      routes:
+        noted:
+          to: finish
+          effect: advance
+        continue:
+          to: finish
+          effect: advance
+    - id: finish
+      use: finish
+      terminal: true
+"#,
+    )
+    .unwrap();
+
+    let output = fixture.run_from_root(&[
+        "--json".to_owned(),
+        "procedure".to_owned(),
+        "preview".to_owned(),
+        "typed-guards.yaml".to_owned(),
+    ]);
+    assert!(output.status.success(), "{output:?}");
+    let envelope = one_json(&output);
+    assert_eq!(envelope["schema"], "podway.output/v3");
+    assert_eq!(envelope["command"], "procedure.preview");
+    let result = envelope["result"].as_object().unwrap();
+    assert_eq!(result["schema"], "podway.procedure-preview-result/v1");
+    assert!(decode_result_schema_contract_v2(result).is_some());
+    let collect = result["graph"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["graph_node_id"] == "collect")
+        .unwrap();
+    assert_eq!(
+        collect["items"][1]["required_when"],
+        json!([{"item": "mode", "equals": "strict"}])
+    );
+    let noted = result["graph"]["edges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|edge| edge["option_id"] == "noted")
+        .unwrap();
+    assert_eq!(
+        noted["guards"],
+        json!([{
+            "evidence": {"node": "collect", "item": "notes"},
+            "non_empty": true
+        }])
+    );
 }
 
 #[test]

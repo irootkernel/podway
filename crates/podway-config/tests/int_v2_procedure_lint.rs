@@ -386,6 +386,26 @@ graph:
     )
 }
 
+fn pairwise_guard_lint_cap_document() -> String {
+    let definitions = ["first-cap", "second-cap"]
+        .into_iter()
+        .map(|definition| {
+            let options = STAGE_NAMES
+                .iter()
+                .map(|name| {
+                    format!(
+                        "      - id: {name}\n        label: Duplicate label\n        criteria: The same concrete criterion applies here.\n"
+                    )
+                })
+                .collect::<String>();
+            format!(
+                "  {definition}:\n    type: decision\n    title: Cap findings\n    objective: Exercise the pairwise finding cap.\n    prompt: Which duplicate option applies?\n    options:\n{options}    reason:\n      required: true\n      prompt: Explain the selected duplicate option.\n"
+            )
+        })
+        .collect::<String>();
+    CLEAN_YAML.replace("graph:\n", &format!("{definitions}graph:\n"))
+}
+
 /// A chain of `chain` action placements closed into one rework loop by a decision, producing a
 /// strongly connected component of `chain + 1` nodes.
 fn rework_region_document(chain: usize) -> String {
@@ -849,6 +869,18 @@ fn v2aut004_option_labels_that_normalize_alike_are_reported_on_the_later_option(
     );
 }
 
+#[test]
+fn v2grd006_option_label_findings_retain_the_eight_finding_cap() {
+    let report = lint(&pairwise_guard_lint_cap_document());
+    assert_eq!(
+        report
+            .iter()
+            .filter(|diagnostic| diagnostic.code().as_str() == "OPTION_LABELS_NOT_DISTINCT")
+            .count(),
+        8
+    );
+}
+
 // ---------------------------------------------------------------------------------------------
 // Same-target routes retain the compatibility diagnostic
 // ---------------------------------------------------------------------------------------------
@@ -1006,6 +1038,18 @@ fn v2grd006_duplicate_normalized_criteria_are_reported_on_the_later_option() {
     assert_eq!(
         lint(&source)[0].field(),
         "node_definitions[review].options[incomplete].criteria"
+    );
+}
+
+#[test]
+fn v2grd006_option_criteria_findings_retain_the_eight_finding_cap() {
+    let report = lint(&pairwise_guard_lint_cap_document());
+    assert_eq!(
+        report
+            .iter()
+            .filter(|diagnostic| diagnostic.code().as_str() == "OPTION_CRITERIA_WEAK")
+            .count(),
+        8
     );
 }
 

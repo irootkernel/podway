@@ -152,6 +152,36 @@ fn v2grd003_rejects_invalid_controller_order_requirement_and_operator_pairings()
     let later_or_unknown = valid.replace("item: mode", "item: later");
     assert!(validate_procedure_v2(v2(&later_or_unknown).unwrap()).is_err());
 
+    let self_reference = valid.replace("item: mode", "item: notes");
+    assert!(validate_procedure_v2(v2(&self_reference).unwrap()).is_err());
+
+    let later_controller = valid
+        .replace("item: mode", "item: later")
+        .replace(
+            "graph:\n",
+            "      - id: later\n        type: confirm\n        prompt: Later?\n        required: true\n\ngraph:\n",
+        );
+    assert!(validate_procedure_v2(v2(&later_controller).unwrap()).is_err());
+
+    let conditional_chain = valid
+        .replace(
+            "    items:\n",
+            "    items:\n      - id: controller\n        type: confirm\n        prompt: Controller?\n        required: true\n",
+        )
+        .replace(
+            "        required: true\n        choices: [strict, relaxed]\n",
+            "        required: false\n        choices: [strict, relaxed]\n        required_when:\n          - item: controller\n            equals: true\n",
+        );
+    assert!(validate_procedure_v2(v2(&conditional_chain).unwrap()).is_err());
+
+    let cross_definition = valid
+        .replace("      - id: mode\n", "      - id: local-mode\n")
+        .replace(
+            "graph:\n",
+            "  other:\n    type: action\n    title: Other\n    intent: Other.\n    items:\n      - id: mode\n        type: confirm\n        prompt: Mode?\n        required: true\n\ngraph:\n",
+        );
+    assert!(validate_procedure_v2(v2(&cross_definition).unwrap()).is_err());
+
     let wrong_operator = valid.replace("equals: strict", "at_least: 1");
     assert!(validate_procedure_v2(v2(&wrong_operator).unwrap()).is_err());
 
