@@ -1405,6 +1405,12 @@ pub enum PersistedGraphMutationFailureV2 {
         option_id: podway_core::OptionId,
         allowed_option_ids: Vec<podway_core::OptionId>,
     },
+    OptionGuardUnsatisfied {
+        graph_node_id: GraphNodeId,
+        option_id: podway_core::OptionId,
+        state: String,
+        predicates: Vec<Value>,
+    },
     RouteNotAllowed {
         graph_node_id: GraphNodeId,
         option_id: podway_core::OptionId,
@@ -1570,6 +1576,17 @@ impl TryFrom<&crate::GraphMutationErrorV2> for PersistedGraphMutationFailureV2 {
                 graph_node_id: graph_node_id.clone(),
                 option_id: option_id.clone(),
                 allowed_option_ids: allowed_option_ids.clone(),
+            },
+            crate::GraphMutationErrorV2::OptionGuardUnsatisfied {
+                graph_node_id,
+                option_id,
+                state,
+                predicates,
+            } => Self::OptionGuardUnsatisfied {
+                graph_node_id: graph_node_id.clone(),
+                option_id: option_id.clone(),
+                state: state.as_str().to_owned(),
+                predicates: predicates.clone(),
             },
             crate::GraphMutationErrorV2::RouteNotAllowed {
                 graph_node_id,
@@ -2700,6 +2717,28 @@ impl PersistedGraphMutationFailureV2 {
                         .len()
                         == allowed_option_ids.len()
             }
+            Self::OptionGuardUnsatisfied {
+                state, predicates, ..
+            } => {
+                matches!(state.as_str(), "unmet" | "unevaluable")
+                    && !predicates.is_empty()
+                    && predicates.len() <= 4
+                    && predicates.iter().all(valid_evidence_predicate_status_v2)
+                    && match state.as_str() {
+                        "unmet" => predicates.iter().any(|predicate| {
+                            predicate.get("state").and_then(Value::as_str) == Some("unmet")
+                        }),
+                        "unevaluable" => {
+                            predicates.iter().all(|predicate| {
+                                predicate.get("state").and_then(Value::as_str) != Some("unmet")
+                            }) && predicates.iter().any(|predicate| {
+                                predicate.get("state").and_then(Value::as_str)
+                                    == Some("unevaluable")
+                            })
+                        }
+                        _ => false,
+                    }
+            }
             Self::SessionResetNotEligible {
                 lifecycle,
                 current_terminal_disposition,
@@ -2772,6 +2811,81 @@ impl PersistedGraphMutationFailureV2 {
             Self::TooManyItemMutations { maximum } => *maximum == 64,
         }
     }
+}
+
+fn valid_evidence_predicate_status_v2(value: &Value) -> bool {
+    let Some(predicate) = value.as_object() else {
+        return false;
+    };
+    let Some(source) = predicate.get("source").and_then(Value::as_object) else {
+        return false;
+    };
+    let source_keys_valid = source
+        .keys()
+        .all(|key| matches!(key.as_str(), "kind" | "graph_node_id" | "item_id" | "field"));
+    if !source_keys_valid
+        || source.get("kind").and_then(Value::as_str) != Some("evidence")
+        || !source
+            .get("graph_node_id")
+            .and_then(Value::as_str)
+            .is_some_and(|value| GraphNodeId::new(value.to_owned()).is_ok())
+        || !source
+            .get("item_id")
+            .and_then(Value::as_str)
+            .is_some_and(|value| ItemId::new(value.to_owned()).is_ok())
+        || source
+            .get("field")
+            .is_some_and(|field| field.as_str() != Some("outcome"))
+    {
+        return false;
+    }
+    let Some(operator) = predicate.get("operator").and_then(Value::as_str) else {
+        return false;
+    };
+    let Some(state) = predicate.get("state").and_then(Value::as_str) else {
+        return false;
+    };
+    if !matches!(state, "met" | "unmet" | "unevaluable")
+        || !matches!(
+            operator,
+            "equals" | "not_equals" | "empty" | "non_empty" | "at_least" | "at_most"
+        )
+        || predicate.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "source" | "operator" | "expected" | "actual" | "actual_count" | "state"
+            )
+        })
+        || (predicate.contains_key("actual") && predicate.contains_key("actual_count"))
+    {
+        return false;
+    }
+    let scalar = |value: &Value| {
+        value.is_boolean()
+            || value.as_i64().is_some()
+            || value
+                .as_str()
+                .is_some_and(|value| !value.is_empty() && value.chars().count() <= 120)
+    };
+    let expected_valid = match operator {
+        "equals" | "not_equals" => predicate.get("expected").is_some_and(scalar),
+        "at_least" | "at_most" => predicate
+            .get("expected")
+            .is_some_and(|value| value.as_i64().is_some()),
+        "empty" | "non_empty" => !predicate.contains_key("expected"),
+        _ => false,
+    };
+    let actual_valid = if state == "unevaluable" {
+        !predicate.contains_key("actual") && !predicate.contains_key("actual_count")
+    } else if matches!(operator, "empty" | "non_empty") {
+        !predicate.contains_key("actual")
+            && predicate
+                .get("actual_count")
+                .is_some_and(|value| value.as_u64().is_some_and(|value| value <= 65_536))
+    } else {
+        !predicate.contains_key("actual_count") && predicate.get("actual").is_some_and(scalar)
+    };
+    expected_valid && actual_valid
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

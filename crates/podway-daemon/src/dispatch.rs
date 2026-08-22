@@ -168,6 +168,12 @@ enum V2RuntimeErrorDetailsV1 {
         option_id: podway_core::OptionId,
         allowed_option_ids: Vec<podway_core::OptionId>,
     },
+    OptionGuardUnsatisfied {
+        graph_node_id: GraphNodeId,
+        option_id: podway_core::OptionId,
+        state: String,
+        predicates: Vec<Value>,
+    },
     RouteNotAllowed {
         graph_node_id: GraphNodeId,
         option_id: podway_core::OptionId,
@@ -536,6 +542,22 @@ impl DispatchErrorDetailsV1 {
         self
     }
 
+    pub fn with_option_guard_unsatisfied(
+        mut self,
+        graph_node_id: GraphNodeId,
+        option_id: podway_core::OptionId,
+        state: impl Into<String>,
+        predicates: Vec<Value>,
+    ) -> Self {
+        self.v2_runtime = Some(Box::new(V2RuntimeErrorDetailsV1::OptionGuardUnsatisfied {
+            graph_node_id,
+            option_id,
+            state: state.into(),
+            predicates,
+        }));
+        self
+    }
+
     pub fn with_route_not_allowed(
         mut self,
         graph_node_id: GraphNodeId,
@@ -847,6 +869,20 @@ impl DispatchErrorDetailsV1 {
                     "graph_node_id": graph_node_id, "option_id": option_id,
                     "allowed_option_ids": allowed_option_ids, "admission": admission,
                 }),
+                V2RuntimeErrorDetailsV1::OptionGuardUnsatisfied {
+                    graph_node_id,
+                    option_id,
+                    state,
+                    predicates,
+                } => json!({
+                    "schema": "podway.v2-runtime-error-details/v1",
+                    "kind": "OPTION_GUARD_UNSATISFIED",
+                    "graph_node_id": graph_node_id,
+                    "option_id": option_id,
+                    "state": state,
+                    "predicates": predicates,
+                    "admission": admission,
+                }),
                 V2RuntimeErrorDetailsV1::RouteNotAllowed {
                     graph_node_id,
                     option_id,
@@ -1157,6 +1193,7 @@ pub enum DispatchFailureKindV1 {
     AttemptNotCurrent,
     GraphNodeTypeMismatch,
     OptionNotAllowed,
+    OptionGuardUnsatisfied,
     RouteNotAllowed,
     DecisionReasonMissing,
     EvidenceReferenceUnresolved,
@@ -2823,6 +2860,12 @@ fn catalog_error_spec_v1(kind: DispatchFailureKindV1) -> (&'static str, &'static
         DispatchFailureKindV1::OptionNotAllowed => (
             "OPTION_NOT_ALLOWED",
             "The selected decision option is not allowed.",
+            false,
+            1,
+        ),
+        DispatchFailureKindV1::OptionGuardUnsatisfied => (
+            "OPTION_GUARD_UNSATISFIED",
+            "The selected decision option has an unmet or unevaluable guard.",
             false,
             1,
         ),

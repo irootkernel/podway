@@ -7,17 +7,18 @@ use std::str::FromStr;
 use podway_core::{
     ActorAttributionV2, ArtifactLocationKindV1, ArtifactValueV1, AttemptId, AttemptLifecycle,
     AttemptNumberV2, AttemptValidityV2, BlockerId, BlockerState, CheckResultExecutorV2,
-    CheckResultInputBasisV2, CheckResultOutcomeV2, CheckResultValueV2, CriterionAssessmentModeV2,
-    CriterionCitationV2, CriterionId, CriterionStatusV2, DecisionRecordInputV2, DecisionRecordV2,
-    EvidenceReferenceSnapshotV2, GoalOutcome, GoalRevisionNumberV2, GraphNodeId, ItemCommonV2,
-    ItemConditionV2, ItemId, ItemPredicateOperatorV2, ItemPredicateV2, ItemSpecV2, ItemTypeV1,
+    CheckResultInputBasisV2, CheckResultOutcomeV2, CheckResultValueV2, ConditionStateV2,
+    CriterionAssessmentModeV2, CriterionCitationV2, CriterionId, CriterionStatusV2,
+    DecisionRecordInputV2, DecisionRecordV2, EvidencePredicateV2, EvidenceReferenceSnapshotV2,
+    GoalOutcome, GoalRevisionNumberV2, GraphNodeId, ItemCommonV2, ItemConditionV2, ItemId,
+    ItemPredicateOperatorV2, ItemPredicateV2, ItemSpecV2, ItemTypeV1,
     MAX_ATTEMPT_CONTENT_SCALARS_V2, MAX_ITEMS_PER_DEFINITION_V2, NodeDefinitionId, OperationId,
-    OptionId, PredicateScalarV2, ProcedureSnapshotId, ReasonV2, RecordedItemSetV2, RecordedItemV2,
-    RecordedItemValueV2, ResolvedEvidenceReferenceV2, ResolvedEvidenceSetV2, Revision,
-    ReworkKindV2, ReworkRecordInputV2, ReworkRecordV2, SessionAttemptV2, SessionId,
-    SessionLifecycle, SessionTraceV2, Sha256Digest, TraceSequenceV2, TransitionEffectV2,
-    UnixMillis, attempt_content_bound_error_v2, canonicalize_json_v1, recorded_content_scalars_v2,
-    verify_canonical_json_v1,
+    OptionGuardV2, OptionId, PredicateActualV2, PredicateScalarV2, ProcedureSnapshotId, ReasonV2,
+    RecordedItemSetV2, RecordedItemV2, RecordedItemValueV2, ResolvedEvidenceReferenceV2,
+    ResolvedEvidenceSetV2, Revision, ReworkKindV2, ReworkRecordInputV2, ReworkRecordV2,
+    SessionAttemptV2, SessionId, SessionLifecycle, SessionTraceV2, Sha256Digest, TraceSequenceV2,
+    TransitionEffectV2, UnixMillis, attempt_content_bound_error_v2, canonicalize_json_v1,
+    recorded_content_scalars_v2, verify_canonical_json_v1,
 };
 use rusqlite::{Connection, Transaction, params};
 use serde_json::{Value, json};
@@ -143,6 +144,12 @@ pub enum GraphMutationErrorV2 {
         graph_node_id: GraphNodeId,
         option_id: OptionId,
         allowed_option_ids: Vec<OptionId>,
+    },
+    OptionGuardUnsatisfied {
+        graph_node_id: GraphNodeId,
+        option_id: OptionId,
+        state: ConditionStateV2,
+        predicates: Vec<Value>,
     },
     RouteNotAllowed {
         graph_node_id: GraphNodeId,
@@ -283,6 +290,9 @@ impl fmt::Display for GraphMutationErrorV2 {
             }
             Self::OptionNotAllowed { .. } => {
                 formatter.write_str("Procedure v2 decision option is not allowed")
+            }
+            Self::OptionGuardUnsatisfied { .. } => {
+                formatter.write_str("Procedure v2 decision option guard is unmet or unevaluable")
             }
             Self::RouteNotAllowed { .. } => {
                 formatter.write_str("Procedure v2 decision route is not allowed")
@@ -1466,6 +1476,39 @@ impl WorkflowMemoryStateV2 {
                 }
             }
         }
+        if let Some(guard) = specification.option_guards.get(&selected_option) {
+            let mut values = BTreeMap::new();
+            for predicate in guard.predicates() {
+                if let Ok(selected) = self.selected_evidence_item(
+                    previous_trace,
+                    expected_attempt_id,
+                    predicate.source_node(),
+                    predicate.item(),
+                )? {
+                    values.insert(
+                        (predicate.source_node().clone(), predicate.item().clone()),
+                        selected.value().clone(),
+                    );
+                }
+            }
+            let status = guard.evaluate(|source, item| values.get(&(source.clone(), item.clone())));
+            if status.state() != ConditionStateV2::Met {
+                let predicates = guard
+                    .predicates()
+                    .iter()
+                    .zip(status.predicates())
+                    .map(|(predicate, status)| {
+                        evidence_predicate_status_value_v2(predicate, status)
+                    })
+                    .collect();
+                return Err(GraphMutationErrorV2::OptionGuardUnsatisfied {
+                    graph_node_id: active.graph_node_id().clone(),
+                    option_id: selected_option,
+                    state: status.state(),
+                    predicates,
+                });
+            }
+        }
         let evidence = ResolvedEvidenceSetV2::new(
             active_memory
                 .evidence()
@@ -2331,6 +2374,7 @@ struct NodeMemorySpecV2 {
     items: Vec<ItemSpecV2>,
     evidence: Vec<EvidenceSpecV2>,
     options: Vec<OptionId>,
+    option_guards: BTreeMap<OptionId, OptionGuardV2>,
     reason_required: bool,
     goal_assessment: bool,
     assessment_outcomes: BTreeMap<OptionId, GoalOutcome>,
@@ -2407,21 +2451,34 @@ impl SnapshotMemoryModelV2 {
                         })
                         .collect()
                 })?;
-            let options = definition.get("options").and_then(Value::as_array).map_or(
-                Ok(Vec::new()),
-                |options| {
-                    options
-                        .iter()
-                        .map(|option| {
-                            let option = option.as_object().ok_or_else(|| {
-                                invalid("Procedure v2 decision option is invalid")
-                            })?;
-                            OptionId::new(required_text(option, "id")?.to_owned())
-                                .map_err(|_| invalid("Procedure v2 option identity is invalid"))
-                        })
-                        .collect()
-                },
-            )?;
+            let (options, option_guards) = definition
+                .get("options")
+                .and_then(Value::as_array)
+                .map_or(Ok((Vec::new(), BTreeMap::new())), |options| {
+                    let mut option_ids = Vec::with_capacity(options.len());
+                    let mut option_guards = BTreeMap::new();
+                    for option in options {
+                        let option = option
+                            .as_object()
+                            .ok_or_else(|| invalid("Procedure v2 decision option is invalid"))?;
+                        let option_id = OptionId::new(required_text(option, "id")?.to_owned())
+                            .map_err(|_| invalid("Procedure v2 option identity is invalid"))?;
+                        if let Some(guards) = option.get("guards").and_then(Value::as_array) {
+                            let predicates = guards
+                                .iter()
+                                .map(parse_evidence_predicate_v2)
+                                .collect::<Result<Vec<_>, _>>()?;
+                            option_guards.insert(
+                                option_id.clone(),
+                                OptionGuardV2::new(predicates).map_err(|_| {
+                                    invalid("Procedure v2 decision option guards are invalid")
+                                })?,
+                            );
+                        }
+                        option_ids.push(option_id);
+                    }
+                    Ok((option_ids, option_guards))
+                })?;
             let reason_required = definition
                 .get("reason")
                 .and_then(Value::as_object)
@@ -2505,6 +2562,7 @@ impl SnapshotMemoryModelV2 {
                     items,
                     evidence,
                     options,
+                    option_guards,
                     reason_required,
                     goal_assessment,
                     assessment_outcomes,
@@ -2546,6 +2604,92 @@ impl SnapshotMemoryModelV2 {
             .get(id)
             .ok_or_else(|| invalid("Procedure v2 workflow-memory node is absent"))
     }
+}
+
+fn parse_evidence_predicate_v2(value: &Value) -> Result<EvidencePredicateV2, StoreValueErrorV1> {
+    let predicate = value
+        .as_object()
+        .ok_or_else(|| invalid("Procedure v2 decision option guard is invalid"))?;
+    let evidence = predicate
+        .get("evidence")
+        .and_then(Value::as_object)
+        .ok_or_else(|| invalid("Procedure v2 decision option guard evidence is invalid"))?;
+    let source_node = GraphNodeId::new(required_text(evidence, "node")?.to_owned())
+        .map_err(|_| invalid("Procedure v2 decision option guard source is invalid"))?;
+    let item = ItemId::new(required_text(evidence, "item")?.to_owned())
+        .map_err(|_| invalid("Procedure v2 decision option guard item is invalid"))?;
+    let field_outcome = predicate.get("field").and_then(Value::as_str) == Some("outcome");
+    let operator = if let Some(value) = predicate.get("equals") {
+        ItemPredicateOperatorV2::Equals(parse_predicate_scalar_v2(value)?)
+    } else if let Some(value) = predicate.get("not_equals") {
+        ItemPredicateOperatorV2::NotEquals(parse_predicate_scalar_v2(value)?)
+    } else if predicate.get("empty").and_then(Value::as_bool) == Some(true) {
+        ItemPredicateOperatorV2::Empty
+    } else if predicate.get("non_empty").and_then(Value::as_bool) == Some(true) {
+        ItemPredicateOperatorV2::NonEmpty
+    } else if let Some(value) = predicate.get("at_least").and_then(Value::as_i64) {
+        ItemPredicateOperatorV2::AtLeast(value)
+    } else if let Some(value) = predicate.get("at_most").and_then(Value::as_i64) {
+        ItemPredicateOperatorV2::AtMost(value)
+    } else {
+        return Err(invalid(
+            "Procedure v2 decision option guard operator is invalid",
+        ));
+    };
+    Ok(EvidencePredicateV2::new(
+        source_node,
+        item,
+        field_outcome,
+        operator,
+    ))
+}
+
+fn predicate_scalar_value_v2(value: &PredicateScalarV2) -> Value {
+    match value {
+        PredicateScalarV2::Boolean(value) => json!(value),
+        PredicateScalarV2::Integer(value) => json!(value),
+        PredicateScalarV2::Text(value) => json!(value),
+    }
+}
+
+fn evidence_predicate_status_value_v2(
+    predicate: &EvidencePredicateV2,
+    status: &podway_core::PredicateStatusV2,
+) -> Value {
+    let mut source = serde_json::Map::new();
+    source.insert("kind".to_owned(), json!("evidence"));
+    source.insert(
+        "graph_node_id".to_owned(),
+        json!(predicate.source_node().as_str()),
+    );
+    source.insert("item_id".to_owned(), json!(predicate.item().as_str()));
+    if predicate.field_outcome() {
+        source.insert("field".to_owned(), json!("outcome"));
+    }
+    let mut value = serde_json::Map::new();
+    value.insert("source".to_owned(), Value::Object(source));
+    value.insert("operator".to_owned(), json!(predicate.operator().as_str()));
+    match predicate.operator() {
+        ItemPredicateOperatorV2::Equals(expected)
+        | ItemPredicateOperatorV2::NotEquals(expected) => {
+            value.insert("expected".to_owned(), predicate_scalar_value_v2(expected));
+        }
+        ItemPredicateOperatorV2::AtLeast(expected) | ItemPredicateOperatorV2::AtMost(expected) => {
+            value.insert("expected".to_owned(), json!(expected));
+        }
+        ItemPredicateOperatorV2::Empty | ItemPredicateOperatorV2::NonEmpty => {}
+    }
+    match status.actual() {
+        PredicateActualV2::Scalar(actual) => {
+            value.insert("actual".to_owned(), predicate_scalar_value_v2(actual));
+        }
+        PredicateActualV2::Count(actual) => {
+            value.insert("actual_count".to_owned(), json!(actual));
+        }
+        PredicateActualV2::Unavailable => {}
+    }
+    value.insert("state".to_owned(), json!(status.state().as_str()));
+    Value::Object(value)
 }
 
 fn parse_item_spec_v2(

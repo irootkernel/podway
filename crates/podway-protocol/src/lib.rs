@@ -1722,6 +1722,11 @@ const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
         retryable: false,
     },
     ErrorCodeCatalogEntryV1 {
+        code: "OPTION_GUARD_UNSATISFIED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
         code: "ROUTE_NOT_ALLOWED",
         exit_code: 1,
         retryable: false,
@@ -2418,6 +2423,7 @@ pub const V2_RUNTIME_ERROR_CODES_V1: &[&str] = &[
     "NODE_DEFINITION_NOT_FOUND",
     "GRAPH_NODE_TYPE_MISMATCH",
     "OPTION_NOT_ALLOWED",
+    "OPTION_GUARD_UNSATISFIED",
     "ROUTE_NOT_ALLOWED",
     "DECISION_REASON_MISSING",
     "EVIDENCE_REFERENCE_UNRESOLVED",
@@ -2465,6 +2471,12 @@ fn validate_v2_runtime_error_details_v1(code: &str, details: &Map<String, Value>
             ("graph_node_id", validate_v2_identifier_value_v1),
             ("option_id", validate_v2_identifier_value_v1),
             ("allowed_option_ids", validate_identifier_set_8_v1),
+        ],
+        "OPTION_GUARD_UNSATISFIED" => &[
+            ("graph_node_id", validate_v2_identifier_value_v1),
+            ("option_id", validate_v2_identifier_value_v1),
+            ("state", validate_unsatisfied_condition_state_v1),
+            ("predicates", validate_evidence_predicate_statuses_v1),
         ],
         "ROUTE_NOT_ALLOWED" => &[
             ("graph_node_id", validate_v2_identifier_value_v1),
@@ -2581,6 +2593,26 @@ fn validate_v2_runtime_error_details_v1(code: &str, details: &Map<String, Value>
                 .get("contract_manifest_digest")
                 .is_none_or(validate_digest_value_v1);
     }
+    if code == "OPTION_GUARD_UNSATISFIED" {
+        let state = details.get("state").and_then(Value::as_str);
+        let predicates = details
+            .get("predicates")
+            .and_then(Value::as_array)
+            .expect("validated option guard predicates");
+        return match state {
+            Some("unmet") => predicates
+                .iter()
+                .any(|predicate| predicate.get("state").and_then(Value::as_str) == Some("unmet")),
+            Some("unevaluable") => {
+                predicates.iter().all(|predicate| {
+                    predicate.get("state").and_then(Value::as_str) != Some("unmet")
+                }) && predicates.iter().any(|predicate| {
+                    predicate.get("state").and_then(Value::as_str) == Some("unevaluable")
+                })
+            }
+            _ => false,
+        };
+    }
     true
 }
 
@@ -2683,6 +2715,91 @@ fn validate_positive_revision_v1(value: &Value) -> bool {
 
 fn validate_node_type_v1(value: &Value) -> bool {
     matches!(value.as_str(), Some("action" | "decision"))
+}
+
+fn validate_unsatisfied_condition_state_v1(value: &Value) -> bool {
+    matches!(value.as_str(), Some("unmet" | "unevaluable"))
+}
+
+fn validate_evidence_predicate_statuses_v1(value: &Value) -> bool {
+    value.as_array().is_some_and(|predicates| {
+        !predicates.is_empty()
+            && predicates.len() <= 4
+            && predicates.iter().all(validate_evidence_predicate_status_v1)
+    })
+}
+
+fn validate_evidence_predicate_status_v1(value: &Value) -> bool {
+    let Some(predicate) = value.as_object() else {
+        return false;
+    };
+    if predicate.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "source" | "operator" | "expected" | "actual" | "actual_count" | "state"
+        )
+    }) {
+        return false;
+    }
+    let Some(source) = predicate.get("source").and_then(Value::as_object) else {
+        return false;
+    };
+    if source
+        .keys()
+        .any(|key| !matches!(key.as_str(), "kind" | "graph_node_id" | "item_id" | "field"))
+        || source.get("kind").and_then(Value::as_str) != Some("evidence")
+        || !source
+            .get("graph_node_id")
+            .is_some_and(validate_v2_identifier_value_v1)
+        || !source
+            .get("item_id")
+            .is_some_and(validate_v2_identifier_value_v1)
+        || source
+            .get("field")
+            .is_some_and(|field| field.as_str() != Some("outcome"))
+    {
+        return false;
+    }
+    let Some(operator) = predicate.get("operator").and_then(Value::as_str) else {
+        return false;
+    };
+    let Some(state) = predicate.get("state").and_then(Value::as_str) else {
+        return false;
+    };
+    if !matches!(state, "met" | "unmet" | "unevaluable")
+        || !matches!(
+            operator,
+            "equals" | "not_equals" | "empty" | "non_empty" | "at_least" | "at_most"
+        )
+    {
+        return false;
+    }
+    let scalar = |value: &Value| {
+        value.is_boolean()
+            || value.as_i64().is_some()
+            || value
+                .as_str()
+                .is_some_and(|value| !value.is_empty() && value.chars().count() <= 120)
+    };
+    let expected_valid = match operator {
+        "equals" | "not_equals" => predicate.get("expected").is_some_and(scalar),
+        "at_least" | "at_most" => predicate
+            .get("expected")
+            .is_some_and(|value| value.as_i64().is_some()),
+        "empty" | "non_empty" => !predicate.contains_key("expected"),
+        _ => false,
+    };
+    let actual_valid = if state == "unevaluable" {
+        !predicate.contains_key("actual") && !predicate.contains_key("actual_count")
+    } else if matches!(operator, "empty" | "non_empty") {
+        !predicate.contains_key("actual")
+            && predicate
+                .get("actual_count")
+                .is_some_and(|value| value.as_u64().is_some_and(|value| value <= 65_536))
+    } else {
+        !predicate.contains_key("actual_count") && predicate.get("actual").is_some_and(scalar)
+    };
+    expected_valid && actual_valid
 }
 
 fn validate_criterion_mode_v1(value: &Value) -> bool {

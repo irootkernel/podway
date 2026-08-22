@@ -344,6 +344,7 @@ const FROZEN_ERROR_CATALOG: &[(&str, u8, bool)] = &[
     ("NODE_DEFINITION_NOT_FOUND", 1, false),
     ("GRAPH_NODE_TYPE_MISMATCH", 1, false),
     ("OPTION_NOT_ALLOWED", 1, false),
+    ("OPTION_GUARD_UNSATISFIED", 1, false),
     ("ROUTE_NOT_ALLOWED", 1, false),
     ("DECISION_REASON_MISSING", 1, false),
     ("EVIDENCE_REFERENCE_UNRESOLVED", 1, false),
@@ -382,6 +383,18 @@ fn v2_runtime_error_details(code: &str) -> Option<Map<String, Value>> {
         "OPTION_NOT_ALLOWED" => {
             json!({"graph_node_id":"review","option_id":"reject","allowed_option_ids":["accept"]})
         }
+        "OPTION_GUARD_UNSATISFIED" => json!({
+            "graph_node_id":"review",
+            "option_id":"accept",
+            "state":"unmet",
+            "predicates":[{
+                "source":{"kind":"evidence","graph_node_id":"build","item_id":"verdict"},
+                "operator":"equals",
+                "expected":"approved",
+                "actual":"changes-requested",
+                "state":"unmet"
+            }]
+        }),
         "ROUTE_NOT_ALLOWED" => json!({"graph_node_id":"review","option_id":"accept"}),
         "EVIDENCE_REFERENCE_UNRESOLVED" => {
             json!({"graph_node_id":"review","source_graph_node_ids":["build"]})

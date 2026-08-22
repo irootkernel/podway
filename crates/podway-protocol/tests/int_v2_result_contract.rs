@@ -737,10 +737,10 @@ fn v2ctr004_v2_runtime_error_catalog_is_schema_and_decoder_bound() {
             .difference(&decoder_codes)
             .map(String::as_str)
             .collect::<BTreeSet<_>>(),
-        BTreeSet::from(["OPTION_GUARD_UNSATISFIED"]),
-        "V2GRD-002 reserves the closed error before V2GRD-005 admits it"
+        BTreeSet::new(),
+        "every closed Procedure v2 runtime error is admitted by the decoder"
     );
-    assert_eq!(decoder_codes.len(), 30);
+    assert_eq!(decoder_codes.len(), 31);
 }
 
 #[test]
@@ -2369,6 +2369,28 @@ fn maximum_runtime_error_details(code: &str) -> Value {
             details["option_id"] = json!(maximum_identifier(9));
             details["allowed_option_ids"] = json!(identifiers_8);
         }
+        "OPTION_GUARD_UNSATISFIED" => {
+            details["graph_node_id"] = json!(identifier);
+            details["option_id"] = json!(maximum_identifier(9));
+            details["state"] = json!("unmet");
+            details["predicates"] = Value::Array(
+                (0..4)
+                    .map(|offset| {
+                        json!({
+                            "source": {
+                                "kind": "evidence",
+                                "graph_node_id": maximum_identifier(offset),
+                                "item_id": maximum_identifier(offset + 4)
+                            },
+                            "operator": "equals",
+                            "expected": escape_heavy(120),
+                            "actual": escape_heavy(120),
+                            "state": "unmet"
+                        })
+                    })
+                    .collect(),
+            );
+        }
         "ROUTE_NOT_ALLOWED" => {
             details["graph_node_id"] = json!(identifier);
             details["option_id"] = json!(maximum_identifier(9));
@@ -2619,7 +2641,7 @@ fn v2rel002_largest_terminal_error_receipt_round_trips_once_in_job_reads() {
         assert_eq!(decode_single_frame_v1(&frame).unwrap(), payload);
         direct.push((payload.len(), error));
     }
-    assert_eq!(direct.len(), 30);
+    assert_eq!(direct.len(), 31);
     let largest_direct_length = direct.iter().map(|(length, _)| *length).max().unwrap();
     let (_, largest) = direct
         .into_iter()
@@ -4248,6 +4270,19 @@ fn v2grd002_reserves_bounded_condition_result_and_error_shapes() {
         }]
     });
     assert_valid("schemas/v2-runtime-error-details-v1.schema.json", &details);
+    let envelope = json!({
+        "schema": "podway.error/v1",
+        "request_id": UUID,
+        "command": "session.decide",
+        "generated_at": "2026-08-22T00:00:00.000Z",
+        "code": "OPTION_GUARD_UNSATISFIED",
+        "message": "The selected decision option has an unmet or unevaluable guard.",
+        "retryable": false,
+        "exit_code": 1,
+        "details": details.clone()
+    });
+    assert!(serde_json::from_value::<ErrorEnvelopeV1>(envelope).is_ok());
+
     let mut retryable_shape = details;
     retryable_shape["recovery"] = json!({});
     assert_invalid(
@@ -4320,8 +4355,5 @@ fn v2grd002_freezes_catalog_replacements_before_runtime_admission() {
     );
     assert_eq!(guard["exit_code"], 1);
     assert_eq!(guard["retryable"], false);
-    assert!(
-        !V2_RUNTIME_ERROR_CODES_V1.contains(&"OPTION_GUARD_UNSATISFIED"),
-        "V2GRD-005 owns runtime admission"
-    );
+    assert!(V2_RUNTIME_ERROR_CODES_V1.contains(&"OPTION_GUARD_UNSATISFIED"));
 }

@@ -1886,7 +1886,10 @@ impl<'a> CurrentProjection<'a> {
         if self.can_advance() {
             match self.placement {
                 GraphPlacementV2::Action(_) => push_unique(&mut actions, "session.complete"),
-                GraphPlacementV2::Decision(_) => push_unique(&mut actions, "session.decide"),
+                GraphPlacementV2::Decision(_) if !self.allowed_option_ids().is_empty() => {
+                    push_unique(&mut actions, "session.decide");
+                }
+                GraphPlacementV2::Decision(_) => {}
             }
         }
         if matches!(self.placement, GraphPlacementV2::Action(action) if action.skip().is_some() && (!action.outcome().is_terminal() || self.goal_ready))

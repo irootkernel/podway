@@ -5175,6 +5175,19 @@ fn map_graph_mutation_failure_v2(error: &PersistedGraphMutationFailureV2) -> Dis
                 allowed_option_ids.clone(),
             ),
         ),
+        PersistedGraphMutationFailureV2::OptionGuardUnsatisfied {
+            graph_node_id,
+            option_id,
+            state,
+            predicates,
+        } => DispatchFailureV1::new(DispatchFailureKindV1::OptionGuardUnsatisfied).with_details(
+            DispatchErrorDetailsV1::default().with_option_guard_unsatisfied(
+                graph_node_id.clone(),
+                option_id.clone(),
+                state.clone(),
+                predicates.clone(),
+            ),
+        ),
         PersistedGraphMutationFailureV2::RouteNotAllowed {
             graph_node_id,
             option_id,
