@@ -149,8 +149,8 @@ authoring_diagnostic_catalog! {
     GoalClarificationPathMissing => ("GOAL_CLARIFICATION_PATH_MISSING", Warning),
     GoalAssessmentTooEarly => ("GOAL_ASSESSMENT_TOO_EARLY", Warning),
     ManualReworkTargetsBroad => ("MANUAL_REWORK_TARGETS_BROAD", Warning),
-    LargeOptionSet => ("LARGE_OPTION_SET", Warning),
-    LargeCycle => ("LARGE_CYCLE", Warning),
+    OptionLabelsNotDistinct => ("OPTION_LABELS_NOT_DISTINCT", Warning),
+    OptionCriteriaWeak => ("OPTION_CRITERIA_WEAK", Warning),
     DuplicatedNodeDefinition => ("DUPLICATED_NODE_DEFINITION", Warning),
     GraphNodeIdConfusing => ("GRAPH_NODE_ID_CONFUSING", Warning),
     ReworkTopologyConfusing => ("REWORK_TOPOLOGY_CONFUSING", Warning),
@@ -505,7 +505,7 @@ mod tests {
         assert_eq!(diagnostic.related_graph_node_ids()[0], "n0");
 
         let deduplicated = AuthoringDiagnostic::new(
-            AuthoringDiagnosticCode::LargeCycle,
+            AuthoringDiagnosticCode::OptionCriteriaWeak,
             "workflow.yaml",
             SourceLocation::document_start(),
             "$",

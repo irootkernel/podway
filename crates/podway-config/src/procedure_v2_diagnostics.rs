@@ -774,6 +774,12 @@ pub(crate) const fn diagnostic_hint(code: AuthoringDiagnosticCode) -> &'static s
         Code::IdenticalEffectiveRoutes => {
             "Give the options different targets or effects, or merge them."
         }
+        Code::OptionLabelsNotDistinct => {
+            "Rewrite the labels so their normalized fingerprints are distinct."
+        }
+        Code::OptionCriteriaWeak => {
+            "Give every option concrete criteria with a distinct normalized fingerprint."
+        }
         Code::WeakPurposeGuidance => "State what the procedure exists to accomplish.",
         Code::WeakIntentGuidance => "State the outcome this node must produce.",
         Code::WeakObjectiveGuidance => "State what the decision must determine.",
@@ -793,14 +799,12 @@ pub(crate) const fn diagnostic_hint(code: AuthoringDiagnosticCode) -> &'static s
         Code::ManualReworkTargetsBroad => {
             "Narrow manual_rework.allowed_targets to the nodes rework should reach."
         }
-        Code::LargeOptionSet => "Split the decision, or group the options into fewer choices.",
-        Code::LargeCycle => "Split the rework region into smaller loops.",
         Code::DuplicatedNodeDefinition => {
             "Reuse one definition from both placements instead of duplicating it."
         }
         Code::GraphNodeIdConfusing => "Rename one identifier so the two read differently.",
         Code::ReworkTopologyConfusing => {
-            "Route the decision's rework options to one target, and never to itself."
+            "Use distinct labels and concrete, distinct criteria for each rework option, and never route back to the deciding node."
         }
         Code::NoReactivationPath => {
             "Add manual_rework.allowed_targets so a completed session can be reopened."

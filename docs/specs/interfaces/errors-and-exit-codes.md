@@ -211,6 +211,22 @@ type, controller order, source selection, and bounds remain authoring failures
 under stable field-specific diagnostics; runtime errors never substitute for
 invalid Procedure admission.
 
+`OPTION_LABELS_NOT_DISTINCT` compares every pair of option labels after lowercasing,
+collapsing whitespace, trimming, and removing trailing `.`, `!`, and `?`. It reports
+the later option for a duplicate fingerprint. `OPTION_CRITERIA_WEAK` reports missing
+or non-concrete criteria and the later option in each pair of duplicate normalized
+criteria. These pairwise rules emit at most eight findings each. The schema's hard
+maximum of eight options is unchanged; option count alone is not a warning.
+
+`REWORK_TOPOLOGY_CONFUSING` reports a decision that routes rework back to itself or
+whose multiple rework routes cannot be distinguished by distinct normalized labels
+and concrete, distinct normalized criteria. Multiple rework routes to distinct
+phase-owner targets are otherwise valid. Rework-region size alone is not a warning;
+advance cycles remain invalid through graph validation. Existing compatibility
+diagnostics such as `INDISTINGUISHABLE_OPTION_LABELS`,
+`IDENTICAL_EFFECTIVE_ROUTES`, and `WEAK_CRITERIA_GUIDANCE` retain their registered
+meanings and may accompany the replacement diagnostics when both rules apply.
+
 ## Bounded evidence scale failures
 
 [ADR-0024](../../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md) adopts four codes. `V2SCL-002` registered them in `error-codes.json`, the closed details schemas, and the protocol catalog. `V2SCL-003` made `ATTEMPT_CONTENT_LIMIT_EXCEEDED` reachable on the item mutation path, and `V2SCL-004` made the three evidence-read codes reachable through the `evidence.read` route.

@@ -296,8 +296,10 @@ trust boundary or turning it into a separate evidence ledger.
 
 ### 5.3 Typed guards and diagnostics
 
-[Podway Typed Guards and Authoring Diagnostics](TODO-podway-typed-guards.md)
-explicitly excludes dynamic routes from Procedure v2 and statically validates
+[ADR-0028](../architecture-decision-records/0028-bounded-typed-procedure-guards.md)
+explicitly excludes dynamic routes from Procedure v2 and the
+[Procedure specification](../specs/domain/procedure-and-item-specification.md)
+statically validates
 guard sources, dominance, selection, and freshness. Those rules remain valid
 inside one immutable execution-group version.
 
@@ -470,7 +472,7 @@ narrowed to the smallest independently motivated mechanism.
 - [Podway Graph Engineering Evolution](TODO-podway-graph-engineering-evolution.md)
 - [ADR-0024: Bounded Evidence Scale and Paged Read-back](../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md)
 - [ADR-0025: Structurally Bound External Check Results](../architecture-decision-records/0025-structurally-bound-external-check-results.md)
-- [Podway Typed Guards and Authoring Diagnostics](TODO-podway-typed-guards.md)
+- [ADR-0028: Bound Procedure Conditions to a Closed Typed Vocabulary](../architecture-decision-records/0028-bounded-typed-procedure-guards.md)
 - [Podway Reference Procedures and Authoring Guidance](TODO-podway-reference-procedures.md)
 - [ADR-0017: Permit Single-Cursor Convergence](../architecture-decision-records/0017-single-cursor-convergence.md)
 - [ADR-0019: Make Procedure v2 the Only Product Model](../architecture-decision-records/0019-procedure-v2-only-product.md)

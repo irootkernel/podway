@@ -54,6 +54,85 @@ to closeout. Its manual rework targets are `inspect`, `implement`, and `verify`.
 The same observation, fence, item-recording, and outcome-reconciliation rules
 below apply.
 
+## Author typed conditions
+
+Procedure authors can make a later optional item conditionally required from an
+earlier, unconditionally required item in the same definition. Predicates are
+AND-combined and use the closed typed vocabulary; this example makes the commit
+SHA required only in committed mode:
+
+```yaml
+items:
+  - id: commit-state
+    type: choice
+    prompt: Select the commit state.
+    required: true
+    choices: [committed, uncommitted]
+  - id: commit-sha
+    type: text
+    prompt: Record the commit SHA.
+    required: false
+    required_when:
+      - item: commit-state
+        equals: committed
+```
+
+A decision guard can read only an explicitly selected item from a required,
+dominating evidence reference. It controls option availability without hiding the
+authored option:
+
+```yaml
+node_definitions:
+  assess-review:
+    type: decision
+    title: Assess the review
+    objective: Decide whether unresolved valid findings remain.
+    prompt: Is the review ready to close?
+    evidence_guidance:
+      - Read the selected unresolved-finding count before deciding.
+    options:
+      - id: approved
+        label: Review approved
+        criteria: No unresolved valid finding remains.
+        guards:
+          - evidence:
+              node: review
+              item: unresolved-valid-findings
+            equals: 0
+      - id: changes-required
+        label: Changes required
+        criteria: At least one unresolved valid finding remains.
+    reason:
+      required: true
+      prompt: Explain the selected review outcome.
+graph:
+  entry: assess
+  nodes:
+    - id: assess
+      use: assess-review
+      evidence_from:
+        - node: review
+          required: true
+          select:
+            items: [unresolved-valid-findings]
+      routes:
+        approved:
+          to: closeout
+          effect: advance
+        changes-required:
+          to: review
+          effect: rework
+```
+
+`podway procedure check <path>` validates controller order, predicate typing,
+evidence selection, dominance, and graph rules before a session can start. At
+runtime, observation exposes authored `required`, derived `required_now`, and a
+bounded condition status. `podway next --json` keeps all authored options and
+publishes authoritative `allowed_option_ids` plus bounded guard statuses when any
+guard exists. An unavailable selection fails with
+`OPTION_GUARD_UNSATISFIED`; stale required evidence retains
+`EVIDENCE_REFERENCE_STALE` precedence.
+
 ## Read stable state before each mutation
 
 ```bash

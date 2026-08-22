@@ -1,4 +1,4 @@
-//! Procedure v2 authoring lint: the 23 advisory rules of dossier section 11.4.
+//! Procedure v2 bounded authoring lint rules.
 //!
 //! **Lint runs on validated models only.** `podway procedure lint` parses, validates, and only then
 //! lints; a document whose closed references do not resolve reports the validation error and is not
@@ -70,11 +70,6 @@ const GOAL_ASSESSMENT_TERMINAL_DISTANCE: u32 = 4;
 /// The fewest manual rework targets that can count as broad, combined with covering at least half
 /// the graph.
 const MANUAL_REWORK_BROAD_MINIMUM: usize = 8;
-/// The largest option set that still reads as a choice. The schema caps options at eight, so this
-/// fires only for six, seven, and eight.
-const LARGE_OPTION_SET_MAXIMUM: usize = 5;
-/// The largest strongly connected component that still reads as one rework loop.
-const LARGE_CYCLE_MAXIMUM: usize = 8;
 /// The fewest characters two graph node identifiers must both have before a one-edit difference
 /// between them is confusing rather than simply short.
 const CONFUSABLE_ID_MIN_CHARS: usize = 4;
@@ -139,7 +134,7 @@ impl<'a> Lint<'a, '_> {
         }
     }
 
-    /// Runs the rules in section 11.4 table order, then sorts the report.
+    /// Runs the rules in stable catalog order, then sorts the report.
     ///
     /// The sort is stable, so a rule that emits several findings in a meaningful order (a cycle's
     /// members, a target list) keeps that order on a full tie, and rule order breaks ties between
@@ -147,19 +142,17 @@ impl<'a> Lint<'a, '_> {
     fn run(mut self) -> Vec<AuthoringDiagnostic> {
         self.unused_node_definitions();
         self.single_option_decisions();
-        self.indistinguishable_option_labels();
+        self.option_labels_not_distinct();
         self.identical_effective_routes();
         self.weak_purpose_guidance();
         self.weak_definition_guidance();
-        self.weak_option_criteria_guidance();
+        self.option_criteria_weak();
         self.weak_reason_guidance();
         self.evidence_guidance_missing();
         self.optional_evidence_unresolvable();
         self.goal_clarification_path_missing();
         self.goal_assessment_too_early();
         self.manual_rework_targets_broad();
-        self.large_option_sets();
-        self.large_cycles();
         self.duplicated_node_definitions();
         self.confusable_graph_node_ids();
         self.rework_topology_confusing();
@@ -241,10 +234,10 @@ impl<'a> Lint<'a, '_> {
     }
 
     // -----------------------------------------------------------------------------------------
-    // Rule 3: INDISTINGUISHABLE_OPTION_LABELS
+    // Rule 3: OPTION_LABELS_NOT_DISTINCT
     // -----------------------------------------------------------------------------------------
 
-    fn indistinguishable_option_labels(&mut self) {
+    fn option_labels_not_distinct(&mut self) {
         let mut emitted = 0_usize;
         for (id, decision) in self.decision_definitions() {
             for (offset, option) in decision.options().iter().enumerate() {
@@ -261,7 +254,7 @@ impl<'a> Lint<'a, '_> {
                 let path = definition_path(id).child_key("options").child_index(offset);
                 let finding = self
                     .diagnostic(
-                        AuthoringDiagnosticCode::IndistinguishableOptionLabels,
+                        AuthoringDiagnosticCode::OptionLabelsNotDistinct,
                         &path,
                         format!(
                             "Option `{}` of `{id}` reads the same as option `{}` once case, spacing, and trailing punctuation are normalized.",
@@ -271,6 +264,18 @@ impl<'a> Lint<'a, '_> {
                     )
                     .with_node_definition_id(id);
                 self.findings.push(finding);
+                let compatibility_finding = self
+                    .diagnostic(
+                        AuthoringDiagnosticCode::IndistinguishableOptionLabels,
+                        &path,
+                        format!(
+                            "Option `{}` of `{id}` reads the same as option `{}` once case, spacing, and trailing punctuation are normalized.",
+                            option.id().as_str(),
+                            earlier.id().as_str(),
+                        ),
+                    )
+                    .with_node_definition_id(id);
+                self.findings.push(compatibility_finding);
                 emitted = emitted.saturating_add(1);
             }
         }
@@ -280,8 +285,8 @@ impl<'a> Lint<'a, '_> {
     // Rule 4: IDENTICAL_EFFECTIVE_ROUTES
     // -----------------------------------------------------------------------------------------
 
-    /// A goal-assessment decision is exempt: section 7.4 lets all three goal outcomes converge on
-    /// one terminal action, and the options remain distinguishable by the outcome each records.
+    /// A goal-assessment decision is exempt: all goal outcomes may converge on one terminal
+    /// action because the recorded outcome, not the route, distinguishes those options.
     fn identical_effective_routes(&mut self) {
         for (index, decision) in self.decision_placements() {
             if self.declares_assessment(decision.definition().as_str()) {
@@ -394,15 +399,29 @@ impl<'a> Lint<'a, '_> {
     }
 
     // -----------------------------------------------------------------------------------------
-    // Rule 9: WEAK_CRITERIA_GUIDANCE
+    // Rule 8: OPTION_CRITERIA_WEAK
     // -----------------------------------------------------------------------------------------
 
-    /// Absent criteria count as weak: an option with no criteria tells the decision-maker nothing
-    /// about when to pick it, which is the same failure as criteria that say nothing.
-    fn weak_option_criteria_guidance(&mut self) {
+    /// Criteria must be concrete and pairwise distinct after the same normalization used for
+    /// labels. This also keeps same-target, same-effect routes meaningful: route convergence is
+    /// valid when the authored criteria explain distinct reasons for selecting each option.
+    fn option_criteria_weak(&mut self) {
+        let mut emitted = 0_usize;
         for (id, decision) in self.decision_definitions() {
             for (offset, option) in decision.options().iter().enumerate() {
-                if !is_weak_guidance(option.criteria(), WEAK_GUIDANCE_MIN_CHARS_SECONDARY) {
+                if emitted == PAIRWISE_RULE_MAX_FINDINGS {
+                    return;
+                }
+                let weak = is_weak_guidance(option.criteria(), WEAK_GUIDANCE_MIN_CHARS_SECONDARY);
+                let duplicate = option.criteria().and_then(|criteria| {
+                    let normalized = normalize_text(criteria);
+                    decision.options()[..offset].iter().find(|candidate| {
+                        candidate
+                            .criteria()
+                            .is_some_and(|value| normalize_text(value) == normalized)
+                    })
+                });
+                if !weak && duplicate.is_none() {
                     continue;
                 }
                 let path = definition_path(id)
@@ -411,15 +430,40 @@ impl<'a> Lint<'a, '_> {
                     .child_key("criteria");
                 let finding = self
                     .diagnostic(
-                        AuthoringDiagnosticCode::WeakCriteriaGuidance,
+                        AuthoringDiagnosticCode::OptionCriteriaWeak,
                         &path,
-                        format!(
-                            "Option `{}` of `{id}` does not state when it applies.",
-                            option.id().as_str(),
+                        duplicate.map_or_else(
+                            || {
+                                format!(
+                                    "Option `{}` of `{id}` does not state concrete criteria for when it applies.",
+                                    option.id().as_str(),
+                                )
+                            },
+                            |earlier| {
+                                format!(
+                                    "Option `{}` of `{id}` has the same normalized criteria as option `{}`.",
+                                    option.id().as_str(),
+                                    earlier.id().as_str(),
+                                )
+                            },
                         ),
                     )
                     .with_node_definition_id(id);
                 self.findings.push(finding);
+                if weak {
+                    let compatibility_finding = self
+                        .diagnostic(
+                            AuthoringDiagnosticCode::WeakCriteriaGuidance,
+                            &path,
+                            format!(
+                                "Option `{}` of `{id}` does not state when it applies.",
+                                option.id().as_str(),
+                            ),
+                        )
+                        .with_node_definition_id(id);
+                    self.findings.push(compatibility_finding);
+                }
+                emitted = emitted.saturating_add(1);
             }
         }
     }
@@ -653,10 +697,6 @@ impl<'a> Lint<'a, '_> {
         self.findings.push(finding);
     }
 
-    // -----------------------------------------------------------------------------------------
-    // Rule 16: LARGE_OPTION_SET
-    // -----------------------------------------------------------------------------------------
-
     /// Warns when an action definition's declared worst-case recorded content exceeds the
     /// per-attempt aggregate of ADR-0024, and names the items that dominate it.
     ///
@@ -700,79 +740,6 @@ impl<'a> Lint<'a, '_> {
                 )
                 .with_node_definition_id(id);
             self.findings.push(finding);
-        }
-    }
-
-    fn large_option_sets(&mut self) {
-        for (id, decision) in self.decision_definitions() {
-            let count = decision.options().len();
-            if count <= LARGE_OPTION_SET_MAXIMUM {
-                continue;
-            }
-            let path = definition_path(id).child_key("options");
-            let finding = self
-                .diagnostic(
-                    AuthoringDiagnosticCode::LargeOptionSet,
-                    &path,
-                    format!(
-                        "The decision definition `{id}` declares {count} options, more than one decision can be weighed against at once."
-                    ),
-                )
-                .with_node_definition_id(id);
-            self.findings.push(finding);
-        }
-    }
-
-    // -----------------------------------------------------------------------------------------
-    // Rule 17: LARGE_CYCLE
-    // -----------------------------------------------------------------------------------------
-
-    /// Strongly connected components, not simple cycles: enumerating simple cycles is exponential,
-    /// while a component is the bounded, deterministic "loop region" a reviewer reasons about. A
-    /// single-node component is a loop only when it routes to itself; the size threshold already
-    /// excludes it, and the guard states the definition rather than relying on that coincidence.
-    fn large_cycles(&mut self) {
-        for component in self.graph.strongly_connected_components() {
-            if !self.is_cyclic_component(&component) || component.len() <= LARGE_CYCLE_MAXIMUM {
-                continue;
-            }
-            let Some(anchor) = component.first().copied() else {
-                continue;
-            };
-            let Some(placement) = self.graph.placement(anchor) else {
-                continue;
-            };
-            let members = component
-                .iter()
-                .filter_map(|member| self.graph.placement(*member))
-                .map(|member| member.id().as_str().to_owned())
-                .collect::<Vec<_>>();
-            let id = placement.id().as_str();
-            let path = node_path(anchor);
-            let finding = self
-                .diagnostic(
-                    AuthoringDiagnosticCode::LargeCycle,
-                    &path,
-                    format!(
-                        "A rework region of {} graph nodes forms one strongly connected component starting at `{id}`.",
-                        component.len(),
-                    ),
-                )
-                .with_graph_node_id(id)
-                .with_related_graph_node_ids(members);
-            self.findings.push(finding);
-        }
-    }
-
-    fn is_cyclic_component(&self, component: &[usize]) -> bool {
-        match component {
-            [] => false,
-            [single] => self
-                .graph
-                .successors(*single)
-                .iter()
-                .any(|successor| successor.target() == *single),
-            _ => true,
         }
     }
 
@@ -881,35 +848,63 @@ impl<'a> Lint<'a, '_> {
     // Rule 20: REWORK_TOPOLOGY_CONFUSING
     // -----------------------------------------------------------------------------------------
 
-    /// Two shapes: a decision whose rework options land on different targets, and a rework route
-    /// back to the deciding placement itself. A rework *in*-degree of two or more is deliberately
-    /// not a trigger — "verify reworks to implement" and "review reworks to implement" is the
-    /// ordinary software-development shape, not a defect.
+    /// Multiple rework routes are valid phase-owner routing when their options have distinct
+    /// normalized labels and concrete, distinct criteria. A route back to the deciding placement
+    /// remains intrinsically confusing because it cannot advance to a fresh owner stage.
     fn rework_topology_confusing(&mut self) {
         for (index, decision) in self.decision_placements() {
-            let rework_targets = self
-                .graph
-                .successors(index)
+            let rework_routes = decision
+                .routes()
+                .entries()
                 .iter()
-                .filter(|successor| successor.effect() == Some(TransitionEffectV2::Rework))
-                .map(|successor| successor.target())
+                .filter(|entry| entry.route().effect() == TransitionEffectV2::Rework)
                 .collect::<Vec<_>>();
-            let distinct = rework_targets.iter().copied().collect::<BTreeSet<_>>();
-            let self_rework = distinct.contains(&index);
-            let divergent = distinct.len() >= 2;
-            if !self_rework && !divergent {
+            let self_rework = rework_routes
+                .iter()
+                .any(|entry| entry.route().to() == decision.id());
+            let options_distinct = self
+                .decision_definition(decision.definition().as_str())
+                .is_some_and(|definition| {
+                    let options = rework_routes
+                        .iter()
+                        .filter_map(|route| {
+                            definition
+                                .options()
+                                .iter()
+                                .find(|option| option.id() == route.option_id())
+                        })
+                        .collect::<Vec<_>>();
+                    options.len() == rework_routes.len()
+                        && options
+                            .iter()
+                            .map(|option| normalize_text(option.label()))
+                            .collect::<BTreeSet<_>>()
+                            .len()
+                            == options.len()
+                        && options.iter().all(|option| {
+                            !is_weak_guidance(option.criteria(), WEAK_GUIDANCE_MIN_CHARS_SECONDARY)
+                        })
+                        && options
+                            .iter()
+                            .filter_map(|option| option.criteria().map(normalize_text))
+                            .collect::<BTreeSet<_>>()
+                            .len()
+                            == options.len()
+                });
+            if !self_rework && (rework_routes.len() < 2 || options_distinct) {
                 continue;
             }
             let reason = if self_rework {
                 "one rework route points back at the deciding node itself"
             } else {
-                "its rework options resume from different graph nodes"
+                "its rework routes do not have distinct labels and concrete, distinct criteria"
             };
             let id = decision.id().as_str();
-            let related = distinct
+            let related = rework_routes
                 .iter()
-                .filter_map(|target| self.graph.placement(*target))
-                .map(|placement| placement.id().as_str().to_owned())
+                .map(|entry| entry.route().to().as_str().to_owned())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
                 .collect::<Vec<_>>();
             let path = node_path(index).child_key("routes");
             let finding = self

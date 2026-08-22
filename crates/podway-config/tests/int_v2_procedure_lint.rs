@@ -701,7 +701,7 @@ fn many_findings_document() -> String {
         .replace("manual_rework:\n  allowed_targets:\n    - gather-inputs\n", "")
 }
 
-/// Every per-rule firing fixture, so the shape and severity assertions cover all twenty-three.
+/// Every per-rule firing fixture, so the shape and severity assertions cover all twenty-four.
 fn every_firing_document() -> Vec<String> {
     vec![
         unused_definition_document(),
@@ -741,7 +741,10 @@ fn every_firing_document() -> Vec<String> {
         rework_region_document(8),
         duplicated_definition_document(true),
         confusable_ids_document("review-works"),
-        divergent_rework_document(),
+        divergent_rework_document().replace(
+            "criteria: The gathered input is unusable.",
+            "criteria: SOME gathered input is missing or wrong!",
+        ),
         CLEAN_YAML.replace(
             "manual_rework:\n  allowed_targets:\n    - gather-inputs\n",
             "",
@@ -816,7 +819,7 @@ fn v2aut004_a_decision_with_one_option_is_reported() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Rule 3: INDISTINGUISHABLE_OPTION_LABELS
+// Rule 3: OPTION_LABELS_NOT_DISTINCT
 // ---------------------------------------------------------------------------------------------
 
 fn indistinguishable_labels_document() -> String {
@@ -829,7 +832,10 @@ fn v2aut004_option_labels_that_normalize_alike_are_reported_on_the_later_option(
     // in a word, so it survives normalization.
     assert_rule(
         &indistinguishable_labels_document(),
-        &["INDISTINGUISHABLE_OPTION_LABELS"],
+        &[
+            "INDISTINGUISHABLE_OPTION_LABELS",
+            "OPTION_LABELS_NOT_DISTINCT",
+        ],
         &CLEAN_YAML.replace(
             "label: Work is incomplete",
             "label: WORK   is complete again.",
@@ -844,7 +850,7 @@ fn v2aut004_option_labels_that_normalize_alike_are_reported_on_the_later_option(
 }
 
 // ---------------------------------------------------------------------------------------------
-// Rule 4: IDENTICAL_EFFECTIVE_ROUTES
+// Same-target routes retain the compatibility diagnostic
 // ---------------------------------------------------------------------------------------------
 
 fn identical_routes_document() -> String {
@@ -855,16 +861,11 @@ fn identical_routes_document() -> String {
 }
 
 #[test]
-fn v2aut004_options_that_lead_to_the_same_place_are_reported_once_per_placement() {
-    assert_rule(
-        &identical_routes_document(),
-        &["IDENTICAL_EFFECTIVE_ROUTES"],
-        CLEAN_YAML,
+fn v2aut004_same_target_routes_remain_reported_outside_goal_assessment() {
+    assert_eq!(
+        codes(&identical_routes_document()),
+        ["IDENTICAL_EFFECTIVE_ROUTES"]
     );
-
-    let report = lint(&identical_routes_document());
-    assert_eq!(report[0].graph_node_id(), Some("review-work"));
-    assert_eq!(report[0].field(), "graph.nodes[review-work].routes");
 }
 
 #[test]
@@ -882,7 +883,7 @@ fn v2aut004_a_goal_assessment_placement_is_exempt_from_identical_effective_route
         );
     assert_eq!(codes(&converged), Vec::<&str>::new());
 
-    // The control: the identical convergence on a decision that declares no assessment fires.
+    // The control still reports converged routes outside assessment.
     assert_eq!(
         codes(&identical_routes_document()),
         ["IDENTICAL_EFFECTIVE_ROUTES"]
@@ -960,11 +961,11 @@ fn v2aut004_guidance_is_weak_when_it_is_one_word_a_placeholder_or_an_unfilled_sp
 }
 
 // ---------------------------------------------------------------------------------------------
-// Rule 9: WEAK_CRITERIA_GUIDANCE
+// Rule 8: OPTION_CRITERIA_WEAK
 // ---------------------------------------------------------------------------------------------
 
 #[test]
-fn v2aut004_weak_or_absent_option_criteria_are_reported_at_seven_characters() {
+fn v2grd006_weak_or_absent_option_criteria_are_reported_at_seven_characters() {
     // Seven characters is under the secondary minimum of eight; the twin adds one character.
     let source = CLEAN_YAML.replace(
         "criteria: Every gathered input is present and correct.",
@@ -974,7 +975,11 @@ fn v2aut004_weak_or_absent_option_criteria_are_reported_at_seven_characters() {
         "criteria: Every gathered input is present and correct.",
         "criteria: Do it no",
     );
-    assert_rule(&source, &["WEAK_CRITERIA_GUIDANCE"], &twin);
+    assert_rule(
+        &source,
+        &["OPTION_CRITERIA_WEAK", "WEAK_CRITERIA_GUIDANCE"],
+        &twin,
+    );
     assert_eq!(
         lint(&source)[0].field(),
         "node_definitions[review].options[complete].criteria"
@@ -985,7 +990,23 @@ fn v2aut004_weak_or_absent_option_criteria_are_reported_at_seven_characters() {
         "        criteria: Every gathered input is present and correct.\n",
         "",
     );
-    assert_eq!(codes(&absent), ["WEAK_CRITERIA_GUIDANCE"]);
+    assert_eq!(
+        codes(&absent),
+        ["OPTION_CRITERIA_WEAK", "WEAK_CRITERIA_GUIDANCE"]
+    );
+}
+
+#[test]
+fn v2grd006_duplicate_normalized_criteria_are_reported_on_the_later_option() {
+    let source = CLEAN_YAML.replace(
+        "criteria: Some gathered input is missing or wrong.",
+        "criteria: EVERY   gathered input is present and correct!",
+    );
+    assert_eq!(codes(&source), ["OPTION_CRITERIA_WEAK"]);
+    assert_eq!(
+        lint(&source)[0].field(),
+        "node_definitions[review].options[incomplete].criteria"
+    );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1227,53 +1248,21 @@ fn v2aut004_manual_rework_targets_covering_half_the_graph_are_reported() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Rule 16: LARGE_OPTION_SET
+// V2GRD-006: count-based option warnings are removed
 // ---------------------------------------------------------------------------------------------
 
 #[test]
-fn v2aut004_a_decision_with_six_options_is_reported() {
-    assert_rule(
-        &option_set_document(6),
-        &["LARGE_OPTION_SET"],
-        &option_set_document(5),
-    );
-    assert_eq!(
-        lint(&option_set_document(6))[0].field(),
-        "node_definitions[review].options"
-    );
+fn v2grd006_eight_distinct_options_do_not_trigger_a_count_warning() {
+    assert_eq!(codes(&option_set_document(8)), Vec::<&str>::new());
 }
 
 // ---------------------------------------------------------------------------------------------
-// Rule 17: LARGE_CYCLE
+// V2GRD-006: count-based cycle warnings are removed
 // ---------------------------------------------------------------------------------------------
 
 #[test]
-fn v2aut004_a_rework_region_of_nine_nodes_is_reported_once_at_its_earliest_member() {
-    // Eight chained actions plus the deciding node form a nine-node component; seven plus the
-    // decision form eight, which is the threshold itself.
-    assert_rule(
-        &rework_region_document(8),
-        &["LARGE_CYCLE"],
-        &rework_region_document(7),
-    );
-
-    let report = lint(&rework_region_document(8));
-    assert_eq!(report[0].graph_node_id(), Some("alpha-stage"));
-    assert_eq!(report[0].field(), "graph.nodes[alpha-stage]");
-    assert_eq!(
-        report[0].related_graph_node_ids(),
-        [
-            "alpha-stage",
-            "bravo-stage",
-            "charlie-stage",
-            "delta-stage",
-            "echo-stage",
-            "foxtrot-stage",
-            "golf-stage",
-            "hotel-stage",
-            "review-work",
-        ]
-    );
+fn v2grd006_a_valid_nine_node_rework_region_does_not_trigger_a_count_warning() {
+    assert_eq!(codes(&rework_region_document(8)), Vec::<&str>::new());
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1422,27 +1411,23 @@ fn divergent_rework_document() -> String {
 }
 
 #[test]
-fn v2aut004_rework_options_that_resume_from_different_nodes_are_reported() {
-    // The twin drops the third option, leaving one rework route: a single rework target is the
-    // ordinary shape, and a rework in-degree of two is deliberately not a trigger either.
-    let twin = divergent_rework_document()
-        .replace(
-            "      - id: restart\n        label: Work must restart\n        criteria: The gathered input is unusable.\n",
-            "",
-        )
-        .replace(
-            "        restart:\n          to: gather-inputs\n          effect: rework\n",
-            "",
-        );
-    assert_rule(
-        &divergent_rework_document(),
-        &["REWORK_TOPOLOGY_CONFUSING"],
-        &twin,
-    );
+fn v2grd006_distinct_phase_owner_rework_routes_are_valid() {
+    assert_eq!(codes(&divergent_rework_document()), Vec::<&str>::new());
+}
 
-    let report = lint(&divergent_rework_document());
-    assert_eq!(report[0].graph_node_id(), Some("review-work"));
-    assert_eq!(report[0].field(), "graph.nodes[review-work].routes");
+#[test]
+fn v2grd006_indistinguishable_rework_routes_are_reported() {
+    let source = divergent_rework_document().replace(
+        "criteria: The gathered input is unusable.",
+        "criteria: SOME gathered input is missing or wrong!",
+    );
+    assert_eq!(
+        codes(&source),
+        ["OPTION_CRITERIA_WEAK", "REWORK_TOPOLOGY_CONFUSING"]
+    );
+    let report = lint(&source);
+    assert_eq!(report[1].graph_node_id(), Some("review-work"));
+    assert_eq!(report[1].field(), "graph.nodes[review-work].routes");
 }
 
 #[test]
@@ -1660,7 +1645,8 @@ fn v2aut004_the_shipped_equivalence_fixture_fires_only_its_missing_option_criter
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
 
     // Truthfully pinned rather than tuned. The fixture's three assessment options declare no
-    // `criteria`, and absent criteria are weak by rule 9, so exactly three findings are honest.
+    // `criteria`, and absent criteria fire both the durable V2GRD diagnostic and the retained
+    // compatibility guidance diagnostic, so exactly six findings are honest.
     // Nothing else fires, and in particular:
     //   - IDENTICAL_EFFECTIVE_ROUTES does not, even though all three routes lead to `finish` with
     //     `advance`, because the `assess` definition declares a session-goal assessment (rule 4's
@@ -1673,8 +1659,11 @@ fn v2aut004_the_shipped_equivalence_fixture_fires_only_its_missing_option_criter
     assert_eq!(
         codes(&source),
         [
+            "OPTION_CRITERIA_WEAK",
             "WEAK_CRITERIA_GUIDANCE",
+            "OPTION_CRITERIA_WEAK",
             "WEAK_CRITERIA_GUIDANCE",
+            "OPTION_CRITERIA_WEAK",
             "WEAK_CRITERIA_GUIDANCE"
         ]
     );
@@ -1687,7 +1676,10 @@ fn v2aut004_the_shipped_equivalence_fixture_fires_only_its_missing_option_criter
         fields,
         [
             "node_definitions[assess].options[achieved].criteria",
+            "node_definitions[assess].options[achieved].criteria",
             "node_definitions[assess].options[not-achieved].criteria",
+            "node_definitions[assess].options[not-achieved].criteria",
+            "node_definitions[assess].options[superseded].criteria",
             "node_definitions[assess].options[superseded].criteria",
         ]
     );
