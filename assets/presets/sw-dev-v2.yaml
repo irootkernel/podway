@@ -1,127 +1,250 @@
 schema: podway.procedure/v2
 id: sw-dev-v2
-version: "2"
+version: "3"
 name: Software Development v2
-purpose: Deliver a reviewed software change with fresh verification evidence.
-description: A bounded full-feature software development procedure with goal-directed closeout.
+purpose: Deliver a reviewed software change with bounded planning and fresh external verification evidence.
+description: The full reference Procedure for guarded verification, documentation, review, and goal-directed closeout.
 goal_tracking: true
 node_definitions:
+  planning:
+    type: action
+    title: Plan the change
+    intent: Bound the implementation before changing the product.
+    instructions:
+      - Inspect the relevant implementation, tests, and authoritative contracts.
+      - Record the agreed scope, measurable success criteria, and material risks in English.
+    items:
+      - id: scope-summary
+        type: text
+        prompt: Record the bounded change scope in English.
+        required: true
+        min_length: 1
+        max_length: 4000
+        multiline: true
+      - id: success-criteria
+        type: list
+        prompt: Record the measurable success criteria in English.
+        required: true
+        min_items: 1
+        max_items: 50
+        max_item_length: 500
+        max_total_length: 25000
+        unique: true
+      - id: risk-summary
+        type: text
+        prompt: Record the material risks and compatibility boundaries in English.
+        required: true
+        min_length: 1
+        max_length: 2000
+        multiline: true
   implementation:
     type: action
     title: Implement the change
-    intent: Produce an implementation that satisfies the task goal.
+    intent: Produce the smallest complete implementation for the recorded plan.
     instructions:
       - Implement only the agreed scope.
-      - Record the resulting source revision.
+      - Record the implementation and affected boundaries in English.
     items:
       - id: implementation-summary
         type: text
-        prompt: Summarize the implemented change.
+        prompt: Summarize the implemented change in English.
         required: true
-        min_length: 0
+        min_length: 1
         max_length: 4000
         multiline: true
-      - id: source-revision
-        type: text
-        prompt: Record the resulting source revision.
+      - id: changed-boundaries
+        type: list
+        prompt: List the changed product, contract, or verification boundaries in English.
         required: true
-        min_length: 0
-        max_length: 256
-        multiline: true
-  baseline:
+        min_items: 1
+        max_items: 50
+        max_item_length: 500
+        max_total_length: 25000
+        unique: true
+  verification:
     type: action
-    title: Capture the verification baseline
-    intent: Record the environment used to interpret later test evidence.
+    title: Verify the change
+    intent: Record a structurally bound external result for the implemented candidate.
     instructions:
-      - Record the toolchain and environment used for verification.
+      - Run the repository-authoritative verification outside Podway.
+      - Record the caller-supplied result and any required observations in English.
     items:
-      - id: environment-fingerprint
-        type: text
-        prompt: Record the verification environment fingerprint.
+      - id: verification-result
+        type: check_result
+        prompt: Record the caller-supplied result for software-change-verification; Podway does not execute or attest the operation.
+        help: The declared operation is "Run the repository-authoritative verification required for the current software change in the recorded input basis." The matching digest identifies only this abstract slot contract and does not prove that any operation ran.
         required: true
-        min_length: 0
-        max_length: 1000
-        multiline: true
-  test-gate:
-    type: action
-    title: Run the test gate
-    intent: Produce fresh verification evidence for the current change.
-    instructions:
-      - Run the required test command outside Podway.
-      - Record the command, its exit status, and the log digest.
-    items:
-      - id: test-command
-        type: text
-        prompt: Record the exact test command that was run.
-        required: true
-        min_length: 0
-        max_length: 1000
-        multiline: true
-      - id: test-exit-status
-        type: integer
-        prompt: Record the exit status of the test command.
-        required: true
-      - id: log-digest
-        type: text
-        prompt: Record the digest of the captured test log.
-        required: true
-        min_length: 0
-        max_length: 128
-        multiline: true
-  evaluate-test:
+        operation_id: software-change-verification
+        operation_digest: sha256:b904aefd4dbd6b01337645fd34b1424efc9faf3d22c936de666305335076969e
+        accepted_outcomes:
+          - pass
+          - fail
+          - inconclusive
+      - id: verification-observations
+        type: list
+        prompt: Record failure or inconclusive observations in English.
+        required: false
+        required_when:
+          - item: verification-result
+            field: outcome
+            not_equals: pass
+        min_items: 1
+        max_items: 20
+        max_item_length: 500
+        max_total_length: 10000
+        unique: true
+      - id: verification-report
+        type: artifact
+        prompt: Attach optional metadata for a repository-local verification report.
+        help: Podway records caller-supplied metadata only and does not store, inspect, or attest the artifact bytes.
+        required: false
+        allowed_media_types:
+          - text/plain
+          - application/json
+          - application/xml
+  verification-decision:
     type: decision
-    title: Evaluate the test result
-    objective: Only a change supported by acceptable test evidence may proceed.
-    prompt: Is the recorded test result acceptable for the task goal?
+    title: Evaluate the verification result
+    objective: Route the recorded candidate by its structurally bound external outcome.
+    prompt: Does the current verification result permit documentation?
     evidence_guidance:
-      - Read the recorded test command, exit status, and log digest.
-      - Compare against the captured verification baseline when one exists.
+      - Read the selected result, conditional observations, and optional report metadata.
     options:
-      - id: passed
-        label: Tests passed
-        criteria: The recorded test run completed successfully.
-      - id: failed
-        label: Tests failed
-        criteria: The recorded test run did not complete successfully.
+      - id: acceptable
+        label: Verification acceptable
+        criteria: The selected verification outcome is pass.
+        guards:
+          - evidence:
+              node: verify
+              item: verification-result
+            field: outcome
+            equals: pass
+      - id: retry
+        label: Verification retry required
+        criteria: The selected verification outcome is fail or inconclusive.
+        guards:
+          - evidence:
+              node: verify
+              item: verification-result
+            field: outcome
+            not_equals: pass
     reason:
       required: true
-      prompt: Explain the selection using the referenced evidence.
+      prompt: Explain the selection using the recorded result in English.
+  documentation:
+    type: action
+    title: Document the change
+    intent: Record whether the implemented behavior requires durable documentation updates.
+    instructions:
+      - Select an explicit documentation state instead of skipping this phase.
+      - Record the update summary in English when documentation changed.
+    items:
+      - id: documentation-state
+        type: choice
+        prompt: Record the documentation state.
+        required: true
+        choices:
+          - not-applicable
+          - updated
+      - id: documentation-summary
+        type: text
+        prompt: Summarize the durable documentation update in English.
+        required: false
+        required_when:
+          - item: documentation-state
+            equals: updated
+        min_length: 1
+        max_length: 4000
+        multiline: true
   review-work:
     type: action
-    title: Review the change
-    intent: Review the verified candidate against the task goal.
+    title: Review the verified change
+    intent: Record separate implementation and documentation findings for phase-owner routing.
     instructions:
-      - Review the implementation and its verification evidence.
-      - Record the review summary and any findings.
+      - Review the plan, implementation, verification, and documentation evidence.
+      - Record the summary, exact unresolved counts, and bounded findings in English.
     items:
       - id: review-summary
         type: text
-        prompt: Summarize the review result.
+        prompt: Summarize the review result in English.
         required: true
-        min_length: 0
+        min_length: 1
         max_length: 4000
         multiline: true
+      - id: unresolved-implementation-findings
+        type: integer
+        prompt: Record the number of unresolved implementation findings.
+        required: true
+        minimum: 0
+      - id: unresolved-documentation-findings
+        type: integer
+        prompt: Record the number of unresolved documentation findings.
+        required: true
+        minimum: 0
       - id: review-findings
         type: list
-        prompt: List unresolved review findings, if any.
+        prompt: List bounded unresolved review findings in English, if any.
         required: false
         min_items: 0
-        max_items: 50
-        max_item_length: 500
-        max_total_length: 1000000
+        max_items: 100
+        max_item_length: 4000
+        max_total_length: 400000
         unique: true
+  review-decision:
+    type: decision
+    title: Evaluate the review result
+    objective: Route each unresolved finding to the phase that owns its correction.
+    prompt: Which phase owns the current review outcome?
+    evidence_guidance:
+      - Read the selected summary, unresolved counts, and findings.
+      - Implementation findings take precedence over documentation findings.
+    options:
+      - id: approved
+        label: Review approved
+        criteria: No unresolved implementation or documentation finding remains.
+        guards:
+          - evidence:
+              node: review
+              item: unresolved-implementation-findings
+            equals: 0
+          - evidence:
+              node: review
+              item: unresolved-documentation-findings
+            equals: 0
+      - id: implementation-changes
+        label: Implementation changes required
+        criteria: At least one unresolved implementation finding remains.
+        guards:
+          - evidence:
+              node: review
+              item: unresolved-implementation-findings
+            at_least: 1
+      - id: documentation-changes
+        label: Documentation changes required
+        criteria: No implementation finding remains and at least one documentation finding remains.
+        guards:
+          - evidence:
+              node: review
+              item: unresolved-implementation-findings
+            equals: 0
+          - evidence:
+              node: review
+              item: unresolved-documentation-findings
+            at_least: 1
+    reason:
+      required: true
+      prompt: Explain the selected phase-owner route in English.
   assess-goal:
     type: decision
     title: Assess the session goal
-    objective: Record whether the current goal revision is supported by fresh evidence.
+    objective: Determine whether fresh implementation, verification, and review evidence supports the goal.
     prompt: What is the outcome of the current session goal?
     evidence_guidance:
-      - Read the latest recorded test command, exit status, and log digest.
-      - Read the recorded review summary and findings.
+      - Assess every criterion against the selected fresh evidence and decision records.
     items:
       - id: assessment-note
         type: text
-        prompt: Record observations supporting the criterion assessments.
+        prompt: Record observations supporting the criterion assessments in English.
         required: false
         min_length: 0
         max_length: 2000
@@ -132,168 +255,171 @@ node_definitions:
         criteria: Fresh criterion assessments support the current goal revision.
       - id: not-achieved
         label: Goal not achieved
-        criteria: Fresh criterion assessments do not support the current goal revision.
+        criteria: Fresh evidence does not support the current goal revision.
       - id: superseded
         label: Goal superseded
-        criteria: The current goal revision is no longer the desired outcome.
+        criteria: The current goal revision is no longer desired.
     reason:
       required: true
-      prompt: Explain the outcome using the criterion results and evidence.
+      prompt: Explain the outcome using criterion assessments and evidence in English.
     assessment:
       target: session_goal
       outcomes:
         achieved: achieved
         not-achieved: not_achieved
         superseded: superseded
-  finalize-outcome:
-    type: action
-    title: Finalize the assessed outcome
-    intent: Record the outcome note and follow-up for the assessed goal.
-    items:
-      - id: outcome-note
-        type: text
-        prompt: Record the outcome note and any follow-up commitments.
-        required: true
-        min_length: 0
-        max_length: 2000
-        multiline: true
-  confirm-outcome:
-    type: decision
-    title: Confirm the assessed outcome
-    objective: Only a task whose recorded outcome is consistent may close.
-    prompt: Is the recorded outcome ready for final closeout?
-    evidence_guidance:
-      - Compare the outcome note with the recorded goal assessment.
-      - Confirm follow-up commitments exist when the goal was not achieved.
-    options:
-      - id: ready
-        label: Ready to close
-        criteria: The outcome record is consistent with the assessment.
-      - id: incomplete
-        label: Outcome record incomplete
-        criteria: The outcome record is missing or contradicts the assessment.
-    reason:
-      required: true
-      prompt: Explain the selection using the referenced evidence.
   closeout:
     type: action
     title: Record the closeout
-    intent: Produce the final task closeout.
+    intent: Record the terminal outcome for the assessed goal.
     items:
       - id: closeout-note
         type: text
-        prompt: Record the final closeout.
+        prompt: Record the final closeout in English.
         required: true
-        min_length: 0
+        min_length: 1
         max_length: 2000
         multiline: true
 graph:
-  entry: implement
+  entry: plan
   nodes:
+    - id: plan
+      use: planning
+      next: implement
     - id: implement
       use: implementation
-      next: capture-baseline
-    - id: capture-baseline
-      use: baseline
-      skip:
-        allowed: true
-        reason_required: true
-      next: test-after-impl
-    - id: test-after-impl
-      use: test-gate
-      next: decide-after-impl-test
-    - id: decide-after-impl-test
-      use: evaluate-test
       evidence_from:
-        - node: test-after-impl
+        - node: plan
           required: true
-        - node: capture-baseline
-          required: false
-      routes:
-        passed:
-          to: review-change
-          effect: advance
-        failed:
-          to: implement
-          effect: rework
-    - id: review-change
-      use: review-work
+          items:
+            - scope-summary
+            - success-criteria
+            - risk-summary
+      next: verify
+    - id: verify
+      use: verification
       evidence_from:
         - node: implement
           required: true
-        - node: test-after-impl
-          required: true
-      next: test-after-review
-    - id: test-after-review
-      use: test-gate
-      next: decide-after-review-test
-    - id: decide-after-review-test
-      use: evaluate-test
+          items:
+            - implementation-summary
+            - changed-boundaries
+      next: evaluate-verification
+    - id: evaluate-verification
+      use: verification-decision
       evidence_from:
-        - node: test-after-review
+        - node: verify
           required: true
+          items:
+            - verification-result
+            - verification-observations
+            - verification-report
       routes:
-        passed:
-          to: assess-session-goal
+        acceptable:
+          to: document
           effect: advance
-        failed:
+        retry:
           to: implement
           effect: rework
-    - id: assess-session-goal
+    - id: document
+      use: documentation
+      evidence_from:
+        - node: implement
+          required: true
+          items:
+            - implementation-summary
+            - changed-boundaries
+        - node: evaluate-verification
+          required: true
+      next: review
+    - id: review
+      use: review-work
+      evidence_from:
+        - node: plan
+          required: true
+          items:
+            - scope-summary
+            - success-criteria
+            - risk-summary
+        - node: implement
+          required: true
+          items:
+            - implementation-summary
+            - changed-boundaries
+        - node: verify
+          required: true
+          items:
+            - verification-result
+            - verification-observations
+            - verification-report
+        - node: document
+          required: true
+          items:
+            - documentation-state
+            - documentation-summary
+      next: evaluate-review
+    - id: evaluate-review
+      use: review-decision
+      evidence_from:
+        - node: review
+          required: true
+          items:
+            - review-summary
+            - unresolved-implementation-findings
+            - unresolved-documentation-findings
+            - review-findings
+      routes:
+        approved:
+          to: assess-goal
+          effect: advance
+        implementation-changes:
+          to: implement
+          effect: rework
+        documentation-changes:
+          to: document
+          effect: rework
+    - id: assess-goal
       use: assess-goal
       evidence_from:
-        - node: test-after-review
+        - node: plan
           required: true
-        - node: review-change
+          items:
+            - success-criteria
+        - node: verify
+          required: true
+          items:
+            - verification-result
+        - node: evaluate-verification
+          required: true
+        - node: review
           required: true
           items:
             - review-summary
+            - unresolved-implementation-findings
+            - unresolved-documentation-findings
+            - review-findings
+        - node: evaluate-review
+          required: true
       routes:
         achieved:
-          to: finish-achieved
+          to: closeout
           effect: advance
         not-achieved:
-          to: finish-not-achieved
+          to: closeout
           effect: advance
         superseded:
-          to: finish-superseded
+          to: closeout
           effect: advance
-    - id: finish-achieved
-      use: finalize-outcome
-      next: confirm-closeout
-    - id: finish-not-achieved
-      use: finalize-outcome
-      next: confirm-closeout
-    - id: finish-superseded
-      use: finalize-outcome
-      next: confirm-closeout
-    - id: confirm-closeout
-      use: confirm-outcome
-      evidence_from:
-        - node: assess-session-goal
-          required: true
-        - node: review-change
-          required: true
-          items:
-            - review-summary
-        - node: finish-achieved
-          required: false
-        - node: finish-not-achieved
-          required: false
-        - node: finish-superseded
-          required: false
-      routes:
-        ready:
-          to: record-closeout
-          effect: advance
-        incomplete:
-          to: assess-session-goal
-          effect: rework
-    - id: record-closeout
+    - id: closeout
       use: closeout
+      evidence_from:
+        - node: assess-goal
+          required: true
       terminal: true
 manual_rework:
   allowed_targets:
+    - plan
     - implement
-    - test-after-impl
-    - review-change
+    - verify
+    - document
+    - review

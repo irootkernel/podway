@@ -28,7 +28,7 @@
     {
       "kind": "preset",
       "path": "presets/sw-dev-v2.yaml",
-      "sha256": "sha256:979ab40bb2ca8c02f241ebd042c5949d6d8ae380996839afd2951d747796ff2a"
+      "sha256": "sha256:e7a4d5f06e2d7df57a9974b37a9f050594049b90c290a6674418514b0ebd9060"
     },
     {
       "kind": "catalog",
@@ -536,7 +536,7 @@
       "sha256": "sha256:23423b1060f6a0fedd1097ac458ca8a1cd8cb3c1a2a7e88aa964d514d01a248a"
     }
   ],
-  "digest": "sha256:6c883f02e04b3dfa8c395c0637dda85f4d01a7480b141b0678cc5b5152e23c3d",
+  "digest": "sha256:c04582a688fa338bac6c8eafef1d6dcddffd852fac6a20b473987977e05da549",
   "product": "podway",
   "product_version": "0.2.5",
   "schema_version": "podway.contract-manifest/v1",

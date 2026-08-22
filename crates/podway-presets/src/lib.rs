@@ -21,7 +21,7 @@ pub const BUG_FIX_V2_SHIPPED_DIGEST: &str =
 pub const SMALL_CHANGE_V2_SHIPPED_DIGEST: &str =
     "sha256:7b9855f12f85d7fb895dad592e8f0ed6ce46bf2bab34c4fcf7113dd91b111e96";
 pub const SW_DEV_V2_SHIPPED_DIGEST: &str =
-    "sha256:23638c8bd9dc0f8b555e8c5f1d4bdeee1824e5d30c13b47e4faa3f4a4c70a492";
+    "sha256:751d0cbfd005d77a7e9053fb920046be93dcd8b30cafc412353a1560ff433efb";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct PresetMetadata {
@@ -300,9 +300,9 @@ const SMALL_CHANGE_V2_METADATA: PresetMetadata = PresetMetadata {
 const SW_DEV_V2_METADATA: PresetMetadata = PresetMetadata {
     schema: PROCEDURE_SCHEMA_V2,
     id: "sw-dev-v2",
-    version: "2",
+    version: "3",
     name: "Software Development v2",
-    description: "A bounded full-feature software development procedure with goal-directed closeout.",
+    description: "The full reference Procedure for guarded verification, documentation, review, and goal-directed closeout.",
 };
 
 const EMBEDDED_PRESETS_V2: [EmbeddedPresetV2; 3] = [

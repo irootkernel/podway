@@ -870,7 +870,7 @@ mod tests {
         // Every shipped preset must sit well inside every allocation. The exact charges are pinned
         // so a change to the charge model shows up here as a number, not as a silent shift.
         let maxima = preset_maxima(include_bytes!("../../../assets/presets/sw-dev-v2.yaml"));
-        assert_eq!(maxima, [9_144, 262_186, 29_393, 5_628, 1_600]);
+        assert_eq!(maxima, [18_276, 262_186, 31_886, 56_280, 16_000]);
         assert_preset_fits("sw-dev-v2", maxima);
     }
 
