@@ -877,7 +877,7 @@ mod tests {
     #[test]
     fn v2dog002_bug_fix_preset_records_budget_headroom() {
         let maxima = preset_maxima(include_bytes!("../../../assets/presets/bug-fix-v2.yaml"));
-        assert_eq!(maxima, [9_384, 262_186, 29_393, 5_628, 1_600]);
+        assert_eq!(maxima, [12_658, 262_186, 26_360, 33_768, 9_600]);
         assert_preset_fits("bug-fix-v2", maxima);
     }
 
@@ -886,6 +886,7 @@ mod tests {
         let maxima = preset_maxima(include_bytes!(
             "../../../assets/presets/small-change-v2.yaml"
         ));
+        assert_eq!(maxima, [7_832, 0, 19_082, 22_512, 6_400]);
         assert_preset_fits("small-change-v2", maxima);
     }
 

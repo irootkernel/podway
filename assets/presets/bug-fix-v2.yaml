@@ -1,18 +1,18 @@
 schema: podway.procedure/v2
 id: bug-fix-v2
-version: "2"
+version: "3"
 name: Bug Fix v2
-purpose: Correct a reproduced defect with fresh regression, verification, and review evidence.
-description: A bounded full-feature bug-fix procedure with explicit rework and goal-directed closeout.
+purpose: Correct a defect with fresh structurally bound verification and guarded review evidence.
+description: The middle reference Procedure for a reproduced defect, typed verification, guarded rework, and goal-directed closeout.
 goal_tracking: true
 node_definitions:
-  reproduce-defect:
+  reproduction:
     type: action
     title: Reproduce the defect
-    intent: Establish the observed and expected behavior before changing the implementation.
+    intent: Establish the observed behavior, expected behavior, and regression boundary before diagnosis.
     instructions:
       - Reproduce the defect or record why reproduction is not currently possible.
-      - Keep the observation separate from the expected behavior.
+      - Record the behavior and regression check in English.
     items:
       - id: reproduction-status
         type: choice
@@ -23,180 +23,186 @@ node_definitions:
           - not-reproduced
       - id: observed-behavior
         type: text
-        prompt: Record the observed behavior or the reproduction limitation.
+        prompt: Record the observed behavior or reproduction limitation in English.
         required: true
         min_length: 1
         max_length: 4000
         multiline: true
       - id: expected-behavior
         type: text
-        prompt: Record the expected behavior.
+        prompt: Record the expected behavior in English.
         required: true
         min_length: 1
         max_length: 2000
         multiline: true
-  diagnose-cause:
+      - id: regression-check
+        type: text
+        prompt: Record the regression check in English, preserving exact commands verbatim.
+        required: true
+        min_length: 1
+        max_length: 2000
+        multiline: true
+  diagnosis:
     type: action
     title: Diagnose the cause
     intent: Identify the defect mechanism and the narrowest safe correction.
     instructions:
       - Inspect the relevant implementation and authoritative contracts.
-      - Record the causal explanation and affected boundary.
+      - Record the causal explanation and affected boundary in English.
     items:
       - id: cause
         type: text
-        prompt: Record the diagnosed cause.
+        prompt: Record the diagnosed cause in English.
         required: true
         min_length: 1
         max_length: 4000
         multiline: true
       - id: affected-boundary
         type: text
-        prompt: Record the affected component or contract boundary.
+        prompt: Record the affected component or contract boundary in English.
         required: true
         min_length: 1
         max_length: 1000
         multiline: true
-  regression-case:
-    type: action
-    title: Establish the regression case
-    intent: Define a check that distinguishes the defect from the corrected behavior.
-    instructions:
-      - Add or identify the narrowest regression check that fails for the diagnosed reason.
-    items:
-      - id: regression-check
-        type: text
-        prompt: Record the regression test or validation command.
-        required: true
-        min_length: 1
-        max_length: 2000
-        multiline: true
-      - id: failing-baseline
-        type: text
-        prompt: Record the failing baseline or why a pre-fix failure cannot be executed.
-        required: true
-        min_length: 1
-        max_length: 2000
-        multiline: true
-  implement-fix:
+  implementation:
     type: action
     title: Implement the fix
     intent: Correct the diagnosed cause without unrelated changes.
     instructions:
       - Implement only the defect correction and its direct verification.
-      - Record the resulting source revision.
+      - Record the fix and changed boundaries in English.
     items:
       - id: fix-summary
         type: text
-        prompt: Summarize the implemented correction.
+        prompt: Summarize the implemented correction in English.
         required: true
         min_length: 1
         max_length: 4000
         multiline: true
-      - id: source-revision
-        type: text
-        prompt: Record the resulting source revision.
+      - id: changed-boundaries
+        type: list
+        prompt: List the changed product or contract boundaries in English.
         required: true
-        min_length: 1
-        max_length: 256
-        multiline: true
-  verify-fix:
+        min_items: 1
+        max_items: 20
+        max_item_length: 500
+        max_total_length: 10000
+        unique: true
+  verification:
     type: action
     title: Verify the fix
-    intent: Produce fresh evidence that the regression is corrected without breaking the required boundary.
+    intent: Record a structurally bound external result for the current bug-fix candidate.
     instructions:
-      - Run the regression check and the required surrounding verification outside Podway.
-      - Record the command, exit status, and log digest.
+      - Run the declared regression check and repository-authoritative surrounding verification outside Podway.
+      - Record the caller-supplied result in English; Podway does not execute or attest the operation.
     items:
-      - id: verification-command
-        type: text
-        prompt: Record the exact verification command.
+      - id: verification-result
+        type: check_result
+        prompt: Record the caller-supplied result for bug-fix-verification; Podway does not execute or attest the operation.
+        help: The declared operation is "Run the declared regression check and the repository-authoritative surrounding verification for the current bug fix in the recorded input basis." The matching digest identifies only this abstract slot contract and does not prove that any operation ran.
         required: true
-        min_length: 1
-        max_length: 2000
-        multiline: true
-      - id: verification-exit-status
-        type: integer
-        prompt: Record the verification exit status.
-        required: true
-      - id: verification-log-digest
-        type: text
-        prompt: Record the digest of the verification log.
-        required: true
-        min_length: 1
-        max_length: 128
-        multiline: true
-  evaluate-verification:
+        operation_id: bug-fix-verification
+        operation_digest: sha256:01122b6057efcfa3f22c453aa48fb647ccba9f7db437dd44473a9f32a854a979
+        accepted_outcomes:
+          - pass
+          - fail
+          - inconclusive
+  verification-decision:
     type: decision
-    title: Evaluate the verification
-    objective: Only a correction supported by acceptable fresh verification may proceed.
-    prompt: Does the recorded verification support the correction?
+    title: Evaluate the verification result
+    objective: Route the recorded candidate by its structurally bound external outcome.
+    prompt: Does the current verification result permit review?
     evidence_guidance:
-      - Read the verification command, exit status, and log digest.
-      - Compare the result with the recorded regression case.
+      - Read the selected result and compare its input basis with the current fix.
     options:
       - id: passed
         label: Verification passed
-        criteria: The regression and required surrounding checks completed successfully.
-      - id: failed
-        label: Verification failed
-        criteria: The recorded verification does not support the correction.
+        criteria: The selected verification outcome is pass.
+        guards:
+          - evidence:
+              node: verify
+              item: verification-result
+            field: outcome
+            equals: pass
+      - id: retry
+        label: Verification retry required
+        criteria: The selected verification outcome is fail or inconclusive.
+        guards:
+          - evidence:
+              node: verify
+              item: verification-result
+            field: outcome
+            not_equals: pass
     reason:
       required: true
-      prompt: Explain the selection using the referenced verification evidence.
-  review-fix:
+      prompt: Explain the selection using the recorded result in English.
+  review-work:
     type: action
-    title: Review the fix
-    intent: Review the verified correction against the diagnosis, task goal, and regression risk.
+    title: Review the verified fix
+    intent: Record the review result and bounded unresolved findings.
     instructions:
-      - Review the correction and its fresh verification evidence.
-      - Record unresolved correctness or scope findings.
+      - Review the diagnosis, fix, fresh verification, and goal boundary.
+      - Record the summary, exact unresolved count, and findings in English.
     items:
       - id: review-summary
         type: text
-        prompt: Summarize the review result.
+        prompt: Summarize the review result in English.
         required: true
         min_length: 1
         max_length: 4000
         multiline: true
+      - id: unresolved-valid-findings
+        type: integer
+        prompt: Record the number of unresolved valid findings.
+        required: true
+        minimum: 0
       - id: review-findings
         type: list
-        prompt: List unresolved review findings, if any.
+        prompt: List bounded unresolved review findings in English, if any.
         required: false
         min_items: 0
-        max_items: 50
+        max_items: 20
         max_item_length: 500
-        max_total_length: 1000000
+        max_total_length: 10000
         unique: true
-  evaluate-review:
+  review-decision:
     type: decision
-    title: Evaluate the review
-    objective: A correction with unresolved review findings must return to implementation.
-    prompt: Is the reviewed correction ready for goal assessment?
+    title: Evaluate the review result
+    objective: Route the fix by its exact non-negative unresolved finding count.
+    prompt: Is the reviewed fix ready for goal assessment?
     evidence_guidance:
-      - Read the review summary and unresolved findings.
+      - Read the selected summary, unresolved count, and findings.
     options:
       - id: approved
         label: Review approved
-        criteria: The review records no unresolved finding that blocks closeout.
+        criteria: No unresolved valid finding remains.
+        guards:
+          - evidence:
+              node: review
+              item: unresolved-valid-findings
+            equals: 0
       - id: changes-requested
         label: Changes requested
-        criteria: At least one unresolved finding requires another implementation attempt.
+        criteria: At least one unresolved valid finding remains.
+        guards:
+          - evidence:
+              node: review
+              item: unresolved-valid-findings
+            at_least: 1
     reason:
       required: true
-      prompt: Explain the selection using the referenced review evidence.
+      prompt: Explain the selected route in English.
   assess-goal:
     type: decision
     title: Assess the session goal
-    objective: Record whether the current bug-fix goal revision is supported by fresh evidence.
+    objective: Determine whether fresh reproduction, verification, and review evidence supports the bug-fix goal.
     prompt: What is the outcome of the current session goal?
     evidence_guidance:
-      - Read the latest verification evidence and approved review summary.
-      - Assess every criterion of the current goal revision.
+      - Assess every criterion against the selected fresh evidence and decision records.
     items:
       - id: assessment-note
         type: text
-        prompt: Record observations supporting the criterion assessments.
+        prompt: Record observations supporting the criterion assessments in English.
         required: false
         min_length: 0
         max_length: 2000
@@ -207,56 +213,27 @@ node_definitions:
         criteria: Fresh criterion assessments support the corrected behavior.
       - id: not-achieved
         label: Goal not achieved
-        criteria: Fresh criterion assessments do not support the corrected behavior.
+        criteria: Fresh evidence does not support the corrected behavior.
       - id: superseded
         label: Goal superseded
-        criteria: The current bug-fix goal revision is no longer the desired outcome.
+        criteria: The current bug-fix goal revision is no longer desired.
     reason:
       required: true
-      prompt: Explain the outcome using the criterion results and evidence.
+      prompt: Explain the outcome using criterion assessments and evidence in English.
     assessment:
       target: session_goal
       outcomes:
         achieved: achieved
         not-achieved: not_achieved
         superseded: superseded
-  finalize-outcome:
-    type: action
-    title: Finalize the assessed outcome
-    intent: Record the defect outcome and any follow-up required by the assessment.
-    items:
-      - id: outcome-note
-        type: text
-        prompt: Record the outcome and follow-up commitments.
-        required: true
-        min_length: 1
-        max_length: 2000
-        multiline: true
-  confirm-outcome:
-    type: decision
-    title: Confirm the assessed outcome
-    objective: Only a bug-fix outcome consistent with its assessment may close.
-    prompt: Is the recorded outcome ready for final closeout?
-    evidence_guidance:
-      - Compare the outcome note with the goal assessment and approved review.
-    options:
-      - id: ready
-        label: Ready to close
-        criteria: The outcome record is consistent with the assessment.
-      - id: incomplete
-        label: Outcome incomplete
-        criteria: The outcome record is missing or contradicts the assessment.
-    reason:
-      required: true
-      prompt: Explain the selection using the referenced evidence.
   closeout:
     type: action
     title: Record the closeout
-    intent: Produce the final defect-correction closeout.
+    intent: Record the terminal outcome for the assessed bug-fix goal.
     items:
       - id: closeout-note
         type: text
-        prompt: Record the final closeout.
+        prompt: Record the final closeout in English.
         required: true
         min_length: 1
         max_length: 2000
@@ -265,130 +242,129 @@ graph:
   entry: reproduce
   nodes:
     - id: reproduce
-      use: reproduce-defect
+      use: reproduction
       next: diagnose
     - id: diagnose
-      use: diagnose-cause
+      use: diagnosis
       evidence_from:
         - node: reproduce
           required: true
-      next: establish-regression
-    - id: establish-regression
-      use: regression-case
-      evidence_from:
-        - node: reproduce
-          required: true
-        - node: diagnose
-          required: true
+          items:
+            - reproduction-status
+            - observed-behavior
+            - expected-behavior
+            - regression-check
       next: implement
     - id: implement
-      use: implement-fix
+      use: implementation
       evidence_from:
+        - node: reproduce
+          required: true
+          items:
+            - regression-check
         - node: diagnose
           required: true
-        - node: establish-regression
-          required: true
+          items:
+            - cause
+            - affected-boundary
       next: verify
     - id: verify
-      use: verify-fix
+      use: verification
       evidence_from:
-        - node: establish-regression
-          required: true
         - node: implement
           required: true
-      next: decide-verification
-    - id: decide-verification
-      use: evaluate-verification
+          items:
+            - fix-summary
+            - changed-boundaries
+      next: evaluate-verification
+    - id: evaluate-verification
+      use: verification-decision
       evidence_from:
-        - node: establish-regression
-          required: true
         - node: verify
           required: true
+          items:
+            - verification-result
       routes:
         passed:
           to: review
           effect: advance
-        failed:
+        retry:
           to: implement
           effect: rework
     - id: review
-      use: review-fix
+      use: review-work
       evidence_from:
+        - node: diagnose
+          required: true
+          items:
+            - cause
+            - affected-boundary
         - node: implement
           required: true
+          items:
+            - fix-summary
+            - changed-boundaries
         - node: verify
           required: true
-      next: decide-review
-    - id: decide-review
-      use: evaluate-review
+          items:
+            - verification-result
+      next: evaluate-review
+    - id: evaluate-review
+      use: review-decision
       evidence_from:
         - node: review
           required: true
+          items:
+            - review-summary
+            - unresolved-valid-findings
+            - review-findings
       routes:
         approved:
-          to: assess-session-goal
+          to: assess-goal
           effect: advance
         changes-requested:
           to: implement
           effect: rework
-    - id: assess-session-goal
+    - id: assess-goal
       use: assess-goal
       evidence_from:
+        - node: reproduce
+          required: true
+          items:
+            - observed-behavior
+            - expected-behavior
+            - regression-check
         - node: verify
           required: true
+          items:
+            - verification-result
+        - node: evaluate-review
+          required: true
         - node: review
           required: true
           items:
             - review-summary
+            - unresolved-valid-findings
       routes:
         achieved:
-          to: finish-achieved
+          to: closeout
           effect: advance
         not-achieved:
-          to: finish-not-achieved
+          to: closeout
           effect: advance
         superseded:
-          to: finish-superseded
+          to: closeout
           effect: advance
-    - id: finish-achieved
-      use: finalize-outcome
-      next: confirm-closeout
-    - id: finish-not-achieved
-      use: finalize-outcome
-      next: confirm-closeout
-    - id: finish-superseded
-      use: finalize-outcome
-      next: confirm-closeout
-    - id: confirm-closeout
-      use: confirm-outcome
-      evidence_from:
-        - node: assess-session-goal
-          required: true
-        - node: review
-          required: true
-          items:
-            - review-summary
-        - node: finish-achieved
-          required: false
-        - node: finish-not-achieved
-          required: false
-        - node: finish-superseded
-          required: false
-      routes:
-        ready:
-          to: record-closeout
-          effect: advance
-        incomplete:
-          to: assess-session-goal
-          effect: rework
-    - id: record-closeout
+    - id: closeout
       use: closeout
+      evidence_from:
+        - node: assess-goal
+          required: true
       terminal: true
 manual_rework:
   allowed_targets:
     - reproduce
     - diagnose
-    - establish-regression
     - implement
     - verify
     - review

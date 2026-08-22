@@ -1,9 +1,9 @@
 schema: podway.procedure/v2
 id: small-change-v2
-version: "2"
+version: "3"
 name: Small Change v2
-purpose: Deliver a small reviewed change with fresh verification evidence.
-description: A short verified change procedure without goal tracking or artifact bookkeeping.
+purpose: Deliver a small reviewed change with fresh caller-asserted verification evidence.
+description: The lightweight assertion-only reference Procedure without goal tracking or typed external results.
 node_definitions:
   inspect-change:
     type: action
@@ -11,11 +11,11 @@ node_definitions:
     intent: Establish the exact scope and constraints before editing.
     instructions:
       - Inspect the relevant implementation, tests, and authoritative contracts.
-      - Record only the bounded scope and constraints for this change.
+      - Record the bounded scope and constraints in English.
     items:
       - id: scope-summary
         type: text
-        prompt: Summarize the change scope and constraints.
+        prompt: Summarize the change scope and constraints in English.
         required: true
         min_length: 1
         max_length: 4000
@@ -26,10 +26,11 @@ node_definitions:
     intent: Make the smallest complete change within the inspected boundary.
     instructions:
       - Implement only the inspected scope and its direct verification.
+      - Record the implementation summary in English.
     items:
       - id: implementation-summary
         type: text
-        prompt: Summarize the implemented change.
+        prompt: Summarize the implemented change in English.
         required: true
         min_length: 1
         max_length: 4000
@@ -37,48 +38,49 @@ node_definitions:
   verify-change:
     type: action
     title: Verify the change
-    intent: Record fresh verification evidence for the implemented change.
+    intent: Record caller-asserted verification evidence for the implemented change.
     instructions:
       - Run the relevant verification outside Podway.
-      - Record the exact command and its integer exit status.
+      - Record the command and integer exit status; Podway does not execute or attest either value.
     items:
       - id: verification-command
         type: text
-        prompt: Record the exact verification command.
+        prompt: Record the caller-asserted verification command.
+        help: Podway records this assertion and does not execute or attest the command. Use a check_result item when structural operation binding is required.
         required: true
         min_length: 1
         max_length: 2000
         multiline: true
       - id: verification-exit-status
         type: integer
-        prompt: Record the verification exit status.
+        prompt: Record the caller-asserted verification exit status.
+        help: Podway records this assertion and does not determine whether the command ran or the status is semantically acceptable.
         required: true
   review-change:
     type: decision
     title: Review the change
-    objective: Only an implementation supported by acceptable verification may close.
-    prompt: Is the verified change ready for closeout?
+    objective: Route the reviewed assertion-supported implementation to closeout or rework.
+    prompt: Is the reviewed change ready for closeout?
     evidence_guidance:
-      - Read the recorded scope, implementation summary, verification command, and exit status.
-      - Request changes when correctness, scope, or verification remains unresolved.
+      - Read the selected scope, implementation summary, verification command, and exit status.
     options:
       - id: ready
-        label: Ready to close
-        criteria: The implementation is within scope and supported by acceptable verification.
+        label: Change ready
+        criteria: The implementation is within scope and the caller-asserted verification is acceptable.
       - id: changes-requested
         label: Changes requested
-        criteria: The implementation or verification requires another implementation attempt.
+        criteria: The implementation or caller-asserted verification requires another implementation attempt.
     reason:
       required: true
-      prompt: Explain the selection using the referenced evidence.
+      prompt: Explain the selection using the recorded evidence in English.
   closeout-change:
     type: action
     title: Record the closeout
-    intent: Record the final outcome of the verified small change.
+    intent: Record the terminal outcome of the small change.
     items:
       - id: closeout-note
         type: text
-        prompt: Record the final closeout note.
+        prompt: Record the final closeout in English.
         required: true
         min_length: 1
         max_length: 2000
@@ -94,22 +96,33 @@ graph:
       evidence_from:
         - node: inspect
           required: true
+          items:
+            - scope-summary
       next: verify
     - id: verify
       use: verify-change
       evidence_from:
         - node: implement
           required: true
+          items:
+            - implementation-summary
       next: review
     - id: review
       use: review-change
       evidence_from:
         - node: inspect
           required: true
+          items:
+            - scope-summary
         - node: implement
           required: true
+          items:
+            - implementation-summary
         - node: verify
           required: true
+          items:
+            - verification-command
+            - verification-exit-status
       routes:
         ready:
           to: closeout

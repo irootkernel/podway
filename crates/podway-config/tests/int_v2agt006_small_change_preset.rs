@@ -43,6 +43,7 @@ fn small_change_v2_is_canonical_clean_and_matches_the_lightweight_contract() {
 
     let procedure = validated.parsed();
     assert_eq!(procedure.id(), "small-change-v2");
+    assert_eq!(procedure.version(), "3");
     assert!(procedure.goal_tracking().is_none());
     assert_eq!(procedure.node_definitions().len(), 5);
     assert_eq!(procedure.graph().placements().len(), 5);
@@ -80,6 +81,33 @@ fn small_change_v2_is_canonical_clean_and_matches_the_lightweight_contract() {
             .entries()
             .len(),
         3
+    );
+    assert_eq!(
+        review
+            .evidence_from()
+            .expect("review evidence")
+            .entries()
+            .iter()
+            .map(|reference| {
+                (
+                    reference.source_node().as_str(),
+                    reference
+                        .selected_items()
+                        .expect("small-change references select exact items")
+                        .iter()
+                        .map(|item| item.as_str())
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<Vec<_>>(),
+        [
+            ("inspect", vec!["scope-summary"]),
+            ("implement", vec!["implementation-summary"]),
+            (
+                "verify",
+                vec!["verification-command", "verification-exit-status"]
+            ),
+        ]
     );
     assert_eq!(
         procedure

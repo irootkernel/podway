@@ -17,9 +17,9 @@ pub const SMALL_CHANGE_V2_YAML: &str = include_str!("../../../assets/presets/sma
 pub const SW_DEV_V2_YAML: &str = include_str!("../../../assets/presets/sw-dev-v2.yaml");
 
 pub const BUG_FIX_V2_SHIPPED_DIGEST: &str =
-    "sha256:b07aa6c5a60da44b0ce1171f0de304b74602f38e2d12574ff36e923543583630";
+    "sha256:154949392818619eb3b0d7b57344f0a2c2799b94dc19b4692a62869ab2e0aa9c";
 pub const SMALL_CHANGE_V2_SHIPPED_DIGEST: &str =
-    "sha256:7b9855f12f85d7fb895dad592e8f0ed6ce46bf2bab34c4fcf7113dd91b111e96";
+    "sha256:428679042ee39b6e48c66949cdc8adcb959c424418ac1ecba26bff28930a6320";
 pub const SW_DEV_V2_SHIPPED_DIGEST: &str =
     "sha256:751d0cbfd005d77a7e9053fb920046be93dcd8b30cafc412353a1560ff433efb";
 
@@ -284,17 +284,17 @@ pub const fn catalog_v2() -> PresetCatalogV2 {
 const BUG_FIX_V2_METADATA: PresetMetadata = PresetMetadata {
     schema: PROCEDURE_SCHEMA_V2,
     id: "bug-fix-v2",
-    version: "2",
+    version: "3",
     name: "Bug Fix v2",
-    description: "A bounded full-feature bug-fix procedure with explicit rework and goal-directed closeout.",
+    description: "The middle reference Procedure for a reproduced defect, typed verification, guarded rework, and goal-directed closeout.",
 };
 
 const SMALL_CHANGE_V2_METADATA: PresetMetadata = PresetMetadata {
     schema: PROCEDURE_SCHEMA_V2,
     id: "small-change-v2",
-    version: "2",
+    version: "3",
     name: "Small Change v2",
-    description: "A short verified change procedure without goal tracking or artifact bookkeeping.",
+    description: "The lightweight assertion-only reference Procedure without goal tracking or typed external results.",
 };
 
 const SW_DEV_V2_METADATA: PresetMetadata = PresetMetadata {
