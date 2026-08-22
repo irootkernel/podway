@@ -145,6 +145,10 @@ pub(crate) const REQUIRED_WHEN_CONTROLLER_REASON: &str =
     "required_when must reference an earlier unconditionally required item in the same definition";
 pub(crate) const REQUIRED_WHEN_OPERATOR_REASON: &str =
     "required_when operator and literal must match the controller item type";
+pub(crate) const OPTION_GUARD_SOURCE_REASON: &str =
+    "an option guard must reference a required evidence source with an explicit selected item";
+pub(crate) const OPTION_GUARD_OPERATOR_REASON: &str =
+    "option guard operator and literal must match the selected evidence item type";
 
 /// Node definitions indexed by identifier. Read-only lookup: never iterated for diagnostics.
 type DefinitionIndex<'a> = BTreeMap<&'a str, &'a ParsedNodeDefinition>;
@@ -268,7 +272,8 @@ fn validate_required_when(items: &[ItemSpecV2]) -> Result<(), ConfigError> {
                     REQUIRED_WHEN_CONTROLLER_REASON,
                 ));
             }
-            if !predicate_matches_controller(predicate, controller) {
+            if !predicate_matches_item(predicate.field_outcome(), predicate.operator(), controller)
+            {
                 return Err(shape_mismatch(
                     "node_definitions.items.required_when",
                     REQUIRED_WHEN_OPERATOR_REASON,
@@ -279,16 +284,16 @@ fn validate_required_when(items: &[ItemSpecV2]) -> Result<(), ConfigError> {
     Ok(())
 }
 
-fn predicate_matches_controller(
-    predicate: &podway_core::ItemPredicateV2,
+fn predicate_matches_item(
+    field_outcome: bool,
+    operator: &ItemPredicateOperatorV2,
     controller: &ItemSpecV2,
 ) -> bool {
-    let field_valid =
-        predicate.field_outcome() == (controller.item_type() == ItemTypeV1::CheckResult);
+    let field_valid = field_outcome == (controller.item_type() == ItemTypeV1::CheckResult);
     if !field_valid {
         return false;
     }
-    match (controller, predicate.operator()) {
+    match (controller, operator) {
         (
             ItemSpecV2::Confirm(_),
             ItemPredicateOperatorV2::Equals(PredicateScalarV2::Boolean(_)),
@@ -357,6 +362,7 @@ fn validate_placement(
                 definitions,
                 placements,
             )?;
+            validate_option_guards(decision.evidence_from(), used, definitions, placements)?;
             for entry in decision.routes().entries() {
                 // Check 4a: no route may name an option the used definition does not declare
                 // (DECISION_ROUTE_OPTION_UNDEFINED).
@@ -410,6 +416,64 @@ fn validate_placement(
             DECISION_PLACEMENT_KIND_REASON,
         )),
     }
+}
+
+fn validate_option_guards(
+    evidence_from: Option<&EvidenceFromListV2>,
+    definition: &podway_core::DecisionDefinitionV2,
+    definitions: &DefinitionIndex<'_>,
+    placements: &PlacementIndex<'_>,
+) -> Result<(), ConfigError> {
+    for predicate in definition
+        .options()
+        .iter()
+        .filter_map(|option| option.guards())
+        .flat_map(|guards| guards.predicates())
+    {
+        let Some(reference) = evidence_from
+            .into_iter()
+            .flat_map(EvidenceFromListV2::entries)
+            .find(|reference| reference.source_node() == predicate.source_node())
+        else {
+            return Err(shape_mismatch(
+                "node_definitions.options.guards.evidence",
+                OPTION_GUARD_SOURCE_REASON,
+            ));
+        };
+        if !reference.required()
+            || !reference
+                .selected_items()
+                .is_some_and(|items| items.contains(predicate.item()))
+        {
+            return Err(shape_mismatch(
+                "node_definitions.options.guards.evidence",
+                OPTION_GUARD_SOURCE_REASON,
+            ));
+        }
+        let source = placements
+            .get(predicate.source_node().as_str())
+            .copied()
+            .ok_or_else(|| {
+                unknown_reference(EVIDENCE_SOURCE_FIELD, predicate.source_node().as_str())
+            })?;
+        let source_definition = lookup_definition(placement_definition(source), definitions)?;
+        let Some(item) = definition_items(source_definition)
+            .iter()
+            .find(|item| item.id() == predicate.item())
+        else {
+            return Err(unknown_reference(
+                EVIDENCE_SELECTOR_FIELD,
+                predicate.item().as_str(),
+            ));
+        };
+        if !predicate_matches_item(predicate.field_outcome(), predicate.operator(), item) {
+            return Err(shape_mismatch(
+                "node_definitions.options.guards",
+                OPTION_GUARD_OPERATOR_REASON,
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Checks 5 and 6 for one placement's `evidence_from` list, in authored entry order.

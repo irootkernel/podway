@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use crate::{BoundUnitV2, DomainError, NodeDefinitionId, OptionId, validate_text};
 
 use super::invalid;
-use super::{ItemSpecV2, MAX_ITEMS_PER_DEFINITION_V2, NodeKindV2};
+use super::{ItemSpecV2, MAX_ITEMS_PER_DEFINITION_V2, NodeKindV2, OptionGuardV2};
 
 const MAX_DEFINITION_TITLE_CHARS: usize = 120;
 const MAX_ACTION_INTENT_CHARS: usize = 300;
@@ -181,6 +181,7 @@ pub struct DecisionOptionV2 {
     id: OptionId,
     label: String,
     criteria: Option<String>,
+    guards: Option<OptionGuardV2>,
 }
 
 impl DecisionOptionV2 {
@@ -204,6 +205,7 @@ impl DecisionOptionV2 {
             id,
             label,
             criteria,
+            guards: None,
         })
     }
 
@@ -217,6 +219,15 @@ impl DecisionOptionV2 {
 
     pub fn criteria(&self) -> Option<&str> {
         self.criteria.as_deref()
+    }
+
+    pub fn with_guards(mut self, guards: Option<OptionGuardV2>) -> Self {
+        self.guards = guards;
+        self
+    }
+
+    pub const fn guards(&self) -> Option<&OptionGuardV2> {
+        self.guards.as_ref()
     }
 }
 

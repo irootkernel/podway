@@ -42,7 +42,7 @@ use podway_config::{
 use podway_core::{
     ActorAttributionV2, AttemptId, CriterionAssessmentReasonV2, CriterionId, GoalCriterionV2,
     GoalDefinitionV2, GoalRevisionNumberV2, GoalRevisionReasonV2, GoalStatementV2, GraphNodeId,
-    ItemConditionV2, ItemId, ItemPredicateOperatorV2, OptionId, PROCEDURE_SCHEMA_V2,
+    ItemConditionV2, ItemId, ItemPredicateOperatorV2, OptionGuardV2, OptionId, PROCEDURE_SCHEMA_V2,
     PredicateScalarV2, ReasonV2, Revision, SessionId, Sha256Digest, UnixMillis, WorkspaceId,
 };
 use podway_presets::{PresetError, catalog_v2};
@@ -4991,6 +4991,9 @@ fn execute_procedure_preview(file: &Path) -> Result<RunResult, LocalFailure> {
                 if let Some(option_id) = edge.option_id() {
                     edge_value["option_id"] = Value::String(option_id.to_owned());
                 }
+                if let Some(guards) = edge.guards() {
+                    edge_value["guards"] = guards_json(guards);
+                }
                 edge_value
             })
             .collect::<Vec<_>>();
@@ -5153,6 +5156,49 @@ fn predicate_scalar_json(value: &PredicateScalarV2) -> Value {
         PredicateScalarV2::Integer(value) => json!(value),
         PredicateScalarV2::Text(value) => json!(value),
     }
+}
+
+fn guards_json(guards: &OptionGuardV2) -> Value {
+    Value::Array(
+        guards
+            .predicates()
+            .iter()
+            .map(|predicate| {
+                let mut value = Map::new();
+                value.insert(
+                    "evidence".to_owned(),
+                    json!({
+                        "node": predicate.source_node().as_str(),
+                        "item": predicate.item().as_str(),
+                    }),
+                );
+                if predicate.field_outcome() {
+                    value.insert("field".to_owned(), json!("outcome"));
+                }
+                match predicate.operator() {
+                    ItemPredicateOperatorV2::Equals(expected) => {
+                        value.insert("equals".to_owned(), predicate_scalar_json(expected));
+                    }
+                    ItemPredicateOperatorV2::NotEquals(expected) => {
+                        value.insert("not_equals".to_owned(), predicate_scalar_json(expected));
+                    }
+                    ItemPredicateOperatorV2::Empty => {
+                        value.insert("empty".to_owned(), json!(true));
+                    }
+                    ItemPredicateOperatorV2::NonEmpty => {
+                        value.insert("non_empty".to_owned(), json!(true));
+                    }
+                    ItemPredicateOperatorV2::AtLeast(expected) => {
+                        value.insert("at_least".to_owned(), json!(expected));
+                    }
+                    ItemPredicateOperatorV2::AtMost(expected) => {
+                        value.insert("at_most".to_owned(), json!(expected));
+                    }
+                }
+                Value::Object(value)
+            })
+            .collect(),
+    )
 }
 
 fn is_worktree_relative_procedure_path(path: &Path) -> bool {

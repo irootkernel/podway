@@ -2233,11 +2233,12 @@ def command_qualify_v2rel003(
         decision_suggestions = [
             entry for entry in assessed_next.get("suggestions", []) if entry.get("command") == "session.decide"
         ]
-        allowed_options = [
+        authored_options = [
             option.get("option_id")
             for option in assessed_next.get("options", [])
             if isinstance(option, dict)
         ]
+        allowed_options = assessed_next.get("allowed_option_ids")
         suggested_options = [
             entry.get("argv", [None] * 4)[3]
             for entry in decision_suggestions
@@ -2245,6 +2246,7 @@ def command_qualify_v2rel003(
         ]
         if (
             not isinstance(allowed_options, list)
+            or authored_options != ["achieved", "not-achieved", "superseded"]
             or allowed_options != ["achieved"]
             or suggested_options != allowed_options
         ):

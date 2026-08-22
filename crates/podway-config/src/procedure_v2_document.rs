@@ -24,7 +24,7 @@
 use podway_core::{
     ActionDefinitionV2, ActionOutcomeV2, AssessmentContractV2, DecisionDefinitionV2,
     EvidenceFromListV2, GraphPlacementV2, ItemCommonV2, ItemConditionV2, ItemPredicateOperatorV2,
-    ItemSpecV2, PredicateScalarV2, ProcedureGraphV2,
+    ItemSpecV2, OptionGuardV2, PredicateScalarV2, ProcedureGraphV2,
 };
 use serde_json::{Map, Value};
 
@@ -230,7 +230,8 @@ fn decision_definition_value(definition: &DecisionDefinitionV2) -> AuthoringValu
             entry
                 .text("id", option.id().as_str())
                 .text("label", option.label())
-                .optional_text("criteria", option.criteria());
+                .optional_text("criteria", option.criteria())
+                .optional_value("guards", option.guards().map(guards_value));
             entry.finish()
         })
         .collect::<Vec<_>>();
@@ -379,6 +380,47 @@ fn condition_value(condition: &ItemConditionV2) -> AuthoringValue {
             .map(|predicate| {
                 let mut value = Entries::new();
                 value.text("item", predicate.item().as_str());
+                if predicate.field_outcome() {
+                    value.text("field", "outcome");
+                }
+                match predicate.operator() {
+                    ItemPredicateOperatorV2::Equals(expected) => {
+                        value.value("equals", predicate_scalar_value(expected));
+                    }
+                    ItemPredicateOperatorV2::NotEquals(expected) => {
+                        value.value("not_equals", predicate_scalar_value(expected));
+                    }
+                    ItemPredicateOperatorV2::Empty => {
+                        value.flag("empty", true);
+                    }
+                    ItemPredicateOperatorV2::NonEmpty => {
+                        value.flag("non_empty", true);
+                    }
+                    ItemPredicateOperatorV2::AtLeast(expected) => {
+                        value.integer("at_least", *expected);
+                    }
+                    ItemPredicateOperatorV2::AtMost(expected) => {
+                        value.integer("at_most", *expected);
+                    }
+                }
+                value.finish()
+            })
+            .collect(),
+    )
+}
+
+fn guards_value(guards: &OptionGuardV2) -> AuthoringValue {
+    AuthoringValue::Seq(
+        guards
+            .predicates()
+            .iter()
+            .map(|predicate| {
+                let mut source = Entries::new();
+                source
+                    .text("node", predicate.source_node().as_str())
+                    .text("item", predicate.item().as_str());
+                let mut value = Entries::new();
+                value.value("evidence", source.finish());
                 if predicate.field_outcome() {
                     value.text("field", "outcome");
                 }

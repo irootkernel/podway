@@ -275,6 +275,35 @@ pub(crate) struct DecisionOptionWire {
     pub(crate) label: String,
     #[serde(default)]
     pub(crate) criteria: Option<String>,
+    #[serde(default)]
+    pub(crate) guards: Option<Vec<EvidencePredicateWire>>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EvidenceSourceWire {
+    pub(crate) node: String,
+    pub(crate) item: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EvidencePredicateWire {
+    pub(crate) evidence: EvidenceSourceWire,
+    #[serde(default)]
+    pub(crate) field: Option<String>,
+    #[serde(default)]
+    pub(crate) equals: Option<PredicateScalarWire>,
+    #[serde(default)]
+    pub(crate) not_equals: Option<PredicateScalarWire>,
+    #[serde(default)]
+    pub(crate) empty: Option<bool>,
+    #[serde(default)]
+    pub(crate) non_empty: Option<bool>,
+    #[serde(default)]
+    pub(crate) at_least: Option<i64>,
+    #[serde(default)]
+    pub(crate) at_most: Option<i64>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

@@ -4773,8 +4773,9 @@ fn v2run002_goal_assessment_guidance_tracks_completion_and_determined_outcome() 
     assert_eq!(next["readiness"]["can_advance"], true);
     assert_eq!(next["goal"]["determined_outcome"], "achieved");
     assert_eq!(status["allowed_option_ids"], json!(["achieved"]));
-    assert_eq!(next["options"].as_array().unwrap().len(), 1);
+    assert_eq!(next["options"].as_array().unwrap().len(), 3);
     assert_eq!(next["options"][0]["option_id"], "achieved");
+    assert_eq!(next["allowed_option_ids"], json!(["achieved"]));
     assert_eq!(
         next["allowed_actions"],
         json!([

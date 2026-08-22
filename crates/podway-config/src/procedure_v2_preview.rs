@@ -6,7 +6,8 @@
 //! start suggestion.
 
 use podway_core::{
-    AuthoringDiagnostic, AuthoringSeverity, ItemConditionV2, ItemSpecV2, Sha256Digest,
+    AuthoringDiagnostic, AuthoringSeverity, GraphPlacementV2, ItemConditionV2, ItemSpecV2,
+    OptionGuardV2, Sha256Digest,
 };
 
 use crate::procedure_v2_authoring::placement_evidence_from;
@@ -128,6 +129,7 @@ pub struct ProcedurePreviewGraphEdgeV2 {
     to_graph_node_id: String,
     effect: String,
     option_id: Option<String>,
+    guards: Option<OptionGuardV2>,
 }
 
 impl ProcedurePreviewGraphEdgeV2 {
@@ -142,6 +144,9 @@ impl ProcedurePreviewGraphEdgeV2 {
     }
     pub fn option_id(&self) -> Option<&str> {
         self.option_id.as_deref()
+    }
+    pub const fn guards(&self) -> Option<&OptionGuardV2> {
+        self.guards.as_ref()
     }
 }
 
@@ -433,6 +438,10 @@ fn details(
                 to_graph_node_id: edge.to_graph_node_id().to_owned(),
                 effect: edge.effect().to_owned(),
                 option_id: edge.option_id().map(str::to_owned),
+                guards: edge.option_id().and_then(|option_id| {
+                    definition_option(parsed, edge.from_graph_node_id(), option_id)
+                        .and_then(|option| option.guards().cloned())
+                }),
             })
             .collect(),
     };
@@ -467,6 +476,32 @@ fn details(
             .collect(),
         },
     }
+}
+
+fn definition_option<'a>(
+    parsed: &'a crate::ParsedProcedureV2,
+    graph_node_id: &str,
+    option_id: &str,
+) -> Option<&'a podway_core::DecisionOptionV2> {
+    let placement = parsed
+        .graph()
+        .placements()
+        .iter()
+        .find(|placement| placement.id().as_str() == graph_node_id)?;
+    let GraphPlacementV2::Decision(placement) = placement else {
+        return None;
+    };
+    let definition = parsed
+        .node_definitions()
+        .iter()
+        .find(|definition| definition.id() == placement.definition())?;
+    let crate::ParsedNodeDefinition::Decision(definition) = definition else {
+        return None;
+    };
+    definition
+        .options()
+        .iter()
+        .find(|option| option.id().as_str() == option_id)
 }
 
 fn definition_items<'a>(parsed: &'a crate::ParsedProcedureV2, id: &str) -> &'a [ItemSpecV2] {

@@ -460,6 +460,7 @@ const ENVELOPE_SELECTORS: &[&str] = &[
 const STATIC_SELECTORS: &[&str] = &[
     "allowed_actions",
     "allowed_manual_rework_targets",
+    "allowed_option_ids",
     "description",
     "evidence_guidance",
     "instructions",

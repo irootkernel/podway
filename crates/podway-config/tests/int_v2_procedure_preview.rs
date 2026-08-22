@@ -196,6 +196,43 @@ fn v2grd003_preview_preserves_authored_required_when_without_materializing_absen
 }
 
 #[test]
+fn v2grd004_preview_projects_option_guards_on_their_route_edges() {
+    let source = CLEAN_YAML.replace(
+        "        criteria: Every gathered input is present and correct.",
+        "        criteria: Every gathered input is present and correct.\n        guards:\n          - evidence:\n              node: gather-inputs\n              item: notes\n            non_empty: true",
+    );
+    let report = preview(&source, "guarded.yaml", ProcedureDocumentFormat::Yaml);
+    assert!(report.admissible(), "{:?}", report.diagnostics());
+    let edge = report
+        .details()
+        .unwrap()
+        .graph()
+        .edges()
+        .iter()
+        .find(|edge| edge.option_id() == Some("complete"))
+        .unwrap();
+    let guards = edge.guards().expect("authored guards remain visible");
+    assert_eq!(guards.predicates().len(), 1);
+    assert_eq!(
+        guards.predicates()[0].source_node().as_str(),
+        "gather-inputs"
+    );
+    assert_eq!(guards.predicates()[0].item().as_str(), "notes");
+    assert!(
+        report
+            .details()
+            .unwrap()
+            .graph()
+            .edges()
+            .iter()
+            .find(|edge| edge.option_id() == Some("incomplete"))
+            .unwrap()
+            .guards()
+            .is_none()
+    );
+}
+
+#[test]
 fn v2grf007_rich_preview_has_exact_summary_graph_and_confirmed_start_argv() {
     let report = preview(CLEAN_YAML, "workflow.yaml", ProcedureDocumentFormat::Yaml);
     assert!(report.admissible());

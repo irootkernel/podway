@@ -9,10 +9,11 @@ use podway_core::{
     AssessmentOutcomeMappingV2, AssessmentTargetV2, CheckResultOutcomeV2,
     DecisionDefinitionInputV2, DecisionDefinitionV2, DecisionOptionV2, DecisionPlacementV2,
     DecisionRouteEntryV2, DecisionRouteMapV2, DecisionRouteV2, DomainError, EvidenceFromListV2,
-    EvidenceReferenceV2, GoalOutcome, GoalTrackingOptIn, GraphNodeId, GraphPlacementV2,
-    ItemCommonV2, ItemConditionV2, ItemId, ItemPredicateOperatorV2, ItemPredicateV2, ItemSpecV2,
-    ManualReworkTargetListV2, NodeDefinitionId, OperationId, OptionId, PredicateScalarV2,
-    ProcedureGraphV2, ReasonPolicyV2, Sha256Digest, SkipPolicyV2, TransitionEffectV2,
+    EvidencePredicateV2, EvidenceReferenceV2, GoalOutcome, GoalTrackingOptIn, GraphNodeId,
+    GraphPlacementV2, ItemCommonV2, ItemConditionV2, ItemId, ItemPredicateOperatorV2,
+    ItemPredicateV2, ItemSpecV2, ManualReworkTargetListV2, NodeDefinitionId, OperationId,
+    OptionGuardV2, OptionId, PredicateScalarV2, ProcedureGraphV2, ReasonPolicyV2, Sha256Digest,
+    SkipPolicyV2, TransitionEffectV2,
 };
 
 use crate::procedure_v2_wire::*;
@@ -664,7 +665,81 @@ fn map_predicate_scalar(value: PredicateScalarWire) -> Result<PredicateScalarV2,
 
 fn map_option(wire: DecisionOptionWire) -> Result<DecisionOptionV2, ConfigError> {
     let id = OptionId::new(wire.id).map_err(map_domain_error)?;
-    DecisionOptionV2::new(id, wire.label, wire.criteria).map_err(map_domain_error)
+    let guards = wire
+        .guards
+        .map(|predicates| {
+            predicates
+                .into_iter()
+                .map(map_evidence_predicate)
+                .collect::<Result<Vec<_>, _>>()
+                .and_then(|predicates| OptionGuardV2::new(predicates).map_err(map_domain_error))
+        })
+        .transpose()?;
+    DecisionOptionV2::new(id, wire.label, wire.criteria)
+        .map(|option| option.with_guards(guards))
+        .map_err(map_domain_error)
+}
+
+fn map_evidence_predicate(wire: EvidencePredicateWire) -> Result<EvidencePredicateV2, ConfigError> {
+    let source_node = GraphNodeId::new(wire.evidence.node).map_err(map_domain_error)?;
+    let item = ItemId::new(wire.evidence.item).map_err(map_domain_error)?;
+    let field_outcome = match wire.field.as_deref() {
+        None => false,
+        Some("outcome") => true,
+        Some(_) => {
+            return Err(ConfigError::InvalidValue {
+                field: "node_definitions.options.guards.field",
+                reason: "must be outcome when present",
+            });
+        }
+    };
+    let mut operators = Vec::new();
+    if let Some(value) = wire.equals {
+        operators.push(ItemPredicateOperatorV2::Equals(map_predicate_scalar(
+            value,
+        )?));
+    }
+    if let Some(value) = wire.not_equals {
+        operators.push(ItemPredicateOperatorV2::NotEquals(map_predicate_scalar(
+            value,
+        )?));
+    }
+    if let Some(value) = wire.empty {
+        if !value {
+            return Err(ConfigError::InvalidValue {
+                field: "node_definitions.options.guards.empty",
+                reason: "must be true when present",
+            });
+        }
+        operators.push(ItemPredicateOperatorV2::Empty);
+    }
+    if let Some(value) = wire.non_empty {
+        if !value {
+            return Err(ConfigError::InvalidValue {
+                field: "node_definitions.options.guards.non_empty",
+                reason: "must be true when present",
+            });
+        }
+        operators.push(ItemPredicateOperatorV2::NonEmpty);
+    }
+    if let Some(value) = wire.at_least {
+        operators.push(ItemPredicateOperatorV2::AtLeast(value));
+    }
+    if let Some(value) = wire.at_most {
+        operators.push(ItemPredicateOperatorV2::AtMost(value));
+    }
+    if operators.len() != 1 {
+        return Err(ConfigError::InvalidValue {
+            field: "node_definitions.options.guards",
+            reason: "each predicate must declare exactly one operator",
+        });
+    }
+    Ok(EvidencePredicateV2::new(
+        source_node,
+        item,
+        field_outcome,
+        operators.pop().expect("exactly one predicate operator"),
+    ))
 }
 
 fn map_assessment(wire: AssessmentWire) -> Result<AssessmentContractV2, ConfigError> {

@@ -36,10 +36,10 @@
     },
     {
       "id": "identity-stability",
-      "operation": "admit conditional items while keeping option guards reserved and preserving condition-free Procedure and preset digests",
-      "expected": "conditional-items-admitted-option-guards-not-admitted-existing-identities-unchanged",
+      "operation": "admit conditional items and option guards while preserving condition-free Procedure and preset digests",
+      "expected": "conditional-items-and-option-guards-admitted-existing-identities-unchanged",
       "proof_task": "V2GRD-006",
-      "proof": {"kind": "cargo-test-set", "members": [{"kind": "cargo-test", "path": "crates/podway-config/tests/int_v2_procedure.rs", "function": "v2grd003_admits_conditional_items_but_keeps_option_guards_reserved", "command": "cargo test -p podway-config --test int_suite int_v2_procedure::v2grd003_admits_conditional_items_but_keeps_option_guards_reserved --locked -- --exact"}, {"kind": "cargo-test", "path": "crates/podway-presets/tests/int_v2dog003_preset_identity.rs", "function": "v2_presets_embed_the_exact_canonical_sources_and_pinned_digests", "command": "cargo test -p podway-presets --test int_suite int_v2dog003_preset_identity::v2_presets_embed_the_exact_canonical_sources_and_pinned_digests --locked -- --exact"}]}
+      "proof": {"kind": "cargo-test-set", "members": [{"kind": "cargo-test", "path": "crates/podway-config/tests/int_v2_procedure.rs", "function": "v2grd004_admits_conditional_items_and_required_selected_evidence_guards", "command": "cargo test -p podway-config --test int_suite int_v2_procedure::v2grd004_admits_conditional_items_and_required_selected_evidence_guards --locked -- --exact"}, {"kind": "cargo-test", "path": "crates/podway-daemon/tests/int_v2grd004_option_guards.rs", "function": "v2grd004_next_keeps_all_options_and_projects_authoritative_guard_statuses", "command": "cargo test -p podway-daemon --test int_suite int_v2grd004_option_guards::v2grd004_next_keeps_all_options_and_projects_authoritative_guard_statuses --locked -- --exact"}, {"kind": "cargo-test", "path": "crates/podway-presets/tests/int_v2dog003_preset_identity.rs", "function": "v2_presets_embed_the_exact_canonical_sources_and_pinned_digests", "command": "cargo test -p podway-presets --test int_suite int_v2dog003_preset_identity::v2_presets_embed_the_exact_canonical_sources_and_pinned_digests --locked -- --exact"}]}
     }
   ]
 }

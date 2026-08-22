@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use crate::procedure::validate_media_type;
 use crate::{
-    BoundUnitV2, CheckResultOutcomeV2, DomainError, ItemId, ItemTypeV1, OperationId,
+    BoundUnitV2, CheckResultOutcomeV2, DomainError, GraphNodeId, ItemId, ItemTypeV1, OperationId,
     RecordedItemValueV2, Sha256Digest, validate_text,
 };
 
@@ -28,6 +28,82 @@ const MAX_CHECK_RESULT_OUTCOMES: usize = 3;
 pub enum NodeKindV2 {
     Action,
     Decision,
+}
+
+/// One selected-evidence predicate declared by a decision option guard.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EvidencePredicateV2 {
+    source_node: GraphNodeId,
+    item: ItemId,
+    field_outcome: bool,
+    operator: ItemPredicateOperatorV2,
+}
+
+impl EvidencePredicateV2 {
+    pub const fn new(
+        source_node: GraphNodeId,
+        item: ItemId,
+        field_outcome: bool,
+        operator: ItemPredicateOperatorV2,
+    ) -> Self {
+        Self {
+            source_node,
+            item,
+            field_outcome,
+            operator,
+        }
+    }
+
+    pub const fn source_node(&self) -> &GraphNodeId {
+        &self.source_node
+    }
+    pub const fn item(&self) -> &ItemId {
+        &self.item
+    }
+    pub const fn field_outcome(&self) -> bool {
+        self.field_outcome
+    }
+    pub const fn operator(&self) -> &ItemPredicateOperatorV2 {
+        &self.operator
+    }
+
+    pub fn evaluate(&self, value: Option<&RecordedItemValueV2>) -> PredicateStatusV2 {
+        ItemPredicateV2::new(self.item.clone(), self.field_outcome, self.operator.clone())
+            .evaluate(value)
+    }
+}
+
+/// One to four AND-combined predicates controlling a decision option.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OptionGuardV2 {
+    predicates: Vec<EvidencePredicateV2>,
+}
+
+impl OptionGuardV2 {
+    pub fn new(predicates: Vec<EvidencePredicateV2>) -> Result<Self, DomainError> {
+        if predicates.is_empty() || predicates.len() > MAX_CONDITION_PREDICATES {
+            return Err(invalid(
+                "guards must contain between one and four predicates",
+            ));
+        }
+        Ok(Self { predicates })
+    }
+
+    pub fn predicates(&self) -> &[EvidencePredicateV2] {
+        &self.predicates
+    }
+
+    pub fn evaluate<'a, F>(&self, mut value: F) -> ConditionStatusV2
+    where
+        F: FnMut(&GraphNodeId, &ItemId) -> Option<&'a RecordedItemValueV2>,
+    {
+        let predicates = self
+            .predicates
+            .iter()
+            .map(|predicate| predicate.evaluate(value(predicate.source_node(), predicate.item())))
+            .collect();
+        condition_status(predicates)
+    }
 }
 
 /// One bounded scalar admitted by the typed predicate vocabulary.
@@ -222,21 +298,25 @@ impl ItemConditionV2 {
             .iter()
             .map(|predicate| predicate.evaluate(value(predicate.item())))
             .collect::<Vec<_>>();
-        let state = if predicates
-            .iter()
-            .any(|status| status.state() == ConditionStateV2::Unmet)
-        {
-            ConditionStateV2::Unmet
-        } else if predicates
-            .iter()
-            .any(|status| status.state() == ConditionStateV2::Unevaluable)
-        {
-            ConditionStateV2::Unevaluable
-        } else {
-            ConditionStateV2::Met
-        };
-        ConditionStatusV2 { state, predicates }
+        condition_status(predicates)
     }
+}
+
+fn condition_status(predicates: Vec<PredicateStatusV2>) -> ConditionStatusV2 {
+    let state = if predicates
+        .iter()
+        .any(|status| status.state() == ConditionStateV2::Unmet)
+    {
+        ConditionStateV2::Unmet
+    } else if predicates
+        .iter()
+        .any(|status| status.state() == ConditionStateV2::Unevaluable)
+    {
+        ConditionStateV2::Unevaluable
+    } else {
+        ConditionStateV2::Met
+    };
+    ConditionStatusV2 { state, predicates }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

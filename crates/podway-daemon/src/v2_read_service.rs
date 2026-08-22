@@ -14,6 +14,7 @@ use podway_core::{
     AttemptLifecycle,
     AttemptValidityV2,
     BlockerState,
+    ConditionStateV2,
     ConditionStatusV2,
     CriterionCitationV2,
     CriterionStatusV2,
@@ -699,11 +700,6 @@ pub fn project_graph_next_v2(
                     definition
                         .options()
                         .iter()
-                        .filter(|option| {
-                            definition.assessment().is_none()
-                                || allowed_options.is_empty()
-                                || allowed_options.contains(&json!(option.id().as_str()))
-                        })
                         .map(|option| {
                             let mut value = Map::new();
                             value.insert("option_id".to_owned(), json!(option.id().as_str()));
@@ -711,11 +707,22 @@ pub fn project_graph_next_v2(
                             if let Some(criteria) = option.criteria() {
                                 value.insert("criteria".to_owned(), json!(criteria));
                             }
+                            if let Some(guards) = option.guards() {
+                                value
+                                    .insert("guards".to_owned(), guards_authoring_value_v2(guards));
+                            }
                             Value::Object(value)
                         })
                         .collect(),
                 ),
             );
+            result.insert(
+                "allowed_option_ids".to_owned(),
+                Value::Array(allowed_options),
+            );
+            if let Some(statuses) = current.option_guard_statuses() {
+                result.insert("option_guard_statuses".to_owned(), Value::Array(statuses));
+            }
             let mut policy = Map::new();
             policy.insert("required".to_owned(), Value::Bool(true));
             if let Some(prompt) = definition.reason().prompt() {
@@ -1119,6 +1126,7 @@ struct CurrentProjection<'a> {
     items_satisfied: bool,
     goal_ready: bool,
     evidence_ready: bool,
+    evidence_readback: Vec<EvidenceReadbackV2>,
 }
 
 impl<'a> CurrentProjection<'a> {
@@ -1222,22 +1230,21 @@ impl<'a> CurrentProjection<'a> {
                         .is_some()
             }
         };
+        let evidence_readback = state
+            .selected_evidence_readback(attempt.attempt_id())
+            .map_err(|_| {
+                GraphViewErrorV2::InconsistentState("selected evidence readback is invalid")
+            })?;
         let evidence_ready = match placement {
             GraphPlacementV2::Action(_) => true,
-            GraphPlacementV2::Decision(_) => state
-                .selected_evidence_readback(attempt.attempt_id())
-                .map_err(|_| {
-                    GraphViewErrorV2::InconsistentState("selected evidence readback is invalid")
-                })?
-                .iter()
-                .all(|readback| {
-                    !readback.stale()
-                        && (!readback.reference().required()
-                            || matches!(
-                                readback.reference().resolution(),
-                                ResolvedEvidenceReferenceV2::Resolved(_)
-                            ))
-                }),
+            GraphPlacementV2::Decision(_) => evidence_readback.iter().all(|readback| {
+                !readback.stale()
+                    && (!readback.reference().required()
+                        || matches!(
+                            readback.reference().resolution(),
+                            ResolvedEvidenceReferenceV2::Resolved(_)
+                        ))
+            }),
         };
         Ok(Some(Self {
             state,
@@ -1251,6 +1258,7 @@ impl<'a> CurrentProjection<'a> {
             items_satisfied,
             goal_ready,
             evidence_ready,
+            evidence_readback,
         }))
     }
 
@@ -1748,7 +1756,7 @@ impl<'a> CurrentProjection<'a> {
                         .filter(|option| {
                             assessment.outcomes().iter().any(|mapping| {
                                 mapping.option_id() == option.id() && mapping.outcome() == outcome
-                            })
+                            }) && self.option_guard_met(option)
                         })
                         .map(|option| json!(option.id().as_str()))
                         .collect()
@@ -1756,12 +1764,82 @@ impl<'a> CurrentProjection<'a> {
                     definition
                         .options()
                         .iter()
+                        .filter(|option| self.option_guard_met(option))
                         .map(|option| json!(option.id().as_str()))
                         .collect()
                 }
             }
             ParsedNodeDefinition::Action(_) => Vec::new(),
         }
+    }
+
+    fn option_guard_met(&self, option: &podway_core::DecisionOptionV2) -> bool {
+        option.guards().is_none_or(|guards| {
+            guards
+                .evaluate(|source, item| self.evidence_value(source, item))
+                .state()
+                == ConditionStateV2::Met
+        })
+    }
+
+    fn evidence_value(&self, source: &GraphNodeId, item: &ItemId) -> Option<&RecordedItemValueV2> {
+        self.evidence_readback
+            .iter()
+            .find(|readback| {
+                !readback.stale()
+                    && readback.reference().resolution().source_node() == source
+                    && matches!(
+                        readback.reference().resolution(),
+                        ResolvedEvidenceReferenceV2::Resolved(_)
+                    )
+            })
+            .and_then(|readback| {
+                readback
+                    .items()
+                    .items()
+                    .iter()
+                    .find(|recorded| recorded.id() == item)
+            })
+            .map(podway_core::RecordedItemV2::value)
+    }
+
+    fn option_guard_statuses(&self) -> Option<Vec<Value>> {
+        let ParsedNodeDefinition::Decision(definition) = self.definition else {
+            return None;
+        };
+        definition
+            .options()
+            .iter()
+            .any(|option| option.guards().is_some())
+            .then(|| {
+                definition
+                    .options()
+                    .iter()
+                    .map(|option| {
+                        let (state, predicates) = option.guards().map_or_else(
+                            || (ConditionStateV2::Met, Vec::new()),
+                            |guards| {
+                                let status = guards
+                                    .evaluate(|source, item| self.evidence_value(source, item));
+                                let predicates = guards
+                                    .predicates()
+                                    .iter()
+                                    .zip(status.predicates())
+                                    .map(|(predicate, status)| {
+                                        evidence_predicate_status_value_v2(predicate, status)
+                                    })
+                                    .collect();
+                                (status.state(), predicates)
+                            },
+                        );
+                        json!({
+                            "option_id": option.id().as_str(),
+                            "state": state.as_str(),
+                            "predicates": predicates,
+                        })
+                    })
+                    .collect()
+            })
     }
 
     fn allowed_actions(
@@ -1996,6 +2074,96 @@ fn condition_status_value_v2(status: &ConditionStatusV2) -> Value {
             Value::Object(value)
         }).collect::<Vec<_>>(),
     })
+}
+
+fn guards_authoring_value_v2(guards: &podway_core::OptionGuardV2) -> Value {
+    Value::Array(
+        guards
+            .predicates()
+            .iter()
+            .map(|predicate| {
+                let mut value = Map::new();
+                value.insert(
+                    "evidence".to_owned(),
+                    json!({
+                        "node": predicate.source_node().as_str(),
+                        "item": predicate.item().as_str(),
+                    }),
+                );
+                if predicate.field_outcome() {
+                    value.insert("field".to_owned(), json!("outcome"));
+                }
+                insert_predicate_operator_v2(&mut value, predicate.operator());
+                Value::Object(value)
+            })
+            .collect(),
+    )
+}
+
+fn evidence_predicate_status_value_v2(
+    predicate: &podway_core::EvidencePredicateV2,
+    status: &podway_core::PredicateStatusV2,
+) -> Value {
+    let mut source = Map::new();
+    source.insert("kind".to_owned(), json!("evidence"));
+    source.insert(
+        "graph_node_id".to_owned(),
+        json!(predicate.source_node().as_str()),
+    );
+    source.insert("item_id".to_owned(), json!(predicate.item().as_str()));
+    if predicate.field_outcome() {
+        source.insert("field".to_owned(), json!("outcome"));
+    }
+    let mut value = Map::new();
+    value.insert("source".to_owned(), Value::Object(source));
+    value.insert("operator".to_owned(), json!(predicate.operator().as_str()));
+    match predicate.operator() {
+        ItemPredicateOperatorV2::Equals(expected)
+        | ItemPredicateOperatorV2::NotEquals(expected) => {
+            value.insert("expected".to_owned(), predicate_scalar_value_v2(expected));
+        }
+        ItemPredicateOperatorV2::AtLeast(expected) | ItemPredicateOperatorV2::AtMost(expected) => {
+            value.insert("expected".to_owned(), json!(expected));
+        }
+        ItemPredicateOperatorV2::Empty | ItemPredicateOperatorV2::NonEmpty => {}
+    }
+    match status.actual() {
+        PredicateActualV2::Scalar(actual) => {
+            value.insert("actual".to_owned(), predicate_scalar_value_v2(actual));
+        }
+        PredicateActualV2::Count(actual) => {
+            value.insert("actual_count".to_owned(), json!(actual));
+        }
+        PredicateActualV2::Unavailable => {}
+    }
+    value.insert("state".to_owned(), json!(status.state().as_str()));
+    Value::Object(value)
+}
+
+fn insert_predicate_operator_v2(
+    value: &mut Map<String, Value>,
+    operator: &ItemPredicateOperatorV2,
+) {
+    match operator {
+        ItemPredicateOperatorV2::Equals(expected) => {
+            value.insert("equals".to_owned(), predicate_scalar_value_v2(expected));
+        }
+        ItemPredicateOperatorV2::NotEquals(expected) => {
+            value.insert("not_equals".to_owned(), predicate_scalar_value_v2(expected));
+        }
+        ItemPredicateOperatorV2::Empty => {
+            value.insert("empty".to_owned(), json!(true));
+        }
+        ItemPredicateOperatorV2::NonEmpty => {
+            value.insert("non_empty".to_owned(), json!(true));
+        }
+        ItemPredicateOperatorV2::AtLeast(expected) => {
+            value.insert("at_least".to_owned(), json!(expected));
+        }
+        ItemPredicateOperatorV2::AtMost(expected) => {
+            value.insert("at_most".to_owned(), json!(expected));
+        }
+    }
 }
 
 fn predicate_scalar_value_v2(value: &PredicateScalarV2) -> Value {

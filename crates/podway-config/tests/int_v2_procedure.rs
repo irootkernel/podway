@@ -12,7 +12,7 @@ fn v2(yaml: &str) -> Result<ParsedProcedureV2, ConfigError> {
 }
 
 #[test]
-fn v2grd003_admits_conditional_items_but_keeps_option_guards_reserved() {
+fn v2grd004_admits_conditional_items_and_required_selected_evidence_guards() {
     let conditional = concat!(
         "schema: podway.procedure/v2\n",
         "id: p\n",
@@ -65,6 +65,15 @@ fn v2grd003_admits_conditional_items_but_keeps_option_guards_reserved() {
         "name: P\n",
         "purpose: Reserve an option guard.\n",
         "node_definitions:\n",
+        "  review:\n",
+        "    type: action\n",
+        "    title: Review\n",
+        "    intent: Record the finding count.\n",
+        "    items:\n",
+        "      - id: unresolved\n",
+        "        type: integer\n",
+        "        prompt: How many findings remain?\n",
+        "        required: true\n",
         "  decide:\n",
         "    type: decision\n",
         "    title: Decide\n",
@@ -75,25 +84,41 @@ fn v2grd003_admits_conditional_items_but_keeps_option_guards_reserved() {
         "        label: Approved\n",
         "        guards:\n",
         "          - evidence:\n",
-        "              node: decide\n",
-        "              item: verdict\n",
-        "            equals: approved\n",
+        "              node: review\n",
+        "              item: unresolved\n",
+        "            equals: 0\n",
         "    reason:\n",
         "      required: true\n",
         "graph:\n",
-        "  entry: decide\n",
+        "  entry: review\n",
         "  nodes:\n",
+        "    - id: review\n",
+        "      use: review\n",
+        "      next: decide\n",
         "    - id: decide\n",
         "      use: decide\n",
+        "      evidence_from:\n",
+        "        - node: review\n",
+        "          required: true\n",
+        "          items: [unresolved]\n",
         "      routes:\n",
         "        approved:\n",
         "          to: decide\n",
         "          effect: rework\n",
     );
-    assert!(
-        v2(guarded).is_err(),
-        "V2GRD-004 owns option-guard authoring admission"
+    let parsed = v2(guarded).expect("V2GRD-004 admits option guards");
+    let validated = validate_procedure_v2(parsed).expect("guard source is required and selected");
+    assert!(validated.canonical_json().as_str().contains("guards"));
+
+    let optional_reference = guarded.replace(
+        "required: true\n          items",
+        "required: false\n          items",
     );
+    assert!(validate_procedure_v2(v2(&optional_reference).unwrap()).is_err());
+    let implicit_selection = guarded.replace("          items: [unresolved]\n", "");
+    assert!(validate_procedure_v2(v2(&implicit_selection).unwrap()).is_err());
+    let wrong_type = guarded.replace("equals: 0", "equals: approved");
+    assert!(validate_procedure_v2(v2(&wrong_type).unwrap()).is_err());
 }
 
 #[test]

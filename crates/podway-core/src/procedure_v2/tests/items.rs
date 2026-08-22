@@ -2,9 +2,10 @@ use crate::procedure_v2::invalid;
 use crate::{
     ArtifactItemSpecV2, ArtifactValueV1, CheckResultExecutorV2, CheckResultInputBasisV2,
     CheckResultItemSpecV2, CheckResultOutcomeV2, CheckResultValueV2, ChoiceItemSpecV2,
-    ConditionStateV2, IntegerItemSpecV2, ItemCommonV2, ItemConditionV2, ItemId,
-    ItemPredicateOperatorV2, ItemPredicateV2, ItemSpecV2, ItemTypeV1, ListItemSpecV2, OperationId,
-    PredicateActualV2, PredicateScalarV2, RecordedItemValueV2, Sha256Digest, TextItemSpecV2,
+    ConditionStateV2, EvidencePredicateV2, GraphNodeId, IntegerItemSpecV2, ItemCommonV2,
+    ItemConditionV2, ItemId, ItemPredicateOperatorV2, ItemPredicateV2, ItemSpecV2, ItemTypeV1,
+    ListItemSpecV2, OperationId, OptionGuardV2, PredicateActualV2, PredicateScalarV2,
+    RecordedItemValueV2, Sha256Digest, TextItemSpecV2,
 };
 
 use super::helpers::item;
@@ -17,6 +18,39 @@ fn common(id: &str) -> ItemCommonV2 {
         true,
     )
     .unwrap()
+}
+
+#[test]
+fn v2grd004_option_guards_are_bounded_and_three_valued() {
+    let source = GraphNodeId::new("review").unwrap();
+    let item = ItemId::new("findings").unwrap();
+    let guard = OptionGuardV2::new(vec![EvidencePredicateV2::new(
+        source.clone(),
+        item.clone(),
+        false,
+        ItemPredicateOperatorV2::Equals(PredicateScalarV2::Integer(0)),
+    )])
+    .unwrap();
+
+    assert_eq!(
+        guard.evaluate(|_, _| None).state(),
+        ConditionStateV2::Unevaluable
+    );
+    let zero = RecordedItemValueV2::integer(0);
+    assert_eq!(
+        guard
+            .evaluate(|candidate_source, candidate_item| {
+                (candidate_source == &source && candidate_item == &item).then_some(&zero)
+            })
+            .state(),
+        ConditionStateV2::Met
+    );
+    let one = RecordedItemValueV2::integer(1);
+    assert_eq!(
+        guard.evaluate(|_, _| Some(&one)).state(),
+        ConditionStateV2::Unmet
+    );
+    assert!(OptionGuardV2::new(Vec::new()).is_err());
 }
 
 fn digest(character: char) -> Sha256Digest {
