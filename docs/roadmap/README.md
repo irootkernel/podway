@@ -399,3 +399,21 @@ Dependencies: completed `V2GRD` epic.
 | `V2REF-003` | Harden bug-fix-v2 and small-change-v2 | Completed | Added guarded fresh bug-fix evidence, preserved the assertion-only small-change boundary, re-pinned both digests, and updated their budget known answers. | [Built-in presets](../specs/domain/built-in-presets.md) |
 | `V2REF-004` | Add English recording and authoring examples | Completed | Documented English narrative recording, the new-session default impact, and copyable page-token, check-result, condition, guard, selector, and rework patterns. | [Procedure v2 workflow](../examples/v2-workflow.md), [user workflows](../specs/product/user-workflows.md) |
 | `V2REF-005` | Dogfood supported paths and pass the development gate | Completed | Bound all 31 accepted paths to runtime proofs; added shipped bug-fix and isolated software-reference dogfood for guarded, conditional, phase-owner, paging, goal, restart, snapshot, and manual-rework paths; closed the complete development gate. | [Testing and conformance](../specs/quality/testing-and-conformance.md#shipped-reference-path-evidence) |
+
+### V2REF cold-validation record
+
+An independent cold validation on August 23, 2026 audited the complete V2REF
+implementation from base `caf621190876e43693fdfd6c64f2d14d6cac8923` through
+committed snapshot `6956aa05a045e9e828379cf6ba68ee44c2d4c64a` plus this
+goal-owned roadmap record. All five task rows are completed, the adopted dossier
+and its stale references are absent, and the 31-case path inventory is bound to
+checked runtime proof symbols. Static architecture and contract checks passed at
+the committed snapshot. Gaori full run `20260823T005743` completed the `make test`
+development gate with exit `0`, artifact status `passed`, and zero failures.
+
+Mulgae run `r_01a02c41-fd35-7200-b5ef-0bea2d7433db` reviewed the complete epic
+target `sha256:4aa9479557813d7166daeaa40f9827ee4f2e12e428c509181447c80a7166efd8`
+with all six roles, complete coverage, CI decision `pass`, committed publication,
+a successful low-severity findings query, and zero findings. This validation does
+not claim distribution readiness, upstream publication, installation, or runtime
+activation, and `make dist` was not run.
