@@ -62,7 +62,8 @@ does not reinterpret an existing session. All three shipped presets are version
 digest. A session admitted under an earlier version keeps its immutable snapshot
 until it is explicitly replaced; there is no in-place migration.
 
-Its complete graph is `inspect -> implement -> verify -> review -> closeout`.
+`small-change-v2`'s complete graph is
+`inspect -> implement -> verify -> review -> closeout`.
 Review option `changes-requested` returns to `implement`; option `ready` advances
 to closeout. Its manual rework targets are `inspect`, `implement`, and `verify`.
 The same observation, fence, item-recording, and outcome-reconciliation rules

@@ -1844,15 +1844,8 @@ def self_test_v2_dogfood(cli: Path, daemon: Path) -> dict[str, Any]:
             paths,
             metadata,
             "documentation-state",
-            "updated",
+            "not-applicable",
             "v2dog005-set-documentation-state-three",
-        )
-        dogfood_set_v2(
-            paths,
-            metadata,
-            "documentation-summary",
-            "Resolved the documentation-owned review finding.",
-            "v2dog005-set-documentation-summary-three",
         )
         dogfood_complete_v2(paths, metadata, "v2dog005-complete-documentation-three")
         require_dogfood_node(dogfood_v2_status(paths, metadata), "review")
@@ -2000,7 +1993,7 @@ def self_test_v2_dogfood(cli: Path, daemon: Path) -> dict[str, Any]:
             "success": True,
             "decision_rework": True,
             "goal_revision": 2,
-            "retry": True,
+            "guarded_verification_retry": True,
             "conditional_evidence": True,
             "conditional_missing_rejected": True,
             "phase_owner_rework": ["implement", "document"],
