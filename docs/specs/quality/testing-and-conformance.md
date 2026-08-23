@@ -19,6 +19,37 @@ failure, guarded, conditional, paging, goal-outcome, and manual-rework inventory
 for all three shipped presets. Every shipped preset must validate and retain its
 pinned canonical digest.
 
+### Shipped reference-path evidence
+
+[`reference-paths.json`](../../../tests/fixtures/v2/presets/reference-paths.json)
+is the exact accepted path inventory for the three shipped presets. Each case is
+bound to a checked Rust test or isolated real-binary Python dogfood function by
+`runtime_proofs`; `tools/verify_quality_contracts.py` rejects a missing case,
+extra case, invalid locator, or missing proof symbol.
+
+The proof is intentionally layered:
+
+- `small-change-v2` runtime tests exercise its clean path, review rework, retry,
+  and every declared manual target without goal tracking.
+- `bug-fix-v2` runtime tests exercise guarded failed verification, review-owned
+  rework, all three goal outcomes, and every declared manual target against the
+  shipped preset bytes.
+- The isolated `sw-dev-v2` contributor-runtime dogfood exercises check-result
+  failure, both conditional-required rejection paths, guarded verification
+  retry, both phase-owner review routes, complete multi-page list readback,
+  changed-value page-token rejection, daemon restart, immutable snapshot
+  retention, achieved closeout, and every declared manual target. The generic
+  goal outcome state-table test supplies the shared runtime proof for its
+  not-achieved and superseded terminal routes; canonical graph validation binds
+  those routes to the shipped preset.
+
+The same contract verifier checks the exact inventory alongside graph semantics.
+Preset validation, warnings-as-errors lint, embedding and manifest identity,
+projection equivalence, guard dominance and satisfiability, option totality, and
+the V2SCL/V2GRD response-budget known answers remain separate executable checks
+inside `make test`. A focused runtime check is useful while iterating, but only a
+successful `make test` establishes the complete development-gate claim.
+
 ## Persistence and compatibility
 
 The store suite creates canonical schema-v5 from an empty database, migrates each

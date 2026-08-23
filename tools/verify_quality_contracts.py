@@ -150,6 +150,21 @@ def validate_reference_paths() -> int:
         observed[preset_id].add(case["id"])
     if observed != expected:
         fail("reference path fixture does not cover the exact accepted path inventory")
+    case_ids = set().union(*observed.values())
+    runtime_proofs = fixture.get("runtime_proofs")
+    if not isinstance(runtime_proofs, dict) or set(runtime_proofs) != case_ids:
+        fail("reference path fixture must bind every accepted path to one runtime proof")
+    for case_id, locator in runtime_proofs.items():
+        proof_path, proof_symbol = locator_parts(locator, f"{case_id} runtime proof")
+        proof_text = proof_path.read_text(encoding="utf-8")
+        if proof_path.suffix == ".rs":
+            pattern = FUNCTION_RE_TEMPLATE.format(name=re.escape(proof_symbol))
+        elif proof_path.suffix == ".py":
+            pattern = rf"\bdef\s+{re.escape(proof_symbol)}\s*\("
+        else:
+            fail(f"{case_id} runtime proof must be Rust or Python")
+        if re.search(pattern, proof_text) is None:
+            fail(f"{case_id} runtime proof function is missing")
     return len(cases)
 
 

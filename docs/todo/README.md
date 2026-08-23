@@ -84,5 +84,4 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 
 ## Current adopted dossiers
 
-- [Podway Reference Procedures and Authoring Guidance](TODO-podway-reference-procedures.md)
-  owns `V2REF`.
+There are no current adopted dossiers.

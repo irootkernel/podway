@@ -64,6 +64,8 @@ mod int_v2gol_epic_acceptance;
 mod int_v2grd003_conditional_items;
 #[path = "int_v2grd004_option_guards.rs"]
 mod int_v2grd004_option_guards;
+#[path = "int_v2ref005_bug_fix_paths.rs"]
+mod int_v2ref005_bug_fix_paths;
 #[path = "int_v2rel002_maximum_next.rs"]
 mod int_v2rel002_maximum_next;
 #[path = "int_v2run001_start.rs"]

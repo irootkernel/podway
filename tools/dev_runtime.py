@@ -1112,6 +1112,37 @@ def dogfood_json_command(
     return envelope
 
 
+def dogfood_error_command(
+    paths: dict[str, Path],
+    metadata: dict[str, Any],
+    arguments: list[str],
+    *,
+    command: str,
+    code: str,
+) -> dict[str, Any]:
+    completed = run_snapshotted_cli(paths, metadata, ["--json", *arguments])
+    if completed.returncode == 0:
+        fail(f"dogfood command unexpectedly succeeded: {' '.join(arguments)}")
+    if completed.stderr:
+        fail(f"dogfood error command emitted stderr: {' '.join(arguments)}")
+    try:
+        envelope = json.loads(completed.stdout)
+    except (UnicodeError, json.JSONDecodeError) as error:
+        fail(f"dogfood error command returned invalid JSON: {' '.join(arguments)}: {error}")
+    if (
+        not isinstance(envelope, dict)
+        or envelope.get("schema") != "podway.error/v1"
+        or envelope.get("command") != command
+        or envelope.get("code") != code
+    ):
+        fail(
+            f"dogfood error mismatch: expected {command}/{code}, observed "
+            f"{envelope.get('command') if isinstance(envelope, dict) else None}/"
+            f"{envelope.get('code') if isinstance(envelope, dict) else None}"
+        )
+    return envelope
+
+
 def dogfood_v2_status(paths: dict[str, Path], metadata: dict[str, Any]) -> dict[str, Any]:
     return dogfood_json_command(
         paths,
@@ -1404,13 +1435,28 @@ def self_test_v2_dogfood(cli: Path, daemon: Path) -> dict[str, Any]:
                     "outcome": "fail",
                     "summary": "The first candidate requires implementation rework.",
                     "output_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-                },
+                }
+            },
+            "v2dog005-record-failed-verification",
+        )
+        dogfood_error_command(
+            paths,
+            metadata,
+            ["complete", "--idempotency-key", "v2dog005-complete-verification-missing"],
+            command="session.complete",
+            code="REQUIRED_ITEMS_MISSING",
+        )
+        require_dogfood_node(dogfood_v2_status(paths, metadata), "verify")
+        dogfood_record_many_v2(
+            paths,
+            metadata,
+            {
                 "verification-observations": {
                     "type": "list",
                     "value": ["Restart persistence remains unverified."],
-                },
+                }
             },
-            "v2dog005-record-failed-verification",
+            "v2dog005-record-verification-observations",
         )
         dogfood_complete_v2(paths, metadata, "v2dog005-complete-verification-one")
         require_dogfood_node(dogfood_v2_status(paths, metadata), "evaluate-verification")
@@ -1531,6 +1577,14 @@ def self_test_v2_dogfood(cli: Path, daemon: Path) -> dict[str, Any]:
             "updated",
             "v2dog005-set-documentation-state",
         )
+        dogfood_error_command(
+            paths,
+            metadata,
+            ["complete", "--idempotency-key", "v2dog005-complete-documentation-missing"],
+            command="session.complete",
+            code="REQUIRED_ITEMS_MISSING",
+        )
+        require_dogfood_node(dogfood_v2_status(paths, metadata), "document")
         dogfood_set_v2(
             paths,
             metadata,
@@ -1545,14 +1599,14 @@ def self_test_v2_dogfood(cli: Path, daemon: Path) -> dict[str, Any]:
             paths,
             metadata,
             "review-summary",
-            "The corrected disposable candidate has no unresolved finding.",
+            "The first reviewed candidate has implementation findings.",
             "v2dog005-set-review-summary",
         )
         dogfood_set_v2(
             paths,
             metadata,
             "unresolved-implementation-findings",
-            "0",
+            "1",
             "v2dog005-set-implementation-findings",
         )
         dogfood_set_v2(
@@ -1562,7 +1616,268 @@ def self_test_v2_dogfood(cli: Path, daemon: Path) -> dict[str, Any]:
             "0",
             "v2dog005-set-documentation-findings",
         )
-        dogfood_complete_v2(paths, metadata, "v2dog005-complete-review")
+        paged_findings = [
+            f"Implementation finding {index:03d}: " + ("x" * 3500)
+            for index in range(24)
+        ]
+        dogfood_record_many_v2(
+            paths,
+            metadata,
+            {"review-findings": {"type": "list", "value": paged_findings}},
+            "v2dog005-record-paged-review-findings",
+        )
+        dogfood_complete_v2(paths, metadata, "v2dog005-complete-review-one")
+        require_dogfood_node(dogfood_v2_status(paths, metadata), "evaluate-review")
+
+        page = dogfood_json_command(
+            paths,
+            metadata,
+            ["evidence", "read", "--source", "review", "--item", "review-findings"],
+            command="evidence.read",
+            output_schema="podway.output/v3",
+            result_schema="podway.evidence-read-result/v1",
+        )["result"]
+        stale_page_token = page.get("next_page_token")
+        if page.get("truncated") is not True or not isinstance(stale_page_token, str):
+            fail("v2 dogfood multi-page evidence did not return a continuation token")
+        value_digest = page.get("value_digest")
+        observed_findings: list[str] = []
+        while True:
+            page_data = page.get("page", {}).get("data")
+            if not isinstance(page_data, list) or any(
+                not isinstance(value, str) for value in page_data
+            ):
+                fail("v2 dogfood evidence page did not contain a string list")
+            observed_findings.extend(page_data)
+            next_page_token = page.get("next_page_token")
+            if next_page_token is None:
+                break
+            page = dogfood_json_command(
+                paths,
+                metadata,
+                [
+                    "evidence",
+                    "read",
+                    "--source",
+                    "review",
+                    "--item",
+                    "review-findings",
+                    "--page-token",
+                    next_page_token,
+                ],
+                command="evidence.read",
+                output_schema="podway.output/v3",
+                result_schema="podway.evidence-read-result/v1",
+            )["result"]
+            if page.get("value_digest") != value_digest:
+                fail("v2 dogfood evidence continuation changed the value digest")
+        if observed_findings != paged_findings:
+            fail("v2 dogfood evidence continuation did not reconstruct the exact list")
+
+        implementation_changes = dogfood_v2_mutation(
+            paths,
+            metadata,
+            [
+                "decide",
+                "--option",
+                "implementation-changes",
+                "--reason",
+                "The implementation finding count routes ownership to implementation.",
+                "--actor",
+                "V2DOG-005 dogfood",
+                "--idempotency-key",
+                "v2dog005-decide-implementation-changes",
+            ],
+            command="session.decide",
+            result_schema="podway.decision-result/v1",
+        )
+        if (
+            implementation_changes.get("effect") != "rework"
+            or implementation_changes.get("target_graph_node_id") != "implement"
+        ):
+            fail("v2 dogfood implementation finding did not route to implementation")
+
+        dogfood_set_v2(
+            paths,
+            metadata,
+            "implementation-summary",
+            "Resolved the implementation-owned review finding.",
+            "v2dog005-set-implementation-three",
+        )
+        dogfood_record_many_v2(
+            paths,
+            metadata,
+            {"changed-boundaries": {"type": "list", "value": ["Review correction"]}},
+            "v2dog005-record-boundaries-three",
+        )
+        dogfood_complete_v2(paths, metadata, "v2dog005-complete-implementation-three")
+        require_dogfood_node(dogfood_v2_status(paths, metadata), "verify")
+        dogfood_record_many_v2(
+            paths,
+            metadata,
+            {
+                "verification-result": {
+                    "type": "check_result",
+                    "operation_id": "software-change-verification",
+                    "operation_digest": "sha256:b904aefd4dbd6b01337645fd34b1424efc9faf3d22c936de666305335076969e",
+                    "input_basis": {
+                        "descriptor": "Review-corrected disposable candidate",
+                        "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                    },
+                    "executor": {"name": "Podway development runtime", "version": "v2"},
+                    "outcome": "pass",
+                    "summary": "The review-corrected candidate passed verification.",
+                    "output_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                }
+            },
+            "v2dog005-record-passing-verification-three",
+        )
+        dogfood_complete_v2(paths, metadata, "v2dog005-complete-verification-three")
+        dogfood_v2_mutation(
+            paths,
+            metadata,
+            [
+                "decide",
+                "--option",
+                "acceptable",
+                "--reason",
+                "The corrected candidate has a passing result.",
+                "--actor",
+                "V2DOG-005 dogfood",
+                "--idempotency-key",
+                "v2dog005-decide-acceptable-three",
+            ],
+            command="session.decide",
+            result_schema="podway.decision-result/v1",
+        )
+        require_dogfood_node(dogfood_v2_status(paths, metadata), "document")
+        dogfood_set_v2(
+            paths,
+            metadata,
+            "documentation-state",
+            "updated",
+            "v2dog005-set-documentation-state-two",
+        )
+        dogfood_set_v2(
+            paths,
+            metadata,
+            "documentation-summary",
+            "Updated the disposable documentation after implementation rework.",
+            "v2dog005-set-documentation-summary-two",
+        )
+        dogfood_complete_v2(paths, metadata, "v2dog005-complete-documentation-two")
+        require_dogfood_node(dogfood_v2_status(paths, metadata), "review")
+        dogfood_set_v2(
+            paths,
+            metadata,
+            "review-summary",
+            "Implementation is clean; one documentation finding remains.",
+            "v2dog005-set-review-summary-two",
+        )
+        dogfood_set_v2(
+            paths,
+            metadata,
+            "unresolved-implementation-findings",
+            "0",
+            "v2dog005-set-implementation-findings-two",
+        )
+        dogfood_set_v2(
+            paths,
+            metadata,
+            "unresolved-documentation-findings",
+            "1",
+            "v2dog005-set-documentation-findings-two",
+        )
+        dogfood_record_many_v2(
+            paths,
+            metadata,
+            {
+                "review-findings": {
+                    "type": "list",
+                    "value": ["One documentation finding remains."],
+                }
+            },
+            "v2dog005-record-documentation-finding",
+        )
+        dogfood_complete_v2(paths, metadata, "v2dog005-complete-review-two")
+        require_dogfood_node(dogfood_v2_status(paths, metadata), "evaluate-review")
+        dogfood_error_command(
+            paths,
+            metadata,
+            [
+                "evidence",
+                "read",
+                "--source",
+                "review",
+                "--item",
+                "review-findings",
+                "--page-token",
+                stale_page_token,
+            ],
+            command="evidence.read",
+            code="EVIDENCE_PAGE_TOKEN_STALE",
+        )
+        documentation_changes = dogfood_v2_mutation(
+            paths,
+            metadata,
+            [
+                "decide",
+                "--option",
+                "documentation-changes",
+                "--reason",
+                "Only the documentation finding count is positive.",
+                "--actor",
+                "V2DOG-005 dogfood",
+                "--idempotency-key",
+                "v2dog005-decide-documentation-changes",
+            ],
+            command="session.decide",
+            result_schema="podway.decision-result/v1",
+        )
+        if (
+            documentation_changes.get("effect") != "rework"
+            or documentation_changes.get("target_graph_node_id") != "document"
+        ):
+            fail("v2 dogfood documentation finding did not route to documentation")
+
+        dogfood_set_v2(
+            paths,
+            metadata,
+            "documentation-state",
+            "updated",
+            "v2dog005-set-documentation-state-three",
+        )
+        dogfood_set_v2(
+            paths,
+            metadata,
+            "documentation-summary",
+            "Resolved the documentation-owned review finding.",
+            "v2dog005-set-documentation-summary-three",
+        )
+        dogfood_complete_v2(paths, metadata, "v2dog005-complete-documentation-three")
+        require_dogfood_node(dogfood_v2_status(paths, metadata), "review")
+        dogfood_set_v2(
+            paths,
+            metadata,
+            "review-summary",
+            "The corrected disposable candidate has no unresolved finding.",
+            "v2dog005-set-review-summary-three",
+        )
+        dogfood_set_v2(
+            paths,
+            metadata,
+            "unresolved-implementation-findings",
+            "0",
+            "v2dog005-set-implementation-findings-three",
+        )
+        dogfood_set_v2(
+            paths,
+            metadata,
+            "unresolved-documentation-findings",
+            "0",
+            "v2dog005-set-documentation-findings-three",
+        )
+        dogfood_complete_v2(paths, metadata, "v2dog005-complete-review-three")
         require_dogfood_node(dogfood_v2_status(paths, metadata), "evaluate-review")
         approved = dogfood_v2_mutation(
             paths,
@@ -1576,7 +1891,7 @@ def self_test_v2_dogfood(cli: Path, daemon: Path) -> dict[str, Any]:
                 "--actor",
                 "V2DOG-005 dogfood",
                 "--idempotency-key",
-                "v2dog005-decide-approved",
+                "v2dog005-decide-approved-three",
             ],
             command="session.decide",
             result_schema="podway.decision-result/v1",
@@ -1640,26 +1955,31 @@ def self_test_v2_dogfood(cli: Path, daemon: Path) -> dict[str, Any]:
         if completed.get("latest_goal_outcome") != "achieved" or completed.get("goal_revision") != 2:
             fail("v2 dogfood closeout lost the achieved revised goal")
 
-        manually_reactivated = dogfood_v2_mutation(
-            paths,
-            metadata,
-            [
-                "rework",
-                "--to",
-                "implement",
-                "--reason",
-                "Exercise the declared completed-session manual reactivation route.",
-                "--actor",
-                "V2DOG-005 dogfood",
-                "--idempotency-key",
-                "v2dog005-manual-reactivation",
-            ],
-            command="session.rework",
-            result_schema="podway.rework-result/v1",
-        )
-        if manually_reactivated.get("reactivated") is not True:
-            fail("v2 dogfood completed-session manual rework did not reactivate")
-        require_dogfood_node(dogfood_v2_status(paths, metadata), "implement")
+        for index, target in enumerate(
+            ["review", "document", "verify", "implement", "plan"]
+        ):
+            manual = dogfood_v2_mutation(
+                paths,
+                metadata,
+                [
+                    "rework",
+                    "--to",
+                    target,
+                    "--reason",
+                    f"Exercise the declared {target} manual rework target.",
+                    "--actor",
+                    "V2DOG-005 dogfood",
+                    "--idempotency-key",
+                    f"v2dog005-manual-{target}",
+                ],
+                command="session.rework",
+                result_schema="podway.rework-result/v1",
+            )
+            if manual.get("to_graph_node_id") != target:
+                fail(f"v2 dogfood manual rework did not target {target}")
+            if index == 0 and manual.get("reactivated") is not True:
+                fail("v2 dogfood completed-session manual rework did not reactivate")
+            require_dogfood_node(dogfood_v2_status(paths, metadata), target)
 
         dogfood_v2_mutation(
             paths,
@@ -1682,9 +2002,13 @@ def self_test_v2_dogfood(cli: Path, daemon: Path) -> dict[str, Any]:
             "goal_revision": 2,
             "retry": True,
             "conditional_evidence": True,
+            "conditional_missing_rejected": True,
+            "phase_owner_rework": ["implement", "document"],
+            "paging": "complete-and-stale-token-rejected",
             "restart": True,
             "closeout": "achieved",
             "manual_reactivation": True,
+            "manual_rework_targets": ["plan", "implement", "verify", "document", "review"],
         }
     finally:
         if process is not None:

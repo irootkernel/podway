@@ -310,11 +310,12 @@ mutation and must not be disguised as a Procedure v2 decision guard.
 
 ### 5.4 Reference Procedures and authoring guidance
 
-[Podway Reference Procedures and Authoring Guidance](TODO-podway-reference-procedures.md)
-should complete before implementation of this candidate. It gives Procedure v2 a
-stable reference baseline, supplies an actual planning and rework workflow for
-comparison, and completes the evidence, result, guard, and authoring foundations a
-successor can reuse.
+The completed [built-in preset contract](../specs/domain/built-in-presets.md) and
+[shipped reference-path evidence](../specs/quality/testing-and-conformance.md#shipped-reference-path-evidence)
+must remain the baseline before implementation of this candidate. They give
+Procedure v2 a stable reference, supply an actual planning and rework workflow
+for comparison, and complete the evidence, result, guard, and authoring
+foundations a successor can reuse.
 
 The `sw-dev-v2` planning placement is a useful experiment source, but V2REF's
 adopted Procedure graphs, preset identities, digests, and v0.3.0 scope must not be
@@ -473,7 +474,8 @@ narrowed to the smallest independently motivated mechanism.
 - [ADR-0024: Bounded Evidence Scale and Paged Read-back](../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md)
 - [ADR-0025: Structurally Bound External Check Results](../architecture-decision-records/0025-structurally-bound-external-check-results.md)
 - [ADR-0028: Bound Procedure Conditions to a Closed Typed Vocabulary](../architecture-decision-records/0028-bounded-typed-procedure-guards.md)
-- [Podway Reference Procedures and Authoring Guidance](TODO-podway-reference-procedures.md)
+- [Built-in Presets](../specs/domain/built-in-presets.md)
+- [Shipped Reference-path Evidence](../specs/quality/testing-and-conformance.md#shipped-reference-path-evidence)
 - [ADR-0017: Permit Single-Cursor Convergence](../architecture-decision-records/0017-single-cursor-convergence.md)
 - [ADR-0019: Make Procedure v2 the Only Product Model](../architecture-decision-records/0019-procedure-v2-only-product.md)
 - [ADR-0021: Separate Session Preparation from Execution](../architecture-decision-records/0021-separate-session-preparation-from-execution.md)
