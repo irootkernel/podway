@@ -74,6 +74,7 @@ architecture: architecture-static
 
 architecture-static:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_docs.py
+	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_docs.py self-test
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_test_layout.py --check
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_quality_contracts.py
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_patch_release.py self-test

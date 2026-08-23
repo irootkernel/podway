@@ -417,3 +417,13 @@ with all six roles, complete coverage, CI decision `pass`, committed publication
 a successful low-severity findings query, and zero findings. This validation does
 not claim distribution readiness, upstream publication, installation, or runtime
 activation, and `make dist` was not run.
+
+## V2SKL — Procedure Authoring Skill Boundary
+
+Dependencies: completed `V2REF` epic.
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `V2SKL-001` | Add a dedicated Procedure authoring skill | Completed | Provide focused guidance for creating, revising, reviewing, statically qualifying, and handing off repository-owned custom Procedure v2 source without runtime mutation. | [Authoring skill](../../skills/create-podway-procedure/SKILL.md) |
+| `V2SKL-002` | Separate runtime and authoring ownership | Completed | Keep `use-podway` responsible for explicit runtime and lifecycle work while routing Procedure source changes to the authoring skill. | [Runtime skill](../../skills/use-podway/SKILL.md), [repository structure](../architecture/repository-structure.md) |
+| `V2SKL-003` | Verify the source-distributed skill package | Completed | Bind the exact skill file sets, metadata, links, command workflow, and documentation to repository checks. | [Documentation verifier](../../tools/verify_docs.py) |

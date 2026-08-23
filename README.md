@@ -112,7 +112,7 @@ For a small project-wide policy, add this template to the project's `AGENTS.md`:
 - Podway records assertions; it does not run the work or prove semantic truth.
 ```
 
-For fuller operational guidance, install the complete [`use-podway` skill](https://github.com/irootkernel/podway/tree/main/skills/use-podway) directory under `~/agents/skills/`:
+For fuller runtime guidance, install the complete [`use-podway` skill](https://github.com/irootkernel/podway/tree/main/skills/use-podway) directory under `~/agents/skills/`:
 
 ```bash
 podway_skill_dir=~/agents/skills/use-podway
@@ -121,13 +121,33 @@ mkdir -p "$podway_skill_dir/references"
 curl -fsSLo "$podway_skill_dir/SKILL.md" \
   https://raw.githubusercontent.com/irootkernel/podway/main/skills/use-podway/SKILL.md
 
-for reference in lifecycle goal authoring recovery; do
+for reference in lifecycle goal recovery; do
   curl -fsSLo "$podway_skill_dir/references/$reference.md" \
     "https://raw.githubusercontent.com/irootkernel/podway/main/skills/use-podway/references/$reference.md"
 done
 ```
 
-The skill covers the active-session loop and loads separate references only for less frequent lifecycle, session-goal, Procedure-authoring, or recovery work. Consult the agent's documentation for its skill reload requirements. The commands require network access and `curl`, and overwrite existing files with the same names. Replace `main` with a release tag or commit SHA when a reproducible, pinned skill version is required.
+The runtime skill covers the active-session loop and loads separate references only for less frequent lifecycle, session-goal, or recovery work.
+
+Install [`create-podway-procedure`](https://github.com/irootkernel/podway/tree/main/skills/create-podway-procedure) separately only when the agent needs to create, revise, review, or harden custom Procedure source:
+
+```bash
+procedure_skill_dir=~/agents/skills/create-podway-procedure
+mkdir -p "$procedure_skill_dir/references" "$procedure_skill_dir/agents"
+
+curl -fsSLo "$procedure_skill_dir/SKILL.md" \
+  https://raw.githubusercontent.com/irootkernel/podway/main/skills/create-podway-procedure/SKILL.md
+
+for reference in authoring distribution; do
+  curl -fsSLo "$procedure_skill_dir/references/$reference.md" \
+    "https://raw.githubusercontent.com/irootkernel/podway/main/skills/create-podway-procedure/references/$reference.md"
+done
+
+curl -fsSLo "$procedure_skill_dir/agents/openai.yaml" \
+  https://raw.githubusercontent.com/irootkernel/podway/main/skills/create-podway-procedure/agents/openai.yaml
+```
+
+The authoring skill produces and validates declarative source, then hands off preview's exact digest-fenced start suggestion without starting or mutating a session. Consult the agent's documentation for skill reload requirements. The commands above require network access and `curl`, and overwrite existing files with the same names. Replace `main` with one exact release tag or commit SHA when a reproducible, pinned skill version is required.
 
 ## Build from source
 

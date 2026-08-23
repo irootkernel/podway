@@ -54,6 +54,7 @@ REQUIRED_TEST_SEQUENCE = (
 )
 REQUIRED_PREPARE_COMMANDS = (
     "python3 tools/verify_docs.py",
+    "python3 tools/verify_docs.py self-test",
     "cargo fmt --all -- --check",
     "cargo clippy --workspace --lib --bins --locked -- -D warnings",
     "cargo deny check",

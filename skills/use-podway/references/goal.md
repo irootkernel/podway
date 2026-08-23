@@ -11,7 +11,7 @@ Read this reference when deciding whether to track a session goal, writing its s
 - Define or revise a goal only with explicit user intent, and propose wording for approval instead of recording an inferred goal. Do not derive a goal from the task title.
 - Settle the goal and criteria before `begin` when the outcome is already known, so goal revision 1 is created atomically with attempt 1. Otherwise `goal define` is accepted exactly once while the session is running, and a second definition fails with `SESSION_GOAL_ALREADY_DEFINED`.
 - Define early rather than late. A goal-tracked graph expects the goal clarified within its first nodes, and no criterion can be assessed and no terminal node can complete while the goal is missing.
-- Do not confuse a session goal criterion with the authored `criteria:` field of a decision option, which states when that option applies and belongs to the Procedure-authoring workflow.
+- Do not confuse a session goal criterion with the authored `criteria:` field of a decision option, which states when that option applies and belongs to `$create-podway-procedure`.
 
 ## Write the goal statement
 

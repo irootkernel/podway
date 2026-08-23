@@ -1,0 +1,4 @@
+interface:
+  display_name: "Create Podway Procedure"
+  short_description: "Author and verify custom Procedure v2 workflows"
+  default_prompt: "Use $create-podway-procedure to author and validate a bounded custom Procedure v2 for this repository."

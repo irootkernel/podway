@@ -1,6 +1,6 @@
 ---
 name: use-podway
-description: Use only when the user explicitly asks to use Podway for the current workflow or to inspect, advance, initialize, start, replace, archive, purge, cancel, discard, reset, author, diagnose, or recover Podway state. Operate Procedure v2 safely by reading authoritative state, recording supported results, following graph transitions, and reconciling uncertain mutations. Do not use merely because Podway is installed or configured, a repository contains Podway files, another skill mentions optional Podway integration, or a session already exists.
+description: Use only when the user explicitly asks to use Podway for the current workflow or to inspect, advance, initialize, start, replace, archive, purge, cancel, discard, reset, diagnose, or recover Podway state. Operate Procedure v2 safely by reading authoritative state, recording supported results, following graph transitions, and reconciling uncertain mutations. Do not use for authoring Procedure source or merely because Podway is installed or configured, a repository contains Podway files, another skill mentions optional Podway integration, or a session already exists.
 ---
 
 # Use Podway
@@ -20,6 +20,7 @@ description: Use only when the user explicitly asks to use Podway for the curren
 - Use JSON fields and stable error codes for decisions. Use human output only for an interactive explanation.
 - Use `podway help <route>` as the current command grammar. Do not invent flags from this skill.
 - Do not install Podway or mutate repository guidance merely because this skill is present.
+- For creating, revising, reviewing, or hardening custom Procedure source, use `$create-podway-procedure` when it is available. Do not author the Procedure through this runtime skill.
 - Support Procedure v2 only. On `LEGACY_PROCEDURE_STATE_UNSUPPORTED`, stop and ask the user to back up the runtime state before authorizing `podway reset --all`.
 
 ## Enter a worktree
@@ -72,8 +73,6 @@ Active-session item updates and justified progression do not require a separate 
 - Re-read state after retry or rework. Historical attempts remain inspectable but do not satisfy the fresh active attempt.
 
 For deciding whether to track a session goal, writing its statement and criteria, assessing a criterion, or revising the goal, read [references/goal.md](references/goal.md) before acting.
-
-For creating or reviewing a custom Procedure, read [references/authoring.md](references/authoring.md) before acting.
 
 ## Recover failures
 

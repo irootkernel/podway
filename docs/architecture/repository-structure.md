@@ -69,4 +69,4 @@ interface inputs executed by repository verification tools.
 machine-specific results. The entire directory is ignored and is not a release
 input. Release readiness is decided only by `make dist` on the current tree.
 
-`skills/` contains optional guidance that users may copy from the source repository into an AI agent's skill directory. It is not installed by Podway, does not change Podway behavior, and is not included in the release archive.
+`skills/` contains optional guidance that users may copy from the source repository into an AI agent's skill directory. `use-podway` owns explicitly requested runtime and lifecycle operations; `create-podway-procedure` owns custom Procedure source authoring and distribution-readiness evidence. Runtime qualification of a distributed Procedure remains a separately authorized `use-podway` operation. The skills are independently installable, are not installed by Podway, do not change Podway behavior, and are not included in the release archive.
