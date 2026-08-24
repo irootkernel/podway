@@ -255,7 +255,7 @@ one observation or to become a long-term evidence archive.
 
 ### 4.7 Presets and execution-group templates
 
-The three current built-in presets are complete Procedures with their own entry,
+The four current built-in presets are complete Procedures with their own entry,
 goal, assessment, rework, and terminal semantics. They are not directly spliceable
 as mid-session execution groups.
 
@@ -266,7 +266,8 @@ A successor may need two distinct catalogs:
   exit, evidence, and rework interface.
 
 This candidate does not add a template catalog or change the identity, digest, or
-selection boundary of `small-change-v2`, `bug-fix-v2`, or `sw-dev-v2`. The exact
+selection boundary of `analysis-v2`, `small-change-v2`, `bug-fix-v2`, or
+`sw-dev-v2`. The exact
 relationship between a future successor's presets and group templates is open.
 
 ## 5. Interaction with current TODO dossiers
@@ -317,9 +318,10 @@ Procedure v2 a stable reference, supply an actual planning and rework workflow
 for comparison, and complete the evidence, result, guard, and authoring
 foundations a successor can reuse.
 
-The `sw-dev-v2` planning placement is a useful experiment source, but V2REF's
-adopted Procedure graphs, preset identities, digests, and v0.3.0 scope must not be
-changed to anticipate this candidate.
+The `sw-dev-v2` planning placement is a useful experiment source, but the current
+v0.2.x reference baseline's adopted Procedure graphs, preset identities, and
+digests must not be changed to anticipate this candidate. The future graph work
+remains reserved for v0.3.0.
 
 ## 6. Compatibility and sequencing direction
 

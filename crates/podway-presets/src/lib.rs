@@ -12,10 +12,13 @@ use serde::Serialize;
 
 pub use podway_core::Sha256Digest;
 
+pub const ANALYSIS_V2_YAML: &str = include_str!("../../../assets/presets/analysis-v2.yaml");
 pub const BUG_FIX_V2_YAML: &str = include_str!("../../../assets/presets/bug-fix-v2.yaml");
 pub const SMALL_CHANGE_V2_YAML: &str = include_str!("../../../assets/presets/small-change-v2.yaml");
 pub const SW_DEV_V2_YAML: &str = include_str!("../../../assets/presets/sw-dev-v2.yaml");
 
+pub const ANALYSIS_V2_SHIPPED_DIGEST: &str =
+    "sha256:a3843d434f545759563514e37c2b0fc1ce404e12bfd869513123877e2100c4b6";
 pub const BUG_FIX_V2_SHIPPED_DIGEST: &str =
     "sha256:154949392818619eb3b0d7b57344f0a2c2799b94dc19b4692a62869ab2e0aa9c";
 pub const SMALL_CHANGE_V2_SHIPPED_DIGEST: &str =
@@ -261,15 +264,16 @@ pub struct PresetCatalogV2;
 
 impl PresetCatalogV2 {
     /// Returns the built-in v2 presets in stable lexicographic ID order.
-    pub fn list(self) -> &'static [EmbeddedPresetV2; 3] {
+    pub fn list(self) -> &'static [EmbeddedPresetV2; 4] {
         &EMBEDDED_PRESETS_V2
     }
 
     pub fn lookup(self, id: &str) -> Option<EmbeddedPresetV2> {
         match id {
-            "bug-fix-v2" => Some(EMBEDDED_PRESETS_V2[0]),
-            "small-change-v2" => Some(EMBEDDED_PRESETS_V2[1]),
-            "sw-dev-v2" => Some(EMBEDDED_PRESETS_V2[2]),
+            "analysis-v2" => Some(EMBEDDED_PRESETS_V2[0]),
+            "bug-fix-v2" => Some(EMBEDDED_PRESETS_V2[1]),
+            "small-change-v2" => Some(EMBEDDED_PRESETS_V2[2]),
+            "sw-dev-v2" => Some(EMBEDDED_PRESETS_V2[3]),
             _ => None,
         }
     }
@@ -280,6 +284,14 @@ pub const PRESET_CATALOG_V2: PresetCatalogV2 = PresetCatalogV2;
 pub const fn catalog_v2() -> PresetCatalogV2 {
     PRESET_CATALOG_V2
 }
+
+const ANALYSIS_V2_METADATA: PresetMetadata = PresetMetadata {
+    schema: PROCEDURE_SCHEMA_V2,
+    id: "analysis-v2",
+    version: "1",
+    name: "Analysis v2",
+    description: "A research and technical-analysis Procedure with guarded evidence-gap rework, phase-owner review, and goal-directed closeout.",
+};
 
 const BUG_FIX_V2_METADATA: PresetMetadata = PresetMetadata {
     schema: PROCEDURE_SCHEMA_V2,
@@ -305,7 +317,12 @@ const SW_DEV_V2_METADATA: PresetMetadata = PresetMetadata {
     description: "The full reference Procedure for guarded verification, documentation, review, and goal-directed closeout.",
 };
 
-const EMBEDDED_PRESETS_V2: [EmbeddedPresetV2; 3] = [
+const EMBEDDED_PRESETS_V2: [EmbeddedPresetV2; 4] = [
+    EmbeddedPresetV2 {
+        metadata: ANALYSIS_V2_METADATA,
+        yaml: ANALYSIS_V2_YAML,
+        shipped_digest: ANALYSIS_V2_SHIPPED_DIGEST,
+    },
     EmbeddedPresetV2 {
         metadata: BUG_FIX_V2_METADATA,
         yaml: BUG_FIX_V2_YAML,
@@ -324,7 +341,7 @@ const EMBEDDED_PRESETS_V2: [EmbeddedPresetV2; 3] = [
 ];
 
 /// Returns the built-in Procedure v2 presets in stable lexicographic ID order.
-pub fn list() -> &'static [EmbeddedPresetV2; 3] {
+pub fn list() -> &'static [EmbeddedPresetV2; 4] {
     catalog_v2().list()
 }
 

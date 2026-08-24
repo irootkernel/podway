@@ -6,8 +6,8 @@ Distribution qualification in `make dist` adds native packaging evidence.
 ## Procedure and lifecycle
 
 - Only `podway.procedure/v2` input is admitted.
-- The shipped presets are exactly `bug-fix-v2`, `small-change-v2`, and
-  `sw-dev-v2`, with pinned embedded identities.
+- The shipped presets are exactly `analysis-v2`, `bug-fix-v2`,
+  `small-change-v2`, and `sw-dev-v2`, with pinned embedded identities.
 - `start` snapshots the Procedure into a cursor-free prepared session; `begin`
   creates the first running attempt at the unique graph entry.
 - Action, decision, and terminal nodes enforce their declared transition rules.

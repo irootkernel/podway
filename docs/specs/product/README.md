@@ -31,8 +31,8 @@ independent worktrees may progress concurrently. Authoritative task state lives
 under `.podway/runtime/` in the owning worktree.
 
 The public product accepts only `podway.procedure/v2`, emits successful results
-through `podway.output/v3`, and ships exactly `bug-fix-v2`, `small-change-v2`,
-and `sw-dev-v2`.
+through `podway.output/v3`, and ships exactly `analysis-v2`, `bug-fix-v2`,
+`small-change-v2`, and `sw-dev-v2`.
 Procedure-independent contracts such as `podway.ipc/v1`, `podway.error/v1`, the
 workspace configuration, and the contract manifest retain their own versions.
 

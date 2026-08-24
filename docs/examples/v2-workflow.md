@@ -57,7 +57,7 @@ podway --json begin
 ```
 
 `podway init` configures `sw-dev-v2` as the default for later new sessions; it
-does not reinterpret an existing session. All three shipped presets are version
+does not reinterpret an existing session. The three established presets are version
 3. A newly started preset session admits its exact current embedded bytes and
 digest. A session admitted under an earlier version keeps its immutable snapshot
 until it is explicitly replaced; there is no in-place migration.

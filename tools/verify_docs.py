@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import re
 import shutil
@@ -48,6 +49,7 @@ EXPECTED_SKILL_FILES = {
         "SKILL.md",
         "agents/openai.yaml",
         "references/authoring.md",
+        "references/capabilities.md",
         "references/distribution.md",
     },
     "use-podway": {
@@ -106,6 +108,53 @@ def validate_skill_frontmatter(name: str, entrypoint: str) -> None:
         fail(f"invalid skill frontmatter: skills/{name}/SKILL.md")
 
 
+def canonical_capability_inventory() -> dict[str, list[str]]:
+    schema = json.loads(
+        (ROOT / "assets/schemas/procedure-v2.schema.json").read_text(encoding="utf-8")
+    )
+    definitions = schema["$defs"]
+    item_types = []
+    for variant in definitions["item"]["oneOf"]:
+        definition = variant["$ref"].rsplit("/", 1)[-1]
+        item_schema = definitions[definition]
+        if "$ref" in item_schema:
+            item_schema = definitions[item_schema["$ref"].rsplit("/", 1)[-1]]
+        item_types.append(item_schema["properties"]["type"]["const"])
+    predicate_sets = []
+    for definition in ("item_predicate", "evidence_predicate"):
+        predicate_sets.append(
+            {
+                required
+                for variant in definitions[definition]["oneOf"]
+                for required in variant["required"]
+            }
+        )
+    if predicate_sets[0] != predicate_sets[1]:
+        fail("Procedure v2 item and evidence predicate operators differ")
+    return {
+        "item_types": sorted(item_types),
+        "predicate_operators": sorted(predicate_sets[0]),
+    }
+
+
+def validate_capability_inventory(content: str) -> None:
+    match = re.search(
+        r"```podway-capability-inventory\n([^\n]+)\n```", content
+    )
+    if match is None:
+        fail("create-podway-procedure capability inventory is missing")
+    try:
+        documented = json.loads(match.group(1))
+    except json.JSONDecodeError as error:
+        fail(f"create-podway-procedure capability inventory is invalid: {error}")
+    canonical = canonical_capability_inventory()
+    if documented != canonical:
+        fail(
+            "create-podway-procedure capability inventory differs from the canonical schema: "
+            f"expected {canonical}, got {documented}"
+        )
+
+
 def validate_skills(skills_root: Path = SKILLS) -> int:
     if skills_root.is_symlink() or not skills_root.is_dir():
         fail(f"unsafe or missing skills root: {skills_root}")
@@ -151,6 +200,10 @@ def validate_skills(skills_root: Path = SKILLS) -> int:
     distribution_reference = (
         authoring_root / "references/distribution.md"
     ).read_text(encoding="utf-8")
+    capability_reference = (
+        authoring_root / "references/capabilities.md"
+    ).read_text(encoding="utf-8")
+    validate_capability_inventory(capability_reference)
     runtime_entrypoint = (skills_root / "use-podway/SKILL.md").read_text(encoding="utf-8")
     required_markers = {
         "authoring entrypoint": (
@@ -165,6 +218,13 @@ def validate_skills(skills_root: Path = SKILLS) -> int:
         "distribution reference": (
             ("separate runtime authorization", "$use-podway"),
             ("exact preview start suggestion", "accepted-path inventory"),
+            ("manifest", "semver alone"),
+        ),
+        "capability reference": (
+            ("required_when", "decision guards"),
+            ("skip", "goal_tracking: true", "manual_rework.allowed_targets"),
+            ("paged read-back", "stale-token rejection"),
+            ("podway version --json --identity", "published release"),
         ),
         "runtime entrypoint": (("$create-podway-procedure", "runtime skill"),),
     }
@@ -172,6 +232,7 @@ def validate_skills(skills_root: Path = SKILLS) -> int:
         "authoring entrypoint": authoring_entrypoint,
         "authoring reference": authoring_reference,
         "distribution reference": distribution_reference,
+        "capability reference": capability_reference,
         "runtime entrypoint": runtime_entrypoint,
     }
     for label, marker_groups in required_markers.items():
@@ -228,6 +289,15 @@ def validate_skills_self_test() -> None:
         shutil.copytree(valid, visible_extra)
         (visible_extra / "use-podway/extra.txt").write_text("extra\n", encoding="utf-8")
         expect_validation_failure(visible_extra, "file set differs")
+
+        capability_drift = temporary_root / "capability-drift"
+        shutil.copytree(valid, capability_drift)
+        inventory = capability_drift / "create-podway-procedure/references/capabilities.md"
+        text = inventory.read_text(encoding="utf-8").replace(
+            '"text"]', '"text","unknown"]', 1
+        )
+        inventory.write_text(text, encoding="utf-8")
+        expect_validation_failure(capability_drift, "differs from the canonical schema")
 
         empty_description = temporary_root / "empty-description"
         shutil.copytree(valid, empty_description)

@@ -117,6 +117,15 @@ def validate_reference_paths() -> int:
         fail("reference path fixture must contain cases")
 
     expected = {
+        "analysis-v2": {
+            "analysis-clean", "analysis-evidence-gap-rework",
+            "analysis-source-review-rework", "analysis-analysis-review-rework",
+            "analysis-source-findings-missing", "analysis-analysis-findings-missing",
+            "analysis-goal-not-achieved", "analysis-goal-superseded",
+            "analysis-manual-define", "analysis-manual-collect",
+            "analysis-manual-analyze", "analysis-manual-challenge",
+            "analysis-manual-synthesize", "analysis-manual-review",
+        },
         "small-change-v2": {
             "small-clean", "small-review-rework", "small-manual-inspect",
             "small-manual-implement", "small-manual-verify",

@@ -1,11 +1,12 @@
 # Built-in Procedures
 
-Podway ships exactly three built-in Procedure v2 presets. Their YAML files under
+Podway ships exactly four built-in Procedure v2 presets. Their YAML files under
 [`assets/presets/`](../../../assets/presets/) are canonical and embedded into the
 binary with pinned digests.
 
 | ID | Selection boundary |
 | --- | --- |
+| `analysis-v2` | Source-backed research or technical analysis that needs explicit limitations, assumptions, counterarguments, evidence-gap rework, separated source and analysis review ownership, and goal assessment. |
 | `small-change-v2` | A bounded change that needs assertion-based verification and one review rework route, but no goal tracking or typed external result. |
 | `bug-fix-v2` | A defect workflow that needs reproduction, diagnosis, a structurally bound verification result, guarded retry and review decisions, and goal assessment. |
 | `sw-dev-v2` | The full software-development reference with bounded planning, conditional evidence, paging, an optional artifact, guarded phase-owner rework, and goal assessment. |
@@ -14,11 +15,11 @@ binary with pinned digests.
 created by `podway init` defaults to `sw-dev-v2`. A preset start admits the exact
 embedded source and fails closed if its shipped digest does not match.
 
-All three current presets declare version `3`. Version is descriptive public
-identity while the canonical digest binds the admitted semantics. New preset
-starts use these current identities; existing sessions retain their earlier
-immutable snapshots. Copyable recording, condition, guard, selector, page-token,
-check-result, and rework patterns live in the
+The established software presets declare version `3`; `analysis-v2` begins at
+version `1`. Version is descriptive public identity while the canonical digest
+binds the admitted semantics. New preset starts use these current identities;
+existing sessions retain their earlier immutable snapshots. Copyable recording,
+condition, guard, selector, page-token, check-result, and rework patterns live in the
 [Procedure v2 workflow](../../examples/v2-workflow.md), not in duplicate preset
 copies.
 
@@ -34,28 +35,53 @@ the feature does not occur anywhere in that preset. A list is single-page when
 page-data allocation and the six-byte worst-case JSON escape charge. A larger
 selected list is multi-page.
 
-| Feature | `small-change-v2` | `bug-fix-v2` | `sw-dev-v2` |
-| --- | --- | --- | --- |
-| Goal tracking and criterion assessment | Forbidden | Required | Required |
-| Assertion-based verification | Required | Forbidden | Forbidden |
-| Structurally bound `check_result` verification | Forbidden | Required | Required |
-| `required_when` | Forbidden | Forbidden | Required |
-| Decision option guards | Forbidden | Required | Required |
-| Explicit selected evidence items | Required | Required | Required |
-| Multi-page list evidence | Forbidden | Forbidden | Required |
-| Optional artifact declaration | Forbidden | Forbidden | Required |
-| Decision route with `effect: rework` | Required | Required | Required |
-| Multiple phase-owner rework option targets | Forbidden | Forbidden | Required |
-| Declared `manual_rework.allowed_targets` | Required | Required | Required |
-| Skippable placement | Forbidden | Forbidden | Forbidden |
-| English narrative recording guidance | Required | Required | Required |
-| Authored Git-mutation implication | Forbidden | Forbidden | Forbidden |
+| Feature | `analysis-v2` | `small-change-v2` | `bug-fix-v2` | `sw-dev-v2` |
+| --- | --- | --- | --- | --- |
+| Goal tracking and criterion assessment | Required | Forbidden | Required | Required |
+| Assertion-based verification | Forbidden | Required | Forbidden | Forbidden |
+| Structurally bound `check_result` verification | Forbidden | Forbidden | Required | Required |
+| `required_when` | Required | Forbidden | Forbidden | Required |
+| Decision option guards | Required | Forbidden | Required | Required |
+| `empty` and `non_empty` guards | Required | Forbidden | Forbidden | Forbidden |
+| Explicit selected evidence items | Required | Required | Required | Required |
+| Multi-page list evidence | Forbidden | Forbidden | Forbidden | Required |
+| Optional artifact declaration | Forbidden | Forbidden | Forbidden | Required |
+| Decision route with `effect: rework` | Required | Required | Required | Required |
+| Multiple phase-owner rework option targets | Required | Forbidden | Forbidden | Required |
+| Declared `manual_rework.allowed_targets` | Required | Required | Required | Required |
+| Skippable placement | Forbidden | Forbidden | Forbidden | Forbidden |
+| English narrative recording guidance | Required | Required | Required | Required |
+| Authored Git-mutation implication | Forbidden | Forbidden | Forbidden | Forbidden |
 
-All presets deliberately omit `empty` and `non_empty` option guards. Authoring
-examples teach those operators separately because adding them to these graphs
-would require complementary routes and obscure their intended progression. An
-explicit state such as `documentation-state: not-applicable` is preferred to
-skipping an owned phase.
+The catalog demonstrates complementary `empty` and `non_empty` routing in
+`analysis-v2`. It still omits `at_most` and skippable placements because those
+features do not improve the accepted workflows. The authoring capability inventory
+documents the complete grammar. An explicit state such as
+`documentation-state: not-applicable` is preferred to skipping an owned phase.
+
+## `analysis-v2`
+
+This preset separates evidence collection from reasoning and challenge. An empty
+`blocking-gaps` list advances to synthesis; a non-empty list reworks collection.
+Review findings are counted by owner. A positive source count requires
+`source-findings` and reworks `collect`; when the source count is zero, a positive
+analysis count requires `analysis-findings` and reworks `analyze`. Both counts must
+be zero for approval.
+
+| Graph path | Behavior |
+| --- | --- |
+| `define -> collect -> analyze -> challenge -> evaluate-evidence` | Establishes the question and sources, derives findings, and records counterarguments, uncertainty, and blocking gaps. |
+| `evaluate-evidence.more-research -> collect` | Guarded rework while `blocking-gaps` is non-empty. |
+| `evaluate-evidence.sufficient -> synthesize -> review -> evaluate-review` | Guarded advance while `blocking-gaps` is empty. |
+| `evaluate-review.source-changes -> collect` | Source-owner rework when unresolved source findings are positive. |
+| `evaluate-review.analysis-changes -> analyze` | Analysis-owner rework when source findings are zero and analysis findings are positive. |
+| `evaluate-review.approved -> assess-goal -> closeout` | Approval, one of three goal outcomes, and terminal closeout. |
+
+Selected evidence is bounded and single-page. `manual_rework.allowed_targets` is
+exactly `define`, `collect`, `analyze`, `challenge`, `synthesize`, and `review`.
+The preset deliberately omits `check_result`, artifacts, skip, and paging because
+analysis quality depends on attributed sources and reasoning rather than an
+executed operation or stored payload.
 
 ## `small-change-v2`
 

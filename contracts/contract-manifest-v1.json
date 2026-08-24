@@ -17,6 +17,11 @@
     },
     {
       "kind": "preset",
+      "path": "presets/analysis-v2.yaml",
+      "sha256": "sha256:46a19636548c9ea9a4a96dc8e50f235595ab34dad3066efc7f7a0f53a3d857dc"
+    },
+    {
+      "kind": "preset",
       "path": "presets/bug-fix-v2.yaml",
       "sha256": "sha256:f63922f7996ad1227f6d309ba70e8c2457847f6a9eb9fe4445b6bd5c1e9e1ca5"
     },
@@ -508,7 +513,7 @@
     {
       "kind": "known_answer_fixture",
       "path": "tests/fixtures/v2/presets/reference-paths.json",
-      "sha256": "sha256:266660e8d374fc0ec312318a151945a8bf68968fa4b4a1837e0d2c8d1310ea2a"
+      "sha256": "sha256:b6706f7366e1620b57b03a0b72592cfc48e5ba93dc3a203afe0c91d3256fd2b7"
     },
     {
       "kind": "known_answer_fixture",
@@ -536,7 +541,7 @@
       "sha256": "sha256:23423b1060f6a0fedd1097ac458ca8a1cd8cb3c1a2a7e88aa964d514d01a248a"
     }
   ],
-  "digest": "sha256:70d2e22b348ed96f32142b454eb62ad2cf49d1e37eb24a5a3a285086b7d6405d",
+  "digest": "sha256:d923470594f1d30ce501cbba523086e3f0bc4c6787b7ec2d0aa8cf9a8fc5e58f",
   "product": "podway",
   "product_version": "0.2.5",
   "schema_version": "podway.contract-manifest/v1",

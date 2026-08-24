@@ -7,8 +7,8 @@ The `v0.2.0` release is a macOS product. It includes:
 - `podway`;
 - `podwayd`;
 - LaunchAgent support;
-- three embedded Procedure v2 presets: `bug-fix-v2`, `small-change-v2`, and
-  `sw-dev-v2`;
+- four embedded Procedure v2 presets: `analysis-v2`, `bug-fix-v2`,
+  `small-change-v2`, and `sw-dev-v2`;
 - JSON schemas and user documentation;
 - zsh, bash, and fish completion;
 - MIT License;

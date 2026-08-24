@@ -6,13 +6,18 @@ use podway_config::{
 };
 use podway_core::{AuthoringSeverity, PROCEDURE_SCHEMA_V2, Sha256Digest};
 use podway_presets::{
-    BUG_FIX_V2_SHIPPED_DIGEST, EmbeddedPresetV2, PresetError, SMALL_CHANGE_V2_SHIPPED_DIGEST,
-    SW_DEV_V2_SHIPPED_DIGEST, catalog_v2,
+    ANALYSIS_V2_SHIPPED_DIGEST, BUG_FIX_V2_SHIPPED_DIGEST, EmbeddedPresetV2, PresetError,
+    SMALL_CHANGE_V2_SHIPPED_DIGEST, SW_DEV_V2_SHIPPED_DIGEST, catalog_v2,
 };
 
 #[test]
 fn v2_presets_embed_the_exact_canonical_sources_and_pinned_digests() {
     let expected = [
+        (
+            "analysis-v2",
+            include_bytes!("../../../assets/presets/analysis-v2.yaml").as_slice(),
+            ANALYSIS_V2_SHIPPED_DIGEST,
+        ),
         (
             "bug-fix-v2",
             include_bytes!("../../../assets/presets/bug-fix-v2.yaml").as_slice(),

@@ -2,6 +2,7 @@
 
 This directory contains the canonical built-in Procedure v2 sources:
 
+- `analysis-v2.yaml`
 - `sw-dev-v2.yaml`
 - `bug-fix-v2.yaml`
 - `small-change-v2.yaml`

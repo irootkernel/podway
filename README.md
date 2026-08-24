@@ -13,10 +13,11 @@ Podway ships two matching binaries:
 
 Use Podway when a task has explicit graph nodes that should not be skipped,
 especially when work may be retried, handed between people or agents, or sent
-through a declared rework path. Three built-in procedures cover common work:
+through a declared rework path. Four built-in procedures cover common work:
 
 | Preset | Best for |
 |---|---|
+| `analysis-v2` | Source-backed research or technical analysis with evidence-gap and review-owner rework |
 | `sw-dev-v2` | Graph-based implementation work with decisions, evidence read-back, rework, and goal assessment |
 | `bug-fix-v2` | Graph-based defect repair with decision rework and goal closeout |
 | `small-change-v2` | Short inspect, implement, verify, review, and closeout path without goal tracking |

@@ -578,6 +578,7 @@ def packaged_preset_manifest_paths() -> list[Path]:
     manifest = contract_manifest_document()
     paths = [Path(asset["path"]) for asset in manifest["assets"] if asset.get("kind") == "preset"]
     expected = [
+        Path("presets/analysis-v2.yaml"),
         Path("presets/bug-fix-v2.yaml"),
         Path("presets/small-change-v2.yaml"),
         Path("presets/sw-dev-v2.yaml"),
@@ -719,7 +720,7 @@ def release_status() -> dict[str, str]:
     required = (
         "Podway 0.2.5 is a release candidate and has not been published",
         "## Changes since",
-        "three built-in Procedure v2 presets",
+        "four built-in Procedure v2 presets",
         "fails closed with `LEGACY_PROCEDURE_STATE_UNSUPPORTED`",
         "podway-0.2.5-aarch64-apple-darwin.tar.gz.sha256",
         "podway-0.2.5-aarch64-apple-darwin.dolgorae-handoff.json",

@@ -1,8 +1,10 @@
 # User Workflows
 
 Initialize one Git worktree with `podway init`, inspect `podway preset list`, and
-start `sw-dev-v2`, `bug-fix-v2`, `small-change-v2`, or a validated worktree-local
-Procedure v2 file. Use `small-change-v2` for a bounded change that still requires
+start `analysis-v2`, `sw-dev-v2`, `bug-fix-v2`, `small-change-v2`, or a validated
+worktree-local Procedure v2 file. Use `analysis-v2` for source-backed research or
+technical analysis that needs evidence-gap and phase-owner review rework. Use
+`small-change-v2` for a bounded change that still requires
 explicit inspection, verification, review, and closeout but no tracked goal. Use
 `--dry-run` before a destructive replacement or other supported preview.
 Starting creates a prepared session without a cursor or goal. Use `podway begin`

@@ -16,19 +16,22 @@ Every valid graph fixture must prove a unique entry, reachable nodes, an acyclic
 advance subgraph, and a finite terminal route when declared rework edges are
 included. The executable reference-path fixture must retain the accepted clean,
 failure, guarded, conditional, paging, goal-outcome, and manual-rework inventory
-for all three shipped presets. Every shipped preset must validate and retain its
+for all four shipped presets. Every shipped preset must validate and retain its
 pinned canonical digest.
 
 ### Shipped reference-path evidence
 
 [`reference-paths.json`](../../../tests/fixtures/v2/presets/reference-paths.json)
-is the exact accepted path inventory for the three shipped presets. Each case is
+is the exact accepted path inventory for the four shipped presets. Each case is
 bound to a checked Rust test or isolated real-binary Python dogfood function by
 `runtime_proofs`; `tools/verify_quality_contracts.py` rejects a missing case,
 extra case, invalid locator, or missing proof symbol.
 
 The proof is intentionally layered:
 
+- `analysis-v2` runtime tests exercise evidence-gap rework, separated source and
+  analysis review ownership, conditional finding requirements, all goal outcomes,
+  and every declared manual target against the shipped preset bytes.
 - `small-change-v2` runtime tests exercise its clean path, review rework, retry,
   and every declared manual target without goal tracking.
 - `bug-fix-v2` runtime tests exercise guarded failed verification, review-owned

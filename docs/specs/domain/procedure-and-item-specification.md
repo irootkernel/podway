@@ -125,7 +125,7 @@ Adding the literal `max_total_length` default in `V2SCL-003` rotates the canonic
 
 The optional `required_when` and `guards` fields have no materialized defaults.
 Procedures that omit them retain their existing canonical bytes and digest, and
-the three built-in preset digests do not rotate. Conditions are part of the
+the established built-in preset digests do not rotate. Conditions are part of the
 immutable canonical snapshot and require no runtime-row migration.
 
 `podway procedure validate`, `format`, `vet`, `graph`, `preview`, `lint`, `check`,

@@ -1,0 +1,526 @@
+schema: podway.procedure/v2
+id: analysis-v2
+version: "1"
+name: Analysis v2
+purpose: Produce a reviewed decision-ready analysis from bounded sources, explicit assumptions, counterarguments, and uncertainty.
+description: A research and technical-analysis Procedure with guarded evidence-gap rework, phase-owner review, and goal-directed closeout.
+goal_tracking: true
+node_definitions:
+  definition:
+    type: action
+    title: Define the analysis
+    intent: Establish the question, decision context, scope, and constraints before gathering evidence.
+    instructions:
+      - Inspect the repository authorities and state one decision-relevant question.
+      - Record the analysis boundary and constraints in English.
+    items:
+      - id: analysis-question
+        type: text
+        prompt: Record the focused analysis question in English.
+        required: true
+        min_length: 1
+        max_length: 4000
+        multiline: true
+      - id: decision-context
+        type: text
+        prompt: Record the decision or use that this analysis must support in English.
+        required: true
+        min_length: 1
+        max_length: 2000
+        multiline: true
+      - id: scope-and-constraints
+        type: list
+        prompt: List the analysis scope and material constraints in English.
+        required: true
+        min_items: 1
+        max_items: 20
+        max_item_length: 500
+        max_total_length: 10000
+        unique: true
+  collection:
+    type: action
+    title: Collect the evidence
+    intent: Gather bounded sources and make their material limitations explicit.
+    instructions:
+      - Gather sources relevant to the recorded question and decision context.
+      - Record limitations as an explicit list, including an empty list when none is known.
+    items:
+      - id: sources
+        type: list
+        prompt: List the authoritative sources or stable inputs used by the analysis.
+        required: true
+        min_items: 2
+        max_items: 40
+        max_item_length: 1000
+        max_total_length: 40000
+        unique: true
+      - id: source-limitations
+        type: list
+        prompt: List material source limitations in English, or record an empty list when none is known.
+        required: true
+        min_items: 0
+        max_items: 20
+        max_item_length: 1000
+        max_total_length: 20000
+        unique: true
+  analysis:
+    type: action
+    title: Analyze the evidence
+    intent: Derive bounded findings from the collected evidence and expose material assumptions.
+    instructions:
+      - Analyze the selected sources against the defined question and constraints.
+      - Separate supported findings from assumptions and summarize the reasoning in English.
+    items:
+      - id: analysis-summary
+        type: text
+        prompt: Summarize the analysis and reasoning in English.
+        required: true
+        min_length: 1
+        max_length: 4000
+        multiline: true
+      - id: key-findings
+        type: list
+        prompt: List the supported key findings in English.
+        required: true
+        min_items: 1
+        max_items: 20
+        max_item_length: 1000
+        max_total_length: 20000
+        unique: true
+      - id: assumptions
+        type: list
+        prompt: List material assumptions in English, or record an empty list when none is needed.
+        required: true
+        min_items: 0
+        max_items: 20
+        max_item_length: 500
+        max_total_length: 10000
+        unique: true
+  challenge:
+    type: action
+    title: Challenge the analysis
+    intent: Test the findings against counterarguments, uncertainty, and missing evidence.
+    instructions:
+      - Challenge the analysis with credible alternatives and counterarguments.
+      - Record every evidence gap that blocks decision-ready synthesis, or an empty list when none remains.
+    items:
+      - id: counterarguments
+        type: list
+        prompt: List the material counterarguments or alternative explanations in English.
+        required: true
+        min_items: 1
+        max_items: 20
+        max_item_length: 1000
+        max_total_length: 20000
+        unique: true
+      - id: uncertainty
+        type: text
+        prompt: Explain the material uncertainty and what could change the conclusion in English.
+        required: true
+        min_length: 1
+        max_length: 4000
+        multiline: true
+      - id: blocking-gaps
+        type: list
+        prompt: List evidence gaps that block synthesis, or record an empty list when the evidence is sufficient.
+        required: true
+        min_items: 0
+        max_items: 20
+        max_item_length: 1000
+        max_total_length: 20000
+        unique: true
+  evidence-decision:
+    type: decision
+    title: Evaluate evidence readiness
+    objective: Route the analysis according to whether blocking evidence gaps remain.
+    prompt: Is the current evidence sufficient for decision-ready synthesis?
+    evidence_guidance:
+      - Read the selected blocking evidence gaps from the current challenge attempt.
+    options:
+      - id: sufficient
+        label: Evidence sufficient
+        criteria: The selected blocking-gaps list is empty.
+        guards:
+          - evidence:
+              node: challenge
+              item: blocking-gaps
+            empty: true
+      - id: more-research
+        label: More research required
+        criteria: The selected blocking-gaps list is non-empty.
+        guards:
+          - evidence:
+              node: challenge
+              item: blocking-gaps
+            non_empty: true
+    reason:
+      required: true
+      prompt: Explain the selection using the recorded evidence gaps in English.
+  synthesis:
+    type: action
+    title: Synthesize the conclusion
+    intent: Produce a bounded conclusion and recommendation that preserve uncertainty and residual risk.
+    instructions:
+      - Synthesize the fresh evidence, findings, counterarguments, and uncertainty.
+      - Record a decision-ready conclusion, recommendation, confidence, and residual risks in English.
+    items:
+      - id: conclusion
+        type: text
+        prompt: Record the supported conclusion in English.
+        required: true
+        min_length: 1
+        max_length: 4000
+        multiline: true
+      - id: recommendation
+        type: text
+        prompt: Record the recommended decision or next action in English.
+        required: true
+        min_length: 1
+        max_length: 4000
+        multiline: true
+      - id: confidence
+        type: choice
+        prompt: Select the confidence in the conclusion.
+        required: true
+        choices:
+          - low
+          - medium
+          - high
+      - id: residual-risks
+        type: list
+        prompt: List residual risks in English, or record an empty list when none remains.
+        required: true
+        min_items: 0
+        max_items: 20
+        max_item_length: 1000
+        max_total_length: 20000
+        unique: true
+  review-work:
+    type: action
+    title: Review the analysis
+    intent: Record source-owned and analysis-owned findings for deterministic rework routing.
+    instructions:
+      - Review the source basis, reasoning, challenge, conclusion, recommendation, and trust claims.
+      - Record separate unresolved counts and the corresponding bounded findings in English.
+    items:
+      - id: review-summary
+        type: text
+        prompt: Summarize the review result in English.
+        required: true
+        min_length: 1
+        max_length: 4000
+        multiline: true
+      - id: unresolved-source-findings
+        type: integer
+        prompt: Record the number of unresolved source or evidence findings.
+        required: true
+        minimum: 0
+      - id: unresolved-analysis-findings
+        type: integer
+        prompt: Record the number of unresolved reasoning, synthesis, or trust-claim findings.
+        required: true
+        minimum: 0
+      - id: source-findings
+        type: list
+        prompt: List unresolved source or evidence findings in English.
+        required: false
+        required_when:
+          - item: unresolved-source-findings
+            at_least: 1
+        min_items: 1
+        max_items: 20
+        max_item_length: 1000
+        max_total_length: 20000
+        unique: true
+      - id: analysis-findings
+        type: list
+        prompt: List unresolved reasoning, synthesis, or trust-claim findings in English.
+        required: false
+        required_when:
+          - item: unresolved-analysis-findings
+            at_least: 1
+        min_items: 1
+        max_items: 20
+        max_item_length: 1000
+        max_total_length: 20000
+        unique: true
+  review-decision:
+    type: decision
+    title: Evaluate the analysis review
+    objective: Route each unresolved finding to the phase that owns its correction.
+    prompt: Which phase owns the current review outcome?
+    evidence_guidance:
+      - Read the selected summary, unresolved counts, and conditional finding lists.
+      - Source findings take precedence over analysis findings.
+    options:
+      - id: approved
+        label: Analysis approved
+        criteria: No unresolved source or analysis finding remains.
+        guards:
+          - evidence:
+              node: review
+              item: unresolved-source-findings
+            equals: 0
+          - evidence:
+              node: review
+              item: unresolved-analysis-findings
+            equals: 0
+      - id: source-changes
+        label: Source changes required
+        criteria: At least one unresolved source or evidence finding remains.
+        guards:
+          - evidence:
+              node: review
+              item: unresolved-source-findings
+            at_least: 1
+      - id: analysis-changes
+        label: Analysis changes required
+        criteria: No source finding remains and at least one reasoning, synthesis, or trust-claim finding remains.
+        guards:
+          - evidence:
+              node: review
+              item: unresolved-source-findings
+            equals: 0
+          - evidence:
+              node: review
+              item: unresolved-analysis-findings
+            at_least: 1
+    reason:
+      required: true
+      prompt: Explain the selected phase-owner route in English.
+  assess-goal:
+    type: decision
+    title: Assess the session goal
+    objective: Determine whether fresh source, analysis, challenge, synthesis, and review evidence supports the goal.
+    prompt: What is the outcome of the current session goal?
+    evidence_guidance:
+      - Assess every criterion against the selected fresh evidence and decision records.
+    items:
+      - id: assessment-note
+        type: text
+        prompt: Record observations supporting the criterion assessments in English.
+        required: false
+        min_length: 0
+        max_length: 2000
+        multiline: true
+    options:
+      - id: achieved
+        label: Goal achieved
+        criteria: Fresh criterion assessments support the current analysis goal revision.
+      - id: not-achieved
+        label: Goal not achieved
+        criteria: Fresh evidence does not support the current analysis goal revision.
+      - id: superseded
+        label: Goal superseded
+        criteria: The current analysis goal revision is no longer desired.
+    reason:
+      required: true
+      prompt: Explain the outcome using criterion assessments and evidence in English.
+    assessment:
+      target: session_goal
+      outcomes:
+        achieved: achieved
+        not-achieved: not_achieved
+        superseded: superseded
+  closeout:
+    type: action
+    title: Record the closeout
+    intent: Record the terminal outcome for the assessed analysis goal.
+    items:
+      - id: closeout-note
+        type: text
+        prompt: Record the final analysis closeout in English.
+        required: true
+        min_length: 1
+        max_length: 2000
+        multiline: true
+graph:
+  entry: define
+  nodes:
+    - id: define
+      use: definition
+      next: collect
+    - id: collect
+      use: collection
+      evidence_from:
+        - node: define
+          required: true
+          items:
+            - analysis-question
+            - decision-context
+            - scope-and-constraints
+      next: analyze
+    - id: analyze
+      use: analysis
+      evidence_from:
+        - node: define
+          required: true
+          items:
+            - analysis-question
+            - scope-and-constraints
+        - node: collect
+          required: true
+          items:
+            - sources
+            - source-limitations
+      next: challenge
+    - id: challenge
+      use: challenge
+      evidence_from:
+        - node: analyze
+          required: true
+          items:
+            - analysis-summary
+            - key-findings
+            - assumptions
+      next: evaluate-evidence
+    - id: evaluate-evidence
+      use: evidence-decision
+      evidence_from:
+        - node: challenge
+          required: true
+          items:
+            - blocking-gaps
+      routes:
+        sufficient:
+          to: synthesize
+          effect: advance
+        more-research:
+          to: collect
+          effect: rework
+    - id: synthesize
+      use: synthesis
+      evidence_from:
+        - node: define
+          required: true
+          items:
+            - analysis-question
+            - decision-context
+            - scope-and-constraints
+        - node: collect
+          required: true
+          items:
+            - sources
+            - source-limitations
+        - node: analyze
+          required: true
+          items:
+            - analysis-summary
+            - key-findings
+            - assumptions
+        - node: challenge
+          required: true
+          items:
+            - counterarguments
+            - uncertainty
+            - blocking-gaps
+        - node: evaluate-evidence
+          required: true
+      next: review
+    - id: review
+      use: review-work
+      evidence_from:
+        - node: define
+          required: true
+          items:
+            - analysis-question
+            - decision-context
+            - scope-and-constraints
+        - node: collect
+          required: true
+          items:
+            - sources
+            - source-limitations
+        - node: analyze
+          required: true
+          items:
+            - analysis-summary
+            - key-findings
+            - assumptions
+        - node: challenge
+          required: true
+          items:
+            - counterarguments
+            - uncertainty
+            - blocking-gaps
+        - node: evaluate-evidence
+          required: true
+        - node: synthesize
+          required: true
+          items:
+            - conclusion
+            - recommendation
+            - confidence
+            - residual-risks
+      next: evaluate-review
+    - id: evaluate-review
+      use: review-decision
+      evidence_from:
+        - node: review
+          required: true
+          items:
+            - review-summary
+            - unresolved-source-findings
+            - unresolved-analysis-findings
+            - source-findings
+            - analysis-findings
+      routes:
+        approved:
+          to: assess-goal
+          effect: advance
+        source-changes:
+          to: collect
+          effect: rework
+        analysis-changes:
+          to: analyze
+          effect: rework
+    - id: assess-goal
+      use: assess-goal
+      evidence_from:
+        - node: define
+          required: true
+          items:
+            - analysis-question
+        - node: collect
+          required: true
+          items:
+            - sources
+        - node: synthesize
+          required: true
+          items:
+            - conclusion
+            - recommendation
+            - confidence
+            - residual-risks
+        - node: review
+          required: true
+          items:
+            - review-summary
+            - unresolved-source-findings
+            - unresolved-analysis-findings
+        - node: evaluate-review
+          required: true
+      routes:
+        achieved:
+          to: closeout
+          effect: advance
+        not-achieved:
+          to: closeout
+          effect: advance
+        superseded:
+          to: closeout
+          effect: advance
+    - id: closeout
+      use: closeout
+      evidence_from:
+        - node: assess-goal
+          required: true
+      terminal: true
+manual_rework:
+  allowed_targets:
+    - define
+    - collect
+    - analyze
+    - challenge
+    - synthesize
+    - review

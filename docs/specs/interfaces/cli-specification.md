@@ -36,8 +36,8 @@ types, conditional chains, invalid controller order, unselected or optional guar
 sources, and out-of-bound predicate arrays before start. Lint diagnoses ambiguous
 labels and weak criteria rather than warning from option or cycle counts.
 
-Built-in catalog commands expose only `bug-fix-v2`, `small-change-v2`, and
-`sw-dev-v2`. `start` accepts one preset or one safe worktree-local Procedure
+Built-in catalog commands expose only `analysis-v2`, `bug-fix-v2`,
+`small-change-v2`, and `sw-dev-v2`. `start` accepts one preset or one safe worktree-local Procedure
 path, an optional expected Procedure digest for file sources, a nonempty task
 title, and the documented existing-session policy and dry-run controls. Start creates a
 prepared session and never accepts or creates initial goal state.

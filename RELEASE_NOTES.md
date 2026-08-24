@@ -57,8 +57,8 @@ The qualified, unpublished distribution contains these exact top-level artifacts
 - `podway-0.2.5-aarch64-apple-darwin.provenance.json`;
 - `podway-0.2.5-aarch64-apple-darwin.dolgorae-handoff.json`.
 
-The archive contains both binaries, shell completions, and three built-in Procedure v2 presets:
-`bug-fix-v2`, `small-change-v2`, and `sw-dev-v2`. It also contains public schemas
+The archive contains both binaries, shell completions, and four built-in Procedure v2 presets:
+`analysis-v2`, `bug-fix-v2`, `small-change-v2`, and `sw-dev-v2`. It also contains public schemas
 and specifications, canonicalization fixtures, the contract manifest, README,
 release notes, and license. Provenance records the source and build identities,
 target, checksums, qualification results, and signing and notarization status.

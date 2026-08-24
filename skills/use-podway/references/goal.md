@@ -5,7 +5,7 @@ Read this reference when deciding whether to track a session goal, writing its s
 ## Decide whether to track a goal
 
 - Treat the session goal as the outcome this session is held accountable to across retry, rework, and actor handoff. It is not a task title, a plan, or a summary of the work performed.
-- Goal tracking exists only when the Procedure opts into it, so the decision happens when choosing the Procedure for `start`. `small-change-v2` deliberately omits it, while `bug-fix-v2` and `sw-dev-v2` require a fresh assessment before any terminal node.
+- Goal tracking exists only when the Procedure opts into it, so the decision happens when choosing the Procedure for `start`. `small-change-v2` deliberately omits it, while `analysis-v2`, `bug-fix-v2`, and `sw-dev-v2` require a fresh assessment before any terminal node.
 - Prefer an untracked Procedure when the work is bounded and mechanical and the graph's own required items already prove completion. Choosing a goal-tracked Procedure for such work produces ceremony, not assurance, and a Procedure without goal tracking rejects goal input with `GOAL_TRACKING_NOT_ENABLED`.
 - Track a goal when the session may outlive its current actor, span several attempts or reworks, or end in a completion claim that someone without the conversation must be able to check.
 - Define or revise a goal only with explicit user intent, and propose wording for approval instead of recording an inferred goal. Do not derive a goal from the task title.

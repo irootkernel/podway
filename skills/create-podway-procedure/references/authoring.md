@@ -3,11 +3,15 @@
 ## Resolve the source of truth
 
 - Work in one Git worktree and follow its authority for workflow meaning, naming, location, compatibility, and verification. If it has no Procedure location policy, use `.podway/procedures/<procedure-id>.yaml` under the configured default procedure path.
-- Treat the installed CLI as the grammar authority for that validation run. Use `podway help procedure.<operation>`, the minimal scaffold, and `podway preset show sw-dev-v2`; do not copy syntax from an unrelated checkout, unreleased branch, or differently versioned example.
+- Treat the exact manifest-bound schema shipped with the validating CLI as the grammar authority. Use `podway help procedure.<operation>`, the minimal scaffold, built-in sources such as `podway preset show sw-dev-v2`, and the [capability inventory](capabilities.md) together; none of the human-facing views alone is the complete grammar.
 - Preserve an existing repository-owned Procedure unless the request authorizes its revision. Creating a Procedure does not authorize replacing another canonical file.
 - When Podway or valid workspace configuration is missing, report the exact prerequisite and stop. Initialization, repair, installation, and daemon control belong to a separate runtime workflow.
 
 ## Select features from requirements
+
+Inventory all seven item types and all six predicate operators from
+[capabilities.md](capabilities.md) before deciding that a feature is unavailable.
+Select from the verified requirement; do not add a feature just to showcase it.
 
 - Use an action item only for evidence that an external actor can actually produce and substantiate.
 - Use `check_result` when an external operation needs a stable structural identity and a closed `pass`, `fail`, or `inconclusive` result. Its operation digest versions the exact abstract operation definition; it never proves that the operation ran.

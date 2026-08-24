@@ -43,7 +43,7 @@ Enter a worktree only after explicit activation for the current workflow.
 
 For initialization, session creation or replacement, archive or purge, daemon control, reset, cancel, or workspace repair, read [references/lifecycle.md](references/lifecycle.md) before acting.
 
-When the user explicitly asks to start a session, prefer `small-change-v2` for a bounded change that needs inspection, implementation, verification, review, and closeout but no tracked goal. Use the fuller goal-tracked presets when their assessment and evidence requirements match the task.
+When the user explicitly asks to start a session, prefer `small-change-v2` for a bounded change that needs inspection, implementation, verification, review, and closeout but no tracked goal. Prefer `analysis-v2` for source-backed research or technical analysis. Use the other fuller goal-tracked presets when their assessment and evidence requirements match the task.
 
 ## Advance an active session
 
@@ -51,7 +51,7 @@ When the user explicitly asks to start a session, prefer `small-change-v2` for a
 2. Inspect `missing_required_items` and `suggestions[].argv`. Fill placeholders only with results supported by the work just performed.
 3. Before a mutation, take the applicable workspace, session, attempt, goal, and item revisions from the latest JSON state. Use explicit precondition flags and a unique, stable idempotency key.
 4. Record each result with the correct item command. Do not substitute a confirmation for evidence or collapse multiple actors into an unsupported claim.
-   - The six item types map to their commands: `confirm` uses `check` and `uncheck`; `text`, `choice`, and `integer` use `set`, with `--stdin` reading a text value; `list` uses `add` and `remove`; `artifact` uses `attach`; `clear` removes any recorded value.
+   - The seven item types map to their commands: `confirm` uses `check` and `uncheck`; `text`, `choice`, and `integer` use `set`, with `--stdin` reading a text value; `list` uses `add` and `remove`; `artifact` uses `attach`; `check_result` uses `record --stdin` with the bound operation identity; `clear` removes any recorded value.
    - Keep distinct actors distinct with `--actor`, accepted by goal-bearing `begin`, terminal disposition, `decide`, `rework`, and the `goal` commands.
    - A required local artifact path is re-verified when completing the active action. A file changed after `attach` fails `complete` with `ARTIFACT_CHANGED` and must be attached again.
    - When one observation supports several item values, prefer one atomic `podway record --stdin`. Build a closed `podway.item-record-many-input/v1` document from that same observation: include its workspace UUID, session ID and revision, active attempt ID, a stable unique idempotency key, and 1..128 unique operations with each observed item revision. Use exactly one typed `record` value or `clear: true` per operation. Do not also pass identity, revision, or idempotency flags. Confirm success only from `podway.item-record-many-result/v1`; its outcomes are item-ID ordered. Any rejected operation leaves every selected item unchanged.

@@ -6,7 +6,7 @@ Read this reference only when a repository ships Procedure source to other workt
 
 - Keep one consumer-owned canonical source. Installed or repository-local copies must be byte-identical and must never become a second authoring source.
 - Call consumer-owned files managed Procedures, not Podway built-in presets. Only the catalog embedded in the Podway binary is a built-in preset.
-- Identify the first immutable stable Podway release that supports every authored feature. Do not ship against an unreleased branch, silently widen a supported release range, or validate only with a newer incompatible binary.
+- Identify the first immutable stable Podway release whose exact manifest supports every authored feature. Record validation binary identity and published-release evidence separately. Do not infer support from semver alone, ship against an unreleased branch, silently widen a supported release range, or validate only with a newer incompatible binary.
 - Preserve admitted sessions as immutable snapshots. A new Procedure version affects only later starts; never rewrite or reinterpret runtime history during managed-file replacement.
 - Treat copying, replacing, installing, or deleting a managed Procedure as a separate consumer-authorized mutation. Active-session disposition does not grant file replacement authority.
 
@@ -21,7 +21,7 @@ Read this reference only when a repository ships Procedure source to other workt
 ## Deliver a versioned bundle
 
 1. Update the canonical Procedure and its version.
-2. Validate the exact canonical bytes with the minimum supported released Podway line.
+2. Validate the exact canonical bytes with the minimum supported released Podway manifest and retain its identity output as provenance.
 3. Refresh every managed copy byte-for-byte and verify its digest.
 4. Update consumer skills, documentation, installation diagnostics, and compatibility pins that name the Procedure, version, items, options, routes, or digest.
 5. Hand off the exact preview start suggestion and accepted-path inventory. Under separate runtime authorization, run the qualification and complete consumer gate.

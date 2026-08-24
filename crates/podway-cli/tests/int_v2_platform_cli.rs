@@ -2630,6 +2630,12 @@ fn help_and_every_completion_target_publish_the_v2_routes_and_flags() {
         one_json(&overview)["result"]["text"]
             .as_str()
             .unwrap()
+            .contains("analysis-v2")
+    );
+    assert!(
+        one_json(&overview)["result"]["text"]
+            .as_str()
+            .unwrap()
             .contains("small-change-v2")
     );
     for topic in [
@@ -2688,6 +2694,7 @@ fn help_and_every_completion_target_publish_the_v2_routes_and_flags() {
             "goal",
             "assess-criterion",
             "if-goal-revision",
+            "analysis-v2",
             "small-change-v2",
             "evidence",
             "page-token",
@@ -2696,7 +2703,7 @@ fn help_and_every_completion_target_publish_the_v2_routes_and_flags() {
         }
         for removed in [
             "procedure convert",
-            "analysis",
+            " analysis ",
             "docs-only",
             "values='sw-dev'",
             "values='bug-fix'",

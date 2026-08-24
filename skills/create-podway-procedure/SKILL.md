@@ -14,10 +14,10 @@ description: Create, revise, review, or harden a custom Podway Procedure v2 from
 
 ## Establish authoring readiness
 
-1. Resolve one Git worktree and run `podway version --json`. If Podway is unavailable, stop and report the missing prerequisite; do not install it.
+1. Resolve one Git worktree and run `podway version --json` plus `podway version --json --identity` when supported. Record the exact manifest and source provenance, not only semver. If Podway is unavailable, stop and report the missing prerequisite; do not install it.
 2. Read the repository authorities and `.podway/config.yaml`. Resolve the canonical target from repository policy and configured `procedure_paths`; when neither chooses a different path, use `.podway/procedures/<procedure-id>.yaml`.
 3. If the workspace configuration is absent, invalid, or excludes the intended target, stop before editing and request a separate `$use-podway` initialization or diagnosis. Do not treat `WORKSPACE_CONFIG_INVALID` as permission to repair the workspace.
-4. For a worktree-local Procedure, record the installed Podway version used for validation. Require a minimum immutable stable release only when the Procedure will be distributed or maintained in other worktrees.
+4. For a worktree-local Procedure, record the exact Podway binary identity used for validation. Require a minimum immutable stable release only when the Procedure will be distributed or maintained in other worktrees; never promote an unreleased source build to released-support evidence.
 
 ## Establish the authoring contract
 
@@ -31,12 +31,12 @@ Before editing, read the repository authorities and identify:
 
 Stop when unresolved product intent would change the graph, trust boundary, compatibility, or completion claim. Do not infer those decisions from a preset example.
 
-Read [references/authoring.md](references/authoring.md) before creating or changing Procedure source. For a Procedure shipped to other repositories or installed as a managed bundle, also read [references/distribution.md](references/distribution.md).
+Read [references/authoring.md](references/authoring.md) and the complete [capability inventory](references/capabilities.md) before creating or changing Procedure source. For a Procedure shipped to other repositories or installed as a managed bundle, also read [references/distribution.md](references/distribution.md).
 
 ## Author the smallest complete graph
 
-1. Inspect built-ins with `podway preset list`. Use `podway preset explain sw-dev-v2` and `podway preset show sw-dev-v2` as the full reference for check results, conditional requirements, guarded decisions, paging, goal tracking, and rework; inspect a smaller preset when its boundary better matches the requested workflow.
-2. Read current grammar with `podway help procedure.<operation>` and scaffold with `podway procedure scaffold --template minimal` when starting from nothing. The scaffold writes to stdout; place the reviewed result only at the repository-owned canonical target.
+1. Inspect built-ins with `podway preset list`. Use `podway preset show analysis-v2` for source-backed research or technical analysis, and `podway preset show sw-dev-v2` for the broadest software-development example. No single preset is the complete grammar; inspect a smaller preset when its boundary better matches the requested workflow.
+2. Read command behavior with `podway help procedure.<operation>` and scaffold with `podway procedure scaffold --template minimal` when starting from nothing. Neither command help nor the minimal scaffold is a complete YAML grammar; reconcile the capability inventory with the exact manifest-bound schema. The scaffold writes to stdout; place the reviewed result only at the repository-owned canonical target.
 3. Model one cursor and one active attempt. Use explicit action evidence, decisions, advance routes, owned rework routes, and terminal outcomes; omit phases and features that do not enforce a verified requirement.
 4. Record narrative guidance in English while preserving exact commands, paths, hashes, identifiers, enumerated values, and product names verbatim.
 5. Review the complete source diff before treating the Procedure as a candidate.
@@ -58,4 +58,4 @@ Use `podway procedure graph <file> --format mermaid` only as a review projection
 
 For a local Procedure, the authoring checks and preview are the required qualification unless repository authority requires more. For a distributed Procedure, follow [references/distribution.md](references/distribution.md) and keep runtime path qualification under separate runtime authorization.
 
-Report the selection boundary, canonical path, Procedure ID/version/digest, installed validation version, graph and evidence decisions, exact checks and outcomes, compatibility impact, and any unverified assumption. Copy the exact start suggestion returned by preview, including `--expect-procedure-digest`, into the handoff without executing it. Report distributed runtime proof separately when it exists. Do not claim that Podway executed external work or judged recorded evidence true.
+Report the selection boundary, canonical path, Procedure ID/version/digest, exact validation binary identity and manifest provenance, graph and evidence decisions, exact checks and outcomes, compatibility impact, released-support evidence, and any unverified assumption. Copy the exact start suggestion returned by preview, including `--expect-procedure-digest`, into the handoff without executing it. Report distributed runtime proof separately when it exists. Do not claim that Podway executed external work or judged recorded evidence true.

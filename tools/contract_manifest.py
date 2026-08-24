@@ -24,6 +24,7 @@ PRODUCT = "podway"
 SUPPORTED_IPC_IDS = ["podway.ipc/v1"]
 STATIC_ASSETS = {
     "contracts/command-routes.json": "catalog",
+    "presets/analysis-v2.yaml": "preset",
     "presets/bug-fix-v2.yaml": "preset",
     "presets/small-change-v2.yaml": "preset",
     "presets/sw-dev-v2.yaml": "preset",
