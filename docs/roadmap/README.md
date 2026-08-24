@@ -418,6 +418,37 @@ a successful low-severity findings query, and zero findings. This validation doe
 not claim distribution readiness, upstream publication, installation, or runtime
 activation, and `make dist` was not run.
 
+### V2REF revalidation record — August 24, 2026
+
+A current cold revalidation audited the complete V2REF implementation from base
+`caf621190876e43693fdfd6c64f2d14d6cac8923` through committed snapshot
+`0f253435ef40296054cf07eddfc079fdf4c7f091` plus this goal-owned roadmap
+record. The shipped inventory is four presets and 45 accepted paths: 14
+`analysis-v2`, 10 `bug-fix-v2`, 5 `small-change-v2`, and 16 `sw-dev-v2`
+cases. Every locator is bound to a checked runtime proof symbol, and the
+historical 31-case record above remains the accurate evidence for its August 23
+snapshot.
+
+Documentation, contract, layout, formatting, and focused runtime checks passed.
+Gaori full run `20260824T101739` completed the development gate with status
+`passed`, exit `0`, and zero failures. Subsequent focused CLI run
+`20260824T110023` and prepare run `20260824T110538` passed after the
+documentation and completion-regression corrections; product and runtime code
+were unchanged. Mulgae whole-epic run
+`r_01a03378-8d0c-7240-bfea-0e442c2f9d94` completed all six roles with complete
+coverage, CI decision `pass`, and committed publication. Its only confirmed live
+gap was the absence of this current 45-case roadmap supplement; this record
+resolves that gap, and no other valid in-scope finding remained after prose
+adjudication.
+
+V2REF therefore passes current development and contract validation, but the
+repository is not distribution-release-ready. The immutable `v0.2.5` tag points
+to `bbc597a66bd276009b10af9b44fbd967da1c095c`, while current source and release
+metadata still identify an unpublished `0.2.5` candidate. Version and release
+metadata reconciliation, `make dist`, tagging, pushing, publication,
+installation, and runtime activation remain release-owner work and were not
+performed by this validation.
+
 ## V2SKL — Procedure Authoring Skill Boundary
 
 Dependencies: completed `V2REF` epic.
