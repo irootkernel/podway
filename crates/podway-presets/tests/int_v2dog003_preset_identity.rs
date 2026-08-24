@@ -1,8 +1,8 @@
 //! V2DOG-003 source, embedding, and shipped-digest identity coverage.
 
 use podway_config::{
-    AuthoringContext, ParsedProcedure, ProcedureDocumentFormat, parse_procedure_document,
-    validate_procedure_v2, vet_procedure_v2,
+    AuthoringContext, FormatRequest, ParsedProcedure, ProcedureDocumentFormat, format_procedure_v2,
+    lint_procedure_v2, parse_procedure_document, validate_procedure_v2, vet_procedure_v2,
 };
 use podway_core::{AuthoringSeverity, PROCEDURE_SCHEMA_V2, Sha256Digest};
 use podway_presets::{
@@ -57,14 +57,21 @@ fn v2_presets_embed_the_exact_canonical_sources_and_pinned_digests() {
         let validated = validate_procedure_v2(parsed).expect("canonical source must validate");
         assert_eq!(admitted.canonical_json(), validated.canonical_json());
         assert_eq!(admitted.digest(), validated.digest());
+        let context = AuthoringContext::new(id, preset.yaml, ProcedureDocumentFormat::Yaml);
         assert!(
-            vet_procedure_v2(
-                &validated,
-                &AuthoringContext::new(id, preset.yaml, ProcedureDocumentFormat::Yaml),
-            )
-            .iter()
-            .all(|diagnostic| diagnostic.severity() != AuthoringSeverity::Error)
+            vet_procedure_v2(&validated, &context)
+                .iter()
+                .all(|diagnostic| diagnostic.severity() != AuthoringSeverity::Error)
         );
+        assert!(lint_procedure_v2(&validated, &context).is_empty());
+        let formatted = format_procedure_v2(FormatRequest {
+            source: preset.yaml,
+            source_path: id,
+            format: ProcedureDocumentFormat::Yaml,
+        })
+        .expect("canonical preset source must format");
+        assert!(!formatted.changed());
+        assert_eq!(formatted.document(), preset.yaml);
     }
 }
 

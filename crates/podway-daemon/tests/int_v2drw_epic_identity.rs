@@ -225,7 +225,7 @@ fn typed_request(
             ProtocolIdempotencyKeyV1::new(format!("typed-envelope-{number}")).unwrap(),
         ),
         preconditions,
-        options: RequestOptionsV1::new(false, 5_000).unwrap(),
+        options: RequestOptionsV1::new(false, runtime::TEST_WAIT_TIMEOUT_MILLIS).unwrap(),
         payload,
     })
     .unwrap();
@@ -258,7 +258,7 @@ fn typed_start_request(
             ProtocolIdempotencyKeyV1::new(format!("typed-start-envelope-{number}")).unwrap(),
         ),
         preconditions,
-        options: RequestOptionsV1::new(false, 5_000).unwrap(),
+        options: RequestOptionsV1::new(false, runtime::TEST_WAIT_TIMEOUT_MILLIS).unwrap(),
         payload,
     })
     .unwrap();

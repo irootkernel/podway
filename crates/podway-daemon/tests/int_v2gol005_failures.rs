@@ -147,7 +147,15 @@ fn request(
         idempotency_key: matches!(operation, OperationV1::Mutate)
             .then(|| IdempotencyKeyV1::new(key).unwrap()),
         preconditions,
-        options: RequestOptionsV1::new(detach, if detach { 0 } else { 5_000 }).unwrap(),
+        options: RequestOptionsV1::new(
+            detach,
+            if detach {
+                0
+            } else {
+                runtime::TEST_WAIT_TIMEOUT_MILLIS
+            },
+        )
+        .unwrap(),
         payload,
     })
     .unwrap();

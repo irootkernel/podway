@@ -157,7 +157,8 @@ fn decide_request(
         ),
         idempotency_key: Some(IdempotencyKeyV1::new(idempotency_key).unwrap()),
         preconditions,
-        options: RequestOptionsV1::new(false, 5_000).unwrap(),
+        options: RequestOptionsV1::new(false, int_v2run003_runtime::TEST_WAIT_TIMEOUT_MILLIS)
+            .unwrap(),
         payload: json!({
             "selector": selector,
             "option_id": option_id,

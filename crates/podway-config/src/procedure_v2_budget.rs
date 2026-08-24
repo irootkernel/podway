@@ -866,7 +866,7 @@ mod tests {
     }
 
     #[test]
-    fn v2ref006_analysis_preset_records_budget_headroom() {
+    fn v2ref_analysis_preset_records_budget_headroom() {
         let maxima = preset_maxima(include_bytes!("../../../assets/presets/analysis-v2.yaml"));
         assert_eq!(maxima, [17_642, 262_186, 47_651, 84_420, 24_000]);
         assert_preset_fits("analysis-v2", maxima);

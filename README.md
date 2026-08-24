@@ -139,7 +139,7 @@ mkdir -p "$procedure_skill_dir/references" "$procedure_skill_dir/agents"
 curl -fsSLo "$procedure_skill_dir/SKILL.md" \
   https://raw.githubusercontent.com/irootkernel/podway/main/skills/create-podway-procedure/SKILL.md
 
-for reference in authoring distribution; do
+for reference in authoring capabilities distribution; do
   curl -fsSLo "$procedure_skill_dir/references/$reference.md" \
     "https://raw.githubusercontent.com/irootkernel/podway/main/skills/create-podway-procedure/references/$reference.md"
 done

@@ -92,7 +92,7 @@ fn typed_request(
         workspace: Some(WorkspaceContextV1::new(selector.display(), None).unwrap()),
         idempotency_key: Some(IdempotencyKeyV1::new(key).unwrap()),
         preconditions,
-        options: RequestOptionsV1::new(false, 5_000).unwrap(),
+        options: RequestOptionsV1::new(false, runtime::TEST_WAIT_TIMEOUT_MILLIS).unwrap(),
         payload,
     })
     .unwrap();

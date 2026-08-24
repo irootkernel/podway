@@ -280,10 +280,10 @@ This completed recovery task shipped in the immutable
 
 ## Procedure Evidence and Reference Quality
 
-The next product line is implemented through seven sequential epics:
+The next product line is implemented through eight sequential epics:
 
 ```text
-V2LIF -> V2SCL -> V2AST -> V2WAL -> V2ARC -> V2GRD -> V2REF
+V2LIF -> V2SCL -> V2AST -> V2WAL -> V2ARC -> V2GRD -> V2REF -> V2SKL
 ```
 
 Within each epic, tasks execute in numeric order. An epic remains entirely

@@ -348,7 +348,11 @@ fn request_with_client(client: ClientInfoV1) -> RequestEnvelopeV1 {
         ),
         idempotency_key: None,
         preconditions: PreconditionsV1::default(),
-        options: RequestOptionsV1::new(false, 30_000).expect("fixture options are valid"),
+        options: RequestOptionsV1::new(
+            false,
+            crate::int_v2run003_runtime::TEST_WAIT_TIMEOUT_MILLIS,
+        )
+        .expect("fixture options are valid"),
         payload,
     })
     .expect("fixture request is valid")

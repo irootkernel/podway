@@ -1,4 +1,4 @@
-//! V2REF-006 isolated runtime coverage for every analysis-v2 route and manual target.
+//! V2REF isolated runtime coverage for every analysis-v2 route and manual target.
 
 use super::{int_v2run003_runtime as runtime, support_phase4_workspace};
 
@@ -27,7 +27,7 @@ impl Session {
     }
 
     fn key(&self, operation: &str, number: u64) -> String {
-        format!("v2ref006-{operation}-{number}")
+        format!("v2ref_analysis-{operation}-{number}")
     }
 }
 
@@ -39,7 +39,7 @@ fn start(dispatcher: &impl RequestDispatcherV1, root: &std::path::Path, base: u6
         "workspace.init",
         &selector,
         Map::new(),
-        &format!("v2ref006-init-{base}"),
+        &format!("v2ref_analysis-init-{base}"),
         PreconditionsV1::default(),
     );
     runtime::v2_result(runtime::dispatch(dispatcher, &initialize), "workspace.init");
@@ -54,7 +54,7 @@ fn start(dispatcher: &impl RequestDispatcherV1, root: &std::path::Path, base: u6
         .as_object()
         .unwrap()
         .clone(),
-        &format!("v2ref006-start-{base}"),
+        &format!("v2ref_analysis-start-{base}"),
         PreconditionsV1::default(),
     );
     let started = runtime::v2_result(runtime::dispatch(dispatcher, &start), "session.start");
@@ -74,7 +74,7 @@ fn start(dispatcher: &impl RequestDispatcherV1, root: &std::path::Path, base: u6
         .as_object()
         .unwrap()
         .clone(),
-        &format!("v2ref006-begin-{base}"),
+        &format!("v2ref_analysis-begin-{base}"),
     );
     Session {
         selector,
@@ -97,7 +97,7 @@ fn mutation_request(
     );
     let envelope = RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
         request_id: RequestIdV1::new(format!("00000000-0000-4000-8000-{number:012x}")).unwrap(),
-        client: ClientInfoV1::new("v2ref006-test", "1", 1).unwrap(),
+        client: ClientInfoV1::new("v2ref_analysis-test", "1", 1).unwrap(),
         operation: OperationV1::Mutate,
         command: CommandNameV1::new(command).unwrap(),
         workspace: Some(
@@ -105,7 +105,7 @@ fn mutation_request(
         ),
         idempotency_key: Some(IdempotencyKeyV1::new(key).unwrap()),
         preconditions,
-        options: RequestOptionsV1::new(false, 5_000).unwrap(),
+        options: RequestOptionsV1::new(false, runtime::TEST_WAIT_TIMEOUT_MILLIS).unwrap(),
         payload,
     })
     .unwrap();
@@ -182,7 +182,7 @@ fn decide(
         json!({
             "option_id": option_id,
             "reason": "The selected fresh evidence supports this analysis route.",
-            "actor": "V2REF-006 runtime dogfood"
+            "actor": "V2REF runtime dogfood"
         })
         .as_object()
         .unwrap()
@@ -353,7 +353,7 @@ fn assess(
             "reason":"The selected synthesis and review evidence support this criterion outcome.",
             "evidence":evidence,
             "items":[],
-            "actor":"V2REF-006 runtime dogfood"
+            "actor":"V2REF runtime dogfood"
         })
         .as_object()
         .unwrap()
@@ -394,7 +394,7 @@ fn rework(
         json!({
             "target_graph_node_id":target,
             "reason":"Exercise the exact declared analysis manual-rework target.",
-            "actor":"V2REF-006 runtime dogfood"
+            "actor":"V2REF runtime dogfood"
         })
         .as_object()
         .unwrap()
@@ -406,10 +406,10 @@ fn rework(
 }
 
 #[test]
-fn v2ref006_analysis_guarded_and_phase_owner_rework_reach_achieved_closeout() {
+fn v2ref_analysis_guarded_and_phase_owner_rework_reach_achieved_closeout() {
     let workspace = support_phase4_workspace::git_worktrees();
     let manager = Arc::new(runtime::manager(workspace.temporary_path()));
-    let production = runtime::dispatcher(manager, "v2ref006-analysis-routes");
+    let production = runtime::dispatcher(manager, "v2ref_analysis-analysis-routes");
     let mut session = start(&production, workspace.main(), 188_000);
 
     complete_define(&production, &mut session);
@@ -465,13 +465,13 @@ fn v2ref006_analysis_guarded_and_phase_owner_rework_reach_achieved_closeout() {
 }
 
 #[test]
-fn v2ref006_analysis_conditional_review_findings_block_completion_when_missing() {
+fn v2ref_analysis_conditional_review_findings_block_completion_when_missing() {
     for (index, source_count, analysis_count, missing_item) in
         [(0, 1, 0, "source-findings"), (1, 0, 1, "analysis-findings")]
     {
         let workspace = support_phase4_workspace::git_worktrees();
         let manager = Arc::new(runtime::manager(workspace.temporary_path()));
-        let worker = format!("v2ref006-analysis-conditional-{index}");
+        let worker = format!("v2ref_analysis-analysis-conditional-{index}");
         let production = runtime::dispatcher(manager, &worker);
         let mut session = start(&production, workspace.main(), 190_000 + index * 1_000);
         reach_evidence_decision(&production, &mut session);
@@ -514,14 +514,14 @@ fn v2ref006_analysis_conditional_review_findings_block_completion_when_missing()
 }
 
 #[test]
-fn v2ref006_analysis_goal_not_achieved_and_superseded_paths_are_reachable() {
+fn v2ref_analysis_goal_not_achieved_and_superseded_paths_are_reachable() {
     for (index, criterion_status, option) in [
         (0, "unsatisfied", "not-achieved"),
         (1, "not_applicable", "superseded"),
     ] {
         let workspace = support_phase4_workspace::git_worktrees();
         let manager = Arc::new(runtime::manager(workspace.temporary_path()));
-        let worker = format!("v2ref006-analysis-goal-{index}");
+        let worker = format!("v2ref_analysis-analysis-goal-{index}");
         let production = runtime::dispatcher(manager, &worker);
         let mut session = start(&production, workspace.main(), 193_000 + index * 1_000);
         reach_evidence_decision(&production, &mut session);
@@ -534,10 +534,10 @@ fn v2ref006_analysis_goal_not_achieved_and_superseded_paths_are_reachable() {
 }
 
 #[test]
-fn v2ref006_analysis_accepts_every_declared_manual_rework_target() {
+fn v2ref_analysis_accepts_every_declared_manual_rework_target() {
     let workspace = support_phase4_workspace::git_worktrees();
     let manager = Arc::new(runtime::manager(workspace.temporary_path()));
-    let production = runtime::dispatcher(manager, "v2ref006-analysis-manual");
+    let production = runtime::dispatcher(manager, "v2ref_analysis-analysis-manual");
     let mut session = start(&production, workspace.main(), 196_000);
     reach_evidence_decision(&production, &mut session);
     decide(&production, &mut session, "evaluate-evidence", "sufficient");

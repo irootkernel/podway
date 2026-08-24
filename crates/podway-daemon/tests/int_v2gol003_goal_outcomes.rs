@@ -235,7 +235,7 @@ fn goal_start_request(
         workspace: Some(WorkspaceContextV1::new(selector.display(), None).unwrap()),
         idempotency_key: Some(IdempotencyKeyV1::new("v2gol003-start").unwrap()),
         preconditions: PreconditionsV1::default(),
-        options: RequestOptionsV1::new(false, 5_000).unwrap(),
+        options: RequestOptionsV1::new(false, runtime::TEST_WAIT_TIMEOUT_MILLIS).unwrap(),
         payload,
     })
     .unwrap();
@@ -411,7 +411,7 @@ fn assess(
         workspace: Some(WorkspaceContextV1::new(fixture.selector.display(), None).unwrap()),
         idempotency_key: Some(IdempotencyKeyV1::new(key).unwrap()),
         preconditions: mutation_preconditions(&status),
-        options: RequestOptionsV1::new(false, 5_000).unwrap(),
+        options: RequestOptionsV1::new(false, runtime::TEST_WAIT_TIMEOUT_MILLIS).unwrap(),
         payload,
     })
     .unwrap();
@@ -439,7 +439,7 @@ fn decide_request(
         workspace: Some(WorkspaceContextV1::new(selector.display(), None).unwrap()),
         idempotency_key: Some(IdempotencyKeyV1::new(key).unwrap()),
         preconditions,
-        options: RequestOptionsV1::new(false, 5_000).unwrap(),
+        options: RequestOptionsV1::new(false, runtime::TEST_WAIT_TIMEOUT_MILLIS).unwrap(),
         payload: json!({
             "selector": selector,
             "option_id": option_id,
@@ -751,7 +751,7 @@ fn v2gol003_goal_assessment_wrong_verb_on_general_decision_is_not_admitted_and_c
         workspace: Some(WorkspaceContextV1::new(fixture.selector.display(), None).unwrap()),
         idempotency_key: Some(IdempotencyKeyV1::new("v2gol003-wrong-assessment-verb").unwrap()),
         preconditions: mutation_preconditions(&before),
-        options: RequestOptionsV1::new(false, 5_000).unwrap(),
+        options: RequestOptionsV1::new(false, runtime::TEST_WAIT_TIMEOUT_MILLIS).unwrap(),
         payload,
     })
     .unwrap();

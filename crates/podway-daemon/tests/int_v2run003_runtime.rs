@@ -1124,7 +1124,7 @@ fn v2run003_detached_job_wait_reads_terminal_v2_job_from_v2_only_store() {
             .clone(),
         "v2run003-detached-retry",
         session_preconditions(&before_retry),
-        RequestOptionsV1::new(true, 5_000).unwrap(),
+        RequestOptionsV1::new(true, 0).unwrap(),
     );
     let retry_response = dispatch(&production, &retry);
     let ResponseEnvelopeV2::OutputV2(detached) = retry_response else {
@@ -1583,7 +1583,7 @@ fn v2rel003_detached_start_lookup_and_terminal_replay_use_common_automation_pipe
         payload.clone(),
         "v2rel003-detached-start",
         PreconditionsV1::default(),
-        RequestOptionsV1::new(true, 5_000).unwrap(),
+        RequestOptionsV1::new(true, 0).unwrap(),
     );
     let detached_response = dispatch(&production, &detached_start);
     let ResponseEnvelopeV2::OutputV2(detached) = detached_response else {
@@ -1622,7 +1622,7 @@ fn v2rel003_detached_start_lookup_and_terminal_replay_use_common_automation_pipe
         payload.clone(),
         "v2rel003-detached-start",
         PreconditionsV1::default(),
-        RequestOptionsV1::new(false, 5_000).unwrap(),
+        RequestOptionsV1::new(false, TEST_WAIT_TIMEOUT_MILLIS).unwrap(),
     );
     let terminal = dispatch(&production, &synchronous);
     let terminal_result = v2_result(terminal.clone(), "session.start");
@@ -1638,7 +1638,7 @@ fn v2rel003_detached_start_lookup_and_terminal_replay_use_common_automation_pipe
         payload,
         "v2rel003-detached-start",
         PreconditionsV1::default(),
-        RequestOptionsV1::new(false, 5_000).unwrap(),
+        RequestOptionsV1::new(false, TEST_WAIT_TIMEOUT_MILLIS).unwrap(),
     );
     let replayed = dispatch(&production, &replay);
     assert_eq!(

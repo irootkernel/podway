@@ -85,7 +85,8 @@ contracts, Rust tests, the feature-gated contract verifier, serial real-binary
 E2E tests, preset tooling checks, and the isolated contributor runtime self-test.
 The E2E inventory covers normal public Procedure v2 admission, restart,
 goal-closeout, decision rework, idempotency reconciliation, service operation,
-and both shipped preset identities.
+and the shipped `sw-dev-v2` preset identity. Preset-specific integration tests
+cover the other shipped identities and their accepted paths.
 
 `make dist` is the release gate. It reruns `make test`, bounded fuzzing,
 release-profile builds, native qualification, packaging, Dolgorae handoff, and

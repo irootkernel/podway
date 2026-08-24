@@ -23,6 +23,11 @@ DAEMON_LIFECYCLE_VERBS = ("install", "uninstall", "start", "stop", "restart")
 DAEMON_ISOLATION_MARKERS = ("PODWAY_TEST_ACCOUNT_ROOT", "PODWAY_TEST_LAUNCHCTL")
 RUST_STRING_LITERAL_RE = re.compile(r'"((?:[^"\\]|\\.)*)"')
 ARGV_SEPARATOR_RE = re.compile(r"[\s,]*")
+REQUEST_OPTIONS_CALL_RE = re.compile(
+    r"RequestOptionsV1::new\s*\((?:[^()]|\([^()]*\))*\)",
+    re.DOTALL,
+)
+POSITIVE_INTEGER_LITERAL_RE = re.compile(r"\b[1-9][0-9_]*\b")
 
 
 class LayoutError(Exception):
@@ -154,6 +159,24 @@ def validate_daemon_isolation(sources: dict[Path, str]) -> int:
     return len(scanned)
 
 
+def validate_daemon_wait_timeouts(sources: dict[Path, str]) -> None:
+    offenders = sorted(
+        path.relative_to(ROOT).as_posix()
+        for path, source in sources.items()
+        if path.is_relative_to(ROOT / "crates/podway-daemon/tests")
+        and any(
+            POSITIVE_INTEGER_LITERAL_RE.search(call.group(0))
+            for call in REQUEST_OPTIONS_CALL_RE.finditer(source)
+        )
+    )
+    if offenders:
+        raise LayoutError(
+            "daemon integration tests must not inline positive wait timeouts; "
+            "use the shared TEST_WAIT_TIMEOUT_MILLIS: "
+            f"{offenders}"
+        )
+
+
 def test_source_texts() -> dict[Path, str]:
     sources: dict[Path, str] = {}
     for tests in sorted(ROOT.glob("crates/*/tests")):
@@ -214,7 +237,9 @@ def verify() -> dict[str, dict[str, int]]:
         source_counts[layer] += 1
     if any(count == 0 for count in target_counts.values()):
         raise LayoutError(f"every test layer must contain at least one target: {target_counts}")
-    lifecycle_sources = validate_daemon_isolation(test_source_texts())
+    test_sources = test_source_texts()
+    lifecycle_sources = validate_daemon_isolation(test_sources)
+    validate_daemon_wait_timeouts(test_sources)
     return {
         "targets": target_counts,
         "sources": source_counts,
@@ -238,6 +263,22 @@ def self_test() -> None:
         except LayoutError:
             continue
         raise LayoutError(f"self-test sentinel unexpectedly passed: {name}")
+    timeout_source = ROOT / "crates/podway-daemon/tests/int_timeout.rs"
+    hardcoded_timeouts = (
+        "let options = RequestOptionsV1::new(false, 5_000);",
+        "let options = RequestOptionsV1::new(\n    false,\n    5000,\n);",
+        "let options = RequestOptionsV1::new(false, 25_000);",
+        (
+            "let options = RequestOptionsV1::new(detach, "
+            "if detach { 0 } else { 5_000 });"
+        ),
+    )
+    for source in hardcoded_timeouts:
+        try:
+            validate_daemon_wait_timeouts({timeout_source: source})
+        except LayoutError:
+            continue
+        raise LayoutError("self-test hardcoded daemon wait timeout unexpectedly passed")
     expected = {Path("int_a.rs"): "int", Path("int_b.rs"): "int"}
     invalid_registrations = (
         {Path("int_a.rs"): [("int", "int_suite")]},
@@ -296,7 +337,7 @@ def main() -> int:
             receipt(selected, True, **verify())
         else:
             self_test()
-            receipt(selected, True, sentinels=9)
+            receipt(selected, True, sentinels=13)
         return 0
     except (LayoutError, json.JSONDecodeError, KeyError, OSError, TypeError) as error:
         receipt(selected, False, error=str(error))

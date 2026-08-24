@@ -249,6 +249,33 @@ def validate_skills(skills_root: Path = SKILLS) -> int:
     return len(EXPECTED_SKILL_FILES)
 
 
+SKILL_REFERENCE_LOOP_RE = re.compile(r"for reference in ([a-z0-9 -]+); do")
+
+
+def skill_reference_loop(content: str, name: str) -> re.Match[str] | None:
+    download = f"skills/{name}/references/$reference.md"
+    download_index = content.find(download)
+    loops = (
+        list(SKILL_REFERENCE_LOOP_RE.finditer(content, 0, download_index))
+        if download_index >= 0
+        else []
+    )
+    return loops[-1] if loops else None
+
+
+def validate_skill_install_instructions(content: str) -> None:
+    for name, expected_files in EXPECTED_SKILL_FILES.items():
+        expected = {
+            Path(relative).stem
+            for relative in expected_files
+            if relative.startswith("references/")
+        }
+        loop = skill_reference_loop(content, name)
+        actual = set(loop.group(1).split()) if loop is not None else set()
+        if actual != expected:
+            fail(f"README omits the complete {name} reference install loop")
+
+
 def copy_skill_fixture(destination: Path) -> None:
     for name, expected_files in EXPECTED_SKILL_FILES.items():
         for relative in expected_files:
@@ -269,6 +296,42 @@ def expect_validation_failure(skills_root: Path, expected: str) -> None:
 
 
 def validate_skills_self_test() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    validate_skill_install_instructions(readme)
+    for name in EXPECTED_SKILL_FILES:
+        loop = skill_reference_loop(readme, name)
+        if loop is None:
+            fail(f"self-test cannot find the {name} reference install loop")
+        references = loop.group(1).split()
+        incomplete = f"for reference in {' '.join(references[1:])}; do"
+        broken = readme[: loop.start()] + incomplete + readme[loop.end() :]
+        try:
+            validate_skill_install_instructions(broken)
+        except DocumentationError as error:
+            if f"{name} reference install loop" not in str(error):
+                fail(f"self-test expected incomplete install loop, got {error!r}")
+        else:
+            fail(f"self-test expected an incomplete {name} reference install loop")
+
+        without_loop = readme[: loop.start()] + readme[loop.end() :]
+        try:
+            validate_skill_install_instructions(without_loop)
+        except DocumentationError as error:
+            if f"{name} reference install loop" not in str(error):
+                fail(f"self-test expected missing install loop, got {error!r}")
+        else:
+            fail(f"self-test expected a missing {name} reference install loop")
+
+        extra = f"for reference in {' '.join(references)} unknown; do"
+        with_extra = readme[: loop.start()] + extra + readme[loop.end() :]
+        try:
+            validate_skill_install_instructions(with_extra)
+        except DocumentationError as error:
+            if f"{name} reference install loop" not in str(error):
+                fail(f"self-test expected extra install reference, got {error!r}")
+        else:
+            fail(f"self-test expected an extra {name} install reference")
+
     with tempfile.TemporaryDirectory(prefix="podway-verify-docs-") as temporary:
         temporary_root = Path(temporary)
         valid = temporary_root / "valid"
@@ -475,6 +538,7 @@ def main(arguments: list[str] | None = None) -> int:
             fail("legacy sot directory still exists")
         validate_layout()
         skills = validate_skills()
+        validate_skill_install_instructions((ROOT / "README.md").read_text(encoding="utf-8"))
         files = markdown_files()
         validate_english(files)
         links = validate_links(files)
