@@ -108,9 +108,11 @@ def validate_skill_frontmatter(name: str, entrypoint: str) -> None:
         fail(f"invalid skill frontmatter: skills/{name}/SKILL.md")
 
 
-def canonical_capability_inventory() -> dict[str, list[str]]:
+def canonical_capability_inventory(
+    schema_path: Path = ROOT / "assets/schemas/procedure-v2.schema.json",
+) -> dict[str, list[str]]:
     schema = json.loads(
-        (ROOT / "assets/schemas/procedure-v2.schema.json").read_text(encoding="utf-8")
+        schema_path.read_text(encoding="utf-8")
     )
     definitions = schema["$defs"]
     item_types = []
@@ -358,6 +360,10 @@ def validate_skills_self_test() -> None:
         (unexpected_skill / "unknown-skill").mkdir()
         expect_validation_failure(unexpected_skill, "skill set differs")
 
+        not_a_root = temporary_root / "not-a-root"
+        not_a_root.write_text("not a directory\n", encoding="utf-8")
+        expect_validation_failure(not_a_root, "unsafe or missing skills root")
+
         capability_drift = temporary_root / "capability-drift"
         shutil.copytree(valid, capability_drift)
         inventory = capability_drift / "create-podway-procedure/references/capabilities.md"
@@ -366,6 +372,42 @@ def validate_skills_self_test() -> None:
         )
         inventory.write_text(text, encoding="utf-8")
         expect_validation_failure(capability_drift, "differs from the canonical schema")
+
+        missing_inventory = temporary_root / "missing-inventory"
+        shutil.copytree(valid, missing_inventory)
+        inventory = missing_inventory / "create-podway-procedure/references/capabilities.md"
+        text = inventory.read_text(encoding="utf-8").replace(
+            "```podway-capability-inventory", "```json", 1
+        )
+        inventory.write_text(text, encoding="utf-8")
+        expect_validation_failure(missing_inventory, "capability inventory is missing")
+
+        invalid_inventory = temporary_root / "invalid-inventory"
+        shutil.copytree(valid, invalid_inventory)
+        inventory = invalid_inventory / "create-podway-procedure/references/capabilities.md"
+        text = inventory.read_text(encoding="utf-8").replace(
+            '{"item_types":', '{"item_types"', 1
+        )
+        inventory.write_text(text, encoding="utf-8")
+        expect_validation_failure(invalid_inventory, "capability inventory is invalid")
+
+        predicate_mismatch = temporary_root / "predicate-mismatch.json"
+        schema = json.loads(
+            (ROOT / "assets/schemas/procedure-v2.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        schema["$defs"]["evidence_predicate"]["oneOf"].append(
+            {"required": ["unknown"]}
+        )
+        predicate_mismatch.write_text(json.dumps(schema), encoding="utf-8")
+        try:
+            canonical_capability_inventory(predicate_mismatch)
+        except DocumentationError as error:
+            if "item and evidence predicate operators differ" not in str(error):
+                fail(f"self-test expected predicate mismatch, got {error!r}")
+        else:
+            fail("self-test expected a predicate mismatch")
 
         empty_description = temporary_root / "empty-description"
         shutil.copytree(valid, empty_description)

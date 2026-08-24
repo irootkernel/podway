@@ -465,13 +465,13 @@ const ROUTES: &[Route] = &[
     Route {
         words: "preset show",
         flags: DISPLAY_FLAGS,
-        values: "analysis-v2 bug-fix-v2 small-change-v2 sw-dev-v2",
+        values: "",
         dynamic: None,
     },
     Route {
         words: "preset explain",
         flags: DISPLAY_FLAGS,
-        values: "analysis-v2 bug-fix-v2 small-change-v2 sw-dev-v2",
+        values: "",
         dynamic: None,
     },
     Route {
@@ -562,7 +562,7 @@ const ROUTES: &[Route] = &[
     Route {
         words: "start",
         flags: START_FLAGS,
-        values: "analysis-v2 bug-fix-v2 small-change-v2 sw-dev-v2",
+        values: "",
         dynamic: None,
     },
     Route {
@@ -1206,8 +1206,18 @@ fn static_candidates(route: &Route) -> Vec<String> {
         .flags
         .iter()
         .map(|flag| format!("--{}", flag.long))
-        .chain(route.values.split_whitespace().map(str::to_owned))
+        .chain(route_values(route))
         .collect()
+}
+
+fn route_values(route: &Route) -> Vec<String> {
+    if matches!(route.words, "preset show" | "preset explain" | "start") {
+        return podway_presets::list()
+            .iter()
+            .map(|preset| preset.metadata.id.to_owned())
+            .collect();
+    }
+    route.values.split_whitespace().map(str::to_owned).collect()
 }
 
 fn bash_script() -> String {
@@ -1431,11 +1441,12 @@ fn fish_script() -> String {
                 contextual_flag_dynamic(route.words, flag.long),
             );
         }
-        if !route.values.is_empty() {
+        let values = route_values(route).join(" ");
+        if !values.is_empty() {
             let _ = writeln!(
                 script,
                 "complete -c podway -n '__podway_route_is \"{}\"' -a '{}'",
-                route.words, route.values
+                route.words, values
             );
         }
         if let Some(kind) = route.dynamic {
