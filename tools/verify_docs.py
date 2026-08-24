@@ -353,6 +353,11 @@ def validate_skills_self_test() -> None:
         (visible_extra / "use-podway/extra.txt").write_text("extra\n", encoding="utf-8")
         expect_validation_failure(visible_extra, "file set differs")
 
+        unexpected_skill = temporary_root / "unexpected-skill"
+        shutil.copytree(valid, unexpected_skill)
+        (unexpected_skill / "unknown-skill").mkdir()
+        expect_validation_failure(unexpected_skill, "skill set differs")
+
         capability_drift = temporary_root / "capability-drift"
         shutil.copytree(valid, capability_drift)
         inventory = capability_drift / "create-podway-procedure/references/capabilities.md"
@@ -370,6 +375,15 @@ def validate_skills_self_test() -> None:
         entrypoint.write_text(text, encoding="utf-8")
         expect_validation_failure(empty_description, "invalid skill frontmatter")
 
+        wrong_name = temporary_root / "wrong-name"
+        shutil.copytree(valid, wrong_name)
+        entrypoint = wrong_name / "use-podway/SKILL.md"
+        text = entrypoint.read_text(encoding="utf-8").replace(
+            "name: use-podway", "name: wrong-name", 1
+        )
+        entrypoint.write_text(text, encoding="utf-8")
+        expect_validation_failure(wrong_name, "invalid skill frontmatter")
+
         late_delimiter = temporary_root / "late-delimiter"
         shutil.copytree(valid, late_delimiter)
         entrypoint = late_delimiter / "use-podway/SKILL.md"
@@ -379,6 +393,24 @@ def validate_skills_self_test() -> None:
             encoding="utf-8",
         )
         expect_validation_failure(late_delimiter, "invalid skill frontmatter")
+
+        missing_marker = temporary_root / "missing-marker"
+        shutil.copytree(valid, missing_marker)
+        entrypoint = missing_marker / "create-podway-procedure/SKILL.md"
+        text = entrypoint.read_text(encoding="utf-8").replace(
+            "podway version --json", "podway version"
+        )
+        entrypoint.write_text(text, encoding="utf-8")
+        expect_validation_failure(missing_marker, "omits required contract markers")
+
+        missing_invocation = temporary_root / "missing-invocation"
+        shutil.copytree(valid, missing_invocation)
+        metadata = missing_invocation / "create-podway-procedure/agents/openai.yaml"
+        text = metadata.read_text(encoding="utf-8").replace(
+            "$create-podway-procedure", "create-podway-procedure", 1
+        )
+        metadata.write_text(text, encoding="utf-8")
+        expect_validation_failure(missing_invocation, "omits its invocation name")
 
         symlink_root = temporary_root / "symlink-root"
         copy_skill_fixture(symlink_root)

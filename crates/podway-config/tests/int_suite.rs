@@ -38,3 +38,5 @@ mod int_v2agt006_small_change_preset;
 mod int_v2dog001_sw_dev_preset;
 #[path = "int_v2dog002_bug_fix_preset.rs"]
 mod int_v2dog002_bug_fix_preset;
+#[path = "int_v2ref_analysis_preset.rs"]
+mod int_v2ref_analysis_preset;

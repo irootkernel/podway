@@ -269,13 +269,10 @@ impl PresetCatalogV2 {
     }
 
     pub fn lookup(self, id: &str) -> Option<EmbeddedPresetV2> {
-        match id {
-            "analysis-v2" => Some(EMBEDDED_PRESETS_V2[0]),
-            "bug-fix-v2" => Some(EMBEDDED_PRESETS_V2[1]),
-            "small-change-v2" => Some(EMBEDDED_PRESETS_V2[2]),
-            "sw-dev-v2" => Some(EMBEDDED_PRESETS_V2[3]),
-            _ => None,
-        }
+        self.list()
+            .iter()
+            .copied()
+            .find(|preset| preset.metadata.id == id)
     }
 }
 
