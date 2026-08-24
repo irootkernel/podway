@@ -2703,7 +2703,6 @@ fn help_and_every_completion_target_publish_the_v2_routes_and_flags() {
         }
         for removed in [
             "procedure convert",
-            " analysis ",
             "docs-only",
             "values='sw-dev'",
             "values='bug-fix'",
@@ -2713,5 +2712,13 @@ fn help_and_every_completion_target_publish_the_v2_routes_and_flags() {
                 "{shell} completion retains removed v1 surface {removed}"
             );
         }
+        assert!(
+            !script
+                .split(|character: char| {
+                    !(character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+                })
+                .any(|token| token == "analysis"),
+            "{shell} completion retains the removed standalone analysis route"
+        );
     }
 }

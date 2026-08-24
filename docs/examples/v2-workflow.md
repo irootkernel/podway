@@ -207,8 +207,8 @@ podway --json evidence read --source review --item review-findings \
   --page-token <next-page-token>
 ```
 
-That selected multi-page item belongs to `sw-dev-v2`; `bug-fix-v2` and
-`small-change-v2` deliberately keep selected lists within one page.
+That selected multi-page item belongs to `sw-dev-v2`; `analysis-v2`,
+`bug-fix-v2`, and `small-change-v2` deliberately keep selected lists within one page.
 
 `podway.evidence-read-result/v1` reports `total_size` with its `size_unit`, so a caller
 knows how much remains before requesting the next page. `EVIDENCE_PAGE_TOKEN_STALE` means
