@@ -19,6 +19,9 @@ not claim a publication date or an existing `v0.2.6` tag.
   guards without introducing expressions or execution hooks.
 - Ship four reviewable reference Procedures, including `analysis-v2`, and split
   Procedure authoring guidance from runtime lifecycle guidance.
+- Serve phase-aware daemon status during startup and recovery, reject normal
+  admission until ready, and add bounded `daemon wait-ready` behavior reused by
+  service installation.
 
 ## Compatibility and migration
 
@@ -84,6 +87,13 @@ During LaunchAgent replacement, Podway waits for launchd to report the prior
 label as unloaded before requesting the replacement bootstrap. Refresh an
 installed service with `podway daemon install` only after installing the matching
 `podway` and `podwayd` binaries together.
+
+During daemon startup and durable recovery, `daemon status` reports bounded
+readiness phase and worktree progress through `podway.daemon-status-result/v2`.
+Normal workspace and session routes fail closed until readiness is `ready`.
+`daemon wait-ready` uses a 120-second default deadline with a one-hour ceiling,
+and `daemon install` reuses the same verified readiness condition after service
+reconciliation.
 
 ## Signing and known limitations
 
