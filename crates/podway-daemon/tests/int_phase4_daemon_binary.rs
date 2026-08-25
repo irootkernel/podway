@@ -115,6 +115,21 @@ fn query_status(socket: &Path) -> Value {
     }
 }
 
+fn query_ready_status(socket: &Path) -> Value {
+    let deadline = Instant::now() + STARTUP_TIMEOUT;
+    loop {
+        let status = query_status(socket);
+        if status["readiness_state"] == "ready" {
+            return status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "daemon did not reach ready state: {status}"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
 fn bootstrap_event(stderr: &[u8]) -> Value {
     let stderr = String::from_utf8_lossy(stderr);
     let lines = stderr.lines().collect::<Vec<_>>();
@@ -212,9 +227,12 @@ fn podwayd_reports_stable_live_process_identity() {
     assert!(!mismatch.retryable());
     assert_eq!(mismatch.details()["admission"]["admitted"], false);
 
-    let first = query_status(socket);
+    let first = query_ready_status(socket);
     thread::sleep(Duration::from_millis(2));
     let second = query_status(socket);
+    assert_eq!(first["schema"], "podway.daemon-status-result/v2");
+    assert_eq!(first["readiness_stage"], "ready");
+    assert_eq!(second["readiness_state"], "ready");
     assert_eq!(
         first["daemon_version"],
         podway_protocol::build_identity_v1().version()
@@ -256,7 +274,7 @@ fn podwayd_reports_stable_live_process_identity() {
     while !socket.exists() && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(10));
     }
-    let restarted = query_status(socket);
+    let restarted = query_ready_status(socket);
     assert_ne!(restarted["process_id"], first["process_id"]);
     assert_ne!(restarted["started_at"], first["started_at"]);
     assert_eq!(
@@ -276,6 +294,37 @@ fn podwayd_reports_stable_live_process_identity() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn fatal_registry_recovery_fails_closed_and_removes_the_owned_socket() {
+    let fixture = ProcessFixtureV1::new();
+    let registry = fixture.paths.workspace_registry_path().as_path();
+    fs::write(registry, b"not-json").expect("invalid registry fixture must be written");
+    fs::set_permissions(registry, fs::Permissions::from_mode(0o600))
+        .expect("registry fixture must be private");
+
+    let child = fixture.spawn();
+    let output = child
+        .wait_with_output()
+        .expect("failed podwayd output must be readable");
+    assert!(
+        !output.status.success(),
+        "fatal registry recovery must fail"
+    );
+    assert!(
+        !fixture.paths.socket_path().as_path().exists(),
+        "fatal recovery must remove only the endpoint owned by the failed daemon"
+    );
+    let log = fs::read_to_string(fixture.paths.bootstrap_log_path().as_path())
+        .expect("failed bootstrap log must be readable");
+    let bootstrap: Value = serde_json::from_str(
+        log.lines()
+            .last()
+            .expect("failed bootstrap log must contain a terminal record"),
+    )
+    .expect("failed bootstrap terminal record must be valid JSON");
+    assert_eq!(bootstrap["outcome"], "failed");
 }
 
 #[test]

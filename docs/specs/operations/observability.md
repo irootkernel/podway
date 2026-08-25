@@ -112,14 +112,15 @@ executable, and configured socket fields but reports every live process field as
 Contract-handshake failures are returned as `DAEMON_CONTRACT_MISMATCH`, never rewritten
 as an unreachable status result.
 
-The final four fields belong to the reserved
+The final four fields belong to the
 `podway.daemon-status-result/v2` family. `readiness_state` distinguishes
 `not_running`, `unreachable`, `starting`, `recovering`, `ready`, and `failed`;
 the stage identifies endpoint, registry, worktree, job, ready, or failed
 processing. Worktree progress contains only bounded total, completed, and failed
 counts. A result is ready only when the endpoint is reachable, live identity and
-the manifest are verified, and the daemon-owned state is ready. `V2RDY-001`
-reserves these fields; runtime emission begins in `V2RDY-002`.
+the manifest are verified, and the daemon-owned state is ready. The daemon emits
+this projection from its early control plane while registry, worktree, and job
+recovery are still in progress.
 
 ## Workspace status observability
 

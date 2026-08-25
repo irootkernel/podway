@@ -10,6 +10,7 @@ use std::{
     num::NonZeroUsize,
     path::{Path, PathBuf},
     sync::Arc,
+    thread,
 };
 
 use podway_core::WorkspaceId;
@@ -35,7 +36,7 @@ use crate::{
         WorkspaceRuntimeErrorV1, WorkspaceRuntimeManagerV1, WorkspaceRuntimeObservationV1,
     },
     server::{
-        BoundedAcceptLoopV1, DaemonProcessIdentityV1, ServerAcceptLoopErrorV1,
+        BoundedAcceptLoopV1, DaemonProcessIdentityV1, DaemonReadinessV1, ServerAcceptLoopErrorV1,
         ServerTransportTimeoutsV1, ShutdownAdmissionV1, UnixServerTransportV1,
     },
     worker::WorkerErrorV1,
@@ -293,6 +294,36 @@ pub enum ProductionDaemonRuntimeErrorV1 {
         accept_loop: Box<ServerAcceptLoopErrorV1>,
         endpoint_shutdown: Box<EndpointErrorV1>,
     },
+    StartupRecovery {
+        recovery: Box<ProductionDaemonRecoveryErrorV1>,
+        accept_loop: Option<Box<ServerAcceptLoopErrorV1>>,
+        endpoint_shutdown: Option<Box<EndpointErrorV1>>,
+    },
+}
+
+/// Fatal startup recovery failures observed after the early control plane is serving.
+#[derive(Debug)]
+pub enum ProductionDaemonRecoveryErrorV1 {
+    Registry(RegistryErrorV1),
+    ThreadPanicked,
+}
+
+impl fmt::Display for ProductionDaemonRecoveryErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Registry(_) => formatter.write_str("cannot load workspace registry"),
+            Self::ThreadPanicked => formatter.write_str("startup recovery thread panicked"),
+        }
+    }
+}
+
+impl Error for ProductionDaemonRecoveryErrorV1 {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Registry(source) => Some(source),
+            Self::ThreadPanicked => None,
+        }
+    }
 }
 
 impl fmt::Display for ProductionDaemonRuntimeErrorV1 {
@@ -303,6 +334,8 @@ impl fmt::Display for ProductionDaemonRuntimeErrorV1 {
             Self::AcceptLoopAndEndpointShutdown { .. } => {
                 formatter.write_str("daemon accept loop and endpoint shutdown both failed")
             }
+            Self::StartupRecovery { .. } => formatter
+                .write_str("daemon startup recovery failed after binding the control plane"),
         }
     }
 }
@@ -313,6 +346,7 @@ impl Error for ProductionDaemonRuntimeErrorV1 {
             Self::AcceptLoop(source) => Some(source),
             Self::EndpointShutdown(source) => Some(source),
             Self::AcceptLoopAndEndpointShutdown { accept_loop, .. } => Some(accept_loop),
+            Self::StartupRecovery { recovery, .. } => Some(recovery),
         }
     }
 }
@@ -366,15 +400,16 @@ type ProductionAcceptLoopV1 =
 pub struct ProductionDaemonRuntimeV1 {
     endpoint: SingletonEndpointGuardV1,
     manager: Arc<WorkspaceRuntimeManagerV1>,
+    worker: ProductionMutationWorkerV1,
     accept_loop: ProductionAcceptLoopV1,
     shutdown: ProductionDaemonShutdownHandleV1,
-    recovery_report: ProductionDaemonRecoveryReportV1,
+    readiness: DaemonReadinessV1,
     observability: Option<ObservabilityEmitterV1>,
 }
 
 impl ProductionDaemonRuntimeV1 {
-    /// Acquires the singleton endpoint before loading recoverable state, then recovers each
-    /// metadata-only registry entry independently through the real Git/SQLite resolution path.
+    /// Acquires the singleton endpoint and composes the bounded control transport without loading
+    /// registry or workspace state. Recovery starts concurrently when [`Self::run`] begins.
     pub fn bind(
         paths: &ServiceRuntimePathsV1,
         inspection_options: SqliteStoreOptionsV1,
@@ -407,18 +442,6 @@ impl ProductionDaemonRuntimeV1 {
             observability.clone(),
             configuration.managed_dev_workspace_root.clone(),
         ));
-        let registry = match manager.registry().load() {
-            Ok(registry) => registry,
-            Err(registry) => {
-                emit_observation(
-                    &observability,
-                    EventOperationV1::DaemonStart,
-                    EventOutcomeV1::Failed,
-                );
-                return Err(shutdown_after_registry_load_failure(endpoint, registry));
-            }
-        };
-
         let composition = compose_dispatcher_with_worker_observability_and_procedure_v2_v1(
             Arc::clone(&manager),
             configuration.worker_id().clone(),
@@ -426,15 +449,15 @@ impl ProductionDaemonRuntimeV1 {
             configuration.procedure_v2_admission.clone(),
         );
         let (dispatcher, worker) = composition.into_parts();
-        let recovery_report =
-            recover_registered_workspaces(&manager, &worker, registry, &observability);
         let admission = ShutdownAdmissionV1::new();
+        let readiness = DaemonReadinessV1::new();
         let mut transport = ProductionTransportV1::new_with_observability(
             PeerUidVerifierV1::for_current_user(),
             dispatcher,
             configuration.transport_timeouts(),
             observability.clone(),
-        );
+        )
+        .with_readiness(readiness.clone());
         if let Some(identity) = configuration.process_identity().cloned() {
             transport = transport
                 .with_process_identity(identity.with_effective_socket_path(endpoint.socket_path()));
@@ -450,17 +473,13 @@ impl ProductionDaemonRuntimeV1 {
             observability.clone(),
         );
 
-        emit_observation(
-            &observability,
-            EventOperationV1::DaemonStart,
-            EventOutcomeV1::Succeeded,
-        );
         Ok(Self {
             endpoint,
             manager,
+            worker,
             accept_loop,
             shutdown: ProductionDaemonShutdownHandleV1 { admission },
-            recovery_report,
+            readiness,
             observability,
         })
     }
@@ -469,8 +488,8 @@ impl ProductionDaemonRuntimeV1 {
         &self.manager
     }
 
-    pub fn recovery_report(&self) -> &ProductionDaemonRecoveryReportV1 {
-        &self.recovery_report
+    pub fn readiness(&self) -> &DaemonReadinessV1 {
+        &self.readiness
     }
 
     pub fn shutdown_handle(&self) -> ProductionDaemonShutdownHandleV1 {
@@ -486,20 +505,73 @@ impl ProductionDaemonRuntimeV1 {
     pub fn run(self) -> Result<ProductionDaemonShutdownReportV1, ProductionDaemonRuntimeErrorV1> {
         let Self {
             endpoint,
-            manager: _,
+            manager,
+            worker,
             accept_loop,
-            shutdown: _,
-            recovery_report,
+            shutdown,
+            readiness,
             observability,
         } = self;
-        let accept_result = accept_loop.run(endpoint.listener());
+        let (accept_result, recovery_result) = run_accept_loop_with_recovery_v1(
+            || {
+                readiness.begin_registry_recovery();
+                let registry = match manager.registry().load() {
+                    Ok(registry) => registry,
+                    Err(error) => {
+                        readiness.mark_failed();
+                        emit_observation(
+                            &observability,
+                            EventOperationV1::DaemonStart,
+                            EventOutcomeV1::Failed,
+                        );
+                        shutdown.request_shutdown();
+                        return Err(ProductionDaemonRecoveryErrorV1::Registry(error));
+                    }
+                };
+                readiness.begin_worktree_recovery(registry.workspaces().len());
+                let report = recover_registered_workspaces(
+                    &manager,
+                    &worker,
+                    registry,
+                    &observability,
+                    &readiness,
+                    &shutdown,
+                );
+                if shutdown.is_accepting() {
+                    readiness.mark_ready();
+                    emit_observation(
+                        &observability,
+                        EventOperationV1::DaemonStart,
+                        EventOutcomeV1::Succeeded,
+                    );
+                }
+                Ok(report)
+            },
+            || accept_loop.run(endpoint.listener()),
+        );
+        let recovery_result =
+            recovery_result.unwrap_or(Err(ProductionDaemonRecoveryErrorV1::ThreadPanicked));
         let shutdown_result = endpoint.shutdown();
         emit_observation(
             &observability,
             EventOperationV1::DaemonStop,
-            daemon_stop_outcome(accept_result.is_ok(), shutdown_result.is_ok()),
+            daemon_stop_outcome(
+                accept_result.is_ok(),
+                recovery_result.is_ok(),
+                shutdown_result.is_ok(),
+            ),
         );
 
+        let recovery_report = match recovery_result {
+            Ok(report) => report,
+            Err(recovery) => {
+                return Err(ProductionDaemonRuntimeErrorV1::StartupRecovery {
+                    recovery: Box::new(recovery),
+                    accept_loop: accept_result.err().map(Box::new),
+                    endpoint_shutdown: shutdown_result.err().map(Box::new),
+                });
+            }
+        };
         match (accept_result, shutdown_result) {
             (Ok(()), Ok(())) => Ok(ProductionDaemonShutdownReportV1::from_recovery(
                 &recovery_report,
@@ -518,6 +590,22 @@ impl ProductionDaemonRuntimeV1 {
             ),
         }
     }
+}
+
+fn run_accept_loop_with_recovery_v1<Recovery, Accept, RecoveryResult, AcceptResult>(
+    recovery: Recovery,
+    accept: Accept,
+) -> (AcceptResult, thread::Result<RecoveryResult>)
+where
+    Recovery: FnOnce() -> RecoveryResult + Send,
+    Accept: FnOnce() -> AcceptResult,
+    RecoveryResult: Send,
+{
+    thread::scope(|scope| {
+        let recovery = scope.spawn(recovery);
+        let accept_result = accept();
+        (accept_result, recovery.join())
+    })
 }
 
 fn emit_observation(
@@ -584,25 +672,13 @@ const fn integrity_check_name(check: &StoreIntegrityCheckV1) -> &'static str {
 }
 const fn daemon_stop_outcome(
     accept_loop_succeeded: bool,
+    recovery_succeeded: bool,
     endpoint_shutdown_succeeded: bool,
 ) -> EventOutcomeV1 {
-    if accept_loop_succeeded && endpoint_shutdown_succeeded {
+    if accept_loop_succeeded && recovery_succeeded && endpoint_shutdown_succeeded {
         EventOutcomeV1::Succeeded
     } else {
         EventOutcomeV1::Failed
-    }
-}
-
-fn shutdown_after_registry_load_failure(
-    endpoint: SingletonEndpointGuardV1,
-    registry: RegistryErrorV1,
-) -> ProductionDaemonStartupErrorV1 {
-    match endpoint.shutdown() {
-        Ok(()) => ProductionDaemonStartupErrorV1::RegistryLoad(registry),
-        Err(cleanup) => ProductionDaemonStartupErrorV1::RegistryLoadAndEndpointCleanup {
-            registry: Box::new(registry),
-            cleanup: Box::new(cleanup),
-        },
     }
 }
 
@@ -611,12 +687,17 @@ fn recover_registered_workspaces(
     worker: &ProductionMutationWorkerV1,
     registry: WorkspaceRegistryV1,
     observability: &Option<ObservabilityEmitterV1>,
+    readiness: &DaemonReadinessV1,
+    shutdown: &ProductionDaemonShutdownHandleV1,
 ) -> ProductionDaemonRecoveryReportV1 {
     let clock = NativeProductionClockV1::default();
     let mut outcomes = Vec::with_capacity(registry.workspaces().len());
     let mut recovered = Vec::new();
 
     for entry in registry.workspaces() {
+        if !shutdown.is_accepting() {
+            break;
+        }
         let workspace_uuid = entry.workspace_uuid().clone();
         let index = outcomes.len();
         let selector = match selector_from_registry_entry(entry) {
@@ -625,6 +706,7 @@ fn recover_registered_workspaces(
                 outcomes.push(Some(WorkspaceRecoveryEntryV1::Unavailable(
                     UnavailableWorkspaceReportV1::new(workspace_uuid, reason),
                 )));
+                readiness.record_worktree_recovery(true);
                 continue;
             }
         };
@@ -664,6 +746,7 @@ fn recover_registered_workspaces(
                                 requeued_job_count,
                                 scheduler,
                             ));
+                            readiness.record_worktree_recovery(false);
                         }
                         Err(error) => {
                             emit_runtime_failure(observability, &workspace_uuid, &error);
@@ -672,7 +755,8 @@ fn recover_registered_workspaces(
                                     workspace_uuid,
                                     unavailable_reason_from_runtime_error(error),
                                 ),
-                            )))
+                            )));
+                            readiness.record_worktree_recovery(true);
                         }
                     }
                 }
@@ -687,6 +771,7 @@ fn recover_registered_workspaces(
                                 .requeued_job_count();
                             outcomes.push(None);
                             recovered.push((index, workspace_uuid, requeued_job_count, scheduler));
+                            readiness.record_worktree_recovery(false);
                         }
                         Err(error) => {
                             emit_runtime_failure(observability, &workspace_uuid, &error);
@@ -695,26 +780,42 @@ fn recover_registered_workspaces(
                                     workspace_uuid,
                                     unavailable_reason_from_runtime_error(error),
                                 ),
-                            )))
+                            )));
+                            readiness.record_worktree_recovery(true);
                         }
                     }
                 }
-                Err(error) => outcomes.push(Some(WorkspaceRecoveryEntryV1::Unavailable(
+                Err(error) => {
+                    outcomes.push(Some(WorkspaceRecoveryEntryV1::Unavailable(
+                        UnavailableWorkspaceReportV1::new(
+                            workspace_uuid,
+                            unavailable_reason_from_runtime_error(error),
+                        ),
+                    )));
+                    readiness.record_worktree_recovery(true);
+                }
+            },
+            Err(error) => {
+                outcomes.push(Some(WorkspaceRecoveryEntryV1::Unavailable(
                     UnavailableWorkspaceReportV1::new(
                         workspace_uuid,
                         unavailable_reason_from_runtime_error(error),
                     ),
-                ))),
-            },
-            Err(error) => outcomes.push(Some(WorkspaceRecoveryEntryV1::Unavailable(
-                UnavailableWorkspaceReportV1::new(
-                    workspace_uuid,
-                    unavailable_reason_from_runtime_error(error),
-                ),
-            ))),
+                )));
+                readiness.record_worktree_recovery(true);
+            }
         }
     }
 
+    if !shutdown.is_accepting() {
+        for (index, workspace_uuid, requeued_job_count, _) in recovered {
+            outcomes[index] = Some(WorkspaceRecoveryEntryV1::Recovered(
+                RecoveredWorkspaceReportV1::new(workspace_uuid, requeued_job_count, 0),
+            ));
+        }
+        return ProductionDaemonRecoveryReportV1::new(outcomes.into_iter().flatten().collect());
+    }
+    readiness.begin_job_recovery();
     let drains = worker.drain_recovered_queues(
         recovered
             .iter()
@@ -728,10 +829,13 @@ fn recover_registered_workspaces(
                 requeued_job_count,
                 report.terminal_job_count(),
             )),
-            Err(error) => WorkspaceRecoveryEntryV1::Unavailable(UnavailableWorkspaceReportV1::new(
-                workspace_uuid,
-                unavailable_reason_from_worker_error(error),
-            )),
+            Err(error) => {
+                readiness.record_recovered_job_failure();
+                WorkspaceRecoveryEntryV1::Unavailable(UnavailableWorkspaceReportV1::new(
+                    workspace_uuid,
+                    unavailable_reason_from_worker_error(error),
+                ))
+            }
         };
         outcomes[index] = Some(entry);
     }
@@ -882,7 +986,7 @@ fn unavailable_reason_from_worker_error(
 mod tests {
     use std::{
         io,
-        sync::{Arc, Mutex},
+        sync::{Arc, Mutex, mpsc},
     };
 
     use podway_core::WorkspaceId;
@@ -892,7 +996,29 @@ mod tests {
 
     use super::{
         EventOutcomeV1, WorkspaceRuntimeErrorV1, daemon_stop_outcome, emit_runtime_failure,
+        run_accept_loop_with_recovery_v1,
     };
+
+    #[test]
+    fn control_accept_loop_runs_while_startup_recovery_is_blocked() {
+        let (recovery_started_tx, recovery_started_rx) = mpsc::sync_channel(0);
+        let (release_recovery_tx, release_recovery_rx) = mpsc::sync_channel(0);
+        let (accepted, recovery) = run_accept_loop_with_recovery_v1(
+            move || {
+                recovery_started_tx.send(()).unwrap();
+                release_recovery_rx.recv().unwrap();
+                "recovered"
+            },
+            || {
+                recovery_started_rx.recv().unwrap();
+                release_recovery_tx.send(()).unwrap();
+                "accepted"
+            },
+        );
+
+        assert_eq!(accepted, "accepted");
+        assert_eq!(recovery.unwrap(), "recovered");
+    }
 
     #[derive(Default)]
     struct CaptureSink(Mutex<Vec<String>>);
@@ -918,14 +1044,19 @@ mod tests {
 
     #[test]
     fn daemon_stop_requires_complete_runtime_success() {
-        for (accept_loop_succeeded, endpoint_shutdown_succeeded, expected) in [
-            (true, true, EventOutcomeV1::Succeeded),
-            (false, true, EventOutcomeV1::Failed),
-            (true, false, EventOutcomeV1::Failed),
-            (false, false, EventOutcomeV1::Failed),
+        for (accept_loop_succeeded, recovery_succeeded, endpoint_shutdown_succeeded, expected) in [
+            (true, true, true, EventOutcomeV1::Succeeded),
+            (false, true, true, EventOutcomeV1::Failed),
+            (true, false, true, EventOutcomeV1::Failed),
+            (true, true, false, EventOutcomeV1::Failed),
+            (false, false, false, EventOutcomeV1::Failed),
         ] {
             assert_eq!(
-                daemon_stop_outcome(accept_loop_succeeded, endpoint_shutdown_succeeded),
+                daemon_stop_outcome(
+                    accept_loop_succeeded,
+                    recovery_succeeded,
+                    endpoint_shutdown_succeeded,
+                ),
                 expected
             );
         }

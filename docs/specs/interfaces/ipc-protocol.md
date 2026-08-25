@@ -98,12 +98,12 @@ or command dispatch. The direct IPC response identifies the current daemon proce
 The CLI can instead emit the service-lifecycle form after merging a probe with local
 service state. Both existing closed variants conform to
 [`../../../assets/schemas/daemon-status-result-v1.schema.json`](../../../assets/schemas/daemon-status-result-v1.schema.json).
-The reserved
+The
 [`podway.daemon-status-result/v2`](../../../assets/schemas/daemon-status-result-v2.schema.json)
 family preserves those service and identity fields and adds daemon-owned
 `readiness_state`, `readiness_stage`, monotonic `readiness_elapsed_ms`, and
-bounded `worktree_recovery` progress. Once `V2RDY-002` makes it executable, the
-early control plane admits only handshake, `daemon.status`, and coordinated
+bounded `worktree_recovery` progress. The early control plane admits only
+handshake, `daemon.status`, and coordinated
 termination until readiness; every other route fails before workspace lookup or
 durable admission with retryable `DAEMON_STARTING`.
 

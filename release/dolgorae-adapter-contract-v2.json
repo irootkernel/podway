@@ -1147,7 +1147,7 @@
       {
         "id": "urn:podway:schema:daemon-status-result:v2",
         "path": "schemas/daemon-status-result-v2.schema.json",
-        "sha256": "sha256:f4d6af2185969e08a02ecf2ece89bfccc74e71998914dd153d47fa6670aabe57"
+        "sha256": "sha256:1f79837ea27f027e1a9d4ca308efb7f13f6512e4cec33fa72e9614a288a9a374"
       },
       {
         "id": "urn:podway:schema:decision-result:v1",

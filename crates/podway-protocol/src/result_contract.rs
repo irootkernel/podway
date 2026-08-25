@@ -1735,6 +1735,7 @@ impl<'de> Deserialize<'de> for OutputEnvelopeV3 {
 
 const VERSION_RESULT_SCHEMA_V1: &str = "podway.version-result/v1";
 const DAEMON_STATUS_RESULT_SCHEMA_V1: &str = "podway.daemon-status-result/v1";
+const DAEMON_STATUS_RESULT_SCHEMA_V2: &str = "podway.daemon-status-result/v2";
 const WORKSPACE_INIT_RESULT_SCHEMA_V1: &str = "podway.workspace-init-result/v1";
 const DETACHED_ADMISSION_RESULT_SCHEMA_V1: &str = "podway.detached-admission-result/v1";
 
@@ -1789,6 +1790,10 @@ pub fn validate_procedure_independent_result_v1(
             validate_daemon_status_result(value.clone())
                 || validate_daemon_service_status_result(value)
         }
+        DAEMON_STATUS_RESULT_SCHEMA_V2 => {
+            validate_daemon_status_result_v2(value.clone())
+                || validate_daemon_service_status_result_v2(value)
+        }
         WORKSPACE_INIT_RESULT_SCHEMA_V1 => decode::<WorkspaceInitResultV1>(value),
         DETACHED_ADMISSION_RESULT_SCHEMA_V1 => decode::<DetachedMutationResultV1>(value),
         _ => unreachable!("procedure-independent schema selection is closed"),
@@ -1819,6 +1824,12 @@ fn command_result_schema_v1(command: &str, result: &Map<String, Value>) -> Optio
     }
     match command {
         "version" => Some(VERSION_RESULT_SCHEMA_V1),
+        "daemon.status"
+            if result.get("schema").and_then(Value::as_str)
+                == Some(DAEMON_STATUS_RESULT_SCHEMA_V2) =>
+        {
+            Some(DAEMON_STATUS_RESULT_SCHEMA_V2)
+        }
         "daemon.status" => Some(DAEMON_STATUS_RESULT_SCHEMA_V1),
         "workspace.init" => Some(WORKSPACE_INIT_RESULT_SCHEMA_V1),
         _ => None,
@@ -1927,6 +1938,114 @@ fn validate_daemon_service_status_result(value: Value) -> bool {
     })
 }
 
+fn validate_daemon_status_result_v2(value: Value) -> bool {
+    serde_json::from_value::<DaemonStatusResultV2>(value).is_ok_and(|result| {
+        result.product == "podway"
+            && non_empty(&result.daemon_version)
+            && non_empty(&result.target)
+            && result.source_commit.as_deref().is_none_or(non_empty)
+            && result.contract_manifest_schema == "podway.contract-manifest/v1"
+            && !result.protocol_versions.is_empty()
+            && unique_non_empty_strings(&result.protocol_versions)
+            && result.pid > 0
+            && result.executable_path.starts_with('/')
+            && result.configured_socket_path.starts_with('/')
+            && result.effective_socket_path.starts_with('/')
+            && matches!(
+                result.readiness_state.as_str(),
+                "starting" | "recovering" | "ready" | "failed"
+            )
+            && matches!(
+                result.readiness_stage.as_str(),
+                "endpoint" | "registry" | "workspaces" | "jobs" | "ready" | "failed"
+            )
+            && (result.readiness_state != "ready" || result.readiness_stage == "ready")
+            && result.worktree_recovery.total <= 10_000
+            && result.worktree_recovery.completed <= result.worktree_recovery.total
+            && result.worktree_recovery.failed <= result.worktree_recovery.completed
+    })
+}
+
+fn validate_daemon_service_status_result_v2(value: Value) -> bool {
+    serde_json::from_value::<DaemonServiceStatusResultV2>(value).is_ok_and(|result| {
+        matches!(
+            result.status.as_str(),
+            "not_installed" | "stopped" | "running"
+        ) && result
+            .product
+            .as_deref()
+            .is_none_or(|value| value == "podway")
+            && result.daemon_version.as_deref().is_none_or(non_empty)
+            && result.target.as_deref().is_none_or(non_empty)
+            && result.source_commit.as_deref().is_none_or(non_empty)
+            && result
+                .contract_manifest_schema
+                .as_deref()
+                .is_none_or(|value| value == "podway.contract-manifest/v1")
+            && unique_non_empty_strings(&result.protocol_versions)
+            && result.pid.is_none_or(|pid| pid > 0)
+            && optional_absolute_path(&result.executable_path)
+            && optional_absolute_path(&result.socket_path)
+            && optional_absolute_path(&result.configured_socket_path)
+            && optional_absolute_path(&result.effective_socket_path)
+            && if result.reachable {
+                result.installed
+                    && result.loaded
+                    && result.product.is_some()
+                    && result.daemon_version.is_some()
+                    && result.target.is_some()
+                    && result.build_identity.is_some()
+                    && result.contract_manifest_schema.is_some()
+                    && result.contract_manifest_digest.is_some()
+                    && !result.protocol_versions.is_empty()
+                    && result.pid.is_some()
+                    && result.process_id.is_some()
+                    && result.executable_path.is_some()
+                    && result.started_at.is_some()
+                    && result.uptime_ms.is_some()
+                    && result.socket_path.is_some()
+                    && result.configured_socket_path.is_some()
+                    && result.effective_socket_path.is_some()
+                    && matches!(
+                        result.readiness_state.as_str(),
+                        "starting" | "recovering" | "ready" | "failed"
+                    )
+                    && result.readiness_stage.as_deref().is_some_and(|stage| {
+                        matches!(
+                            stage,
+                            "endpoint" | "registry" | "workspaces" | "jobs" | "ready" | "failed"
+                        )
+                    })
+                    && result.readiness_elapsed_ms.is_some()
+                    && result
+                        .worktree_recovery
+                        .as_ref()
+                        .is_some_and(valid_worktree_progress)
+                    && (result.readiness_state != "ready"
+                        || result.readiness_stage.as_deref() == Some("ready"))
+            } else {
+                result.pid.is_none()
+                    && result.process_id.is_none()
+                    && result.started_at.is_none()
+                    && result.uptime_ms.is_none()
+                    && result.effective_socket_path.is_none()
+                    && matches!(
+                        result.readiness_state.as_str(),
+                        "not_running" | "unreachable"
+                    )
+                    && result.readiness_stage.is_none()
+                    && result.readiness_elapsed_ms.is_none()
+                    && result.worktree_recovery.is_none()
+            }
+    })
+}
+
+fn valid_worktree_progress(progress: &WorktreeRecoveryProgressResultV1) -> bool {
+    progress.total <= 10_000
+        && progress.completed <= progress.total
+        && progress.failed <= progress.completed
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct VersionResultV1 {
@@ -1960,6 +2079,39 @@ struct DaemonStatusResultV1 {
     uptime_ms: u64,
     configured_socket_path: String,
     effective_socket_path: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DaemonStatusResultV2 {
+    product: String,
+    daemon_version: String,
+    target: String,
+    build_identity: Sha256Digest,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    source_commit: Option<String>,
+    contract_manifest_schema: String,
+    contract_manifest_digest: Sha256Digest,
+    protocol_versions: Vec<String>,
+    pid: u32,
+    process_id: JobId,
+    executable_path: String,
+    started_at: Rfc3339MillisV1,
+    uptime_ms: u64,
+    configured_socket_path: String,
+    effective_socket_path: String,
+    readiness_state: String,
+    readiness_stage: String,
+    readiness_elapsed_ms: u64,
+    worktree_recovery: WorktreeRecoveryProgressResultV1,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorktreeRecoveryProgressResultV1 {
+    total: u32,
+    completed: u32,
+    failed: u32,
 }
 
 #[derive(Deserialize)]
@@ -2008,6 +2160,61 @@ struct DaemonServiceStatusResultV1 {
     queued_job_count: Option<u64>,
     #[serde(deserialize_with = "deserialize_required_option")]
     running_job_count: Option<u64>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DaemonServiceStatusResultV2 {
+    status: String,
+    installed: bool,
+    loaded: bool,
+    reachable: bool,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    product: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    daemon_version: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    target: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    build_identity: Option<Sha256Digest>,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    source_commit: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    contract_manifest_schema: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    contract_manifest_digest: Option<Sha256Digest>,
+    protocol_versions: Vec<String>,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    pid: Option<u32>,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    process_id: Option<JobId>,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    executable_path: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    started_at: Option<Rfc3339MillisV1>,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    uptime_ms: Option<u64>,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    socket_path: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    configured_socket_path: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    effective_socket_path: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    registered_worktree_count: Option<u64>,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    active_scheduler_count: Option<u64>,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    queued_job_count: Option<u64>,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    running_job_count: Option<u64>,
+    readiness_state: String,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    readiness_stage: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    readiness_elapsed_ms: Option<u64>,
+    #[serde(deserialize_with = "deserialize_required_option")]
+    worktree_recovery: Option<WorktreeRecoveryProgressResultV1>,
 }
 
 #[derive(Deserialize)]

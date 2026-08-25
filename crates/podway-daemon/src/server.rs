@@ -106,6 +106,227 @@ impl DaemonProcessIdentityV1 {
     }
 }
 
+/// One bounded registered-worktree recovery projection for daemon status.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WorktreeRecoveryProgressV1 {
+    total: u32,
+    completed: u32,
+    failed: u32,
+}
+
+impl WorktreeRecoveryProgressV1 {
+    pub const fn total(self) -> u32 {
+        self.total
+    }
+
+    pub const fn completed(self) -> u32 {
+        self.completed
+    }
+
+    pub const fn failed(self) -> u32 {
+        self.failed
+    }
+}
+
+/// The daemon-owned readiness state served independently of workspace dispatch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DaemonReadinessStateV1 {
+    Starting,
+    Recovering,
+    Ready,
+    Failed,
+}
+
+impl DaemonReadinessStateV1 {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Starting => "starting",
+            Self::Recovering => "recovering",
+            Self::Ready => "ready",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+/// The current bounded startup stage reported with readiness state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DaemonReadinessStageV1 {
+    Endpoint,
+    Registry,
+    Workspaces,
+    Jobs,
+    Ready,
+    Failed,
+}
+
+impl DaemonReadinessStageV1 {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Endpoint => "endpoint",
+            Self::Registry => "registry",
+            Self::Workspaces => "workspaces",
+            Self::Jobs => "jobs",
+            Self::Ready => "ready",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+/// A coherent point-in-time readiness projection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DaemonReadinessSnapshotV1 {
+    state: DaemonReadinessStateV1,
+    stage: DaemonReadinessStageV1,
+    elapsed_ms: u64,
+    worktrees: WorktreeRecoveryProgressV1,
+}
+
+impl DaemonReadinessSnapshotV1 {
+    pub const fn state(self) -> DaemonReadinessStateV1 {
+        self.state
+    }
+
+    pub const fn stage(self) -> DaemonReadinessStageV1 {
+        self.stage
+    }
+
+    pub const fn elapsed_ms(self) -> u64 {
+        self.elapsed_ms
+    }
+
+    pub const fn worktrees(self) -> WorktreeRecoveryProgressV1 {
+        self.worktrees
+    }
+}
+
+#[derive(Debug)]
+struct DaemonReadinessDataV1 {
+    state: DaemonReadinessStateV1,
+    stage: DaemonReadinessStageV1,
+    worktrees: WorktreeRecoveryProgressV1,
+}
+
+/// Cloneable process-local readiness authority shared by startup and the control transport.
+#[derive(Clone, Debug)]
+pub struct DaemonReadinessV1 {
+    started: Instant,
+    data: Arc<Mutex<DaemonReadinessDataV1>>,
+}
+
+impl DaemonReadinessV1 {
+    pub fn new() -> Self {
+        Self {
+            started: Instant::now(),
+            data: Arc::new(Mutex::new(DaemonReadinessDataV1 {
+                state: DaemonReadinessStateV1::Starting,
+                stage: DaemonReadinessStageV1::Endpoint,
+                worktrees: WorktreeRecoveryProgressV1 {
+                    total: 0,
+                    completed: 0,
+                    failed: 0,
+                },
+            })),
+        }
+    }
+
+    pub fn begin_registry_recovery(&self) {
+        self.update(|data| {
+            data.state = DaemonReadinessStateV1::Recovering;
+            data.stage = DaemonReadinessStageV1::Registry;
+        });
+    }
+
+    pub fn begin_worktree_recovery(&self, total: usize) {
+        let total = u32::try_from(total).unwrap_or(u32::MAX).min(10_000);
+        self.update(|data| {
+            data.state = DaemonReadinessStateV1::Recovering;
+            data.stage = DaemonReadinessStageV1::Workspaces;
+            data.worktrees = WorktreeRecoveryProgressV1 {
+                total,
+                completed: 0,
+                failed: 0,
+            };
+        });
+    }
+
+    pub fn record_worktree_recovery(&self, failed: bool) {
+        self.update(|data| {
+            data.worktrees.completed = data
+                .worktrees
+                .completed
+                .saturating_add(1)
+                .min(data.worktrees.total);
+            if failed {
+                data.worktrees.failed = data
+                    .worktrees
+                    .failed
+                    .saturating_add(1)
+                    .min(data.worktrees.completed);
+            }
+        });
+    }
+
+    pub fn record_recovered_job_failure(&self) {
+        self.update(|data| {
+            data.worktrees.failed = data
+                .worktrees
+                .failed
+                .saturating_add(1)
+                .min(data.worktrees.completed);
+        });
+    }
+
+    pub fn begin_job_recovery(&self) {
+        self.update(|data| {
+            data.state = DaemonReadinessStateV1::Recovering;
+            data.stage = DaemonReadinessStageV1::Jobs;
+        });
+    }
+
+    pub fn mark_ready(&self) {
+        self.update(|data| {
+            data.state = DaemonReadinessStateV1::Ready;
+            data.stage = DaemonReadinessStageV1::Ready;
+        });
+    }
+
+    pub fn mark_failed(&self) {
+        self.update(|data| {
+            data.state = DaemonReadinessStateV1::Failed;
+            data.stage = DaemonReadinessStageV1::Failed;
+        });
+    }
+
+    pub fn snapshot(&self) -> DaemonReadinessSnapshotV1 {
+        let data = match self.data.lock() {
+            Ok(data) => data,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        DaemonReadinessSnapshotV1 {
+            state: data.state,
+            stage: data.stage,
+            elapsed_ms: u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            worktrees: data.worktrees,
+        }
+    }
+
+    fn update(&self, update: impl FnOnce(&mut DaemonReadinessDataV1)) {
+        let mut data = match self.data.lock() {
+            Ok(data) => data,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if data.state != DaemonReadinessStateV1::Failed {
+            update(&mut data);
+        }
+    }
+}
+
+impl Default for DaemonReadinessV1 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// The documented default deadline for one framed request or response operation.
 pub const DEFAULT_FRAME_IO_TIMEOUT_V1: Duration = Duration::from_secs(5);
 /// The maximum period a nonblocking accept loop waits before observing an unchanged shutdown state.
@@ -528,6 +749,7 @@ pub struct UnixServerTransportV1<Source, Dispatcher, Metadata = SystemResponseMe
     timeouts: ServerTransportTimeoutsV1,
     observability: Option<ObservabilityEmitterV1>,
     process_identity: Option<DaemonProcessIdentityV1>,
+    readiness: Option<DaemonReadinessV1>,
     dev_shutdown: Option<ShutdownAdmissionV1>,
 }
 
@@ -580,12 +802,18 @@ impl<Source, Dispatcher, Metadata> UnixServerTransportV1<Source, Dispatcher, Met
             timeouts,
             observability,
             process_identity: None,
+            readiness: None,
             dev_shutdown: None,
         }
     }
 
     pub fn with_process_identity(mut self, identity: DaemonProcessIdentityV1) -> Self {
         self.process_identity = Some(identity);
+        self
+    }
+
+    pub fn with_readiness(mut self, readiness: DaemonReadinessV1) -> Self {
+        self.readiness = Some(readiness);
         self
     }
 
@@ -788,6 +1016,20 @@ where
                 .request_shutdown();
             return Ok(());
         }
+        if let Some(readiness) = &self.readiness {
+            let snapshot = readiness.snapshot();
+            if snapshot.state() != DaemonReadinessStateV1::Ready {
+                let response = self.daemon_not_ready_response(&request, snapshot)?;
+                emit_correlated_observation(
+                    &self.observability,
+                    EventOperationV1::ServiceDispatch,
+                    EventOutcomeV1::Rejected,
+                    Some(&request),
+                    Some(&response),
+                );
+                return self.write_response(&mut connection, &response);
+            }
+        }
         let daemon_request = match DaemonRequestV1::from_envelope(&request) {
             Ok(daemon_request) => daemon_request,
             Err(error) => {
@@ -958,7 +1200,7 @@ where
         process: &DaemonProcessIdentityV1,
     ) -> Result<ResponseEnvelopeV2, ServerConnectionErrorV1> {
         let identity = build_identity_v1();
-        let result = serde_json::json!({
+        let mut result = serde_json::json!({
             "schema": "podway.daemon-status-result/v1",
             "product": identity.product(),
             "daemon_version": identity.version(),
@@ -979,6 +1221,34 @@ where
         .as_object()
         .expect("daemon status is an object")
         .clone();
+        if let Some(readiness) = &self.readiness {
+            let snapshot = readiness.snapshot();
+            let worktrees = snapshot.worktrees();
+            result.insert(
+                "schema".to_owned(),
+                Value::String("podway.daemon-status-result/v2".to_owned()),
+            );
+            result.insert(
+                "readiness_state".to_owned(),
+                Value::String(snapshot.state().as_str().to_owned()),
+            );
+            result.insert(
+                "readiness_stage".to_owned(),
+                Value::String(snapshot.stage().as_str().to_owned()),
+            );
+            result.insert(
+                "readiness_elapsed_ms".to_owned(),
+                Value::from(snapshot.elapsed_ms()),
+            );
+            result.insert(
+                "worktree_recovery".to_owned(),
+                serde_json::json!({
+                    "total": worktrees.total(),
+                    "completed": worktrees.completed(),
+                    "failed": worktrees.failed(),
+                }),
+            );
+        }
         Ok(ResponseEnvelopeV2::OutputV2(
             OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
                 request_id: request.request_id().clone(),
@@ -994,6 +1264,67 @@ where
                 warnings: Vec::new(),
             })
             .expect("the daemon constructs a protocol-valid status response"),
+        ))
+    }
+
+    fn daemon_not_ready_response(
+        &self,
+        request: &RequestEnvelopeV1,
+        readiness: DaemonReadinessSnapshotV1,
+    ) -> Result<ResponseEnvelopeV2, ServerConnectionErrorV1> {
+        if readiness.state() == DaemonReadinessStateV1::Failed {
+            let details = Map::new();
+            return Ok(ResponseEnvelopeV2::Error(
+                ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
+                    request_id: request.request_id().clone(),
+                    command: request.command().clone(),
+                    generated_at: self
+                        .metadata
+                        .try_generated_at()
+                        .map_err(ServerConnectionErrorV1::ResponseMetadata)?,
+                    code: ErrorCodeV1::new("DAEMON_UNAVAILABLE")
+                        .expect("the unavailable code is catalog-defined"),
+                    message: "Daemon startup failed before request admission.".to_owned(),
+                    retryable: true,
+                    exit_code: ExitCodeV1::new(3).expect("daemon exit code is valid"),
+                    workspace: None,
+                    details,
+                })
+                .expect("the daemon constructs a protocol-valid unavailable response"),
+            ));
+        }
+        let worktrees = readiness.worktrees();
+        let details = serde_json::json!({
+            "readiness_state": readiness.state().as_str(),
+            "readiness_stage": readiness.stage().as_str(),
+            "elapsed_ms": readiness.elapsed_ms(),
+            "worktree_recovery": {
+                "total": worktrees.total(),
+                "completed": worktrees.completed(),
+                "failed": worktrees.failed(),
+            },
+            "admission": { "admitted": false },
+        })
+        .as_object()
+        .expect("daemon readiness details are an object")
+        .clone();
+        Ok(ResponseEnvelopeV2::Error(
+            ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
+                request_id: request.request_id().clone(),
+                command: request.command().clone(),
+                generated_at: self
+                    .metadata
+                    .try_generated_at()
+                    .map_err(ServerConnectionErrorV1::ResponseMetadata)?,
+                code: ErrorCodeV1::new("DAEMON_STARTING")
+                    .expect("the starting code is catalog-defined"),
+                message: "Daemon startup recovery is still in progress.".to_owned(),
+                retryable: true,
+                exit_code: ExitCodeV1::new(3).expect("daemon exit code is valid"),
+                workspace: None,
+                details,
+            })
+            .expect("the daemon constructs a protocol-valid starting response"),
         ))
     }
 
@@ -1913,6 +2244,32 @@ fn civil_date_from_unix_days(days: i64) -> (i64, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn readiness_progress_is_monotonic_and_failure_is_terminal() {
+        let readiness = DaemonReadinessV1::new();
+        let starting = readiness.snapshot();
+        assert_eq!(starting.state(), DaemonReadinessStateV1::Starting);
+        assert_eq!(starting.stage(), DaemonReadinessStageV1::Endpoint);
+
+        readiness.begin_registry_recovery();
+        readiness.begin_worktree_recovery(3);
+        readiness.record_worktree_recovery(false);
+        readiness.record_worktree_recovery(true);
+        let recovering = readiness.snapshot();
+        assert_eq!(recovering.state(), DaemonReadinessStateV1::Recovering);
+        assert_eq!(recovering.stage(), DaemonReadinessStageV1::Workspaces);
+        assert_eq!(recovering.worktrees().total(), 3);
+        assert_eq!(recovering.worktrees().completed(), 2);
+        assert_eq!(recovering.worktrees().failed(), 1);
+        assert!(recovering.elapsed_ms() >= starting.elapsed_ms());
+
+        readiness.mark_failed();
+        readiness.mark_ready();
+        let failed = readiness.snapshot();
+        assert_eq!(failed.state(), DaemonReadinessStateV1::Failed);
+        assert_eq!(failed.stage(), DaemonReadinessStageV1::Failed);
+    }
 
     #[test]
     fn admission_outcomes_distinguish_capacity_from_shutdown_closure() {

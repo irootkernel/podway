@@ -123,9 +123,13 @@ impl ControlledPathFixtureV1 {
             .env_clear()
             .env("PATH", path);
         self.configure_test_isolation(&mut command);
-        command
+        let output = command
             .output()
-            .expect("controlled PATH must invoke podway")
+            .expect("controlled PATH must invoke podway");
+        if arguments.starts_with(&["--json", "daemon", "restart"]) && output.status.success() {
+            self.wait_for_daemon_readiness();
+        }
+        output
     }
 
     fn run_owned(&self, path: &str, arguments: &[String]) -> Output {
@@ -245,6 +249,47 @@ impl ControlledPathFixtureV1 {
         format!("{:?}", DaemonClientV1::new(paths).daemon_status(&request))
     }
 
+    fn wait_for_daemon_readiness(&self) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let request = RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
+                request_id: RequestIdV1::new(uuid::Uuid::new_v4().to_string())
+                    .expect("readiness request ID"),
+                client: ClientInfoV1::new(
+                    "podway-dolgi-test",
+                    env!("CARGO_PKG_VERSION"),
+                    std::process::id(),
+                )
+                .expect("readiness client"),
+                command: CommandNameV1::new("daemon.status").expect("readiness command"),
+                operation: OperationV1::Control,
+                workspace: None,
+                idempotency_key: None,
+                preconditions: PreconditionsV1::default(),
+                options: RequestOptionsV1::new(false, 0).expect("readiness options"),
+                payload: serde_json::Map::new(),
+            })
+            .expect("readiness request");
+            if let Ok(ResponseEnvelopeV2::OutputV2(output)) =
+                DaemonClientV1::new(self.runtime_paths()).daemon_status(&request)
+                && matches!(
+                    output.result().get("schema").and_then(Value::as_str),
+                    Some("podway.daemon-status-result/v1") | Some("podway.daemon-status-result/v2")
+                )
+                && (output.result()["schema"] == "podway.daemon-status-result/v1"
+                    || output.result()["readiness_state"] == "ready")
+            {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "daemon did not reach verified readiness: {}",
+                self.live_daemon_diagnostic()
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     fn runtime_paths(&self) -> ServiceRuntimePathsV1 {
         if self.production_service {
             ServiceRuntimePathsV1::for_dev_home(&self.home, self.dev_home(), geteuid().as_raw())
@@ -324,6 +369,7 @@ impl ControlledPathFixtureV1 {
             );
             thread::sleep(Duration::from_millis(10));
         }
+        self.wait_for_daemon_readiness();
     }
 
     fn restart_dev_daemon(&self, path: &str) {

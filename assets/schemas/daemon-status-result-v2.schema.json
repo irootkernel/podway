@@ -94,11 +94,7 @@
           "readiness_elapsed_ms": { "type": "integer" }, "worktree_recovery": { "type": "object" }
         } },
         "else": { "properties": {
-          "product": { "type": "null" }, "daemon_version": { "type": "null" },
-          "target": { "type": "null" }, "build_identity": { "type": "null" },
-          "source_commit": { "type": "null" }, "contract_manifest_schema": { "type": "null" },
-          "contract_manifest_digest": { "type": "null" }, "protocol_versions": { "maxItems": 0 },
-          "pid": { "type": "null" }, "process_id": { "type": "null" }, "executable_path": { "type": "null" },
+          "pid": { "type": "null" }, "process_id": { "type": "null" },
           "started_at": { "type": "null" }, "uptime_ms": { "type": "null" },
           "effective_socket_path": { "type": "null" }, "registered_worktree_count": { "type": "null" },
           "active_scheduler_count": { "type": "null" }, "queued_job_count": { "type": "null" },

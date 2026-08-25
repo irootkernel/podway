@@ -3570,7 +3570,13 @@ fn wait_for_verified_service(
         match client.daemon_status(&request) {
             Ok(ResponseEnvelopeV2::OutputV2(output)) => {
                 match validated_live_daemon_status(&output, None, paths, Some(expected_binary)) {
-                    Ok(_) => return Ok(()),
+                    Ok(status)
+                        if status.get("readiness_state").and_then(Value::as_str)
+                            == Some("ready") =>
+                    {
+                        return Ok(());
+                    }
+                    Ok(_) => {}
                     Err(failure) => last_identity_failure = Some(failure),
                 }
             }
@@ -3653,8 +3659,13 @@ fn service_status_result(
     let executable_path = metadata
         .as_ref()
         .map(|metadata| metadata.daemon_binary().display().to_string());
+    let readiness_state = if status == "running" {
+        "unreachable"
+    } else {
+        "not_running"
+    };
     let mut result = json!({
-        "schema": "podway.daemon-status-result/v1",
+        "schema": "podway.daemon-status-result/v2",
         "status": status,
         "installed": installed,
         "loaded": loaded,
@@ -3679,6 +3690,10 @@ fn service_status_result(
         "active_scheduler_count": Value::Null,
         "queued_job_count": Value::Null,
         "running_job_count": Value::Null,
+        "readiness_state": readiness_state,
+        "readiness_stage": Value::Null,
+        "readiness_elapsed_ms": Value::Null,
+        "worktree_recovery": Value::Null,
     })
     .as_object()
     .expect("daemon service status is an object")
@@ -3735,7 +3750,7 @@ fn validated_live_daemon_status(
         ));
     }
     let result = output.result();
-    const LIVE_FIELDS: [&str; 16] = [
+    const LIVE_FIELDS_V1: [&str; 16] = [
         "schema",
         "product",
         "daemon_version",
@@ -3753,9 +3768,27 @@ fn validated_live_daemon_status(
         "configured_socket_path",
         "effective_socket_path",
     ];
-    if result.len() != LIVE_FIELDS.len()
-        || LIVE_FIELDS.iter().any(|field| !result.contains_key(*field))
-        || result.get("schema").and_then(Value::as_str) != Some("podway.daemon-status-result/v1")
+    const READINESS_FIELDS_V2: [&str; 4] = [
+        "readiness_state",
+        "readiness_stage",
+        "readiness_elapsed_ms",
+        "worktree_recovery",
+    ];
+    let schema = result.get("schema").and_then(Value::as_str);
+    let fields_valid = LIVE_FIELDS_V1
+        .iter()
+        .all(|field| result.contains_key(*field));
+    if !fields_valid
+        || !match schema {
+            Some("podway.daemon-status-result/v1") => result.len() == LIVE_FIELDS_V1.len(),
+            Some("podway.daemon-status-result/v2") => {
+                result.len() == LIVE_FIELDS_V1.len() + READINESS_FIELDS_V2.len()
+                    && READINESS_FIELDS_V2
+                        .iter()
+                        .all(|field| result.contains_key(*field))
+            }
+            _ => false,
+        }
     {
         return Err(LocalFailure::response_invalid(
             "daemon status response schema is invalid",
@@ -3851,7 +3884,58 @@ fn validated_live_daemon_status(
             "daemon status response is invalid",
         ));
     }
-    Ok(result.clone())
+    let mut result = result.clone();
+    if schema == Some("podway.daemon-status-result/v1") {
+        result.insert(
+            "schema".to_owned(),
+            Value::String("podway.daemon-status-result/v2".to_owned()),
+        );
+        result.insert(
+            "readiness_state".to_owned(),
+            Value::String("ready".to_owned()),
+        );
+        result.insert(
+            "readiness_stage".to_owned(),
+            Value::String("ready".to_owned()),
+        );
+        result.insert(
+            "readiness_elapsed_ms".to_owned(),
+            result["uptime_ms"].clone(),
+        );
+        result.insert(
+            "worktree_recovery".to_owned(),
+            json!({"total":0,"completed":0,"failed":0}),
+        );
+    } else if !valid_live_readiness(&result) {
+        return Err(LocalFailure::response_invalid(
+            "daemon readiness response is invalid",
+        ));
+    }
+    Ok(result)
+}
+
+fn valid_live_readiness(result: &Map<String, Value>) -> bool {
+    let state = result.get("readiness_state").and_then(Value::as_str);
+    let stage = result.get("readiness_stage").and_then(Value::as_str);
+    let progress = result.get("worktree_recovery").and_then(Value::as_object);
+    let Some(progress) = progress else {
+        return false;
+    };
+    let total = progress.get("total").and_then(Value::as_u64);
+    let completed = progress.get("completed").and_then(Value::as_u64);
+    let failed = progress.get("failed").and_then(Value::as_u64);
+    matches!(state, Some("starting" | "recovering" | "ready" | "failed"))
+        && matches!(
+            stage,
+            Some("endpoint" | "registry" | "workspaces" | "jobs" | "ready" | "failed")
+        )
+        && (state != Some("ready") || stage == Some("ready"))
+        && result
+            .get("readiness_elapsed_ms")
+            .and_then(Value::as_u64)
+            .is_some()
+        && progress.len() == 3
+        && matches!((total, completed, failed), (Some(total), Some(completed), Some(failed)) if total <= 10_000 && completed <= total && failed <= completed)
 }
 
 fn service_logs_result(
@@ -7863,8 +7947,10 @@ mod tests {
         .expect("stopped installed daemon status");
         match stopped {
             super::RunResult::Local { result, .. } => {
-                assert_eq!(result["schema"], "podway.daemon-status-result/v1");
+                assert_eq!(result["schema"], "podway.daemon-status-result/v2");
                 assert_eq!(result["status"], "stopped");
+                assert_eq!(result["readiness_state"], "not_running");
+                assert!(result["readiness_stage"].is_null());
                 assert_eq!(result["product"], expected.product());
                 assert_eq!(
                     result["contract_manifest_digest"],

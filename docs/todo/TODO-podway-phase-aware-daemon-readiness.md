@@ -110,7 +110,7 @@ Timeout produces `DAEMON_READINESS_TIMEOUT` with:
 
 - `V2RDY-001` adopts and reserves the contract without runtime admission.
 - `V2RDY-002` starts the control plane early and gates normal dispatch on the
-  readiness state machine.
+  readiness state machine. This task is implemented.
 - `V2RDY-003` implements the waiter, install reuse, status rendering, timeout
   diagnostics, compatibility proof, and epic closeout.
 

@@ -22,6 +22,7 @@ import tempfile
 import threading
 import time
 from typing import Any, Callable
+import uuid
 
 import release_archive
 import release_evidence
@@ -1015,13 +1016,117 @@ def expect_failure(action: Callable[[], Any], fragment: str) -> None:
     fail(f"expected failure containing {fragment!r}")
 
 
-def wait_for_socket(socket_path: Path, timeout_seconds: float) -> None:
+def daemon_contract_identity(cli: Path, account_root: Path, dev_home: Path) -> dict[str, str]:
+    completed = subprocess.run(
+        [cli.as_posix(), "--json", "version", "--identity"],
+        cwd=account_root,
+        env=isolation_environment(account_root, dev_home),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=COMMAND_TIMEOUT_SECONDS,
+    )
+    if completed.returncode != 0:
+        fail(
+            "cannot read CLI contract identity: "
+            + completed.stderr.decode("utf-8", errors="replace").strip()
+        )
+    try:
+        envelope = json.loads(completed.stdout)
+        result = envelope["result"]
+        identity = {
+            "version": result["version"],
+            "product": result["product"],
+            "contract_manifest_digest": result["contract_manifest_digest"],
+        }
+    except (KeyError, TypeError, UnicodeError, json.JSONDecodeError) as error:
+        fail(f"CLI contract identity response is invalid: {error}")
+    if not all(isinstance(value, str) and value for value in identity.values()):
+        fail("CLI contract identity response contains invalid fields")
+    return identity
+
+
+def probe_daemon_readiness(socket_path: Path, identity: dict[str, str]) -> str:
+    request = {
+        "protocol": "podway.ipc/v1",
+        "request_id": str(uuid.uuid4()),
+        "client": {
+            "name": "podway-dev-runtime",
+            "version": identity["version"],
+            "pid": os.getpid(),
+            "product": identity["product"],
+            "contract_manifest_digest": identity["contract_manifest_digest"],
+        },
+        "operation": "control",
+        "command": "daemon.status",
+        "options": {"detach": False, "wait_timeout_ms": 0},
+        "payload": {},
+    }
+    payload = json.dumps(request, separators=(",", ":")).encode("utf-8")
+    if len(payload) > IPC_MAX_PAYLOAD_BYTES:
+        fail("daemon status request exceeds the IPC frame bound")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        connection.settimeout(1.0)
+        connection.connect(socket_path.as_posix())
+        connection.sendall(len(payload).to_bytes(4, "big") + payload)
+        connection.shutdown(socket.SHUT_WR)
+        prefix = receive_exact(connection, 4)
+        response_length = int.from_bytes(prefix, "big")
+        if response_length < 1 or response_length > IPC_MAX_PAYLOAD_BYTES:
+            fail(f"daemon status response has invalid frame length {response_length}")
+        response = json.loads(receive_exact(connection, response_length))
+    if response.get("schema") != "podway.output/v3" or response.get("command") != "daemon.status":
+        fail(f"daemon status response envelope is invalid: {response!r}")
+    result = response.get("result")
+    if not isinstance(result, dict):
+        fail("daemon status response result is invalid")
+    if result.get("schema") == "podway.daemon-status-result/v1":
+        return "ready"
+    if result.get("schema") != "podway.daemon-status-result/v2":
+        fail(f"daemon status response schema is unsupported: {result.get('schema')!r}")
+    state = result.get("readiness_state")
+    if state not in {"starting", "recovering", "ready", "failed"}:
+        fail(f"daemon status readiness state is invalid: {state!r}")
+    return state
+
+
+def receive_exact(connection: socket.socket, length: int) -> bytes:
+    received = bytearray()
+    while len(received) < length:
+        chunk = connection.recv(length - len(received))
+        if not chunk:
+            fail("daemon closed the status connection before one complete frame")
+        received.extend(chunk)
+    return bytes(received)
+
+
+def wait_for_socket(
+    socket_path: Path,
+    timeout_seconds: float,
+    *,
+    cli: Path,
+    account_root: Path,
+    dev_home: Path,
+) -> None:
     deadline = time.time() + timeout_seconds
+    last_observation = "endpoint not live"
+    identity = daemon_contract_identity(cli, account_root, dev_home)
     while time.time() < deadline:
         if endpoint_is_live(socket_path):
-            return
+            try:
+                state = probe_daemon_readiness(socket_path, identity)
+                last_observation = f"readiness_state={state}"
+                if state == "ready":
+                    return
+                if state == "failed":
+                    fail("daemon entered terminal failed readiness")
+            except (DevRuntimeError, OSError, UnicodeError, json.JSONDecodeError) as error:
+                last_observation = str(error)
         time.sleep(0.05)
-    fail(f"daemon socket did not become ready: {socket_path}")
+    fail(
+        f"daemon did not reach verified readiness: {socket_path}; "
+        f"last observation: {last_observation}"
+    )
 
 
 def start_isolated_daemon(
@@ -1029,6 +1134,7 @@ def start_isolated_daemon(
     account_root: Path,
     dev_home: Path,
     *,
+    cli: Path,
     label: str = "isolated daemon",
 ) -> subprocess.Popen[bytes]:
     for path in (account_root, account_root / ".podway", dev_home):
@@ -1043,8 +1149,14 @@ def start_isolated_daemon(
         stderr=subprocess.PIPE,
     )
     try:
-        wait_for_socket(dev_home / "run" / "podwayd.sock", DAEMON_READY_TIMEOUT_SECONDS)
-    except Exception:
+        wait_for_socket(
+            dev_home / "run" / "podwayd.sock",
+            DAEMON_READY_TIMEOUT_SECONDS,
+            cli=cli,
+            account_root=account_root,
+            dev_home=dev_home,
+        )
+    except Exception as error:
         process.send_signal(signal.SIGTERM)
         try:
             process.wait(timeout=5)
@@ -1056,6 +1168,7 @@ def start_isolated_daemon(
             detail = process.stderr.read()
         fail(
             f"failed to start {label} at {dev_home.as_posix()}: "
+            f"{error}; daemon stderr="
             + detail.decode("utf-8", errors="replace").strip()
         )
     return process
@@ -1290,6 +1403,7 @@ def self_test_v2_dogfood(cli: Path, daemon: Path) -> dict[str, Any]:
             snapshotted_daemon,
             paths["account_root"],
             paths["dev_home"],
+            cli=Path(metadata["snapshot"]["podway"]),
             label="v2 dogfood daemon",
         )
         initialize_sandbox(paths["sandbox"])
@@ -1495,6 +1609,7 @@ def self_test_v2_dogfood(cli: Path, daemon: Path) -> dict[str, Any]:
             snapshotted_daemon,
             paths["account_root"],
             paths["dev_home"],
+            cli=Path(metadata["snapshot"]["podway"]),
             label="restarted v2 dogfood daemon",
         )
         after_restart = dogfood_v2_status(paths, metadata)
@@ -2176,6 +2291,7 @@ def command_qualify_v2rel003(
             snap_daemon,
             paths["account_root"],
             paths["dev_home"],
+            cli=snap_cli,
             label="native qualification daemon",
         )
         initialize_sandbox(paths["sandbox"])
@@ -2352,6 +2468,7 @@ def command_qualify_v2rel003(
             snap_daemon,
             paths["account_root"],
             paths["dev_home"],
+            cli=snap_cli,
             label="SIGKILL recovery daemon",
         )
         after_kill = require_output_result(
@@ -2745,6 +2862,7 @@ def command_qualify_v2rel003(
             qualification_daemon,
             release_paths["account_root"],
             release_paths["dev_home"],
+            cli=cli,
             label="release-profile qualification daemon",
         )
         initialize_sandbox(release_paths["sandbox"])
@@ -3030,17 +3148,17 @@ def self_test_snapshot_and_clean() -> int:
     return sentinels
 
 
-def self_test_dual_daemon(_cli: Path, daemon: Path) -> int:
+def self_test_dual_daemon(cli: Path, daemon: Path) -> int:
     with tempfile.TemporaryDirectory(prefix="pw-dev-dual-", dir="/private/tmp") as name:
         root = Path(name)
         os.chmod(root, DIRECTORY_MODE)
         first_account, first_dev = root / "a1", root / "d1"
         second_account, second_dev = root / "a2", root / "d2"
         first = start_isolated_daemon(
-            daemon, first_account, first_dev, label="first dual-daemon sentinel"
+            daemon, first_account, first_dev, cli=cli, label="first dual-daemon sentinel"
         )
         second = start_isolated_daemon(
-            daemon, second_account, second_dev, label="second dual-daemon sentinel"
+            daemon, second_account, second_dev, cli=cli, label="second dual-daemon sentinel"
         )
         try:
             if not endpoint_is_live(first_dev / "run" / "podwayd.sock"):

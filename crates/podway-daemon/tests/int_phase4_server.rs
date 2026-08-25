@@ -25,10 +25,10 @@ use podway_daemon::{
     peer::{FixedPeerCredentialSourceV1, PeerUidVerificationErrorV1, PeerUidVerifierV1},
     server::{
         BoundedAcceptLoopV1, ConnectionHandlerSpawnerV1, DaemonProcessIdentityV1,
-        FixedResponseMetadataSourceV1, RequestDispatcherV1, ResponseMetadataClockErrorV1,
-        ResponseMetadataClockV1, ResponseMetadataErrorV1, ServerAcceptLoopErrorV1,
-        ServerConnectionErrorV1, ServerTransportTimeoutsV1, ShutdownAdmissionV1,
-        SystemResponseMetadataSourceV1, UnixServerTransportV1,
+        DaemonReadinessV1, FixedResponseMetadataSourceV1, RequestDispatcherV1,
+        ResponseMetadataClockErrorV1, ResponseMetadataClockV1, ResponseMetadataErrorV1,
+        ServerAcceptLoopErrorV1, ServerConnectionErrorV1, ServerTransportTimeoutsV1,
+        ShutdownAdmissionV1, SystemResponseMetadataSourceV1, UnixServerTransportV1,
     },
 };
 use podway_protocol::{
@@ -600,6 +600,37 @@ fn status_transport(
     )
 }
 
+fn status_transport_with_readiness(
+    dispatcher: TestDispatcher,
+    readiness: DaemonReadinessV1,
+) -> Arc<
+    UnixServerTransportV1<
+        FixedPeerCredentialSourceV1,
+        TestDispatcher,
+        FixedResponseMetadataSourceV1,
+    >,
+> {
+    let identity = DaemonProcessIdentityV1::new(
+        RequestIdV1::new("3037d76d-6ea8-42c2-a11f-883248bb8774").unwrap(),
+        4242,
+        timestamp(),
+        "/usr/local/bin/podwayd",
+        "/tmp/podway-runtime/podwayd.sock",
+        "/tmp/podway-runtime/podwayd.sock",
+    )
+    .expect("process identity fixture is valid");
+    Arc::new(
+        UnixServerTransportV1::with_metadata(
+            PeerUidVerifierV1::new(EXPECTED_UID, FixedPeerCredentialSourceV1::uid(EXPECTED_UID)),
+            dispatcher,
+            ServerTransportTimeoutsV1::default(),
+            metadata(),
+        )
+        .with_process_identity(identity)
+        .with_readiness(readiness),
+    )
+}
+
 fn read_response(client: &mut UnixStream) -> ResponseEnvelopeV2 {
     let payload = read_single_frame_v1(client)
         .expect("server response must be one complete frame")
@@ -922,6 +953,64 @@ fn daemon_status_is_stable_live_and_bypasses_dispatch() {
             >= observations[0]["uptime_ms"].as_u64().unwrap()
     );
     assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn v2rdy002_control_status_is_live_while_normal_dispatch_remains_closed() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let readiness = DaemonReadinessV1::new();
+    let transport = status_transport_with_readiness(
+        TestDispatcher::new(DispatcherOutcome::Success, Arc::clone(&calls)),
+        readiness.clone(),
+    );
+
+    let (mut client, server) = UnixStream::pair().unwrap();
+    let handler = {
+        let transport = Arc::clone(&transport);
+        thread::spawn(move || transport.handle_connection(server))
+    };
+    send_and_half_close(&mut client, &request_frame(&daemon_status_request(0)));
+    let ResponseEnvelopeV2::OutputV2(output) = read_response_v2(&mut client) else {
+        panic!("starting daemon status must return output");
+    };
+    handler.join().unwrap().unwrap();
+    assert_eq!(output.result()["schema"], "podway.daemon-status-result/v2");
+    assert_eq!(output.result()["readiness_state"], "starting");
+    assert_eq!(output.result()["readiness_stage"], "endpoint");
+
+    readiness.begin_registry_recovery();
+    readiness.begin_worktree_recovery(4);
+    readiness.record_worktree_recovery(false);
+    readiness.record_worktree_recovery(true);
+    let (mut client, server) = UnixStream::pair().unwrap();
+    let handler = {
+        let transport = Arc::clone(&transport);
+        thread::spawn(move || transport.handle_connection(server))
+    };
+    send_and_half_close(&mut client, &request_frame(&request()));
+    let error = assert_error_code(read_response_v2(&mut client), "DAEMON_STARTING");
+    handler.join().unwrap().unwrap();
+    assert_eq!(error.details()["readiness_state"], "recovering");
+    assert_eq!(error.details()["readiness_stage"], "workspaces");
+    assert_eq!(error.details()["worktree_recovery"]["total"], 4);
+    assert_eq!(error.details()["worktree_recovery"]["completed"], 2);
+    assert_eq!(error.details()["worktree_recovery"]["failed"], 1);
+    assert_eq!(error.details()["admission"]["admitted"], false);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+    readiness.begin_job_recovery();
+    readiness.mark_ready();
+    let (mut client, server) = UnixStream::pair().unwrap();
+    let handler = {
+        let transport = Arc::clone(&transport);
+        thread::spawn(move || transport.handle_connection(server))
+    };
+    send_and_half_close(&mut client, &request_frame(&request()));
+    let ResponseEnvelopeV2::OutputV2(_) = read_response_v2(&mut client) else {
+        panic!("ready daemon must dispatch the request");
+    };
+    handler.join().unwrap().unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
 #[test]

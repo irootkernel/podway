@@ -38,7 +38,7 @@
     {
       "kind": "catalog",
       "path": "release/dolgorae-adapter-contract-v2.json",
-      "sha256": "sha256:4563c06350c405aae43add427678ccd5d0002631a0be79968a55bf94e36ab0d3"
+      "sha256": "sha256:f6ba045297d292c0fdf618506858cc9bbe71a8352f7917460e9b4fde1dbf22f1"
     },
     {
       "kind": "schema",
@@ -108,7 +108,7 @@
     {
       "kind": "schema",
       "path": "schemas/daemon-status-result-v2.schema.json",
-      "sha256": "sha256:f4d6af2185969e08a02ecf2ece89bfccc74e71998914dd153d47fa6670aabe57"
+      "sha256": "sha256:1f79837ea27f027e1a9d4ca308efb7f13f6512e4cec33fa72e9614a288a9a374"
     },
     {
       "kind": "schema",
@@ -556,7 +556,7 @@
       "sha256": "sha256:23423b1060f6a0fedd1097ac458ca8a1cd8cb3c1a2a7e88aa964d514d01a248a"
     }
   ],
-  "digest": "sha256:af53507752ec215c5ad4ddfb8be54db536fb0446e6c79c6f1c02576ef8a770c4",
+  "digest": "sha256:2c85d7c5f07f6c7a52e89fd67c81d01bc5d4a6a2e7d41df29d586d96402417da",
   "product": "podway",
   "product_version": "0.2.6",
   "schema_version": "podway.contract-manifest/v1",
