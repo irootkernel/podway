@@ -12,7 +12,7 @@ use std::{
         net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
-    process::{Child, Command, Output},
+    process::{Child, Command, Output, Stdio},
     sync::{
         Mutex,
         atomic::{AtomicU64, Ordering},
@@ -21,7 +21,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use nix::unistd::geteuid;
+use nix::{
+    sys::signal::{Signal, kill},
+    unistd::{Pid, geteuid},
+};
 use podway_cli::client::DaemonClientV1;
 use podway_protocol::{
     ClientInfoV1, CommandNameV1, OperationV1, PreconditionsV1, RequestEnvelopeInputV1,
@@ -44,6 +47,38 @@ struct ControlledPathFixtureV1 {
     launchctl_state: PathBuf,
     production_service: bool,
     dev_daemon: Mutex<Option<Child>>,
+}
+
+struct SuspendedProcessV1 {
+    pid: Pid,
+    resumed: bool,
+}
+
+impl SuspendedProcessV1 {
+    fn suspend(pid: u64) -> Self {
+        let pid = Pid::from_raw(i32::try_from(pid).expect("daemon PID must fit i32"));
+        kill(pid, Signal::SIGSTOP).expect("fixture daemon must stop at the recovery barrier");
+        Self {
+            pid,
+            resumed: false,
+        }
+    }
+
+    fn release(&mut self) {
+        if self.resumed {
+            return;
+        }
+        kill(self.pid, Signal::SIGCONT).expect("fixture daemon must resume after the barrier");
+        self.resumed = true;
+    }
+}
+
+impl Drop for SuspendedProcessV1 {
+    fn drop(&mut self) {
+        if !self.resumed {
+            let _ = kill(self.pid, Signal::SIGCONT);
+        }
+    }
 }
 
 impl ControlledPathFixtureV1 {
@@ -130,6 +165,20 @@ impl ControlledPathFixtureV1 {
             self.wait_for_daemon_readiness();
         }
         output
+    }
+
+    fn spawn(&self, path: &str, arguments: &[&str]) -> Child {
+        assert!(!self.production_service);
+        let mut command = Command::new("podway");
+        command
+            .args(arguments)
+            .current_dir(&self.arbitrary)
+            .env_clear()
+            .env("PATH", path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        self.configure_test_isolation(&mut command);
+        command.spawn().expect("controlled PATH must spawn podway")
     }
 
     fn run_owned(&self, path: &str, arguments: &[String]) -> Output {
@@ -632,6 +681,74 @@ fn create_non_bare_worktree(path: &Path) {
     );
 }
 
+fn initialize_running_recovery_worktree(
+    fixture: &ControlledPathFixtureV1,
+    path: &str,
+    socket: &Path,
+    parent: &Path,
+    index: usize,
+) -> (PathBuf, FencedStatusV1) {
+    let worktree = parent.join(format!("worktree-{index:02}"));
+    create_non_bare_worktree(&worktree);
+    let socket = socket.to_str().expect("fixture socket path must be UTF-8");
+    let worktree_text = worktree
+        .to_str()
+        .expect("fixture worktree path must be UTF-8");
+    let initialized = fixture.run_json_success(
+        path,
+        &[
+            "--json",
+            "--socket",
+            socket,
+            "--worktree",
+            worktree_text,
+            "init",
+        ],
+    );
+    assert_eq!(initialized["command"], "workspace.init");
+
+    let started = fixture.run_json_success_owned(
+        path,
+        &[
+            "--json".to_owned(),
+            "--socket".to_owned(),
+            socket.to_owned(),
+            "--worktree".to_owned(),
+            worktree_text.to_owned(),
+            "--timeout".to_owned(),
+            "25s".to_owned(),
+            "--idempotency-key".to_owned(),
+            format!("70000000-0000-4000-8000-{index:012}"),
+            "start".to_owned(),
+            "--preset".to_owned(),
+            "small-change-v2".to_owned(),
+            "--task".to_owned(),
+            format!("Preserve recovery workspace {index}"),
+        ],
+    );
+    assert_eq!(started["command"], "session.start");
+
+    let begun = fixture.run_json_success_owned(
+        path,
+        &[
+            "--json".to_owned(),
+            "--socket".to_owned(),
+            socket.to_owned(),
+            "--worktree".to_owned(),
+            worktree_text.to_owned(),
+            "--timeout".to_owned(),
+            "25s".to_owned(),
+            "--idempotency-key".to_owned(),
+            format!("70000001-0000-4000-8000-{index:012}"),
+            "begin".to_owned(),
+        ],
+    );
+    assert_eq!(begun["command"], "session.begin");
+
+    let status = compact_status(fixture, path, socket, worktree_text, None);
+    (worktree, status)
+}
+
 fn run_git(command: &mut Command, action: &str) {
     let output = command
         .output()
@@ -863,6 +980,23 @@ fn required_u64(value: &Value, label: &str) -> u64 {
     value
         .as_u64()
         .unwrap_or_else(|| panic!("{label} must be an unsigned integer"))
+}
+
+fn registry_workspace_identities(bytes: &[u8]) -> BTreeSet<(String, String)> {
+    let registry: Value =
+        serde_json::from_slice(bytes).expect("workspace registry must remain valid JSON");
+    assert_eq!(registry["schema"], "podway.registry/v1");
+    registry["workspaces"]
+        .as_array()
+        .expect("workspace registry entries must be an array")
+        .iter()
+        .map(|entry| {
+            (
+                required_text(&entry["workspace_uuid"], "registry workspace UUID"),
+                required_text(&entry["last_known_root"], "registry worktree root"),
+            )
+        })
+        .collect()
 }
 
 fn compact_status(
@@ -1154,6 +1288,176 @@ fn aut_t_path_default_install_recovers_a_prepared_publication_without_a_socket_o
 
     let status = fixture.run_json_success(&controlled_path, &["--json", "daemon", "status"]);
     assert_eq!(status["result"]["reachable"], true);
+    fixture.uninstall(&controlled_path);
+}
+
+#[test]
+fn aut_t_install_timeout_preserves_slow_registered_worktrees_and_retry_converges() {
+    const WORKTREE_COUNT: usize = 8;
+
+    let fixture = ControlledPathFixtureV1::new();
+    if fixture.production_service {
+        return;
+    }
+    let (controlled_path, _) = install_sibling_release(&fixture, "slow-install-recovery");
+    let socket = fixture.socket_path();
+    let worktree_parent = fixture.root.join("slow-install-recovery/worktrees");
+    fs::create_dir_all(&worktree_parent).expect("recovery worktree parent must be created");
+
+    let mut worktrees = Vec::with_capacity(WORKTREE_COUNT);
+    let mut expected_statuses = Vec::with_capacity(WORKTREE_COUNT);
+    for index in 0..WORKTREE_COUNT {
+        let (worktree, status) = initialize_running_recovery_worktree(
+            &fixture,
+            &controlled_path,
+            &socket,
+            &worktree_parent,
+            index,
+        );
+        worktrees.push(worktree);
+        expected_statuses.push(status);
+    }
+
+    let metadata_path = fixture.home.join(".podway/state/service.json");
+    let launch_agent_path = fixture
+        .home
+        .join("Library/LaunchAgents/dev.podway.podwayd.plist");
+    let registry_path = fixture.home.join(".podway/state/workspaces.json");
+    let registry_snapshot = fs::read(&registry_path).expect("workspace registry snapshot");
+    let registry_identities = registry_workspace_identities(&registry_snapshot);
+    assert_eq!(registry_identities.len(), WORKTREE_COUNT);
+    fixture.uninstall(&controlled_path);
+    assert!(
+        !socket.exists(),
+        "uninstalled daemon must release its socket"
+    );
+    assert!(!metadata_path.exists());
+    assert!(!launch_agent_path.exists());
+    assert_eq!(fs::read(&registry_path).unwrap(), registry_snapshot);
+
+    let database_paths = worktrees
+        .iter()
+        .map(|worktree| worktree.join(".podway/runtime/state.sqlite3"))
+        .collect::<Vec<_>>();
+
+    let started_at = Instant::now();
+    let install = fixture.spawn(&controlled_path, &["--json", "daemon", "install"]);
+    let pid_path = fixture.launchctl_state.join("pid");
+    let publication_deadline = Instant::now() + Duration::from_secs(10);
+    while !(metadata_path.exists()
+        && launch_agent_path.exists()
+        && pid_path.exists()
+        && socket.exists())
+    {
+        assert!(
+            Instant::now() < publication_deadline,
+            "install did not publish service state and bind the early socket"
+        );
+        thread::sleep(Duration::from_millis(1));
+    }
+    let daemon_pid = fs::read_to_string(&pid_path)
+        .expect("fake launchctl PID must be readable")
+        .trim()
+        .parse::<u64>()
+        .expect("fake launchctl PID must be numeric");
+    let mut barrier = SuspendedProcessV1::suspend(daemon_pid);
+    let receipt_deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let metadata: Value = serde_json::from_slice(
+            &fs::read(&metadata_path).expect("service metadata during publication"),
+        )
+        .expect("service metadata must remain JSON");
+        if metadata["publication_state"] == "receipt_durable" {
+            break;
+        }
+        assert!(
+            Instant::now() < receipt_deadline,
+            "install did not publish its durable service receipt"
+        );
+        thread::sleep(Duration::from_millis(1));
+    }
+    let service_snapshot = [
+        fs::read(&metadata_path).expect("service metadata after bootstrap"),
+        fs::read(&launch_agent_path).expect("LaunchAgent after bootstrap"),
+    ];
+    let database_snapshot = database_paths
+        .iter()
+        .map(|path| fs::read(path).expect("suspended workspace database snapshot"))
+        .collect::<Vec<_>>();
+
+    let timed_out = install
+        .wait_with_output()
+        .expect("install timeout process must be reaped");
+    let elapsed = started_at.elapsed();
+    let failure = assert_json_error(timed_out, "DAEMON_READINESS_TIMEOUT", 3);
+    assert!(
+        elapsed >= Duration::from_secs(120),
+        "install readiness timeout returned before its supported deadline: {elapsed:?}"
+    );
+    assert_eq!(failure["details"]["operation"], "install");
+    assert_eq!(failure["details"]["readiness_state"], "unreachable");
+    assert!(failure["details"]["readiness_stage"].is_null());
+    assert_eq!(failure["details"]["installed"], true);
+    assert_eq!(failure["details"]["loaded"], true);
+    assert_eq!(failure["details"]["socket_present"], true);
+    assert_eq!(failure["details"]["reachable"], false);
+    assert_eq!(failure["details"]["contract_verified"], false);
+    assert_eq!(failure["details"]["same_command_retry_safe"], true);
+    assert!(failure["details"]["worktree_recovery"].is_null());
+    assert!(
+        socket.exists(),
+        "readiness timeout must preserve the live socket"
+    );
+    assert_eq!(fs::read(&metadata_path).unwrap(), service_snapshot[0]);
+    assert_eq!(fs::read(&launch_agent_path).unwrap(), service_snapshot[1]);
+    assert_eq!(fs::read(&registry_path).unwrap(), registry_snapshot);
+    for (path, expected) in database_paths.iter().zip(&database_snapshot) {
+        assert_eq!(
+            fs::read(path).expect("suspended workspace database after timeout"),
+            *expected,
+            "readiness timeout must not rewrite {}",
+            path.display()
+        );
+    }
+
+    barrier.release();
+    let retried = fixture.run_json_success(&controlled_path, &["--json", "daemon", "install"]);
+    assert_eq!(retried["command"], "daemon.install");
+    assert_eq!(retried["result"]["outcome"], "already_in_desired_state");
+    let ready = fixture.run_json_success(&controlled_path, &["--json", "daemon", "status"]);
+    assert_eq!(ready["result"]["readiness_state"], "ready");
+    assert_eq!(
+        ready["result"]["worktree_recovery"]["total"],
+        WORKTREE_COUNT
+    );
+    assert_eq!(
+        ready["result"]["worktree_recovery"]["completed"],
+        WORKTREE_COUNT
+    );
+    assert_eq!(ready["result"]["worktree_recovery"]["failed"], 0);
+
+    let socket_text = socket.to_str().expect("fixture socket path must be UTF-8");
+    for (worktree, expected) in worktrees.iter().zip(&expected_statuses) {
+        let actual = compact_status(
+            &fixture,
+            &controlled_path,
+            socket_text,
+            worktree
+                .to_str()
+                .expect("fixture worktree path must be UTF-8"),
+            Some((&expected.workspace_id, &expected.session_id)),
+        );
+        assert_eq!(actual.workspace_id, expected.workspace_id);
+        assert_eq!(actual.session_id, expected.session_id);
+        assert_eq!(actual.session_revision, expected.session_revision);
+        assert_eq!(actual.attempt_id, expected.attempt_id);
+    }
+    assert_eq!(fs::read(&metadata_path).unwrap(), service_snapshot[0]);
+    assert_eq!(fs::read(&launch_agent_path).unwrap(), service_snapshot[1]);
+    assert_eq!(
+        registry_workspace_identities(&fs::read(&registry_path).unwrap()),
+        registry_identities
+    );
     fixture.uninstall(&controlled_path);
 }
 
