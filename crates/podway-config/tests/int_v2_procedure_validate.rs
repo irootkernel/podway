@@ -1413,6 +1413,26 @@ fn item_document(item: &str) -> String {
     action_document(&format!("    items:\n      - id: note\n{item}"))
 }
 
+#[test]
+fn v2scl003_admits_the_aquarium_list_scale_declaration() {
+    let procedure = item_document(
+        "        type: list\n        prompt: Findings?\n        required: false\n        max_items: 1000\n        max_item_length: 1200\n        max_total_length: 1000000\n",
+    );
+    let validated = accept_yaml(&procedure);
+    let podway_config::ParsedNodeDefinition::Action(definition) =
+        &validated.parsed().node_definitions()[0]
+    else {
+        panic!("the admitted definition must stay an action");
+    };
+    let item = &definition.items()[0];
+    let podway_core::ItemSpecV2::List(list) = item else {
+        panic!("the admitted declaration must stay a list");
+    };
+    assert_eq!(list.max_items(), 1_000);
+    assert_eq!(list.max_item_length(), 1_200);
+    assert_eq!(list.max_total_length(), 1_000_000);
+}
+
 /// A decision definition `pick` with the supplied body lines and options, placed once with one
 /// route per option so the closed route checks pass at the limit.
 fn decision_document(body: &str, options: &[String]) -> String {

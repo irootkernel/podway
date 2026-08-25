@@ -348,6 +348,40 @@ fn initial_state() -> GraphSessionStateV2 {
     )
 }
 
+/// V2SCL-003: v0.2.5 snapshots omitted `max_total_length`; cold reconstruction must retain the
+/// exact stored bytes while deriving the v0.2.6 default for workflow-memory validation.
+#[test]
+fn v2scl003_v025_list_snapshot_reconstructs_with_the_default_total_bound() {
+    let expected = initial_state();
+    let declaration: serde_json::Value =
+        serde_json::from_str(expected.snapshot().canonical_json().as_str()).unwrap();
+    let list = &declaration["node_definitions"]["capture-def"]["items"][2];
+    assert_eq!(list["type"], json!("list"));
+    assert!(
+        list.get("max_total_length").is_none(),
+        "the compatibility fixture must have the v0.2.5 shape"
+    );
+
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
+    store
+        .create_graph_session_v2(&identity(), expected.clone())
+        .unwrap();
+    drop(store);
+
+    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
+    let reconstructed = reopened
+        .read_graph_session_v2(&identity())
+        .unwrap()
+        .unwrap();
+    assert_eq!(reconstructed, expected);
+    assert_eq!(
+        reconstructed.snapshot().canonical_json().as_str(),
+        expected.snapshot().canonical_json().as_str(),
+        "cold reconstruction must not rewrite a v0.2.5 Procedure digest"
+    );
+}
+
 fn active_recorded_state(revision: u64, blocker_state: BlockerState) -> GraphSessionStateV2 {
     state_with_memory(
         revision,

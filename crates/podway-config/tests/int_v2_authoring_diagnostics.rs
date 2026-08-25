@@ -433,6 +433,15 @@ fn truth_table() -> Vec<Row> {
             "$",
         ),
         row(
+            "unknown list metadata",
+            mutate(
+                "        required: true\n",
+                "        required: true\n      - id: findings\n        type: list\n        prompt: Findings\n        required: false\n        max_totl_length: 1000000\n",
+            ),
+            "AUTHORING_SCHEMA_INVALID",
+            "$",
+        ),
+        row(
             "a duplicate mapping key",
             mutate("id: diagnostics\n", "id: diagnostics\nid: diagnostics\n"),
             "SOURCE_CONSTRUCT_UNSUPPORTED",

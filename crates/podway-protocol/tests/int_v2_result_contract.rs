@@ -730,7 +730,15 @@ fn v2ctr004_v2_runtime_error_catalog_is_schema_and_decoder_bound() {
     })
     .collect::<BTreeSet<_>>();
 
-    assert_eq!(catalog_codes, schema_codes);
+    let conditionally_structured_codes = BTreeSet::from(["ITEM_CONSTRAINT_FAILED".to_owned()]);
+    assert_eq!(
+        catalog_codes
+            .union(&conditionally_structured_codes)
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        schema_codes,
+        "legacy-compatible errors may opt into structured details only when those details exist"
+    );
     assert!(decoder_codes.is_subset(&catalog_codes));
     assert_eq!(
         catalog_codes

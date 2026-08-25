@@ -1427,7 +1427,7 @@
       {
         "id": "urn:podway:schema:v2-runtime-error-details:v1",
         "path": "schemas/v2-runtime-error-details-v1.schema.json",
-        "sha256": "sha256:ccaccd64d10c93252583fdda630450d27cb024d7fc6efca9184af5a5f2352828"
+        "sha256": "sha256:cef63eb336a88fd9bbaf13c854302a49a98ee94900a1770e9b965026a7d99e0a"
       },
       {
         "id": "urn:podway:schema:version-result:v1",

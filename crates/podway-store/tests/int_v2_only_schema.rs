@@ -1771,10 +1771,9 @@ fn schema_v3_orphaned_v1_idempotency_receipt_is_rejected_without_mutation() {
     assert_eq!((version, receipts), (3, 1));
 }
 
-/// V2SCL-003: the structured scale rejection survives persistence, and a reconstructed list item
-/// takes the canonical `max_total_length` default when a stored snapshot predates the field.
+/// V2SCL-003: the structured scale rejection survives persistence.
 #[test]
-fn v2scl003_bound_exceeded_round_trips_and_list_reconstruction_defaults_the_total() {
+fn v2scl003_bound_exceeded_round_trips_through_the_persistence_codec() {
     let error = podway_core::attempt_content_bound_error_v2(20_000_000);
     let persisted = podway_store::codec::PersistedDomainErrorV1::from_domain(&error);
     let encoded = serde_json::to_value(&persisted).expect("persisted error serializes");

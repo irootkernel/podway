@@ -493,7 +493,7 @@ fn authored_defaults_and_omitted_defaults_produce_the_same_digest() {
     assert_eq!(
         yaml_digest(&edited(
             "        prompt: List the findings.\n        required: false\n",
-            "        prompt: List the findings.\n        required: false\n        min_items: 0\n        max_items: 50\n        max_item_length: 500\n        unique: true\n",
+            "        prompt: List the findings.\n        required: false\n        min_items: 0\n        max_items: 50\n        max_item_length: 500\n        max_total_length: 1000000\n        unique: true\n",
         )),
         base,
     );
