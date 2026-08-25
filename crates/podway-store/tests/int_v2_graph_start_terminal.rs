@@ -1252,6 +1252,75 @@ fn terminal_archive_preserves_full_state_and_allows_a_new_current_session() {
 }
 
 #[test]
+fn archived_goal_history_does_not_corrupt_a_goal_enabled_successor_after_cold_reopen() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
+    let completed = crate::int_v2_goal_state::completed_goal_state_for_archive();
+    store
+        .create_graph_session_v2(&identity(), completed.clone())
+        .unwrap();
+    store
+        .record_terminal_disposition_v2(
+            &identity(),
+            TerminalDispositionV2::not_required(
+                completed.trace().session_id().clone(),
+                completed.trace().revision(),
+                "No handoff required",
+                None,
+                UnixMillis::new(21),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let claimed = admit_archive_and_claim(&store, &completed, "v2-goal-archive", 8_152);
+    store
+        .commit_graph_archive_terminal_v2(
+            claimed.claim().clone(),
+            completed.workspace_revision(),
+            completed.trace().revision(),
+            completed.trace().session_id().clone(),
+            UnixMillis::new(42),
+        )
+        .unwrap();
+
+    let template = graph_state_with_options(8_153, 8_154, 50, false, true, false);
+    let successor = GraphSessionStateV2::prepared(
+        Revision::new(1),
+        "Goal-enabled successor",
+        template.snapshot().clone(),
+        SessionId::new(uuid(8_155)).unwrap(),
+        UnixMillis::new(50),
+    )
+    .unwrap();
+    store
+        .create_graph_session_v2(&identity(), successor.clone())
+        .unwrap();
+    assert_eq!(
+        store.read_graph_session_v2(&identity()).unwrap(),
+        Some(successor.clone())
+    );
+    assert_eq!(
+        store
+            .read_archived_session_v2(&identity(), completed.trace().session_id())
+            .unwrap(),
+        Some(completed.clone())
+    );
+    drop(store);
+
+    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 60);
+    assert_eq!(
+        reopened.read_graph_session_v2(&identity()).unwrap(),
+        Some(successor)
+    );
+    assert_eq!(
+        reopened
+            .read_archived_session_v2(&identity(), completed.trace().session_id())
+            .unwrap(),
+        Some(completed)
+    );
+}
+
+#[test]
 fn terminal_archive_limit_blocks_without_deleting_retained_sessions() {
     let temporary = TempDir::new().unwrap();
     let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);

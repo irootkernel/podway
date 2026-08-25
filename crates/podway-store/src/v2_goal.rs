@@ -1142,12 +1142,16 @@ pub(crate) fn load_goal_state_v2(
     ];
     let actual: (i64, i64, i64, i64, i64) = connection
         .query_row(
-            "SELECT (SELECT COUNT(*) FROM v2_goal_revisions), \
-             (SELECT COUNT(*) FROM v2_goal_criteria), \
-             (SELECT COUNT(*) FROM v2_criterion_assessment_results), \
-             (SELECT COUNT(*) FROM v2_criterion_citations), \
-             (SELECT COUNT(*) FROM v2_goal_assessments)",
-            [],
+            "SELECT (SELECT COUNT(*) FROM v2_goal_revisions WHERE session_id = ?1), \
+             (SELECT COUNT(*) FROM v2_goal_criteria WHERE session_id = ?1), \
+             (SELECT COUNT(*) FROM v2_criterion_assessment_results WHERE session_id = ?1), \
+             (SELECT COUNT(*) FROM v2_criterion_citations AS citation \
+                JOIN v2_criterion_assessment_results AS result \
+                  ON result.attempt_id = citation.attempt_id \
+                 AND result.criterion_id = citation.criterion_id \
+               WHERE result.session_id = ?1), \
+             (SELECT COUNT(*) FROM v2_goal_assessments WHERE session_id = ?1)",
+            [session_id.as_str()],
             |row| {
                 Ok((
                     row.get(0)?,

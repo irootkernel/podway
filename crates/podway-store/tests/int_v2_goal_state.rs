@@ -1015,6 +1015,10 @@ fn decided_state(revision: u64, completed: bool) -> GraphSessionStateV2 {
     )
 }
 
+pub(crate) fn completed_goal_state_for_archive() -> GraphSessionStateV2 {
+    decided_state(9, true)
+}
+
 pub(crate) fn rich_v2_state_for_schema_migration() -> GraphSessionStateV2 {
     let reworked = decided_state(9, true)
         .manual_rework_v2(
