@@ -799,6 +799,16 @@ fn v2agt005_recovery_schemas_accept_exact_closed_read_only_fixtures() {
             }),
         ),
         (
+            "schemas/daemon-readiness-timeout-details-v1.schema.json",
+            json!({
+                "schema":"podway.daemon-readiness-timeout-details/v1",
+                "operation":"wait_ready","readiness_state":"not_running","readiness_stage":null,
+                "elapsed_ms":120_000,"deadline_ms":120_000,"installed":false,"loaded":false,
+                "socket_present":false,"reachable":false,"contract_verified":false,
+                "same_command_retry_safe":true,"worktree_recovery":null,"recovery":wait_ready
+            }),
+        ),
+        (
             "schemas/endpoint-error-details-v2.schema.json",
             json!({"schema":"podway.endpoint-error-details/v2","recovery":daemon}),
         ),

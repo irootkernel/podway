@@ -585,6 +585,14 @@ fn install_sibling_release(fixture: &ControlledPathFixtureV1, label: &str) -> (S
         &["--json", "daemon", "install"],
         &release_daemon,
     );
+    let wait_ready = ["--json", "daemon", "wait-ready", "--timeout", "5s"];
+    let ready = assert_json_success(
+        fixture.run(&controlled_path, &wait_ready),
+        wait_ready.iter().copied(),
+    );
+    assert_eq!(ready["command"], "daemon.wait-ready");
+    assert_eq!(ready["result"]["schema"], "podway.daemon-status-result/v2");
+    assert_eq!(ready["result"]["readiness_state"], "ready");
     (controlled_path, release_daemon)
 }
 

@@ -84,4 +84,4 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 
 ## Current adopted dossiers
 
-- [Podway Phase-Aware Daemon Readiness](TODO-podway-phase-aware-daemon-readiness.md)
+No adopted dossier is currently active.

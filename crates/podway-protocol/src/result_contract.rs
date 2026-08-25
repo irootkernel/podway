@@ -1464,6 +1464,7 @@ const PROCEDURE_INDEPENDENT_OUTPUT_COMMANDS_V3: &[&str] = &[
     "daemon.stop",
     "daemon.restart",
     "daemon.status",
+    "daemon.wait-ready",
     "daemon.logs",
     "daemon.terminate",
     "workspace.init",
@@ -1651,7 +1652,7 @@ impl OutputEnvelopeV3 {
 
     fn validate_procedure_independent_projection_v1(&self) -> bool {
         match self.command.as_str() {
-            "version" | "daemon.status" => {
+            "version" | "daemon.status" | "daemon.wait-ready" => {
                 self.workspace.is_none() && self.job.is_none() && self.session.is_none()
             }
             "workspace.init" => {
@@ -1830,6 +1831,7 @@ fn command_result_schema_v1(command: &str, result: &Map<String, Value>) -> Optio
         {
             Some(DAEMON_STATUS_RESULT_SCHEMA_V2)
         }
+        "daemon.wait-ready" => Some(DAEMON_STATUS_RESULT_SCHEMA_V2),
         "daemon.status" => Some(DAEMON_STATUS_RESULT_SCHEMA_V1),
         "workspace.init" => Some(WORKSPACE_INIT_RESULT_SCHEMA_V1),
         _ => None,

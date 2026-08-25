@@ -203,12 +203,13 @@ V2_EXECUTABLE_ROUTES = frozenset(
         "session.begin",
         "session.terminal_disposition",
         "evidence.read",
+        "daemon.wait-ready",
     }
 )
 PROCEDURE_INDEPENDENT_EXECUTABLE_ROUTES = {
     "help", "version", "completions", "procedure.validate", "procedure.show",
     "preset.list", "preset.show", "preset.explain", "daemon.install", "daemon.uninstall",
-    "daemon.start", "daemon.stop", "daemon.restart", "daemon.status", "daemon.terminate",
+    "daemon.start", "daemon.stop", "daemon.restart", "daemon.status", "daemon.wait-ready", "daemon.terminate",
     "daemon.logs", "workspace.init", "workspace.doctor", "workspace.show", "workspace.repair",
     "session.start", "session.start_replace", "session.status", "session.next",
     "session.observe",

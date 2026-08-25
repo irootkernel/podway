@@ -2370,7 +2370,7 @@ fn validate_daemon_readiness_timeout_details_v1(details: &Map<String, Value>) ->
             == Some(true)
         && details
             .get("worktree_recovery")
-            .is_some_and(validate_worktree_recovery_v1)
+            .is_some_and(|value| value.is_null() || validate_worktree_recovery_v1(value))
 }
 
 fn validate_session_start_decision_required_details_v1(details: &Map<String, Value>) -> bool {

@@ -74,7 +74,8 @@ const LOCAL_USAGE_EXIT: i32 = 2;
 const LOCAL_DAEMON_EXIT: i32 = 3;
 const LOCAL_CLIENT_EXIT: i32 = 6;
 const MAX_SERVICE_LOG_READ_BYTES: u64 = 10 * 1024 * 1024;
-const SERVICE_HEALTH_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_DAEMON_READINESS_TIMEOUT_MS: u64 = 120_000;
+const DAEMON_READINESS_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const DAEMON_VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 const DAEMON_VERSION_PROBE_OUTPUT_LIMIT: usize = 4 * 1024;
 const DAEMON_VERSION_PROBE_POST_KILL_DRAIN: Duration = Duration::from_millis(100);
@@ -643,6 +644,7 @@ enum DaemonCommand {
     Stop,
     Restart,
     Status,
+    WaitReady,
     Logs {
         #[arg(long, action = ArgAction::SetTrue)]
         follow: bool,
@@ -1386,7 +1388,7 @@ impl LocalFailure {
             "DAEMON_NOT_INSTALLED" | "DAEMON_VERSION_INCOMPATIBLE" | "DAEMON_CONTRACT_MISMATCH" => {
                 (LOCAL_DAEMON_EXIT, false)
             }
-            "DAEMON_UNAVAILABLE" => (LOCAL_DAEMON_EXIT, true),
+            "DAEMON_UNAVAILABLE" | "DAEMON_READINESS_TIMEOUT" => (LOCAL_DAEMON_EXIT, true),
             // A registered v2 route this build does not serve. No local command produces it now
             // that `procedure format --write` is implemented; the entry stays because this match is
             // the CLI's copy of the frozen exit classes in `assets/specifications/error-codes.json`,
@@ -3027,13 +3029,18 @@ fn execute_local(cli: &Cli) -> Result<Option<RunResult>, LocalFailure> {
                 ));
             }
             if cli.worktree.is_some()
-                || cli.timeout.is_some()
+                || (cli.timeout.is_some() && !matches!(command, DaemonCommand::WaitReady))
                 || cli.detach
                 || cli.idempotency_key.is_some()
                 || ExplicitPreconditions::parse(cli)?.any()
             {
                 return Err(LocalFailure::request_invalid(
                     "daemon lifecycle commands accept no daemon request flags",
+                ));
+            }
+            if matches!(command, DaemonCommand::WaitReady) && cli.timeout == Some(0) {
+                return Err(LocalFailure::request_invalid(
+                    "daemon wait-ready timeout must be at least 1ms",
                 ));
             }
             if cli.socket.is_some() && !matches!(command, DaemonCommand::Install { .. }) {
@@ -3057,6 +3064,7 @@ fn execute_local(cli: &Cli) -> Result<Option<RunResult>, LocalFailure> {
             Ok(Some(execute_service_lifecycle(
                 command,
                 cli.socket.as_deref(),
+                cli.timeout,
             )?))
         }
         Command::Terminate => {
@@ -3148,6 +3156,7 @@ fn dev_terminate_result() -> RunResult {
 fn execute_service_lifecycle(
     command: &DaemonCommand,
     socket_path: Option<&Path>,
+    readiness_timeout_ms: Option<u64>,
 ) -> Result<RunResult, LocalFailure> {
     let command_name = daemon_command_name(command);
     let mut paths = if socket_path.is_some() {
@@ -3172,19 +3181,19 @@ fn execute_service_lifecycle(
     )
     .map_err(|_| LocalFailure::daemon_unavailable(command_name))?;
     let manager = ServiceManagerV1::new(runner, clock, paths.clone());
-    execute_service_lifecycle_with_manager(command, &manager, &paths)
+    execute_service_lifecycle_with_manager(command, &manager, &paths, readiness_timeout_ms)
 }
 
 fn execute_service_lifecycle_with_manager(
     command: &DaemonCommand,
     manager: &impl ServiceManagerContractV1,
     paths: &ServiceRuntimePathsV1,
+    readiness_timeout_ms: Option<u64>,
 ) -> Result<RunResult, LocalFailure> {
     let command_name = daemon_command_name(command);
     let result = match command {
         DaemonCommand::Install { daemon_path } => {
             let binary = resolve_daemon_executable(daemon_path.as_deref(), command_name)?;
-            let expected_binary = binary.as_path().to_path_buf();
             let identity = build_identity_v1();
             let spec = InstallSpecV1::new(
                 binary,
@@ -3200,11 +3209,12 @@ fn execute_service_lifecycle_with_manager(
                 outcome,
                 ServiceOutcomeV1::ChangedV1(_) | ServiceOutcomeV1::AlreadyInDesiredStateV1(_)
             ) {
-                wait_for_verified_service(
+                wait_for_service_readiness(
+                    manager,
                     paths,
-                    expected_binary.as_path(),
                     command_name,
-                    SERVICE_HEALTH_TIMEOUT,
+                    "install",
+                    Duration::from_millis(DEFAULT_DAEMON_READINESS_TIMEOUT_MS),
                 )?;
             }
             service_outcome_result(command_name, outcome)
@@ -3240,6 +3250,22 @@ fn execute_service_lifecycle_with_manager(
                 .map_err(|error| map_service_error(error, command_name))?,
             paths,
         )?,
+        DaemonCommand::WaitReady => {
+            let status = wait_for_service_readiness(
+                manager,
+                paths,
+                command_name,
+                "wait_ready",
+                Duration::from_millis(
+                    readiness_timeout_ms.unwrap_or(DEFAULT_DAEMON_READINESS_TIMEOUT_MS),
+                ),
+            )?;
+            local_result(
+                command_name,
+                Value::Object(status),
+                "daemon ready".to_owned(),
+            )
+        }
         DaemonCommand::Logs { follow, lines } => {
             let query = LogQueryV1::new(ServiceLogStreamV1::DaemonV1)
                 .with_follow(*follow)
@@ -3556,6 +3582,25 @@ fn probe_daemon_identity_with_runner(
     })
 }
 
+fn wait_for_service_readiness(
+    manager: &impl ServiceManagerContractV1,
+    paths: &ServiceRuntimePathsV1,
+    command: &str,
+    operation: &'static str,
+    timeout: Duration,
+) -> Result<Map<String, Value>, LocalFailure> {
+    let mut runtime = SystemReadinessWaitRuntime::new();
+    wait_for_verified_service_with_runtime(
+        manager,
+        paths,
+        command,
+        operation,
+        timeout,
+        &mut runtime,
+    )
+}
+
+#[cfg(test)]
 fn wait_for_verified_service(
     paths: &ServiceRuntimePathsV1,
     expected_binary: &Path,
@@ -3609,6 +3654,167 @@ fn wait_for_verified_service(
     Err(last_identity_failure.unwrap_or_else(|| LocalFailure::daemon_unavailable(command)))
 }
 
+trait ReadinessWaitRuntime {
+    fn elapsed(&self) -> Duration;
+    fn wait(&mut self, duration: Duration);
+}
+
+struct SystemReadinessWaitRuntime {
+    started_at: Instant,
+}
+
+impl SystemReadinessWaitRuntime {
+    fn new() -> Self {
+        Self {
+            started_at: Instant::now(),
+        }
+    }
+}
+
+impl ReadinessWaitRuntime for SystemReadinessWaitRuntime {
+    fn elapsed(&self) -> Duration {
+        self.started_at.elapsed()
+    }
+
+    fn wait(&mut self, duration: Duration) {
+        thread::sleep(duration);
+    }
+}
+
+fn wait_for_verified_service_with_runtime(
+    manager: &impl ServiceManagerContractV1,
+    paths: &ServiceRuntimePathsV1,
+    command: &str,
+    operation: &'static str,
+    timeout: Duration,
+    runtime: &mut impl ReadinessWaitRuntime,
+) -> Result<Map<String, Value>, LocalFailure> {
+    wait_for_readiness_observations_with_runtime(
+        || observe_service_readiness(manager, paths, command),
+        paths,
+        command,
+        operation,
+        timeout,
+        runtime,
+    )
+}
+
+fn observe_service_readiness(
+    manager: &impl ServiceManagerContractV1,
+    paths: &ServiceRuntimePathsV1,
+    command: &str,
+) -> Result<ReadinessObservation, LocalFailure> {
+    let service_status = manager
+        .status()
+        .map_err(|error| map_service_error(error, command))?;
+    let (run_result, verified_v2_ready) =
+        service_status_projection("daemon.status", service_status, paths)?;
+    match run_result {
+        RunResult::Local { result, .. } => Ok(ReadinessObservation {
+            result,
+            verified_v2_ready,
+        }),
+        RunResult::Response(response) => match *response {
+            ResponseEnvelopeV2::Error(error)
+                if error.code().as_str() == "DAEMON_CONTRACT_MISMATCH" =>
+            {
+                Err(
+                    LocalFailure::catalog("DAEMON_CONTRACT_MISMATCH", error.message(), command)
+                        .with_details(error.details().clone()),
+                )
+            }
+            _ => Err(LocalFailure::response_invalid(
+                "daemon readiness returned an unexpected response",
+            )
+            .with_command(command)),
+        },
+        _ => Err(LocalFailure::response_invalid(
+            "daemon readiness returned an invalid local result",
+        )
+        .with_command(command)),
+    }
+}
+
+struct ReadinessObservation {
+    result: Map<String, Value>,
+    verified_v2_ready: bool,
+}
+
+fn wait_for_readiness_observations_with_runtime(
+    mut observe: impl FnMut() -> Result<ReadinessObservation, LocalFailure>,
+    paths: &ServiceRuntimePathsV1,
+    command: &str,
+    operation: &'static str,
+    timeout: Duration,
+    runtime: &mut impl ReadinessWaitRuntime,
+) -> Result<Map<String, Value>, LocalFailure> {
+    loop {
+        let observed = observe()?;
+        if observed.verified_v2_ready {
+            return Ok(observed.result);
+        }
+        let elapsed = runtime.elapsed();
+        if elapsed >= timeout {
+            return Err(daemon_readiness_timeout(
+                command,
+                operation,
+                elapsed,
+                timeout,
+                &observed.result,
+                paths,
+            ));
+        }
+        runtime.wait(DAEMON_READINESS_POLL_INTERVAL.min(timeout - elapsed));
+    }
+}
+
+fn daemon_readiness_timeout(
+    command: &str,
+    operation: &'static str,
+    elapsed: Duration,
+    timeout: Duration,
+    observed: &Map<String, Value>,
+    paths: &ServiceRuntimePathsV1,
+) -> LocalFailure {
+    let mut failure = LocalFailure::catalog(
+        "DAEMON_READINESS_TIMEOUT",
+        "verified daemon readiness was not reached before the deadline",
+        command,
+    );
+    let elapsed_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
+    let deadline_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX);
+    failure.details = Map::from_iter([
+        ("operation".to_owned(), Value::String(operation.to_owned())),
+        (
+            "readiness_state".to_owned(),
+            observed["readiness_state"].clone(),
+        ),
+        (
+            "readiness_stage".to_owned(),
+            observed["readiness_stage"].clone(),
+        ),
+        ("elapsed_ms".to_owned(), json!(elapsed_ms)),
+        ("deadline_ms".to_owned(), json!(deadline_ms)),
+        ("installed".to_owned(), observed["installed"].clone()),
+        ("loaded".to_owned(), observed["loaded"].clone()),
+        (
+            "socket_present".to_owned(),
+            json!(paths.socket_path().as_path().try_exists().unwrap_or(false)),
+        ),
+        ("reachable".to_owned(), observed["reachable"].clone()),
+        (
+            "contract_verified".to_owned(),
+            observed["reachable"].clone(),
+        ),
+        ("same_command_retry_safe".to_owned(), Value::Bool(true)),
+        (
+            "worktree_recovery".to_owned(),
+            observed["worktree_recovery"].clone(),
+        ),
+    ]);
+    failure
+}
+
 fn service_outcome_result(command: &str, outcome: ServiceOutcomeV1) -> RunResult {
     let outcome = outcome.kind().as_str();
     local_result(
@@ -3623,6 +3829,14 @@ fn service_status_result(
     status: ServiceStatusV1,
     paths: &ServiceRuntimePathsV1,
 ) -> Result<RunResult, LocalFailure> {
+    service_status_projection(command, status, paths).map(|(result, _)| result)
+}
+
+fn service_status_projection(
+    command: &str,
+    status: ServiceStatusV1,
+    paths: &ServiceRuntimePathsV1,
+) -> Result<(RunResult, bool), LocalFailure> {
     let (status, installed, loaded, metadata) = match status {
         ServiceStatusV1::NotInstalledV1(_) => ("not_installed", false, false, None),
         ServiceStatusV1::RunningV1(running) => {
@@ -3698,16 +3912,20 @@ fn service_status_result(
     .as_object()
     .expect("daemon service status is an object")
     .clone();
+    let mut verified_v2_ready = false;
     if loaded {
         let request = build_daemon_status_request()?;
         let client = DaemonClientV1::new(paths.clone());
         match client.daemon_status(&request) {
             Ok(ResponseEnvelopeV2::Error(error)) => {
-                return Ok(RunResult::Response(Box::new(ResponseEnvelopeV2::Error(
-                    error,
-                ))));
+                return Ok((
+                    RunResult::Response(Box::new(ResponseEnvelopeV2::Error(error))),
+                    false,
+                ));
             }
             Ok(ResponseEnvelopeV2::OutputV2(output)) => {
+                let is_v2 = output.result().get("schema").and_then(Value::as_str)
+                    == Some("podway.daemon-status-result/v2");
                 let live = validated_live_daemon_status(
                     &output,
                     static_identity.as_ref(),
@@ -3718,6 +3936,8 @@ fn service_status_result(
                     result.insert(key, value);
                 }
                 result.insert("reachable".to_owned(), Value::Bool(true));
+                verified_v2_ready =
+                    is_v2 && result.get("readiness_state").and_then(Value::as_str) == Some("ready");
             }
             Err(
                 DaemonClientErrorV1::Connection { .. }
@@ -3731,10 +3951,20 @@ fn service_status_result(
             Err(error) => return Err(map_client_error(error).with_command(command)),
         }
     }
-    Ok(local_result(
-        command,
-        Value::Object(result),
-        status.replace('_', " "),
+    let readiness = result
+        .get("readiness_state")
+        .and_then(Value::as_str)
+        .unwrap_or("unreachable");
+    let text = match readiness {
+        "ready" => "daemon ready".to_owned(),
+        "starting" | "recovering" => format!("daemon startup incomplete: {readiness}"),
+        "failed" => "daemon startup failed".to_owned(),
+        "unreachable" if loaded => "daemon startup incomplete: unreachable".to_owned(),
+        _ => status.replace('_', " "),
+    };
+    Ok((
+        local_result(command, Value::Object(result), text),
+        verified_v2_ready,
     ))
 }
 
@@ -5603,6 +5833,7 @@ fn daemon_command_name(command: &DaemonCommand) -> &'static str {
         DaemonCommand::Stop => "daemon.stop",
         DaemonCommand::Restart => "daemon.restart",
         DaemonCommand::Status => "daemon.status",
+        DaemonCommand::WaitReady => "daemon.wait-ready",
         DaemonCommand::Logs { .. } => "daemon.logs",
     }
 }
@@ -7440,7 +7671,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Procedures:\n  podway procedure scaffold > .podway/procedures/custom.yaml\n  podway procedure format .podway/procedures/custom.yaml --write\n  podway procedure check .podway/procedures/custom.yaml --warnings-as-errors\n  podway procedure preview .podway/procedures/custom.yaml\n  podway start --procedure .podway/procedures/custom.yaml --expect-procedure-digest sha256:<hex> --task 'perform work'\n\nOther Procedure v2 authoring routes are procedure validate, vet, lint, and graph."
         }
         "daemon" => {
-            "Daemon lifecycle grammar:\n  podway daemon status\n  podway daemon install --daemon-path /absolute/podwayd\n  podway daemon logs --lines 100"
+            "Daemon lifecycle grammar:\n  podway daemon status\n  podway daemon wait-ready [--timeout 120s]\n  podway daemon install --daemon-path /absolute/podwayd\n  podway daemon logs --lines 100"
         }
         "artifacts" => {
             "Artifacts:\n  podway attach verification-reference report.md --media-type text/markdown\n  podway attach verification-reference --reference build:42 --digest sha256:<hex> --size 42 --media-type text/plain"
@@ -7496,6 +7727,9 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
         "daemon.stop" => "Usage:\n  podway daemon stop\n\nExample:\n  podway daemon stop",
         "daemon.restart" => "Usage:\n  podway daemon restart\n\nExample:\n  podway daemon restart",
         "daemon.status" => "Usage:\n  podway daemon status\n\nExample:\n  podway daemon status",
+        "daemon.wait-ready" => {
+            "Usage:\n  podway daemon wait-ready [--timeout DURATION]\n\nExample:\n  podway --json daemon wait-ready --timeout 120s"
+        }
         "daemon.terminate" => {
             "Usage:\n  podway --dev terminate\n\nExample:\n  podway --dev terminate"
         }
@@ -7642,16 +7876,17 @@ mod tests {
     };
 
     use super::{
-        Cli, Command, CommandNameV1, LocalEnvelopeClock, LocalFailure, OutputEnvelopeInputV3,
-        OutputEnvelopeV3, ParseFailureCommandContext, RequestIdV1, ResponseEnvelopeV2,
-        Rfc3339MillisV1, RunResult, build_identity_v1, contains_check_result_projection_v1,
-        daemon_payload, local_generated_at, local_result, map_service_error,
-        parse_failure_command_context, parse_timeout_millis, probe_daemon_identity,
-        probe_daemon_identity_with_runner, render_local_failure_with_clock_and_writers,
-        render_result_with_clock_and_writers, resolve_daemon_executable,
-        resolve_implicit_daemon_executable_from, resolve_installed_service_endpoint,
-        service_outcome_result, service_status_result, stream_log_follow_update,
-        system_service_clock, validate_command_shape, validate_daemon_flags,
+        Cli, Command, CommandNameV1, DaemonCommand, LocalEnvelopeClock, LocalFailure,
+        OutputEnvelopeInputV3, OutputEnvelopeV3, ParseFailureCommandContext, RequestIdV1,
+        ResponseEnvelopeV2, Rfc3339MillisV1, RunResult, build_identity_v1,
+        contains_check_result_projection_v1, daemon_payload, local_generated_at, local_result,
+        map_service_error, parse_failure_command_context, parse_timeout_millis,
+        probe_daemon_identity, probe_daemon_identity_with_runner,
+        render_local_failure_with_clock_and_writers, render_result_with_clock_and_writers,
+        resolve_daemon_executable, resolve_implicit_daemon_executable_from,
+        resolve_installed_service_endpoint, service_outcome_result, service_status_result,
+        stream_log_follow_update, system_service_clock, validate_command_shape,
+        validate_daemon_flags,
     };
     use clap::{Parser, error::ErrorKind};
     use serde_json::json;
@@ -8364,8 +8599,31 @@ mod tests {
         assert_eq!(parse_timeout_millis("500ms"), Ok(500));
         assert_eq!(parse_timeout_millis("30s"), Ok(30_000));
         assert_eq!(parse_timeout_millis("2m"), Ok(120_000));
+        assert_eq!(parse_timeout_millis("60m"), Ok(3_600_000));
+        assert!(parse_timeout_millis("61m").is_err());
         assert!(parse_timeout_millis("30").is_err());
         assert!(parse_timeout_millis("1h").is_err());
+    }
+
+    #[test]
+    fn daemon_wait_ready_has_closed_read_only_grammar() {
+        let cli = Cli::try_parse_from([
+            "podway",
+            "--json",
+            "daemon",
+            "wait-ready",
+            "--timeout",
+            "120s",
+        ])
+        .expect("documented wait-ready grammar");
+        assert_eq!(cli.timeout, Some(120_000));
+        assert!(matches!(
+            cli.command,
+            Command::Daemon {
+                command: DaemonCommand::WaitReady
+            }
+        ));
+        assert!(Cli::try_parse_from(["podway", "daemon", "wait-ready", "--repair"]).is_err());
     }
     #[test]
     fn service_clock_failures_are_explicit_and_command_scoped() {
@@ -8730,11 +8988,153 @@ mod phase6_health_tests {
 
     use podway_core::UnixMillis;
     use podway_protocol::{
-        build_identity_v1, decode_request_payload_v1, decode_single_frame_v1, encode_frame_v1,
+        ResponseEnvelopeV2, build_identity_v1, decode_request_payload_v1, decode_single_frame_v1,
+        encode_frame_v1, ensure_error_details_schema_v1,
     };
     use podway_service::{ServiceRunningV1, ServiceRuntimePathsV1, ServiceStatusV1};
 
-    use super::{service_status_result, wait_for_verified_service};
+    use serde_json::json;
+
+    use super::{
+        ReadinessObservation, ReadinessWaitRuntime, service_status_result,
+        wait_for_readiness_observations_with_runtime, wait_for_verified_service,
+    };
+
+    struct SimulatedReadinessRuntime {
+        elapsed: Duration,
+    }
+
+    impl ReadinessWaitRuntime for SimulatedReadinessRuntime {
+        fn elapsed(&self) -> Duration {
+            self.elapsed
+        }
+
+        fn wait(&mut self, duration: Duration) {
+            self.elapsed += duration;
+        }
+    }
+
+    #[test]
+    fn readiness_timeout_crosses_thirty_seconds_without_sleep_or_mutation() {
+        let runtime_root = std::env::temp_dir().join(format!(
+            "podway-cli-readiness-timeout-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&runtime_root);
+        fs::create_dir_all(&runtime_root).expect("timeout fixture runtime");
+        fs::set_permissions(&runtime_root, fs::Permissions::from_mode(0o700))
+            .expect("timeout fixture runtime must be private");
+        let sentinel = runtime_root.join("sentinel");
+        fs::write(&sentinel, b"preserved").expect("timeout fixture sentinel");
+        let paths = ServiceRuntimePathsV1::from_directories(
+            runtime_root.join("LaunchAgents"),
+            runtime_root.join("ApplicationSupport"),
+            runtime_root.join("Logs"),
+            &runtime_root,
+        )
+        .expect("timeout fixture service paths");
+        let observation = json!({
+            "schema":"podway.daemon-status-result/v2",
+            "status":"not_installed","installed":false,"loaded":false,"reachable":false,
+            "product":null,"daemon_version":null,"target":null,"build_identity":null,
+            "source_commit":null,"contract_manifest_schema":null,"contract_manifest_digest":null,
+            "protocol_versions":[],"pid":null,"process_id":null,"executable_path":null,
+            "started_at":null,"uptime_ms":null,"socket_path":null,"configured_socket_path":null,
+            "effective_socket_path":null,"registered_worktree_count":null,
+            "active_scheduler_count":null,"queued_job_count":null,"running_job_count":null,
+            "readiness_state":"not_running","readiness_stage":null,
+            "readiness_elapsed_ms":null,"worktree_recovery":null
+        })
+        .as_object()
+        .expect("observation object")
+        .clone();
+        let mut runtime = SimulatedReadinessRuntime {
+            elapsed: Duration::ZERO,
+        };
+        let failure = wait_for_readiness_observations_with_runtime(
+            || {
+                Ok::<ReadinessObservation, super::LocalFailure>(ReadinessObservation {
+                    result: observation.clone(),
+                    verified_v2_ready: false,
+                })
+            },
+            &paths,
+            "daemon.wait-ready",
+            "wait_ready",
+            Duration::from_secs(31),
+            &mut runtime,
+        )
+        .expect_err("non-running daemon must time out");
+
+        assert_eq!(failure.code, "DAEMON_READINESS_TIMEOUT");
+        assert!(failure.retryable);
+        assert_eq!(failure.details["operation"], "wait_ready");
+        assert_eq!(failure.details["elapsed_ms"], 31_000);
+        assert_eq!(failure.details["deadline_ms"], 31_000);
+        assert!(failure.details["worktree_recovery"].is_null());
+        let mut details = failure.details.clone();
+        ensure_error_details_schema_v1(failure.code, &mut details);
+        serde_json::from_value::<ResponseEnvelopeV2>(json!({
+            "schema":"podway.error/v1",
+            "request_id":"123e4567-e89b-42d3-a456-426614174000",
+            "command":"daemon.wait-ready",
+            "generated_at":"2026-08-25T00:00:00.000Z",
+            "code":failure.code,
+            "message":failure.message,
+            "retryable":failure.retryable,
+            "exit_code":failure.exit_code,
+            "details":details
+        }))
+        .expect("timeout must serialize through the public error contract");
+        assert_eq!(fs::read(&sentinel).expect("sentinel remains"), b"preserved");
+        fs::remove_dir_all(runtime_root).expect("remove timeout fixture");
+    }
+
+    #[test]
+    fn legacy_ready_observation_does_not_satisfy_the_v2_waiter() {
+        let runtime_root = std::env::temp_dir().join(format!(
+            "podway-cli-legacy-readiness-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&runtime_root);
+        fs::create_dir_all(&runtime_root).expect("legacy fixture runtime");
+        fs::set_permissions(&runtime_root, fs::Permissions::from_mode(0o700))
+            .expect("legacy fixture runtime must be private");
+        let paths = ServiceRuntimePathsV1::from_directories(
+            runtime_root.join("LaunchAgents"),
+            runtime_root.join("ApplicationSupport"),
+            runtime_root.join("Logs"),
+            &runtime_root,
+        )
+        .expect("legacy fixture service paths");
+        let result = json!({
+            "readiness_state":"ready","readiness_stage":"ready",
+            "installed":true,"loaded":true,"reachable":true,
+            "worktree_recovery":{"total":0,"completed":0,"failed":0}
+        })
+        .as_object()
+        .expect("legacy observation object")
+        .clone();
+        let mut runtime = SimulatedReadinessRuntime {
+            elapsed: Duration::from_millis(1),
+        };
+        let failure = wait_for_readiness_observations_with_runtime(
+            || {
+                Ok::<ReadinessObservation, super::LocalFailure>(ReadinessObservation {
+                    result: result.clone(),
+                    verified_v2_ready: false,
+                })
+            },
+            &paths,
+            "daemon.wait-ready",
+            "wait_ready",
+            Duration::from_millis(1),
+            &mut runtime,
+        )
+        .expect_err("a synthesized legacy ready result must not satisfy the v2 waiter");
+        assert_eq!(failure.code, "DAEMON_READINESS_TIMEOUT");
+        fs::remove_dir_all(runtime_root).expect("remove legacy fixture");
+    }
 
     #[test]
     fn raw_socket_listener_is_not_verified_daemon_health() {
@@ -8782,9 +9182,10 @@ mod phase6_health_tests {
         )
         .expect("status without daemon metadata must remain available");
         match result {
-            super::RunResult::Local { result, .. } => {
+            super::RunResult::Local { result, text, .. } => {
                 assert_eq!(result["reachable"], false);
                 assert_eq!(result["loaded"], true);
+                assert_eq!(text, "daemon startup incomplete: unreachable");
             }
             _ => panic!("service status must remain local"),
         }
