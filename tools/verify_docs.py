@@ -252,6 +252,19 @@ def validate_skills(skills_root: Path = SKILLS) -> int:
 
 
 SKILL_REFERENCE_LOOP_RE = re.compile(r"for reference in ([a-z0-9 -]+); do")
+SKILL_INSTALL_ASSIGNMENTS = {
+    "create-podway-procedure": (
+        'procedure_skill_dir="$HOME/.agents/skills/create-podway-procedure"'
+    ),
+    "use-podway": 'podway_skill_dir="$HOME/.agents/skills/use-podway"',
+}
+CUSTOM_PROCEDURE_WORKFLOW = (
+    "podway procedure scaffold --template minimal > .podway/procedures/custom.yaml",
+    "podway procedure check .podway/procedures/custom.yaml --warnings-as-errors",
+    "podway --json procedure preview .podway/procedures/custom.yaml",
+    "--expect-procedure-digest sha256:<digest-from-preview>",
+    "podway begin",
+)
 
 
 def skill_reference_loop(content: str, name: str) -> re.Match[str] | None:
@@ -267,6 +280,9 @@ def skill_reference_loop(content: str, name: str) -> re.Match[str] | None:
 
 def validate_skill_install_instructions(content: str) -> None:
     for name, expected_files in EXPECTED_SKILL_FILES.items():
+        assignment = SKILL_INSTALL_ASSIGNMENTS[name]
+        if assignment not in content:
+            fail(f"README omits the .agents install path for {name}")
         expected = {
             Path(relative).stem
             for relative in expected_files
@@ -276,6 +292,24 @@ def validate_skill_install_instructions(content: str) -> None:
         actual = set(loop.group(1).split()) if loop is not None else set()
         if actual != expected:
             fail(f"README omits the complete {name} reference install loop")
+
+    workflow_start = content.find(CUSTOM_PROCEDURE_WORKFLOW[0])
+    workflow_end = content.find("\n```", workflow_start)
+    workflow = (
+        content[workflow_start:workflow_end]
+        if workflow_start >= 0 and workflow_end >= 0
+        else ""
+    )
+    positions = [workflow.find(marker) for marker in CUSTOM_PROCEDURE_WORKFLOW]
+    if any(position < 0 for position in positions):
+        missing = [
+            marker
+            for marker, position in zip(CUSTOM_PROCEDURE_WORKFLOW, positions, strict=True)
+            if position < 0
+        ]
+        fail(f"README custom Procedure workflow omits required commands: {missing}")
+    if positions != sorted(positions):
+        fail("README custom Procedure workflow is out of order")
 
 
 def copy_skill_fixture(destination: Path) -> None:
@@ -300,6 +334,47 @@ def expect_validation_failure(skills_root: Path, expected: str) -> None:
 def validate_skills_self_test() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     validate_skill_install_instructions(readme)
+    for name, assignment in SKILL_INSTALL_ASSIGNMENTS.items():
+        broken = readme.replace(assignment, assignment.replace("/.agents/", "/agents/"), 1)
+        try:
+            validate_skill_install_instructions(broken)
+        except DocumentationError as error:
+            if f".agents install path for {name}" not in str(error):
+                fail(f"self-test expected invalid skill install path, got {error!r}")
+        else:
+            fail(f"self-test expected an invalid {name} install path")
+
+    workflow_start = readme.find(CUSTOM_PROCEDURE_WORKFLOW[0])
+    for marker in CUSTOM_PROCEDURE_WORKFLOW:
+        marker_start = readme.find(marker, workflow_start)
+        broken = (
+            readme[:marker_start]
+            + "REMOVED_CUSTOM_WORKFLOW_MARKER"
+            + readme[marker_start + len(marker) :]
+        )
+        try:
+            validate_skill_install_instructions(broken)
+        except DocumentationError as error:
+            if "custom Procedure workflow" not in str(error):
+                fail(f"self-test expected incomplete custom workflow, got {error!r}")
+        else:
+            fail(f"self-test expected custom workflow to require {marker!r}")
+
+    preview = CUSTOM_PROCEDURE_WORKFLOW[2]
+    digest = CUSTOM_PROCEDURE_WORKFLOW[3]
+    reversed_workflow = (
+        readme.replace(preview, "__PREVIEW_COMMAND__", 1)
+        .replace(digest, preview, 1)
+        .replace("__PREVIEW_COMMAND__", digest, 1)
+    )
+    try:
+        validate_skill_install_instructions(reversed_workflow)
+    except DocumentationError as error:
+        if "custom Procedure workflow is out of order" not in str(error):
+            fail(f"self-test expected out-of-order custom workflow, got {error!r}")
+    else:
+        fail("self-test expected an out-of-order custom workflow")
+
     for name in EXPECTED_SKILL_FILES:
         loop = skill_reference_loop(readme, name)
         if loop is None:

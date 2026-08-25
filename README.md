@@ -13,7 +13,9 @@ Podway ships two matching binaries:
 
 Use Podway when a task has explicit graph nodes that should not be skipped,
 especially when work may be retried, handed between people or agents, or sent
-through a declared rework path. Four built-in procedures cover common work:
+through a declared rework path. `podway preset list` is the authority for the
+installed binary's exact catalog. The current source embeds four built-in
+procedures for common work:
 
 | Preset | Best for |
 |---|---|
@@ -113,10 +115,10 @@ For a small project-wide policy, add this template to the project's `AGENTS.md`:
 - Podway records assertions; it does not run the work or prove semantic truth.
 ```
 
-For fuller runtime guidance, install the complete [`use-podway` skill](https://github.com/irootkernel/podway/tree/main/skills/use-podway) directory under `~/agents/skills/`:
+For fuller runtime guidance, install the complete [`use-podway` skill](https://github.com/irootkernel/podway/tree/main/skills/use-podway) directory under `~/.agents/skills/`:
 
 ```bash
-podway_skill_dir=~/agents/skills/use-podway
+podway_skill_dir="$HOME/.agents/skills/use-podway"
 mkdir -p "$podway_skill_dir/references"
 
 curl -fsSLo "$podway_skill_dir/SKILL.md" \
@@ -133,7 +135,7 @@ The runtime skill covers the active-session loop and loads separate references o
 Install [`create-podway-procedure`](https://github.com/irootkernel/podway/tree/main/skills/create-podway-procedure) separately only when the agent needs to create, revise, review, or harden custom Procedure source:
 
 ```bash
-procedure_skill_dir=~/agents/skills/create-podway-procedure
+procedure_skill_dir="$HOME/.agents/skills/create-podway-procedure"
 mkdir -p "$procedure_skill_dir/references" "$procedure_skill_dir/agents"
 
 curl -fsSLo "$procedure_skill_dir/SKILL.md" \
@@ -229,8 +231,15 @@ podway begin
 You can also use a worktree-local YAML procedure:
 
 ```bash
-podway procedure validate .podway/procedures/custom.yaml
-podway start --procedure .podway/procedures/custom.yaml --task "review queue behavior"
+podway procedure scaffold --template minimal > .podway/procedures/custom.yaml
+# Review and edit the scaffold, then qualify the resulting source.
+podway procedure check .podway/procedures/custom.yaml --warnings-as-errors
+podway --json procedure preview .podway/procedures/custom.yaml
+# Run the exact start suggestion returned by preview.
+podway start \
+  --procedure .podway/procedures/custom.yaml \
+  --expect-procedure-digest sha256:<digest-from-preview> \
+  --task "review queue behavior"
 podway begin
 ```
 
