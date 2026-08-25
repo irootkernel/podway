@@ -191,6 +191,12 @@ enum V2RuntimeErrorDetailsV1 {
         maximum: u64,
         unit: String,
     },
+    ItemConstraintFailed {
+        field: String,
+        actual: u64,
+        maximum: u64,
+        unit: String,
+    },
     EvidenceNotAvailable {
         graph_node_id: String,
         source_graph_node_id: String,
@@ -673,6 +679,22 @@ impl DispatchErrorDetailsV1 {
         self
     }
 
+    pub fn with_item_constraint_bound(
+        mut self,
+        field: String,
+        actual: u64,
+        maximum: u64,
+        unit: String,
+    ) -> Self {
+        self.v2_runtime = Some(Box::new(V2RuntimeErrorDetailsV1::ItemConstraintFailed {
+            field,
+            actual,
+            maximum,
+            unit,
+        }));
+        self
+    }
+
     pub fn with_evidence_reference_unresolved(
         mut self,
         graph_node_id: GraphNodeId,
@@ -935,6 +957,16 @@ impl DispatchErrorDetailsV1 {
                     unit,
                 } => json!({
                     "schema": "podway.v2-runtime-error-details/v1", "kind": "ATTEMPT_CONTENT_LIMIT_EXCEEDED",
+                    "field": field, "actual": actual, "maximum": maximum, "unit": unit,
+                    "admission": admission,
+                }),
+                V2RuntimeErrorDetailsV1::ItemConstraintFailed {
+                    field,
+                    actual,
+                    maximum,
+                    unit,
+                } => json!({
+                    "schema": "podway.v2-runtime-error-details/v1", "kind": "ITEM_CONSTRAINT_FAILED",
                     "field": field, "actual": actual, "maximum": maximum, "unit": unit,
                     "admission": admission,
                 }),

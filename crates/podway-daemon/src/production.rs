@@ -2756,9 +2756,19 @@ fn map_preview_domain_error(error: DomainError, _command: &SliceCommandV1) -> Di
                 ),
             )
         }
-        DomainError::BoundExceeded { .. } => {
-            DispatchFailureV1::new(DispatchFailureKindV1::ItemConstraintFailed)
-        }
+        DomainError::BoundExceeded {
+            field,
+            actual,
+            maximum,
+            unit,
+        } => DispatchFailureV1::new(DispatchFailureKindV1::ItemConstraintFailed).with_details(
+            DispatchErrorDetailsV1::default().with_item_constraint_bound(
+                field.to_owned(),
+                actual,
+                maximum,
+                unit.as_str().to_owned(),
+            ),
+        ),
         DomainError::PreconditionFailed { expected, actual } => {
             DispatchFailureV1::new(DispatchFailureKindV1::SessionRevisionConflict).with_details(
                 DispatchErrorDetailsV1::default()
@@ -4970,9 +4980,8 @@ fn map_terminal_domain_error(
             )
         }
         // Only the per-attempt content aggregate maps to ATTEMPT_CONTENT_LIMIT_EXCEEDED, whose
-        // closed details fix `unit` to scalars. Every other scale bound is a declaration-time
-        // rejection that a coherent admitted snapshot cannot reach, so it stays a constraint
-        // failure rather than borrowing a code whose schema it would violate.
+        // closed details fix `unit` to scalars. Every other scale bound keeps the item-constraint
+        // code and its own closed bound details rather than borrowing the aggregate code.
         PersistedDomainErrorV1::BoundExceeded {
             field,
             actual,
@@ -4990,9 +4999,19 @@ fn map_terminal_domain_error(
                 ),
             )
         }
-        PersistedDomainErrorV1::BoundExceeded { .. } => {
-            DispatchFailureV1::new(DispatchFailureKindV1::ItemConstraintFailed)
-        }
+        PersistedDomainErrorV1::BoundExceeded {
+            field,
+            actual,
+            maximum,
+            unit,
+        } => DispatchFailureV1::new(DispatchFailureKindV1::ItemConstraintFailed).with_details(
+            DispatchErrorDetailsV1::default().with_item_constraint_bound(
+                field.clone(),
+                *actual,
+                *maximum,
+                unit.clone(),
+            ),
+        ),
         PersistedDomainErrorV1::ItemNotFound { .. } => {
             DispatchFailureV1::new(DispatchFailureKindV1::ItemNotFound)
         }
@@ -5350,6 +5369,19 @@ fn map_graph_mutation_failure_v2(error: &PersistedGraphMutationFailureV2) -> Dis
         PersistedGraphMutationFailureV2::ItemConstraintFailed => {
             DispatchFailureV1::new(DispatchFailureKindV1::ItemConstraintFailed)
         }
+        PersistedGraphMutationFailureV2::ItemConstraintBound {
+            field,
+            actual,
+            maximum,
+            unit,
+        } => DispatchFailureV1::new(DispatchFailureKindV1::ItemConstraintFailed).with_details(
+            DispatchErrorDetailsV1::default().with_item_constraint_bound(
+                field.clone(),
+                *actual,
+                *maximum,
+                unit.clone(),
+            ),
+        ),
         PersistedGraphMutationFailureV2::ListValueNotFound => {
             DispatchFailureV1::new(DispatchFailureKindV1::ListValueNotFound)
         }
@@ -6098,8 +6130,8 @@ mod tests {
     };
 
     /// V2SCL-003: only the per-attempt content aggregate becomes ATTEMPT_CONTENT_LIMIT_EXCEEDED,
-    /// whose closed details fix `unit` to scalars. Any other scale bound would violate that schema,
-    /// so it stays a constraint failure.
+    /// whose closed details fix `unit` to scalars. Every other scale bound stays an item constraint
+    /// failure while preserving the same exact bound fields in its own closed branch.
     #[test]
     fn v2scl003_only_the_attempt_aggregate_surfaces_the_content_limit_code() {
         let aggregate = podway_store::codec::PersistedDomainErrorV1::from_domain(
@@ -6149,6 +6181,12 @@ mod tests {
             DispatchFailureKindV1::AttemptContentLimitExceeded
         );
         assert_eq!(other.kind(), DispatchFailureKindV1::ItemConstraintFailed);
+        let details = other.into_details().into_json(false);
+        assert_eq!(details["kind"], json!("ITEM_CONSTRAINT_FAILED"));
+        assert_eq!(details["field"], json!("list max_items"));
+        assert_eq!(details["actual"], json!(1_001u64));
+        assert_eq!(details["maximum"], json!(1_000u64));
+        assert_eq!(details["unit"], json!("entries"));
     }
 
     fn fixture_job(sequence: u64) -> JobReceiptV1 {

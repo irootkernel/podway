@@ -436,6 +436,9 @@ fn v2_runtime_error_details(code: &str) -> Option<Map<String, Value>> {
         "ATTEMPT_CONTENT_LIMIT_EXCEEDED" => {
             json!({"field":"items.notes.value","actual":16_777_217,"maximum":16_777_216,"unit":"scalars"})
         }
+        "ITEM_CONSTRAINT_FAILED" => {
+            json!({"field":"item list content","actual":300_001,"maximum":300_000,"unit":"scalars"})
+        }
         "EVIDENCE_PAGE_TOKEN_EXHAUSTED" => {
             json!({"source_graph_node_id":"implement","item_id":"notes","offset":4_000,"total_size":4_000,"unit":"scalars"})
         }

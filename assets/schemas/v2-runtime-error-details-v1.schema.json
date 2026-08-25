@@ -32,6 +32,7 @@
     { "$ref": "#/$defs/unsupportedV2Capability" },
     { "$ref": "#/$defs/evidenceNotAvailable" },
     { "$ref": "#/$defs/attemptContentLimitExceeded" },
+    { "$ref": "#/$defs/itemConstraintFailed" },
     { "$ref": "#/$defs/evidencePageTokenExhausted" }
   ],
   "$defs": {
@@ -160,7 +161,7 @@
       "allOf": [{ "$ref": "#/$defs/base" }, { "required": ["capability"], "properties": { "kind": { "const": "UNSUPPORTED_V2_CAPABILITY" }, "capability": { "type": "string", "minLength": 1, "maxLength": 128 }, "required_result_schema": { "type": "string", "minLength": 1, "maxLength": 128 }, "contract_manifest_digest": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/digest" } } }],
       "unevaluatedProperties": false
     },
-    "boundUnit": { "enum": ["scalars", "entries", "items", "operations"] },
+    "boundUnit": { "enum": ["bytes", "scalars", "entries", "items", "operations"] },
     "boundMagnitude": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
     "fieldPath": { "type": "string", "minLength": 1, "maxLength": 256 },
     "evidenceNotAvailable": {
@@ -169,6 +170,10 @@
     },
     "attemptContentLimitExceeded": {
       "allOf": [{ "$ref": "#/$defs/base" }, { "required": ["field", "actual", "maximum", "unit"], "properties": { "kind": { "const": "ATTEMPT_CONTENT_LIMIT_EXCEEDED" }, "field": { "$ref": "#/$defs/fieldPath" }, "actual": { "$ref": "#/$defs/boundMagnitude" }, "maximum": { "$ref": "#/$defs/boundMagnitude" }, "unit": { "const": "scalars" } } }],
+      "unevaluatedProperties": false
+    },
+    "itemConstraintFailed": {
+      "allOf": [{ "$ref": "#/$defs/base" }, { "required": ["field", "actual", "maximum", "unit"], "properties": { "kind": { "const": "ITEM_CONSTRAINT_FAILED" }, "field": { "$ref": "#/$defs/fieldPath" }, "actual": { "$ref": "#/$defs/boundMagnitude" }, "maximum": { "$ref": "#/$defs/boundMagnitude" }, "unit": { "$ref": "#/$defs/boundUnit" } } }],
       "unevaluatedProperties": false
     },
     "evidencePageTokenExhausted": {

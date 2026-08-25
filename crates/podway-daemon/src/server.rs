@@ -790,7 +790,7 @@ where
         }
         let daemon_request = match DaemonRequestV1::from_envelope(&request) {
             Ok(daemon_request) => daemon_request,
-            Err(_) => {
+            Err(error) => {
                 emit_correlated_observation(
                     &self.observability,
                     EventOperationV1::TransportServiceRequest,
@@ -798,6 +798,17 @@ where
                     Some(&request),
                     None,
                 );
+                if let SliceErrorV1::BoundExceeded {
+                    field,
+                    maximum,
+                    actual,
+                    unit,
+                } = error
+                {
+                    let response = self
+                        .item_constraint_bound_response(&request, field, actual, maximum, unit)?;
+                    return self.write_response(&mut connection, &response);
+                }
                 return self.write_transport_error(
                     &mut connection,
                     Some(RequestContextV1::from_request(&request)),
@@ -858,6 +869,48 @@ where
     ) -> Result<(), ServerConnectionErrorV1> {
         let response = self.transport_error_response(context, kind)?;
         self.write_response(connection, &response)
+    }
+
+    fn item_constraint_bound_response(
+        &self,
+        request: &RequestEnvelopeV1,
+        field: &'static str,
+        actual: usize,
+        maximum: usize,
+        unit: &'static str,
+    ) -> Result<ResponseEnvelopeV2, ServerConnectionErrorV1> {
+        let details = serde_json::json!({
+            "schema": "podway.v2-runtime-error-details/v1",
+            "kind": "ITEM_CONSTRAINT_FAILED",
+            "field": field,
+            "actual": actual,
+            "maximum": maximum,
+            "unit": unit,
+            "admission": { "admitted": false },
+        })
+        .as_object()
+        .expect("item constraint details are an object")
+        .clone();
+        Ok(ResponseEnvelopeV2::Error(
+            ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
+                request_id: request.request_id().clone(),
+                command: request.command().clone(),
+                generated_at: self
+                    .metadata
+                    .try_generated_at()
+                    .map_err(ServerConnectionErrorV1::ResponseMetadata)?,
+                code: ErrorCodeV1::new("ITEM_CONSTRAINT_FAILED")
+                    .expect("the item constraint code is catalog-defined"),
+                message: format!(
+                    "{field} exceeds its maximum of {maximum} {unit} (received {actual})"
+                ),
+                retryable: false,
+                exit_code: ExitCodeV1::new(1).expect("the item constraint exit code is valid"),
+                workspace: None,
+                details,
+            })
+            .expect("the daemon constructs a protocol-valid item constraint response"),
+        ))
     }
 
     fn contract_mismatch_response(

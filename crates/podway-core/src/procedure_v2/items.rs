@@ -969,6 +969,69 @@ impl ItemSpecV2 {
         }
     }
 
+    /// Returns the exact upper-bound failure, when one exists, before the caller falls back to the
+    /// declaration's ordinary constraint result.
+    pub fn recorded_value_bound_error(&self, value: &RecordedItemValueV2) -> Option<DomainError> {
+        let bound = |field, actual, maximum, unit| DomainError::BoundExceeded {
+            field,
+            actual,
+            maximum,
+            unit,
+        };
+        match self {
+            Self::Text(specification) => value.as_text().and_then(|value| {
+                let length = value.trim().chars().count();
+                if length > specification.max_length() as usize {
+                    Some(bound(
+                        "item text value",
+                        length as u64,
+                        u64::from(specification.max_length()),
+                        BoundUnitV2::Scalars,
+                    ))
+                } else {
+                    None
+                }
+            }),
+            Self::List(specification) => value.as_list().and_then(|values| {
+                let length = values.len();
+                if length > specification.max_items() as usize {
+                    return Some(bound(
+                        "item list entries",
+                        length as u64,
+                        u64::from(specification.max_items()),
+                        BoundUnitV2::Entries,
+                    ));
+                }
+                if let Some(actual) = values
+                    .iter()
+                    .map(|value| value.chars().count())
+                    .find(|actual| *actual > specification.max_item_length() as usize)
+                {
+                    return Some(bound(
+                        "item list entry",
+                        actual as u64,
+                        u64::from(specification.max_item_length()),
+                        BoundUnitV2::Scalars,
+                    ));
+                }
+                let total: u64 = values
+                    .iter()
+                    .map(|value| value.chars().count() as u64)
+                    .sum();
+                if total > u64::from(specification.max_total_length()) {
+                    return Some(bound(
+                        "item list content",
+                        total,
+                        u64::from(specification.max_total_length()),
+                        BoundUnitV2::Scalars,
+                    ));
+                }
+                None
+            }),
+            _ => None,
+        }
+    }
+
     /// Reports whether one admitted value satisfies this declaration's progression constraints.
     pub fn is_satisfied_by(&self, value: &RecordedItemValueV2) -> bool {
         match self {

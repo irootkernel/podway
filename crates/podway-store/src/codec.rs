@@ -1501,6 +1501,12 @@ pub enum PersistedGraphMutationFailureV2 {
     },
     ItemTypeMismatch,
     ItemConstraintFailed,
+    ItemConstraintBound {
+        field: String,
+        actual: u64,
+        maximum: u64,
+        unit: String,
+    },
     ListValueNotFound,
     ListValueDuplicate,
     ArtifactChanged,
@@ -1739,6 +1745,17 @@ impl TryFrom<&crate::GraphMutationErrorV2> for PersistedGraphMutationFailureV2 {
             }
             crate::GraphMutationErrorV2::ItemTypeMismatch => Self::ItemTypeMismatch,
             crate::GraphMutationErrorV2::ItemConstraintFailed => Self::ItemConstraintFailed,
+            crate::GraphMutationErrorV2::Domain(podway_core::DomainError::BoundExceeded {
+                field,
+                actual,
+                maximum,
+                unit,
+            }) => Self::ItemConstraintBound {
+                field: (*field).to_owned(),
+                actual: *actual,
+                maximum: *maximum,
+                unit: unit.as_str().to_owned(),
+            },
             crate::GraphMutationErrorV2::ListValueNotFound => Self::ListValueNotFound,
             crate::GraphMutationErrorV2::ListValueDuplicate => Self::ListValueDuplicate,
             crate::GraphMutationErrorV2::RequiredItemsMissing { item_ids } => {
@@ -2807,6 +2824,20 @@ impl PersistedGraphMutationFailureV2 {
             | Self::ArtifactChanged
             | Self::BlockersPresent
             | Self::SessionGoalMissing => true,
+            Self::ItemConstraintBound {
+                field,
+                actual,
+                maximum,
+                unit,
+            } => {
+                !field.is_empty()
+                    && field.chars().count() <= 256
+                    && actual > maximum
+                    && matches!(
+                        unit.as_str(),
+                        "bytes" | "scalars" | "entries" | "items" | "operations"
+                    )
+            }
             Self::TooManyOpenBlockers { maximum } => *maximum == 64,
             Self::TooManyItemMutations { maximum } => *maximum == 64,
         }

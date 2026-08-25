@@ -49,6 +49,12 @@ pub enum SliceErrorV1 {
         maximum: usize,
         actual: usize,
     },
+    BoundExceeded {
+        field: &'static str,
+        maximum: usize,
+        actual: usize,
+        unit: &'static str,
+    },
     EmptyValue {
         field: &'static str,
     },
@@ -105,6 +111,15 @@ impl fmt::Display for SliceErrorV1 {
             } => write!(
                 formatter,
                 "{field} exceeds its maximum of {maximum} (received {actual})"
+            ),
+            Self::BoundExceeded {
+                field,
+                maximum,
+                actual,
+                unit,
+            } => write!(
+                formatter,
+                "{field} exceeds its maximum of {maximum} {unit} (received {actual})"
             ),
             Self::EmptyValue { field } => write!(formatter, "{field} must not be empty"),
             Self::InvalidValue { field } => write!(formatter, "{field} is invalid"),
@@ -2526,9 +2541,17 @@ pub fn decode_item_record_many_operations_v1(
 fn validate_item_record_many_operations_v1(
     operations: Vec<RawItemRecordManyOperationV1>,
 ) -> Result<Vec<ItemRecordManyOperationV1>, SliceErrorV1> {
-    if operations.is_empty() || operations.len() > MAX_ITEM_RECORD_MANY_OPERATIONS_V1 {
+    if operations.is_empty() {
         return Err(SliceErrorV1::InvalidValue {
             field: "item record operations",
+        });
+    }
+    if operations.len() > MAX_ITEM_RECORD_MANY_OPERATIONS_V1 {
+        return Err(SliceErrorV1::BoundExceeded {
+            field: "item record operations",
+            maximum: MAX_ITEM_RECORD_MANY_OPERATIONS_V1,
+            actual: operations.len(),
+            unit: "operations",
         });
     }
     let mut operations = operations
@@ -2570,11 +2593,19 @@ fn validate_item_record_value_v1(
     Ok(match record {
         RawItemRecordValueV1::Confirm { value } => ItemRecordValueV1::Confirm { value },
         RawItemRecordValueV1::Text { value } => {
-            validate_item_text(&value)?;
+            validate_record_scalar_bound(
+                &value,
+                MAX_SLICE_ITEM_TEXT_SCALARS_V1,
+                "item text value",
+            )?;
             ItemRecordValueV1::Text { value }
         }
         RawItemRecordValueV1::Choice { value } => {
-            validate_scalar_bound(&value, MAX_ITEM_RECORD_MANY_CHOICE_SCALARS_V1, "choice")?;
+            validate_record_scalar_bound(
+                &value,
+                MAX_ITEM_RECORD_MANY_CHOICE_SCALARS_V1,
+                "item choice value",
+            )?;
             if value.is_empty() {
                 return Err(SliceErrorV1::EmptyValue { field: "choice" });
             }
@@ -2583,17 +2614,18 @@ fn validate_item_record_value_v1(
         RawItemRecordValueV1::Integer { value } => ItemRecordValueV1::Integer { value },
         RawItemRecordValueV1::List { value } => {
             if value.len() > MAX_ITEM_RECORD_MANY_LIST_ENTRIES_V1 {
-                return Err(SliceErrorV1::ValueTooLong {
-                    field: "list",
+                return Err(SliceErrorV1::BoundExceeded {
+                    field: "item list entries",
                     maximum: MAX_ITEM_RECORD_MANY_LIST_ENTRIES_V1,
                     actual: value.len(),
+                    unit: "entries",
                 });
             }
             for entry in &value {
-                validate_scalar_bound(
+                validate_record_scalar_bound(
                     entry,
                     MAX_ITEM_RECORD_MANY_LIST_ENTRY_SCALARS_V1,
-                    "list entry",
+                    "item list entry",
                 )?;
                 if entry.is_empty() {
                     return Err(SliceErrorV1::EmptyValue {
@@ -2639,6 +2671,26 @@ fn validate_item_record_value_v1(
             summary,
             output_digest,
         } => {
+            validate_record_scalar_bound(
+                &input_basis.descriptor,
+                podway_core::MAX_CHECK_RESULT_INPUT_DESCRIPTOR_SCALARS_V2,
+                "check result input descriptor",
+            )?;
+            validate_record_scalar_bound(
+                &executor.name,
+                podway_core::MAX_CHECK_RESULT_EXECUTOR_NAME_SCALARS_V2,
+                "check result executor name",
+            )?;
+            validate_record_scalar_bound(
+                &executor.version,
+                podway_core::MAX_CHECK_RESULT_EXECUTOR_VERSION_SCALARS_V2,
+                "check result executor version",
+            )?;
+            validate_record_scalar_bound(
+                &summary,
+                podway_core::MAX_CHECK_RESULT_SUMMARY_SCALARS_V2,
+                "check result summary",
+            )?;
             let input_basis =
                 CheckResultInputBasisV2::new(input_basis.descriptor, input_basis.digest).map_err(
                     |_| SliceErrorV1::InvalidValue {
@@ -2678,10 +2730,11 @@ fn validate_item_record_value_v1(
                     message: error.to_string(),
                 })?;
             if canonical.len() > podway_core::MAX_CHECK_RESULT_VALUE_BYTES_V2 {
-                return Err(SliceErrorV1::ValueTooLong {
+                return Err(SliceErrorV1::BoundExceeded {
                     field: "check result value",
                     maximum: podway_core::MAX_CHECK_RESULT_VALUE_BYTES_V2,
                     actual: canonical.len(),
+                    unit: "bytes",
                 });
             }
             ItemRecordValueV1::CheckResult { value }
@@ -3585,6 +3638,23 @@ fn validate_scalar_bound(
             field,
             maximum,
             actual,
+        });
+    }
+    Ok(())
+}
+
+fn validate_record_scalar_bound(
+    value: &str,
+    maximum: usize,
+    field: &'static str,
+) -> Result<(), SliceErrorV1> {
+    let actual = value.chars().count();
+    if actual > maximum {
+        return Err(SliceErrorV1::BoundExceeded {
+            field,
+            maximum,
+            actual,
+            unit: "scalars",
         });
     }
     Ok(())

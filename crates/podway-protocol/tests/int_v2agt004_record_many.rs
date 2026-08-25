@@ -2,8 +2,8 @@ use podway_protocol::{
     ClientInfoV1, CommandNameV1, ITEM_RECORD_MANY_INPUT_SCHEMA_V1, IdempotencyKeyV1,
     ItemRecordManyDispositionV1, ItemRecordValueV1, MAX_FRAME_PAYLOAD_BYTES_V1, OperationV1,
     PreconditionsV1, RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, RequestOptionsV1,
-    SliceCommandV1, SliceRequestV1, WorkspaceContextV1, canonical_mutation_identity_v1,
-    decode_item_record_many_input_v1,
+    SliceCommandV1, SliceErrorV1, SliceRequestV1, WorkspaceContextV1,
+    canonical_mutation_identity_v1, decode_item_record_many_input_v1,
 };
 use serde_json::{Value, json};
 
@@ -205,7 +205,15 @@ fn v2agt004_stdin_accepts_exactly_128_operations_and_rejects_129() {
             .len(),
         128
     );
-    assert!(decode_item_record_many_input_v1(&input(operations(129))).is_err());
+    assert_eq!(
+        decode_item_record_many_input_v1(&input(operations(129))),
+        Err(SliceErrorV1::BoundExceeded {
+            field: "item record operations",
+            maximum: 128,
+            actual: 129,
+            unit: "operations",
+        })
+    );
 }
 
 #[test]
@@ -467,13 +475,18 @@ fn v2scl003_record_many_schema_and_decoder_share_the_scale_envelope() {
             .map(|index| json!(format!("entry-{index}")))
             .collect(),
     );
-    assert!(
+    assert_eq!(
         decode_item_record_many_input_v1(&input(json!([{
             "item_id": "notes",
             "expected_item_revision": 0,
             "record": {"type": "list", "value": over_entries}
-        }])))
-        .is_err()
+        }]))),
+        Err(SliceErrorV1::BoundExceeded {
+            field: "item list entries",
+            maximum: 1_000,
+            actual: 1_001,
+            unit: "entries",
+        })
     );
     assert!(
         decode_item_record_many_input_v1(&input(json!([{
@@ -499,12 +512,17 @@ fn v2scl003_record_many_schema_and_decoder_share_the_scale_envelope() {
         }])))
         .is_ok()
     );
-    assert!(
+    assert_eq!(
         decode_item_record_many_input_v1(&input(json!([{
             "item_id": "notes",
             "expected_item_revision": 0,
             "record": {"type": "text", "value": "x".repeat(65_537)}
-        }])))
-        .is_err()
+        }]))),
+        Err(SliceErrorV1::BoundExceeded {
+            field: "item text value",
+            maximum: 65_536,
+            actual: 65_537,
+            unit: "scalars",
+        })
     );
 }

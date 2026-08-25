@@ -1,11 +1,11 @@
 use crate::procedure_v2::invalid;
 use crate::{
-    ArtifactItemSpecV2, ArtifactValueV1, CheckResultExecutorV2, CheckResultInputBasisV2,
-    CheckResultItemSpecV2, CheckResultOutcomeV2, CheckResultValueV2, ChoiceItemSpecV2,
-    ConditionStateV2, EvidencePredicateV2, GraphNodeId, IntegerItemSpecV2, ItemCommonV2,
-    ItemConditionV2, ItemId, ItemPredicateOperatorV2, ItemPredicateV2, ItemSpecV2, ItemTypeV1,
-    ListItemSpecV2, OperationId, OptionGuardV2, PredicateActualV2, PredicateScalarV2,
-    RecordedItemValueV2, Sha256Digest, TextItemSpecV2,
+    ArtifactItemSpecV2, ArtifactValueV1, BoundUnitV2, CheckResultExecutorV2,
+    CheckResultInputBasisV2, CheckResultItemSpecV2, CheckResultOutcomeV2, CheckResultValueV2,
+    ChoiceItemSpecV2, ConditionStateV2, DomainError, EvidencePredicateV2, GraphNodeId,
+    IntegerItemSpecV2, ItemCommonV2, ItemConditionV2, ItemId, ItemPredicateOperatorV2,
+    ItemPredicateV2, ItemSpecV2, ItemTypeV1, ListItemSpecV2, OperationId, OptionGuardV2,
+    PredicateActualV2, PredicateScalarV2, RecordedItemValueV2, Sha256Digest, TextItemSpecV2,
 };
 
 use super::helpers::item;
@@ -451,6 +451,17 @@ fn item_specs_admit_only_recorded_values_that_satisfy_the_declaration() {
     assert!(!bounded_total.admits_recorded_value(
         &RecordedItemValueV2::list(vec!["abc".to_owned(), "defg".to_owned()]).unwrap()
     ));
+    assert_eq!(
+        bounded_total.recorded_value_bound_error(
+            &RecordedItemValueV2::list(vec!["abc".to_owned(), "defg".to_owned()]).unwrap()
+        ),
+        Some(DomainError::BoundExceeded {
+            field: "item list content",
+            actual: 7,
+            maximum: 5,
+            unit: BoundUnitV2::Scalars,
+        })
+    );
 
     let artifact = ItemSpecV2::artifact(common("artifact"), vec!["text/plain".to_owned()]).unwrap();
     let value = RecordedItemValueV2::artifact(

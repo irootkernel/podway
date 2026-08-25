@@ -1398,6 +1398,7 @@ impl LocalFailure {
             | "PROCEDURE_INVALID"
             | "PROCEDURE_SCHEMA_UNSUPPORTED" => (1, false),
             "GOAL_TRACKING_NOT_ENABLED" => (1, false),
+            "ITEM_CONSTRAINT_FAILED" => (1, false),
             "DIGEST_CONFIRMATION_REQUIRED" => (LOCAL_USAGE_EXIT, false),
             "PROCEDURE_DIGEST_MISMATCH" => (4, false),
             "PATH_OUTSIDE_WORKTREE" => (5, false),
@@ -6355,7 +6356,41 @@ fn prepare_stdin_payload(command: &mut Command) -> Result<(), LocalFailure> {
                         "cli",
                     )
                 } else {
-                    LocalFailure::request_invalid(error.to_string())
+                    match error {
+                        podway_protocol::SliceErrorV1::BoundExceeded {
+                            field,
+                            maximum,
+                            actual,
+                            unit,
+                        } => {
+                            let mut failure = LocalFailure::catalog(
+                                "ITEM_CONSTRAINT_FAILED",
+                                format!(
+                                    "{field} exceeds its maximum of {maximum} {unit} (received {actual})"
+                                ),
+                                "item.record_many",
+                            );
+                            failure.details = Map::from_iter([
+                                (
+                                    "schema".to_owned(),
+                                    Value::String(
+                                        "podway.v2-runtime-error-details/v1".to_owned(),
+                                    ),
+                                ),
+                                (
+                                    "kind".to_owned(),
+                                    Value::String("ITEM_CONSTRAINT_FAILED".to_owned()),
+                                ),
+                                ("field".to_owned(), Value::String(field.to_owned())),
+                                ("actual".to_owned(), json!(actual)),
+                                ("maximum".to_owned(), json!(maximum)),
+                                ("unit".to_owned(), Value::String(unit.to_owned())),
+                                ("admission".to_owned(), json!({"admitted": false})),
+                            ]);
+                            failure
+                        }
+                        error => LocalFailure::request_invalid(error.to_string()),
+                    }
                 }
             })?);
         }

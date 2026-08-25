@@ -9,9 +9,9 @@ use podway_core::{
     AttemptNumberV2, AttemptValidityV2, BlockerId, BlockerState, CheckResultExecutorV2,
     CheckResultInputBasisV2, CheckResultOutcomeV2, CheckResultValueV2, ConditionStateV2,
     CriterionAssessmentModeV2, CriterionCitationV2, CriterionId, CriterionStatusV2,
-    DecisionRecordInputV2, DecisionRecordV2, EvidencePredicateV2, EvidenceReferenceSnapshotV2,
-    GoalOutcome, GoalRevisionNumberV2, GraphNodeId, ItemCommonV2, ItemConditionV2, ItemId,
-    ItemPredicateOperatorV2, ItemPredicateV2, ItemSpecV2, ItemTypeV1,
+    DecisionRecordInputV2, DecisionRecordV2, DomainError, EvidencePredicateV2,
+    EvidenceReferenceSnapshotV2, GoalOutcome, GoalRevisionNumberV2, GraphNodeId, ItemCommonV2,
+    ItemConditionV2, ItemId, ItemPredicateOperatorV2, ItemPredicateV2, ItemSpecV2, ItemTypeV1,
     MAX_ATTEMPT_CONTENT_SCALARS_V2, MAX_ITEMS_PER_DEFINITION_V2, NodeDefinitionId, OperationId,
     OptionGuardV2, OptionId, PredicateActualV2, PredicateScalarV2, ProcedureSnapshotId, ReasonV2,
     RecordedItemSetV2, RecordedItemV2, RecordedItemValueV2, ResolvedEvidenceReferenceV2,
@@ -2068,6 +2068,10 @@ fn mutate_item_value_v2(
     current: Option<&RecordedItemValueV2>,
     mutation: ActiveItemMutationV2,
 ) -> Result<Option<RecordedItemValueV2>, GraphMutationErrorV2> {
+    let item_value_error = |error| match error {
+        DomainError::BoundExceeded { .. } => GraphMutationErrorV2::Domain(error),
+        _ => GraphMutationErrorV2::ItemConstraintFailed,
+    };
     let candidate = match mutation {
         ActiveItemMutationV2::Check => {
             if specification.item_type() != ItemTypeV1::Confirm {
@@ -2082,10 +2086,8 @@ fn mutate_item_value_v2(
             None
         }
         ActiveItemMutationV2::Set { value } => Some(match specification.item_type() {
-            ItemTypeV1::Text => RecordedItemValueV2::text(value)
-                .map_err(|_| GraphMutationErrorV2::ItemConstraintFailed)?,
-            ItemTypeV1::Choice => RecordedItemValueV2::choice(value)
-                .map_err(|_| GraphMutationErrorV2::ItemConstraintFailed)?,
+            ItemTypeV1::Text => RecordedItemValueV2::text(value).map_err(item_value_error)?,
+            ItemTypeV1::Choice => RecordedItemValueV2::choice(value).map_err(item_value_error)?,
             ItemTypeV1::Integer => RecordedItemValueV2::integer(
                 value
                     .parse::<i64>()
@@ -2102,10 +2104,7 @@ fn mutate_item_value_v2(
             if specification.item_type() != ItemTypeV1::List {
                 return Err(GraphMutationErrorV2::ItemTypeMismatch);
             }
-            Some(
-                RecordedItemValueV2::list(values)
-                    .map_err(|_| GraphMutationErrorV2::ItemConstraintFailed)?,
-            )
+            Some(RecordedItemValueV2::list(values).map_err(item_value_error)?)
         }
         ActiveItemMutationV2::Add { value } => {
             let ItemSpecV2::List(list_specification) = specification else {
@@ -2118,10 +2117,7 @@ fn mutate_item_value_v2(
                 return Err(GraphMutationErrorV2::ListValueDuplicate);
             }
             values.push(value);
-            Some(
-                RecordedItemValueV2::list(values)
-                    .map_err(|_| GraphMutationErrorV2::ItemConstraintFailed)?,
-            )
+            Some(RecordedItemValueV2::list(values).map_err(item_value_error)?)
         }
         ActiveItemMutationV2::Remove {
             value,
@@ -2143,10 +2139,7 @@ fn mutate_item_value_v2(
             if values.is_empty() {
                 None
             } else {
-                Some(
-                    RecordedItemValueV2::list(values)
-                        .map_err(|_| GraphMutationErrorV2::ItemConstraintFailed)?,
-                )
+                Some(RecordedItemValueV2::list(values).map_err(item_value_error)?)
             }
         }
         ActiveItemMutationV2::Attach { value } => {
@@ -2163,11 +2156,13 @@ fn mutate_item_value_v2(
         }
         ActiveItemMutationV2::Clear => None,
     };
-    if candidate
-        .as_ref()
-        .is_some_and(|value| !specification.admits_recorded_value(value))
-    {
-        return Err(GraphMutationErrorV2::ItemConstraintFailed);
+    if let Some(value) = candidate.as_ref() {
+        if let Some(error) = specification.recorded_value_bound_error(value) {
+            return Err(GraphMutationErrorV2::Domain(error));
+        }
+        if !specification.admits_recorded_value(value) {
+            return Err(GraphMutationErrorV2::ItemConstraintFailed);
+        }
     }
     Ok(candidate)
 }

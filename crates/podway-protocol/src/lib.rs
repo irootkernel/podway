@@ -2261,6 +2261,9 @@ fn validate_closed_error_details_v1(
         "WORKSPACE_STATE_UNREADABLE" | "WORKSPACE_SCHEMA_UNSUPPORTED" => {
             validate_workspace_recovery_details_v1(details)
         }
+        "ITEM_CONSTRAINT_FAILED" if details.contains_key("field") => {
+            validate_v2_runtime_error_details_v1(code, details)
+        }
         code if is_v2_runtime_error_code_v1(code) => {
             validate_v2_runtime_error_details_v1(code, details)
         }
@@ -2531,11 +2534,18 @@ fn validate_v2_runtime_error_details_v1(code: &str, details: &Map<String, Value>
             ("item_id", validate_v2_identifier_value_v1),
             ("reference_state", validate_unavailable_reference_state_v1),
         ],
-        "ATTEMPT_CONTENT_LIMIT_EXCEEDED" => &[
+        "ATTEMPT_CONTENT_LIMIT_EXCEEDED" | "ITEM_CONSTRAINT_FAILED" => &[
             ("field", validate_bound_field_path_v1),
             ("actual", validate_bound_magnitude_v1),
             ("maximum", validate_bound_magnitude_v1),
-            ("unit", validate_scalar_bound_unit_v1),
+            (
+                "unit",
+                if code == "ATTEMPT_CONTENT_LIMIT_EXCEEDED" {
+                    validate_scalar_bound_unit_v1
+                } else {
+                    validate_bound_unit_v1
+                },
+            ),
         ],
         "EVIDENCE_PAGE_TOKEN_EXHAUSTED" => &[
             ("source_graph_node_id", validate_v2_identifier_value_v1),
@@ -2637,7 +2647,7 @@ fn validate_scalar_bound_unit_v1(value: &Value) -> bool {
 fn validate_bound_unit_v1(value: &Value) -> bool {
     matches!(
         value.as_str(),
-        Some("scalars") | Some("entries") | Some("items") | Some("operations")
+        Some("bytes") | Some("scalars") | Some("entries") | Some("items") | Some("operations")
     )
 }
 
@@ -3232,6 +3242,15 @@ fn validate_recovery_details_v1(
 
 /// Adds a stable schema identifier to each closed public error-detail family.
 pub fn ensure_error_details_schema_v1(code: &str, details: &mut Map<String, Value>) {
+    if code == "ITEM_CONSTRAINT_FAILED" && details.contains_key("field") {
+        details
+            .entry("schema".to_owned())
+            .or_insert_with(|| Value::String(V2_RUNTIME_ERROR_DETAILS_SCHEMA_V1.to_owned()));
+        details
+            .entry("kind".to_owned())
+            .or_insert_with(|| Value::String(code.to_owned()));
+        return;
+    }
     if is_v2_runtime_error_code_v1(code) {
         let schema = if RECOVERY_ERROR_CODES_V1.contains(&code) {
             "podway.recoverable-v2-runtime-error-details/v1"
