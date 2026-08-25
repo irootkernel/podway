@@ -458,3 +458,13 @@ Dependencies: completed `V2REF` epic.
 | `V2SKL-001` | Add a dedicated Procedure authoring skill | Completed | Provide focused guidance for creating, revising, reviewing, statically qualifying, and handing off repository-owned custom Procedure v2 source without runtime mutation. | [Authoring skill](../../skills/create-podway-procedure/SKILL.md) |
 | `V2SKL-002` | Separate runtime and authoring ownership | Completed | Keep `use-podway` responsible for explicit runtime and lifecycle work while routing Procedure source changes to the authoring skill. | [Runtime skill](../../skills/use-podway/SKILL.md), [repository structure](../architecture/repository-structure.md) |
 | `V2SKL-003` | Verify the source-distributed skill package | Completed | Bind the exact skill file sets, metadata, links, command workflow, and documentation to repository checks. | [Documentation verifier](../../tools/verify_docs.py) |
+
+## V2RDY — Phase-Aware Daemon Readiness
+
+Dependencies: completed `V2SKL` epic.
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `V2RDY-001` | Adopt and reserve daemon readiness contracts | Completed | Adopt the early-control-plane decision and reserve status v2, wait-ready, phase-aware errors, recovery recipes, routes, and manifest pins without runtime admission. | [ADR-0029](../architecture-decision-records/0029-serve-phase-aware-daemon-readiness.md), [V2RDY dossier](../todo/TODO-podway-phase-aware-daemon-readiness.md) |
+| `V2RDY-002` | Serve verified status during recovery | Planned | Start the authenticated control plane before registry/worktree/job recovery, expose monotonic readiness progress, and reject normal routes before ready. | [V2RDY dossier](../todo/TODO-podway-phase-aware-daemon-readiness.md) |
+| `V2RDY-003` | Add bounded readiness waiting and close conformance | Planned | Add daemon wait-ready, reuse it for install, render non-ready status honestly, return actionable timeouts, prove retry preservation, promote durable guidance, and pass the development gate. | [V2RDY dossier](../todo/TODO-podway-phase-aware-daemon-readiness.md) |

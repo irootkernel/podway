@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:daemon-readiness-error-details:v1",
+  "title": "Podway Daemon Readiness Error Details v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "readiness_state", "readiness_stage", "elapsed_ms", "worktree_recovery", "admission", "recovery"],
+  "properties": {
+    "schema": { "const": "podway.daemon-readiness-error-details/v1" },
+    "readiness_state": { "enum": ["starting", "recovering"] },
+    "readiness_stage": { "enum": ["endpoint", "registry", "workspaces", "jobs"] },
+    "elapsed_ms": { "type": "integer", "minimum": 0 },
+    "worktree_recovery": { "$ref": "urn:podway:schema:daemon-status-result:v2#/$defs/worktreeRecovery" },
+    "admission": {
+      "type": "object", "additionalProperties": false, "required": ["admitted"],
+      "properties": { "admitted": { "const": false } }
+    },
+    "recovery": { "$ref": "urn:podway:schema:recovery-recipe:v1" }
+  }
+}

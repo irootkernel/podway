@@ -1362,6 +1362,16 @@ const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
         retryable: true,
     },
     ErrorCodeCatalogEntryV1 {
+        code: "DAEMON_STARTING",
+        exit_code: 3,
+        retryable: true,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "DAEMON_READINESS_TIMEOUT",
+        exit_code: 3,
+        retryable: true,
+    },
+    ErrorCodeCatalogEntryV1 {
         code: "DAEMON_SHUTTING_DOWN",
         exit_code: 3,
         retryable: true,
@@ -2240,6 +2250,8 @@ fn validate_closed_error_details_v1(
         | "DAEMON_SHUTTING_DOWN"
         | "DAEMON_VERSION_INCOMPATIBLE" => validate_endpoint_details_v1(code, details),
         "DAEMON_CONTRACT_MISMATCH" => validate_daemon_contract_mismatch_details_v1(details),
+        "DAEMON_STARTING" => validate_daemon_readiness_error_details_v1(details),
+        "DAEMON_READINESS_TIMEOUT" => validate_daemon_readiness_timeout_details_v1(details),
         "SOCKET_ENDPOINT_INVALID" => validate_socket_endpoint_details_v1(details),
         "SESSION_REVISION_CONFLICT" | "ITEM_REVISION_CONFLICT" => {
             validate_revision_conflict_details_v1(details)
@@ -2276,6 +2288,89 @@ fn validate_closed_error_details_v1(
             code: code.to_owned(),
         })
     }
+}
+
+fn validate_worktree_recovery_v1(value: &Value) -> bool {
+    if value.is_null() {
+        return true;
+    }
+    let Some(progress) = value.as_object() else {
+        return false;
+    };
+    if progress.len() != 3 {
+        return false;
+    }
+    let Some(total) = progress.get("total").and_then(Value::as_u64) else {
+        return false;
+    };
+    let Some(completed) = progress.get("completed").and_then(Value::as_u64) else {
+        return false;
+    };
+    let Some(failed) = progress.get("failed").and_then(Value::as_u64) else {
+        return false;
+    };
+    total <= 10_000 && completed <= total && failed <= completed
+}
+
+fn validate_daemon_readiness_error_details_v1(details: &Map<String, Value>) -> bool {
+    details.len() == 7
+        && details.get("schema").and_then(Value::as_str)
+            == Some("podway.daemon-readiness-error-details/v1")
+        && matches!(
+            details.get("readiness_state").and_then(Value::as_str),
+            Some("starting" | "recovering")
+        )
+        && matches!(
+            details.get("readiness_stage").and_then(Value::as_str),
+            Some("endpoint" | "registry" | "workspaces" | "jobs")
+        )
+        && details.get("elapsed_ms").and_then(Value::as_u64).is_some()
+        && details
+            .get("worktree_recovery")
+            .is_some_and(validate_worktree_recovery_v1)
+        && validate_not_admitted_value_v1(details.get("admission"))
+}
+
+fn validate_daemon_readiness_timeout_details_v1(details: &Map<String, Value>) -> bool {
+    details.len() == 14
+        && details.get("schema").and_then(Value::as_str)
+            == Some("podway.daemon-readiness-timeout-details/v1")
+        && matches!(
+            details.get("operation").and_then(Value::as_str),
+            Some("install" | "start" | "wait_ready")
+        )
+        && matches!(
+            details.get("readiness_state").and_then(Value::as_str),
+            Some("not_running" | "unreachable" | "starting" | "recovering" | "ready" | "failed")
+        )
+        && details.get("readiness_stage").is_some_and(|value| {
+            value.is_null()
+                || matches!(
+                    value.as_str(),
+                    Some("endpoint" | "registry" | "workspaces" | "jobs" | "ready" | "failed")
+                )
+        })
+        && details.get("elapsed_ms").and_then(Value::as_u64).is_some()
+        && details
+            .get("deadline_ms")
+            .and_then(Value::as_u64)
+            .is_some_and(|value| (1..=3_600_000).contains(&value))
+        && [
+            "installed",
+            "loaded",
+            "socket_present",
+            "reachable",
+            "contract_verified",
+        ]
+        .iter()
+        .all(|field| details.get(*field).and_then(Value::as_bool).is_some())
+        && details
+            .get("same_command_retry_safe")
+            .and_then(Value::as_bool)
+            == Some(true)
+        && details
+            .get("worktree_recovery")
+            .is_some_and(validate_worktree_recovery_v1)
 }
 
 fn validate_session_start_decision_required_details_v1(details: &Map<String, Value>) -> bool {
@@ -3085,6 +3180,8 @@ fn validate_not_admitted_value_v1(value: Option<&Value>) -> bool {
 
 const RECOVERY_ERROR_CODES_V1: &[&str] = &[
     "DAEMON_UNAVAILABLE",
+    "DAEMON_STARTING",
+    "DAEMON_READINESS_TIMEOUT",
     "DAEMON_CONTRACT_MISMATCH",
     "WORKSPACE_UUID_MISMATCH",
     "WORKSPACE_STATE_UNREADABLE",
@@ -3103,6 +3200,12 @@ const RECOVERY_ERROR_CODES_V1: &[&str] = &[
 
 fn recovery_recipe_v1(code: &str, details: &Map<String, Value>) -> Option<Value> {
     let (action, command, argv, reason) = match code {
+        "DAEMON_STARTING" | "DAEMON_READINESS_TIMEOUT" => (
+            "wait_for_daemon",
+            "daemon.wait-ready",
+            json!(["podway", "--json", "daemon", "wait-ready"]),
+            "Wait for verified daemon readiness without changing service state.",
+        ),
         "DAEMON_UNAVAILABLE" | "DAEMON_CONTRACT_MISMATCH" => (
             "inspect_daemon",
             "daemon.status",
@@ -3208,6 +3311,7 @@ fn validate_recovery_details_v1(
                             | "job.lookup"
                             | "job.wait"
                             | "daemon.status"
+                            | "daemon.wait-ready"
                             | "workspace.doctor"
                     )
                 })
@@ -3269,6 +3373,8 @@ pub fn ensure_error_details_schema_v1(code: &str, details: &mut Map<String, Valu
         return;
     }
     let schema = match code {
+        "DAEMON_STARTING" => "podway.daemon-readiness-error-details/v1",
+        "DAEMON_READINESS_TIMEOUT" => "podway.daemon-readiness-timeout-details/v1",
         "DAEMON_UNAVAILABLE" => "podway.endpoint-error-details/v2",
         "DAEMON_NOT_INSTALLED" | "DAEMON_SHUTTING_DOWN" | "DAEMON_VERSION_INCOMPATIBLE" => {
             "podway.endpoint-error-details/v1"

@@ -272,6 +272,8 @@ fn valid_error_envelope_json() -> Value {
 const FROZEN_ERROR_CATALOG: &[(&str, u8, bool)] = &[
     ("DAEMON_NOT_INSTALLED", 3, false),
     ("DAEMON_UNAVAILABLE", 3, true),
+    ("DAEMON_STARTING", 3, true),
+    ("DAEMON_READINESS_TIMEOUT", 3, true),
     ("DAEMON_SHUTTING_DOWN", 3, true),
     ("DAEMON_VERSION_INCOMPATIBLE", 3, false),
     ("DAEMON_CONTRACT_MISMATCH", 3, false),
@@ -579,6 +581,23 @@ fn api_004_error_catalog_is_exhaustive_and_error_pairs_fail_closed() {
             "BLOCKER_LIMIT_REACHED" => {
                 Map::from_iter([("maximum_open_blockers".to_owned(), json!(64))])
             }
+            "DAEMON_STARTING" => json!({
+                "readiness_state":"recovering","readiness_stage":"workspaces",
+                "elapsed_ms":31_000,"worktree_recovery":{"total":4,"completed":2,"failed":1},
+                "admission":{"admitted":false}
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+            "DAEMON_READINESS_TIMEOUT" => json!({
+                "operation":"wait_ready","readiness_state":"recovering","readiness_stage":"jobs",
+                "elapsed_ms":120_000,"deadline_ms":120_000,"installed":true,"loaded":true,
+                "socket_present":true,"reachable":true,"contract_verified":true,
+                "same_command_retry_safe":true,"worktree_recovery":{"total":4,"completed":4,"failed":1}
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
             "IDEMPOTENCY_KEY_REUSED" => {
                 Map::from_iter([("admission".to_owned(), json!({"admitted": false}))])
             }

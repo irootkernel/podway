@@ -3,7 +3,7 @@
     {
       "kind": "catalog",
       "path": "contracts/command-routes.json",
-      "sha256": "sha256:5d6c176aca82f1b055033a6617cea5517b40e5913e20d0679c90b770439831b6"
+      "sha256": "sha256:3abe3ca0b811ab10bd303ffe44d9e5e0d9c291ac1be35a06b8ac781e911f64a3"
     },
     {
       "kind": "known_answer_fixture",
@@ -38,7 +38,7 @@
     {
       "kind": "catalog",
       "path": "release/dolgorae-adapter-contract-v2.json",
-      "sha256": "sha256:56d39bbf0500595eafd6175af551d1e45d3f22e65d13821f4ba9dc2ae40470b9"
+      "sha256": "sha256:4563c06350c405aae43add427678ccd5d0002631a0be79968a55bf94e36ab0d3"
     },
     {
       "kind": "schema",
@@ -92,8 +92,23 @@
     },
     {
       "kind": "schema",
+      "path": "schemas/daemon-readiness-error-details-v1.schema.json",
+      "sha256": "sha256:341ec9bab39bbf8a1527225eae2233a77fd77a7de93aedcf9288519069ce8835"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/daemon-readiness-timeout-details-v1.schema.json",
+      "sha256": "sha256:9afb543fb6e204542b06892f82dff6ecc77a266213f8abf5f0bfd23a17c7ae49"
+    },
+    {
+      "kind": "schema",
       "path": "schemas/daemon-status-result-v1.schema.json",
       "sha256": "sha256:998d14853d3d86b226d9a67f239ee6f0d3e90590ecbd7eaa15c1c91952552486"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/daemon-status-result-v2.schema.json",
+      "sha256": "sha256:f4d6af2185969e08a02ecf2ece89bfccc74e71998914dd153d47fa6670aabe57"
     },
     {
       "kind": "schema",
@@ -123,7 +138,7 @@
     {
       "kind": "schema",
       "path": "schemas/error-v1.schema.json",
-      "sha256": "sha256:bde25746accfef3b44e30e77f1bc9c9211a90fa921098c581f469f0de133c7ec"
+      "sha256": "sha256:025f0b24c7e4be83c97620fb97ecca43e37f9fd98a48f3ecb1f63633d592c79d"
     },
     {
       "kind": "schema",
@@ -223,7 +238,7 @@
     {
       "kind": "schema",
       "path": "schemas/output-v3.schema.json",
-      "sha256": "sha256:b8a08fdf59bf2e92e027095d7390ae4e6a1f4fce0592fe6a0c434ae04f569bcf"
+      "sha256": "sha256:4b3a4a023694d336b6e6a21843d9d294c5721c9569a2f1f9eeb806fbd9bd4d10"
     },
     {
       "kind": "schema",
@@ -268,7 +283,7 @@
     {
       "kind": "schema",
       "path": "schemas/recovery-recipe-v1.schema.json",
-      "sha256": "sha256:5816b20deb8ac3996c08990b74f58858c8d1695a2aa4411cd9d3ff254b1ca667"
+      "sha256": "sha256:7f6f9912b26e848d26e04bf4d85290810d991a1cd84281d36f2da93bf84f931a"
     },
     {
       "kind": "schema",
@@ -443,12 +458,12 @@
     {
       "kind": "catalog",
       "path": "spec/command-catalog.yaml",
-      "sha256": "sha256:bb5862a3f86fad4d34c1e7be34d386c498b6a1c2b3363a9d325de0e00c26f0c2"
+      "sha256": "sha256:9984ba0352fc3b7ec901f01e1aa5815e0f5e94011b8974f4392f61f5b0456746"
     },
     {
       "kind": "catalog",
       "path": "spec/error-codes.json",
-      "sha256": "sha256:08e5cd1d19d8df22fd5175b74e845f2e44c67bc3232abd0bd6874f6c22201d56"
+      "sha256": "sha256:4d56a858cab0071f346ba89bb5dda0b1d98cde24980d0b2af75afd0e67db6897"
     },
     {
       "kind": "transition_matrix",
@@ -541,7 +556,7 @@
       "sha256": "sha256:23423b1060f6a0fedd1097ac458ca8a1cd8cb3c1a2a7e88aa964d514d01a248a"
     }
   ],
-  "digest": "sha256:e9a77768e4d097a6de45fd2e821ca73d5f545988f0dd0af595ef817ef2ee6d55",
+  "digest": "sha256:af53507752ec215c5ad4ddfb8be54db536fb0446e6c79c6f1c02576ef8a770c4",
   "product": "podway",
   "product_version": "0.2.6",
   "schema_version": "podway.contract-manifest/v1",

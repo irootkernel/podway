@@ -42,3 +42,4 @@ narrative architecture and specifications when sources conflict.
 - [ADR-0026](0026-retain-inactive-terminal-sessions.md): bounded inactive terminal-session retention
 - [ADR-0027](0027-state-aware-session-start.md): lifecycle-aware interactive and automated session start
 - [ADR-0028](0028-bounded-typed-procedure-guards.md): bounded typed Procedure guards
+- [ADR-0029](0029-serve-phase-aware-daemon-readiness.md): phase-aware daemon readiness

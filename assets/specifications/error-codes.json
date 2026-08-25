@@ -25,6 +25,20 @@
       "summary": "Daemon socket cannot be reached."
     },
     {
+      "code": "DAEMON_STARTING",
+      "details_schema": "podway.daemon-readiness-error-details/v1",
+      "exit_code": 3,
+      "retryable": true,
+      "summary": "Daemon is starting and normal request admission is not open."
+    },
+    {
+      "code": "DAEMON_READINESS_TIMEOUT",
+      "details_schema": "podway.daemon-readiness-timeout-details/v1",
+      "exit_code": 3,
+      "retryable": true,
+      "summary": "Daemon did not reach verified readiness before the bounded deadline."
+    },
+    {
       "code": "DAEMON_SHUTTING_DOWN",
       "details_schema": "podway.endpoint-error-details/v1",
       "exit_code": 3,

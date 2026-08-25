@@ -120,6 +120,14 @@
       "capabilities": []
     },
     {
+      "command": "daemon.wait-ready",
+      "availability": "reserved_contract",
+      "owner": "podway-service",
+      "path": ["podway-cli", "podway-service"],
+      "execution": "service_lifecycle",
+      "capabilities": []
+    },
+    {
       "command": "daemon.terminate",
       "availability": "executable",
       "owner": "podway-daemon",

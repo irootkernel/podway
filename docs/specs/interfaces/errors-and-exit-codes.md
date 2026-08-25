@@ -40,6 +40,8 @@ behavior. Manifest registration alone does not imply executable capability.
 |---|---:|---:|---|
 | `DAEMON_NOT_INSTALLED` | 3 | no | User service is not installed |
 | `DAEMON_UNAVAILABLE` | 3 | yes | Socket cannot be reached |
+| `DAEMON_STARTING` | 3 | yes | The control plane is reachable but normal admission is not open |
+| `DAEMON_READINESS_TIMEOUT` | 3 | yes | Verified readiness was not reached before a bounded deadline |
 | `DAEMON_SHUTTING_DOWN` | 3 | yes | Daemon is draining and not accepting work |
 | `DAEMON_VERSION_INCOMPATIBLE` | 3 | no | CLI and daemon cannot share a supported contract |
 | `DAEMON_CONTRACT_MISMATCH` | 3 | no | CLI and daemon product or manifest identity differs |
@@ -370,6 +372,8 @@ code, retryability, exit class, and admission facts:
 | Error family | Details schema | Read-only command |
 |---|---|---|
 | `DAEMON_UNAVAILABLE` | `podway.endpoint-error-details/v2` | `daemon.status` |
+| `DAEMON_STARTING` | `podway.daemon-readiness-error-details/v1` | `daemon.wait-ready` |
+| `DAEMON_READINESS_TIMEOUT` | `podway.daemon-readiness-timeout-details/v1` | `daemon.wait-ready` |
 | `DAEMON_CONTRACT_MISMATCH` | `podway.daemon-contract-mismatch-details/v2` | `daemon.status` |
 | `WORKSPACE_UUID_MISMATCH` | `podway.workspace-uuid-mismatch-details/v2` | `workspace.doctor` |
 | `WORKSPACE_STATE_UNREADABLE`, `WORKSPACE_SCHEMA_UNSUPPORTED` | `podway.workspace-recovery-details/v1` | `workspace.doctor` |
@@ -383,11 +387,18 @@ code, retryability, exit class, and admission facts:
 
 `podway.recovery-recipe/v1` contains exactly `action`, `command`, `argv`,
 `reason`, and `requires_explicit_authorization`. Commands are limited to
-`session.observe`, `job.lookup`, `job.wait`, `daemon.status`, and
+`session.observe`, `job.lookup`, `job.wait`, `daemon.status`, `daemon.wait-ready`, and
 `workspace.doctor`; argv is limited to 2..8 non-empty strings and reason to 256
 Unicode scalars. Every current recipe is read-only and therefore reports
 `requires_explicit_authorization=false`. The object never authorizes retry,
 restart, repair, reset, reinstall, fence weakening, or another mutation.
+
+`DAEMON_STARTING` is a pre-admission response with the current state, stage,
+elapsed time, bounded worktree progress, and `admission.admitted=false`.
+`DAEMON_READINESS_TIMEOUT` additionally records the lifecycle operation,
+deadline, installed, loaded, socket-present, reachable, and contract-verified
+observations plus `same_command_retry_safe=true`. Timeout preserves the existing
+LaunchAgent, endpoint ownership, registry, workspace databases, and sessions.
 
 ## Error redaction
 

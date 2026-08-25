@@ -58,6 +58,17 @@ and treats stable IDs and structured fields rather than text as the interface.
 | `AUT-DAEMON-002` | LaunchAgent startup MUST NOT depend on an interactive shell `PATH`. |
 | `AUT-DAEMON-003` | Installation MUST NOT stage or copy `podwayd`; upgrade MUST re-resolve and re-verify the selected release binary. |
 
+### Phase-aware daemon readiness (AUT-DAEMON-004–009)
+
+| ID | Normative requirement |
+|---|---|
+| `AUT-DAEMON-004` | The authenticated control endpoint MUST become available before registered-worktree and recovered-job reconciliation, while normal command admission remains closed until daemon-owned readiness is `ready`. |
+| `AUT-DAEMON-005` | During startup only handshake, `daemon.status`, and coordinated termination may pass the early control plane; other routes MUST return retryable `DAEMON_STARTING` before workspace lookup or durable admission. |
+| `AUT-DAEMON-006` | Status v2 MUST distinguish service state, reachability, contract verification, readiness state and stage, monotonic elapsed time, and bounded worktree recovery progress. |
+| `AUT-DAEMON-007` | `daemon wait-ready` MUST be read-only, use a 120-second default and one-hour maximum, and succeed only for a matching verified v2 `ready` result. |
+| `AUT-DAEMON-008` | Readiness deadline expiry MUST return `DAEMON_READINESS_TIMEOUT` with closed last-observation details and MUST preserve service, endpoint, registry, workspace, and session state. |
+| `AUT-DAEMON-009` | `daemon install` MUST reuse the bounded readiness waiter after idempotent service reconciliation; retry after timeout MUST reconcile the same durable installation. |
+
 ## 8. Podway user-global home and layout (AUT-HOME-001–003)
 
 | ID | Normative requirement |
@@ -108,7 +119,7 @@ When no explicit endpoint is supplied, an interactive client may read
 | `AUT-CONTRACT-002` | `podway version --json` MUST emit exactly the compact `name` and `v`-prefixed `version`; `podway version --json --identity` MUST emit a validated `podway.output/v3` envelope with a closed `podway.version-result/v1` result exposing product, version, target, build identity, source commit when available, manifest schema and digest, and supported IPC IDs. |
 | `AUT-CONTRACT-003` | `podway` and `podwayd` from one release MUST emit exactly equal closed identity results and embed the same manifest digest. |
 | `AUT-CONTRACT-004` | Installation and every daemon connection MUST reject a malformed complete identity envelope or a product or manifest mismatch before command execution or durable admission; IPC compatibility alone MUST NOT authorize the connection. |
-| `AUT-CONTRACT-005` | `daemon status --json` MUST expose daemon version, executable path, process-instance identity, configured and effective socket, and manifest digest. |
+| `AUT-CONTRACT-005` | `daemon status --json` MUST expose daemon version, executable path, process-instance identity, configured and effective socket, manifest digest, and, in status v2, explicit readiness fields. |
 
 The client version field is diagnostic and MUST NOT independently authorize or
 reject a connection. Admission is determined by product and manifest identity.
@@ -292,7 +303,7 @@ The active-item allocation holds the widest definition vetting admits, so in pra
 | `AUT-ERR-001` | `WORKSPACE_UUID_MISMATCH`, `SESSION_ID_MISMATCH`, `PROCEDURE_DIGEST_MISMATCH`, `DAEMON_CONTRACT_MISMATCH`, socket errors, and wait timeout MUST have stable catalog entries and exit mappings. |
 | `AUT-ERR-002` | A pre-admission contract, identity, digest, endpoint, or validation failure MUST report `admission.admitted=false`; a mismatch MUST NOT admit a job. |
 | `AUT-ERR-003` | Adopted recoverable errors MUST carry one closed bounded `recovery` recipe containing `action`, canonical read-only `command`, structured `argv`, bounded `reason`, and `requires_explicit_authorization=false`. |
-| `AUT-ERR-004` | Recovery recipes MUST recommend only `session.observe`, `job.lookup`, `job.wait`, `daemon.status`, or `workspace.doctor`; they MUST NOT weaken a fence or recommend retry, restart, repair, reset, reinstall, or another mutation. |
+| `AUT-ERR-004` | Recovery recipes MUST recommend only `session.observe`, `job.lookup`, `job.wait`, `daemon.status`, `daemon.wait-ready`, or `workspace.doctor`; they MUST NOT weaken a fence or recommend retry, restart, repair, reset, reinstall, or another mutation. |
 | `AUT-ERR-005` | Recovery recipes MUST derive only from existing public error details, MUST preserve code, retryability, exit class, and admission facts, and MUST NOT copy item values, requests, environment variables, file contents, credentials, or artifact bytes. |
 
 ## 23. Release artifact and installation (AUT-REL-001–004)
@@ -360,6 +371,7 @@ Preview and other authoring reads remain side-effect free.
 | Requirements | Implemented by | Planned evidence |
 |---|---|---|
 | `AUT-PATH-001`–`003`, `AUT-DAEMON-001`–`003` | `RPATH004`, `RPATH006`, `CONID006` | `AUT-T-PATH`, `AUT-T-CONTRACT` |
+| `AUT-DAEMON-004`–`009` | `V2RDY-001`–`003` | `AUT-T-CONTRACT`, `AUT-T-JSON`, repository-local readiness integration tests |
 | `AUT-HOME-001`–`004` | `RPATH001`, `RPATH002`, `RPATH004` | `AUT-T-PATH`, `AUT-T-SOCK` |
 | `AUT-SOCK-001`–`005`, `AUT-SEC-001`–`004` | `RPATH003`–`RPATH006` | `AUT-T-SOCK` |
 | `AUT-CONTRACT-001`–`005` | `CONID001`–`CONID006` | `AUT-T-CONTRACT`, `AUT-T-DIST` |

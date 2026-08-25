@@ -771,7 +771,33 @@ fn v2agt005_recovery_schemas_accept_exact_closed_read_only_fixtures() {
         "reason":"Wait for the admitted job instead of resubmitting its mutation.",
         "requires_explicit_authorization":false
     });
+    let wait_ready = json!({
+        "action":"wait_for_daemon","command":"daemon.wait-ready",
+        "argv":["podway","--json","daemon","wait-ready"],
+        "reason":"Wait for verified daemon readiness without changing service state.",
+        "requires_explicit_authorization":false
+    });
     let cases = [
+        (
+            "schemas/daemon-readiness-error-details-v1.schema.json",
+            json!({
+                "schema":"podway.daemon-readiness-error-details/v1",
+                "readiness_state":"recovering","readiness_stage":"workspaces",
+                "elapsed_ms":31_000,"worktree_recovery":{"total":4,"completed":2,"failed":1},
+                "admission":{"admitted":false},"recovery":wait_ready
+            }),
+        ),
+        (
+            "schemas/daemon-readiness-timeout-details-v1.schema.json",
+            json!({
+                "schema":"podway.daemon-readiness-timeout-details/v1",
+                "operation":"wait_ready","readiness_state":"recovering","readiness_stage":"jobs",
+                "elapsed_ms":120_000,"deadline_ms":120_000,"installed":true,"loaded":true,
+                "socket_present":true,"reachable":true,"contract_verified":true,
+                "same_command_retry_safe":true,"worktree_recovery":{"total":4,"completed":4,"failed":1},
+                "recovery":wait_ready
+            }),
+        ),
         (
             "schemas/endpoint-error-details-v2.schema.json",
             json!({"schema":"podway.endpoint-error-details/v2","recovery":daemon}),
@@ -826,6 +852,7 @@ fn v2agt005_recovery_schemas_accept_exact_closed_read_only_fixtures() {
         daemon,
         doctor,
         wait,
+        wait_ready,
         json!({
             "action":"reconcile_mutation","command":"job.lookup",
             "argv":["podway","--json","job","lookup","--idempotency-key","key"],
@@ -835,6 +862,37 @@ fn v2agt005_recovery_schemas_accept_exact_closed_read_only_fixtures() {
     ] {
         assert_valid("schemas/recovery-recipe-v1.schema.json", &recipe);
     }
+}
+
+#[test]
+fn v2rdy001_reserves_closed_phase_aware_status_and_wait_ready_output() {
+    let result = json!({
+        "schema":"podway.daemon-status-result/v2",
+        "status":"running","installed":true,"loaded":true,"reachable":true,
+        "product":"podway","daemon_version":"0.2.6","target":"aarch64-apple-darwin",
+        "build_identity":DIGEST,"source_commit":null,
+        "contract_manifest_schema":"podway.contract-manifest/v1",
+        "contract_manifest_digest":DIGEST,"protocol_versions":["podway.ipc/v1"],
+        "pid":42,"process_id":UUID,"executable_path":"/opt/podwayd",
+        "started_at":"2026-08-25T00:00:00.000Z","uptime_ms":47_000,
+        "socket_path":"/tmp/podway.sock","configured_socket_path":"/tmp/podway.sock",
+        "effective_socket_path":"/tmp/podway.sock","registered_worktree_count":4,
+        "active_scheduler_count":4,"queued_job_count":1,"running_job_count":0,
+        "readiness_state":"recovering","readiness_stage":"jobs","readiness_elapsed_ms":47_000,
+        "worktree_recovery":{"total":4,"completed":4,"failed":1}
+    });
+    assert_valid("schemas/daemon-status-result-v2.schema.json", &result);
+    assert_valid(
+        "schemas/output-v3.schema.json",
+        &json!({
+            "schema":OUTPUT_SCHEMA_V3,"request_id":UUID,"command":"daemon.wait-ready",
+            "generated_at":"2026-08-25T00:00:00.000Z","result":result,"warnings":[]
+        }),
+    );
+
+    let mut false_ready = result;
+    false_ready["readiness_state"] = json!("ready");
+    assert_invalid("schemas/daemon-status-result-v2.schema.json", &false_ready);
 }
 
 #[test]

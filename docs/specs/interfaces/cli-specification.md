@@ -21,6 +21,13 @@ human-readable text or one JSON document. It never writes SQLite directly.
 The executable grammar is owned by the command catalog and clap definitions.
 Removed commands are not aliases and must fail argument parsing.
 
+`daemon wait-ready [--timeout <duration>]` is a reserved read-only service
+operation. Its default deadline is 120 seconds and its hard maximum is one hour.
+It succeeds only after a v2 status response proves matching live identity,
+matching contract identity, and `readiness_state: ready`; it never starts,
+installs, restarts, repairs, or otherwise mutates the service. `V2RDY-001`
+reserves this grammar and result contract but does not make the route executable.
+
 ## Procedure commands
 
 All procedure commands accept only `podway.procedure/v2`. Validation and authoring

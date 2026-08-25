@@ -20,6 +20,7 @@
     { "$ref": "#/$defs/procedureIndependent" },
     { "$ref": "#/$defs/version" },
     { "$ref": "#/$defs/daemonStatus" },
+    { "$ref": "#/$defs/daemonReadiness" },
     { "$ref": "#/$defs/workspaceInit" },
     { "$ref": "#/$defs/procedureValidation" },
     { "$ref": "#/$defs/detachedAdmission" },
@@ -76,7 +77,25 @@
     "daemonStatus": {
       "properties": {
         "command": { "const": "daemon.status" },
-        "result": { "$ref": "urn:podway:schema:daemon-status-result:v1" }
+        "result": {
+          "oneOf": [
+            { "$ref": "urn:podway:schema:daemon-status-result:v1" },
+            { "$ref": "urn:podway:schema:daemon-status-result:v2" }
+          ]
+        }
+      },
+      "not": {
+        "anyOf": [
+          { "required": ["workspace"] },
+          { "required": ["job"] },
+          { "required": ["session"] }
+        ]
+      }
+    },
+    "daemonReadiness": {
+      "properties": {
+        "command": { "const": "daemon.wait-ready" },
+        "result": { "$ref": "urn:podway:schema:daemon-status-result:v2" }
       },
       "not": {
         "anyOf": [

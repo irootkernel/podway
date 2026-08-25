@@ -171,6 +171,7 @@ SERVICE_COMMANDS = {
     "daemon.stop",
     "daemon.restart",
     "daemon.status",
+    "daemon.wait-ready",
     "daemon.logs",
 }
 PROHIBITED_CAPABILITIES = {"command_runner", "git_mutation", "network"}
@@ -181,6 +182,7 @@ V2_ROUTE_DELTA = {
     "session.decide", "session.rework", "goal.define", "goal.revise",
     "goal.assess_criterion", "session.begin", "session.terminal_disposition",
     "evidence.read",
+    "daemon.wait-ready",
 }
 # V2_ROUTE_DELTA members whose owning task has landed. The delta itself never shrinks: a route
 # stays registered forever, and this set records only which of them the build now serves.
@@ -218,7 +220,8 @@ PROCEDURE_INDEPENDENT_EXECUTABLE_ROUTES = {
     "job.wait", "job.cancel",
 }
 PROCEDURE_INDEPENDENT_RUNTIME_ERROR_CODES = (
-    "DAEMON_NOT_INSTALLED", "DAEMON_UNAVAILABLE", "DAEMON_SHUTTING_DOWN",
+    "DAEMON_NOT_INSTALLED", "DAEMON_UNAVAILABLE", "DAEMON_STARTING",
+    "DAEMON_READINESS_TIMEOUT", "DAEMON_SHUTTING_DOWN",
     "DAEMON_VERSION_INCOMPATIBLE", "DAEMON_CONTRACT_MISMATCH",
     "PROTOCOL_VERSION_UNSUPPORTED", "REQUEST_TOO_LARGE", "REQUEST_INVALID",
     "SOCKET_ENDPOINT_INVALID", "NOT_A_GIT_WORKTREE", "BARE_GIT_REPOSITORY",
@@ -474,7 +477,7 @@ def validate_v2_catalog_delta(root: Path) -> int:
     if set(runtime) != {"schema", "exit_codes", "errors"}:
         fail("error catalog has unexpected or missing top-level fields")
     entries = runtime.get("errors")
-    if not isinstance(entries, list) or len(entries) != 100:
+    if not isinstance(entries, list) or len(entries) != 102:
         fail("runtime error catalog must contain the v2-only error set")
     runtime_codes = [entry.get("code") for entry in entries if isinstance(entry, dict)]
     if len(runtime_codes) != len(entries) or len(set(runtime_codes)) != len(runtime_codes):
@@ -505,6 +508,8 @@ def validate_v2_catalog_delta(root: Path) -> int:
         fail("every v2 runtime error must bind the closed v2 details schema")
     recovery_details_schemas = {
         "DAEMON_UNAVAILABLE": "podway.endpoint-error-details/v2",
+        "DAEMON_STARTING": "podway.daemon-readiness-error-details/v1",
+        "DAEMON_READINESS_TIMEOUT": "podway.daemon-readiness-timeout-details/v1",
         "DAEMON_CONTRACT_MISMATCH": "podway.daemon-contract-mismatch-details/v2",
         "WORKSPACE_UUID_MISMATCH": "podway.workspace-uuid-mismatch-details/v2",
         "WORKSPACE_STATE_UNREADABLE": "podway.workspace-recovery-details/v1",
@@ -731,7 +736,7 @@ def validate_routes(root: Path) -> int:
     if not isinstance(prohibited, list) or set(prohibited) != PROHIBITED_CAPABILITIES or len(prohibited) != len(PROHIBITED_CAPABILITIES):
         fail("command route contract must prohibit command_runner, git_mutation, and network")
     routes = contract["routes"]
-    if not isinstance(routes, list) or len(routes) != 65:
+    if not isinstance(routes, list) or len(routes) != 66:
         fail("command route contract routes must be a list")
 
     expected_commands = catalog_commands(root) | {"completions"}

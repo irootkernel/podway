@@ -6,8 +6,8 @@
   "additionalProperties": false,
   "required": ["action", "command", "argv", "reason", "requires_explicit_authorization"],
   "properties": {
-    "action": { "enum": ["refresh_state", "reconcile_mutation", "wait_for_job", "inspect_daemon", "diagnose_workspace"] },
-    "command": { "enum": ["session.observe", "job.lookup", "job.wait", "daemon.status", "workspace.doctor"] },
+    "action": { "enum": ["refresh_state", "reconcile_mutation", "wait_for_job", "inspect_daemon", "wait_for_daemon", "diagnose_workspace"] },
+    "command": { "enum": ["session.observe", "job.lookup", "job.wait", "daemon.status", "daemon.wait-ready", "workspace.doctor"] },
     "argv": { "type": "array", "minItems": 2, "maxItems": 8, "items": { "type": "string", "minLength": 1, "maxLength": 256 } },
     "reason": { "type": "string", "minLength": 1, "maxLength": 256 },
     "requires_explicit_authorization": { "const": false }
@@ -20,6 +20,10 @@
     {
       "if": { "properties": { "command": { "const": "daemon.status" } }, "required": ["command"] },
       "then": { "properties": { "action": { "const": "inspect_daemon" }, "argv": { "const": ["podway", "--json", "daemon", "status"] } } }
+    },
+    {
+      "if": { "properties": { "command": { "const": "daemon.wait-ready" } }, "required": ["command"] },
+      "then": { "properties": { "action": { "const": "wait_for_daemon" }, "argv": { "const": ["podway", "--json", "daemon", "wait-ready"] } } }
     },
     {
       "if": { "properties": { "command": { "const": "workspace.doctor" } }, "required": ["command"] },

@@ -144,6 +144,19 @@ commands:
   destructive_confirmation: false
   result_schemas:
   - podway.daemon-status-result/v1
+  - podway.daemon-status-result/v2
+- name: daemon.wait-ready
+  availability: reserved_contract
+  cli:
+  - daemon
+  - wait-ready
+  operation: control
+  workspace_required: false
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+  result_schemas:
+  - podway.daemon-status-result/v2
 - name: daemon.terminate
   availability: executable
   cli:

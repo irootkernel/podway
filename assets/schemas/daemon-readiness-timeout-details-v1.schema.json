@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:daemon-readiness-timeout-details:v1",
+  "title": "Podway Daemon Readiness Timeout Details v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "operation", "readiness_state", "readiness_stage", "elapsed_ms", "deadline_ms",
+    "installed", "loaded", "socket_present", "reachable", "contract_verified",
+    "same_command_retry_safe", "worktree_recovery", "recovery"
+  ],
+  "properties": {
+    "schema": { "const": "podway.daemon-readiness-timeout-details/v1" },
+    "operation": { "enum": ["install", "start", "wait_ready"] },
+    "readiness_state": { "enum": ["not_running", "unreachable", "starting", "recovering", "ready", "failed"] },
+    "readiness_stage": { "enum": ["endpoint", "registry", "workspaces", "jobs", "ready", "failed", null] },
+    "elapsed_ms": { "type": "integer", "minimum": 0 },
+    "deadline_ms": { "type": "integer", "minimum": 1, "maximum": 3600000 },
+    "installed": { "type": "boolean" },
+    "loaded": { "type": "boolean" },
+    "socket_present": { "type": "boolean" },
+    "reachable": { "type": "boolean" },
+    "contract_verified": { "type": "boolean" },
+    "same_command_retry_safe": { "const": true },
+    "worktree_recovery": { "$ref": "urn:podway:schema:daemon-status-result:v2#/$defs/worktreeRecovery" },
+    "recovery": { "$ref": "urn:podway:schema:recovery-recipe:v1" }
+  }
+}

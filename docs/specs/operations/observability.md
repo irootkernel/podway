@@ -99,6 +99,10 @@ registered_worktree_count
 active_scheduler_count
 queued_job_count
 running_job_count
+readiness_state
+readiness_stage
+readiness_elapsed_ms
+worktree_recovery
 ```
 
 It contains aggregate counts only, not task titles or item data.
@@ -107,6 +111,15 @@ monotonic. A stopped or unreachable installation retains static build identity,
 executable, and configured socket fields but reports every live process field as `null`.
 Contract-handshake failures are returned as `DAEMON_CONTRACT_MISMATCH`, never rewritten
 as an unreachable status result.
+
+The final four fields belong to the reserved
+`podway.daemon-status-result/v2` family. `readiness_state` distinguishes
+`not_running`, `unreachable`, `starting`, `recovering`, `ready`, and `failed`;
+the stage identifies endpoint, registry, worktree, job, ready, or failed
+processing. Worktree progress contains only bounded total, completed, and failed
+counts. A result is ready only when the endpoint is reachable, live identity and
+the manifest are verified, and the daemon-owned state is ready. `V2RDY-001`
+reserves these fields; runtime emission begins in `V2RDY-002`.
 
 ## Workspace status observability
 

@@ -38,6 +38,47 @@ fn error(
 fn fixtures() -> Vec<(&'static str, ErrorEnvelopeV1, &'static str, &'static str)> {
     vec![
         (
+            "podway.daemon-readiness-error-details/v1",
+            error(
+                "DAEMON_STARTING",
+                3,
+                true,
+                details(json!({
+                    "readiness_state":"recovering",
+                    "readiness_stage":"workspaces",
+                    "elapsed_ms":31_000,
+                    "worktree_recovery":{"total":4,"completed":2,"failed":1},
+                    "admission":{"admitted":false}
+                })),
+            ),
+            "wait_for_daemon",
+            "daemon.wait-ready",
+        ),
+        (
+            "podway.daemon-readiness-timeout-details/v1",
+            error(
+                "DAEMON_READINESS_TIMEOUT",
+                3,
+                true,
+                details(json!({
+                    "operation":"wait_ready",
+                    "readiness_state":"recovering",
+                    "readiness_stage":"jobs",
+                    "elapsed_ms":120_000,
+                    "deadline_ms":120_000,
+                    "installed":true,
+                    "loaded":true,
+                    "socket_present":true,
+                    "reachable":true,
+                    "contract_verified":true,
+                    "same_command_retry_safe":true,
+                    "worktree_recovery":{"total":4,"completed":4,"failed":1}
+                })),
+            ),
+            "wait_for_daemon",
+            "daemon.wait-ready",
+        ),
+        (
             "podway.endpoint-error-details/v2",
             error("DAEMON_UNAVAILABLE", 3, true, Map::new()),
             "inspect_daemon",

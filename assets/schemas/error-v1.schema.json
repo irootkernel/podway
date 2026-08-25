@@ -248,6 +248,28 @@
     },
     {
       "if": {
+        "properties": { "code": { "const": "DAEMON_STARTING" } },
+        "required": ["code"]
+      },
+      "then": {
+        "properties": {
+          "details": { "$ref": "urn:podway:schema:daemon-readiness-error-details:v1" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "code": { "const": "DAEMON_READINESS_TIMEOUT" } },
+        "required": ["code"]
+      },
+      "then": {
+        "properties": {
+          "details": { "$ref": "urn:podway:schema:daemon-readiness-timeout-details:v1" }
+        }
+      }
+    },
+    {
+      "if": {
         "properties": { "code": { "const": "DAEMON_CONTRACT_MISMATCH" } },
         "required": ["code"]
       },
