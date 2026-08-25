@@ -55,9 +55,9 @@ stores artifact metadata rather than artifact bytes.
 
 ## Supported boundary
 
-The supported release target is native Apple Silicon macOS. SQLite schema-v5 is
-the canonical store. Empty predecessors and v2-only schema-v3 or schema-v4
-stores migrate transactionally; any predecessor containing Procedure v1 domain
+The supported release target is native Apple Silicon macOS. SQLite schema-v9 is
+the canonical store. Empty predecessors and supported Procedure v2 predecessors
+through schema-v8 migrate transactionally; any predecessor containing Procedure v1 domain
 state fails closed with `LEGACY_PROCEDURE_STATE_UNSUPPORTED` and is never
 converted or deleted automatically.
 

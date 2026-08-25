@@ -1140,20 +1140,21 @@ impl StatusFacts {
             let item_id = item_id(command).ok_or_else(|| {
                 LocalFailure::request_invalid("item command omitted an item identifier")
             })?;
-            let item_revision = explicit.item_revision.or_else(|| {
-                self.item_revisions
-                    .iter()
-                    .find_map(|(id, revision)| (id == item_id).then_some(*revision))
-            });
+            let item_revision = explicit
+                .item_revision
+                .or_else(|| {
+                    self.item_revisions
+                        .iter()
+                        .find_map(|(id, revision)| (id == item_id).then_some(*revision))
+                })
+                .unwrap_or(Revision::ZERO);
             return PreconditionsV1::new(
                 Some(session_id),
                 None,
                 Some(attempt_id.ok_or_else(|| {
                     LocalFailure::response_invalid("status response omitted the active attempt")
                 })?),
-                Some(item_revision.ok_or_else(|| {
-                    LocalFailure::response_invalid("status response omitted the requested item")
-                })?),
+                Some(item_revision),
                 None,
                 None,
             )
@@ -1935,8 +1936,16 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
                             preflight.facts.session_id,
                             preflight.facts.session_revision.get(),
                         );
+                        let continued_command = if matches!(
+                            preflight.facts.lifecycle.as_str(),
+                            "completed" | "cancelled"
+                        ) {
+                            "session.observe"
+                        } else {
+                            "session.next"
+                        };
                         let request = build_request(
-                            "session.next",
+                            continued_command,
                             &target,
                             RequestSpec {
                                 operation: OperationV1::Query,

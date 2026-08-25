@@ -511,6 +511,12 @@ const ROUTES: &[Route] = &[
         dynamic: None,
     },
     Route {
+        words: "daemon wait-ready",
+        flags: &[&JSON, &TIMEOUT, &NO_COLOR, &QUIET],
+        values: "",
+        dynamic: None,
+    },
+    Route {
         words: "terminate",
         flags: &[&JSON, &DEV, &TIMEOUT, &NO_COLOR, &QUIET],
         values: "",
@@ -1491,4 +1497,29 @@ fn write_fish_flag(script: &mut String, route: &str, flag: &Flag, dynamic: Optio
         let _ = write!(script, " -a '(__podway_dynamic {kind})'");
     }
     script.push('\n');
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Shell, children};
+
+    #[test]
+    fn daemon_wait_ready_is_present_in_every_completion_script() {
+        assert!(children("daemon").contains(&"wait-ready"));
+        for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
+            let script = shell.script();
+            assert!(
+                script.contains("wait-ready"),
+                "missing wait-ready in {shell:?}"
+            );
+            assert!(
+                script.contains("daemon wait-ready"),
+                "missing route in {shell:?}"
+            );
+            assert!(
+                script.contains("timeout"),
+                "missing timeout flag in {shell:?}"
+            );
+        }
+    }
 }

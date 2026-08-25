@@ -7082,6 +7082,15 @@ fn graph_mutation_failure_matches_v2(
                                 | crate::CommandV1::ItemAttach { .. }
                         )
                 }),
+                PersistedGraphMutationFailureV2::ItemConstraintBound { .. } => {
+                    reproduced_item_bound_failure_v2(
+                        execution,
+                        preconditions,
+                        current,
+                        command,
+                        error,
+                    )
+                }
                 PersistedGraphMutationFailureV2::ListValueNotFound => matches!(
                     (command, slot.map(crate::ItemSlotStateV2::item_type)),
                     (
@@ -7101,6 +7110,74 @@ fn graph_mutation_failure_matches_v2(
         }
         _ => false,
     }
+}
+
+fn reproduced_item_bound_failure_v2(
+    execution: &ClaimedExecutionV1,
+    preconditions: &crate::RevisionAttemptItemPreconditionsV1,
+    current: &crate::GraphSessionStateV2,
+    command: &crate::CommandV1,
+    expected: &PersistedGraphMutationFailureV2,
+) -> bool {
+    let Ok((_, payload)) =
+        procedure_v2_operation_payload_v1(execution, public_command_name_v1(command), 7)
+    else {
+        return false;
+    };
+    let Some(item_id) = graph_item_id_v2(command) else {
+        return false;
+    };
+    let Some(attempt_id) = preconditions.expected_attempt_id() else {
+        return false;
+    };
+    let Some(item_revision) = preconditions.expected_item_revision() else {
+        return false;
+    };
+    if payload.get("item_id").and_then(serde_json::Value::as_str) != Some(item_id.as_str()) {
+        return false;
+    }
+    let mutation = match command {
+        crate::CommandV1::ItemSet { .. } => payload
+            .get("value")
+            .and_then(serde_json::Value::as_str)
+            .map(|value| crate::ActiveItemMutationV2::Set {
+                value: value.to_owned(),
+            }),
+        crate::CommandV1::ItemAdd { .. } => payload
+            .get("value")
+            .and_then(serde_json::Value::as_str)
+            .map(|value| crate::ActiveItemMutationV2::Add {
+                value: value.to_owned(),
+            }),
+        crate::CommandV1::ItemRemove { .. } => {
+            let value = payload.get("value").and_then(serde_json::Value::as_str);
+            let ignore_missing = payload
+                .get("ignore_missing")
+                .and_then(serde_json::Value::as_bool);
+            value.zip(ignore_missing).map(|(value, ignore_missing)| {
+                crate::ActiveItemMutationV2::Remove {
+                    value: value.to_owned(),
+                    ignore_missing,
+                }
+            })
+        }
+        _ => None,
+    };
+    let Some(mutation) = mutation else {
+        return false;
+    };
+    current
+        .mutate_active_item_v2(
+            attempt_id,
+            item_id,
+            item_revision,
+            mutation,
+            podway_core::UnixMillis::new(u64::MAX),
+        )
+        .err()
+        .and_then(|failure| PersistedGraphMutationFailureV2::try_from(&failure).ok())
+        .as_ref()
+        == Some(expected)
 }
 
 fn persisted_session_state_failure_matches_v2(

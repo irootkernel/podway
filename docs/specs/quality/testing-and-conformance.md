@@ -7,7 +7,7 @@ ordering, crash ambiguity, filesystem boundaries, and public contract stability.
 
 1. Pure graph, goal, item, decision, retry, and rework domain tests.
 2. Procedure v2 parsing, validation, canonicalization, and preset identity tests.
-3. SQLite schema-v5 initialization, migration, rollback, and legacy-state rejection.
+3. SQLite schema-v9 initialization, migration, rollback, and legacy-state rejection.
 4. Daemon queue, idempotency, concurrency, restart, and crash-injection tests.
 5. IPC framing, bounded decoding, schema validation, and fuzzing.
 6. Git/worktree, service, CLI, and real-binary end-to-end tests.
@@ -55,8 +55,8 @@ successful `make test` establishes the complete development-gate claim.
 
 ## Persistence and compatibility
 
-The store suite creates canonical schema-v5 from an empty database, migrates each
-supported empty or v2-only predecessor transactionally, preserves v2 domain and
+The store suite creates canonical schema-v9 from an empty database, migrates each
+supported empty or Procedure v2-only predecessor transactionally, preserves v2 domain and
 receipt state, rejects newer schemas, and rejects every nonempty or mixed
 Procedure v1 predecessor without mutation. Reset-all recovery is tested against
 isolated fixtures rather than user state.

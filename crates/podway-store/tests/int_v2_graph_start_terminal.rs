@@ -230,6 +230,85 @@ fn graph_state_with_options(
     .unwrap()
 }
 
+fn graph_state_with_bounded_list(
+    session_number: u64,
+    snapshot_number: u64,
+    created_at: u64,
+) -> GraphSessionStateV2 {
+    let document = json!({
+        "schema": "podway.procedure/v2",
+        "id": "bounded-list",
+        "version": "1",
+        "name": "Bounded list",
+        "purpose": "Verify bounded list mutation receipts.",
+        "node_definitions": {
+            "work": {
+                "type": "action",
+                "title": "Work",
+                "intent": "Record a bounded list.",
+                "items": [{
+                    "id": "items",
+                    "type": "list",
+                    "prompt": "Items",
+                    "required": true,
+                    "min_items": 0,
+                    "max_items": 2,
+                    "max_item_length": 10,
+                    "max_total_length": 20,
+                    "unique": true
+                }]
+            }
+        },
+        "graph": {
+            "entry": "work",
+            "nodes": [{"id": "work", "use": "work", "terminal": true}]
+        }
+    });
+    let canonical = canonicalize_json_v1(&document).unwrap();
+    let procedure_digest =
+        Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))).unwrap();
+    let snapshot = ProcedureSnapshotV2::new(
+        ProcedureSnapshotId::new(uuid(snapshot_number)).unwrap(),
+        CanonicalProcedureJsonV1::new(canonical).unwrap(),
+        procedure_digest,
+        ProcedureSourceLabelV1::file("procedure.yaml").unwrap(),
+        UnixMillis::new(created_at),
+    )
+    .unwrap();
+    let attempt_id = AttemptId::new(uuid(session_number + 1)).unwrap();
+    let trace = SessionTraceV2::from_parts(
+        SessionId::new(uuid(session_number)).unwrap(),
+        SessionLifecycle::Running,
+        Revision::new(1),
+        vec![
+            SessionAttemptV2::new(
+                attempt_id.clone(),
+                node("work"),
+                AttemptNumberV2::FIRST,
+                TraceSequenceV2::FIRST,
+                AttemptLifecycle::Active,
+                AttemptValidityV2::Valid,
+                None,
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    GraphSessionStateV2::new(
+        Revision::new(1),
+        "Bounded list",
+        snapshot,
+        trace,
+        vec![GraphNodeCounterV2::new(node("work"), 1, 0)],
+        vec![AttemptMetadataV2::new(attempt_id, UnixMillis::new(created_at), None, None).unwrap()],
+        UnixMillis::new(created_at),
+        None,
+        None,
+        None,
+    )
+    .unwrap()
+}
+
 fn initial_goal() -> GraphInitialGoalV2 {
     GraphInitialGoalV2::new(
         GoalStatementV2::new("Persist the prepared lifecycle.").unwrap(),
@@ -1719,6 +1798,76 @@ fn admit_item_record_many_and_claim(
         .claim_next(
             &identity(),
             WorkerIdV1::new("v2-item-batch-worker").unwrap(),
+            UnixMillis::new(31),
+        )
+        .unwrap()
+        .unwrap()
+}
+
+fn admit_item_add_and_claim(
+    store: &SqliteStoreV1,
+    state: &GraphSessionStateV2,
+    item_revision: Revision,
+    value: &str,
+    key: &str,
+    job_number: u64,
+) -> podway_store::ClaimedJobV1 {
+    let active = state.trace().active_attempt().unwrap();
+    let item_id = ItemId::new("items").unwrap();
+    let execution = CanonicalExecutionJsonV1::new(
+        canonicalize_json_v1(&json!({
+            "attached_artifact": null,
+            "command": "item.add",
+            "execution_version": 7,
+            "fresh_attempt_id": null,
+            "payload": {"item_id": "items", "value": value},
+            "preconditions": {
+                "attempt_id": active.attempt_id(),
+                "item_revision": item_revision,
+                "session_id": state.trace().session_id(),
+            },
+            "selector": {"root": "/tmp/podway-v2-graph-start"},
+            "workspace_id": identity().workspace_uuid(),
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let request = AdmitRequestV1::new_with_canonical_execution(
+        DomainCommand::ItemAdd {
+            item_id: item_id.clone(),
+        },
+        IdempotencyKeyV1::new(key).unwrap(),
+        podway_core::JobId::new(uuid(job_number)).unwrap(),
+        RevisionAttemptItemPreconditionsV1::new(
+            None,
+            Some(active.attempt_id().clone()),
+            Some(item_id),
+            Some(item_revision),
+        )
+        .unwrap(),
+        digest('8'),
+        UnixMillis::new(30),
+        execution,
+    )
+    .with_procedure_v2_execution()
+    .with_session_identity(AdmissionSessionIdentityV1::Exact(
+        state.trace().session_id().clone(),
+    ))
+    .with_response_context(
+        PersistedResponseContextV1::new(
+            uuid(job_number + 100),
+            "item.add",
+            identity().workspace_uuid().clone(),
+            "/tmp/podway-v2-graph-start",
+            0,
+        )
+        .unwrap(),
+    );
+    store.admit(&identity(), request).unwrap();
+    store
+        .claim_next(
+            &identity(),
+            WorkerIdV1::new("v2-item-add-worker").unwrap(),
             UnixMillis::new(31),
         )
         .unwrap()
@@ -4357,6 +4506,103 @@ fn graph_mutation_failure_replays_exact_v2_error_without_mutating_state() {
             .unwrap()
             .operation(),
         Some(&operation)
+    );
+}
+
+#[test]
+fn item_add_bound_failure_commits_one_terminal_receipt_and_survives_restart() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
+    let initial = graph_state_with_bounded_list(7_000, 7_010, 10);
+    let active = initial.trace().active_attempt().unwrap();
+    let with_one = initial
+        .mutate_active_item_v2(
+            active.attempt_id(),
+            &ItemId::new("items").unwrap(),
+            Revision::ZERO,
+            ActiveItemMutationV2::Add {
+                value: "a".to_owned(),
+            },
+            UnixMillis::new(11),
+        )
+        .unwrap()
+        .into_state();
+    let active = with_one.trace().active_attempt().unwrap();
+    let current = with_one
+        .mutate_active_item_v2(
+            active.attempt_id(),
+            &ItemId::new("items").unwrap(),
+            Revision::new(1),
+            ActiveItemMutationV2::Add {
+                value: "b".to_owned(),
+            },
+            UnixMillis::new(12),
+        )
+        .unwrap()
+        .into_state();
+    store
+        .create_graph_session_v2(&identity(), current.clone())
+        .unwrap();
+    let claimed = admit_item_add_and_claim(
+        &store,
+        &current,
+        Revision::new(2),
+        "c",
+        "v2-item-add-bound",
+        7_020,
+    );
+    let job_id = claimed.job().job_id().clone();
+    let failure = PersistedGraphMutationFailureV2::ItemConstraintBound {
+        field: "item list entries".to_owned(),
+        actual: 3,
+        maximum: 2,
+        unit: "entries".to_owned(),
+    };
+    let operation = PersistedGraphTerminalOperationV2::failure(failure).unwrap();
+
+    store
+        .commit_graph_mutation_terminal_v2(
+            claimed.claim().clone(),
+            current.workspace_revision(),
+            current.trace().revision(),
+            None,
+            TerminalResultV1::Failure(DomainError::InvalidState {
+                reason: "Procedure v2 graph mutation failed",
+            }),
+            operation.clone(),
+            UnixMillis::new(33),
+        )
+        .unwrap();
+    assert_eq!(
+        store.read_graph_session_v2(&identity()).unwrap(),
+        Some(current.clone())
+    );
+    let failed = store.read_job(&identity(), &job_id).unwrap().unwrap();
+    assert_eq!(failed.state(), JobStateV1::Failed);
+    assert_eq!(
+        failed
+            .terminal_receipt()
+            .unwrap()
+            .graph_session_projection()
+            .unwrap()
+            .operation(),
+        Some(&operation)
+    );
+    drop(store);
+
+    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 34);
+    assert_eq!(reopened.startup_recovery_report().requeued_job_count(), 0);
+    assert_eq!(
+        reopened.read_graph_session_v2(&identity()).unwrap(),
+        Some(current)
+    );
+    assert_eq!(
+        reopened
+            .read_job(&identity(), &job_id)
+            .unwrap()
+            .unwrap()
+            .state(),
+        JobStateV1::Failed
     );
 }
 

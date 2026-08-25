@@ -98,8 +98,10 @@ detached, non-TTY, and policy invocations never prompt. Automation uses
 include `--actor`, while deleting a running session requires
 `--progress-summary` and `--yes`. Missing policy returns
 `SESSION_START_DECISION_REQUIRED` with no mutation.
-An interactive continue result performs a fresh idle-barrier `session.next` read
-and renders current guidance after stating that no session was created.
+An interactive continue result performs a fresh idle-barrier read and renders
+current guidance after stating that no session was created. Prepared and running
+sessions use `session.next`; completed and cancelled sessions use the terminal-safe
+`session.observe` route.
 
 Plain `start` archives a completed or cancelled current session whose disposition
 is current, then creates the new prepared session. That automatic path rejects

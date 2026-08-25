@@ -193,11 +193,14 @@ enum Reply {
     JobLookupFound,
     JobLookupMissing,
     NextV3,
+    ObserveV3,
     StatusV3TerminalDisposed,
     ResetDryRunDisposed,
+    ResetDryRunUndisposed,
     StatusV2GoalDefined,
     StatusV2Verbose,
     SharedMutationV2,
+    ItemNotFound,
     SessionReset,
     EvidenceRead,
 }
@@ -489,6 +492,26 @@ fn response_for(request: &RequestEnvelopeV1, reply: Reply) -> Value {
                 "warnings": []
             })
         }
+        Reply::ObserveV3 => {
+            let mut fixture: Value = serde_json::from_str(include_str!(
+                "../../../tests/fixtures/v2/protocol/result-families.json"
+            ))
+            .expect("v2 result fixtures must parse");
+            let result = fixture["fixtures"]["podway.observation-result/v3"].take();
+            json!({
+                "schema": "podway.output/v3",
+                "request_id": request.request_id().as_str(),
+                "command": "session.observe",
+                "generated_at": "2026-08-09T12:34:56.789Z",
+                "workspace": {
+                    "uuid": WORKSPACE_ID,
+                    "root": request.workspace().expect("observe selects a workspace").root(),
+                    "latest_workspace_sequence": 8
+                },
+                "result": result,
+                "warnings": []
+            })
+        }
         Reply::StatusV2Verbose => json!({
             "schema": "podway.output/v3",
             "request_id": request.request_id().as_str(),
@@ -610,6 +633,17 @@ fn response_for(request: &RequestEnvelopeV1, reply: Reply) -> Value {
                 "warnings": []
             })
         }
+        Reply::ItemNotFound => json!({
+            "schema": "podway.error/v1",
+            "request_id": request.request_id().as_str(),
+            "command": request.command().as_str(),
+            "generated_at": "2026-08-09T12:34:56.789Z",
+            "code": "ITEM_NOT_FOUND",
+            "message": "The item does not exist on the active stage.",
+            "retryable": false,
+            "exit_code": 1,
+            "details": {"admission": {"admitted": false}}
+        }),
         Reply::SessionReset => {
             let mut fixture: Value = serde_json::from_str(include_str!(
                 "../../../tests/fixtures/v2/protocol/result-families.json"
@@ -666,6 +700,30 @@ fn response_for(request: &RequestEnvelopeV1, reply: Reply) -> Value {
                 "current_terminal_disposition": true,
                 "eligible": true,
                 "required_action": "none",
+                "reset": false
+            },
+            "warnings": []
+        }),
+        Reply::ResetDryRunUndisposed => json!({
+            "schema": "podway.output/v3",
+            "request_id": request.request_id().as_str(),
+            "command": "session.reset",
+            "generated_at": "2026-08-09T12:34:56.789Z",
+            "workspace": {
+                "uuid": WORKSPACE_ID,
+                "root": request.workspace().expect("reset preview selects a workspace").root(),
+                "latest_workspace_sequence": 8
+            },
+            "result": {
+                "schema": "podway.session-reset-result/v1",
+                "dry_run": true,
+                "mode": "eligible",
+                "session_id": SESSION_ID,
+                "session_revision": 7,
+                "lifecycle": "completed",
+                "current_terminal_disposition": false,
+                "eligible": false,
+                "required_action": "force",
                 "reset": false
             },
             "warnings": []
@@ -1434,6 +1492,31 @@ fn shared_item_complete_retry_and_skip_use_v2_status_fences_and_render_output_v2
 }
 
 #[test]
+fn inactive_item_uses_zero_revision_to_reach_the_daemon_error_contract() {
+    let fixture = Fixture::new();
+    let daemon =
+        SequenceRecordingDaemon::start(&fixture.socket, vec![Reply::StatusV2, Reply::ItemNotFound]);
+    let output = fixture.run(&[
+        "--json".to_owned(),
+        "--socket".to_owned(),
+        fixture.socket.display().to_string(),
+        "--worktree".to_owned(),
+        fixture.root.display().to_string(),
+        "--idempotency-key".to_owned(),
+        "inactive-item".to_owned(),
+        "set".to_owned(),
+        "prior-item".to_owned(),
+        "value".to_owned(),
+    ]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let requests = daemon.finish();
+    assert_eq!(requests[0]["command"], "session.status");
+    assert_eq!(requests[1]["command"], "item.set");
+    assert_eq!(requests[1]["preconditions"]["item_revision"], 0);
+    assert_eq!(one_json(&output)["code"], "ITEM_NOT_FOUND");
+}
+
+#[test]
 fn fully_fenced_retry_skips_status_preflight_and_preserves_explicit_fences() {
     let fixture = Fixture::new();
     let daemon = RecordingDaemon::start(&fixture.socket, Reply::SharedMutationV2);
@@ -2039,6 +2122,40 @@ fn interactive_start_enter_continues_the_running_session_without_creating_one() 
     assert!(rendered.contains("Continue the existing task"));
     assert!(rendered.contains("No new session was created"));
     assert!(rendered.contains(SESSION_ID));
+}
+
+#[test]
+fn interactive_start_enter_observes_an_undisposed_terminal_session() {
+    let fixture = Fixture::new();
+    let daemon = SequenceRecordingDaemon::start(
+        &fixture.socket,
+        vec![
+            Reply::StatusV3TerminalDisposed,
+            Reply::ResetDryRunUndisposed,
+            Reply::ObserveV3,
+        ],
+    );
+    let output = fixture.run_in_pty_with_stdin(
+        &[
+            "--socket".to_owned(),
+            fixture.socket.display().to_string(),
+            "--worktree".to_owned(),
+            fixture.root.display().to_string(),
+            "start".to_owned(),
+            "--preset".to_owned(),
+            "small-change-v2".to_owned(),
+            "--task".to_owned(),
+            "Start a successor task".to_owned(),
+        ],
+        b"\n",
+    );
+    let requests = daemon.finish();
+    assert_eq!(requests[0]["command"], "session.status");
+    assert_eq!(requests[1]["command"], "session.reset");
+    assert_eq!(requests[2]["command"], "session.observe");
+    assert_eq!(requests[2]["payload"]["wait_for_idle"], true);
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("No new session was created"));
 }
 
 #[test]
