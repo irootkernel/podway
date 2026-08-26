@@ -149,7 +149,10 @@ impl ControlledPathFixtureV1 {
             output.stdout = br#"{"schema":"podway.output/v3","command":"daemon.restart","result":{"status":"running"},"warnings":[]}"#.to_vec();
             return output;
         }
-        if self.production_service && !arguments.contains(&"--socket") {
+        if self.production_service
+            && !arguments.contains(&"--socket")
+            && !arguments.starts_with(&["--json", "daemon", "wait-ready"])
+        {
             command.arg("--dev");
         }
         command
@@ -399,7 +402,10 @@ impl ControlledPathFixtureV1 {
             .current_dir(&self.arbitrary)
             .env_clear()
             .env("PATH", "/usr/bin:/bin")
-            .env("PODWAY_DEV_HOME", self.dev_home());
+            .env("PODWAY_DEV_HOME", self.dev_home())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
         let child = command.spawn().expect("packaged dev daemon must start");
         let previous = self
             .dev_daemon
@@ -466,6 +472,17 @@ impl ControlledPathFixtureV1 {
 
 impl Drop for ControlledPathFixtureV1 {
     fn drop(&mut self) {
+        if self.production_service {
+            let child = self
+                .dev_daemon
+                .get_mut()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take();
+            if let Some(mut child) = child {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
         if !self.production_service
             && let Ok(pid) = fs::read_to_string(self.launchctl_state.join("pid"))
         {

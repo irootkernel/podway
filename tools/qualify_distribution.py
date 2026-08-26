@@ -7,8 +7,10 @@ import argparse
 import json
 import os
 from pathlib import Path
+import signal
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 from typing import Any
@@ -22,6 +24,7 @@ VERSION = release_archive.PRODUCT_VERSION
 TARGET = release_archive.TARGET
 ARCHIVE_ROOT = release_archive.ARCHIVE_ROOT
 REQUIRED_TESTS = release_evidence.PACKAGED_CONFORMANCE_SCENARIOS
+SCENARIO_TIMEOUT_SECONDS = 300
 
 
 class QualificationError(RuntimeError):
@@ -38,15 +41,30 @@ def run(
     label: str,
     cwd: Path = ROOT,
     environment: dict[str, str] | None = None,
+    timeout_seconds: float | None = None,
+    isolate_process_group: bool = False,
 ) -> subprocess.CompletedProcess[bytes]:
-    completed = subprocess.run(
+    process = subprocess.Popen(
         arguments,
         cwd=cwd,
         env=environment,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        check=False,
+        start_new_session=isolate_process_group,
     )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        if isolate_process_group:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        else:
+            process.kill()
+        stdout, stderr = process.communicate()
+        fail(f"{label} timed out after {timeout_seconds:g}s")
+    completed = subprocess.CompletedProcess(arguments, process.returncode, stdout, stderr)
     if completed.returncode != 0:
         stdout = completed.stdout.decode("utf-8", errors="replace").strip()
         stderr = completed.stderr.decode("utf-8", errors="replace").strip()
@@ -258,6 +276,8 @@ def run_packaged_suite(root: Path, harness: Path, cli: Path, daemon: Path) -> No
             label=f"packaged dev-mode Dolgorae scenario {test}",
             cwd=root,
             environment=environment,
+            timeout_seconds=SCENARIO_TIMEOUT_SECONDS,
+            isolate_process_group=True,
         )
         if test not in completed.stdout.decode("utf-8", errors="strict"):
             fail(f"packaged distribution suite omitted required test: {test}")
@@ -295,6 +315,23 @@ def self_test() -> dict[str, Any]:
         fail("required packaged scenarios must be unique")
     if any(not name.startswith("aut_t_") for name in REQUIRED_TESTS):
         fail("required packaged scenarios must be acceptance tests")
+    leaking_child = (
+        "import subprocess,sys;"
+        "subprocess.Popen(['/bin/sleep','60']);"
+        "sys.exit(7)"
+    )
+    try:
+        run(
+            [sys.executable, "-c", leaking_child],
+            label="leaking descendant sentinel",
+            timeout_seconds=0.1,
+            isolate_process_group=True,
+        )
+    except QualificationError as error:
+        if "timed out after 0.1s" not in str(error):
+            fail(f"leaking descendant sentinel failed incorrectly: {error}")
+    else:
+        fail("leaking descendant sentinel did not time out")
     with tempfile.TemporaryDirectory(prefix="podway-qualification-self-test-") as name:
         path = Path(name) / "provenance.json"
         pending = {
