@@ -22,6 +22,8 @@ not claim a publication date or an existing `v0.2.6` tag.
 - Serve phase-aware daemon status during startup and recovery, reject normal
   admission until ready, and add bounded `daemon wait-ready` behavior reused by
   service installation.
+- Preserve retained goal history when a successor session starts, and keep
+  `workspace doctor` available when normal workspace state is unreadable.
 
 ## Compatibility and migration
 

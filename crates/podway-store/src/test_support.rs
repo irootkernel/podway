@@ -6,6 +6,22 @@ use podway_core::JobId;
 use rusqlite::{Connection, params};
 use serde_json::Value;
 
+/// Creates an impossible current-session cursor for read-only recovery-path tests.
+pub fn corrupt_current_session_cursor(database_path: &Path) -> Result<(), String> {
+    let connection = Connection::open(database_path).map_err(|error| error.to_string())?;
+    let changed = connection
+        .execute(
+            "UPDATE v2_task_sessions SET latest_trace_sequence = latest_trace_sequence + 1 \
+             WHERE activity = 'current'",
+            [],
+        )
+        .map_err(|error| error.to_string())?;
+    if changed != 1 {
+        return Err(format!("expected one current session, changed {changed}"));
+    }
+    Ok(())
+}
+
 /// Restores the exact released schema-v4 shape while preserving Procedure v2 state.
 pub fn downgrade_to_schema_v4(database_path: &Path) -> Result<(), String> {
     let connection = Connection::open(database_path).map_err(|error| error.to_string())?;

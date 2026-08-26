@@ -2719,6 +2719,134 @@ fn v2wal001_previews_use_the_active_store_when_wal_paths_are_unlinked() {
 }
 
 #[test]
+fn doctor_reports_unreadable_state_without_activating_a_scheduler() {
+    let fixture = support_phase4_workspace::git_worktrees();
+    make_runtime_private(fixture.main());
+    fs::write(
+        fixture.main().join("doctor-unreadable.yaml"),
+        ACTION_READBACK_PROCEDURE,
+    )
+    .unwrap();
+    let ParsedProcedure::V2(parsed) = parse_procedure_document(
+        ACTION_READBACK_PROCEDURE.as_bytes(),
+        ProcedureDocumentFormat::Yaml,
+    )
+    .unwrap() else {
+        unreachable!()
+    };
+    let digest = validate_procedure_v2(parsed).unwrap().digest().clone();
+    let workspace_selector = selector(fixture.main());
+    let runtime_manager = Arc::new(manager(fixture.temporary_path()));
+    let production = dispatcher(Arc::clone(&runtime_manager), "doctor-unreadable-setup");
+
+    let initialize = request(
+        145_001,
+        "workspace.init",
+        &workspace_selector,
+        Map::new(),
+        "doctor-unreadable-init",
+        PreconditionsV1::default(),
+    );
+    assert!(matches!(
+        dispatch(&production, &initialize),
+        ResponseEnvelopeV2::OutputV2(_)
+    ));
+    let start = request(
+        145_002,
+        "session.start",
+        &workspace_selector,
+        json!({
+            "procedure": "doctor-unreadable.yaml",
+            "expected_procedure_digest": digest,
+            "task_title": "Diagnose unreadable state"
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+        "doctor-unreadable-start",
+        PreconditionsV1::default(),
+    );
+    let started = v2_result(dispatch(&production, &start), "session.start");
+    let session_id = started["session_id"].as_str().unwrap();
+    begin(
+        &production,
+        &workspace_selector,
+        145_003,
+        session_id,
+        Map::new(),
+        "doctor-unreadable-begin",
+    );
+
+    let database_path = runtime_manager
+        .resolve_existing(git_selector(fixture.main()), None, observation())
+        .unwrap()
+        .context_snapshot()
+        .database_path()
+        .to_path_buf();
+    drop(production);
+    drop(runtime_manager);
+    podway_store::test_support::corrupt_current_session_cursor(&database_path).unwrap();
+
+    let cold_manager = Arc::new(manager(fixture.temporary_path()));
+    let cold = dispatcher(Arc::clone(&cold_manager), "doctor-unreadable-cold");
+    let status = request(
+        145_004,
+        "session.status",
+        &workspace_selector,
+        Map::new(),
+        "doctor-unreadable-status",
+        PreconditionsV1::default(),
+    );
+    let ResponseEnvelopeV2::Error(error) = dispatch(&cold, &status) else {
+        panic!("normal state reads must remain fail-closed");
+    };
+    assert_eq!(error.code().as_str(), "WORKSPACE_STATE_UNREADABLE");
+
+    let doctor = request(
+        145_005,
+        "workspace.doctor",
+        &workspace_selector,
+        json!({"deep":true}).as_object().unwrap().clone(),
+        "doctor-unreadable-diagnostic",
+        PreconditionsV1::default(),
+    );
+    let doctor = v2_result(dispatch(&cold, &doctor), "workspace.doctor");
+    assert_eq!(doctor["deep"], true);
+    assert_eq!(doctor["healthy"], false);
+    assert_eq!(doctor["workspace_state_readable"], false);
+    assert_eq!(
+        doctor["git_store_binding_revalidated"]["outcome"],
+        "current"
+    );
+    assert_eq!(doctor["store_snapshot_revalidated"]["outcome"], "error");
+    assert_eq!(doctor["findings"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        doctor["findings"][0]["code"],
+        "store_snapshot_revalidation_failed"
+    );
+    assert_eq!(doctor["findings"][0]["severity"], "error");
+
+    let shallow_doctor = request(
+        145_006,
+        "workspace.doctor",
+        &workspace_selector,
+        json!({"deep":false}).as_object().unwrap().clone(),
+        "doctor-unreadable-shallow",
+        PreconditionsV1::default(),
+    );
+    let shallow_doctor = v2_result(dispatch(&cold, &shallow_doctor), "workspace.doctor");
+    assert_eq!(shallow_doctor["deep"], false);
+    assert_eq!(shallow_doctor["healthy"], false);
+    assert_eq!(shallow_doctor["workspace_state_readable"], false);
+    assert_eq!(
+        shallow_doctor["git_store_binding_revalidated"]["outcome"],
+        "not_requested"
+    );
+    assert!(shallow_doctor.get("store_snapshot_revalidated").is_none());
+    assert_eq!(shallow_doctor["findings"].as_array().unwrap().len(), 1);
+}
+
+#[test]
 fn v2lif003_cold_read_migrates_released_v4_and_rebuilds_missing_registry_once() {
     let fixture = support_phase4_workspace::git_worktrees();
     make_runtime_private(fixture.main());

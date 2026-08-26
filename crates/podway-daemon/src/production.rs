@@ -329,6 +329,45 @@ impl ProductionWorkspaceRuntimeV1 {
             .ok_or_else(|| DispatchFailureV1::new(DispatchFailureKindV1::DaemonUnavailable))?;
         self.workspace_from_scheduler(scheduler)
     }
+
+    fn unreadable_doctor_output(
+        &self,
+        workspace: WorkspaceOutputV1,
+        deep: bool,
+    ) -> DispatcherWorkspaceOutputV1 {
+        let mut result = Map::from_iter([
+            ("deep".to_owned(), Value::Bool(deep)),
+            ("healthy".to_owned(), Value::Bool(false)),
+            ("workspace_state_readable".to_owned(), Value::Bool(false)),
+            (
+                "git_store_binding_revalidated".to_owned(),
+                Value::Object(Map::from_iter([(
+                    "outcome".to_owned(),
+                    Value::String(if deep { "current" } else { "not_requested" }.to_owned()),
+                )])),
+            ),
+            (
+                "findings".to_owned(),
+                Value::Array(vec![Value::Object(Map::from_iter([
+                    (
+                        "code".to_owned(),
+                        Value::String("store_snapshot_revalidation_failed".to_owned()),
+                    ),
+                    ("severity".to_owned(), Value::String("error".to_owned())),
+                ]))]),
+            ),
+        ]);
+        if deep {
+            result.insert(
+                "store_snapshot_revalidated".to_owned(),
+                Value::Object(Map::from_iter([(
+                    "outcome".to_owned(),
+                    Value::String("error".to_owned()),
+                )])),
+            );
+        }
+        DispatcherWorkspaceOutputV1::new(workspace, result, Vec::new())
+    }
 }
 
 impl WorkspaceRuntimeV1 for ProductionWorkspaceRuntimeV1 {
@@ -407,7 +446,52 @@ impl WorkspaceRuntimeV1 for ProductionWorkspaceRuntimeV1 {
         selector: &WorktreeSelectorWireV1,
         deep: bool,
     ) -> Result<DispatcherWorkspaceOutputV1, DispatchFailureV1> {
-        let workspace = self.readonly_workspace(selector)?;
+        let workspace = match self.readonly_workspace(selector) {
+            Ok(workspace) => workspace,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    DispatchFailureKindV1::WorkspaceStateUnreadable
+                        | DispatchFailureKindV1::WorkspaceSchemaUnsupported
+                ) =>
+            {
+                let expected_workspace_id = selector.expected_uuid();
+                let selector = selector_from_wire(selector)?;
+                let authority = self
+                    .manager
+                    .registered_reset_source_authority(selector)
+                    .map_err(map_runtime_error)?;
+                if let Some(expected) = expected_workspace_id
+                    && expected != authority.registry_previous_workspace_uuid()
+                {
+                    return Err(workspace_uuid_mismatch_failure(
+                        expected.clone(),
+                        authority.registry_previous_workspace_uuid().clone(),
+                    ));
+                }
+                let identity = authority.routing_identity();
+                let latest_workspace_sequence =
+                    SqliteStoreV1::inspect_workspace_sequence_for_diagnostics(
+                        authority.database_path(),
+                        &identity,
+                        self.manager.inspection_options(),
+                    )
+                    .unwrap_or(0);
+                let workspace = WorkspaceOutputV1::new(
+                    identity.workspace_uuid().clone(),
+                    authority
+                        .worktree()
+                        .roots()
+                        .worktree_root()
+                        .display()
+                        .as_str(),
+                    latest_workspace_sequence,
+                )
+                .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?;
+                return Ok(self.unreadable_doctor_output(workspace, deep));
+            }
+            Err(error) => return Err(error),
+        };
         let mut result = Map::from_iter([
             ("deep".to_owned(), Value::Bool(deep)),
             ("workspace_state_readable".to_owned(), Value::Bool(true)),

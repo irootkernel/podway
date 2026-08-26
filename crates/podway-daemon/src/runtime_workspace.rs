@@ -1454,6 +1454,7 @@ impl ResetAllCompletionV1 {
 #[derive(Clone)]
 pub struct ResetSourceAuthorityV1 {
     worktree: podway_git::ValidatedWorktreeV1,
+    database_path: PathBuf,
     registry_previous_workspace_uuid: WorkspaceId,
     registry_root_workspace_uuids: Vec<WorkspaceId>,
     routing_identity: podway_store::DurableWorktreeIdentityV1,
@@ -1462,6 +1463,12 @@ pub struct ResetSourceAuthorityV1 {
 }
 
 impl ResetSourceAuthorityV1 {
+    pub fn worktree(&self) -> &podway_git::ValidatedWorktreeV1 {
+        &self.worktree
+    }
+    pub fn database_path(&self) -> &Path {
+        &self.database_path
+    }
     pub fn registry_previous_workspace_uuid(&self) -> &WorkspaceId {
         &self.registry_previous_workspace_uuid
     }
@@ -1755,6 +1762,10 @@ impl WorkspaceRuntimeManagerV1 {
         &self.resolver
     }
 
+    pub(crate) fn inspection_options(&self) -> &SqliteStoreOptionsV1 {
+        &self.inspection_options
+    }
+
     pub const fn layout_initializer(&self) -> WorkspaceLayoutInitializerV1 {
         self.layout_initializer
     }
@@ -1982,6 +1993,7 @@ impl WorkspaceRuntimeManagerV1 {
                 let routing_identity = reset.target_identity(registered.clone());
                 return Ok(ResetSourceAuthorityV1 {
                     worktree: reset.worktree().clone(),
+                    database_path: reset.database_path().to_path_buf(),
                     registry_previous_workspace_uuid: registered,
                     registry_root_workspace_uuids,
                     routing_identity,
@@ -2037,6 +2049,7 @@ impl WorkspaceRuntimeManagerV1 {
         };
         Ok(ResetSourceAuthorityV1 {
             worktree: reset.worktree().clone(),
+            database_path: reset.database_path().to_path_buf(),
             registry_previous_workspace_uuid,
             registry_root_workspace_uuids,
             routing_identity,

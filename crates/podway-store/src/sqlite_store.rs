@@ -210,6 +210,35 @@ impl SqliteStoreV1 {
         inspect_existing_store_openability_v1(&database_path, expected_identity, options)
     }
 
+    /// Reads only the workspace sequence needed to identify a diagnostic response.
+    ///
+    /// This intentionally validates the binding and schema without decoding session state, so
+    /// `workspace.doctor` can describe an otherwise unreadable workspace without weakening normal
+    /// Store opens or reads.
+    pub fn inspect_workspace_sequence_for_diagnostics(
+        path: impl AsRef<Path>,
+        expected_identity: &DurableWorktreeIdentityV1,
+        options: &SqliteStoreOptionsV1,
+    ) -> Result<u64, StoreErrorV1> {
+        let database_path = canonical_database_path_v1(path.as_ref())?;
+        inspect_database_snapshot_unbound_v1(&database_path, options, |connection| {
+            crate::schema::verify_reset_binding_inspection_schema_v1(connection)?;
+            crate::schema::verify_reset_binding_inspection_identity_v1(
+                connection,
+                expected_identity,
+                options,
+            )?;
+            let sequence: i64 = connection
+                .query_row(
+                    "SELECT next_workspace_sequence FROM workspace_state WHERE singleton = 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|error| storage_record(error, StoreRecordKindV1::Workspace))?;
+            u64::try_from(sequence).map_err(|_| corrupt(StoreRecordKindV1::Workspace))
+        })
+    }
+
     /// Reads reconciliation state from a disposable snapshot without touching authoritative files.
     pub fn inspect_reconciliation_snapshot(
         path: impl AsRef<Path>,
