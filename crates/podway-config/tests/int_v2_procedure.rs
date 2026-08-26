@@ -48,11 +48,8 @@ fn v2grd004_admits_conditional_items_and_required_selected_evidence_guards() {
     let validated = validate_procedure_v2(parsed).expect("the condition is statically valid");
     let canonical = validated.canonical_json().as_str();
     assert!(canonical.contains("required_when"));
-    let ParsedProcedure::V2(reparsed) = parse_procedure_document(
-        canonical.as_bytes(),
-        ProcedureDocumentFormat::Json,
-    )
-    .unwrap();
+    let ParsedProcedure::V2(reparsed) =
+        parse_procedure_document(canonical.as_bytes(), ProcedureDocumentFormat::Json).unwrap();
     assert_eq!(reparsed, validated.parsed().clone());
 
     let guarded = concat!(
