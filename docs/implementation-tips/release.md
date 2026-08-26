@@ -20,7 +20,7 @@ the Dolgorae repository, qualify a distribution, or establish downstream
 acceptance. `python3 tools/create_dolgorae_handoff.py self-test` rejects catalog,
 schema-pin, route, error, migration, reactivation, and handoff drift.
 
-After version and release-note preparation:
+After version and changelog preparation:
 
 1. run `make dist` on native Apple Silicon macOS;
 2. inspect the final verifier receipt for the archive, checksum, provenance, and

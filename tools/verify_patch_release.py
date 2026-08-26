@@ -16,7 +16,7 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
-ALWAYS_ALLOWED = {"README.md", "RELEASE_NOTES.md"}
+ALWAYS_ALLOWED = {"CHANGELOG.md", "README.md"}
 VERSION_BOUND = {
     "Cargo.toml",
     "Cargo.lock",
@@ -337,7 +337,7 @@ def patch_release_fixture(root: Path, mutation: str = "valid") -> str:
     git_at(root, "config", "user.email", "patch-release@example.invalid")
     git_at(root, "config", "user.name", "Patch Release Fixture")
     (root / "README.md").write_text("fixture\n", encoding="utf-8")
-    (root / "RELEASE_NOTES.md").write_text("fixture\n", encoding="utf-8")
+    (root / "CHANGELOG.md").write_text("fixture\n", encoding="utf-8")
     write_fixture_version(root, "1.2.3")
     git_at(root, "add", "--all")
     git_at(root, "commit", "--quiet", "-m", "baseline")

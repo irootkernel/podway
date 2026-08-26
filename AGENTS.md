@@ -143,6 +143,11 @@ Apply these distinctions as well:
 - Use `Makefile` as the entry point for repository-standard checks. Read the nearest
   relevant authority rather than copying detailed feature design into this file.
 
+## Project Configuration
+
+- `CHANGELOG.md` owns cumulative release notes and the planned next stable release.
+- Aquarium release notes: CHANGELOG.md
+
 ## Architecture and Ownership
 
 - `podway-core` owns pure domain values, invariants, transitions, item satisfaction,

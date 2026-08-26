@@ -56,7 +56,7 @@ affected source when resolving a contradiction.
 
 ## Maintenance rules
 
-- Write the root README, release notes, and all Markdown under `docs/` in English.
+- Write the root README, changelog, and all Markdown under `docs/` in English.
 - Link to the narrowest stable document and heading that supports a claim.
 - Update specifications, machine assets, ADRs, tests, and roadmap state together
   when a change crosses those boundaries.

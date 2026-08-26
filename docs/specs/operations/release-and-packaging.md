@@ -12,7 +12,7 @@ The `v0.2.0` release is a macOS product. It includes:
 - JSON schemas and user documentation;
 - zsh, bash, and fish completion;
 - MIT License;
-- checksums and release notes.
+- checksums and a cumulative changelog.
 
 Linux, Windows, Intel macOS, translated, universal, fat, and cross-built artifacts
 are not Podway release or support targets.
@@ -67,7 +67,7 @@ podway-<version>-<target>/
       contracts/contract-manifest-v1.json
   LICENSE
   README.md
-  RELEASE_NOTES.md
+  CHANGELOG.md
 ```
 Each Apple Silicon archive contains both executables, `podway` and `podwayd`; they are not separate architecture artifacts.
 
@@ -277,7 +277,7 @@ V2REL-006 performs the final executable, machine-contract, and artifact mutation
 It enables production public v2 admission, commits that implementation and its
 direct tests and contracts, and runs `make dist` from the exact clean unpublished
 commit. The four qualified outputs are the archive, detached checksum, provenance
-document, and Dolgorae handoff named in the release notes. Any executable-source or
+document, and Dolgorae handoff named in the changelog. Any executable-source or
 machine-contract change, rebuild, or artifact-byte change after that successful
 gate invalidates qualification and requires a new clean V2REL-006 candidate and
 complete `make dist` run. The post-publication report and roadmap/archive update are

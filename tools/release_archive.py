@@ -402,7 +402,7 @@ def self_test() -> dict[str, Any]:
         else:
             fail("packaged preset tamper sentinel was accepted")
     if release_status() != {"signing": "unsigned", "notarization": "not-attempted"}:
-        fail("release-note status sentinel returned an unexpected value")
+        fail("changelog status sentinel returned an unexpected value")
     return {"mode": "self-test", "ok": True, "sentinels": 25}
 
 
@@ -501,7 +501,7 @@ def copy_release_inputs(staging: Path, podway: Path, podwayd: Path) -> None:
     manifest_target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(manifest, manifest_target)
 
-    for name in ("LICENSE", "README.md", "RELEASE_NOTES.md"):
+    for name in ("CHANGELOG.md", "LICENSE", "README.md"):
         source = require_regular_file(ROOT / name, name)
         shutil.copyfile(source, staging / name)
 
@@ -519,7 +519,7 @@ def expected_archive_files() -> set[str]:
         f"{ARCHIVE_ROOT}/bin/podwayd",
         f"{ARCHIVE_ROOT}/LICENSE",
         f"{ARCHIVE_ROOT}/README.md",
-        f"{ARCHIVE_ROOT}/RELEASE_NOTES.md",
+        f"{ARCHIVE_ROOT}/CHANGELOG.md",
     }
     expected.update(
         f"{ARCHIVE_ROOT}/share/completions/{filename}"
@@ -716,25 +716,22 @@ def rust_toolchain() -> str:
 
 
 def release_status() -> dict[str, str]:
-    notes = (ROOT / "RELEASE_NOTES.md").read_text(encoding="utf-8")
-    required = (
-        "Podway 0.2.7 is a release candidate and has not been published",
-        "## Changes since",
-        "four built-in Procedure v2 presets",
-        "fails closed with `LEGACY_PROCEDURE_STATE_UNSUPPORTED`",
-        "podway-0.2.7-aarch64-apple-darwin.tar.gz.sha256",
-        "podway-0.2.7-aarch64-apple-darwin.dolgorae-handoff.json",
-        "native Apple Silicon macOS",
-        "same-user local tool",
-        "release candidate admits Procedure v2 sessions normally",
-        "does not contain the development-only admission unlock",
-        "after explicit release authorization",
-        "No MCP server or MCP transport is included",
-        "unsigned and not notarized",
+    changelog = require_regular_file(ROOT / "CHANGELOG.md", "changelog").read_text(
+        encoding="utf-8"
     )
-    missing = [text for text in required if text not in notes]
-    if missing:
-        fail(f"release notes omit required release facts: {missing}")
+    headings = re.findall(
+        r"^## (v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)) - "
+        r"(Unreleased|[0-9]{4}-[0-9]{2}-[0-9]{2})$",
+        changelog,
+        flags=re.MULTILINE,
+    )
+    expected_open = (f"v{PRODUCT_VERSION}", "Unreleased")
+    if not changelog.startswith("# Changelog\n"):
+        fail("changelog must begin with the canonical title")
+    if not headings or headings[0] != expected_open:
+        fail(f"changelog must open with ## {expected_open[0]} - Unreleased")
+    if sum(status == "Unreleased" for _version, status in headings) != 1:
+        fail("changelog must contain exactly one Unreleased section")
     return {"signing": "unsigned", "notarization": "not-attempted"}
 
 

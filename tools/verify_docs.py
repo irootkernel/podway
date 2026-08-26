@@ -83,7 +83,7 @@ def skill_markdown_files(skills_root: Path = SKILLS) -> list[Path]:
 
 
 def markdown_files() -> list[Path]:
-    files = [ROOT / "README.md", ROOT / "RELEASE_NOTES.md"]
+    files = [ROOT / "README.md", ROOT / "CHANGELOG.md"]
     files.extend(sorted(DOCS.rglob("*.md")))
     files.extend(skill_markdown_files())
     return files
