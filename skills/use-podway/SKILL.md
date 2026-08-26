@@ -35,9 +35,24 @@ Enter a worktree only after explicit activation for the current workflow.
    podway observe --json --wait-for-idle
    ```
 
-4. Require `result.schema` to identify `podway.observation-result/v3`.
-5. Treat the returned observation as authoritative. Do not rely on chat memory. Read identity and queue facts from `status`, current guidance from `guidance`, item declarations and bounded values from `active_items`, and fenced mutation recipes from `mutation_templates`. Add any CLI-required semantic subcommand or value described by command help; the template deliberately does not invent them. Prepared guidance has no cursor and offers begin, eligible reset, and start with explicit deletion policy. A null `guidance` means the session is completed or cancelled: an undisposed terminal revision offers only terminal disposition, while a disposed terminal revision is eligible for archive, reset, or automatic archival by the next start. Use `status --verbose` only when history is needed and `next` only for compatibility with callers that need its narrower result.
-6. If no active session exists, continue the user's work without creating one unless the user explicitly asks to start or manage a Podway session.
+4. On success, require `result.schema` to identify `podway.observation-result/v3`. If observation returns `SESSION_NOT_FOUND`, record that the initialized workspace has no current session and continue to the archive advisory. Handle every other error normally.
+5. Treat a successful observation as authoritative. Do not rely on chat memory. Read identity and queue facts from `status`, current guidance from `guidance`, item declarations and bounded values from `active_items`, and fenced mutation recipes from `mutation_templates`. Add any CLI-required semantic subcommand or value described by command help; the template deliberately does not invent them. Prepared guidance has no cursor and offers begin, eligible reset, and start with explicit deletion policy. A null `guidance` means the session is completed or cancelled: an undisposed terminal revision offers only terminal disposition, while a disposed terminal revision is eligible for archive, reset, or automatic archival by the next start. Use `status --verbose` only when history is needed and `next` only for compatibility with callers that need its narrower result.
+6. After a successful observation or `SESSION_NOT_FOUND`, run `podway archive list --json` once for this workflow entry and require `result.schema` to identify `podway.session-archive-list-result/v1`. The result is newest first. If `count` is greater than 10, tell the user the current count and present exactly these two alternatives:
+
+   - Reinitialize the complete workspace runtime, deleting all current and inactive session state while preserving reviewable `.podway` configuration and Procedures:
+
+     ```bash
+     podway reset --all --force --yes
+     ```
+
+   - Permanently delete only the oldest inactive session, using its `session_id` and `session_revision` plus `workspace.uuid` from the same archive-list envelope:
+
+     ```bash
+     podway archive purge --session-id <oldest-session-id> --if-session-revision <revision> --yes --if-workspace-uuid <workspace-uuid>
+     ```
+
+   This is an advisory threshold, not authorization or a product retention limit. Do not run either command or block the current workflow. Before an explicitly authorized operation, read [references/lifecycle.md](references/lifecycle.md) and the applicable command help, then re-read the target state required there. After an authorized purge, re-read `archive list` before suggesting another candidate. If the advisory read fails independently of observation, report that the count was unavailable and continue the requested workflow.
+7. If no active session exists, continue the user's work without creating one unless the user explicitly asks to start or manage a Podway session.
 
 `--json` is a global flag on every command. For a non-default invocation, the global endpoint options are `--worktree <path>`, `--socket <absolute-path>`, and `--timeout <duration>`.
 

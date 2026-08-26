@@ -140,12 +140,19 @@ Deleting the worktree deletes:
 - queued and terminal jobs stored in that database;
 - command receipts and operational journal.
 
-Before each queued mutation, the daemon revalidates the root. If it is gone:
+Before each queued mutation, the daemon revalidates the root. If a fresh,
+descriptor-safe observation conclusively reports it absent:
 
 - the scheduler stops;
-- the global registry entry is removed;
+- under the registry lock, the daemon removes the entry only when its exact
+  workspace UUID and encoded root generation still match and a repeated
+  observation still reports absence;
 - open clients receive `WORKTREE_GONE` where possible;
 - no task state is reconstructed globally.
+
+A changed generation, reappeared root, permission failure, transient I/O, or
+other inconclusive observation retains the registry entry and fails closed. This
+is the same exact-generation removal contract used during startup recovery.
 
 Database connections SHOULD be closed after a short idle period so deleted files are not held indefinitely.
 

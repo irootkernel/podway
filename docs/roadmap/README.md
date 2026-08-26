@@ -468,3 +468,15 @@ Dependencies: completed `V2SKL` epic.
 | `V2RDY-001` | Adopt and reserve daemon readiness contracts | Completed | Adopt the early-control-plane decision and reserve status v2, wait-ready, phase-aware errors, recovery recipes, routes, and manifest pins without runtime admission. | [ADR-0029](../architecture-decision-records/0029-serve-phase-aware-daemon-readiness.md), [IPC contract](../specs/interfaces/ipc-protocol.md) |
 | `V2RDY-002` | Serve verified status during recovery | Completed | Start the authenticated control plane before registry/worktree/job recovery, expose monotonic readiness progress, and reject normal routes before ready. | [Observability contract](../specs/operations/observability.md) |
 | `V2RDY-003` | Add bounded readiness waiting and close conformance | Completed | Add daemon wait-ready, reuse it for install, render non-ready status honestly, return actionable timeouts, prove retry preservation, promote durable guidance, and pass the development gate. | [CLI contract](../specs/interfaces/cli-specification.md), [automation contract](../specs/interfaces/automation-client-contract.md) |
+
+## V2RET — Workspace Retirement and Registry Hygiene
+
+Dependencies: completed `V2RDY` epic.
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `V2RET-001` | Adopt workspace retirement authority | Completed | Adopt exact missing-root pruning, explicitly confirmed full `.podway` removal, recovery, compatibility, and safety boundaries. | [ADR-0030](../architecture-decision-records/0030-retire-workspaces-and-prune-stale-registry-entries.md), [V2RET dossier](../todo/TODO-podway-workspace-retirement-and-registry-hygiene.md) |
+| `V2RET-002` | Reserve workspace removal contracts | Planned | Register the command, result, errors, removal marker, replay semantics, observability, manifest identity, and compatibility fixtures without premature runtime admission. | [V2RET dossier](../todo/TODO-podway-workspace-retirement-and-registry-hygiene.md#3-accepted-interfaces) |
+| `V2RET-003` | Prune stale registry entries | Planned | Remove only conclusively missing exact UUID/root generations during startup and pre-mutation revalidation, then integrate successful cleanup with readiness and bounded observability. | [Recovery specification](../specs/storage/recovery-retention-and-maintenance.md#moved-worktrees); [worktree deletion](../architecture/git-worktree-and-filesystem.md#worktree-deletion) |
+| `V2RET-004` | Remove a selected Podway workspace | Planned | Add exact-path confirmation, maintenance fencing, marker-backed recovery, empty-residual replay convergence, bounded observability, and complete `.podway` removal while preserving the Git worktree. | [V2RET dossier](../todo/TODO-podway-workspace-retirement-and-registry-hygiene.md#32-explicit-workspace-removal) |
+| `V2RET-005` | Close retirement and cleanup conformance | Planned | Prove races, crashes, replay, compatibility, path safety, reinitialization, and E2E behavior; promote durable guidance; remove the dossier; and pass the development gate. | [Testing and conformance](../specs/quality/testing-and-conformance.md) |
