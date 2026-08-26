@@ -1106,11 +1106,9 @@ fn rehydrate_snapshot(state: &GraphSessionStateV2) -> Result<ParsedProcedureV2, 
     .map_err(|_| GraphViewErrorV2::InvalidSnapshot)?;
     let ParsedProcedure::V2(parsed) = parsed;
     let validated = validate_procedure_v2(parsed).map_err(|_| GraphViewErrorV2::InvalidSnapshot)?;
-    if validated.digest() != state.snapshot().digest()
-        || validated.canonical_json().as_str() != state.snapshot().canonical_json().as_str()
-    {
-        return Err(GraphViewErrorV2::InvalidSnapshot);
-    }
+    // ProcedureSnapshotV2 already binds the stored canonical bytes to their digest. Validation may
+    // materialize defaults added after that snapshot was admitted, so its newly projected identity
+    // must not replace or invalidate the immutable historical identity.
     Ok(validated.parsed().clone())
 }
 

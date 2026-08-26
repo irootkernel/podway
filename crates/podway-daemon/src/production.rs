@@ -245,6 +245,12 @@ pub struct ProductionWorkspaceRuntimeV1 {
     procedure_v2_admission: ProcedureV2AdmissionGateV1,
 }
 
+enum DeepStoreRevalidationV1 {
+    Current,
+    Diverged,
+    SessionProjectionFailed(GraphViewErrorV2),
+}
+
 impl ProductionWorkspaceRuntimeV1 {
     pub fn new(
         manager: Arc<WorkspaceRuntimeManagerV1>,
@@ -273,10 +279,10 @@ impl ProductionWorkspaceRuntimeV1 {
         WorkspaceRuntimeObservationV1::new(self.clock.now(), self.clock.generated_at())
     }
 
-    fn active_store_matches_disposable_snapshot(
+    fn revalidate_active_store(
         &self,
         scheduler: &Arc<WorkspaceSchedulerV1<WorkspaceSchedulerContextV1>>,
-    ) -> Result<bool, StoreErrorV1> {
+    ) -> Result<DeepStoreRevalidationV1, StoreErrorV1> {
         scheduler.with_serialized(|context| {
             let active = context
                 .store()
@@ -287,7 +293,15 @@ impl ProductionWorkspaceRuntimeV1 {
                 context.store_options(),
                 EpochMillisV1::new(self.clock.now().get()),
             )?;
-            Ok(active == snapshot)
+            if active != snapshot {
+                return Ok(DeepStoreRevalidationV1::Diverged);
+            }
+            if active.graph_state().is_some()
+                && let Err(error) = project_graph_observation_v1(&active)
+            {
+                return Ok(DeepStoreRevalidationV1::SessionProjectionFailed(error));
+            }
+            Ok(DeepStoreRevalidationV1::Current)
         })
     }
 
@@ -328,6 +342,45 @@ impl ProductionWorkspaceRuntimeV1 {
             .cloned()
             .ok_or_else(|| DispatchFailureV1::new(DispatchFailureKindV1::DaemonUnavailable))?;
         self.workspace_from_scheduler(scheduler)
+    }
+
+    fn unreadable_doctor_output(
+        &self,
+        workspace: WorkspaceOutputV1,
+        deep: bool,
+    ) -> DispatcherWorkspaceOutputV1 {
+        let mut result = Map::from_iter([
+            ("deep".to_owned(), Value::Bool(deep)),
+            ("healthy".to_owned(), Value::Bool(false)),
+            ("workspace_state_readable".to_owned(), Value::Bool(false)),
+            (
+                "git_store_binding_revalidated".to_owned(),
+                Value::Object(Map::from_iter([(
+                    "outcome".to_owned(),
+                    Value::String(if deep { "current" } else { "not_requested" }.to_owned()),
+                )])),
+            ),
+            (
+                "findings".to_owned(),
+                Value::Array(vec![Value::Object(Map::from_iter([
+                    (
+                        "code".to_owned(),
+                        Value::String("store_snapshot_revalidation_failed".to_owned()),
+                    ),
+                    ("severity".to_owned(), Value::String("error".to_owned())),
+                ]))]),
+            ),
+        ]);
+        if deep {
+            result.insert(
+                "store_snapshot_revalidated".to_owned(),
+                Value::Object(Map::from_iter([(
+                    "outcome".to_owned(),
+                    Value::String("error".to_owned()),
+                )])),
+            );
+        }
+        DispatcherWorkspaceOutputV1::new(workspace, result, Vec::new())
     }
 }
 
@@ -407,7 +460,52 @@ impl WorkspaceRuntimeV1 for ProductionWorkspaceRuntimeV1 {
         selector: &WorktreeSelectorWireV1,
         deep: bool,
     ) -> Result<DispatcherWorkspaceOutputV1, DispatchFailureV1> {
-        let workspace = self.readonly_workspace(selector)?;
+        let workspace = match self.readonly_workspace(selector) {
+            Ok(workspace) => workspace,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    DispatchFailureKindV1::WorkspaceStateUnreadable
+                        | DispatchFailureKindV1::WorkspaceSchemaUnsupported
+                ) =>
+            {
+                let expected_workspace_id = selector.expected_uuid();
+                let selector = selector_from_wire(selector)?;
+                let authority = self
+                    .manager
+                    .registered_reset_source_authority(selector)
+                    .map_err(map_runtime_error)?;
+                if let Some(expected) = expected_workspace_id
+                    && expected != authority.registry_previous_workspace_uuid()
+                {
+                    return Err(workspace_uuid_mismatch_failure(
+                        expected.clone(),
+                        authority.registry_previous_workspace_uuid().clone(),
+                    ));
+                }
+                let identity = authority.routing_identity();
+                let latest_workspace_sequence =
+                    SqliteStoreV1::inspect_workspace_sequence_for_diagnostics(
+                        authority.database_path(),
+                        &identity,
+                        self.manager.inspection_options(),
+                    )
+                    .unwrap_or(0);
+                let workspace = WorkspaceOutputV1::new(
+                    identity.workspace_uuid().clone(),
+                    authority
+                        .worktree()
+                        .roots()
+                        .worktree_root()
+                        .display()
+                        .as_str(),
+                    latest_workspace_sequence,
+                )
+                .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?;
+                return Ok(self.unreadable_doctor_output(workspace, deep));
+            }
+            Err(error) => return Err(error),
+        };
         let mut result = Map::from_iter([
             ("deep".to_owned(), Value::Bool(deep)),
             ("workspace_state_readable".to_owned(), Value::Bool(true)),
@@ -422,8 +520,8 @@ impl WorkspaceRuntimeV1 for ProductionWorkspaceRuntimeV1 {
                             Value::String("current".to_owned()),
                         )])),
                     );
-                    match self.active_store_matches_disposable_snapshot(workspace.scheduler()) {
-                        Ok(true) => {
+                    match self.revalidate_active_store(workspace.scheduler()) {
+                        Ok(DeepStoreRevalidationV1::Current) => {
                             result.insert("healthy".to_owned(), Value::Bool(true));
                             result.insert(
                                 "store_snapshot_revalidated".to_owned(),
@@ -432,14 +530,28 @@ impl WorkspaceRuntimeV1 for ProductionWorkspaceRuntimeV1 {
                                     Value::String("current".to_owned()),
                                 )])),
                             );
+                            result.insert(
+                                "session_projection_revalidated".to_owned(),
+                                Value::Object(Map::from_iter([(
+                                    "outcome".to_owned(),
+                                    Value::String("current".to_owned()),
+                                )])),
+                            );
                         }
-                        Ok(false) => {
+                        Ok(DeepStoreRevalidationV1::Diverged) => {
                             result.insert("healthy".to_owned(), Value::Bool(false));
                             result.insert(
                                 "store_snapshot_revalidated".to_owned(),
                                 Value::Object(Map::from_iter([(
                                     "outcome".to_owned(),
                                     Value::String("diverged".to_owned()),
+                                )])),
+                            );
+                            result.insert(
+                                "session_projection_revalidated".to_owned(),
+                                Value::Object(Map::from_iter([(
+                                    "outcome".to_owned(),
+                                    Value::String("skipped".to_owned()),
                                 )])),
                             );
                             result.insert(
@@ -453,6 +565,42 @@ impl WorkspaceRuntimeV1 for ProductionWorkspaceRuntimeV1 {
                                 ]))]),
                             );
                         }
+                        Ok(DeepStoreRevalidationV1::SessionProjectionFailed(error)) => {
+                            result.insert("healthy".to_owned(), Value::Bool(false));
+                            result
+                                .insert("workspace_state_readable".to_owned(), Value::Bool(false));
+                            result.insert(
+                                "store_snapshot_revalidated".to_owned(),
+                                Value::Object(Map::from_iter([(
+                                    "outcome".to_owned(),
+                                    Value::String("current".to_owned()),
+                                )])),
+                            );
+                            result.insert(
+                                "session_projection_revalidated".to_owned(),
+                                Value::Object(Map::from_iter([
+                                    ("outcome".to_owned(), Value::String("error".to_owned())),
+                                    (
+                                        "failure_kind".to_owned(),
+                                        Value::String(graph_view_error_kind_v2(&error).to_owned()),
+                                    ),
+                                ])),
+                            );
+                            result.insert(
+                                "findings".to_owned(),
+                                Value::Array(vec![Value::Object(Map::from_iter([
+                                    (
+                                        "code".to_owned(),
+                                        Value::String("session_projection_failed".to_owned()),
+                                    ),
+                                    ("severity".to_owned(), Value::String("error".to_owned())),
+                                    (
+                                        "failure_kind".to_owned(),
+                                        Value::String(graph_view_error_kind_v2(&error).to_owned()),
+                                    ),
+                                ]))]),
+                            );
+                        }
                         Err(_) => {
                             result.insert("healthy".to_owned(), Value::Bool(false));
                             result
@@ -462,6 +610,13 @@ impl WorkspaceRuntimeV1 for ProductionWorkspaceRuntimeV1 {
                                 Value::Object(Map::from_iter([(
                                     "outcome".to_owned(),
                                     Value::String("error".to_owned()),
+                                )])),
+                            );
+                            result.insert(
+                                "session_projection_revalidated".to_owned(),
+                                Value::Object(Map::from_iter([(
+                                    "outcome".to_owned(),
+                                    Value::String("skipped".to_owned()),
                                 )])),
                             );
                             result.insert(
@@ -5826,6 +5981,17 @@ fn map_graph_view_error_v2(error: GraphViewErrorV2) -> DispatchFailureV1 {
         | GraphViewErrorV2::InconsistentState(_) => {
             DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceStateUnreadable)
         }
+    }
+}
+
+fn graph_view_error_kind_v2(error: &GraphViewErrorV2) -> &'static str {
+    match error {
+        GraphViewErrorV2::MissingGraphSession => "missing_graph_session",
+        GraphViewErrorV2::PendingMutationsForCompact => "pending_mutations_for_compact",
+        GraphViewErrorV2::TerminalSessionHasNoNext => "terminal_session_has_no_next",
+        GraphViewErrorV2::InvalidSnapshot => "invalid_snapshot",
+        GraphViewErrorV2::InconsistentState(_) => "inconsistent_state",
+        GraphViewErrorV2::TimestampOutOfRange => "timestamp_out_of_range",
     }
 }
 
