@@ -6,8 +6,8 @@ use podway_config::{
 };
 use podway_core::{
     ActorAttributionV2, ArtifactValueV1, AttemptId, AttemptLifecycle, AttemptNumberV2,
-    AttemptValidityV2, BlockerId, BlockerState, CheckResultExecutorV2, CheckResultInputBasisV2,
-    CheckResultOutcomeV2, CheckResultValueV2, CriterionAssessmentReasonV2,
+    AttemptValidityV2, BlockerId, BlockerState, CanonicalProcedureJsonV1, CheckResultExecutorV2,
+    CheckResultInputBasisV2, CheckResultOutcomeV2, CheckResultValueV2, CriterionAssessmentReasonV2,
     CriterionAssessmentResultV2, CriterionCitationV2, CriterionId, CriterionStatusV2,
     DecisionRecordInputV2, DecisionRecordV2, EvidenceReferenceSnapshotV2, GoalAssessmentRecordV2,
     GoalCriterionV2, GoalDefinitionV2, GoalOutcome, GoalRevisionNumberV2, GoalRevisionReasonV2,
@@ -23,8 +23,8 @@ use podway_daemon::{
         workspace_procedure_snapshot_from_bytes_v2,
     },
     v2_read_service::{
-        EvidenceReadErrorV2, GraphStatusTierV2, project_evidence_read_v1, project_graph_next_v2,
-        project_graph_observation_v1, project_graph_status_v2,
+        EvidenceReadErrorV2, GraphStatusTierV2, GraphViewErrorV2, project_evidence_read_v1,
+        project_graph_next_v2, project_graph_observation_v1, project_graph_status_v2,
     },
 };
 use podway_protocol::{
@@ -284,6 +284,49 @@ fn fresh_state(path: &str, source: &[u8]) -> GraphSessionStateV2 {
         AttemptId::new(ATTEMPT_ID).unwrap(),
         ProcedureSnapshotId::new(SNAPSHOT_ID).unwrap(),
         UnixMillis::new(1_700_000_000_000),
+    )
+    .unwrap()
+}
+
+fn with_v025_list_snapshot(current: GraphSessionStateV2) -> GraphSessionStateV2 {
+    let mut document: Value =
+        serde_json::from_str(current.snapshot().canonical_json().as_str()).unwrap();
+    let list = document["node_definitions"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+        .filter_map(|definition| definition.get_mut("items")?.as_array_mut())
+        .flatten()
+        .find(|item| item["type"] == "list")
+        .unwrap()
+        .as_object_mut()
+        .unwrap();
+    assert_eq!(list.remove("max_total_length"), Some(json!(1_000_000)));
+    let canonical = canonicalize_json_v1(&document).unwrap();
+    let digest =
+        Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))).unwrap();
+    assert_ne!(&digest, current.snapshot().digest());
+    let snapshot = ProcedureSnapshotV2::new(
+        current.snapshot().snapshot_id().clone(),
+        CanonicalProcedureJsonV1::new(canonical).unwrap(),
+        digest,
+        current.snapshot().source().clone(),
+        current.snapshot().created_at(),
+    )
+    .unwrap();
+    GraphSessionStateV2::new_with_goal_state(
+        current.workspace_revision(),
+        current.task_title(),
+        snapshot,
+        current.trace().clone(),
+        current.counters().to_vec(),
+        current.attempt_metadata().to_vec(),
+        current.workflow_memory().clone(),
+        current.goal_state().clone(),
+        current.created_at(),
+        current.completed_at(),
+        current.cancelled_at(),
+        current.cancel_reason().map(str::to_owned),
     )
     .unwrap()
 }
@@ -669,6 +712,91 @@ fn v2run002_projection_is_bound_to_the_canonical_snapshot_not_source_encoding() 
         project_graph_next_v2(&yaml).unwrap(),
         project_graph_next_v2(&json).unwrap()
     );
+}
+
+#[test]
+fn v2scl003_v025_list_snapshot_rehydrates_without_rotating_identity() {
+    let current = fresh_state("applicability.json", APPLICABILITY_PROCEDURE);
+    let view = view(with_v025_list_snapshot(current));
+    let stored_digest = view.graph_state().unwrap().snapshot().digest().as_str();
+
+    for tier in [
+        GraphStatusTierV2::Compact,
+        GraphStatusTierV2::Standard,
+        GraphStatusTierV2::Verbose,
+    ] {
+        let status = project_graph_status_v2(&view, tier, None).unwrap();
+        assert_eq!(status["procedure"]["digest"], stored_digest);
+    }
+    let next = project_graph_next_v2(&view).unwrap();
+    assert_eq!(next["procedure_digest"], stored_digest);
+    let observation = project_graph_observation_v1(&view).unwrap();
+    assert_eq!(observation["status"]["procedure"]["digest"], stored_digest);
+    let list = observation["active_items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["item_id"] == "list")
+        .unwrap();
+    assert_eq!(list["constraints"]["max_total_length"], 1_000_000);
+}
+
+#[test]
+fn v2scl003_v025_completed_disposed_session_remains_observable() {
+    const PROCEDURE: &[u8] = br#"{
+      "schema":"podway.procedure/v2",
+      "id":"legacy-completed-list",
+      "version":"2",
+      "name":"Legacy completed list",
+      "purpose":"Exercise a completed v0.2.5 list snapshot.",
+      "node_definitions":{"finish":{
+        "type":"action",
+        "title":"Finish",
+        "intent":"Finish the session.",
+        "items":[{"id":"findings","type":"list","prompt":"Record findings.","required":false}]
+      }},
+      "graph":{"entry":"finish","nodes":[{"id":"finish","use":"finish","terminal":true}]}
+    }"#;
+    let running = fresh_state("legacy-completed-list.json", PROCEDURE);
+    let attempt_id = running
+        .trace()
+        .active_attempt()
+        .unwrap()
+        .attempt_id()
+        .clone();
+    let current = running
+        .complete_active_action_v2(
+            running.trace().revision(),
+            &attempt_id,
+            None,
+            UnixMillis::new(1_700_000_000_001),
+        )
+        .unwrap()
+        .into_state();
+    let state = with_v025_list_snapshot(current);
+    let stored_digest = state.snapshot().digest().as_str().to_owned();
+    let view = view_with_terminal_disposition(state, true);
+
+    for tier in [
+        GraphStatusTierV2::Compact,
+        GraphStatusTierV2::Standard,
+        GraphStatusTierV2::Verbose,
+    ] {
+        let status = project_graph_status_v2(&view, tier, None).unwrap();
+        assert_eq!(status["procedure"]["digest"], stored_digest);
+    }
+    assert_eq!(
+        project_graph_next_v2(&view),
+        Err(GraphViewErrorV2::TerminalSessionHasNoNext)
+    );
+    let observation = project_graph_observation_v1(&view).unwrap();
+    let commands = observation["mutation_templates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|template| template["command"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(commands, vec!["session.reset", "session.start_replace"]);
 }
 
 #[test]

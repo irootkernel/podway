@@ -187,6 +187,9 @@ Checks include:
 - Git-to-Store workspace binding revalidation in deep mode.
 - active-Store and disposable-snapshot agreement in deep mode, reported as
   `store_snapshot_diverged` when the two coherent reads do not match.
+- current-session observation projection from that same coherent Store view in
+  deep mode, reported as `session_projection_failed` with a bounded
+  `failure_kind` when public session reads cannot reconstruct the stored state.
 
 Doctor is read-only. It may recommend `init --repair`, `workspace repair`, daemon restart, or destructive reset, but does not perform them automatically.
 

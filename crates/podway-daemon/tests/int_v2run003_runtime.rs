@@ -17,13 +17,16 @@ use podway_config::{
     AuthoringContext, ParsedProcedure, ProcedureDocumentFormat, parse_procedure_document,
     validate_procedure_v2, vet_procedure_v2,
 };
-use podway_core::{AttemptId, ProcedureSnapshotId, Revision, SessionId, UnixMillis};
+use podway_core::{AttemptId, BlockerId, ProcedureSnapshotId, Revision, SessionId, UnixMillis};
 use podway_daemon::{
     dispatch::{
         CatalogDispatchErrorMapperV1, DispatcherWorkspaceOutputV1, ProcedureV2AdmissionProofV1,
         RequestDispatcherV1Adapter, WorkspaceRuntimeV1,
     },
-    execution::workspace_procedure_snapshot_from_bytes_v2,
+    execution::{
+        graph_prepared_session_state_from_procedure_v2_snapshot,
+        workspace_procedure_snapshot_from_bytes_v2,
+    },
     production::{
         NativeProductionClockV1, ProductionControlServiceV1, ProductionMutationWorkerV1,
         ProductionPreviewServiceV1, ProductionReadServiceV1, ProductionWorkspaceRuntimeV1,
@@ -2844,6 +2847,97 @@ fn doctor_reports_unreadable_state_without_activating_a_scheduler() {
     );
     assert!(shallow_doctor.get("store_snapshot_revalidated").is_none());
     assert_eq!(shallow_doctor["findings"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn deep_doctor_reports_a_session_projection_failure() {
+    let fixture = support_phase4_workspace::git_worktrees();
+    make_runtime_private(fixture.main());
+    let workspace_selector = selector(fixture.main());
+    let runtime_manager = Arc::new(manager(fixture.temporary_path()));
+    let production = dispatcher(Arc::clone(&runtime_manager), "doctor-projection-failure");
+
+    let initialize = request(
+        145_101,
+        "workspace.init",
+        &workspace_selector,
+        Map::new(),
+        "doctor-projection-failure-init",
+        PreconditionsV1::default(),
+    );
+    assert!(matches!(
+        dispatch(&production, &initialize),
+        ResponseEnvelopeV2::OutputV2(_)
+    ));
+
+    let snapshot = workspace_procedure_snapshot_from_bytes_v2(
+        "doctor-projection-failure.yaml",
+        ACTION_READBACK_PROCEDURE.as_bytes(),
+        ProcedureSnapshotId::new("00000000-0000-4000-8000-000000145101").unwrap(),
+        UnixMillis::new(1),
+    )
+    .unwrap();
+    let prepared = graph_prepared_session_state_from_procedure_v2_snapshot(
+        snapshot,
+        "Diagnose a projection failure",
+        SessionId::new("00000000-0000-4000-8000-000000145102").unwrap(),
+        UnixMillis::new(1),
+    )
+    .unwrap();
+    let attempt_id = AttemptId::new("00000000-0000-4000-8000-000000145103").unwrap();
+    let running = prepared
+        .begin_v2(Revision::ZERO, attempt_id.clone(), None, UnixMillis::new(2))
+        .unwrap()
+        .into_state();
+    let blocked = running
+        .block_active_attempt_v2(
+            running.trace().revision(),
+            &attempt_id,
+            BlockerId::new("00000000-0000-4000-8000-000000145104").unwrap(),
+            "The timestamp is intentionally outside the public projection range.",
+            UnixMillis::new(i64::MAX as u64),
+        )
+        .unwrap()
+        .into_state();
+    let scheduler = runtime_manager
+        .resolve_existing(git_selector(fixture.main()), None, observation())
+        .unwrap();
+    let context = scheduler.context_snapshot();
+    let store = SqliteStoreV1::open(
+        context.database_path(),
+        context.workspace_root(),
+        context.binding().identity().clone(),
+        context.store_options().clone(),
+        UnixMillis::new(3),
+    )
+    .unwrap();
+    store
+        .create_graph_session_v2(context.binding().identity(), blocked)
+        .unwrap();
+    drop(store);
+
+    let doctor = request(
+        145_102,
+        "workspace.doctor",
+        &workspace_selector,
+        json!({"deep":true}).as_object().unwrap().clone(),
+        "doctor-projection-failure-diagnostic",
+        PreconditionsV1::default(),
+    );
+    let doctor = v2_result(dispatch(&production, &doctor), "workspace.doctor");
+    assert_eq!(doctor["healthy"], false);
+    assert_eq!(doctor["workspace_state_readable"], false);
+    assert_eq!(doctor["store_snapshot_revalidated"]["outcome"], "current");
+    assert_eq!(doctor["session_projection_revalidated"]["outcome"], "error");
+    assert_eq!(
+        doctor["session_projection_revalidated"]["failure_kind"],
+        "timestamp_out_of_range"
+    );
+    assert_eq!(doctor["findings"][0]["code"], "session_projection_failed");
+    assert_eq!(
+        doctor["findings"][0]["failure_kind"],
+        "timestamp_out_of_range"
+    );
 }
 
 #[test]
