@@ -1,29 +1,11 @@
-# Podway 0.2.6 release candidate notes
+# Podway 0.2.7 release candidate notes
 
-Podway 0.2.6 is a release candidate and has not been published. These notes do
-not claim a publication date or an existing `v0.2.6` tag.
+Podway 0.2.7 is a release candidate and has not been published. These notes do
+not claim a publication date or an existing `v0.2.7` tag.
 
-## Changes since 0.2.5
+## Changes since 0.2.6
 
-- Scale Procedure v2 definitions and atomic item recording to 128 items, align
-  text and list bounds, and return structured diagnostics at each limit.
-- Replace whole-value evidence embedding with bounded previews and stable
-  `evidence read` pagination through digest-bound continuation tokens.
-- Add structurally bound external check results that record caller-supplied
-  operation identity, input digest, outcome, summary, and optional diagnostics.
-- Retain up to 32 immutable inactive terminal sessions per worktree with explicit
-  archive list, show, and purge commands and no automatic eviction.
-- Make `start` resolve existing prepared, running, and terminal state explicitly,
-  including atomic preservation of superseded running work.
-- Add bounded typed predicates for conditional required items and decision-option
-  guards without introducing expressions or execution hooks.
-- Ship four reviewable reference Procedures, including `analysis-v2`, and split
-  Procedure authoring guidance from runtime lifecycle guidance.
-- Serve phase-aware daemon status during startup and recovery, reject normal
-  admission until ready, and add bounded `daemon wait-ready` behavior reused by
-  service installation.
-- Preserve retained goal history when a successor session starts, and keep
-  `workspace doctor` available when normal workspace state is unreadable.
+- No user-visible changes have been adopted for this cycle yet.
 
 ## Compatibility and migration
 
@@ -64,10 +46,10 @@ Podway remains a same-user local tool rather than a multi-user security boundary
 
 The qualified, unpublished distribution contains these exact top-level artifacts:
 
-- `podway-0.2.6-aarch64-apple-darwin.tar.gz`;
-- `podway-0.2.6-aarch64-apple-darwin.tar.gz.sha256`;
-- `podway-0.2.6-aarch64-apple-darwin.provenance.json`;
-- `podway-0.2.6-aarch64-apple-darwin.dolgorae-handoff.json`.
+- `podway-0.2.7-aarch64-apple-darwin.tar.gz`;
+- `podway-0.2.7-aarch64-apple-darwin.tar.gz.sha256`;
+- `podway-0.2.7-aarch64-apple-darwin.provenance.json`;
+- `podway-0.2.7-aarch64-apple-darwin.dolgorae-handoff.json`.
 
 The archive contains both binaries, shell completions, and four built-in Procedure v2 presets:
 `analysis-v2`, `bug-fix-v2`, `small-change-v2`, and `sw-dev-v2`. It also contains public schemas
@@ -99,7 +81,7 @@ reconciliation.
 
 ## Signing and known limitations
 
-The Podway 0.2.6 Apple Silicon release candidate is unsigned and not notarized.
+The Podway 0.2.7 Apple Silicon release candidate is unsigned and not notarized.
 Users must verify the attached SHA-256 checksum before installing a published
 artifact.
 
