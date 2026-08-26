@@ -5374,6 +5374,24 @@ fn map_graph_mutation_failure_v2(error: &PersistedGraphMutationFailureV2) -> Dis
             actual,
             maximum,
             unit,
+        } if field == podway_core::ATTEMPT_CONTENT_FIELD_V2
+            && *maximum == podway_core::MAX_ATTEMPT_CONTENT_SCALARS_V2
+            && unit == podway_core::BoundUnitV2::Scalars.as_str() =>
+        {
+            DispatchFailureV1::new(DispatchFailureKindV1::AttemptContentLimitExceeded).with_details(
+                DispatchErrorDetailsV1::default().with_attempt_content_limit_exceeded(
+                    field.clone(),
+                    *actual,
+                    *maximum,
+                    unit.clone(),
+                ),
+            )
+        }
+        PersistedGraphMutationFailureV2::ItemConstraintBound {
+            field,
+            actual,
+            maximum,
+            unit,
         } => DispatchFailureV1::new(DispatchFailureKindV1::ItemConstraintFailed).with_details(
             DispatchErrorDetailsV1::default().with_item_constraint_bound(
                 field.clone(),
@@ -6187,6 +6205,35 @@ mod tests {
         assert_eq!(details["actual"], json!(1_001u64));
         assert_eq!(details["maximum"], json!(1_000u64));
         assert_eq!(details["unit"], json!("entries"));
+
+        let graph_aggregate = PersistedGraphMutationFailureV2::ItemConstraintBound {
+            field: podway_core::ATTEMPT_CONTENT_FIELD_V2.to_owned(),
+            actual: 20_000_000,
+            maximum: podway_core::MAX_ATTEMPT_CONTENT_SCALARS_V2,
+            unit: podway_core::BoundUnitV2::Scalars.as_str().to_owned(),
+        };
+        let failure = map_graph_mutation_failure_v2(&graph_aggregate);
+        assert_eq!(
+            failure.kind(),
+            DispatchFailureKindV1::AttemptContentLimitExceeded
+        );
+        let details = failure.into_details().into_json(false);
+        assert_eq!(details["kind"], json!("ATTEMPT_CONTENT_LIMIT_EXCEEDED"));
+        assert_eq!(
+            details["field"],
+            json!(podway_core::ATTEMPT_CONTENT_FIELD_V2)
+        );
+
+        let graph_item_bound = PersistedGraphMutationFailureV2::ItemConstraintBound {
+            field: "list max_items".to_owned(),
+            actual: 1_001,
+            maximum: 1_000,
+            unit: podway_core::BoundUnitV2::Entries.as_str().to_owned(),
+        };
+        assert_eq!(
+            map_graph_mutation_failure_v2(&graph_item_bound).kind(),
+            DispatchFailureKindV1::ItemConstraintFailed
+        );
     }
 
     fn fixture_job(sequence: u64) -> JobReceiptV1 {

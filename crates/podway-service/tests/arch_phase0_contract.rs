@@ -1791,6 +1791,17 @@ fn phase6_replaced_executable_fails_closed_then_install_refresh_restarts() {
         filesystem.events.lock().expect("test lock").is_empty(),
         "stale executable detection must precede launchctl and publication side effects"
     );
+    assert!(matches!(
+        runner.run(ServiceCommandV1::ReadinessStatus {
+            requested_at: UnixMillis::new(3_004),
+            paths: service_paths(),
+            timeout: Duration::from_millis(20),
+        }),
+        Ok(ServiceCommandResultV1::Status(ServiceStatusV1::RunningV1(
+            _
+        )))
+    ));
+    filesystem.events.lock().expect("test lock").clear();
     let changed = phase6_spec();
     assert!(matches!(
         runner.run(ServiceCommandV1::Install {

@@ -76,6 +76,7 @@ const LOCAL_CLIENT_EXIT: i32 = 6;
 const MAX_SERVICE_LOG_READ_BYTES: u64 = 10 * 1024 * 1024;
 const DEFAULT_DAEMON_READINESS_TIMEOUT_MS: u64 = 120_000;
 const DAEMON_READINESS_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const DAEMON_READINESS_MIN_OBSERVATION_BUDGET: Duration = Duration::from_millis(100);
 const DAEMON_VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 const DAEMON_VERSION_PROBE_OUTPUT_LIMIT: usize = 4 * 1024;
 const DAEMON_VERSION_PROBE_POST_KILL_DRAIN: Duration = Duration::from_millis(100);
@@ -3510,14 +3511,37 @@ fn probe_daemon_identity(binary: &Path) -> Result<DaemonStaticIdentityV1, Servic
     probe_daemon_identity_with_runner(&runner)
 }
 
+fn probe_daemon_identity_with_timeout(
+    binary: &Path,
+    timeout: Duration,
+) -> Result<DaemonStaticIdentityV1, ServiceErrorV1> {
+    let runner = SystemLaunchctlRunnerV1::new(binary).with_bounds(
+        DAEMON_VERSION_PROBE_TIMEOUT,
+        DAEMON_VERSION_PROBE_OUTPUT_LIMIT,
+        DAEMON_VERSION_PROBE_POST_KILL_DRAIN,
+    );
+    probe_daemon_identity_with_runner_and_timeout(&runner, Some(timeout))
+}
+
 fn probe_daemon_identity_with_runner(
     runner: &impl LaunchctlRunnerV1,
 ) -> Result<DaemonStaticIdentityV1, ServiceErrorV1> {
-    let output = runner.run(&[
+    probe_daemon_identity_with_runner_and_timeout(runner, None)
+}
+
+fn probe_daemon_identity_with_runner_and_timeout(
+    runner: &impl LaunchctlRunnerV1,
+    timeout: Option<Duration>,
+) -> Result<DaemonStaticIdentityV1, ServiceErrorV1> {
+    let arguments = [
         "version".to_owned(),
         "--json".to_owned(),
         "--identity".to_owned(),
-    ])?;
+    ];
+    let output = match timeout {
+        Some(timeout) => runner.run_with_timeout(&arguments, timeout)?,
+        None => runner.run(&arguments)?,
+    };
     if output.exit_status != 0 || !output.stderr.is_empty() || output.stdout.contains('\u{fffd}') {
         return Err(ServiceErrorV1::IoV1 {
             operation: None,
@@ -3699,7 +3723,7 @@ fn wait_for_verified_service_with_runtime(
     runtime: &mut impl ReadinessWaitRuntime,
 ) -> Result<Map<String, Value>, LocalFailure> {
     wait_for_readiness_observations_with_runtime(
-        || observe_service_readiness(manager, paths, command),
+        |remaining| observe_service_readiness(manager, paths, command, remaining),
         paths,
         command,
         operation,
@@ -3712,12 +3736,21 @@ fn observe_service_readiness(
     manager: &impl ServiceManagerContractV1,
     paths: &ServiceRuntimePathsV1,
     command: &str,
+    remaining: Duration,
 ) -> Result<ReadinessObservation, LocalFailure> {
-    let service_status = manager
-        .status()
-        .map_err(|error| map_service_error(error, command))?;
+    if remaining < DAEMON_READINESS_MIN_OBSERVATION_BUDGET {
+        return readiness_unverified_observation(paths, command);
+    }
+    let deadline = Instant::now() + remaining;
+    let service_status = match manager.status_for_readiness(remaining) {
+        Ok(status) => status,
+        Err(error) if service_error_is_timeout(&error) => {
+            return readiness_unverified_observation(paths, command);
+        }
+        Err(error) => return Err(map_service_error(error, command)),
+    };
     let (run_result, verified_v2_ready) =
-        service_status_projection("daemon.status", service_status, paths)?;
+        service_status_projection("daemon.status", service_status, paths, Some(deadline))?;
     match run_result {
         RunResult::Local { result, .. } => Ok(ReadinessObservation {
             result,
@@ -3744,13 +3777,58 @@ fn observe_service_readiness(
     }
 }
 
+fn service_error_is_timeout(error: &ServiceErrorV1) -> bool {
+    match error {
+        ServiceErrorV1::LaunchctlTimeoutV1 { .. } => true,
+        ServiceErrorV1::OperationFailureV1 { source, .. } => service_error_is_timeout(source),
+        _ => false,
+    }
+}
+
+fn readiness_unverified_observation(
+    paths: &ServiceRuntimePathsV1,
+    command: &str,
+) -> Result<ReadinessObservation, LocalFailure> {
+    let publication_present = paths
+        .metadata_index_path()
+        .as_path()
+        .try_exists()
+        .unwrap_or(false)
+        && paths
+            .launch_agent_path()
+            .as_path()
+            .try_exists()
+            .unwrap_or(false);
+    let status = if publication_present {
+        ServiceStatusV1::StoppedV1(podway_service::ServiceStoppedV1::new(
+            UnixMillis::new(0),
+            None,
+        ))
+    } else {
+        ServiceStatusV1::NotInstalledV1(podway_service::ServiceNotInstalledV1::new(
+            UnixMillis::new(0),
+        ))
+    };
+    let (run_result, _) = service_status_projection(command, status, paths, Some(Instant::now()))?;
+    match run_result {
+        RunResult::Local { result, .. } => Ok(ReadinessObservation {
+            result,
+            verified_v2_ready: false,
+        }),
+        _ => Err(LocalFailure::response_invalid(
+            "daemon readiness fallback returned an invalid local result",
+        )
+        .with_command(command)),
+    }
+}
+
 struct ReadinessObservation {
     result: Map<String, Value>,
     verified_v2_ready: bool,
 }
 
 fn wait_for_readiness_observations_with_runtime(
-    mut observe: impl FnMut() -> Result<ReadinessObservation, LocalFailure>,
+    mut observe: impl FnMut(Duration) -> Result<ReadinessObservation, LocalFailure>,
     paths: &ServiceRuntimePathsV1,
     command: &str,
     operation: &'static str,
@@ -3758,7 +3836,11 @@ fn wait_for_readiness_observations_with_runtime(
     runtime: &mut impl ReadinessWaitRuntime,
 ) -> Result<Map<String, Value>, LocalFailure> {
     loop {
-        let observed = observe()?;
+        let elapsed = runtime.elapsed();
+        let remaining = timeout
+            .saturating_sub(elapsed)
+            .max(Duration::from_millis(1));
+        let observed = observe(remaining)?;
         if observed.verified_v2_ready {
             return Ok(observed.result);
         }
@@ -3838,13 +3920,14 @@ fn service_status_result(
     status: ServiceStatusV1,
     paths: &ServiceRuntimePathsV1,
 ) -> Result<RunResult, LocalFailure> {
-    service_status_projection(command, status, paths).map(|(result, _)| result)
+    service_status_projection(command, status, paths, None).map(|(result, _)| result)
 }
 
 fn service_status_projection(
     command: &str,
     status: ServiceStatusV1,
     paths: &ServiceRuntimePathsV1,
+    readiness_deadline: Option<Instant>,
 ) -> Result<(RunResult, bool), LocalFailure> {
     let (status, installed, loaded, metadata) = match status {
         ServiceStatusV1::NotInstalledV1(_) => ("not_installed", false, false, None),
@@ -3856,11 +3939,32 @@ fn service_status_projection(
             ("stopped", true, false, stopped.metadata().cloned())
         }
     };
-    let static_identity = metadata
-        .as_ref()
-        .map(|metadata| probe_daemon_identity(metadata.daemon_binary()))
-        .transpose()
-        .map_err(|error| map_service_error(error, command))?;
+    let socket_present = paths.socket_path().as_path().try_exists().unwrap_or(false);
+    let mut readiness_probe_blocked = readiness_deadline.is_some() && !socket_present;
+    let static_identity = if readiness_probe_blocked {
+        None
+    } else {
+        let identity = metadata
+            .as_ref()
+            .map(|metadata| match readiness_deadline {
+                Some(deadline) => probe_daemon_identity_with_timeout(
+                    metadata.daemon_binary(),
+                    deadline
+                        .saturating_duration_since(Instant::now())
+                        .max(Duration::from_millis(1)),
+                ),
+                None => probe_daemon_identity(metadata.daemon_binary()),
+            })
+            .transpose();
+        match identity {
+            Err(ServiceErrorV1::LaunchctlTimeoutV1 { .. }) if readiness_deadline.is_some() => {
+                readiness_probe_blocked = true;
+                None
+            }
+            Err(error) => return Err(map_service_error(error, command)),
+            Ok(identity) => identity,
+        }
+    };
     if let Some(actual) = static_identity.as_ref() {
         let expected = build_identity_v1();
         if actual.product != expected.product()
@@ -3922,9 +4026,31 @@ fn service_status_projection(
     .expect("daemon service status is an object")
     .clone();
     let mut verified_v2_ready = false;
+    if readiness_probe_blocked
+        || readiness_deadline.is_some_and(|deadline| Instant::now() >= deadline)
+    {
+        return Ok((
+            local_result(
+                command,
+                Value::Object(result),
+                "daemon unreachable".to_owned(),
+            ),
+            false,
+        ));
+    }
     if loaded {
         let request = build_daemon_status_request()?;
-        let client = DaemonClientV1::new(paths.clone());
+        let client = match readiness_deadline {
+            Some(deadline) => {
+                let timeout = deadline
+                    .saturating_duration_since(Instant::now())
+                    .max(Duration::from_millis(1));
+                let timeouts = DaemonClientTimeoutsV1::new(timeout, timeout, timeout)
+                    .map_err(|_| LocalFailure::daemon_unavailable(command))?;
+                DaemonClientV1::with_timeouts(paths.clone(), timeouts)
+            }
+            None => DaemonClientV1::new(paths.clone()),
+        };
         match client.daemon_status(&request) {
             Ok(ResponseEnvelopeV2::Error(error)) => {
                 return Ok((
@@ -7881,7 +8007,7 @@ mod tests {
         os::unix::fs::PermissionsExt,
         path::PathBuf,
         sync::atomic::{AtomicU64, Ordering},
-        time::{Duration, SystemTime, UNIX_EPOCH},
+        time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     };
 
     use super::{
@@ -7893,9 +8019,9 @@ mod tests {
         probe_daemon_identity, probe_daemon_identity_with_runner,
         render_local_failure_with_clock_and_writers, render_result_with_clock_and_writers,
         resolve_daemon_executable, resolve_implicit_daemon_executable_from,
-        resolve_installed_service_endpoint, service_outcome_result, service_status_result,
-        stream_log_follow_update, system_service_clock, validate_command_shape,
-        validate_daemon_flags,
+        resolve_installed_service_endpoint, service_outcome_result, service_status_projection,
+        service_status_result, stream_log_follow_update, system_service_clock,
+        validate_command_shape, validate_daemon_flags,
     };
     use clap::{Parser, error::ErrorKind};
     use serde_json::json;
@@ -8262,6 +8388,60 @@ mod tests {
             probe_daemon_identity_with_runner(&stalled_runner),
             Err(ServiceErrorV1::LaunchctlTimeoutV1 { timeout_ms: 100 })
         ));
+    }
+
+    #[test]
+    fn readiness_skips_static_identity_until_the_socket_exists() {
+        use podway_core::UnixMillis;
+        use podway_service::{
+            ServiceInstallMetadataV1, ServiceRunningV1, ServiceRuntimePathsV1, ServiceStatusV1,
+        };
+
+        let root = std::env::temp_dir().join(format!(
+            "pwrns-{}-{}",
+            std::process::id(),
+            VERSION_PROBE_SCRIPT_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let runtime = root.join("runtime");
+        fs::create_dir_all(&runtime).expect("readiness fixture runtime");
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))
+            .expect("readiness fixture runtime must be private");
+        let paths = ServiceRuntimePathsV1::from_directories(
+            root.join("LaunchAgents"),
+            root.join("ApplicationSupport"),
+            root.join("Logs"),
+            &runtime,
+        )
+        .expect("readiness fixture paths");
+        let stalled = VersionProbeScript::new("sleep 10");
+        let metadata = ServiceInstallMetadataV1::new(
+            &stalled.path,
+            paths.socket_path().as_path(),
+            UnixMillis::new(1),
+            UnixMillis::new(1),
+        )
+        .expect("readiness fixture metadata");
+
+        let started = Instant::now();
+        let (result, verified) = service_status_projection(
+            "daemon.status",
+            ServiceStatusV1::RunningV1(ServiceRunningV1::new(
+                UnixMillis::new(1),
+                Some(42),
+                Some(metadata),
+            )),
+            &paths,
+            Some(started + Duration::from_millis(20)),
+        )
+        .expect("missing readiness socket must remain a bounded observation");
+
+        assert!(!verified);
+        assert!(started.elapsed() < Duration::from_millis(500));
+        match result {
+            RunResult::Local { result, .. } => assert_eq!(result["reachable"], false),
+            _ => panic!("missing readiness socket must remain a local observation"),
+        }
+        fs::remove_dir_all(root).expect("remove readiness fixture root");
     }
 
     #[test]
@@ -8992,7 +9172,7 @@ mod phase6_health_tests {
         os::unix::fs::PermissionsExt,
         os::unix::net::UnixListener,
         path::Path,
-        time::Duration,
+        time::{Duration, Instant},
     };
 
     use podway_core::UnixMillis;
@@ -9061,7 +9241,7 @@ mod phase6_health_tests {
             elapsed: Duration::ZERO,
         };
         let failure = wait_for_readiness_observations_with_runtime(
-            || {
+            |_| {
                 Ok::<ReadinessObservation, super::LocalFailure>(ReadinessObservation {
                     result: observation.clone(),
                     verified_v2_ready: false,
@@ -9128,7 +9308,7 @@ mod phase6_health_tests {
             elapsed: Duration::from_millis(1),
         };
         let failure = wait_for_readiness_observations_with_runtime(
-            || {
+            |_| {
                 Ok::<ReadinessObservation, super::LocalFailure>(ReadinessObservation {
                     result: result.clone(),
                     verified_v2_ready: false,
@@ -9201,6 +9381,51 @@ mod phase6_health_tests {
 
         responder.join().expect("health fixture responder");
         fs::remove_dir_all(runtime).expect("remove health fixture");
+    }
+
+    #[test]
+    fn readiness_caps_a_stalled_daemon_exchange_to_the_deadline() {
+        let runtime = std::env::temp_dir().join(format!("pwrd-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&runtime);
+        fs::create_dir_all(&runtime).expect("readiness probe fixture runtime");
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))
+            .expect("readiness probe fixture runtime must be private");
+        let paths = ServiceRuntimePathsV1::from_directories(
+            runtime.join("LaunchAgents"),
+            runtime.join("ApplicationSupport"),
+            runtime.join("Logs"),
+            &runtime,
+        )
+        .expect("readiness probe fixture paths");
+        let listener =
+            UnixListener::bind(paths.socket_path().as_path()).expect("readiness probe socket");
+        fs::set_permissions(
+            paths.socket_path().as_path(),
+            fs::Permissions::from_mode(0o600),
+        )
+        .expect("readiness probe socket must be private");
+        let responder = std::thread::spawn(move || {
+            let (_stream, _) = listener.accept().expect("readiness probe connection");
+            std::thread::sleep(Duration::from_secs(1));
+        });
+
+        let started = Instant::now();
+        let (result, verified) = super::service_status_projection(
+            "daemon.status",
+            ServiceStatusV1::RunningV1(ServiceRunningV1::new(UnixMillis::new(1), Some(42), None)),
+            &paths,
+            Some(started + Duration::from_millis(20)),
+        )
+        .expect("stalled daemon exchange must remain a bounded observation");
+
+        assert!(!verified);
+        assert!(started.elapsed() < Duration::from_millis(500));
+        match result {
+            super::RunResult::Local { result, .. } => assert_eq!(result["reachable"], false),
+            _ => panic!("stalled daemon exchange must remain a local observation"),
+        }
+        responder.join().expect("readiness probe responder");
+        fs::remove_dir_all(runtime).expect("remove readiness probe fixture");
     }
 
     #[test]

@@ -102,6 +102,10 @@ pub trait ServiceManagerContractV1: Send + Sync {
     fn restart(&self) -> Result<ServiceOutcomeV1, ServiceErrorV1>;
     fn start(&self) -> Result<ServiceOutcomeV1, ServiceErrorV1>;
     fn status(&self) -> Result<ServiceStatusV1, ServiceErrorV1>;
+    fn status_for_readiness(&self, timeout: Duration) -> Result<ServiceStatusV1, ServiceErrorV1> {
+        let _ = timeout;
+        self.status()
+    }
     fn stop(&self) -> Result<ServiceOutcomeV1, ServiceErrorV1>;
     fn uninstall(&self) -> Result<ServiceOutcomeV1, ServiceErrorV1>;
     fn update(&self, spec: InstallSpecV1) -> Result<ServiceOutcomeV1, ServiceErrorV1>;
@@ -695,6 +699,11 @@ pub enum ServiceCommandV1 {
         requested_at: UnixMillis,
         paths: ServiceRuntimePathsV1,
     },
+    ReadinessStatus {
+        requested_at: UnixMillis,
+        paths: ServiceRuntimePathsV1,
+        timeout: Duration,
+    },
     Logs {
         requested_at: UnixMillis,
         paths: ServiceRuntimePathsV1,
@@ -719,7 +728,7 @@ impl ServiceCommandV1 {
             Self::Start { .. } => ServiceOperationV1::Start,
             Self::Stop { .. } => ServiceOperationV1::Stop,
             Self::Restart { .. } => ServiceOperationV1::Restart,
-            Self::Status { .. } => ServiceOperationV1::Status,
+            Self::Status { .. } | Self::ReadinessStatus { .. } => ServiceOperationV1::Status,
             Self::Logs { .. } => ServiceOperationV1::Logs,
             Self::Uninstall { .. } | Self::UninstallWithOptions { .. } => {
                 ServiceOperationV1::Uninstall
@@ -1128,24 +1137,16 @@ where
             requested_at: self.clock.now(),
             paths: self.paths.clone(),
         };
-        let operation = command.operation();
-        let result = match self
-            .command_runner
-            .run(command)
-            .map_err(|error| error.wrap_with_operation(operation))
-        {
-            Ok(ServiceCommandResultV1::Status(status)) => Ok(status),
-            Ok(result) => Err(ServiceErrorV1::IoV1 {
-                operation: Some(operation),
-                message: format!(
-                    "runner returned {} result; expected {}",
-                    result.kind().as_str(),
-                    ServiceCommandResultKindV1::Status.as_str()
-                ),
-            }),
-            Err(error) => Err(error),
+        self.run_status(command)
+    }
+
+    fn status_for_readiness(&self, timeout: Duration) -> Result<ServiceStatusV1, ServiceErrorV1> {
+        let command = ServiceCommandV1::ReadinessStatus {
+            requested_at: self.clock.now(),
+            paths: self.paths.clone(),
+            timeout,
         };
-        result.map_err(|error| error.wrap_with_operation(operation))
+        self.run_status(command)
     }
 
     fn stop(&self) -> Result<ServiceOutcomeV1, ServiceErrorV1> {
@@ -1167,6 +1168,19 @@ where
             accepts_uninstall,
         )
     }
+
+    fn update(&self, spec: InstallSpecV1) -> Result<ServiceOutcomeV1, ServiceErrorV1> {
+        self.validate_spec_paths(ServiceOperationV1::Update, &spec)
+            .map_err(|error| error.wrap_with_operation(ServiceOperationV1::Update))?;
+        self.run_outcome(
+            ServiceCommandV1::Update {
+                requested_at: self.clock.now(),
+                spec,
+            },
+            accepts_update,
+        )
+    }
+
     fn uninstall_with_options(
         &self,
         options: UninstallOptionsV1,
@@ -1180,17 +1194,32 @@ where
             accepts_uninstall,
         )
     }
+}
 
-    fn update(&self, spec: InstallSpecV1) -> Result<ServiceOutcomeV1, ServiceErrorV1> {
-        self.validate_spec_paths(ServiceOperationV1::Update, &spec)
-            .map_err(|error| error.wrap_with_operation(ServiceOperationV1::Update))?;
-        self.run_outcome(
-            ServiceCommandV1::Update {
-                requested_at: self.clock.now(),
-                spec,
-            },
-            accepts_update,
-        )
+impl<R, C> ServiceManagerV1<R, C>
+where
+    R: ServiceCommandRunnerV1,
+    C: ServiceClockV1,
+{
+    fn run_status(&self, command: ServiceCommandV1) -> Result<ServiceStatusV1, ServiceErrorV1> {
+        let operation = command.operation();
+        let result = match self
+            .command_runner
+            .run(command)
+            .map_err(|error| error.wrap_with_operation(operation))
+        {
+            Ok(ServiceCommandResultV1::Status(status)) => Ok(status),
+            Ok(result) => Err(ServiceErrorV1::IoV1 {
+                operation: Some(operation),
+                message: format!(
+                    "runner returned {} result; expected {}",
+                    result.kind().as_str(),
+                    ServiceCommandResultKindV1::Status.as_str()
+                ),
+            }),
+            Err(error) => Err(error),
+        };
+        result.map_err(|error| error.wrap_with_operation(operation))
     }
 }
 
@@ -2376,6 +2405,15 @@ impl ServiceFilesystemV1 for StdServiceFilesystemV1 {
 /// Injectable launchctl boundary. Arguments exclude the `launchctl` executable itself.
 pub trait LaunchctlRunnerV1: Send + Sync {
     fn run(&self, arguments: &[String]) -> Result<LaunchctlOutputV1, ServiceErrorV1>;
+
+    fn run_with_timeout(
+        &self,
+        arguments: &[String],
+        timeout: Duration,
+    ) -> Result<LaunchctlOutputV1, ServiceErrorV1> {
+        let _ = timeout;
+        self.run(arguments)
+    }
 }
 
 /// Verifies that an executable reports the contract identity required by an installation.
@@ -3067,6 +3105,21 @@ impl LaunchctlRunnerV1 for SystemLaunchctlRunnerV1 {
             stderr: String::from_utf8_lossy(&stderr_bytes).into_owned(),
         })
     }
+
+    fn run_with_timeout(
+        &self,
+        arguments: &[String],
+        timeout: Duration,
+    ) -> Result<LaunchctlOutputV1, ServiceErrorV1> {
+        let timeout = timeout.max(Duration::from_millis(1)).min(self.timeout);
+        self.clone()
+            .with_bounds(
+                timeout,
+                self.output_limit,
+                self.post_kill_drain.min(timeout),
+            )
+            .run(arguments)
+    }
 }
 
 /// Production LaunchAgent command runner. Lifecycle serialization locks the verified root-owned
@@ -3367,6 +3420,23 @@ where
         op: ServiceOperationV1,
         paths: &ServiceRuntimePathsV1,
     ) -> Result<Option<ServiceInstallMetadataV1>, ServiceErrorV1> {
+        self.coherent_metadata_with_binary_verification(op, paths, true)
+    }
+
+    fn readiness_metadata(
+        &self,
+        op: ServiceOperationV1,
+        paths: &ServiceRuntimePathsV1,
+    ) -> Result<Option<ServiceInstallMetadataV1>, ServiceErrorV1> {
+        self.coherent_metadata_with_binary_verification(op, paths, false)
+    }
+
+    fn coherent_metadata_with_binary_verification(
+        &self,
+        op: ServiceOperationV1,
+        paths: &ServiceRuntimePathsV1,
+        verify_binary: bool,
+    ) -> Result<Option<ServiceInstallMetadataV1>, ServiceErrorV1> {
         let metadata = self.metadata(op, paths)?;
         let plist_path = paths.launch_agent_path().as_path();
         let plist_exists = self
@@ -3400,7 +3470,9 @@ where
                         message: "service publication receipt is not durable".to_owned(),
                     });
                 }
-                self.verify_persisted_daemon(op, &metadata)?;
+                if verify_binary {
+                    self.verify_persisted_daemon(op, &metadata)?;
+                }
                 Ok(Some(metadata))
             }
         }
@@ -3817,7 +3889,8 @@ where
                 | ServiceCommandV1::Restart { .. }
                 | ServiceCommandV1::Uninstall { .. }
                 | ServiceCommandV1::UninstallWithOptions { .. }
-                | ServiceCommandV1::Status { .. } => {
+                | ServiceCommandV1::Status { .. }
+                | ServiceCommandV1::ReadinessStatus { .. } => {
                     Some(self.lifecycle_transaction(command.operation())?)
                 }
                 ServiceCommandV1::Logs { .. } => None,
@@ -3940,6 +4013,52 @@ where
                     let output = self
                         .launchctl
                         .run(&["print".to_owned(), self.loaded_target()])?;
+                    self.observe(ServiceObservationV1::LaunchctlSideEffectCompleted);
+                    match output {
+                        output if launchctl_loaded_state_v1(&output, &self.loaded_target()) => {
+                            Ok(ServiceCommandResultV1::Status(ServiceStatusV1::RunningV1(
+                                ServiceRunningV1::new(
+                                    self.clock.now(),
+                                    parse_pid(&output.stdout),
+                                    metadata,
+                                ),
+                            )))
+                        }
+                        output if launchctl_not_loaded_v1(&output, &self.domain()) => {
+                            Ok(ServiceCommandResultV1::Status(ServiceStatusV1::StoppedV1(
+                                ServiceStoppedV1::new(self.clock.now(), metadata),
+                            )))
+                        }
+                        output => Err(ServiceErrorV1::LaunchctlFailureV1 {
+                            operation: ServiceOperationV1::Status,
+                            exit_status: Some(output.exit_status),
+                            message: if output.stderr.is_empty() {
+                                output.stdout
+                            } else {
+                                output.stderr
+                            },
+                        }),
+                    }
+                }
+                ServiceCommandV1::ReadinessStatus { paths, timeout, .. } => {
+                    let metadata = self.readiness_metadata(ServiceOperationV1::Status, &paths)?;
+                    if metadata.is_none() {
+                        if self.loaded_or_not_loaded(ServiceOperationV1::Status)? {
+                            return Err(ServiceErrorV1::InvalidMetadataV1 {
+                                message: "service is loaded without a coherent publication"
+                                    .to_owned(),
+                            });
+                        }
+                        return Ok(ServiceCommandResultV1::Status(
+                            ServiceStatusV1::NotInstalledV1(ServiceNotInstalledV1::new(
+                                self.clock.now(),
+                            )),
+                        ));
+                    }
+                    self.observe(ServiceObservationV1::LaunchctlSideEffectRequested);
+                    let output = self
+                        .launchctl
+                        .run_with_timeout(&["print".to_owned(), self.loaded_target()], timeout)?;
                     self.observe(ServiceObservationV1::LaunchctlSideEffectCompleted);
                     match output {
                         output if launchctl_loaded_state_v1(&output, &self.loaded_target()) => {
