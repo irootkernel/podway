@@ -20,8 +20,9 @@ use podway_config::{
 };
 use podway_core::{DomainResult, UnixMillis, WorkspaceId};
 use podway_git::{
-    GitResolveErrorV1, GitResolverContractV1, NativeGitResolverV1, WORKTREE_SELECTOR_VERSION_V1,
-    WorkspaceLayoutErrorV1, WorkspaceLayoutInitializerV1, WorktreeSelectorV1,
+    DiagnosticPathDisplayV1, GitResolveErrorV1, GitResolverContractV1, LocalPathPresenceV1,
+    LosslessPathV1, NativeGitResolverV1, WORKTREE_SELECTOR_VERSION_V1, WorkspaceLayoutErrorV1,
+    WorkspaceLayoutInitializerV1, WorktreeSelectorV1,
 };
 use podway_protocol::Rfc3339MillisV1;
 use podway_service::ServiceRuntimePathsV1;
@@ -42,7 +43,10 @@ use crate::{
     DaemonCompositionErrorV1,
     execution::{PreparedWorkspaceResetAllV1, ResetStoreInspectionV1, ValidatedUnavailableStoreV1},
     observability::ObservabilityEmitterV1,
-    registry::{RegistryErrorV1, RegistryStoreV1, WorkspaceRegistryEntryV1, WorkspaceRegistryV1},
+    registry::{
+        ExactRegistryRemovalOutcomeV1, RegistryErrorV1, RegistryStoreV1, WorkspaceRegistryEntryV1,
+        WorkspaceRegistryV1,
+    },
     scheduler::{WorkspaceSchedulerKeyV1, WorkspaceSchedulerRegistryV1, WorkspaceSchedulerV1},
     workspace::{
         ResetMaintenanceFilesystemTokenV1, ResetMarkerPublicationErrorV1, ResetMarkerV1,
@@ -1782,6 +1786,40 @@ impl WorkspaceRuntimeManagerV1 {
         }
     }
 
+    /// Performs one no-follow observation of an exact registry root.
+    pub(crate) fn observe_registry_root(
+        &self,
+        root: &ValidatedWorkspaceRootV1,
+    ) -> Result<LocalPathPresenceV1, WorkspaceRuntimeErrorV1> {
+        let path = registry_root_path_v1(root)?;
+        NativeGitResolverV1::new()
+            .observe_local_path(&path)
+            .map_err(|source| {
+                WorkspaceRuntimeErrorV1::Resolution(WorkspaceResolutionErrorV1::Git {
+                    observation: WorkspaceGitObservationV1::Preliminary,
+                    source,
+                })
+            })
+    }
+
+    /// Confirms absence again while holding the registry lock, then compare-removes one exact
+    /// UUID/root generation.
+    pub(crate) fn confirm_and_prune_registry_generation(
+        &self,
+        workspace_uuid: &WorkspaceId,
+        exact_root: &ValidatedWorkspaceRootV1,
+    ) -> Result<ExactRegistryRemovalOutcomeV1, WorkspaceRuntimeErrorV1> {
+        let path = registry_root_path_v1(exact_root)?;
+        self.registry
+            .remove_exact_if_missing(workspace_uuid, exact_root, || {
+                NativeGitResolverV1::new()
+                    .observe_local_path(&path)
+                    .map(|presence| presence == LocalPathPresenceV1::Missing)
+                    .map_err(|_| RegistryErrorV1::RootObservationFailed)
+            })
+            .map_err(WorkspaceRuntimeErrorV1::Registry)
+    }
+
     pub(crate) fn scheduler_registry(
         &self,
     ) -> &WorkspaceSchedulerRegistryV1<WorkspaceSchedulerContextV1> {
@@ -2899,6 +2937,17 @@ impl WorkspaceRuntimeManagerV1 {
             })
             .map_err(WorkspaceRuntimeErrorV1::StoreOptions)
     }
+}
+
+fn registry_root_path_v1(
+    root: &ValidatedWorkspaceRootV1,
+) -> Result<LosslessPathV1, WorkspaceRuntimeErrorV1> {
+    let display = DiagnosticPathDisplayV1::new("registered workspace")
+        .map_err(|source| WorkspaceResolutionErrorV1::StoredRootPathInvalid { source })
+        .map_err(WorkspaceRuntimeErrorV1::Resolution)?;
+    LosslessPathV1::from_raw_bytes(root.unix_bytes(), display)
+        .map_err(|source| WorkspaceResolutionErrorV1::StoredRootPathInvalid { source })
+        .map_err(WorkspaceRuntimeErrorV1::Resolution)
 }
 fn reset_seed_request(
     reset: &ResetWorkspaceResolutionV1,

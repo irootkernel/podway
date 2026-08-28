@@ -14,8 +14,8 @@ use podway_core::{
     TerminalDispositionV2, TraceSequenceV2, UnixMillis,
 };
 use podway_git::{
-    Base64UrlPathBytesV1, DiagnosticPathDisplayV1, LosslessPathV1, WORKTREE_SELECTOR_VERSION_V1,
-    WorktreeSelectorV1,
+    Base64UrlPathBytesV1, DiagnosticPathDisplayV1, LocalPathPresenceV1, LosslessPathV1,
+    WORKTREE_SELECTOR_VERSION_V1, WorktreeSelectorV1,
 };
 use podway_protocol::{
     CommandNameV1, IdempotencyKeyV1, JobOutputV1, JobStateV1, OutputEnvelopeInputV3,
@@ -72,7 +72,7 @@ use crate::{
         ReadNotificationV1, ReadNotificationVersionV1, ReadServiceErrorV1, ReadWaitOutcomeV1,
         ReadWaitV1,
     },
-    registry::RegistryErrorV1,
+    registry::{ExactRegistryRemovalOutcomeV1, RegistryErrorV1},
     runtime_workspace::{
         ReadonlyReconciliationResolutionV1, ReadonlyWorkspaceResolutionV1, ResetSourceAuthorityV1,
         WorkspaceRuntimeErrorV1, WorkspaceRuntimeManagerV1, WorkspaceRuntimeObservationV1,
@@ -1640,6 +1640,46 @@ impl ProductionMutationWorkerV1 {
         }
     }
 
+    /// Revalidates one admitted scheduler immediately before queue admission and retires a
+    /// conclusively deleted worktree before pruning only its exact registry generation.
+    fn prune_missing_before_mutation(
+        &self,
+        scheduler: &Arc<WorkspaceSchedulerV1<WorkspaceSchedulerContextV1>>,
+    ) -> Result<(), DispatchFailureV1> {
+        match self
+            .manager
+            .revalidate_scheduler(scheduler)
+            .map_err(map_runtime_error)?
+        {
+            WorkspaceSchedulerRevalidationV1::Current => return Ok(()),
+            WorkspaceSchedulerRevalidationV1::RetireRequired { .. } => {}
+        }
+
+        let context = scheduler.context_snapshot();
+        let workspace_uuid = context.binding().identity().workspace_uuid().clone();
+        let exact_root = context.binding().last_validated_root().clone();
+        drop(context);
+        match self.manager.observe_registry_root(&exact_root) {
+            Ok(LocalPathPresenceV1::Missing) => {}
+            Ok(LocalPathPresenceV1::Present) | Err(_) => return Ok(()),
+        }
+        self.worker
+            .retire_missing_workspace(self.manager.scheduler_registry(), scheduler)
+            .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceMaintenance))?;
+        match self
+            .manager
+            .confirm_and_prune_registry_generation(&workspace_uuid, &exact_root)
+            .map_err(map_runtime_error)?
+        {
+            ExactRegistryRemovalOutcomeV1::Removed(_)
+            | ExactRegistryRemovalOutcomeV1::AlreadyAbsent
+            | ExactRegistryRemovalOutcomeV1::GenerationChanged
+            | ExactRegistryRemovalOutcomeV1::RootPresent => {
+                Err(DispatchFailureV1::new(DispatchFailureKindV1::WorktreeGone))
+            }
+        }
+    }
+
     /// Drains only schedulers returned by the runtime manager during startup recovery.
     pub fn drain_recovered_queues(
         &self,
@@ -1658,6 +1698,7 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
         response_context: &MutationResponseContextV1,
         wait: MutationWaitV1,
     ) -> Result<MutationDispatchOutcomeV1, DispatchFailureV1> {
+        self.prune_missing_before_mutation(&workspace.scheduler)?;
         let store_idempotency_key = StoreIdempotencyKeyV1::new(idempotency_key.as_str())
             .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::RequestInvalid))?;
         let submission = self
@@ -1744,6 +1785,7 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                 Arc::clone(&self.clock),
             );
             let workspace = runtime.resolve_existing(typed_request.selector())?;
+            self.prune_missing_before_mutation(&workspace.scheduler)?;
             let idempotency_key = StoreIdempotencyKeyV1::new(
                 request
                     .idempotency_key()
@@ -1916,6 +1958,7 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                 Arc::clone(&self.clock),
             );
             let workspace = runtime.resolve_existing(typed_request.selector())?;
+            self.prune_missing_before_mutation(&workspace.scheduler)?;
             let idempotency_key = StoreIdempotencyKeyV1::new(
                 request
                     .idempotency_key()
@@ -2425,6 +2468,7 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                 Arc::clone(&self.clock),
             );
             let workspace = runtime.resolve_existing(slice_request.selector())?;
+            self.prune_missing_before_mutation(&workspace.scheduler)?;
             let idempotency_key = StoreIdempotencyKeyV1::new(
                 request
                     .idempotency_key()
@@ -2605,6 +2649,7 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
         let runtime =
             ProductionWorkspaceRuntimeV1::new(Arc::clone(&self.manager), Arc::clone(&self.clock));
         let workspace = runtime.resolve_existing(slice_request.selector())?;
+        self.prune_missing_before_mutation(&workspace.scheduler)?;
         let idempotency_key = StoreIdempotencyKeyV1::new(
             request
                 .idempotency_key()

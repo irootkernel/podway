@@ -13,10 +13,11 @@ use podway_core::{Sha256Digest, WorkspaceId};
 use podway_git::{
     ContainmentMetadataV1, DiagnosticPathDisplayV1, DurableWorktreeIdentityV1,
     GitInvariantViolationV1, GitReadOperationV1, GitRepresentationProblemV1, GitResolverContractV1,
-    GitResolverErrorV1, LosslessPathV1, NativeGitResolverV1, RegistryRepairActionV1,
-    ValidatedWorktreeV1, ValidatedWorktreeValidationErrorV1, WORKTREE_SELECTOR_VERSION_V1,
-    WorkspaceIdentityStateV1, WorkspaceUuidVerificationV1, WorktreeKindV1, WorktreeMoveMetadataV1,
-    WorktreeRepairMetadataV1, WorktreeRootsV1, WorktreeSelectorV1,
+    GitResolverErrorV1, LocalPathPresenceV1, LosslessPathV1, NativeGitResolverV1,
+    RegistryRepairActionV1, ValidatedWorktreeV1, ValidatedWorktreeValidationErrorV1,
+    WORKTREE_SELECTOR_VERSION_V1, WorkspaceIdentityStateV1, WorkspaceUuidVerificationV1,
+    WorktreeKindV1, WorktreeMoveMetadataV1, WorktreeRepairMetadataV1, WorktreeRootsV1,
+    WorktreeSelectorV1,
 };
 use tempfile::TempDir;
 
@@ -478,6 +479,30 @@ fn durable_identity_supports_move_but_rejects_copy_delete_and_stale_root_replace
         resolver.resolve(selector(&moved, Some(durable))),
         Err(GitResolverErrorV1::WorktreeDeleted)
     ));
+}
+
+#[test]
+fn local_path_observation_distinguishes_absence_without_following_symlinks() {
+    let temporary = temp();
+    let present = fs::canonicalize(temporary.path()).expect("temporary root must canonicalize");
+    let missing = present.join("missing");
+    let alias = present.join("alias");
+    symlink(&missing, &alias).expect("dangling symlink fixture");
+    let resolver = NativeGitResolverV1::new();
+
+    assert_eq!(
+        resolver.observe_local_path(&lossless(&present)).unwrap(),
+        LocalPathPresenceV1::Present
+    );
+    assert_eq!(
+        resolver.observe_local_path(&lossless(&missing)).unwrap(),
+        LocalPathPresenceV1::Missing
+    );
+    assert_eq!(
+        resolver.observe_local_path(&lossless(&alias)).unwrap(),
+        LocalPathPresenceV1::Present,
+        "a path node must remain present even when its symlink target is absent"
+    );
 }
 
 #[test]

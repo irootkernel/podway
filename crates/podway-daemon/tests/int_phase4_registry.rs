@@ -24,9 +24,9 @@ use podway_service::ServiceRuntimePathsV1;
 use podway_store::ValidatedWorkspaceRootV1;
 use registry_under_test as registry;
 use registry_under_test::{
-    MAX_WORKSPACE_REGISTRY_ENTRIES_V1, RegistryErrorV1, RegistryFailpointActionV1,
-    RegistryFailpointV1, RegistryPathViolationV1, RegistryStoreV1, WorkspaceRegistryEntryV1,
-    WorkspaceRegistryV1,
+    ExactRegistryRemovalOutcomeV1, MAX_WORKSPACE_REGISTRY_ENTRIES_V1, RegistryErrorV1,
+    RegistryFailpointActionV1, RegistryFailpointV1, RegistryPathViolationV1, RegistryStoreV1,
+    WorkspaceRegistryEntryV1, WorkspaceRegistryV1,
 };
 
 static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -998,5 +998,76 @@ fn reset_replacement_atomically_converges_a_legacy_duplicate_root_generation() {
             .expect("unrelated metadata must remain")
             .last_known_root(),
         &unrelated_root
+    );
+}
+
+#[test]
+fn exact_missing_root_removal_is_compare_and_swap_guarded() {
+    let fixture = RegistryFixture::new();
+    let workspace_uuid = workspace(90);
+    let exact_root = root("/tmp/registry-prune-exact");
+    let replacement_root = root("/tmp/registry-prune-replacement");
+    let store = RegistryStoreV1::new(&fixture.paths);
+    store
+        .insert_or_refresh(workspace_uuid.clone(), exact_root.clone(), timestamp())
+        .expect("fixture generation must be registered");
+
+    assert_eq!(
+        store
+            .remove_exact_if_missing(&workspace_uuid, &exact_root, || Ok(false))
+            .expect("a reappeared root must be a retained outcome"),
+        ExactRegistryRemovalOutcomeV1::RootPresent
+    );
+    assert!(store.load().unwrap().lookup(&workspace_uuid).is_some());
+
+    store
+        .remove(&workspace_uuid)
+        .expect("fixture generation must be replaceable")
+        .expect("fixture generation must exist");
+    store
+        .insert_or_refresh(
+            workspace_uuid.clone(),
+            replacement_root.clone(),
+            timestamp(),
+        )
+        .expect("replacement generation must be registered");
+    assert_eq!(
+        store
+            .remove_exact_if_missing(&workspace_uuid, &exact_root, || {
+                panic!("a changed generation must not be observed")
+            })
+            .expect("a replacement generation must be retained"),
+        ExactRegistryRemovalOutcomeV1::GenerationChanged
+    );
+    assert_eq!(
+        store
+            .load()
+            .unwrap()
+            .lookup(&workspace_uuid)
+            .unwrap()
+            .last_known_root(),
+        &replacement_root
+    );
+
+    assert!(matches!(
+        store.remove_exact_if_missing(&workspace_uuid, &replacement_root, || {
+            Err(RegistryErrorV1::RootObservationFailed)
+        }),
+        Err(RegistryErrorV1::RootObservationFailed)
+    ));
+    assert!(store.load().unwrap().lookup(&workspace_uuid).is_some());
+
+    let removed = store
+        .remove_exact_if_missing(&workspace_uuid, &replacement_root, || Ok(true))
+        .expect("the exact missing generation must be removed");
+    assert!(matches!(removed, ExactRegistryRemovalOutcomeV1::Removed(_)));
+    assert!(store.load().unwrap().lookup(&workspace_uuid).is_none());
+    assert_eq!(
+        store
+            .remove_exact_if_missing(&workspace_uuid, &replacement_root, || {
+                panic!("an absent entry must not be observed")
+            })
+            .expect("an absent entry must be idempotent"),
+        ExactRegistryRemovalOutcomeV1::AlreadyAbsent
     );
 }

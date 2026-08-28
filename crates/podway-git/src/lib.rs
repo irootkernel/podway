@@ -27,6 +27,13 @@ pub trait GitResolverContractV1: Send + Sync {
     ) -> Result<ValidatedWorktreeV1, GitResolveErrorV1>;
 }
 
+/// One no-follow observation of a canonical local path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LocalPathPresenceV1 {
+    Present,
+    Missing,
+}
+
 /// An unpadded base64url encoding of canonical, absolute local native path bytes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Base64UrlPathBytesV1(String);

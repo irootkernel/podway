@@ -23,6 +23,7 @@ use podway_protocol::{
     decode_response_payload_v2, encode_request_payload_v1, read_single_frame_v1, write_frame_v1,
 };
 use podway_service::ServiceRuntimePathsV1;
+use podway_store::ValidatedWorkspaceRootV1;
 use serde_json::{Map, Value};
 use uuid::Uuid;
 
@@ -325,6 +326,82 @@ fn fatal_registry_recovery_fails_closed_and_removes_the_owned_socket() {
     )
     .expect("failed bootstrap terminal record must be valid JSON");
     assert_eq!(bootstrap["outcome"], "failed");
+}
+
+#[test]
+fn startup_prunes_one_conclusively_missing_registry_generation() {
+    let fixture = ProcessFixtureV1::new();
+    let missing_root = fixture.root.join("missing-worktree");
+    let encoded_root = ValidatedWorkspaceRootV1::from_unix_bytes(
+        std::os::unix::ffi::OsStrExt::as_bytes(missing_root.as_os_str()).to_vec(),
+    )
+    .expect("absolute fixture root must encode");
+    let registry = fixture.paths.workspace_registry_path().as_path();
+    fs::write(
+        registry,
+        format!(
+            concat!(
+                "{{\"schema\":\"podway.registry/v1\",\"workspaces\":[{{",
+                "\"last_known_root\":\"{}\",",
+                "\"last_seen_at\":\"2026-08-28T00:00:00.000Z\",",
+                "\"workspace_uuid\":\"00000000-0000-0000-0000-000000000091\"",
+                "}}]}}"
+            ),
+            encoded_root.as_encoded()
+        ),
+    )
+    .expect("stale registry fixture must be written");
+    fs::set_permissions(registry, fs::Permissions::from_mode(0o600))
+        .expect("registry fixture must be private");
+
+    let mut child = fixture.spawn();
+    let socket = fixture.paths.socket_path().as_path();
+    let deadline = Instant::now() + STARTUP_TIMEOUT;
+    while !socket.exists() && Instant::now() < deadline {
+        if let Some(status) = child.try_wait().expect("podwayd status must be observable") {
+            let output = child
+                .wait_with_output()
+                .expect("terminated podwayd output must be readable");
+            panic!(
+                "podwayd exited before stale cleanup ({status}): {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        socket.exists(),
+        "podwayd must bind before readiness probing"
+    );
+    let status = query_ready_status(socket);
+    assert_eq!(status["worktree_recovery"]["total"], 1);
+    assert_eq!(status["worktree_recovery"]["completed"], 1);
+    assert_eq!(status["worktree_recovery"]["failed"], 0);
+    assert_eq!(
+        fs::read_to_string(registry).expect("pruned registry must remain readable"),
+        "{\"schema\":\"podway.registry/v1\",\"workspaces\":[]}"
+    );
+    let log = fs::read_to_string(fixture.paths.log_path().as_path())
+        .expect("daemon event log must be readable");
+    let prune = log
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("event must be JSON"))
+        .find(|event| event["operation"] == "registry_entry_prune")
+        .expect("startup cleanup must emit its closed operation");
+    assert_eq!(prune["outcome"], "succeeded");
+    assert_eq!(
+        prune["workspace_uuid"],
+        "00000000-0000-0000-0000-000000000091"
+    );
+    assert!(prune.get("root").is_none());
+
+    kill(Pid::from_raw(child.id() as i32), Signal::SIGTERM).expect("stop podwayd");
+    let output = child.wait_with_output().expect("read podwayd shutdown");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]

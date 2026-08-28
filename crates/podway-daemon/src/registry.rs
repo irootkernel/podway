@@ -53,6 +53,15 @@ pub struct WorkspaceRegistryEntryV1 {
     last_seen_at: Rfc3339MillisV1,
 }
 
+/// Outcome of a lock-held exact-generation registry removal attempt.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ExactRegistryRemovalOutcomeV1 {
+    Removed(WorkspaceRegistryEntryV1),
+    AlreadyAbsent,
+    GenerationChanged,
+    RootPresent,
+}
+
 impl WorkspaceRegistryEntryV1 {
     pub fn new(
         workspace_uuid: WorkspaceId,
@@ -335,6 +344,7 @@ pub enum RegistryErrorV1 {
     Failpoint {
         point: RegistryFailpointV1,
     },
+    RootObservationFailed,
     InProcessLockPoisoned,
 }
 
@@ -448,6 +458,7 @@ impl fmt::Display for RegistryErrorV1 {
             Self::Failpoint { point } => {
                 write!(formatter, "registry failpoint {point:?} triggered")
             }
+            Self::RootObservationFailed => formatter.write_str("registry root confirmation failed"),
             Self::InProcessLockPoisoned => {
                 formatter.write_str("registry in-process lock is poisoned")
             }
@@ -754,6 +765,45 @@ impl RegistryStoreV1 {
             persist_registry_v1(self, parent, current_uid, &registry)?;
             Ok(Some(removed))
         })
+    }
+
+    /// Removes one exact UUID/root generation only after a lock-held missing-root confirmation.
+    pub(crate) fn remove_exact_if_missing(
+        &self,
+        workspace_uuid: &WorkspaceId,
+        exact_root: &ValidatedWorkspaceRootV1,
+        confirm_missing: impl FnOnce() -> Result<bool, RegistryErrorV1>,
+    ) -> Result<ExactRegistryRemovalOutcomeV1, RegistryErrorV1> {
+        let result = self.with_locked(|parent, current_uid| {
+            let mut registry = read_registry_v1(&self.registry_path, parent, current_uid)?;
+            let Ok(index) = registry
+                .workspaces
+                .binary_search_by(|entry| entry.workspace_uuid.cmp(workspace_uuid))
+            else {
+                return Ok(ExactRegistryRemovalOutcomeV1::AlreadyAbsent);
+            };
+            if registry.workspaces[index].last_known_root != *exact_root {
+                return Ok(ExactRegistryRemovalOutcomeV1::GenerationChanged);
+            }
+            if !confirm_missing()? {
+                return Ok(ExactRegistryRemovalOutcomeV1::RootPresent);
+            }
+            let removed = registry.workspaces.remove(index);
+            persist_registry_v1(self, parent, current_uid, &registry)?;
+            Ok(ExactRegistryRemovalOutcomeV1::Removed(removed))
+        });
+        let outcome = match &result {
+            Ok(ExactRegistryRemovalOutcomeV1::Removed(_))
+            | Ok(ExactRegistryRemovalOutcomeV1::AlreadyAbsent) => EventOutcomeV1::Succeeded,
+            Ok(ExactRegistryRemovalOutcomeV1::GenerationChanged)
+            | Ok(ExactRegistryRemovalOutcomeV1::RootPresent) => EventOutcomeV1::Rejected,
+            Err(_) => EventOutcomeV1::Failed,
+        };
+        self.emit(
+            EventRecordV1::new(EventOperationV1::RegistryEntryPrune, outcome)
+                .with_workspace_uuid(workspace_uuid),
+        );
+        result
     }
 
     fn with_locked<T>(

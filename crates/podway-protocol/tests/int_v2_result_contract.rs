@@ -281,6 +281,10 @@ fn examples() -> BTreeMap<&'static str, Value> {
             "podway.criterion-assessment-result/v1",
             json!({"schema":"podway.criterion-assessment-result/v1","admission":admission(),"graph_node_id":"assess","attempt_id":UUID,"goal_revision":1,"mode":"assessment","result":{"criterion_id":"tests","status":"satisfied","reason":"verified","citations":[]},"complete":true,"determined_outcome":"achieved","revision":3}),
         ),
+        (
+            "podway.workspace-removal-result/v1",
+            json!({"schema":"podway.workspace-removal-result/v1","worktree_root":"/tmp/podway-v2ret","workspace_uuid":UUID,"registry_entry_removed":true,"podway_directory_removed":true,"already_absent":false}),
+        ),
     ]);
     examples.insert(
         "podway.observation-result/v1",

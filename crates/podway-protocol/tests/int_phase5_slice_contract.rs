@@ -5,8 +5,8 @@ use podway_protocol::{
     RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, SliceCommandV1,
     SliceErrorV1, SliceRequestV1, TerminalJobCancellationProjectionV1,
     TerminalJobErrorProjectionV1, TerminalJobResponseV1, TerminalJobSuccessProjectionV1,
-    TerminalJobSuccessResultV1, WorkspaceContextV1, WorktreeSelectorWireV1,
-    canonical_mutation_identity_v1, canonical_reset_all_identity_v1,
+    TerminalJobSuccessResultV1, WorkspaceContextV1, WorkspaceRemoveRequestV1,
+    WorktreeSelectorWireV1, canonical_mutation_identity_v1, canonical_reset_all_identity_v1,
     canonical_start_mutation_identity_v1,
 };
 use serde_json::{Map, Value, json};
@@ -299,6 +299,13 @@ fn route_cases() -> Vec<RouteCase> {
             preconditions: PreconditionsV1::default(),
         },
         RouteCase {
+            command: "workspace.remove",
+            operation: OperationV1::Control,
+            durable: false,
+            payload: json!({"selector": selector.clone(), "force": true, "confirmed": true}),
+            preconditions: PreconditionsV1::default(),
+        },
+        RouteCase {
             command: "session.start",
             operation: OperationV1::Mutate,
             durable: true,
@@ -535,10 +542,10 @@ fn route_cases() -> Vec<RouteCase> {
 }
 
 #[test]
-fn recon001_exhaustively_admits_only_the_35_canonical_daemon_routes() {
+fn recon001_exhaustively_admits_only_the_36_canonical_daemon_routes() {
     let cases = route_cases();
-    assert_eq!(cases.len(), 35);
-    assert_eq!(DAEMON_COMMAND_NAMES_V1.len(), 35);
+    assert_eq!(cases.len(), 36);
+    assert_eq!(DAEMON_COMMAND_NAMES_V1.len(), 36);
     assert_eq!(
         cases.iter().map(|case| case.command).collect::<Vec<_>>(),
         DAEMON_COMMAND_NAMES_V1.to_vec(),
@@ -546,14 +553,31 @@ fn recon001_exhaustively_admits_only_the_35_canonical_daemon_routes() {
 
     let workspace_id = WorkspaceId::new(WORKSPACE_ID).unwrap();
     for case in cases {
-        let request = SliceRequestV1::from_envelope(&envelope(
+        let request_envelope = envelope(
             case.command,
             case.operation,
             case.durable,
             case.payload.clone(),
             case.preconditions.clone(),
-        ))
-        .unwrap();
+        );
+        if case.command == "workspace.remove" {
+            WorkspaceRemoveRequestV1::from_envelope(&request_envelope).unwrap();
+            let mut unknown_payload = case.payload.as_object().unwrap().clone();
+            unknown_payload.insert("unexpected".to_owned(), json!(true));
+            assert!(
+                WorkspaceRemoveRequestV1::from_envelope(&envelope_with_workspace_uuid(
+                    case.command,
+                    case.operation,
+                    case.durable,
+                    Value::Object(unknown_payload),
+                    case.preconditions.clone(),
+                    Some(workspace_id.clone()),
+                ))
+                .is_err()
+            );
+            continue;
+        }
+        let request = SliceRequestV1::from_envelope(&request_envelope).unwrap();
         assert_eq!(request.command().command_name(), case.command);
         assert_eq!(request.command().operation(), case.operation);
         assert_eq!(request.command().is_durable_job(), case.durable);

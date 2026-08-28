@@ -15,7 +15,8 @@ use std::{
 
 use podway_core::WorkspaceId;
 use podway_git::{
-    DiagnosticPathDisplayV1, LosslessPathV1, WORKTREE_SELECTOR_VERSION_V1, WorktreeSelectorV1,
+    DiagnosticPathDisplayV1, LocalPathPresenceV1, LosslessPathV1, WORKTREE_SELECTOR_VERSION_V1,
+    WorktreeSelectorV1,
 };
 use podway_service::ServiceRuntimePathsV1;
 use podway_store::{SqliteStoreOptionsV1, StoreErrorV1, StoreIntegrityCheckV1, WorkerIdV1};
@@ -31,7 +32,10 @@ use crate::{
         NativeProductionClockV1, ProductionMutationWorkerV1, ProductionRequestDispatcherV1,
         compose_dispatcher_with_worker_observability_and_procedure_v2_v1,
     },
-    registry::{RegistryErrorV1, WorkspaceRegistryEntryV1, WorkspaceRegistryV1},
+    registry::{
+        ExactRegistryRemovalOutcomeV1, RegistryErrorV1, WorkspaceRegistryEntryV1,
+        WorkspaceRegistryV1,
+    },
     runtime_workspace::{
         WorkspaceRuntimeErrorV1, WorkspaceRuntimeManagerV1, WorkspaceRuntimeObservationV1,
     },
@@ -162,6 +166,30 @@ pub struct UnavailableWorkspaceReportV1 {
     reason: WorkspaceRecoveryUnavailableReasonV1,
 }
 
+/// One stale metadata generation conclusively removed during startup recovery.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PrunedWorkspaceReportV1 {
+    workspace_uuid: WorkspaceId,
+    registry_entry_removed: bool,
+}
+
+impl PrunedWorkspaceReportV1 {
+    fn new(workspace_uuid: WorkspaceId, registry_entry_removed: bool) -> Self {
+        Self {
+            workspace_uuid,
+            registry_entry_removed,
+        }
+    }
+
+    pub fn workspace_uuid(&self) -> &WorkspaceId {
+        &self.workspace_uuid
+    }
+
+    pub const fn registry_entry_removed(&self) -> bool {
+        self.registry_entry_removed
+    }
+}
+
 impl UnavailableWorkspaceReportV1 {
     fn new(workspace_uuid: WorkspaceId, reason: WorkspaceRecoveryUnavailableReasonV1) -> Self {
         Self {
@@ -244,12 +272,20 @@ impl ProductionDaemonRecoveryReportV1 {
             .filter(|entry| matches!(entry, WorkspaceRecoveryEntryV1::Unavailable(_)))
             .count()
     }
+
+    pub fn pruned_workspace_count(&self) -> usize {
+        self.workspaces
+            .iter()
+            .filter(|entry| matches!(entry, WorkspaceRecoveryEntryV1::Pruned(_)))
+            .count()
+    }
 }
 
 /// A per-workspace startup recovery outcome.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WorkspaceRecoveryEntryV1 {
     Recovered(RecoveredWorkspaceReportV1),
+    Pruned(PrunedWorkspaceReportV1),
     Unavailable(UnavailableWorkspaceReportV1),
 }
 
@@ -700,6 +736,61 @@ fn recover_registered_workspaces(
         }
         let workspace_uuid = entry.workspace_uuid().clone();
         let index = outcomes.len();
+        match manager.observe_registry_root(entry.last_known_root()) {
+            Ok(LocalPathPresenceV1::Missing) => {
+                match manager
+                    .confirm_and_prune_registry_generation(&workspace_uuid, entry.last_known_root())
+                {
+                    Ok(ExactRegistryRemovalOutcomeV1::Removed(_)) => {
+                        outcomes.push(Some(WorkspaceRecoveryEntryV1::Pruned(
+                            PrunedWorkspaceReportV1::new(workspace_uuid, true),
+                        )));
+                        readiness.record_worktree_recovery(false);
+                        continue;
+                    }
+                    Ok(ExactRegistryRemovalOutcomeV1::AlreadyAbsent) => {
+                        outcomes.push(Some(WorkspaceRecoveryEntryV1::Pruned(
+                            PrunedWorkspaceReportV1::new(workspace_uuid, false),
+                        )));
+                        readiness.record_worktree_recovery(false);
+                        continue;
+                    }
+                    Ok(ExactRegistryRemovalOutcomeV1::RootPresent) => {}
+                    Ok(ExactRegistryRemovalOutcomeV1::GenerationChanged) => {
+                        outcomes.push(Some(WorkspaceRecoveryEntryV1::Unavailable(
+                            UnavailableWorkspaceReportV1::new(
+                                workspace_uuid,
+                                WorkspaceRecoveryUnavailableReasonV1::WorkspaceIdentityConflict,
+                            ),
+                        )));
+                        readiness.record_worktree_recovery(true);
+                        continue;
+                    }
+                    Err(error) => {
+                        outcomes.push(Some(WorkspaceRecoveryEntryV1::Unavailable(
+                            UnavailableWorkspaceReportV1::new(
+                                workspace_uuid,
+                                unavailable_reason_from_runtime_error(error),
+                            ),
+                        )));
+                        readiness.record_worktree_recovery(true);
+                        continue;
+                    }
+                }
+            }
+            Ok(LocalPathPresenceV1::Present) => {}
+            Err(error) => {
+                emit_registry_prune(observability, &workspace_uuid, EventOutcomeV1::Failed);
+                outcomes.push(Some(WorkspaceRecoveryEntryV1::Unavailable(
+                    UnavailableWorkspaceReportV1::new(
+                        workspace_uuid,
+                        unavailable_reason_from_runtime_error(error),
+                    ),
+                )));
+                readiness.record_worktree_recovery(true);
+                continue;
+            }
+        }
         let selector = match selector_from_registry_entry(entry) {
             Ok(selector) => selector,
             Err(reason) => {
@@ -851,6 +942,19 @@ fn recover_registered_workspaces(
         },
     );
     report
+}
+
+fn emit_registry_prune(
+    observability: &Option<ObservabilityEmitterV1>,
+    workspace_uuid: &WorkspaceId,
+    outcome: EventOutcomeV1,
+) {
+    if let Some(observability) = observability {
+        observability.emit(
+            EventRecordV1::new(EventOperationV1::RegistryEntryPrune, outcome)
+                .with_workspace_uuid(workspace_uuid),
+        );
+    }
 }
 
 fn selector_from_registry_entry(

@@ -802,6 +802,23 @@ where
         self.retire_workspace_with(registry, scheduler, |_| Ok(()))
     }
 
+    /// Retires a scheduler whose worktree root was conclusively observed absent. No Store access
+    /// is attempted because its complete `.podway` subtree is already unavailable.
+    pub fn retire_missing_workspace(
+        &self,
+        registry: &WorkspaceSchedulerRegistryV1<Context>,
+        scheduler: &Arc<WorkspaceSchedulerV1<Context>>,
+    ) -> Result<(), WorkerRetirementErrorV1<Context, Execution, Clock>> {
+        registry
+            .retire(scheduler, |retiring| {
+                retiring.with_serialized(|context| {
+                    context.stop_claims();
+                    Ok(())
+                })
+            })
+            .map_err(|error| self.map_retirement_error(error, WorkerRetirementModeV1::Ordinary))
+    }
+
     pub fn retire_workspace_with<F>(
         &self,
         registry: &WorkspaceSchedulerRegistryV1<Context>,

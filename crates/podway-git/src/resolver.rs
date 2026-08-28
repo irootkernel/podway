@@ -11,9 +11,10 @@ use uuid::Uuid;
 use crate::native;
 use crate::{
     ContainmentMetadataV1, DurableWorktreeIdentityV1, GitInvariantViolationV1, GitReadOperationV1,
-    GitResolverContractV1, GitResolverErrorV1, HashedLocalArtifactV1, LosslessPathV1,
-    ReadLocalFileV1, ValidatedWorktreeV1, WorkspaceIdentityStateV1, WorkspaceUuidVerificationV1,
-    WorktreeMoveMetadataV1, WorktreeRepairMetadataV1, WorktreeRootsV1, WorktreeSelectorV1,
+    GitResolverContractV1, GitResolverErrorV1, HashedLocalArtifactV1, LocalPathPresenceV1,
+    LosslessPathV1, ReadLocalFileV1, ValidatedWorktreeV1, WorkspaceIdentityStateV1,
+    WorkspaceUuidVerificationV1, WorktreeMoveMetadataV1, WorktreeRepairMetadataV1, WorktreeRootsV1,
+    WorktreeSelectorV1,
 };
 
 /// A zero-configuration, read-only resolver for supported native Unix Git worktrees.
@@ -55,6 +56,21 @@ impl NativeGitResolverV1 {
     /// Creates a resolver that performs no process execution or filesystem mutation.
     pub const fn new() -> Self {
         Self
+    }
+
+    /// Observes whether one canonical local path currently exists without following a symlink.
+    pub fn observe_local_path(
+        &self,
+        path: &LosslessPathV1,
+    ) -> Result<LocalPathPresenceV1, GitResolverErrorV1> {
+        let path = native::decode_lossless_path(path)?;
+        native::path_is_missing(&path, GitReadOperationV1::CanonicalizePath).map(|missing| {
+            if missing {
+                LocalPathPresenceV1::Missing
+            } else {
+                LocalPathPresenceV1::Present
+            }
+        })
     }
 
     /// Hashes a stable regular artifact strictly beneath a freshly revalidated worktree root.

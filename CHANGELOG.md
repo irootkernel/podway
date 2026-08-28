@@ -8,6 +8,10 @@ This file records concise shipped outcomes and the planned next stable release.
 
 - Replace single-release candidate notes with this cumulative changelog and ship it in distribution archives.
 
+### Fixed
+
+- Prune only conclusively missing exact workspace registry generations while retaining ambiguous recovery failures.
+
 ## v0.2.6 - 2026-08-26
 
 ### Added

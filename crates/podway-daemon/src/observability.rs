@@ -69,6 +69,7 @@ pub enum EventOperationV1 {
     HandlerJoin,
     ConnectionSetup,
     ResponseWrite,
+    RegistryEntryPrune,
 }
 impl EventOperationV1 {
     const fn name(self) -> &'static str {
@@ -93,6 +94,7 @@ impl EventOperationV1 {
             Self::HandlerJoin => "handler_join",
             Self::ConnectionSetup => "connection_setup",
             Self::ResponseWrite => "response_write",
+            Self::RegistryEntryPrune => "registry_entry_prune",
         }
     }
 }
