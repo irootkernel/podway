@@ -20,7 +20,7 @@ use sha2::{Digest, Sha256};
 use crate::{
     DiagnosticPathDisplayV1, GitInvariantViolationV1, GitReadOperationV1,
     GitRepresentationProblemV1, GitResolverErrorV1, LosslessPathV1,
-    MAX_SELECTOR_COMPONENT_BYTES_V1, WorktreeKindV1,
+    MAX_SELECTOR_COMPONENT_BYTES_V1, ValidatedWorktreeV1, WorktreeKindV1,
 };
 use podway_core::Sha256Digest;
 
@@ -2108,6 +2108,43 @@ pub(crate) fn validate_workspace_layout_root(
     if &actual != expected_fingerprint {
         return Err(metadata_changed(
             GitInvariantViolationV1::MetadataChangedDuringWorkspaceLayout,
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_open_worktree_root(
+    directory: &File,
+    worktree: &ValidatedWorktreeV1,
+) -> Result<(), GitResolverErrorV1> {
+    let root_bytes = worktree
+        .roots()
+        .worktree_root()
+        .decode_path_bytes()
+        .map_err(GitResolverErrorV1::Selector)?;
+    let path = PathBuf::from(OsString::from_vec(root_bytes));
+    let opened = OpenedDirectory::from_file(
+        directory
+            .try_clone()
+            .map_err(|error| map_io(&path, GitReadOperationV1::ReadGitDirectory, error))?,
+        path,
+        GitReadOperationV1::ReadGitDirectory,
+    )?;
+    let expected = worktree
+        .identity()
+        .root_directory_fingerprint()
+        .ok_or_else(|| {
+            metadata_changed(GitInvariantViolationV1::MetadataChangedDuringResolution)
+        })?;
+    let actual = fingerprint_directory_with_invariant(
+        &opened,
+        b"worktree-root",
+        worktree.kind(),
+        GitInvariantViolationV1::MetadataChangedDuringResolution,
+    )?;
+    if &actual != expected {
+        return Err(metadata_changed(
+            GitInvariantViolationV1::MetadataChangedDuringResolution,
         ));
     }
     Ok(())

@@ -72,6 +72,8 @@ mod int_v2ref_analysis_paths;
 mod int_v2rel002_maximum_next;
 #[path = "int_v2ret003_registry_pruning.rs"]
 mod int_v2ret003_registry_pruning;
+#[path = "int_v2ret004_workspace_removal.rs"]
+mod int_v2ret004_workspace_removal;
 #[path = "int_v2run001_start.rs"]
 mod int_v2run001_start;
 #[path = "int_v2run002_views.rs"]

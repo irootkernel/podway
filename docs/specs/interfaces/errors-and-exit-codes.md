@@ -21,8 +21,8 @@ request returns
 `UNSUPPORTED_V2_CAPABILITY`; a malformed request returns `REQUEST_INVALID`; and
 a route absent from the registry retains ordinary unknown-command or usage
 behavior. Manifest registration alone does not imply executable capability.
-`workspace.remove` follows this reserved boundary until V2RET-004. Its eventual
-runtime uses the existing `WORKSPACE_PATH_UNSAFE`, `WORKSPACE_UUID_MISMATCH`,
+`workspace.remove` is executable and uses the existing
+`WORKSPACE_PATH_UNSAFE`, `WORKSPACE_UUID_MISMATCH`,
 `WORKSPACE_MAINTENANCE`, and `WORKTREE_GONE` families rather than introducing a
 parallel removal-specific error taxonomy.
 

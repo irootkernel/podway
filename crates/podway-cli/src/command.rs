@@ -658,6 +658,10 @@ enum DaemonCommand {
 enum WorkspaceCommand {
     Show,
     Repair,
+    Remove {
+        #[arg(long, required = true, action = ArgAction::SetTrue)]
+        force: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -711,6 +715,9 @@ impl Command {
             Self::Workspace {
                 command: WorkspaceCommand::Repair,
             } => Some("workspace.repair"),
+            Self::Workspace {
+                command: WorkspaceCommand::Remove { .. },
+            } => Some("workspace.remove"),
             Self::Start(args)
                 if args.on_existing.is_some()
                     || args.auto_archive_terminal
@@ -935,6 +942,9 @@ impl Command {
                 | Self::Disposition { .. }
                 | Self::Archive { .. }
                 | Self::Reset(_)
+                | Self::Workspace {
+                    command: WorkspaceCommand::Remove { .. },
+                }
                 | Self::Check { .. }
                 | Self::Uncheck { .. }
                 | Self::Set(_)
@@ -988,6 +998,9 @@ impl Command {
                 !args.dry_run && matches!(args.on_existing, Some(ExistingSessionPolicy::Delete))
             }
             Self::Reset(args) => !args.dry_run && (args.all || args.progress_summary.is_some()),
+            Self::Workspace {
+                command: WorkspaceCommand::Remove { .. },
+            } => true,
             Self::Archive {
                 command: Some(ArchiveCommand::Purge { .. }),
             } => true,
@@ -1688,7 +1701,11 @@ fn parse_failure_command_context_from_matches(
         "doctor" => ParseFailureCommandContext::new("workspace.doctor", false),
         "workspace" => nested_parse_failure_context(
             matches,
-            &[("show", "workspace.show"), ("repair", "workspace.repair")],
+            &[
+                ("show", "workspace.show"),
+                ("repair", "workspace.repair"),
+                ("remove", "workspace.remove"),
+            ],
         )?,
         "start" => ParseFailureCommandContext::new(
             if matches.contains_id("on_existing") {
@@ -1849,9 +1866,16 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
     {
         return execute_start_dry_run(&cli);
     }
-    confirm_if_required(&cli, wire_name)?;
-
-    let target = workspace_target(cli.worktree.take())?;
+    let mut target = workspace_target(cli.worktree.take())?;
+    if matches!(
+        cli.command,
+        Command::Workspace {
+            command: WorkspaceCommand::Remove { .. }
+        }
+    ) {
+        target = workspace_removal_target(target)?;
+    }
+    confirm_if_required(&cli, wire_name, &target)?;
     let wait_timeout_ms = cli.timeout.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS);
     let explicit = ExplicitPreconditions::parse(&cli)?;
     apply_archive_purge_revision(&mut cli.command, &explicit)?;
@@ -2022,8 +2046,15 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
         }
     }
 
-    let reset_all_workspace_id =
-        if matches!(&cli.command, Command::Reset(ResetArgs { all: true, .. })) {
+    let destructive_workspace_id =
+        if matches!(&cli.command, Command::Reset(ResetArgs { all: true, .. }))
+            || matches!(
+                &cli.command,
+                Command::Workspace {
+                    command: WorkspaceCommand::Remove { .. }
+                }
+            )
+        {
             let status_request = build_request(
                 "session.status",
                 &target,
@@ -2041,7 +2072,13 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
                             .transport_workspace_id,
                     ),
                 ),
-                ResponseEnvelopeV2::Error(error) if reset_probe_can_recover(&error) => {
+                ResponseEnvelopeV2::Error(error)
+                    if reset_probe_can_recover(&error)
+                        || matches!(
+                            error.code().as_str(),
+                            "WORKSPACE_NOT_INITIALIZED" | "WORKSPACE_MAINTENANCE"
+                        ) =>
+                {
                     explicit.workspace_id.clone()
                 }
                 ResponseEnvelopeV2::Error(error) => {
@@ -2104,7 +2141,9 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
 
     let (operation, mut payload) =
         daemon_payload(&mut cli.command, cli.idempotency_key.as_deref())?;
-    if let Some(workspace_id) = &reset_all_workspace_id {
+    if matches!(&cli.command, Command::Reset(ResetArgs { all: true, .. }))
+        && let Some(workspace_id) = &destructive_workspace_id
+    {
         payload.insert(
             "expected_workspace_uuid".to_owned(),
             Value::String(workspace_id.as_str().to_owned()),
@@ -2115,7 +2154,7 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
         &target,
         RequestSpec {
             operation,
-            expected_uuid: reset_all_workspace_id.or_else(|| explicit.workspace_id.clone()),
+            expected_uuid: destructive_workspace_id.or_else(|| explicit.workspace_id.clone()),
             idempotency_key: requires_idempotency_key(operation)
                 .then(|| mutation_key(cli.idempotency_key))
                 .transpose()?,
@@ -6066,6 +6105,18 @@ fn validate_daemon_flags(cli: &Cli) -> Result<(), LocalFailure> {
     }
     if matches!(
         command,
+        Command::Workspace {
+            command: WorkspaceCommand::Remove { .. }
+        }
+    ) && (cli.json || !io::stdin().is_terminal())
+        && (!cli.yes || explicit.workspace_id.is_none())
+    {
+        return Err(LocalFailure::request_invalid(
+            "non-interactive workspace removal requires --yes and --if-workspace-uuid",
+        ));
+    }
+    if matches!(
+        command,
         Command::Next(ReadArgs { verbose: true, .. })
             | Command::Observe(ReadArgs { verbose: true, .. })
     ) {
@@ -6335,7 +6386,11 @@ fn parse_criteria(criteria: &[String]) -> Result<Vec<GoalCriterionV2>, LocalFail
         .collect()
 }
 
-fn confirm_if_required(cli: &Cli, command: &str) -> Result<(), LocalFailure> {
+fn confirm_if_required(
+    cli: &Cli,
+    command: &str,
+    target: &WorkspaceTarget,
+) -> Result<(), LocalFailure> {
     if matches!(cli.command, Command::Start(_)) {
         return Ok(());
     }
@@ -6344,6 +6399,33 @@ fn confirm_if_required(cli: &Cli, command: &str) -> Result<(), LocalFailure> {
     }
     if cli.json || !io::stdin().is_terminal() {
         return Err(LocalFailure::confirmation_required(command));
+    }
+    if matches!(
+        cli.command,
+        Command::Workspace {
+            command: WorkspaceCommand::Remove { .. }
+        }
+    ) {
+        let exact_path = workspace_removal_confirmation_path(target)?;
+        let mut stdout = io::stdout().lock();
+        writeln!(stdout, "Resolved worktree root: {exact_path}")
+            .and_then(|()| {
+                write!(
+                    stdout,
+                    "Type that exact path to remove all .podway content: "
+                )
+            })
+            .and_then(|()| stdout.flush())
+            .map_err(|_| LocalFailure::response_invalid("cannot write confirmation prompt"))?;
+        let mut answer = String::new();
+        io::stdin()
+            .read_line(&mut answer)
+            .map_err(|_| LocalFailure::daemon_unavailable(command))?;
+        return if answer.trim_end_matches(['\r', '\n']) == exact_path {
+            Ok(())
+        } else {
+            Err(LocalFailure::confirmation_required(command))
+        };
     }
     let mut stdout = io::stdout().lock();
     write!(stdout, "This operation is destructive. Continue? [y/N] ")
@@ -6360,6 +6442,14 @@ fn confirm_if_required(cli: &Cli, command: &str) -> Result<(), LocalFailure> {
     } else {
         Err(LocalFailure::confirmation_required(command))
     }
+}
+
+fn workspace_removal_confirmation_path(target: &WorkspaceTarget) -> Result<&str, LocalFailure> {
+    target.path.to_str().ok_or_else(|| {
+        LocalFailure::request_invalid(
+            "interactive removal cannot confirm a non-UTF-8 worktree path; use --yes and --if-workspace-uuid",
+        )
+    })
 }
 fn confirm_daemon_uninstall(cli: &Cli) -> Result<(), LocalFailure> {
     if cli.yes {
@@ -6394,6 +6484,9 @@ fn daemon_payload(
         Command::Workspace {
             command: WorkspaceCommand::Repair,
         }
+        | Command::Workspace {
+            command: WorkspaceCommand::Remove { .. },
+        }
         | Command::Job {
             command: JobCommand::Cancel { .. },
         }
@@ -6420,6 +6513,12 @@ fn daemon_payload(
         | Command::Workspace {
             command: WorkspaceCommand::Show,
         } => {}
+        Command::Workspace {
+            command: WorkspaceCommand::Remove { force },
+        } => {
+            payload.insert("force".to_owned(), Value::Bool(*force));
+            payload.insert("confirmed".to_owned(), Value::Bool(true));
+        }
         Command::Doctor { deep } => {
             payload.insert("deep".to_owned(), Value::Bool(*deep));
         }
@@ -6944,6 +7043,36 @@ fn workspace_target(worktree: Option<PathBuf>) -> Result<WorkspaceTarget, LocalF
         path_bytes,
         display,
     })
+}
+
+fn workspace_removal_target(target: WorkspaceTarget) -> Result<WorkspaceTarget, LocalFailure> {
+    let mut candidate = target.path.as_path();
+    for _ in 0..128 {
+        let marker = candidate.join(".git");
+        match fs::symlink_metadata(&marker) {
+            Ok(metadata) if metadata.file_type().is_dir() || metadata.file_type().is_file() => {
+                return workspace_target(Some(candidate.to_path_buf()));
+            }
+            Ok(_) => {
+                return Err(LocalFailure::request_invalid(
+                    "worktree Git marker is unsafe",
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(_) => {
+                return Err(LocalFailure::request_invalid(
+                    "worktree Git marker cannot be inspected",
+                ));
+            }
+        }
+        let Some(parent) = candidate.parent() else {
+            break;
+        };
+        candidate = parent;
+    }
+    Err(LocalFailure::request_invalid(
+        "workspace removal requires an existing Git worktree",
+    ))
 }
 
 fn daemon_client(
@@ -7541,6 +7670,27 @@ fn render_human_output_v2(
             ),
         )?;
     }
+    if output.result().get("schema").and_then(Value::as_str)
+        == Some("podway.workspace-removal-result/v1")
+    {
+        write_text_line(
+            stdout,
+            format_args!(
+                "Podway workspace state was removed from {}. The Git worktree was preserved; tracked .podway paths may now appear deleted.",
+                output
+                    .result()
+                    .get("worktree_root")
+                    .and_then(Value::as_str)
+                    .unwrap_or("the selected worktree")
+            ),
+        )?;
+        write_text_line(
+            stdout,
+            format_args!(
+                "Daemon logs remain outside the worktree. Remove them explicitly with podway daemon uninstall --purge-logs --yes."
+            ),
+        )?;
+    }
     let result = serde_json::to_string_pretty(output.result())
         .map_err(|_| LocalFailure::response_invalid("cannot render Procedure v2 result"))?;
     write_text_line(stdout, format_args!("result: {result}"))?;
@@ -7881,6 +8031,9 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
         "workspace.repair" => {
             "Usage:\n  podway workspace repair\n\nExample:\n  podway workspace repair"
         }
+        "workspace.remove" => {
+            "Usage:\n  podway [--worktree <path>] workspace remove --force [--if-workspace-uuid <uuid>] [--yes]\n\nInteractive use prints the resolved absolute worktree root and requires that exact path as confirmation. JSON and non-interactive use require --yes and --if-workspace-uuid. Success removes all .podway content, including tracked files, while preserving the Git worktree. Daemon logs remain outside the worktree; remove them explicitly with podway daemon uninstall --purge-logs --yes."
+        }
         "session.start" => {
             "Usage:\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> [--on-existing <preserve|delete>] [--supersede-reason <text>] [--actor <text>] [--progress-summary <text>] [--dry-run]\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'implement feature'\n  podway start --preset sw-dev-v2 --task 'start successor' --on-existing preserve --supersede-reason 'The successor has priority.'\n  podway start --preset sw-dev-v2 --task 'replace running work' --on-existing delete --progress-summary 'The current progress was reviewed.' --yes\n  podway start --preset bug-fix-v2 --task 'preview deletion' --dry-run --on-existing delete\n\nHuman TTY mode interviews when a nonterminal session already exists; Enter continues it and creates nothing. Noninteractive callers must choose preserve or delete. Disposed terminal sessions archive automatically. A successful start creates a prepared session at revision 0 without a cursor, attempt, or goal."
         }
@@ -8004,7 +8157,7 @@ mod tests {
         ffi::OsString,
         fs::{self, File},
         io::{self, Seek, SeekFrom, Write},
-        os::unix::fs::PermissionsExt,
+        os::unix::{ffi::OsStringExt, fs::PermissionsExt},
         path::PathBuf,
         sync::atomic::{AtomicU64, Ordering},
         time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -8013,7 +8166,7 @@ mod tests {
     use super::{
         Cli, Command, CommandNameV1, DaemonCommand, LocalEnvelopeClock, LocalFailure,
         OutputEnvelopeInputV3, OutputEnvelopeV3, ParseFailureCommandContext, RequestIdV1,
-        ResponseEnvelopeV2, Rfc3339MillisV1, RunResult, build_identity_v1,
+        ResponseEnvelopeV2, Rfc3339MillisV1, RunResult, WorkspaceTarget, build_identity_v1,
         contains_check_result_projection_v1, daemon_payload, local_generated_at, local_result,
         map_service_error, parse_failure_command_context, parse_timeout_millis,
         probe_daemon_identity, probe_daemon_identity_with_runner,
@@ -8021,11 +8174,78 @@ mod tests {
         resolve_daemon_executable, resolve_implicit_daemon_executable_from,
         resolve_installed_service_endpoint, service_outcome_result, service_status_projection,
         service_status_result, stream_log_follow_update, system_service_clock,
-        validate_command_shape, validate_daemon_flags,
+        validate_command_shape, validate_daemon_flags, workspace_removal_confirmation_path,
     };
     use clap::{Parser, error::ErrorKind};
     use serde_json::json;
     static VERSION_PROBE_SCRIPT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn v2ret004_workspace_remove_requires_automation_fences_and_builds_control_payload() {
+        let workspace_uuid = "00000000-0000-4000-8000-000000040004";
+        let mut command = Cli::try_parse_from([
+            "podway",
+            "--json",
+            "--yes",
+            "--if-workspace-uuid",
+            workspace_uuid,
+            "workspace",
+            "remove",
+            "--force",
+        ])
+        .unwrap();
+        assert!(validate_daemon_flags(&command).is_ok());
+        assert_eq!(command.command.daemon_wire_name(), Some("workspace.remove"));
+        assert!(command.command.is_destructive());
+        let (operation, payload) = daemon_payload(&mut command.command, None).unwrap();
+        assert_eq!(operation, podway_protocol::OperationV1::Control);
+        assert_eq!(
+            payload,
+            json!({"force": true, "confirmed": true})
+                .as_object()
+                .unwrap()
+                .clone()
+        );
+
+        for arguments in [
+            vec![
+                "podway",
+                "--json",
+                "--if-workspace-uuid",
+                workspace_uuid,
+                "workspace",
+                "remove",
+                "--force",
+            ],
+            vec![
+                "podway",
+                "--json",
+                "--yes",
+                "workspace",
+                "remove",
+                "--force",
+            ],
+        ] {
+            let command = Cli::try_parse_from(arguments).unwrap();
+            assert!(validate_daemon_flags(&command).is_err());
+        }
+        assert!(
+            super::help_text(Some("workspace.remove"))
+                .unwrap()
+                .contains("preserving the Git worktree")
+        );
+    }
+
+    #[test]
+    fn v2ret004_interactive_confirmation_rejects_non_utf8_worktree_paths() {
+        let path = PathBuf::from(OsString::from_vec(b"/tmp/podway-\xff".to_vec()));
+        let target = WorkspaceTarget {
+            path,
+            path_bytes: b"/tmp/podway-\xff".to_vec(),
+            display: "/tmp/podway-�".to_owned(),
+        };
+        assert!(workspace_removal_confirmation_path(&target).is_err());
+    }
 
     #[test]
     fn v2ast005_human_rendering_detects_structurally_bound_check_results() {

@@ -774,7 +774,7 @@ fn all_registered_unserved_v2_mutations_cross_the_socket_as_closed_errors() {
 }
 
 #[test]
-fn registered_workspace_removal_is_closed_but_not_executable() {
+fn fallback_mutation_worker_rejects_workspace_removal_without_an_executor() {
     let (mut client, server) =
         UnixStream::pair().expect("Unix stream fixture pair must be created");
     let calls = Arc::new(AtomicUsize::new(0));
@@ -791,7 +791,7 @@ fn registered_workspace_removal_is_closed_but_not_executable() {
 
     send_and_half_close(&mut client, &request_frame(&request));
     let ResponseEnvelopeV2::Error(error) = read_response_v2(&mut client) else {
-        panic!("reserved workspace removal must return a compatibility error");
+        panic!("a fallback worker must return a compatibility error");
     };
     assert_eq!(error.code().as_str(), "UNSUPPORTED_V2_CAPABILITY");
     assert_eq!(error.details()["capability"], "workspace.remove");

@@ -219,7 +219,7 @@ commands:
   session_mutation: false
   destructive_confirmation: false
 - name: workspace.remove
-  availability: reserved_contract
+  availability: executable
   cli:
   - workspace
   - remove

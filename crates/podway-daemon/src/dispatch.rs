@@ -9,7 +9,7 @@ use podway_protocol::{
     ErrorCodeV1, ErrorEnvelopeInputV1, ErrorEnvelopeV1, ExitCodeV1, IdempotencyKeyV1, JobOutputV1,
     JobStateV1, OperationV1, OutputEnvelopeInputV3, OutputEnvelopeV3, QueryWaitV1,
     RequestEnvelopeV1, ResponseEnvelopeV2, Rfc3339MillisV1, SessionOutputV1, SliceCommandV1,
-    SliceRequestV1, WorkspaceOutputV1, WorktreeSelectorWireV1,
+    SliceRequestV1, WorkspaceOutputV1, WorkspaceRemoveRequestV1, WorktreeSelectorWireV1,
 };
 use serde_json::{Map, Value, json};
 
@@ -1803,6 +1803,17 @@ pub trait MutationAdmissionWorkerV1<Workspace>: Send + Sync {
         response_request_id: &podway_protocol::RequestIdV1,
     ) -> Result<(WorkspaceOutputV1, MutationDispatchOutcomeV1), DispatchFailureV1>;
 
+    /// Completes one synchronous, marker-backed workspace removal without a durable job.
+    fn remove_workspace(
+        &self,
+        _request: &RequestEnvelopeV1,
+        _removal: &WorkspaceRemoveRequestV1,
+    ) -> Result<Map<String, Value>, DispatchFailureV1> {
+        Err(DispatchFailureV1::new(
+            DispatchFailureKindV1::UnsupportedV2Capability,
+        ))
+    }
+
     /// Procedure v2 runtimes plug into this seam only after the active admission policy succeeds.
     fn dispatch_procedure_v2(
         &self,
@@ -2622,8 +2633,28 @@ where
                 procedure_independent_response_v1(self.error_response(request, failure, false))
             });
         }
-        if matches!(daemon_request, DaemonRequestV1::WorkspaceRemove(_)) {
-            return self.unsupported_v2_capability_response(request, daemon_request);
+        if let DaemonRequestV1::WorkspaceRemove(removal) = daemon_request {
+            return match self.mutations.remove_workspace(request, removal) {
+                Ok(result) => OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
+                    request_id: request.request_id().clone(),
+                    command: request.command().clone(),
+                    generated_at: self.metadata.generated_at(),
+                    workspace: None,
+                    job: None,
+                    session: None,
+                    result,
+                    warnings: Vec::new(),
+                })
+                .map(ResponseEnvelopeV2::OutputV2)
+                .unwrap_or_else(|_| {
+                    self.error_response(
+                        request,
+                        DispatchFailureV1::new(DispatchFailureKindV1::Internal),
+                        false,
+                    )
+                }),
+                Err(failure) => self.error_response(request, failure, false),
+            };
         }
         let selector = match daemon_request {
             DaemonRequestV1::ProcedureV2Start(request) => request.selector(),

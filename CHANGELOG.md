@@ -4,6 +4,10 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ## v0.2.7 - Unreleased
 
+### Added
+
+- Add confirmed, marker-recoverable removal of one selected Podway workspace while preserving its Git worktree.
+
 ### Changed
 
 - Replace single-release candidate notes with this cumulative changelog and ship it in distribution archives.

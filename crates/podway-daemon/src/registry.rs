@@ -806,6 +806,29 @@ impl RegistryStoreV1 {
         result
     }
 
+    /// Compare-removes one exact UUID/root generation for admitted destructive maintenance.
+    pub(crate) fn remove_exact_generation(
+        &self,
+        workspace_uuid: &WorkspaceId,
+        exact_root: &ValidatedWorkspaceRootV1,
+    ) -> Result<ExactRegistryRemovalOutcomeV1, RegistryErrorV1> {
+        self.with_locked(|parent, current_uid| {
+            let mut registry = read_registry_v1(&self.registry_path, parent, current_uid)?;
+            let Ok(index) = registry
+                .workspaces
+                .binary_search_by(|entry| entry.workspace_uuid.cmp(workspace_uuid))
+            else {
+                return Ok(ExactRegistryRemovalOutcomeV1::AlreadyAbsent);
+            };
+            if registry.workspaces[index].last_known_root != *exact_root {
+                return Ok(ExactRegistryRemovalOutcomeV1::GenerationChanged);
+            }
+            let removed = registry.workspaces.remove(index);
+            persist_registry_v1(self, parent, current_uid, &registry)?;
+            Ok(ExactRegistryRemovalOutcomeV1::Removed(removed))
+        })
+    }
+
     fn with_locked<T>(
         &self,
         operation: impl FnOnce(&Path, u32) -> Result<T, RegistryErrorV1>,

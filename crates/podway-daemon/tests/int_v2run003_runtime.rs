@@ -275,7 +275,7 @@ fn request_with_options(
             | "job.lookup"
             | "job.status"
             | "job.wait" => OperationV1::Query,
-            "session.archive_purge" => OperationV1::Control,
+            "session.archive_purge" | "workspace.remove" => OperationV1::Control,
             _ => OperationV1::Mutate,
         }
     };
@@ -296,7 +296,9 @@ fn request_with_options(
     })
     .unwrap();
     let daemon = DaemonRequestV1::from_envelope(&envelope).unwrap();
-    if matches!(command, "session.begin" | "session.terminal_disposition") {
+    if command == "workspace.remove" {
+        assert!(matches!(daemon, DaemonRequestV1::WorkspaceRemove(_)));
+    } else if matches!(command, "session.begin" | "session.terminal_disposition") {
         assert!(matches!(daemon, DaemonRequestV1::ProcedureV2Mutation(_)));
     } else {
         let slice = SliceRequestV1::from_envelope(&envelope).unwrap();

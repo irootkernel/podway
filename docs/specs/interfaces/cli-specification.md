@@ -21,11 +21,12 @@ human-readable text or one JSON document. It never writes SQLite directly.
 The executable grammar is owned by the command catalog and clap definitions.
 Removed commands are not aliases and must fail argument parsing.
 
-The reserved `workspace remove` grammar is `podway [--worktree <path>] workspace
-remove --force [--if-workspace-uuid <uuid>] [--yes]`. It is contract-visible but
-not executable until its owning roadmap task lands. Human TTY use may omit
-`--yes` and must then confirm the resolved absolute worktree root exactly. JSON
-and non-TTY use require both `--yes` and `--if-workspace-uuid`.
+The executable `workspace remove` grammar is `podway [--worktree <path>]
+workspace remove --force [--if-workspace-uuid <uuid>] [--yes]`. Human TTY use
+may omit `--yes` and must then confirm the resolved absolute Git worktree root
+exactly. JSON and non-TTY use require both `--yes` and
+`--if-workspace-uuid`. Success removes the complete `.podway` tree but preserves
+the selected Git worktree; daemon logs remain outside the worktree.
 
 `daemon wait-ready [--timeout <duration>]` is a read-only service
 operation. Its default deadline is 120 seconds and its hard maximum is one hour.

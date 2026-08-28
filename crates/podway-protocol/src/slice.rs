@@ -1046,9 +1046,7 @@ pub struct ProcedureV2MutationRequestV1 {
     command: ProcedureV2MutationCommandV1,
 }
 
-/// One decoded reserved workspace-removal request.
-///
-/// This closed protocol shape does not by itself make the command executable.
+/// One decoded workspace-removal request.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkspaceRemoveRequestV1 {
@@ -1825,7 +1823,7 @@ impl TryFrom<&RequestEnvelopeV1> for SliceRequestV1 {
 }
 
 impl WorkspaceRemoveRequestV1 {
-    /// Decodes the complete closed removal payload without registering runtime execution.
+    /// Decodes the complete closed removal payload.
     pub fn from_envelope(envelope: &RequestEnvelopeV1) -> Result<Self, SliceErrorV1> {
         require_envelope(envelope, "workspace.remove", OperationV1::Control, false)?;
         require_no_preconditions(envelope.preconditions())?;

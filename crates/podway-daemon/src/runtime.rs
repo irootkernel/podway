@@ -801,6 +801,64 @@ fn recover_registered_workspaces(
                 continue;
             }
         };
+        match manager.discover_workspace_removal_marker(selector.clone()) {
+            Ok(Some(marker)) => {
+                let completion = manager
+                    .begin_workspace_removal(selector.clone(), Some(&workspace_uuid))
+                    .and_then(|transaction| {
+                        if transaction.existing_marker() != Some(&marker) {
+                            return Err(WorkspaceRuntimeErrorV1::WorkspaceRemovalConflict);
+                        }
+                        transaction.resume_marked()
+                    });
+                match completion {
+                    Ok(completion) => {
+                        emit_workspace_remove(
+                            observability,
+                            &workspace_uuid,
+                            Some(marker.response_request_id()),
+                            EventOutcomeV1::Succeeded,
+                        );
+                        outcomes.push(Some(WorkspaceRecoveryEntryV1::Pruned(
+                            PrunedWorkspaceReportV1::new(
+                                workspace_uuid,
+                                completion.registry_entry_removed,
+                            ),
+                        )));
+                        readiness.record_worktree_recovery(false);
+                    }
+                    Err(error) => {
+                        emit_workspace_remove(
+                            observability,
+                            &workspace_uuid,
+                            Some(marker.response_request_id()),
+                            EventOutcomeV1::Failed,
+                        );
+                        emit_runtime_failure(observability, &workspace_uuid, &error);
+                        outcomes.push(Some(WorkspaceRecoveryEntryV1::Unavailable(
+                            UnavailableWorkspaceReportV1::new(
+                                workspace_uuid,
+                                unavailable_reason_from_runtime_error(error),
+                            ),
+                        )));
+                        readiness.record_worktree_recovery(true);
+                    }
+                }
+                continue;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                emit_workspace_remove(observability, &workspace_uuid, None, EventOutcomeV1::Failed);
+                outcomes.push(Some(WorkspaceRecoveryEntryV1::Unavailable(
+                    UnavailableWorkspaceReportV1::new(
+                        workspace_uuid,
+                        unavailable_reason_from_runtime_error(error),
+                    ),
+                )));
+                readiness.record_worktree_recovery(true);
+                continue;
+            }
+        }
         let observation = WorkspaceRuntimeObservationV1::new(clock.now(), clock.generated_at());
         match manager.begin_reset_maintenance(selector.clone()) {
             Ok(transaction) => match transaction.discover_marker() {
@@ -957,6 +1015,22 @@ fn emit_registry_prune(
     }
 }
 
+fn emit_workspace_remove(
+    observability: &Option<ObservabilityEmitterV1>,
+    workspace_uuid: &WorkspaceId,
+    request_id: Option<&podway_protocol::RequestIdV1>,
+    outcome: EventOutcomeV1,
+) {
+    if let Some(observability) = observability {
+        let event = EventRecordV1::new(EventOperationV1::WorkspaceRemove, outcome)
+            .with_workspace_uuid(workspace_uuid);
+        observability.emit(match request_id {
+            Some(request_id) => event.with_request_id(request_id),
+            None => event,
+        });
+    }
+}
+
 fn selector_from_registry_entry(
     entry: &WorkspaceRegistryEntryV1,
 ) -> Result<WorktreeSelectorV1, WorkspaceRecoveryUnavailableReasonV1> {
@@ -984,6 +1058,8 @@ fn unavailable_reason_from_runtime_error(
             WorkspaceRecoveryUnavailableReasonV1::WorkspaceStateUnreadable
         }
         WorkspaceRuntimeErrorV1::MaintenanceInProgress
+        | WorkspaceRuntimeErrorV1::WorkspaceRemovalConflict
+        | WorkspaceRuntimeErrorV1::WorkspaceRemovalFilesystem(_)
         | WorkspaceRuntimeErrorV1::ResetAdmissionOutcomeUnknown { .. }
         | WorkspaceRuntimeErrorV1::ResetAdmitted { .. }
         | WorkspaceRuntimeErrorV1::ResetSchedulerRetirement

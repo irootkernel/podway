@@ -21,10 +21,10 @@ use podway_config::{
 use podway_core::{DomainResult, UnixMillis, WorkspaceId};
 use podway_git::{
     DiagnosticPathDisplayV1, GitResolveErrorV1, GitResolverContractV1, LocalPathPresenceV1,
-    LosslessPathV1, NativeGitResolverV1, WORKTREE_SELECTOR_VERSION_V1, WorkspaceLayoutErrorV1,
-    WorkspaceLayoutInitializerV1, WorktreeSelectorV1,
+    LosslessPathV1, NativeGitResolverV1, ValidatedWorktreeV1, WORKTREE_SELECTOR_VERSION_V1,
+    WorkspaceLayoutErrorV1, WorkspaceLayoutInitializerV1, WorktreeSelectorV1,
 };
-use podway_protocol::Rfc3339MillisV1;
+use podway_protocol::{RequestIdV1, Rfc3339MillisV1};
 use podway_service::ServiceRuntimePathsV1;
 use podway_store::{
     AdmitOutcomeV1, AdmitRequestV1, CancelOutcomeV1, CanonicalRequestDigestV1, ClaimTokenV1,
@@ -51,9 +51,10 @@ use crate::{
     workspace::{
         ResetMaintenanceFilesystemTokenV1, ResetMarkerPublicationErrorV1, ResetMarkerV1,
         ResetWorkspaceResolutionV1, ResolvedWorkspaceV1, SqliteWorkspaceBindingInspectorV1,
-        ValidatedRuntimeDirectoryErrorV1, ValidatedRuntimeDirectoryV1,
-        WorkspaceBindingInspectionErrorV1, WorkspaceBindingInspectorV1, WorkspaceGitObservationV1,
-        WorkspaceResolutionErrorV1, WorkspaceResolverV1,
+        ValidatedPodwayRemovalDirectoryV1, ValidatedRuntimeDirectoryErrorV1,
+        ValidatedRuntimeDirectoryV1, WorkspaceBindingInspectionErrorV1,
+        WorkspaceBindingInspectorV1, WorkspaceGitObservationV1, WorkspaceRemovalFilesystemErrorV1,
+        WorkspaceRemovalMarkerV1, WorkspaceResolutionErrorV1, WorkspaceResolverV1,
     },
 };
 
@@ -939,6 +940,8 @@ pub enum WorkspaceRuntimeErrorV1 {
         runtime_directory_path: PathBuf,
     },
     RuntimeDirectory(ValidatedRuntimeDirectoryErrorV1),
+    WorkspaceRemovalFilesystem(WorkspaceRemovalFilesystemErrorV1),
+    WorkspaceRemovalConflict,
     ResetAdmissionOutcomeUnknown {
         idempotency_key: IdempotencyKeyV1,
         source: ValidatedRuntimeDirectoryErrorV1,
@@ -1017,6 +1020,12 @@ impl fmt::Display for WorkspaceRuntimeErrorV1 {
             Self::RuntimeDirectory(_) => {
                 formatter.write_str("validated reset runtime-directory operation failed")
             }
+            Self::WorkspaceRemovalFilesystem(_) => {
+                formatter.write_str("validated workspace removal filesystem operation failed")
+            }
+            Self::WorkspaceRemovalConflict => {
+                formatter.write_str("workspace removal identity or recovery state conflicts")
+            }
             Self::ResetAdmissionOutcomeUnknown { .. } => {
                 formatter.write_str("reset marker publication outcome is unknown")
             }
@@ -1057,6 +1066,7 @@ impl Error for WorkspaceRuntimeErrorV1 {
             Self::Store(source) => Some(source),
             Self::Registry(source) => Some(source),
             Self::RuntimeDirectory(source) => Some(source),
+            Self::WorkspaceRemovalFilesystem(source) => Some(source),
             Self::ResetAdmissionOutcomeUnknown { source, .. } => Some(source),
             Self::ResetAdmitted { source, .. } => Some(source.as_ref()),
             Self::ConfigRead { source, .. } => Some(source),
@@ -1070,6 +1080,7 @@ impl Error for WorkspaceRuntimeErrorV1 {
             | Self::RebindEvidenceMismatch { .. }
             | Self::RuntimeDirectoryMissing { .. }
             | Self::RuntimePathMismatch { .. }
+            | Self::WorkspaceRemovalConflict
             | Self::RuntimePathsUnsupportedPlatform
             | Self::MaintenanceInProgress
             | Self::ResetMarkerConflict
@@ -1504,6 +1515,16 @@ impl ResetSourceAuthorityV1 {
     fn matches_reset(&self, reset: &ResetWorkspaceResolutionV1) -> bool {
         same_git_root_evidence(&self.worktree, reset.worktree())
     }
+
+    fn same_removal_authority(&self, current: &Self) -> bool {
+        same_git_root_evidence(&self.worktree, &current.worktree)
+            && self.database_path == current.database_path
+            && self.registry_previous_workspace_uuid == current.registry_previous_workspace_uuid
+            && self.registry_root_workspace_uuids == current.registry_root_workspace_uuids
+            && self.routing_identity == current.routing_identity
+            && self.persisted_identity == current.persisted_identity
+            && self.store_inspection == current.store_inspection
+    }
 }
 /// One manager-owned, exclusive reset transaction. Its lease begins before source inspection and
 /// remains held through marker handling, retirement verification, destructive maintenance, and
@@ -1635,6 +1656,241 @@ impl WorkspaceResetMaintenanceV1<'_> {
                 filesystem_authority: &self.filesystem_authority,
             })
             .map_err(|error| error.with_reset_admission(&marker))
+    }
+}
+
+enum WorkspaceRemovalStateV1 {
+    Registered(Box<ResetSourceAuthorityV1>),
+    Marked(WorkspaceRemovalMarkerV1),
+    AlreadyAbsent {
+        residual: Option<ValidatedPodwayRemovalDirectoryV1>,
+    },
+}
+
+/// One exclusive, exact-worktree workspace-removal transaction.
+pub(crate) struct WorkspaceRemovalMaintenanceV1<'a> {
+    manager: &'a WorkspaceRuntimeManagerV1,
+    selector: WorktreeSelectorV1,
+    reset: ResetWorkspaceResolutionV1,
+    maintenance_key: WorkspaceMaintenanceKeyV1,
+    _lease: WorkspaceMaintenanceLeaseV1,
+    state: WorkspaceRemovalStateV1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WorkspaceRemovalCompletionV1 {
+    pub(crate) worktree_root: String,
+    pub(crate) workspace_uuid: Option<WorkspaceId>,
+    pub(crate) registry_entry_removed: bool,
+    pub(crate) podway_directory_removed: bool,
+    pub(crate) already_absent: bool,
+}
+
+impl WorkspaceRemovalMaintenanceV1<'_> {
+    pub(crate) fn workspace_uuid(&self) -> Option<&WorkspaceId> {
+        match &self.state {
+            WorkspaceRemovalStateV1::Registered(authority) => {
+                Some(authority.registry_previous_workspace_uuid())
+            }
+            WorkspaceRemovalStateV1::Marked(marker) => Some(marker.workspace_uuid()),
+            WorkspaceRemovalStateV1::AlreadyAbsent { .. } => None,
+        }
+    }
+
+    pub(crate) fn active_scheduler(
+        &self,
+    ) -> Option<Arc<WorkspaceSchedulerV1<WorkspaceSchedulerContextV1>>> {
+        match &self.state {
+            WorkspaceRemovalStateV1::Registered(authority) => self
+                .manager
+                .active_old_scheduler_for_reset_authority(authority),
+            WorkspaceRemovalStateV1::Marked(marker) => self.manager.active_old_scheduler_for_reset(
+                &self.reset.target_identity(marker.workspace_uuid().clone()),
+            ),
+            WorkspaceRemovalStateV1::AlreadyAbsent { .. } => None,
+        }
+    }
+
+    pub(crate) fn existing_marker(&self) -> Option<&WorkspaceRemovalMarkerV1> {
+        match &self.state {
+            WorkspaceRemovalStateV1::Marked(marker) => Some(marker),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn complete(
+        &self,
+        request_digest: &CanonicalRequestDigestV1,
+        request_id: &RequestIdV1,
+        created_at: Rfc3339MillisV1,
+    ) -> Result<WorkspaceRemovalCompletionV1, WorkspaceRuntimeErrorV1> {
+        let worktree_root = self
+            .reset
+            .worktree()
+            .roots()
+            .worktree_root()
+            .display()
+            .as_str()
+            .to_owned();
+        match &self.state {
+            WorkspaceRemovalStateV1::AlreadyAbsent { residual } => {
+                let podway_directory_removed = match residual {
+                    Some(directory) => {
+                        directory
+                            .remove_empty_residual()
+                            .map_err(WorkspaceRuntimeErrorV1::WorkspaceRemovalFilesystem)?;
+                        true
+                    }
+                    None => false,
+                };
+                Ok(WorkspaceRemovalCompletionV1 {
+                    worktree_root,
+                    workspace_uuid: None,
+                    registry_entry_removed: false,
+                    podway_directory_removed,
+                    already_absent: true,
+                })
+            }
+            WorkspaceRemovalStateV1::Registered(authority) => {
+                self.revalidate_worktree()?;
+                if self
+                    .manager
+                    .maintenance
+                    .has_unclosed_generation(&self.maintenance_key)
+                {
+                    return Err(WorkspaceRuntimeErrorV1::ResetSchedulerRetirement);
+                }
+                let current_authority = self
+                    .manager
+                    .registered_reset_source_authority(self.selector.clone())?;
+                if !authority.same_removal_authority(&current_authority)
+                    || !current_authority.matches_reset(&self.reset)
+                {
+                    return Err(WorkspaceRuntimeErrorV1::WorkspaceRemovalConflict);
+                }
+                let directory = ValidatedPodwayRemovalDirectoryV1::open(self.reset.worktree())
+                    .map_err(WorkspaceRuntimeErrorV1::WorkspaceRemovalFilesystem)?
+                    .ok_or(WorkspaceRuntimeErrorV1::WorkspaceRemovalConflict)?;
+                let marker = WorkspaceRemovalMarkerV1::new(
+                    request_id.clone(),
+                    request_digest.clone(),
+                    request_id.clone(),
+                    authority.registry_previous_workspace_uuid().clone(),
+                    self.reset.worktree(),
+                    created_at,
+                );
+                directory
+                    .publish_marker(&marker)
+                    .map_err(WorkspaceRuntimeErrorV1::WorkspaceRemovalFilesystem)?;
+                let removed = self
+                    .manager
+                    .registry
+                    .remove_exact_generation(
+                        authority.registry_previous_workspace_uuid(),
+                        self.reset.workspace_root(),
+                    )
+                    .map_err(WorkspaceRuntimeErrorV1::Registry)?;
+                if !matches!(removed, ExactRegistryRemovalOutcomeV1::Removed(_)) {
+                    return Err(WorkspaceRuntimeErrorV1::WorkspaceRemovalConflict);
+                }
+                directory
+                    .remove_all_with_marker_last(&marker)
+                    .map_err(WorkspaceRuntimeErrorV1::WorkspaceRemovalFilesystem)?;
+                Ok(WorkspaceRemovalCompletionV1 {
+                    worktree_root,
+                    workspace_uuid: Some(marker.workspace_uuid().clone()),
+                    registry_entry_removed: true,
+                    podway_directory_removed: true,
+                    already_absent: false,
+                })
+            }
+            WorkspaceRemovalStateV1::Marked(marker) => {
+                if marker.request_digest() != request_digest {
+                    return Err(WorkspaceRuntimeErrorV1::WorkspaceRemovalConflict);
+                }
+                self.complete_marked(marker, worktree_root)
+            }
+        }
+    }
+
+    pub(crate) fn resume_marked(
+        &self,
+    ) -> Result<WorkspaceRemovalCompletionV1, WorkspaceRuntimeErrorV1> {
+        let WorkspaceRemovalStateV1::Marked(marker) = &self.state else {
+            return Err(WorkspaceRuntimeErrorV1::WorkspaceRemovalConflict);
+        };
+        self.complete_marked(
+            marker,
+            self.reset
+                .worktree()
+                .roots()
+                .worktree_root()
+                .display()
+                .as_str()
+                .to_owned(),
+        )
+    }
+
+    fn complete_marked(
+        &self,
+        marker: &WorkspaceRemovalMarkerV1,
+        worktree_root: String,
+    ) -> Result<WorkspaceRemovalCompletionV1, WorkspaceRuntimeErrorV1> {
+        self.revalidate_worktree()?;
+        if self
+            .manager
+            .maintenance
+            .has_unclosed_generation(&self.maintenance_key)
+        {
+            return Err(WorkspaceRuntimeErrorV1::ResetSchedulerRetirement);
+        }
+        let directory = ValidatedPodwayRemovalDirectoryV1::open(self.reset.worktree())
+            .map_err(WorkspaceRuntimeErrorV1::WorkspaceRemovalFilesystem)?
+            .ok_or(WorkspaceRuntimeErrorV1::WorkspaceRemovalConflict)?;
+        let actual = directory
+            .read_marker()
+            .map_err(WorkspaceRuntimeErrorV1::WorkspaceRemovalFilesystem)?
+            .ok_or(WorkspaceRuntimeErrorV1::WorkspaceRemovalConflict)?;
+        if actual != *marker || !actual.matches_worktree(self.reset.worktree()) {
+            return Err(WorkspaceRuntimeErrorV1::WorkspaceRemovalConflict);
+        }
+        let removal = self
+            .manager
+            .registry
+            .remove_exact_generation(marker.workspace_uuid(), self.reset.workspace_root())
+            .map_err(WorkspaceRuntimeErrorV1::Registry)?;
+        let registry_entry_removed = match removal {
+            ExactRegistryRemovalOutcomeV1::Removed(_) => true,
+            ExactRegistryRemovalOutcomeV1::AlreadyAbsent => false,
+            ExactRegistryRemovalOutcomeV1::GenerationChanged
+            | ExactRegistryRemovalOutcomeV1::RootPresent => {
+                return Err(WorkspaceRuntimeErrorV1::WorkspaceRemovalConflict);
+            }
+        };
+        directory
+            .remove_all_with_marker_last(marker)
+            .map_err(WorkspaceRuntimeErrorV1::WorkspaceRemovalFilesystem)?;
+        Ok(WorkspaceRemovalCompletionV1 {
+            worktree_root,
+            workspace_uuid: Some(marker.workspace_uuid().clone()),
+            registry_entry_removed,
+            podway_directory_removed: true,
+            already_absent: false,
+        })
+    }
+
+    fn revalidate_worktree(&self) -> Result<(), WorkspaceRuntimeErrorV1> {
+        let current = self
+            .manager
+            .resolver
+            .resolve_for_reset(self.selector.clone())
+            .map_err(WorkspaceRuntimeErrorV1::Resolution)?;
+        if WorkspaceMaintenanceKeyV1::from_worktree(current.worktree()) != self.maintenance_key
+            || !same_git_root_evidence(current.worktree(), self.reset.worktree())
+        {
+            return Err(WorkspaceRuntimeErrorV1::WorkspaceRemovalConflict);
+        }
+        Ok(())
     }
 }
 
@@ -1855,6 +2111,90 @@ impl WorkspaceRuntimeManagerV1 {
             filesystem_authority: ResetMaintenanceFilesystemTokenV1::issue(),
         })
     }
+
+    /// Acquires the exact worktree maintenance lease and classifies explicit-removal recovery.
+    pub(crate) fn begin_workspace_removal(
+        &self,
+        selector: WorktreeSelectorV1,
+        expected_workspace_uuid: Option<&WorkspaceId>,
+    ) -> Result<WorkspaceRemovalMaintenanceV1<'_>, WorkspaceRuntimeErrorV1> {
+        let reset = self
+            .resolver
+            .resolve_for_reset(selector.clone())
+            .map_err(WorkspaceRuntimeErrorV1::Resolution)?;
+        let maintenance_key = WorkspaceMaintenanceKeyV1::from_worktree(reset.worktree());
+        let lease = self
+            .maintenance
+            .acquire(maintenance_key.clone())
+            .ok_or(WorkspaceRuntimeErrorV1::MaintenanceInProgress)?;
+        let directory = ValidatedPodwayRemovalDirectoryV1::open(reset.worktree())
+            .map_err(WorkspaceRuntimeErrorV1::WorkspaceRemovalFilesystem)?;
+        let removal_marker = directory
+            .as_ref()
+            .map(ValidatedPodwayRemovalDirectoryV1::read_marker)
+            .transpose()
+            .map_err(WorkspaceRuntimeErrorV1::WorkspaceRemovalFilesystem)?
+            .flatten();
+        let registry = self
+            .registry
+            .load()
+            .map_err(WorkspaceRuntimeErrorV1::Registry)?;
+        let root_entries = registry
+            .workspaces()
+            .iter()
+            .filter(|entry| entry.last_known_root() == reset.workspace_root())
+            .collect::<Vec<_>>();
+        let state = if let Some(marker) = removal_marker {
+            if !marker.matches_worktree(reset.worktree())
+                || expected_workspace_uuid
+                    .is_some_and(|expected| expected != marker.workspace_uuid())
+                || root_entries
+                    .iter()
+                    .any(|entry| entry.workspace_uuid() != marker.workspace_uuid())
+            {
+                return Err(WorkspaceRuntimeErrorV1::WorkspaceRemovalConflict);
+            }
+            WorkspaceRemovalStateV1::Marked(marker)
+        } else if root_entries.is_empty() {
+            WorkspaceRemovalStateV1::AlreadyAbsent {
+                residual: directory,
+            }
+        } else {
+            if root_entries.len() != 1 {
+                return Err(WorkspaceRuntimeErrorV1::WorkspaceRemovalConflict);
+            }
+            let authority = self.registered_reset_source_authority(selector.clone())?;
+            if expected_workspace_uuid
+                .is_some_and(|expected| expected != authority.registry_previous_workspace_uuid())
+            {
+                return Err(WorkspaceRuntimeErrorV1::Resolution(
+                    WorkspaceResolutionErrorV1::ExpectedWorkspaceUuidMismatch {
+                        expected: expected_workspace_uuid
+                            .expect("the mismatch branch requires an expected UUID")
+                            .clone(),
+                        actual: authority.registry_previous_workspace_uuid().clone(),
+                    },
+                ));
+            }
+            let reset_marker = reset
+                .open_runtime_directory()
+                .map_err(WorkspaceRuntimeErrorV1::RuntimeDirectory)?
+                .read_reset_marker()
+                .map_err(WorkspaceRuntimeErrorV1::RuntimeDirectory)?;
+            if reset_marker.is_some() {
+                return Err(WorkspaceRuntimeErrorV1::WorkspaceRemovalConflict);
+            }
+            WorkspaceRemovalStateV1::Registered(Box::new(authority))
+        };
+        Ok(WorkspaceRemovalMaintenanceV1 {
+            manager: self,
+            selector,
+            reset,
+            maintenance_key,
+            _lease: lease,
+            state,
+        })
+    }
     /// Looks for a reset marker using only fresh Git containment evidence and the validated
     /// runtime-directory descriptor. It intentionally never opens the workspace Store.
     pub fn discover_reset_marker(
@@ -1870,6 +2210,58 @@ impl WorkspaceRuntimeManagerV1 {
             .map_err(WorkspaceRuntimeErrorV1::RuntimeDirectory)?
             .read_reset_marker()
             .map_err(WorkspaceRuntimeErrorV1::RuntimeDirectory)
+    }
+
+    /// Looks for the bounded workspace-removal marker without opening the workspace Store.
+    pub(crate) fn discover_workspace_removal_marker(
+        &self,
+        selector: WorktreeSelectorV1,
+    ) -> Result<Option<WorkspaceRemovalMarkerV1>, WorkspaceRuntimeErrorV1> {
+        let reset = self
+            .resolver
+            .resolve_for_reset(selector)
+            .map_err(WorkspaceRuntimeErrorV1::Resolution)?;
+        let Some(directory) = ValidatedPodwayRemovalDirectoryV1::open(reset.worktree())
+            .map_err(WorkspaceRuntimeErrorV1::WorkspaceRemovalFilesystem)?
+        else {
+            return Ok(None);
+        };
+        directory
+            .read_marker()
+            .map_err(WorkspaceRuntimeErrorV1::WorkspaceRemovalFilesystem)
+    }
+
+    fn resume_workspace_removal_if_marked(
+        &self,
+        selector: WorktreeSelectorV1,
+    ) -> Result<(), WorkspaceRuntimeErrorV1> {
+        let Some(expected_marker) = self.discover_workspace_removal_marker(selector.clone())?
+        else {
+            return Ok(());
+        };
+        let transaction =
+            self.begin_workspace_removal(selector, Some(expected_marker.workspace_uuid()))?;
+        if transaction.existing_marker() != Some(&expected_marker) {
+            return Err(WorkspaceRuntimeErrorV1::WorkspaceRemovalConflict);
+        }
+        transaction.resume_marked()?;
+        Ok(())
+    }
+
+    fn ensure_workspace_removal_marker_clear(
+        &self,
+        worktree: &ValidatedWorktreeV1,
+    ) -> Result<(), WorkspaceRuntimeErrorV1> {
+        let marker = ValidatedPodwayRemovalDirectoryV1::open(worktree)
+            .map_err(WorkspaceRuntimeErrorV1::WorkspaceRemovalFilesystem)?
+            .map(|directory| directory.read_marker())
+            .transpose()
+            .map_err(WorkspaceRuntimeErrorV1::WorkspaceRemovalFilesystem)?
+            .flatten();
+        if marker.is_some() {
+            return Err(WorkspaceRuntimeErrorV1::WorkspaceRemovalConflict);
+        }
+        Ok(())
     }
 
     /// Binds reset source ownership to durable Store evidence when readable while retaining the
@@ -2374,6 +2766,8 @@ impl WorkspaceRuntimeManagerV1 {
         observation: WorkspaceRuntimeObservationV1,
     ) -> Result<Arc<WorkspaceSchedulerV1<WorkspaceSchedulerContextV1>>, WorkspaceRuntimeErrorV1>
     {
+        // Finish any admitted removal before initialization can establish a new generation.
+        self.resume_workspace_removal_if_marked(selector.clone())?;
         // Resolve Git-only containment first so lifecycle serialization begins before bootstrap
         // inspects or opens SQLite, mutates the layout, or publishes a scheduler.
         let lifecycle = self
@@ -2385,6 +2779,7 @@ impl WorkspaceRuntimeManagerV1 {
             .maintenance
             .acquire_activation(maintenance_key.clone())
             .ok_or(WorkspaceRuntimeErrorV1::MaintenanceInProgress)?;
+        self.ensure_workspace_removal_marker_clear(lifecycle.worktree())?;
         let candidate = self
             .resolver
             .resolve_bootstrap(selector.clone())
@@ -2440,10 +2835,12 @@ impl WorkspaceRuntimeManagerV1 {
         observation: WorkspaceRuntimeObservationV1,
     ) -> Result<Arc<WorkspaceSchedulerV1<WorkspaceSchedulerContextV1>>, WorkspaceRuntimeErrorV1>
     {
+        self.resume_workspace_removal_if_marked(selector.clone())?;
         let resolved = self
             .resolver
             .resolve_existing(selector, expected_workspace_id)
             .map_err(WorkspaceRuntimeErrorV1::Resolution)?;
+        self.ensure_workspace_removal_marker_clear(resolved.worktree())?;
         self.activate_existing_resolved(resolved, observation)
     }
     /// Resolves an existing workspace for a read-only route.
@@ -2456,10 +2853,12 @@ impl WorkspaceRuntimeManagerV1 {
         selector: WorktreeSelectorV1,
         expected_workspace_id: Option<&WorkspaceId>,
     ) -> Result<ReadonlyWorkspaceResolutionV1, WorkspaceRuntimeErrorV1> {
+        self.resume_workspace_removal_if_marked(selector.clone())?;
         let resolved = self
             .resolver
             .resolve_existing(selector, expected_workspace_id)
             .map_err(WorkspaceRuntimeErrorV1::Resolution)?;
+        self.ensure_workspace_removal_marker_clear(resolved.worktree())?;
         let config = read_admitted_workspace_config(&resolved)?;
         let store_options = self.store_options_for(&config)?;
         let binding = WorkspaceBindingV1::new(

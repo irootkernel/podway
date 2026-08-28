@@ -566,6 +566,23 @@ const ROUTES: &[Route] = &[
         dynamic: None,
     },
     Route {
+        words: "workspace remove",
+        flags: &[
+            &JSON,
+            &DEV,
+            &WORKTREE,
+            &TIMEOUT,
+            &SOCKET,
+            &NO_COLOR,
+            &QUIET,
+            &IF_WORKSPACE_UUID,
+            &FORCE,
+            &YES,
+        ],
+        values: "",
+        dynamic: None,
+    },
+    Route {
         words: "start",
         flags: START_FLAGS,
         values: "",

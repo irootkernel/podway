@@ -618,7 +618,7 @@ pub enum DaemonRequestV1 {
 }
 
 impl DaemonRequestV1 {
-    /// Classifies a fully decoded IPC envelope without making reserved v2 routes executable.
+    /// Classifies a fully decoded IPC envelope into its closed runtime request family.
     pub fn from_envelope(request: &RequestEnvelopeV1) -> Result<Self, SliceErrorV1> {
         if request.command().as_str() == "workspace.remove" {
             return WorkspaceRemoveRequestV1::from_envelope(request).map(Self::WorkspaceRemove);

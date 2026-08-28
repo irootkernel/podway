@@ -2,6 +2,7 @@
 
 use podway_core::{Sha256Digest, WorkspaceId};
 use sha2::{Digest, Sha256};
+use std::fs::File;
 #[cfg(test)]
 use std::path::{Path, PathBuf};
 #[cfg(test)]
@@ -71,6 +72,19 @@ impl NativeGitResolverV1 {
                 LocalPathPresenceV1::Present
             }
         })
+    }
+
+    /// Revalidates a caller-opened descriptor against one exact resolved worktree root.
+    ///
+    /// The descriptor remains read-only authority owned by the caller. This crate performs no
+    /// mutation; it only proves that the open directory has the same descriptor-derived identity
+    /// as the supplied Git resolution and that the absolute root has not been substituted.
+    pub fn validate_open_worktree_root(
+        &self,
+        worktree: &ValidatedWorktreeV1,
+        directory: &File,
+    ) -> Result<(), GitResolverErrorV1> {
+        native::validate_open_worktree_root(directory, worktree)
     }
 
     /// Hashes a stable regular artifact strictly beneath a freshly revalidated worktree root.

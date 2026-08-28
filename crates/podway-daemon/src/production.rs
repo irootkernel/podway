@@ -11,7 +11,7 @@ use std::{sync::Arc, time::Instant};
 use podway_core::DomainError;
 use podway_core::{
     Revision, SessionId, SessionLifecycle, Sha256Digest, TerminalDispositionKindV2,
-    TerminalDispositionV2, TraceSequenceV2, UnixMillis,
+    TerminalDispositionV2, TraceSequenceV2, UnixMillis, WorkspaceId, canonicalize_json_v1,
 };
 use podway_git::{
     Base64UrlPathBytesV1, DiagnosticPathDisplayV1, LocalPathPresenceV1, LosslessPathV1,
@@ -22,8 +22,8 @@ use podway_protocol::{
     OutputEnvelopeV3, ProcedureV2MutationRequestV1, ProcedureV2StartRequestV1, RequestEnvelopeV1,
     RequestIdV1, ResponseEnvelopeV2, Rfc3339MillisV1, SessionLifecycleV1, SessionOutputV1,
     SessionStartSourceV1, SliceCommandV1, SliceRequestV1, TerminalJobCancellationProjectionV1,
-    TerminalJobResponseV1, TerminalJobSuccessResultV1, WorkspaceOutputV1, WorktreeSelectorWireV1,
-    canonical_reset_all_identity_v1, decode_response_payload_v2,
+    TerminalJobResponseV1, TerminalJobSuccessResultV1, WorkspaceOutputV1, WorkspaceRemoveRequestV1,
+    WorktreeSelectorWireV1, canonical_reset_all_identity_v1, decode_response_payload_v2,
 };
 use podway_store::{
     AdmitOutcomeV1, CancelOutcomeV1, CanonicalRequestDigestV1, DurableWorktreeIdentityV1,
@@ -66,7 +66,7 @@ use crate::{
         NativeArtifactVerifierV1, NativeExecutionIdSourceV1, NativeProcedureProviderV1,
         NativeWorkspaceRevalidatorV1, WallUtcExecutionClockV1,
     },
-    observability::ObservabilityEmitterV1,
+    observability::{EventOperationV1, EventOutcomeV1, EventRecordV1, ObservabilityEmitterV1},
     read_service::{
         AuthoritativeReadServiceV1, MonotonicClockV1, MonotonicDeadlineV1, ReadNotificationErrorV1,
         ReadNotificationV1, ReadNotificationVersionV1, ReadServiceErrorV1, ReadWaitOutcomeV1,
@@ -1395,6 +1395,7 @@ pub struct ProductionMutationWorkerV1 {
     >,
     clock: Arc<NativeProductionClockV1>,
     manager: Arc<WorkspaceRuntimeManagerV1>,
+    observability: Option<ObservabilityEmitterV1>,
 }
 /// The exact production dispatcher and worker pair used during daemon startup.
 pub struct ProductionDispatcherCompositionV1 {
@@ -1441,10 +1442,11 @@ impl ProductionMutationWorkerV1 {
                 Arc::new(NativeContextExecutionV1::new(observability.clone())),
                 Arc::clone(&clock),
                 worker_id,
-                observability,
+                observability.clone(),
             ),
             clock,
             manager,
+            observability,
         }
     }
 
@@ -1759,6 +1761,141 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
             failure
                 .with_admission_identity(admission.job_id().clone(), admission.identity_sequence())
         })
+    }
+
+    fn remove_workspace(
+        &self,
+        request: &RequestEnvelopeV1,
+        removal: &WorkspaceRemoveRequestV1,
+    ) -> Result<Map<String, Value>, DispatchFailureV1> {
+        let requested_workspace_uuid = removal.selector().expected_uuid().cloned();
+        let emit_failure = |failure: &DispatchFailureV1, workspace_uuid: Option<&WorkspaceId>| {
+            if let Some(observability) = &self.observability {
+                let outcome = if matches!(
+                    failure.kind(),
+                    DispatchFailureKindV1::WorkspaceMaintenance
+                        | DispatchFailureKindV1::WorkspaceUuidMismatch
+                        | DispatchFailureKindV1::WorkspacePathUnsafe
+                        | DispatchFailureKindV1::RequestInvalid
+                ) {
+                    EventOutcomeV1::Rejected
+                } else {
+                    EventOutcomeV1::Failed
+                };
+                let event = EventRecordV1::new(EventOperationV1::WorkspaceRemove, outcome)
+                    .with_request_id(request.request_id());
+                observability.emit(match workspace_uuid {
+                    Some(workspace_uuid) => event.with_workspace_uuid(workspace_uuid),
+                    None => event,
+                });
+            }
+        };
+        let selector = match selector_from_wire(removal.selector()) {
+            Ok(selector) => selector,
+            Err(failure) => {
+                emit_failure(&failure, requested_workspace_uuid.as_ref());
+                return Err(failure);
+            }
+        };
+        let deadline =
+            Instant::now() + std::time::Duration::from_millis(request.options().wait_timeout_ms());
+        let transaction = loop {
+            match self
+                .manager
+                .begin_workspace_removal(selector.clone(), removal.selector().expected_uuid())
+            {
+                Ok(transaction) => break transaction,
+                Err(WorkspaceRuntimeErrorV1::MaintenanceInProgress)
+                    if Instant::now() < deadline =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(error) => {
+                    let failure = map_runtime_error(error);
+                    emit_failure(&failure, requested_workspace_uuid.as_ref());
+                    return Err(failure);
+                }
+            }
+        };
+        let workspace_uuid = transaction.workspace_uuid().cloned();
+        let event = |outcome| {
+            let event = EventRecordV1::new(EventOperationV1::WorkspaceRemove, outcome)
+                .with_request_id(request.request_id());
+            match &workspace_uuid {
+                Some(workspace_uuid) => event.with_workspace_uuid(workspace_uuid),
+                None => event,
+            }
+        };
+        let result = (|| {
+            if let Some(scheduler) = transaction.active_scheduler() {
+                self.worker
+                    .retire_workspace_for_maintenance(
+                        self.manager.scheduler_registry(),
+                        &scheduler,
+                        |_| Ok(()),
+                    )
+                    .map_err(|_| {
+                        DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceMaintenance)
+                    })?;
+            }
+            let canonical = canonicalize_json_v1(&json!({
+                "command": "workspace.remove",
+                "request": removal,
+            }))
+            .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::RequestInvalid))?;
+            let request_digest = CanonicalRequestDigestV1::new(format!(
+                "sha256:{:x}",
+                Sha256::digest(canonical.as_bytes())
+            ))
+            .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?;
+            transaction
+                .complete(
+                    &request_digest,
+                    request.request_id(),
+                    self.clock.generated_at(),
+                )
+                .map_err(map_runtime_error)
+        })();
+        match result {
+            Ok(completion) => {
+                if let Some(observability) = &self.observability {
+                    observability.emit(event(EventOutcomeV1::Succeeded));
+                }
+                Ok(Map::from_iter([
+                    (
+                        "schema".to_owned(),
+                        Value::String("podway.workspace-removal-result/v1".to_owned()),
+                    ),
+                    (
+                        "worktree_root".to_owned(),
+                        Value::String(completion.worktree_root),
+                    ),
+                    (
+                        "workspace_uuid".to_owned(),
+                        completion
+                            .workspace_uuid
+                            .map(|uuid| Value::String(uuid.as_str().to_owned()))
+                            .unwrap_or(Value::Null),
+                    ),
+                    (
+                        "registry_entry_removed".to_owned(),
+                        Value::Bool(completion.registry_entry_removed),
+                    ),
+                    (
+                        "podway_directory_removed".to_owned(),
+                        Value::Bool(completion.podway_directory_removed),
+                    ),
+                    (
+                        "already_absent".to_owned(),
+                        Value::Bool(completion.already_absent),
+                    ),
+                ]))
+            }
+            Err(failure) => {
+                emit_failure(&failure, workspace_uuid.as_ref());
+                Err(failure)
+            }
+        }
     }
 
     fn dispatch_procedure_v2(
@@ -6080,6 +6217,7 @@ fn map_runtime_error(error: WorkspaceRuntimeErrorV1) -> DispatchFailureV1 {
             DispatchFailureV1::new(DispatchFailureKindV1::DaemonUnavailable)
         }
         WorkspaceRuntimeErrorV1::MaintenanceInProgress
+        | WorkspaceRuntimeErrorV1::WorkspaceRemovalConflict
         | WorkspaceRuntimeErrorV1::ResetSchedulerRetirement
         | WorkspaceRuntimeErrorV1::ResetMarkerConflict
         | WorkspaceRuntimeErrorV1::ResetRegistryPredecessorStale => {
@@ -6094,7 +6232,8 @@ fn map_runtime_error(error: WorkspaceRuntimeErrorV1) -> DispatchFailureV1 {
         WorkspaceRuntimeErrorV1::ResetSourceAmbiguous => {
             DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceIdentityConflict)
         }
-        WorkspaceRuntimeErrorV1::RuntimeDirectory(_) => {
+        WorkspaceRuntimeErrorV1::RuntimeDirectory(_)
+        | WorkspaceRuntimeErrorV1::WorkspaceRemovalFilesystem(_) => {
             DispatchFailureV1::new(DispatchFailureKindV1::WorkspacePathUnsafe)
         }
         WorkspaceRuntimeErrorV1::ConfigRead { .. }

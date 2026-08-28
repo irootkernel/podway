@@ -205,6 +205,7 @@ V2_EXECUTABLE_ROUTES = frozenset(
         "session.terminal_disposition",
         "evidence.read",
         "daemon.wait-ready",
+        "workspace.remove",
     }
 )
 PROCEDURE_INDEPENDENT_EXECUTABLE_ROUTES = {

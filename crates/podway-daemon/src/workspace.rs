@@ -10,6 +10,7 @@ use std::{
     fmt,
     fs::{self, File, Metadata},
     io::{self, Read, Write},
+    os::fd::OwnedFd,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -18,25 +19,26 @@ use std::{
 use std::{
     ffi::OsString,
     os::unix::{
-        ffi::OsStringExt,
+        ffi::{OsStrExt, OsStringExt},
         fs::{MetadataExt, PermissionsExt},
     },
 };
 
 #[cfg(unix)]
 use nix::{
+    dir::Dir,
     errno::Errno,
     fcntl::{AtFlags, OFlag, open, openat},
-    sys::stat::Mode,
+    sys::stat::{Mode, SFlag},
     unistd::{UnlinkatFlags, getuid, linkat, unlinkat},
 };
 use podway_core::{UnixMillis, WorkspaceId, canonicalize_json_v1, verify_canonical_json_v1};
 use podway_git::{
     DiagnosticPathDisplayV1, DurableWorktreeIdentityV1 as GitWorktreeIdentityV1, GitResolveErrorV1,
-    GitResolverContractV1, LosslessPathV1, SelectorValidationErrorV1, ValidatedWorktreeV1,
-    WorkspaceIdentityStateV1, WorktreeMoveMetadataV1, WorktreeSelectorV1,
+    GitResolverContractV1, LosslessPathV1, NativeGitResolverV1, SelectorValidationErrorV1,
+    ValidatedWorktreeV1, WorkspaceIdentityStateV1, WorktreeMoveMetadataV1, WorktreeSelectorV1,
 };
-use podway_protocol::RequestIdV1;
+use podway_protocol::{RequestIdV1, Rfc3339MillisV1};
 use podway_store::{
     CanonicalRequestDigestV1, DurableWorktreeIdentityV1,
     DurableWorktreeIdentityV1 as StoreWorktreeIdentityV1, IdempotencyKeyV1, JobIdV1,
@@ -62,8 +64,15 @@ const STATE_DATABASE_FILE_SHM_NAME_V1: &str = "state.sqlite3-shm";
 const PRIVATE_RUNTIME_DIRECTORY_MODE_V1: u32 = 0o700;
 const PRIVATE_RUNTIME_FILE_MODE_V1: u32 = 0o600;
 const RESET_MARKER_TEMPORARY_NAME_ATTEMPTS_V1: usize = 128;
+const WORKSPACE_REMOVAL_MARKER_FILE_NAME_V1: &str = "workspace-removal.marker";
+const WORKSPACE_REMOVAL_MARKER_SCHEMA_V1: &str = "podway.workspace-removal-marker/v1";
+const MAX_WORKSPACE_REMOVAL_MARKER_BYTES_V1: u64 = 16 * 1024;
+const WORKSPACE_REMOVAL_MARKER_TEMPORARY_NAME_ATTEMPTS_V1: usize = 128;
+const MAX_WORKSPACE_REMOVAL_ENTRIES_V1: usize = 100_000;
+const MAX_WORKSPACE_REMOVAL_DEPTH_V1: usize = 128;
 
 static RESET_MARKER_TEMPORARY_SEQUENCE_V1: AtomicU64 = AtomicU64::new(0);
+static WORKSPACE_REMOVAL_MARKER_TEMPORARY_SEQUENCE_V1: AtomicU64 = AtomicU64::new(0);
 
 /// Exact durable recovery input for a reset-all operation.
 ///
@@ -327,6 +336,602 @@ pub(crate) struct ResetMaintenanceFilesystemTokenV1 {
 impl ResetMaintenanceFilesystemTokenV1 {
     pub(crate) const fn issue() -> Self {
         Self { _private: () }
+    }
+}
+
+/// Canonical recovery authority for one explicitly confirmed workspace removal.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkspaceRemovalMarkerV1 {
+    operation_id: RequestIdV1,
+    request_digest: CanonicalRequestDigestV1,
+    response_request_id: RequestIdV1,
+    workspace_uuid: WorkspaceId,
+    root_path_bytes_base64url: String,
+    common_dir_identity: CanonicalRequestDigestV1,
+    worktree_admin_identity: CanonicalRequestDigestV1,
+    created_at: Rfc3339MillisV1,
+}
+
+impl WorkspaceRemovalMarkerV1 {
+    pub fn new(
+        operation_id: RequestIdV1,
+        request_digest: CanonicalRequestDigestV1,
+        response_request_id: RequestIdV1,
+        workspace_uuid: WorkspaceId,
+        worktree: &ValidatedWorktreeV1,
+        created_at: Rfc3339MillisV1,
+    ) -> Self {
+        Self {
+            operation_id,
+            request_digest,
+            response_request_id,
+            workspace_uuid,
+            root_path_bytes_base64url: worktree
+                .roots()
+                .worktree_root()
+                .path_bytes_base64url()
+                .as_str()
+                .to_owned(),
+            common_dir_identity: worktree.identity().common_directory_fingerprint().clone(),
+            worktree_admin_identity: worktree
+                .identity()
+                .worktree_administration_fingerprint()
+                .clone(),
+            created_at,
+        }
+    }
+
+    pub fn operation_id(&self) -> &RequestIdV1 {
+        &self.operation_id
+    }
+
+    pub fn request_digest(&self) -> &CanonicalRequestDigestV1 {
+        &self.request_digest
+    }
+
+    pub fn response_request_id(&self) -> &RequestIdV1 {
+        &self.response_request_id
+    }
+
+    pub fn workspace_uuid(&self) -> &WorkspaceId {
+        &self.workspace_uuid
+    }
+
+    pub fn matches_worktree(&self, worktree: &ValidatedWorktreeV1) -> bool {
+        self.root_path_bytes_base64url
+            == worktree
+                .roots()
+                .worktree_root()
+                .path_bytes_base64url()
+                .as_str()
+            && self.common_dir_identity == *worktree.identity().common_directory_fingerprint()
+            && self.worktree_admin_identity
+                == *worktree.identity().worktree_administration_fingerprint()
+    }
+
+    fn canonical_bytes(&self) -> Result<Vec<u8>, WorkspaceRemovalFilesystemErrorV1> {
+        canonicalize_json_v1(&SerializableWorkspaceRemovalMarkerV1 {
+            schema: WORKSPACE_REMOVAL_MARKER_SCHEMA_V1,
+            operation_id: self.operation_id.as_str(),
+            request_digest: self.request_digest.as_str(),
+            response_request_id: self.response_request_id.as_str(),
+            workspace_uuid: self.workspace_uuid.as_str(),
+            root_identity: SerializableWorkspaceRemovalRootIdentityV1 {
+                root_path_bytes_base64url: &self.root_path_bytes_base64url,
+                common_dir_identity: self.common_dir_identity.as_str(),
+                worktree_admin_identity: self.worktree_admin_identity.as_str(),
+            },
+            created_at: self.created_at.as_str(),
+        })
+        .map(String::into_bytes)
+        .map_err(|_| WorkspaceRemovalFilesystemErrorV1::MarkerInvalid)
+    }
+
+    fn decode_canonical(bytes: &[u8]) -> Result<Self, WorkspaceRemovalFilesystemErrorV1> {
+        if bytes.len() as u64 > MAX_WORKSPACE_REMOVAL_MARKER_BYTES_V1
+            || verify_canonical_json_v1(bytes).is_err()
+        {
+            return Err(WorkspaceRemovalFilesystemErrorV1::MarkerInvalid);
+        }
+        let marker: SerializedWorkspaceRemovalMarkerV1 = serde_json::from_slice(bytes)
+            .map_err(|_| WorkspaceRemovalFilesystemErrorV1::MarkerInvalid)?;
+        if marker.schema != WORKSPACE_REMOVAL_MARKER_SCHEMA_V1 {
+            return Err(WorkspaceRemovalFilesystemErrorV1::MarkerInvalid);
+        }
+        Ok(Self {
+            operation_id: RequestIdV1::new(marker.operation_id)
+                .map_err(|_| WorkspaceRemovalFilesystemErrorV1::MarkerInvalid)?,
+            request_digest: CanonicalRequestDigestV1::new(marker.request_digest)
+                .map_err(|_| WorkspaceRemovalFilesystemErrorV1::MarkerInvalid)?,
+            response_request_id: RequestIdV1::new(marker.response_request_id)
+                .map_err(|_| WorkspaceRemovalFilesystemErrorV1::MarkerInvalid)?,
+            workspace_uuid: WorkspaceId::new(marker.workspace_uuid)
+                .map_err(|_| WorkspaceRemovalFilesystemErrorV1::MarkerInvalid)?,
+            root_path_bytes_base64url: marker.root_identity.root_path_bytes_base64url,
+            common_dir_identity: CanonicalRequestDigestV1::new(
+                marker.root_identity.common_dir_identity,
+            )
+            .map_err(|_| WorkspaceRemovalFilesystemErrorV1::MarkerInvalid)?,
+            worktree_admin_identity: CanonicalRequestDigestV1::new(
+                marker.root_identity.worktree_admin_identity,
+            )
+            .map_err(|_| WorkspaceRemovalFilesystemErrorV1::MarkerInvalid)?,
+            created_at: Rfc3339MillisV1::new(marker.created_at)
+                .map_err(|_| WorkspaceRemovalFilesystemErrorV1::MarkerInvalid)?,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub enum WorkspaceRemovalFilesystemErrorV1 {
+    UnsupportedPlatform,
+    Path {
+        operation: &'static str,
+        source: io::Error,
+    },
+    UnsafePath,
+    MarkerInvalid,
+    MarkerAlreadyExists,
+    MarkerMissing,
+    MarkerChanged,
+    NotEmptyResidual,
+}
+
+impl fmt::Display for WorkspaceRemovalFilesystemErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnsupportedPlatform => formatter.write_str("workspace removal requires Unix"),
+            Self::Path { operation, source } => write!(formatter, "cannot {operation}: {source}"),
+            Self::UnsafePath => formatter.write_str("workspace removal path is unsafe"),
+            Self::MarkerInvalid => formatter.write_str("workspace removal marker is invalid"),
+            Self::MarkerAlreadyExists => {
+                formatter.write_str("workspace removal marker already exists")
+            }
+            Self::MarkerMissing => formatter.write_str("workspace removal marker is missing"),
+            Self::MarkerChanged => formatter.write_str("workspace removal marker changed"),
+            Self::NotEmptyResidual => {
+                formatter.write_str("Podway directory is not an empty removal residual")
+            }
+        }
+    }
+}
+
+impl Error for WorkspaceRemovalFilesystemErrorV1 {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Path { source, .. } => Some(source),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RemovalObjectIdentityV1 {
+    device: u64,
+    inode: u64,
+    owner_uid: u32,
+}
+
+#[cfg(unix)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RemovalPathComponentV1 {
+    name: OsString,
+    identity: RemovalObjectIdentityV1,
+}
+
+#[cfg(unix)]
+impl RemovalObjectIdentityV1 {
+    fn from_metadata(metadata: &Metadata) -> Self {
+        Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            owner_uid: metadata.uid(),
+        }
+    }
+
+    fn matches_stat(self, stat: &nix::sys::stat::FileStat) -> bool {
+        self.device == stat.st_dev as u64
+            && self.inode == stat.st_ino
+            && self.owner_uid == stat.st_uid
+    }
+}
+
+/// A `.podway` directory opened relative to one freshly validated Git worktree root.
+pub(crate) struct ValidatedPodwayRemovalDirectoryV1 {
+    #[cfg(unix)]
+    root: File,
+    #[cfg(unix)]
+    podway: File,
+    #[cfg(unix)]
+    podway_identity: RemovalObjectIdentityV1,
+    #[cfg(unix)]
+    current_uid: u32,
+}
+
+impl ValidatedPodwayRemovalDirectoryV1 {
+    pub(crate) fn open(
+        worktree: &ValidatedWorktreeV1,
+    ) -> Result<Option<Self>, WorkspaceRemovalFilesystemErrorV1> {
+        #[cfg(unix)]
+        {
+            let root_bytes = worktree
+                .roots()
+                .worktree_root()
+                .decode_path_bytes()
+                .map_err(|_| WorkspaceRemovalFilesystemErrorV1::UnsafePath)?;
+            let root_path = PathBuf::from(OsString::from_vec(root_bytes));
+            let root = File::from(
+                open(
+                    &root_path,
+                    OFlag::O_CLOEXEC | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_RDONLY,
+                    Mode::empty(),
+                )
+                .map_err(|source| removal_path_error("open worktree root", source.into()))?,
+            );
+            NativeGitResolverV1::new()
+                .validate_open_worktree_root(worktree, &root)
+                .map_err(|_| WorkspaceRemovalFilesystemErrorV1::UnsafePath)?;
+            let podway = match openat(
+                &root,
+                ".podway",
+                OFlag::O_CLOEXEC | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_RDONLY,
+                Mode::empty(),
+            ) {
+                Ok(directory) => File::from(directory),
+                Err(Errno::ENOENT) => return Ok(None),
+                Err(Errno::ELOOP | Errno::ENOTDIR) => {
+                    return Err(WorkspaceRemovalFilesystemErrorV1::UnsafePath);
+                }
+                Err(source) => {
+                    return Err(removal_path_error("open .podway directory", source.into()));
+                }
+            };
+            let root_metadata = root
+                .metadata()
+                .map_err(|source| removal_path_error("inspect worktree root", source))?;
+            let podway_metadata = podway
+                .metadata()
+                .map_err(|source| removal_path_error("inspect .podway directory", source))?;
+            let current_uid = getuid().as_raw();
+            if !podway_metadata.is_dir()
+                || podway_metadata.uid() != current_uid
+                || podway_metadata.dev() != root_metadata.dev()
+            {
+                return Err(WorkspaceRemovalFilesystemErrorV1::UnsafePath);
+            }
+            Ok(Some(Self {
+                root,
+                podway_identity: RemovalObjectIdentityV1::from_metadata(&podway_metadata),
+                podway,
+                current_uid,
+            }))
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = worktree;
+            Err(WorkspaceRemovalFilesystemErrorV1::UnsupportedPlatform)
+        }
+    }
+
+    pub(crate) fn read_marker(
+        &self,
+    ) -> Result<Option<WorkspaceRemovalMarkerV1>, WorkspaceRemovalFilesystemErrorV1> {
+        #[cfg(unix)]
+        {
+            let Some(runtime) = self.open_child_directory(&self.podway, "runtime")? else {
+                return Ok(None);
+            };
+            let Some(mut marker) = open_regular_file_optional(
+                &runtime,
+                WORKSPACE_REMOVAL_MARKER_FILE_NAME_V1,
+                self.current_uid,
+            )?
+            else {
+                return Ok(None);
+            };
+            let bytes = read_bounded_removal_marker(&mut marker)?;
+            WorkspaceRemovalMarkerV1::decode_canonical(&bytes).map(Some)
+        }
+        #[cfg(not(unix))]
+        {
+            Err(WorkspaceRemovalFilesystemErrorV1::UnsupportedPlatform)
+        }
+    }
+
+    pub(crate) fn publish_marker(
+        &self,
+        marker: &WorkspaceRemovalMarkerV1,
+    ) -> Result<(), WorkspaceRemovalFilesystemErrorV1> {
+        #[cfg(unix)]
+        {
+            let runtime = self
+                .open_child_directory(&self.podway, "runtime")?
+                .ok_or(WorkspaceRemovalFilesystemErrorV1::UnsafePath)?;
+            if open_regular_file_optional(
+                &runtime,
+                WORKSPACE_REMOVAL_MARKER_FILE_NAME_V1,
+                self.current_uid,
+            )?
+            .is_some()
+            {
+                return Err(WorkspaceRemovalFilesystemErrorV1::MarkerAlreadyExists);
+            }
+            let bytes = marker.canonical_bytes()?;
+            for _ in 0..WORKSPACE_REMOVAL_MARKER_TEMPORARY_NAME_ATTEMPTS_V1 {
+                let sequence =
+                    WORKSPACE_REMOVAL_MARKER_TEMPORARY_SEQUENCE_V1.fetch_add(1, Ordering::Relaxed);
+                let temporary_name = format!(
+                    ".podway-workspace-removal-marker-v1-{}-{sequence}.tmp",
+                    std::process::id()
+                );
+                let descriptor = match openat(
+                    &runtime,
+                    temporary_name.as_str(),
+                    OFlag::O_CLOEXEC
+                        | OFlag::O_CREAT
+                        | OFlag::O_EXCL
+                        | OFlag::O_NOFOLLOW
+                        | OFlag::O_WRONLY,
+                    Mode::S_IRUSR | Mode::S_IWUSR,
+                ) {
+                    Ok(descriptor) => descriptor,
+                    Err(Errno::EEXIST) => continue,
+                    Err(source) => {
+                        return Err(removal_path_error(
+                            "create workspace removal marker temporary",
+                            source.into(),
+                        ));
+                    }
+                };
+                let mut temporary = File::from(descriptor);
+                temporary.write_all(&bytes).map_err(|source| {
+                    removal_path_error("write workspace removal marker temporary", source)
+                })?;
+                temporary.sync_all().map_err(|source| {
+                    removal_path_error("sync workspace removal marker temporary", source)
+                })?;
+                drop(temporary);
+                match linkat(
+                    &runtime,
+                    temporary_name.as_str(),
+                    &runtime,
+                    WORKSPACE_REMOVAL_MARKER_FILE_NAME_V1,
+                    AtFlags::empty(),
+                ) {
+                    Ok(()) => {}
+                    Err(Errno::EEXIST) => {
+                        let _ = unlinkat(
+                            &runtime,
+                            temporary_name.as_str(),
+                            UnlinkatFlags::NoRemoveDir,
+                        );
+                        return Err(WorkspaceRemovalFilesystemErrorV1::MarkerAlreadyExists);
+                    }
+                    Err(source) => {
+                        let _ = unlinkat(
+                            &runtime,
+                            temporary_name.as_str(),
+                            UnlinkatFlags::NoRemoveDir,
+                        );
+                        return Err(removal_path_error(
+                            "publish workspace removal marker",
+                            source.into(),
+                        ));
+                    }
+                }
+                runtime
+                    .sync_all()
+                    .map_err(|source| removal_path_error("sync runtime directory", source))?;
+                unlinkat(
+                    &runtime,
+                    temporary_name.as_str(),
+                    UnlinkatFlags::NoRemoveDir,
+                )
+                .map_err(|source| {
+                    removal_path_error("remove workspace removal marker temporary", source.into())
+                })?;
+                runtime
+                    .sync_all()
+                    .map_err(|source| removal_path_error("sync runtime directory", source))?;
+                return Ok(());
+            }
+            Err(WorkspaceRemovalFilesystemErrorV1::UnsafePath)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = marker;
+            Err(WorkspaceRemovalFilesystemErrorV1::UnsupportedPlatform)
+        }
+    }
+
+    pub(crate) fn remove_all_with_marker_last(
+        &self,
+        expected: &WorkspaceRemovalMarkerV1,
+    ) -> Result<(), WorkspaceRemovalFilesystemErrorV1> {
+        #[cfg(unix)]
+        {
+            let runtime = self
+                .open_child_directory(&self.podway, "runtime")?
+                .ok_or(WorkspaceRemovalFilesystemErrorV1::MarkerMissing)?;
+            let runtime_metadata = runtime
+                .metadata()
+                .map_err(|source| removal_path_error("inspect runtime directory", source))?;
+            let runtime_identity = RemovalObjectIdentityV1::from_metadata(&runtime_metadata);
+            let marker_identity = self.require_exact_marker(&runtime, expected)?;
+            let retained = remove_directory_contents_v1(
+                &self.root,
+                &self.podway,
+                self.podway_identity,
+                self.current_uid,
+                self.podway_identity.device,
+                &[],
+                &mut RemovalTraversalBudgetV1::new(),
+            )?;
+            if !retained {
+                return Err(WorkspaceRemovalFilesystemErrorV1::MarkerMissing);
+            }
+            let runtime_component = [RemovalPathComponentV1 {
+                name: OsString::from("runtime"),
+                identity: runtime_identity,
+            }];
+            validate_removal_ancestry_v1(
+                &self.root,
+                &runtime,
+                self.podway_identity,
+                self.current_uid,
+                self.podway_identity.device,
+                &runtime_component,
+            )?;
+            self.require_exact_marker_with_identity(&runtime, expected, marker_identity)?;
+            unlinkat(
+                &runtime,
+                WORKSPACE_REMOVAL_MARKER_FILE_NAME_V1,
+                UnlinkatFlags::NoRemoveDir,
+            )
+            .map_err(|source| {
+                removal_path_error("remove workspace removal marker", source.into())
+            })?;
+            runtime
+                .sync_all()
+                .map_err(|source| removal_path_error("sync runtime directory", source))?;
+            validate_removal_ancestry_v1(
+                &self.root,
+                &self.podway,
+                self.podway_identity,
+                self.current_uid,
+                self.podway_identity.device,
+                &[],
+            )?;
+            let runtime_stat =
+                nix::sys::stat::fstatat(&self.podway, "runtime", AtFlags::AT_SYMLINK_NOFOLLOW)
+                    .map_err(|source| {
+                        removal_path_error("reinspect runtime directory", source.into())
+                    })?;
+            if !runtime_identity.matches_stat(&runtime_stat) {
+                return Err(WorkspaceRemovalFilesystemErrorV1::UnsafePath);
+            }
+            unlinkat(&self.podway, "runtime", UnlinkatFlags::RemoveDir)
+                .map_err(|source| removal_path_error("remove runtime directory", source.into()))?;
+            self.podway
+                .sync_all()
+                .map_err(|source| removal_path_error("sync .podway directory", source))?;
+            self.remove_podway_directory()
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = expected;
+            Err(WorkspaceRemovalFilesystemErrorV1::UnsupportedPlatform)
+        }
+    }
+
+    pub(crate) fn remove_empty_residual(&self) -> Result<(), WorkspaceRemovalFilesystemErrorV1> {
+        #[cfg(unix)]
+        {
+            let mut inspection_budget = RemovalTraversalBudgetV1::new();
+            if !inspect_empty_directories_v1(
+                &self.podway,
+                self.current_uid,
+                self.podway_identity.device,
+                0,
+                &mut inspection_budget,
+            )? {
+                return Err(WorkspaceRemovalFilesystemErrorV1::NotEmptyResidual);
+            }
+            remove_empty_directories_v1(
+                &self.root,
+                &self.podway,
+                self.podway_identity,
+                self.current_uid,
+                self.podway_identity.device,
+                &[],
+                &mut RemovalTraversalBudgetV1::new(),
+            )?;
+            self.remove_podway_directory()
+        }
+        #[cfg(not(unix))]
+        {
+            Err(WorkspaceRemovalFilesystemErrorV1::UnsupportedPlatform)
+        }
+    }
+
+    #[cfg(unix)]
+    fn open_child_directory(
+        &self,
+        parent: &File,
+        name: &str,
+    ) -> Result<Option<File>, WorkspaceRemovalFilesystemErrorV1> {
+        let descriptor = match openat(
+            parent,
+            name,
+            OFlag::O_CLOEXEC | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_RDONLY,
+            Mode::empty(),
+        ) {
+            Ok(descriptor) => descriptor,
+            Err(Errno::ENOENT) => return Ok(None),
+            Err(Errno::ELOOP | Errno::ENOTDIR) => {
+                return Err(WorkspaceRemovalFilesystemErrorV1::UnsafePath);
+            }
+            Err(source) => {
+                return Err(removal_path_error(
+                    "open Podway subdirectory",
+                    source.into(),
+                ));
+            }
+        };
+        let directory = File::from(descriptor);
+        validate_removal_directory(&directory, self.current_uid, self.podway_identity.device)?;
+        Ok(Some(directory))
+    }
+
+    #[cfg(unix)]
+    fn require_exact_marker(
+        &self,
+        runtime: &File,
+        expected: &WorkspaceRemovalMarkerV1,
+    ) -> Result<RemovalObjectIdentityV1, WorkspaceRemovalFilesystemErrorV1> {
+        let mut marker = open_regular_file_optional(
+            runtime,
+            WORKSPACE_REMOVAL_MARKER_FILE_NAME_V1,
+            self.current_uid,
+        )?
+        .ok_or(WorkspaceRemovalFilesystemErrorV1::MarkerMissing)?;
+        let metadata = marker
+            .metadata()
+            .map_err(|source| removal_path_error("inspect workspace removal marker", source))?;
+        let actual =
+            WorkspaceRemovalMarkerV1::decode_canonical(&read_bounded_removal_marker(&mut marker)?)?;
+        if &actual != expected {
+            return Err(WorkspaceRemovalFilesystemErrorV1::MarkerChanged);
+        }
+        Ok(RemovalObjectIdentityV1::from_metadata(&metadata))
+    }
+
+    #[cfg(unix)]
+    fn require_exact_marker_with_identity(
+        &self,
+        runtime: &File,
+        expected: &WorkspaceRemovalMarkerV1,
+        identity: RemovalObjectIdentityV1,
+    ) -> Result<(), WorkspaceRemovalFilesystemErrorV1> {
+        if self.require_exact_marker(runtime, expected)? != identity {
+            return Err(WorkspaceRemovalFilesystemErrorV1::MarkerChanged);
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn remove_podway_directory(&self) -> Result<(), WorkspaceRemovalFilesystemErrorV1> {
+        let stat = nix::sys::stat::fstatat(&self.root, ".podway", AtFlags::AT_SYMLINK_NOFOLLOW)
+            .map_err(|source| removal_path_error("reinspect .podway directory", source.into()))?;
+        if !self.podway_identity.matches_stat(&stat) {
+            return Err(WorkspaceRemovalFilesystemErrorV1::UnsafePath);
+        }
+        unlinkat(&self.root, ".podway", UnlinkatFlags::RemoveDir)
+            .map_err(|source| removal_path_error("remove .podway directory", source.into()))?;
+        self.root
+            .sync_all()
+            .map_err(|source| removal_path_error("sync worktree root", source))
     }
 }
 
@@ -1149,6 +1754,481 @@ fn runtime_path_error(
         path,
         source,
     }
+}
+
+fn removal_path_error(
+    operation: &'static str,
+    source: io::Error,
+) -> WorkspaceRemovalFilesystemErrorV1 {
+    WorkspaceRemovalFilesystemErrorV1::Path { operation, source }
+}
+
+#[cfg(unix)]
+fn validate_removal_directory(
+    directory: &File,
+    current_uid: u32,
+    expected_device: u64,
+) -> Result<(), WorkspaceRemovalFilesystemErrorV1> {
+    let metadata = directory
+        .metadata()
+        .map_err(|source| removal_path_error("inspect Podway directory", source))?;
+    if !metadata.is_dir() || metadata.uid() != current_uid || metadata.dev() != expected_device {
+        return Err(WorkspaceRemovalFilesystemErrorV1::UnsafePath);
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn open_regular_file_optional(
+    parent: &File,
+    name: &str,
+    current_uid: u32,
+) -> Result<Option<File>, WorkspaceRemovalFilesystemErrorV1> {
+    let descriptor = match openat(
+        parent,
+        name,
+        OFlag::O_CLOEXEC | OFlag::O_NOFOLLOW | OFlag::O_NONBLOCK | OFlag::O_RDONLY,
+        Mode::empty(),
+    ) {
+        Ok(descriptor) => descriptor,
+        Err(Errno::ENOENT) => return Ok(None),
+        Err(Errno::ELOOP) => return Err(WorkspaceRemovalFilesystemErrorV1::UnsafePath),
+        Err(source) => {
+            return Err(removal_path_error(
+                "open workspace removal marker",
+                source.into(),
+            ));
+        }
+    };
+    let file = File::from(descriptor);
+    let metadata = file
+        .metadata()
+        .map_err(|source| removal_path_error("inspect workspace removal marker", source))?;
+    if !metadata.is_file()
+        || metadata.uid() != current_uid
+        || metadata.permissions().mode() & 0o777 != PRIVATE_RUNTIME_FILE_MODE_V1
+    {
+        return Err(WorkspaceRemovalFilesystemErrorV1::UnsafePath);
+    }
+    Ok(Some(file))
+}
+
+#[cfg(unix)]
+fn read_bounded_removal_marker(
+    file: &mut File,
+) -> Result<Vec<u8>, WorkspaceRemovalFilesystemErrorV1> {
+    let metadata = file
+        .metadata()
+        .map_err(|source| removal_path_error("inspect workspace removal marker", source))?;
+    if metadata.len() > MAX_WORKSPACE_REMOVAL_MARKER_BYTES_V1 {
+        return Err(WorkspaceRemovalFilesystemErrorV1::MarkerInvalid);
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(MAX_WORKSPACE_REMOVAL_MARKER_BYTES_V1 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|source| removal_path_error("read workspace removal marker", source))?;
+    if bytes.len() as u64 > MAX_WORKSPACE_REMOVAL_MARKER_BYTES_V1 {
+        return Err(WorkspaceRemovalFilesystemErrorV1::MarkerInvalid);
+    }
+    Ok(bytes)
+}
+
+#[cfg(unix)]
+fn removal_directory_entries(
+    directory: &File,
+    budget: &mut RemovalTraversalBudgetV1,
+) -> Result<Vec<OsString>, WorkspaceRemovalFilesystemErrorV1> {
+    let clone = directory
+        .try_clone()
+        .map_err(|source| removal_path_error("clone Podway directory descriptor", source))?;
+    let owned: OwnedFd = clone.into();
+    let mut directory = Dir::from_fd(owned)
+        .map_err(|source| removal_path_error("read Podway directory", source.into()))?;
+    let mut entries = Vec::new();
+    for entry in directory.iter() {
+        let entry =
+            entry.map_err(|source| removal_path_error("read Podway directory", source.into()))?;
+        let name = entry.file_name().to_bytes();
+        if name == b"." || name == b".." {
+            continue;
+        }
+        budget.consume()?;
+        entries.push(OsString::from_vec(name.to_vec()));
+    }
+    Ok(entries)
+}
+
+#[cfg(unix)]
+fn remove_directory_contents_v1(
+    root: &File,
+    directory: &File,
+    podway_identity: RemovalObjectIdentityV1,
+    current_uid: u32,
+    expected_device: u64,
+    relative: &[RemovalPathComponentV1],
+    budget: &mut RemovalTraversalBudgetV1,
+) -> Result<bool, WorkspaceRemovalFilesystemErrorV1> {
+    if relative.len() > MAX_WORKSPACE_REMOVAL_DEPTH_V1 {
+        return Err(WorkspaceRemovalFilesystemErrorV1::UnsafePath);
+    }
+    validate_removal_ancestry_v1(
+        root,
+        directory,
+        podway_identity,
+        current_uid,
+        expected_device,
+        relative,
+    )?;
+    let mut retained_marker = false;
+    for name in removal_directory_entries(directory, budget)? {
+        let is_marker = relative.len() == 1
+            && relative[0].name.as_bytes() == b"runtime"
+            && name.as_bytes() == WORKSPACE_REMOVAL_MARKER_FILE_NAME_V1.as_bytes();
+        if is_marker {
+            retained_marker = true;
+            continue;
+        }
+        let stat =
+            nix::sys::stat::fstatat(directory, name.as_os_str(), AtFlags::AT_SYMLINK_NOFOLLOW)
+                .map_err(|source| removal_path_error("inspect Podway entry", source.into()))?;
+        validate_removal_ancestry_v1(
+            root,
+            directory,
+            podway_identity,
+            current_uid,
+            expected_device,
+            relative,
+        )?;
+        let kind = SFlag::from_bits_truncate(stat.st_mode) & SFlag::S_IFMT;
+        if kind == SFlag::S_IFDIR {
+            let child = File::from(
+                openat(
+                    directory,
+                    name.as_os_str(),
+                    OFlag::O_CLOEXEC | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_RDONLY,
+                    Mode::empty(),
+                )
+                .map_err(|source| removal_path_error("open Podway subdirectory", source.into()))?,
+            );
+            validate_removal_directory(&child, current_uid, expected_device)?;
+            let child_metadata = child
+                .metadata()
+                .map_err(|source| removal_path_error("inspect Podway subdirectory", source))?;
+            let child_identity = RemovalObjectIdentityV1::from_metadata(&child_metadata);
+            if !child_identity.matches_stat(&stat) {
+                return Err(WorkspaceRemovalFilesystemErrorV1::UnsafePath);
+            }
+            let mut child_relative = relative.to_vec();
+            child_relative.push(RemovalPathComponentV1 {
+                name: name.clone(),
+                identity: child_identity,
+            });
+            let child_retained = remove_directory_contents_v1(
+                root,
+                &child,
+                podway_identity,
+                current_uid,
+                expected_device,
+                &child_relative,
+                budget,
+            )?;
+            if child_retained {
+                retained_marker = true;
+            } else {
+                validate_removal_ancestry_v1(
+                    root,
+                    directory,
+                    podway_identity,
+                    current_uid,
+                    expected_device,
+                    relative,
+                )?;
+                let current = nix::sys::stat::fstatat(
+                    directory,
+                    name.as_os_str(),
+                    AtFlags::AT_SYMLINK_NOFOLLOW,
+                )
+                .map_err(|source| {
+                    removal_path_error("reinspect Podway subdirectory", source.into())
+                })?;
+                if !child_identity.matches_stat(&current) {
+                    return Err(WorkspaceRemovalFilesystemErrorV1::UnsafePath);
+                }
+                unlinkat(directory, name.as_os_str(), UnlinkatFlags::RemoveDir).map_err(
+                    |source| removal_path_error("remove Podway subdirectory", source.into()),
+                )?;
+            }
+        } else if kind == SFlag::S_IFREG || kind == SFlag::S_IFLNK {
+            validate_removal_ancestry_v1(
+                root,
+                directory,
+                podway_identity,
+                current_uid,
+                expected_device,
+                relative,
+            )?;
+            unlinkat(directory, name.as_os_str(), UnlinkatFlags::NoRemoveDir)
+                .map_err(|source| removal_path_error("remove Podway entry", source.into()))?;
+        } else {
+            return Err(WorkspaceRemovalFilesystemErrorV1::UnsafePath);
+        }
+    }
+    directory
+        .sync_all()
+        .map_err(|source| removal_path_error("sync Podway directory", source))?;
+    Ok(retained_marker)
+}
+
+#[cfg(unix)]
+fn remove_empty_directories_v1(
+    root: &File,
+    directory: &File,
+    podway_identity: RemovalObjectIdentityV1,
+    current_uid: u32,
+    expected_device: u64,
+    relative: &[RemovalPathComponentV1],
+    budget: &mut RemovalTraversalBudgetV1,
+) -> Result<(), WorkspaceRemovalFilesystemErrorV1> {
+    if relative.len() > MAX_WORKSPACE_REMOVAL_DEPTH_V1 {
+        return Err(WorkspaceRemovalFilesystemErrorV1::UnsafePath);
+    }
+    validate_removal_ancestry_v1(
+        root,
+        directory,
+        podway_identity,
+        current_uid,
+        expected_device,
+        relative,
+    )?;
+    for name in removal_directory_entries(directory, budget)? {
+        let stat =
+            nix::sys::stat::fstatat(directory, name.as_os_str(), AtFlags::AT_SYMLINK_NOFOLLOW)
+                .map_err(|source| removal_path_error("inspect removal residual", source.into()))?;
+        let kind = SFlag::from_bits_truncate(stat.st_mode) & SFlag::S_IFMT;
+        if kind != SFlag::S_IFDIR {
+            return Err(WorkspaceRemovalFilesystemErrorV1::NotEmptyResidual);
+        }
+        let child = File::from(
+            openat(
+                directory,
+                name.as_os_str(),
+                OFlag::O_CLOEXEC | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_RDONLY,
+                Mode::empty(),
+            )
+            .map_err(|source| removal_path_error("open removal residual", source.into()))?,
+        );
+        validate_removal_directory(&child, current_uid, expected_device)?;
+        let metadata = child
+            .metadata()
+            .map_err(|source| removal_path_error("inspect removal residual", source))?;
+        let identity = RemovalObjectIdentityV1::from_metadata(&metadata);
+        if !identity.matches_stat(&stat) {
+            return Err(WorkspaceRemovalFilesystemErrorV1::UnsafePath);
+        }
+        let mut child_relative = relative.to_vec();
+        child_relative.push(RemovalPathComponentV1 {
+            name: name.clone(),
+            identity,
+        });
+        remove_empty_directories_v1(
+            root,
+            &child,
+            podway_identity,
+            current_uid,
+            expected_device,
+            &child_relative,
+            budget,
+        )?;
+        validate_removal_ancestry_v1(
+            root,
+            directory,
+            podway_identity,
+            current_uid,
+            expected_device,
+            relative,
+        )?;
+        let current =
+            nix::sys::stat::fstatat(directory, name.as_os_str(), AtFlags::AT_SYMLINK_NOFOLLOW)
+                .map_err(|source| {
+                    removal_path_error("reinspect removal residual", source.into())
+                })?;
+        if !identity.matches_stat(&current) {
+            return Err(WorkspaceRemovalFilesystemErrorV1::UnsafePath);
+        }
+        unlinkat(directory, name.as_os_str(), UnlinkatFlags::RemoveDir)
+            .map_err(|source| removal_path_error("remove empty residual", source.into()))?;
+    }
+    directory
+        .sync_all()
+        .map_err(|source| removal_path_error("sync removal residual", source))?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn validate_removal_ancestry_v1(
+    root: &File,
+    directory: &File,
+    podway_identity: RemovalObjectIdentityV1,
+    current_uid: u32,
+    expected_device: u64,
+    relative: &[RemovalPathComponentV1],
+) -> Result<(), WorkspaceRemovalFilesystemErrorV1> {
+    let mut current = File::from(
+        openat(
+            root,
+            ".podway",
+            OFlag::O_CLOEXEC | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_RDONLY,
+            Mode::empty(),
+        )
+        .map_err(|source| removal_path_error("reopen .podway directory", source.into()))?,
+    );
+    validate_removal_directory(&current, current_uid, expected_device)?;
+    let metadata = current
+        .metadata()
+        .map_err(|source| removal_path_error("reinspect .podway directory", source))?;
+    if RemovalObjectIdentityV1::from_metadata(&metadata) != podway_identity {
+        return Err(WorkspaceRemovalFilesystemErrorV1::UnsafePath);
+    }
+    for component in relative {
+        let stat = nix::sys::stat::fstatat(
+            &current,
+            component.name.as_os_str(),
+            AtFlags::AT_SYMLINK_NOFOLLOW,
+        )
+        .map_err(|source| removal_path_error("reinspect Podway ancestry", source.into()))?;
+        if !component.identity.matches_stat(&stat) {
+            return Err(WorkspaceRemovalFilesystemErrorV1::UnsafePath);
+        }
+        current = File::from(
+            openat(
+                &current,
+                component.name.as_os_str(),
+                OFlag::O_CLOEXEC | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_RDONLY,
+                Mode::empty(),
+            )
+            .map_err(|source| removal_path_error("reopen Podway ancestry", source.into()))?,
+        );
+        validate_removal_directory(&current, current_uid, expected_device)?;
+        let reopened = current
+            .metadata()
+            .map_err(|source| removal_path_error("reinspect Podway ancestry", source))?;
+        if RemovalObjectIdentityV1::from_metadata(&reopened) != component.identity {
+            return Err(WorkspaceRemovalFilesystemErrorV1::UnsafePath);
+        }
+    }
+    let expected = relative
+        .last()
+        .map(|component| component.identity)
+        .unwrap_or(podway_identity);
+    let actual = directory
+        .metadata()
+        .map_err(|source| removal_path_error("reinspect deletion directory", source))?;
+    if RemovalObjectIdentityV1::from_metadata(&actual) != expected {
+        return Err(WorkspaceRemovalFilesystemErrorV1::UnsafePath);
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn inspect_empty_directories_v1(
+    directory: &File,
+    current_uid: u32,
+    expected_device: u64,
+    depth: usize,
+    budget: &mut RemovalTraversalBudgetV1,
+) -> Result<bool, WorkspaceRemovalFilesystemErrorV1> {
+    if depth > MAX_WORKSPACE_REMOVAL_DEPTH_V1 {
+        return Err(WorkspaceRemovalFilesystemErrorV1::UnsafePath);
+    }
+    for name in removal_directory_entries(directory, budget)? {
+        let stat =
+            nix::sys::stat::fstatat(directory, name.as_os_str(), AtFlags::AT_SYMLINK_NOFOLLOW)
+                .map_err(|source| removal_path_error("inspect removal residual", source.into()))?;
+        let kind = SFlag::from_bits_truncate(stat.st_mode) & SFlag::S_IFMT;
+        if kind != SFlag::S_IFDIR {
+            return Ok(false);
+        }
+        let child = File::from(
+            openat(
+                directory,
+                name.as_os_str(),
+                OFlag::O_CLOEXEC | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_RDONLY,
+                Mode::empty(),
+            )
+            .map_err(|source| removal_path_error("open removal residual", source.into()))?,
+        );
+        validate_removal_directory(&child, current_uid, expected_device)?;
+        let metadata = child
+            .metadata()
+            .map_err(|source| removal_path_error("inspect removal residual", source))?;
+        if !RemovalObjectIdentityV1::from_metadata(&metadata).matches_stat(&stat) {
+            return Err(WorkspaceRemovalFilesystemErrorV1::UnsafePath);
+        }
+        if !inspect_empty_directories_v1(&child, current_uid, expected_device, depth + 1, budget)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+#[cfg(unix)]
+struct RemovalTraversalBudgetV1 {
+    remaining: usize,
+}
+
+#[cfg(unix)]
+impl RemovalTraversalBudgetV1 {
+    const fn new() -> Self {
+        Self {
+            remaining: MAX_WORKSPACE_REMOVAL_ENTRIES_V1,
+        }
+    }
+
+    fn consume(&mut self) -> Result<(), WorkspaceRemovalFilesystemErrorV1> {
+        self.remaining = self
+            .remaining
+            .checked_sub(1)
+            .ok_or(WorkspaceRemovalFilesystemErrorV1::UnsafePath)?;
+        Ok(())
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SerializedWorkspaceRemovalMarkerV1 {
+    schema: String,
+    operation_id: String,
+    request_digest: String,
+    response_request_id: String,
+    workspace_uuid: String,
+    root_identity: SerializedWorkspaceRemovalRootIdentityV1,
+    created_at: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SerializedWorkspaceRemovalRootIdentityV1 {
+    root_path_bytes_base64url: String,
+    common_dir_identity: String,
+    worktree_admin_identity: String,
+}
+
+#[derive(serde::Serialize)]
+struct SerializableWorkspaceRemovalMarkerV1<'a> {
+    schema: &'a str,
+    operation_id: &'a str,
+    request_digest: &'a str,
+    response_request_id: &'a str,
+    workspace_uuid: &'a str,
+    root_identity: SerializableWorkspaceRemovalRootIdentityV1<'a>,
+    created_at: &'a str,
+}
+
+#[derive(serde::Serialize)]
+struct SerializableWorkspaceRemovalRootIdentityV1<'a> {
+    root_path_bytes_base64url: &'a str,
+    common_dir_identity: &'a str,
+    worktree_admin_identity: &'a str,
 }
 
 #[derive(serde::Deserialize)]
@@ -2089,12 +3169,15 @@ mod tests {
     };
 
     use podway_core::{UnixMillis, WorkspaceId};
+    use podway_protocol::{RequestIdV1, Rfc3339MillisV1};
     use podway_store::{CanonicalRequestDigestV1, IdempotencyKeyV1, JobIdV1};
 
     use super::{
+        RemovalObjectIdentityV1, RemovalPathComponentV1, RemovalTraversalBudgetV1,
         ResetMaintenanceFilesystemTokenV1, ResetMarkerPublicationErrorV1,
         ResetMarkerPublicationFailpointV1, ResetMarkerV1, ValidatedRuntimeDirectoryErrorV1,
-        ValidatedRuntimeDirectoryV1,
+        ValidatedRuntimeDirectoryV1, WorkspaceRemovalFilesystemErrorV1, WorkspaceRemovalMarkerV1,
+        inspect_empty_directories_v1, remove_directory_contents_v1,
     };
 
     static RUNTIME_TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -2132,6 +3215,109 @@ mod tests {
             current_uid: nix::unistd::getuid().as_raw(),
         };
         (path, runtime)
+    }
+
+    #[test]
+    fn workspace_removal_marker_is_canonical_and_strict() {
+        let marker = WorkspaceRemovalMarkerV1 {
+            operation_id: RequestIdV1::new("00000000-0000-4000-8000-000000040001").unwrap(),
+            request_digest: CanonicalRequestDigestV1::new(format!("sha256:{}", "a".repeat(64)))
+                .unwrap(),
+            response_request_id: RequestIdV1::new("00000000-0000-4000-8000-000000040002").unwrap(),
+            workspace_uuid: WorkspaceId::new("00000000-0000-4000-8000-000000040003").unwrap(),
+            root_path_bytes_base64url: "L3RtcC9wb2R3YXk".to_owned(),
+            common_dir_identity: CanonicalRequestDigestV1::new(format!(
+                "sha256:{}",
+                "b".repeat(64)
+            ))
+            .unwrap(),
+            worktree_admin_identity: CanonicalRequestDigestV1::new(format!(
+                "sha256:{}",
+                "c".repeat(64)
+            ))
+            .unwrap(),
+            created_at: Rfc3339MillisV1::new("2026-08-28T00:00:00.000Z").unwrap(),
+        };
+        let bytes = marker.canonical_bytes().unwrap();
+        assert_eq!(
+            WorkspaceRemovalMarkerV1::decode_canonical(&bytes).unwrap(),
+            marker
+        );
+        let mut noncanonical = b" ".to_vec();
+        noncanonical.extend(bytes);
+        assert!(matches!(
+            WorkspaceRemovalMarkerV1::decode_canonical(&noncanonical),
+            Err(WorkspaceRemovalFilesystemErrorV1::MarkerInvalid)
+        ));
+    }
+
+    #[test]
+    fn nonempty_removal_residual_is_detected_without_partial_deletion() {
+        use std::os::unix::fs::MetadataExt;
+
+        let (path, runtime) = runtime_directory();
+        let first = path.join("first-empty");
+        let second = path.join("second-nonempty");
+        fs::create_dir(&first).unwrap();
+        fs::create_dir(&second).unwrap();
+        fs::write(second.join("retained"), "ambiguous").unwrap();
+        let metadata = runtime.directory.metadata().unwrap();
+        let empty = inspect_empty_directories_v1(
+            &runtime.directory,
+            nix::unistd::getuid().as_raw(),
+            metadata.dev(),
+            0,
+            &mut RemovalTraversalBudgetV1::new(),
+        )
+        .unwrap();
+        assert!(!empty);
+        assert!(
+            first.is_dir(),
+            "inspection must not delete earlier empty siblings"
+        );
+        assert!(second.join("retained").is_file());
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn renamed_removal_subdirectory_is_rejected_before_deleting_outside_podway() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        let sequence = RUNTIME_TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let root_path = std::env::temp_dir().join(format!(
+            "podway-removal-ancestry-unit-{}-{sequence}",
+            std::process::id()
+        ));
+        let podway_path = root_path.join(".podway");
+        let child_path = podway_path.join("child");
+        fs::create_dir_all(&child_path).unwrap();
+        fs::set_permissions(&podway_path, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&child_path, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::write(child_path.join("retained"), b"outside boundary").unwrap();
+
+        let root = fs::File::open(&root_path).unwrap();
+        let podway = fs::File::open(&podway_path).unwrap();
+        let child = fs::File::open(&child_path).unwrap();
+        let podway_identity = RemovalObjectIdentityV1::from_metadata(&podway.metadata().unwrap());
+        let child_identity = RemovalObjectIdentityV1::from_metadata(&child.metadata().unwrap());
+        let moved_path = root_path.join("moved-outside-podway");
+        fs::rename(&child_path, &moved_path).unwrap();
+
+        let result = remove_directory_contents_v1(
+            &root,
+            &child,
+            podway_identity,
+            nix::unistd::getuid().as_raw(),
+            podway.metadata().unwrap().dev(),
+            &[RemovalPathComponentV1 {
+                name: "child".into(),
+                identity: child_identity,
+            }],
+            &mut RemovalTraversalBudgetV1::new(),
+        );
+        assert!(result.is_err());
+        assert!(moved_path.join("retained").is_file());
+        fs::remove_dir_all(root_path).unwrap();
     }
 
     #[test]
