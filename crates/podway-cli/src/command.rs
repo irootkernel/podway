@@ -2081,6 +2081,16 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
                 {
                     explicit.workspace_id.clone()
                 }
+                ResponseEnvelopeV2::Error(error)
+                    if matches!(
+                        &cli.command,
+                        Command::Workspace {
+                            command: WorkspaceCommand::Remove { .. }
+                        }
+                    ) && error.code().as_str() == "SESSION_NOT_FOUND" =>
+                {
+                    explicit.workspace_id.clone()
+                }
                 ResponseEnvelopeV2::Error(error) => {
                     return re_correlate_preflight_error(&error, wire_name);
                 }

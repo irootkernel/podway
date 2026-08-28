@@ -27,12 +27,15 @@ use podway_daemon::{
         graph_prepared_session_state_from_procedure_v2_snapshot,
         workspace_procedure_snapshot_from_bytes_v2,
     },
+    observability::ObservabilityEmitterV1,
     production::{
         NativeProductionClockV1, ProductionControlServiceV1, ProductionMutationWorkerV1,
         ProductionPreviewServiceV1, ProductionReadServiceV1, ProductionWorkspaceRuntimeV1,
         ProductionWorkspaceV1,
     },
-    runtime_workspace::{WorkspaceRuntimeManagerV1, WorkspaceRuntimeObservationV1},
+    runtime_workspace::{
+        WorkspaceRemovalCrashBoundaryV1, WorkspaceRuntimeManagerV1, WorkspaceRuntimeObservationV1,
+    },
     server::{DaemonRequestV1, RequestDispatcherV1},
 };
 use podway_protocol::{
@@ -58,6 +61,28 @@ fn fixture_runtime_directory(root: &Path) -> std::path::PathBuf {
 
 pub(super) fn manager(root: &Path) -> WorkspaceRuntimeManagerV1 {
     manager_with_wal_autocheckpoint(root, 8)
+}
+
+pub(super) fn manager_with_workspace_removal_crash_boundary(
+    root: &Path,
+    boundary: WorkspaceRemovalCrashBoundaryV1,
+) -> WorkspaceRuntimeManagerV1 {
+    let application_support = root.join("Application Support");
+    fs::create_dir_all(&application_support).unwrap();
+    #[cfg(unix)]
+    fs::set_permissions(&application_support, fs::Permissions::from_mode(0o700)).unwrap();
+    let paths = ServiceRuntimePathsV1::from_directories(
+        root.join("LaunchAgents"),
+        application_support.join("Podway"),
+        root.join("Logs/Podway"),
+        fixture_runtime_directory(root),
+    )
+    .unwrap();
+    WorkspaceRuntimeManagerV1::with_workspace_removal_crash_boundary_for_tests(
+        &paths,
+        SqliteStoreOptionsV1::new(8).unwrap(),
+        boundary,
+    )
 }
 
 fn manager_with_wal_autocheckpoint(
@@ -186,6 +211,31 @@ pub(super) fn dispatcher(
         WorkerIdV1::new(worker_id).unwrap(),
         Arc::clone(&clock),
         Arc::clone(&manager),
+    );
+    RequestDispatcherV1Adapter::new(
+        DevelopmentV2RoutingRuntime {
+            inner: ProductionWorkspaceRuntimeV1::new(Arc::clone(&manager), Arc::clone(&clock)),
+        },
+        ProductionReadServiceV1::new(Arc::clone(&manager), Arc::clone(&clock)),
+        ProductionControlServiceV1::new(Arc::clone(&clock)),
+        ProductionPreviewServiceV1::new(Arc::clone(&clock)),
+        worker,
+        clock,
+        CatalogDispatchErrorMapperV1,
+    )
+}
+
+pub(super) fn dispatcher_with_observability(
+    manager: Arc<WorkspaceRuntimeManagerV1>,
+    worker_id: &str,
+    observability: ObservabilityEmitterV1,
+) -> impl RequestDispatcherV1 {
+    let clock = Arc::new(NativeProductionClockV1::default());
+    let worker = ProductionMutationWorkerV1::new_with_observability(
+        WorkerIdV1::new(worker_id).unwrap(),
+        Arc::clone(&clock),
+        Arc::clone(&manager),
+        Some(observability),
     );
     RequestDispatcherV1Adapter::new(
         DevelopmentV2RoutingRuntime {

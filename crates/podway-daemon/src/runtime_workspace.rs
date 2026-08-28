@@ -66,11 +66,30 @@ pub enum ResetAllCrashBoundaryV1 {
     NewTargetDatabaseCreated,
 }
 
+/// Workspace-removal crash boundaries available only through an explicitly injected test seam.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorkspaceRemovalCrashBoundaryV1 {
+    MarkerCreated,
+    RegistryEntryRemoved,
+    PodwayDirectoryRemoved,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct ResetAllCrashInjectionV1(Option<ResetAllCrashBoundaryV1>);
 
 impl ResetAllCrashInjectionV1 {
     fn abort_at(self, boundary: ResetAllCrashBoundaryV1) {
+        if self.0 == Some(boundary) {
+            std::process::abort();
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct WorkspaceRemovalCrashInjectionV1(Option<WorkspaceRemovalCrashBoundaryV1>);
+
+impl WorkspaceRemovalCrashInjectionV1 {
+    fn abort_at(self, boundary: WorkspaceRemovalCrashBoundaryV1) {
         if self.0 == Some(boundary) {
             std::process::abort();
         }
@@ -1782,6 +1801,9 @@ impl WorkspaceRemovalMaintenanceV1<'_> {
                 directory
                     .publish_marker(&marker)
                     .map_err(WorkspaceRuntimeErrorV1::WorkspaceRemovalFilesystem)?;
+                self.manager
+                    .workspace_removal_crash_injection
+                    .abort_at(WorkspaceRemovalCrashBoundaryV1::MarkerCreated);
                 let removed = self
                     .manager
                     .registry
@@ -1793,9 +1815,15 @@ impl WorkspaceRemovalMaintenanceV1<'_> {
                 if !matches!(removed, ExactRegistryRemovalOutcomeV1::Removed(_)) {
                     return Err(WorkspaceRuntimeErrorV1::WorkspaceRemovalConflict);
                 }
+                self.manager
+                    .workspace_removal_crash_injection
+                    .abort_at(WorkspaceRemovalCrashBoundaryV1::RegistryEntryRemoved);
                 directory
                     .remove_all_with_marker_last(&marker)
                     .map_err(WorkspaceRuntimeErrorV1::WorkspaceRemovalFilesystem)?;
+                self.manager
+                    .workspace_removal_crash_injection
+                    .abort_at(WorkspaceRemovalCrashBoundaryV1::PodwayDirectoryRemoved);
                 Ok(WorkspaceRemovalCompletionV1 {
                     worktree_root,
                     workspace_uuid: Some(marker.workspace_uuid().clone()),
@@ -1956,6 +1984,7 @@ pub struct WorkspaceRuntimeManagerV1 {
     schedulers: WorkspaceSchedulerRegistryV1<WorkspaceSchedulerContextV1>,
     maintenance: Arc<WorkspaceMaintenanceCoordinatorV1>,
     reset_crash_injection: ResetAllCrashInjectionV1,
+    workspace_removal_crash_injection: WorkspaceRemovalCrashInjectionV1,
 }
 
 impl WorkspaceRuntimeManagerV1 {
@@ -2000,6 +2029,7 @@ impl WorkspaceRuntimeManagerV1 {
             schedulers,
             maintenance: process_maintenance_coordinator_v1(),
             reset_crash_injection: ResetAllCrashInjectionV1::default(),
+            workspace_removal_crash_injection: WorkspaceRemovalCrashInjectionV1::default(),
         }
     }
     /// Constructs an isolated test manager with one deliberately injected crash boundary.
@@ -2013,6 +2043,20 @@ impl WorkspaceRuntimeManagerV1 {
     ) -> Self {
         let mut manager = Self::new(paths, inspection_options);
         manager.reset_crash_injection = ResetAllCrashInjectionV1(Some(boundary));
+        manager
+    }
+
+    /// Constructs an isolated test manager with one deliberately injected removal crash boundary.
+    ///
+    /// Production composition never accepts ambient failpoint configuration.
+    pub fn with_workspace_removal_crash_boundary_for_tests(
+        paths: &ServiceRuntimePathsV1,
+        inspection_options: SqliteStoreOptionsV1,
+        boundary: WorkspaceRemovalCrashBoundaryV1,
+    ) -> Self {
+        let mut manager = Self::new(paths, inspection_options);
+        manager.workspace_removal_crash_injection =
+            WorkspaceRemovalCrashInjectionV1(Some(boundary));
         manager
     }
 

@@ -76,7 +76,13 @@ idempotent replay; no domain effect may occur twice.
 
 Concurrency tests cover FIFO worktree ordering, parallel independent worktrees,
 bounded queues, stale identity fences, same-key replay and conflict, item races,
-and deletion of a worktree with pending jobs.
+and deletion of a worktree with pending jobs. Explicit workspace-removal tests
+abort child processes after durable marker publication, exact registry removal,
+and complete `.podway` deletion; cold replay must converge at every boundary
+without deleting the Git worktree. Separate tests cover stale authority and
+renamed-ancestor rejection, bounded success and rejection observability, exact
+confirmation, response-loss replay, empty and non-empty residuals, paths outside
+`.podway`, and reinitialization with a new workspace UUID.
 
 ## Development and distribution gates
 
@@ -85,8 +91,9 @@ contracts, Rust tests, the feature-gated contract verifier, serial real-binary
 E2E tests, preset tooling checks, and the isolated contributor runtime self-test.
 The E2E inventory covers normal public Procedure v2 admission, restart,
 goal-closeout, decision rework, idempotency reconciliation, service operation,
-and the shipped `sw-dev-v2` preset identity. Preset-specific integration tests
-cover the other shipped identities and their accepted paths.
+the shipped `sw-dev-v2` preset identity, and confirmed selected-worktree removal
+through production dispatch. Preset-specific integration tests cover the other
+shipped identities and their accepted paths.
 
 `make dist` is the release gate. It reruns `make test`, bounded fuzzing,
 release-profile builds, native qualification, packaging, Dolgorae handoff, and

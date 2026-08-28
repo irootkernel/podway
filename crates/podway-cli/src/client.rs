@@ -18,8 +18,8 @@ use nix::unistd::geteuid;
 use podway_protocol::{
     FrameErrorV1, OperationV1, PayloadCodecErrorV1, ProcedureV2MutationRequestV1,
     ProcedureV2StartRequestV1, RESERVED_V2_MUTATION_COMMAND_NAMES_V1, RequestEnvelopeV1,
-    ResponseEnvelopeV2, SliceErrorV1, SliceRequestV1, decode_response_payload_v2,
-    encode_request_payload_v1, read_single_frame_v1, write_frame_v1,
+    ResponseEnvelopeV2, SliceErrorV1, SliceRequestV1, WorkspaceRemoveRequestV1,
+    decode_response_payload_v2, encode_request_payload_v1, read_single_frame_v1, write_frame_v1,
 };
 use podway_service::ServiceRuntimePathsV1;
 
@@ -423,6 +423,9 @@ fn admit_version_aware_request(request: &RequestEnvelopeV1) -> Result<bool, Slic
     }
     if matches!(command, "session.start" | "session.start_replace") {
         return ProcedureV2StartRequestV1::from_envelope(request).map(|_| true);
+    }
+    if command == "workspace.remove" {
+        return WorkspaceRemoveRequestV1::from_envelope(request).map(|_| true);
     }
     SliceRequestV1::from_envelope(request).map(|_| false)
 }

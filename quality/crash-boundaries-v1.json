@@ -9,6 +9,7 @@
       "C11",
       "D01",
       "D02",
+      "D03",
       "S01",
       "S02",
       "S03"
@@ -20,6 +21,7 @@
       "C11",
       "D01",
       "D02",
+      "D03",
       "S01",
       "S02",
       "S03"
@@ -91,6 +93,17 @@
         "recovery": "valid predecessor or successor",
         "invariant": "no partial registry",
         "source_locator": "crates/podway-daemon/src/registry.rs::persist_registry_v1"
+      }
+    },
+    {
+      "id": "D03",
+      "proof": {
+        "failpoint": "workspace removal marker, registry, and directory boundaries",
+        "test": "crates/podway-daemon/tests/int_v2ret005_retirement_conformance.rs::every_removal_crash_boundary_converges_on_cold_replay",
+        "termination": "child abort observed at each injected boundary",
+        "recovery": "cold replay removes the exact registry generation and .podway directory",
+        "invariant": "the Git worktree survives and explicit removal converges exactly once",
+        "source_locator": "crates/podway-daemon/src/runtime_workspace.rs::WorkspaceRemovalMaintenanceV1::complete"
       }
     },
     {
