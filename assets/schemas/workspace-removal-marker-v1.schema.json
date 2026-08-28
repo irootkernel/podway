@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:workspace-removal-marker:v1",
+  "title": "Podway Workspace Removal Marker v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "operation_id", "request_digest", "response_request_id", "workspace_uuid", "root_identity", "created_at"],
+  "properties": {
+    "schema": { "const": "podway.workspace-removal-marker/v1" },
+    "operation_id": { "type": "string", "format": "uuid" },
+    "request_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "response_request_id": { "type": "string", "format": "uuid" },
+    "workspace_uuid": { "type": "string", "format": "uuid" },
+    "root_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root_path_bytes_base64url", "common_dir_identity", "worktree_admin_identity"],
+      "properties": {
+        "root_path_bytes_base64url": { "type": "string", "minLength": 2, "maxLength": 5462, "pattern": "^[A-Za-z0-9_-]+$" },
+        "common_dir_identity": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "worktree_admin_identity": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      }
+    },
+    "created_at": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/timestamp" }
+  }
+}

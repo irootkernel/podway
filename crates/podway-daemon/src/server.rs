@@ -24,9 +24,10 @@ use podway_protocol::{
     FRAME_LENGTH_PREFIX_BYTES_V1, FrameErrorV1, FrameIoPhaseV1, IdempotencyKeyV1, OperationV1,
     OutputEnvelopeInputV3, OutputEnvelopeV3, PayloadCodecErrorV1, ProcedureV2MutationRequestV1,
     ProcedureV2StartRequestV1, ProtocolError, RequestEnvelopeV1, RequestIdV1, ResponseEnvelopeV2,
-    Rfc3339MillisV1, SUPPORTED_PROTOCOLS_V1, SliceErrorV1, SliceRequestV1, build_identity_v1,
-    decode_request_payload_v1, decode_single_frame_v1, encode_response_payload_v2,
-    read_single_frame_v1, validate_frame_payload_length, write_frame_v1,
+    Rfc3339MillisV1, SUPPORTED_PROTOCOLS_V1, SliceErrorV1, SliceRequestV1,
+    WorkspaceRemoveRequestV1, build_identity_v1, decode_request_payload_v1, decode_single_frame_v1,
+    encode_response_payload_v2, read_single_frame_v1, validate_frame_payload_length,
+    write_frame_v1,
 };
 use serde_json::{Map, Value};
 
@@ -613,11 +614,15 @@ pub enum DaemonRequestV1 {
     Legacy(SliceRequestV1),
     ProcedureV2Start(ProcedureV2StartRequestV1),
     ProcedureV2Mutation(ProcedureV2MutationRequestV1),
+    WorkspaceRemove(WorkspaceRemoveRequestV1),
 }
 
 impl DaemonRequestV1 {
     /// Classifies a fully decoded IPC envelope without making reserved v2 routes executable.
     pub fn from_envelope(request: &RequestEnvelopeV1) -> Result<Self, SliceErrorV1> {
+        if request.command().as_str() == "workspace.remove" {
+            return WorkspaceRemoveRequestV1::from_envelope(request).map(Self::WorkspaceRemove);
+        }
         if podway_protocol::RESERVED_V2_MUTATION_COMMAND_NAMES_V1
             .contains(&request.command().as_str())
         {
@@ -636,7 +641,9 @@ impl DaemonRequestV1 {
     pub fn legacy(&self) -> Option<&SliceRequestV1> {
         match self {
             Self::Legacy(request) => Some(request),
-            Self::ProcedureV2Start(_) | Self::ProcedureV2Mutation(_) => None,
+            Self::ProcedureV2Start(_) | Self::ProcedureV2Mutation(_) | Self::WorkspaceRemove(_) => {
+                None
+            }
         }
     }
 
@@ -645,6 +652,7 @@ impl DaemonRequestV1 {
             Self::Legacy(_) => None,
             Self::ProcedureV2Start(request) => Some(request.command().command_name()),
             Self::ProcedureV2Mutation(request) => Some(request.command().command_name()),
+            Self::WorkspaceRemove(_) => Some("workspace.remove"),
         }
     }
 
@@ -662,6 +670,7 @@ impl DaemonRequestV1 {
                 "goal.assess_criterion" => "podway.criterion-assessment-result/v1",
                 _ => unreachable!("Procedure v2 mutation decoder is closed"),
             }),
+            Self::WorkspaceRemove(_) => Some("podway.workspace-removal-result/v1"),
         }
     }
 }

@@ -27,6 +27,8 @@ These JSON Schema Draft 2020-12 files define Podway's versioned structural contr
 - `version-summary-v1.schema.json`: compact public product name and version.
 - `version-result-v1.schema.json`: detailed static build and contract identity.
 - `workspace-init-result-v1.schema.json`: terminal workspace initialization outcome.
+- `workspace-removal-result-v1.schema.json`: explicit selected-worktree retirement outcome.
+- `workspace-removal-marker-v1.schema.json`: durable exact-identity workspace-removal recovery marker.
 - `detached-admission-result-v1.schema.json`: detached workspace initialization admission.
 - `job-result-v3.schema.json`: job status/wait wrapper and terminal response.
 - `job-lookup-result-v3.schema.json`: idempotency-key reconciliation result.

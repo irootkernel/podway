@@ -22,6 +22,7 @@
     { "$ref": "#/$defs/daemonStatus" },
     { "$ref": "#/$defs/daemonReadiness" },
     { "$ref": "#/$defs/workspaceInit" },
+    { "$ref": "#/$defs/workspaceRemoval" },
     { "$ref": "#/$defs/procedureValidation" },
     { "$ref": "#/$defs/detachedAdmission" },
     { "$ref": "#/$defs/sessionStart" },
@@ -117,6 +118,19 @@
         }
       },
       "not": { "required": ["session"] }
+    },
+    "workspaceRemoval": {
+      "properties": {
+        "command": { "const": "workspace.remove" },
+        "result": { "$ref": "urn:podway:schema:workspace-removal-result:v1" }
+      },
+      "not": {
+        "anyOf": [
+          { "required": ["workspace"] },
+          { "required": ["job"] },
+          { "required": ["session"] }
+        ]
+      }
     },
     "terminalMutationOutput": {
       "type": "object",

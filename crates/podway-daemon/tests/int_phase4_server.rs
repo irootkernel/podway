@@ -384,6 +384,34 @@ fn mutation_request(command: &str, payload: Map<String, Value>) -> RequestEnvelo
     .expect("mutation fixture is structurally valid")
 }
 
+fn reserved_workspace_remove_request(force: bool, confirmed: bool) -> RequestEnvelopeV1 {
+    let selector =
+        WorktreeSelectorWireV1::new(b"/tmp/podway-worktree", "/tmp/podway-worktree", None)
+            .expect("fixture selector is valid");
+    RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
+        request_id: RequestIdV1::new(REQUEST_ID).expect("fixture request ID is valid"),
+        client: ClientInfoV1::new("podway-test", "1.0.0", 42).expect("fixture client is valid"),
+        operation: OperationV1::Control,
+        command: CommandNameV1::new("workspace.remove").expect("fixture command is valid"),
+        workspace: Some(
+            WorkspaceContextV1::new("/tmp/podway-worktree", None)
+                .expect("fixture workspace context is valid"),
+        ),
+        idempotency_key: None,
+        preconditions: PreconditionsV1::default(),
+        options: RequestOptionsV1::new(false, 0).expect("fixture options are valid"),
+        payload: json!({
+            "selector": selector,
+            "force": force,
+            "confirmed": confirmed
+        })
+        .as_object()
+        .expect("fixture payload is an object")
+        .clone(),
+    })
+    .expect("workspace removal fixture is structurally valid")
+}
+
 fn reserved_v2_cases() -> Vec<(&'static str, Value, Value, &'static str)> {
     let selector = serde_json::to_value(
         WorktreeSelectorWireV1::new(b"/tmp/podway-worktree", "/tmp/podway-worktree", None)
@@ -742,6 +770,65 @@ fn all_registered_unserved_v2_mutations_cross_the_socket_as_closed_errors() {
         assert_eq!(error.details()["admission"], json!({"admitted": false}));
         assert!(handler.join().expect("handler must not panic").is_ok());
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[test]
+fn registered_workspace_removal_is_closed_but_not_executable() {
+    let (mut client, server) =
+        UnixStream::pair().expect("Unix stream fixture pair must be created");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let transport = transport(
+        TestDispatcher::new(DispatcherOutcome::Success, Arc::clone(&calls)),
+        EXPECTED_UID,
+        ServerTransportTimeoutsV1::default(),
+    );
+    let request = reserved_workspace_remove_request(true, true);
+    let handler = {
+        let transport = Arc::clone(&transport);
+        thread::spawn(move || transport.handle_connection(server))
+    };
+
+    send_and_half_close(&mut client, &request_frame(&request));
+    let ResponseEnvelopeV2::Error(error) = read_response_v2(&mut client) else {
+        panic!("reserved workspace removal must return a compatibility error");
+    };
+    assert_eq!(error.code().as_str(), "UNSUPPORTED_V2_CAPABILITY");
+    assert_eq!(error.details()["capability"], "workspace.remove");
+    assert_eq!(
+        error.details()["required_result_schema"],
+        "podway.workspace-removal-result/v1"
+    );
+    assert!(handler.join().expect("handler must not panic").is_ok());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn malformed_workspace_removal_is_rejected_before_dispatch() {
+    for request in [
+        reserved_workspace_remove_request(false, true),
+        reserved_workspace_remove_request(true, false),
+    ] {
+        let (mut client, server) =
+            UnixStream::pair().expect("Unix stream fixture pair must be created");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let transport = transport(
+            TestDispatcher::new(DispatcherOutcome::Success, Arc::clone(&calls)),
+            EXPECTED_UID,
+            ServerTransportTimeoutsV1::default(),
+        );
+        let handler = {
+            let transport = Arc::clone(&transport);
+            thread::spawn(move || transport.handle_connection(server))
+        };
+
+        send_and_half_close(&mut client, &request_frame(&request));
+        let ResponseEnvelopeV2::Error(error) = read_response_v2(&mut client) else {
+            panic!("malformed workspace removal must return a request error");
+        };
+        assert_eq!(error.code().as_str(), "REQUEST_INVALID");
+        assert!(handler.join().expect("handler must not panic").is_ok());
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 }
 

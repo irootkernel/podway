@@ -361,6 +361,7 @@
       "workspace.doctor",
       "workspace.show",
       "workspace.repair",
+      "workspace.remove",
       "session.start",
       "session.start_replace",
       "session.begin",
@@ -1277,7 +1278,7 @@
       {
         "id": "urn:podway:schema:output:v3",
         "path": "schemas/output-v3.schema.json",
-        "sha256": "sha256:4b3a4a023694d336b6e6a21843d9d294c5721c9569a2f1f9eeb806fbd9bd4d10"
+        "sha256": "sha256:831147e05959545f03dc5fd0b7df5cbfee3dd773c637f8b1d20eacd63eec5c3e"
       },
       {
         "id": "urn:podway:schema:prepared-next-result:v1",
@@ -1480,6 +1481,16 @@
         "sha256": "sha256:d5ac050ba137f9231e0d6e3c79c7d6fda763cecd490c5d9ee31c39defc49a052"
       },
       {
+        "id": "urn:podway:schema:workspace-removal-marker:v1",
+        "path": "schemas/workspace-removal-marker-v1.schema.json",
+        "sha256": "sha256:562d1fb28acad1f44903944173041120253557a80c1d68c6c2c3921a57914987"
+      },
+      {
+        "id": "urn:podway:schema:workspace-removal-result:v1",
+        "path": "schemas/workspace-removal-result-v1.schema.json",
+        "sha256": "sha256:03ada1ebab7d93392d98cb1152951b76c08a3cc689e5498a2a371bd6abb74bff"
+      },
+      {
         "id": "urn:podway:schema:workspace:v1",
         "path": "schemas/workspace-v1.schema.json",
         "sha256": "sha256:61461264d6da76953a1e41534360a28e3fe294bf329972da7b687f3ac7822d1a"
@@ -1488,9 +1499,9 @@
   },
   "current_surface_counts": {
     "authoring_diagnostics": 58,
-    "routes": 66,
+    "routes": 67,
     "runtime_errors": 102,
-    "schemas": 81
+    "schemas": 83
   },
   "migration_boundary": {
     "adapter_database_access": "forbidden",

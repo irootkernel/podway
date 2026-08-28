@@ -183,6 +183,7 @@ V2_ROUTE_DELTA = {
     "goal.assess_criterion", "session.begin", "session.terminal_disposition",
     "evidence.read",
     "daemon.wait-ready",
+    "workspace.remove",
 }
 # V2_ROUTE_DELTA members whose owning task has landed. The delta itself never shrinks: a route
 # stays registered forever, and this set records only which of them the build now serves.
@@ -737,7 +738,7 @@ def validate_routes(root: Path) -> int:
     if not isinstance(prohibited, list) or set(prohibited) != PROHIBITED_CAPABILITIES or len(prohibited) != len(PROHIBITED_CAPABILITIES):
         fail("command route contract must prohibit command_runner, git_mutation, and network")
     routes = contract["routes"]
-    if not isinstance(routes, list) or len(routes) != 66:
+    if not isinstance(routes, list) or len(routes) != 67:
         fail("command route contract routes must be a list")
 
     expected_commands = catalog_commands(root) | {"completions"}

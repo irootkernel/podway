@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:workspace-removal-result:v1",
+  "title": "Podway Workspace Removal Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "worktree_root", "workspace_uuid", "registry_entry_removed", "podway_directory_removed", "already_absent"],
+  "properties": {
+    "schema": { "const": "podway.workspace-removal-result/v1" },
+    "worktree_root": { "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^/" },
+    "workspace_uuid": {
+      "oneOf": [
+        { "type": "string", "format": "uuid" },
+        { "type": "null" }
+      ]
+    },
+    "registry_entry_removed": { "type": "boolean" },
+    "podway_directory_removed": { "type": "boolean" },
+    "already_absent": { "type": "boolean" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "already_absent": { "const": true } }, "required": ["already_absent"] },
+      "then": {
+        "properties": {
+          "workspace_uuid": { "type": "null" },
+          "registry_entry_removed": { "const": false }
+        }
+      },
+      "else": { "properties": { "workspace_uuid": { "type": "string", "format": "uuid" } } }
+    }
+  ]
+}

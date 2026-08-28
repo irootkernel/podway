@@ -392,7 +392,7 @@ fn v2grf_preview_uses_one_closed_result_family_for_every_document_outcome() {
 #[test]
 fn v2ctr003_registry_is_versioned_and_covers_exactly_the_v2_authoring_routes() {
     assert_eq!(EXISTING_ROUTE_RESULT_SCHEMAS_V2.len(), 17);
-    assert_eq!(NEW_ROUTE_RESULT_SCHEMAS_V1.len(), 21);
+    assert_eq!(NEW_ROUTE_RESULT_SCHEMAS_V1.len(), 22);
     assert!(
         EXISTING_ROUTE_RESULT_SCHEMAS_V2
             .iter()
@@ -439,9 +439,10 @@ fn v2ctr003_registry_is_versioned_and_covers_exactly_the_v2_authoring_routes() {
             "goal.assess_criterion",
             "item.record_many",
             "evidence.read",
+            "workspace.remove",
         ])
     );
-    assert_eq!(routes.len(), 23);
+    assert_eq!(routes.len(), 24);
 }
 
 #[test]
@@ -467,6 +468,59 @@ fn v2ctr003_registry_top_level_fields_match_every_canonical_schema() {
         assert_eq!(schema_required, required.iter().copied().collect());
         assert_eq!(schema_allowed, allowed.iter().copied().collect());
     }
+}
+
+#[test]
+fn v2ret002_workspace_removal_result_is_closed_and_procedure_independent() {
+    let result = json!({
+        "schema": "podway.workspace-removal-result/v1",
+        "worktree_root": "/tmp/podway-v2ret",
+        "workspace_uuid": UUID,
+        "registry_entry_removed": true,
+        "podway_directory_removed": true,
+        "already_absent": false
+    });
+    assert_valid("schemas/workspace-removal-result-v1.schema.json", &result);
+    assert!(decode_result_schema_contract_v2(result.as_object().unwrap()).is_some());
+    assert!(validate_command_result_v2("workspace.remove", result.as_object().unwrap()).is_ok());
+
+    let output = json!({
+        "schema": OUTPUT_SCHEMA_V3,
+        "request_id": UUID,
+        "command": "workspace.remove",
+        "generated_at": "2026-08-28T00:00:00.000Z",
+        "result": result,
+        "warnings": []
+    });
+    assert_valid("schemas/output-v3.schema.json", &output);
+    let mut invalid = output;
+    add_workspace_envelope_metadata(&mut invalid);
+    assert_invalid("schemas/output-v3.schema.json", &invalid);
+
+    let absent = json!({
+        "schema": "podway.workspace-removal-result/v1",
+        "worktree_root": "/tmp/podway-v2ret",
+        "workspace_uuid": null,
+        "registry_entry_removed": false,
+        "podway_directory_removed": false,
+        "already_absent": true
+    });
+    assert_valid("schemas/workspace-removal-result-v1.schema.json", &absent);
+
+    let marker = json!({
+        "schema": "podway.workspace-removal-marker/v1",
+        "operation_id": UUID,
+        "request_digest": DIGEST,
+        "response_request_id": UUID,
+        "workspace_uuid": UUID,
+        "root_identity": {
+            "root_path_bytes_base64url": "L3RtcC9wb2R3YXktdjJyZXQ",
+            "common_dir_identity": DIGEST,
+            "worktree_admin_identity": DIGEST
+        },
+        "created_at": "2026-08-28T00:00:00.000Z"
+    });
+    assert_valid("schemas/workspace-removal-marker-v1.schema.json", &marker);
 }
 
 #[test]

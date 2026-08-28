@@ -1,2 +1,3 @@
 # Repository-local agent instructions must not enter provider review prompts.
 /AGENTS.md
+/CLAUDE.md

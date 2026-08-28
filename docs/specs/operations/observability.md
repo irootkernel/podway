@@ -48,6 +48,12 @@ internal categories. Records cannot carry task titles, item values, artifact
 locations, procedure content, full requests, idempotency keys, filesystem paths,
 or raw error source chains.
 
+Workspace retirement reserves `registry_entry_prune` and `workspace_remove` as
+daemon-log operations. Both use only `succeeded`, `rejected`, or `failed` and
+never record a worktree root or removed content. Removal may retain the bounded
+workspace UUID while known and the explicit request ID; an `already_absent`
+convergence is `succeeded`.
+
 ## Queueing and configuration
 
 The sink uses bounded primary and priority queues. Saturation does not block request processing; dropped records and saturation episodes are counted and included in the frozen shutdown report.

@@ -197,6 +197,15 @@ Doctor is read-only. It may recommend `init --repair`, `workspace repair`, daemo
 
 Workspace maintenance operations such as migration and reset-all obtain an exclusive in-memory scheduler lock plus a database or filesystem marker. Normal admission fails with a retryable maintenance error while the operation is active.
 
+Explicit workspace removal uses the same maintenance key and reserves the closed
+`podway.workspace-removal-marker/v1` contract. The marker binds an operation ID,
+canonical request digest, response request ID, workspace UUID, exact root path and
+Git identities, and creation time. Recovery resumes only after revalidating that
+identity; it removes the marker last and accepts only a descriptor-verified empty
+`.podway` residual as an already-absent replay convergence. Symlinks, mounts,
+non-directories, changed roots, competing markers, and unknown non-empty residuals
+fail closed.
+
 ## No backup or export requirement
 
 The public v1 product intentionally has no:

@@ -116,6 +116,21 @@ must agree. The daemon rejects disagreement during request decoding, before disp
 
 The daemon independently re-discovers and validates the worktree. It never trusts the path or UUID solely because the CLI supplied them.
 
+### Reserved workspace removal
+
+`workspace.remove` is a synchronous `control` route with no durable job or
+idempotency key. Its closed payload carries the selector plus literal
+`force: true` and `confirmed: true`; its workspace UUID, when known, is carried
+consistently by the envelope and selector. The closed
+`podway.workspace-removal-result/v1` result contains the resolved root, nullable
+workspace UUID, separate registry and `.podway` removal booleans, and the
+`already_absent` convergence flag. A successful output deliberately omits outer
+workspace, job, and session projections because the selected workspace state no
+longer exists. Exact request replay is keyed by the request identity and the
+marker's canonical request digest; it does not retain deleted content or add a
+global tombstone. Until V2RET-004, a well-formed request returns the registered
+unsupported-capability response before workspace mutation.
+
 ## Preconditions
 
 The `preconditions` object may contain:

@@ -1046,12 +1046,24 @@ pub struct ProcedureV2MutationRequestV1 {
     command: ProcedureV2MutationCommandV1,
 }
 
+/// One decoded reserved workspace-removal request.
+///
+/// This closed protocol shape does not by itself make the command executable.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceRemoveRequestV1 {
+    selector: WorktreeSelectorWireV1,
+    force: bool,
+    confirmed: bool,
+}
+
 /// The authoritative G006 daemon route set. No aliases are admitted at the protocol boundary.
-pub const DAEMON_COMMAND_NAMES_V1: [&str; 35] = [
+pub const DAEMON_COMMAND_NAMES_V1: [&str; 36] = [
     "workspace.init",
     "workspace.doctor",
     "workspace.show",
     "workspace.repair",
+    "workspace.remove",
     "session.start",
     "session.start_replace",
     "session.status",
@@ -1812,6 +1824,54 @@ impl TryFrom<&RequestEnvelopeV1> for SliceRequestV1 {
     }
 }
 
+impl WorkspaceRemoveRequestV1 {
+    /// Decodes the complete closed removal payload without registering runtime execution.
+    pub fn from_envelope(envelope: &RequestEnvelopeV1) -> Result<Self, SliceErrorV1> {
+        require_envelope(envelope, "workspace.remove", OperationV1::Control, false)?;
+        require_no_preconditions(envelope.preconditions())?;
+        let payload: WorkspaceRemovePayloadV1 = parse_payload(envelope)?;
+        if !payload.force {
+            return Err(SliceErrorV1::InvalidValue { field: "force" });
+        }
+        if !payload.confirmed {
+            return Err(SliceErrorV1::InvalidValue { field: "confirmed" });
+        }
+        let workspace = envelope.workspace().ok_or(SliceErrorV1::MissingWorkspace {
+            command: "workspace.remove",
+        })?;
+        if workspace.expected_uuid() != payload.selector.expected_uuid() {
+            return Err(SliceErrorV1::InvalidValue {
+                field: "workspace.expected_uuid/selector.expected_uuid",
+            });
+        }
+        Ok(Self {
+            selector: payload.selector,
+            force: payload.force,
+            confirmed: payload.confirmed,
+        })
+    }
+
+    pub fn selector(&self) -> &WorktreeSelectorWireV1 {
+        &self.selector
+    }
+
+    pub const fn force(&self) -> bool {
+        self.force
+    }
+
+    pub const fn confirmed(&self) -> bool {
+        self.confirmed
+    }
+}
+
+impl TryFrom<&RequestEnvelopeV1> for WorkspaceRemoveRequestV1 {
+    type Error = SliceErrorV1;
+
+    fn try_from(envelope: &RequestEnvelopeV1) -> Result<Self, Self::Error> {
+        Self::from_envelope(envelope)
+    }
+}
+
 impl ProcedureV2MutationRequestV1 {
     pub fn from_envelope(envelope: &RequestEnvelopeV1) -> Result<Self, SliceErrorV1> {
         let (selector, command) = match envelope.command().as_str() {
@@ -2164,6 +2224,14 @@ struct WorkspaceInitPayloadV1 {
 struct WorkspaceDoctorPayloadV1 {
     selector: WorktreeSelectorWireV1,
     deep: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkspaceRemovePayloadV1 {
+    selector: WorktreeSelectorWireV1,
+    force: bool,
+    confirmed: bool,
 }
 
 #[derive(Deserialize)]
