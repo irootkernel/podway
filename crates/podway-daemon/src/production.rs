@@ -1648,14 +1648,14 @@ impl ProductionMutationWorkerV1 {
         &self,
         scheduler: &Arc<WorkspaceSchedulerV1<WorkspaceSchedulerContextV1>>,
     ) -> Result<(), DispatchFailureV1> {
-        match self
+        let retirement_source = match self
             .manager
             .revalidate_scheduler(scheduler)
             .map_err(map_runtime_error)?
         {
             WorkspaceSchedulerRevalidationV1::Current => return Ok(()),
-            WorkspaceSchedulerRevalidationV1::RetireRequired { .. } => {}
-        }
+            WorkspaceSchedulerRevalidationV1::RetireRequired { source, .. } => source,
+        };
 
         let context = scheduler.context_snapshot();
         let workspace_uuid = context.binding().identity().workspace_uuid().clone();
@@ -1663,7 +1663,12 @@ impl ProductionMutationWorkerV1 {
         drop(context);
         match self.manager.observe_registry_root(&exact_root) {
             Ok(LocalPathPresenceV1::Missing) => {}
-            Ok(LocalPathPresenceV1::Present) | Err(_) => return Ok(()),
+            Ok(LocalPathPresenceV1::Present) => {
+                return Err(map_runtime_error(WorkspaceRuntimeErrorV1::Resolution(
+                    retirement_source,
+                )));
+            }
+            Err(source) => return Err(map_runtime_error(source)),
         }
         self.worker
             .retire_missing_workspace(self.manager.scheduler_registry(), scheduler)
