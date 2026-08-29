@@ -471,6 +471,10 @@ Dependencies: completed `V2SKL` epic.
 
 ## V2RET — Workspace Retirement and Registry Hygiene
 
+Status: Completed.
+
+Canonical Outcomes: [ADR-0030](../architecture-decision-records/0030-retire-workspaces-and-prune-stale-registry-entries.md), [IPC protocol](../specs/interfaces/ipc-protocol.md), [JSON contract](../specs/interfaces/json-contract.md), [CLI specification](../specs/interfaces/cli-specification.md), [recovery specification](../specs/storage/recovery-retention-and-maintenance.md), [testing and conformance](../specs/quality/testing-and-conformance.md), and [crash-boundary registry](../../quality/crash-boundaries-v1.json).
+
 Dependencies: completed `V2RDY` epic.
 
 | id | title | status | goal | references |
