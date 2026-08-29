@@ -1,6 +1,6 @@
 # Workspace and Session Lifecycle
 
-Read this reference only when the user asks to initialize Podway, start or replace a session, archive or purge retained state, control the daemon, cancel or reset state, or repair a workspace.
+Read this reference only when the user asks to initialize Podway, start or replace a session, archive or purge retained state, control the daemon, cancel or reset state, remove Podway from a workspace, or repair a workspace.
 
 ## Diagnose first
 
@@ -23,6 +23,7 @@ Read this reference only when the user asks to initialize Podway, start or repla
 
 ## Manage terminal and destructive operations
 
+- Match the command to the requested deletion boundary. `reset` deletes the current session and its session-scoped history. `archive purge` permanently deletes one selected inactive session. `reset --all` reinitializes all workspace runtime state while preserving reviewable `.podway` configuration and Procedures. `workspace remove` deletes the complete `.podway` tree while preserving the Git worktree. Do not widen one request into another boundary.
 - Treat `cancel` as ending the current task, not as a pause.
 - Treat `reset` as deletion of session-scoped history. Show or summarize the current session first and require an explicit user request before invoking it. Default reset is eligible only for prepared state or terminal state with a disposition for the exact current revision. Force reset requires a bounded progress summary and explicit confirmation.
 - A completed or cancelled session becomes eligible only after `disposition handed-off` or `disposition not-required` records its current ownership outcome. `superseded` is created only by atomic running-session preservation during `start`. Never invent the summary, reference, reason, or actor.
@@ -33,6 +34,19 @@ Read this reference only when the user asks to initialize Podway, start or repla
 - Use `workspace repair` or daemon uninstall only for a diagnosed condition and an explicit request. Preserve the current installed binary and endpoint identities unless replacement is authorized.
 - Daemon replacement is not a subcommand: replacing the managed daemon means re-running `podway daemon install` with a new binary, and it remains explicit-request-only.
 - Do not edit `.podway/runtime/`, SQLite files, registry metadata, sockets, or LaunchAgent files manually to simulate a supported lifecycle action.
+
+## Remove Podway from a workspace
+
+Use this flow only when the user explicitly asks to stop using Podway in one exact existing Git worktree and accepts deletion of its complete `.podway` tree. A generic cleanup request, a missing session, or an old registry entry is not workspace-removal authorization.
+
+1. Resolve and state the exact absolute Git worktree root. Run `podway help workspace.remove`, then inspect the current target with `podway workspace show --json` and `podway doctor` as applicable. Obtain the current workspace UUID from supported output; never read or edit the registry directly and never invent a missing UUID.
+2. Explain that removal deletes configuration, ignore rules, custom Procedures, current and inactive sessions, runtime state, and unknown content below `.podway`. It preserves the Git worktree and every path outside `.podway`, does not mutate Git, and leaves daemon logs outside the worktree. Inspect `git status --short -- .podway` and `git ls-files -- .podway` so tracked or modified project content that will appear deleted is visible before authorization.
+3. Require the request to identify the exact worktree and accept complete `.podway` deletion. Do not treat approval to reset or purge a session, clean stale registry metadata, uninstall the daemon, or delete a Git worktree as equivalent authorization.
+4. Immediately before mutation, re-read the workspace through supported commands and require the same absolute root and workspace UUID. For JSON or non-TTY execution, invoke the exact target with `podway --worktree <absolute-root> workspace remove --force --if-workspace-uuid <workspace-uuid> --yes`. For direct human TTY use, `--yes` may be omitted only so Podway can require the user to type the resolved absolute root exactly.
+5. Confirm success only from `podway.workspace-removal-result/v1`. Report its prior workspace UUID, registry and content removal fields, and `already_absent` state. Then verify through supported read-only workspace status and filesystem inspection that the selected `.podway` tree is absent while the Git worktree remains.
+6. Workspace removal is a synchronous maintenance mutation, not a durable job. After response loss or an interrupted removal, do not use job lookup, manually delete residual state, weaken the UUID fence, or assume either success or failure. Reinspect the exact root with supported workspace diagnostics; marker-backed recovery or an identical revalidated removal may converge the operation. Stop if the root, UUID, registry generation, filesystem identity, or deletion boundary is ambiguous.
+
+Do not combine workspace removal with daemon uninstall, daemon log purging, Git cleanup, worktree deletion, commit, or publication unless each additional operation is explicitly requested.
 
 ## Discard the current session
 

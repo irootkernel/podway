@@ -11,6 +11,7 @@ This file records concise shipped outcomes and the planned next stable release.
 ### Changed
 
 - Replace single-release candidate notes with this cumulative changelog and ship it in distribution archives.
+- Teach the source-distributed `use-podway` skill to distinguish session cleanup from complete workspace removal and require exact target confirmation.
 
 ### Fixed
 

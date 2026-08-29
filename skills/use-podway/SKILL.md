@@ -1,6 +1,6 @@
 ---
 name: use-podway
-description: Use only when the user explicitly asks to use Podway for the current workflow or to inspect, advance, initialize, start, replace, archive, purge, cancel, discard, reset, diagnose, or recover Podway state. Operate Procedure v2 safely by reading authoritative state, recording supported results, following graph transitions, and reconciling uncertain mutations. Do not use for authoring Procedure source or merely because Podway is installed or configured, a repository contains Podway files, another skill mentions optional Podway integration, or a session already exists.
+description: Use only when the user explicitly asks to use Podway for the current workflow or to inspect, advance, initialize, start, replace, archive, purge, cancel, discard, reset, remove a workspace, diagnose, or recover Podway state. Operate Procedure v2 safely by reading authoritative state, recording supported results, following graph transitions, and reconciling uncertain mutations. Do not use for authoring Procedure source or merely because Podway is installed or configured, a repository contains Podway files, another skill mentions optional Podway integration, or a session already exists.
 ---
 
 # Use Podway
@@ -56,7 +56,7 @@ Enter a worktree only after explicit activation for the current workflow.
 
 `--json` is a global flag on every command. For a non-default invocation, the global endpoint options are `--worktree <path>`, `--socket <absolute-path>`, and `--timeout <duration>`.
 
-For initialization, session creation or replacement, archive or purge, daemon control, reset, cancel, or workspace repair, read [references/lifecycle.md](references/lifecycle.md) before acting.
+For initialization, session creation or replacement, archive or purge, daemon control, reset, cancel, workspace removal, or workspace repair, read [references/lifecycle.md](references/lifecycle.md) before acting.
 
 When the user explicitly asks to start a session, prefer `small-change-v2` for a bounded change that needs inspection, implementation, verification, review, and closeout but no tracked goal. Prefer `analysis-v2` for source-backed research or technical analysis. Use the other fuller goal-tracked presets when their assessment and evidence requirements match the task.
 
@@ -75,7 +75,7 @@ When the user explicitly asks to start a session, prefer `small-change-v2` for a
    - Skip is a distinct disposition, not a quiet completion. It is legal only where the active placement's declared skip policy allows it; required items and open blockers do not gate it; it atomically clears the attempt's recorded item values; and a terminal skip applies the same goal and fresh-assessment readiness gates as terminal completion.
 7. Stop and report a real external dependency with `podway block` only when the active task cannot progress; do not use a blocker to represent ordinary incomplete work.
 
-Active-session item updates and justified progression do not require a separate confirmation. Session creation, start-time preservation or deletion, archival, purge, cancellation, reset, workspace-wide reset, daemon lifecycle changes, repair, and reactivating a completed session through `rework` or `goal revise --reactivate` require an explicit user request. Starting a new session authorizes the built-in archival of a disposed terminal session, but does not authorize deleting current work or purging inactive history.
+Active-session item updates and justified progression do not require a separate confirmation. Session creation, start-time preservation or deletion, archival, purge, cancellation, reset, workspace-wide reset, workspace removal, daemon lifecycle changes, repair, and reactivating a completed session through `rework` or `goal revise --reactivate` require an explicit user request. Starting a new session authorizes the built-in archival of a disposed terminal session, but does not authorize deleting current work, purging inactive history, or removing the workspace's Podway state.
 
 ## Follow the Procedure v2 graph
 
