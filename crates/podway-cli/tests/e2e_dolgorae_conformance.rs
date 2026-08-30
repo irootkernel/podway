@@ -140,6 +140,11 @@ impl ControlledPathFixtureV1 {
     }
 
     fn run(&self, path: &str, arguments: &[&str]) -> Output {
+        assert!(
+            !(self.production_service
+                && arguments.starts_with(&["--json", "daemon", "wait-ready"])),
+            "distribution qualification must not probe the installed production daemon"
+        );
         let mut command = Command::new("podway");
         if self.production_service && arguments.starts_with(&["--json", "daemon", "restart"]) {
             self.restart_dev_daemon(path);
@@ -149,10 +154,7 @@ impl ControlledPathFixtureV1 {
             output.stdout = br#"{"schema":"podway.output/v3","command":"daemon.restart","result":{"status":"running"},"warnings":[]}"#.to_vec();
             return output;
         }
-        if self.production_service
-            && !arguments.contains(&"--socket")
-            && !arguments.starts_with(&["--json", "daemon", "wait-ready"])
-        {
+        if self.production_service && !arguments.contains(&"--socket") {
             command.arg("--dev");
         }
         command
@@ -651,14 +653,18 @@ fn install_sibling_release(fixture: &ControlledPathFixtureV1, label: &str) -> (S
         &["--json", "daemon", "install"],
         &release_daemon,
     );
-    let wait_ready = ["--json", "daemon", "wait-ready", "--timeout", "5s"];
-    let ready = assert_json_success(
-        fixture.run(&controlled_path, &wait_ready),
-        wait_ready.iter().copied(),
-    );
-    assert_eq!(ready["command"], "daemon.wait-ready");
-    assert_eq!(ready["result"]["schema"], "podway.daemon-status-result/v2");
-    assert_eq!(ready["result"]["readiness_state"], "ready");
+    if fixture.production_service {
+        fixture.wait_for_daemon_readiness();
+    } else {
+        let wait_ready = ["--json", "daemon", "wait-ready", "--timeout", "5s"];
+        let ready = assert_json_success(
+            fixture.run(&controlled_path, &wait_ready),
+            wait_ready.iter().copied(),
+        );
+        assert_eq!(ready["command"], "daemon.wait-ready");
+        assert_eq!(ready["result"]["schema"], "podway.daemon-status-result/v2");
+        assert_eq!(ready["result"]["readiness_state"], "ready");
+    }
     (controlled_path, release_daemon)
 }
 
