@@ -13,11 +13,75 @@ use podway_daemon::{
     },
     server::DaemonRequestV1,
 };
-use podway_protocol::{PreconditionsV1, ResponseEnvelopeV2};
+use podway_protocol::{PreconditionsV1, ResponseEnvelopeV2, WorktreeSelectorWireV1};
 use podway_store::WorkerIdV1;
 use serde_json::json;
 
 use crate::{int_v2run003_runtime, support_phase4_workspace};
+
+fn selector_with_uuid(
+    selector: &WorktreeSelectorWireV1,
+    workspace_uuid: podway_core::WorkspaceId,
+) -> WorktreeSelectorWireV1 {
+    let selector_path = selector.path_bytes().unwrap();
+    WorktreeSelectorWireV1::new(&selector_path, selector.display(), Some(workspace_uuid)).unwrap()
+}
+
+#[test]
+fn dispatcher_classifies_a_deleted_registered_worktree_before_session_begin_admission() {
+    let fixture = support_phase4_workspace::git_worktrees();
+    int_v2run003_runtime::make_runtime_private(fixture.main());
+    let selector = int_v2run003_runtime::selector(fixture.main());
+    let manager = Arc::new(int_v2run003_runtime::manager(fixture.temporary_path()));
+    let dispatcher = int_v2run003_runtime::dispatcher(Arc::clone(&manager), "v2ret003-dispatch");
+    let initialize = int_v2run003_runtime::request(
+        300_000,
+        "workspace.init",
+        &selector,
+        serde_json::Map::new(),
+        "v2ret003-dispatch-initialize",
+        PreconditionsV1::default(),
+    );
+    let ResponseEnvelopeV2::OutputV2(initialized) =
+        int_v2run003_runtime::dispatch(&dispatcher, &initialize)
+    else {
+        panic!("workspace.init must succeed")
+    };
+    let workspace_uuid = initialized.workspace().unwrap().uuid().clone();
+    let selected = selector_with_uuid(&selector, workspace_uuid.clone());
+    let begin = int_v2run003_runtime::request(
+        300_010,
+        "session.begin",
+        &selected,
+        serde_json::Map::new(),
+        "v2ret003-dispatch-begin",
+        PreconditionsV1::new(
+            Some(SessionId::new("00000000-0000-4000-8000-000000030010").unwrap()),
+            Some(Revision::ZERO),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+
+    fs::remove_dir_all(fixture.main()).expect("fixture worktree must be deleted");
+    let ResponseEnvelopeV2::Error(failure) = int_v2run003_runtime::dispatch(&dispatcher, &begin)
+    else {
+        panic!("deleted worktree must fail before session.begin admission")
+    };
+    assert_eq!(failure.code().as_str(), "WORKTREE_GONE");
+    assert!(
+        manager
+            .registry()
+            .load()
+            .expect("registry must remain readable")
+            .lookup(&workspace_uuid)
+            .is_none(),
+        "the exact deleted generation must be pruned"
+    );
+}
 
 #[test]
 fn pre_mutation_revalidation_retires_and_prunes_a_deleted_worktree() {

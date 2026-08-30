@@ -279,6 +279,32 @@ impl ProductionWorkspaceRuntimeV1 {
         WorkspaceRuntimeObservationV1::new(self.clock.now(), self.clock.generated_at())
     }
 
+    fn map_missing_active_generation(
+        &self,
+        selector: &WorktreeSelectorV1,
+        expected_workspace_uuid: Option<&WorkspaceId>,
+        error: WorkspaceRuntimeErrorV1,
+    ) -> DispatchFailureV1 {
+        let is_preliminary_io = matches!(
+            &error,
+            WorkspaceRuntimeErrorV1::Resolution(WorkspaceResolutionErrorV1::Git {
+                observation: crate::workspace::WorkspaceGitObservationV1::Preliminary,
+                source: podway_git::GitResolverErrorV1::Io { .. },
+            })
+        );
+        if is_preliminary_io && let Some(expected_workspace_uuid) = expected_workspace_uuid {
+            return match self
+                .manager
+                .prune_missing_active_generation(selector, expected_workspace_uuid)
+            {
+                Ok(true) => DispatchFailureV1::new(DispatchFailureKindV1::WorktreeGone),
+                Ok(false) => map_runtime_error(error),
+                Err(prune_error) => map_runtime_error(prune_error),
+            };
+        }
+        map_runtime_error(error)
+    }
+
     fn revalidate_active_store(
         &self,
         scheduler: &Arc<WorkspaceSchedulerV1<WorkspaceSchedulerContextV1>>,
@@ -393,10 +419,20 @@ impl WorkspaceRuntimeV1 for ProductionWorkspaceRuntimeV1 {
     ) -> Result<Self::Workspace, DispatchFailureV1> {
         let expected_workspace_id = selector.expected_uuid();
         let selector = selector_from_wire(selector)?;
-        let scheduler = self
-            .manager
-            .resolve_existing(selector, expected_workspace_id, self.observation())
-            .map_err(map_runtime_error)?;
+        let scheduler = match self.manager.resolve_existing(
+            selector.clone(),
+            expected_workspace_id,
+            self.observation(),
+        ) {
+            Ok(scheduler) => scheduler,
+            Err(error) => {
+                return Err(self.map_missing_active_generation(
+                    &selector,
+                    expected_workspace_id,
+                    error,
+                ));
+            }
+        };
         self.workspace_from_scheduler(scheduler)
     }
     fn resolve_existing_readonly(
@@ -426,9 +462,16 @@ impl WorkspaceRuntimeV1 for ProductionWorkspaceRuntimeV1 {
             ProcedureV2AdmissionGateV1::Public => {
                 let expected_workspace_id = selector.expected_uuid();
                 let selector = selector_from_wire(selector)?;
-                self.manager
-                    .resolve_existing_readonly(selector, expected_workspace_id)
-                    .map_err(map_runtime_error)?;
+                if let Err(error) = self
+                    .manager
+                    .resolve_existing_readonly(selector.clone(), expected_workspace_id)
+                {
+                    return Err(self.map_missing_active_generation(
+                        &selector,
+                        expected_workspace_id,
+                        error,
+                    ));
+                }
                 Ok(Some(ProcedureV2AdmissionProofV1::granted_for_runtime()))
             }
             ProcedureV2AdmissionGateV1::Development(admission) => {

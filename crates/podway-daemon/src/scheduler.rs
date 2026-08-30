@@ -499,6 +499,19 @@ impl<C> WorkspaceSchedulerRegistryV1<C> {
         }
     }
 
+    /// Returns a bounded snapshot of the active generations without retaining the registry lock.
+    pub(crate) fn active_generations(&self) -> Vec<Arc<WorkspaceSchedulerV1<C>>> {
+        let state = mutex_lock(&self.inner.state);
+        state
+            .slots
+            .values()
+            .filter_map(|slot| match slot {
+                WorkspaceSchedulerRegistrySlotV1::Active(scheduler) => Some(Arc::clone(scheduler)),
+                WorkspaceSchedulerRegistrySlotV1::Retiring { .. } => None,
+            })
+            .collect()
+    }
+
     /// Atomically returns the active scheduler or reserves exactly one generation for `factory`.
     ///
     /// A factory runs without the registry lock. Calls that encounter a creating or actively closing

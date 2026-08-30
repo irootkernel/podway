@@ -2120,6 +2120,57 @@ impl WorkspaceRuntimeManagerV1 {
             .map_err(WorkspaceRuntimeErrorV1::Registry)
     }
 
+    /// Retires and prunes an active exact registry generation when its selected root is absent.
+    ///
+    /// This is the pre-resolution counterpart of mutation-worker revalidation: it is used only
+    /// when a missing root prevents the preliminary Git pass from reconstructing durable identity.
+    pub(crate) fn prune_missing_active_generation(
+        &self,
+        selector: &WorktreeSelectorV1,
+        expected_workspace_uuid: &WorkspaceId,
+    ) -> Result<bool, WorkspaceRuntimeErrorV1> {
+        let exact_root = validated_root_from_lossless(selector.path())?;
+        let Some(entry) = self
+            .registry
+            .lookup(expected_workspace_uuid)
+            .map_err(WorkspaceRuntimeErrorV1::Registry)?
+        else {
+            return Ok(false);
+        };
+        if entry.last_known_root() != &exact_root
+            || self.observe_registry_root(&exact_root)? != LocalPathPresenceV1::Missing
+        {
+            return Ok(false);
+        }
+
+        let mut matching = self
+            .schedulers
+            .active_generations()
+            .into_iter()
+            .filter(|scheduler| {
+                let context = scheduler.context_snapshot();
+                context.binding().identity().workspace_uuid() == expected_workspace_uuid
+                    && context.binding().last_validated_root() == &exact_root
+            });
+        let Some(scheduler) = matching.next() else {
+            return Ok(false);
+        };
+        if matching.next().is_some() {
+            return Err(WorkspaceRuntimeErrorV1::MaintenanceInProgress);
+        }
+
+        self.schedulers
+            .retire(&scheduler, |retiring| {
+                retiring.with_serialized(|context| {
+                    context.stop_claims();
+                    Ok::<(), ()>(())
+                })
+            })
+            .map_err(|_| WorkspaceRuntimeErrorV1::MaintenanceInProgress)?;
+        let _ = self.confirm_and_prune_registry_generation(expected_workspace_uuid, &exact_root)?;
+        Ok(true)
+    }
+
     pub(crate) fn scheduler_registry(
         &self,
     ) -> &WorkspaceSchedulerRegistryV1<WorkspaceSchedulerContextV1> {
