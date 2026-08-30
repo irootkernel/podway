@@ -40,6 +40,7 @@ The daemon reads the length before allocating the payload buffer and rejects ove
 
 ## Request envelope
 
+<!-- IPC_REQUEST_EXAMPLE_START -->
 ```json
 {
   "protocol": "podway.ipc/v1",
@@ -52,26 +53,37 @@ The daemon reads the length before allocating the payload buffer and rejects ove
     "contract_manifest_digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
   },
   "operation": "mutate",
-  "command": "session.complete",
+  "command": "session.begin",
   "workspace": {
     "root": "/Users/example/src/project-wt",
     "expected_uuid": "83f9fbaa-3df8-4c23-8253-f94098b0af63"
   },
-  "idempotency_key": "task-42-verify-complete",
+  "idempotency_key": "task-42-begin",
   "preconditions": {
     "session_id": "9f8ad796-e4de-4f9d-b114-b68cf3de7561",
-    "session_revision": 12,
-    "attempt_id": "6f8e7429-3703-47cf-81dc-ae4048352f1f"
+    "session_revision": 0
   },
   "options": {
     "detach": false,
     "wait_timeout_ms": 30000
   },
-  "payload": {}
+  "payload": {
+    "selector": {
+      "version": 1,
+      "path_bytes_base64url": "L1VzZXJzL2V4YW1wbGUvc3JjL3Byb2plY3Qtd3Q",
+      "display": "/Users/example/src/project-wt",
+      "expected_uuid": "83f9fbaa-3df8-4c23-8253-f94098b0af63"
+    }
+  }
 }
 ```
+<!-- IPC_REQUEST_EXAMPLE_END -->
 
 The normative structural schema is [`../../../assets/schemas/ipc-request-v1.schema.json`](../../../assets/schemas/ipc-request-v1.schema.json).
+It validates the common envelope shape; each command additionally owns a closed,
+command-specific payload contract enforced during request decoding. The client
+version and contract manifest digest above are representative values and must be
+replaced with the exact peer identity for a live handshake.
 
 ## Operations
 

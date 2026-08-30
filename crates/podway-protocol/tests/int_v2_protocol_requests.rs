@@ -4,10 +4,11 @@ use podway_protocol::{
     ProcedureV2StartRequestV1, RequestEnvelopeV1, SessionDeletionModeV1, SliceRequestV1,
     V2_MUTATION_COMMANDS, canonical_mutation_identity_v1,
     canonical_procedure_v2_mutation_identity_v1, canonical_procedure_v2_start_identity_v1,
-    canonical_start_mutation_identity_v1,
+    canonical_start_mutation_identity_v1, decode_request_payload_v1,
 };
 use serde_json::{Value, json};
 
+const IPC_PROTOCOL_DOCUMENT: &str = include_str!("../../../docs/specs/interfaces/ipc-protocol.md");
 const REQUEST_ID: &str = "00000000-0000-4000-8000-000000000001";
 const SESSION_ID: &str = "00000000-0000-4000-8000-000000000002";
 const ATTEMPT_ID: &str = "00000000-0000-4000-8000-000000000003";
@@ -22,6 +23,60 @@ fn selector() -> Value {
         "display": "/tmp/podway-v2",
         "expected_uuid": WORKSPACE_ID,
     })
+}
+
+#[test]
+fn documented_ipc_request_example_is_command_admissible() {
+    let (_, after_start) = IPC_PROTOCOL_DOCUMENT
+        .split_once("<!-- IPC_REQUEST_EXAMPLE_START -->")
+        .expect("IPC request example start marker");
+    let (example, _) = after_start
+        .split_once("<!-- IPC_REQUEST_EXAMPLE_END -->")
+        .expect("IPC request example end marker");
+    let json = example
+        .trim()
+        .strip_prefix("```json\n")
+        .and_then(|value| value.strip_suffix("\n```"))
+        .expect("IPC request example JSON fence");
+
+    let envelope = decode_request_payload_v1(json.as_bytes()).expect("valid request envelope");
+    assert_eq!(envelope.command().as_str(), "session.begin");
+    assert_eq!(
+        envelope.workspace().expect("workspace context").root(),
+        "/Users/example/src/project-wt"
+    );
+    assert_eq!(
+        envelope
+            .preconditions()
+            .session_revision()
+            .expect("session revision")
+            .get(),
+        0
+    );
+    assert!(!envelope.options().detach());
+    assert_eq!(envelope.options().wait_timeout_ms(), 30_000);
+
+    let request = ProcedureV2MutationRequestV1::from_envelope(&envelope)
+        .expect("command-admissible session.begin request");
+    assert!(matches!(
+        request.command(),
+        ProcedureV2MutationCommandV1::SessionBegin(_)
+    ));
+    assert_eq!(
+        request
+            .selector()
+            .path_bytes()
+            .expect("selector path bytes"),
+        b"/Users/example/src/project-wt"
+    );
+    assert_eq!(
+        request
+            .selector()
+            .expected_uuid()
+            .expect("selector workspace identity")
+            .to_string(),
+        "83f9fbaa-3df8-4c23-8253-f94098b0af63"
+    );
 }
 
 #[test]

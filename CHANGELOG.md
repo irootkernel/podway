@@ -15,6 +15,7 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ### Fixed
 
+- Correct the public IPC mutation example to include the command-level worktree selector required by decoding.
 - Prune only conclusively missing exact workspace registry generations while retaining ambiguous recovery failures.
 
 ## v0.2.6 - 2026-08-26
