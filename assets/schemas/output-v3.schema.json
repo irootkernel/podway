@@ -23,6 +23,8 @@
     { "$ref": "#/$defs/daemonReadiness" },
     { "$ref": "#/$defs/workspaceInit" },
     { "$ref": "#/$defs/workspaceRemoval" },
+    { "$ref": "#/$defs/workspaceModePlan" },
+    { "$ref": "#/$defs/workspaceModeApply" },
     { "$ref": "#/$defs/procedureValidation" },
     { "$ref": "#/$defs/detachedAdmission" },
     { "$ref": "#/$defs/sessionStart" },
@@ -81,7 +83,8 @@
         "result": {
           "oneOf": [
             { "$ref": "urn:podway:schema:daemon-status-result:v1" },
-            { "$ref": "urn:podway:schema:daemon-status-result:v2" }
+            { "$ref": "urn:podway:schema:daemon-status-result:v2" },
+            { "$ref": "urn:podway:schema:daemon-status-result:v3" }
           ]
         }
       },
@@ -96,7 +99,12 @@
     "daemonReadiness": {
       "properties": {
         "command": { "const": "daemon.wait-ready" },
-        "result": { "$ref": "urn:podway:schema:daemon-status-result:v2" }
+        "result": {
+          "oneOf": [
+            { "$ref": "urn:podway:schema:daemon-status-result:v2" },
+            { "$ref": "urn:podway:schema:daemon-status-result:v3" }
+          ]
+        }
       },
       "not": {
         "anyOf": [
@@ -123,6 +131,32 @@
       "properties": {
         "command": { "const": "workspace.remove" },
         "result": { "$ref": "urn:podway:schema:workspace-removal-result:v1" }
+      },
+      "not": {
+        "anyOf": [
+          { "required": ["workspace"] },
+          { "required": ["job"] },
+          { "required": ["session"] }
+        ]
+      }
+    },
+    "workspaceModePlan": {
+      "properties": {
+        "command": { "const": "workspace.mode.plan" },
+        "result": { "$ref": "urn:podway:schema:workspace-mode-plan-result:v1" }
+      },
+      "not": {
+        "anyOf": [
+          { "required": ["workspace"] },
+          { "required": ["job"] },
+          { "required": ["session"] }
+        ]
+      }
+    },
+    "workspaceModeApply": {
+      "properties": {
+        "command": { "const": "workspace.mode.apply" },
+        "result": { "$ref": "urn:podway:schema:workspace-mode-apply-result:v1" }
       },
       "not": {
         "anyOf": [

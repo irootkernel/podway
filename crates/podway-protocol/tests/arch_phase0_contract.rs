@@ -289,6 +289,7 @@ const FROZEN_ERROR_CATALOG: &[(&str, u8, bool)] = &[
     ("WORKSPACE_INIT_CONFLICT", 5, false),
     ("WORKSPACE_ID_CONFLICT", 5, false),
     ("WORKSPACE_UUID_MISMATCH", 4, false),
+    ("WORKSPACE_MODE_MISMATCH", 4, false),
     ("WORKSPACE_CONFIG_INVALID", 5, false),
     ("WORKSPACE_STATE_UNREADABLE", 5, false),
     ("WORKSPACE_SCHEMA_UNSUPPORTED", 5, false),
@@ -473,6 +474,15 @@ fn api_004_error_catalog_is_exhaustive_and_error_pairs_fail_closed() {
                 Some("523e4567-e89b-12d3-a456-426614174000"),
                 false,
             ),
+            "WORKSPACE_MODE_MISMATCH" => Map::from_iter([
+                (
+                    "schema".to_owned(),
+                    json!("podway.workspace-mode-mismatch-details/v1"),
+                ),
+                ("boundary".to_owned(), json!("store")),
+                ("expected_mode".to_owned(), json!("dev")),
+                ("actual_mode".to_owned(), json!("prod")),
+            ]),
             "SESSION_ID_MISMATCH" => identity_details(
                 "podway.session-id-mismatch-details/v2",
                 "expected_session_id",

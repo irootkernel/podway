@@ -184,6 +184,8 @@ V2_ROUTE_DELTA = {
     "evidence.read",
     "daemon.wait-ready",
     "workspace.remove",
+    "workspace.mode.plan",
+    "workspace.mode.apply",
 }
 # V2_ROUTE_DELTA members whose owning task has landed. The delta itself never shrinks: a route
 # stays registered forever, and this set records only which of them the build now serves.
@@ -230,6 +232,7 @@ PROCEDURE_INDEPENDENT_RUNTIME_ERROR_CODES = (
     "SOCKET_ENDPOINT_INVALID", "NOT_A_GIT_WORKTREE", "BARE_GIT_REPOSITORY",
     "WORKTREE_GONE", "WORKSPACE_NOT_INITIALIZED", "WORKSPACE_ALREADY_INITIALIZED",
     "WORKSPACE_INIT_CONFLICT", "WORKSPACE_ID_CONFLICT", "WORKSPACE_UUID_MISMATCH",
+    "WORKSPACE_MODE_MISMATCH",
     "WORKSPACE_CONFIG_INVALID", "WORKSPACE_STATE_UNREADABLE", "WORKSPACE_SCHEMA_UNSUPPORTED",
     "WORKSPACE_QUEUE_FULL", "WORKSPACE_MAINTENANCE", "WORKSPACE_PATH_UNSAFE",
     "PATH_OUTSIDE_WORKTREE", "MIGRATION_FAILED", "PROCEDURE_NOT_FOUND", "PROCEDURE_INVALID",
@@ -480,7 +483,7 @@ def validate_v2_catalog_delta(root: Path) -> int:
     if set(runtime) != {"schema", "exit_codes", "errors"}:
         fail("error catalog has unexpected or missing top-level fields")
     entries = runtime.get("errors")
-    if not isinstance(entries, list) or len(entries) != 102:
+    if not isinstance(entries, list) or len(entries) != 103:
         fail("runtime error catalog must contain the v2-only error set")
     runtime_codes = [entry.get("code") for entry in entries if isinstance(entry, dict)]
     if len(runtime_codes) != len(entries) or len(set(runtime_codes)) != len(runtime_codes):
@@ -515,6 +518,7 @@ def validate_v2_catalog_delta(root: Path) -> int:
         "DAEMON_READINESS_TIMEOUT": "podway.daemon-readiness-timeout-details/v1",
         "DAEMON_CONTRACT_MISMATCH": "podway.daemon-contract-mismatch-details/v2",
         "WORKSPACE_UUID_MISMATCH": "podway.workspace-uuid-mismatch-details/v2",
+        "WORKSPACE_MODE_MISMATCH": "podway.workspace-mode-mismatch-details/v1",
         "WORKSPACE_STATE_UNREADABLE": "podway.workspace-recovery-details/v1",
         "WORKSPACE_SCHEMA_UNSUPPORTED": "podway.workspace-recovery-details/v1",
         "PROCEDURE_DIGEST_MISMATCH": "podway.procedure-digest-mismatch-details/v2",
@@ -739,7 +743,7 @@ def validate_routes(root: Path) -> int:
     if not isinstance(prohibited, list) or set(prohibited) != PROHIBITED_CAPABILITIES or len(prohibited) != len(PROHIBITED_CAPABILITIES):
         fail("command route contract must prohibit command_runner, git_mutation, and network")
     routes = contract["routes"]
-    if not isinstance(routes, list) or len(routes) != 67:
+    if not isinstance(routes, list) or len(routes) != 69:
         fail("command route contract routes must be a list")
 
     expected_commands = catalog_commands(root) | {"completions"}

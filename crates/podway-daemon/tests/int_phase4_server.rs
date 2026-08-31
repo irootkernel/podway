@@ -412,6 +412,35 @@ fn reserved_workspace_remove_request(force: bool, confirmed: bool) -> RequestEnv
     .expect("workspace removal fixture is structurally valid")
 }
 
+fn reserved_workspace_mode_request(command: &str, target: &str) -> RequestEnvelopeV1 {
+    let selector =
+        WorktreeSelectorWireV1::new(b"/tmp/podway-worktree", "/tmp/podway-worktree", None)
+            .expect("fixture selector is valid");
+    let mut payload = json!({"selector": selector, "to": target});
+    if command == "workspace.mode.apply" {
+        payload["plan_token"] = json!("opaque-plan-token");
+    }
+    RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
+        request_id: RequestIdV1::new(REQUEST_ID).expect("fixture request ID is valid"),
+        client: ClientInfoV1::new("podway-test", "1.0.0", 42).expect("fixture client is valid"),
+        operation: if command == "workspace.mode.plan" {
+            OperationV1::Query
+        } else {
+            OperationV1::Control
+        },
+        command: CommandNameV1::new(command).expect("fixture command is valid"),
+        workspace: Some(
+            WorkspaceContextV1::new("/tmp/podway-worktree", None)
+                .expect("fixture workspace context is valid"),
+        ),
+        idempotency_key: None,
+        preconditions: PreconditionsV1::default(),
+        options: RequestOptionsV1::new(false, 0).expect("fixture options are valid"),
+        payload: payload.as_object().unwrap().clone(),
+    })
+    .expect("workspace mode fixture is structurally valid")
+}
+
 fn reserved_v2_cases() -> Vec<(&'static str, Value, Value, &'static str)> {
     let selector = serde_json::to_value(
         WorktreeSelectorWireV1::new(b"/tmp/podway-worktree", "/tmp/podway-worktree", None)
@@ -801,6 +830,44 @@ fn fallback_mutation_worker_rejects_workspace_removal_without_an_executor() {
     );
     assert!(handler.join().expect("handler must not panic").is_ok());
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn v2dvc002_mode_switch_routes_are_typed_but_remain_unsupported() {
+    for (command, result_schema) in [
+        (
+            "workspace.mode.plan",
+            "podway.workspace-mode-plan-result/v1",
+        ),
+        (
+            "workspace.mode.apply",
+            "podway.workspace-mode-apply-result/v1",
+        ),
+    ] {
+        let (mut client, server) =
+            UnixStream::pair().expect("Unix stream fixture pair must be created");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let transport = transport(
+            TestDispatcher::new(DispatcherOutcome::Success, Arc::clone(&calls)),
+            EXPECTED_UID,
+            ServerTransportTimeoutsV1::default(),
+        );
+        let request = reserved_workspace_mode_request(command, "dev");
+        let handler = {
+            let transport = Arc::clone(&transport);
+            thread::spawn(move || transport.handle_connection(server))
+        };
+
+        send_and_half_close(&mut client, &request_frame(&request));
+        let ResponseEnvelopeV2::Error(error) = read_response_v2(&mut client) else {
+            panic!("reserved workspace mode route must return a compatibility error");
+        };
+        assert_eq!(error.code().as_str(), "UNSUPPORTED_V2_CAPABILITY");
+        assert_eq!(error.details()["capability"], command);
+        assert_eq!(error.details()["required_result_schema"], result_schema);
+        assert!(handler.join().expect("handler must not panic").is_ok());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
 }
 
 #[test]

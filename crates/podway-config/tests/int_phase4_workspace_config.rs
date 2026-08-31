@@ -184,3 +184,11 @@ fn workspace_config_requires_utf8_and_exactly_one_document() {
         })
     );
 }
+
+#[test]
+fn v2dvc002_workspace_v2_contract_remains_unadmitted_by_the_v1_parser() {
+    assert!(matches!(
+        parse_workspace_config_v1("schema: podway.workspace/v2\nmode: dev\n"),
+        Err(ConfigError::InvalidDocument { .. })
+    ));
+}

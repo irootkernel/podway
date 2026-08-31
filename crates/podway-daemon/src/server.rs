@@ -25,7 +25,8 @@ use podway_protocol::{
     OutputEnvelopeInputV3, OutputEnvelopeV3, PayloadCodecErrorV1, ProcedureV2MutationRequestV1,
     ProcedureV2StartRequestV1, ProtocolError, RequestEnvelopeV1, RequestIdV1, ResponseEnvelopeV2,
     Rfc3339MillisV1, SUPPORTED_PROTOCOLS_V1, SliceErrorV1, SliceRequestV1,
-    WorkspaceRemoveRequestV1, build_identity_v1, decode_request_payload_v1, decode_single_frame_v1,
+    WorkspaceModeApplyRequestV1, WorkspaceModePlanRequestV1, WorkspaceRemoveRequestV1,
+    build_identity_v1, decode_request_payload_v1, decode_single_frame_v1,
     encode_response_payload_v2, read_single_frame_v1, validate_frame_payload_length,
     write_frame_v1,
 };
@@ -615,6 +616,8 @@ pub enum DaemonRequestV1 {
     ProcedureV2Start(ProcedureV2StartRequestV1),
     ProcedureV2Mutation(ProcedureV2MutationRequestV1),
     WorkspaceRemove(WorkspaceRemoveRequestV1),
+    WorkspaceModePlan(WorkspaceModePlanRequestV1),
+    WorkspaceModeApply(WorkspaceModeApplyRequestV1),
 }
 
 impl DaemonRequestV1 {
@@ -622,6 +625,13 @@ impl DaemonRequestV1 {
     pub fn from_envelope(request: &RequestEnvelopeV1) -> Result<Self, SliceErrorV1> {
         if request.command().as_str() == "workspace.remove" {
             return WorkspaceRemoveRequestV1::from_envelope(request).map(Self::WorkspaceRemove);
+        }
+        if request.command().as_str() == "workspace.mode.plan" {
+            return WorkspaceModePlanRequestV1::from_envelope(request).map(Self::WorkspaceModePlan);
+        }
+        if request.command().as_str() == "workspace.mode.apply" {
+            return WorkspaceModeApplyRequestV1::from_envelope(request)
+                .map(Self::WorkspaceModeApply);
         }
         if podway_protocol::RESERVED_V2_MUTATION_COMMAND_NAMES_V1
             .contains(&request.command().as_str())
@@ -641,9 +651,11 @@ impl DaemonRequestV1 {
     pub fn legacy(&self) -> Option<&SliceRequestV1> {
         match self {
             Self::Legacy(request) => Some(request),
-            Self::ProcedureV2Start(_) | Self::ProcedureV2Mutation(_) | Self::WorkspaceRemove(_) => {
-                None
-            }
+            Self::ProcedureV2Start(_)
+            | Self::ProcedureV2Mutation(_)
+            | Self::WorkspaceRemove(_)
+            | Self::WorkspaceModePlan(_)
+            | Self::WorkspaceModeApply(_) => None,
         }
     }
 
@@ -653,6 +665,8 @@ impl DaemonRequestV1 {
             Self::ProcedureV2Start(request) => Some(request.command().command_name()),
             Self::ProcedureV2Mutation(request) => Some(request.command().command_name()),
             Self::WorkspaceRemove(_) => Some("workspace.remove"),
+            Self::WorkspaceModePlan(_) => Some("workspace.mode.plan"),
+            Self::WorkspaceModeApply(_) => Some("workspace.mode.apply"),
         }
     }
 
@@ -671,6 +685,8 @@ impl DaemonRequestV1 {
                 _ => unreachable!("Procedure v2 mutation decoder is closed"),
             }),
             Self::WorkspaceRemove(_) => Some("podway.workspace-removal-result/v1"),
+            Self::WorkspaceModePlan(_) => Some("podway.workspace-mode-plan-result/v1"),
+            Self::WorkspaceModeApply(_) => Some("podway.workspace-mode-apply-result/v1"),
         }
     }
 }

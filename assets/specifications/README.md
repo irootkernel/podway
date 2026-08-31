@@ -9,6 +9,7 @@
 - `sqlite-v7.sql`: retained inactive terminal-session migration and bounded archive slots.
 - `sqlite-v8.sql`: successor-linked superseded terminal-disposition migration.
 - `sqlite-v9.sql`: ordinal-keyed duplicate evidence-reference migration.
+- `sqlite-v10.sql`: reserved workspace runtime-mode binding migration; live registration begins in V2DVC-004.
 - `launchagent.plist.template`: reference macOS user LaunchAgent.
 - `error-codes.json`: stable public error and exit-code catalog, including reserved typed-guard failures.
 - `authoring-diagnostics.json`: stable authoring-time diagnostic catalog with ambiguity-based option replacements.

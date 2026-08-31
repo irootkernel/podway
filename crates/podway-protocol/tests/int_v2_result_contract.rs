@@ -285,6 +285,14 @@ fn examples() -> BTreeMap<&'static str, Value> {
             "podway.workspace-removal-result/v1",
             json!({"schema":"podway.workspace-removal-result/v1","worktree_root":"/tmp/podway-v2ret","workspace_uuid":UUID,"registry_entry_removed":true,"podway_directory_removed":true,"already_absent":false}),
         ),
+        (
+            "podway.workspace-mode-plan-result/v1",
+            json!({"schema":"podway.workspace-mode-plan-result/v1","status":"ready","worktree_root":"/tmp/podway-v2dvc","workspace_uuid":UUID,"source_mode":"prod","target_mode":"dev","disposable_state":{"session_present":true,"queued_jobs":0,"running_jobs":0},"expires_at":"2026-08-31T12:00:00.000Z","plan_token":"opaque-token"}),
+        ),
+        (
+            "podway.workspace-mode-apply-result/v1",
+            json!({"schema":"podway.workspace-mode-apply-result/v1","worktree_root":"/tmp/podway-v2dvc","workspace_uuid":UUID,"source_mode":"prod","target_mode":"dev","config_schema":"podway.workspace/v2","runtime_state_removed":true,"source_registry_retired":true,"target_registry_published":true,"already_applied":false}),
+        ),
     ]);
     examples.insert(
         "podway.observation-result/v1",
@@ -396,7 +404,7 @@ fn v2grf_preview_uses_one_closed_result_family_for_every_document_outcome() {
 #[test]
 fn v2ctr003_registry_is_versioned_and_covers_exactly_the_v2_authoring_routes() {
     assert_eq!(EXISTING_ROUTE_RESULT_SCHEMAS_V2.len(), 17);
-    assert_eq!(NEW_ROUTE_RESULT_SCHEMAS_V1.len(), 22);
+    assert_eq!(NEW_ROUTE_RESULT_SCHEMAS_V1.len(), 24);
     assert!(
         EXISTING_ROUTE_RESULT_SCHEMAS_V2
             .iter()
@@ -444,9 +452,11 @@ fn v2ctr003_registry_is_versioned_and_covers_exactly_the_v2_authoring_routes() {
             "item.record_many",
             "evidence.read",
             "workspace.remove",
+            "workspace.mode.plan",
+            "workspace.mode.apply",
         ])
     );
-    assert_eq!(routes.len(), 24);
+    assert_eq!(routes.len(), 26);
 }
 
 #[test]
@@ -525,6 +535,122 @@ fn v2ret002_workspace_removal_result_is_closed_and_procedure_independent() {
         "created_at": "2026-08-28T00:00:00.000Z"
     });
     assert_valid("schemas/workspace-removal-marker-v1.schema.json", &marker);
+}
+
+#[test]
+fn v2dvc002_reserves_closed_runtime_mode_contracts_without_runtime_admission() {
+    let workspace = json!({
+        "schema": "podway.workspace/v2",
+        "mode": "demo-2",
+        "procedure_paths": [".podway/procedures"]
+    });
+    assert_valid("schemas/workspace-v2.schema.json", &workspace);
+    let mut invalid_workspace = workspace;
+    invalid_workspace["mode"] = json!("Demo_2");
+    assert_invalid("schemas/workspace-v2.schema.json", &invalid_workspace);
+
+    let managed = json!({
+        "schema":"podway.managed-runtime/v3","metadata_version":3,
+        "purpose":"contributor","euid":501,"canonical_root":"/tmp/podway-managed",
+        "mode":"contributor",
+        "paths":{
+            "lock":"/tmp/podway-managed/run/podwayd.lock",
+            "socket":"/tmp/podway-managed/run/podwayd.sock",
+            "service_state":"/tmp/podway-managed/state/service.json",
+            "registry":"/tmp/podway-managed/state/workspaces.json",
+            "recovery":"/tmp/podway-managed/state/recovery.json",
+            "log":"/tmp/podway-managed/logs/podwayd.log",
+            "bootstrap_log":"/tmp/podway-managed/logs/podwayd-bootstrap.log"
+        },
+        "sandbox_root":"/tmp/podway-sandbox",
+        "executables":{
+            "cli":{"path":"/tmp/podway-managed/bin/podway","sha256":DIGEST},
+            "daemon":{"path":"/tmp/podway-managed/bin/podwayd","sha256":DIGEST},
+            "controller":null
+        },
+        "generation":null
+    });
+    assert_valid("schemas/managed-runtime-v3.schema.json", &managed);
+
+    let plan = json!({
+        "schema":"podway.workspace-mode-plan-result/v1","status":"ready",
+        "worktree_root":"/tmp/podway-v2dvc","workspace_uuid":UUID,
+        "source_mode":"prod","target_mode":"dev",
+        "disposable_state":{"session_present":true,"queued_jobs":0,"running_jobs":0},
+        "expires_at":"2026-08-31T12:00:00.000Z","plan_token":"opaque-token"
+    });
+    assert_valid("schemas/workspace-mode-plan-result-v1.schema.json", &plan);
+    assert!(decode_result_schema_contract_v2(plan.as_object().unwrap()).is_some());
+    assert!(validate_command_result_v2("workspace.mode.plan", plan.as_object().unwrap()).is_ok());
+
+    let apply = json!({
+        "schema":"podway.workspace-mode-apply-result/v1",
+        "worktree_root":"/tmp/podway-v2dvc","workspace_uuid":UUID,
+        "source_mode":"prod","target_mode":"dev","config_schema":"podway.workspace/v2",
+        "runtime_state_removed":true,"source_registry_retired":true,
+        "target_registry_published":true,"already_applied":false
+    });
+    assert_valid("schemas/workspace-mode-apply-result-v1.schema.json", &apply);
+    assert!(decode_result_schema_contract_v2(apply.as_object().unwrap()).is_some());
+    assert!(validate_command_result_v2("workspace.mode.apply", apply.as_object().unwrap()).is_ok());
+
+    for (command, result) in [
+        ("workspace.mode.plan", plan),
+        ("workspace.mode.apply", apply),
+    ] {
+        assert_valid(
+            "schemas/output-v3.schema.json",
+            &json!({
+                "schema":OUTPUT_SCHEMA_V3,"request_id":UUID,"command":command,
+                "generated_at":"2026-08-31T00:00:00.000Z","result":result,"warnings":[]
+            }),
+        );
+    }
+
+    let marker = json!({
+        "schema":"podway.workspace-mode-switch-marker/v1","operation_id":UUID,
+        "plan_token_digest":DIGEST,"workspace_uuid":UUID,
+        "source_mode":"prod","target_mode":"dev","config_digest":DIGEST,
+        "completed_steps":["source_closed","source_registry_retired"],
+        "created_at":"2026-08-31T00:00:00.000Z","updated_at":"2026-08-31T00:00:01.000Z"
+    });
+    assert_valid(
+        "schemas/workspace-mode-switch-marker-v1.schema.json",
+        &marker,
+    );
+
+    let mismatch = json!({
+        "schema":"podway.workspace-mode-mismatch-details/v1","boundary":"store",
+        "expected_mode":"dev","actual_mode":"prod"
+    });
+    assert_valid(
+        "schemas/workspace-mode-mismatch-details-v1.schema.json",
+        &mismatch,
+    );
+
+    let status = json!({
+        "schema":"podway.daemon-status-result/v3","mode":"dev",
+        "status":"running","installed":true,"loaded":true,"reachable":true,
+        "product":"podway","daemon_version":"0.2.8","target":"aarch64-apple-darwin",
+        "build_identity":DIGEST,"source_commit":null,
+        "contract_manifest_schema":"podway.contract-manifest/v1",
+        "contract_manifest_digest":DIGEST,"protocol_versions":["podway.ipc/v1"],
+        "pid":42,"process_id":UUID,"executable_path":"/opt/podwayd",
+        "started_at":"2026-08-31T00:00:00.000Z","uptime_ms":1,
+        "socket_path":"/tmp/podway.sock","configured_socket_path":"/tmp/podway.sock",
+        "effective_socket_path":"/tmp/podway.sock","registered_worktree_count":0,
+        "active_scheduler_count":0,"queued_job_count":0,"running_job_count":0,
+        "readiness_state":"ready","readiness_stage":"ready","readiness_elapsed_ms":1,
+        "worktree_recovery":{"total":0,"completed":0,"failed":0}
+    });
+    assert_valid("schemas/daemon-status-result-v3.schema.json", &status);
+    assert_valid(
+        "schemas/output-v3.schema.json",
+        &json!({
+            "schema":OUTPUT_SCHEMA_V3,"request_id":UUID,"command":"daemon.wait-ready",
+            "generated_at":"2026-08-31T00:00:00.000Z","result":status,"warnings":[]
+        }),
+    );
 }
 
 #[test]

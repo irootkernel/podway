@@ -416,6 +416,16 @@ pub const NEW_ROUTE_RESULT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
         "schemas/workspace-removal-result-v1.schema.json",
         &["workspace.remove"],
     ),
+    result_schema_v2(
+        "podway.workspace-mode-plan-result/v1",
+        "schemas/workspace-mode-plan-result-v1.schema.json",
+        &["workspace.mode.plan"],
+    ),
+    result_schema_v2(
+        "podway.workspace-mode-apply-result/v1",
+        "schemas/workspace-mode-apply-result-v1.schema.json",
+        &["workspace.mode.apply"],
+    ),
 ];
 
 const fn result_schema_v2(
@@ -1034,6 +1044,29 @@ fn required_result_fields_v2(schema: &str) -> &'static [&'static str] {
             "podway_directory_removed",
             "already_absent",
         ],
+        "podway.workspace-mode-plan-result/v1" => &[
+            "schema",
+            "status",
+            "worktree_root",
+            "workspace_uuid",
+            "source_mode",
+            "target_mode",
+            "disposable_state",
+            "expires_at",
+            "plan_token",
+        ],
+        "podway.workspace-mode-apply-result/v1" => &[
+            "schema",
+            "worktree_root",
+            "workspace_uuid",
+            "source_mode",
+            "target_mode",
+            "config_schema",
+            "runtime_state_removed",
+            "source_registry_retired",
+            "target_registry_published",
+            "already_applied",
+        ],
         _ => &[],
     }
 }
@@ -1493,6 +1526,8 @@ const PROCEDURE_INDEPENDENT_OUTPUT_COMMANDS_V3: &[&str] = &[
     "workspace.doctor",
     "workspace.repair",
     "workspace.remove",
+    "workspace.mode.plan",
+    "workspace.mode.apply",
     "workspace.reset_all",
     "job.list",
     "job.cancel",
@@ -1759,6 +1794,8 @@ impl<'de> Deserialize<'de> for OutputEnvelopeV3 {
 const VERSION_RESULT_SCHEMA_V1: &str = "podway.version-result/v1";
 const DAEMON_STATUS_RESULT_SCHEMA_V1: &str = "podway.daemon-status-result/v1";
 const DAEMON_STATUS_RESULT_SCHEMA_V2: &str = "podway.daemon-status-result/v2";
+const WORKSPACE_MODE_PLAN_RESULT_SCHEMA_V1: &str = "podway.workspace-mode-plan-result/v1";
+const WORKSPACE_MODE_APPLY_RESULT_SCHEMA_V1: &str = "podway.workspace-mode-apply-result/v1";
 const WORKSPACE_INIT_RESULT_SCHEMA_V1: &str = "podway.workspace-init-result/v1";
 const DETACHED_ADMISSION_RESULT_SCHEMA_V1: &str = "podway.detached-admission-result/v1";
 
@@ -1819,6 +1856,9 @@ pub fn validate_procedure_independent_result_v1(
         }
         WORKSPACE_INIT_RESULT_SCHEMA_V1 => decode::<WorkspaceInitResultV1>(value),
         DETACHED_ADMISSION_RESULT_SCHEMA_V1 => decode::<DetachedMutationResultV1>(value),
+        WORKSPACE_MODE_PLAN_RESULT_SCHEMA_V1 | WORKSPACE_MODE_APPLY_RESULT_SCHEMA_V1 => {
+            validate_embedded_result_schema_v2(expected_schema, result)
+        }
         _ => unreachable!("procedure-independent schema selection is closed"),
     };
     if valid {
@@ -1856,6 +1896,8 @@ fn command_result_schema_v1(command: &str, result: &Map<String, Value>) -> Optio
         "daemon.wait-ready" => Some(DAEMON_STATUS_RESULT_SCHEMA_V2),
         "daemon.status" => Some(DAEMON_STATUS_RESULT_SCHEMA_V1),
         "workspace.init" => Some(WORKSPACE_INIT_RESULT_SCHEMA_V1),
+        "workspace.mode.plan" => Some(WORKSPACE_MODE_PLAN_RESULT_SCHEMA_V1),
+        "workspace.mode.apply" => Some(WORKSPACE_MODE_APPLY_RESULT_SCHEMA_V1),
         _ => None,
     }
 }

@@ -1,0 +1,25 @@
+{
+  "schema": "podway.compatibility-fixture/v1",
+  "cases": [
+    {
+      "id": "workspace-v1-remains-production",
+      "operation": "parse podway.workspace/v1 with the v0.2.7-compatible parser",
+      "expected": "accepted-with-effective-mode-prod"
+    },
+    {
+      "id": "workspace-v2-remains-reserved",
+      "operation": "parse podway.workspace/v2 before V2DVC-003 runtime admission",
+      "expected": "WORKSPACE_CONFIG_INVALID"
+    },
+    {
+      "id": "sqlite-v10-remains-reserved",
+      "operation": "open a schema-v10 Store before V2DVC-004 runtime admission",
+      "expected": "WORKSPACE_SCHEMA_UNSUPPORTED"
+    },
+    {
+      "id": "mode-routes-remain-reserved",
+      "operation": "dispatch workspace.mode.plan or workspace.mode.apply before V2DVC-004",
+      "expected": "UNSUPPORTED_V2_CAPABILITY"
+    }
+  ]
+}

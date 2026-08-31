@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:workspace-mode-switch-marker:v1",
+  "title": "Podway Workspace Mode Switch Marker v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "operation_id", "plan_token_digest", "workspace_uuid", "source_mode", "target_mode", "config_digest", "completed_steps", "created_at", "updated_at"],
+  "properties": {
+    "schema": { "const": "podway.workspace-mode-switch-marker/v1" },
+    "operation_id": { "type": "string", "format": "uuid" },
+    "plan_token_digest": { "$ref": "#/$defs/digest" },
+    "workspace_uuid": { "type": "string", "format": "uuid" },
+    "source_mode": { "$ref": "#/$defs/mode" },
+    "target_mode": { "$ref": "#/$defs/mode" },
+    "config_digest": { "$ref": "#/$defs/digest" },
+    "completed_steps": {
+      "type": "array",
+      "maxItems": 6,
+      "uniqueItems": true,
+      "items": { "enum": ["source_closed", "source_registry_retired", "runtime_removed", "config_updated", "target_initialized", "target_registry_published"] }
+    },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "mode": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" }
+  }
+}

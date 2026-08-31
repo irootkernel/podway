@@ -145,6 +145,7 @@ commands:
   result_schemas:
   - podway.daemon-status-result/v1
   - podway.daemon-status-result/v2
+  - podway.daemon-status-result/v3
 - name: daemon.wait-ready
   availability: executable
   cli:
@@ -157,6 +158,7 @@ commands:
   destructive_confirmation: false
   result_schemas:
   - podway.daemon-status-result/v2
+  - podway.daemon-status-result/v3
 - name: daemon.terminate
   availability: executable
   cli:
@@ -233,6 +235,33 @@ commands:
   maintenance_barrier: true
   result_schemas:
   - podway.workspace-removal-result/v1
+- name: workspace.mode.plan
+  availability: reserved_contract
+  cli:
+  - workspace
+  - mode
+  - plan
+  operation: query
+  workspace_required: true
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+  result_schemas:
+  - podway.workspace-mode-plan-result/v1
+- name: workspace.mode.apply
+  availability: reserved_contract
+  cli:
+  - workspace
+  - mode
+  - apply
+  operation: control
+  workspace_required: true
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: true
+  maintenance_barrier: true
+  result_schemas:
+  - podway.workspace-mode-apply-result/v1
 - name: session.start
   availability: executable
   cli:

@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:workspace-mode-plan-result:v1",
+  "title": "Podway Workspace Mode Plan Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "status", "worktree_root", "workspace_uuid", "source_mode", "target_mode", "disposable_state", "expires_at", "plan_token"],
+  "properties": {
+    "schema": { "const": "podway.workspace-mode-plan-result/v1" },
+    "status": { "enum": ["ready", "no_change", "busy", "target_unavailable"] },
+    "worktree_root": { "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^/" },
+    "workspace_uuid": { "type": "string", "format": "uuid" },
+    "source_mode": { "$ref": "#/$defs/mode" },
+    "target_mode": { "$ref": "#/$defs/mode" },
+    "disposable_state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["session_present", "queued_jobs", "running_jobs"],
+      "properties": {
+        "session_present": { "type": "boolean" },
+        "queued_jobs": { "type": "integer", "minimum": 0, "maximum": 4096 },
+        "running_jobs": { "type": "integer", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "expires_at": { "type": ["string", "null"], "format": "date-time" },
+    "plan_token": { "type": ["string", "null"], "minLength": 1, "maxLength": 4096 }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "ready" } }, "required": ["status"] },
+      "then": { "properties": { "expires_at": { "type": "string" }, "plan_token": { "type": "string" } } },
+      "else": { "properties": { "expires_at": { "type": "null" }, "plan_token": { "type": "null" } } }
+    }
+  ],
+  "$defs": {
+    "mode": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" }
+  }
+}

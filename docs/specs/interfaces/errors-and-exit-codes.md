@@ -78,6 +78,7 @@ unexpected process transition. Automation must not branch on those messages.
 | `WORKSPACE_INIT_CONFLICT` | 5 | no | Existing `.podway` content conflicts with safe initialization |
 | `WORKSPACE_ID_CONFLICT` | 5 | no | Workspace UUID-to-root metadata is non-unique or conflicts with live identity evidence |
 | `WORKSPACE_UUID_MISMATCH` | 4 | no | Authoritative workspace UUID differs from the expected UUID |
+| `WORKSPACE_MODE_MISMATCH` | 4 | no | Runtime ownership modes disagree at the endpoint, daemon, config, Store, or registry boundary |
 | `WORKSPACE_CONFIG_INVALID` | 5 | no | Workspace config fails schema or semantic validation |
 | `WORKSPACE_STATE_UNREADABLE` | 5 | no | SQLite state is corrupt or inaccessible |
 | `WORKSPACE_SCHEMA_UNSUPPORTED` | 5 | no | Database schema is newer or otherwise unsupported |
@@ -322,6 +323,11 @@ terminal conflict discovered after admission uses `{ "admitted": true,
 "job_id": "<uuid>", "workspace_sequence": <positive integer> }`. The two
 identity errors are non-retryable exit-4 conflicts: callers must observe fresh
 identity before deciding whether a new operation is valid.
+
+`WORKSPACE_MODE_MISMATCH` is a non-retryable exit-4 conflict. Its closed
+`podway.workspace-mode-mismatch-details/v1` object contains only the bounded
+`expected_mode`, `actual_mode`, and one of the `endpoint`, `daemon`, `config`,
+`store`, or `registry` boundaries. It deliberately excludes raw paths.
 
 `PROCEDURE_DIGEST_MISMATCH` is a non-retryable exit-4 conflict. Its closed
 `podway.procedure-digest-mismatch-details/v2` object contains the expected and actual canonical

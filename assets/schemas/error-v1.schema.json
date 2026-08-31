@@ -185,6 +185,17 @@
     },
     {
       "if": {
+        "properties": { "code": { "const": "WORKSPACE_MODE_MISMATCH" } },
+        "required": ["code"]
+      },
+      "then": {
+        "properties": {
+          "details": { "$ref": "urn:podway:schema:workspace-mode-mismatch-details:v1" }
+        }
+      }
+    },
+    {
+      "if": {
         "properties": { "code": { "const": "SESSION_ID_MISMATCH" } },
         "required": ["code"]
       },

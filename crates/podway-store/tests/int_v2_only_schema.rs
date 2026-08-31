@@ -841,6 +841,60 @@ fn v2ast002_sqlite_v6_reservation_preserves_values_and_extends_only_the_item_dis
 }
 
 #[test]
+fn v2dvc002_sqlite_v10_reserves_a_bounded_default_production_mode() {
+    let connection = Connection::open_in_memory().unwrap();
+    for ddl in [
+        podway_store::schema::sqlite_v1_ddl(),
+        podway_store::schema::sqlite_v2_ddl(),
+        podway_store::schema::sqlite_v3_ddl(),
+        podway_store::schema::sqlite_v4_ddl(),
+        podway_store::schema::sqlite_v5_ddl(),
+        podway_store::schema::sqlite_v6_ddl(),
+        podway_store::schema::sqlite_v7_ddl(),
+        podway_store::schema::sqlite_v8_ddl(),
+        podway_store::schema::sqlite_v9_ddl(),
+    ] {
+        connection.execute_batch(ddl).unwrap();
+    }
+    connection
+        .execute(
+            "INSERT INTO workspace_state (
+                singleton, workspace_uuid, git_common_fingerprint,
+                git_worktree_fingerprint, last_validated_root,
+                next_workspace_sequence, created_at_ms, updated_at_ms
+             ) VALUES (1, ?1, ?2, ?3, '/tmp/podway-v2dvc', 0, 1, 1)",
+            params![uuid(208), digest('a').as_str(), digest('b').as_str()],
+        )
+        .unwrap();
+    connection
+        .execute_batch(include_str!(
+            "../../../assets/specifications/sqlite-v10.sql"
+        ))
+        .unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT runtime_mode FROM workspace_state WHERE singleton = 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "prod"
+    );
+    assert_eq!(
+        connection
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        10
+    );
+    assert!(
+        connection
+            .execute("UPDATE workspace_state SET runtime_mode = 'bad_mode'", [])
+            .is_err()
+    );
+}
+
+#[test]
 fn v2ast004_runtime_migrates_v5_to_v7_without_reencoding_item_values() {
     let temporary = TempDir::new().unwrap();
     let path = temporary.path().join("state.sqlite3");

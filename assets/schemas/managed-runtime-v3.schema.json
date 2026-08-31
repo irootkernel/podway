@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:managed-runtime:v3",
+  "title": "Podway Managed Runtime v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "metadata_version", "purpose", "euid", "canonical_root", "mode", "paths", "sandbox_root", "executables", "generation"],
+  "properties": {
+    "schema": { "const": "podway.managed-runtime/v3" },
+    "metadata_version": { "const": 3 },
+    "purpose": { "enum": ["aquarium-development", "contributor", "release-qualification"] },
+    "euid": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+    "canonical_root": { "$ref": "#/$defs/absolutePath" },
+    "mode": { "$ref": "#/$defs/mode" },
+    "paths": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lock", "socket", "service_state", "registry", "recovery", "log", "bootstrap_log"],
+      "properties": {
+        "lock": { "$ref": "#/$defs/absolutePath" },
+        "socket": { "$ref": "#/$defs/absolutePath" },
+        "service_state": { "$ref": "#/$defs/absolutePath" },
+        "registry": { "$ref": "#/$defs/absolutePath" },
+        "recovery": { "$ref": "#/$defs/absolutePath" },
+        "log": { "$ref": "#/$defs/absolutePath" },
+        "bootstrap_log": { "$ref": "#/$defs/absolutePath" }
+      }
+    },
+    "sandbox_root": {
+      "oneOf": [{ "$ref": "#/$defs/absolutePath" }, { "type": "null" }]
+    },
+    "executables": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cli", "daemon", "controller"],
+      "properties": {
+        "cli": { "$ref": "#/$defs/executable" },
+        "daemon": { "$ref": "#/$defs/executable" },
+        "controller": { "$ref": "#/$defs/nullableExecutable" }
+      }
+    },
+    "generation": { "type": ["string", "null"], "minLength": 1, "maxLength": 256 }
+  },
+  "$defs": {
+    "absolutePath": { "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^/" },
+    "mode": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" },
+    "executable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "$ref": "#/$defs/absolutePath" },
+        "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      }
+    },
+    "nullableExecutable": { "oneOf": [{ "$ref": "#/$defs/executable" }, { "type": "null" }] }
+  }
+}

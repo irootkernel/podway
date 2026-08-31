@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:workspace-mode-apply-result:v1",
+  "title": "Podway Workspace Mode Apply Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "worktree_root", "workspace_uuid", "source_mode", "target_mode", "config_schema", "runtime_state_removed", "source_registry_retired", "target_registry_published", "already_applied"],
+  "properties": {
+    "schema": { "const": "podway.workspace-mode-apply-result/v1" },
+    "worktree_root": { "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^/" },
+    "workspace_uuid": { "type": "string", "format": "uuid" },
+    "source_mode": { "$ref": "#/$defs/mode" },
+    "target_mode": { "$ref": "#/$defs/mode" },
+    "config_schema": { "enum": ["podway.workspace/v1", "podway.workspace/v2"] },
+    "runtime_state_removed": { "type": "boolean" },
+    "source_registry_retired": { "type": "boolean" },
+    "target_registry_published": { "type": "boolean" },
+    "already_applied": { "type": "boolean" }
+  },
+  "$defs": {
+    "mode": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" }
+  }
+}

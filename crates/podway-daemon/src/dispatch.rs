@@ -2656,12 +2656,21 @@ where
                 Err(failure) => self.error_response(request, failure, false),
             };
         }
+        if matches!(
+            daemon_request,
+            DaemonRequestV1::WorkspaceModePlan(_) | DaemonRequestV1::WorkspaceModeApply(_)
+        ) {
+            return self.unsupported_v2_capability_response(request, daemon_request);
+        }
         let selector = match daemon_request {
             DaemonRequestV1::ProcedureV2Start(request) => request.selector(),
             DaemonRequestV1::ProcedureV2Mutation(request) => request.selector(),
             DaemonRequestV1::Legacy(_) => unreachable!("legacy requests returned above"),
             DaemonRequestV1::WorkspaceRemove(_) => {
                 unreachable!("reserved workspace removal returned above")
+            }
+            DaemonRequestV1::WorkspaceModePlan(_) | DaemonRequestV1::WorkspaceModeApply(_) => {
+                unreachable!("reserved workspace mode requests returned above")
             }
         };
         let proof = match self.runtime.procedure_v2_admission(selector) {

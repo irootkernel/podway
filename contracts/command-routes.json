@@ -184,6 +184,22 @@
       "capabilities": []
     },
     {
+      "command": "workspace.mode.plan",
+      "availability": "reserved_contract",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
+      "command": "workspace.mode.apply",
+      "availability": "reserved_contract",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
+    },
+    {
       "command": "session.start",
       "availability": "executable",
       "owner": "podway-daemon",

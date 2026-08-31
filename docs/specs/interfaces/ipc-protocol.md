@@ -144,6 +144,18 @@ global tombstone. The daemon executes this route only after exact worktree and
 optional UUID validation, exclusive maintenance admission, and durable marker
 publication.
 
+### Reserved workspace mode switching
+
+`workspace.mode.plan` is a synchronous read-only `query` and
+`workspace.mode.apply` is a synchronous token-bound `control` operation. Both
+carry the selected worktree and one bounded target mode. Apply additionally
+carries the exact opaque plan token. Their closed results are
+`podway.workspace-mode-plan-result/v1` and
+`podway.workspace-mode-apply-result/v1`; the durable recovery record is
+`podway.workspace-mode-switch-marker/v1`. Until V2DVC-004 completes the
+pre-Store ownership checks and recoverable transition, well-formed requests
+return `UNSUPPORTED_V2_CAPABILITY` before any workspace mutation.
+
 ## Preconditions
 
 The `preconditions` object may contain:

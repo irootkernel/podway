@@ -1447,6 +1447,11 @@ const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
         retryable: false,
     },
     ErrorCodeCatalogEntryV1 {
+        code: "WORKSPACE_MODE_MISMATCH",
+        exit_code: 4,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
         code: "WORKSPACE_CONFIG_INVALID",
         exit_code: 5,
         retryable: false,
@@ -2253,6 +2258,7 @@ fn validate_closed_error_details_v1(
         "DAEMON_STARTING" => validate_daemon_readiness_error_details_v1(details),
         "DAEMON_READINESS_TIMEOUT" => validate_daemon_readiness_timeout_details_v1(details),
         "SOCKET_ENDPOINT_INVALID" => validate_socket_endpoint_details_v1(details),
+        "WORKSPACE_MODE_MISMATCH" => validate_workspace_mode_mismatch_details_v1(details),
         "SESSION_REVISION_CONFLICT" | "ITEM_REVISION_CONFLICT" => {
             validate_revision_conflict_details_v1(details)
         }
@@ -3126,6 +3132,35 @@ fn validate_workspace_recovery_details_v1(details: &Map<String, Value>) -> bool 
         }
 }
 
+fn validate_workspace_mode_mismatch_details_v1(details: &Map<String, Value>) -> bool {
+    fn valid_mode(value: Option<&Value>) -> bool {
+        value.and_then(Value::as_str).is_some_and(|value| {
+            let bytes = value.as_bytes();
+            (1..=64).contains(&bytes.len())
+                && bytes[0].is_ascii_lowercase()
+                && bytes[bytes.len() - 1] != b'-'
+                && !bytes.windows(2).any(|pair| pair == b"--")
+                && bytes
+                    .iter()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+        })
+    }
+    details.len() == 4
+        && details.get("schema").and_then(Value::as_str)
+            == Some("podway.workspace-mode-mismatch-details/v1")
+        && details
+            .get("boundary")
+            .and_then(Value::as_str)
+            .is_some_and(|value| {
+                matches!(
+                    value,
+                    "endpoint" | "daemon" | "config" | "store" | "registry"
+                )
+            })
+        && valid_mode(details.get("expected_mode"))
+        && valid_mode(details.get("actual_mode"))
+}
+
 fn validate_blocker_limit_details_v1(details: &Map<String, Value>) -> bool {
     let maximum = details.get("maximum_open_blockers").and_then(Value::as_u64);
     if details.get("schema").and_then(Value::as_str) != Some("podway.blocker-limit-details/v1")
@@ -3395,6 +3430,7 @@ pub fn ensure_error_details_schema_v1(code: &str, details: &mut Map<String, Valu
         "JOB_WAIT_TIMEOUT" => "podway.job-wait-timeout-details/v2",
         "BLOCKER_LIMIT_REACHED" => "podway.blocker-limit-details/v1",
         "WORKSPACE_UUID_MISMATCH" => "podway.workspace-uuid-mismatch-details/v2",
+        "WORKSPACE_MODE_MISMATCH" => "podway.workspace-mode-mismatch-details/v1",
         "WORKSPACE_STATE_UNREADABLE" | "WORKSPACE_SCHEMA_UNSUPPORTED" => {
             "podway.workspace-recovery-details/v1"
         }

@@ -1,8 +1,10 @@
 # SQLite Model
 
 The implemented canonical DDL history is `sqlite-v1.sql` through `sqlite-v9.sql`
-under `assets/specifications/`. New databases currently apply that ordered
-history in one transaction and finish at schema version 9. The v5 contract is
+under `assets/specifications/`. `sqlite-v10.sql` reserves the workspace
+runtime-mode binding for V2DVC-004 and is not yet in the live migration registry.
+New databases currently apply the implemented history in one transaction and
+finish at schema version 9. The v5 contract is
 normative under ADR-0021; `V2LIF-002` reserved its exact canonical DDL and
 `V2LIF-003` admitted it in runtime. ADR-0025 owns schema v6 for external check
 results; `V2AST-002` reserved its canonical DDL and named migration, and

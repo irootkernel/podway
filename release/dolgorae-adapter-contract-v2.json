@@ -362,6 +362,8 @@
       "workspace.show",
       "workspace.repair",
       "workspace.remove",
+      "workspace.mode.plan",
+      "workspace.mode.apply",
       "session.start",
       "session.start_replace",
       "session.begin",
@@ -531,6 +533,13 @@
         "exit_code": 4,
         "retryable": false,
         "summary": "The workspace UUID differs from the expected identity."
+      },
+      {
+        "code": "WORKSPACE_MODE_MISMATCH",
+        "details_schema": "podway.workspace-mode-mismatch-details/v1",
+        "exit_code": 4,
+        "retryable": false,
+        "summary": "The selected runtime mode differs across an ownership boundary."
       },
       {
         "code": "WORKSPACE_CONFIG_INVALID",
@@ -1151,6 +1160,11 @@
         "sha256": "sha256:1f79837ea27f027e1a9d4ca308efb7f13f6512e4cec33fa72e9614a288a9a374"
       },
       {
+        "id": "urn:podway:schema:daemon-status-result:v3",
+        "path": "schemas/daemon-status-result-v3.schema.json",
+        "sha256": "sha256:a5ba12dcb6414ee1743560d26c236e3ae14f3f0d900a11b9b210eed55f3988be"
+      },
+      {
         "id": "urn:podway:schema:decision-result:v1",
         "path": "schemas/decision-result-v1.schema.json",
         "sha256": "sha256:ced9d63a2e9cf3d69c925d363822acccfcdd4d78a12423c93b4b248408814ad4"
@@ -1178,7 +1192,7 @@
       {
         "id": "urn:podway:schema:error:v1",
         "path": "schemas/error-v1.schema.json",
-        "sha256": "sha256:025f0b24c7e4be83c97620fb97ecca43e37f9fd98a48f3ecb1f63633d592c79d"
+        "sha256": "sha256:6113dbea9ad9669f3a6686839ec73af6dd76c6f7b413c76c80ca63d2c263c27d"
       },
       {
         "id": "urn:podway:schema:evidence-read-result:v1",
@@ -1251,6 +1265,11 @@
         "sha256": "sha256:245060d02f3e35ddbec5ff8ab3441f1a780d0824e4d518a6745d11210aaa64cd"
       },
       {
+        "id": "urn:podway:schema:managed-runtime:v3",
+        "path": "schemas/managed-runtime-v3.schema.json",
+        "sha256": "sha256:2864e11ad5ad455594a3e9c2cae60d07c08bf75e8c5084dc8e279937a9856884"
+      },
+      {
         "id": "urn:podway:schema:next-result:v2",
         "path": "schemas/next-result-v2.schema.json",
         "sha256": "sha256:ef64559c7ede43ea11c64de1dcd60dea46539da92113fc20734aa2c006d4aa26"
@@ -1278,7 +1297,7 @@
       {
         "id": "urn:podway:schema:output:v3",
         "path": "schemas/output-v3.schema.json",
-        "sha256": "sha256:831147e05959545f03dc5fd0b7df5cbfee3dd773c637f8b1d20eacd63eec5c3e"
+        "sha256": "sha256:c2c08f47d67e18680fdce7f546775ad215f18478d60c746484f9ff5e1d583657"
       },
       {
         "id": "urn:podway:schema:prepared-next-result:v1",
@@ -1476,6 +1495,26 @@
         "sha256": "sha256:6befefe2a87428f8e62140a24c63a01c3842fdbfa7ce19132eaaa934bb0f646b"
       },
       {
+        "id": "urn:podway:schema:workspace-mode-apply-result:v1",
+        "path": "schemas/workspace-mode-apply-result-v1.schema.json",
+        "sha256": "sha256:442fa47cc90a5abc1205d1097f6c3101418014447874e69d26ae5ed4136fa341"
+      },
+      {
+        "id": "urn:podway:schema:workspace-mode-mismatch-details:v1",
+        "path": "schemas/workspace-mode-mismatch-details-v1.schema.json",
+        "sha256": "sha256:fbd95a3d7e0c1a66f06c9aa543cb24b3a11ad56016f0596cde6a37485e77aebf"
+      },
+      {
+        "id": "urn:podway:schema:workspace-mode-plan-result:v1",
+        "path": "schemas/workspace-mode-plan-result-v1.schema.json",
+        "sha256": "sha256:aeef6b5146ace9e5303a43169a8add2d70105991180579b9df756f7e0ec5b527"
+      },
+      {
+        "id": "urn:podway:schema:workspace-mode-switch-marker:v1",
+        "path": "schemas/workspace-mode-switch-marker-v1.schema.json",
+        "sha256": "sha256:48689b616f2ae9d73bafb1f118a0685b76fcff4f6ee85311815f791f8b6b5e6e"
+      },
+      {
         "id": "urn:podway:schema:workspace-recovery-details:v1",
         "path": "schemas/workspace-recovery-details-v1.schema.json",
         "sha256": "sha256:d5ac050ba137f9231e0d6e3c79c7d6fda763cecd490c5d9ee31c39defc49a052"
@@ -1494,14 +1533,19 @@
         "id": "urn:podway:schema:workspace:v1",
         "path": "schemas/workspace-v1.schema.json",
         "sha256": "sha256:61461264d6da76953a1e41534360a28e3fe294bf329972da7b687f3ac7822d1a"
+      },
+      {
+        "id": "urn:podway:schema:workspace:v2",
+        "path": "schemas/workspace-v2.schema.json",
+        "sha256": "sha256:48d1a0db7955ae33ef6486819cb7b395b62567e25c908bd9d737bc690553f9d8"
       }
     ]
   },
   "current_surface_counts": {
     "authoring_diagnostics": 58,
-    "routes": 67,
-    "runtime_errors": 102,
-    "schemas": 83
+    "routes": 69,
+    "runtime_errors": 103,
+    "schemas": 90
   },
   "migration_boundary": {
     "adapter_database_access": "forbidden",

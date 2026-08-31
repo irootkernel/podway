@@ -1055,13 +1055,32 @@ pub struct WorkspaceRemoveRequestV1 {
     confirmed: bool,
 }
 
+/// One decoded read-only workspace-mode plan request.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceModePlanRequestV1 {
+    selector: WorktreeSelectorWireV1,
+    target_mode: String,
+}
+
+/// One decoded token-bound workspace-mode apply request.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceModeApplyRequestV1 {
+    selector: WorktreeSelectorWireV1,
+    target_mode: String,
+    plan_token: String,
+}
+
 /// The authoritative G006 daemon route set. No aliases are admitted at the protocol boundary.
-pub const DAEMON_COMMAND_NAMES_V1: [&str; 36] = [
+pub const DAEMON_COMMAND_NAMES_V1: [&str; 38] = [
     "workspace.init",
     "workspace.doctor",
     "workspace.show",
     "workspace.repair",
     "workspace.remove",
+    "workspace.mode.plan",
+    "workspace.mode.apply",
     "session.start",
     "session.start_replace",
     "session.status",
@@ -1862,6 +1881,93 @@ impl WorkspaceRemoveRequestV1 {
     }
 }
 
+impl WorkspaceModePlanRequestV1 {
+    pub fn from_envelope(envelope: &RequestEnvelopeV1) -> Result<Self, SliceErrorV1> {
+        require_envelope(envelope, "workspace.mode.plan", OperationV1::Query, false)?;
+        require_no_preconditions(envelope.preconditions())?;
+        let payload: WorkspaceModePlanPayloadV1 = parse_payload(envelope)?;
+        validate_runtime_mode_v1(&payload.to)?;
+        validate_selector_identity_v1(envelope, &payload.selector, "workspace.mode.plan")?;
+        Ok(Self {
+            selector: payload.selector,
+            target_mode: payload.to,
+        })
+    }
+
+    pub fn selector(&self) -> &WorktreeSelectorWireV1 {
+        &self.selector
+    }
+
+    pub fn target_mode(&self) -> &str {
+        &self.target_mode
+    }
+}
+
+impl WorkspaceModeApplyRequestV1 {
+    pub fn from_envelope(envelope: &RequestEnvelopeV1) -> Result<Self, SliceErrorV1> {
+        require_envelope(
+            envelope,
+            "workspace.mode.apply",
+            OperationV1::Control,
+            false,
+        )?;
+        require_no_preconditions(envelope.preconditions())?;
+        let payload: WorkspaceModeApplyPayloadV1 = parse_payload(envelope)?;
+        validate_runtime_mode_v1(&payload.to)?;
+        validate_non_empty_bytes(&payload.plan_token, 4096, "plan_token")?;
+        validate_selector_identity_v1(envelope, &payload.selector, "workspace.mode.apply")?;
+        Ok(Self {
+            selector: payload.selector,
+            target_mode: payload.to,
+            plan_token: payload.plan_token,
+        })
+    }
+
+    pub fn selector(&self) -> &WorktreeSelectorWireV1 {
+        &self.selector
+    }
+
+    pub fn target_mode(&self) -> &str {
+        &self.target_mode
+    }
+
+    pub fn plan_token(&self) -> &str {
+        &self.plan_token
+    }
+}
+
+fn validate_selector_identity_v1(
+    envelope: &RequestEnvelopeV1,
+    selector: &WorktreeSelectorWireV1,
+    command: &'static str,
+) -> Result<(), SliceErrorV1> {
+    let workspace = envelope
+        .workspace()
+        .ok_or(SliceErrorV1::MissingWorkspace { command })?;
+    if workspace.expected_uuid() != selector.expected_uuid() {
+        return Err(SliceErrorV1::InvalidValue {
+            field: "workspace.expected_uuid/selector.expected_uuid",
+        });
+    }
+    Ok(())
+}
+
+fn validate_runtime_mode_v1(value: &str) -> Result<(), SliceErrorV1> {
+    let bytes = value.as_bytes();
+    let valid = (1..=64).contains(&bytes.len())
+        && bytes[0].is_ascii_lowercase()
+        && bytes[bytes.len() - 1] != b'-'
+        && !bytes.windows(2).any(|pair| pair == b"--")
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-');
+    if valid {
+        Ok(())
+    } else {
+        Err(SliceErrorV1::InvalidValue { field: "to" })
+    }
+}
+
 impl TryFrom<&RequestEnvelopeV1> for WorkspaceRemoveRequestV1 {
     type Error = SliceErrorV1;
 
@@ -2230,6 +2336,21 @@ struct WorkspaceRemovePayloadV1 {
     selector: WorktreeSelectorWireV1,
     force: bool,
     confirmed: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkspaceModePlanPayloadV1 {
+    selector: WorktreeSelectorWireV1,
+    to: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkspaceModeApplyPayloadV1 {
+    selector: WorktreeSelectorWireV1,
+    to: String,
+    plan_token: String,
 }
 
 #[derive(Deserialize)]

@@ -134,6 +134,13 @@
       "summary": "The workspace UUID differs from the expected identity."
     },
     {
+      "code": "WORKSPACE_MODE_MISMATCH",
+      "details_schema": "podway.workspace-mode-mismatch-details/v1",
+      "exit_code": 4,
+      "retryable": false,
+      "summary": "The selected runtime mode differs across an ownership boundary."
+    },
+    {
       "code": "WORKSPACE_CONFIG_INVALID",
       "exit_code": 5,
       "retryable": false,

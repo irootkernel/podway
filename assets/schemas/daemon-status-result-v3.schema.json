@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:daemon-status-result:v3",
+  "title": "Podway Daemon Status Result v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "mode", "status", "installed", "loaded", "reachable", "product", "daemon_version", "target", "build_identity", "source_commit", "contract_manifest_schema", "contract_manifest_digest", "protocol_versions", "pid", "process_id", "executable_path", "started_at", "uptime_ms", "socket_path", "configured_socket_path", "effective_socket_path", "registered_worktree_count", "active_scheduler_count", "queued_job_count", "running_job_count", "readiness_state", "readiness_stage", "readiness_elapsed_ms", "worktree_recovery"],
+  "properties": {
+    "schema": { "const": "podway.daemon-status-result/v3" },
+    "mode": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" },
+    "status": { "enum": ["not_installed", "stopped", "running"] },
+    "installed": { "type": "boolean" },
+    "loaded": { "type": "boolean" },
+    "reachable": { "type": "boolean" },
+    "product": { "enum": ["podway", null] },
+    "daemon_version": { "type": ["string", "null"], "minLength": 1, "maxLength": 64 },
+    "target": { "type": ["string", "null"], "minLength": 1, "maxLength": 256 },
+    "build_identity": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
+    "source_commit": { "type": ["string", "null"], "minLength": 1, "maxLength": 128 },
+    "contract_manifest_schema": { "enum": ["podway.contract-manifest/v1", null] },
+    "contract_manifest_digest": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
+    "protocol_versions": { "type": "array", "maxItems": 16, "items": { "type": "string", "minLength": 1, "maxLength": 64 }, "uniqueItems": true },
+    "pid": { "type": ["integer", "null"], "minimum": 1, "maximum": 4294967295 },
+    "process_id": { "type": ["string", "null"], "format": "uuid" },
+    "executable_path": { "type": ["string", "null"], "maxLength": 4096, "pattern": "^/" },
+    "started_at": { "type": ["string", "null"], "format": "date-time" },
+    "uptime_ms": { "type": ["integer", "null"], "minimum": 0 },
+    "socket_path": { "type": ["string", "null"], "maxLength": 4096, "pattern": "^/" },
+    "configured_socket_path": { "type": ["string", "null"], "maxLength": 4096, "pattern": "^/" },
+    "effective_socket_path": { "type": ["string", "null"], "maxLength": 4096, "pattern": "^/" },
+    "registered_worktree_count": { "type": ["integer", "null"], "minimum": 0, "maximum": 10000 },
+    "active_scheduler_count": { "type": ["integer", "null"], "minimum": 0, "maximum": 10000 },
+    "queued_job_count": { "type": ["integer", "null"], "minimum": 0, "maximum": 4096 },
+    "running_job_count": { "type": ["integer", "null"], "minimum": 0, "maximum": 10000 },
+    "readiness_state": { "enum": ["not_running", "unreachable", "starting", "recovering", "ready", "failed"] },
+    "readiness_stage": { "enum": ["endpoint", "registry", "workspaces", "jobs", "ready", "failed", null] },
+    "readiness_elapsed_ms": { "type": ["integer", "null"], "minimum": 0 },
+    "worktree_recovery": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["total", "completed", "failed"],
+          "properties": {
+            "total": { "type": "integer", "minimum": 0, "maximum": 10000 },
+            "completed": { "type": "integer", "minimum": 0, "maximum": 10000 },
+            "failed": { "type": "integer", "minimum": 0, "maximum": 10000 }
+          }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "reachable": { "const": true } }, "required": ["reachable"] },
+      "then": {
+        "properties": {
+          "status": { "const": "running" },
+          "installed": { "const": true },
+          "loaded": { "const": true },
+          "product": { "const": "podway" },
+          "daemon_version": { "type": "string" },
+          "target": { "type": "string" },
+          "build_identity": { "type": "string" },
+          "contract_manifest_schema": { "const": "podway.contract-manifest/v1" },
+          "contract_manifest_digest": { "type": "string" },
+          "protocol_versions": { "minItems": 1 },
+          "pid": { "type": "integer" },
+          "process_id": { "type": "string" },
+          "executable_path": { "type": "string" },
+          "started_at": { "type": "string" },
+          "uptime_ms": { "type": "integer" },
+          "socket_path": { "type": "string" },
+          "configured_socket_path": { "type": "string" },
+          "effective_socket_path": { "type": "string" },
+          "readiness_state": { "enum": ["starting", "recovering", "ready", "failed"] },
+          "readiness_stage": { "enum": ["endpoint", "registry", "workspaces", "jobs", "ready", "failed"] },
+          "readiness_elapsed_ms": { "type": "integer" },
+          "worktree_recovery": { "type": "object" }
+        }
+      },
+      "else": {
+        "properties": {
+          "pid": { "type": "null" },
+          "process_id": { "type": "null" },
+          "started_at": { "type": "null" },
+          "uptime_ms": { "type": "null" },
+          "effective_socket_path": { "type": "null" },
+          "registered_worktree_count": { "type": "null" },
+          "active_scheduler_count": { "type": "null" },
+          "queued_job_count": { "type": "null" },
+          "running_job_count": { "type": "null" },
+          "readiness_state": { "enum": ["not_running", "unreachable"] },
+          "readiness_stage": { "type": "null" },
+          "readiness_elapsed_ms": { "type": "null" },
+          "worktree_recovery": { "type": "null" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "readiness_state": { "const": "ready" } }, "required": ["readiness_state"] },
+      "then": { "properties": { "reachable": { "const": true }, "readiness_stage": { "const": "ready" } } }
+    }
+  ]
+}

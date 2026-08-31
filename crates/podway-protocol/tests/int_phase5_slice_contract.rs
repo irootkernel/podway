@@ -5,8 +5,9 @@ use podway_protocol::{
     RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, SliceCommandV1,
     SliceErrorV1, SliceRequestV1, TerminalJobCancellationProjectionV1,
     TerminalJobErrorProjectionV1, TerminalJobResponseV1, TerminalJobSuccessProjectionV1,
-    TerminalJobSuccessResultV1, WorkspaceContextV1, WorkspaceRemoveRequestV1,
-    WorktreeSelectorWireV1, canonical_mutation_identity_v1, canonical_reset_all_identity_v1,
+    TerminalJobSuccessResultV1, WorkspaceContextV1, WorkspaceModeApplyRequestV1,
+    WorkspaceModePlanRequestV1, WorkspaceRemoveRequestV1, WorktreeSelectorWireV1,
+    canonical_mutation_identity_v1, canonical_reset_all_identity_v1,
     canonical_start_mutation_identity_v1,
 };
 use serde_json::{Map, Value, json};
@@ -306,6 +307,20 @@ fn route_cases() -> Vec<RouteCase> {
             preconditions: PreconditionsV1::default(),
         },
         RouteCase {
+            command: "workspace.mode.plan",
+            operation: OperationV1::Query,
+            durable: false,
+            payload: json!({"selector": selector.clone(), "to": "dev"}),
+            preconditions: PreconditionsV1::default(),
+        },
+        RouteCase {
+            command: "workspace.mode.apply",
+            operation: OperationV1::Control,
+            durable: false,
+            payload: json!({"selector": selector.clone(), "to": "dev", "plan_token": "opaque-token"}),
+            preconditions: PreconditionsV1::default(),
+        },
+        RouteCase {
             command: "session.start",
             operation: OperationV1::Mutate,
             durable: true,
@@ -542,10 +557,10 @@ fn route_cases() -> Vec<RouteCase> {
 }
 
 #[test]
-fn recon001_exhaustively_admits_only_the_36_canonical_daemon_routes() {
+fn recon001_exhaustively_admits_only_the_38_canonical_daemon_routes() {
     let cases = route_cases();
-    assert_eq!(cases.len(), 36);
-    assert_eq!(DAEMON_COMMAND_NAMES_V1.len(), 36);
+    assert_eq!(cases.len(), 38);
+    assert_eq!(DAEMON_COMMAND_NAMES_V1.len(), 38);
     assert_eq!(
         cases.iter().map(|case| case.command).collect::<Vec<_>>(),
         DAEMON_COMMAND_NAMES_V1.to_vec(),
@@ -575,6 +590,14 @@ fn recon001_exhaustively_admits_only_the_36_canonical_daemon_routes() {
                 ))
                 .is_err()
             );
+            continue;
+        }
+        if case.command == "workspace.mode.plan" {
+            WorkspaceModePlanRequestV1::from_envelope(&request_envelope).unwrap();
+            continue;
+        }
+        if case.command == "workspace.mode.apply" {
+            WorkspaceModeApplyRequestV1::from_envelope(&request_envelope).unwrap();
             continue;
         }
         let request = SliceRequestV1::from_envelope(&request_envelope).unwrap();
