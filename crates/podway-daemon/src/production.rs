@@ -81,7 +81,9 @@ use crate::{
         WorkspaceStoreSlotV1,
     },
     scheduler::WorkspaceSchedulerV1,
-    server::{DaemonRequestV1, ResponseMetadataSourceV1, SystemResponseMetadataSourceV1},
+    server::{
+        DaemonActivityV1, DaemonRequestV1, ResponseMetadataSourceV1, SystemResponseMetadataSourceV1,
+    },
     v2_read_service::{
         EvidenceReadErrorV2, GraphStatusTierV2, GraphViewErrorV2, project_evidence_read_v1,
         project_graph_next_v2, project_graph_observation_v1, project_graph_status_v2,
@@ -413,6 +415,23 @@ impl ProductionWorkspaceRuntimeV1 {
 
 impl WorkspaceRuntimeV1 for ProductionWorkspaceRuntimeV1 {
     type Workspace = ProductionWorkspaceV1;
+
+    fn daemon_activity(&self) -> Option<DaemonActivityV1> {
+        let (
+            registered_worktrees,
+            active_schedulers,
+            queued_jobs,
+            running_jobs,
+            maintenance_operations,
+        ) = self.manager.daemon_activity_counts(self.clock.now())?;
+        Some(DaemonActivityV1 {
+            registered_worktrees,
+            active_schedulers,
+            queued_jobs,
+            running_jobs,
+            maintenance_operations,
+        })
+    }
 
     fn resolve_existing(
         &self,

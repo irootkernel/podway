@@ -105,6 +105,8 @@ registered_worktree_count
 active_scheduler_count
 queued_job_count
 running_job_count
+in_flight_client_count
+maintenance_operation_count
 readiness_state
 readiness_stage
 readiness_elapsed_ms
@@ -121,7 +123,10 @@ as an unreachable status result.
 The final four fields were introduced by the
 `podway.daemon-status-result/v2` family. Current daemon and CLI projections use
 `podway.daemon-status-result/v3`, whose additional `mode` field identifies the
-selected runtime namespace. `readiness_state` distinguishes
+selected runtime namespace. Its two service-rollover counters report other
+admitted client handlers and active workspace maintenance, activation, claim,
+or rebind leases. A live v3 daemon reports concrete aggregate counts; a local
+stopped or unreachable projection uses `null`. `readiness_state` distinguishes
 `not_running`, `unreachable`, `starting`, `recovering`, `ready`, and `failed`;
 the stage identifies endpoint, registry, worktree, job, ready, or failed
 processing. Worktree progress contains only bounded total, completed, and failed

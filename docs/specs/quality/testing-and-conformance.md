@@ -84,6 +84,13 @@ renamed-ancestor rejection, bounded success and rejection observability, exact
 confirmation, response-loss replay, empty and non-empty residuals, paths outside
 `.podway`, and reinitialization with a new workspace UUID.
 
+Aquarium managed-service tests validate the external producer description and
+artifact manifest, immutable bundle and executable digests, read-only status and
+planning, fail-closed activity observation, busy deferral, stale-token rejection,
+exact target activation, and exact prior-generation rollback. These tests use an
+isolated controller harness and never inspect or mutate the installed production
+service or a shared Aquarium runtime.
+
 ## Development and distribution gates
 
 `make test` is the required development gate. It runs preparation and static

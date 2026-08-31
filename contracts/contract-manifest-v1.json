@@ -38,7 +38,32 @@
     {
       "kind": "catalog",
       "path": "release/dolgorae-adapter-contract-v2.json",
-      "sha256": "sha256:bbd0c5b76b7061b1763d0a51b68bd4cfb88fd81ad83a15d31e2da084b1f14488"
+      "sha256": "sha256:8b7c6784a6da18a40afd72e2c158c642b0733cf6ce013f641f8683c8b0a83080"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/aquarium-dev-artifact-manifest-v2.schema.json",
+      "sha256": "sha256:df24ed66c7d6fa875d8ad5431161cfd3d64ef7d012a49a52399756353b051b6a"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/aquarium-dev-producer-description-v2.schema.json",
+      "sha256": "sha256:27509e85a759cb33b5e814ce8c1b8575af7b49d08f01ab0c9b04196db70b1dc8"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/aquarium-dev-service-plan-v1.schema.json",
+      "sha256": "sha256:8ae6b7cc965c3aa13d243274b3a06e209e388a1019113e04bd99aa2a32b86d01"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/aquarium-dev-service-result-v1.schema.json",
+      "sha256": "sha256:75a4341eba3383bc5681a7b1ce5a6b11ce0c9b79fa9a3deabfea6c752d2a4c81"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/aquarium-dev-service-status-v1.schema.json",
+      "sha256": "sha256:a0d18dc4e58d3883a513a281499cfda0dfd719cc291fa9d190a82ba205d52fc8"
     },
     {
       "kind": "schema",
@@ -113,7 +138,7 @@
     {
       "kind": "schema",
       "path": "schemas/daemon-status-result-v3.schema.json",
-      "sha256": "sha256:a5ba12dcb6414ee1743560d26c236e3ae14f3f0d900a11b9b210eed55f3988be"
+      "sha256": "sha256:dcb611b909cd240f572f726123bb8addea7b0e0361fcf9301ad3b73e5649cf4e"
     },
     {
       "kind": "schema",
@@ -606,7 +631,7 @@
       "sha256": "sha256:23423b1060f6a0fedd1097ac458ca8a1cd8cb3c1a2a7e88aa964d514d01a248a"
     }
   ],
-  "digest": "sha256:e96e582f4dc4f14e61c69feeb8a9eddc121da9ea1ffce89f5f7739a912a89689",
+  "digest": "sha256:3836bcebfbef790c3bdc4f3a193f1a1a123505670cde75a9c45c476dec36cf55",
   "product": "podway",
   "product_version": "0.2.8",
   "schema_version": "podway.contract-manifest/v1",

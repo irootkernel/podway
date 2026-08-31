@@ -7,7 +7,7 @@ daemon as one product and are grouped by concern:
 - [Domain](domain/): procedures, items, transitions, rework, and presets.
 - [Interfaces](interfaces/): CLI, JSON, IPC, automation, errors, and exit codes.
 - [Storage](storage/): SQLite state, transactions, recovery, and retention.
-- [Operations](operations/): trust, observability, installation, and packaging.
+- [Operations](operations/): trust, observability, installation, packaging, and the Aquarium development service.
 - [Quality](quality/): tests, acceptance criteria, and traceability.
 
 Machine-readable counterparts live under [`assets/`](../../assets/) and

@@ -16,8 +16,7 @@ use podway_protocol::{
 };
 use serde_json::{Map, Value, json};
 
-use crate::server::DaemonRequestV1;
-use crate::server::RequestDispatcherV1;
+use crate::server::{DaemonActivityV1, DaemonRequestV1, RequestDispatcherV1};
 
 /// The longest diagnostic that may be emitted by this dispatcher.
 ///
@@ -1474,6 +1473,10 @@ impl DispatcherReconciliationOutputV1 {
 pub trait WorkspaceRuntimeV1: Send + Sync {
     type Workspace: Send + Sync;
 
+    fn daemon_activity(&self) -> Option<DaemonActivityV1> {
+        None
+    }
+
     fn resolve_existing(
         &self,
         selector: &WorktreeSelectorWireV1,
@@ -2547,6 +2550,10 @@ where
     Metadata: DispatchResponseMetadataV1,
     Errors: DispatchErrorMapperV1,
 {
+    fn daemon_activity(&self) -> Option<DaemonActivityV1> {
+        self.runtime.daemon_activity()
+    }
+
     fn dispatch(
         &self,
         request: &RequestEnvelopeV1,

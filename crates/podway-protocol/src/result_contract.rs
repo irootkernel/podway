@@ -2133,6 +2133,26 @@ fn validate_daemon_service_status_result_v3(mut value: Value) -> bool {
     if podway_core::RuntimeModeV1::new(mode).is_err() {
         return false;
     }
+    let reachable = object.get("reachable").and_then(Value::as_bool);
+    let activity =
+        ["in_flight_client_count", "maintenance_operation_count"].map(|field| object.remove(field));
+    let activity_valid = match reachable {
+        Some(true) => activity
+            .iter()
+            .zip([1_024_u64, 10_000_u64])
+            .all(|(value, maximum)| {
+                value.as_ref().is_some_and(|value| {
+                    value.is_null() || value.as_u64().is_some_and(|count| count <= maximum)
+                })
+            }),
+        Some(false) => activity
+            .iter()
+            .all(|value| value.as_ref() == Some(&Value::Null)),
+        None => false,
+    };
+    if !activity_valid {
+        return false;
+    }
     validate_daemon_service_status_result_v2(value)
 }
 

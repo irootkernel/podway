@@ -24,7 +24,7 @@ use podway_daemon::{
     },
     peer::{FixedPeerCredentialSourceV1, PeerUidVerificationErrorV1, PeerUidVerifierV1},
     server::{
-        BoundedAcceptLoopV1, ConnectionHandlerSpawnerV1, DaemonProcessIdentityV1,
+        BoundedAcceptLoopV1, ConnectionHandlerSpawnerV1, DaemonActivityV1, DaemonProcessIdentityV1,
         DaemonReadinessV1, FixedResponseMetadataSourceV1, RequestDispatcherV1,
         ResponseMetadataClockErrorV1, ResponseMetadataClockV1, ResponseMetadataErrorV1,
         ServerAcceptLoopErrorV1, ServerConnectionErrorV1, ServerTransportTimeoutsV1,
@@ -141,15 +141,29 @@ enum DispatcherOutcome {
 struct TestDispatcher {
     outcome: DispatcherOutcome,
     calls: Arc<AtomicUsize>,
+    activity: Option<DaemonActivityV1>,
 }
 
 impl TestDispatcher {
     fn new(outcome: DispatcherOutcome, calls: Arc<AtomicUsize>) -> Self {
-        Self { outcome, calls }
+        Self {
+            outcome,
+            calls,
+            activity: None,
+        }
+    }
+
+    fn with_activity(mut self, activity: DaemonActivityV1) -> Self {
+        self.activity = Some(activity);
+        self
     }
 }
 
 impl RequestDispatcherV1 for TestDispatcher {
+    fn daemon_activity(&self) -> Option<DaemonActivityV1> {
+        self.activity
+    }
+
     fn dispatch(
         &self,
         request: &RequestEnvelopeV1,
@@ -653,7 +667,8 @@ fn status_transport(
             ServerTransportTimeoutsV1::default(),
             metadata(),
         )
-        .with_process_identity(identity),
+        .with_process_identity(identity)
+        .with_dev_shutdown(ShutdownAdmissionV1::new()),
     )
 }
 
@@ -1102,10 +1117,42 @@ fn daemon_status_is_stable_live_and_bypasses_dispatch() {
         observations[0]["effective_socket_path"],
         "/tmp/podway-runtime/podwayd.sock"
     );
+    assert_eq!(observations[0]["in_flight_client_count"], 0);
     assert!(
         observations[1]["uptime_ms"].as_u64().unwrap()
             >= observations[0]["uptime_ms"].as_u64().unwrap()
     );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn daemon_status_projects_the_exact_rollover_activity_snapshot() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let transport = status_transport(
+        TestDispatcher::new(DispatcherOutcome::Success, Arc::clone(&calls)).with_activity(
+            DaemonActivityV1 {
+                registered_worktrees: 3,
+                active_schedulers: 2,
+                queued_jobs: 4,
+                running_jobs: 1,
+                maintenance_operations: 5,
+            },
+        ),
+    );
+    let (mut client, server) =
+        UnixStream::pair().expect("Unix stream fixture pair must be created");
+    let handler = thread::spawn(move || transport.handle_connection(server));
+    send_and_half_close(&mut client, &request_frame(&daemon_status_request(0)));
+    let ResponseEnvelopeV2::OutputV2(output) = read_response_v2(&mut client) else {
+        panic!("daemon status must return output");
+    };
+    assert!(handler.join().expect("handler must not panic").is_ok());
+    assert_eq!(output.result()["registered_worktree_count"], 3);
+    assert_eq!(output.result()["active_scheduler_count"], 2);
+    assert_eq!(output.result()["queued_job_count"], 4);
+    assert_eq!(output.result()["running_job_count"], 1);
+    assert_eq!(output.result()["maintenance_operation_count"], 5);
+    assert_eq!(output.result()["in_flight_client_count"], 0);
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 

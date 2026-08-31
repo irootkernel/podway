@@ -640,6 +640,7 @@ fn v2dvc002_reserves_closed_runtime_mode_contracts_without_runtime_admission() {
         "socket_path":"/tmp/podway.sock","configured_socket_path":"/tmp/podway.sock",
         "effective_socket_path":"/tmp/podway.sock","registered_worktree_count":0,
         "active_scheduler_count":0,"queued_job_count":0,"running_job_count":0,
+        "in_flight_client_count":0,"maintenance_operation_count":0,
         "readiness_state":"ready","readiness_stage":"ready","readiness_elapsed_ms":1,
         "worktree_recovery":{"total":0,"completed":0,"failed":0}
     });
@@ -651,6 +652,76 @@ fn v2dvc002_reserves_closed_runtime_mode_contracts_without_runtime_admission() {
             "generated_at":"2026-08-31T00:00:00.000Z","result":status,"warnings":[]
         }),
     );
+}
+
+#[test]
+fn v2dvc005_daemon_activity_fields_are_closed_bounded_and_nullable() {
+    let status = json!({
+        "schema":"podway.daemon-status-result/v3","mode":"dev",
+        "status":"running","installed":true,"loaded":true,"reachable":true,
+        "product":"podway","daemon_version":"0.2.8","target":"aarch64-apple-darwin",
+        "build_identity":DIGEST,"source_commit":null,
+        "contract_manifest_schema":"podway.contract-manifest/v1",
+        "contract_manifest_digest":DIGEST,"protocol_versions":["podway.ipc/v1"],
+        "pid":42,"process_id":UUID,"executable_path":"/opt/podwayd",
+        "started_at":"2026-08-31T00:00:00.000Z","uptime_ms":1,
+        "socket_path":"/tmp/podway.sock","configured_socket_path":"/tmp/podway.sock",
+        "effective_socket_path":"/tmp/podway.sock","registered_worktree_count":0,
+        "active_scheduler_count":0,"queued_job_count":0,"running_job_count":0,
+        "in_flight_client_count":null,"maintenance_operation_count":null,
+        "readiness_state":"ready","readiness_stage":"ready","readiness_elapsed_ms":1,
+        "worktree_recovery":{"total":0,"completed":0,"failed":0}
+    });
+    let input = |result: &Value| OutputEnvelopeInputV3 {
+        request_id: RequestIdV1::new(UUID).unwrap(),
+        command: CommandNameV1::new("daemon.wait-ready").unwrap(),
+        generated_at: Rfc3339MillisV1::new("2026-08-31T00:00:00.000Z").unwrap(),
+        workspace: None,
+        job: None,
+        session: None,
+        result: result.as_object().unwrap().clone(),
+        warnings: Vec::new(),
+    };
+    assert!(OutputEnvelopeV3::new(input(&status)).is_ok());
+
+    let mut string_count = status.clone();
+    string_count["in_flight_client_count"] = json!("0");
+    assert!(OutputEnvelopeV3::new(input(&string_count)).is_err());
+
+    let mut excessive = status.clone();
+    excessive["maintenance_operation_count"] = json!(10_001);
+    assert!(OutputEnvelopeV3::new(input(&excessive)).is_err());
+
+    let mut excessive_clients = status.clone();
+    excessive_clients["in_flight_client_count"] = json!(1_025);
+    assert!(OutputEnvelopeV3::new(input(&excessive_clients)).is_err());
+
+    let mut missing = status;
+    missing
+        .as_object_mut()
+        .unwrap()
+        .remove("in_flight_client_count");
+    assert!(OutputEnvelopeV3::new(input(&missing)).is_err());
+
+    let mut unreachable = json!({
+        "schema":"podway.daemon-status-result/v3","mode":"dev",
+        "status":"stopped","installed":true,"loaded":false,"reachable":false,
+        "product":"podway","daemon_version":"0.2.8","target":"aarch64-apple-darwin",
+        "build_identity":DIGEST,"source_commit":null,
+        "contract_manifest_schema":"podway.contract-manifest/v1",
+        "contract_manifest_digest":DIGEST,"protocol_versions":["podway.ipc/v1"],
+        "pid":null,"process_id":null,"executable_path":"/opt/podwayd",
+        "started_at":null,"uptime_ms":null,
+        "socket_path":"/tmp/podway.sock","configured_socket_path":"/tmp/podway.sock",
+        "effective_socket_path":null,"registered_worktree_count":null,
+        "active_scheduler_count":null,"queued_job_count":null,"running_job_count":null,
+        "in_flight_client_count":null,"maintenance_operation_count":null,
+        "readiness_state":"not_running","readiness_stage":null,"readiness_elapsed_ms":null,
+        "worktree_recovery":null
+    });
+    assert!(OutputEnvelopeV3::new(input(&unreachable)).is_ok());
+    unreachable["in_flight_client_count"] = json!(0);
+    assert!(OutputEnvelopeV3::new(input(&unreachable)).is_err());
 }
 
 #[test]

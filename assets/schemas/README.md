@@ -27,6 +27,11 @@ These JSON Schema Draft 2020-12 files define Podway's versioned structural contr
 - `daemon-status-result-v1.schema.json`: merged local-service and live-daemon status result.
 - `daemon-status-result-v3.schema.json`: live mode-aware daemon status result.
 - `managed-runtime-v3.schema.json`: closed managed runtime identity, topology, executable, and generation metadata.
+- `aquarium-dev-producer-description-v2.schema.json`: fixed Podway managed-service producer description.
+- `aquarium-dev-artifact-manifest-v2.schema.json`: exact committed-generation bundle identity emitted by the producer.
+- `aquarium-dev-service-status-v1.schema.json`: closed Aquarium controller status projection.
+- `aquarium-dev-service-plan-v1.schema.json`: read-only exact-generation activation plan and token.
+- `aquarium-dev-service-result-v1.schema.json`: successful controller apply result.
 - `workspace-mode-plan-result-v1.schema.json`: read-only token issuance and bounded mode-switch readiness result.
 - `workspace-mode-apply-result-v1.schema.json`: convergent mode-switch application result.
 - `workspace-mode-switch-marker-v1.schema.json`: durable bounded recovery marker for an exact mode transition.

@@ -40,6 +40,9 @@ REQUIRED_MAKE_TARGETS = (
     "preset-import",
     "preset-tool-test",
     "dev-runtime-test",
+    "aquarium-dev-describe",
+    "aquarium-dev-build",
+    "aquarium-dev-test",
     "dist",
     "dist-patch",
     "contract-manifest",
@@ -51,6 +54,7 @@ REQUIRED_TEST_SEQUENCE = (
     "$(MAKE) test-e2e",
     "$(MAKE) preset-tool-test PRESET_VALIDATOR_READY=1",
     "$(MAKE) dev-runtime-test",
+    "$(MAKE) aquarium-dev-test",
 )
 REQUIRED_PREPARE_COMMANDS = (
     "python3 tools/verify_docs.py",
@@ -852,6 +856,7 @@ def validate_makefile_contract(root: Path) -> int:
         ("preset-import", "tools/manage_presets.py import"),
         ("test-fuzzing", "python3 tools/run_fuzzing.py"),
         ("dev-runtime-test", "python3 tools/dev_runtime.py self-test"),
+        ("aquarium-dev-test", "python3 -m unittest tests.test_aquarium_dev"),
     ):
         recipe = re.search(rf"^{target}\s*:[^\n]*\n((?:\t.*\n)+)", text, flags=re.MULTILINE)
         if recipe is None or command not in recipe.group(1):

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:aquarium-dev-producer-description:v2",
+  "title": "Aquarium development producer description v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "project_id", "next_version", "artifact_kind", "artifact_path", "command_path", "controller_path"],
+  "properties": {
+    "schema": {"const": "aquarium-dev-producer-description/v2"},
+    "project_id": {"const": "podway"},
+    "next_version": {"type": "string", "pattern": "^v(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)$"},
+    "artifact_kind": {"const": "managed-service"},
+    "artifact_path": {"const": "bundle"},
+    "command_path": {"const": "bin/podway"},
+    "controller_path": {"const": "libexec/aquarium-dev-service"}
+  }
+}

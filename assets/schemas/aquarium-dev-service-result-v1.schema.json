@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:aquarium-dev-service-result:v1",
+  "title": "Aquarium development service result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "project_id", "status", "active_git_sha", "recovery_required"],
+  "properties": {
+    "schema": {"const": "aquarium-dev-service-result/v1"},
+    "project_id": {"const": "podway"},
+    "status": {"enum": ["activated", "repaired", "no-change"]},
+    "active_git_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "recovery_required": {"type": "boolean"}
+  }
+}

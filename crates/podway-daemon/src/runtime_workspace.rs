@@ -1255,6 +1255,14 @@ struct WorkspaceSchedulerRetirementStateV1 {
     store_closed: bool,
 }
 impl WorkspaceMaintenanceCoordinatorV1 {
+    fn active_operation_count(&self) -> usize {
+        let state = mutex_lock(&self.state);
+        state.maintenance.len()
+            + state.rebinds.len()
+            + state.activations.values().sum::<usize>()
+            + state.claims.values().sum::<usize>()
+    }
+
     fn acquire(
         self: &Arc<Self>,
         key: WorkspaceMaintenanceKeyV1,
@@ -2169,6 +2177,28 @@ impl WorkspaceRuntimeManagerV1 {
         WorkspaceSchedulerReadFacadeV1 {
             registry: &self.schedulers,
         }
+    }
+
+    pub fn daemon_activity_counts(&self, now: UnixMillis) -> Option<(u32, u32, u32, u32, u32)> {
+        let registered = u32::try_from(self.registry.load().ok()?.workspaces().len()).ok()?;
+        let schedulers = self.schedulers.active_generations();
+        let active = u32::try_from(schedulers.len()).ok()?;
+        let mut queued = 0_u32;
+        let mut running = 0_u32;
+        for scheduler in schedulers {
+            let context = scheduler.context_snapshot();
+            let state = SqliteStoreV1::inspect_disposable_runtime_state_v1(
+                context.database_path(),
+                context.binding().identity(),
+                context.store_options(),
+                now,
+            )
+            .ok()?;
+            queued = queued.checked_add(state.queued_jobs())?;
+            running = running.checked_add(state.running_jobs())?;
+        }
+        let maintenance = u32::try_from(self.maintenance.active_operation_count()).ok()?;
+        Some((registered, active, queued, running, maintenance))
     }
 
     /// Performs one no-follow observation of an exact registry root.
@@ -4698,6 +4728,39 @@ mod tests {
         let lossless =
             LosslessPathV1::from_raw_bytes(canonical.as_os_str().as_bytes(), display).unwrap();
         WorktreeSelectorV1::new(WORKTREE_SELECTOR_VERSION_V1, None, lossless).unwrap()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn v2dvc005_activity_snapshot_is_complete_or_fails_closed() {
+        let sequence = CONFIG_TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let fixture = std::env::temp_dir().join(format!("pwa-{}-{sequence}", std::process::id()));
+        let account = fixture.join("home");
+        fs::create_dir_all(&account).unwrap();
+        fs::set_permissions(&account, fs::Permissions::from_mode(0o700)).unwrap();
+        let paths = ServiceRuntimePathsV1::for_account_home_mode(
+            &account,
+            RuntimeModeV1::development(),
+            nix::unistd::geteuid().as_raw(),
+        )
+        .unwrap();
+        let registry_parent = paths.workspace_registry_path().as_path().parent().unwrap();
+        fs::create_dir_all(registry_parent).unwrap();
+        fs::set_permissions(registry_parent, fs::Permissions::from_mode(0o700)).unwrap();
+        let mut manager =
+            WorkspaceRuntimeManagerV1::new(&paths, SqliteStoreOptionsV1::new(8).unwrap());
+        manager.maintenance = Arc::new(WorkspaceMaintenanceCoordinatorV1::default());
+
+        assert_eq!(
+            manager.daemon_activity_counts(UnixMillis::new(1_800_000_000_000)),
+            Some((0, 0, 0, 0, 0))
+        );
+        fs::write(paths.workspace_registry_path().as_path(), b"{").unwrap();
+        assert_eq!(
+            manager.daemon_activity_counts(UnixMillis::new(1_800_000_000_001)),
+            None
+        );
+        fs::remove_dir_all(fixture).unwrap();
     }
 
     #[cfg(unix)]

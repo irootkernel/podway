@@ -619,6 +619,20 @@ pub trait RequestDispatcherV1: Send + Sync {
         request: &RequestEnvelopeV1,
         daemon_request: &DaemonRequestV1,
     ) -> ResponseEnvelopeV2;
+
+    /// Returns a bounded service-rollover activity snapshot when the runtime can prove one.
+    fn daemon_activity(&self) -> Option<DaemonActivityV1> {
+        None
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DaemonActivityV1 {
+    pub registered_worktrees: u32,
+    pub active_schedulers: u32,
+    pub queued_jobs: u32,
+    pub running_jobs: u32,
+    pub maintenance_operations: u32,
 }
 
 /// A closed request admitted by the daemon transport boundary.
@@ -1264,6 +1278,8 @@ where
             "active_scheduler_count": Value::Null,
             "queued_job_count": Value::Null,
             "running_job_count": Value::Null,
+            "in_flight_client_count": Value::Null,
+            "maintenance_operation_count": Value::Null,
             "readiness_state": "ready",
             "readiness_stage": "ready",
             "readiness_elapsed_ms": process.uptime_millis(),
@@ -1272,6 +1288,36 @@ where
         .as_object()
         .expect("daemon status is an object")
         .clone();
+        if let Some(activity) = self.dispatcher.daemon_activity() {
+            result.insert(
+                "registered_worktree_count".to_owned(),
+                Value::from(activity.registered_worktrees),
+            );
+            result.insert(
+                "active_scheduler_count".to_owned(),
+                Value::from(activity.active_schedulers),
+            );
+            result.insert(
+                "queued_job_count".to_owned(),
+                Value::from(activity.queued_jobs),
+            );
+            result.insert(
+                "running_job_count".to_owned(),
+                Value::from(activity.running_jobs),
+            );
+            result.insert(
+                "maintenance_operation_count".to_owned(),
+                Value::from(activity.maintenance_operations),
+            );
+        }
+        if let Some(admission) = &self.dev_shutdown
+            && let Ok(in_flight) = admission.try_in_flight()
+        {
+            result.insert(
+                "in_flight_client_count".to_owned(),
+                Value::from(in_flight.saturating_sub(1) as u64),
+            );
+        }
         if let Some(readiness) = &self.readiness {
             let snapshot = readiness.snapshot();
             let worktrees = snapshot.worktrees();

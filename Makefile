@@ -17,7 +17,7 @@ export PRESET_ID PRESET_NAME PRESET_DESCRIPTION PRESET_FILE PRESET_DIR PRESET_VA
 .PHONY: test test-prepare release-prepare dist-preflight patch-release-preflight release-version-check test-rust test-unit test-int test-fuzzing test-e2e contract-verifier-test \
 	toolchain format format-check vet lint lint-all architecture architecture-static preset-validator \
 	preset-create preset-import preset-tool-test contract-manifest dist dist-patch \
-	dev-daemon dev-runtime-test
+	dev-daemon dev-runtime-test aquarium-dev-describe aquarium-dev-build aquarium-dev-test
 
 toolchain:
 	@$(RUST_TOOLCHAIN_ENV) cargo --version
@@ -30,6 +30,7 @@ test:
 	$(MAKE) test-e2e
 	$(MAKE) preset-tool-test PRESET_VALIDATOR_READY=1
 	$(MAKE) dev-runtime-test
+	$(MAKE) aquarium-dev-test
 
 test-prepare: toolchain
 	$(MAKE) format-check
@@ -120,6 +121,15 @@ dev-runtime-test:
 	$(RUST_GATE_ENV) cargo test -p podway-daemon --lib --locked \
 		--features development-v2-admission development_v2::tests -- \
 		--test-threads=$(TEST_THREADS)
+
+aquarium-dev-describe:
+	@$(RUST_TOOLCHAIN_ENV) python3 tools/aquarium_dev_producer.py describe
+
+aquarium-dev-build:
+	@$(RUST_TOOLCHAIN_ENV) python3 tools/aquarium_dev_producer.py build
+
+aquarium-dev-test:
+	$(RUST_TOOLCHAIN_ENV) python3 -m unittest tests.test_aquarium_dev
 
 test-rust:
 	$(RUST_GATE_ENV) cargo test --workspace --lib --bins \

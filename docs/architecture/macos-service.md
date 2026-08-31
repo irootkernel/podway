@@ -180,6 +180,8 @@ registered_worktree_count
 active_scheduler_count
 queued_job_count
 running_job_count
+in_flight_client_count
+maintenance_operation_count
 ```
 
 `process_id` is a UUID created once per daemon process; `pid` is the operating-system

@@ -21,6 +21,12 @@ are not Podway release or support targets.
 
 Podway uses semantic versioning for product releases.
 
+The Aquarium development bundle is not a release archive. Its producer accepts
+only a clean local `main`, gives the immutable generation a
+`v<next>-dev.<sha12>` identity, and publishes it only through Aquarium's pending
+generation flow. Building or committing that bundle does not activate its
+LaunchAgent or change Aquarium's current selector.
+
 Independent versioned contracts:
 
 ```text

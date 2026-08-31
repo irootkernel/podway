@@ -1096,6 +1096,31 @@
     ],
     "schema_pins": [
       {
+        "id": "urn:podway:schema:aquarium-dev-artifact-manifest:v2",
+        "path": "schemas/aquarium-dev-artifact-manifest-v2.schema.json",
+        "sha256": "sha256:df24ed66c7d6fa875d8ad5431161cfd3d64ef7d012a49a52399756353b051b6a"
+      },
+      {
+        "id": "urn:podway:schema:aquarium-dev-producer-description:v2",
+        "path": "schemas/aquarium-dev-producer-description-v2.schema.json",
+        "sha256": "sha256:27509e85a759cb33b5e814ce8c1b8575af7b49d08f01ab0c9b04196db70b1dc8"
+      },
+      {
+        "id": "urn:podway:schema:aquarium-dev-service-plan:v1",
+        "path": "schemas/aquarium-dev-service-plan-v1.schema.json",
+        "sha256": "sha256:8ae6b7cc965c3aa13d243274b3a06e209e388a1019113e04bd99aa2a32b86d01"
+      },
+      {
+        "id": "urn:podway:schema:aquarium-dev-service-result:v1",
+        "path": "schemas/aquarium-dev-service-result-v1.schema.json",
+        "sha256": "sha256:75a4341eba3383bc5681a7b1ce5a6b11ce0c9b79fa9a3deabfea6c752d2a4c81"
+      },
+      {
+        "id": "urn:podway:schema:aquarium-dev-service-status:v1",
+        "path": "schemas/aquarium-dev-service-status-v1.schema.json",
+        "sha256": "sha256:a0d18dc4e58d3883a513a281499cfda0dfd719cc291fa9d190a82ba205d52fc8"
+      },
+      {
         "id": "urn:podway:schema:attempt-conflict-details:v1",
         "path": "schemas/attempt-conflict-details-v1.schema.json",
         "sha256": "sha256:865829b0bea4977601d07466abeaf2e505011eb72ee0c789e56ec99427b121a2"
@@ -1168,7 +1193,7 @@
       {
         "id": "urn:podway:schema:daemon-status-result:v3",
         "path": "schemas/daemon-status-result-v3.schema.json",
-        "sha256": "sha256:a5ba12dcb6414ee1743560d26c236e3ae14f3f0d900a11b9b210eed55f3988be"
+        "sha256": "sha256:dcb611b909cd240f572f726123bb8addea7b0e0361fcf9301ad3b73e5649cf4e"
       },
       {
         "id": "urn:podway:schema:decision-result:v1",
@@ -1551,7 +1576,7 @@
     "authoring_diagnostics": 58,
     "routes": 69,
     "runtime_errors": 104,
-    "schemas": 90
+    "schemas": 95
   },
   "migration_boundary": {
     "adapter_database_access": "forbidden",
