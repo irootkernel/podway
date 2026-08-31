@@ -36,24 +36,31 @@ directory. Test-only account-root injection is compiled only in debug builds so
 process-level integration tests can exercise the real binaries without touching
 the developer's installed service state.
 
-## Foreground dev mode
+## Foreground named modes
 
-`podwayd --dev` is a contributor-only foreground execution mode compiled into the
-release binaries so packaged IPC conformance can exercise the actual artifact
-without installing a LaunchAgent. Its default root is
-`<effective-user-home>/.podway/dev/`; an absolute `PODWAY_DEV_HOME` overrides that
-root only in dev mode. Raw `--dev` keeps its socket, registry, metadata, and logs
-below that root while retaining the production singleton lock for compatibility.
-When that root belongs to a validated `podway.managed-dev-runtime/v2` topology,
-the daemon instead uses the topology's isolated account root and restricts every
-workspace to its canonical sandbox. Invalid present metadata fails startup.
+`podwayd --mode <key>` starts one foreground daemon in the selected bounded
+runtime mode. The default unmanaged root is
+`<effective-user-home>/.podway/modes/<key>/`. Every mode owns its complete
+`run`, `state`, and `logs` namespace, including its lock, socket, service state,
+registry, recovery record, and both logs. This permits production and named
+daemons to coexist without sharing mutable runtime files. `podwayd --dev` and
+`podway --dev` are exact aliases for mode `dev`.
 
-`podway --dev` selects the dev socket directly and never consults installed-service
-metadata. `podway --dev terminate` sends the dev-only `daemon.terminate` control
-request, waits for endpoint cleanup, and safely removes a same-user stale Unix
-socket when no daemon is listening. Production daemons reject that request. Normal
-signal shutdown and dev IPC shutdown share the endpoint guard, which removes only
-the socket identity owned by that process; dev registry and log files remain.
+`PODWAY_DEV_HOME` may select an explicit non-production root. A present
+`podway.managed-runtime/v3` document is authoritative and binds the canonical
+root, mode, effective UID, complete derived paths, purpose, optional sandbox,
+generation, and executable identities. An invalid or stale document fails closed
+without falling back to production or another mode. The legacy
+`podway.managed-dev-runtime/v2` contributor topology remains readable only for
+mode `dev` until its owning helper migration completes.
+
+The CLI selects the matching named socket directly and never consults installed
+production service metadata. `podway --dev terminate` sends the dev-only
+`daemon.terminate` control request, waits for endpoint cleanup, and safely removes
+a same-user stale Unix socket when no daemon is listening. Production and other
+named modes reject that request. Normal signal shutdown and dev IPC shutdown share
+the endpoint guard, which removes only the socket identity owned by that process;
+registry and log files remain.
 
 This mode validates Podway's daemon/CLI interface. LaunchAgent plist generation,
 absolute arguments, permissions, atomic publication, and command-runner behavior
@@ -67,8 +74,8 @@ production service should use `tools/dev_runtime.py` rather than raw
 `podwayd --dev`. The helper derives a short private root under `/private/tmp`,
 snapshots matching debug binaries, and writes purpose `contributor` managed-runtime
 metadata. `podwayd --dev` validates that metadata and derives an isolated lock from
-its private account root. Raw `podwayd --dev` without managed metadata still shares the
-production lock and never satisfies the development-v2 admission gate. Only the
+its private runtime root. Raw `podwayd --dev` without managed metadata never
+satisfies the development-v2 admission gate. Only the
 feature-built, helper-managed daemon plus its exact disposable sandbox marker can
 produce a development admission token; current v2 runtime routes remain closed
 until their owning runtime tasks land. See the [contributor development
@@ -187,7 +194,7 @@ while PID, process UUID, start time, uptime, and effective socket are `null`.
 At startup the daemon:
 
 1. creates PODWAY_HOME and its directories with mode `0700`;
-2. acquires the fixed per-user singleton lock regardless of selected socket;
+2. acquires the singleton lock belonging to the selected runtime namespace;
 3. validates the selected socket parent as a real, effective-user-owned mode
    `0700` directory;
 4. rejects a regular file, directory, symlink, wrong-owner socket, or

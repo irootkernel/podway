@@ -107,7 +107,7 @@ def layout_paths(root: Path) -> dict[str, Path]:
         "development_v2_marker": (
             root / SANDBOX_NAME / ".podway" / "runtime" / DEVELOPMENT_V2_MARKER_NAME
         ),
-        "lock": root / ACCOUNT_NAME / ".podway" / "run" / "podwayd.lock",
+        "lock": root / DEV_HOME_NAME / "run" / "podwayd.lock",
         "socket": root / DEV_HOME_NAME / "run" / "podwayd.sock",
     }
 
@@ -1082,8 +1082,14 @@ def probe_daemon_readiness(socket_path: Path, identity: dict[str, str]) -> str:
         fail("daemon status response result is invalid")
     if result.get("schema") == "podway.daemon-status-result/v1":
         return "ready"
-    if result.get("schema") != "podway.daemon-status-result/v2":
+    schema = result.get("schema")
+    if schema not in {
+        "podway.daemon-status-result/v2",
+        "podway.daemon-status-result/v3",
+    }:
         fail(f"daemon status response schema is unsupported: {result.get('schema')!r}")
+    if schema == "podway.daemon-status-result/v3" and result.get("mode") != "dev":
+        fail(f"daemon status response mode is invalid: {result.get('mode')!r}")
     state = result.get("readiness_state")
     if state not in {"starting", "recovering", "ready", "failed"}:
         fail(f"daemon status readiness state is invalid: {state!r}")

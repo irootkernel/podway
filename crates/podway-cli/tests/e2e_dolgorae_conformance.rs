@@ -328,7 +328,9 @@ impl ControlledPathFixtureV1 {
                 DaemonClientV1::new(self.runtime_paths()).daemon_status(&request)
                 && matches!(
                     output.result().get("schema").and_then(Value::as_str),
-                    Some("podway.daemon-status-result/v1") | Some("podway.daemon-status-result/v2")
+                    Some("podway.daemon-status-result/v1")
+                        | Some("podway.daemon-status-result/v2")
+                        | Some("podway.daemon-status-result/v3")
                 )
                 && (output.result()["schema"] == "podway.daemon-status-result/v1"
                     || output.result()["readiness_state"] == "ready")
@@ -662,7 +664,8 @@ fn install_sibling_release(fixture: &ControlledPathFixtureV1, label: &str) -> (S
             wait_ready.iter().copied(),
         );
         assert_eq!(ready["command"], "daemon.wait-ready");
-        assert_eq!(ready["result"]["schema"], "podway.daemon-status-result/v2");
+        assert_eq!(ready["result"]["schema"], "podway.daemon-status-result/v3");
+        assert_eq!(ready["result"]["mode"], "prod");
         assert_eq!(ready["result"]["readiness_state"], "ready");
     }
     (controlled_path, release_daemon)

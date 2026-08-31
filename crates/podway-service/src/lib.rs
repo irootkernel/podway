@@ -6,6 +6,10 @@
 //! translating direct lifecycle requests into typed runner commands with injectable command execution,
 //! clocks, runtime paths, and filesystem access at the composition boundary.
 
+mod managed_runtime_v3;
+
+pub use managed_runtime_v3::*;
+
 use nix::{
     dir::Dir,
     errno::Errno,
@@ -16,7 +20,7 @@ use nix::{
     },
     unistd::{Pid, UnlinkatFlags, User, fsync, geteuid, unlinkat},
 };
-use podway_core::UnixMillis;
+use podway_core::{RuntimeModeV1, UnixMillis};
 use serde::{
     Deserialize, Deserializer as _, Serialize,
     de::{IgnoredAny, MapAccess, Visitor},
@@ -230,6 +234,7 @@ impl ServiceLabelV1 {
 /// All bounded global paths owned by the per-user Podway service.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ServiceRuntimePathsV1 {
+    mode: RuntimeModeV1,
     podway_home: Option<LocalPlatformPathV1>,
     runtime_directory: LocalPlatformPathV1,
     global_lock_path: LocalPlatformPathV1,
@@ -238,40 +243,53 @@ pub struct ServiceRuntimePathsV1 {
     bootstrap_log_path: LocalPlatformPathV1,
     metadata_index_path: LocalPlatformPathV1,
     workspace_registry_path: LocalPlatformPathV1,
+    recovery_path: LocalPlatformPathV1,
     socket_path: LocalPlatformPathV1,
 }
 
 impl ServiceRuntimePathsV1 {
-    /// Constructs the contributor-only foreground daemon layout.
-    ///
-    /// Dev state is isolated below `dev_home`, while the production singleton lock remains shared
-    /// so production and dev daemons can never own the same worktree concurrently.
+    /// Constructs the legacy `--dev` compatibility layout at an explicit runtime root.
     pub fn for_dev_home(
         account_home: impl AsRef<Path>,
         dev_home: impl AsRef<Path>,
         user_id: u32,
     ) -> Result<Self, ServicePathErrorV1> {
         let account = PodwayHomeV1::from_account_home(account_home, user_id)?;
-        let dev_home = dev_home.as_ref();
-        validate_absolute_normalized_path(dev_home, "dev_home")?;
-        if dev_home == account.as_path() {
+        if dev_home.as_ref() == account.as_path() {
             return Err(ServicePathErrorV1::DevHomeConflictsProduction {
-                path: dev_home.to_path_buf(),
+                path: dev_home.as_ref().to_path_buf(),
             });
         }
-        let runtime_directory = dev_home.join("run");
-        let state_directory = dev_home.join("state");
-        let logs_directory = dev_home.join("logs");
+        Self::for_runtime_root(dev_home, RuntimeModeV1::development(), user_id)
+    }
+
+    /// Constructs one complete non-production runtime namespace at an explicit root.
+    pub fn for_runtime_root(
+        runtime_root: impl AsRef<Path>,
+        mode: RuntimeModeV1,
+        _user_id: u32,
+    ) -> Result<Self, ServicePathErrorV1> {
+        let runtime_root = runtime_root.as_ref();
+        validate_absolute_normalized_path(runtime_root, "runtime_root")?;
+        if mode.is_production() {
+            return Err(ServicePathErrorV1::DevHomeConflictsProduction {
+                path: runtime_root.to_path_buf(),
+            });
+        }
+        let runtime_directory = runtime_root.join("run");
+        let state_directory = runtime_root.join("state");
+        let logs_directory = runtime_root.join("logs");
         let socket_path = runtime_directory.join("podwayd.sock");
         validate_socket_path_capacity(&socket_path)?;
         Ok(Self {
-            podway_home: Some(LocalPlatformPathV1::service_global(dev_home)?),
+            mode,
+            podway_home: Some(LocalPlatformPathV1::service_global(runtime_root)?),
             runtime_directory: LocalPlatformPathV1::service_global(&runtime_directory)?,
             global_lock_path: LocalPlatformPathV1::service_global(
-                account.as_path().join("run/podwayd.lock"),
+                runtime_directory.join("podwayd.lock"),
             )?,
             launch_agent_path: LocalPlatformPathV1::service_global(
-                dev_home.join("LaunchAgents/dev.podway.podwayd.plist"),
+                runtime_root.join("LaunchAgents/dev.podway.podwayd.plist"),
             )?,
             log_path: LocalPlatformPathV1::service_global(logs_directory.join("podwayd.log"))?,
             bootstrap_log_path: LocalPlatformPathV1::service_global(
@@ -283,18 +301,40 @@ impl ServiceRuntimePathsV1 {
             workspace_registry_path: LocalPlatformPathV1::service_global(
                 state_directory.join("workspaces.json"),
             )?,
+            recovery_path: LocalPlatformPathV1::service_global(
+                state_directory.join("recovery.json"),
+            )?,
             socket_path: LocalPlatformPathV1::service_global(socket_path)?,
         })
     }
 
     pub fn for_effective_user_dev(dev_home: Option<&Path>) -> Result<Self, ServicePathErrorV1> {
         let account = PodwayHomeV1::for_effective_user()?;
-        let default_dev_home = account.as_path().join("dev");
+        let default_dev_home = account.as_path().join("modes/dev");
         Self::for_dev_home(
             account.account_home(),
             dev_home.unwrap_or(&default_dev_home),
             account.user_id(),
         )
+    }
+
+    /// Constructs the released production layout or one unmanaged named-mode layout.
+    pub fn for_account_home_mode(
+        account_home: impl AsRef<Path>,
+        mode: RuntimeModeV1,
+        user_id: u32,
+    ) -> Result<Self, ServicePathErrorV1> {
+        let account = PodwayHomeV1::from_account_home(account_home, user_id)?;
+        if mode.is_production() {
+            return Self::from_podway_home(&account);
+        }
+        let root = account.as_path().join("modes").join(mode.as_str());
+        Self::for_runtime_root(root, mode, user_id)
+    }
+
+    pub fn for_effective_user_mode(mode: RuntimeModeV1) -> Result<Self, ServicePathErrorV1> {
+        let account = PodwayHomeV1::for_effective_user()?;
+        Self::for_account_home_mode(account.account_home(), mode, account.user_id())
     }
 
     pub fn from_directories(
@@ -320,6 +360,7 @@ impl ServiceRuntimePathsV1 {
         validate_socket_path_capacity(&socket_path)?;
 
         Ok(Self {
+            mode: RuntimeModeV1::production(),
             podway_home: None,
             runtime_directory: LocalPlatformPathV1::new(runtime_directory)?,
             global_lock_path: LocalPlatformPathV1::new(runtime_directory.join("podwayd.lock"))?,
@@ -335,6 +376,9 @@ impl ServiceRuntimePathsV1 {
             )?,
             workspace_registry_path: LocalPlatformPathV1::new(
                 application_support_directory.join("workspaces.json"),
+            )?,
+            recovery_path: LocalPlatformPathV1::new(
+                application_support_directory.join("recovery.json"),
             )?,
             socket_path: LocalPlatformPathV1::new(socket_path)?,
         })
@@ -359,6 +403,7 @@ impl ServiceRuntimePathsV1 {
         validate_socket_path_capacity(&socket_path)?;
 
         Ok(Self {
+            mode: RuntimeModeV1::production(),
             podway_home: Some(LocalPlatformPathV1::service_global(home.as_path())?),
             runtime_directory: LocalPlatformPathV1::service_global(&runtime_directory)?,
             global_lock_path: LocalPlatformPathV1::service_global(
@@ -379,8 +424,15 @@ impl ServiceRuntimePathsV1 {
             workspace_registry_path: LocalPlatformPathV1::service_global(
                 state_directory.join("workspaces.json"),
             )?,
+            recovery_path: LocalPlatformPathV1::service_global(
+                state_directory.join("recovery.json"),
+            )?,
             socket_path: LocalPlatformPathV1::service_global(socket_path)?,
         })
+    }
+
+    pub fn mode(&self) -> &RuntimeModeV1 {
+        &self.mode
     }
 
     pub fn global_lock_path(&self) -> &LocalPlatformPathV1 {
@@ -413,6 +465,10 @@ impl ServiceRuntimePathsV1 {
 
     pub fn workspace_registry_path(&self) -> &LocalPlatformPathV1 {
         &self.workspace_registry_path
+    }
+
+    pub fn recovery_path(&self) -> &LocalPlatformPathV1 {
+        &self.recovery_path
     }
 
     pub fn socket_path(&self) -> &LocalPlatformPathV1 {
@@ -4502,7 +4558,7 @@ mod tests {
     }
 
     #[test]
-    fn dev_layout_is_isolated_but_shares_the_production_singleton_lock() {
+    fn dev_layout_owns_a_complete_isolated_namespace() {
         let paths = ServiceRuntimePathsV1::for_dev_home(
             "/Users/contributor",
             "/Users/contributor/.podway/dev",
@@ -4523,7 +4579,7 @@ mod tests {
         );
         assert_eq!(
             paths.global_lock_path().as_path(),
-            Path::new("/Users/contributor/.podway/run/podwayd.lock")
+            Path::new("/Users/contributor/.podway/dev/run/podwayd.lock")
         );
         assert!(matches!(
             ServiceRuntimePathsV1::for_dev_home(

@@ -43,7 +43,8 @@ use podway_core::{
     ActorAttributionV2, AttemptId, CriterionAssessmentReasonV2, CriterionId, GoalCriterionV2,
     GoalDefinitionV2, GoalRevisionNumberV2, GoalRevisionReasonV2, GoalStatementV2, GraphNodeId,
     ItemConditionV2, ItemId, ItemPredicateOperatorV2, OptionGuardV2, OptionId, PROCEDURE_SCHEMA_V2,
-    PredicateScalarV2, ReasonV2, Revision, SessionId, Sha256Digest, UnixMillis, WorkspaceId,
+    PredicateScalarV2, ReasonV2, Revision, RuntimeModeV1, SessionId, Sha256Digest, UnixMillis,
+    WorkspaceId,
 };
 use podway_presets::{PresetError, catalog_v2};
 use podway_protocol::{
@@ -58,9 +59,10 @@ use podway_protocol::{
 };
 use podway_service::{
     DaemonContractVerifierV1, InstallSpecV1, LaunchctlRunnerV1, LocalPlatformPathV1, LogQueryV1,
-    MacosServiceCommandRunnerV1, SERVICE_METADATA_MAX_BYTES_V1, ServiceClockV1, ServiceErrorV1,
-    ServiceFilesystemV1, ServiceLabelV1, ServiceLogStreamV1, ServiceManagerContractV1,
-    ServiceManagerV1, ServiceOutcomeV1, ServicePathErrorV1, ServiceRuntimePathsV1, ServiceStatusV1,
+    MacosServiceCommandRunnerV1, ManagedRuntimeExecutableRoleV3, ManagedRuntimeV3,
+    SERVICE_METADATA_MAX_BYTES_V1, ServiceClockV1, ServiceErrorV1, ServiceFilesystemV1,
+    ServiceLabelV1, ServiceLogStreamV1, ServiceManagerContractV1, ServiceManagerV1,
+    ServiceOutcomeV1, ServicePathErrorV1, ServiceRuntimePathsV1, ServiceStatusV1,
     StdServiceFilesystemV1, SystemLaunchctlRunnerV1, UninstallOptionsV1,
     install_socket_path_from_metadata_v1, installed_socket_path_from_metadata_v1,
 };
@@ -91,9 +93,13 @@ const DAEMON_VERSION_PROBE_POST_KILL_DRAIN: Duration = Duration::from_millis(100
     arg_required_else_help = false
 )]
 struct Cli {
-    /// Use the isolated contributor daemon and state tree.
-    #[arg(long, global = true, action = ArgAction::SetTrue)]
+    /// Use mode `dev`; exact compatibility alias for `--mode dev`.
+    #[arg(long, global = true, action = ArgAction::SetTrue, conflicts_with = "mode")]
     dev: bool,
+
+    /// Select one bounded daemon runtime mode.
+    #[arg(long, global = true, value_name = "KEY", conflicts_with = "dev")]
+    mode: Option<String>,
 
     /// Emit exactly one versioned JSON object to stdout.
     #[arg(long, global = true, action = ArgAction::SetTrue)]
@@ -157,6 +163,20 @@ struct Cli {
 
     #[command(subcommand)]
     command: Command,
+}
+
+impl Cli {
+    fn runtime_mode(&self) -> Result<RuntimeModeV1, LocalFailure> {
+        if self.dev {
+            return Ok(RuntimeModeV1::development());
+        }
+        self.mode
+            .as_deref()
+            .map(RuntimeModeV1::new)
+            .transpose()
+            .map(|mode| mode.unwrap_or_default())
+            .map_err(|_| LocalFailure::request_invalid("runtime mode is invalid"))
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -1839,9 +1859,10 @@ pub fn run() -> i32 {
 }
 
 fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
+    let runtime_mode = cli.runtime_mode()?;
     if let Command::CompleteDynamic { kind } = &cli.command {
         let kind = kind.clone();
-        return dynamic_completion(cli.worktree.take(), cli.socket.take(), cli.dev, &kind);
+        return dynamic_completion(cli.worktree.take(), cli.socket.take(), runtime_mode, &kind);
     }
     if let Some(local) = execute_local(&cli)? {
         return Ok(local);
@@ -1879,7 +1900,7 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
     let wait_timeout_ms = cli.timeout.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS);
     let explicit = ExplicitPreconditions::parse(&cli)?;
     apply_archive_purge_revision(&mut cli.command, &explicit)?;
-    let client = daemon_client(wait_timeout_ms, cli.socket.as_deref(), cli.dev)
+    let client = daemon_client(wait_timeout_ms, cli.socket.as_deref(), &runtime_mode)
         .map_err(|failure| failure.with_command(wire_name))?;
 
     let replaying_plain_start = cli.idempotency_key.is_some()
@@ -3019,6 +3040,7 @@ fn procedure_open_failure(error: Errno) -> LocalFailure {
 }
 
 fn execute_local(cli: &Cli) -> Result<Option<RunResult>, LocalFailure> {
+    let runtime_mode = cli.runtime_mode()?;
     let local_flags = cli.worktree.is_some()
         || cli.timeout.is_some()
         || cli.socket.is_some()
@@ -3082,9 +3104,11 @@ fn execute_local(cli: &Cli) -> Result<Option<RunResult>, LocalFailure> {
             Ok(Some(execute_procedure(command)?))
         }
         Command::Daemon { command } => {
-            if cli.dev {
+            if !runtime_mode.is_production()
+                && !matches!(command, DaemonCommand::Status | DaemonCommand::WaitReady)
+            {
                 return Err(LocalFailure::request_invalid(
-                    "--dev cannot be combined with daemon service lifecycle commands",
+                    "named runtime modes cannot be combined with daemon service lifecycle commands",
                 ));
             }
             if cli.worktree.is_some()
@@ -3120,6 +3144,13 @@ fn execute_local(cli: &Cli) -> Result<Option<RunResult>, LocalFailure> {
                     "--follow cannot be combined with --json",
                 ));
             }
+            if !runtime_mode.is_production() {
+                return Ok(Some(execute_named_runtime_status(
+                    command,
+                    &runtime_mode,
+                    cli.timeout,
+                )?));
+            }
             Ok(Some(execute_service_lifecycle(
                 command,
                 cli.socket.as_deref(),
@@ -3127,8 +3158,10 @@ fn execute_local(cli: &Cli) -> Result<Option<RunResult>, LocalFailure> {
             )?))
         }
         Command::Terminate => {
-            if !cli.dev {
-                return Err(LocalFailure::request_invalid("terminate requires --dev"));
+            if runtime_mode.as_str() != "dev" {
+                return Err(LocalFailure::request_invalid(
+                    "terminate requires --dev or --mode dev",
+                ));
             }
             if cli.worktree.is_some()
                 || cli.socket.is_some()
@@ -3143,19 +3176,23 @@ fn execute_local(cli: &Cli) -> Result<Option<RunResult>, LocalFailure> {
             }
             Ok(Some(execute_dev_terminate(
                 cli.timeout.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS),
+                &runtime_mode,
             )?))
         }
         _ => Ok(None),
     }
 }
 
-fn execute_dev_terminate(wait_timeout_ms: u64) -> Result<RunResult, LocalFailure> {
-    let paths = effective_dev_paths("daemon.terminate")?;
+fn execute_dev_terminate(
+    wait_timeout_ms: u64,
+    mode: &RuntimeModeV1,
+) -> Result<RunResult, LocalFailure> {
+    let paths = effective_runtime_paths(mode, "daemon.terminate")?;
     let socket_path = paths.socket_path().as_path();
     if !socket_path.exists() {
         return Ok(dev_terminate_result());
     }
-    let client = daemon_client(wait_timeout_ms, None, true)?;
+    let client = daemon_client(wait_timeout_ms, None, mode)?;
     let request = build_daemon_terminate_request()?;
     let response = match client.daemon_terminate(&request) {
         Ok(response) => response,
@@ -3184,6 +3221,111 @@ fn execute_dev_terminate(wait_timeout_ms: u64) -> Result<RunResult, LocalFailure
         thread::sleep(Duration::from_millis(10));
     }
     Ok(dev_terminate_result())
+}
+
+fn execute_named_runtime_status(
+    command: &DaemonCommand,
+    mode: &RuntimeModeV1,
+    timeout_ms: Option<u64>,
+) -> Result<RunResult, LocalFailure> {
+    let route = if matches!(command, DaemonCommand::WaitReady) {
+        "daemon.wait-ready"
+    } else {
+        "daemon.status"
+    };
+    let paths = effective_runtime_paths(mode, route)?;
+    let deadline = matches!(command, DaemonCommand::WaitReady).then(|| {
+        Instant::now()
+            + Duration::from_millis(timeout_ms.unwrap_or(DEFAULT_DAEMON_READINESS_TIMEOUT_MS))
+    });
+    loop {
+        let request = build_daemon_status_request()?;
+        let client = DaemonClientV1::new(paths.clone());
+        match client.daemon_status(&request) {
+            Ok(ResponseEnvelopeV2::OutputV2(output)) => {
+                let live = validated_live_daemon_status(&output, None, &paths, None)?;
+                let ready = live.get("readiness_state").and_then(Value::as_str) == Some("ready");
+                if !matches!(command, DaemonCommand::WaitReady) || ready {
+                    return Ok(local_result(
+                        route,
+                        Value::Object(live),
+                        if ready {
+                            "daemon ready".to_owned()
+                        } else {
+                            "daemon startup incomplete".to_owned()
+                        },
+                    ));
+                }
+            }
+            Ok(ResponseEnvelopeV2::Error(error)) => {
+                if !matches!(command, DaemonCommand::WaitReady) {
+                    return Ok(RunResult::Response(Box::new(ResponseEnvelopeV2::Error(
+                        error,
+                    ))));
+                }
+            }
+            Err(error) => {
+                if !matches!(command, DaemonCommand::WaitReady) {
+                    return Ok(named_runtime_unreachable_result(route, mode, &paths));
+                }
+                if !matches!(
+                    error,
+                    DaemonClientErrorV1::Connection { .. }
+                        | DaemonClientErrorV1::SocketConfiguration { .. }
+                        | DaemonClientErrorV1::Timeout { .. }
+                ) {
+                    return Err(map_client_error(error).with_command(route));
+                }
+            }
+        }
+        if deadline.is_none_or(|deadline| Instant::now() >= deadline) {
+            return Ok(named_runtime_unreachable_result(route, mode, &paths));
+        }
+        thread::sleep(DAEMON_READINESS_POLL_INTERVAL);
+    }
+}
+
+fn named_runtime_unreachable_result(
+    route: &str,
+    mode: &RuntimeModeV1,
+    paths: &ServiceRuntimePathsV1,
+) -> RunResult {
+    local_result(
+        route,
+        json!({
+            "schema": "podway.daemon-status-result/v3",
+            "mode": mode.as_str(),
+            "status": "not_installed",
+            "installed": false,
+            "loaded": false,
+            "reachable": false,
+            "product": Value::Null,
+            "daemon_version": Value::Null,
+            "target": Value::Null,
+            "build_identity": Value::Null,
+            "source_commit": Value::Null,
+            "contract_manifest_schema": Value::Null,
+            "contract_manifest_digest": Value::Null,
+            "protocol_versions": [],
+            "pid": Value::Null,
+            "process_id": Value::Null,
+            "executable_path": Value::Null,
+            "started_at": Value::Null,
+            "uptime_ms": Value::Null,
+            "socket_path": paths.socket_path().as_path().display().to_string(),
+            "configured_socket_path": paths.socket_path().as_path().display().to_string(),
+            "effective_socket_path": Value::Null,
+            "registered_worktree_count": Value::Null,
+            "active_scheduler_count": Value::Null,
+            "queued_job_count": Value::Null,
+            "running_job_count": Value::Null,
+            "readiness_state": "not_running",
+            "readiness_stage": Value::Null,
+            "readiness_elapsed_ms": Value::Null,
+            "worktree_recovery": Value::Null,
+        }),
+        "daemon not running".to_owned(),
+    )
 }
 
 fn remove_stale_dev_socket(socket_path: &Path) -> Result<(), LocalFailure> {
@@ -3389,16 +3531,59 @@ fn effective_service_paths(command: &str) -> Result<ServiceRuntimePathsV1, Local
         .map_err(|_| LocalFailure::daemon_unavailable(command))
 }
 
-fn effective_dev_paths(command: &str) -> Result<ServiceRuntimePathsV1, LocalFailure> {
-    let dev_home = env::var_os("PODWAY_DEV_HOME").map(PathBuf::from);
+fn effective_runtime_paths(
+    mode: &RuntimeModeV1,
+    command: &str,
+) -> Result<ServiceRuntimePathsV1, LocalFailure> {
+    if mode.is_production() {
+        return effective_service_paths(command);
+    }
+    let runtime_root = env::var_os("PODWAY_DEV_HOME").map(PathBuf::from);
+    if let Some(runtime_root) = runtime_root.as_deref() {
+        let executable = env::current_exe()
+            .and_then(|path| path.canonicalize())
+            .map_err(|_| LocalFailure::daemon_unavailable(command))?;
+        if let Some(runtime) = ManagedRuntimeV3::discover(
+            runtime_root,
+            mode,
+            &executable,
+            ManagedRuntimeExecutableRoleV3::Cli,
+        )
+        .map_err(|_| LocalFailure::daemon_unavailable(command))?
+        {
+            return Ok(runtime.paths().clone());
+        }
+        if mode.as_str() != "dev" {
+            return Err(LocalFailure::daemon_unavailable(command));
+        }
+    }
     #[cfg(debug_assertions)]
     if let Some(account_root) = env::var_os("PODWAY_TEST_ACCOUNT_ROOT") {
         let account_root = PathBuf::from(account_root);
-        let dev_home = dev_home.unwrap_or_else(|| account_root.join(".podway/dev"));
-        return ServiceRuntimePathsV1::for_dev_home(account_root, dev_home, geteuid().as_raw())
+        if let Some(runtime_root) = runtime_root {
+            return ServiceRuntimePathsV1::for_runtime_root(
+                runtime_root,
+                mode.clone(),
+                geteuid().as_raw(),
+            )
             .map_err(|_| LocalFailure::daemon_unavailable(command));
+        }
+        return ServiceRuntimePathsV1::for_account_home_mode(
+            account_root,
+            mode.clone(),
+            geteuid().as_raw(),
+        )
+        .map_err(|_| LocalFailure::daemon_unavailable(command));
     }
-    ServiceRuntimePathsV1::for_effective_user_dev(dev_home.as_deref())
+    if let Some(runtime_root) = runtime_root {
+        return ServiceRuntimePathsV1::for_runtime_root(
+            runtime_root,
+            mode.clone(),
+            geteuid().as_raw(),
+        )
+        .map_err(|_| LocalFailure::daemon_unavailable(command));
+    }
+    ServiceRuntimePathsV1::for_effective_user_mode(mode.clone())
         .map_err(|_| LocalFailure::daemon_unavailable(command))
 }
 
@@ -4041,7 +4226,8 @@ fn service_status_projection(
         "not_running"
     };
     let mut result = json!({
-        "schema": "podway.daemon-status-result/v2",
+        "schema": "podway.daemon-status-result/v3",
+        "mode": paths.mode().as_str(),
         "status": status,
         "installed": installed,
         "loaded": loaded,
@@ -4074,7 +4260,7 @@ fn service_status_projection(
     .as_object()
     .expect("daemon service status is an object")
     .clone();
-    let mut verified_v2_ready = false;
+    let mut verified_ready = false;
     if readiness_probe_blocked
         || readiness_deadline.is_some_and(|deadline| Instant::now() >= deadline)
     {
@@ -4108,8 +4294,10 @@ fn service_status_projection(
                 ));
             }
             Ok(ResponseEnvelopeV2::OutputV2(output)) => {
-                let is_v2 = output.result().get("schema").and_then(Value::as_str)
-                    == Some("podway.daemon-status-result/v2");
+                let is_readiness_status = matches!(
+                    output.result().get("schema").and_then(Value::as_str),
+                    Some("podway.daemon-status-result/v2" | "podway.daemon-status-result/v3")
+                );
                 let live = validated_live_daemon_status(
                     &output,
                     static_identity.as_ref(),
@@ -4120,8 +4308,8 @@ fn service_status_projection(
                     result.insert(key, value);
                 }
                 result.insert("reachable".to_owned(), Value::Bool(true));
-                verified_v2_ready =
-                    is_v2 && result.get("readiness_state").and_then(Value::as_str) == Some("ready");
+                verified_ready = is_readiness_status
+                    && result.get("readiness_state").and_then(Value::as_str) == Some("ready");
             }
             Err(
                 DaemonClientErrorV1::Connection { .. }
@@ -4148,7 +4336,7 @@ fn service_status_projection(
     };
     Ok((
         local_result(command, Value::Object(result), text),
-        verified_v2_ready,
+        verified_ready,
     ))
 }
 
@@ -4201,6 +4389,7 @@ fn validated_live_daemon_status(
                         .iter()
                         .all(|field| result.contains_key(*field))
             }
+            Some("podway.daemon-status-result/v3") => true,
             _ => false,
         }
     {
@@ -4216,6 +4405,13 @@ fn validated_live_daemon_status(
             .ok_or_else(|| LocalFailure::response_invalid("daemon status response is invalid"))
     };
     let product = string("product")?;
+    if schema == Some("podway.daemon-status-result/v3")
+        && result.get("mode").and_then(Value::as_str) != Some(paths.mode().as_str())
+    {
+        return Err(LocalFailure::response_invalid(
+            "daemon status mode does not match the selected runtime",
+        ));
+    }
     let manifest = string("contract_manifest_digest")?;
     let local = build_identity_v1();
     let (expected_product, expected_manifest) = installed
@@ -7088,19 +7284,15 @@ fn workspace_removal_target(target: WorkspaceTarget) -> Result<WorkspaceTarget, 
 fn daemon_client(
     wait_timeout_ms: u64,
     socket_path: Option<&Path>,
-    dev_mode: bool,
+    mode: &RuntimeModeV1,
 ) -> Result<DaemonClientV1, LocalFailure> {
-    if dev_mode && socket_path.is_some() {
+    if !mode.is_production() && socket_path.is_some() {
         return Err(LocalFailure::request_invalid(
-            "--dev and --socket are mutually exclusive",
+            "--mode and --socket are mutually exclusive",
         ));
     }
-    let paths = if dev_mode {
-        effective_dev_paths("cli")?
-    } else {
-        effective_service_paths("cli")?
-    };
-    let paths = if socket_path.is_some() || dev_mode {
+    let paths = effective_runtime_paths(mode, "cli")?;
+    let paths = if socket_path.is_some() || !mode.is_production() {
         paths
     } else {
         resolve_installed_service_endpoint(paths, "cli", false)?
@@ -7820,7 +8012,7 @@ fn render_warnings(
 fn dynamic_completion(
     worktree: Option<PathBuf>,
     socket_path: Option<PathBuf>,
-    dev_mode: bool,
+    mode: RuntimeModeV1,
     kind: &str,
 ) -> Result<RunResult, LocalFailure> {
     let target = match workspace_target(worktree) {
@@ -7829,7 +8021,7 @@ fn dynamic_completion(
             return Ok(empty_dynamic_completion());
         }
     };
-    let client = match daemon_client(200, socket_path.as_deref(), dev_mode) {
+    let client = match daemon_client(200, socket_path.as_deref(), &mode) {
         Ok(client) => client,
         Err(_) => {
             return Ok(empty_dynamic_completion());
@@ -7951,7 +8143,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             .collect::<Vec<_>>()
             .join(", ");
         return Ok(format!(
-            "Podway coordinates durable worktree-local procedures.\n\nTrust boundary:\n  Podway trusts same-user processes connecting through its local socket.\n  It provides no authentication or workspace access key.\n  It does not protect against malicious same-user processes.\n  It records caller assertions and does not judge their semantic truth.\n\nDaemon endpoint:\n  Daemon-backed commands accept --socket <absolute-path>.\n  Without --socket, Podway selects the installed or default per-user endpoint.\n\nUsage:\n  podway help <route>\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'add retry backoff'\n  podway begin\n  podway status --json\n  podway observe --json\n\nProcedure v2 routes:\n  procedure format|vet|lint|check|graph|preview|scaffold\n  session.begin, session.terminal_disposition, session.decide, session.rework\n  goal.define, goal.revise, goal.assess_criterion\n  evidence read\n\nShipped presets: {preset_ids}. Start prepares a session; begin creates its first active attempt. Contributors may use the managed disposable runtime documented by help workflow for isolated development."
+            "Podway coordinates durable worktree-local procedures.\n\nTrust boundary:\n  Podway trusts same-user processes connecting through its local socket.\n  It provides no authentication or workspace access key.\n  It does not protect against malicious same-user processes.\n  It records caller assertions and does not judge their semantic truth.\n\nDaemon endpoint:\n  Daemon-backed commands accept --mode <key>; --dev is the exact alias for mode dev.\n  Omitting a mode selects the production per-user endpoint.\n  Production commands may instead accept --socket <absolute-path>.\n\nUsage:\n  podway help <route>\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'add retry backoff'\n  podway begin\n  podway status --json\n  podway observe --json\n\nProcedure v2 routes:\n  procedure format|vet|lint|check|graph|preview|scaffold\n  session.begin, session.terminal_disposition, session.decide, session.rework\n  goal.define, goal.revise, goal.assess_criterion\n  evidence read\n\nShipped presets: {preset_ids}. Start prepares a session; begin creates its first active attempt. Contributors may use the managed disposable runtime documented by help workflow for isolated development."
         ));
     }
     let text = match topic {
@@ -7966,7 +8158,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Procedures:\n  podway procedure scaffold > .podway/procedures/custom.yaml\n  podway procedure format .podway/procedures/custom.yaml --write\n  podway procedure check .podway/procedures/custom.yaml --warnings-as-errors\n  podway procedure preview .podway/procedures/custom.yaml\n  podway start --procedure .podway/procedures/custom.yaml --expect-procedure-digest sha256:<hex> --task 'perform work'\n\nOther Procedure v2 authoring routes are procedure validate, vet, lint, and graph."
         }
         "daemon" => {
-            "Daemon lifecycle grammar:\n  podway daemon status\n  podway daemon wait-ready [--timeout 120s]\n  podway daemon install --daemon-path /absolute/podwayd\n  podway daemon logs --lines 100"
+            "Daemon lifecycle grammar:\n  podway [--mode <key> | --dev] daemon status\n  podway [--mode <key> | --dev] daemon wait-ready [--timeout 120s]\n  podway daemon install --daemon-path /absolute/podwayd\n  podway daemon logs --lines 100"
         }
         "artifacts" => {
             "Artifacts:\n  podway attach verification-reference report.md --media-type text/markdown\n  podway attach verification-reference --reference build:42 --digest sha256:<hex> --size 42 --media-type text/plain"
@@ -8021,12 +8213,14 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
         "daemon.start" => "Usage:\n  podway daemon start\n\nExample:\n  podway daemon start",
         "daemon.stop" => "Usage:\n  podway daemon stop\n\nExample:\n  podway daemon stop",
         "daemon.restart" => "Usage:\n  podway daemon restart\n\nExample:\n  podway daemon restart",
-        "daemon.status" => "Usage:\n  podway daemon status\n\nExample:\n  podway daemon status",
+        "daemon.status" => {
+            "Usage:\n  podway [--mode <key> | --dev] daemon status\n\nExamples:\n  podway daemon status\n  podway --mode demo daemon status"
+        }
         "daemon.wait-ready" => {
-            "Usage:\n  podway daemon wait-ready [--timeout DURATION]\n\nExample:\n  podway --json daemon wait-ready --timeout 120s"
+            "Usage:\n  podway [--mode <key> | --dev] daemon wait-ready [--timeout DURATION]\n\nExample:\n  podway --mode demo --json daemon wait-ready --timeout 120s"
         }
         "daemon.terminate" => {
-            "Usage:\n  podway --dev terminate\n\nExample:\n  podway --dev terminate"
+            "Usage:\n  podway (--mode dev | --dev) terminate\n\nExample:\n  podway --dev terminate"
         }
         "daemon.logs" => {
             "Usage:\n  podway daemon logs [--follow] [--lines <n>]\n\nExample:\n  podway daemon logs --lines 100"
@@ -8547,7 +8741,8 @@ mod tests {
         .expect("stopped installed daemon status");
         match stopped {
             super::RunResult::Local { result, .. } => {
-                assert_eq!(result["schema"], "podway.daemon-status-result/v2");
+                assert_eq!(result["schema"], "podway.daemon-status-result/v3");
+                assert_eq!(result["mode"], "prod");
                 assert_eq!(result["status"], "stopped");
                 assert_eq!(result["readiness_state"], "not_running");
                 assert!(result["readiness_stage"].is_null());
@@ -8678,7 +8873,14 @@ mod tests {
     fn parser_accepts_canonical_session_start_and_attachment_forms() {
         let terminate = Cli::try_parse_from(["podway", "--dev", "terminate"]).unwrap();
         assert!(terminate.dev);
+        assert_eq!(terminate.runtime_mode().unwrap().as_str(), "dev");
         assert!(matches!(terminate.command, Command::Terminate));
+        let named = Cli::try_parse_from(["podway", "--mode", "demo", "status"]).unwrap();
+        assert_eq!(named.runtime_mode().unwrap().as_str(), "demo");
+        assert!(Cli::try_parse_from(["podway", "--dev", "--mode", "demo", "status"]).is_err());
+        assert!(
+            Cli::try_parse_from(["podway", "--mode", "demo", "--mode", "qa", "status"]).is_err()
+        );
         assert!(matches!(
             Cli::try_parse_from(["podway", "start", "--preset", "sw-dev-v2", "--task", "task"])
                 .unwrap()

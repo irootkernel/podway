@@ -118,8 +118,10 @@ executable, and configured socket fields but reports every live process field as
 Contract-handshake failures are returned as `DAEMON_CONTRACT_MISMATCH`, never rewritten
 as an unreachable status result.
 
-The final four fields belong to the
-`podway.daemon-status-result/v2` family. `readiness_state` distinguishes
+The final four fields were introduced by the
+`podway.daemon-status-result/v2` family. Current daemon and CLI projections use
+`podway.daemon-status-result/v3`, whose additional `mode` field identifies the
+selected runtime namespace. `readiness_state` distinguishes
 `not_running`, `unreachable`, `starting`, `recovering`, `ready`, and `failed`;
 the stage identifies endpoint, registry, worktree, job, ready, or failed
 processing. Worktree progress contains only bounded total, completed, and failed

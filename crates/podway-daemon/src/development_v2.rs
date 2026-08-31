@@ -188,7 +188,7 @@ fn enabled_process_identity_v1(
     let daemon_path = metadata.snapshot.podwayd.canonicalize().ok()?;
     let production_paths = ServiceRuntimePathsV1::for_effective_user().ok()?;
     let state_directory = active_paths.workspace_registry_path().as_path().parent()?;
-    let account_lock = Path::new(&metadata.account_root).join(".podway/run/podwayd.lock");
+    let runtime_lock = dev_home.join("run/podwayd.lock");
     if metadata.schema != "podway.managed-dev-runtime/v2"
         || metadata.purpose != "contributor"
         || metadata.uid != uid
@@ -209,7 +209,7 @@ fn enabled_process_identity_v1(
             .podway_sha256
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-        || active_paths.global_lock_path().as_path() != account_lock
+        || active_paths.global_lock_path().as_path() != runtime_lock
         || active_paths.socket_path().as_path() != dev_home.join("run/podwayd.sock")
         || active_paths.workspace_registry_path().as_path()
             != dev_home.join("state/workspaces.json")
@@ -356,7 +356,6 @@ fn validate_process_directories_v1(
 fn validate_request_directories_v1(identity: &DevelopmentV2ProcessIdentityV1) -> bool {
     let snapshots = identity.managed_root.join("snapshots");
     let account_podway = identity.account_root.join(".podway");
-    let account_run = account_podway.join("run");
     let dev_run = identity.dev_home.join("run");
     let workspace_podway = identity.sandbox.join(".podway");
     let workspace_runtime = workspace_podway.join("runtime");
@@ -371,7 +370,6 @@ fn validate_request_directories_v1(identity: &DevelopmentV2ProcessIdentityV1) ->
         snapshots.as_path(),
         snapshot_directory,
         account_podway.as_path(),
-        account_run.as_path(),
         dev_run.as_path(),
         identity.state_directory.as_path(),
         workspace_podway.as_path(),

@@ -19,6 +19,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use podway_core::RuntimeModeV1;
 use podway_protocol::{
     CommandNameV1, ErrorCodeV1, ErrorEnvelopeInputV1, ErrorEnvelopeV1, ExitCodeV1,
     FRAME_LENGTH_PREFIX_BYTES_V1, FrameErrorV1, FrameIoPhaseV1, IdempotencyKeyV1, OperationV1,
@@ -40,6 +41,7 @@ use crate::{
 /// Immutable identity and monotonic lifetime of one daemon process instance.
 #[derive(Clone, Debug)]
 pub struct DaemonProcessIdentityV1 {
+    mode: RuntimeModeV1,
     process_id: RequestIdV1,
     pid: u32,
     started_at: Rfc3339MillisV1,
@@ -64,6 +66,7 @@ impl DaemonProcessIdentityV1 {
             });
         }
         Ok(Self {
+            mode: RuntimeModeV1::production(),
             process_id,
             pid,
             started_at,
@@ -72,6 +75,15 @@ impl DaemonProcessIdentityV1 {
             configured_socket_path: configured_socket_path.into(),
             effective_socket_path: effective_socket_path.into(),
         })
+    }
+
+    pub fn with_runtime_mode(mut self, mode: RuntimeModeV1) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    pub fn mode(&self) -> &RuntimeModeV1 {
+        &self.mode
     }
 
     pub fn with_effective_socket_path(mut self, path: impl Into<PathBuf>) -> Self {
@@ -1226,7 +1238,12 @@ where
     ) -> Result<ResponseEnvelopeV2, ServerConnectionErrorV1> {
         let identity = build_identity_v1();
         let mut result = serde_json::json!({
-            "schema": "podway.daemon-status-result/v1",
+            "schema": "podway.daemon-status-result/v3",
+            "mode": process.mode().as_str(),
+            "status": "running",
+            "installed": true,
+            "loaded": true,
+            "reachable": true,
             "product": identity.product(),
             "daemon_version": identity.version(),
             "target": identity.target(),
@@ -1240,8 +1257,17 @@ where
             "executable_path": process.executable_path().display().to_string(),
             "started_at": process.started_at().as_str(),
             "uptime_ms": process.uptime_millis(),
+            "socket_path": process.effective_socket_path().display().to_string(),
             "configured_socket_path": process.configured_socket_path().display().to_string(),
             "effective_socket_path": process.effective_socket_path().display().to_string(),
+            "registered_worktree_count": Value::Null,
+            "active_scheduler_count": Value::Null,
+            "queued_job_count": Value::Null,
+            "running_job_count": Value::Null,
+            "readiness_state": "ready",
+            "readiness_stage": "ready",
+            "readiness_elapsed_ms": process.uptime_millis(),
+            "worktree_recovery": {"total": 0, "completed": 0, "failed": 0},
         })
         .as_object()
         .expect("daemon status is an object")
@@ -1249,10 +1275,6 @@ where
         if let Some(readiness) = &self.readiness {
             let snapshot = readiness.snapshot();
             let worktrees = snapshot.worktrees();
-            result.insert(
-                "schema".to_owned(),
-                Value::String("podway.daemon-status-result/v2".to_owned()),
-            );
             result.insert(
                 "readiness_state".to_owned(),
                 Value::String(snapshot.state().as_str().to_owned()),

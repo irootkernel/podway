@@ -21,6 +21,14 @@ human-readable text or one JSON document. It never writes SQLite directly.
 The executable grammar is owned by the command catalog and clap definitions.
 Removed commands are not aliases and must fail argument parsing.
 
+Daemon-backed commands accept one global runtime selector. Omitting it selects
+`prod`; `--mode <key>` selects a bounded lowercase kebab-case mode, and `--dev`
+is the exact alias for `--mode dev`. The selectors conflict and may not repeat.
+Named modes use their own complete runtime namespace. Production-only LaunchAgent
+lifecycle commands reject a named mode, while `daemon status` and
+`daemon wait-ready` inspect the selected named endpoint. `--socket` remains an
+explicit production endpoint selector and cannot be combined with a named mode.
+
 The executable `workspace remove` grammar is `podway [--worktree <path>]
 workspace remove --force [--if-workspace-uuid <uuid>] [--yes]`. Human TTY use
 may omit `--yes` and must then confirm the resolved absolute Git worktree root
@@ -30,7 +38,7 @@ the selected Git worktree; daemon logs remain outside the worktree.
 
 `daemon wait-ready [--timeout <duration>]` is a read-only service
 operation. Its default deadline is 120 seconds and its hard maximum is one hour.
-It succeeds only after a v2 status response proves matching live identity,
+It succeeds only after a current status response proves matching live identity,
 matching contract identity, and `readiness_state: ready`; it never starts,
 installs, restarts, repairs, or otherwise mutates the service. `daemon install`
 uses the same bounded waiter after idempotent service reconciliation.

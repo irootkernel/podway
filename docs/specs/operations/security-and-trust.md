@@ -85,6 +85,8 @@ authorization grant, or cryptographic authority.
 ## Filesystem protections
 
 - daemon runtime and registry directories are user-private;
+- each validated runtime mode owns a complete, disjoint lock, socket, state,
+  registry, recovery, and log namespace;
 - workspace runtime directory is `0700` where supported;
 - database and socket files are `0600` where supported;
 - path canonicalization occurs immediately before file access;

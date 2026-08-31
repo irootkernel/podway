@@ -1,9 +1,16 @@
 #![forbid(unsafe_code)]
 
-use std::{env, io, num::NonZeroUsize, path::PathBuf, process, sync::Arc, thread};
+use std::{
+    env, io,
+    num::NonZeroUsize,
+    path::{Path, PathBuf},
+    process,
+    sync::Arc,
+    thread,
+};
 
 use nix::unistd::geteuid;
-#[cfg(all(feature = "development-v2-admission", debug_assertions))]
+use podway_core::RuntimeModeV1;
 use podway_daemon::managed_dev::ManagedDevPurposeV2;
 use podway_daemon::{
     LogSinkV1, ObservabilityCountersV1, ObservabilityFinalizationV1, ObservabilityV1,
@@ -18,7 +25,10 @@ use podway_daemon::{
 use podway_protocol::{
     CommandNameV1, OutputEnvelopeInputV3, OutputEnvelopeV3, RequestIdV1, build_identity_v1,
 };
-use podway_service::ServiceRuntimePathsV1;
+use podway_service::{
+    ManagedRuntimeExecutableRoleV3, ManagedRuntimePurposeV3, ManagedRuntimeV3,
+    ServiceRuntimePathsV1,
+};
 use podway_store::{SqliteStoreOptionsV1, WorkerIdV1};
 use signal_hook::{
     consts::{SIGINT, SIGTERM},
@@ -156,7 +166,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let arguments = env::args_os().skip(1).collect::<Vec<_>>();
-    let (dev_mode, socket_path) = match arguments.as_slice() {
+    let (mode, socket_path) = match arguments.as_slice() {
         [argument] if argument == "version" || argument == "--version" => {
             println!("podwayd {}", env!("CARGO_PKG_VERSION"));
             return Ok(());
@@ -199,27 +209,34 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             );
             return Ok(());
         }
-        [] => (false, None),
-        [argument] if argument == "--service" => (false, None),
-        [argument] if argument == "--dev" => (true, None),
+        [] => (RuntimeModeV1::production(), None),
+        [argument] if argument == "--service" => (RuntimeModeV1::production(), None),
+        [argument] if argument == "--dev" => (RuntimeModeV1::development(), None),
+        [mode, value] if mode == "--mode" => (
+            RuntimeModeV1::new(value.to_string_lossy().into_owned())?,
+            None,
+        ),
         [service, socket, path] if service == "--service" && socket == "--socket" => {
-            (false, Some(PathBuf::from(path)))
+            (RuntimeModeV1::production(), Some(PathBuf::from(path)))
         }
         _ => {
             return Err(
-                "usage: podwayd [--dev|--service [--socket <absolute-path>]|version [--json [--identity]]]"
+                "usage: podwayd [--mode <key>|--dev|--service [--socket <absolute-path>]|version [--json [--identity]]]"
                     .into(),
             );
         }
     };
-    run_service(dev_mode, socket_path)
+    run_service(mode, socket_path)
 }
 
 fn run_service(
-    dev_mode: bool,
+    mode: RuntimeModeV1,
     socket_path: Option<PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (paths, managed_dev) = effective_service_paths(dev_mode)?;
+    if socket_path.is_some() && !mode.is_production() {
+        return Err("--socket is available only with --service".into());
+    }
+    let (paths, managed_sandbox, _managed_contributor) = effective_service_paths(&mode)?;
     let paths = match socket_path {
         Some(socket_path) => paths.with_socket_path(socket_path)?,
         None => paths,
@@ -231,7 +248,8 @@ fn run_service(
         env::current_exe()?.canonicalize()?,
         paths.socket_path().as_path(),
         paths.socket_path().as_path(),
-    )?;
+    )?
+    .with_runtime_mode(mode.clone());
     let daemon_id = process_identity.process_id().as_str().to_owned();
     let bootstrap_log_path = paths.bootstrap_log_path().as_path().to_path_buf();
     write_bootstrap_file(
@@ -249,22 +267,19 @@ fn run_service(
         ServerTransportTimeoutsV1::default(),
     )
     .with_process_identity(process_identity);
-    if let Some(managed_dev) = &managed_dev {
-        configuration = configuration.with_managed_dev_workspace_root(managed_dev.sandbox());
+    if let Some(sandbox) = managed_sandbox.as_deref() {
+        configuration = configuration.with_managed_dev_workspace_root(sandbox);
     }
     #[cfg(all(feature = "development-v2-admission", debug_assertions))]
-    if dev_mode {
+    if mode == RuntimeModeV1::development() {
         configuration = configuration.with_dev_mode();
-        if managed_dev
-            .as_ref()
-            .is_some_and(|runtime| runtime.purpose() == ManagedDevPurposeV2::Contributor)
-        {
+        if _managed_contributor {
             configuration = configuration
                 .with_development_v2_admission(&paths, &env::current_exe()?.canonicalize()?);
         }
     }
     #[cfg(not(all(feature = "development-v2-admission", debug_assertions)))]
-    if dev_mode {
+    if mode == RuntimeModeV1::development() {
         configuration = configuration.with_dev_mode();
     }
     let inspection_options = SqliteStoreOptionsV1::new(1)?;
@@ -333,45 +348,77 @@ fn run_service(
 }
 
 fn effective_service_paths(
-    dev_mode: bool,
-) -> Result<(ServiceRuntimePathsV1, Option<ManagedDevRuntimeV2>), Box<dyn std::error::Error>> {
-    if dev_mode
-        && let Some(dev_home) = env::var_os("PODWAY_DEV_HOME").map(PathBuf::from)
-        && let Some(runtime) =
-            ManagedDevRuntimeV2::discover(&dev_home, &env::current_exe()?.canonicalize()?)?
+    mode: &RuntimeModeV1,
+) -> Result<(ServiceRuntimePathsV1, Option<PathBuf>, bool), Box<dyn std::error::Error>> {
+    if !mode.is_production()
+        && let Some(runtime_root) = env::var_os("PODWAY_DEV_HOME").map(PathBuf::from)
     {
-        let paths = ServiceRuntimePathsV1::for_dev_home(
-            runtime.account_root(),
-            runtime.dev_home(),
-            geteuid().as_raw(),
-        )?;
-        return Ok((paths, Some(runtime)));
+        let executable = env::current_exe()?.canonicalize()?;
+        if let Some(runtime) = ManagedRuntimeV3::discover(
+            &runtime_root,
+            mode,
+            &executable,
+            ManagedRuntimeExecutableRoleV3::Daemon,
+        )? {
+            let contributor = runtime.purpose() == ManagedRuntimePurposeV3::Contributor;
+            return Ok((
+                runtime.paths().clone(),
+                runtime.sandbox_root().map(Path::to_path_buf),
+                contributor,
+            ));
+        }
+        if mode.as_str() == "dev"
+            && let Some(runtime) = ManagedDevRuntimeV2::discover(&runtime_root, &executable)?
+        {
+            let paths = ServiceRuntimePathsV1::for_dev_home(
+                runtime.account_root(),
+                runtime.dev_home(),
+                geteuid().as_raw(),
+            )?;
+            let contributor = runtime.purpose() == ManagedDevPurposeV2::Contributor;
+            return Ok((paths, Some(runtime.sandbox().to_path_buf()), contributor));
+        }
+        if mode.as_str() != "dev" {
+            return Err("an explicit managed runtime root requires valid v3 metadata".into());
+        }
+        return Ok((
+            ServiceRuntimePathsV1::for_runtime_root(
+                runtime_root,
+                mode.clone(),
+                geteuid().as_raw(),
+            )?,
+            None,
+            false,
+        ));
     }
     #[cfg(debug_assertions)]
     if let Some(account_root) = env::var_os("PODWAY_TEST_ACCOUNT_ROOT") {
-        if dev_mode {
+        if !mode.is_production() {
             let account_root = PathBuf::from(account_root);
-            let dev_home = env::var_os("PODWAY_DEV_HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| account_root.join(".podway/dev"));
             return Ok((
-                ServiceRuntimePathsV1::for_dev_home(account_root, dev_home, geteuid().as_raw())?,
+                ServiceRuntimePathsV1::for_account_home_mode(
+                    account_root,
+                    mode.clone(),
+                    geteuid().as_raw(),
+                )?,
                 None,
+                false,
             ));
         }
         return Ok((
             ServiceRuntimePathsV1::for_account_home(account_root, geteuid().as_raw())?,
             None,
+            false,
         ));
     }
-    if dev_mode {
-        let dev_home = env::var_os("PODWAY_DEV_HOME").map(PathBuf::from);
+    if !mode.is_production() {
         return Ok((
-            ServiceRuntimePathsV1::for_effective_user_dev(dev_home.as_deref())?,
+            ServiceRuntimePathsV1::for_effective_user_mode(mode.clone())?,
             None,
+            false,
         ));
     }
-    Ok((ServiceRuntimePathsV1::for_effective_user()?, None))
+    Ok((ServiceRuntimePathsV1::for_effective_user()?, None, false))
 }
 
 type StageResult = Result<(), String>;

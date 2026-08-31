@@ -114,7 +114,10 @@ The
 [`podway.daemon-status-result/v2`](../../../assets/schemas/daemon-status-result-v2.schema.json)
 family preserves those service and identity fields and adds daemon-owned
 `readiness_state`, `readiness_stage`, monotonic `readiness_elapsed_ms`, and
-bounded `worktree_recovery` progress. The early control plane admits only
+bounded `worktree_recovery` progress. The current
+[`podway.daemon-status-result/v3`](../../../assets/schemas/daemon-status-result-v3.schema.json)
+family adds the selected bounded `mode` and the complete mode-aware service
+projection while retaining v1 and v2 decoding compatibility. The early control plane admits only
 handshake, `daemon.status`, and coordinated
 termination until readiness; every other route fails before workspace lookup or
 durable admission with retryable `DAEMON_STARTING`.

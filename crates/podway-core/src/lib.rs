@@ -27,6 +27,8 @@ pub use record_v2::*;
 pub use session_v2::*;
 
 pub const MAX_PROCEDURE_IDENTIFIER_BYTES: usize = 64;
+/// Maximum UTF-8 byte length of one runtime mode key.
+pub const MAX_RUNTIME_MODE_BYTES_V1: usize = 64;
 /// Maximum UTF-8 byte length of an admitted canonical procedure document.
 pub const MAX_PROCEDURE_DOCUMENT_BYTES: usize = 1_048_576;
 
@@ -331,6 +333,75 @@ procedure_identifier_newtype!(GraphNodeId);
 procedure_identifier_newtype!(OptionId);
 procedure_identifier_newtype!(CriterionId);
 procedure_identifier_newtype!(OperationId);
+
+/// One bounded daemon-runtime namespace key.
+///
+/// The value is an opaque lowercase kebab-case identifier. Only `prod` has
+/// reserved behavior: it selects the released per-user service namespace when
+/// callers omit an explicit mode.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct RuntimeModeV1(String);
+
+impl RuntimeModeV1 {
+    pub fn new(value: impl Into<String>) -> Result<Self, DomainError> {
+        let value = value.into();
+        validate_runtime_mode_v1(&value)?;
+        Ok(Self(value))
+    }
+
+    pub fn production() -> Self {
+        Self("prod".to_owned())
+    }
+
+    pub fn development() -> Self {
+        Self("dev".to_owned())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn is_production(&self) -> bool {
+        self.0 == "prod"
+    }
+
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+impl Default for RuntimeModeV1 {
+    fn default() -> Self {
+        Self::production()
+    }
+}
+
+impl AsRef<str> for RuntimeModeV1 {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl fmt::Display for RuntimeModeV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl TryFrom<String> for RuntimeModeV1 {
+    type Error = DomainError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl From<RuntimeModeV1> for String {
+    fn from(value: RuntimeModeV1) -> Self {
+        value.into_inner()
+    }
+}
 
 /// An optimistic-concurrency revision. Zero is valid for absent-or-never-written slots.
 #[derive(
@@ -687,6 +758,40 @@ fn validate_procedure_identifier(value: &str, field: &'static str) -> Result<(),
     Ok(())
 }
 
+fn validate_runtime_mode_v1(value: &str) -> Result<(), DomainError> {
+    let bytes = value.as_bytes();
+    if bytes.is_empty() {
+        return Err(DomainError::EmptyValue {
+            field: "RuntimeModeV1",
+        });
+    }
+    if bytes.len() > MAX_RUNTIME_MODE_BYTES_V1 {
+        return Err(DomainError::ValueTooLong {
+            field: "RuntimeModeV1",
+            maximum: MAX_RUNTIME_MODE_BYTES_V1,
+            actual: bytes.len(),
+        });
+    }
+    if !bytes[0].is_ascii_lowercase() || bytes.last() == Some(&b'-') {
+        return Err(DomainError::InvalidIdentifier {
+            field: "RuntimeModeV1",
+        });
+    }
+    let mut previous_was_hyphen = false;
+    for byte in bytes.iter().copied() {
+        match byte {
+            b'a'..=b'z' | b'0'..=b'9' => previous_was_hyphen = false,
+            b'-' if !previous_was_hyphen => previous_was_hyphen = true,
+            _ => {
+                return Err(DomainError::InvalidIdentifier {
+                    field: "RuntimeModeV1",
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_sha256_digest(value: &str) -> Result<(), DomainError> {
     let bytes = value.as_bytes();
     if bytes.len() != 71 || !value.starts_with("sha256:") {
@@ -700,4 +805,36 @@ fn validate_sha256_digest(value: &str) -> Result<(), DomainError> {
         return Err(DomainError::InvalidSha256Digest);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod runtime_mode_tests {
+    use super::{DomainError, RuntimeModeV1};
+
+    #[test]
+    fn runtime_mode_preserves_bounded_kebab_case_values() {
+        for value in ["prod", "dev", "demo", "release-qa", "a1-b2"] {
+            assert_eq!(RuntimeModeV1::new(value).unwrap().as_str(), value);
+        }
+        assert_eq!(RuntimeModeV1::default(), RuntimeModeV1::production());
+    }
+
+    #[test]
+    fn runtime_mode_rejects_noncanonical_or_overlong_values() {
+        for value in [
+            "",
+            "Dev",
+            "dev_mode",
+            "dev/mode",
+            "-dev",
+            "dev-",
+            "dev--mode",
+        ] {
+            assert!(RuntimeModeV1::new(value).is_err(), "accepted {value:?}");
+        }
+        assert!(matches!(
+            RuntimeModeV1::new("a".repeat(65)),
+            Err(DomainError::ValueTooLong { maximum: 64, .. })
+        ));
+    }
 }

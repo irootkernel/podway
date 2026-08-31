@@ -1128,7 +1128,8 @@ fn v2rdy002_control_status_is_live_while_normal_dispatch_remains_closed() {
         panic!("starting daemon status must return output");
     };
     handler.join().unwrap().unwrap();
-    assert_eq!(output.result()["schema"], "podway.daemon-status-result/v2");
+    assert_eq!(output.result()["schema"], "podway.daemon-status-result/v3");
+    assert_eq!(output.result()["mode"], "prod");
     assert_eq!(output.result()["readiness_state"], "starting");
     assert_eq!(output.result()["readiness_stage"], "endpoint");
 

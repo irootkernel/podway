@@ -1794,6 +1794,7 @@ impl<'de> Deserialize<'de> for OutputEnvelopeV3 {
 const VERSION_RESULT_SCHEMA_V1: &str = "podway.version-result/v1";
 const DAEMON_STATUS_RESULT_SCHEMA_V1: &str = "podway.daemon-status-result/v1";
 const DAEMON_STATUS_RESULT_SCHEMA_V2: &str = "podway.daemon-status-result/v2";
+const DAEMON_STATUS_RESULT_SCHEMA_V3: &str = "podway.daemon-status-result/v3";
 const WORKSPACE_MODE_PLAN_RESULT_SCHEMA_V1: &str = "podway.workspace-mode-plan-result/v1";
 const WORKSPACE_MODE_APPLY_RESULT_SCHEMA_V1: &str = "podway.workspace-mode-apply-result/v1";
 const WORKSPACE_INIT_RESULT_SCHEMA_V1: &str = "podway.workspace-init-result/v1";
@@ -1854,6 +1855,7 @@ pub fn validate_procedure_independent_result_v1(
             validate_daemon_status_result_v2(value.clone())
                 || validate_daemon_service_status_result_v2(value)
         }
+        DAEMON_STATUS_RESULT_SCHEMA_V3 => validate_daemon_service_status_result_v3(value),
         WORKSPACE_INIT_RESULT_SCHEMA_V1 => decode::<WorkspaceInitResultV1>(value),
         DETACHED_ADMISSION_RESULT_SCHEMA_V1 => decode::<DetachedMutationResultV1>(value),
         WORKSPACE_MODE_PLAN_RESULT_SCHEMA_V1 | WORKSPACE_MODE_APPLY_RESULT_SCHEMA_V1 => {
@@ -1889,9 +1891,21 @@ fn command_result_schema_v1(command: &str, result: &Map<String, Value>) -> Optio
         "version" => Some(VERSION_RESULT_SCHEMA_V1),
         "daemon.status"
             if result.get("schema").and_then(Value::as_str)
+                == Some(DAEMON_STATUS_RESULT_SCHEMA_V3) =>
+        {
+            Some(DAEMON_STATUS_RESULT_SCHEMA_V3)
+        }
+        "daemon.status"
+            if result.get("schema").and_then(Value::as_str)
                 == Some(DAEMON_STATUS_RESULT_SCHEMA_V2) =>
         {
             Some(DAEMON_STATUS_RESULT_SCHEMA_V2)
+        }
+        "daemon.wait-ready"
+            if result.get("schema").and_then(Value::as_str)
+                == Some(DAEMON_STATUS_RESULT_SCHEMA_V3) =>
+        {
+            Some(DAEMON_STATUS_RESULT_SCHEMA_V3)
         }
         "daemon.wait-ready" => Some(DAEMON_STATUS_RESULT_SCHEMA_V2),
         "daemon.status" => Some(DAEMON_STATUS_RESULT_SCHEMA_V1),
@@ -2104,6 +2118,22 @@ fn validate_daemon_service_status_result_v2(value: Value) -> bool {
                     && result.worktree_recovery.is_none()
             }
     })
+}
+
+fn validate_daemon_service_status_result_v3(mut value: Value) -> bool {
+    let Some(object) = value.as_object_mut() else {
+        return false;
+    };
+    let Some(mode) = object
+        .remove("mode")
+        .and_then(|value| value.as_str().map(str::to_owned))
+    else {
+        return false;
+    };
+    if podway_core::RuntimeModeV1::new(mode).is_err() {
+        return false;
+    }
+    validate_daemon_service_status_result_v2(value)
 }
 
 fn valid_worktree_progress(progress: &WorktreeRecoveryProgressResultV1) -> bool {

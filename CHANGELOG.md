@@ -4,6 +4,10 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ## v0.2.8 - Unreleased
 
+### Added
+
+- Add bounded named runtime modes with complete isolated daemon namespaces and preserve `--dev` as the exact alias for mode `dev`.
+
 ## v0.2.7 - 2026-08-31
 
 ### Added

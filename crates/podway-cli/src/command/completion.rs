@@ -45,6 +45,10 @@ const DEV: Flag = Flag {
     long: "dev",
     takes_value: false,
 };
+const MODE: Flag = Flag {
+    long: "mode",
+    takes_value: true,
+};
 const WORKTREE: Flag = Flag {
     long: "worktree",
     takes_value: true,
@@ -1225,12 +1229,21 @@ fn shared_flags() -> Vec<&'static Flag> {
 }
 
 fn static_candidates(route: &Route) -> Vec<String> {
-    route
-        .flags
-        .iter()
+    route_flags(route)
+        .into_iter()
         .map(|flag| format!("--{}", flag.long))
         .chain(route_values(route))
         .collect()
+}
+
+fn route_flags(route: &Route) -> Vec<&'static Flag> {
+    let mut flags = route.flags.to_vec();
+    if (route.flags.contains(&&DEV) || matches!(route.words, "daemon status" | "daemon wait-ready"))
+        && !flags.contains(&&MODE)
+    {
+        flags.push(&MODE);
+    }
+    flags
 }
 
 fn route_values(route: &Route) -> Vec<String> {
@@ -1245,7 +1258,7 @@ fn route_values(route: &Route) -> Vec<String> {
 
 fn bash_script() -> String {
     let mut script = String::from("# podway bash completion (generated from ROUTES)\n");
-    script.push_str("_podway_dynamic() {\n  local kind=$1 worktree=\"\" socket=\"\" dev=0 index word\n  for ((index = 1; index < COMP_CWORD; ++index)); do\n    word=${COMP_WORDS[index]}\n    case \"$word\" in\n      --dev) dev=1 ;;\n      --worktree) ((++index)); worktree=${COMP_WORDS[index]} ;;\n      --worktree=*) worktree=${word#--worktree=} ;;\n      --socket) ((++index)); socket=${COMP_WORDS[index]} ;;\n      --socket=*) socket=${word#--socket=} ;;\n    esac\n  done\n  local -a endpoint=() workspace=() mode=()\n  [[ $dev -eq 1 ]] && mode=(--dev)\n  [[ -n \"$socket\" ]] && endpoint=(--socket \"$socket\")\n  [[ -n \"$worktree\" ]] && workspace=(--worktree \"$worktree\")\n  command podway \"${mode[@]}\" \"${endpoint[@]}\" \"${workspace[@]}\" __complete \"$kind\" 2>/dev/null\n}\n");
+    script.push_str("_podway_dynamic() {\n  local kind=$1 worktree=\"\" socket=\"\" runtime_mode=\"\" dev=0 index word\n  for ((index = 1; index < COMP_CWORD; ++index)); do\n    word=${COMP_WORDS[index]}\n    case \"$word\" in\n      --dev) dev=1 ;;\n      --mode) ((++index)); runtime_mode=${COMP_WORDS[index]} ;;\n      --mode=*) runtime_mode=${word#--mode=} ;;\n      --worktree) ((++index)); worktree=${COMP_WORDS[index]} ;;\n      --worktree=*) worktree=${word#--worktree=} ;;\n      --socket) ((++index)); socket=${COMP_WORDS[index]} ;;\n      --socket=*) socket=${word#--socket=} ;;\n    esac\n  done\n  local -a endpoint=() workspace=() mode=()\n  if [[ -n \"$runtime_mode\" ]]; then mode=(--mode \"$runtime_mode\"); elif [[ $dev -eq 1 ]]; then mode=(--dev); fi\n  [[ -n \"$socket\" ]] && endpoint=(--socket \"$socket\")\n  [[ -n \"$worktree\" ]] && workspace=(--worktree \"$worktree\")\n  command podway \"${mode[@]}\" \"${endpoint[@]}\" \"${workspace[@]}\" __complete \"$kind\" 2>/dev/null\n}\n");
     script.push_str("_podway_route() {\n  local word root=\"\" index expecting_worktree=0\n");
     script.push_str("  for ((index = 1; index < COMP_CWORD; ++index)); do\n");
     script.push_str("    word=${COMP_WORDS[index]}\n");
@@ -1334,7 +1347,7 @@ fn write_bash_dynamic(script: &mut String, dynamic: Option<&str>) {
 
 fn zsh_script() -> String {
     let mut script = String::from("#compdef podway\n# Generated from ROUTES.\n");
-    script.push_str("_podway_dynamic() {\n  local kind=$1 worktree=\"\" socket=\"\" dev=0 index word\n  for ((index = 2; index < CURRENT; ++index)); do\n    word=$words[index]\n    case \"$word\" in\n      --dev) dev=1 ;;\n      --worktree) ((++index)); worktree=$words[index] ;;\n      --worktree=*) worktree=${word#--worktree=} ;;\n      --socket) ((++index)); socket=$words[index] ;;\n      --socket=*) socket=${word#--socket=} ;;\n    esac\n  done\n  local -a endpoint=() workspace=() mode=()\n  [[ $dev -eq 1 ]] && mode=(--dev)\n  [[ -n \"$socket\" ]] && endpoint=(--socket \"$socket\")\n  [[ -n \"$worktree\" ]] && workspace=(--worktree \"$worktree\")\n  command podway \"${mode[@]}\" \"${endpoint[@]}\" \"${workspace[@]}\" __complete \"$kind\" 2>/dev/null\n}\n");
+    script.push_str("_podway_dynamic() {\n  local kind=$1 worktree=\"\" socket=\"\" runtime_mode=\"\" dev=0 index word\n  for ((index = 2; index < CURRENT; ++index)); do\n    word=$words[index]\n    case \"$word\" in\n      --dev) dev=1 ;;\n      --mode) ((++index)); runtime_mode=$words[index] ;;\n      --mode=*) runtime_mode=${word#--mode=} ;;\n      --worktree) ((++index)); worktree=$words[index] ;;\n      --worktree=*) worktree=${word#--worktree=} ;;\n      --socket) ((++index)); socket=$words[index] ;;\n      --socket=*) socket=${word#--socket=} ;;\n    esac\n  done\n  local -a endpoint=() workspace=() mode=()\n  if [[ -n \"$runtime_mode\" ]]; then mode=(--mode \"$runtime_mode\"); elif [[ $dev -eq 1 ]]; then mode=(--dev); fi\n  [[ -n \"$socket\" ]] && endpoint=(--socket \"$socket\")\n  [[ -n \"$worktree\" ]] && workspace=(--worktree \"$worktree\")\n  command podway \"${mode[@]}\" \"${endpoint[@]}\" \"${workspace[@]}\" __complete \"$kind\" 2>/dev/null\n}\n");
     script.push_str("_podway_route() {\n  local word root=\"\" index expecting_worktree=0\n");
     script.push_str("  for ((index = 2; index < CURRENT; ++index)); do\n");
     script.push_str("    word=$words[index]\n");
@@ -1421,7 +1434,7 @@ fn write_zsh_dynamic(script: &mut String, dynamic: Option<&str>) {
 
 fn fish_script() -> String {
     let mut script = String::from("# podway fish completion (generated from ROUTES)\n");
-    script.push_str("function __podway_dynamic\n  set -l worktree\n  set -l socket\n  set -l mode\n  set -l expecting_worktree 0\n  set -l expecting_socket 0\n  for word in (commandline -opc)\n    if test $expecting_worktree -eq 1\n      set worktree \"$word\"\n      set expecting_worktree 0\n      continue\n    end\n    if test $expecting_socket -eq 1\n      set socket \"$word\"\n      set expecting_socket 0\n      continue\n    end\n    switch \"$word\"\n      case --dev\n        set mode --dev\n      case --worktree\n        set expecting_worktree 1\n      case '--worktree=*'\n        set worktree (string replace -- '--worktree=' '' \"$word\")\n      case --socket\n        set expecting_socket 1\n      case '--socket=*'\n        set socket (string replace -- '--socket=' '' \"$word\")\n    end\n  end\n  set -l endpoint\n  set -l workspace\n  if test -n \"$socket\"; set endpoint --socket \"$socket\"; end\n  if test -n \"$worktree\"; set workspace --worktree \"$worktree\"; end\n  command podway $mode $endpoint $workspace __complete $argv 2>/dev/null\nend\n");
+    script.push_str("function __podway_dynamic\n  set -l worktree\n  set -l socket\n  set -l mode\n  set -l expecting_worktree 0\n  set -l expecting_socket 0\n  set -l expecting_mode 0\n  for word in (commandline -opc)\n    if test $expecting_worktree -eq 1\n      set worktree \"$word\"\n      set expecting_worktree 0\n      continue\n    end\n    if test $expecting_socket -eq 1\n      set socket \"$word\"\n      set expecting_socket 0\n      continue\n    end\n    if test $expecting_mode -eq 1\n      set mode --mode \"$word\"\n      set expecting_mode 0\n      continue\n    end\n    switch \"$word\"\n      case --dev\n        set mode --dev\n      case --mode\n        set expecting_mode 1\n      case '--mode=*'\n        set mode --mode (string replace -- '--mode=' '' \"$word\")\n      case --worktree\n        set expecting_worktree 1\n      case '--worktree=*'\n        set worktree (string replace -- '--worktree=' '' \"$word\")\n      case --socket\n        set expecting_socket 1\n      case '--socket=*'\n        set socket (string replace -- '--socket=' '' \"$word\")\n    end\n  end\n  set -l endpoint\n  set -l workspace\n  if test -n \"$socket\"; set endpoint --socket \"$socket\"; end\n  if test -n \"$worktree\"; set workspace --worktree \"$worktree\"; end\n  command podway $mode $endpoint $workspace __complete $argv 2>/dev/null\nend\n");
     script.push_str("function __podway_route\n  set -l root\n  set -l expecting_worktree 0\n");
     script.push_str("  for word in (commandline -opc)\n    if test \"$word\" = podway\n      continue\n    end\n    if test $expecting_worktree -eq 1\n      set expecting_worktree 0\n      continue\n    end\n    switch \"$word\"\n      case --worktree\n        set expecting_worktree 1\n        continue\n      case '--worktree=*'\n        continue\n    end\n");
     script.push_str("    if test -z \"$root\"\n      switch \"$word\"\n");
@@ -1456,7 +1469,7 @@ fn fish_script() -> String {
         );
     }
     for route in ROUTES {
-        for flag in route.flags {
+        for flag in route_flags(route) {
             write_fish_flag(
                 &mut script,
                 route.words,
@@ -1536,6 +1549,18 @@ mod tests {
             assert!(
                 script.contains("timeout"),
                 "missing timeout flag in {shell:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn named_runtime_mode_is_present_and_forwarded_in_every_completion_script() {
+        for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
+            let script = shell.script();
+            assert!(script.contains("--mode"), "missing mode flag in {shell:?}");
+            assert!(
+                script.contains("daemon status"),
+                "missing named status route in {shell:?}"
             );
         }
     }

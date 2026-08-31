@@ -17,6 +17,7 @@ use nix::{
     sys::signal::{Signal, kill},
     unistd::{Pid, geteuid},
 };
+use podway_core::RuntimeModeV1;
 use podway_protocol::{
     ClientInfoV1, CommandNameV1, OperationV1, PreconditionsV1, RequestEnvelopeInputV1,
     RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, ResponseEnvelopeV2,
@@ -63,6 +64,27 @@ impl ProcessFixtureV1 {
             .stderr(Stdio::piped())
             .spawn()
             .expect("podwayd process must start")
+    }
+
+    fn mode_paths(&self, mode: &str) -> ServiceRuntimePathsV1 {
+        ServiceRuntimePathsV1::for_account_home_mode(
+            &self.home,
+            RuntimeModeV1::new(mode).unwrap(),
+            geteuid().as_raw(),
+        )
+        .unwrap()
+    }
+
+    fn spawn_mode(&self, mode: &str) -> Child {
+        Command::new(env!("CARGO_BIN_EXE_podwayd"))
+            .args(["--mode", mode])
+            .env_clear()
+            .env("PODWAY_TEST_ACCOUNT_ROOT", &self.home)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("named podwayd process must start")
     }
 }
 
@@ -231,7 +253,8 @@ fn podwayd_reports_stable_live_process_identity() {
     let first = query_ready_status(socket);
     thread::sleep(Duration::from_millis(2));
     let second = query_status(socket);
-    assert_eq!(first["schema"], "podway.daemon-status-result/v2");
+    assert_eq!(first["schema"], "podway.daemon-status-result/v3");
+    assert_eq!(first["mode"], "prod");
     assert_eq!(first["readiness_stage"], "ready");
     assert_eq!(second["readiness_state"], "ready");
     assert_eq!(
@@ -295,6 +318,46 @@ fn podwayd_reports_stable_live_process_identity() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn production_and_named_mode_own_disjoint_complete_namespaces() {
+    let fixture = ProcessFixtureV1::new();
+    let named_paths = fixture.mode_paths("demo");
+    let production_socket = fixture.paths.socket_path().as_path();
+    let named_socket = named_paths.socket_path().as_path();
+    assert_ne!(
+        fixture.paths.global_lock_path(),
+        named_paths.global_lock_path()
+    );
+    assert_ne!(
+        fixture.paths.workspace_registry_path(),
+        named_paths.workspace_registry_path()
+    );
+    assert_ne!(fixture.paths.log_path(), named_paths.log_path());
+    assert_ne!(
+        fixture.paths.metadata_index_path(),
+        named_paths.metadata_index_path()
+    );
+    assert_ne!(fixture.paths.recovery_path(), named_paths.recovery_path());
+
+    let production = fixture.spawn();
+    let named = fixture.spawn_mode("demo");
+    let deadline = Instant::now() + STARTUP_TIMEOUT;
+    while (!production_socket.exists() || !named_socket.exists()) && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(production_socket.exists());
+    assert!(named_socket.exists());
+    assert_eq!(query_ready_status(production_socket)["mode"], "prod");
+    assert_eq!(query_ready_status(named_socket)["mode"], "demo");
+
+    for child in [production, named] {
+        kill(Pid::from_raw(child.id() as i32), Signal::SIGTERM).unwrap();
+        assert!(child.wait_with_output().unwrap().status.success());
+    }
+    assert!(!production_socket.exists());
+    assert!(!named_socket.exists());
 }
 
 #[test]
