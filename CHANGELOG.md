@@ -7,6 +7,7 @@ This file records concise shipped outcomes and the planned next stable release.
 ### Added
 
 - Add bounded named runtime modes with complete isolated daemon namespaces and preserve `--dev` as the exact alias for mode `dev`.
+- Bind each workspace config, registry generation, and SQLite store to one runtime mode, with token-bound idle switching and marker-backed replay recovery.
 
 ## v0.2.7 - 2026-08-31
 

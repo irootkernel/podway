@@ -290,6 +290,7 @@ const FROZEN_ERROR_CATALOG: &[(&str, u8, bool)] = &[
     ("WORKSPACE_ID_CONFLICT", 5, false),
     ("WORKSPACE_UUID_MISMATCH", 4, false),
     ("WORKSPACE_MODE_MISMATCH", 4, false),
+    ("WORKSPACE_MODE_SWITCH_CONFLICT", 4, false),
     ("WORKSPACE_CONFIG_INVALID", 5, false),
     ("WORKSPACE_STATE_UNREADABLE", 5, false),
     ("WORKSPACE_SCHEMA_UNSUPPORTED", 5, false),
@@ -1327,6 +1328,17 @@ fn api_004_job_finished_at_state_invariant_is_typed_and_compatible() {
 
 #[test]
 fn api_004_timestamp_calendar_and_clock_ranges_are_exact() {
+    assert_eq!(
+        Rfc3339MillisV1::from_unix_millis(0).unwrap().as_str(),
+        "1970-01-01T00:00:00.000Z"
+    );
+    assert_eq!(
+        Rfc3339MillisV1::from_unix_millis(1_800_000_300_000)
+            .unwrap()
+            .as_str(),
+        "2027-01-15T08:05:00.000Z"
+    );
+    assert!(Rfc3339MillisV1::from_unix_millis(253_402_300_800_000).is_err());
     for value in [
         "2024-02-29T00:00:00.000Z",
         "2000-02-29T23:59:59.999Z",

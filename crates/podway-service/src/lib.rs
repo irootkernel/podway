@@ -235,6 +235,8 @@ impl ServiceLabelV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ServiceRuntimePathsV1 {
     mode: RuntimeModeV1,
+    account_home: Option<LocalPlatformPathV1>,
+    account_user_id: Option<u32>,
     podway_home: Option<LocalPlatformPathV1>,
     runtime_directory: LocalPlatformPathV1,
     global_lock_path: LocalPlatformPathV1,
@@ -260,7 +262,10 @@ impl ServiceRuntimePathsV1 {
                 path: dev_home.as_ref().to_path_buf(),
             });
         }
-        Self::for_runtime_root(dev_home, RuntimeModeV1::development(), user_id)
+        let mut paths = Self::for_runtime_root(dev_home, RuntimeModeV1::development(), user_id)?;
+        paths.account_home = Some(LocalPlatformPathV1::service_global(account.account_home())?);
+        paths.account_user_id = Some(user_id);
+        Ok(paths)
     }
 
     /// Constructs one complete non-production runtime namespace at an explicit root.
@@ -283,6 +288,8 @@ impl ServiceRuntimePathsV1 {
         validate_socket_path_capacity(&socket_path)?;
         Ok(Self {
             mode,
+            account_home: None,
+            account_user_id: None,
             podway_home: Some(LocalPlatformPathV1::service_global(runtime_root)?),
             runtime_directory: LocalPlatformPathV1::service_global(&runtime_directory)?,
             global_lock_path: LocalPlatformPathV1::service_global(
@@ -329,7 +336,10 @@ impl ServiceRuntimePathsV1 {
             return Self::from_podway_home(&account);
         }
         let root = account.as_path().join("modes").join(mode.as_str());
-        Self::for_runtime_root(root, mode, user_id)
+        let mut paths = Self::for_runtime_root(root, mode, user_id)?;
+        paths.account_home = Some(LocalPlatformPathV1::service_global(account.account_home())?);
+        paths.account_user_id = Some(user_id);
+        Ok(paths)
     }
 
     pub fn for_effective_user_mode(mode: RuntimeModeV1) -> Result<Self, ServicePathErrorV1> {
@@ -361,6 +371,8 @@ impl ServiceRuntimePathsV1 {
 
         Ok(Self {
             mode: RuntimeModeV1::production(),
+            account_home: None,
+            account_user_id: None,
             podway_home: None,
             runtime_directory: LocalPlatformPathV1::new(runtime_directory)?,
             global_lock_path: LocalPlatformPathV1::new(runtime_directory.join("podwayd.lock"))?,
@@ -404,6 +416,8 @@ impl ServiceRuntimePathsV1 {
 
         Ok(Self {
             mode: RuntimeModeV1::production(),
+            account_home: Some(LocalPlatformPathV1::service_global(home.account_home())?),
+            account_user_id: Some(home.user_id()),
             podway_home: Some(LocalPlatformPathV1::service_global(home.as_path())?),
             runtime_directory: LocalPlatformPathV1::service_global(&runtime_directory)?,
             global_lock_path: LocalPlatformPathV1::service_global(
@@ -433,6 +447,12 @@ impl ServiceRuntimePathsV1 {
 
     pub fn mode(&self) -> &RuntimeModeV1 {
         &self.mode
+    }
+
+    /// Derives a sibling runtime namespace only when the construction retained its account root.
+    pub fn for_sibling_mode(&self, mode: RuntimeModeV1) -> Option<Self> {
+        let account_home = self.account_home.as_ref()?;
+        Self::for_account_home_mode(account_home.as_path(), mode, self.account_user_id?).ok()
     }
 
     pub fn global_lock_path(&self) -> &LocalPlatformPathV1 {
@@ -4589,6 +4609,31 @@ mod tests {
             ),
             Err(ServicePathErrorV1::DevHomeConflictsProduction { .. })
         ));
+        let production = paths
+            .for_sibling_mode(RuntimeModeV1::production())
+            .expect("a dev layout retaining its account root must derive production paths");
+        assert_eq!(
+            production.socket_path().as_path(),
+            Path::new("/Users/contributor/.podway/run/podwayd.sock")
+        );
+        let named = paths
+            .for_sibling_mode(RuntimeModeV1::new("qa").unwrap())
+            .expect("a dev layout retaining its account root must derive named-mode paths");
+        assert_eq!(
+            named.socket_path().as_path(),
+            Path::new("/Users/contributor/.podway/modes/qa/run/podwayd.sock")
+        );
+        let detached = ServiceRuntimePathsV1::for_runtime_root(
+            "/private/tmp/podway-detached-dev",
+            RuntimeModeV1::development(),
+            501,
+        )
+        .expect("an explicit runtime root must be valid");
+        assert!(
+            detached
+                .for_sibling_mode(RuntimeModeV1::production())
+                .is_none()
+        );
     }
 
     #[test]

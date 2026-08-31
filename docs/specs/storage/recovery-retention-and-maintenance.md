@@ -56,6 +56,11 @@ one.
 
 The registry contains no task title, procedure, graph node, attempt, item, blocker, artifact, or job payload data.
 
+Each runtime mode has a separate registry namespace. A worktree is admitted only
+when config, the Store's schema-v10 mode binding, and that namespace agree. Legacy
+stores without a mode column belong to `prod`; a named daemon does not migrate or
+open them.
+
 ## Moved worktrees
 
 If a registered path is missing, the entry is removed after a grace-free validation pass. A moved worktree is rediscovered when a CLI request arrives at its new path. Matching Git identity and workspace UUID allow the registry to be rebuilt.
@@ -205,6 +210,28 @@ identity; it removes the marker last and accepts only a descriptor-verified empt
 `.podway` residual as an already-absent replay convergence. Symlinks, mounts,
 non-directories, changed roots, competing markers, and unknown non-empty residuals
 fail closed.
+
+Workspace mode switching uses the same exclusive maintenance key and the adjacent
+`podway.workspace-mode-switch-marker/v1`. The marker binds the plan-token digest,
+workspace UUID, source and target modes, original and expected target config
+digests, and the ordered
+source-close, registry-retirement, runtime-removal, config-update, target-init,
+and target-publication steps. An exact retry resumes only the missing suffix and
+a completed marker returns `already_applied`; a later independently planned switch
+may retire that completed receipt before publishing its own marker. Runtime reset
+deletes the complete current and archived session, attempt, queue, receipt, and job
+history held under `.podway/runtime/`. A session without queued or running work is
+reported by plan but does not make the disposable source busy. The caller must
+retain the exact plan token: expiry applies before marker publication, while an
+existing marker keeps that token as recovery authority until its completed receipt
+is retired. A source daemon restart before marker publication invalidates its
+process-local plan record, so the caller must plan again; a restart after marker
+publication resumes with the retained token. If config publication completed but
+the `config_updated` marker step did not, recovery recognizes the exact target
+digest, records the completed step, and continues; any third config digest fails
+closed. Runtime reset never deletes
+procedures, `.podway/.gitignore`, config
+content unrelated to mode, or Git worktree, index, and ref state.
 
 ## No backup or export requirement
 

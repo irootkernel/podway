@@ -225,6 +225,10 @@ const TO: Flag = Flag {
     long: "to",
     takes_value: true,
 };
+const PLAN_TOKEN: Flag = Flag {
+    long: "plan-token",
+    takes_value: true,
+};
 const ALL: Flag = Flag {
     long: "all",
     takes_value: false,
@@ -308,6 +312,20 @@ const ITEM: Flag = Flag {
 
 const DISPLAY_FLAGS: &[&Flag] = &[&JSON, &NO_COLOR, &QUIET];
 const DAEMON_READ_FLAGS: &[&Flag] = &[&JSON, &DEV, &WORKTREE, &TIMEOUT, &SOCKET, &NO_COLOR, &QUIET];
+const WORKSPACE_MODE_PLAN_FLAGS: &[&Flag] = &[
+    &JSON, &DEV, &WORKTREE, &TIMEOUT, &SOCKET, &NO_COLOR, &QUIET, &TO,
+];
+const WORKSPACE_MODE_APPLY_FLAGS: &[&Flag] = &[
+    &JSON,
+    &DEV,
+    &WORKTREE,
+    &TIMEOUT,
+    &SOCKET,
+    &NO_COLOR,
+    &QUIET,
+    &TO,
+    &PLAN_TOKEN,
+];
 const SESSION_MUTATION_FLAGS: &[&Flag] = &[
     &JSON,
     &DEV,
@@ -566,6 +584,18 @@ const ROUTES: &[Route] = &[
     Route {
         words: "workspace repair",
         flags: DAEMON_READ_FLAGS,
+        values: "",
+        dynamic: None,
+    },
+    Route {
+        words: "workspace mode plan",
+        flags: WORKSPACE_MODE_PLAN_FLAGS,
+        values: "",
+        dynamic: None,
+    },
+    Route {
+        words: "workspace mode apply",
+        flags: WORKSPACE_MODE_APPLY_FLAGS,
         values: "",
         dynamic: None,
     },
@@ -1196,24 +1226,33 @@ fn roots() -> Vec<&'static str> {
 }
 
 fn children(parent: &str) -> Vec<&'static str> {
-    ROUTES
-        .iter()
-        .filter_map(|route| {
-            route
-                .words
-                .strip_prefix(parent)
-                .and_then(|suffix| suffix.strip_prefix(' '))
-                .filter(|child| !child.contains(' '))
-        })
-        .collect()
+    let mut children = Vec::new();
+    for route in ROUTES {
+        let Some(suffix) = route
+            .words
+            .strip_prefix(parent)
+            .and_then(|suffix| suffix.strip_prefix(' '))
+        else {
+            continue;
+        };
+        let child = suffix.split_once(' ').map_or(suffix, |(child, _)| child);
+        if !children.contains(&child) {
+            children.push(child);
+        }
+    }
+    children
 }
 
 fn parents() -> Vec<&'static str> {
     let mut parents = Vec::new();
     for route in ROUTES {
-        match route.words.split_once(' ') {
-            Some((parent, _)) if !parents.contains(&parent) => parents.push(parent),
-            _ => {}
+        for (index, byte) in route.words.bytes().enumerate() {
+            if byte == b' ' {
+                let parent = &route.words[..index];
+                if !parents.contains(&parent) {
+                    parents.push(parent);
+                }
+            }
         }
     }
     parents
@@ -1273,7 +1312,7 @@ fn bash_script() -> String {
         let children = children(parent).join("|");
         let _ = writeln!(
             script,
-            "      {parent}) case \"$word\" in {children}) printf '%s\\n' \"$root $word\"; return ;; esac ;;"
+            "      \"{parent}\") case \"$word\" in {children}) root=\"$root $word\"; continue ;; esac ;;"
         );
     }
     script.push_str("    esac\n  done\n  printf '%s\\n' \"${root:-root}\"\n}\n");
@@ -1362,7 +1401,7 @@ fn zsh_script() -> String {
         let children = children(parent).join("|");
         let _ = writeln!(
             script,
-            "      {parent}) case \"$word\" in {children}) print -r -- \"$root $word\"; return ;; esac ;;"
+            "      \"{parent}\") case \"$word\" in {children}) root=\"$root $word\"; continue ;; esac ;;"
         );
     }
     script.push_str("    esac\n  done\n  print -r -- \"${root:-root}\"\n}\n");
@@ -1447,7 +1486,7 @@ fn fish_script() -> String {
         let children = children(parent).join(" ");
         let _ = writeln!(
             script,
-            "      case {parent}\n        switch \"$word\"\n          case {children}; echo \"$root $word\"; return\n        end"
+            "      case \"{parent}\"\n        switch \"$word\"\n          case {children}; set root \"$root $word\"; continue\n        end"
         );
     }
     script.push_str("    end\n  end\n  if test -n \"$root\"\n    echo \"$root\"\n  else\n    echo root\n  end\nend\n");
@@ -1531,7 +1570,7 @@ fn write_fish_flag(script: &mut String, route: &str, flag: &Flag, dynamic: Optio
 
 #[cfg(test)]
 mod tests {
-    use super::{Shell, children};
+    use super::{ROUTES, Shell, children, parents};
 
     #[test]
     fn daemon_wait_ready_is_present_in_every_completion_script() {
@@ -1561,6 +1600,45 @@ mod tests {
             assert!(
                 script.contains("daemon status"),
                 "missing named status route in {shell:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn workspace_mode_routes_are_present_in_every_completion_script() {
+        assert!(children("workspace").contains(&"mode"));
+        assert_eq!(children("workspace mode"), vec!["plan", "apply"]);
+        assert!(parents().contains(&"workspace mode"));
+        for route in ROUTES {
+            for (index, byte) in route.words.bytes().enumerate() {
+                if byte == b' ' {
+                    let parent = &route.words[..index];
+                    assert!(parents().contains(&parent));
+                    assert!(!children(parent).is_empty());
+                }
+            }
+        }
+        for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
+            let script = shell.script();
+            assert!(
+                script.contains("workspace mode plan"),
+                "missing workspace mode plan route in {shell:?}"
+            );
+            assert!(
+                script.contains("workspace mode apply"),
+                "missing workspace mode apply route in {shell:?}"
+            );
+            assert!(
+                script.contains("plan-token"),
+                "missing plan-token flag in {shell:?}"
+            );
+            let accumulation = match shell {
+                Shell::Bash | Shell::Zsh => "root=\"$root $word\"; continue",
+                Shell::Fish => "set root \"$root $word\"; continue",
+            };
+            assert!(
+                script.contains(accumulation),
+                "missing route accumulation in {shell:?}"
             );
         }
     }

@@ -60,6 +60,13 @@ pub fn downgrade_to_schema_v4(database_path: &Path) -> Result<(), String> {
             |row| row.get(0),
         )
         .map_err(|error| error.to_string())?;
+    let workspace_binding_table_sql: String = reference
+        .query_row(
+            "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'workspace_state'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
     let workspace_table_sql: String = reference
         .query_row(
             "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'v2_workspace_state'",
@@ -72,10 +79,28 @@ pub fn downgrade_to_schema_v4(database_path: &Path) -> Result<(), String> {
             "PRAGMA foreign_keys = OFF;
              DROP TABLE v2_terminal_dispositions;
              PRAGMA legacy_alter_table = ON;
+             ALTER TABLE workspace_state RENAME TO workspace_state_v10;
              ALTER TABLE v2_workspace_state RENAME TO v2_workspace_state_v7;
              ALTER TABLE v2_item_slots RENAME TO v2_item_slots_v6;
              ALTER TABLE v2_resolved_evidence_references
                  RENAME TO v2_resolved_evidence_references_v9;",
+        )
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute_batch(&workspace_binding_table_sql)
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute_batch(
+            "INSERT INTO workspace_state (
+                    singleton, workspace_uuid, git_common_fingerprint,
+                    git_worktree_fingerprint, last_validated_root,
+                    next_workspace_sequence, created_at_ms, updated_at_ms
+             ) SELECT
+                    singleton, workspace_uuid, git_common_fingerprint,
+                    git_worktree_fingerprint, last_validated_root,
+                    next_workspace_sequence, created_at_ms, updated_at_ms
+               FROM workspace_state_v10;
+             DROP TABLE workspace_state_v10;",
         )
         .map_err(|error| error.to_string())?;
     connection
@@ -131,7 +156,7 @@ pub fn downgrade_to_schema_v4(database_path: &Path) -> Result<(), String> {
                FROM v2_workspace_state_v7
               WHERE singleton = 1;
              DROP TABLE v2_workspace_state_v7;
-             DELETE FROM schema_migrations WHERE version IN (5, 6, 7, 8, 9);",
+             DELETE FROM schema_migrations WHERE version IN (5, 6, 7, 8, 9, 10);",
         )
         .map_err(|error| error.to_string())?;
     connection

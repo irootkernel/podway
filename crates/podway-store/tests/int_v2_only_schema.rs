@@ -3,8 +3,8 @@ use std::path::Path;
 use std::{fs, os::unix::fs::PermissionsExt};
 
 use podway_core::{
-    DomainCommand, JobId, Revision, SessionId, Sha256Digest, UnixMillis, WorkspaceId,
-    canonicalize_json_v1,
+    DomainCommand, JobId, Revision, RuntimeModeV1, SessionId, Sha256Digest, UnixMillis,
+    WorkspaceId, canonicalize_json_v1,
 };
 use podway_store::codec::{
     PersistedDomainCommandV1, PersistedDomainResultV1, PersistedSessionLifecycleV1,
@@ -70,12 +70,35 @@ fn restore_schema_v8_shape(connection: &Connection) {
             |row| row.get(0),
         )
         .unwrap();
+    let workspace_table_sql: String = reference
+        .query_row(
+            "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'workspace_state'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
     connection
         .execute_batch(
             "PRAGMA foreign_keys = OFF;
              PRAGMA legacy_alter_table = ON;
+             ALTER TABLE workspace_state RENAME TO workspace_state_v10;
              ALTER TABLE v2_resolved_evidence_references
                  RENAME TO v2_resolved_evidence_references_v9;",
+        )
+        .unwrap();
+    connection.execute_batch(&workspace_table_sql).unwrap();
+    connection
+        .execute_batch(
+            "INSERT INTO workspace_state (
+                 singleton, workspace_uuid, git_common_fingerprint,
+                 git_worktree_fingerprint, last_validated_root,
+                 next_workspace_sequence, created_at_ms, updated_at_ms
+             )
+             SELECT singleton, workspace_uuid, git_common_fingerprint,
+                    git_worktree_fingerprint, last_validated_root,
+                    next_workspace_sequence, created_at_ms, updated_at_ms
+             FROM workspace_state_v10;
+             DROP TABLE workspace_state_v10;",
         )
         .unwrap();
     connection.execute_batch(&evidence_table_sql).unwrap();
@@ -84,8 +107,57 @@ fn restore_schema_v8_shape(connection: &Connection) {
             "INSERT INTO v2_resolved_evidence_references
              SELECT * FROM v2_resolved_evidence_references_v9;
              DROP TABLE v2_resolved_evidence_references_v9;
-             DELETE FROM schema_migrations WHERE version = 9;
+             DELETE FROM schema_migrations WHERE version IN (9, 10);
              PRAGMA user_version = 8;
+             PRAGMA legacy_alter_table = OFF;
+             PRAGMA foreign_keys = ON;",
+        )
+        .unwrap();
+}
+
+fn restore_schema_v9_shape(connection: &Connection) {
+    let reference = Connection::open_in_memory().unwrap();
+    for ddl in [
+        podway_store::schema::sqlite_v1_ddl(),
+        podway_store::schema::sqlite_v2_ddl(),
+        podway_store::schema::sqlite_v3_ddl(),
+        podway_store::schema::sqlite_v4_ddl(),
+        podway_store::schema::sqlite_v5_ddl(),
+        podway_store::schema::sqlite_v6_ddl(),
+        podway_store::schema::sqlite_v7_ddl(),
+        podway_store::schema::sqlite_v8_ddl(),
+        podway_store::schema::sqlite_v9_ddl(),
+    ] {
+        reference.execute_batch(ddl).unwrap();
+    }
+    let workspace_table_sql: String = reference
+        .query_row(
+            "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'workspace_state'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    connection
+        .execute_batch(
+            "PRAGMA foreign_keys = OFF;
+             PRAGMA legacy_alter_table = ON;
+             ALTER TABLE workspace_state RENAME TO workspace_state_v10;",
+        )
+        .unwrap();
+    connection.execute_batch(&workspace_table_sql).unwrap();
+    connection
+        .execute_batch(
+            "INSERT INTO workspace_state (
+                 singleton, workspace_uuid, git_common_fingerprint,
+                 git_worktree_fingerprint, last_validated_root,
+                 next_workspace_sequence, created_at_ms, updated_at_ms
+             ) SELECT singleton, workspace_uuid, git_common_fingerprint,
+                      git_worktree_fingerprint, last_validated_root,
+                      next_workspace_sequence, created_at_ms, updated_at_ms
+                 FROM workspace_state_v10;
+             DROP TABLE workspace_state_v10;
+             DELETE FROM schema_migrations WHERE version = 10;
+             PRAGMA user_version = 9;
              PRAGMA legacy_alter_table = OFF;
              PRAGMA foreign_keys = ON;",
         )
@@ -895,6 +967,136 @@ fn v2dvc002_sqlite_v10_reserves_a_bounded_default_production_mode() {
 }
 
 #[test]
+fn v2dvc004_live_schema_v10_binds_new_and_legacy_stores_to_runtime_mode() {
+    let production = TempDir::new().unwrap();
+    let production_path = production.path().join("state.sqlite3");
+    drop(
+        SqliteStoreV1::open(
+            &production_path,
+            &root(),
+            identity(),
+            SqliteStoreOptionsV1::new(8).unwrap(),
+            UnixMillis::new(1),
+        )
+        .unwrap(),
+    );
+    let connection = Connection::open(&production_path).unwrap();
+    let binding: (u32, String, i64) = connection
+        .query_row(
+            "SELECT (SELECT user_version FROM pragma_user_version), runtime_mode,
+                    (SELECT COUNT(*) FROM schema_migrations WHERE version = 10)
+             FROM workspace_state WHERE singleton = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(binding, (10, "prod".to_owned(), 1));
+    drop(connection);
+
+    let before = fs::read(&production_path).unwrap();
+    assert_eq!(
+        SqliteStoreV1::inspect_workspace_binding(
+            &production_path,
+            &SqliteStoreOptionsV1::new(8)
+                .unwrap()
+                .with_runtime_mode(RuntimeModeV1::development()),
+        ),
+        Err(StoreErrorV1::RuntimeModeMismatchV1 {
+            expected: RuntimeModeV1::development(),
+            actual: RuntimeModeV1::production(),
+        })
+    );
+    assert_eq!(fs::read(&production_path).unwrap(), before);
+
+    let connection = Connection::open(&production_path).unwrap();
+    restore_schema_v9_shape(&connection);
+    drop(connection);
+    let legacy_before = fs::read(&production_path).unwrap();
+    assert!(matches!(
+        SqliteStoreV1::open(
+            &production_path,
+            &root(),
+            identity(),
+            SqliteStoreOptionsV1::new(8)
+                .unwrap()
+                .with_runtime_mode(RuntimeModeV1::development()),
+            UnixMillis::new(2),
+        ),
+        Err(StoreErrorV1::RuntimeModeMismatchV1 { expected, actual })
+            if expected == RuntimeModeV1::development()
+                && actual == RuntimeModeV1::production()
+    ));
+    assert_eq!(fs::read(&production_path).unwrap(), legacy_before);
+    let connection = Connection::open(&production_path).unwrap();
+    assert_eq!(
+        connection
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        9
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('workspace_state') WHERE name = 'runtime_mode'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
+    drop(connection);
+    assert!(
+        SqliteStoreV1::open(
+            &production_path,
+            &root(),
+            identity(),
+            SqliteStoreOptionsV1::new(8)
+                .unwrap()
+                .with_failpoint(Some(StoreFailpointV1::SchemaBeforeCommit)),
+            UnixMillis::new(3),
+        )
+        .is_err()
+    );
+    assert_eq!(fs::read(&production_path).unwrap(), legacy_before);
+    drop(
+        SqliteStoreV1::open(
+            &production_path,
+            &root(),
+            identity(),
+            SqliteStoreOptionsV1::new(8).unwrap(),
+            UnixMillis::new(4),
+        )
+        .unwrap(),
+    );
+
+    let named = TempDir::new().unwrap();
+    let named_path = named.path().join("state.sqlite3");
+    drop(
+        SqliteStoreV1::open(
+            &named_path,
+            &root(),
+            identity(),
+            SqliteStoreOptionsV1::new(8)
+                .unwrap()
+                .with_runtime_mode(RuntimeModeV1::development()),
+            UnixMillis::new(1),
+        )
+        .unwrap(),
+    );
+    let connection = Connection::open(named_path).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT runtime_mode FROM workspace_state WHERE singleton = 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "dev"
+    );
+}
+
+#[test]
 fn v2ast004_runtime_migrates_v5_to_v7_without_reencoding_item_values() {
     let temporary = TempDir::new().unwrap();
     let path = temporary.path().join("state.sqlite3");
@@ -1001,7 +1203,7 @@ fn v2ast004_runtime_migrates_v5_to_v7_without_reencoding_item_values() {
         connection
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        9
+        10
     );
     drop(connection);
 
@@ -1073,7 +1275,7 @@ fn schema_v8_evidence_rows_survive_v9_migration_and_reopen() {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .unwrap();
-    assert_eq!((version, after, migration), (9, before, 1));
+    assert_eq!((version, after, migration), (10, before, 1));
     let mut primary_key = connection
         .prepare(
             "SELECT name FROM pragma_table_info('v2_resolved_evidence_references') \
@@ -1143,7 +1345,7 @@ fn schema_v6_and_v7_upgrade_paths_migrate_to_v9() {
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .unwrap();
-        assert_eq!((version, migrations, foreign_key_violations), (9, 5, 0));
+        assert_eq!((version, migrations, foreign_key_violations), (10, 5, 0));
         let migration: (String, String) = connection
             .query_row(
                 "SELECT name, checksum FROM schema_migrations WHERE version = 9",
@@ -1283,7 +1485,7 @@ fn empty_schema_v4_inspects_read_only_then_migrates_to_v7() {
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!((version, disposition_table_count), (9, 1));
+    assert_eq!((version, disposition_table_count), (10, 1));
 }
 
 #[test]
@@ -1315,7 +1517,7 @@ fn schema_v3_without_legacy_state_migrates_to_retained_terminal_schema_v7() {
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 9);
+    assert_eq!(version, 10);
     let legacy_tables: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name IN \
@@ -1426,7 +1628,7 @@ fn schema_v3_v2_state_and_terminal_receipt_survive_v7_migration_and_reopen() {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
-    assert_eq!((version, migration, legacy_tables), (9, 6, 0));
+    assert_eq!((version, migration, legacy_tables), (10, 6, 0));
     assert_eq!(receipts.0, receipts.1);
 }
 

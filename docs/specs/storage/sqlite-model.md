@@ -1,10 +1,8 @@
 # SQLite Model
 
-The implemented canonical DDL history is `sqlite-v1.sql` through `sqlite-v9.sql`
-under `assets/specifications/`. `sqlite-v10.sql` reserves the workspace
-runtime-mode binding for V2DVC-004 and is not yet in the live migration registry.
-New databases currently apply the implemented history in one transaction and
-finish at schema version 9. The v5 contract is
+The implemented canonical DDL history is `sqlite-v1.sql` through `sqlite-v10.sql`
+under `assets/specifications/`. New databases apply that history in one
+transaction and finish at schema version 10. The v5 contract is
 normative under ADR-0021; `V2LIF-002` reserved its exact canonical DDL and
 `V2LIF-003` admitted it in runtime. ADR-0025 owns schema v6 for external check
 results; `V2AST-002` reserved its canonical DDL and named migration, and
@@ -31,6 +29,13 @@ from one consumer attempt may select different items from the same source node.
 The migration rebuilds only `v2_resolved_evidence_references`, preserves every v8
 row and foreign key, and replaces the source-based primary key with
 `(attempt_id, reference_ordinal)`.
+
+Schema v10 binds the workspace singleton to one bounded runtime mode. New stores
+persist the daemon's exact effective mode. Versions 1 through 9 have no named-mode
+identity and therefore migrate only as `prod`; a named daemon rejects them without
+mutation. Every normal inspection and open verifies the persisted value before
+task state is read or changed. Changing workspace config alone never transfers
+ownership between daemon namespaces.
 
 ADR-0028 itself adds no materialized condition state. Typed conditions are immutable fields
 of the canonical Procedure snapshot already stored with each session, and their
@@ -100,7 +105,7 @@ transaction, applies the canonical v5 DDL with legacy rename behavior, runs
 `foreign_key_check` before commit, and restores enforcement after commit or
 rollback. The DDL does not toggle `foreign_keys` because SQLite ignores that
 pragma inside an open transaction.
-Opening a schema newer than v9 remains an unsupported downgrade and performs no
+Opening a schema newer than v10 remains an unsupported downgrade and performs no
 mutation.
 
 The daemon is the sole normal writer. Foreign keys, strict tables, application ID,

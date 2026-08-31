@@ -3,8 +3,8 @@
 //! Requirements: STO-001 through STO-006, INV-S10, ARC-002, ARC-003.
 
 use podway_core::{
-    AttemptId, DomainCommand, DomainError, DomainResult, ItemId, JobId, Revision, SessionId,
-    Sha256Digest, UnixMillis, WorkspaceId,
+    AttemptId, DomainCommand, DomainError, DomainResult, ItemId, JobId, Revision, RuntimeModeV1,
+    SessionId, Sha256Digest, UnixMillis, WorkspaceId,
 };
 use podway_store::codec::PersistedTerminalResultV1;
 use podway_store::{
@@ -452,6 +452,10 @@ fn store_v1_constructs_every_typed_error_variant() {
             reason: StoreUnavailableReasonV1::Locked,
         },
         StoreErrorV1::LegacyProcedureStateUnsupportedV1,
+        StoreErrorV1::RuntimeModeMismatchV1 {
+            expected: RuntimeModeV1::production(),
+            actual: RuntimeModeV1::development(),
+        },
     ];
 
     for error in errors {
@@ -550,6 +554,10 @@ fn store_v1_constructs_every_typed_error_variant() {
                 assert_eq!(reason, StoreUnavailableReasonV1::Locked);
             }
             StoreErrorV1::LegacyProcedureStateUnsupportedV1 => {}
+            StoreErrorV1::RuntimeModeMismatchV1 { expected, actual } => {
+                assert_eq!(expected, RuntimeModeV1::production());
+                assert_eq!(actual, RuntimeModeV1::development());
+            }
             StoreErrorV1::SessionResetNotEligibleV1 { .. } => {}
             StoreErrorV1::SessionArchiveNotEligibleV1 { .. }
             | StoreErrorV1::SessionArchiveLimitReachedV1 { .. }

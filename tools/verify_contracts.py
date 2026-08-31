@@ -208,6 +208,8 @@ V2_EXECUTABLE_ROUTES = frozenset(
         "evidence.read",
         "daemon.wait-ready",
         "workspace.remove",
+        "workspace.mode.plan",
+        "workspace.mode.apply",
     }
 )
 PROCEDURE_INDEPENDENT_EXECUTABLE_ROUTES = {
@@ -233,6 +235,7 @@ PROCEDURE_INDEPENDENT_RUNTIME_ERROR_CODES = (
     "WORKTREE_GONE", "WORKSPACE_NOT_INITIALIZED", "WORKSPACE_ALREADY_INITIALIZED",
     "WORKSPACE_INIT_CONFLICT", "WORKSPACE_ID_CONFLICT", "WORKSPACE_UUID_MISMATCH",
     "WORKSPACE_MODE_MISMATCH",
+    "WORKSPACE_MODE_SWITCH_CONFLICT",
     "WORKSPACE_CONFIG_INVALID", "WORKSPACE_STATE_UNREADABLE", "WORKSPACE_SCHEMA_UNSUPPORTED",
     "WORKSPACE_QUEUE_FULL", "WORKSPACE_MAINTENANCE", "WORKSPACE_PATH_UNSAFE",
     "PATH_OUTSIDE_WORKTREE", "MIGRATION_FAILED", "PROCEDURE_NOT_FOUND", "PROCEDURE_INVALID",
@@ -483,7 +486,7 @@ def validate_v2_catalog_delta(root: Path) -> int:
     if set(runtime) != {"schema", "exit_codes", "errors"}:
         fail("error catalog has unexpected or missing top-level fields")
     entries = runtime.get("errors")
-    if not isinstance(entries, list) or len(entries) != 103:
+    if not isinstance(entries, list) or len(entries) != 104:
         fail("runtime error catalog must contain the v2-only error set")
     runtime_codes = [entry.get("code") for entry in entries if isinstance(entry, dict)]
     if len(runtime_codes) != len(entries) or len(set(runtime_codes)) != len(runtime_codes):

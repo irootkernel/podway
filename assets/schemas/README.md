@@ -3,7 +3,7 @@
 These JSON Schema Draft 2020-12 files define Podway's versioned structural contracts.
 
 - `workspace-v1.schema.json`: `.podway/config.yaml` after YAML parsing.
-- `workspace-v2.schema.json`: reserved mode-aware `.podway/config.yaml` shape; runtime admission begins in V2DVC-003.
+- `workspace-v2.schema.json`: admitted mode-aware `.podway/config.yaml` shape; omission remains production-compatible.
 - `procedure-v2.schema.json`: closed and bounded Procedure v2 YAML/JSON authoring shape, including optional typed conditions and option guards.
 - `registry-v1.schema.json`: minimal daemon path registry.
 - `ipc-request-v1.schema.json`: framed daemon request payload.
@@ -25,7 +25,7 @@ These JSON Schema Draft 2020-12 files define Podway's versioned structural contr
 - `workspace-recovery-details-v1.schema.json`: unreadable or unsupported workspace-state recovery.
 - `recovery-recipe-v1.schema.json`: shared closed read-only remediation command contract.
 - `daemon-status-result-v1.schema.json`: merged local-service and live-daemon status result.
-- `daemon-status-result-v3.schema.json`: reserved mode-aware daemon status result.
+- `daemon-status-result-v3.schema.json`: live mode-aware daemon status result.
 - `managed-runtime-v3.schema.json`: closed managed runtime identity, topology, executable, and generation metadata.
 - `workspace-mode-plan-result-v1.schema.json`: read-only token issuance and bounded mode-switch readiness result.
 - `workspace-mode-apply-result-v1.schema.json`: convergent mode-switch application result.

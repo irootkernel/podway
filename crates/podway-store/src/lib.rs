@@ -15,8 +15,8 @@ use std::sync::{Arc, OnceLock};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
 use podway_core::{
-    AttemptId, DomainCommand, DomainError, DomainResult, ItemId, JobId, Revision, SessionId,
-    Sha256Digest, UnixMillis, WorkspaceId, WorkspaceState,
+    AttemptId, DomainCommand, DomainError, DomainResult, ItemId, JobId, Revision, RuntimeModeV1,
+    SessionId, Sha256Digest, UnixMillis, WorkspaceId, WorkspaceState,
 };
 use serde_json::Value;
 
@@ -316,6 +316,7 @@ impl ValidatedWorkspaceRootV1 {
 pub struct SqliteStoreOptionsV1 {
     max_pending_jobs: u32,
     busy_timeout_ms: u32,
+    runtime_mode: RuntimeModeV1,
     max_page_count_for_test: Option<u32>,
     failpoint: Option<StoreFailpointV1>,
     failpoint_action: StoreFailpointActionV1,
@@ -331,10 +332,20 @@ impl SqliteStoreOptionsV1 {
         Ok(Self {
             max_pending_jobs,
             busy_timeout_ms: DEFAULT_SQLITE_BUSY_TIMEOUT_MS_V1,
+            runtime_mode: RuntimeModeV1::production(),
             max_page_count_for_test: None,
             failpoint: None,
             failpoint_action: StoreFailpointActionV1::ReturnError,
         })
+    }
+
+    pub fn with_runtime_mode(mut self, runtime_mode: RuntimeModeV1) -> Self {
+        self.runtime_mode = runtime_mode;
+        self
+    }
+
+    pub fn runtime_mode(&self) -> &RuntimeModeV1 {
+        &self.runtime_mode
     }
 
     pub fn with_busy_timeout_ms(mut self, busy_timeout_ms: u32) -> Result<Self, StoreValueErrorV1> {
@@ -709,6 +720,36 @@ impl IntegrityReportV1 {
 pub struct RecoveryReportV1 {
     requeued_job_count: u32,
     recovered_at: EpochMillisV1,
+}
+
+/// Bounded read-only summary of disposable workspace runtime state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DisposableRuntimeStateV1 {
+    session_present: bool,
+    queued_jobs: u32,
+    running_jobs: u32,
+}
+
+impl DisposableRuntimeStateV1 {
+    pub fn new(session_present: bool, queued_jobs: u32, running_jobs: u32) -> Self {
+        Self {
+            session_present,
+            queued_jobs,
+            running_jobs,
+        }
+    }
+
+    pub const fn session_present(self) -> bool {
+        self.session_present
+    }
+
+    pub const fn queued_jobs(self) -> u32 {
+        self.queued_jobs
+    }
+
+    pub const fn running_jobs(self) -> u32 {
+        self.running_jobs
+    }
 }
 
 impl RecoveryReportV1 {
@@ -1929,6 +1970,10 @@ pub enum StoreErrorV1 {
     NewerStateV1 {
         found_schema_version: u32,
         supported_schema_version: u32,
+    },
+    RuntimeModeMismatchV1 {
+        expected: RuntimeModeV1,
+        actual: RuntimeModeV1,
     },
     PreconditionConflictV1 {
         expected: Option<RevisionV1>,

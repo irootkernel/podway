@@ -236,7 +236,7 @@ commands:
   result_schemas:
   - podway.workspace-removal-result/v1
 - name: workspace.mode.plan
-  availability: reserved_contract
+  availability: executable
   cli:
   - workspace
   - mode
@@ -249,7 +249,7 @@ commands:
   result_schemas:
   - podway.workspace-mode-plan-result/v1
 - name: workspace.mode.apply
-  availability: reserved_contract
+  availability: executable
   cli:
   - workspace
   - mode

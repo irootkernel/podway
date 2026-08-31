@@ -1647,7 +1647,7 @@ fn direct_v6_and_v7_upgrades_preserve_terminal_state_and_disposition() {
             connection
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .unwrap(),
-            9
+            10
         );
     }
 }

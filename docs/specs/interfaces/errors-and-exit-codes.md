@@ -79,6 +79,7 @@ unexpected process transition. Automation must not branch on those messages.
 | `WORKSPACE_ID_CONFLICT` | 5 | no | Workspace UUID-to-root metadata is non-unique or conflicts with live identity evidence |
 | `WORKSPACE_UUID_MISMATCH` | 4 | no | Authoritative workspace UUID differs from the expected UUID |
 | `WORKSPACE_MODE_MISMATCH` | 4 | no | Runtime ownership modes disagree at the endpoint, daemon, config, Store, or registry boundary |
+| `WORKSPACE_MODE_SWITCH_CONFLICT` | 4 | no | The plan is stale or an incomplete switch requires its exact recovery token; plan again only when no partial marker is pending |
 | `WORKSPACE_CONFIG_INVALID` | 5 | no | Workspace config fails schema or semantic validation |
 | `WORKSPACE_STATE_UNREADABLE` | 5 | no | SQLite state is corrupt or inaccessible |
 | `WORKSPACE_SCHEMA_UNSUPPORTED` | 5 | no | Database schema is newer or otherwise unsupported |

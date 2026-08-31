@@ -178,7 +178,7 @@ def adapter_contract() -> dict[str, Any]:
 
     error_catalog = read_object(ROOT / "assets/specifications/error-codes.json", "error catalog")
     runtime_error_codes = catalog_codes(error_catalog, "errors", "error catalog")
-    if len(runtime_error_codes) != 103:
+    if len(runtime_error_codes) != 104:
         fail("error catalog does not contain the v2-only runtime inventory")
 
     diagnostic_catalog = read_object(

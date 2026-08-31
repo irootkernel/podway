@@ -36,6 +36,22 @@ exactly. JSON and non-TTY use require both `--yes` and
 `--if-workspace-uuid`. Success removes the complete `.podway` tree but preserves
 the selected Git worktree; daemon logs remain outside the worktree.
 
+Workspace ownership moves only through `workspace mode plan --to <mode>` followed
+by `workspace mode apply --to <mode> --plan-token <token>`. Plan is read-only and
+returns no token for a no-change, busy, or unavailable target. Apply revalidates
+the token-bound config, Store, source registry generation, disposable state, and
+the target mode's live Unix endpoint in its exact namespace. It atomically updates
+config and recreates `.podway/runtime/`, deleting every current and archived
+session, attempt, queue entry, receipt, and job-history row stored there; Git
+state, procedures, and other supported workspace content remain untouched. The
+caller must retain the exact plan token. Its expiry is enforced until durable
+marker publication; after publication, that same token remains the recovery and
+exact-replay authority until the completed marker is retired by a later plan.
+Before marker publication, the plan is source-daemon-process-local: a source
+daemon restart invalidates the token and requires a fresh `workspace mode plan`.
+Exact replay resumes from the durable adjacent marker and reports
+`already_applied` after convergence.
+
 `daemon wait-ready [--timeout <duration>]` is a read-only service
 operation. Its default deadline is 120 seconds and its hard maximum is one hour.
 It succeeds only after a current status response proves matching live identity,

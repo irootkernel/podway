@@ -10,7 +10,7 @@ use std::{sync::Arc, time::Instant};
 #[cfg(test)]
 use podway_core::DomainError;
 use podway_core::{
-    Revision, SessionId, SessionLifecycle, Sha256Digest, TerminalDispositionKindV2,
+    Revision, RuntimeModeV1, SessionId, SessionLifecycle, Sha256Digest, TerminalDispositionKindV2,
     TerminalDispositionV2, TraceSequenceV2, UnixMillis, WorkspaceId, canonicalize_json_v1,
 };
 use podway_git::{
@@ -22,7 +22,8 @@ use podway_protocol::{
     OutputEnvelopeV3, ProcedureV2MutationRequestV1, ProcedureV2StartRequestV1, RequestEnvelopeV1,
     RequestIdV1, ResponseEnvelopeV2, Rfc3339MillisV1, SessionLifecycleV1, SessionOutputV1,
     SessionStartSourceV1, SliceCommandV1, SliceRequestV1, TerminalJobCancellationProjectionV1,
-    TerminalJobResponseV1, TerminalJobSuccessResultV1, WorkspaceOutputV1, WorkspaceRemoveRequestV1,
+    TerminalJobResponseV1, TerminalJobSuccessResultV1, WorkspaceModeApplyRequestV1,
+    WorkspaceModePlanRequestV1, WorkspaceOutputV1, WorkspaceRemoveRequestV1,
     WorktreeSelectorWireV1, canonical_reset_all_identity_v1, decode_response_payload_v2,
 };
 use podway_store::{
@@ -1944,6 +1945,41 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                 Err(failure)
             }
         }
+    }
+
+    fn plan_workspace_mode(
+        &self,
+        _request: &RequestEnvelopeV1,
+        plan: &WorkspaceModePlanRequestV1,
+    ) -> Result<Map<String, Value>, DispatchFailureV1> {
+        let selector = selector_from_wire(plan.selector())?;
+        let target = RuntimeModeV1::new(plan.target_mode().to_owned())
+            .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::RequestInvalid))?;
+        self.manager
+            .plan_workspace_mode(
+                selector,
+                target,
+                WorkspaceRuntimeObservationV1::new(self.clock.now(), self.clock.generated_at()),
+            )
+            .map_err(map_runtime_error)
+    }
+
+    fn apply_workspace_mode(
+        &self,
+        _request: &RequestEnvelopeV1,
+        apply: &WorkspaceModeApplyRequestV1,
+    ) -> Result<Map<String, Value>, DispatchFailureV1> {
+        let selector = selector_from_wire(apply.selector())?;
+        let target = RuntimeModeV1::new(apply.target_mode().to_owned())
+            .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::RequestInvalid))?;
+        self.manager
+            .apply_workspace_mode(
+                selector,
+                target,
+                apply.plan_token(),
+                WorkspaceRuntimeObservationV1::new(self.clock.now(), self.clock.generated_at()),
+            )
+            .map_err(map_runtime_error)
     }
 
     fn dispatch_procedure_v2(
@@ -6265,6 +6301,7 @@ fn map_runtime_error(error: WorkspaceRuntimeErrorV1) -> DispatchFailureV1 {
             DispatchFailureV1::new(DispatchFailureKindV1::DaemonUnavailable)
         }
         WorkspaceRuntimeErrorV1::MaintenanceInProgress
+        | WorkspaceRuntimeErrorV1::ModeSwitchMarkerIo { .. }
         | WorkspaceRuntimeErrorV1::WorkspaceRemovalConflict
         | WorkspaceRuntimeErrorV1::ResetSchedulerRetirement
         | WorkspaceRuntimeErrorV1::ResetMarkerConflict
@@ -6273,6 +6310,12 @@ fn map_runtime_error(error: WorkspaceRuntimeErrorV1) -> DispatchFailureV1 {
         }
         WorkspaceRuntimeErrorV1::ResetIdempotencyConflict { .. } => {
             DispatchFailureV1::new(DispatchFailureKindV1::IdempotencyKeyReused)
+        }
+        WorkspaceRuntimeErrorV1::ModeSwitchConflict => {
+            DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceModeSwitchConflict)
+        }
+        WorkspaceRuntimeErrorV1::ModeSwitchTargetUnavailable => {
+            DispatchFailureV1::new(DispatchFailureKindV1::DaemonUnavailable)
         }
         WorkspaceRuntimeErrorV1::ResetSourceNotRegistered => {
             DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceNotInitialized)
@@ -6289,6 +6332,14 @@ fn map_runtime_error(error: WorkspaceRuntimeErrorV1) -> DispatchFailureV1 {
         | WorkspaceRuntimeErrorV1::StoreOptions(_) => {
             DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceConfigInvalid)
         }
+        WorkspaceRuntimeErrorV1::ModeMismatch {
+            expected,
+            actual,
+            boundary,
+        } => DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceModeMismatch).with_details(
+            DispatchErrorDetailsV1::default()
+                .with_workspace_mode_mismatch(expected, actual, boundary),
+        ),
         WorkspaceRuntimeErrorV1::BindingDisappeared { .. } => {
             DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceNotInitialized)
         }
@@ -6450,6 +6501,12 @@ fn map_store_error(error: StoreErrorV1) -> DispatchFailureV1 {
         }
         StoreErrorV1::NewerStateV1 { .. } => {
             DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceSchemaUnsupported)
+        }
+        StoreErrorV1::RuntimeModeMismatchV1 { expected, actual } => {
+            DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceModeMismatch).with_details(
+                DispatchErrorDetailsV1::default()
+                    .with_workspace_mode_mismatch(expected, actual, "store"),
+            )
         }
         StoreErrorV1::LegacyProcedureStateUnsupportedV1 => {
             DispatchFailureV1::new(DispatchFailureKindV1::LegacyProcedureStateUnsupported)

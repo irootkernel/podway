@@ -678,9 +678,27 @@ enum DaemonCommand {
 enum WorkspaceCommand {
     Show,
     Repair,
+    Mode {
+        #[command(subcommand)]
+        command: WorkspaceModeCommand,
+    },
     Remove {
         #[arg(long, required = true, action = ArgAction::SetTrue)]
         force: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum WorkspaceModeCommand {
+    Plan {
+        #[arg(long, value_name = "KEY")]
+        to: String,
+    },
+    Apply {
+        #[arg(long, value_name = "KEY")]
+        to: String,
+        #[arg(long, value_name = "TOKEN")]
+        plan_token: String,
     },
 }
 
@@ -738,6 +756,18 @@ impl Command {
             Self::Workspace {
                 command: WorkspaceCommand::Remove { .. },
             } => Some("workspace.remove"),
+            Self::Workspace {
+                command:
+                    WorkspaceCommand::Mode {
+                        command: WorkspaceModeCommand::Plan { .. },
+                    },
+            } => Some("workspace.mode.plan"),
+            Self::Workspace {
+                command:
+                    WorkspaceCommand::Mode {
+                        command: WorkspaceModeCommand::Apply { .. },
+                    },
+            } => Some("workspace.mode.apply"),
             Self::Start(args)
                 if args.on_existing.is_some()
                     || args.auto_archive_terminal
@@ -964,6 +994,9 @@ impl Command {
                 | Self::Reset(_)
                 | Self::Workspace {
                     command: WorkspaceCommand::Remove { .. },
+                }
+                | Self::Workspace {
+                    command: WorkspaceCommand::Mode { .. },
                 }
                 | Self::Check { .. }
                 | Self::Uncheck { .. }
@@ -6691,6 +6724,12 @@ fn daemon_payload(
             command: WorkspaceCommand::Repair,
         }
         | Command::Workspace {
+            command:
+                WorkspaceCommand::Mode {
+                    command: WorkspaceModeCommand::Apply { .. },
+                },
+        }
+        | Command::Workspace {
             command: WorkspaceCommand::Remove { .. },
         }
         | Command::Job {
@@ -6719,6 +6758,30 @@ fn daemon_payload(
         | Command::Workspace {
             command: WorkspaceCommand::Show,
         } => {}
+        Command::Workspace {
+            command:
+                WorkspaceCommand::Mode {
+                    command: WorkspaceModeCommand::Plan { to },
+                },
+        } => {
+            RuntimeModeV1::new(to.clone())
+                .map_err(|_| LocalFailure::request_invalid("target runtime mode is invalid"))?;
+            payload.insert("to".to_owned(), Value::String(to.clone()));
+        }
+        Command::Workspace {
+            command:
+                WorkspaceCommand::Mode {
+                    command: WorkspaceModeCommand::Apply { to, plan_token },
+                },
+        } => {
+            RuntimeModeV1::new(to.clone())
+                .map_err(|_| LocalFailure::request_invalid("target runtime mode is invalid"))?;
+            if plan_token.is_empty() || plan_token.len() > 4_096 {
+                return Err(LocalFailure::request_invalid("plan token is invalid"));
+            }
+            payload.insert("to".to_owned(), Value::String(to.clone()));
+            payload.insert("plan_token".to_owned(), Value::String(plan_token.clone()));
+        }
         Command::Workspace {
             command: WorkspaceCommand::Remove { force },
         } => {
@@ -8235,6 +8298,12 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
         "workspace.repair" => {
             "Usage:\n  podway workspace repair\n\nExample:\n  podway workspace repair"
         }
+        "workspace.mode.plan" => {
+            "Usage:\n  podway [--mode <source>] [--worktree <path>] workspace mode plan --to <key> [--json]\n\nProduces a read-only, expiring mode-switch plan token when the source is idle and the exact target-mode Unix endpoint is live. Retain the token for apply and crash recovery. If the source daemon restarts before marker publication, run plan again."
+        }
+        "workspace.mode.apply" => {
+            "Usage:\n  podway [--mode <source>] [--worktree <path>] workspace mode apply --to <key> --plan-token <token> [--json]\n\nApplies the exact token-bound mode transfer. This deletes all current and archived session, attempt, queue, receipt, and job history under .podway/runtime while preserving procedures, other workspace content, and Git state."
+        }
         "workspace.remove" => {
             "Usage:\n  podway [--worktree <path>] workspace remove --force [--if-workspace-uuid <uuid>] [--yes]\n\nInteractive use prints the resolved absolute worktree root and requires that exact path as confirmation. JSON and non-interactive use require --yes and --if-workspace-uuid. Success removes all .podway content, including tracked files, while preserving the Git worktree. Daemon logs remain outside the worktree; remove them explicitly with podway daemon uninstall --purge-logs --yes."
         }
@@ -8368,7 +8437,7 @@ mod tests {
     };
 
     use super::{
-        Cli, Command, CommandNameV1, DaemonCommand, LocalEnvelopeClock, LocalFailure,
+        Cli, Command, CommandNameV1, DaemonCommand, LocalEnvelopeClock, LocalFailure, OperationV1,
         OutputEnvelopeInputV3, OutputEnvelopeV3, ParseFailureCommandContext, RequestIdV1,
         ResponseEnvelopeV2, Rfc3339MillisV1, RunResult, WorkspaceTarget, build_identity_v1,
         contains_check_result_projection_v1, daemon_payload, local_generated_at, local_result,
@@ -8908,6 +8977,53 @@ mod tests {
                 "text/plain"
             ])
             .is_ok()
+        );
+    }
+
+    #[test]
+    fn v2dvc004_parser_and_payload_admit_exact_workspace_mode_grammar() {
+        let mut plan = Cli::try_parse_from([
+            "podway",
+            "--mode",
+            "prod",
+            "--json",
+            "workspace",
+            "mode",
+            "plan",
+            "--to",
+            "dev",
+        ])
+        .unwrap();
+        assert_eq!(plan.command.daemon_wire_name(), Some("workspace.mode.plan"));
+        let (operation, payload) = daemon_payload(&mut plan.command, None).unwrap();
+        assert_eq!(operation, OperationV1::Query);
+        assert_eq!(payload["to"], "dev");
+
+        let mut apply = Cli::try_parse_from([
+            "podway",
+            "--mode",
+            "prod",
+            "--json",
+            "workspace",
+            "mode",
+            "apply",
+            "--to",
+            "dev",
+            "--plan-token",
+            "exact-token",
+        ])
+        .unwrap();
+        assert_eq!(
+            apply.command.daemon_wire_name(),
+            Some("workspace.mode.apply")
+        );
+        let (operation, payload) = daemon_payload(&mut apply.command, None).unwrap();
+        assert_eq!(operation, OperationV1::Control);
+        assert_eq!(payload["to"], "dev");
+        assert_eq!(payload["plan_token"], "exact-token");
+
+        assert!(
+            Cli::try_parse_from(["podway", "workspace", "mode", "apply", "--to", "dev"]).is_err()
         );
     }
 

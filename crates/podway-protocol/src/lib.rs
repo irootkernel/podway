@@ -1034,6 +1034,32 @@ impl Rfc3339MillisV1 {
         &self.0
     }
 
+    /// Constructs the canonical UTC timestamp for milliseconds since the Unix epoch.
+    pub fn from_unix_millis(value: u64) -> Result<Self, ProtocolError> {
+        let seconds = value / 1_000;
+        let millis = value % 1_000;
+        let days = seconds / 86_400;
+        let seconds_of_day = seconds % 86_400;
+        let z = i128::from(days) + 719_468;
+        let era = z / 146_097;
+        let doe = z - era * 146_097;
+        let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+        let mut year = yoe + era * 400;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let day = doy - (153 * mp + 2) / 5 + 1;
+        let month = mp + if mp < 10 { 3 } else { -9 };
+        if month <= 2 {
+            year += 1;
+        }
+        let hour = seconds_of_day / 3_600;
+        let minute = (seconds_of_day % 3_600) / 60;
+        let second = seconds_of_day % 60;
+        Self::new(format!(
+            "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z"
+        ))
+    }
+
     pub fn into_inner(self) -> String {
         self.0
     }
@@ -1448,6 +1474,11 @@ const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
     },
     ErrorCodeCatalogEntryV1 {
         code: "WORKSPACE_MODE_MISMATCH",
+        exit_code: 4,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "WORKSPACE_MODE_SWITCH_CONFLICT",
         exit_code: 4,
         retryable: false,
     },

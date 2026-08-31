@@ -141,6 +141,12 @@
       "summary": "The selected runtime mode differs across an ownership boundary."
     },
     {
+      "code": "WORKSPACE_MODE_SWITCH_CONFLICT",
+      "exit_code": 4,
+      "retryable": false,
+      "summary": "The mode-switch plan is stale or requires its exact recovery token."
+    },
+    {
       "code": "WORKSPACE_CONFIG_INVALID",
       "exit_code": 5,
       "retryable": false,

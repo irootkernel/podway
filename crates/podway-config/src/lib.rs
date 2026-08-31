@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use podway_core::{CanonicalJsonErrorV1, Sha256Digest, canonicalize_json_v1};
+use podway_core::{CanonicalJsonErrorV1, RuntimeModeV1, Sha256Digest, canonicalize_json_v1};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
@@ -76,6 +76,7 @@ pub use procedure_v2_validate::{ValidatedProcedureV2, validate_procedure_v2};
 pub use procedure_v2_vet::vet_procedure_v2;
 
 pub const WORKSPACE_SCHEMA_V1: &str = "podway.workspace/v1";
+pub const WORKSPACE_SCHEMA_V2: &str = "podway.workspace/v2";
 /// The complete, explicit v1 workspace configuration written for a new workspace.
 pub const DEFAULT_WORKSPACE_CONFIG_YAML_V1: &[u8] = b"schema: podway.workspace/v1\nprocedure_paths:\n  - .podway/procedures\ndefault_preset: sw-dev-v2\njob_queue:\n  max_pending: 256\nui:\n  show_stage_in_prompt: false\n";
 
@@ -151,6 +152,8 @@ pub enum ConfigError {
 #[serde(deny_unknown_fields)]
 pub struct WorkspaceConfigV1 {
     pub schema: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<RuntimeModeV1>,
     #[serde(default = "default_procedure_paths")]
     pub procedure_paths: Vec<String>,
     #[serde(default = "default_preset")]
@@ -165,6 +168,7 @@ impl Default for WorkspaceConfigV1 {
     fn default() -> Self {
         Self {
             schema: WORKSPACE_SCHEMA_V1.to_owned(),
+            mode: None,
             procedure_paths: default_procedure_paths(),
             default_preset: default_preset(),
             job_queue: JobQueueConfigV1::default(),
@@ -182,6 +186,7 @@ impl WorkspaceConfigV1 {
     ) -> Result<Self, ConfigError> {
         let config = Self {
             schema: WORKSPACE_SCHEMA_V1.to_owned(),
+            mode: None,
             procedure_paths,
             default_preset: default_preset.into(),
             job_queue,
@@ -192,7 +197,22 @@ impl WorkspaceConfigV1 {
     }
 
     pub fn validate(&self) -> Result<(), ConfigError> {
-        validate_schema(&self.schema, WORKSPACE_SCHEMA_V1)?;
+        match self.schema.as_str() {
+            WORKSPACE_SCHEMA_V1 if self.mode.is_none() => {}
+            WORKSPACE_SCHEMA_V1 => {
+                return Err(ConfigError::InvalidValue {
+                    field: "mode",
+                    reason: "requires workspace schema v2",
+                });
+            }
+            WORKSPACE_SCHEMA_V2 => {}
+            _ => {
+                return Err(ConfigError::InvalidSchema {
+                    expected: "podway.workspace/v1 or podway.workspace/v2",
+                    actual: self.schema.clone(),
+                });
+            }
+        }
         validate_count("procedure_paths", self.procedure_paths.len(), 1, 16)?;
 
         let mut paths = BTreeSet::new();
@@ -210,6 +230,96 @@ impl WorkspaceConfigV1 {
         self.job_queue.validate()?;
         Ok(())
     }
+
+    /// Returns the runtime namespace selected by this configuration.
+    ///
+    /// Workspace v1 and an omitted v2 `mode` both select production.
+    pub fn effective_mode(&self) -> RuntimeModeV1 {
+        self.mode.clone().unwrap_or_default()
+    }
+}
+
+/// Rewrites only the top-level schema and mode scalars needed for a workspace-mode switch.
+///
+/// The input must already be an admitted workspace configuration. Existing ordering, comments,
+/// and every unrelated supported value are preserved byte-for-byte.
+pub fn rewrite_workspace_mode_v1(
+    input: impl AsRef<[u8]>,
+    target: &RuntimeModeV1,
+) -> Result<Vec<u8>, ConfigError> {
+    let input = input.as_ref();
+    let config = parse_workspace_config_v1(input)?;
+    if config.effective_mode() == *target {
+        return Ok(input.to_vec());
+    }
+    let text = std::str::from_utf8(input).map_err(|_| ConfigError::InvalidDocument {
+        reason: "input must be valid UTF-8".to_owned(),
+    })?;
+    let mut lines: Vec<String> = text.split_inclusive('\n').map(str::to_owned).collect();
+    if !text.ends_with('\n') && lines.is_empty() {
+        lines.push(text.to_owned());
+    }
+    let schema_index = lines
+        .iter()
+        .position(|line| line.starts_with("schema:"))
+        .ok_or_else(|| ConfigError::InvalidDocument {
+            reason: "workspace config schema must be a top-level scalar".to_owned(),
+        })?;
+    let schema_comment = yaml_scalar_comment_suffix(&lines[schema_index]);
+    let newline = if lines[schema_index].ends_with("\r\n") {
+        "\r\n"
+    } else if lines[schema_index].ends_with('\n') {
+        "\n"
+    } else {
+        ""
+    };
+    let schema = if target.is_production() {
+        WORKSPACE_SCHEMA_V1
+    } else {
+        WORKSPACE_SCHEMA_V2
+    };
+    lines[schema_index] = format!("schema: {schema}{schema_comment}{newline}");
+
+    if let Some(mode_index) = lines.iter().position(|line| line.starts_with("mode:")) {
+        if target.is_production() {
+            lines.remove(mode_index);
+        } else {
+            let comment = yaml_scalar_comment_suffix(&lines[mode_index]);
+            let newline = if lines[mode_index].ends_with("\r\n") {
+                "\r\n"
+            } else if lines[mode_index].ends_with('\n') {
+                "\n"
+            } else {
+                ""
+            };
+            lines[mode_index] = format!("mode: {}{comment}{newline}", target.as_str());
+        }
+    } else if !target.is_production() {
+        let mode_newline = if newline.is_empty() {
+            lines[schema_index].push('\n');
+            ""
+        } else {
+            newline
+        };
+        lines.insert(
+            schema_index + 1,
+            format!("mode: {}{mode_newline}", target.as_str()),
+        );
+    }
+    let output = lines.concat().into_bytes();
+    let rewritten = parse_workspace_config_v1(&output)?;
+    if rewritten.effective_mode() != *target {
+        return Err(ConfigError::InvalidValue {
+            field: "mode",
+            reason: "rewritten mode did not match the requested target",
+        });
+    }
+    Ok(output)
+}
+
+fn yaml_scalar_comment_suffix(line: &str) -> &str {
+    let body = line.trim_end_matches(['\r', '\n']);
+    body.find(" #").map_or("", |index| &body[index..])
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -360,17 +470,6 @@ fn canonical_json_from_serializable<T: Serialize>(
         _ => ConfigError::Serialization(error.to_string()),
     })?;
     Ok(CanonicalJsonV1(canonical))
-}
-
-fn validate_schema(actual: &str, expected: &'static str) -> Result<(), ConfigError> {
-    if actual == expected {
-        Ok(())
-    } else {
-        Err(ConfigError::InvalidSchema {
-            expected,
-            actual: actual.to_owned(),
-        })
-    }
 }
 
 pub(crate) fn validate_identifier(field: &'static str, value: &str) -> Result<(), ConfigError> {

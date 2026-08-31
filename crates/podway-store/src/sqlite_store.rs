@@ -43,9 +43,9 @@ use crate::v2_state::{
 };
 use crate::{
     AdmitOutcomeV1, AdmitRequestV1, CancelOutcomeV1, CanonicalRequestDigestV1, ClaimTokenV1,
-    ClaimedExecutionV1, ClaimedJobV1, DurableExecutionFlavorV1, DurableWorktreeIdentityV1,
-    EpochMillisV1, IdempotentExecutionV1, IntegrityModeV1, JobIdV1, JobListQueryV1,
-    JobReceiptOrTerminalV1, JobReceiptV1, JobStateV1, JobViewV1, PruneReportV1,
+    ClaimedExecutionV1, ClaimedJobV1, DisposableRuntimeStateV1, DurableExecutionFlavorV1,
+    DurableWorktreeIdentityV1, EpochMillisV1, IdempotentExecutionV1, IntegrityModeV1, JobIdV1,
+    JobListQueryV1, JobReceiptOrTerminalV1, JobReceiptV1, JobStateV1, JobViewV1, PruneReportV1,
     ReconciliationSnapshotV1, RecoveryReportV1, RevisionV1, RusqliteErrorContextV1,
     SqliteStoreOptionsV1, StateTransitionV1, StoreContractV1, StoreErrorV1, StoreFailpointV1,
     StoreIdempotencyReadContractV1, StoreIntegrityCheckV1, StoreInvariantV1, StoreReadContractV1,
@@ -310,6 +310,45 @@ impl SqliteStoreV1 {
                 .flatten();
             transaction.commit().map_err(storage)?;
             Ok((view, job_state))
+        })
+    }
+
+    /// Reads the mode-switch disposable-state summary from a disposable database snapshot.
+    pub fn inspect_disposable_runtime_state_v1(
+        path: impl AsRef<Path>,
+        expected_identity: &DurableWorktreeIdentityV1,
+        options: &SqliteStoreOptionsV1,
+        checked_at: EpochMillisV1,
+    ) -> Result<DisposableRuntimeStateV1, StoreErrorV1> {
+        let database_path = canonical_database_path_v1(path.as_ref())?;
+        inspect_database_snapshot_unbound_v1(&database_path, options, |connection| {
+            verify_inspection_integrity_connection_v1(
+                connection,
+                expected_identity,
+                options,
+                IntegrityModeV1::Fast,
+                checked_at,
+            )?;
+            let view = read_graph_workspace_view_connection_v2(connection, expected_identity)?;
+            let (queued, running): (i64, i64) = connection
+                .query_row(
+                    "SELECT \
+                       COALESCE(SUM(CASE WHEN state = 'queued' THEN 1 ELSE 0 END), 0), \
+                       COALESCE(SUM(CASE WHEN state = 'running' THEN 1 ELSE 0 END), 0) \
+                     FROM jobs",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .map_err(storage)?;
+            Ok(DisposableRuntimeStateV1::new(
+                view.graph_state().is_some(),
+                u32::try_from(queued).map_err(|_| StoreErrorV1::CorruptStateV1 {
+                    record: StoreRecordKindV1::Job,
+                })?,
+                u32::try_from(running).map_err(|_| StoreErrorV1::CorruptStateV1 {
+                    record: StoreRecordKindV1::Job,
+                })?,
+            ))
         })
     }
 

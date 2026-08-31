@@ -3,11 +3,15 @@
 //! The Store remains the durable authority. This module only admits a workspace after Git and the
 //! existing Store binding agree, then keeps registry data as non-authoritative metadata.
 
+#[cfg(unix)]
+use std::os::unix::fs::{FileTypeExt, OpenOptionsExt, PermissionsExt};
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
 use std::{
     collections::{HashMap, HashSet},
     error::Error,
     fmt, fs,
-    io::{self, Read},
+    io::{self, Read, Write},
     path::{Path, PathBuf},
     sync::{
         Arc, Condvar, Mutex, MutexGuard, OnceLock,
@@ -17,7 +21,9 @@ use std::{
 
 use podway_config::{
     ConfigError, DEFAULT_WORKSPACE_CONFIG_YAML_V1, WorkspaceConfigV1, parse_workspace_config_v1,
+    rewrite_workspace_mode_v1,
 };
+use podway_core::RuntimeModeV1;
 use podway_core::{DomainResult, UnixMillis, WorkspaceId};
 use podway_git::{
     DiagnosticPathDisplayV1, GitResolveErrorV1, GitResolverContractV1, LocalPathPresenceV1,
@@ -38,6 +44,10 @@ use podway_store::{
     StoreUnavailableReasonV1, StoreValueErrorV1, TerminalReceiptV1, TerminalResultV1,
     ValidatedWorkspaceRootV1, WorkerIdV1, WorkspaceBindingV1, WorkspaceViewV1,
 };
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value, json};
+use sha2::{Digest as _, Sha256};
+use uuid::Uuid;
 
 use crate::{
     DaemonCompositionErrorV1,
@@ -932,7 +942,16 @@ pub enum WorkspaceRuntimeErrorV1 {
         path: PathBuf,
         source: io::Error,
     },
+    ModeSwitchMarkerIo {
+        path: PathBuf,
+        source: io::Error,
+    },
     ConfigAdmission(ConfigError),
+    ModeMismatch {
+        expected: RuntimeModeV1,
+        actual: RuntimeModeV1,
+        boundary: &'static str,
+    },
     StoreOptions(StoreValueErrorV1),
     Scheduler(DaemonCompositionErrorV1),
     BindingDisappeared {
@@ -980,6 +999,8 @@ pub enum WorkspaceRuntimeErrorV1 {
     ResetSourceNotRegistered,
     ResetSourceAmbiguous,
     ResetRegistryPredecessorStale,
+    ModeSwitchConflict,
+    ModeSwitchTargetUnavailable,
     RevalidationKeyMismatch {
         expected: Box<WorkspaceSchedulerKeyV1>,
         actual: Box<WorkspaceSchedulerKeyV1>,
@@ -1012,7 +1033,13 @@ impl fmt::Display for WorkspaceRuntimeErrorV1 {
                     path.display()
                 )
             }
+            Self::ModeSwitchMarkerIo { path, .. } => write!(
+                formatter,
+                "cannot read or update workspace mode-switch marker {}",
+                path.display()
+            ),
             Self::ConfigAdmission(_) => formatter.write_str("workspace configuration is invalid"),
+            Self::ModeMismatch { .. } => formatter.write_str("workspace runtime modes disagree"),
             Self::StoreOptions(_) => formatter.write_str("workspace Store options are invalid"),
             Self::Scheduler(_) => formatter.write_str("workspace scheduler creation failed"),
             Self::BindingDisappeared { database_path } => write!(
@@ -1071,6 +1098,12 @@ impl fmt::Display for WorkspaceRuntimeErrorV1 {
                 .write_str("multiple registered reset sources match the validated worktree"),
             Self::ResetRegistryPredecessorStale => formatter
                 .write_str("registered reset predecessor changed before destructive maintenance"),
+            Self::ModeSwitchConflict => {
+                formatter.write_str("workspace mode-switch plan or recovery state is stale")
+            }
+            Self::ModeSwitchTargetUnavailable => {
+                formatter.write_str("target runtime mode is not ready")
+            }
             Self::RevalidationKeyMismatch { .. } => {
                 formatter.write_str("revalidated workspace has a different scheduler identity")
             }
@@ -1089,10 +1122,12 @@ impl Error for WorkspaceRuntimeErrorV1 {
             Self::ResetAdmissionOutcomeUnknown { source, .. } => Some(source),
             Self::ResetAdmitted { source, .. } => Some(source.as_ref()),
             Self::ConfigRead { source, .. } => Some(source),
+            Self::ModeSwitchMarkerIo { source, .. } => Some(source),
             Self::ConfigAdmission(source) => Some(source),
             Self::StoreOptions(source) => Some(source),
             Self::Scheduler(source) => Some(source),
             Self::Layout(_)
+            | Self::ModeMismatch { .. }
             | Self::BindingDisappeared { .. }
             | Self::BindingIdentityMismatch { .. }
             | Self::BindingMismatch { .. }
@@ -1108,6 +1143,8 @@ impl Error for WorkspaceRuntimeErrorV1 {
             | Self::ResetSourceNotRegistered
             | Self::ResetSourceAmbiguous
             | Self::ResetRegistryPredecessorStale
+            | Self::ModeSwitchConflict
+            | Self::ModeSwitchTargetUnavailable
             | Self::RevalidationKeyMismatch { .. } => None,
         }
     }
@@ -1963,6 +2000,47 @@ pub struct WorkspaceSchedulerReadFacadeV1<'a> {
     registry: &'a WorkspaceSchedulerRegistryV1<WorkspaceSchedulerContextV1>,
 }
 
+const WORKSPACE_MODE_PLAN_TTL_MILLIS_V1: u64 = 5 * 60 * 1_000;
+const WORKSPACE_MODE_PLAN_MAX_V1: usize = 1_024;
+const WORKSPACE_MODE_MARKER_MAX_BYTES_V1: usize = 64 * 1_024;
+const WORKSPACE_MODE_MARKER_FILE_V1: &str = "mode-switch.json";
+const WORKSPACE_MODE_SWITCH_STEPS_V1: [&str; 6] = [
+    "source_closed",
+    "source_registry_retired",
+    "runtime_removed",
+    "config_updated",
+    "target_initialized",
+    "target_registry_published",
+];
+
+#[derive(Clone, Debug)]
+struct WorkspaceModePlanRecordV1 {
+    workspace_uuid: WorkspaceId,
+    worktree_root: ValidatedWorkspaceRootV1,
+    source_mode: RuntimeModeV1,
+    target_mode: RuntimeModeV1,
+    config_digest: String,
+    target_config_digest: String,
+    registry_generation: String,
+    expires_at_ms: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct WorkspaceModeSwitchMarkerV1 {
+    schema: String,
+    operation_id: String,
+    plan_token_digest: String,
+    workspace_uuid: String,
+    source_mode: String,
+    target_mode: String,
+    config_digest: String,
+    target_config_digest: String,
+    completed_steps: Vec<String>,
+    created_at: String,
+    updated_at: String,
+}
+
 impl WorkspaceSchedulerReadFacadeV1<'_> {
     pub fn get_active(
         &self,
@@ -1981,6 +2059,9 @@ pub struct WorkspaceRuntimeManagerV1 {
     layout_initializer: WorkspaceLayoutInitializerV1,
     inspection_options: SqliteStoreOptionsV1,
     registry: RegistryStoreV1,
+    runtime_mode: RuntimeModeV1,
+    service_paths: ServiceRuntimePathsV1,
+    mode_plans: Mutex<HashMap<String, WorkspaceModePlanRecordV1>>,
     schedulers: WorkspaceSchedulerRegistryV1<WorkspaceSchedulerContextV1>,
     maintenance: Arc<WorkspaceMaintenanceCoordinatorV1>,
     reset_crash_injection: ResetAllCrashInjectionV1,
@@ -2007,6 +2088,7 @@ impl WorkspaceRuntimeManagerV1 {
         observability: Option<ObservabilityEmitterV1>,
         allowed_worktree_root: Option<PathBuf>,
     ) -> Self {
+        let inspection_options = inspection_options.with_runtime_mode(paths.mode().clone());
         let (registry, schedulers) = match observability {
             Some(emitter) => (
                 RegistryStoreV1::with_observability(paths, Some(emitter.clone())),
@@ -2026,6 +2108,9 @@ impl WorkspaceRuntimeManagerV1 {
             layout_initializer: WorkspaceLayoutInitializerV1::new(),
             inspection_options,
             registry,
+            runtime_mode: paths.mode().clone(),
+            service_paths: paths.clone(),
+            mode_plans: Mutex::new(HashMap::new()),
             schedulers,
             maintenance: process_maintenance_coordinator_v1(),
             reset_crash_injection: ResetAllCrashInjectionV1::default(),
@@ -2884,8 +2969,11 @@ impl WorkspaceRuntimeManagerV1 {
         {
             return Err(WorkspaceRuntimeErrorV1::MaintenanceInProgress);
         }
+        let default_config =
+            rewrite_workspace_mode_v1(DEFAULT_WORKSPACE_CONFIG_YAML_V1, &self.runtime_mode)
+                .map_err(WorkspaceRuntimeErrorV1::ConfigAdmission)?;
         self.layout_initializer
-            .initialize_with_config(candidate.worktree(), DEFAULT_WORKSPACE_CONFIG_YAML_V1)
+            .initialize_with_config(candidate.worktree(), &default_config)
             .map_err(WorkspaceRuntimeErrorV1::Layout)?;
         self.ensure_activation_marker_clear(&candidate)?;
         self.registry
@@ -2898,6 +2986,7 @@ impl WorkspaceRuntimeManagerV1 {
         // Admit the configuration before Store creation. The layout either created the canonical
         // default or descriptor-validated an existing regular config file.
         let config = read_admitted_workspace_config(&candidate)?;
+        self.require_config_mode(&config)?;
         let options = self.store_options_for(&config)?;
         self.revalidate_before_store_open(&candidate)?;
         let store = SqliteStoreV1::open(
@@ -2931,6 +3020,7 @@ impl WorkspaceRuntimeManagerV1 {
     ) -> Result<Arc<WorkspaceSchedulerV1<WorkspaceSchedulerContextV1>>, WorkspaceRuntimeErrorV1>
     {
         self.resume_workspace_removal_if_marked(selector.clone())?;
+        self.require_selector_config_mode(&selector)?;
         let resolved = self
             .resolver
             .resolve_existing(selector, expected_workspace_id)
@@ -2949,12 +3039,14 @@ impl WorkspaceRuntimeManagerV1 {
         expected_workspace_id: Option<&WorkspaceId>,
     ) -> Result<ReadonlyWorkspaceResolutionV1, WorkspaceRuntimeErrorV1> {
         self.resume_workspace_removal_if_marked(selector.clone())?;
+        self.require_selector_config_mode(&selector)?;
         let resolved = self
             .resolver
             .resolve_existing(selector, expected_workspace_id)
             .map_err(WorkspaceRuntimeErrorV1::Resolution)?;
         self.ensure_workspace_removal_marker_clear(resolved.worktree())?;
         let config = read_admitted_workspace_config(&resolved)?;
+        self.require_config_mode(&config)?;
         let store_options = self.store_options_for(&config)?;
         let binding = WorkspaceBindingV1::new(
             resolved.store_identity().clone(),
@@ -3256,6 +3348,8 @@ impl WorkspaceRuntimeManagerV1 {
     {
         let maintenance_key = WorkspaceMaintenanceKeyV1::from_worktree(resolved.worktree());
         let key = resolved.scheduler_key().clone();
+        let config = read_admitted_workspace_config(&resolved)?;
+        self.require_config_mode(&config)?;
         if let Some(scheduler) = self.schedulers.get_active(&key) {
             let current = scheduler.context_snapshot();
             let expected_binding = WorkspaceBindingV1::new(
@@ -3275,6 +3369,7 @@ impl WorkspaceRuntimeManagerV1 {
                 && current.database_path() == resolved.database_path()
                 && current_database_identity.as_ref() == Some(current.database_file_identity())
                 && current.runtime_directory_path() == expected_runtime_directory
+                && current.config() == &config
                 && current.git_evidence() == resolved.worktree()
             {
                 if !maintenance_authorized {
@@ -3302,7 +3397,6 @@ impl WorkspaceRuntimeManagerV1 {
             )
         };
 
-        let config = read_admitted_workspace_config(&resolved)?;
         let options = self.store_options_for(&config)?;
         let binding_before_open =
             SqliteStoreV1::inspect_workspace_binding(resolved.database_path(), &options)
@@ -3429,7 +3523,706 @@ impl WorkspaceRuntimeManagerV1 {
             .and_then(|options| {
                 options.with_busy_timeout_ms(self.inspection_options.busy_timeout_ms())
             })
+            .map(|options| options.with_runtime_mode(self.runtime_mode.clone()))
             .map_err(WorkspaceRuntimeErrorV1::StoreOptions)
+    }
+
+    fn require_config_mode(
+        &self,
+        config: &WorkspaceConfigV1,
+    ) -> Result<(), WorkspaceRuntimeErrorV1> {
+        let actual = config.effective_mode();
+        if actual == self.runtime_mode {
+            Ok(())
+        } else {
+            Err(WorkspaceRuntimeErrorV1::ModeMismatch {
+                expected: self.runtime_mode.clone(),
+                actual,
+                boundary: "config",
+            })
+        }
+    }
+
+    fn require_selector_config_mode(
+        &self,
+        selector: &WorktreeSelectorV1,
+    ) -> Result<(), WorkspaceRuntimeErrorV1> {
+        let reset = self
+            .resolver
+            .resolve_for_reset(selector.clone())
+            .map_err(WorkspaceRuntimeErrorV1::Resolution)?;
+        let config = read_admitted_workspace_config_from_root(reset.workspace_root())?;
+        self.require_config_mode(&config)
+    }
+
+    pub(crate) fn plan_workspace_mode(
+        &self,
+        selector: WorktreeSelectorV1,
+        target_mode: RuntimeModeV1,
+        observation: WorkspaceRuntimeObservationV1,
+    ) -> Result<Map<String, Value>, WorkspaceRuntimeErrorV1> {
+        let resolved = self.resolve_existing_readonly(selector, None)?;
+        let marker_path = workspace_mode_marker_path_v1(resolved.workspace_root())?;
+        if read_workspace_mode_marker_v1(&marker_path)?
+            .as_ref()
+            .is_some_and(|marker| !mode_switch_marker_complete_v1(marker))
+        {
+            return Err(WorkspaceRuntimeErrorV1::ModeSwitchConflict);
+        }
+        let state = SqliteStoreV1::inspect_disposable_runtime_state_v1(
+            resolved.database_path(),
+            resolved.binding().identity(),
+            resolved.store_options(),
+            observation.store_now(),
+        )
+        .map_err(WorkspaceRuntimeErrorV1::Store)?;
+        let source_mode = self.runtime_mode.clone();
+        let base = || {
+            Map::from_iter([
+                (
+                    "schema".to_owned(),
+                    Value::String("podway.workspace-mode-plan-result/v1".to_owned()),
+                ),
+                (
+                    "worktree_root".to_owned(),
+                    Value::String(
+                        resolved
+                            .worktree()
+                            .roots()
+                            .worktree_root()
+                            .display()
+                            .as_str()
+                            .to_owned(),
+                    ),
+                ),
+                (
+                    "workspace_uuid".to_owned(),
+                    Value::String(resolved.binding().identity().workspace_uuid().to_string()),
+                ),
+                (
+                    "source_mode".to_owned(),
+                    Value::String(source_mode.as_str().to_owned()),
+                ),
+                (
+                    "target_mode".to_owned(),
+                    Value::String(target_mode.as_str().to_owned()),
+                ),
+                (
+                    "disposable_state".to_owned(),
+                    json!({
+                        "session_present": state.session_present(),
+                        "queued_jobs": state.queued_jobs(),
+                        "running_jobs": state.running_jobs(),
+                    }),
+                ),
+            ])
+        };
+        if source_mode == target_mode {
+            let mut output = base();
+            output.insert("status".to_owned(), Value::String("no_change".to_owned()));
+            output.insert("expires_at".to_owned(), Value::Null);
+            output.insert("plan_token".to_owned(), Value::Null);
+            return Ok(output);
+        }
+        if state.queued_jobs() != 0 || state.running_jobs() != 0 {
+            let mut output = base();
+            output.insert("status".to_owned(), Value::String("busy".to_owned()));
+            output.insert("expires_at".to_owned(), Value::Null);
+            output.insert("plan_token".to_owned(), Value::Null);
+            return Ok(output);
+        }
+        let Some(target_paths) = self.paths_for_mode(&target_mode) else {
+            let mut output = base();
+            output.insert(
+                "status".to_owned(),
+                Value::String("target_unavailable".to_owned()),
+            );
+            output.insert("expires_at".to_owned(), Value::Null);
+            output.insert("plan_token".to_owned(), Value::Null);
+            return Ok(output);
+        };
+        #[cfg(unix)]
+        let target_ready = target_mode_socket_live_v1(&target_paths);
+        #[cfg(not(unix))]
+        let target_ready = false;
+        if !target_ready {
+            let mut output = base();
+            output.insert(
+                "status".to_owned(),
+                Value::String("target_unavailable".to_owned()),
+            );
+            output.insert("expires_at".to_owned(), Value::Null);
+            output.insert("plan_token".to_owned(), Value::Null);
+            return Ok(output);
+        }
+        let registry_entry = self
+            .registry
+            .lookup(resolved.binding().identity().workspace_uuid())
+            .map_err(WorkspaceRuntimeErrorV1::Registry)?
+            .ok_or(WorkspaceRuntimeErrorV1::ResetSourceNotRegistered)?;
+        if registry_entry.last_known_root() != resolved.workspace_root() {
+            return Err(WorkspaceRuntimeErrorV1::ResetRegistryPredecessorStale);
+        }
+        let config_bytes = read_workspace_config_bytes_from_root(resolved.workspace_root())?;
+        let target_config_bytes = rewrite_workspace_mode_v1(&config_bytes, &target_mode)
+            .map_err(WorkspaceRuntimeErrorV1::ConfigAdmission)?;
+        let config_digest = sha256_text_v1(&config_bytes);
+        let target_config_digest = sha256_text_v1(&target_config_bytes);
+        let token = Uuid::new_v4().to_string();
+        let expires_at_ms = observation
+            .store_now()
+            .get()
+            .saturating_add(WORKSPACE_MODE_PLAN_TTL_MILLIS_V1);
+        let mut plans = mutex_lock(&self.mode_plans);
+        plans.retain(|_, record| record.expires_at_ms >= observation.store_now().get());
+        if plans.len() >= WORKSPACE_MODE_PLAN_MAX_V1 {
+            return Err(WorkspaceRuntimeErrorV1::ModeSwitchConflict);
+        }
+        plans.insert(
+            token.clone(),
+            WorkspaceModePlanRecordV1 {
+                workspace_uuid: resolved.binding().identity().workspace_uuid().clone(),
+                worktree_root: resolved.workspace_root().clone(),
+                source_mode: self.runtime_mode.clone(),
+                target_mode: target_mode.clone(),
+                config_digest,
+                target_config_digest,
+                registry_generation: registry_entry.last_seen_at().as_str().to_owned(),
+                expires_at_ms,
+            },
+        );
+        let mut output = base();
+        output.insert("status".to_owned(), Value::String("ready".to_owned()));
+        output.insert(
+            "expires_at".to_owned(),
+            Value::String(
+                Rfc3339MillisV1::from_unix_millis(expires_at_ms)
+                    .map_err(|_| WorkspaceRuntimeErrorV1::ModeSwitchConflict)?
+                    .into_inner(),
+            ),
+        );
+        output.insert("plan_token".to_owned(), Value::String(token));
+        Ok(output)
+    }
+
+    pub(crate) fn apply_workspace_mode(
+        &self,
+        selector: WorktreeSelectorV1,
+        target_mode: RuntimeModeV1,
+        plan_token: &str,
+        observation: WorkspaceRuntimeObservationV1,
+    ) -> Result<Map<String, Value>, WorkspaceRuntimeErrorV1> {
+        let reset = self
+            .resolver
+            .resolve_for_reset(selector)
+            .map_err(WorkspaceRuntimeErrorV1::Resolution)?;
+        let maintenance_key = WorkspaceMaintenanceKeyV1::from_worktree(reset.worktree());
+        let _lease = self
+            .maintenance
+            .acquire(maintenance_key)
+            .ok_or(WorkspaceRuntimeErrorV1::MaintenanceInProgress)?;
+        self.ensure_workspace_removal_marker_clear(reset.worktree())?;
+        let marker_path = workspace_mode_marker_path_v1(reset.workspace_root())?;
+        let mut existing_marker = read_workspace_mode_marker_v1(&marker_path)?;
+        let token_digest = sha256_text_v1(plan_token.as_bytes());
+        let record = mutex_lock(&self.mode_plans).get(plan_token).cloned();
+        let retire_completed_marker = existing_marker.as_ref().is_some_and(|marker| {
+            mode_switch_marker_complete_v1(marker)
+                && marker.plan_token_digest != token_digest
+                && marker.target_mode == self.runtime_mode.as_str()
+                && record.is_some()
+        });
+        if retire_completed_marker {
+            existing_marker = None;
+        }
+        let marker_was_present = existing_marker.is_some();
+        let mut marker = if let Some(marker) = existing_marker {
+            if marker.plan_token_digest != token_digest
+                || marker.target_mode != target_mode.as_str()
+                || marker.source_mode != self.runtime_mode.as_str()
+            {
+                return Err(WorkspaceRuntimeErrorV1::ModeSwitchConflict);
+            }
+            marker
+        } else {
+            let record = record.ok_or(WorkspaceRuntimeErrorV1::ModeSwitchConflict)?;
+            if record.expires_at_ms < observation.store_now().get()
+                || record.source_mode != self.runtime_mode
+                || record.target_mode != target_mode
+                || &record.worktree_root != reset.workspace_root()
+            {
+                return Err(WorkspaceRuntimeErrorV1::ModeSwitchConflict);
+            }
+            let config_bytes = read_workspace_config_bytes_from_root(reset.workspace_root())?;
+            if sha256_text_v1(&config_bytes) != record.config_digest {
+                return Err(WorkspaceRuntimeErrorV1::ModeSwitchConflict);
+            }
+            let registry = self
+                .registry
+                .lookup(&record.workspace_uuid)
+                .map_err(WorkspaceRuntimeErrorV1::Registry)?
+                .ok_or(WorkspaceRuntimeErrorV1::ModeSwitchConflict)?;
+            if registry.last_seen_at().as_str() != record.registry_generation
+                || registry.last_known_root() != reset.workspace_root()
+            {
+                return Err(WorkspaceRuntimeErrorV1::ModeSwitchConflict);
+            }
+            let state = SqliteStoreV1::inspect_disposable_runtime_state_v1(
+                reset.database_path(),
+                &reset.target_identity(record.workspace_uuid.clone()),
+                &self.inspection_options,
+                observation.store_now(),
+            )
+            .map_err(WorkspaceRuntimeErrorV1::Store)?;
+            if state.queued_jobs() != 0 || state.running_jobs() != 0 {
+                return Err(WorkspaceRuntimeErrorV1::MaintenanceInProgress);
+            }
+            WorkspaceModeSwitchMarkerV1 {
+                schema: "podway.workspace-mode-switch-marker/v1".to_owned(),
+                operation_id: Uuid::new_v4().to_string(),
+                plan_token_digest: token_digest,
+                workspace_uuid: record.workspace_uuid.to_string(),
+                source_mode: record.source_mode.to_string(),
+                target_mode: record.target_mode.to_string(),
+                config_digest: record.config_digest,
+                target_config_digest: record.target_config_digest,
+                completed_steps: Vec::new(),
+                created_at: observation.registry_seen_at().as_str().to_owned(),
+                updated_at: observation.registry_seen_at().as_str().to_owned(),
+            }
+        };
+        let already_applied = mode_switch_marker_complete_v1(&marker);
+        let workspace_uuid = WorkspaceId::new(marker.workspace_uuid.clone())
+            .map_err(|_| WorkspaceRuntimeErrorV1::ModeSwitchConflict)?;
+        let source_mode = RuntimeModeV1::new(marker.source_mode.clone())
+            .map_err(|_| WorkspaceRuntimeErrorV1::ModeSwitchConflict)?;
+        let target_mode = RuntimeModeV1::new(marker.target_mode.clone())
+            .map_err(|_| WorkspaceRuntimeErrorV1::ModeSwitchConflict)?;
+        if marker_was_present && !already_applied {
+            let config_bytes = read_workspace_config_bytes_from_root(reset.workspace_root())?;
+            if marker
+                .completed_steps
+                .iter()
+                .any(|step| step == "config_updated")
+            {
+                let config = admit_workspace_config_bytes(config_bytes)
+                    .map_err(WorkspaceRuntimeErrorV1::ConfigAdmission)?;
+                if config.effective_mode() != target_mode {
+                    return Err(WorkspaceRuntimeErrorV1::ModeSwitchConflict);
+                }
+            } else {
+                let digest = sha256_text_v1(&config_bytes);
+                if digest != marker.config_digest && digest != marker.target_config_digest {
+                    return Err(WorkspaceRuntimeErrorV1::ModeSwitchConflict);
+                }
+            }
+        }
+        let target_paths = self
+            .paths_for_mode(&target_mode)
+            .ok_or(WorkspaceRuntimeErrorV1::ModeSwitchTargetUnavailable)?;
+        #[cfg(unix)]
+        if !already_applied && !target_mode_socket_live_v1(&target_paths) {
+            return Err(WorkspaceRuntimeErrorV1::ModeSwitchTargetUnavailable);
+        }
+        if !marker_was_present {
+            write_workspace_mode_marker_v1(&marker_path, &marker)?;
+        }
+        if !already_applied {
+            for scheduler in self.schedulers.active_generations() {
+                if scheduler
+                    .context_snapshot()
+                    .binding()
+                    .identity()
+                    .workspace_uuid()
+                    == &workspace_uuid
+                {
+                    self.schedulers
+                        .retire(&scheduler, |retiring| {
+                            retiring.with_serialized(|context| {
+                                context.stop_claims();
+                                context.close_store_for_maintenance()
+                            })
+                        })
+                        .map_err(|_| WorkspaceRuntimeErrorV1::ResetSchedulerRetirement)?;
+                }
+            }
+        }
+        if !marker
+            .completed_steps
+            .iter()
+            .any(|step| step == "source_closed")
+        {
+            record_mode_switch_step_v1(
+                &marker_path,
+                &mut marker,
+                "source_closed",
+                observation.registry_seen_at(),
+            )?;
+        }
+        if !already_applied
+            && !marker
+                .completed_steps
+                .iter()
+                .any(|step| step == "runtime_removed")
+        {
+            let state = SqliteStoreV1::inspect_disposable_runtime_state_v1(
+                reset.database_path(),
+                &reset.target_identity(workspace_uuid.clone()),
+                &self.inspection_options,
+                observation.store_now(),
+            )
+            .map_err(WorkspaceRuntimeErrorV1::Store)?;
+            if state.queued_jobs() != 0 || state.running_jobs() != 0 {
+                return Err(WorkspaceRuntimeErrorV1::MaintenanceInProgress);
+            }
+        }
+        if !marker
+            .completed_steps
+            .iter()
+            .any(|step| step == "source_registry_retired")
+        {
+            match self
+                .registry
+                .remove_exact_generation(&workspace_uuid, reset.workspace_root())
+                .map_err(WorkspaceRuntimeErrorV1::Registry)?
+            {
+                ExactRegistryRemovalOutcomeV1::Removed(_)
+                | ExactRegistryRemovalOutcomeV1::AlreadyAbsent => {}
+                _ => return Err(WorkspaceRuntimeErrorV1::ModeSwitchConflict),
+            }
+            record_mode_switch_step_v1(
+                &marker_path,
+                &mut marker,
+                "source_registry_retired",
+                observation.registry_seen_at(),
+            )?;
+        }
+        if !marker
+            .completed_steps
+            .iter()
+            .any(|step| step == "runtime_removed")
+        {
+            let directory = ValidatedPodwayRemovalDirectoryV1::open(reset.worktree())
+                .map_err(WorkspaceRuntimeErrorV1::WorkspaceRemovalFilesystem)?
+                .ok_or(WorkspaceRuntimeErrorV1::ModeSwitchConflict)?;
+            directory
+                .clear_runtime_contents()
+                .map_err(WorkspaceRuntimeErrorV1::WorkspaceRemovalFilesystem)?;
+            record_mode_switch_step_v1(
+                &marker_path,
+                &mut marker,
+                "runtime_removed",
+                observation.registry_seen_at(),
+            )?;
+        }
+        let config_path = workspace_config_path_from_root(reset.workspace_root())?;
+        if !marker
+            .completed_steps
+            .iter()
+            .any(|step| step == "config_updated")
+        {
+            let current = read_workspace_config_bytes_from_root(reset.workspace_root())?;
+            let current_digest = sha256_text_v1(&current);
+            if current_digest == marker.config_digest {
+                let updated = rewrite_workspace_mode_v1(current, &target_mode)
+                    .map_err(WorkspaceRuntimeErrorV1::ConfigAdmission)?;
+                if sha256_text_v1(&updated) != marker.target_config_digest {
+                    return Err(WorkspaceRuntimeErrorV1::ModeSwitchConflict);
+                }
+                atomic_write_private_file_v1(&config_path, &updated, false)?;
+            } else if current_digest != marker.target_config_digest {
+                return Err(WorkspaceRuntimeErrorV1::ModeSwitchConflict);
+            }
+            record_mode_switch_step_v1(
+                &marker_path,
+                &mut marker,
+                "config_updated",
+                observation.registry_seen_at(),
+            )?;
+        }
+        let identity = reset.target_identity(workspace_uuid.clone());
+        if !marker
+            .completed_steps
+            .iter()
+            .any(|step| step == "target_initialized")
+        {
+            let options = SqliteStoreOptionsV1::new(self.inspection_options.max_pending_jobs())
+                .and_then(|options| {
+                    options.with_busy_timeout_ms(self.inspection_options.busy_timeout_ms())
+                })
+                .map(|options| options.with_runtime_mode(target_mode.clone()))
+                .map_err(WorkspaceRuntimeErrorV1::StoreOptions)?;
+            drop(
+                SqliteStoreV1::open(
+                    reset.database_path(),
+                    reset.workspace_root(),
+                    identity,
+                    options,
+                    observation.store_now(),
+                )
+                .map_err(WorkspaceRuntimeErrorV1::Store)?,
+            );
+            record_mode_switch_step_v1(
+                &marker_path,
+                &mut marker,
+                "target_initialized",
+                observation.registry_seen_at(),
+            )?;
+        }
+        if !marker
+            .completed_steps
+            .iter()
+            .any(|step| step == "target_registry_published")
+        {
+            RegistryStoreV1::new(&target_paths)
+                .insert_or_refresh(
+                    workspace_uuid.clone(),
+                    reset.workspace_root().clone(),
+                    observation.registry_seen_at().clone(),
+                )
+                .map_err(WorkspaceRuntimeErrorV1::Registry)?;
+            record_mode_switch_step_v1(
+                &marker_path,
+                &mut marker,
+                "target_registry_published",
+                observation.registry_seen_at(),
+            )?;
+        }
+        mutex_lock(&self.mode_plans).remove(plan_token);
+        Ok(Map::from_iter([
+            (
+                "schema".to_owned(),
+                Value::String("podway.workspace-mode-apply-result/v1".to_owned()),
+            ),
+            (
+                "worktree_root".to_owned(),
+                Value::String(
+                    reset
+                        .worktree()
+                        .roots()
+                        .worktree_root()
+                        .display()
+                        .as_str()
+                        .to_owned(),
+                ),
+            ),
+            (
+                "workspace_uuid".to_owned(),
+                Value::String(workspace_uuid.to_string()),
+            ),
+            (
+                "source_mode".to_owned(),
+                Value::String(source_mode.to_string()),
+            ),
+            (
+                "target_mode".to_owned(),
+                Value::String(target_mode.to_string()),
+            ),
+            (
+                "config_schema".to_owned(),
+                Value::String(
+                    if target_mode.is_production() {
+                        "podway.workspace/v1"
+                    } else {
+                        "podway.workspace/v2"
+                    }
+                    .to_owned(),
+                ),
+            ),
+            ("runtime_state_removed".to_owned(), Value::Bool(true)),
+            ("source_registry_retired".to_owned(), Value::Bool(true)),
+            ("target_registry_published".to_owned(), Value::Bool(true)),
+            ("already_applied".to_owned(), Value::Bool(already_applied)),
+        ]))
+    }
+
+    fn paths_for_mode(&self, mode: &RuntimeModeV1) -> Option<ServiceRuntimePathsV1> {
+        if mode == &self.runtime_mode {
+            return Some(self.service_paths.clone());
+        }
+        self.service_paths.for_sibling_mode(mode.clone())
+    }
+}
+
+#[cfg(unix)]
+fn target_mode_socket_live_v1(paths: &ServiceRuntimePathsV1) -> bool {
+    let socket = paths.socket_path().as_path();
+    fs::symlink_metadata(socket).is_ok_and(|metadata| metadata.file_type().is_socket())
+        && UnixStream::connect(socket).is_ok()
+}
+
+fn workspace_config_path_from_root(
+    root: &ValidatedWorkspaceRootV1,
+) -> Result<PathBuf, WorkspaceRuntimeErrorV1> {
+    #[cfg(unix)]
+    {
+        Ok(root.to_path_buf().join(".podway/config.yaml"))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = root;
+        Err(WorkspaceRuntimeErrorV1::RuntimePathsUnsupportedPlatform)
+    }
+}
+
+fn workspace_mode_marker_path_v1(
+    root: &ValidatedWorkspaceRootV1,
+) -> Result<PathBuf, WorkspaceRuntimeErrorV1> {
+    #[cfg(unix)]
+    {
+        Ok(root
+            .to_path_buf()
+            .join(".podway")
+            .join(WORKSPACE_MODE_MARKER_FILE_V1))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = root;
+        Err(WorkspaceRuntimeErrorV1::RuntimePathsUnsupportedPlatform)
+    }
+}
+
+fn sha256_text_v1(bytes: &[u8]) -> String {
+    format!("sha256:{:x}", Sha256::digest(bytes))
+}
+
+fn read_workspace_mode_marker_v1(
+    path: &Path,
+) -> Result<Option<WorkspaceModeSwitchMarkerV1>, WorkspaceRuntimeErrorV1> {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => {
+            return Err(WorkspaceRuntimeErrorV1::ModeSwitchMarkerIo {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
+    };
+    if bytes.len() > WORKSPACE_MODE_MARKER_MAX_BYTES_V1 {
+        return Err(WorkspaceRuntimeErrorV1::ModeSwitchConflict);
+    }
+    let marker: WorkspaceModeSwitchMarkerV1 =
+        serde_json::from_slice(&bytes).map_err(|_| WorkspaceRuntimeErrorV1::ModeSwitchConflict)?;
+    if marker.schema != "podway.workspace-mode-switch-marker/v1"
+        || !valid_mode_switch_marker_identity_v1(&marker)
+        || marker.completed_steps.len() > WORKSPACE_MODE_SWITCH_STEPS_V1.len()
+        || marker
+            .completed_steps
+            .iter()
+            .zip(WORKSPACE_MODE_SWITCH_STEPS_V1)
+            .any(|(actual, expected)| actual != expected)
+    {
+        return Err(WorkspaceRuntimeErrorV1::ModeSwitchConflict);
+    }
+    Ok(Some(marker))
+}
+
+fn valid_mode_switch_marker_identity_v1(marker: &WorkspaceModeSwitchMarkerV1) -> bool {
+    Uuid::parse_str(&marker.operation_id)
+        .is_ok_and(|operation_id| operation_id.to_string() == marker.operation_id)
+        && CanonicalRequestDigestV1::new(marker.plan_token_digest.clone()).is_ok()
+        && WorkspaceId::new(marker.workspace_uuid.clone()).is_ok()
+        && RuntimeModeV1::new(marker.source_mode.clone()).is_ok()
+        && RuntimeModeV1::new(marker.target_mode.clone()).is_ok()
+        && marker.source_mode != marker.target_mode
+        && CanonicalRequestDigestV1::new(marker.config_digest.clone()).is_ok()
+        && CanonicalRequestDigestV1::new(marker.target_config_digest.clone()).is_ok()
+        && marker.config_digest != marker.target_config_digest
+        && Rfc3339MillisV1::new(marker.created_at.clone()).is_ok()
+        && Rfc3339MillisV1::new(marker.updated_at.clone()).is_ok()
+}
+
+fn mode_switch_marker_complete_v1(marker: &WorkspaceModeSwitchMarkerV1) -> bool {
+    marker.completed_steps.len() == WORKSPACE_MODE_SWITCH_STEPS_V1.len()
+}
+
+fn record_mode_switch_step_v1(
+    path: &Path,
+    marker: &mut WorkspaceModeSwitchMarkerV1,
+    step: &str,
+    updated_at: &Rfc3339MillisV1,
+) -> Result<(), WorkspaceRuntimeErrorV1> {
+    if !marker.completed_steps.iter().any(|current| current == step) {
+        marker.completed_steps.push(step.to_owned());
+    }
+    marker.updated_at = updated_at.as_str().to_owned();
+    write_workspace_mode_marker_v1(path, marker)
+}
+
+fn write_workspace_mode_marker_v1(
+    path: &Path,
+    marker: &WorkspaceModeSwitchMarkerV1,
+) -> Result<(), WorkspaceRuntimeErrorV1> {
+    let bytes = podway_core::canonicalize_json_v1(marker)
+        .map_err(|_| WorkspaceRuntimeErrorV1::ModeSwitchConflict)?
+        .into_bytes();
+    atomic_write_private_file_v1(path, &bytes, true)
+}
+
+fn atomic_write_private_file_v1(
+    path: &Path,
+    bytes: &[u8],
+    mode_switch_marker: bool,
+) -> Result<(), WorkspaceRuntimeErrorV1> {
+    let parent = path
+        .parent()
+        .ok_or(WorkspaceRuntimeErrorV1::ModeSwitchConflict)?;
+    let temporary = parent.join(format!(".mode-switch-{}.tmp", Uuid::new_v4()));
+    #[cfg(unix)]
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&temporary)
+        .map_err(|source| private_file_write_error_v1(mode_switch_marker, &temporary, source))?;
+    #[cfg(not(unix))]
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .map_err(|source| private_file_write_error_v1(mode_switch_marker, &temporary, source))?;
+    let result = file.write_all(bytes).and_then(|()| file.sync_all());
+    drop(file);
+    if let Err(source) = result {
+        let _ = fs::remove_file(&temporary);
+        return Err(private_file_write_error_v1(
+            mode_switch_marker,
+            &temporary,
+            source,
+        ));
+    }
+    if let Err(source) = fs::rename(&temporary, path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(private_file_write_error_v1(
+            mode_switch_marker,
+            path,
+            source,
+        ));
+    }
+    #[cfg(unix)]
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        .map_err(|source| private_file_write_error_v1(mode_switch_marker, path, source))?;
+    fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|source| private_file_write_error_v1(mode_switch_marker, parent, source))
+}
+
+fn private_file_write_error_v1(
+    mode_switch_marker: bool,
+    path: &Path,
+    source: io::Error,
+) -> WorkspaceRuntimeErrorV1 {
+    if mode_switch_marker {
+        WorkspaceRuntimeErrorV1::ModeSwitchMarkerIo {
+            path: path.to_path_buf(),
+            source,
+        }
+    } else {
+        WorkspaceRuntimeErrorV1::ConfigRead {
+            path: path.to_path_buf(),
+            source,
+        }
     }
 }
 
@@ -3499,6 +4292,7 @@ fn reset_seed_requires_fixed_replacement(error: &StoreErrorV1) -> bool {
         | StoreErrorV1::SessionStartStateConflictV1 { .. }
         | StoreErrorV1::SessionArchiveNotFoundV1 { .. }
         | StoreErrorV1::TerminalDispositionAlreadyRecordedV1 { .. }
+        | StoreErrorV1::RuntimeModeMismatchV1 { .. }
         | StoreErrorV1::StorageUnavailableV1 { .. } => false,
     }
 }
@@ -3526,10 +4320,23 @@ fn marker_matches_registry_generation(
 fn read_admitted_workspace_config(
     resolved: &ResolvedWorkspaceV1,
 ) -> Result<WorkspaceConfigV1, WorkspaceRuntimeErrorV1> {
-    let path = workspace_config_path(resolved)?;
+    read_admitted_workspace_config_from_root(resolved.workspace_root())
+}
+
+fn read_admitted_workspace_config_from_root(
+    root: &ValidatedWorkspaceRootV1,
+) -> Result<WorkspaceConfigV1, WorkspaceRuntimeErrorV1> {
+    let bytes = read_workspace_config_bytes_from_root(root)?;
+    admit_workspace_config_bytes(bytes).map_err(WorkspaceRuntimeErrorV1::ConfigAdmission)
+}
+
+fn read_workspace_config_bytes_from_root(
+    root: &ValidatedWorkspaceRootV1,
+) -> Result<Vec<u8>, WorkspaceRuntimeErrorV1> {
+    let path = workspace_config_path_from_root(root)?;
     #[cfg(unix)]
     {
-        read_admitted_workspace_config_unix(&path)
+        read_workspace_config_bytes_unix(&path)
     }
     #[cfg(not(unix))]
     {
@@ -3544,14 +4351,20 @@ fn read_admitted_workspace_config(
                 source,
             }
         })?;
-        admit_workspace_config_bytes(bytes).map_err(WorkspaceRuntimeErrorV1::ConfigAdmission)
+        if bytes.len() > podway_config::MAX_WORKSPACE_CONFIG_BYTES_V1 {
+            return Err(WorkspaceRuntimeErrorV1::ConfigAdmission(
+                ConfigError::InputTooLarge {
+                    maximum: podway_config::MAX_WORKSPACE_CONFIG_BYTES_V1,
+                    actual: bytes.len(),
+                },
+            ));
+        }
+        Ok(bytes)
     }
 }
 
 #[cfg(unix)]
-fn read_admitted_workspace_config_unix(
-    path: &Path,
-) -> Result<WorkspaceConfigV1, WorkspaceRuntimeErrorV1> {
+fn read_workspace_config_bytes_unix(path: &Path) -> Result<Vec<u8>, WorkspaceRuntimeErrorV1> {
     use nix::{
         fcntl::{OFlag, open, openat},
         sys::stat::Mode,
@@ -3610,7 +4423,7 @@ fn read_admitted_workspace_config_unix(
                 source,
             }
         })?;
-    admit_workspace_config_bytes(bytes).map_err(WorkspaceRuntimeErrorV1::ConfigAdmission)
+    Ok(bytes)
 }
 fn read_workspace_config_bytes(
     reader: &mut impl Read,
@@ -3633,24 +4446,6 @@ fn admit_workspace_config_bytes(bytes: Vec<u8>) -> Result<WorkspaceConfigV1, Con
         });
     }
     parse_workspace_config_v1(bytes)
-}
-
-fn workspace_config_path(
-    resolved: &ResolvedWorkspaceV1,
-) -> Result<PathBuf, WorkspaceRuntimeErrorV1> {
-    #[cfg(unix)]
-    {
-        Ok(resolved
-            .workspace_root()
-            .to_path_buf()
-            .join(".podway")
-            .join("config.yaml"))
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = resolved;
-        Err(WorkspaceRuntimeErrorV1::RuntimePathsUnsupportedPlatform)
-    }
 }
 
 fn require_exact_binding(
@@ -3857,27 +4652,554 @@ mod tests {
     use std::{
         fs,
         io::{self, Read},
+        path::Path,
         sync::{
             Arc, Barrier, Mutex,
             atomic::{AtomicU64, Ordering},
         },
         thread,
     };
+    #[cfg(unix)]
+    use std::{
+        os::unix::{ffi::OsStrExt, fs::PermissionsExt},
+        process::Command,
+    };
 
     use podway_config::{ConfigError, MAX_WORKSPACE_CONFIG_BYTES_V1};
-    use podway_core::{UnixMillis, WorkspaceId};
-    use podway_store::{
-        CanonicalRequestDigestV1, DurableWorktreeIdentityV1, SqliteStoreOptionsV1, SqliteStoreV1,
-        StoreErrorV1, StoreUnavailableReasonV1, ValidatedWorkspaceRootV1,
+    use podway_core::{RuntimeModeV1, UnixMillis, WorkspaceId};
+    use podway_git::{
+        DiagnosticPathDisplayV1, LosslessPathV1, WORKTREE_SELECTOR_VERSION_V1, WorktreeSelectorV1,
     };
+    use podway_protocol::Rfc3339MillisV1;
+    use podway_service::ServiceRuntimePathsV1;
+    use podway_store::{
+        AdmitRequestV1, CanonicalRequestDigestV1, DurableWorktreeIdentityV1, IdempotencyKeyV1,
+        JobIdV1, RevisionAttemptItemPreconditionsV1, RevisionV1, SqliteStoreOptionsV1,
+        SqliteStoreV1, StoreContractV1, StoreErrorV1, StoreReadContractV1,
+        StoreUnavailableReasonV1, ValidatedWorkspaceRootV1,
+    };
+    use uuid::Uuid;
 
     use super::{
-        WorkspaceMaintenanceCoordinatorV1, WorkspaceMaintenanceKeyV1, WorkspaceSchedulerKeyV1,
+        ValidatedPodwayRemovalDirectoryV1, WORKSPACE_MODE_SWITCH_STEPS_V1,
+        WorkspaceMaintenanceCoordinatorV1, WorkspaceMaintenanceKeyV1, WorkspaceModeSwitchMarkerV1,
+        WorkspaceRuntimeManagerV1, WorkspaceRuntimeObservationV1, WorkspaceSchedulerKeyV1,
         WorkspaceSchedulerRetirementBindingV1, WorkspaceStoreSlotTokenV1, WorkspaceStoreSlotV1,
-        WorkspaceStoreStateV1, admit_workspace_config_bytes, read_workspace_config_bytes,
-        reset_seed_requires_fixed_replacement,
+        WorkspaceStoreStateV1, admit_workspace_config_bytes, mode_switch_marker_complete_v1,
+        mutex_lock, read_workspace_config_bytes, read_workspace_mode_marker_v1,
+        reset_seed_requires_fixed_replacement, sha256_text_v1, write_workspace_mode_marker_v1,
     };
     static CONFIG_TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    #[cfg(unix)]
+    fn mode_switch_selector(path: &Path) -> WorktreeSelectorV1 {
+        let canonical = fs::canonicalize(path).unwrap();
+        let display = DiagnosticPathDisplayV1::new("mode switch fixture").unwrap();
+        let lossless =
+            LosslessPathV1::from_raw_bytes(canonical.as_os_str().as_bytes(), display).unwrap();
+        WorktreeSelectorV1::new(WORKTREE_SELECTOR_VERSION_V1, None, lossless).unwrap()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn v2dvc004_plan_apply_transfers_one_idle_workspace_and_preserves_non_runtime_content() {
+        let sequence = CONFIG_TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let fixture = std::env::temp_dir().join(format!("pwm-{}-{sequence}", std::process::id()));
+        let account = fixture.join("home");
+        let worktree = fixture.join("work");
+        fs::create_dir_all(&account).unwrap();
+        fs::set_permissions(&account, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::create_dir_all(&worktree).unwrap();
+        assert!(
+            Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(&worktree)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .args(["config", "user.email", "podway@example.invalid"])
+                .current_dir(&worktree)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .args(["config", "user.name", "Podway Test"])
+                .current_dir(&worktree)
+                .status()
+                .unwrap()
+                .success()
+        );
+        fs::write(worktree.join("tracked.txt"), b"tracked\n").unwrap();
+        assert!(
+            Command::new("git")
+                .args(["add", "tracked.txt"])
+                .current_dir(&worktree)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .args(["commit", "-qm", "fixture"])
+                .current_dir(&worktree)
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        let production_paths = ServiceRuntimePathsV1::for_account_home_mode(
+            &account,
+            RuntimeModeV1::production(),
+            nix::unistd::geteuid().as_raw(),
+        )
+        .unwrap();
+        let target_paths = ServiceRuntimePathsV1::for_account_home_mode(
+            &account,
+            RuntimeModeV1::development(),
+            nix::unistd::geteuid().as_raw(),
+        )
+        .unwrap();
+        for directory in [
+            production_paths
+                .workspace_registry_path()
+                .as_path()
+                .parent()
+                .unwrap(),
+            production_paths.socket_path().as_path().parent().unwrap(),
+            target_paths
+                .workspace_registry_path()
+                .as_path()
+                .parent()
+                .unwrap(),
+            target_paths.socket_path().as_path().parent().unwrap(),
+        ] {
+            fs::create_dir_all(directory).unwrap();
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let manager = WorkspaceRuntimeManagerV1::new(
+            &production_paths,
+            SqliteStoreOptionsV1::new(8).unwrap(),
+        );
+        let observation = WorkspaceRuntimeObservationV1::new(
+            UnixMillis::new(1_800_000_000_000),
+            Rfc3339MillisV1::new("2027-01-15T08:00:00.000Z").unwrap(),
+        );
+        let scheduler = manager
+            .bootstrap(mode_switch_selector(&worktree), observation.clone())
+            .unwrap();
+        let workspace_uuid = scheduler
+            .context_snapshot()
+            .binding()
+            .identity()
+            .workspace_uuid()
+            .clone();
+        fs::create_dir_all(worktree.join(".podway/procedures")).unwrap();
+        fs::write(
+            worktree.join(".podway/procedures/retained.yaml"),
+            b"retained\n",
+        )
+        .unwrap();
+
+        let no_change = manager
+            .plan_workspace_mode(
+                mode_switch_selector(&worktree),
+                RuntimeModeV1::production(),
+                observation.clone(),
+            )
+            .unwrap();
+        assert_eq!(no_change["status"], "no_change");
+        assert!(no_change["plan_token"].is_null());
+        let unavailable = manager
+            .plan_workspace_mode(
+                mode_switch_selector(&worktree),
+                RuntimeModeV1::development(),
+                observation.clone(),
+            )
+            .unwrap();
+        assert_eq!(unavailable["status"], "target_unavailable");
+        assert!(unavailable["plan_token"].is_null());
+
+        let target_listener =
+            std::os::unix::net::UnixListener::bind(target_paths.socket_path().as_path()).unwrap();
+
+        let expired_plan = manager
+            .plan_workspace_mode(
+                mode_switch_selector(&worktree),
+                RuntimeModeV1::development(),
+                observation.clone(),
+            )
+            .unwrap();
+        let expired_token = expired_plan["plan_token"].as_str().unwrap();
+        assert!(matches!(
+            manager.apply_workspace_mode(
+                mode_switch_selector(&worktree),
+                RuntimeModeV1::development(),
+                expired_token,
+                WorkspaceRuntimeObservationV1::new(
+                    UnixMillis::new(1_800_000_300_001),
+                    Rfc3339MillisV1::new("2027-01-15T08:05:00.001Z").unwrap(),
+                ),
+            ),
+            Err(super::WorkspaceRuntimeErrorV1::ModeSwitchConflict)
+        ));
+        assert!(!worktree.join(".podway/mode-switch.json").exists());
+
+        let recovery_observation = WorkspaceRuntimeObservationV1::new(
+            UnixMillis::new(1_800_000_300_002),
+            Rfc3339MillisV1::new("2027-01-15T08:05:00.002Z").unwrap(),
+        );
+        let plan = manager
+            .plan_workspace_mode(
+                mode_switch_selector(&worktree),
+                RuntimeModeV1::development(),
+                recovery_observation.clone(),
+            )
+            .unwrap();
+        assert_eq!(plan["status"], "ready");
+        let mut token = plan["plan_token"].as_str().unwrap().to_owned();
+        let plan_record = mutex_lock(&manager.mode_plans)
+            .get(&token)
+            .cloned()
+            .unwrap();
+        let config_path = worktree.join(".podway/config.yaml");
+        let original_config = fs::read(&config_path).unwrap();
+        let mut changed_config = original_config.clone();
+        changed_config.extend_from_slice(b"# changed after plan\n");
+        fs::write(&config_path, changed_config).unwrap();
+        assert!(matches!(
+            manager.apply_workspace_mode(
+                mode_switch_selector(&worktree),
+                RuntimeModeV1::development(),
+                &token,
+                recovery_observation.clone(),
+            ),
+            Err(super::WorkspaceRuntimeErrorV1::ModeSwitchConflict)
+        ));
+        assert!(!worktree.join(".podway/mode-switch.json").exists());
+        fs::write(&config_path, &original_config).unwrap();
+        let resolved_for_maintenance = manager
+            .resolver
+            .resolve_for_reset(mode_switch_selector(&worktree))
+            .unwrap();
+        let competing_lease = manager
+            .maintenance
+            .acquire(WorkspaceMaintenanceKeyV1::from_worktree(
+                resolved_for_maintenance.worktree(),
+            ))
+            .unwrap();
+        assert!(matches!(
+            manager.apply_workspace_mode(
+                mode_switch_selector(&worktree),
+                RuntimeModeV1::development(),
+                &token,
+                recovery_observation.clone(),
+            ),
+            Err(super::WorkspaceRuntimeErrorV1::MaintenanceInProgress)
+        ));
+        assert!(!worktree.join(".podway/mode-switch.json").exists());
+        drop(competing_lease);
+        let marker_path = worktree.join(".podway/mode-switch.json");
+        let source_closed_marker = WorkspaceModeSwitchMarkerV1 {
+            schema: "podway.workspace-mode-switch-marker/v1".to_owned(),
+            operation_id: Uuid::new_v4().to_string(),
+            plan_token_digest: sha256_text_v1(token.as_bytes()),
+            workspace_uuid: workspace_uuid.to_string(),
+            source_mode: RuntimeModeV1::production().to_string(),
+            target_mode: RuntimeModeV1::development().to_string(),
+            config_digest: plan_record.config_digest,
+            target_config_digest: plan_record.target_config_digest,
+            completed_steps: vec!["source_closed".to_owned()],
+            created_at: recovery_observation.registry_seen_at().as_str().to_owned(),
+            updated_at: recovery_observation.registry_seen_at().as_str().to_owned(),
+        };
+        let queued_job = JobIdV1::new(Uuid::new_v4().to_string()).unwrap();
+        let source_context = scheduler.context_snapshot();
+        let source_identity = source_context.binding().identity().clone();
+        source_context
+            .store_for_mutation()
+            .admit(
+                &source_identity,
+                AdmitRequestV1::new(
+                    podway_store::CommandV1::WorkspaceInitialize,
+                    IdempotencyKeyV1::new("v2dvc004-resume-busy").unwrap(),
+                    queued_job.clone(),
+                    RevisionAttemptItemPreconditionsV1::new(None, None, None, None).unwrap(),
+                    CanonicalRequestDigestV1::new(format!("sha256:{}", "a".repeat(64))).unwrap(),
+                    recovery_observation.store_now(),
+                ),
+            )
+            .unwrap();
+        let busy_plan = manager
+            .plan_workspace_mode(
+                mode_switch_selector(&worktree),
+                RuntimeModeV1::development(),
+                recovery_observation.clone(),
+            )
+            .unwrap();
+        assert_eq!(busy_plan["status"], "busy");
+        assert!(busy_plan["plan_token"].is_null());
+        write_workspace_mode_marker_v1(&marker_path, &source_closed_marker).unwrap();
+        assert!(matches!(
+            manager.apply_workspace_mode(
+                mode_switch_selector(&worktree),
+                RuntimeModeV1::development(),
+                &token,
+                recovery_observation.clone(),
+            ),
+            Err(super::WorkspaceRuntimeErrorV1::MaintenanceInProgress)
+        ));
+        assert!(resolved_for_maintenance.database_path().exists());
+        assert_eq!(
+            read_workspace_mode_marker_v1(&marker_path)
+                .unwrap()
+                .unwrap()
+                .completed_steps,
+            vec!["source_closed"]
+        );
+        assert!(matches!(
+            source_context
+                .store_for_mutation()
+                .read_workspace_view(&source_identity),
+            Err(StoreErrorV1::StorageUnavailableV1 {
+                reason: StoreUnavailableReasonV1::Recovery
+            })
+        ));
+        drop(source_context);
+        drop(scheduler);
+        let cleanup_store = SqliteStoreV1::open(
+            resolved_for_maintenance.database_path(),
+            resolved_for_maintenance.workspace_root(),
+            resolved_for_maintenance.target_identity(workspace_uuid.clone()),
+            SqliteStoreOptionsV1::new(8).unwrap(),
+            recovery_observation.store_now(),
+        )
+        .unwrap();
+        let queued_revision = cleanup_store
+            .read_job(&source_identity, &queued_job)
+            .unwrap()
+            .unwrap()
+            .job()
+            .identity_sequence();
+        cleanup_store
+            .cancel_before_claim(
+                &source_identity,
+                queued_job,
+                RevisionV1::new(queued_revision),
+                UnixMillis::new(recovery_observation.store_now().get() + 1),
+            )
+            .unwrap();
+        cleanup_store.close_for_maintenance().unwrap();
+        fs::remove_file(&marker_path).unwrap();
+        let scheduler = manager
+            .resolve_existing(
+                mode_switch_selector(&worktree),
+                Some(&workspace_uuid),
+                WorkspaceRuntimeObservationV1::new(
+                    UnixMillis::new(recovery_observation.store_now().get() + 2),
+                    recovery_observation.registry_seen_at().clone(),
+                ),
+            )
+            .unwrap();
+        let resumed_plan = manager
+            .plan_workspace_mode(
+                mode_switch_selector(&worktree),
+                RuntimeModeV1::development(),
+                WorkspaceRuntimeObservationV1::new(
+                    UnixMillis::new(recovery_observation.store_now().get() + 3),
+                    recovery_observation.registry_seen_at().clone(),
+                ),
+            )
+            .unwrap();
+        assert_eq!(resumed_plan["status"], "ready");
+        token = resumed_plan["plan_token"].as_str().unwrap().to_owned();
+        let applied = manager
+            .apply_workspace_mode(
+                mode_switch_selector(&worktree),
+                RuntimeModeV1::development(),
+                &token,
+                recovery_observation.clone(),
+            )
+            .unwrap();
+        assert_eq!(applied["target_mode"], "dev");
+        assert_eq!(applied["runtime_state_removed"], true);
+        assert_eq!(applied["already_applied"], false);
+
+        let renamed_target_config = podway_config::rewrite_workspace_mode_v1(
+            original_config.clone(),
+            &RuntimeModeV1::development(),
+        )
+        .unwrap();
+        fs::write(&config_path, renamed_target_config).unwrap();
+        ValidatedPodwayRemovalDirectoryV1::open(resolved_for_maintenance.worktree())
+            .unwrap()
+            .unwrap()
+            .clear_runtime_contents()
+            .unwrap();
+        super::RegistryStoreV1::new(&target_paths)
+            .remove_exact_generation(&workspace_uuid, resolved_for_maintenance.workspace_root())
+            .unwrap();
+        let mut partial_marker = read_workspace_mode_marker_v1(&marker_path)
+            .unwrap()
+            .unwrap();
+        partial_marker.completed_steps = WORKSPACE_MODE_SWITCH_STEPS_V1[..3]
+            .iter()
+            .map(|step| (*step).to_owned())
+            .collect();
+        write_workspace_mode_marker_v1(&marker_path, &partial_marker).unwrap();
+        fs::write(
+            worktree.join(".podway/runtime/post-removal-sentinel"),
+            b"preserved\n",
+        )
+        .unwrap();
+        drop(scheduler);
+        drop(manager);
+
+        let recovery_manager = WorkspaceRuntimeManagerV1::new(
+            &production_paths,
+            SqliteStoreOptionsV1::new(8).unwrap(),
+        );
+        let recovered = recovery_manager
+            .apply_workspace_mode(
+                mode_switch_selector(&worktree),
+                RuntimeModeV1::development(),
+                &token,
+                recovery_observation,
+            )
+            .unwrap();
+        assert_eq!(recovered["target_mode"], "dev");
+        assert_eq!(recovered["runtime_state_removed"], true);
+        assert_eq!(recovered["already_applied"], false);
+        assert_eq!(
+            fs::read_to_string(worktree.join(".podway/runtime/post-removal-sentinel")).unwrap(),
+            "preserved\n"
+        );
+        assert_eq!(
+            fs::read_to_string(worktree.join(".podway/procedures/retained.yaml")).unwrap(),
+            "retained\n"
+        );
+        let config = fs::read_to_string(worktree.join(".podway/config.yaml")).unwrap();
+        assert!(config.contains("schema: podway.workspace/v2"));
+        assert!(config.contains("mode: dev"));
+        assert!(marker_path.exists());
+        assert!(
+            recovery_manager
+                .registry
+                .lookup(&workspace_uuid)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            super::RegistryStoreV1::new(&target_paths)
+                .lookup(&workspace_uuid)
+                .unwrap()
+                .is_some()
+        );
+        let database_path = worktree.join(".podway/runtime/state.sqlite3");
+        let development_options = SqliteStoreOptionsV1::new(8)
+            .unwrap()
+            .with_runtime_mode(RuntimeModeV1::development());
+        let binding =
+            SqliteStoreV1::inspect_workspace_binding(&database_path, &development_options)
+                .unwrap()
+                .unwrap();
+        assert_eq!(binding.identity().workspace_uuid(), &workspace_uuid);
+        assert!(matches!(
+            SqliteStoreV1::inspect_workspace_binding(
+                &database_path,
+                &SqliteStoreOptionsV1::new(8).unwrap()
+            ),
+            Err(StoreErrorV1::RuntimeModeMismatchV1 { .. })
+        ));
+        drop(target_listener);
+        let replayed = recovery_manager
+            .apply_workspace_mode(
+                mode_switch_selector(&worktree),
+                RuntimeModeV1::development(),
+                &token,
+                WorkspaceRuntimeObservationV1::new(
+                    UnixMillis::new(1_800_000_300_003),
+                    Rfc3339MillisV1::new("2027-01-15T08:05:00.003Z").unwrap(),
+                ),
+            )
+            .unwrap();
+        assert_eq!(replayed["already_applied"], true);
+        assert!(matches!(
+            recovery_manager.resolve_existing_readonly(mode_switch_selector(&worktree), None),
+            Err(super::WorkspaceRuntimeErrorV1::ModeMismatch {
+                boundary: "config",
+                ..
+            })
+        ));
+
+        let completed_operation = read_workspace_mode_marker_v1(&marker_path)
+            .unwrap()
+            .unwrap()
+            .operation_id;
+        let production_listener =
+            std::os::unix::net::UnixListener::bind(production_paths.socket_path().as_path())
+                .unwrap();
+        let development_manager =
+            WorkspaceRuntimeManagerV1::new(&target_paths, SqliteStoreOptionsV1::new(8).unwrap());
+        let reverse_observation = WorkspaceRuntimeObservationV1::new(
+            UnixMillis::new(1_800_000_400_000),
+            Rfc3339MillisV1::new("2027-01-15T08:06:40.000Z").unwrap(),
+        );
+        let reverse_plan = development_manager
+            .plan_workspace_mode(
+                mode_switch_selector(&worktree),
+                RuntimeModeV1::production(),
+                reverse_observation.clone(),
+            )
+            .unwrap();
+        assert_eq!(reverse_plan["status"], "ready");
+        let reverse_token = reverse_plan["plan_token"].as_str().unwrap().to_owned();
+        let reversed = development_manager
+            .apply_workspace_mode(
+                mode_switch_selector(&worktree),
+                RuntimeModeV1::production(),
+                &reverse_token,
+                reverse_observation,
+            )
+            .unwrap();
+        assert_eq!(reversed["source_mode"], "dev");
+        assert_eq!(reversed["target_mode"], "prod");
+        let reverse_marker = read_workspace_mode_marker_v1(&marker_path)
+            .unwrap()
+            .unwrap();
+        assert_ne!(reverse_marker.operation_id, completed_operation);
+        assert!(mode_switch_marker_complete_v1(&reverse_marker));
+        assert!(matches!(
+            development_manager.apply_workspace_mode(
+                mode_switch_selector(&worktree),
+                RuntimeModeV1::development(),
+                &token,
+                WorkspaceRuntimeObservationV1::new(
+                    UnixMillis::new(1_800_000_400_001),
+                    Rfc3339MillisV1::new("2027-01-15T08:06:40.001Z").unwrap(),
+                ),
+            ),
+            Err(super::WorkspaceRuntimeErrorV1::ModeSwitchConflict)
+        ));
+        drop(production_listener);
+        let reverse_replay = development_manager
+            .apply_workspace_mode(
+                mode_switch_selector(&worktree),
+                RuntimeModeV1::production(),
+                &reverse_token,
+                WorkspaceRuntimeObservationV1::new(
+                    UnixMillis::new(1_800_000_400_002),
+                    Rfc3339MillisV1::new("2027-01-15T08:06:40.002Z").unwrap(),
+                ),
+            )
+            .unwrap();
+        assert_eq!(reverse_replay["already_applied"], true);
+        fs::remove_dir_all(fixture).unwrap();
+    }
     #[cfg(unix)]
     #[test]
     fn real_store_slot_close_failpoint_executes_once_and_caches_the_exact_failure() {
@@ -4173,7 +5495,7 @@ mod tests {
         fs::create_dir_all(&podway).expect("FIFO fixture parent must exist");
         mkfifo(&path, Mode::S_IRUSR | Mode::S_IWUSR).expect("config FIFO must be created");
 
-        let result = super::read_admitted_workspace_config_unix(&path);
+        let result = super::read_workspace_config_bytes_unix(&path);
         assert!(matches!(
             result,
             Err(super::WorkspaceRuntimeErrorV1::ConfigRead { source, .. })

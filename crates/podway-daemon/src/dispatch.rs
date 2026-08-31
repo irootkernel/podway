@@ -4,12 +4,15 @@
 //! capabilities remain behind the injected runtime seams below. In particular, a workspace value is
 //! opaque to this module, so routing cannot accidentally turn a display path into an identity key.
 
-use podway_core::{AttemptId, GraphNodeId, JobId, Revision, SessionId, Sha256Digest, WorkspaceId};
+use podway_core::{
+    AttemptId, GraphNodeId, JobId, Revision, RuntimeModeV1, SessionId, Sha256Digest, WorkspaceId,
+};
 use podway_protocol::{
     ErrorCodeV1, ErrorEnvelopeInputV1, ErrorEnvelopeV1, ExitCodeV1, IdempotencyKeyV1, JobOutputV1,
     JobStateV1, OperationV1, OutputEnvelopeInputV3, OutputEnvelopeV3, QueryWaitV1,
     RequestEnvelopeV1, ResponseEnvelopeV2, Rfc3339MillisV1, SessionOutputV1, SliceCommandV1,
-    SliceRequestV1, WorkspaceOutputV1, WorkspaceRemoveRequestV1, WorktreeSelectorWireV1,
+    SliceRequestV1, WorkspaceModeApplyRequestV1, WorkspaceModePlanRequestV1, WorkspaceOutputV1,
+    WorkspaceRemoveRequestV1, WorktreeSelectorWireV1,
 };
 use serde_json::{Map, Value, json};
 
@@ -49,6 +52,14 @@ pub struct DispatchErrorDetailsV1 {
     session_reset_not_eligible: Option<Box<SessionResetNotEligibleDetailsV1>>,
     session_archive_failure: Option<Box<SessionArchiveFailureDetailsV1>>,
     session_start_state_conflict: Option<Box<SessionStartStateConflictDetailsV1>>,
+    workspace_mode_mismatch: Option<Box<WorkspaceModeMismatchDetailsV1>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct WorkspaceModeMismatchDetailsV1 {
+    expected: RuntimeModeV1,
+    actual: RuntimeModeV1,
+    boundary: &'static str,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -350,6 +361,20 @@ impl DispatchErrorDetailsV1 {
         self.identity_conflict = Some(Box::new(IdentityConflictDetailsV1::Workspace {
             expected,
             actual,
+        }));
+        self
+    }
+
+    pub fn with_workspace_mode_mismatch(
+        mut self,
+        expected: RuntimeModeV1,
+        actual: RuntimeModeV1,
+        boundary: &'static str,
+    ) -> Self {
+        self.workspace_mode_mismatch = Some(Box::new(WorkspaceModeMismatchDetailsV1 {
+            expected,
+            actual,
+            boundary,
         }));
         self
     }
@@ -726,6 +751,17 @@ impl DispatchErrorDetailsV1 {
     }
 
     pub(crate) fn into_json(self, requires_admission: bool) -> Map<String, Value> {
+        if let Some(mismatch) = self.workspace_mode_mismatch {
+            return json!({
+                "schema": "podway.workspace-mode-mismatch-details/v1",
+                "expected_mode": mismatch.expected.as_str(),
+                "actual_mode": mismatch.actual.as_str(),
+                "boundary": mismatch.boundary,
+            })
+            .as_object()
+            .expect("workspace-mode mismatch details are an object")
+            .clone();
+        }
         if let Some(details) = self.session_archive_failure {
             let admission = admission_value_v1(self.job_id.as_ref(), self.job_sequence);
             let value = match *details {
@@ -1193,6 +1229,8 @@ pub enum DispatchFailureKindV1 {
     WorkspaceInitConflict,
     WorkspaceIdentityConflict,
     WorkspaceUuidMismatch,
+    WorkspaceModeMismatch,
+    WorkspaceModeSwitchConflict,
     WorkspaceConfigInvalid,
     WorkspaceStateUnreadable,
     WorkspaceSchemaUnsupported,
@@ -1304,6 +1342,7 @@ impl DispatchFailureV1 {
                 session_reset_not_eligible: None,
                 session_archive_failure: None,
                 session_start_state_conflict: None,
+                workspace_mode_mismatch: None,
             }),
         }
     }
@@ -1808,6 +1847,26 @@ pub trait MutationAdmissionWorkerV1<Workspace>: Send + Sync {
         &self,
         _request: &RequestEnvelopeV1,
         _removal: &WorkspaceRemoveRequestV1,
+    ) -> Result<Map<String, Value>, DispatchFailureV1> {
+        Err(DispatchFailureV1::new(
+            DispatchFailureKindV1::UnsupportedV2Capability,
+        ))
+    }
+
+    fn plan_workspace_mode(
+        &self,
+        _request: &RequestEnvelopeV1,
+        _plan: &WorkspaceModePlanRequestV1,
+    ) -> Result<Map<String, Value>, DispatchFailureV1> {
+        Err(DispatchFailureV1::new(
+            DispatchFailureKindV1::UnsupportedV2Capability,
+        ))
+    }
+
+    fn apply_workspace_mode(
+        &self,
+        _request: &RequestEnvelopeV1,
+        _apply: &WorkspaceModeApplyRequestV1,
     ) -> Result<Map<String, Value>, DispatchFailureV1> {
         Err(DispatchFailureV1::new(
             DispatchFailureKindV1::UnsupportedV2Capability,
@@ -2434,6 +2493,34 @@ where
             );
         procedure_independent_response_v1(self.error_response(request, failure, true))
     }
+
+    fn workspace_mode_response(
+        &self,
+        request: &RequestEnvelopeV1,
+        result: Result<Map<String, Value>, DispatchFailureV1>,
+    ) -> ResponseEnvelopeV2 {
+        match result {
+            Ok(result) => OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
+                request_id: request.request_id().clone(),
+                command: request.command().clone(),
+                generated_at: self.metadata.generated_at(),
+                workspace: None,
+                job: None,
+                session: None,
+                result,
+                warnings: Vec::new(),
+            })
+            .map(ResponseEnvelopeV2::OutputV2)
+            .unwrap_or_else(|_| {
+                self.error_response(
+                    request,
+                    DispatchFailureV1::new(DispatchFailureKindV1::Internal),
+                    false,
+                )
+            }),
+            Err(failure) => self.error_response(request, failure, false),
+        }
+    }
 }
 
 fn procedure_independent_response_v1(response: ResponseEnvelopeV2) -> ResponseEnvelopeV2 {
@@ -2656,11 +2743,17 @@ where
                 Err(failure) => self.error_response(request, failure, false),
             };
         }
-        if matches!(
-            daemon_request,
-            DaemonRequestV1::WorkspaceModePlan(_) | DaemonRequestV1::WorkspaceModeApply(_)
-        ) {
-            return self.unsupported_v2_capability_response(request, daemon_request);
+        if let DaemonRequestV1::WorkspaceModePlan(plan) = daemon_request {
+            return self.workspace_mode_response(
+                request,
+                self.mutations.plan_workspace_mode(request, plan),
+            );
+        }
+        if let DaemonRequestV1::WorkspaceModeApply(apply) = daemon_request {
+            return self.workspace_mode_response(
+                request,
+                self.mutations.apply_workspace_mode(request, apply),
+            );
         }
         let selector = match daemon_request {
             DaemonRequestV1::ProcedureV2Start(request) => request.selector(),
@@ -2755,6 +2848,18 @@ fn catalog_error_spec_v1(kind: DispatchFailureKindV1) -> (&'static str, &'static
         DispatchFailureKindV1::WorkspaceUuidMismatch => (
             "WORKSPACE_UUID_MISMATCH",
             "The workspace UUID differs from the expected identity.",
+            false,
+            4,
+        ),
+        DispatchFailureKindV1::WorkspaceModeMismatch => (
+            "WORKSPACE_MODE_MISMATCH",
+            "Workspace runtime modes disagree.",
+            false,
+            4,
+        ),
+        DispatchFailureKindV1::WorkspaceModeSwitchConflict => (
+            "WORKSPACE_MODE_SWITCH_CONFLICT",
+            "The mode-switch plan is stale or requires its exact recovery token; run plan again only when no partial switch is pending.",
             false,
             4,
         ),

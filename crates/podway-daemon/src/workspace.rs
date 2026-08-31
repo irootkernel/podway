@@ -825,6 +825,42 @@ impl ValidatedPodwayRemovalDirectoryV1 {
         }
     }
 
+    /// Removes only the contents of the descriptor-validated `.podway/runtime` directory.
+    /// Configuration, procedures, Git state, and every sibling under `.podway` are retained.
+    pub(crate) fn clear_runtime_contents(&self) -> Result<(), WorkspaceRemovalFilesystemErrorV1> {
+        #[cfg(unix)]
+        {
+            let runtime = self
+                .open_child_directory(&self.podway, "runtime")?
+                .ok_or(WorkspaceRemovalFilesystemErrorV1::UnsafePath)?;
+            let runtime_metadata = runtime
+                .metadata()
+                .map_err(|source| removal_path_error("inspect runtime directory", source))?;
+            let runtime_identity = RemovalObjectIdentityV1::from_metadata(&runtime_metadata);
+            let relative = [RemovalPathComponentV1 {
+                name: OsString::from("runtime"),
+                identity: runtime_identity,
+            }];
+            let retained = remove_directory_contents_v1(
+                &self.root,
+                &runtime,
+                self.podway_identity,
+                self.current_uid,
+                self.podway_identity.device,
+                &relative,
+                &mut RemovalTraversalBudgetV1::new(),
+            )?;
+            if retained {
+                return Err(WorkspaceRemovalFilesystemErrorV1::UnsafePath);
+            }
+            Ok(())
+        }
+        #[cfg(not(unix))]
+        {
+            Err(WorkspaceRemovalFilesystemErrorV1::UnsupportedPlatform)
+        }
+    }
+
     pub(crate) fn remove_empty_residual(&self) -> Result<(), WorkspaceRemovalFilesystemErrorV1> {
         #[cfg(unix)]
         {

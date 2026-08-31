@@ -1051,6 +1051,7 @@ fn unavailable_reason_from_runtime_error(
         }
         WorkspaceRuntimeErrorV1::ConfigRead { .. }
         | WorkspaceRuntimeErrorV1::ConfigAdmission(_)
+        | WorkspaceRuntimeErrorV1::ModeMismatch { .. }
         | WorkspaceRuntimeErrorV1::StoreOptions(_) => {
             WorkspaceRecoveryUnavailableReasonV1::WorkspaceConfigurationInvalid
         }
@@ -1058,6 +1059,7 @@ fn unavailable_reason_from_runtime_error(
             WorkspaceRecoveryUnavailableReasonV1::WorkspaceStateUnreadable
         }
         WorkspaceRuntimeErrorV1::MaintenanceInProgress
+        | WorkspaceRuntimeErrorV1::ModeSwitchMarkerIo { .. }
         | WorkspaceRuntimeErrorV1::WorkspaceRemovalConflict
         | WorkspaceRuntimeErrorV1::WorkspaceRemovalFilesystem(_)
         | WorkspaceRuntimeErrorV1::ResetAdmissionOutcomeUnknown { .. }
@@ -1066,6 +1068,8 @@ fn unavailable_reason_from_runtime_error(
         | WorkspaceRuntimeErrorV1::ResetMarkerConflict
         | WorkspaceRuntimeErrorV1::ResetIdempotencyConflict { .. }
         | WorkspaceRuntimeErrorV1::ResetRegistryPredecessorStale
+        | WorkspaceRuntimeErrorV1::ModeSwitchConflict
+        | WorkspaceRuntimeErrorV1::ModeSwitchTargetUnavailable
         | WorkspaceRuntimeErrorV1::RuntimeDirectory(_) => {
             WorkspaceRecoveryUnavailableReasonV1::DaemonUnavailable
         }

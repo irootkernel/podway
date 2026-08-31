@@ -185,7 +185,7 @@
     },
     {
       "command": "workspace.mode.plan",
-      "availability": "reserved_contract",
+      "availability": "executable",
       "owner": "podway-daemon",
       "path": ["podway-cli", "podway-protocol", "podway-daemon"],
       "execution": "daemon",
@@ -193,7 +193,7 @@
     },
     {
       "command": "workspace.mode.apply",
-      "availability": "reserved_contract",
+      "availability": "executable",
       "owner": "podway-daemon",
       "path": ["podway-cli", "podway-protocol", "podway-daemon"],
       "execution": "daemon",

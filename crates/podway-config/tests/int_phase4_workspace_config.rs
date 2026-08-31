@@ -1,8 +1,9 @@
 use podway_config::{
     CanonicalDigest, CanonicalJson, ConfigError, DEFAULT_WORKSPACE_CONFIG_YAML_V1,
     MAX_WORKSPACE_CONFIG_BYTES_V1, WorkspaceConfigParseLimitsV1, WorkspaceConfigV1,
-    parse_workspace_config_v1, parse_workspace_config_v1_with_limits,
+    parse_workspace_config_v1, parse_workspace_config_v1_with_limits, rewrite_workspace_mode_v1,
 };
+use podway_core::RuntimeModeV1;
 use sha2::{Digest as _, Sha256};
 
 fn limits(max_bytes: usize, max_depth: usize, max_nodes: usize) -> WorkspaceConfigParseLimitsV1 {
@@ -186,9 +187,60 @@ fn workspace_config_requires_utf8_and_exactly_one_document() {
 }
 
 #[test]
-fn v2dvc002_workspace_v2_contract_remains_unadmitted_by_the_v1_parser() {
-    assert!(matches!(
-        parse_workspace_config_v1("schema: podway.workspace/v2\nmode: dev\n"),
-        Err(ConfigError::InvalidDocument { .. })
-    ));
+fn v2dvc004_workspace_v2_mode_is_admitted_with_v1_production_compatibility() {
+    let legacy = parse_workspace_config_v1("schema: podway.workspace/v1\n").unwrap();
+    assert_eq!(legacy.effective_mode(), RuntimeModeV1::production());
+
+    let omitted = parse_workspace_config_v1("schema: podway.workspace/v2\n").unwrap();
+    assert_eq!(omitted.effective_mode(), RuntimeModeV1::production());
+
+    let named = parse_workspace_config_v1("schema: podway.workspace/v2\nmode: dev\n").unwrap();
+    assert_eq!(named.effective_mode(), RuntimeModeV1::development());
+
+    assert_eq!(
+        parse_workspace_config_v1("schema: podway.workspace/v1\nmode: dev\n"),
+        Err(ConfigError::InvalidValue {
+            field: "mode",
+            reason: "requires workspace schema v2",
+        })
+    );
+}
+
+#[test]
+fn v2dvc004_mode_rewrite_preserves_unrelated_values_and_comments() {
+    let source = concat!(
+        "# workspace owner\n",
+        "schema: podway.workspace/v1 # schema comment\n",
+        "procedure_paths:\n",
+        "  - custom/procedures # keep me\n",
+        "default_preset: custom-preset\n",
+        "job_queue:\n",
+        "  max_pending: 17\n",
+        "ui:\n",
+        "  show_stage_in_prompt: true\n",
+    );
+    let dev = rewrite_workspace_mode_v1(source, &RuntimeModeV1::development()).unwrap();
+    assert_eq!(
+        String::from_utf8(dev.clone()).unwrap(),
+        source.replace(
+            "schema: podway.workspace/v1 # schema comment\n",
+            "schema: podway.workspace/v2 # schema comment\nmode: dev\n",
+        )
+    );
+    let prod = rewrite_workspace_mode_v1(&dev, &RuntimeModeV1::production()).unwrap();
+    assert_eq!(String::from_utf8(prod).unwrap(), source);
+
+    assert_eq!(
+        rewrite_workspace_mode_v1("schema: podway.workspace/v1", &RuntimeModeV1::development())
+            .unwrap(),
+        b"schema: podway.workspace/v2\nmode: dev"
+    );
+    assert_eq!(
+        rewrite_workspace_mode_v1(
+            "schema: podway.workspace/v2\r\nmode: dev # retained\r\n",
+            &RuntimeModeV1::new("qa").unwrap(),
+        )
+        .unwrap(),
+        b"schema: podway.workspace/v2\r\nmode: qa # retained\r\n"
+    );
 }

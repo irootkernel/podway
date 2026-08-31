@@ -148,6 +148,8 @@ not create a contract mismatch.
 | `AUT-ID-007` | Identity mismatches MUST return stable typed errors with closed details containing expected and actual identities and no mutation. |
 | `AUT-ID-008` | `item.record_many` MUST enforce workspace UUID, session ID, session revision, active attempt, and every selected item revision before atomically changing any selected item. |
 | `AUT-ID-009` | `begin`, terminal disposition, eligible or force replacement, and eligible or force reset MUST enforce the exact observed workspace UUID, session ID, and session revision; begin and disposition MUST NOT accept an attempt fence. |
+| `AUT-ID-010` | Every workspace operation MUST establish selected endpoint, daemon mode, config mode, namespace registry generation, and persisted Store mode agreement before normal Store access; disagreement MUST return non-retryable `WORKSPACE_MODE_MISMATCH`. |
+| `AUT-ID-011` | `workspace.mode.plan` MUST be read-only and issue a bounded token only for an idle source and a live Unix endpoint in the exact target-mode namespace; `workspace.mode.apply` MUST revalidate that token and converge exact replay through its durable ordered marker while deleting only disposable runtime state. The liveness probe MUST NOT create a daemon-to-daemon protocol client. |
 
 `podway record --stdin` consumes only closed
 `podway.item-record-many-input/v1` JSON bounded to 1 MiB and 1..128 unique item
@@ -291,7 +293,7 @@ The active-item allocation holds the widest definition vetting admits, so in pra
 
 | ID | Normative requirement |
 |---|---|
-| `AUT-JSON-001` | Version, daemon status, Procedure validation, start, begin, terminal disposition, reset, archive/list/show/purge, status, running and prepared next, observation, item mutation, graph-node transition, detached admission, job status/wait, and job lookup MUST each have a closed result schema. |
+| `AUT-JSON-001` | Version, daemon status, workspace mode plan/apply, Procedure validation, start, begin, terminal disposition, reset, archive/list/show/purge, status, running and prepared next, observation, item mutation, graph-node transition, detached admission, job status/wait, and job lookup MUST each have a closed result schema. |
 | `AUT-JSON-002` | Daemon, socket, identity, revision, attempt, digest, idempotency, and timeout failures MUST each have closed error-detail schemas. |
 | `AUT-JSON-003` | Results and error details MUST carry an unambiguous schema identifier or discriminator. |
 | `AUT-JSON-004` | A closed v1 object MUST reject unknown fields; adding fields requires a new schema identifier or discriminator version rather than an undocumented additive-field exception. |
@@ -300,7 +302,7 @@ The active-item allocation holds the widest definition vetting admits, so in pra
 
 | ID | Normative requirement |
 |---|---|
-| `AUT-ERR-001` | `WORKSPACE_UUID_MISMATCH`, `SESSION_ID_MISMATCH`, `PROCEDURE_DIGEST_MISMATCH`, `DAEMON_CONTRACT_MISMATCH`, socket errors, and wait timeout MUST have stable catalog entries and exit mappings. |
+| `AUT-ERR-001` | `WORKSPACE_UUID_MISMATCH`, `WORKSPACE_MODE_MISMATCH`, `SESSION_ID_MISMATCH`, `PROCEDURE_DIGEST_MISMATCH`, `DAEMON_CONTRACT_MISMATCH`, socket errors, and wait timeout MUST have stable catalog entries and exit mappings. |
 | `AUT-ERR-002` | A pre-admission contract, identity, digest, endpoint, or validation failure MUST report `admission.admitted=false`; a mismatch MUST NOT admit a job. |
 | `AUT-ERR-003` | Adopted recoverable errors MUST carry one closed bounded `recovery` recipe containing `action`, canonical read-only `command`, structured `argv`, bounded `reason`, and `requires_explicit_authorization=false`. |
 | `AUT-ERR-004` | Recovery recipes MUST recommend only `session.observe`, `job.lookup`, `job.wait`, `daemon.status`, `daemon.wait-ready`, or `workspace.doctor`; they MUST NOT weaken a fence or recommend retry, restart, repair, reset, reinstall, or another mutation. |
