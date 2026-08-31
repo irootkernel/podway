@@ -4,6 +4,11 @@
 - Date: 2026-08-16
 - Supersedes: the assertion in ADR-0012 that every daemon instance contends on
   the production singleton lock
+- Partially superseded by:
+  [ADR-0031](0031-keyed-runtime-modes-and-managed-development-service.md), which
+  replaces the `--dev`-only foreground model, raw production-lock contention,
+  and closed two-purpose topology while retaining this ADR's validated isolation
+  requirements
 
 ## Context
 

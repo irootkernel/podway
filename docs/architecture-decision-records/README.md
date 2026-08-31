@@ -44,3 +44,4 @@ narrative architecture and specifications when sources conflict.
 - [ADR-0028](0028-bounded-typed-procedure-guards.md): bounded typed Procedure guards
 - [ADR-0029](0029-serve-phase-aware-daemon-readiness.md): phase-aware daemon readiness
 - [ADR-0030](0030-retire-workspaces-and-prune-stale-registry-entries.md): explicit workspace retirement and stale registry pruning
+- [ADR-0031](0031-keyed-runtime-modes-and-managed-development-service.md): keyed runtime modes and managed development service

@@ -484,3 +484,25 @@ Dependencies: completed `V2RDY` epic.
 | `V2RET-003` | Prune stale registry entries | Completed | Remove only conclusively missing exact UUID/root generations during startup and pre-mutation revalidation, then integrate successful cleanup with readiness and bounded observability. | [Recovery specification](../specs/storage/recovery-retention-and-maintenance.md#moved-worktrees); [worktree deletion](../architecture/git-worktree-and-filesystem.md#worktree-deletion) |
 | `V2RET-004` | Remove a selected Podway workspace | Completed | Add exact-path confirmation, maintenance fencing, marker-backed recovery, empty-residual replay convergence, bounded observability, and complete `.podway` removal while preserving the Git worktree. | [CLI contract](../specs/interfaces/cli-specification.md), [recovery specification](../specs/storage/recovery-retention-and-maintenance.md) |
 | `V2RET-005` | Close retirement and cleanup conformance | Completed | Prove races, crashes, replay, compatibility, path safety, reinitialization, and E2E behavior; promote durable guidance; remove the dossier; and pass the development gate. | [Testing and conformance](../specs/quality/testing-and-conformance.md), [crash registry](../../quality/crash-boundaries-v1.json) |
+
+## V2DVC — Named Runtime Modes and Aquarium Development Channel
+
+Dependencies: completed `V2RET` epic.
+
+This epic generalizes the production/development distinction into one bounded
+runtime mode key while preserving exactly one effective mode and one normal
+writer for each worktree. It delivers Podway's unchanged external Aquarium v2
+managed-service interface on top of that model. The adopted
+[V2DVC dossier](../todo/TODO-podway-named-runtime-modes-and-aquarium-development-service.md)
+owns the decision-complete implementation plan until the final task promotes its
+lasting content into durable authorities and retires it.
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `V2DVC-001` | Adopt the keyed runtime authority | Completed | Adopt the architecture, SOT dossier, compatibility boundaries, external Aquarium interface, and ordered implementation plan. | [ADR-0031](../architecture-decision-records/0031-keyed-runtime-modes-and-managed-development-service.md), [V2DVC dossier](../todo/TODO-podway-named-runtime-modes-and-aquarium-development-service.md) |
+| `V2DVC-002` | Reserve v0.2.8 runtime-mode contracts | Planned | Reconcile the v0.2.8 cycle and reserve bounded workspace mode, managed-runtime, status, error, protocol, storage, and compatibility contracts without premature runtime admission. | [V2DVC contract plan](../todo/TODO-podway-named-runtime-modes-and-aquarium-development-service.md#31-mode-value-and-workspace-configuration), [changelog](../../CHANGELOG.md) |
+| `V2DVC-003` | Add keyed daemon namespaces | Planned | Implement runtime-mode values, complete mode-keyed paths, managed metadata validation, CLI and daemon selectors, and the `--dev` compatibility aliases. | [ADR-0031](../architecture-decision-records/0031-keyed-runtime-modes-and-managed-development-service.md), [V2DVC runtime design](../todo/TODO-podway-named-runtime-modes-and-aquarium-development-service.md#32-runtime-namespace-and-paths) |
+| `V2DVC-004` | Bind and switch workspace modes | Planned | Enforce config, endpoint, daemon, registry, and Store mode agreement before Store access, then add token-bound runtime-reset switching with crash recovery. | [V2DVC ownership design](../todo/TODO-podway-named-runtime-modes-and-aquarium-development-service.md#35-admission-and-store-binding), [V2DVC switch design](../todo/TODO-podway-named-runtime-modes-and-aquarium-development-service.md#36-workspace-mode-switching) |
+| `V2DVC-005` | Add the persistent Aquarium development service | Planned | Build the immutable managed-service bundle and producer controller, keep publication pending-only, and activate exact idle generations with proven rollback or bounded recovery debt. | [V2DVC Aquarium design](../todo/TODO-podway-named-runtime-modes-and-aquarium-development-service.md#37-aquarium-producer-bundle), [V2DVC activation design](../todo/TODO-podway-named-runtime-modes-and-aquarium-development-service.md#38-publication-activation-and-rollback) |
+| `V2DVC-006` | Generalize isolated qualification runtimes | Planned | Move contributor and packaged release qualification to private named runtime identities while preserving exact snapshots, sandbox admission, cleanup, and production and Aquarium isolation. | [V2DVC qualification design](../todo/TODO-podway-named-runtime-modes-and-aquarium-development-service.md#39-contributor-and-release-qualification), [release workflow](../implementation-tips/release.md) |
+| `V2DVC-007` | Close named-runtime conformance | Planned | Prove compatibility, coexistence, switching, recovery, Aquarium rollover, and parallel qualification; promote durable documentation; retire the dossier; and pass the development gate. | [V2DVC acceptance plan](../todo/TODO-podway-named-runtime-modes-and-aquarium-development-service.md#6-verification-and-release-acceptance), [testing and conformance](../specs/quality/testing-and-conformance.md) |
