@@ -11,6 +11,10 @@ This file records concise shipped outcomes and the planned next stable release.
 - Add an immutable Aquarium managed-service bundle with token-bound idle activation, exact-generation rollback, and bounded recovery debt.
 - Move contributor and packaged release qualification to purpose-bound private named runtimes with exact executable identity and bounded cleanup.
 
+### Fixed
+
+- Accept Aquarium-sealed managed-service executables when validating the exact development runtime.
+
 ## v0.2.7 - 2026-08-31
 
 ### Added

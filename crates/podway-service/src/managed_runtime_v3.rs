@@ -113,6 +113,11 @@ impl ManagedRuntimeV3 {
             ));
         }
         validate_purpose_shape(&document, &mode)?;
+        let executable_mode = match document.purpose {
+            ManagedRuntimePurposeV3::AquariumDevelopment => 0o500,
+            ManagedRuntimePurposeV3::Contributor
+            | ManagedRuntimePurposeV3::ReleaseQualification => 0o755,
+        };
         if let Some(sandbox) = document.sandbox_root.as_deref() {
             let canonical = sandbox.canonicalize().map_err(ManagedRuntimeErrorV3::Io)?;
             if canonical != sandbox {
@@ -122,10 +127,10 @@ impl ManagedRuntimeV3 {
             }
             validate_directory(sandbox)?;
         }
-        validate_executable(&document.executables.cli)?;
-        validate_executable(&document.executables.daemon)?;
+        validate_executable(&document.executables.cli, executable_mode)?;
+        validate_executable(&document.executables.daemon, executable_mode)?;
         if let Some(controller) = document.executables.controller.as_ref() {
-            validate_executable(controller)?;
+            validate_executable(controller, executable_mode)?;
         }
         let declared = match role {
             ManagedRuntimeExecutableRoleV3::Cli => Some(&document.executables.cli),
@@ -311,6 +316,7 @@ fn validate_file_metadata(
 
 fn validate_executable(
     executable: &ManagedRuntimeExecutableDocumentV3,
+    expected_mode: u32,
 ) -> Result<(), ManagedRuntimeErrorV3> {
     if !executable.path.is_absolute()
         || executable.sha256.len() != 71
@@ -324,7 +330,7 @@ fn validate_executable(
         ));
     }
     let metadata = fs::symlink_metadata(&executable.path).map_err(ManagedRuntimeErrorV3::Io)?;
-    validate_file_metadata(&metadata, 0o755, true)?;
+    validate_file_metadata(&metadata, expected_mode, true)?;
     let canonical = executable
         .path
         .canonicalize()
@@ -425,6 +431,37 @@ mod tests {
             fs::set_permissions(&metadata, fs::Permissions::from_mode(0o600)).unwrap();
             Self { root, cli }
         }
+
+        fn seal_as_aquarium_development(&self) {
+            let daemon = self.root.join("podwayd");
+            for path in [&self.cli, &daemon] {
+                fs::set_permissions(path, fs::Permissions::from_mode(0o500)).unwrap();
+            }
+            let metadata = self.root.join("runtime.json");
+            let mut document: serde_json::Value =
+                serde_json::from_slice(&fs::read(&metadata).unwrap()).unwrap();
+            let paths = ServiceRuntimePathsV1::for_runtime_root(
+                &self.root,
+                RuntimeModeV1::development(),
+                geteuid().as_raw(),
+            )
+            .unwrap();
+            document["purpose"] = serde_json::Value::String("aquarium-development".to_owned());
+            document["mode"] = serde_json::Value::String("dev".to_owned());
+            document["sandbox_root"] = serde_json::Value::Null;
+            document["generation"] = serde_json::Value::String("a".repeat(40));
+            document["paths"] = json!({
+                "lock": paths.global_lock_path().as_path(),
+                "socket": paths.socket_path().as_path(),
+                "service_state": paths.metadata_index_path().as_path(),
+                "registry": paths.workspace_registry_path().as_path(),
+                "recovery": paths.recovery_path().as_path(),
+                "log": paths.log_path().as_path(),
+                "bootstrap_log": paths.bootstrap_log_path().as_path(),
+            });
+            document["executables"]["controller"] = document["executables"]["cli"].clone();
+            fs::write(&metadata, serde_json::to_vec(&document).unwrap()).unwrap();
+        }
     }
 
     impl Drop for Fixture {
@@ -458,6 +495,40 @@ mod tests {
             ManagedRuntimeV3::discover(
                 &fixture.root,
                 &RuntimeModeV1::new("release-qa").unwrap(),
+                &fixture.cli,
+                ManagedRuntimeExecutableRoleV3::Cli,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn validates_sealed_aquarium_development_executables() {
+        let fixture = Fixture::contributor();
+        fixture.seal_as_aquarium_development();
+        let runtime = ManagedRuntimeV3::discover(
+            &fixture.root,
+            &RuntimeModeV1::development(),
+            &fixture.cli,
+            ManagedRuntimeExecutableRoleV3::Cli,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            runtime.purpose(),
+            super::ManagedRuntimePurposeV3::AquariumDevelopment
+        );
+    }
+
+    #[test]
+    fn rejects_writable_aquarium_development_executables() {
+        let fixture = Fixture::contributor();
+        fixture.seal_as_aquarium_development();
+        fs::set_permissions(&fixture.cli, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(
+            ManagedRuntimeV3::discover(
+                &fixture.root,
+                &RuntimeModeV1::development(),
                 &fixture.cli,
                 ManagedRuntimeExecutableRoleV3::Cli,
             )

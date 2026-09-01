@@ -88,7 +88,9 @@ the fixed LaunchAgent plist, `podway.managed-runtime/v3` metadata, a controller
 lock, exact active-generation state, and at most one bounded recovery record.
 The plist label is `dev.aquarium.podwayd`; it executes the exact generation's
 `libexec/podwayd --dev`, supplies that runtime root through `PODWAY_DEV_HOME`,
-and never uses a mutable `PATH` entry.
+and never uses a mutable `PATH` entry. Aquarium development runtime validation
+requires its sealed executable entries to use owner-only mode `0500`; contributor
+and release-qualification runtimes retain their private `0755` executable mode.
 
 Replacement rechecks that the current daemon is ready and has no queued or
 running work, other admitted clients, or maintenance operation. Missing activity
