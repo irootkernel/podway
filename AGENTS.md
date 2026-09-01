@@ -274,6 +274,9 @@ roadmap and the adopted task dossier before choosing it:
 - Do not substitute a release program ID such as `PV2GA` for a task or epic ID. If
   neither a specific roadmap task nor an epic owns the change, use `[INT]`, for
   example `[INT] docs: adopt local review tooling`.
+- For the metadata-only release commit created by `$aquarium:release-handler`, use
+  its exact required title `[REL] Release v<version>`. This is the only exception
+  to the task, epic, or `[INT]` header and conventional `type: summary` form.
 - Keep the remainder of the title concise and imperative, matching the repository's
   conventional `type: summary` style. The header is required even for trivial
   commits.
