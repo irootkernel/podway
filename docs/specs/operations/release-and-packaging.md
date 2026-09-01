@@ -118,19 +118,22 @@ digest, successful development and fuzzing gate result, artifact class, and
 signing/notarization status. Release
 packaging rejects debug-only isolation capability. After packaging, `make dist`
 extracts the release-profile archive and qualifies its binaries through the isolated
-foreground dev daemon mode. The test-only
+foreground `release-qa` daemon mode. The test-only
 `--allow-dirty` switch is invalid for `artifact_class=distribution`; distribution
 construction always requires a clean tree.
 
 Packaging initially writes the exact required conformance scenario list with a
 `pending` result. Qualification is an automatic, unprivileged step of `make dist`;
 there is no separate qualification target or receipt. It creates an owner-private
-`podway.managed-dev-runtime/v2` root directly under `/private/tmp`, declares purpose
-`release-qualification`, snapshots the extracted binaries into that root, starts
-the snapshot `podwayd --dev`, and runs packaged fenced
+`podway.managed-runtime/v3` root directly under `/private/tmp`, declares purpose
+`release-qualification` and mode `release-qa`, binds the extracted binary digests,
+snapshots those binaries into that root, starts the snapshot
+`podwayd --mode release-qa`, and runs packaged fenced
 lifecycle, conflict, admitted-timeout, response-loss, reconciliation, and identity
-scenarios through the snapshot `podway --dev`. Success requires orderly termination
-and absence of every temporary daemon socket. The managed account lock, registry,
+scenarios through the snapshot `podway --mode release-qa`. Success requires orderly
+termination, absence of every temporary daemon socket and process, and removal of
+the exact owned root. Failure preserves and reports that root for bounded recovery.
+The managed lock, registry,
 logs, and sandbox are disjoint from production, selectors and canonical Git roots
 outside the sandbox fail before Store access, and release-purpose metadata never
 enables debug development admission. Only after every extracted-archive

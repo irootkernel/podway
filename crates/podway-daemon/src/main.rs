@@ -273,10 +273,11 @@ fn run_service(
     #[cfg(all(feature = "development-v2-admission", debug_assertions))]
     if mode == RuntimeModeV1::development() {
         configuration = configuration.with_dev_mode();
-        if _managed_contributor {
-            configuration = configuration
-                .with_development_v2_admission(&paths, &env::current_exe()?.canonicalize()?);
-        }
+    }
+    #[cfg(all(feature = "development-v2-admission", debug_assertions))]
+    if _managed_contributor {
+        configuration = configuration
+            .with_development_v2_admission(&paths, &env::current_exe()?.canonicalize()?);
     }
     #[cfg(not(all(feature = "development-v2-admission", debug_assertions)))]
     if mode == RuntimeModeV1::development() {

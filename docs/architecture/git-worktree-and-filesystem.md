@@ -56,7 +56,7 @@ runtime/
 `podway init` appends this entry if needed without overwriting unrelated ignore rules.
 
 The development runtime helper has one narrow, development-only exception to the daemon's normal
-write authority: after the isolated `podway --dev init` succeeds, it atomically publishes
+write authority: after the isolated `podway --mode contributor init` succeeds, it atomically publishes
 `development-v2.marker` through the private runtime directory. The marker contains no task state
 and grants no transition authority; the daemon treats it only as disposable-runtime provenance and
 revalidates it before admitting requests through the contributor-only development

@@ -52,7 +52,7 @@ root, mode, effective UID, complete derived paths, purpose, optional sandbox,
 generation, and executable identities. An invalid or stale document fails closed
 without falling back to production or another mode. The legacy
 `podway.managed-dev-runtime/v2` contributor topology remains readable only for
-mode `dev` until its owning helper migration completes.
+mode `dev` as a bounded compatibility path; current contributor tooling emits v3.
 
 The CLI selects the matching named socket directly and never consults installed
 production service metadata. `podway --dev terminate` sends the dev-only
@@ -70,11 +70,11 @@ GUI login domain during distribution packaging.
 ### Managed contributor development runtime
 
 Contributors who need a disposable daemon that can coexist with an installed
-production service should use `tools/dev_runtime.py` rather than raw
-`podwayd --dev`. The helper derives a short private root under `/private/tmp`,
+production service should use `tools/dev_runtime.py` rather than a raw named-mode
+daemon. The helper derives a short private root under `/private/tmp`,
 snapshots matching debug binaries, and writes purpose `contributor` managed-runtime
-metadata. `podwayd --dev` validates that metadata and derives an isolated lock from
-its private runtime root. Raw `podwayd --dev` without managed metadata never
+v3 metadata. `podwayd --mode contributor` validates that metadata and derives an
+isolated lock from its private runtime root. Raw contributor mode without managed metadata never
 satisfies the development-v2 admission gate. Only the
 feature-built, helper-managed daemon plus its exact disposable sandbox marker can
 produce a development admission token; current v2 runtime routes remain closed

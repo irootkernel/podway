@@ -29,31 +29,34 @@ After version and changelog preparation:
 4. tag the exact source revision and publish all required files.
 
 `make dist` always runs the development gate and bounded fuzzing before it builds
-thin arm64 binaries and qualifies the packaged CLI/daemon contract in isolated dev
-mode. Distribution construction rejects dirty trees, translated execution,
+thin arm64 binaries and qualifies the packaged CLI/daemon contract in isolated
+`release-qa` mode. Distribution construction rejects dirty trees, translated execution,
 non-arm64 binaries, version mismatches, and stale layouts.
 
 The native-host and clean-worktree preflight runs before the expensive test gate,
 while packaging repeats those checks before writing release artifacts. It does not
 inspect or acquire the production singleton lock. Packaged live qualification
 creates a private purpose `release-qualification` managed runtime under
-`/private/tmp` and uses the existing `--dev` lifecycle, so an installed production
+`/private/tmp` and uses the named `release-qa` lifecycle, so an installed production
 daemon may remain active throughout `make dist`.
 
 ## Runtime isolation and cleanup
 
 `make dist` owns packaged runtime qualification end to end. Do not replace that
-step with a raw `podwayd --dev` process or point its CLI, daemon, account home,
+step with a raw `podwayd --mode release-qa` process or point its CLI, daemon, account home,
 socket, registry, logs, or sandbox at installed production state. The qualifier
 uses the extracted matching binary pair in an owner-private
-`podway.managed-dev-runtime/v2` root with purpose `release-qualification`; the
-installed production LaunchAgent may remain running.
+`podway.managed-runtime/v3` root with purpose `release-qualification`, mode
+`release-qa`, and exact extracted executable digests; the
+installed production LaunchAgent may remain running. Each run uses a unique
+`/private/tmp/podway-release-qa-<uid>-*` root.
 
 Cleanup is part of qualification, not optional follow-up. Each scenario must stop
 its temporary daemon, and a successful full gate must prove that no qualification
-daemon process or socket remains. If a gate fails or is interrupted, do not
-publish or retry until the exact helper-owned process, socket, and root have been
-reconciled. Inspect and clean only the identified owner-private qualification
+daemon process or socket remains, then removes the exact owner-private root. If a
+gate fails or is interrupted, the qualifier preserves and reports the exact
+helper-owned root and executable identity; do not publish or retry until its
+process and socket have been reconciled. Inspect and clean only the identified owner-private qualification
 state; never use broad `/private/tmp` deletion and never edit production databases,
 registry data, sockets, service metadata, or LaunchAgent files to simulate cleanup.
 

@@ -28,7 +28,9 @@ import release_archive
 import release_evidence
 ROOT = Path(__file__).resolve().parents[1]
 PINNED_RUST_TOOLCHAIN = "1.97.1"
-SCHEMA = "podway.managed-dev-runtime/v2"
+SCHEMA = "podway.managed-runtime/v3"
+CONTRIBUTOR_MODE = "contributor"
+RELEASE_QA_MODE = "release-qa"
 V2REL003_QUALIFICATION_SCHEMA = "podway.v2rel003-native-qualification/v1"
 IPC_MAX_PAYLOAD_BYTES = 1_048_576
 METADATA_NAME = "runtime.json"
@@ -41,13 +43,12 @@ DIRECTORY_MODE = 0o700
 FILE_MODE = 0o600
 EXECUTABLE_MODE = 0o755
 ACCOUNT_NAME = "account"
-DEV_HOME_NAME = "dev"
 SANDBOX_NAME = "sandbox"
 SNAPSHOTS_NAME = "snapshots"
 BUILD_TIMEOUT_SECONDS = 600
 COMMAND_TIMEOUT_SECONDS = 60
 DAEMON_READY_TIMEOUT_SECONDS = 30
-FORBIDDEN_RUN_FLAGS = frozenset({"--socket", "--worktree", "--dev"})
+FORBIDDEN_RUN_FLAGS = frozenset({"--socket", "--worktree", "--mode", "--dev"})
 DAEMON_LIFECYCLE_COMMANDS = frozenset(
     {"install", "uninstall", "start", "stop", "restart", "status", "logs"}
 )
@@ -85,7 +86,15 @@ def checkout_digest(checkout: Path) -> str:
 
 
 def managed_root_for(checkout: Path, uid: int | None = None) -> Path:
-    return TMP_ROOT / f"podway-dev-{euid() if uid is None else uid}-{checkout_digest(checkout)}"
+    return TMP_ROOT / (
+        f"podway-contributor-{euid() if uid is None else uid}-{checkout_digest(checkout)}"
+    )
+
+
+def release_qualification_root_for(checkout: Path, uid: int | None = None) -> Path:
+    return TMP_ROOT / (
+        f"podway-release-qa-{euid() if uid is None else uid}-{checkout_digest(checkout)}"
+    )
 
 
 def production_runtime_lock_path() -> Path:
@@ -100,28 +109,54 @@ def layout_paths(root: Path) -> dict[str, Path]:
     return {
         "root": root,
         "account_root": root / ACCOUNT_NAME,
-        "dev_home": root / DEV_HOME_NAME,
+        # Keep this internal alias while the helper migrates from the legacy v2
+        # topology. In v3 the managed runtime root itself owns the namespace.
+        "dev_home": root,
         "sandbox": root / SANDBOX_NAME,
         "snapshots": root / SNAPSHOTS_NAME,
         "metadata": root / METADATA_NAME,
         "development_v2_marker": (
             root / SANDBOX_NAME / ".podway" / "runtime" / DEVELOPMENT_V2_MARKER_NAME
         ),
-        "lock": root / DEV_HOME_NAME / "run" / "podwayd.lock",
-        "socket": root / DEV_HOME_NAME / "run" / "podwayd.sock",
+        "lock": root / "run" / "podwayd.lock",
+        "socket": root / "run" / "podwayd.sock",
     }
 
 
-def expected_identity(checkout: Path, root: Path) -> dict[str, Any]:
+def expected_identity(
+    checkout: Path,
+    root: Path,
+    *,
+    purpose: str = "contributor",
+    mode: str = CONTRIBUTOR_MODE,
+) -> dict[str, Any]:
     paths = layout_paths(root)
+    if purpose == "contributor":
+        expected_root = managed_root_for(checkout)
+    elif purpose == "release-qualification":
+        expected_root = release_qualification_root_for(checkout)
+    else:
+        fail(f"unsupported private runtime purpose: {purpose}")
+    if root != expected_root:
+        fail(f"managed root does not match the canonical {purpose} identity")
     return {
-        "purpose": "contributor",
-        "checkout": checkout.as_posix(),
-        "uid": euid(),
-        "root": root.as_posix(),
-        "account_root": paths["account_root"].as_posix(),
-        "dev_home": paths["dev_home"].as_posix(),
-        "sandbox": paths["sandbox"].as_posix(),
+        "schema": SCHEMA,
+        "metadata_version": 3,
+        "purpose": purpose,
+        "euid": euid(),
+        "canonical_root": root.as_posix(),
+        "mode": mode,
+        "paths": {
+            "lock": paths["lock"].as_posix(),
+            "socket": paths["socket"].as_posix(),
+            "service_state": (root / "state/service.json").as_posix(),
+            "registry": (root / "state/workspaces.json").as_posix(),
+            "recovery": (root / "state/recovery.json").as_posix(),
+            "log": (root / "logs/podwayd.log").as_posix(),
+            "bootstrap_log": (root / "logs/podwayd-bootstrap.log").as_posix(),
+        },
+        "sandbox_root": paths["sandbox"].as_posix(),
+        "generation": None,
     }
 
 
@@ -261,7 +296,7 @@ def audit_managed_tree(
     paths = layout_paths(root)
     validate_socket_capacity(paths["socket"])
     walk_private_tree(root, uid=uid, repair_modes=repair_modes)
-    for key in ("account_root", "dev_home", "sandbox", "snapshots"):
+    for key in ("account_root", "sandbox", "snapshots"):
         if paths[key].exists():
             require_owned_directory(paths[key], label=key.replace("_", " "), uid=uid)
     return paths
@@ -281,12 +316,14 @@ def ensure_managed_tree(checkout: Path) -> dict[str, Path]:
         root.mkdir(mode=DIRECTORY_MODE, parents=False, exist_ok=False)
         os.chmod(root, DIRECTORY_MODE)
     paths = layout_paths(root)
-    for key in ("account_root", "dev_home", "sandbox", "snapshots"):
+    for key in ("account_root", "sandbox", "snapshots"):
         ensure_private_directory(paths[key], uid=uid)
         if not is_exact_child(root, paths[key]):
             fail(f"managed path escaped the root: {paths[key]}")
     # Debug account-root isolation needs synthetic ~/.podway before lock acquisition.
     ensure_private_directory(paths["account_root"] / ".podway", uid=uid)
+    for directory in (root / "run", root / "state", root / "logs"):
+        ensure_private_directory(directory, uid=uid)
     assert_disjoint_from_production(root)
     return paths
 
@@ -340,11 +377,11 @@ def read_metadata(path: Path) -> dict[str, Any]:
     return value
 
 
-def isolation_environment(account_root: Path, dev_home: Path) -> dict[str, str]:
+def isolation_environment(account_root: Path, runtime_root: Path) -> dict[str, str]:
     return {
         "PATH": "/usr/bin:/bin",
         "PODWAY_TEST_ACCOUNT_ROOT": account_root.as_posix(),
-        "PODWAY_DEV_HOME": dev_home.as_posix(),
+        "PODWAY_DEV_HOME": runtime_root.as_posix(),
     }
 
 
@@ -437,6 +474,11 @@ def snapshot_pair(
     cli: Path,
     daemon: Path,
     checkout: Path,
+    *,
+    purpose: str = "contributor",
+    mode: str = CONTRIBUTOR_MODE,
+    require_development_admission: bool = True,
+    require_test_isolation: bool = True,
 ) -> dict[str, Any]:
     cli_digest = release_archive.sha256_file(cli)
     daemon_digest = release_archive.sha256_file(daemon)
@@ -462,34 +504,35 @@ def snapshot_pair(
         actual = release_archive.sha256_file(path)
         if actual != expected:
             fail(f"snapshot {label} digest mismatch: expected {expected}, observed {actual}")
-        capability = release_archive.test_isolation_capability(path)
-        if capability is release_archive.TestIsolationCapability.INDETERMINATE:
+        if require_test_isolation:
             capability = release_archive.test_isolation_capability(path)
-        if capability is not release_archive.TestIsolationCapability.ENABLED:
-            fail(f"snapshot {label} lacks debug test-isolation capability")
-    if (
+            if capability is release_archive.TestIsolationCapability.INDETERMINATE:
+                capability = release_archive.test_isolation_capability(path)
+            if capability is not release_archive.TestIsolationCapability.ENABLED:
+                fail(f"snapshot {label} lacks debug test-isolation capability")
+    if require_development_admission and (
         release_archive.development_v2_admission_capability(snapshotted_daemon)
         is not release_archive.TestIsolationCapability.ENABLED
     ):
         fail(f"snapshot podwayd lacks {DEVELOPMENT_V2_FEATURE} capability")
-    return {
-        "schema": SCHEMA,
-        "purpose": "contributor",
-        "checkout": checkout.as_posix(),
-        "uid": euid(),
-        "root": paths["root"].as_posix(),
-        "account_root": paths["account_root"].as_posix(),
-        "dev_home": paths["dev_home"].as_posix(),
-        "sandbox": paths["sandbox"].as_posix(),
-        "snapshot": {
-            "id": snapshot_id,
-            "directory": snapshot_dir.as_posix(),
-            "podway": snapshotted_cli.as_posix(),
-            "podwayd": snapshotted_daemon.as_posix(),
-            "podway_sha256": cli_digest,
-            "podwayd_sha256": daemon_digest,
+    metadata = expected_identity(
+        checkout,
+        paths["root"],
+        purpose=purpose,
+        mode=mode,
+    )
+    metadata["executables"] = {
+        "cli": {
+            "path": snapshotted_cli.as_posix(),
+            "sha256": f"sha256:{cli_digest}",
         },
+        "daemon": {
+            "path": snapshotted_daemon.as_posix(),
+            "sha256": f"sha256:{daemon_digest}",
+        },
+        "controller": None,
     }
+    return metadata
 
 
 def endpoint_is_live(socket_path: Path) -> bool:
@@ -559,35 +602,54 @@ def prove_isolated_state_idle(paths: dict[str, Path]) -> None:
             os.close(descriptor)
 
 
-def current_snapshot(paths: dict[str, Path], *, checkout: Path) -> dict[str, Any]:
+def current_snapshot(
+    paths: dict[str, Path],
+    *,
+    checkout: Path,
+    purpose: str = "contributor",
+    mode: str = CONTRIBUTOR_MODE,
+) -> dict[str, Any]:
     if not paths["metadata"].exists():
         fail("no managed snapshot metadata; run `python3 tools/dev_runtime.py daemon` first")
     metadata = read_metadata(paths["metadata"])
-    expected = expected_identity(checkout, paths["root"])
+    expected = expected_identity(
+        checkout,
+        paths["root"],
+        purpose=purpose,
+        mode=mode,
+    )
     for key, value in expected.items():
         if metadata.get(key) != value:
             fail(
                 f"runtime metadata {key} mismatch: "
                 f"expected {value!r}, observed {metadata.get(key)!r}"
             )
-    snapshot = metadata.get("snapshot")
-    if not isinstance(snapshot, dict):
-        fail("runtime metadata is missing snapshot identity")
-    for key in ("podway", "podwayd", "directory", "podway_sha256", "podwayd_sha256"):
-        if not isinstance(snapshot.get(key), str) or not snapshot[key]:
-            fail(f"runtime metadata snapshot field is invalid: {key}")
-    reject_dot_components(Path(snapshot["directory"]), label="snapshot directory")
-    if not is_exact_child(paths["root"], Path(snapshot["directory"]).resolve()):
-        fail("snapshot directory escapes the managed root")
+    executables = metadata.get("executables")
+    if not isinstance(executables, dict) or set(executables) != {"cli", "daemon", "controller"}:
+        fail("runtime metadata executables are invalid")
+    if executables.get("controller") is not None:
+        fail("contributor runtime must not declare a controller")
+    for role in ("cli", "daemon"):
+        entry = executables.get(role)
+        if not isinstance(entry, dict) or set(entry) != {"path", "sha256"}:
+            fail(f"runtime metadata {role} identity is invalid")
+        if not isinstance(entry["path"], str) or not isinstance(entry["sha256"], str):
+            fail(f"runtime metadata {role} identity is invalid")
+    snapshot_directory = Path(executables["cli"]["path"]).parent
+    if Path(executables["daemon"]["path"]).parent != snapshot_directory:
+        fail("runtime metadata executable snapshots do not share one directory")
+    reject_dot_components(snapshot_directory, label="snapshot directory")
+    if not is_exact_child(paths["snapshots"], snapshot_directory.resolve()):
+        fail("snapshot directory escapes the managed snapshots root")
     cli = require_trusted_snapshot_binary(
-        paths["root"], snapshot["podway"], label="snapshot podway"
+        paths["root"], executables["cli"]["path"], label="snapshot podway"
     )
     daemon = require_trusted_snapshot_binary(
-        paths["root"], snapshot["podwayd"], label="snapshot podwayd"
+        paths["root"], executables["daemon"]["path"], label="snapshot podwayd"
     )
-    if release_archive.sha256_file(cli) != snapshot["podway_sha256"]:
+    if f"sha256:{release_archive.sha256_file(cli)}" != executables["cli"]["sha256"]:
         fail("snapshot podway digest does not match metadata")
-    if release_archive.sha256_file(daemon) != snapshot["podwayd_sha256"]:
+    if f"sha256:{release_archive.sha256_file(daemon)}" != executables["daemon"]["sha256"]:
         fail("snapshot podwayd digest does not match metadata")
     return metadata
 
@@ -595,6 +657,14 @@ def current_snapshot(paths: dict[str, Path], *, checkout: Path) -> dict[str, Any
 def adopt_snapshot_when_idle(paths: dict[str, Path], metadata: dict[str, Any]) -> None:
     prove_isolated_state_idle(paths)
     atomic_write_private_json(paths["metadata"], metadata)
+
+
+def snapshot_cli(metadata: dict[str, Any]) -> Path:
+    return Path(metadata["executables"]["cli"]["path"])
+
+
+def snapshot_daemon(metadata: dict[str, Any]) -> Path:
+    return Path(metadata["executables"]["daemon"]["path"])
 
 
 def run_git(sandbox: Path, arguments: list[str]) -> subprocess.CompletedProcess[bytes]:
@@ -646,7 +716,11 @@ def reject_run_arguments(arguments: list[str]) -> None:
     for index, token in enumerate(arguments):
         if token in FORBIDDEN_RUN_FLAGS:
             fail(f"run rejects {token}; the managed runtime supplies isolation itself")
-        if token.startswith("--socket=") or token.startswith("--worktree="):
+        if (
+            token.startswith("--socket=")
+            or token.startswith("--worktree=")
+            or token.startswith("--mode=")
+        ):
             fail("run rejects explicit endpoint or worktree overrides")
         if token == "terminate":
             fail("run rejects terminate; stop the managed daemon instead")
@@ -664,10 +738,10 @@ def run_snapshotted_cli(
     stdin: bytes | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     cli = require_trusted_snapshot_binary(
-        paths["root"], metadata["snapshot"]["podway"], label="snapshot podway"
+        paths["root"], metadata["executables"]["cli"]["path"], label="snapshot podway"
     )
     return subprocess.run(
-        [cli.as_posix(), "--dev", *arguments],
+        [cli.as_posix(), "--mode", CONTRIBUTOR_MODE, *arguments],
         cwd=paths["sandbox"],
         env=isolation_environment(paths["account_root"], paths["dev_home"]),
         stdout=subprocess.PIPE,
@@ -698,10 +772,11 @@ def run_cli_binary(
     worktree: Path,
     account_root: Path,
     dev_home: Path,
+    mode: str,
     arguments: list[str],
 ) -> subprocess.CompletedProcess[bytes]:
     return subprocess.run(
-        [cli.as_posix(), "--dev", "--json", *arguments],
+        [cli.as_posix(), "--mode", mode, "--json", *arguments],
         cwd=worktree,
         env=isolation_environment(account_root, dev_home),
         stdout=subprocess.PIPE,
@@ -739,6 +814,7 @@ def qualification_command(
     *,
     label: str,
     expected_code: int | None = 0,
+    mode: str = CONTRIBUTOR_MODE,
 ) -> dict[str, Any]:
     return decode_cli_json(
         run_cli_binary(
@@ -746,6 +822,7 @@ def qualification_command(
             worktree=paths["sandbox"],
             account_root=paths["account_root"],
             dev_home=paths["dev_home"],
+            mode=mode,
             arguments=arguments,
         ),
         label=label,
@@ -846,8 +923,10 @@ def publish_development_v2_marker(
             "workspace_root": paths["sandbox"].as_posix(),
             "socket_path": paths["socket"].as_posix(),
             "state_directory": (paths["dev_home"] / "state").as_posix(),
-            "daemon_path": metadata["snapshot"]["podwayd"],
-            "daemon_sha256": metadata["snapshot"]["podwayd_sha256"],
+            "daemon_path": metadata["executables"]["daemon"]["path"],
+            "daemon_sha256": metadata["executables"]["daemon"]["sha256"].removeprefix(
+                "sha256:"
+            ),
         },
         # The daemon verifies this trust-boundary file against podway-core's exact canonical JSON,
         # which deliberately has no record-separating newline.
@@ -905,13 +984,13 @@ def command_daemon() -> int:
     metadata = snapshot_pair(paths, cli, daemon, checkout)
     adopt_snapshot_when_idle(paths, metadata)
     snapshotted_daemon = require_trusted_snapshot_binary(
-        paths["root"], metadata["snapshot"]["podwayd"], label="snapshot podwayd"
+        paths["root"], metadata["executables"]["daemon"]["path"], label="snapshot podwayd"
     )
     environment = isolation_environment(paths["account_root"], paths["dev_home"])
     os.chdir(paths["root"])
     os.execve(
         snapshotted_daemon.as_posix(),
-        [snapshotted_daemon.as_posix(), "--dev"],
+        [snapshotted_daemon.as_posix(), "--mode", CONTRIBUTOR_MODE],
         environment,
     )
     fail("execve returned unexpectedly")
@@ -1046,7 +1125,9 @@ def daemon_contract_identity(cli: Path, account_root: Path, dev_home: Path) -> d
     return identity
 
 
-def probe_daemon_readiness(socket_path: Path, identity: dict[str, str]) -> str:
+def probe_daemon_readiness(
+    socket_path: Path, identity: dict[str, str], *, expected_mode: str
+) -> str:
     request = {
         "protocol": "podway.ipc/v1",
         "request_id": str(uuid.uuid4()),
@@ -1088,7 +1169,7 @@ def probe_daemon_readiness(socket_path: Path, identity: dict[str, str]) -> str:
         "podway.daemon-status-result/v3",
     }:
         fail(f"daemon status response schema is unsupported: {result.get('schema')!r}")
-    if schema == "podway.daemon-status-result/v3" and result.get("mode") != "dev":
+    if schema == "podway.daemon-status-result/v3" and result.get("mode") != expected_mode:
         fail(f"daemon status response mode is invalid: {result.get('mode')!r}")
     state = result.get("readiness_state")
     if state not in {"starting", "recovering", "ready", "failed"}:
@@ -1113,6 +1194,7 @@ def wait_for_socket(
     cli: Path,
     account_root: Path,
     dev_home: Path,
+    mode: str,
 ) -> None:
     deadline = time.time() + timeout_seconds
     last_observation = "endpoint not live"
@@ -1120,7 +1202,9 @@ def wait_for_socket(
     while time.time() < deadline:
         if endpoint_is_live(socket_path):
             try:
-                state = probe_daemon_readiness(socket_path, identity)
+                state = probe_daemon_readiness(
+                    socket_path, identity, expected_mode=mode
+                )
                 last_observation = f"readiness_state={state}"
                 if state == "ready":
                     return
@@ -1142,13 +1226,14 @@ def start_isolated_daemon(
     *,
     cli: Path,
     label: str = "isolated daemon",
+    mode: str = CONTRIBUTOR_MODE,
 ) -> subprocess.Popen[bytes]:
     for path in (account_root, account_root / ".podway", dev_home):
         path.mkdir(mode=DIRECTORY_MODE, parents=True, exist_ok=True)
         os.chmod(path, DIRECTORY_MODE)
     validate_socket_capacity(dev_home / "run" / "podwayd.sock")
     process = subprocess.Popen(
-        [daemon.as_posix(), "--dev"],
+        [daemon.as_posix(), "--mode", mode],
         cwd=account_root,
         env=isolation_environment(account_root, dev_home),
         stdout=subprocess.DEVNULL,
@@ -1161,6 +1246,7 @@ def start_isolated_daemon(
             cli=cli,
             account_root=account_root,
             dev_home=dev_home,
+            mode=mode,
         )
     except Exception as error:
         process.send_signal(signal.SIGTERM)
@@ -1403,13 +1489,13 @@ def self_test_v2_dogfood(cli: Path, daemon: Path) -> dict[str, Any]:
         metadata = snapshot_pair(paths, cli, daemon, checkout)
         adopt_snapshot_when_idle(paths, metadata)
         snapshotted_daemon = require_trusted_snapshot_binary(
-            paths["root"], metadata["snapshot"]["podwayd"], label="snapshot podwayd"
+            paths["root"], snapshot_daemon(metadata).as_posix(), label="snapshot podwayd"
         )
         process = start_isolated_daemon(
             snapshotted_daemon,
             paths["account_root"],
             paths["dev_home"],
-            cli=Path(metadata["snapshot"]["podway"]),
+            cli=snapshot_cli(metadata),
             label="v2 dogfood daemon",
         )
         initialize_sandbox(paths["sandbox"])
@@ -1615,7 +1701,7 @@ def self_test_v2_dogfood(cli: Path, daemon: Path) -> dict[str, Any]:
             snapshotted_daemon,
             paths["account_root"],
             paths["dev_home"],
-            cli=Path(metadata["snapshot"]["podway"]),
+            cli=snapshot_cli(metadata),
             label="restarted v2 dogfood daemon",
         )
         after_restart = dogfood_v2_status(paths, metadata)
@@ -1628,7 +1714,8 @@ def self_test_v2_dogfood(cli: Path, daemon: Path) -> dict[str, Any]:
             fail("v2 dogfood restart changed the active session, attempt, or goal revision")
         if (
             release_archive.sha256_file(snapshotted_daemon) != before_restart_daemon_digest
-            or current_snapshot(paths, checkout=checkout)["snapshot"] != metadata["snapshot"]
+            or current_snapshot(paths, checkout=checkout)["executables"]
+            != metadata["executables"]
         ):
             fail("v2 dogfood restart did not retain the adopted daemon snapshot")
 
@@ -2129,7 +2216,7 @@ def self_test_v2_dogfood(cli: Path, daemon: Path) -> dict[str, Any]:
             stop_process(process)
         cleanup_failures: list[str] = []
         for temporary, label, prefix in (
-            (root, "managed runtime", f"podway-dev-{euid()}-"),
+            (root, "managed runtime", f"podway-contributor-{euid()}-"),
             (checkout, "synthetic checkout", "podway-dev-checkout-"),
         ):
             try:
@@ -2153,17 +2240,23 @@ def make_synthetic_checkout() -> Path:
     return checkout.resolve()
 
 
-def prepare_synthetic_runtime(checkout: Path) -> dict[str, Path]:
-    root = managed_root_for(checkout)
+def prepare_synthetic_runtime(
+    checkout: Path,
+    *,
+    root: Path | None = None,
+) -> dict[str, Path]:
+    root = managed_root_for(checkout) if root is None else root
     assert_disjoint_from_production(root)
     if root.exists():
         shutil.rmtree(root)
     root.mkdir(mode=DIRECTORY_MODE)
     os.chmod(root, DIRECTORY_MODE)
     paths = layout_paths(root)
-    for key in ("account_root", "dev_home", "sandbox", "snapshots"):
+    for key in ("account_root", "sandbox", "snapshots"):
         ensure_private_directory(paths[key], uid=euid())
     ensure_private_directory(paths["account_root"] / ".podway", uid=euid())
+    for directory in (root / "run", root / "state", root / "logs"):
+        ensure_private_directory(directory, uid=euid())
     return paths
 
 
@@ -2291,8 +2384,8 @@ def command_qualify_v2rel003(
         paths = prepare_synthetic_runtime(checkout)
         metadata = snapshot_pair(paths, cli, debug_daemon, checkout)
         adopt_snapshot_when_idle(paths, metadata)
-        snap_cli = Path(metadata["snapshot"]["podway"])
-        snap_daemon = Path(metadata["snapshot"]["podwayd"])
+        snap_cli = snapshot_cli(metadata)
+        snap_daemon = snapshot_daemon(metadata)
         process = start_isolated_daemon(
             snap_daemon,
             paths["account_root"],
@@ -2484,7 +2577,10 @@ def command_qualify_v2rel003(
         )
         if after_kill["session"]["id"] != session_id or after_kill["procedure"]["digest"] != digest:
             fail("SIGKILL recovery changed session or Procedure identity")
-        if current_snapshot(paths, checkout=checkout)["snapshot"] != metadata["snapshot"]:
+        if (
+            current_snapshot(paths, checkout=checkout)["executables"]
+            != metadata["executables"]
+        ):
             fail("SIGKILL recovery changed the adopted CLI/daemon snapshot identity")
         checks["sigkill_recovery"] = True
         checks["format_equivalence_restart"] = True
@@ -2535,7 +2631,7 @@ def command_qualify_v2rel003(
             racers.append(
                 subprocess.Popen(
                     [
-                        snap_cli.as_posix(), "--dev", "--json", *fence,
+                        snap_cli.as_posix(), "--mode", CONTRIBUTOR_MODE, "--json", *fence,
                         "--idempotency-key", f"v2rel003-race-{suffix}",
                         "retry", "--reason", f"Concurrent stale-fence contender {suffix}.",
                     ],
@@ -2852,10 +2948,13 @@ def command_qualify_v2rel003(
         shutil.rmtree(checkout, ignore_errors=True)
 
     release_checkout = make_synthetic_checkout()
-    release_root = managed_root_for(release_checkout)
+    release_root = release_qualification_root_for(release_checkout)
     release_process: subprocess.Popen[bytes] | None = None
     try:
-        release_paths = prepare_synthetic_runtime(release_checkout)
+        release_paths = prepare_synthetic_runtime(
+            release_checkout,
+            root=release_root,
+        )
         qualification_daemon = release_daemon
         production_socket = production_runtime_lock_path().with_name("podwayd.sock")
         if endpoint_is_live(production_socket):
@@ -2864,23 +2963,50 @@ def command_qualify_v2rel003(
             # disabled development capability was verified above, while this feature-enabled
             # binary exercises the same public admission path without publishing a dev marker.
             qualification_daemon = public_daemon
-        release_process = start_isolated_daemon(
+        release_metadata = snapshot_pair(
+            release_paths,
+            cli,
             qualification_daemon,
+            release_checkout,
+            purpose="release-qualification",
+            mode=RELEASE_QA_MODE,
+            require_development_admission=False,
+            require_test_isolation=False,
+        )
+        adopt_snapshot_when_idle(release_paths, release_metadata)
+        release_metadata = current_snapshot(
+            release_paths,
+            checkout=release_checkout,
+            purpose="release-qualification",
+            mode=RELEASE_QA_MODE,
+        )
+        release_cli = snapshot_cli(release_metadata)
+        release_qualification_daemon = snapshot_daemon(release_metadata)
+        release_process = start_isolated_daemon(
+            release_qualification_daemon,
             release_paths["account_root"],
             release_paths["dev_home"],
-            cli=cli,
+            cli=release_cli,
             label="release-profile qualification daemon",
+            mode=RELEASE_QA_MODE,
         )
         initialize_sandbox(release_paths["sandbox"])
-        qualification_command(cli, release_paths, ["init"], label="release-profile init")
+        qualification_command(
+            release_cli,
+            release_paths,
+            ["init"],
+            label="release-profile init",
+            mode=RELEASE_QA_MODE,
+        )
         release_started_envelope = qualification_command(
-            cli,
+            release_cli,
             release_paths,
             [
                 "--idempotency-key", "v2rel003-release-public-admission",
                 "start", "--preset", "sw-dev-v2", "--task", "Release admission",
             ],
             label="release-profile public v2 admission",
+            mode=RELEASE_QA_MODE,
         )
         release_started = require_output_result(
             release_started_envelope,
@@ -2896,7 +3022,7 @@ def command_qualify_v2rel003(
             fail("release-profile public v2 start was not durably admitted")
         require_output_result(
             qualification_command(
-                cli,
+                release_cli,
                 release_paths,
                 [
                     "--idempotency-key", "v2rel003-release-public-begin",
@@ -2906,16 +3032,18 @@ def command_qualify_v2rel003(
                     "--actor", "V2REL-003 qualifier",
                 ],
                 label="release-profile public v2 begin",
+                mode=RELEASE_QA_MODE,
             ),
             command="session.begin",
             result_schema="podway.session-begin-result/v1",
         )
         release_status = require_output_result(
             qualification_command(
-                cli,
+                release_cli,
                 release_paths,
                 ["status"],
                 label="release-profile status after public v2 admission",
+                mode=RELEASE_QA_MODE,
             ),
             command="session.status",
             result_schema="podway.status-result/v3",
@@ -3009,6 +3137,7 @@ def self_test_command_escape() -> int:
         (["--socket", "/tmp/x.sock", "status"], "--socket"),
         (["--worktree", "/tmp/wt", "status"], "--worktree"),
         (["--dev", "status"], "--dev"),
+        (["--mode", "demo", "status"], "--mode"),
         (["terminate"], "terminate"),
         (["daemon", "status"], "daemon lifecycle"),
         (["daemon", "install"], "daemon lifecycle"),
@@ -3039,14 +3168,17 @@ def self_test_snapshot_and_clean() -> int:
         if cli_digest == daemon_digest:
             fail("snapshot self-test requires distinct CLI and daemon probe digests")
         metadata = snapshot_pair(paths, cli_source, daemon_source, checkout)
-        snapshot = metadata["snapshot"]
-        if Path(snapshot["podway"]) != paths["snapshots"] / snapshot["id"] / "podway":
+        executables = metadata["executables"]
+        snapshot_id = hashlib.sha256(
+            f"{cli_digest}:{daemon_digest}".encode()
+        ).hexdigest()[:12]
+        if Path(executables["cli"]["path"]) != paths["snapshots"] / snapshot_id / "podway":
             fail("metadata podway path does not identify the snapshot CLI")
-        if Path(snapshot["podwayd"]) != paths["snapshots"] / snapshot["id"] / "podwayd":
+        if Path(executables["daemon"]["path"]) != paths["snapshots"] / snapshot_id / "podwayd":
             fail("metadata podwayd path does not identify the snapshot daemon")
-        if snapshot["podway_sha256"] != cli_digest:
+        if executables["cli"]["sha256"] != f"sha256:{cli_digest}":
             fail("metadata lost the CLI digest")
-        if snapshot["podwayd_sha256"] != daemon_digest:
+        if executables["daemon"]["sha256"] != f"sha256:{daemon_digest}":
             fail("metadata lost the daemon digest")
         adopt_snapshot_when_idle(paths, metadata)
         ensure_private_directory(paths["sandbox"] / ".podway", uid=euid())
@@ -3063,28 +3195,21 @@ def self_test_snapshot_and_clean() -> int:
             marker.get("schema") != DEVELOPMENT_V2_MARKER_SCHEMA
             or marker.get("feature") != DEVELOPMENT_V2_FEATURE
             or marker.get("workspace_root") != paths["sandbox"].as_posix()
-            or marker.get("daemon_path") != snapshot["podwayd"]
+            or marker.get("daemon_path") != executables["daemon"]["path"]
             or marker.get("daemon_sha256") != daemon_digest
         ):
             fail("development-v2 marker lost its exact runtime or snapshot binding")
         sentinels += 1
-        revalidated = current_snapshot(paths, checkout=checkout)["snapshot"]
-        if revalidated["podway"] != snapshot["podway"] or revalidated["podwayd"] != snapshot["podwayd"]:
+        revalidated = current_snapshot(paths, checkout=checkout)["executables"]
+        if revalidated != executables:
             fail("current_snapshot changed snapshot paths")
-        if (
-            revalidated["podway_sha256"] != cli_digest
-            or revalidated["podwayd_sha256"] != daemon_digest
-        ):
-            fail("current_snapshot failed to revalidate both digests")
         sentinels += 1
 
         for key, wrong in (
-            ("checkout", "/tmp/wrong-checkout"),
-            ("uid", euid() + 1),
-            ("root", (root / "mutated").as_posix()),
-            ("account_root", (root / "wrong-account").as_posix()),
-            ("dev_home", (root / "wrong-dev").as_posix()),
-            ("sandbox", (root / "wrong-sandbox").as_posix()),
+            ("euid", euid() + 1),
+            ("canonical_root", (root / "mutated").as_posix()),
+            ("mode", "wrong-mode"),
+            ("sandbox_root", (root / "wrong-sandbox").as_posix()),
         ):
             tampered = json.loads(json.dumps(metadata))
             tampered[key] = wrong
@@ -3155,49 +3280,75 @@ def self_test_snapshot_and_clean() -> int:
 
 
 def self_test_dual_daemon(cli: Path, daemon: Path) -> int:
-    with tempfile.TemporaryDirectory(prefix="pw-dev-dual-", dir="/private/tmp") as name:
-        root = Path(name)
-        os.chmod(root, DIRECTORY_MODE)
-        first_account, first_dev = root / "a1", root / "d1"
-        second_account, second_dev = root / "a2", root / "d2"
-        first = start_isolated_daemon(
-            daemon, first_account, first_dev, cli=cli, label="first dual-daemon sentinel"
+    first_checkout = make_synthetic_checkout()
+    second_checkout = make_synthetic_checkout()
+    first_paths = prepare_synthetic_runtime(first_checkout)
+    second_paths = prepare_synthetic_runtime(second_checkout)
+    first_metadata = snapshot_pair(first_paths, cli, daemon, first_checkout)
+    second_metadata = snapshot_pair(second_paths, cli, daemon, second_checkout)
+    adopt_snapshot_when_idle(first_paths, first_metadata)
+    adopt_snapshot_when_idle(second_paths, second_metadata)
+    first = start_isolated_daemon(
+        snapshot_daemon(first_metadata),
+        first_paths["account_root"],
+        first_paths["dev_home"],
+        cli=snapshot_cli(first_metadata),
+        label="first dual-daemon sentinel",
+    )
+    second = start_isolated_daemon(
+        snapshot_daemon(second_metadata),
+        second_paths["account_root"],
+        second_paths["dev_home"],
+        cli=snapshot_cli(second_metadata),
+        label="second dual-daemon sentinel",
+    )
+    try:
+        if not endpoint_is_live(first_paths["socket"]):
+            fail("first isolated daemon endpoint is not live")
+        if not endpoint_is_live(second_paths["socket"]):
+            fail("second isolated daemon endpoint is not live")
+        expect_failure(
+            lambda: prove_isolated_state_idle(first_paths),
+            "lock is held",
         )
-        second = start_isolated_daemon(
-            daemon, second_account, second_dev, cli=cli, label="second dual-daemon sentinel"
+        conflicting = subprocess.Popen(
+            [snapshot_daemon(first_metadata).as_posix(), "--mode", CONTRIBUTOR_MODE],
+            cwd=first_paths["account_root"],
+            env=isolation_environment(
+                first_paths["account_root"], first_paths["dev_home"]
+            ),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
         )
-        try:
-            if not endpoint_is_live(first_dev / "run" / "podwayd.sock"):
-                fail("first isolated daemon endpoint is not live")
-            if not endpoint_is_live(second_dev / "run" / "podwayd.sock"):
-                fail("second isolated daemon endpoint is not live")
-            conflicting = subprocess.Popen(
-                [daemon.as_posix(), "--dev"],
-                cwd=first_account,
-                env=isolation_environment(first_account, first_dev),
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
+        time.sleep(0.5)
+        conflict_code = conflicting.poll()
+        if conflict_code is not None:
+            fail(
+                "duplicate isolated daemon did not remain blocked by the owned runtime lock: "
+                f"exit {conflict_code}"
             )
-            try:
-                conflict_code = conflicting.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                stop_process(conflicting)
-                fail("duplicate isolated daemon did not exit while the lock was held")
-            if conflict_code == 0:
-                fail("duplicate isolated daemon unexpectedly acquired the same account root")
-            stop_process(first)
-            deadline = time.time() + 5
-            while time.time() < deadline and endpoint_is_live(first_dev / "run" / "podwayd.sock"):
-                time.sleep(0.05)
-            if endpoint_is_live(first_dev / "run" / "podwayd.sock"):
-                fail("stopped daemon is still live")
-            if not endpoint_is_live(second_dev / "run" / "podwayd.sock"):
-                fail("stopping one isolated daemon disturbed the other")
-            if second.poll() is not None:
-                fail("surviving isolated daemon process exited unexpectedly")
-        finally:
-            stop_process(first)
-            stop_process(second)
+        stop_process(conflicting)
+        if not endpoint_is_live(first_paths["socket"]):
+            fail("duplicate daemon attempt displaced the original endpoint")
+        stop_process(first)
+        deadline = time.time() + 5
+        while time.time() < deadline and endpoint_is_live(first_paths["socket"]):
+            time.sleep(0.05)
+        if endpoint_is_live(first_paths["socket"]):
+            fail("stopped daemon is still live")
+        if not endpoint_is_live(second_paths["socket"]):
+            fail("stopping one isolated daemon disturbed the other")
+        if second.poll() is not None:
+            fail("surviving isolated daemon process exited unexpectedly")
+    finally:
+        stop_process(first)
+        stop_process(second)
+        for paths, checkout in (
+            (first_paths, first_checkout),
+            (second_paths, second_checkout),
+        ):
+            shutil.rmtree(paths["root"], ignore_errors=True)
+            shutil.rmtree(checkout, ignore_errors=True)
     return 1
 
 

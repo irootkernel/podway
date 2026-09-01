@@ -99,7 +99,7 @@ impl ProductionDaemonRuntimeConfigV1 {
         current_executable: &Path,
     ) -> Self {
         self.procedure_v2_admission = ProcedureV2AdmissionGateV1::development(
-            DevelopmentV2AdmissionGateV1::from_process(self.dev_mode, paths, current_executable),
+            DevelopmentV2AdmissionGateV1::from_process(paths, current_executable),
         );
         self
     }

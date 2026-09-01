@@ -64,19 +64,18 @@ impl DevelopmentV2AdmissionGateV1 {
     /// Captures immutable process topology at daemon startup. Invalid or incomplete development
     /// provenance deliberately leaves the daemon usable for v1 while keeping v2 admission closed.
     pub(crate) fn from_process(
-        dev_mode: bool,
         active_paths: &ServiceRuntimePathsV1,
         current_executable: &Path,
     ) -> Self {
         #[cfg(all(feature = "development-v2-admission", debug_assertions))]
         {
             Self {
-                enabled: enabled_process_identity_v1(dev_mode, active_paths, current_executable),
+                enabled: enabled_process_identity_v1(active_paths, current_executable),
             }
         }
         #[cfg(not(all(feature = "development-v2-admission", debug_assertions)))]
         {
-            let _ = (dev_mode, active_paths, current_executable);
+            let _ = (active_paths, current_executable);
             Self { enabled: None }
         }
     }
@@ -152,24 +151,18 @@ const PRIVATE_DIRECTORY_MODE_V1: u32 = 0o700;
 
 #[cfg(all(feature = "development-v2-admission", debug_assertions))]
 fn enabled_process_identity_v1(
-    dev_mode: bool,
     active_paths: &ServiceRuntimePathsV1,
     current_executable: &Path,
 ) -> Option<DevelopmentV2ProcessIdentityV1> {
-    use std::os::unix::ffi::OsStrExt as _;
-
     use sha2::{Digest as _, Sha256};
 
-    if !dev_mode {
-        return None;
-    }
     let dev_home = active_paths.podway_home()?.as_path().to_path_buf();
-    let managed_root = dev_home.parent()?.to_path_buf();
+    let managed_root = dev_home.clone();
     if managed_root.parent()? != Path::new("/private/tmp")
         || !managed_root
             .file_name()?
             .to_string_lossy()
-            .starts_with("podway-dev-")
+            .starts_with("podway-contributor-")
     {
         return None;
     }
@@ -180,41 +173,44 @@ fn enabled_process_identity_v1(
         uid,
         DEVELOPMENT_V2_METADATA_MAX_BYTES_V1,
     )?;
-    let checkout = metadata.checkout.canonicalize().ok()?;
-    let checkout_digest = format!("{:x}", Sha256::digest(checkout.as_os_str().as_bytes()));
-    let expected_managed_root =
-        Path::new("/private/tmp").join(format!("podway-dev-{uid}-{}", &checkout_digest[..12]));
     let current_executable = current_executable.canonicalize().ok()?;
-    let daemon_path = metadata.snapshot.podwayd.canonicalize().ok()?;
+    let daemon_path = metadata.executables.daemon.path.canonicalize().ok()?;
+    let snapshot_directory = daemon_path.parent()?.to_path_buf();
     let production_paths = ServiceRuntimePathsV1::for_effective_user().ok()?;
     let state_directory = active_paths.workspace_registry_path().as_path().parent()?;
-    let runtime_lock = dev_home.join("run/podwayd.lock");
-    if metadata.schema != "podway.managed-dev-runtime/v2"
+    let runtime_lock = managed_root.join("run/podwayd.lock");
+    let root_name = managed_root.file_name()?.to_string_lossy();
+    let expected_prefix = format!("podway-contributor-{uid}-");
+    let suffix = root_name.strip_prefix(&expected_prefix)?;
+    if suffix.len() != 12
+        || !suffix.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || metadata.schema != "podway.managed-runtime/v3"
+        || metadata.metadata_version != 3
         || metadata.purpose != "contributor"
-        || metadata.uid != uid
-        || metadata.root != managed_root
-        || metadata.dev_home != dev_home
-        || metadata.sandbox != managed_root.join("sandbox")
-        || metadata.account_root != managed_root.join("account")
-        || metadata.checkout != checkout
-        || managed_root != expected_managed_root
-        || metadata.snapshot.directory != managed_root.join("snapshots").join(&metadata.snapshot.id)
-        || metadata.snapshot.podway != metadata.snapshot.directory.join("podway")
-        || metadata.snapshot.podwayd != metadata.snapshot.directory.join("podwayd")
-        || metadata.snapshot.podwayd != daemon_path
-        || metadata.snapshot.directory.file_name()?.to_string_lossy() != metadata.snapshot.id
-        || metadata.snapshot.podway_sha256.len() != 64
-        || !metadata
-            .snapshot
-            .podway_sha256
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        || metadata.euid != uid
+        || metadata.canonical_root != managed_root
+        || metadata.mode != "contributor"
+        || metadata.sandbox_root.as_deref() != Some(managed_root.join("sandbox").as_path())
+        || metadata.executables.controller.is_some()
+        || metadata.generation.is_some()
+        || metadata.executables.cli.path.parent()? != snapshot_directory
+        || metadata.executables.cli.path != snapshot_directory.join("podway")
+        || metadata.executables.daemon.path != snapshot_directory.join("podwayd")
+        || !snapshot_directory.starts_with(managed_root.join("snapshots"))
+        || metadata.paths.lock != runtime_lock
+        || metadata.paths.socket != managed_root.join("run/podwayd.sock")
+        || metadata.paths.service_state != managed_root.join("state/service.json")
+        || metadata.paths.registry != managed_root.join("state/workspaces.json")
+        || metadata.paths.recovery != managed_root.join("state/recovery.json")
+        || metadata.paths.log != managed_root.join("logs/podwayd.log")
+        || metadata.paths.bootstrap_log != managed_root.join("logs/podwayd-bootstrap.log")
+        || !valid_prefixed_digest(&metadata.executables.cli.sha256)
+        || !valid_prefixed_digest(&metadata.executables.daemon.sha256)
         || active_paths.global_lock_path().as_path() != runtime_lock
-        || active_paths.socket_path().as_path() != dev_home.join("run/podwayd.sock")
+        || active_paths.socket_path().as_path() != managed_root.join("run/podwayd.sock")
         || active_paths.workspace_registry_path().as_path()
-            != dev_home.join("state/workspaces.json")
+            != managed_root.join("state/workspaces.json")
         || current_executable != daemon_path
-        || !daemon_path.starts_with(managed_root.join("snapshots"))
         || active_paths.socket_path().as_path() == production_paths.socket_path().as_path()
         || active_paths.workspace_registry_path().as_path()
             == production_paths.workspace_registry_path().as_path()
@@ -225,17 +221,22 @@ fn enabled_process_identity_v1(
     }
     let provisional = DevelopmentV2ProcessIdentityV1 {
         managed_root,
-        account_root: metadata.account_root,
+        account_root: dev_home.join("account"),
         dev_home,
-        sandbox: metadata.sandbox,
+        sandbox: metadata.sandbox_root?,
         socket_path: active_paths.socket_path().as_path().to_path_buf(),
         state_directory: state_directory.to_path_buf(),
         daemon_path: daemon_path.clone(),
-        daemon_sha256: metadata.snapshot.podwayd_sha256.clone(),
+        daemon_sha256: metadata
+            .executables
+            .daemon
+            .sha256
+            .strip_prefix("sha256:")?
+            .to_owned(),
         production_paths,
         uid,
     };
-    if !validate_process_directories_v1(&provisional, &metadata.snapshot.directory) {
+    if !validate_process_directories_v1(&provisional, &snapshot_directory) {
         return None;
     }
     let bytes = read_owned_regular_bytes_v1(
@@ -245,13 +246,22 @@ fn enabled_process_identity_v1(
         SERVICE_DAEMON_BINARY_MAX_BYTES_V1 as u64,
     )?;
     let daemon_sha256 = format!("{:x}", Sha256::digest(bytes));
-    if daemon_sha256 != metadata.snapshot.podwayd_sha256 {
+    if format!("sha256:{daemon_sha256}") != metadata.executables.daemon.sha256 {
         return None;
     }
     Some(DevelopmentV2ProcessIdentityV1 {
         daemon_sha256,
         ..provisional
     })
+}
+
+#[cfg(all(feature = "development-v2-admission", debug_assertions))]
+fn valid_prefixed_digest(value: &str) -> bool {
+    value.len() == 71
+        && value.starts_with("sha256:")
+        && value[7..]
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
 #[cfg(all(feature = "development-v2-admission", debug_assertions))]
@@ -384,26 +394,45 @@ fn validate_request_directories_v1(identity: &DevelopmentV2ProcessIdentityV1) ->
 #[serde(deny_unknown_fields)]
 struct DevelopmentRuntimeMetadataV1 {
     schema: String,
+    metadata_version: u8,
     purpose: String,
-    checkout: PathBuf,
-    uid: u32,
-    root: PathBuf,
-    account_root: PathBuf,
-    dev_home: PathBuf,
-    sandbox: PathBuf,
-    snapshot: DevelopmentRuntimeSnapshotV1,
+    euid: u32,
+    canonical_root: PathBuf,
+    mode: String,
+    paths: DevelopmentRuntimePathsV1,
+    sandbox_root: Option<PathBuf>,
+    executables: DevelopmentRuntimeExecutablesV1,
+    generation: Option<String>,
 }
 
 #[cfg(all(feature = "development-v2-admission", debug_assertions))]
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-struct DevelopmentRuntimeSnapshotV1 {
-    id: String,
-    directory: PathBuf,
-    podway: PathBuf,
-    podwayd: PathBuf,
-    podway_sha256: String,
-    podwayd_sha256: String,
+struct DevelopmentRuntimePathsV1 {
+    lock: PathBuf,
+    socket: PathBuf,
+    service_state: PathBuf,
+    registry: PathBuf,
+    recovery: PathBuf,
+    log: PathBuf,
+    bootstrap_log: PathBuf,
+}
+
+#[cfg(all(feature = "development-v2-admission", debug_assertions))]
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DevelopmentRuntimeExecutablesV1 {
+    cli: DevelopmentRuntimeExecutableV1,
+    daemon: DevelopmentRuntimeExecutableV1,
+    controller: Option<DevelopmentRuntimeExecutableV1>,
+}
+
+#[cfg(all(feature = "development-v2-admission", debug_assertions))]
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DevelopmentRuntimeExecutableV1 {
+    path: PathBuf,
+    sha256: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -435,7 +464,7 @@ mod tests {
         },
     };
 
-    use podway_core::{Sha256Digest, UnixMillis, WorkspaceId};
+    use podway_core::{RuntimeModeV1, Sha256Digest, UnixMillis, WorkspaceId};
     use podway_git::{
         DiagnosticPathDisplayV1, GitResolverContractV1, LosslessPathV1, NativeGitResolverV1,
         ValidatedWorktreeV1, WORKTREE_SELECTOR_VERSION_V1, WorktreeSelectorV1,
@@ -487,11 +516,11 @@ mod tests {
             let checkout = checkout.canonicalize().unwrap();
             let checkout_digest = format!("{:x}", Sha256::digest(checkout.as_os_str().as_bytes()));
             let root = PathBuf::from(format!(
-                "/private/tmp/podway-dev-{uid}-{}",
+                "/private/tmp/podway-contributor-{uid}-{}",
                 &checkout_digest[..12]
             ));
             let account = root.join("account");
-            let dev_home = root.join("dev");
+            let dev_home = root.clone();
             let sandbox = root.join("sandbox");
             let snapshot = root.join("snapshots/fixture");
             for directory in [
@@ -499,9 +528,9 @@ mod tests {
                 &account,
                 &account.join(".podway"),
                 &account.join(".podway/run"),
-                &dev_home,
-                &dev_home.join("run"),
-                &dev_home.join("state"),
+                &root.join("run"),
+                &root.join("state"),
+                &root.join("logs"),
                 &sandbox,
                 &sandbox.join(".podway"),
                 &sandbox.join(".podway/runtime"),
@@ -515,7 +544,12 @@ mod tests {
             fs::write(&daemon, b"feature-enabled debug daemon fixture").unwrap();
             fs::set_permissions(&daemon, fs::Permissions::from_mode(0o755)).unwrap();
             let digest = format!("{:x}", Sha256::digest(fs::read(&daemon).unwrap()));
-            let paths = ServiceRuntimePathsV1::for_dev_home(&account, &dev_home, uid).unwrap();
+            let paths = ServiceRuntimePathsV1::for_runtime_root(
+                &root,
+                RuntimeModeV1::new("contributor").unwrap(),
+                uid,
+            )
+            .unwrap();
             run_git(&sandbox, &["init", "--quiet"]);
             run_git(
                 &sandbox,
@@ -532,22 +566,34 @@ mod tests {
             write_private_json(
                 &root.join("runtime.json"),
                 &serde_json::json!({
-                    "schema": "podway.managed-dev-runtime/v2",
+                    "schema": "podway.managed-runtime/v3",
+                    "metadata_version": 3,
                     "purpose": "contributor",
-                    "checkout": checkout,
-                    "uid": uid,
-                    "root": root,
-                    "account_root": account,
-                    "dev_home": dev_home,
-                    "sandbox": sandbox,
-                    "snapshot": {
-                        "id": "fixture",
-                        "directory": snapshot,
-                        "podway": snapshot.join("podway"),
-                        "podwayd": daemon,
-                        "podway_sha256": "0".repeat(64),
-                        "podwayd_sha256": digest,
-                    }
+                    "euid": uid,
+                    "canonical_root": root,
+                    "mode": "contributor",
+                    "paths": {
+                        "lock": root.join("run/podwayd.lock"),
+                        "socket": root.join("run/podwayd.sock"),
+                        "service_state": root.join("state/service.json"),
+                        "registry": root.join("state/workspaces.json"),
+                        "recovery": root.join("state/recovery.json"),
+                        "log": root.join("logs/podwayd.log"),
+                        "bootstrap_log": root.join("logs/podwayd-bootstrap.log"),
+                    },
+                    "sandbox_root": sandbox,
+                    "executables": {
+                        "cli": {
+                            "path": snapshot.join("podway"),
+                            "sha256": format!("sha256:{}", "0".repeat(64)),
+                        },
+                        "daemon": {
+                            "path": daemon,
+                            "sha256": format!("sha256:{digest}"),
+                        },
+                        "controller": null,
+                    },
+                    "generation": null,
                 }),
             );
             let identity_digest = Sha256Digest::new(format!("sha256:{}", "a".repeat(64))).unwrap();
@@ -633,14 +679,12 @@ mod tests {
     }
 
     #[test]
-    fn v2plt009_gate_requires_dev_process_and_exact_disposable_marker() {
+    fn v2plt009_gate_requires_exact_contributor_process_and_disposable_marker() {
         let fixture = Fixture::new();
-        let production =
-            DevelopmentV2AdmissionGateV1::from_process(false, &fixture.paths, &fixture.daemon);
+        let production = DevelopmentV2AdmissionGateV1::default();
         assert!(!production.process_is_eligible());
 
-        let gate =
-            DevelopmentV2AdmissionGateV1::from_process(true, &fixture.paths, &fixture.daemon);
+        let gate = DevelopmentV2AdmissionGateV1::from_process(&fixture.paths, &fixture.daemon);
         assert!(gate.process_is_eligible());
         assert!(!gate.permits_workspace(&fixture.binding, &fixture.worktree));
 
@@ -669,8 +713,7 @@ mod tests {
     fn v2plt009_gate_rejects_marker_tamper_and_normal_registry_membership() {
         let fixture = Fixture::new();
         fixture.write_marker();
-        let mut gate =
-            DevelopmentV2AdmissionGateV1::from_process(true, &fixture.paths, &fixture.daemon);
+        let mut gate = DevelopmentV2AdmissionGateV1::from_process(&fixture.paths, &fixture.daemon);
         assert!(gate.permits_workspace(&fixture.binding, &fixture.worktree));
 
         let marker = fixture
@@ -728,8 +771,7 @@ mod tests {
         fs::create_dir_all(installed_copy.parent().unwrap()).unwrap();
         fs::copy(&fixture.daemon, &installed_copy).unwrap();
         fs::set_permissions(&installed_copy, fs::Permissions::from_mode(0o755)).unwrap();
-        let installed =
-            DevelopmentV2AdmissionGateV1::from_process(true, &fixture.paths, &installed_copy);
+        let installed = DevelopmentV2AdmissionGateV1::from_process(&fixture.paths, &installed_copy);
         assert!(!installed.process_is_eligible());
 
         let alternate_socket = fixture.dev_home.join("run/not-the-managed-endpoint.sock");
@@ -739,24 +781,54 @@ mod tests {
             .with_socket_path(&alternate_socket)
             .unwrap();
         let wrong_endpoint =
-            DevelopmentV2AdmissionGateV1::from_process(true, &wrong_endpoint, &fixture.daemon);
+            DevelopmentV2AdmissionGateV1::from_process(&wrong_endpoint, &fixture.daemon);
         assert!(!wrong_endpoint.process_is_eligible());
 
         let original_metadata: serde_json::Value =
             serde_json::from_slice(&fs::read(fixture.root.join("runtime.json")).unwrap()).unwrap();
+        for (field, value) in [
+            (
+                "purpose",
+                serde_json::Value::String("release-qualification".to_owned()),
+            ),
+            ("mode", serde_json::Value::String("release-qa".to_owned())),
+            (
+                "metadata_version",
+                serde_json::Value::Number(serde_json::Number::from(2)),
+            ),
+            (
+                "schema",
+                serde_json::Value::String("podway.managed-dev-runtime/v2".to_owned()),
+            ),
+        ] {
+            let mut metadata = original_metadata.clone();
+            metadata[field] = value;
+            write_private_json(&fixture.root.join("runtime.json"), &metadata);
+            let rejected =
+                DevelopmentV2AdmissionGateV1::from_process(&fixture.paths, &fixture.daemon);
+            assert!(!rejected.process_is_eligible(), "accepted invalid {field}");
+        }
         let mut metadata = original_metadata.clone();
-        metadata["checkout"] =
+        metadata["executables"]["controller"] = original_metadata["executables"]["cli"].clone();
+        write_private_json(&fixture.root.join("runtime.json"), &metadata);
+        let controller =
+            DevelopmentV2AdmissionGateV1::from_process(&fixture.paths, &fixture.daemon);
+        assert!(!controller.process_is_eligible());
+
+        let mut metadata = original_metadata.clone();
+        metadata["canonical_root"] =
             serde_json::Value::String(fixture.sandbox.to_string_lossy().into_owned());
         write_private_json(&fixture.root.join("runtime.json"), &metadata);
         let wrong_root =
-            DevelopmentV2AdmissionGateV1::from_process(true, &fixture.paths, &fixture.daemon);
+            DevelopmentV2AdmissionGateV1::from_process(&fixture.paths, &fixture.daemon);
         assert!(!wrong_root.process_is_eligible());
 
         let mut metadata = original_metadata;
-        metadata["snapshot"]["podwayd_sha256"] = serde_json::Value::String("0".repeat(64));
+        metadata["executables"]["daemon"]["sha256"] =
+            serde_json::Value::String(format!("sha256:{}", "0".repeat(64)));
         write_private_json(&fixture.root.join("runtime.json"), &metadata);
         let wrong_digest =
-            DevelopmentV2AdmissionGateV1::from_process(true, &fixture.paths, &fixture.daemon);
+            DevelopmentV2AdmissionGateV1::from_process(&fixture.paths, &fixture.daemon);
         assert!(!wrong_digest.process_is_eligible());
     }
 
@@ -805,8 +877,7 @@ mod tests {
         ));
         fixture.write_marker();
 
-        let mut gate =
-            DevelopmentV2AdmissionGateV1::from_process(true, &fixture.paths, &fixture.daemon);
+        let mut gate = DevelopmentV2AdmissionGateV1::from_process(&fixture.paths, &fixture.daemon);
         let production_account = fixture.root.join("isolated-production-account");
         let production_home = fixture.root.join("isolated-production-home");
         fs::create_dir_all(&production_account).unwrap();

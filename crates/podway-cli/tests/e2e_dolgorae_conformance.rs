@@ -26,6 +26,7 @@ use nix::{
     unistd::{Pid, geteuid},
 };
 use podway_cli::client::DaemonClientV1;
+use podway_core::RuntimeModeV1;
 use podway_protocol::{
     ClientInfoV1, CommandNameV1, OperationV1, PreconditionsV1, RequestEnvelopeInputV1,
     RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, ResponseEnvelopeV2,
@@ -37,7 +38,8 @@ use serde_json::Value;
 static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 const DISTRIBUTION_QUALIFICATION_ROOT_ENV: &str = "PODWAY_DISTRIBUTION_QUALIFICATION_ROOT";
 const DISTRIBUTION_ACCOUNT_HOME_ENV: &str = "PODWAY_DISTRIBUTION_ACCOUNT_HOME";
-const DISTRIBUTION_DEV_HOME_ENV: &str = "PODWAY_DISTRIBUTION_DEV_HOME";
+const DISTRIBUTION_RUNTIME_ROOT_ENV: &str = "PODWAY_DISTRIBUTION_RUNTIME_ROOT";
+const RELEASE_QA_MODE: &str = "release-qa";
 
 struct ControlledPathFixtureV1 {
     root: PathBuf,
@@ -155,7 +157,7 @@ impl ControlledPathFixtureV1 {
             return output;
         }
         if self.production_service && !arguments.contains(&"--socket") {
-            command.arg("--dev");
+            command.args(["--mode", RELEASE_QA_MODE]);
         }
         command
             .args(arguments)
@@ -189,7 +191,7 @@ impl ControlledPathFixtureV1 {
     fn run_owned(&self, path: &str, arguments: &[String]) -> Output {
         let mut command = Command::new("podway");
         if self.production_service && !arguments.iter().any(|argument| argument == "--socket") {
-            command.arg("--dev");
+            command.args(["--mode", RELEASE_QA_MODE]);
         }
         command
             .args(arguments.iter().map(String::as_str))
@@ -204,6 +206,9 @@ impl ControlledPathFixtureV1 {
 
     fn run_from(&self, path: &str, directory: &Path, arguments: &[&str]) -> Output {
         let mut command = Command::new("podway");
+        if self.production_service && !arguments.contains(&"--socket") {
+            command.args(["--mode", RELEASE_QA_MODE]);
+        }
         command
             .args(arguments)
             .current_dir(directory)
@@ -217,7 +222,7 @@ impl ControlledPathFixtureV1 {
 
     fn configure_test_isolation(&self, command: &mut Command) {
         if self.production_service {
-            command.env("PODWAY_DEV_HOME", self.dev_home());
+            command.env("PODWAY_DEV_HOME", self.runtime_root());
         } else {
             command
                 .env("PODWAY_TEST_ACCOUNT_ROOT", &self.home)
@@ -334,6 +339,7 @@ impl ControlledPathFixtureV1 {
                 )
                 && (output.result()["schema"] == "podway.daemon-status-result/v1"
                     || output.result()["readiness_state"] == "ready")
+                && (!self.production_service || output.result()["mode"] == RELEASE_QA_MODE)
             {
                 return;
             }
@@ -348,7 +354,11 @@ impl ControlledPathFixtureV1 {
 
     fn runtime_paths(&self) -> ServiceRuntimePathsV1 {
         if self.production_service {
-            ServiceRuntimePathsV1::for_dev_home(&self.home, self.dev_home(), geteuid().as_raw())
+            ServiceRuntimePathsV1::for_runtime_root(
+                self.runtime_root(),
+                RuntimeModeV1::new(RELEASE_QA_MODE).expect("release qualification mode"),
+                geteuid().as_raw(),
+            )
         } else {
             ServiceRuntimePathsV1::for_account_home(&self.home, geteuid().as_raw())
         }
@@ -357,15 +367,7 @@ impl ControlledPathFixtureV1 {
 
     fn uninstall(&self, path: &str) {
         if self.production_service {
-            let output = self.run(path, &["--json", "terminate"]);
-            assert!(
-                output.status.success(),
-                "dev daemon terminate failed: stdout={} stderr={}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-            assert!(!self.socket_path().exists());
-            self.wait_dev_daemon();
+            self.stop_dev_daemon();
             return;
         }
         let output = self.run(path, &["--json", "--yes", "daemon", "uninstall"]);
@@ -377,11 +379,11 @@ impl ControlledPathFixtureV1 {
         );
     }
 
-    fn dev_home(&self) -> PathBuf {
+    fn runtime_root(&self) -> PathBuf {
         if self.production_service {
             PathBuf::from(
-                std::env::var_os(DISTRIBUTION_DEV_HOME_ENV)
-                    .expect("distribution qualification must provide the dev home"),
+                std::env::var_os(DISTRIBUTION_RUNTIME_ROOT_ENV)
+                    .expect("distribution qualification must provide the runtime root"),
             )
         } else {
             self.home.join(".podway/dev")
@@ -390,7 +392,7 @@ impl ControlledPathFixtureV1 {
 
     fn socket_path(&self) -> PathBuf {
         if self.production_service {
-            self.dev_home().join("run/podwayd.sock")
+            self.runtime_root().join("run/podwayd.sock")
         } else {
             self.home.join(".podway/run/podwayd.sock")
         }
@@ -402,11 +404,11 @@ impl ControlledPathFixtureV1 {
         }
         let mut command = Command::new(daemon);
         command
-            .arg("--dev")
+            .args(["--mode", RELEASE_QA_MODE])
             .current_dir(&self.arbitrary)
             .env_clear()
             .env("PATH", "/usr/bin:/bin")
-            .env("PODWAY_DEV_HOME", self.dev_home())
+            .env("PODWAY_DEV_HOME", self.runtime_root())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -432,13 +434,29 @@ impl ControlledPathFixtureV1 {
     }
 
     fn restart_dev_daemon(&self, path: &str) {
-        let stopped = self.run(path, &["--json", "terminate"]);
-        assert!(
-            stopped.status.success(),
-            "packaged dev daemon must terminate"
-        );
-        self.wait_dev_daemon();
+        let _ = path;
+        self.stop_dev_daemon();
         self.start_dev_daemon(&daemon_binary());
+    }
+
+    fn stop_dev_daemon(&self) {
+        let pid = self
+            .dev_daemon
+            .lock()
+            .expect("qualification daemon child lock")
+            .as_ref()
+            .map(Child::id)
+            .expect("qualification daemon child must be owned");
+        kill(
+            Pid::from_raw(pid.try_into().expect("daemon PID must fit i32")),
+            Signal::SIGTERM,
+        )
+        .expect("qualification daemon must accept SIGTERM");
+        self.wait_dev_daemon();
+        assert!(
+            !self.socket_path().exists(),
+            "qualification daemon must release its socket"
+        );
     }
 
     fn wait_dev_daemon(&self) {

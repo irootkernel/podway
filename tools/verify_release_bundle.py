@@ -70,11 +70,11 @@ def verify_detached_checksum(archive: Path, checksum: Path) -> str:
 
 
 def is_managed_release_daemon_process(command: str, uid: int) -> bool:
-    prefix = f"/private/tmp/podway-release-{uid}-"
+    prefix = f"/private/tmp/podway-release-qa-{uid}-"
     return (
         command.startswith(prefix)
         and "/snapshots/" in command
-        and command.endswith("/podwayd --dev")
+        and command.endswith("/podwayd --mode release-qa")
     )
 
 
@@ -371,7 +371,10 @@ def self_test() -> dict[str, Any]:
     )
     sentinels += 1
     uid = os.geteuid()
-    managed = f"/private/tmp/podway-release-{uid}-fixture/snapshots/digest/podwayd --dev"
+    managed = (
+        f"/private/tmp/podway-release-qa-{uid}-fixture/"
+        "snapshots/digest/podwayd --mode release-qa"
+    )
     production = "/Users/example/.local/bin/podwayd --service"
     if not is_managed_release_daemon_process(managed, uid) or is_managed_release_daemon_process(
         production, uid

@@ -349,6 +349,7 @@ mod tests {
     use std::{
         fs,
         os::unix::fs::PermissionsExt as _,
+        sync::atomic::{AtomicU64, Ordering},
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -359,6 +360,8 @@ mod tests {
     use super::{ManagedRuntimeExecutableRoleV3, ManagedRuntimeV3};
     use crate::ServiceRuntimePathsV1;
     use podway_core::RuntimeModeV1;
+
+    static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
     struct Fixture {
         root: std::path::PathBuf,
@@ -371,8 +374,9 @@ mod tests {
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
+            let sequence = FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
             let root = std::path::PathBuf::from(format!(
-                "/private/tmp/pw3-{}-{suffix}",
+                "/private/tmp/pw3-{}-{suffix}-{sequence}",
                 std::process::id()
             ));
             fs::create_dir(&root).unwrap();

@@ -25,6 +25,7 @@ TARGET = release_archive.TARGET
 ARCHIVE_ROOT = release_archive.ARCHIVE_ROOT
 REQUIRED_TESTS = release_evidence.PACKAGED_CONFORMANCE_SCENARIOS
 SCENARIO_TIMEOUT_SECONDS = 300
+RELEASE_QA_MODE = "release-qa"
 
 
 class QualificationError(RuntimeError):
@@ -216,7 +217,6 @@ def build_harness() -> Path:
 
 def run_packaged_suite(root: Path, harness: Path, cli: Path, daemon: Path) -> None:
     account = root / "account"
-    dev_home = root / "dev"
     sandbox = root / "sandbox"
     snapshots = root / "snapshots"
     snapshot_id = release_archive.sha256_file(daemon)[:16]
@@ -225,10 +225,12 @@ def run_packaged_suite(root: Path, harness: Path, cli: Path, daemon: Path) -> No
         account,
         account / ".podway",
         account / ".podway/run",
-        dev_home,
         sandbox,
         snapshots,
         snapshot,
+        root / "run",
+        root / "state",
+        root / "logs",
     ):
         directory.mkdir(mode=0o700)
     snapshot_cli = release_archive.snapshot_executable(cli, snapshot / "podway", "podway")
@@ -236,21 +238,34 @@ def run_packaged_suite(root: Path, harness: Path, cli: Path, daemon: Path) -> No
         daemon, snapshot / "podwayd", "podwayd"
     )
     metadata = {
-        "schema": "podway.managed-dev-runtime/v2",
+        "schema": "podway.managed-runtime/v3",
+        "metadata_version": 3,
         "purpose": "release-qualification",
-        "uid": os.geteuid(),
-        "root": str(root),
-        "account_root": str(account),
-        "dev_home": str(dev_home),
-        "sandbox": str(sandbox),
-        "snapshot": {
-            "id": snapshot_id,
-            "directory": str(snapshot),
-            "podway": str(snapshot_cli),
-            "podwayd": str(snapshot_daemon),
-            "podway_sha256": release_archive.sha256_file(snapshot_cli),
-            "podwayd_sha256": release_archive.sha256_file(snapshot_daemon),
+        "euid": os.geteuid(),
+        "canonical_root": str(root),
+        "mode": RELEASE_QA_MODE,
+        "paths": {
+            "lock": str(root / "run/podwayd.lock"),
+            "socket": str(root / "run/podwayd.sock"),
+            "service_state": str(root / "state/service.json"),
+            "registry": str(root / "state/workspaces.json"),
+            "recovery": str(root / "state/recovery.json"),
+            "log": str(root / "logs/podwayd.log"),
+            "bootstrap_log": str(root / "logs/podwayd-bootstrap.log"),
         },
+        "sandbox_root": str(sandbox),
+        "executables": {
+            "cli": {
+                "path": str(snapshot_cli),
+                "sha256": f"sha256:{release_archive.sha256_file(snapshot_cli)}",
+            },
+            "daemon": {
+                "path": str(snapshot_daemon),
+                "sha256": f"sha256:{release_archive.sha256_file(snapshot_daemon)}",
+            },
+            "controller": None,
+        },
+        "generation": None,
     }
     metadata_path = root / "runtime.json"
     release_archive.write_json(metadata_path, metadata)
@@ -259,31 +274,54 @@ def run_packaged_suite(root: Path, harness: Path, cli: Path, daemon: Path) -> No
         "PATH": "/usr/bin:/bin",
         "PODWAY_DISTRIBUTION_QUALIFICATION_ROOT": str(sandbox),
         "PODWAY_DISTRIBUTION_ACCOUNT_HOME": str(account),
-        "PODWAY_DISTRIBUTION_DEV_HOME": str(dev_home),
+        "PODWAY_DISTRIBUTION_RUNTIME_ROOT": str(root),
         "PODWAY_TEST_CLI_BINARY": str(snapshot_cli),
         "PODWAYD_TEST_BINARY": str(snapshot_daemon),
     }
-    for test in REQUIRED_TESTS:
-        completed = run(
-            [
-                str(harness),
-                f"e2e_dolgorae_conformance::{test}",
-                "--exact",
-                "--nocapture",
-                "--include-ignored",
-                "--test-threads=1",
-            ],
-            label=f"packaged dev-mode Dolgorae scenario {test}",
-            cwd=root,
-            environment=environment,
-            timeout_seconds=SCENARIO_TIMEOUT_SECONDS,
-            isolate_process_group=True,
-        )
-        if test not in completed.stdout.decode("utf-8", errors="strict"):
-            fail(f"packaged distribution suite omitted required test: {test}")
+    try:
+        for test in REQUIRED_TESTS:
+            completed = run(
+                [
+                    str(harness),
+                    f"e2e_dolgorae_conformance::{test}",
+                    "--exact",
+                    "--nocapture",
+                    "--include-ignored",
+                    "--test-threads=1",
+                ],
+                label=f"packaged release-qa Dolgorae scenario {test}",
+                cwd=root,
+                environment=environment,
+                timeout_seconds=SCENARIO_TIMEOUT_SECONDS,
+                isolate_process_group=True,
+            )
+            if test not in completed.stdout.decode("utf-8", errors="strict"):
+                fail(f"packaged distribution suite omitted required test: {test}")
+    except BaseException as error:
+        raise QualificationError(
+            f"{error}; recoverable daemon command: "
+            f"{snapshot_daemon} --mode {RELEASE_QA_MODE}"
+        ) from error
     remaining = list(root.glob("**/podwayd.sock"))
     if remaining:
-        fail(f"packaged dev-mode suite left daemon sockets behind: {remaining}")
+        fail(f"packaged release-qa suite left daemon sockets behind: {remaining}")
+    expected_command = f"{snapshot_daemon} --mode {RELEASE_QA_MODE}"
+    processes = subprocess.run(
+        ["ps", "-Ao", "command="],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if processes.returncode != 0:
+        fail("cannot prove release-qualification process cleanup")
+    remaining_processes = [
+        line.strip()
+        for line in processes.stdout.splitlines()
+        if line.strip() == expected_command
+    ]
+    if remaining_processes:
+        fail(f"packaged release-qa suite left daemon processes behind: {remaining_processes}")
 
 
 def qualify(output_directory: Path) -> dict[str, Any]:
@@ -291,23 +329,35 @@ def qualify(output_directory: Path) -> dict[str, Any]:
     tree = source_tree()
     archive, checksum, provenance_path = expected_paths(output_directory)
     harness = build_harness()
-    with tempfile.TemporaryDirectory(
-        prefix=f"podway-release-{os.geteuid()}-", dir="/private/tmp"
-    ) as temporary_name:
-        temporary = Path(temporary_name)
-        temporary.chmod(0o700)
+    temporary = Path(
+        tempfile.mkdtemp(prefix=f"podway-release-qa-{os.geteuid()}-", dir="/private/tmp")
+    )
+    temporary.chmod(0o700)
+    try:
         cli, daemon, provenance = verify_distribution(
             archive, checksum, provenance_path, temporary / "extracted", commit, tree
         )
         run_packaged_suite(temporary, harness, cli, daemon)
-        passed = release_evidence.mark_packaged_conformance_passed(provenance_path, provenance)
-        return {
-            "archive": archive.name,
-            "build_identity": passed["build_identity"],
-            "mode": "qualify",
-            "ok": True,
-            "scenarios": REQUIRED_TESTS,
-        }
+    except BaseException as error:
+        raise QualificationError(
+            f"{error}; recoverable release-qualification root: {temporary}"
+        ) from error
+    try:
+        shutil.rmtree(temporary)
+    except OSError as error:
+        raise QualificationError(
+            f"release-qualification cleanup failed; recoverable root: {temporary}: {error}"
+        ) from error
+    if temporary.exists():
+        fail(f"release-qualification cleanup left runtime root behind: {temporary}")
+    passed = release_evidence.mark_packaged_conformance_passed(provenance_path, provenance)
+    return {
+        "archive": archive.name,
+        "build_identity": passed["build_identity"],
+        "mode": "qualify",
+        "ok": True,
+        "scenarios": REQUIRED_TESTS,
+    }
 
 
 def self_test() -> dict[str, Any]:
