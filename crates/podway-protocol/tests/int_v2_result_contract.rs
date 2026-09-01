@@ -655,8 +655,8 @@ fn v2dvc002_reserves_closed_runtime_mode_contracts_without_runtime_admission() {
 }
 
 #[test]
-fn v2dvc005_daemon_activity_fields_are_closed_bounded_and_nullable() {
-    let status = json!({
+fn v2dvc005_daemon_activity_fields_are_closed_bounded_and_bound_to_reachability() {
+    let mut status = json!({
         "schema":"podway.daemon-status-result/v3","mode":"dev",
         "status":"running","installed":true,"loaded":true,"reachable":true,
         "product":"podway","daemon_version":"0.2.8","target":"aarch64-apple-darwin",
@@ -668,7 +668,7 @@ fn v2dvc005_daemon_activity_fields_are_closed_bounded_and_nullable() {
         "socket_path":"/tmp/podway.sock","configured_socket_path":"/tmp/podway.sock",
         "effective_socket_path":"/tmp/podway.sock","registered_worktree_count":0,
         "active_scheduler_count":0,"queued_job_count":0,"running_job_count":0,
-        "in_flight_client_count":null,"maintenance_operation_count":null,
+        "in_flight_client_count":0,"maintenance_operation_count":0,
         "readiness_state":"ready","readiness_stage":"ready","readiness_elapsed_ms":1,
         "worktree_recovery":{"total":0,"completed":0,"failed":0}
     });
@@ -683,6 +683,12 @@ fn v2dvc005_daemon_activity_fields_are_closed_bounded_and_nullable() {
         warnings: Vec::new(),
     };
     assert!(OutputEnvelopeV3::new(input(&status)).is_ok());
+    assert_valid("schemas/daemon-status-result-v3.schema.json", &status);
+
+    status["in_flight_client_count"] = Value::Null;
+    assert!(OutputEnvelopeV3::new(input(&status)).is_err());
+    assert_invalid("schemas/daemon-status-result-v3.schema.json", &status);
+    status["in_flight_client_count"] = json!(0);
 
     let mut string_count = status.clone();
     string_count["in_flight_client_count"] = json!("0");
@@ -720,8 +726,35 @@ fn v2dvc005_daemon_activity_fields_are_closed_bounded_and_nullable() {
         "worktree_recovery":null
     });
     assert!(OutputEnvelopeV3::new(input(&unreachable)).is_ok());
+    assert_valid("schemas/daemon-status-result-v3.schema.json", &unreachable);
     unreachable["in_flight_client_count"] = json!(0);
     assert!(OutputEnvelopeV3::new(input(&unreachable)).is_err());
+    assert_invalid("schemas/daemon-status-result-v3.schema.json", &unreachable);
+}
+
+#[test]
+fn v2dvc005_aquarium_service_plan_schema_closes_action_semantics() {
+    let token = format!("sha256:{}", "0".repeat(64));
+    let mut plan = json!({
+        "schema":"aquarium-dev-service-plan/v1","project_id":"podway",
+        "target_git_sha":"0".repeat(40),"action":"activate",
+        "active_git_sha":"1".repeat(40),"busy":false,"plan_token":token
+    });
+    assert_valid("schemas/aquarium-dev-service-plan-v1.schema.json", &plan);
+
+    plan["plan_token"] = Value::Null;
+    assert_invalid("schemas/aquarium-dev-service-plan-v1.schema.json", &plan);
+
+    plan["action"] = json!("defer");
+    plan["busy"] = json!(true);
+    assert_valid("schemas/aquarium-dev-service-plan-v1.schema.json", &plan);
+
+    plan["busy"] = json!(false);
+    assert_invalid("schemas/aquarium-dev-service-plan-v1.schema.json", &plan);
+
+    plan["busy"] = json!(true);
+    plan["plan_token"] = json!(format!("sha256:{}", "0".repeat(64)));
+    assert_invalid("schemas/aquarium-dev-service-plan-v1.schema.json", &plan);
 }
 
 #[test]

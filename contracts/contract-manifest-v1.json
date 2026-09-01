@@ -53,7 +53,7 @@
     {
       "kind": "schema",
       "path": "schemas/aquarium-dev-service-plan-v1.schema.json",
-      "sha256": "sha256:8ae6b7cc965c3aa13d243274b3a06e209e388a1019113e04bd99aa2a32b86d01"
+      "sha256": "sha256:cf039fc019943909fdad782e2164026f647aac6f5dec7077547a0248fdca73cf"
     },
     {
       "kind": "schema",
@@ -138,7 +138,7 @@
     {
       "kind": "schema",
       "path": "schemas/daemon-status-result-v3.schema.json",
-      "sha256": "sha256:dcb611b909cd240f572f726123bb8addea7b0e0361fcf9301ad3b73e5649cf4e"
+      "sha256": "sha256:7f165346eb12f08bb4953639ba3e9f2fdd671fcd5c16a94aa739facf7ff71a7d"
     },
     {
       "kind": "schema",
@@ -631,7 +631,7 @@
       "sha256": "sha256:23423b1060f6a0fedd1097ac458ca8a1cd8cb3c1a2a7e88aa964d514d01a248a"
     }
   ],
-  "digest": "sha256:3d070e7722845e65834b0f02e7d257dd91c6d700f5dbe5591130e5c38c7b97b9",
+  "digest": "sha256:05ae1a44a9fcb55bf3606ac1bf34f9d2941e67e0e5dbaf23eb3f8ca29473a490",
   "product": "podway",
   "product_version": "0.2.8",
   "schema_version": "podway.contract-manifest/v1",

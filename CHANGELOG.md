@@ -7,7 +7,7 @@ This file records concise shipped outcomes and the planned next stable release.
 ### Added
 
 - Add bounded named runtime modes with complete isolated daemon namespaces and preserve `--dev` as the exact alias for mode `dev`.
-- Bind each workspace config, registry generation, and SQLite store to one runtime mode, with token-bound idle switching and marker-backed replay recovery.
+- Bind each workspace config, registry generation, and SQLite store to one runtime mode, with token-bound idle switching that deletes current and archived runtime history while preserving Git and worktree content, plus marker-backed replay recovery.
 - Add an immutable Aquarium managed-service bundle with token-bound idle activation, exact-generation rollback, and bounded recovery debt.
 - Move contributor and packaged release qualification to purpose-bound private named runtimes with exact executable identity and bounded cleanup.
 

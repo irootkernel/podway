@@ -329,7 +329,7 @@ and the [roadmap](docs/roadmap/README.md).
 
 ## Local data and trust
 
-Task state lives under `.podway/runtime/` in the owning worktree. Deleting the worktree deletes that state. Podway keeps only user-global service metadata, a minimal workspace registry, its socket, and bounded logs under `~/.podway/`.
+Task state lives under `.podway/runtime/` in the owning worktree. Deleting the worktree deletes that state. By default, Podway keeps only user-global service metadata, a minimal workspace registry, its socket, and bounded logs under `~/.podway/`. An Aquarium-managed development service instead keeps its service state under the runtime root supplied by Aquarium.
 
 Podway trusts processes running as the same operating-system user. It is not a security boundary against malicious same-user processes. It performs no network I/O and exposes no arbitrary command-execution or Git-mutation API.
 

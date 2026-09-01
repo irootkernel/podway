@@ -13,5 +13,12 @@
     "active_git_sha": {"oneOf": [{"type": "null"}, {"type": "string", "pattern": "^[0-9a-f]{40}$"}]},
     "busy": {"type": "boolean"},
     "plan_token": {"oneOf": [{"type": "null"}, {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}]}
-  }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"action": {"const": "defer"}}, "required": ["action"]},
+      "then": {"properties": {"busy": {"const": true}, "plan_token": {"type": "null"}}},
+      "else": {"properties": {"busy": {"const": false}, "plan_token": {"type": "string"}}}
+    }
+  ]
 }
