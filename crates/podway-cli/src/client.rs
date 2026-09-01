@@ -18,8 +18,9 @@ use nix::unistd::geteuid;
 use podway_protocol::{
     FrameErrorV1, OperationV1, PayloadCodecErrorV1, ProcedureV2MutationRequestV1,
     ProcedureV2StartRequestV1, RESERVED_V2_MUTATION_COMMAND_NAMES_V1, RequestEnvelopeV1,
-    ResponseEnvelopeV2, SliceErrorV1, SliceRequestV1, WorkspaceRemoveRequestV1,
-    decode_response_payload_v2, encode_request_payload_v1, read_single_frame_v1, write_frame_v1,
+    ResponseEnvelopeV2, SliceErrorV1, SliceRequestV1, WorkspaceModeApplyRequestV1,
+    WorkspaceModePlanRequestV1, WorkspaceRemoveRequestV1, decode_response_payload_v2,
+    encode_request_payload_v1, read_single_frame_v1, write_frame_v1,
 };
 use podway_service::ServiceRuntimePathsV1;
 
@@ -427,6 +428,12 @@ fn admit_version_aware_request(request: &RequestEnvelopeV1) -> Result<bool, Slic
     if command == "workspace.remove" {
         return WorkspaceRemoveRequestV1::from_envelope(request).map(|_| true);
     }
+    if command == "workspace.mode.plan" {
+        return WorkspaceModePlanRequestV1::from_envelope(request).map(|_| true);
+    }
+    if command == "workspace.mode.apply" {
+        return WorkspaceModeApplyRequestV1::from_envelope(request).map(|_| true);
+    }
     SliceRequestV1::from_envelope(request).map(|_| false)
 }
 
@@ -774,7 +781,17 @@ mod tests {
         sync::atomic::{AtomicU64, Ordering},
     };
 
-    use super::{DaemonClientErrorV1, validate_socket_metadata, validate_socket_parent_metadata};
+    use podway_protocol::{
+        ClientInfoV1, CommandNameV1, OperationV1, PreconditionsV1, RequestEnvelopeInputV1,
+        RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, WorkspaceContextV1,
+        WorktreeSelectorWireV1,
+    };
+    use serde_json::json;
+
+    use super::{
+        DaemonClientErrorV1, admit_version_aware_request, validate_socket_metadata,
+        validate_socket_parent_metadata,
+    };
 
     static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -788,6 +805,43 @@ mod tests {
         fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
             .expect("test directory must be owner-private");
         directory
+    }
+
+    fn workspace_mode_request(command: &str, operation: OperationV1) -> RequestEnvelopeV1 {
+        let selector =
+            WorktreeSelectorWireV1::new(b"/tmp/podway-worktree", "/tmp/podway-worktree", None)
+                .expect("fixture selector is valid");
+        let mut payload = json!({"selector": selector, "to": "dev"});
+        if command == "workspace.mode.apply" {
+            payload["plan_token"] = json!("opaque-plan-token");
+        }
+        RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
+            request_id: RequestIdV1::new("2037d76d-6ea8-42c2-a11f-883248bb8774")
+                .expect("fixture request ID is valid"),
+            client: ClientInfoV1::new("podway-test", "1.0.0", 42).expect("fixture client is valid"),
+            operation,
+            command: CommandNameV1::new(command).expect("fixture command is valid"),
+            workspace: Some(
+                WorkspaceContextV1::new("/tmp/podway-worktree", None)
+                    .expect("fixture workspace context is valid"),
+            ),
+            idempotency_key: None,
+            preconditions: PreconditionsV1::default(),
+            options: RequestOptionsV1::new(false, 0).expect("fixture options are valid"),
+            payload: payload.as_object().unwrap().clone(),
+        })
+        .expect("workspace mode fixture is structurally valid")
+    }
+
+    #[test]
+    fn v2dvc007_client_admits_workspace_mode_routes_through_typed_boundary() {
+        let plan = workspace_mode_request("workspace.mode.plan", OperationV1::Query);
+        let apply = workspace_mode_request("workspace.mode.apply", OperationV1::Control);
+        assert_eq!(admit_version_aware_request(&plan), Ok(true));
+        assert_eq!(admit_version_aware_request(&apply), Ok(true));
+
+        let invalid_plan = workspace_mode_request("workspace.mode.plan", OperationV1::Control);
+        assert!(admit_version_aware_request(&invalid_plan).is_err());
     }
 
     #[test]
