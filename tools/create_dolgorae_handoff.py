@@ -267,7 +267,7 @@ def adapter_contract() -> dict[str, Any]:
         "migration_boundary": {
             "adapter_database_access": "forbidden",
             "development_state_migration_promise": False,
-            "released_workspace_upgrade": "transactional-empty-or-v2-only-predecessor-to-v4",
+            "released_workspace_upgrade": "transactional-empty-or-v2-only-predecessor-to-v10",
             "released_workspace_upgrade_owner": "podway-daemon",
             "legacy_procedure_state": "rejected-without-conversion-or-deletion",
             "v2_downgrade": "forbidden",
@@ -427,6 +427,12 @@ def self_test() -> dict[str, Any]:
                 {"adapter_database_access": "allowed"}
             ),
             "migration boundary drift",
+        ),
+        (
+            lambda value: value["migration_boundary"].update(
+                {"released_workspace_upgrade": "transactional-empty-or-v2-only-predecessor-to-v4"}
+            ),
+            "released workspace upgrade drift",
         ),
         (
             lambda value: value["adapter_acceptance"].pop(),

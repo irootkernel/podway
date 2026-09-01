@@ -16,6 +16,7 @@ This file records concise shipped outcomes and the planned next stable release.
 - Accept Aquarium-sealed managed-service executables when validating the exact development runtime.
 - Route the bundled Aquarium CLI to its active managed runtime without production or default-development fallback.
 - Admit `workspace mode plan` and `workspace mode apply` through their typed client request contracts.
+- Align the Dolgorae adapter handoff's released workspace upgrade boundary with SQLite schema-v10.
 
 ## v0.2.7 - 2026-08-31
 
