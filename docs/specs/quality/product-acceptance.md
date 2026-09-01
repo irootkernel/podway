@@ -20,8 +20,10 @@ Distribution qualification in `make dist` adds native packaging evidence.
 
 - `podwayd` is the sole normal writer and executes one mutation per worktree.
 - Admission, idempotency, ordering, terminal receipts, and domain state are atomic.
-- SQLite schema-v9 contains only Procedure v2 domain state.
-- Empty predecessors and supported Procedure v2 predecessors through schema-v8 migrate transactionally.
+- SQLite schema-v10 contains only Procedure v2 domain state and binds the
+  workspace singleton to one runtime mode.
+- Empty predecessors and supported Procedure v2 predecessors through schema-v9
+  migrate transactionally only in `prod`; named modes reject them without mutation.
 - Any nonempty Procedure v1 predecessor fails without mutation and requires user
   backup followed by confirmed `reset --all`.
 - Crash recovery never duplicates an admitted mutation or terminal result.

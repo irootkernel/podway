@@ -34,9 +34,9 @@ product binary version: 0.2.0
 IPC: podway.ipc/v1
 output: podway.output/v3
 error: podway.error/v1
-workspace config: podway.workspace/v1
+workspace config: podway.workspace/v1 and podway.workspace/v2
 procedure: podway.procedure/v2
-SQLite schema: integer migration version, currently schema-v9
+SQLite schema: integer migration version, currently schema-v10
 ```
 
 A product minor release may add backward-compatible fields or commands. Breaking public contract changes require a new contract version and migration plan.
@@ -214,8 +214,9 @@ Upgrade procedure:
 5. migrate worktree databases lazily on first access.
 
 New worktree databases begin in schema-0/uninitialized state; on first access, the daemon
-transactionally initializes them to canonical schema-v9. Empty predecessors and
-supported Procedure v2 predecessors through schema-v8 migrate forward lazily to schema-v9 on first access;
+transactionally initializes them to canonical schema-v10. Empty predecessors and
+supported Procedure v2 predecessors through schema-v9 migrate forward lazily to
+schema-v10 on first access in `prod`; named modes reject pre-v10 stores without mutation;
 nonempty Procedure v1 state is rejected without mutation.
 
 The daemon handles one workspace migration failure without disabling other workspaces.
