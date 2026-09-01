@@ -7,7 +7,8 @@ ordering, crash ambiguity, filesystem boundaries, and public contract stability.
 
 1. Pure graph, goal, item, decision, retry, and rework domain tests.
 2. Procedure v2 parsing, validation, canonicalization, and preset identity tests.
-3. SQLite schema-v9 initialization, migration, rollback, and legacy-state rejection.
+3. SQLite schema-v10 initialization, migration, runtime-mode binding, rollback,
+   and legacy-state rejection.
 4. Daemon queue, idempotency, concurrency, restart, and crash-injection tests.
 5. IPC framing, bounded decoding, schema validation, and fuzzing.
 6. Git/worktree, service, CLI, and real-binary end-to-end tests.
@@ -55,8 +56,9 @@ successful `make test` establishes the complete development-gate claim.
 
 ## Persistence and compatibility
 
-The store suite creates canonical schema-v9 from an empty database, migrates each
-supported empty or Procedure v2-only predecessor transactionally, preserves v2 domain and
+The store suite creates canonical schema-v10 from an empty database, migrates each
+supported empty or Procedure v2-only predecessor transactionally, binds the
+workspace singleton to its effective runtime mode, preserves v2 domain and
 receipt state, rejects newer schemas, and rejects every nonempty or mixed
 Procedure v1 predecessor without mutation. Reset-all recovery is tested against
 isolated fixtures rather than user state.
@@ -90,6 +92,35 @@ planning, fail-closed activity observation, busy deferral, stale-token rejection
 exact target activation, and exact prior-generation rollback. These tests use an
 isolated controller harness and never inspect or mutate the installed production
 service or a shared Aquarium runtime.
+
+### Named runtime conformance
+
+Named-runtime coverage binds the complete model rather than testing selectors in
+isolation:
+
+- config v1, config v2 without `mode`, and explicit `prod` retain production
+  compatibility, while valid named modes and every invalid boundary are covered;
+- `--dev` and `--mode dev` select the same complete keyed namespace, and
+  production, `dev`, arbitrary named, contributor, and parallel `release-qa`
+  roots do not share locks, sockets, registries, logs, metadata, or recovery
+  state;
+- daemon endpoint, workspace config, registry generation, and SQLite Store mode
+  must agree before Store access, so one worktree cannot be admitted by two modes;
+- workspace mode planning and apply cover no-change, busy and unavailable
+  targets, stale identities, source-to-target combinations, preservation of Git
+  and non-runtime workspace content, destructive-boundary interruption, and
+  convergent replay;
+- Aquarium producer and controller coverage proves pending-only publication,
+  exact-generation activation, busy deferral, rollback, recovery debt, and
+  production coexistence; and
+- contributor and packaged qualification coverage proves purpose-specific
+  admission, exact executable identity, parallel private roots, success cleanup,
+  and bounded failure preservation without using production or Aquarium state.
+
+Focused tests establish only their named boundary. The integrated development
+claim requires the contract and documentation verifiers, all Rust and Python
+layers, real-binary E2E coverage, Aquarium controller tests, and the isolated
+contributor self-test to pass together through `make test`.
 
 ## Development and distribution gates
 

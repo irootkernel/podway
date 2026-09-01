@@ -84,7 +84,4 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 
 ## Current adopted dossiers
 
-- [Named Runtime Modes and Aquarium Development Service](TODO-podway-named-runtime-modes-and-aquarium-development-service.md)
-  (`V2DVC`): decision-complete design for single-mode workspace ownership,
-  keyed daemon namespaces, the persistent Aquarium development service, and
-  isolated qualification runtimes.
+There are no adopted dossiers for incomplete roadmap work.
