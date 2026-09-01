@@ -47,9 +47,11 @@ The internal manifest binds the full Git SHA, the payload digest before the
 manifest is added, every executable digest, and the controller and managed
 runtime protocol versions.
 
-`bundle/bin/podway` resolves relative to its own immutable generation and
-executes only `bundle/libexec/podway --dev`. It never searches `PATH`, resolves
-an installed production binary, or falls back to the production endpoint.
+`bundle/bin/podway` resolves direct and stable-symlink invocation to its own
+immutable generation, derives the Aquarium host root from that closed topology,
+sets `PODWAY_DEV_HOME` to the producer runtime below that host root, and executes
+only `bundle/libexec/podway --dev`. It never searches `PATH`, resolves an
+installed production binary, or falls back to the production endpoint.
 
 ## Controller interface
 

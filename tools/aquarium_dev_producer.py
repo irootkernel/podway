@@ -111,6 +111,37 @@ def _copy_executable(source: Path, destination: Path) -> None:
     destination.chmod(0o755)
 
 
+def launcher_source() -> str:
+    return (
+        "#!/bin/sh\n"
+        "set -eu\n"
+        "self=$0\n"
+        "while [ -L \"$self\" ]; do\n"
+        "  base=$(CDPATH= cd -- \"${self%/*}\" && pwd -P) || exit 126\n"
+        "  link=$(/usr/bin/readlink \"$self\") || exit 126\n"
+        "  case $link in\n"
+        "    /*) self=$link ;;\n"
+        "    *) self=$base/$link ;;\n"
+        "  esac\n"
+        "done\n"
+        "here=$(CDPATH= cd -- \"${self%/*}\" && pwd -P) || exit 126\n"
+        "bundle=$(CDPATH= cd -- \"$here/..\" && pwd -P) || exit 126\n"
+        "generation=$(CDPATH= cd -- \"$bundle/..\" && pwd -P) || exit 126\n"
+        "project=$(CDPATH= cd -- \"$generation/..\" && pwd -P) || exit 126\n"
+        "artifacts=$(CDPATH= cd -- \"$project/..\" && pwd -P) || exit 126\n"
+        "host=$(CDPATH= cd -- \"$artifacts/..\" && pwd -P) || exit 126\n"
+        "generation_id=${generation##*/}\n"
+        "case $generation_id in ''|*[!0-9a-f]*) exit 126 ;; esac\n"
+        "[ \"${#generation_id}\" -eq 40 ] || exit 126\n"
+        "[ \"${bundle##*/}\" = bundle ] || exit 126\n"
+        "[ \"${project##*/}\" = podway ] || exit 126\n"
+        "[ \"${artifacts##*/}\" = artifacts ] || exit 126\n"
+        "PODWAY_DEV_HOME=$host/runtime/podway\n"
+        "export PODWAY_DEV_HOME\n"
+        "exec \"$bundle/libexec/podway\" --dev \"$@\"\n"
+    )
+
+
 def _remove_owned_output(path: Path) -> None:
     try:
         metadata = path.lstat()
@@ -156,13 +187,7 @@ def build(output_value: str | None) -> dict[str, str]:
         _copy_executable(build_root / "release/podwayd", daemon)
         _copy_executable(ROOT / "tools/aquarium_dev_service.py", controller)
         launcher.parent.mkdir(parents=True, exist_ok=True)
-        launcher.write_text(
-            "#!/bin/sh\n"
-            "set -eu\n"
-            "here=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd -P)\n"
-            "exec \"$here/../libexec/podway\" --dev \"$@\"\n",
-            encoding="utf-8",
-        )
+        launcher.write_text(launcher_source(), encoding="utf-8")
         launcher.chmod(0o755)
         shutil.rmtree(build_root)
 

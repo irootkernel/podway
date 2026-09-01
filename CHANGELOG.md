@@ -14,6 +14,7 @@ This file records concise shipped outcomes and the planned next stable release.
 ### Fixed
 
 - Accept Aquarium-sealed managed-service executables when validating the exact development runtime.
+- Route the bundled Aquarium CLI to its active managed runtime without production or default-development fallback.
 
 ## v0.2.7 - 2026-08-31
 

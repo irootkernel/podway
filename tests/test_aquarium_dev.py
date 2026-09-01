@@ -134,9 +134,44 @@ class AquariumDevProducerTests(unittest.TestCase):
             self.assertEqual(manifest["sha256"], producer.tree_digest(output / "bundle"))
             self.assertFalse((output / ".build").exists())
             launcher = (output / "bundle/bin/podway").read_text(encoding="utf-8")
-            self.assertIn('"$here/../libexec/podway" --dev', launcher)
+            self.assertIn('PODWAY_DEV_HOME=$host/runtime/podway', launcher)
+            self.assertIn('"$bundle/libexec/podway" --dev', launcher)
             self.assertNotIn("command -v", launcher)
             self.assertNotIn("exec podway", launcher)
+
+    def test_launcher_routes_direct_and_stable_paths_to_managed_runtime(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            host = Path(temporary).resolve() / "host"
+            generation = host / "artifacts/podway" / ("a" * 40)
+            launcher = generation / "bundle/bin/podway"
+            cli = generation / "bundle/libexec/podway"
+            launcher.parent.mkdir(parents=True)
+            cli.parent.mkdir(parents=True)
+            launcher.write_text(producer.launcher_source(), encoding="utf-8")
+            launcher.chmod(0o755)
+            cli.write_text(
+                "#!/bin/sh\nprintf '%s\\n' \"$PODWAY_DEV_HOME\" \"$@\"\n",
+                encoding="utf-8",
+            )
+            cli.chmod(0o755)
+            (host / "current").mkdir()
+            (host / "bin").mkdir()
+            (host / "current/podway").symlink_to(
+                Path("../artifacts/podway") / generation.name
+            )
+            stable = host / "bin/podway"
+            stable.symlink_to(Path("../current/podway/bundle/bin/podway"))
+
+            expected = [os.fspath(host / "runtime/podway"), "--dev", "daemon", "status"]
+            for command in (launcher, stable):
+                result = subprocess.run(
+                    [os.fspath(command), "daemon", "status"],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.splitlines(), expected)
 
 
 class AquariumDevControllerTests(unittest.TestCase):
