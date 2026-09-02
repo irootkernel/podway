@@ -60,14 +60,14 @@ def file_digest(path: Path) -> str:
 
 def tree_digest(root: Path, *, exclude: frozenset[str] = frozenset()) -> str:
     digest = hashlib.sha256()
-    files = sorted(
-        path
-        for path in root.rglob("*")
-        if path.is_file() and path.relative_to(root).as_posix() not in exclude
-    )
-    for path in files:
-        if stat.S_ISLNK(path.lstat().st_mode):
+    files: list[Path] = []
+    for path in root.rglob("*"):
+        metadata = path.lstat()
+        if stat.S_ISLNK(metadata.st_mode):
             raise ProducerError("generation bundles cannot contain symbolic links")
+        if path.is_file() and path.relative_to(root).as_posix() not in exclude:
+            files.append(path)
+    for path in sorted(files):
         relative = path.relative_to(root).as_posix().encode("utf-8")
         digest.update(relative)
         digest.update(b"\0")

@@ -92,6 +92,12 @@ class AquariumDevProducerTests(unittest.TestCase):
                 producer.tree_digest(root)
             with self.assertRaises(controller.ControllerError):
                 controller._tree_digest(root)
+            (root / "link").unlink()
+            (root / "link").symlink_to(root / "nested", target_is_directory=True)
+            with self.assertRaises(producer.ProducerError):
+                producer.tree_digest(root)
+            with self.assertRaises(controller.ControllerError):
+                controller._tree_digest(root)
 
     def test_failed_build_removes_only_owned_partial_output(self):
         with tempfile.TemporaryDirectory() as temporary:
