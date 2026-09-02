@@ -69,6 +69,12 @@ def verify_detached_checksum(archive: Path, checksum: Path) -> str:
     return digest
 
 
+def verify_release_status(provenance: dict[str, Any]) -> None:
+    artifact_class = provenance["artifact_class"]
+    if provenance["release_status"] != release_archive.release_status(artifact_class):
+        fail("provenance release status does not match release policy")
+
+
 def is_managed_release_daemon_process(command: str, uid: int) -> bool:
     prefix = f"/private/tmp/podway-release-qa-{uid}-"
     return (
@@ -132,8 +138,7 @@ def verify(output_directory: Path, gate: str) -> dict[str, Any]:
         fail("provenance does not identify the final archive")
     if provenance["cargo_lock_sha256"] != release_archive.sha256_file(ROOT / "Cargo.lock"):
         fail("provenance Cargo.lock digest does not match the qualified source")
-    if provenance["release_status"] != release_archive.release_status():
-        fail("provenance release status does not match release policy")
+    verify_release_status(provenance)
     adapter_path = ROOT / ADAPTER_CONTRACT_RELATIVE
     require_regular(adapter_path, "Dolgorae v2 adapter contract")
     adapter = release_evidence.read_object(adapter_path, "Dolgorae v2 adapter contract")
@@ -270,6 +275,17 @@ def self_test() -> dict[str, Any]:
         tree="2" * 40,
         conformance_result=release_evidence.PASSED,
     )
+    observed_artifact_classes = []
+    original_release_status = release_archive.release_status
+    release_archive.release_status = lambda artifact_class: (
+        observed_artifact_classes.append(artifact_class) or provenance["release_status"]
+    )
+    try:
+        verify_release_status(provenance)
+    finally:
+        release_archive.release_status = original_release_status
+    if observed_artifact_classes != ["distribution"]:
+        fail("final verifier did not use the provenance artifact class")
     adapter = {"schema": "podway.dolgorae-adapter-contract/v2", "sentinel": True}
     adapter_catalog_sha256 = f"sha256:{'4' * 64}"
     handoff = release_evidence.handoff_from_provenance(
@@ -287,7 +303,7 @@ def self_test() -> dict[str, Any]:
         adapter,
         adapter_catalog_sha256,
     )
-    sentinels = 0
+    sentinels = 1
     patch_provenance = fixture_patch_provenance()
     release_evidence.validate_provenance(
         patch_provenance,
