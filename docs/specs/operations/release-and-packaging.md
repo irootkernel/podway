@@ -101,6 +101,11 @@ descriptors. Binary validation, isolation classification, packaged content, reco
 digests, and provenance all use those immutable snapshot bytes. Probe failure,
 timeout, or ambiguity rejects both artifact classes.
 
+Distribution packaging requires the current version's changelog section to use
+its publication date and rejects any remaining `Unreleased` section. Disposable
+test-fixture packaging may use either the open or completed current section so
+development scenarios do not impersonate a publishable artifact.
+
 Before packaging, the internal Rust release-contract verifier reconstructs the
 source manifest and its exact offline schema registry, validates both complete
 identity envelopes and their closed version results, and requires the two result

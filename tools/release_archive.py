@@ -401,9 +401,22 @@ def self_test() -> dict[str, Any]:
                 fail("packaged preset tamper sentinel returned the wrong error")
         else:
             fail("packaged preset tamper sentinel was accepted")
-    if release_status() != {"signing": "unsigned", "notarization": "not-attempted"}:
-        fail("changelog status sentinel returned an unexpected value")
-    return {"mode": "self-test", "ok": True, "sentinels": 25}
+    version = f"v{PRODUCT_VERSION}"
+    open_changelog = f"# Changelog\n\n## {version} - Unreleased\n"
+    published_changelog = f"# Changelog\n\n## {version} - 2026-09-02\n"
+    expected_status = {"signing": "unsigned", "notarization": "not-attempted"}
+    if validate_changelog_release_status(open_changelog, "test-fixture") != expected_status:
+        fail("open test-fixture changelog sentinel returned an unexpected value")
+    if validate_changelog_release_status(published_changelog, "distribution") != expected_status:
+        fail("published distribution changelog sentinel returned an unexpected value")
+    try:
+        validate_changelog_release_status(open_changelog, "distribution")
+    except ReleaseError as error:
+        if "published release date" not in str(error):
+            fail("open distribution changelog sentinel returned the wrong error")
+    else:
+        fail("open distribution changelog sentinel was accepted")
+    return {"mode": "self-test", "ok": True, "sentinels": 27}
 
 
 def require_native_host() -> None:
@@ -715,24 +728,36 @@ def rust_toolchain() -> str:
     return output
 
 
-def release_status() -> dict[str, str]:
-    changelog = require_regular_file(ROOT / "CHANGELOG.md", "changelog").read_text(
-        encoding="utf-8"
-    )
+def validate_changelog_release_status(
+    changelog: str, artifact_class: str
+) -> dict[str, str]:
     headings = re.findall(
         r"^## (v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)) - "
         r"(Unreleased|[0-9]{4}-[0-9]{2}-[0-9]{2})$",
         changelog,
         flags=re.MULTILINE,
     )
-    expected_open = (f"v{PRODUCT_VERSION}", "Unreleased")
+    expected_version = f"v{PRODUCT_VERSION}"
     if not changelog.startswith("# Changelog\n"):
         fail("changelog must begin with the canonical title")
-    if not headings or headings[0] != expected_open:
-        fail(f"changelog must open with ## {expected_open[0]} - Unreleased")
-    if sum(status == "Unreleased" for _version, status in headings) != 1:
-        fail("changelog must contain exactly one Unreleased section")
+    if not headings or headings[0][0] != expected_version:
+        fail(f"changelog must open with the current version ## {expected_version}")
+    unreleased_count = sum(status == "Unreleased" for _version, status in headings)
+    if artifact_class == "distribution":
+        if headings[0][1] == "Unreleased":
+            fail("distribution changelog must use a published release date")
+        if unreleased_count != 0:
+            fail("distribution changelog must not contain an Unreleased section")
+    elif unreleased_count > 1:
+        fail("test-fixture changelog must contain at most one Unreleased section")
     return {"signing": "unsigned", "notarization": "not-attempted"}
+
+
+def release_status(artifact_class: str) -> dict[str, str]:
+    changelog = require_regular_file(ROOT / "CHANGELOG.md", "changelog").read_text(
+        encoding="utf-8"
+    )
+    return validate_changelog_release_status(changelog, artifact_class)
 
 
 def write_json(path: Path, value: Any) -> None:
@@ -824,7 +849,7 @@ def package(arguments: argparse.Namespace) -> dict[str, Any]:
                 )
             ),
             "release_gate_result": release_evidence.PASSED,
-            "release_status": release_status(),
+            "release_status": release_status(arguments.artifact_class),
             "schema": (
                 release_evidence.PATCH_PROVENANCE_SCHEMA
                 if gate == "patch"
