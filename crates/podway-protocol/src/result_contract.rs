@@ -2141,10 +2141,9 @@ fn validate_daemon_service_status_result_v3(mut value: Value) -> bool {
             .iter()
             .zip([1_024_u64, 10_000_u64])
             .all(|(value, maximum)| {
-                value
-                    .as_ref()
-                    .and_then(Value::as_u64)
-                    .is_some_and(|count| count <= maximum)
+                value.as_ref().is_some_and(|value| {
+                    value.is_null() || value.as_u64().is_some_and(|count| count <= maximum)
+                })
             }),
         Some(false) => activity
             .iter()

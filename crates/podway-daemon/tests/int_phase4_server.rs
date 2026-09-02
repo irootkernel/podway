@@ -1177,6 +1177,8 @@ fn v2rdy002_control_status_is_live_while_normal_dispatch_remains_closed() {
     handler.join().unwrap().unwrap();
     assert_eq!(output.result()["schema"], "podway.daemon-status-result/v3");
     assert_eq!(output.result()["mode"], "prod");
+    assert_eq!(output.result()["in_flight_client_count"], Value::Null);
+    assert_eq!(output.result()["maintenance_operation_count"], Value::Null);
     assert_eq!(output.result()["readiness_state"], "starting");
     assert_eq!(output.result()["readiness_stage"], "endpoint");
 

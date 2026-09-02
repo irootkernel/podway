@@ -255,6 +255,8 @@ fn podwayd_reports_stable_live_process_identity() {
     let second = query_status(socket);
     assert_eq!(first["schema"], "podway.daemon-status-result/v3");
     assert_eq!(first["mode"], "prod");
+    assert_eq!(first["in_flight_client_count"], Value::Null);
+    assert_eq!(first["maintenance_operation_count"], 0);
     assert_eq!(first["readiness_stage"], "ready");
     assert_eq!(second["readiness_state"], "ready");
     assert_eq!(

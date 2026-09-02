@@ -1108,7 +1108,7 @@
       {
         "id": "urn:podway:schema:aquarium-dev-service-plan:v1",
         "path": "schemas/aquarium-dev-service-plan-v1.schema.json",
-        "sha256": "sha256:8ae6b7cc965c3aa13d243274b3a06e209e388a1019113e04bd99aa2a32b86d01"
+        "sha256": "sha256:cf039fc019943909fdad782e2164026f647aac6f5dec7077547a0248fdca73cf"
       },
       {
         "id": "urn:podway:schema:aquarium-dev-service-result:v1",
@@ -1193,7 +1193,7 @@
       {
         "id": "urn:podway:schema:daemon-status-result:v3",
         "path": "schemas/daemon-status-result-v3.schema.json",
-        "sha256": "sha256:dcb611b909cd240f572f726123bb8addea7b0e0361fcf9301ad3b73e5649cf4e"
+        "sha256": "sha256:64d725ca1540ed87bc1672364f95b824ef0f36d077a5eae5249be4445c01074b"
       },
       {
         "id": "urn:podway:schema:decision-result:v1",

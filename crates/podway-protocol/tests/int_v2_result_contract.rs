@@ -655,7 +655,7 @@ fn v2dvc002_reserves_closed_runtime_mode_contracts_without_runtime_admission() {
 }
 
 #[test]
-fn v2dvc005_daemon_activity_fields_are_closed_bounded_and_bound_to_reachability() {
+fn v2dvc005_daemon_activity_fields_are_closed_bounded_nullable_and_bound_to_reachability() {
     let mut status = json!({
         "schema":"podway.daemon-status-result/v3","mode":"dev",
         "status":"running","installed":true,"loaded":true,"reachable":true,
@@ -686,8 +686,8 @@ fn v2dvc005_daemon_activity_fields_are_closed_bounded_and_bound_to_reachability(
     assert_valid("schemas/daemon-status-result-v3.schema.json", &status);
 
     status["in_flight_client_count"] = Value::Null;
-    assert!(OutputEnvelopeV3::new(input(&status)).is_err());
-    assert_invalid("schemas/daemon-status-result-v3.schema.json", &status);
+    assert!(OutputEnvelopeV3::new(input(&status)).is_ok());
+    assert_valid("schemas/daemon-status-result-v3.schema.json", &status);
     status["in_flight_client_count"] = json!(0);
 
     let mut string_count = status.clone();

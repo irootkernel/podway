@@ -125,8 +125,10 @@ The final four fields were introduced by the
 `podway.daemon-status-result/v3`, whose additional `mode` field identifies the
 selected runtime namespace. Its two service-rollover counters report other
 admitted client handlers and active workspace maintenance, activation, claim,
-or rebind leases. A live v3 daemon reports concrete aggregate counts; a local
-stopped or unreachable projection uses `null`. `readiness_state` distinguishes
+or rebind leases. A live v3 daemon reports a concrete bounded count when the
+selected runtime can prove that activity and otherwise reports `null`; consumers
+that require quiescence treat `null` as busy. A local stopped or unreachable
+projection always uses `null`. `readiness_state` distinguishes
 `not_running`, `unreachable`, `starting`, `recovering`, `ready`, and `failed`;
 the stage identifies endpoint, registry, worktree, job, ready, or failed
 processing. Worktree progress contains only bounded total, completed, and failed

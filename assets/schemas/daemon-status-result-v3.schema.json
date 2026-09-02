@@ -76,8 +76,6 @@
           "socket_path": { "type": "string" },
           "configured_socket_path": { "type": "string" },
           "effective_socket_path": { "type": "string" },
-          "in_flight_client_count": { "type": "integer" },
-          "maintenance_operation_count": { "type": "integer" },
           "readiness_state": { "enum": ["starting", "recovering", "ready", "failed"] },
           "readiness_stage": { "enum": ["endpoint", "registry", "workspaces", "jobs", "ready", "failed"] },
           "readiness_elapsed_ms": { "type": "integer" },
