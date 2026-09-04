@@ -130,8 +130,12 @@ E2E tests, preset tooling checks, and the isolated contributor runtime self-test
 The E2E inventory covers normal public Procedure v2 admission, restart,
 goal-closeout, decision rework, idempotency reconciliation, service operation,
 the shipped `sw-dev-v2` preset identity, and confirmed selected-worktree removal
-through production dispatch. Preset-specific integration tests cover the other
-shipped identities and their accepted paths.
+through production dispatch. One isolated destructive-lifecycle scenario also
+chains initialization, prepared-session reset, reset-all, missing-registry
+repair, workspace removal and reinitialization, purge-logs uninstall, reinstall,
+and cold recovery so boundary interactions cannot rely only on independent
+tests. Preset-specific integration tests cover the other shipped identities and
+their accepted paths.
 
 `make dist` is the release gate. It reruns `make test`, bounded fuzzing,
 release-profile builds, native qualification, packaging, Dolgorae handoff, and

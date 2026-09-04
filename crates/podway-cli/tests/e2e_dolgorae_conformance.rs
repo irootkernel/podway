@@ -2980,3 +2980,324 @@ fn aut_t_v2_public_admission_survives_restart_and_completes_rework_and_goal_clos
 
     fixture.uninstall(&controlled_path);
 }
+
+#[test]
+fn destructive_lifecycle_converges_across_cleanup_repair_removal_and_reinstall() {
+    let fixture = ControlledPathFixtureV1::new();
+    assert!(
+        !fixture.production_service,
+        "the destructive lifecycle uses only the fake isolated service"
+    );
+    let (controlled_path, release_daemon) = install_sibling_release(&fixture, "lifecycle");
+    let service_paths = fixture.runtime_paths();
+    let socket = fixture.socket_path();
+    let worktree = fixture.root.join("lifecycle/worktree");
+    create_non_bare_worktree(&worktree);
+    let preserved = worktree.join("preserved.txt");
+    fs::write(&preserved, "preserved outside Podway\n").unwrap();
+    let socket_text = socket.to_str().expect("fixture socket path must be UTF-8");
+    let worktree_text = worktree
+        .to_str()
+        .expect("fixture worktree path must be UTF-8");
+
+    let initialized = fixture.run_json_success(
+        &controlled_path,
+        &[
+            "--json",
+            "--socket",
+            socket_text,
+            "--worktree",
+            worktree_text,
+            "init",
+        ],
+    );
+    let initial_workspace_uuid = initialized["workspace"]["uuid"]
+        .as_str()
+        .expect("workspace.init must return its UUID")
+        .to_owned();
+    assert_eq!(
+        initialized["result"]["schema"],
+        "podway.workspace-init-result/v1"
+    );
+    assert_json_error(
+        fixture.run(
+            &controlled_path,
+            &[
+                "--json",
+                "--socket",
+                socket_text,
+                "--worktree",
+                worktree_text,
+                "init",
+            ],
+        ),
+        "WORKSPACE_ALREADY_INITIALIZED",
+        1,
+    );
+    let retained_config = fs::read(worktree.join(".podway/config.yaml")).unwrap();
+
+    let first_start = fixture.run_json_success(
+        &controlled_path,
+        &[
+            "--json",
+            "--socket",
+            socket_text,
+            "--worktree",
+            worktree_text,
+            "--idempotency-key",
+            "77777777-0000-4000-8000-000000000001",
+            "start",
+            "--preset",
+            "small-change-v2",
+            "--task",
+            "Reset a prepared lifecycle session",
+        ],
+    );
+    assert_eq!(first_start["command"], "session.start");
+    let session_reset = fixture.run_json_success(
+        &controlled_path,
+        &[
+            "--json",
+            "--socket",
+            socket_text,
+            "--worktree",
+            worktree_text,
+            "--idempotency-key",
+            "77777777-0000-4000-8000-000000000002",
+            "reset",
+        ],
+    );
+    assert_eq!(session_reset["command"], "session.reset");
+    assert_eq!(
+        session_reset["result"]["schema"],
+        "podway.session-reset-result/v1"
+    );
+    assert_eq!(session_reset["result"]["reset"], true);
+    assert_json_error(
+        fixture.run(
+            &controlled_path,
+            &[
+                "--json",
+                "--socket",
+                socket_text,
+                "--worktree",
+                worktree_text,
+                "status",
+            ],
+        ),
+        "SESSION_NOT_FOUND",
+        1,
+    );
+
+    fixture.run_json_success(
+        &controlled_path,
+        &[
+            "--json",
+            "--socket",
+            socket_text,
+            "--worktree",
+            worktree_text,
+            "--idempotency-key",
+            "77777777-0000-4000-8000-000000000003",
+            "start",
+            "--preset",
+            "small-change-v2",
+            "--task",
+            "Delete the session through reset-all",
+        ],
+    );
+    let reset_all = fixture.run_json_success(
+        &controlled_path,
+        &[
+            "--json",
+            "--socket",
+            socket_text,
+            "--worktree",
+            worktree_text,
+            "--if-workspace-uuid",
+            &initial_workspace_uuid,
+            "--idempotency-key",
+            "77777777-0000-4000-8000-000000000004",
+            "reset",
+            "--all",
+            "--force",
+            "--yes",
+        ],
+    );
+    let reset_workspace_uuid = reset_all["workspace"]["uuid"]
+        .as_str()
+        .expect("reset-all must return its replacement UUID")
+        .to_owned();
+    assert_eq!(reset_all["command"], "workspace.reset_all");
+    assert_ne!(reset_workspace_uuid, initial_workspace_uuid);
+    assert_eq!(
+        fs::read(worktree.join(".podway/config.yaml")).unwrap(),
+        retained_config
+    );
+    assert_eq!(
+        fs::read_to_string(&preserved).unwrap(),
+        "preserved outside Podway\n"
+    );
+    assert_json_error(
+        fixture.run(
+            &controlled_path,
+            &[
+                "--json",
+                "--socket",
+                socket_text,
+                "--worktree",
+                worktree_text,
+                "status",
+            ],
+        ),
+        "SESSION_NOT_FOUND",
+        1,
+    );
+
+    fixture.uninstall(&controlled_path);
+    fs::remove_file(service_paths.workspace_registry_path().as_path())
+        .expect("the isolated registry must be removable");
+    fixture.assert_install(
+        &controlled_path,
+        &["--json", "daemon", "install"],
+        &release_daemon,
+    );
+    let ready = fixture.run_json_success(
+        &controlled_path,
+        &["--json", "daemon", "wait-ready", "--timeout", "10s"],
+    );
+    assert_eq!(ready["result"]["registered_worktree_count"], 0);
+
+    let repaired = fixture.run_json_success(
+        &controlled_path,
+        &[
+            "--json",
+            "--socket",
+            socket_text,
+            "--worktree",
+            worktree_text,
+            "workspace",
+            "repair",
+        ],
+    );
+    assert_eq!(repaired["workspace"]["uuid"], reset_workspace_uuid);
+    assert_eq!(repaired["result"]["changed"], true);
+    assert_eq!(
+        repaired["result"]["changes"],
+        serde_json::json!(["registry.last_known_root"])
+    );
+    let repeated_repair = fixture.run_json_success(
+        &controlled_path,
+        &[
+            "--json",
+            "--socket",
+            socket_text,
+            "--worktree",
+            worktree_text,
+            "workspace",
+            "repair",
+        ],
+    );
+    assert_eq!(repeated_repair["workspace"]["uuid"], reset_workspace_uuid);
+    assert_eq!(repeated_repair["result"]["changed"], false);
+    assert_eq!(repeated_repair["result"]["changes"], serde_json::json!([]));
+
+    let removed = fixture.run_json_success(
+        &controlled_path,
+        &[
+            "--json",
+            "--socket",
+            socket_text,
+            "--worktree",
+            worktree_text,
+            "--if-workspace-uuid",
+            &reset_workspace_uuid,
+            "--yes",
+            "workspace",
+            "remove",
+            "--force",
+        ],
+    );
+    assert_eq!(
+        removed["result"]["schema"],
+        "podway.workspace-removal-result/v1"
+    );
+    assert_eq!(removed["result"]["workspace_uuid"], reset_workspace_uuid);
+    assert!(!worktree.join(".podway").exists());
+    assert!(worktree.join(".git").exists());
+    assert_eq!(
+        fs::read_to_string(&preserved).unwrap(),
+        "preserved outside Podway\n"
+    );
+
+    let reinitialized = fixture.run_json_success(
+        &controlled_path,
+        &[
+            "--json",
+            "--socket",
+            socket_text,
+            "--worktree",
+            worktree_text,
+            "init",
+        ],
+    );
+    let final_workspace_uuid = reinitialized["workspace"]["uuid"]
+        .as_str()
+        .expect("reinitialization must return its UUID")
+        .to_owned();
+    assert_eq!(
+        reinitialized["result"]["schema"],
+        "podway.workspace-init-result/v1"
+    );
+    assert_ne!(final_workspace_uuid, reset_workspace_uuid);
+
+    let uninstalled = fixture.run_json_success(
+        &controlled_path,
+        &["--json", "--yes", "daemon", "uninstall", "--purge-logs"],
+    );
+    assert_eq!(uninstalled["command"], "daemon.uninstall");
+    assert_eq!(uninstalled["result"]["outcome"], "changed");
+    assert!(!service_paths.launch_agent_path().as_path().exists());
+    assert!(!service_paths.socket_path().as_path().exists());
+    assert!(!service_paths.log_path().as_path().exists());
+    assert!(!service_paths.bootstrap_log_path().as_path().exists());
+    assert!(service_paths.workspace_registry_path().as_path().exists());
+    assert!(worktree.join(".podway/runtime/state.sqlite3").exists());
+    let repeated_uninstall = fixture.run_json_success(
+        &controlled_path,
+        &["--json", "--yes", "daemon", "uninstall", "--purge-logs"],
+    );
+    assert_eq!(repeated_uninstall["command"], "daemon.uninstall");
+    assert_eq!(repeated_uninstall["result"]["outcome"], "changed");
+    assert!(service_paths.workspace_registry_path().as_path().exists());
+    assert!(worktree.join(".podway/runtime/state.sqlite3").exists());
+
+    fixture.assert_install(
+        &controlled_path,
+        &["--json", "daemon", "install"],
+        &release_daemon,
+    );
+    let recovered = fixture.run_json_success(
+        &controlled_path,
+        &["--json", "daemon", "wait-ready", "--timeout", "10s"],
+    );
+    assert_eq!(recovered["result"]["readiness_state"], "ready");
+    assert_eq!(recovered["result"]["registered_worktree_count"], 1);
+    assert_eq!(recovered["result"]["worktree_recovery"]["completed"], 1);
+    assert_eq!(recovered["result"]["worktree_recovery"]["failed"], 0);
+    let shown = fixture.run_json_success(
+        &controlled_path,
+        &[
+            "--json",
+            "--socket",
+            socket_text,
+            "--worktree",
+            worktree_text,
+            "workspace",
+            "show",
+        ],
+    );
+    assert_eq!(shown["workspace"]["uuid"], final_workspace_uuid);
+
+    fixture.uninstall(&controlled_path);
+}

@@ -197,7 +197,10 @@ Rules:
 
 ## Initialization behavior
 
-`podway init` is idempotent.
+`podway init` safely refuses to replace compatible existing runtime state with
+`WORKSPACE_ALREADY_INITIALIZED`; callers use `workspace repair` when the durable
+workspace already exists. Filesystem layout publication remains idempotent so a
+retry cannot replace a valid custom configuration or adopt conflicting state.
 
 It MUST:
 
