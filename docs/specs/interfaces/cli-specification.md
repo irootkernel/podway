@@ -20,6 +20,9 @@ human-readable text or one JSON document. It never writes SQLite directly.
 
 The executable grammar is owned by the command catalog and clap definitions.
 Removed commands are not aliases and must fail argument parsing.
+The top-level `podway -h` and `podway --help` forms are exact aliases for the
+overview produced by `podway help`; they do not enable help flags on subcommands.
+Their JSON output retains the canonical `help` command identity.
 
 Daemon-backed commands accept one global runtime selector. Omitting it selects
 `prod`; `--mode <key>` selects a bounded lowercase kebab-case mode, and `--dev`

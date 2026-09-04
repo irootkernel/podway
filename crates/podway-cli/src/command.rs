@@ -1860,7 +1860,8 @@ pub fn run() -> i32 {
         }
     }
 
-    let arguments: Vec<OsString> = env::args_os().collect();
+    let mut arguments: Vec<OsString> = env::args_os().collect();
+    normalize_top_level_help_alias(&mut arguments);
     let json_requested = arguments
         .iter()
         .any(|argument| argument.as_os_str() == OsStr::new("--json"));
@@ -1888,6 +1889,27 @@ pub fn run() -> i32 {
             };
             render_local_failure(failure, json_requested)
         }
+    }
+}
+
+fn normalize_top_level_help_alias(arguments: &mut [OsString]) {
+    let mut help_index = None;
+    for (index, argument) in arguments.iter().enumerate().skip(1) {
+        match argument.as_os_str() {
+            value if value == OsStr::new("-h") || value == OsStr::new("--help") => {
+                if help_index.replace(index).is_some() {
+                    return;
+                }
+            }
+            value
+                if value == OsStr::new("--json")
+                    || value == OsStr::new("--no-color")
+                    || value == OsStr::new("--quiet") => {}
+            _ => return,
+        }
+    }
+    if let Some(index) = help_index {
+        arguments[index] = OsString::from("help");
     }
 }
 
@@ -8213,7 +8235,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             .collect::<Vec<_>>()
             .join(", ");
         return Ok(format!(
-            "Podway coordinates durable worktree-local procedures.\n\nTrust boundary:\n  Podway trusts same-user processes connecting through its local socket.\n  It provides no authentication or workspace access key.\n  It does not protect against malicious same-user processes.\n  It records caller assertions and does not judge their semantic truth.\n\nDaemon endpoint:\n  Daemon-backed commands accept --mode <key>; --dev is the exact alias for mode dev.\n  Omitting a mode selects the production per-user endpoint.\n  Production commands may instead accept --socket <absolute-path>.\n\nUsage:\n  podway help <route>\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'add retry backoff'\n  podway begin\n  podway status --json\n  podway observe --json\n\nProcedure v2 routes:\n  procedure format|vet|lint|check|graph|preview|scaffold\n  session.begin, session.terminal_disposition, session.decide, session.rework\n  goal.define, goal.revise, goal.assess_criterion\n  evidence read\n\nShipped presets: {preset_ids}. Start prepares a session; begin creates its first active attempt. Contributors may use the managed disposable runtime documented by help workflow for isolated development."
+            "Podway coordinates durable worktree-local procedures.\n\nTrust boundary:\n  Podway trusts same-user processes connecting through its local socket.\n  It provides no authentication or workspace access key.\n  It does not protect against malicious same-user processes.\n  It records caller assertions and does not judge their semantic truth.\n\nDaemon endpoint:\n  Daemon-backed commands accept --mode <key>; --dev is the exact alias for mode dev.\n  Omitting a mode selects the production per-user endpoint.\n  Production commands may instead accept --socket <absolute-path>.\n\nUsage:\n  podway help [<route>]\n  podway -h\n  podway --help\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'add retry backoff'\n  podway begin\n  podway status --json\n  podway observe --json\n\nProcedure v2 routes:\n  procedure format|vet|lint|check|graph|preview|scaffold\n  session.begin, session.terminal_disposition, session.decide, session.rework\n  goal.define, goal.revise, goal.assess_criterion\n  evidence read\n\nShipped presets: {preset_ids}. Start prepares a session; begin creates its first active attempt. Contributors may use the managed disposable runtime documented by help workflow for isolated development."
         ));
     }
     let text = match topic {

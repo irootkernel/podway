@@ -2842,3 +2842,48 @@ fn help_and_every_completion_target_publish_the_v2_routes_and_flags() {
         );
     }
 }
+
+#[test]
+fn top_level_help_flags_alias_the_canonical_help_command_only() {
+    let canonical = Fixture::new().run(&["help".to_owned()]);
+    assert!(canonical.status.success(), "{canonical:?}");
+
+    for alias in ["-h", "--help"] {
+        let output = Fixture::new().run(&[alias.to_owned()]);
+        assert!(output.status.success(), "{alias}: {output:?}");
+        assert_eq!(output.stdout, canonical.stdout, "{alias}");
+        assert!(output.stderr.is_empty(), "{alias}: {output:?}");
+    }
+    let no_color = Fixture::new().run(&["--no-color".to_owned(), "--help".to_owned()]);
+    assert!(no_color.status.success(), "{no_color:?}");
+    assert_eq!(no_color.stdout, canonical.stdout);
+    let quiet = Fixture::new().run(&["--quiet".to_owned(), "-h".to_owned()]);
+    assert!(quiet.status.success(), "{quiet:?}");
+    assert!(quiet.stdout.is_empty(), "{quiet:?}");
+    assert!(quiet.stderr.is_empty(), "{quiet:?}");
+
+    for arguments in [
+        vec!["--json".to_owned(), "-h".to_owned()],
+        vec!["--help".to_owned(), "--json".to_owned()],
+    ] {
+        let output = Fixture::new().run(&arguments);
+        assert!(output.status.success(), "{arguments:?}: {output:?}");
+        let envelope = one_json(&output);
+        assert_eq!(envelope["command"], "help");
+        assert_eq!(envelope["result"]["topic"], Value::Null);
+        assert!(
+            envelope["result"]["text"]
+                .as_str()
+                .unwrap()
+                .contains("podway --help")
+        );
+    }
+
+    for arguments in [
+        vec!["status".to_owned(), "--help".to_owned()],
+        vec!["--help".to_owned(), "status".to_owned()],
+    ] {
+        let output = Fixture::new().run(&arguments);
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {output:?}");
+    }
+}

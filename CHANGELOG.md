@@ -4,6 +4,10 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ## v0.2.9 - Unreleased
 
+### Added
+
+- Accept top-level `-h` and `--help` as aliases for the canonical `podway help` overview.
+
 ### Fixed
 
 - Let `workspace repair` restore a missing global registry entry after fully revalidating the worktree's durable Git and Store identity.
