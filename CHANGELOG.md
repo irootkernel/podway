@@ -4,6 +4,10 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ## v0.2.9 - Unreleased
 
+### Fixed
+
+- Restore successful UUID-fenced workspace-removal replay after the first removal deletes the workspace configuration.
+
 ## v0.2.8 - 2026-09-03
 
 ### Added

@@ -95,18 +95,34 @@ fn cli_json(
     worktree: Option<&Path>,
     arguments: &[&str],
 ) -> Value {
-    let mut command = Command::new(cli);
-    command
-        .arg("--json")
-        .arg("--socket")
-        .arg(paths.socket_path().as_path())
-        .env("PODWAY_TEST_ACCOUNT_ROOT", home);
-    if let Some(worktree) = worktree {
-        command.arg("--worktree").arg(worktree);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let mut command = Command::new(cli);
+        command
+            .arg("--json")
+            .arg("--socket")
+            .arg(paths.socket_path().as_path())
+            .env("PODWAY_TEST_ACCOUNT_ROOT", home);
+        if let Some(worktree) = worktree {
+            command.arg("--worktree").arg(worktree);
+        }
+        command.args(arguments);
+        let output = command.output().expect("Podway CLI command must execute");
+        let response: Value =
+            serde_json::from_slice(&output.stdout).expect("CLI response must be JSON");
+        if output.status.success() {
+            return response;
+        }
+        if response["code"] == "DAEMON_STARTING" && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+            continue;
+        }
+        panic!(
+            "Podway CLI command failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
     }
-    command.args(arguments);
-    let output = run(&mut command, "Podway CLI command");
-    serde_json::from_slice(&output.stdout).expect("CLI success must be JSON")
 }
 
 #[test]
@@ -155,6 +171,35 @@ fn real_cli_and_daemon_remove_only_the_confirmed_workspace_state() {
     assert!(!worktree.join(".podway").exists());
     assert!(worktree.join(".git").exists());
     assert_eq!(fs::read_to_string(outside).unwrap(), "preserved\n");
+
+    let replayed = cli_json(
+        cli,
+        &home,
+        &paths,
+        Some(&worktree),
+        &[
+            "--yes",
+            "--if-workspace-uuid",
+            &workspace_uuid,
+            "workspace",
+            "remove",
+            "--force",
+        ],
+    );
+    assert_eq!(
+        replayed["result"]["schema"],
+        "podway.workspace-removal-result/v1"
+    );
+    assert_eq!(replayed["result"]["workspace_uuid"], Value::Null);
+    assert_eq!(replayed["result"]["registry_entry_removed"], false);
+    assert_eq!(replayed["result"]["podway_directory_removed"], false);
+    assert_eq!(replayed["result"]["already_absent"], true);
+    assert!(!worktree.join(".podway").exists());
+    assert!(worktree.join(".git").exists());
+    assert_eq!(
+        fs::read_to_string(worktree.join("preserved.txt")).unwrap(),
+        "preserved\n"
+    );
 
     stop_daemon(child);
     fs::remove_dir_all(root).unwrap();

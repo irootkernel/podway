@@ -2141,7 +2141,10 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
                         Command::Workspace {
                             command: WorkspaceCommand::Remove { .. }
                         }
-                    ) && error.code().as_str() == "SESSION_NOT_FOUND" =>
+                    ) && matches!(
+                        error.code().as_str(),
+                        "SESSION_NOT_FOUND" | "WORKSPACE_CONFIG_INVALID"
+                    ) =>
                 {
                     explicit.workspace_id.clone()
                 }
