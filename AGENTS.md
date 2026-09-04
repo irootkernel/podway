@@ -293,6 +293,40 @@ trivial changes with no meaningful decision context.
 
 #### Verification
 
+##### Podway Release Upgrade Hands-on QA
+
+- Every full `$aquarium:release-qa` pass for an intended stable Podway release
+  must read and execute
+  [the repository upgrade scenario](docs/implementation-tips/release-upgrade-qa.md)
+  as one independent required scenario cluster. This repository-specific rule is
+  the explicit exception to Aquarium's generic rule that the previous release is
+  inspected but not executed.
+- The release-QA invocation authorizes its coordinator to download only the
+  selected previous stable GitHub Release's Apple Silicon archive, checksum, and
+  provenance into the assigned worker fixture before dispatch. This
+  repository-specific rule is the explicit exception to Aquarium's generic
+  metadata-only discovery and offline-scenario rules. The coordinator must verify
+  those assets without new authentication. The dispatched worker retains
+  Aquarium's no-network and no-credential constraints and runs only from those
+  verified local files.
+- Compare the canonical SQLite schema version declared at the selected previous
+  tag and candidate commit before execution. A previous schema below v10 is
+  `INCOMPLETE`, because those Stores have no named-mode identity and migrate only
+  in production. A v10-or-later version difference remains in scope and must
+  exercise forward migration in the disposable named mode.
+- Run the previous release and exact candidate directly inside the scenario's
+  assigned fixture. Pass both `--mode dev` and its disposable `PODWAY_DEV_HOME`
+  explicitly on every daemon and daemon-backed CLI invocation. Before spawning
+  any process, fail closed unless the controlled environment contains the exact
+  nonempty fixture path; omitting it selects the user-global
+  `~/.podway/modes/dev` namespace. Verify the reported socket paths before the
+  first workspace mutation. Do not install either generation or touch the
+  production LaunchAgent, user-global Podway state, Aquarium's development
+  runtime, or any worktree outside the evidence root.
+- Treat a missing prerequisite or safe-execution gap as `INCOMPLETE` and a
+  reproducible expected-behavior mismatch as a finding. A confirmation pass may
+  rerun this scenario only when it is present in the frozen full-pass matrix.
+
 ##### Release Gate Selection
 
 - This subsection is the single source of truth for agent-operated release gate

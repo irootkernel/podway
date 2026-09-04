@@ -9,6 +9,8 @@ Use these guides when changing Podway:
   managed sandbox, and production-safe coexistence.
 - [Documentation](documentation.md): document placement, precedence, and links.
 - [Release](release.md): source readiness, packaging, and publication handoff.
+- [Release Upgrade Hands-on QA](release-upgrade-qa.md): previous-release state
+  handoff and candidate deletion-boundary verification.
 
 ## Core implementation rules
 

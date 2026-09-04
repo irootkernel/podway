@@ -71,6 +71,14 @@ The helper validates ownership, layout, the isolated lock, and endpoint idleness
 before rename-to-trash deletion. A failed cleanup is a blocker: preserve and
 report the exact recoverable path instead of deleting around the guard.
 
+Aquarium's full release-QA pass separately runs the repository-owned
+[release upgrade hands-on scenario](release-upgrade-qa.md). That scenario
+executes the verified previous stable release and the exact candidate in one
+disposable development namespace to check durable-state handoff and public
+deletion boundaries. It uses an assigned fixture below Aquarium's physical
+release-QA evidence root; it neither changes `make dist` nor contributes to
+release provenance or packaged-conformance status.
+
 `make dist-patch` does not run packaged runtime qualification. Its readiness comes
 from the confirmed tested baseline and reduced-gate provenance and handoff; do not
 claim that a temporary release-qualification runtime, packaged scenarios, or their

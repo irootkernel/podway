@@ -7,6 +7,7 @@ This file records concise shipped outcomes and the planned next stable release.
 ### Added
 
 - Accept top-level `-h` and `--help` as aliases for the canonical `podway help` overview.
+- Add a repository-owned release-QA scenario that verifies isolated previous-release state handoff and candidate deletion boundaries.
 
 ### Fixed
 
