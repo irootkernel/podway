@@ -6,6 +6,7 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ### Fixed
 
+- Let `workspace repair` restore a missing global registry entry after fully revalidating the worktree's durable Git and Store identity.
 - Make confirmed `reset --all` independent of normal workspace status so v0.2.6 workspaces with detached Git identity can be destructively reinitialized during upgrade.
 - Restore successful UUID-fenced workspace-removal replay after the first removal deletes the workspace configuration.
 

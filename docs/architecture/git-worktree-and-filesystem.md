@@ -115,7 +115,9 @@ When a worktree moves:
 4. if both match the registered workspace, the daemon updates `last_known_root`;
 5. queued jobs resume.
 
-`podway workspace repair` performs the same validation explicitly and reports every change. It MUST NOT adopt a database whose Git identity conflicts.
+`podway workspace repair` performs the same validation explicitly, restores a
+missing global registry entry from the revalidated durable Store identity, and
+reports every change. It MUST NOT adopt a database whose Git identity conflicts.
 
 ## Copied runtime state
 

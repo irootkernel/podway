@@ -787,8 +787,7 @@ impl WorkspaceRuntimeV1 for ProductionWorkspaceRuntimeV1 {
             .manager
             .registry()
             .lookup(&workspace_uuid)
-            .map_err(|error| map_runtime_error(WorkspaceRuntimeErrorV1::Registry(error)))?
-            .ok_or_else(|| DispatchFailureV1::new(DispatchFailureKindV1::RequestInvalid))?;
+            .map_err(|error| map_runtime_error(WorkspaceRuntimeErrorV1::Registry(error)))?;
         let moved = resolved.move_metadata().relocated_from_prior_root();
 
         // A repair is admitted only after the resolver has bound durable SQLite identity to two
@@ -806,8 +805,9 @@ impl WorkspaceRuntimeV1 for ProductionWorkspaceRuntimeV1 {
             .ok_or_else(|| {
                 DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceStateUnreadable)
             })?;
-        let registry_reconciled =
-            registry_before.last_known_root() != registry_after.last_known_root();
+        let registry_reconciled = registry_before
+            .as_ref()
+            .is_none_or(|before| before.last_known_root() != registry_after.last_known_root());
         let mut changes = Vec::new();
         if moved {
             changes.push(Value::String(

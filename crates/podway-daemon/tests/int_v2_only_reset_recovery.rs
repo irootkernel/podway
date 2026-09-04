@@ -27,6 +27,58 @@ fn selector_with_workspace(path: &Path, workspace: WorkspaceId) -> WorktreeSelec
 }
 
 #[test]
+fn workspace_repair_restores_a_missing_global_registry_entry() {
+    let fixture = support_phase4_workspace::git_worktrees();
+    runtime::make_runtime_private(fixture.main());
+    let manager = Arc::new(runtime::manager(fixture.temporary_path()));
+    let initialized = manager
+        .bootstrap(
+            support_phase4_workspace::selector(fixture.main()),
+            runtime::observation(),
+        )
+        .unwrap();
+    let workspace_uuid = initialized
+        .context_snapshot()
+        .binding()
+        .identity()
+        .workspace_uuid()
+        .clone();
+    let registry_path = manager.registry().registry_path().to_path_buf();
+    drop(initialized);
+    fs::remove_file(&registry_path).unwrap();
+
+    let dispatcher = runtime::dispatcher(Arc::clone(&manager), "repair-missing-registry");
+    let repair = runtime::request(
+        95_000,
+        "workspace.repair",
+        &runtime::selector(fixture.main()),
+        Map::new(),
+        "unused-repair-key",
+        PreconditionsV1::default(),
+    );
+    let response = runtime::dispatch(&dispatcher, &repair);
+    let ResponseEnvelopeV2::OutputV2(output) = response else {
+        panic!("workspace repair must restore a missing registry entry: {response:?}");
+    };
+    assert_eq!(output.command().as_str(), "workspace.repair");
+    assert_eq!(output.workspace().unwrap().uuid(), &workspace_uuid);
+    assert_eq!(output.result()["changed"], true);
+    assert_eq!(
+        output.result()["changes"],
+        json!(["registry.last_known_root"])
+    );
+    let restored = manager.registry().load().unwrap();
+    let entry = restored.lookup(&workspace_uuid).unwrap();
+    assert_eq!(
+        entry.last_known_root().unix_bytes(),
+        fs::canonicalize(fixture.main())
+            .unwrap()
+            .as_os_str()
+            .as_encoded_bytes()
+    );
+}
+
+#[test]
 fn bootstrap_rejects_a_new_workspace_identity_at_an_already_registered_root() {
     let fixture = support_phase4_workspace::git_worktrees();
     runtime::make_runtime_private(fixture.main());

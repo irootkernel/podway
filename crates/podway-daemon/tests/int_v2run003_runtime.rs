@@ -325,7 +325,9 @@ fn request_with_options(
             | "job.lookup"
             | "job.status"
             | "job.wait" => OperationV1::Query,
-            "session.archive_purge" | "workspace.remove" => OperationV1::Control,
+            "session.archive_purge" | "workspace.repair" | "workspace.remove" => {
+                OperationV1::Control
+            }
             _ => OperationV1::Mutate,
         }
     };
