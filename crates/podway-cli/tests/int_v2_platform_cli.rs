@@ -186,7 +186,6 @@ impl Drop for Fixture {
 enum Reply {
     Unsupported,
     WorkspaceError,
-    LegacyProcedureStateUnsupported,
     ResetAll,
     GoalDefinition,
     StatusV2,
@@ -310,17 +309,6 @@ fn response_for(request: &RequestEnvelopeV1, reply: Reply) -> Value {
             "generated_at": "2026-08-09T12:34:56.789Z",
             "code": "WORKSPACE_NOT_INITIALIZED",
             "message": "recording daemon rejection",
-            "retryable": false,
-            "exit_code": 5,
-            "details": {}
-        }),
-        Reply::LegacyProcedureStateUnsupported => json!({
-            "schema": "podway.error/v1",
-            "request_id": request.request_id().as_str(),
-            "command": request.command().as_str(),
-            "generated_at": "2026-08-09T12:34:56.789Z",
-            "code": "LEGACY_PROCEDURE_STATE_UNSUPPORTED",
-            "message": "Legacy Procedure v1 state is unsupported; back up the workspace and run confirmed reset --all.",
             "retryable": false,
             "exit_code": 5,
             "details": {}
@@ -1766,12 +1754,9 @@ fn state_mutations_with_omitted_fences_use_v2_status_preflight() {
 }
 
 #[test]
-fn legacy_procedure_state_error_allows_confirmed_reset_all() {
+fn confirmed_reset_all_skips_status_preflight_without_workspace_uuid() {
     let fixture = Fixture::new();
-    let daemon = SequenceRecordingDaemon::start(
-        &fixture.socket,
-        vec![Reply::LegacyProcedureStateUnsupported, Reply::ResetAll],
-    );
+    let daemon = RecordingDaemon::start(&fixture.socket, Reply::ResetAll);
     let output = fixture.run(&[
         "--json".to_owned(),
         "--socket".to_owned(),
@@ -1785,24 +1770,42 @@ fn legacy_procedure_state_error_allows_confirmed_reset_all() {
     ]);
 
     assert!(output.status.success(), "{output:?}");
-    let requests = daemon.finish();
-    assert_eq!(requests.len(), 2);
-    assert_eq!(requests[0]["command"], "session.status");
-    assert_eq!(requests[0]["operation"], "query");
-    assert_eq!(requests[1]["command"], "workspace.reset_all");
-    assert_eq!(requests[1]["operation"], "bootstrap");
-    assert_eq!(requests[1]["payload"]["confirmed"], true);
-    assert!(
-        requests[1]["payload"]
-            .get("expected_workspace_uuid")
-            .is_none()
-    );
-    assert!(requests[1]["preconditions"].get("session_id").is_none());
-    assert!(
-        requests[1]["preconditions"]
-            .get("session_revision")
-            .is_none()
-    );
+    let request = daemon.finish();
+    assert_eq!(request["command"], "workspace.reset_all");
+    assert_eq!(request["operation"], "bootstrap");
+    assert_eq!(request["payload"]["confirmed"], true);
+    assert!(request["payload"].get("expected_workspace_uuid").is_none());
+    assert!(request["workspace"].get("expected_uuid").is_none());
+    assert!(request["preconditions"].get("session_id").is_none());
+    assert!(request["preconditions"].get("session_revision").is_none());
+    assert_eq!(one_json(&output)["schema"], "podway.output/v3");
+}
+
+#[test]
+fn confirmed_reset_all_skips_status_preflight_with_workspace_uuid() {
+    let fixture = Fixture::new();
+    let daemon = RecordingDaemon::start(&fixture.socket, Reply::ResetAll);
+    let output = fixture.run(&[
+        "--json".to_owned(),
+        "--socket".to_owned(),
+        fixture.socket.display().to_string(),
+        "--worktree".to_owned(),
+        fixture.root.display().to_string(),
+        "--if-workspace-uuid".to_owned(),
+        WORKSPACE_ID.to_owned(),
+        "reset".to_owned(),
+        "--all".to_owned(),
+        "--force".to_owned(),
+        "--yes".to_owned(),
+    ]);
+
+    assert!(output.status.success(), "{output:?}");
+    let request = daemon.finish();
+    assert_eq!(request["command"], "workspace.reset_all");
+    assert_eq!(request["operation"], "bootstrap");
+    assert_eq!(request["workspace"]["expected_uuid"], WORKSPACE_ID);
+    assert_eq!(request["payload"]["expected_workspace_uuid"], WORKSPACE_ID);
+    assert_eq!(request["payload"]["confirmed"], true);
     assert_eq!(one_json(&output)["schema"], "podway.output/v3");
 }
 

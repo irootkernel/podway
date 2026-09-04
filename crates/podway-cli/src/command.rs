@@ -2101,14 +2101,14 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
     }
 
     let destructive_workspace_id =
-        if matches!(&cli.command, Command::Reset(ResetArgs { all: true, .. }))
-            || matches!(
-                &cli.command,
-                Command::Workspace {
-                    command: WorkspaceCommand::Remove { .. }
-                }
-            )
-        {
+        if matches!(&cli.command, Command::Reset(ResetArgs { all: true, .. })) {
+            explicit.workspace_id.clone()
+        } else if matches!(
+            &cli.command,
+            Command::Workspace {
+                command: WorkspaceCommand::Remove { .. }
+            }
+        ) {
             let status_request = build_request(
                 "session.status",
                 &target,
@@ -2127,7 +2127,7 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
                     ),
                 ),
                 ResponseEnvelopeV2::Error(error)
-                    if reset_probe_can_recover(&error)
+                    if workspace_removal_probe_can_recover(&error)
                         || matches!(
                             error.code().as_str(),
                             "WORKSPACE_NOT_INITIALIZED" | "WORKSPACE_MAINTENANCE"
@@ -2644,7 +2644,7 @@ fn apply_archive_purge_revision(
     Ok(())
 }
 
-fn reset_probe_can_recover(error: &podway_protocol::ErrorEnvelopeV1) -> bool {
+fn workspace_removal_probe_can_recover(error: &podway_protocol::ErrorEnvelopeV1) -> bool {
     matches!(
         error.code().as_str(),
         "WORKSPACE_STATE_UNREADABLE"
