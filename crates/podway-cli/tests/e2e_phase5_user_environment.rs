@@ -52,6 +52,38 @@ fn aut_t_path_invokes_cli_symlink_from_sanitized_arbitrary_directory() {
         })
     );
 
+    let output = Command::new("podway")
+        .arg("version")
+        .current_dir(&arbitrary)
+        .env_clear()
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+        .output()
+        .expect("controlled PATH must resolve podway");
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    assert_eq!(
+        String::from_utf8(output.stdout).expect("version output must be UTF-8"),
+        format!("podway v{}\n", env!("CARGO_PKG_VERSION"))
+    );
+
+    let output = Command::new("podway")
+        .args(["version", "--json", "--identity"])
+        .current_dir(&arbitrary)
+        .env_clear()
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+        .output()
+        .expect("controlled PATH must resolve podway");
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let envelope: Value =
+        serde_json::from_slice(&output.stdout).expect("version identity must be JSON");
+    assert_eq!(envelope["schema"], "podway.output/v3");
+    assert_eq!(envelope["command"], "version");
+    assert_eq!(
+        envelope["result"]["version"],
+        format!("v{}", env!("CARGO_PKG_VERSION"))
+    );
+
     fs::remove_dir_all(root).expect("user-environment fixture must be removed");
 }
 

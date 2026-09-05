@@ -124,6 +124,15 @@ When no explicit endpoint is supplied, an interactive client may read
 The client version field is diagnostic and MUST NOT independently authorize or
 reject a connection. Admission is determined by product and manifest identity.
 
+`podway version` emits `podway v<version>` as plain text, using the same
+`v`-prefixed version as `podway version --json`.
+
+The `version` field in both CLI and daemon `version --json --identity` results
+uses the same `v` prefix. Cargo and contract-manifest product versions remain
+unprefixed; release probes compare the identity version with `v` followed by the
+manifest product version. Identity consumers must accept the previous unprefixed
+form when inspecting older binaries.
+
 `podwayd version --json` emits the compact daemon name and `v`-prefixed version.
 `podwayd version --json --identity` emits the full versioned identity envelope used
 by installation and qualification probes. Runtime probes reject bare results and

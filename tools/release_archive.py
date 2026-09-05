@@ -121,7 +121,8 @@ def require_native_binary(path: Path, expected_name: str) -> Path:
         fail(f"{expected_name} is not an arm64 Mach-O binary")
     version_arguments = ["version"]
     version = run([str(path), *version_arguments], label=f"{expected_name} version probe")
-    expected_version = f"{expected_name} {PRODUCT_VERSION}\n".encode()
+    version_prefix = "v" if expected_name == "podway" else ""
+    expected_version = f"{expected_name} {version_prefix}{PRODUCT_VERSION}\n".encode()
     if version != expected_version:
         fail(f"{expected_name} version output does not equal {expected_version!r}")
     return path

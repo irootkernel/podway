@@ -100,7 +100,7 @@ impl ContractFixture {
             "result": {
                 "schema": "podway.version-result/v1",
                 "product": "podway",
-                "version": manifest["product_version"],
+                "version": format!("v{}", manifest["product_version"].as_str().unwrap()),
                 "target": TARGET,
                 "build_identity": format!("sha256:{}", "a".repeat(64)),
                 "source_commit": SOURCE_COMMIT,
@@ -257,6 +257,9 @@ fn complete_identity_validation_rejects_generated_drift() {
     let mut wrong_result_schema = valid.clone();
     wrong_result_schema["result"]["schema"] = json!("podway.version-result/v2");
     mutations.push(("wrong result discriminator".to_owned(), wrong_result_schema));
+    let mut unprefixed_version = valid.clone();
+    unprefixed_version["result"]["version"] = fixture.manifest()["product_version"].clone();
+    mutations.push(("unprefixed version".to_owned(), unprefixed_version));
     let mut unknown_result = valid.clone();
     unknown_result["result"]["unknown"] = json!(true);
     mutations.push(("unknown result field".to_owned(), unknown_result));

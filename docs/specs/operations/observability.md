@@ -84,6 +84,9 @@ unrelated files, symlinks, and foreign-owned files are not followed or removed.
 
 ## Daemon status
 
+The `daemon_version` value uses the build identity's `v`-prefixed version when
+available. Status readers must also accept unprefixed versions from older daemons.
+
 `podway daemon status --json` reports:
 
 ```text

@@ -77,7 +77,10 @@ mod tests {
         let identity = build_identity_v1();
         assert_eq!(identity.schema(), "podway.version-result/v1");
         assert_eq!(identity.product(), "podway");
-        assert_eq!(identity.version(), env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            identity.version(),
+            format!("v{}", env!("CARGO_PKG_VERSION"))
+        );
         assert!(!identity.target().is_empty());
         assert_eq!(identity.supported_ipc_ids(), ["podway.ipc/v1"]);
         for digest in [

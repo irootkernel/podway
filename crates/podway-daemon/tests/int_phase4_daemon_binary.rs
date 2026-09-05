@@ -520,7 +520,10 @@ fn podwayd_service_and_version_modes_are_explicit() {
     let identity = &envelope["result"];
     assert_eq!(identity["schema"], "podway.version-result/v1");
     assert_eq!(identity["product"], "podway");
-    assert_eq!(identity["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        identity["version"],
+        format!("v{}", env!("CARGO_PKG_VERSION"))
+    );
     assert_eq!(
         identity["contract_manifest_schema"],
         "podway.contract-manifest/v1"

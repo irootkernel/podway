@@ -3126,7 +3126,7 @@ fn execute_local(cli: &Cli) -> Result<Option<RunResult>, LocalFailure> {
                 return Ok(Some(RunResult::VersionSummary {
                     name: "podway",
                     version: format!("v{}", env!("CARGO_PKG_VERSION")),
-                    text: format!("podway {}", env!("CARGO_PKG_VERSION")),
+                    text: format!("podway v{}", env!("CARGO_PKG_VERSION")),
                 }));
             }
             if !cli.json {
@@ -3139,7 +3139,7 @@ fn execute_local(cli: &Cli) -> Result<Option<RunResult>, LocalFailure> {
                 "version",
                 serde_json::to_value(identity)
                     .expect("the static build identity always serializes"),
-                format!("podway {}", env!("CARGO_PKG_VERSION")),
+                format!("podway v{}", env!("CARGO_PKG_VERSION")),
             )))
         }
         Command::Completions { shell } => {

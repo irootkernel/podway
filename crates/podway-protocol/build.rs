@@ -171,7 +171,7 @@ fn main() {
          pub const CONTRACT_MANIFEST_DIGEST_V1: &str = {};\n\
          pub const CONTRACT_SUPPORTED_IPC_IDS_V1: &[&str] = &[{ipc_ids}];\n",
         rust_string(product),
-        rust_string(version),
+        rust_string(&format!("v{version}")),
         rust_string(&target),
         rust_string(&build_identity),
         rust_string(MANIFEST_SCHEMA),

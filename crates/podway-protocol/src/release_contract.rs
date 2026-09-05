@@ -473,10 +473,11 @@ impl ContractSetV1 {
             &result,
             &format!("{role} identity result"),
         )?;
+        let expected_version = format!("v{}", self.manifest.product_version);
         let expected = [
             ("schema", VERSION_RESULT_SCHEMA_V1),
             ("product", self.manifest.product.as_str()),
-            ("version", self.manifest.product_version.as_str()),
+            ("version", expected_version.as_str()),
             ("target", expected_target),
             ("source_commit", expected_source_commit),
             (
