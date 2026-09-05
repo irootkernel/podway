@@ -203,7 +203,7 @@ including the mandatory stable codes
 `REWORK_TARGET_NOT_DOMINATING`, and
 `NO_REACTIVATION_PATH`.
 
-`INTERNAL_ERROR` is never marked retryable, and its details include a diagnostic ID. A client may make an out-of-band retry decision, but the daemon does not prove that an unexpected failure committed no mutation.
+`INTERNAL_ERROR` is never marked retryable. A client may make an out-of-band retry decision, but the daemon does not prove that an unexpected failure committed no mutation. When the daemon cannot reconstruct a mutation response after durable admission, `podway.internal-error-details/v1` uses the `ADMITTED_RESPONSE_RECONSTRUCTION_FAILED` discriminator, carries a diagnostic ID equal to the current response request ID, and retains the admitted job ID and workspace sequence. This classification avoids emitting an invalid `podway.workspace-recovery-details/v1` object, whose recovery contract permits only pre-admission failures.
 
 ## Typed condition failures
 

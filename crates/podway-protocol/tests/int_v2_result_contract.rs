@@ -897,6 +897,85 @@ fn v2plt006_production_codec_round_trips_every_registered_command_result_pair() 
 }
 
 #[test]
+fn recon002_internal_error_admitted_reconstruction_details_are_closed() {
+    let details = json!({
+        "schema": "podway.internal-error-details/v1",
+        "kind": "ADMITTED_RESPONSE_RECONSTRUCTION_FAILED",
+        "diagnostic_id": UUID,
+        "job_id": "00000000-0000-4000-8000-000000000002",
+        "job_sequence": 7,
+        "admission": {
+            "admitted": true,
+            "job_id": "00000000-0000-4000-8000-000000000002",
+            "workspace_sequence": 7
+        }
+    });
+    assert_valid("schemas/internal-error-details-v1.schema.json", &details);
+    let envelope = json!({
+        "schema": "podway.error/v1",
+        "request_id": UUID,
+        "command": "item.record_many",
+        "generated_at": "2026-09-05T00:00:00.000Z",
+        "code": "INTERNAL_ERROR",
+        "message": "An unexpected internal error occurred.",
+        "retryable": false,
+        "exit_code": 6,
+        "details": details
+    });
+    assert_valid("schemas/error-v1.schema.json", &envelope);
+    assert!(serde_json::from_value::<ErrorEnvelopeV1>(envelope.clone()).is_ok());
+
+    let mut wrong_kind = envelope.clone();
+    wrong_kind["details"]["kind"] = json!("RECONSTRUCTION_FAILED");
+    assert_invalid(
+        "schemas/internal-error-details-v1.schema.json",
+        &wrong_kind["details"],
+    );
+    assert!(serde_json::from_value::<ErrorEnvelopeV1>(wrong_kind).is_err());
+
+    let mut wrong_diagnostic = envelope.clone();
+    wrong_diagnostic["details"]["diagnostic_id"] = json!("00000000-0000-4000-8000-000000000003");
+    assert!(serde_json::from_value::<ErrorEnvelopeV1>(wrong_diagnostic).is_err());
+
+    let mut mismatched_job = envelope.clone();
+    mismatched_job["details"]["admission"]["job_id"] =
+        json!("00000000-0000-4000-8000-000000000004");
+    assert!(serde_json::from_value::<ErrorEnvelopeV1>(mismatched_job).is_err());
+
+    let mut mismatched_sequence = envelope.clone();
+    mismatched_sequence["details"]["admission"]["workspace_sequence"] = json!(8);
+    assert!(serde_json::from_value::<ErrorEnvelopeV1>(mismatched_sequence).is_err());
+
+    let mut open = envelope;
+    open["details"].as_object_mut().unwrap().remove("schema");
+    open["details"].as_object_mut().unwrap().remove("kind");
+    open["details"]
+        .as_object_mut()
+        .unwrap()
+        .remove("diagnostic_id");
+    assert_valid(
+        "schemas/internal-error-details-v1.schema.json",
+        &open["details"],
+    );
+    assert!(serde_json::from_value::<ErrorEnvelopeV1>(open).is_ok());
+
+    let catalog: Value = serde_json::from_slice(
+        &fs::read(root().join("assets/specifications/error-codes.json")).unwrap(),
+    )
+    .unwrap();
+    let internal = catalog["errors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["code"] == "INTERNAL_ERROR")
+        .unwrap();
+    assert_eq!(
+        internal["details_schema"],
+        "podway.internal-error-details/v1"
+    );
+}
+
+#[test]
 fn v2ctr003_v2_runtime_error_details_are_code_bound_and_closed() {
     let valid_details = json!({
         "schema": "podway.v2-runtime-error-details/v1",

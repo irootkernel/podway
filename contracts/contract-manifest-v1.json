@@ -38,7 +38,7 @@
     {
       "kind": "catalog",
       "path": "release/dolgorae-adapter-contract-v2.json",
-      "sha256": "sha256:051807cf5652bfcf6cf5c5c7f4a705f05947e8c7cdc4bc6f8461db152371e3a0"
+      "sha256": "sha256:d7b200723d694a94cc469a5fda610d563ce2da8f0f250b2379136490874709ac"
     },
     {
       "kind": "schema",
@@ -189,6 +189,11 @@
       "kind": "schema",
       "path": "schemas/idempotency-key-reused-details-v1.schema.json",
       "sha256": "sha256:df53a64adb45be10df7f112b3b032a26eef656f2d4e4a3c2dd73989ce8a94c6a"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/internal-error-details-v1.schema.json",
+      "sha256": "sha256:725c2fdea896b71cc8b23c7d9313f1c66e58468432e135575cd6e96b09995042"
     },
     {
       "kind": "schema",
@@ -533,7 +538,7 @@
     {
       "kind": "catalog",
       "path": "spec/error-codes.json",
-      "sha256": "sha256:a8f9ac89bc7c0819248db8e21fe51b6d7d97738cc3839f325acca28202dd9e2b"
+      "sha256": "sha256:0a459c6d3c9748103972679f8fb5d28a9cb9564993ae979d94c4d8a12a872af1"
     },
     {
       "kind": "transition_matrix",
@@ -631,7 +636,7 @@
       "sha256": "sha256:23423b1060f6a0fedd1097ac458ca8a1cd8cb3c1a2a7e88aa964d514d01a248a"
     }
   ],
-  "digest": "sha256:9f3ed3571cc45cf49e445f8e2d75be3396f533db054e5e5cac8339207b8fea0c",
+  "digest": "sha256:f287db95d269e8346ff39399067c1239504bfc93bd9e745b8d9c0688ca294138",
   "product": "podway",
   "product_version": "0.2.8",
   "schema_version": "podway.contract-manifest/v1",

@@ -37,6 +37,7 @@ pub const MAX_PUBLIC_DIAGNOSTIC_SCALARS_V1: usize = 512;
 pub struct DispatchErrorDetailsV1 {
     job_id: Option<JobId>,
     job_sequence: Option<u64>,
+    internal_failure: Option<Box<InternalFailureDetailsV1>>,
     expected_revision: Option<Revision>,
     current_revision: Option<Revision>,
     attempt_mismatch: Option<Box<AttemptMismatchDetailsV1>>,
@@ -52,6 +53,12 @@ pub struct DispatchErrorDetailsV1 {
     session_archive_failure: Option<Box<SessionArchiveFailureDetailsV1>>,
     session_start_state_conflict: Option<Box<SessionStartStateConflictDetailsV1>>,
     workspace_mode_mismatch: Option<Box<WorkspaceModeMismatchDetailsV1>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct InternalFailureDetailsV1 {
+    kind: &'static str,
+    diagnostic_id: podway_protocol::RequestIdV1,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -328,6 +335,18 @@ impl DispatchErrorDetailsV1 {
     pub fn with_admission_identity(mut self, job_id: JobId, job_sequence: u64) -> Self {
         self.job_id = Some(job_id);
         self.job_sequence = Some(job_sequence);
+        self
+    }
+
+    pub fn with_internal_failure(
+        mut self,
+        kind: &'static str,
+        diagnostic_id: podway_protocol::RequestIdV1,
+    ) -> Self {
+        self.internal_failure = Some(Box::new(InternalFailureDetailsV1 {
+            kind,
+            diagnostic_id,
+        }));
         self
     }
 
@@ -1157,6 +1176,20 @@ impl DispatchErrorDetailsV1 {
         if let Some(job_sequence) = self.job_sequence {
             details.insert("job_sequence".to_owned(), Value::from(job_sequence));
         }
+        if let Some(internal_failure) = self.internal_failure {
+            details.insert(
+                "schema".to_owned(),
+                Value::String("podway.internal-error-details/v1".to_owned()),
+            );
+            details.insert(
+                "kind".to_owned(),
+                Value::String(internal_failure.kind.to_owned()),
+            );
+            details.insert(
+                "diagnostic_id".to_owned(),
+                Value::String(internal_failure.diagnostic_id.into_inner()),
+            );
+        }
         if let Some(expected_revision) = self.expected_revision {
             details.insert(
                 "expected_revision".to_owned(),
@@ -1327,6 +1360,7 @@ impl DispatchFailureV1 {
             details: Box::new(DispatchErrorDetailsV1 {
                 job_id: None,
                 job_sequence: None,
+                internal_failure: None,
                 expected_revision: None,
                 current_revision: None,
                 attempt_mismatch: None,
@@ -1359,6 +1393,19 @@ impl DispatchFailureV1 {
     pub fn with_admission_identity(mut self, job_id: JobId, job_sequence: u64) -> Self {
         self.details = Box::new((*self.details).with_admission_identity(job_id, job_sequence));
         self
+    }
+
+    pub fn with_internal_failure(
+        mut self,
+        kind: &'static str,
+        diagnostic_id: podway_protocol::RequestIdV1,
+    ) -> Self {
+        self.details = Box::new((*self.details).with_internal_failure(kind, diagnostic_id));
+        self
+    }
+
+    fn admission_identity(&self) -> Option<(JobId, u64)> {
+        self.details.job_id.clone().zip(self.details.job_sequence)
     }
 
     pub const fn kind(&self) -> DispatchFailureKindV1 {
@@ -2291,9 +2338,14 @@ where
                 result,
                 response_context,
             } => self.terminal_response(request, workspace, job, result, response_context, false),
-            MutationDispatchOutcomeV1::Detached { .. }
-            | MutationDispatchOutcomeV1::TimedOut { .. } => {
-                Err(DispatchFailureV1::new(DispatchFailureKindV1::Internal))
+            MutationDispatchOutcomeV1::Detached { job, .. }
+            | MutationDispatchOutcomeV1::TimedOut { job } => {
+                Err(admitted_response_reconstruction_failure_v1(
+                    DispatchFailureV1::new(DispatchFailureKindV1::Internal),
+                    job.id().clone(),
+                    job.sequence(),
+                    request.request_id(),
+                ))
             }
         }
     }
@@ -2331,7 +2383,16 @@ where
                 },
             ) => {
                 let workspace_output =
-                    workspace_at_least_sequence(workspace_output, job.sequence())?;
+                    workspace_at_least_sequence(workspace_output, job.sequence()).map_err(
+                        |failure| {
+                            admitted_response_reconstruction_failure_v1(
+                                failure,
+                                job.id().clone(),
+                                job.sequence(),
+                                request.request_id(),
+                            )
+                        },
+                    )?;
                 self.detached_response(request, workspace_output, job, procedure_digest.as_ref())
             }
             (
@@ -2360,10 +2421,16 @@ where
             (MutationWaitV1::UntilTerminal { .. }, MutationDispatchOutcomeV1::TimedOut { job }) => {
                 Err(DispatchFailureV1::new(DispatchFailureKindV1::JobWaitTimeout).with_job(&job))
             }
-            (MutationWaitV1::Detached, MutationDispatchOutcomeV1::TimedOut { .. })
-            | (MutationWaitV1::UntilTerminal { .. }, MutationDispatchOutcomeV1::Detached { .. }) => {
-                Err(DispatchFailureV1::new(DispatchFailureKindV1::Internal))
-            }
+            (MutationWaitV1::Detached, MutationDispatchOutcomeV1::TimedOut { job })
+            | (
+                MutationWaitV1::UntilTerminal { .. },
+                MutationDispatchOutcomeV1::Detached { job, .. },
+            ) => Err(admitted_response_reconstruction_failure_v1(
+                DispatchFailureV1::new(DispatchFailureKindV1::Internal),
+                job.id().clone(),
+                job.sequence(),
+                request.request_id(),
+            )),
         }
     }
 
@@ -2381,6 +2448,8 @@ where
         if let Some(procedure_digest) = procedure_digest {
             result.insert("procedure_digest".to_owned(), json!(procedure_digest));
         }
+        let admitted_job_id = job.id().clone();
+        let admitted_job_sequence = job.sequence();
         self.output_response(
             request,
             Some(workspace),
@@ -2389,6 +2458,14 @@ where
             result,
             Vec::new(),
         )
+        .map_err(|failure| {
+            admitted_response_reconstruction_failure_v1(
+                failure,
+                admitted_job_id,
+                admitted_job_sequence,
+                request.request_id(),
+            )
+        })
     }
 
     fn terminal_response(
@@ -2400,6 +2477,8 @@ where
         response_context: Option<Box<TerminalResponseContextV1>>,
         bootstrap: bool,
     ) -> Result<ResponseEnvelopeV2, DispatchFailureV1> {
+        let admitted_job_id = job.id().clone();
+        let admitted_job_sequence = job.sequence();
         let context = response_context
             .filter(|context| context.request_id() == request.request_id())
             .map(|context| *context)
@@ -2412,6 +2491,14 @@ where
                 )
             });
         terminal_response_envelope_with_mapper_v1(context, job, result, bootstrap, &self.errors)
+            .map_err(|failure| {
+                admitted_response_reconstruction_failure_v1(
+                    failure,
+                    admitted_job_id,
+                    admitted_job_sequence,
+                    request.request_id(),
+                )
+            })
     }
 
     fn output_response(
@@ -2443,39 +2530,14 @@ where
         failure: DispatchFailureV1,
         requires_admission: bool,
     ) -> ResponseEnvelopeV2 {
-        let presentation = self.errors.map_failure(&failure);
-        let generated_at = self.metadata.generated_at();
-        let envelope = ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
-            request_id: request.request_id().clone(),
-            command: request.command().clone(),
-            generated_at: generated_at.clone(),
-            code: presentation.code,
-            message: presentation.message.to_owned(),
-            retryable: presentation.retryable,
-            exit_code: presentation.exit_code,
-            workspace: None,
-            details: failure.into_details().into_json(requires_admission),
-        })
-        .unwrap_or_else(|_| {
-            let internal = DispatchErrorPresentationV1::catalog(DispatchFailureKindV1::Internal);
-            ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
-                request_id: request.request_id().clone(),
-                command: request.command().clone(),
-                generated_at,
-                code: internal.code,
-                message: internal.message.to_owned(),
-                retryable: internal.retryable,
-                exit_code: internal.exit_code,
-                workspace: None,
-                details: if requires_admission {
-                    Map::from_iter([("admission".to_owned(), json!({"admitted": false}))])
-                } else {
-                    Map::new()
-                },
-            })
-            .expect("static internal dispatcher error must be protocol-valid")
-        });
-        ResponseEnvelopeV2::Error(envelope)
+        render_dispatch_failure_v1(
+            request.request_id().clone(),
+            request.command().clone(),
+            self.metadata.generated_at(),
+            failure,
+            requires_admission,
+            &self.errors,
+        )
     }
 
     fn unsupported_v2_capability_response(
@@ -2537,6 +2599,92 @@ fn workspace_at_least_sequence(
     let latest = workspace.latest_workspace_sequence().max(sequence);
     WorkspaceOutputV1::new(workspace.uuid().clone(), workspace.root(), latest)
         .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))
+}
+
+pub fn admitted_response_reconstruction_failure_v1(
+    failure: DispatchFailureV1,
+    job_id: JobId,
+    job_sequence: u64,
+    diagnostic_id: &podway_protocol::RequestIdV1,
+) -> DispatchFailureV1 {
+    failure
+        .with_kind(DispatchFailureKindV1::Internal)
+        .with_details(DispatchErrorDetailsV1::default())
+        .with_internal_failure(
+            "ADMITTED_RESPONSE_RECONSTRUCTION_FAILED",
+            diagnostic_id.clone(),
+        )
+        .with_admission_identity(job_id, job_sequence)
+}
+
+pub(crate) fn render_dispatch_failure_v1(
+    request_id: podway_protocol::RequestIdV1,
+    command: podway_protocol::CommandNameV1,
+    generated_at: Rfc3339MillisV1,
+    failure: DispatchFailureV1,
+    requires_admission: bool,
+    errors: &impl DispatchErrorMapperV1,
+) -> ResponseEnvelopeV2 {
+    let admission_identity = if requires_admission {
+        failure
+            .admission_identity()
+            .filter(|(_, job_sequence)| *job_sequence > 0)
+    } else {
+        None
+    };
+    let failure = match (&admission_identity, failure.kind()) {
+        (Some((job_id, job_sequence)), DispatchFailureKindV1::Internal) => {
+            admitted_response_reconstruction_failure_v1(
+                failure,
+                job_id.clone(),
+                *job_sequence,
+                &request_id,
+            )
+        }
+        _ => failure,
+    };
+    let presentation = errors.map_failure(&failure);
+    let envelope = ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
+        request_id: request_id.clone(),
+        command: command.clone(),
+        generated_at: generated_at.clone(),
+        code: presentation.code,
+        message: presentation.message.to_owned(),
+        retryable: presentation.retryable,
+        exit_code: presentation.exit_code,
+        workspace: None,
+        details: failure.into_details().into_json(requires_admission),
+    })
+    .unwrap_or_else(|_| {
+        let internal = DispatchErrorPresentationV1::catalog(DispatchFailureKindV1::Internal);
+        let details = match admission_identity {
+            Some((job_id, job_sequence)) => admitted_response_reconstruction_failure_v1(
+                DispatchFailureV1::new(DispatchFailureKindV1::Internal),
+                job_id,
+                job_sequence,
+                &request_id,
+            )
+            .into_details()
+            .into_json(true),
+            None if requires_admission => {
+                Map::from_iter([("admission".to_owned(), json!({"admitted": false}))])
+            }
+            None => Map::new(),
+        };
+        ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {
+            request_id,
+            command,
+            generated_at,
+            code: internal.code,
+            message: internal.message.to_owned(),
+            retryable: internal.retryable,
+            exit_code: internal.exit_code,
+            workspace: None,
+            details,
+        })
+        .expect("static internal dispatcher error must be protocol-valid")
+    });
+    ResponseEnvelopeV2::Error(envelope)
 }
 
 impl<Runtime, Reads, Controls, Previews, Mutations, Metadata, Errors> RequestDispatcherV1

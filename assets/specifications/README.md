@@ -25,8 +25,9 @@ registered under `assets/schemas/`, and their durable behavior is specified in
 `command-catalog.yaml` records every closed result discriminator in `result_schemas`;
 multiple entries represent request-selected or detached variants. Runtime errors in
 `error-codes.json` and authoring findings in `authoring-diagnostics.json` are
-separate automation namespaces. `error-codes.json`
-uses `details_schema` only for errors with a closed public detail family. The
+separate automation namespaces. `error-codes.json` uses `details_schema` only for
+errors with a closed public detail family or a discriminated family whose typed
+variants are closed. The
 transition matrix binds each state-changing route to its terminal `result_schema`
 and uses `none` where no closed terminal result is defined. A
 `procedure_digest_file_source_only` precondition is an optional caller guard that

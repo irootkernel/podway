@@ -23,6 +23,7 @@ These JSON Schema Draft 2020-12 files define Podway's versioned structural contr
 - `job-wait-timeout-details-v1.schema.json`: query and admitted mutation wait timeouts.
 - `job-wait-timeout-details-v2.schema.json`: wait timeouts with bounded job-wait recovery.
 - `workspace-recovery-details-v1.schema.json`: unreadable or unsupported workspace-state recovery.
+- `internal-error-details-v1.schema.json`: open generic internal failures and the closed post-admission response-reconstruction variant.
 - `recovery-recipe-v1.schema.json`: shared closed read-only remediation command contract.
 - `daemon-status-result-v1.schema.json`: merged local-service and live-daemon status result.
 - `daemon-status-result-v3.schema.json`: live mode-aware daemon status result.

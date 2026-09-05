@@ -872,6 +872,7 @@
       },
       {
         "code": "INTERNAL_ERROR",
+        "details_schema": "podway.internal-error-details/v1",
         "exit_code": 6,
         "retryable": false,
         "summary": "An unexpected internal error occurred."
@@ -1246,6 +1247,11 @@
         "sha256": "sha256:df53a64adb45be10df7f112b3b032a26eef656f2d4e4a3c2dd73989ce8a94c6a"
       },
       {
+        "id": "urn:podway:schema:internal-error-details:v1",
+        "path": "schemas/internal-error-details-v1.schema.json",
+        "sha256": "sha256:725c2fdea896b71cc8b23c7d9313f1c66e58468432e135575cd6e96b09995042"
+      },
+      {
         "id": "urn:podway:schema:ipc-request:v1",
         "path": "schemas/ipc-request-v1.schema.json",
         "sha256": "sha256:5d80862cfbcaefb8edc7f1460e1fa6c152a52c35d87c7d4d94c80a356efd35ae"
@@ -1576,7 +1582,7 @@
     "authoring_diagnostics": 58,
     "routes": 69,
     "runtime_errors": 104,
-    "schemas": 95
+    "schemas": 96
   },
   "migration_boundary": {
     "adapter_database_access": "forbidden",

@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:internal-error-details:v1",
+  "title": "Podway Internal Error Details v1",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "kind", "diagnostic_id", "job_id", "job_sequence", "admission"],
+      "properties": {
+        "schema": { "const": "podway.internal-error-details/v1" },
+        "kind": { "const": "ADMITTED_RESPONSE_RECONSTRUCTION_FAILED" },
+        "diagnostic_id": { "type": "string", "format": "uuid" },
+        "job_id": { "type": "string", "format": "uuid" },
+        "job_sequence": { "type": "integer", "minimum": 1 },
+        "admission": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["admitted", "job_id", "workspace_sequence"],
+          "properties": {
+            "admitted": { "const": true },
+            "job_id": { "type": "string", "format": "uuid" },
+            "workspace_sequence": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "not": { "required": ["kind"] }
+    }
+  ]
+}

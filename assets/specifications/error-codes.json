@@ -471,6 +471,7 @@
     },
     {
       "code": "INTERNAL_ERROR",
+      "details_schema": "podway.internal-error-details/v1",
       "exit_code": 6,
       "retryable": false,
       "summary": "An unexpected internal error occurred."

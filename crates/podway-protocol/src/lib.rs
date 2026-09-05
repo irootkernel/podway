@@ -2071,6 +2071,15 @@ impl ErrorEnvelopeV1 {
         validate_procedure_digest_mismatch_details_v1(self.code.as_str(), &self.details)?;
         validate_mutation_outcome_unknown_details_v1(self.code.as_str(), &self.details)?;
         validate_closed_error_details_v1(self.code.as_str(), &self.details)?;
+        if self.code.as_str() == "INTERNAL_ERROR"
+            && self.details.contains_key("kind")
+            && self.details.get("diagnostic_id").and_then(Value::as_str)
+                != Some(self.request_id.as_str())
+        {
+            return Err(ProtocolError::InvalidErrorDetails {
+                code: self.code.as_str().to_owned(),
+            });
+        }
         validate_recovery_details_v1(self.code.as_str(), &self.details)?;
         if is_v2_runtime_error_code_v1(self.code.as_str())
             && is_v2_mutation_contract_command(self.command.as_str())
@@ -2310,6 +2319,7 @@ fn validate_closed_error_details_v1(
         "WORKSPACE_STATE_UNREADABLE" | "WORKSPACE_SCHEMA_UNSUPPORTED" => {
             validate_workspace_recovery_details_v1(details)
         }
+        "INTERNAL_ERROR" => validate_internal_error_details_v1(details),
         "ITEM_CONSTRAINT_FAILED" if details.contains_key("field") => {
             validate_v2_runtime_error_details_v1(code, details)
         }
@@ -3161,6 +3171,30 @@ fn validate_workspace_recovery_details_v1(details: &Map<String, Value>) -> bool 
             None => details.len() == 2,
             Some(value) => details.len() == 3 && validate_not_admitted_value_v1(Some(value)),
         }
+}
+
+fn validate_internal_error_details_v1(details: &Map<String, Value>) -> bool {
+    if !details.contains_key("kind") {
+        return true;
+    }
+    details.len() == 6
+        && details.get("schema").and_then(Value::as_str) == Some("podway.internal-error-details/v1")
+        && details.get("kind").and_then(Value::as_str)
+            == Some("ADMITTED_RESPONSE_RECONSTRUCTION_FAILED")
+        && details
+            .get("diagnostic_id")
+            .and_then(Value::as_str)
+            .is_some_and(|value| RequestIdV1::new(value).is_ok())
+        && validate_job_fields_v1(details)
+        && details.get("admission").is_some_and(|admission| {
+            validate_admission_metadata_v1(admission, false)
+                .ok()
+                .flatten()
+                .is_some_and(|(job_id, sequence)| {
+                    details.get("job_id").and_then(Value::as_str) == Some(job_id.as_str())
+                        && details.get("job_sequence").and_then(Value::as_u64) == Some(sequence)
+                })
+        })
 }
 
 fn validate_workspace_mode_mismatch_details_v1(details: &Map<String, Value>) -> bool {

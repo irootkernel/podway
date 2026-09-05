@@ -54,7 +54,8 @@ use crate::{
         DispatcherTerminalResultV1, DispatcherWorkspaceOutputV1, MutationAdmissionWorkerV1,
         MutationDispatchOutcomeV1, MutationResponseContextV1, MutationWaitV1,
         ProcedureV2AdmissionProofV1, RequestDispatcherV1Adapter, RequestReadWaitV1,
-        TerminalResponseContextV1, WorkspaceRuntimeV1, terminal_response_envelope_v1,
+        TerminalResponseContextV1, WorkspaceRuntimeV1, admitted_response_reconstruction_failure_v1,
+        terminal_response_envelope_v1,
     },
     execution::{
         DaemonExecutionEngineV1, ExecutionClockV1, ExecutionErrorV1, ExecutionIdSourceV1,
@@ -1645,15 +1646,28 @@ impl ProductionMutationWorkerV1 {
         &self,
         completion: crate::runtime_workspace::ResetAllCompletionV1,
         request: &SliceRequestV1,
+        response_request_id: &RequestIdV1,
     ) -> Result<(WorkspaceOutputV1, MutationDispatchOutcomeV1), DispatchFailureV1> {
         let scheduler = Arc::clone(completion.scheduler());
+        let job_id = completion.marker().operation_id().clone();
         let outcome = reread_reset_terminal(
             &scheduler,
             completion.marker().idempotency_key().as_str(),
             completion.marker().request_digest(),
             request.command(),
-        )?;
-        Ok((self.workspace_output(scheduler)?, outcome))
+        )
+        .map_err(|failure| {
+            admitted_response_reconstruction_failure_v1(
+                failure,
+                job_id.clone(),
+                1,
+                response_request_id,
+            )
+        })?;
+        let workspace = self.workspace_output(scheduler).map_err(|failure| {
+            admitted_response_reconstruction_failure_v1(failure, job_id, 1, response_request_id)
+        })?;
+        Ok((workspace, outcome))
     }
 
     fn complete_prepared_reset(
@@ -1662,6 +1676,7 @@ impl ProductionMutationWorkerV1 {
         prepared: crate::execution::PreparedWorkspaceResetAllV1,
         active: Option<Arc<WorkspaceSchedulerV1<WorkspaceSchedulerContextV1>>>,
         request: &SliceRequestV1,
+        response_request_id: &RequestIdV1,
     ) -> Result<(WorkspaceOutputV1, MutationDispatchOutcomeV1), DispatchFailureV1> {
         self.retire_reset_scheduler(active)?;
         let observation =
@@ -1669,7 +1684,7 @@ impl ProductionMutationWorkerV1 {
         let completion = transaction
             .complete_prepared(prepared, observation)
             .map_err(map_runtime_error)?;
-        self.reset_completion_output(completion, request)
+        self.reset_completion_output(completion, request, response_request_id)
     }
 
     fn resume_reset_marker(
@@ -1678,17 +1693,17 @@ impl ProductionMutationWorkerV1 {
         marker: &crate::workspace::ResetMarkerV1,
         idempotency_key: &StoreIdempotencyKeyV1,
         request_digest: &CanonicalRequestDigestV1,
-        active: Option<Arc<WorkspaceSchedulerV1<WorkspaceSchedulerContextV1>>>,
         request: &SliceRequestV1,
+        response_request_id: &RequestIdV1,
     ) -> Result<(WorkspaceOutputV1, MutationDispatchOutcomeV1), DispatchFailureV1> {
-        self.retire_reset_scheduler(active)
+        self.retire_reset_scheduler(transaction.active_old_scheduler())
             .map_err(|failure| failure.with_admission_identity(marker.operation_id().clone(), 1))?;
         let observation =
             WorkspaceRuntimeObservationV1::new(self.clock.now(), self.clock.generated_at());
         let completion = transaction
             .resume(idempotency_key, request_digest, observation)
             .map_err(map_runtime_error)?;
-        self.reset_completion_output(completion, request)
+        self.reset_completion_output(completion, request, response_request_id)
     }
 
     fn completion_mode(
@@ -1826,8 +1841,12 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
             }
         })();
         outcome.map_err(|failure| {
-            failure
-                .with_admission_identity(admission.job_id().clone(), admission.identity_sequence())
+            admitted_response_reconstruction_failure_v1(
+                failure,
+                admission.job_id().clone(),
+                admission.identity_sequence(),
+                response_context.request_id(),
+            )
         })
     }
 
@@ -2066,6 +2085,7 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
             else {
                 return Ok(None);
             };
+            let admission = admission_receipt(submission.admission()).clone();
             let terminal =
                 terminal_replay(submission.admission()).or_else(|| match submission.completion() {
                     Some(WorkerWaitResultV1::Terminal(receipt)) => Some(receipt.as_ref()),
@@ -2076,37 +2096,55 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                     .map(Some);
             }
             if let Some(WorkerWaitResultV1::TimedOut(view)) = submission.completion() {
-                let job = job_output(view)?;
+                let job = job_output(view).map_err(|failure| {
+                    admitted_response_reconstruction_failure_v1(
+                        failure,
+                        admission.job_id().clone(),
+                        admission.identity_sequence(),
+                        request.request_id(),
+                    )
+                })?;
                 return Err(
                     DispatchFailureV1::new(DispatchFailureKindV1::JobWaitTimeout).with_job(&job),
                 );
             }
-            let job = job_output_only_from_context(&workspace.scheduler, submission.admission())?;
-            let result = json!({
-                "schema": "podway.detached-admission-result/v2",
-                "detached": true,
-                "admission": {
-                    "admitted": true,
-                    "job_id": job.id(),
-                    "workspace_sequence": job.sequence(),
-                },
+            let response = (|| {
+                let job =
+                    job_output_only_from_context(&workspace.scheduler, submission.admission())?;
+                let result = json!({
+                    "schema": "podway.detached-admission-result/v2",
+                    "detached": true,
+                    "admission": {
+                        "admitted": true,
+                        "job_id": job.id(),
+                        "workspace_sequence": job.sequence(),
+                    },
+                });
+                OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
+                    request_id: request.request_id().clone(),
+                    command: request.command().clone(),
+                    generated_at: self.clock.generated_at(),
+                    workspace: Some(workspace.output),
+                    job: Some(job),
+                    session: None,
+                    result: result
+                        .as_object()
+                        .expect("Procedure v2 detached result is an object")
+                        .clone(),
+                    warnings: Vec::new(),
+                })
+                .map(ResponseEnvelopeV2::OutputV2)
+                .map(Some)
+                .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))
+            })();
+            return response.map_err(|failure| {
+                admitted_response_reconstruction_failure_v1(
+                    failure,
+                    admission.job_id().clone(),
+                    admission.identity_sequence(),
+                    request.request_id(),
+                )
             });
-            return OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
-                request_id: request.request_id().clone(),
-                command: request.command().clone(),
-                generated_at: self.clock.generated_at(),
-                workspace: Some(workspace.output),
-                job: Some(job),
-                session: None,
-                result: result
-                    .as_object()
-                    .expect("Procedure v2 detached result is an object")
-                    .clone(),
-                warnings: Vec::new(),
-            })
-            .map(ResponseEnvelopeV2::OutputV2)
-            .map(Some)
-            .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal));
         }
         if let DaemonRequestV1::ProcedureV2Start(typed_request) = daemon_request {
             if !typed_request.command().is_mutation() {
@@ -2239,6 +2277,7 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
             else {
                 return Ok(None);
             };
+            let admission = admission_receipt(submission.admission()).clone();
             let terminal =
                 terminal_replay(submission.admission()).or_else(|| match submission.completion() {
                     Some(WorkerWaitResultV1::Terminal(receipt)) => Some(receipt.as_ref()),
@@ -2253,34 +2292,51 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                 .map(Some);
             }
             if let Some(WorkerWaitResultV1::TimedOut(view)) = submission.completion() {
+                let job = job_output(view).map_err(|failure| {
+                    admitted_response_reconstruction_failure_v1(
+                        failure,
+                        admission.job_id().clone(),
+                        admission.identity_sequence(),
+                        request.request_id(),
+                    )
+                })?;
                 return Err(
-                    DispatchFailureV1::new(DispatchFailureKindV1::JobWaitTimeout)
-                        .with_job(&job_output(view)?),
+                    DispatchFailureV1::new(DispatchFailureKindV1::JobWaitTimeout).with_job(&job),
                 );
             }
-            let (job, procedure_digest) =
-                job_output_from_context(&workspace.scheduler, submission.admission())?;
-            let result = json!({
-                "schema": "podway.detached-admission-result/v2", "detached": true,
-                "admission": { "admitted": true, "job_id": job.id(), "workspace_sequence": job.sequence() },
-                "procedure_digest": procedure_digest,
+            let response = (|| {
+                let (job, procedure_digest) =
+                    job_output_from_context(&workspace.scheduler, submission.admission())?;
+                let result = json!({
+                    "schema": "podway.detached-admission-result/v2", "detached": true,
+                    "admission": { "admitted": true, "job_id": job.id(), "workspace_sequence": job.sequence() },
+                    "procedure_digest": procedure_digest,
+                });
+                OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
+                    request_id: request.request_id().clone(),
+                    command: request.command().clone(),
+                    generated_at: self.clock.generated_at(),
+                    workspace: Some(workspace.output),
+                    job: Some(job),
+                    session: None,
+                    result: result
+                        .as_object()
+                        .expect("detached result is an object")
+                        .clone(),
+                    warnings: Vec::new(),
+                })
+                .map(ResponseEnvelopeV2::OutputV2)
+                .map(Some)
+                .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))
+            })();
+            return response.map_err(|failure| {
+                admitted_response_reconstruction_failure_v1(
+                    failure,
+                    admission.job_id().clone(),
+                    admission.identity_sequence(),
+                    request.request_id(),
+                )
             });
-            return OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
-                request_id: request.request_id().clone(),
-                command: request.command().clone(),
-                generated_at: self.clock.generated_at(),
-                workspace: Some(workspace.output),
-                job: Some(job),
-                session: None,
-                result: result
-                    .as_object()
-                    .expect("detached result is an object")
-                    .clone(),
-                warnings: Vec::new(),
-            })
-            .map(ResponseEnvelopeV2::OutputV2)
-            .map(Some)
-            .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal));
         }
         let Some(slice_request) = daemon_request.legacy() else {
             return Ok(None);
@@ -2749,6 +2805,7 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
             else {
                 return Ok(None);
             };
+            let admission = admission_receipt(submission.admission()).clone();
             let terminal =
                 terminal_replay(submission.admission()).or_else(|| match submission.completion() {
                     Some(WorkerWaitResultV1::Terminal(receipt)) => Some(receipt.as_ref()),
@@ -2763,37 +2820,55 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                 .map(Some);
             }
             if let Some(WorkerWaitResultV1::TimedOut(view)) = submission.completion() {
-                let job = job_output(view)?;
+                let job = job_output(view).map_err(|failure| {
+                    admitted_response_reconstruction_failure_v1(
+                        failure,
+                        admission.job_id().clone(),
+                        admission.identity_sequence(),
+                        request.request_id(),
+                    )
+                })?;
                 return Err(
                     DispatchFailureV1::new(DispatchFailureKindV1::JobWaitTimeout).with_job(&job),
                 );
             }
-            let job = job_output_only_from_context(&workspace.scheduler, submission.admission())?;
-            let result = json!({
-                "schema": "podway.detached-admission-result/v2",
-                "detached": true,
-                "admission": {
-                    "admitted": true,
-                    "job_id": job.id(),
-                    "workspace_sequence": job.sequence(),
-                },
+            let response = (|| {
+                let job =
+                    job_output_only_from_context(&workspace.scheduler, submission.admission())?;
+                let result = json!({
+                    "schema": "podway.detached-admission-result/v2",
+                    "detached": true,
+                    "admission": {
+                        "admitted": true,
+                        "job_id": job.id(),
+                        "workspace_sequence": job.sequence(),
+                    },
+                });
+                OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
+                    request_id: request.request_id().clone(),
+                    command: request.command().clone(),
+                    generated_at: self.clock.generated_at(),
+                    workspace: Some(workspace.output),
+                    job: Some(job),
+                    session: None,
+                    result: result
+                        .as_object()
+                        .expect("Procedure v2 detached result is an object")
+                        .clone(),
+                    warnings: Vec::new(),
+                })
+                .map(ResponseEnvelopeV2::OutputV2)
+                .map(Some)
+                .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))
+            })();
+            return response.map_err(|failure| {
+                admitted_response_reconstruction_failure_v1(
+                    failure,
+                    admission.job_id().clone(),
+                    admission.identity_sequence(),
+                    request.request_id(),
+                )
             });
-            return OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
-                request_id: request.request_id().clone(),
-                command: request.command().clone(),
-                generated_at: self.clock.generated_at(),
-                workspace: Some(workspace.output),
-                job: Some(job),
-                session: None,
-                result: result
-                    .as_object()
-                    .expect("Procedure v2 detached result is an object")
-                    .clone(),
-                warnings: Vec::new(),
-            })
-            .map(ResponseEnvelopeV2::OutputV2)
-            .map(Some)
-            .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal));
         }
         if !matches!(
             slice_request.command(),
@@ -2930,6 +3005,7 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
         else {
             return Ok(None);
         };
+        let admission = admission_receipt(submission.admission()).clone();
         let terminal =
             terminal_replay(submission.admission()).or_else(|| match submission.completion() {
                 Some(WorkerWaitResultV1::Terminal(receipt)) => Some(receipt.as_ref()),
@@ -2944,47 +3020,64 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
             .map(Some);
         }
         if let Some(WorkerWaitResultV1::TimedOut(view)) = submission.completion() {
-            let job = job_output(view)?;
+            let job = job_output(view).map_err(|failure| {
+                admitted_response_reconstruction_failure_v1(
+                    failure,
+                    admission.job_id().clone(),
+                    admission.identity_sequence(),
+                    request.request_id(),
+                )
+            })?;
             return Err(
                 DispatchFailureV1::new(DispatchFailureKindV1::JobWaitTimeout).with_job(&job),
             );
         }
-        let job = job_output_only_from_context(&workspace.scheduler, submission.admission())?;
-        let view = workspace
-            .scheduler
-            .context_snapshot()
-            .read_job(job.id())
-            .map_err(map_store_error)?
-            .ok_or_else(terminal_replay_integrity_failure)?;
-        let projection =
-            admitted_procedure_v2_start_projection_v1(view.execution().canonical_execution())
-                .map_err(|_| terminal_replay_integrity_failure())?;
-        let result = json!({
-            "schema": "podway.detached-admission-result/v2",
-            "detached": true,
-            "procedure_digest": projection.procedure_digest,
-            "admission": {
-                "admitted": true,
-                "job_id": job.id(),
-                "workspace_sequence": job.sequence(),
-            },
-        });
-        OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
-            request_id: request.request_id().clone(),
-            command: request.command().clone(),
-            generated_at: self.clock.generated_at(),
-            workspace: Some(workspace.output),
-            job: Some(job),
-            session: None,
-            result: result
-                .as_object()
-                .expect("Procedure v2 start result is an object")
-                .clone(),
-            warnings: Vec::new(),
+        let response = (|| {
+            let job = job_output_only_from_context(&workspace.scheduler, submission.admission())?;
+            let view = workspace
+                .scheduler
+                .context_snapshot()
+                .read_job(job.id())
+                .map_err(map_store_error)?
+                .ok_or_else(terminal_replay_integrity_failure)?;
+            let projection =
+                admitted_procedure_v2_start_projection_v1(view.execution().canonical_execution())
+                    .map_err(|_| terminal_replay_integrity_failure())?;
+            let result = json!({
+                "schema": "podway.detached-admission-result/v2",
+                "detached": true,
+                "procedure_digest": projection.procedure_digest,
+                "admission": {
+                    "admitted": true,
+                    "job_id": job.id(),
+                    "workspace_sequence": job.sequence(),
+                },
+            });
+            OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
+                request_id: request.request_id().clone(),
+                command: request.command().clone(),
+                generated_at: self.clock.generated_at(),
+                workspace: Some(workspace.output),
+                job: Some(job),
+                session: None,
+                result: result
+                    .as_object()
+                    .expect("Procedure v2 start result is an object")
+                    .clone(),
+                warnings: Vec::new(),
+            })
+            .map(ResponseEnvelopeV2::OutputV2)
+            .map(Some)
+            .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))
+        })();
+        response.map_err(|failure| {
+            admitted_response_reconstruction_failure_v1(
+                failure,
+                admission.job_id().clone(),
+                admission.identity_sequence(),
+                request.request_id(),
+            )
         })
-        .map(ResponseEnvelopeV2::OutputV2)
-        .map(Some)
-        .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))
     }
 
     fn reset_all(
@@ -3014,8 +3107,8 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                 &marker,
                 &store_idempotency_key,
                 &digest,
-                active,
                 request,
+                response_request_id,
             );
         }
 
@@ -3038,20 +3131,58 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
             response_request_id,
         )? {
             ResetAllPreparationOutcomeV1::Existing(existing) => {
-                let receipt =
-                    terminal_replay(&existing).ok_or_else(terminal_replay_integrity_failure)?;
-                let scheduler = active.ok_or_else(terminal_replay_integrity_failure)?;
+                let admission = admission_receipt(&existing).clone();
+                let receipt = terminal_replay(&existing)
+                    .ok_or_else(terminal_replay_integrity_failure)
+                    .map_err(|failure| {
+                        admitted_response_reconstruction_failure_v1(
+                            failure,
+                            admission.job_id().clone(),
+                            admission.identity_sequence(),
+                            response_request_id,
+                        )
+                    })?;
+                let scheduler = active
+                    .ok_or_else(terminal_replay_integrity_failure)
+                    .map_err(|failure| {
+                        admitted_response_reconstruction_failure_v1(
+                            failure,
+                            admission.job_id().clone(),
+                            admission.identity_sequence(),
+                            response_request_id,
+                        )
+                    })?;
                 let outcome = reread_reset_terminal(
                     &scheduler,
                     idempotency_key.as_str(),
                     receipt.job().request_digest(),
                     request.command(),
-                )?;
-                Ok((self.workspace_output(scheduler)?, outcome))
+                )
+                .map_err(|failure| {
+                    admitted_response_reconstruction_failure_v1(
+                        failure,
+                        admission.job_id().clone(),
+                        admission.identity_sequence(),
+                        response_request_id,
+                    )
+                })?;
+                let workspace = self.workspace_output(scheduler).map_err(|failure| {
+                    admitted_response_reconstruction_failure_v1(
+                        failure,
+                        admission.job_id().clone(),
+                        admission.identity_sequence(),
+                        response_request_id,
+                    )
+                })?;
+                Ok((workspace, outcome))
             }
-            ResetAllPreparationOutcomeV1::New(prepared) => {
-                self.complete_prepared_reset(&transaction, *prepared, active, request)
-            }
+            ResetAllPreparationOutcomeV1::New(prepared) => self.complete_prepared_reset(
+                &transaction,
+                *prepared,
+                active,
+                request,
+                response_request_id,
+            ),
         }
     }
 }
@@ -3682,17 +3813,27 @@ fn terminal_direct_response_v2(
     command: TerminalCommandKindV1,
     request_id: &RequestIdV1,
 ) -> Result<ResponseEnvelopeV2, DispatchFailureV1> {
-    let mut value = terminal_job_response(receipt, command)?;
-    value
-        .as_object_mut()
-        .ok_or_else(terminal_replay_integrity_failure)?
-        .insert(
-            "request_id".to_owned(),
-            Value::String(request_id.as_str().to_owned()),
-        );
-    let encoded = serde_json::to_vec(&value)
-        .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?;
-    decode_response_payload_v2(&encoded).map_err(|_| terminal_replay_integrity_failure())
+    let response = (|| {
+        let mut value = terminal_job_response(receipt, command)?;
+        value
+            .as_object_mut()
+            .ok_or_else(terminal_replay_integrity_failure)?
+            .insert(
+                "request_id".to_owned(),
+                Value::String(request_id.as_str().to_owned()),
+            );
+        let encoded = serde_json::to_vec(&value)
+            .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?;
+        decode_response_payload_v2(&encoded).map_err(|_| terminal_replay_integrity_failure())
+    })();
+    response.map_err(|failure| {
+        admitted_response_reconstruction_failure_v1(
+            failure,
+            receipt.job().job_id().clone(),
+            receipt.job().identity_sequence(),
+            request_id,
+        )
+    })
 }
 
 fn validate_frozen_terminal_envelope(
@@ -6969,6 +7110,7 @@ mod tests {
 
     #[test]
     fn recon002_post_commit_store_errors_preserve_admission_identity() {
+        let request_id = RequestIdV1::new("00000000-0000-4000-8000-000000000008").unwrap();
         let failure = map_store_error(StoreErrorV1::AdmissionCommittedV1 {
             receipt: fixture_job(7),
             source: Box::new(StoreErrorV1::StorageUnavailableV1 {
@@ -6976,8 +7118,25 @@ mod tests {
             }),
         });
 
+        let response = crate::dispatch::render_dispatch_failure_v1(
+            request_id.clone(),
+            CommandNameV1::new("item.record_many").unwrap(),
+            Rfc3339MillisV1::new("2026-09-05T00:00:00.000Z").unwrap(),
+            failure,
+            true,
+            &CatalogDispatchErrorMapperV1,
+        );
+        let ResponseEnvelopeV2::Error(envelope) = response else {
+            panic!("post-commit Store failure must render an error envelope");
+        };
+        assert_eq!(envelope.code().as_str(), "INTERNAL_ERROR");
         assert_eq!(
-            failure.into_details().into_json(true)["admission"],
+            envelope.details()["kind"],
+            "ADMITTED_RESPONSE_RECONSTRUCTION_FAILED"
+        );
+        assert_eq!(envelope.details()["diagnostic_id"], request_id.as_str());
+        assert_eq!(
+            envelope.details()["admission"],
             json!({
                 "admitted": true,
                 "job_id": "00000000-0000-4000-8000-000000000007",
@@ -7006,7 +7165,8 @@ mod tests {
     }
 
     #[test]
-    fn reset_marker_failures_preserve_unknown_and_admitted_public_evidence() {
+    fn recon002_reset_marker_failures_preserve_unknown_and_admitted_public_evidence() {
+        let request_id = RequestIdV1::new("00000000-0000-4000-8000-000000000074").unwrap();
         let key = StoreIdempotencyKeyV1::new("reset-admission-boundary").unwrap();
         let marker = crate::workspace::ResetMarkerV1::new(
             JobId::new("00000000-0000-4000-8000-000000000071").unwrap(),
@@ -7022,8 +7182,22 @@ mod tests {
                 crate::workspace::ValidatedRuntimeDirectoryErrorV1::UnsupportedPlatform,
             )),
         });
+        let response = crate::dispatch::render_dispatch_failure_v1(
+            request_id.clone(),
+            CommandNameV1::new("workspace.reset_all").unwrap(),
+            Rfc3339MillisV1::new("2026-09-05T00:00:00.000Z").unwrap(),
+            admitted,
+            true,
+            &CatalogDispatchErrorMapperV1,
+        );
+        let ResponseEnvelopeV2::Error(envelope) = response else {
+            panic!("admitted reset failure must render an error envelope");
+        };
+        assert_eq!(envelope.code().as_str(), "WORKSPACE_PATH_UNSAFE");
+        assert!(!envelope.details().contains_key("kind"));
+        assert!(!envelope.details().contains_key("diagnostic_id"));
         assert_eq!(
-            admitted.into_details().into_json(true)["admission"],
+            envelope.details()["admission"],
             json!({
                 "admitted": true,
                 "job_id": marker.operation_id().as_str(),
@@ -7747,6 +7921,50 @@ mod tests {
                 DispatchFailureKindV1::WorkspaceStateUnreadable
             );
         }
+    }
+
+    #[test]
+    fn recon002_terminal_direct_response_failure_retains_committed_admission_identity() {
+        let (receipt, mut frozen) = procedure_v2_terminal_fixture(86);
+        frozen["result"]["unexpected"] = json!(true);
+        let receipt = receipt.with_public_terminal_envelope(frozen).unwrap();
+        let request_id = RequestIdV1::new("00000000-0000-4000-8000-000000000087").unwrap();
+
+        let failure =
+            terminal_direct_response_v2(&receipt, TerminalCommandKindV1::Other, &request_id)
+                .unwrap_err();
+        assert_eq!(failure.kind(), DispatchFailureKindV1::Internal);
+        let response = crate::dispatch::render_dispatch_failure_v1(
+            request_id.clone(),
+            CommandNameV1::new("item.record_many").unwrap(),
+            Rfc3339MillisV1::new("2026-09-05T00:00:00.000Z").unwrap(),
+            failure,
+            true,
+            &CatalogDispatchErrorMapperV1,
+        );
+        let ResponseEnvelopeV2::Error(envelope) = response else {
+            panic!("post-admission reconstruction failure must render an error envelope");
+        };
+        let envelope = serde_json::to_value(envelope).unwrap();
+        assert_eq!(envelope["code"], "INTERNAL_ERROR");
+        assert_eq!(
+            envelope["details"]["schema"],
+            "podway.internal-error-details/v1"
+        );
+        assert_eq!(
+            envelope["details"]["kind"],
+            "ADMITTED_RESPONSE_RECONSTRUCTION_FAILED"
+        );
+        assert_eq!(envelope["details"]["diagnostic_id"], request_id.as_str());
+        assert_eq!(envelope["details"]["admission"]["admitted"], true);
+        assert_eq!(
+            envelope["details"]["admission"]["job_id"],
+            receipt.job().job_id().as_str()
+        );
+        assert_eq!(
+            envelope["details"]["admission"]["workspace_sequence"],
+            receipt.job().identity_sequence()
+        );
     }
 
     fn terminal_error_fixture(sequence: u64) -> (PersistedTerminalReceiptV1, Value) {
