@@ -137,6 +137,13 @@ and cold recovery so boundary interactions cannot rely only on independent
 tests. Preset-specific integration tests cover the other shipped identities and
 their accepted paths.
 
+Post-admission reconstruction integration coverage uses process-isolated renderer
+injection with real Store commits and the production dispatcher. It verifies
+session-start failure responses, truthful admitted identity, idempotent replay,
+a normal reset control, and durable receipts after the dispatcher closes. Independent release QA follows
+the [admission failure procedure](../../implementation-tips/release-admission-qa.md)
+rather than treating these automated tests as scenario evidence.
+
 `make dist` is the release gate. It reruns `make test`, bounded fuzzing,
 release-profile builds, native qualification, packaging, Dolgorae handoff, and
 final bundle verification. Optional diagnostics and advisory evidence never

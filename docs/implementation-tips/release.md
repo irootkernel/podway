@@ -79,6 +79,11 @@ deletion boundaries. It uses an assigned fixture below Aquarium's physical
 release-QA evidence root; it neither changes `make dist` nor contributes to
 release provenance or packaged-conformance status.
 
+When the release delta changes post-admission response reconstruction, include
+the independent [admission failure scenario](release-admission-qa.md). It uses
+the candidate's production libraries and real persistence with an explicitly
+injected renderer, without adding a fault switch to the shipped daemon.
+
 `make dist-patch` does not run packaged runtime qualification. Its readiness comes
 from the confirmed tested baseline and reduced-gate provenance and handoff; do not
 claim that a temporary release-qualification runtime, packaged scenarios, or their

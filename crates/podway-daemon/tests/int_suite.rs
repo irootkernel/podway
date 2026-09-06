@@ -32,6 +32,8 @@ mod int_phase4_workspace;
 mod int_phase5_reset_marker;
 #[path = "int_phase8_observability.rs"]
 mod int_phase8_observability;
+#[path = "int_post_admission_reconstruction.rs"]
+mod int_post_admission_reconstruction;
 #[path = "int_v2_only_reset_recovery.rs"]
 mod int_v2_only_reset_recovery;
 #[path = "int_v2agt006_small_change_preset.rs"]

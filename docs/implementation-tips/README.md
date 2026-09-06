@@ -11,6 +11,8 @@ Use these guides when changing Podway:
 - [Release](release.md): source readiness, packaging, and publication handoff.
 - [Release Upgrade Hands-on QA](release-upgrade-qa.md): previous-release state
   handoff and candidate deletion-boundary verification.
+- [Post-admission Response Reconstruction QA](release-admission-qa.md): isolated
+  production error routing after real Store commits.
 
 ## Core implementation rules
 
