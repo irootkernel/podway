@@ -6,16 +6,19 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ### Added
 
-- Accept top-level `-h` and `--help` as aliases for the canonical `podway help` overview.
-- Add a repository-owned release-QA scenario that verifies isolated previous-release state handoff and candidate deletion boundaries.
+- Accept top-level `-h` and `--help` as aliases for `podway help`.
 
 ### Fixed
 
 - Prefix CLI version text and shared CLI/daemon identity versions with `v`.
-- Preserve committed job admission identity when a mutation response cannot be reconstructed, reporting the post-admission failure as a discriminated `INTERNAL_ERROR` instead of an invalid workspace-recovery envelope.
-- Let `workspace repair` restore a missing global registry entry after fully revalidating the worktree's durable Git and Store identity.
-- Make confirmed `reset --all` independent of normal workspace status so v0.2.6 workspaces with detached Git identity can be destructively reinitialized during upgrade.
-- Restore successful UUID-fenced workspace-removal replay after the first removal deletes the workspace configuration.
+- Preserve committed job admission identity and report a structured `INTERNAL_ERROR`
+  when a mutation response cannot be reconstructed.
+- Let `workspace repair` restore a missing registry entry after validating
+  the worktree's Git and durable Store identity.
+- Let confirmed `reset --all` reach daemon recovery when normal workspace status
+  fails, including after Git identity replacement.
+- Allow UUID-fenced `workspace remove` retries to succeed after an earlier removal
+  deletes the workspace configuration.
 
 ## v0.2.8 - 2026-09-03
 
