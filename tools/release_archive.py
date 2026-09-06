@@ -25,7 +25,7 @@ import verify_patch_release
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PRODUCT_VERSION = "0.2.8"
+PRODUCT_VERSION = "0.2.9"
 TARGET = "aarch64-apple-darwin"
 ARCHIVE_ROOT = f"podway-{PRODUCT_VERSION}-{TARGET}"
 MACHO_64_LITTLE_ENDIAN = b"\xcf\xfa\xed\xfe"
