@@ -10,7 +10,7 @@ description: Use only when the user explicitly asks to use Podway for the curren
 - Treat Podway as opt-in for the current user request, not for the repository. Activate it only when the request explicitly asks to use or manage Podway, or when the user approves a workflow envelope that explicitly names the Podway operations in scope.
 - Treat the binary, daemon, `.podway/config.yaml`, Procedure files, repository guidance about optional integration, and existing session state as availability facts only. None activates Podway by itself.
 - Without explicit activation, do not run Podway commands, inspect or attach to an existing session, validate Podway integration, or let Podway state block unrelated work. Continue the non-Podway workflow independently.
-- Do not carry activation from an earlier request, session, or workflow. Require it again for a later workflow.
+- Context restoration or automatic continuation of the same authorized workflow retains its original scope and operation boundaries; do not request activation again. A new workflow requires its own applicable authorization. If prior authorization cannot be established, do not infer it from runtime state or an active Codex goal.
 - Treat an explicit request to diagnose or discard the current session as activation for that lifecycle operation only.
 
 ## Preserve the boundary
@@ -60,6 +60,14 @@ For initialization, session creation or replacement, archive or purge, daemon co
 
 When the user explicitly asks to start a session, prefer `small-change-v2` for a bounded change that needs inspection, implementation, verification, review, and closeout but no tracked goal. Prefer `analysis-v2` for source-backed research or technical analysis. Use the other fuller goal-tracked presets when their assessment and evidence requirements match the task.
 
+## Resume after context loss
+
+- Treat recovered notes and historical observations as background. Before deriving the next Podway action, run `podway observe --json --wait-for-idle` in the authorized owning worktree and compare its workspace UUID and session ID with the resumed workflow's recorded identities. If either identity differs and existing authorization does not cover the change, report the mismatch and do not mutate the observed session until its authorization is established. Within the same authorized workspace and session, use the currently observed active attempt and revisions; their changes alone do not require renewed activation. Do not attach to a different session because a note names it.
+- Derive new mutations from current observation, not remembered templates or fences. For an uncertain submitted mutation, retain its original idempotency key and canonical request, or their exact recovery location, and follow [references/recovery.md](references/recovery.md) before issuing another mutation. Identical-request recovery is distinct from deriving a new mutation.
+- Keep agent-authored notes focused on the authorized objective and scope, decisions and reasons, unresolved dependencies, and source or evidence locations with relevant identities. Treat recorded session identifiers and stages as historical lookup hints. Avoid duplicating complete observations, graph history, or artifact contents; preserve unresolved-request recovery information.
+- Context restoration alone does not invalidate an external check. Reuse results only when their target and relevant inputs still match and the current Procedure permits it. Preserve required evidence readback and freshness checks; notes and previews never replace them.
+- This supplements ordinary observation and recovery rules even without Codex context management. It adds no observation before unrelated reads or external work, and resuming the same workflow does not repeat its entry archive advisory.
+
 ## Advance an active session
 
 1. Perform only the work required by the active graph node. Side work may run concurrently, but Podway retains one authoritative active attempt.
@@ -87,7 +95,7 @@ Active-session item updates and justified progression do not require a separate 
 - Treat every `readback[].items[].preview` as a bounded excerpt, never the complete value. Read the whole value with `podway evidence read --json --source <graph-node-id> --item <item-id>`, then follow `next_page_token` until `truncated` is `false`. A page read is a query: it creates no job and no revision. On `EVIDENCE_PAGE_TOKEN_STALE` the snapshot moved, so re-read observe and restart the item from its first page; never repair a token by hand.
 - Re-read state after retry or rework. Historical attempts remain inspectable but do not satisfy the fresh active attempt.
 
-For deciding whether to track a session goal, writing its statement and criteria, assessing a criterion, or revising the goal, read [references/goal.md](references/goal.md) before acting.
+For deciding whether to track a session goal, writing its statement and criteria, assessing a criterion, revising the goal, or operating an authorized Podway workflow alongside a Codex goal, read [references/goal.md](references/goal.md) before acting.
 
 ## Recover failures
 

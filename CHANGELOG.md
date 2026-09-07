@@ -4,6 +4,11 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ## v0.2.10 - Unreleased
 
+### Changed
+
+- Clarify how Podway cooperates with Codex context management and goals, preserving
+  authorized session boundaries, safe recovery, and evidence-based completion.
+
 ## v0.2.9 - 2026-09-06
 
 ### Added

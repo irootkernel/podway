@@ -1,6 +1,15 @@
 # Session Goals and Criteria
 
-Read this reference when deciding whether to track a session goal, writing its statement and criteria, assessing a criterion, or revising the goal.
+Read this reference when deciding whether to track a session goal, writing its statement and criteria, assessing a criterion, revising the goal, or operating an authorized Podway workflow alongside a Codex goal.
+
+## Cooperate with Codex goals
+
+- A Codex goal and a Podway session goal are separate objects with separate lifecycles. Neither creates, revises, or authorizes the other. Follow explicit user intent and each system's creation rules; an active Codex goal does not require Podway goal tracking. Keep using an untracked Procedure when its existing completion conditions fit bounded work.
+- When both are authorized, align scope and acceptance conditions with the user's objective without duplicating Podway's complete criteria or status history in another evolving checklist. Resolve divergent objectives against user instructions; do not silently revise criteria to make statuses agree.
+- A terminal session, null guidance, or successful transition does not prove the Codex objective was achieved. Verify the actual authorized requirements, applicable external checks, and Podway completion conditions. For a mapped goal-tracked session, inspect its current derived outcome: `not_achieved` and `superseded` do not establish achievement of the original objective, and even `achieved` records caller assertions rather than external truth.
+- A bounded Podway session may cover only part of a broader Codex goal. Continue remaining authorized work before completing that goal.
+- A Podway blocker does not automatically make a Codex goal `blocked`. Follow the active Codex tool contract, including any recurrence threshold, and continue useful independent work within scope. Report the dependency and required input or state change instead of repeatedly polling an unchanged blocker or repeating failed work solely because automatic continuation remains active.
+- Do not reset, cancel, replace, reactivate, or otherwise change Podway lifecycle state to synchronize goal statuses. These rules add no synchronization loop and impose no Codex feature requirement on ordinary Podway operation.
 
 ## Decide whether to track a goal
 
