@@ -508,3 +508,30 @@ the completed architecture, contracts, operations, and conformance surface.
 | `V2DVC-005` | Add the persistent Aquarium development service | Completed | Build the immutable managed-service bundle and producer controller, keep publication pending-only, and activate exact idle generations with proven rollback or bounded recovery debt. | [Aquarium development service](../specs/operations/aquarium-development-service.md), [macOS service architecture](../architecture/macos-service.md) |
 | `V2DVC-006` | Generalize isolated qualification runtimes | Completed | Move contributor and packaged release qualification to private named runtime identities while preserving exact snapshots, sandbox admission, cleanup, and production and Aquarium isolation. | [contributor runtime](../implementation-tips/dev-runtime.md), [release workflow](../implementation-tips/release.md) |
 | `V2DVC-007` | Close named-runtime conformance | Completed | Prove compatibility, coexistence, switching, recovery, Aquarium rollover, and parallel qualification; promote durable documentation; retire the dossier; and pass the development gate. | [testing and conformance](../specs/quality/testing-and-conformance.md), [requirements traceability](../specs/quality/requirements-traceability.md) |
+
+## V2FRT — User Runtime Factory Reset
+
+Status: Planned.
+
+Dependencies: completed `V2DVC` epic.
+
+Detailed SOT: [User Runtime Factory Reset](../todo/TODO-podway-user-runtime-factory-reset.md).
+
+Provide explicitly confirmed single-mode and all-mode retirement of ordinary
+user-global runtime data and the selected production service. Preserve
+worktrees, their Podway state, installed binaries, and external managed runtimes.
+Reject busy runtimes; support bounded offline cleanup and crash-safe exact retry.
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `V2FRT-001` | Adopt reset authority and reserve contracts | Planned | Promote the reset ownership, compatibility, public contracts, and bounded recovery model before runtime admission. | [Detailed SOT](../todo/TODO-podway-user-runtime-factory-reset.md#v2frt-001-adopt-reset-authority-and-reserve-contracts) |
+| `V2FRT-002` | Add bounded read-only reset planning | Planned | Add explicit selection, no-write inventory, eligibility, exclusions, and state-bound confirmation tokens. | [Detailed SOT](../todo/TODO-podway-user-runtime-factory-reset.md#v2frt-002-add-bounded-read-only-reset-planning) |
+| `V2FRT-003` | Add atomic idle reservation and startup fencing | Planned | Close admission and commit races while preserving stable lock identity and existing lifecycle contracts. | [Detailed SOT](../todo/TODO-podway-user-runtime-factory-reset.md#v2frt-003-add-atomic-idle-reservation-and-startup-fencing) |
+| `V2FRT-004` | Retire one ordinary runtime with durable recovery | Planned | Add live and offline cleanup, exact service shutdown, bounded resource deletion, and interruption-safe replay. | [Detailed SOT](../todo/TODO-podway-user-runtime-factory-reset.md#v2frt-004-retire-one-ordinary-runtime-with-durable-recovery) |
+| `V2FRT-005` | Compose all-mode reset and exact retry | Planned | Preflight and reserve the frozen selection, report partial failure honestly, and preserve recreated runtimes on replay. | [Detailed SOT](../todo/TODO-podway-user-runtime-factory-reset.md#v2frt-005-compose-all-mode-reset-and-exact-retry) |
+| `V2FRT-006` | Close conformance and operator guidance | Planned | Prove isolated runtime, crash, race, compatibility and re-registration behavior; promote durable guidance, retire the dossier, and pass the development gate. | [Detailed SOT](../todo/TODO-podway-user-runtime-factory-reset.md#v2frt-006-close-conformance-and-operator-guidance) |
+
+Tasks execute in numeric order. At most the first incomplete task may be In
+Progress, In Review, or Blocked; later tasks remain Planned. Completing the tasks
+does not replace independent epic acceptance. Release selection, distribution,
+installation, and runtime activation remain outside this epic.
