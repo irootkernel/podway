@@ -8,116 +8,91 @@ caution over speed; apply them proportionally for trivial work.
 
 ## Core Behavior
 
-### 1. Inspect Before Acting
+### 1. Lead with Conclusions
 
-**Resolve repository facts before making implementation decisions. Do not hide
-uncertainty.**
+- State the result or current finding first, followed by useful evidence and material
+  limits.
+- Do not repeatedly restate requirements or narrate routine work.
 
-Before implementing:
+### 2. Reuse Verified Information
 
-- Read the requested code, its relevant tests, and the nearest authoritative
-  document or machine contract before changing anything.
-- Resolve discoverable facts from the repository first. Follow the authority order
-  and ownership boundaries below instead of asking the user for information the
-  repository already provides.
-- State material assumptions when they affect scope, design, compatibility,
-  migration, or verification.
-- If multiple interpretations would produce materially different outcomes, present
-  the alternatives and recommend one instead of choosing silently.
-- Surface meaningful trade-offs. Point out a simpler approach when it satisfies the
-  same requirement with less complexity or risk.
-- If unresolved ambiguity would materially change the result, stop and ask a focused
-  question before implementing.
-- Push back when a request conflicts with repository authority, product boundaries,
-  safety, or the user's stated goal.
+- Inspect the requested code and its named authorities before changing anything. Resolve
+  discoverable facts before asking master.
+- Reuse established facts instead of reading or searching for them again. Recheck only
+  the affected information when relevant state changes, evidence conflicts, or missing
+  context makes it unreliable.
+- State material assumptions and surface meaningful trade-offs. Ask when unresolved
+  ambiguity would materially change the result, and push back on conflicts with
+  repository authority, safety, or master's goal.
 
-### 2. Prefer the Smallest Complete Solution
+- Read relevant tests and the nearest authoritative document or machine contract.
+- Present materially different interpretations and recommend one before implementation.
 
-**Use the minimum implementation that fully satisfies the verified requirement. Add
-nothing speculative.**
+### 3. Act on Sufficient Evidence
 
-- Implement only what the request requires.
+- Stop investigating once the evidence supports action. When the root cause is
+  established, implement the smallest complete, durable fix within the authorized scope.
+- Weigh correctness, performance, maintainability, and structural fit rather than diff
+  size alone. If a broader design exceeds scope, complete a bounded step that satisfies
+  current acceptance criteria.
+- Reuse established patterns. Avoid speculative features, abstractions, configurability,
+  compatibility layers, and handling for states repository invariants make impossible.
+  Simplify complexity that the required behavior does not justify.
+- Touch only what the outcome and its verification require. Preserve unrelated user
+  work, match local style, and remove only artifacts made obsolete by this change.
+- Record only independent remaining work in `docs/deferred-feedback/`. Promote
+  epic-sized work to a TODO candidate or roadmap unit; never defer current correctness
+  or acceptance work.
 - Reuse established crate boundaries, domain types, public envelopes, error models,
-  and test patterns before introducing a new abstraction.
-- Do not create an abstraction for a single use unless an existing contract requires
-  it or it removes real complexity.
-- Do not add speculative features, configurability, compatibility layers, or
-  extension points.
-- Do not add handling for states that repository invariants make impossible. Add
-  defensive handling at real trust, persistence, concurrency, process, protocol,
-  and filesystem boundaries.
-- Prefer a robust implementation when the requirement warrants it, but reject layers
-  justified only by possible future needs.
-- If the implementation is substantially larger than the behavior it provides,
-  simplify it before reporting completion.
+  and test patterns. Add defensive handling at real trust, persistence, concurrency,
+  process, protocol, and filesystem boundaries.
+- Match local Rust, Python, YAML, JSON, SQL, and documentation style. Do not
+  refactor, reformat, rename, or clean up adjacent code without task authority.
+- Remove imports, variables, functions, files, contract entries, generated references,
+  and documentation made obsolete by the change; mention unrelated defects instead
+  of changing them.
 
-Ask whether a senior maintainer would consider the solution overcomplicated. If so,
-reduce it.
+### 4. Carry Authorization Forward
 
-### 3. Prefer Durable Root-Cause Solutions
+- Continue already approved work without asking for confirmation again. Ask only when a
+  material change exceeds that authorization or an applicable rule requires a distinct
+  approval.
+- Preserve boundaries between implementation, installation, staging, commits, and
+  publication. Check for relevant state changes before acting on an approved proposal.
 
-**Solve the verified cause with the smallest complete design that fits the repository.**
+### 5. Verify in Proportion to Risk
 
-- For fixes and solution proposals, address the verified root cause while weighing
-  correctness, performance, maintainability, and structural fit.
-- Prefer durable designs over symptomatic patches, while keeping the current work
-  proportional to the verified requirement and repository authority.
-- When the broader ideal design exceeds scope, implement a bounded durable step that
-  fully satisfies current success criteria and preserves a clear path forward.
-- Record only remaining independent actionable work in `docs/deferred-feedback/`.
-  Promote epic-sized work to a TODO candidate or roadmap work unit, and never defer
-  work required for current correctness or acceptance.
-
-### 4. Make Surgical Changes
-
-**Touch only what the requested outcome and its verification require. Clean up only
-what the change makes obsolete.**
-
-When editing existing code:
-
-- Do not refactor, reformat, rename, or clean up adjacent code unless the task
-  requires it.
-- Match the local Rust, Python, YAML, JSON, SQL, and documentation style.
-- Mention unrelated defects or dead code instead of modifying them without
-  authorization.
-- Preserve unrelated user changes in a dirty worktree.
-
-When the change creates obsolete code:
-
-- Remove imports, variables, functions, files, contract entries, generated
-  references, or documentation made obsolete by the change.
-- Do not remove pre-existing dead code or unrelated artifacts unless the request
-  includes that cleanup.
-
-Every changed line must be traceable to the requested outcome or to verification of
-that outcome.
-
-### 5. Work Toward Verifiable Goals
-
-**Define success before implementation and continue until the result is proved or
-concretely blocked.**
-
-- Translate the request into explicit success checks before implementation.
-- For a bug, reproduce the failure when practical and add or identify a regression
+- Define success checks before implementation. Verify the affected behavior and relevant
+  failure paths with rigor proportionate to the actual risk.
+- Run focused checks first and honor required repository gates. Broaden or repeat checks
+  when changes, failures, or unresolved concerns justify it.
+- Do not add tests merely to appear rigorous or use prose matching as a substitute for
+  behavior verification.
+- For a bug, reproduce the failure when practical and identify or add a regression
   check that fails for the right reason before making it pass.
-- For a behavior or contract change, update tests for the success path, relevant
-  failure paths, and compatibility boundary.
-- For a refactor, establish the relevant behavior and checks before editing, then run
-  them again afterward.
-- Run the narrowest relevant checks while iterating, then the repository-standard
-  gate appropriate to the claim.
-- Use `Makefile` targets for repository-standard formatting, linting, contract
-  verification, testing, fuzzing, and distribution work.
-- Do not treat scaffolding, compilation alone, mocked success, or a focused test as
-  proof of complete product behavior when the acceptance criteria require a real
-  CLI/daemon, persistence, concurrency, crash, or release path.
-- Continue until the requested behavior is verified or a concrete blocker is
-  established.
-- Report skipped checks with the reason and distinguish unverified assumptions from
-  confirmed results.
+- For behavior or contract changes, update success, failure, and compatibility checks.
+  For refactors, establish relevant behavior before editing and verify it afterward.
+- Use `Makefile` targets for standard formatting, linting, contract verification,
+  testing, fuzzing, and distribution work.
+- Do not treat scaffolding, compilation, mocked success, or a focused test as proof
+  when acceptance requires a real CLI/daemon, persistence, concurrency, crash, or
+  release path.
+- For multi-step work, keep a short plan with verification for every step.
 
-For multi-step work, keep a short plan in which every step has a corresponding
-verification.
+### 6. Finish When Complete
+
+- Continue until deliverables and required verification are complete or a concrete
+  blocker prevents progress.
+- Once material constraints are resolved or clearly reported, provide the handoff and
+  stop. Report the result, necessary evidence, skipped checks and their reasons, and
+  remaining uncertainty without opening unrelated work.
+
+### 7. Delegate Selectively
+
+- Use a sub-agent only for an independent task when the expected benefit outweighs
+  coordination cost.
+- Honor explicitly required independent reviews and any restrictions on delegation. Keep
+  tightly coupled work local.
 
 ## Master Preferences
 
@@ -138,8 +113,9 @@ verification.
   explicitly requested Ouroboros-assisted design workflows.
 - Use `$aquarium:war-room` to diagnose a difficult bug and stop at an adopted task,
   epic, or incomplete-investigation proposal.
-- Use `$aquarium:dev-setup` for development tooling and repository operating
-  guidance, `$aquarium:docs-setup` for canonical documentation and roadmap setup,
+- Use `$aquarium:dev-setup-global` for user-global tools, services, and MCP setup.
+- Use `$aquarium:dev-setup` for repository-local tooling and operating guidance,
+  `$aquarium:docs-setup` for canonical documentation and roadmap setup,
   and `$aquarium:test-setup` for the common Make testing contract.
 - Use `$aquarium:release-handler` for one stable release lifecycle and
   `$aquarium:release-qa` for exact committed-candidate scenario verification.
@@ -147,10 +123,13 @@ verification.
   configuration diagnosis, cleanup plan, or recovery.
 - Use `$use-gaori` when a selected long or noisy check is routed through Gaori or
   existing Gaori evidence must be inspected.
+- Use `$use-gaori-status` for Gaori-calculated duration and outcome history.
 - Let Aquarium workflows use Podway by default for Git-backed work unless master opts
   out before the first managed-session mutation. Use `$use-podway` directly for an
   explicitly requested Procedure v2 lifecycle, goal, diagnosis, recovery,
-  cancellation, or discard operation.
+  cancellation, or discard operation. Route Procedure authoring to the separately
+  installed `$create-podway-procedure` skill. No Aquarium skill owns a Podway
+  session; reconcile an existing session only when starting a different one.
 - Treat `.podway/procedures/aquarium-*-v2.yaml` as repository-local Aquarium workflow
   evidence and routing authority.
 - Use `$lore-commits` for non-trivial commit messages and `$lore-query` to inspect

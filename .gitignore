@@ -30,6 +30,9 @@
 # Project-local Codex MCP configuration
 /.codex/config.toml
 
+# Sorage local handoff state
+/.sorage/
+
 # Test, coverage, and temporary artifacts
 /coverage/
 /dist/
