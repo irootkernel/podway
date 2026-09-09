@@ -16,6 +16,13 @@ that the new commands or contracts are implemented. Existing accepted ADRs,
 machine contracts, and specifications remain authoritative until their owning
 implementation task promotes the change.
 
+Reset authority and the reserved contract surface are now owned by
+[ADR-0032](../architecture-decision-records/0032-retire-ordinary-user-runtimes.md)
+and the [runtime reset specification](../specs/operations/runtime-reset.md).
+That specification fixes the wire encodings, error choices and narrow persistent
+control exchange required by the connection-bound reservation. The roadmap
+continues to own implementation admission and task status.
+
 ## Verified context
 
 Production owns the effective user's .podway/run, state, and logs directories

@@ -68,6 +68,7 @@ fn build_result_validators_v2() -> Result<HashMap<&'static str, Validator>, Stri
     for contract in EXISTING_ROUTE_RESULT_SCHEMAS_V2
         .iter()
         .chain(NEW_ROUTE_RESULT_SCHEMAS_V1)
+        .chain(RESET_DOCUMENT_SCHEMAS_V1)
     {
         let filename = contract
             .schema_path
@@ -116,7 +117,7 @@ fn validate_embedded_result_schema_v2(schema: &str, result: &Map<String, Value>)
     validate_embedded_schema_v2(schema, &Value::Object(result.clone()))
 }
 
-fn validate_embedded_schema_v2(schema: &str, value: &Value) -> bool {
+pub(crate) fn validate_embedded_schema_v2(schema: &str, value: &Value) -> bool {
     RESULT_VALIDATORS_V2
         .get_or_init(build_result_validators_v2)
         .as_ref()
@@ -299,6 +300,21 @@ pub const PROCEDURE_DIAGNOSTICS_RESULT_SCHEMA_V1: &str = "podway.procedure-diagn
 /// Result families for v2-only routes. New command surfaces begin at `/v1`.
 pub const NEW_ROUTE_RESULT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
     result_schema_v2(
+        "podway.runtime-reset-plan-result/v1",
+        "schemas/runtime-reset-plan-result-v1.schema.json",
+        &["runtime.reset.plan"],
+    ),
+    result_schema_v2(
+        "podway.runtime-reset-result/v1",
+        "schemas/runtime-reset-result-v1.schema.json",
+        &["runtime.reset.apply"],
+    ),
+    result_schema_v2(
+        "podway.runtime-reset-control-result/v1",
+        "schemas/runtime-reset-control-result-v1.schema.json",
+        &["daemon.runtime_reset"],
+    ),
+    result_schema_v2(
         "podway.item-record-many-result/v1",
         "schemas/item-record-many-result-v1.schema.json",
         &["item.record_many"],
@@ -428,6 +444,12 @@ pub const NEW_ROUTE_RESULT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
     ),
 ];
 
+const RESET_DOCUMENT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[result_schema_v2(
+    "podway.runtime-reset-error-details/v1",
+    "schemas/runtime-reset-error-details-v1.schema.json",
+    &[],
+)];
+
 const fn result_schema_v2(
     schema: &'static str,
     schema_path: &'static str,
@@ -464,6 +486,9 @@ pub fn decode_result_schema_contract_v2(
 
 fn validate_result_correlations_v2(schema: &str, result: &Map<String, Value>) -> bool {
     match schema {
+        "podway.runtime-reset-plan-result/v1" | "podway.runtime-reset-result/v1" => {
+            reset_resources_within_bound_v1(result)
+        }
         "podway.terminal-disposition-result/v1" => result
             .get("session_revision")
             .zip(
@@ -536,6 +561,23 @@ fn validate_result_correlations_v2(schema: &str, result: &Map<String, Value>) ->
         }
         _ => true,
     }
+}
+
+pub(crate) fn reset_resources_within_bound_v1(result: &Map<String, Value>) -> bool {
+    let collection = match result.get("schema").and_then(Value::as_str) {
+        Some("podway.runtime-reset-plan-result/v1") => "targets",
+        Some("podway.runtime-reset-result/v1") => "modes",
+        _ => return false,
+    };
+    result
+        .get(collection)
+        .and_then(Value::as_array)
+        .and_then(|modes| {
+            modes.iter().try_fold(0usize, |total, mode| {
+                total.checked_add(mode.get("resources")?.as_array()?.len())
+            })
+        })
+        .is_some_and(|total| total <= 4096)
 }
 
 fn validate_terminal_response_typed_v2(response: &Value) -> bool {
@@ -723,6 +765,38 @@ fn is_durable_job_command_v4(command: &str) -> bool {
 
 fn required_result_fields_v2(schema: &str) -> &'static [&'static str] {
     match schema {
+        "podway.runtime-reset-plan-result/v1" => &[
+            "schema",
+            "status",
+            "account_root",
+            "selection",
+            "targets",
+            "preserved",
+            "excluded",
+            "expires_at",
+            "plan_token",
+            "recovery_operation",
+        ],
+        "podway.runtime-reset-result/v1" => &[
+            "schema",
+            "status",
+            "operation_id",
+            "selection",
+            "modes",
+            "preserved",
+            "excluded",
+        ],
+        "podway.runtime-reset-control-result/v1" => &[
+            "schema",
+            "state",
+            "mode",
+            "namespace_root",
+            "process_id",
+            "operation_id",
+            "token_sha256",
+            "reservation_id",
+            "reason",
+        ],
         "podway.procedure-validation-result/v2" => {
             &["schema", "file", "procedure_schema", "digest", "valid"]
         }
@@ -1502,6 +1576,8 @@ pub const MAX_V2_WARNING_PATH_CHARS: usize = 256;
 pub const MAX_V2_WARNING_MESSAGE_CHARS: usize = 512;
 /// Maximum encoded bytes for an error retained inside one v2 job-result wrapper.
 pub const MAX_V2_TERMINAL_ERROR_BYTES: usize = 524_288;
+
+pub(crate) const MAX_RUNTIME_RESET_DOCUMENT_BYTES_V1: usize = 524_288;
 pub const OUTPUT_SCHEMA_V3: &str = "podway.output/v3";
 pub const SUPPORTED_OUTPUT_SCHEMAS_V3: &[&str] = &[OUTPUT_SCHEMA_V3];
 const PROCEDURE_INDEPENDENT_OUTPUT_COMMANDS_V3: &[&str] = &[
@@ -1572,6 +1648,18 @@ pub fn validate_command_result_v2(
     command: &str,
     result: &Map<String, Value>,
 ) -> Result<(), ProtocolError> {
+    if matches!(
+        command,
+        "runtime.reset.plan" | "runtime.reset.apply" | "daemon.runtime_reset"
+    ) && (serde_json::to_vec(result).map_or(true, |bytes| {
+        bytes.len() > MAX_RUNTIME_RESET_DOCUMENT_BYTES_V1
+    }) || (command == "runtime.reset.apply"
+        && result.get("status").and_then(Value::as_str) == Some("incomplete")))
+    {
+        return Err(ProtocolError::InvalidCommandResult {
+            command: command.to_owned(),
+        });
+    }
     if decode_result_schema_contract_v2(result)
         .is_some_and(|contract| contract.commands.contains(&command))
         || (PROCEDURE_INDEPENDENT_OUTPUT_COMMANDS_V3.contains(&command)

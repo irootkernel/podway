@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:runtime-reset-error-details:v1",
+  "title": "Podway Runtime Reset Error Details v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "mode",
+    "reason",
+    "result",
+    "retry"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.runtime-reset-error-details/v1"
+    },
+    "mode": {
+      "oneOf": [
+        {
+          "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/mode"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "reason": {
+      "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/reason"
+    },
+    "result": {
+      "oneOf": [
+        {
+          "$ref": "urn:podway:schema:runtime-reset-result:v1"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "retry": {
+      "oneOf": [
+        {
+          "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/retry"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  }
+}

@@ -558,6 +558,30 @@
       "path": ["podway-cli", "podway-protocol", "podway-daemon"],
       "execution": "daemon",
       "capabilities": []
+    },
+    {
+      "command": "runtime.reset.plan",
+      "availability": "reserved_contract",
+      "owner": "podway-service",
+      "path": ["podway-cli", "podway-service"],
+      "execution": "service_lifecycle",
+      "capabilities": []
+    },
+    {
+      "command": "runtime.reset.apply",
+      "availability": "reserved_contract",
+      "owner": "podway-service",
+      "path": ["podway-cli", "podway-service"],
+      "execution": "service_lifecycle",
+      "capabilities": []
+    },
+    {
+      "command": "daemon.runtime_reset",
+      "availability": "reserved_contract",
+      "owner": "podway-daemon",
+      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
+      "execution": "daemon",
+      "capabilities": []
     }
   ]
 }

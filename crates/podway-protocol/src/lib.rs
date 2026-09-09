@@ -1378,6 +1378,41 @@ struct ErrorCodeCatalogEntryV1 {
 
 const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
     ErrorCodeCatalogEntryV1 {
+        code: "RUNTIME_RESET_BUSY",
+        exit_code: 4,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "RUNTIME_RESET_UNSAFE",
+        exit_code: 5,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "RUNTIME_RESET_UNSUPPORTED",
+        exit_code: 3,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "RUNTIME_RESET_PLAN_STALE",
+        exit_code: 4,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "RUNTIME_RESET_LIMIT_EXCEEDED",
+        exit_code: 2,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "RUNTIME_RESET_IN_PROGRESS",
+        exit_code: 4,
+        retryable: true,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "RUNTIME_RESET_INCOMPLETE",
+        exit_code: 4,
+        retryable: true,
+    },
+    ErrorCodeCatalogEntryV1 {
         code: "DAEMON_NOT_INSTALLED",
         exit_code: 3,
         retryable: false,
@@ -2071,6 +2106,21 @@ impl ErrorEnvelopeV1 {
         validate_procedure_digest_mismatch_details_v1(self.code.as_str(), &self.details)?;
         validate_mutation_outcome_unknown_details_v1(self.code.as_str(), &self.details)?;
         validate_closed_error_details_v1(self.code.as_str(), &self.details)?;
+        if matches!(
+            self.code.as_str(),
+            "RUNTIME_RESET_BUSY"
+                | "RUNTIME_RESET_UNSAFE"
+                | "RUNTIME_RESET_UNSUPPORTED"
+                | "RUNTIME_RESET_PLAN_STALE"
+                | "RUNTIME_RESET_LIMIT_EXCEEDED"
+                | "RUNTIME_RESET_IN_PROGRESS"
+                | "RUNTIME_RESET_INCOMPLETE"
+        ) && self.workspace.is_some()
+        {
+            return Err(ProtocolError::InvalidErrorDetails {
+                code: self.code.as_str().to_owned(),
+            });
+        }
         if self.code.as_str() == "INTERNAL_ERROR"
             && self.details.contains_key("kind")
             && self.details.get("diagnostic_id").and_then(Value::as_str)
@@ -2290,6 +2340,33 @@ fn validate_closed_error_details_v1(
     details: &Map<String, Value>,
 ) -> Result<(), ProtocolError> {
     let valid = match code {
+        "RUNTIME_RESET_BUSY"
+        | "RUNTIME_RESET_UNSAFE"
+        | "RUNTIME_RESET_UNSUPPORTED"
+        | "RUNTIME_RESET_PLAN_STALE"
+        | "RUNTIME_RESET_LIMIT_EXCEEDED"
+        | "RUNTIME_RESET_IN_PROGRESS"
+        | "RUNTIME_RESET_INCOMPLETE" => {
+            result_contract::validate_embedded_schema_v2(
+                "podway.runtime-reset-error-details/v1",
+                &Value::Object(details.clone()),
+            ) && serde_json::to_vec(details).is_ok_and(|bytes| {
+                bytes.len() <= result_contract::MAX_RUNTIME_RESET_DOCUMENT_BYTES_V1
+            }) && if code == "RUNTIME_RESET_INCOMPLETE" {
+                details
+                    .get("result")
+                    .and_then(|result| result.get("status"))
+                    == Some(&Value::String("incomplete".to_owned()))
+                    && details.get("retry").is_some_and(Value::is_object)
+                    && details
+                        .get("result")
+                        .and_then(Value::as_object)
+                        .is_some_and(result_contract::reset_resources_within_bound_v1)
+            } else {
+                details.get("result") == Some(&Value::Null)
+                    && details.get("retry") == Some(&Value::Null)
+            }
+        }
         "DAEMON_NOT_INSTALLED"
         | "DAEMON_UNAVAILABLE"
         | "DAEMON_SHUTTING_DOWN"
@@ -3473,6 +3550,13 @@ pub fn ensure_error_details_schema_v1(code: &str, details: &mut Map<String, Valu
         return;
     }
     let schema = match code {
+        "RUNTIME_RESET_BUSY"
+        | "RUNTIME_RESET_UNSAFE"
+        | "RUNTIME_RESET_UNSUPPORTED"
+        | "RUNTIME_RESET_PLAN_STALE"
+        | "RUNTIME_RESET_LIMIT_EXCEEDED"
+        | "RUNTIME_RESET_IN_PROGRESS"
+        | "RUNTIME_RESET_INCOMPLETE" => "podway.runtime-reset-error-details/v1",
         "DAEMON_STARTING" => "podway.daemon-readiness-error-details/v1",
         "DAEMON_READINESS_TIMEOUT" => "podway.daemon-readiness-timeout-details/v1",
         "DAEMON_UNAVAILABLE" => "podway.endpoint-error-details/v2",

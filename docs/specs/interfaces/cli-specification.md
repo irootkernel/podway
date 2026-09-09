@@ -62,6 +62,15 @@ matching contract identity, and `readiness_state: ready`; it never starts,
 installs, restarts, repairs, or otherwise mutates the service. `daemon install`
 uses the same bounded waiter after idempotent service reconciliation.
 
+## Reserved account-runtime commands
+
+The catalog reserves `runtime reset plan` and `runtime reset apply` without
+admitting them in the current CLI. Their explicit selector, confirmation,
+read-only planning, output and failure contracts are owned by the
+[runtime reset specification](../operations/runtime-reset.md). They require no
+worktree and preserve all workspace state. This reservation does not add an
+alias for `reset --all`, workspace removal, or daemon uninstall.
+
 ## Procedure commands
 
 All procedure commands accept only `podway.procedure/v2`. Validation and authoring

@@ -174,6 +174,325 @@
   "allOf": [
     {
       "if": {
+        "properties": {
+          "code": {
+            "const": "RUNTIME_RESET_BUSY"
+          }
+        },
+        "required": [
+          "code"
+        ]
+      },
+      "then": {
+        "properties": {
+          "exit_code": {
+            "const": 4
+          },
+          "retryable": {
+            "const": false
+          },
+          "details": {
+            "allOf": [
+              {
+                "$ref": "urn:podway:schema:runtime-reset-error-details:v1"
+              },
+              {
+                "properties": {
+                  "result": {
+                    "type": "null"
+                  },
+                  "retry": {
+                    "type": "null"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "not": {
+          "required": [
+            "workspace"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "code": {
+            "const": "RUNTIME_RESET_UNSAFE"
+          }
+        },
+        "required": [
+          "code"
+        ]
+      },
+      "then": {
+        "properties": {
+          "exit_code": {
+            "const": 5
+          },
+          "retryable": {
+            "const": false
+          },
+          "details": {
+            "allOf": [
+              {
+                "$ref": "urn:podway:schema:runtime-reset-error-details:v1"
+              },
+              {
+                "properties": {
+                  "result": {
+                    "type": "null"
+                  },
+                  "retry": {
+                    "type": "null"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "not": {
+          "required": [
+            "workspace"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "code": {
+            "const": "RUNTIME_RESET_UNSUPPORTED"
+          }
+        },
+        "required": [
+          "code"
+        ]
+      },
+      "then": {
+        "properties": {
+          "exit_code": {
+            "const": 3
+          },
+          "retryable": {
+            "const": false
+          },
+          "details": {
+            "allOf": [
+              {
+                "$ref": "urn:podway:schema:runtime-reset-error-details:v1"
+              },
+              {
+                "properties": {
+                  "result": {
+                    "type": "null"
+                  },
+                  "retry": {
+                    "type": "null"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "not": {
+          "required": [
+            "workspace"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "code": {
+            "const": "RUNTIME_RESET_PLAN_STALE"
+          }
+        },
+        "required": [
+          "code"
+        ]
+      },
+      "then": {
+        "properties": {
+          "exit_code": {
+            "const": 4
+          },
+          "retryable": {
+            "const": false
+          },
+          "details": {
+            "allOf": [
+              {
+                "$ref": "urn:podway:schema:runtime-reset-error-details:v1"
+              },
+              {
+                "properties": {
+                  "result": {
+                    "type": "null"
+                  },
+                  "retry": {
+                    "type": "null"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "not": {
+          "required": [
+            "workspace"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "code": {
+            "const": "RUNTIME_RESET_LIMIT_EXCEEDED"
+          }
+        },
+        "required": [
+          "code"
+        ]
+      },
+      "then": {
+        "properties": {
+          "exit_code": {
+            "const": 2
+          },
+          "retryable": {
+            "const": false
+          },
+          "details": {
+            "allOf": [
+              {
+                "$ref": "urn:podway:schema:runtime-reset-error-details:v1"
+              },
+              {
+                "properties": {
+                  "result": {
+                    "type": "null"
+                  },
+                  "retry": {
+                    "type": "null"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "not": {
+          "required": [
+            "workspace"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "code": {
+            "const": "RUNTIME_RESET_IN_PROGRESS"
+          }
+        },
+        "required": [
+          "code"
+        ]
+      },
+      "then": {
+        "properties": {
+          "exit_code": {
+            "const": 4
+          },
+          "retryable": {
+            "const": true
+          },
+          "details": {
+            "allOf": [
+              {
+                "$ref": "urn:podway:schema:runtime-reset-error-details:v1"
+              },
+              {
+                "properties": {
+                  "result": {
+                    "type": "null"
+                  },
+                  "retry": {
+                    "type": "null"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "not": {
+          "required": [
+            "workspace"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "code": {
+            "const": "RUNTIME_RESET_INCOMPLETE"
+          }
+        },
+        "required": [
+          "code"
+        ]
+      },
+      "then": {
+        "properties": {
+          "exit_code": {
+            "const": 4
+          },
+          "retryable": {
+            "const": true
+          },
+          "details": {
+            "allOf": [
+              {
+                "$ref": "urn:podway:schema:runtime-reset-error-details:v1"
+              },
+              {
+                "properties": {
+                  "result": {
+                    "allOf": [
+                      {
+                        "$ref": "urn:podway:schema:runtime-reset-result:v1"
+                      },
+                      {
+                        "properties": {
+                          "status": {
+                            "const": "incomplete"
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "retry": {
+                    "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/retry"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "not": {
+          "required": [
+            "workspace"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
         "properties": { "code": { "const": "WORKSPACE_UUID_MISMATCH" } },
         "required": ["code"]
       },

@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:runtime-reset-control-result:v1",
+  "title": "Podway Runtime Reset Control Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "state",
+    "mode",
+    "namespace_root",
+    "process_id",
+    "operation_id",
+    "token_sha256",
+    "reservation_id",
+    "reason"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.runtime-reset-control-result/v1"
+    },
+    "state": {
+      "enum": [
+        "idle",
+        "busy",
+        "unsupported",
+        "reserved",
+        "committed",
+        "released",
+        "shutting_down"
+      ]
+    },
+    "mode": {
+      "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/mode"
+    },
+    "namespace_root": {
+      "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/path"
+    },
+    "process_id": {
+      "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/uuid"
+    },
+    "operation_id": {
+      "oneOf": [
+        {
+          "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/uuid"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "token_sha256": {
+      "oneOf": [
+        {
+          "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/digest"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "reservation_id": {
+      "oneOf": [
+        {
+          "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/uuid"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "reason": {
+      "oneOf": [
+        {
+          "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/reason"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "enum": [
+              "reserved",
+              "committed",
+              "released",
+              "shutting_down"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "operation_id": {
+            "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/uuid"
+          },
+          "token_sha256": {
+            "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/digest"
+          },
+          "reservation_id": {
+            "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/uuid"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "operation_id": {
+            "type": "null"
+          },
+          "token_sha256": {
+            "type": "null"
+          },
+          "reservation_id": {
+            "type": "null"
+          }
+        }
+      }
+    }
+  ]
+}

@@ -233,6 +233,15 @@ closed. Runtime reset never deletes
 procedures, `.podway/.gitignore`, config
 content unrelated to mode, or Git worktree, index, and ref state.
 
+## Reserved account-runtime retirement
+
+The [runtime reset contract](../operations/runtime-reset.md#durable-retirement-and-recovery)
+defines a separate offline-capable account record outside worktree state. It
+reserves account-runtime deletion while preserving every Store, job and session;
+it does not alter workspace reset, removal or mode-switch marker semantics.
+Stable singleton anchors, committed admission fencing and exact intent-backed
+retry are mandatory before its runtime admission. No SQLite migration is added.
+
 ## No backup or export requirement
 
 The public v1 product intentionally has no:

@@ -511,7 +511,7 @@ the completed architecture, contracts, operations, and conformance surface.
 
 ## V2FRT — User Runtime Factory Reset
 
-Status: Planned.
+Status: In Progress.
 
 Dependencies: completed `V2DVC` epic.
 
@@ -524,7 +524,7 @@ Reject busy runtimes; support bounded offline cleanup and crash-safe exact retry
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `V2FRT-001` | Adopt reset authority and reserve contracts | Planned | Promote the reset ownership, compatibility, public contracts, and bounded recovery model before runtime admission. | [Detailed SOT](../todo/TODO-podway-user-runtime-factory-reset.md#v2frt-001-adopt-reset-authority-and-reserve-contracts) |
+| `V2FRT-001` | Adopt reset authority and reserve contracts | Completed | Promote the reset ownership, compatibility, public contracts, and bounded recovery model before runtime admission. | [Detailed SOT](../todo/TODO-podway-user-runtime-factory-reset.md#v2frt-001-adopt-reset-authority-and-reserve-contracts) |
 | `V2FRT-002` | Add bounded read-only reset planning | Planned | Add explicit selection, no-write inventory, eligibility, exclusions, and state-bound confirmation tokens. | [Detailed SOT](../todo/TODO-podway-user-runtime-factory-reset.md#v2frt-002-add-bounded-read-only-reset-planning) |
 | `V2FRT-003` | Add atomic idle reservation and startup fencing | Planned | Close admission and commit races while preserving stable lock identity and existing lifecycle contracts. | [Detailed SOT](../todo/TODO-podway-user-runtime-factory-reset.md#v2frt-003-add-atomic-idle-reservation-and-startup-fencing) |
 | `V2FRT-004` | Retire one ordinary runtime with durable recovery | Planned | Add live and offline cleanup, exact service shutdown, bounded resource deletion, and interruption-safe replay. | [Detailed SOT](../todo/TODO-podway-user-runtime-factory-reset.md#v2frt-004-retire-one-ordinary-runtime-with-durable-recovery) |

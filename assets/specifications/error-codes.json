@@ -692,6 +692,55 @@
       "exit_code": 4,
       "retryable": true,
       "summary": "The evidence page token no longer matches the current consumer, source value, or session identity."
+    },
+    {
+      "code": "RUNTIME_RESET_BUSY",
+      "details_schema": "podway.runtime-reset-error-details/v1",
+      "exit_code": 4,
+      "retryable": false,
+      "summary": "Live runtime activity prevents an idle reset reservation."
+    },
+    {
+      "code": "RUNTIME_RESET_UNSAFE",
+      "details_schema": "podway.runtime-reset-error-details/v1",
+      "exit_code": 5,
+      "retryable": false,
+      "summary": "Runtime path, ownership, or process safety cannot be established."
+    },
+    {
+      "code": "RUNTIME_RESET_UNSUPPORTED",
+      "details_schema": "podway.runtime-reset-error-details/v1",
+      "exit_code": 3,
+      "retryable": false,
+      "summary": "The selected runtime does not support the reset contract."
+    },
+    {
+      "code": "RUNTIME_RESET_PLAN_STALE",
+      "details_schema": "podway.runtime-reset-error-details/v1",
+      "exit_code": 4,
+      "retryable": false,
+      "summary": "The runtime reset token, selection, expiry, or identity is stale."
+    },
+    {
+      "code": "RUNTIME_RESET_LIMIT_EXCEEDED",
+      "details_schema": "podway.runtime-reset-error-details/v1",
+      "exit_code": 2,
+      "retryable": false,
+      "summary": "Runtime reset exceeds a fixed discovery or encoding bound."
+    },
+    {
+      "code": "RUNTIME_RESET_IN_PROGRESS",
+      "details_schema": "podway.runtime-reset-error-details/v1",
+      "exit_code": 4,
+      "retryable": true,
+      "summary": "An account runtime reset is already in progress."
+    },
+    {
+      "code": "RUNTIME_RESET_INCOMPLETE",
+      "details_schema": "podway.runtime-reset-error-details/v1",
+      "exit_code": 4,
+      "retryable": true,
+      "summary": "A committed runtime reset requires exact explicit retry."
     }
   ]
 }

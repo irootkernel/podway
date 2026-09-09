@@ -270,6 +270,13 @@ fn valid_error_envelope_json() -> Value {
 }
 
 const FROZEN_ERROR_CATALOG: &[(&str, u8, bool)] = &[
+    ("RUNTIME_RESET_BUSY", 4, false),
+    ("RUNTIME_RESET_UNSAFE", 5, false),
+    ("RUNTIME_RESET_UNSUPPORTED", 3, false),
+    ("RUNTIME_RESET_PLAN_STALE", 4, false),
+    ("RUNTIME_RESET_LIMIT_EXCEEDED", 2, false),
+    ("RUNTIME_RESET_IN_PROGRESS", 4, true),
+    ("RUNTIME_RESET_INCOMPLETE", 4, true),
     ("DAEMON_NOT_INSTALLED", 3, false),
     ("DAEMON_UNAVAILABLE", 3, true),
     ("DAEMON_STARTING", 3, true),
@@ -467,6 +474,26 @@ fn api_004_error_catalog_is_exhaustive_and_error_pairs_fail_closed() {
     );
     for &(code, exit_code, retryable) in FROZEN_ERROR_CATALOG {
         let details = match code {
+            code if code.starts_with("RUNTIME_RESET_") => {
+                let mut details = json!({
+                    "schema":"podway.runtime-reset-error-details/v1",
+                    "mode":"prod","reason":"io","result":null,"retry":null
+                });
+                if code == "RUNTIME_RESET_INCOMPLETE" {
+                    let fixtures: Value = serde_json::from_str(include_str!(
+                        "../../../tests/fixtures/v2/compatibility/runtime-reset-contract-reservation.json"
+                    )).unwrap();
+                    let mut result = fixtures["fixtures"]["podway.runtime-reset-result/v1"].clone();
+                    result["status"] = json!("incomplete");
+                    result["modes"][0]["state"] = json!("incomplete");
+                    details["result"] = result;
+                    details["retry"] = json!({
+                        "command":"runtime.reset.apply","selection":{"kind":"mode","mode":"prod"},
+                        "plan_token":format!("e30.{}", "a".repeat(64)),"requires_confirmation":true
+                    });
+                }
+                details.as_object().unwrap().clone()
+            }
             "WORKSPACE_UUID_MISMATCH" => identity_details(
                 "podway.workspace-uuid-mismatch-details/v2",
                 "expected_workspace_uuid",

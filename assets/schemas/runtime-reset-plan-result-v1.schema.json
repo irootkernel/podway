@@ -1,0 +1,235 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:runtime-reset-plan-result:v1",
+  "title": "Podway Runtime Reset Plan Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "status",
+    "account_root",
+    "selection",
+    "targets",
+    "preserved",
+    "excluded",
+    "expires_at",
+    "plan_token",
+    "recovery_operation"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.runtime-reset-plan-result/v1"
+    },
+    "status": {
+      "enum": [
+        "ready",
+        "no_change",
+        "blocked",
+        "recovery_required"
+      ]
+    },
+    "account_root": {
+      "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/path"
+    },
+    "selection": {
+      "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/selection"
+    },
+    "targets": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 64,
+      "items": {
+        "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/plan_target"
+      }
+    },
+    "preserved": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 256,
+      "items": {
+        "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/resource"
+      }
+    },
+    "excluded": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 257,
+      "items": {
+        "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/exclusion"
+      }
+    },
+    "expires_at": {
+      "oneOf": [
+        {
+          "type": "string",
+          "format": "date-time"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "plan_token": {
+      "oneOf": [
+        {
+          "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/encoded_token"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "recovery_operation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "operation_id",
+            "token_sha256"
+          ],
+          "properties": {
+            "operation_id": {
+              "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/uuid"
+            },
+            "token_sha256": {
+              "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/digest"
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "ready"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "plan_token": {
+            "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/encoded_token"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "targets": {
+            "minItems": 1,
+            "items": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "live_idle",
+                    "offline",
+                    "absent"
+                  ]
+                }
+              }
+            },
+            "contains": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "live_idle",
+                    "offline"
+                  ]
+                }
+              }
+            },
+            "minContains": 1
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "plan_token": {
+            "type": "null"
+          },
+          "expires_at": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "recovery_required"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "recovery_operation": {
+            "type": "object"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "recovery_operation": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "no_change"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "targets": {
+            "items": {
+              "properties": {
+                "state": {
+                  "const": "absent"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "blocked"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "targets": {
+            "contains": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "busy",
+                    "unsupported",
+                    "unsafe"
+                  ]
+                }
+              }
+            },
+            "minContains": 1
+          }
+        }
+      }
+    }
+  ]
+}

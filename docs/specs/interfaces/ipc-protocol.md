@@ -15,7 +15,8 @@ podway.ipc/v1
 - Unix-domain stream socket;
 - user-private socket path defined by the macOS service specification;
 - no TCP, UDP, HTTP, WebSocket, or network fallback;
-- one request and one response per connection;
+- one request and one response per connection, except the reserved bounded
+  runtime-reset control exchange described below;
 - no compression;
 - UTF-8 JSON payloads.
 
@@ -32,7 +33,8 @@ Limits:
 
 - maximum payload length: 1,048,576 bytes;
 - zero-length frames are invalid;
-- extra bytes after the declared single frame are rejected;
+- extra bytes after the declared single frame are rejected; only an admitted
+  runtime-reset exchange may subsequently read another non-pipelined frame;
 - incomplete frames time out;
 - invalid UTF-8 or JSON returns `REQUEST_INVALID` when a response can be produced.
 
@@ -121,6 +123,16 @@ projection while retaining v1 and v2 decoding compatibility. The early control p
 handshake, `daemon.status`, and coordinated
 termination until readiness; every other route fails before workspace lookup or
 durable admission with retryable `DAEMON_STARTING`.
+
+## Reserved runtime-reset control
+
+`daemon.runtime_reset` is reserved, not dispatched. Its closed input/result
+families, five actions, connection-bound reservation identities, eight-exchange
+limit and timeout behavior are specified by the
+[runtime reset control contract](../operations/runtime-reset.md#bounded-control-exchange).
+It carries no worktree, job or session state and does not reuse `daemon.terminate`.
+The narrow multi-exchange reservation exception becomes executable only with its
+own admission fence; normal requests retain the single-frame contract.
 
 ## Workspace context
 

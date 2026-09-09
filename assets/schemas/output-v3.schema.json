@@ -25,6 +25,9 @@
     { "$ref": "#/$defs/workspaceRemoval" },
     { "$ref": "#/$defs/workspaceModePlan" },
     { "$ref": "#/$defs/workspaceModeApply" },
+    { "$ref": "#/$defs/runtimeResetPlan" },
+    { "$ref": "#/$defs/runtimeResetApply" },
+    { "$ref": "#/$defs/runtimeResetControl" },
     { "$ref": "#/$defs/procedureValidation" },
     { "$ref": "#/$defs/detachedAdmission" },
     { "$ref": "#/$defs/sessionStart" },
@@ -56,6 +59,107 @@
     { "$ref": "#/$defs/criterionAssessment" }
   ],
   "$defs": {
+    "runtimeResetPlan": {
+      "properties": {
+        "command": {
+          "const": "runtime.reset.plan"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:runtime-reset-plan-result:v1"
+        }
+      },
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "workspace"
+            ]
+          },
+          {
+            "required": [
+              "job"
+            ]
+          },
+          {
+            "required": [
+              "session"
+            ]
+          }
+        ]
+      }
+    },
+    "runtimeResetApply": {
+      "properties": {
+        "command": {
+          "const": "runtime.reset.apply"
+        },
+        "result": {
+          "allOf": [
+            {
+              "$ref": "urn:podway:schema:runtime-reset-result:v1"
+            },
+            {
+              "properties": {
+                "status": {
+                  "enum": [
+                    "complete",
+                    "already_applied"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "workspace"
+            ]
+          },
+          {
+            "required": [
+              "job"
+            ]
+          },
+          {
+            "required": [
+              "session"
+            ]
+          }
+        ]
+      }
+    },
+    "runtimeResetControl": {
+      "properties": {
+        "command": {
+          "const": "daemon.runtime_reset"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:runtime-reset-control-result:v1"
+        }
+      },
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "workspace"
+            ]
+          },
+          {
+            "required": [
+              "job"
+            ]
+          },
+          {
+            "required": [
+              "session"
+            ]
+          }
+        ]
+      }
+    },
     "procedureIndependent": {
       "properties": {
         "command": {

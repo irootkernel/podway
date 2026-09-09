@@ -1,0 +1,68 @@
+{
+  "contract_version": "podway.runtime-reset-contract/v1",
+  "owner_crate": "podway-service",
+  "availability": "reserved_contract",
+  "allowed_dependencies": [
+    "podway-core"
+  ],
+  "consumers": [
+    "podway-cli",
+    "podway-daemon"
+  ],
+  "operations": {
+    "plan": {
+      "input": "explicit ordinary mode or all_modes",
+      "output": "podway.runtime-reset-plan-result/v1",
+      "writes": false
+    },
+    "apply": {
+      "input": "matching explicit selection, original plan token and confirmed=true",
+      "output": "podway.runtime-reset-result/v1 or catalogued reset error",
+      "writes": "only selected ordinary runtime payload and bounded account control state"
+    }
+  },
+  "injected_control": {
+    "owner": "podway-service",
+    "adapter": "podway-cli",
+    "wire_owner": "podway-protocol",
+    "daemon_owner": "podway-daemon",
+    "actions": [
+      "inspect",
+      "reserve",
+      "snapshot",
+      "release",
+      "shutdown"
+    ],
+    "binding": [
+      "mode",
+      "namespace_root",
+      "process_id",
+      "operation_id",
+      "token_sha256",
+      "reservation_id"
+    ],
+    "connection_bound": true
+  },
+  "lock_order": [
+    "account_reset_mutex",
+    "production_service_lifecycle_if_selected",
+    "account_topology_gate",
+    "commit_interlock",
+    "namespace_singletons_in_target_order"
+  ],
+  "preserved_anchors": [
+    "run/podwayd.lock",
+    "maintenance/runtime-reset.lock",
+    "maintenance/runtime-start.lock",
+    "maintenance/runtime-reset-commit.lock"
+  ],
+  "prohibited_capabilities": [
+    "workspace_store_access",
+    "workspace_state_mutation",
+    "git_mutation",
+    "external_managed_runtime_mutation",
+    "forced_termination",
+    "automatic_restart"
+  ],
+  "verification_owner": "V2FRT-001"
+}

@@ -6,6 +6,8 @@ canonical home for human-readable product and contributor documentation.
 
 - root JSON files define repository contracts and schemas;
 - `interfaces/` freezes internal interface contracts;
+- [`interfaces/runtime-reset-v1.json`](interfaces/runtime-reset-v1.json) reserves
+  the ordinary-runtime coordinator and injected control ownership boundary;
 - canonical build assets live under `assets/` and are verified without generated
   mirrors.
 

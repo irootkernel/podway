@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:runtime-reset-token:v1",
+  "title": "Podway Runtime Reset Token v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "caller_uid",
+    "account_root",
+    "account_identity",
+    "selection",
+    "mode_inventory",
+    "targets",
+    "created_at_ms",
+    "expires_at_ms"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.runtime-reset-token/v1"
+    },
+    "caller_uid": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "account_root": {
+      "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/path"
+    },
+    "account_identity": {
+      "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/identity"
+    },
+    "selection": {
+      "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/selection"
+    },
+    "mode_inventory": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 64,
+      "items": {
+        "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/mode"
+      },
+      "uniqueItems": true
+    },
+    "targets": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/namespace_binding"
+      }
+    },
+    "created_at_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9223372036854775807
+    },
+    "expires_at_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9223372036854775807
+    }
+  }
+}

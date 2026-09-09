@@ -1,0 +1,230 @@
+{
+  "schema": "podway.runtime-reset-contract-fixture/v1",
+  "fixtures": {
+    "podway.runtime-reset-plan-result/v1": {
+      "schema": "podway.runtime-reset-plan-result/v1",
+      "status": "no_change",
+      "account_root": {
+        "display": "/tmp/podway-reset-account/.podway",
+        "path_bytes_base64url": "L3RtcC9wb2R3YXktcmVzZXQtYWNjb3VudC8ucG9kd2F5"
+      },
+      "selection": {
+        "kind": "mode",
+        "mode": "prod"
+      },
+      "targets": [
+        {
+          "mode": "prod",
+          "root": {
+            "display": "/tmp/podway-reset-account/.podway",
+            "path_bytes_base64url": "L3RtcC9wb2R3YXktcmVzZXQtYWNjb3VudC8ucG9kd2F5"
+          },
+          "state": "absent",
+          "reason": null,
+          "resources": []
+        }
+      ],
+      "preserved": [],
+      "excluded": [
+        {
+          "path": null,
+          "reason": "external_managed_runtimes"
+        }
+      ],
+      "expires_at": null,
+      "plan_token": null,
+      "recovery_operation": null
+    },
+    "podway.runtime-reset-result/v1": {
+      "schema": "podway.runtime-reset-result/v1",
+      "status": "complete",
+      "operation_id": "00000000-0000-4000-8000-000000000001",
+      "selection": {
+        "kind": "mode",
+        "mode": "prod"
+      },
+      "modes": [
+        {
+          "mode": "prod",
+          "state": "complete",
+          "resources": []
+        }
+      ],
+      "preserved": [],
+      "excluded": [
+        {
+          "path": null,
+          "reason": "external_managed_runtimes"
+        }
+      ]
+    },
+    "podway.runtime-reset-control-result/v1": {
+      "schema": "podway.runtime-reset-control-result/v1",
+      "state": "idle",
+      "mode": "prod",
+      "namespace_root": {
+        "display": "/tmp/podway-reset-account/.podway",
+        "path_bytes_base64url": "L3RtcC9wb2R3YXktcmVzZXQtYWNjb3VudC8ucG9kd2F5"
+      },
+      "process_id": "00000000-0000-4000-8000-000000000001",
+      "operation_id": null,
+      "token_sha256": null,
+      "reservation_id": null,
+      "reason": null
+    },
+    "podway.runtime-reset-control-input/v1": {
+      "schema": "podway.runtime-reset-control-input/v1",
+      "action": "inspect",
+      "mode": "prod",
+      "namespace_root": {
+        "display": "/tmp/podway-reset-account/.podway",
+        "path_bytes_base64url": "L3RtcC9wb2R3YXktcmVzZXQtYWNjb3VudC8ucG9kd2F5"
+      },
+      "expected_process_id": "00000000-0000-4000-8000-000000000001",
+      "operation_id": null,
+      "token_sha256": null,
+      "reservation_id": null
+    },
+    "podway.runtime-reset-token/v1": {
+      "schema": "podway.runtime-reset-token/v1",
+      "caller_uid": 501,
+      "account_root": {
+        "display": "/tmp/podway-reset-account/.podway",
+        "path_bytes_base64url": "L3RtcC9wb2R3YXktcmVzZXQtYWNjb3VudC8ucG9kd2F5"
+      },
+      "account_identity": {
+        "device": 1,
+        "inode": 2,
+        "uid": 501,
+        "mode": 16832,
+        "links": 2
+      },
+      "selection": {
+        "kind": "mode",
+        "mode": "prod"
+      },
+      "mode_inventory": [],
+      "targets": [
+        {
+          "mode": "prod",
+          "root": {
+            "display": "/tmp/podway-reset-account/.podway",
+            "path_bytes_base64url": "L3RtcC9wb2R3YXktcmVzZXQtYWNjb3VudC8ucG9kd2F5"
+          },
+          "root_identity": {
+            "device": 1,
+            "inode": 2,
+            "uid": 501,
+            "mode": 16832,
+            "links": 2
+          },
+          "run_identity": null,
+          "state_identity": null,
+          "logs_identity": null,
+          "lock_identity": null,
+          "socket_identity": null,
+          "process": null,
+          "service": {
+            "installed": false,
+            "loaded": false,
+            "plist_identity": null,
+            "plist_sha256": null,
+            "metadata_identity": null,
+            "metadata_sha256": null
+          },
+          "resource_classes": [
+            "registry",
+            "runtime_recovery",
+            "service_metadata",
+            "socket",
+            "daemon_log",
+            "bootstrap_log",
+            "state_directory",
+            "logs_directory",
+            "service_plist"
+          ]
+        }
+      ],
+      "created_at_ms": 1,
+      "expires_at_ms": 600001
+    },
+    "podway.runtime-reset-record/v1": {
+      "schema": "podway.runtime-reset-record/v1",
+      "operation_id": "00000000-0000-4000-8000-000000000001",
+      "token_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "phase": "in_progress",
+      "plan": {
+        "schema": "podway.runtime-reset-token/v1",
+        "caller_uid": 501,
+        "account_root": {
+          "display": "/tmp/podway-reset-account/.podway",
+          "path_bytes_base64url": "L3RtcC9wb2R3YXktcmVzZXQtYWNjb3VudC8ucG9kd2F5"
+        },
+        "account_identity": {
+          "device": 1,
+          "inode": 2,
+          "uid": 501,
+          "mode": 16832,
+          "links": 2
+        },
+        "selection": {
+          "kind": "mode",
+          "mode": "prod"
+        },
+        "mode_inventory": [],
+        "targets": [
+          {
+            "mode": "prod",
+            "root": {
+              "display": "/tmp/podway-reset-account/.podway",
+              "path_bytes_base64url": "L3RtcC9wb2R3YXktcmVzZXQtYWNjb3VudC8ucG9kd2F5"
+            },
+            "root_identity": {
+              "device": 1,
+              "inode": 2,
+              "uid": 501,
+              "mode": 16832,
+              "links": 2
+            },
+            "run_identity": null,
+            "state_identity": null,
+            "logs_identity": null,
+            "lock_identity": null,
+            "socket_identity": null,
+            "process": null,
+            "service": {
+              "installed": false,
+              "loaded": false,
+              "plist_identity": null,
+              "plist_sha256": null,
+              "metadata_identity": null,
+              "metadata_sha256": null
+            },
+            "resource_classes": [
+              "registry",
+              "runtime_recovery",
+              "service_metadata",
+              "socket",
+              "daemon_log",
+              "bootstrap_log",
+              "state_directory",
+              "logs_directory",
+              "service_plist"
+            ]
+          }
+        ],
+        "created_at_ms": 1,
+        "expires_at_ms": 600001
+      },
+      "modes": [
+        {
+          "mode": "prod",
+          "phase": "pending",
+          "reservation_id": null,
+          "entries": []
+        }
+      ],
+      "result": null
+    }
+  }
+}

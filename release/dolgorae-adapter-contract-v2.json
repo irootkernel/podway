@@ -408,7 +408,10 @@
       "session.rework",
       "goal.define",
       "goal.revise",
-      "goal.assess_criterion"
+      "goal.assess_criterion",
+      "runtime.reset.plan",
+      "runtime.reset.apply",
+      "daemon.runtime_reset"
     ],
     "runtime_errors": [
       {
@@ -1093,6 +1096,55 @@
         "exit_code": 4,
         "retryable": true,
         "summary": "The evidence page token no longer matches the current consumer, source value, or session identity."
+      },
+      {
+        "code": "RUNTIME_RESET_BUSY",
+        "details_schema": "podway.runtime-reset-error-details/v1",
+        "exit_code": 4,
+        "retryable": false,
+        "summary": "Live runtime activity prevents an idle reset reservation."
+      },
+      {
+        "code": "RUNTIME_RESET_UNSAFE",
+        "details_schema": "podway.runtime-reset-error-details/v1",
+        "exit_code": 5,
+        "retryable": false,
+        "summary": "Runtime path, ownership, or process safety cannot be established."
+      },
+      {
+        "code": "RUNTIME_RESET_UNSUPPORTED",
+        "details_schema": "podway.runtime-reset-error-details/v1",
+        "exit_code": 3,
+        "retryable": false,
+        "summary": "The selected runtime does not support the reset contract."
+      },
+      {
+        "code": "RUNTIME_RESET_PLAN_STALE",
+        "details_schema": "podway.runtime-reset-error-details/v1",
+        "exit_code": 4,
+        "retryable": false,
+        "summary": "The runtime reset token, selection, expiry, or identity is stale."
+      },
+      {
+        "code": "RUNTIME_RESET_LIMIT_EXCEEDED",
+        "details_schema": "podway.runtime-reset-error-details/v1",
+        "exit_code": 2,
+        "retryable": false,
+        "summary": "Runtime reset exceeds a fixed discovery or encoding bound."
+      },
+      {
+        "code": "RUNTIME_RESET_IN_PROGRESS",
+        "details_schema": "podway.runtime-reset-error-details/v1",
+        "exit_code": 4,
+        "retryable": true,
+        "summary": "An account runtime reset is already in progress."
+      },
+      {
+        "code": "RUNTIME_RESET_INCOMPLETE",
+        "details_schema": "podway.runtime-reset-error-details/v1",
+        "exit_code": 4,
+        "retryable": true,
+        "summary": "A committed runtime reset requires exact explicit retry."
       }
     ],
     "schema_pins": [
@@ -1224,7 +1276,7 @@
       {
         "id": "urn:podway:schema:error:v1",
         "path": "schemas/error-v1.schema.json",
-        "sha256": "sha256:6113dbea9ad9669f3a6686839ec73af6dd76c6f7b413c76c80ca63d2c263c27d"
+        "sha256": "sha256:8f11621c88b23cf2f19f46a784bbf9bf48f9de6859704f5b72080894503f6aac"
       },
       {
         "id": "urn:podway:schema:evidence-read-result:v1",
@@ -1334,7 +1386,7 @@
       {
         "id": "urn:podway:schema:output:v3",
         "path": "schemas/output-v3.schema.json",
-        "sha256": "sha256:c2c08f47d67e18680fdce7f546775ad215f18478d60c746484f9ff5e1d583657"
+        "sha256": "sha256:51e6bf217a609f5e1e59c20d56422f2dcc0f849af52f33a503dd548e88772b2d"
       },
       {
         "id": "urn:podway:schema:prepared-next-result:v1",
@@ -1400,6 +1452,46 @@
         "id": "urn:podway:schema:rework-result:v1",
         "path": "schemas/rework-result-v1.schema.json",
         "sha256": "sha256:ac46b49fa31932a27a46034e479e7e86dcbb30e1cd5367f10de4344ea8849b15"
+      },
+      {
+        "id": "urn:podway:schema:runtime-reset-components:v1",
+        "path": "schemas/runtime-reset-components-v1.schema.json",
+        "sha256": "sha256:5f8fd6e3a7e1860674ff4bd8af5ff7f95159ff66074047712643a98386aaf780"
+      },
+      {
+        "id": "urn:podway:schema:runtime-reset-control-input:v1",
+        "path": "schemas/runtime-reset-control-input-v1.schema.json",
+        "sha256": "sha256:34a6fdd42ccc6329ea1b41d2eafd55a6b81313a2dbbf5d272204d2b89ee25e86"
+      },
+      {
+        "id": "urn:podway:schema:runtime-reset-control-result:v1",
+        "path": "schemas/runtime-reset-control-result-v1.schema.json",
+        "sha256": "sha256:783a81af96b0ae7b70c1f4a25b2e8d6e714472b2f254a9a136aed65be381d0db"
+      },
+      {
+        "id": "urn:podway:schema:runtime-reset-error-details:v1",
+        "path": "schemas/runtime-reset-error-details-v1.schema.json",
+        "sha256": "sha256:c6a8ef7730063cd57d3e444f86315c57a8c65f3030874e75a371c5fd3e193901"
+      },
+      {
+        "id": "urn:podway:schema:runtime-reset-plan-result:v1",
+        "path": "schemas/runtime-reset-plan-result-v1.schema.json",
+        "sha256": "sha256:49c03af577319e20e7fbade7179b65bbf988ca5e815e07ed6cf01f932cb7f636"
+      },
+      {
+        "id": "urn:podway:schema:runtime-reset-record:v1",
+        "path": "schemas/runtime-reset-record-v1.schema.json",
+        "sha256": "sha256:95510a8cd30b862c593bb51f415823e592556582601367e19540864b73043566"
+      },
+      {
+        "id": "urn:podway:schema:runtime-reset-result:v1",
+        "path": "schemas/runtime-reset-result-v1.schema.json",
+        "sha256": "sha256:9a76a3835c055c1c98bc24fbeedbfff0b1c019d4ee2ea76708c297f2b63219ef"
+      },
+      {
+        "id": "urn:podway:schema:runtime-reset-token:v1",
+        "path": "schemas/runtime-reset-token-v1.schema.json",
+        "sha256": "sha256:ce25792bfc3565e1dff2596bb96cb6a774972ab227bc717f877942ff35375405"
       },
       {
         "id": "urn:podway:schema:session-archive-limit-details:v1",
@@ -1580,9 +1672,9 @@
   },
   "current_surface_counts": {
     "authoring_diagnostics": 58,
-    "routes": 69,
-    "runtime_errors": 104,
-    "schemas": 96
+    "routes": 72,
+    "runtime_errors": 111,
+    "schemas": 104
   },
   "migration_boundary": {
     "adapter_database_access": "forbidden",

@@ -1,0 +1,194 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:runtime-reset-record:v1",
+  "title": "Podway Runtime Reset Record v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "operation_id",
+    "token_sha256",
+    "phase",
+    "plan",
+    "modes",
+    "result"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.runtime-reset-record/v1"
+    },
+    "operation_id": {
+      "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/uuid"
+    },
+    "token_sha256": {
+      "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/digest"
+    },
+    "phase": {
+      "enum": [
+        "in_progress",
+        "completed"
+      ]
+    },
+    "plan": {
+      "oneOf": [
+        {
+          "$ref": "urn:podway:schema:runtime-reset-token:v1"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "modes": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "mode",
+          "phase",
+          "reservation_id",
+          "entries"
+        ],
+        "properties": {
+          "mode": {
+            "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/mode"
+          },
+          "phase": {
+            "enum": [
+              "pending",
+              "stop_intended",
+              "stopped",
+              "inventory_intended",
+              "inventory_ready",
+              "complete"
+            ]
+          },
+          "reservation_id": {
+            "oneOf": [
+              {
+                "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "entries": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 4096,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "class",
+                "relative_path_bytes_base64url",
+                "identity",
+                "kind",
+                "state"
+              ],
+              "properties": {
+                "class": {
+                  "enum": [
+                    "registry",
+                    "runtime_recovery",
+                    "service_metadata",
+                    "socket",
+                    "daemon_log",
+                    "bootstrap_log",
+                    "state_directory",
+                    "logs_directory"
+                  ]
+                },
+                "relative_path_bytes_base64url": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 5462,
+                  "pattern": "^[A-Za-z0-9_-]+$"
+                },
+                "identity": {
+                  "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/identity"
+                },
+                "kind": {
+                  "enum": [
+                    "regular",
+                    "directory",
+                    "socket"
+                  ]
+                },
+                "state": {
+                  "enum": [
+                    "pending",
+                    "intended",
+                    "completed"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "result": {
+      "oneOf": [
+        {
+          "$ref": "urn:podway:schema:runtime-reset-result:v1"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "phase": {
+            "const": "in_progress"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "plan": {
+            "$ref": "urn:podway:schema:runtime-reset-token:v1"
+          },
+          "modes": {
+            "minItems": 1
+          },
+          "result": {
+            "type": "null"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "plan": {
+            "type": "null"
+          },
+          "modes": {
+            "maxItems": 0
+          },
+          "result": {
+            "allOf": [
+              {
+                "$ref": "urn:podway:schema:runtime-reset-result:v1"
+              },
+              {
+                "properties": {
+                  "status": {
+                    "const": "complete"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

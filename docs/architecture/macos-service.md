@@ -251,6 +251,15 @@ requesting the replacement bootstrap. Package upgrade should:
 
 The LaunchAgent plist contains no version-specific workspace paths.
 
+## Reserved runtime-reset coordinator
+
+The [ordinary runtime reset contract](../specs/operations/runtime-reset.md)
+reserves a service-owned offline coordinator and an injected reset-control
+interface. The CLI implements the protocol adapter; service retains its sole
+internal dependency on core. The existing production service lifecycle lock
+participates in the declared account-reset lock order. External managed roots
+retain their existing lifecycle and never become reset targets.
+
 ## Service tests
 
 The macOS integration suite MUST cover:

@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:runtime-reset-result:v1",
+  "title": "Podway Runtime Reset Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "status",
+    "operation_id",
+    "selection",
+    "modes",
+    "preserved",
+    "excluded"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.runtime-reset-result/v1"
+    },
+    "status": {
+      "enum": [
+        "complete",
+        "already_applied",
+        "incomplete"
+      ]
+    },
+    "operation_id": {
+      "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/uuid"
+    },
+    "selection": {
+      "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/selection"
+    },
+    "modes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/mode_outcome"
+      }
+    },
+    "preserved": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 256,
+      "items": {
+        "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/resource"
+      }
+    },
+    "excluded": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 257,
+      "items": {
+        "$ref": "urn:podway:schema:runtime-reset-components:v1#/$defs/exclusion"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "complete",
+              "already_applied"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "modes": {
+            "items": {
+              "properties": {
+                "state": {
+                  "const": "complete"
+                },
+                "resources": {
+                  "items": {
+                    "properties": {
+                      "state": {
+                        "enum": [
+                          "removed",
+                          "already_absent"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "modes": {
+            "contains": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "pending",
+                    "incomplete"
+                  ]
+                }
+              }
+            },
+            "minContains": 1
+          }
+        }
+      }
+    }
+  ]
+}

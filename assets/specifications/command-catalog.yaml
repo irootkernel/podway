@@ -980,3 +980,39 @@ commands:
   result_schemas:
   - podway.criterion-assessment-result/v1
   - podway.detached-admission-result/v2
+- name: runtime.reset.plan
+  availability: reserved_contract
+  cli:
+  - runtime
+  - reset
+  - plan
+  operation: query
+  workspace_required: false
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+  result_schemas:
+  - podway.runtime-reset-plan-result/v1
+- name: runtime.reset.apply
+  availability: reserved_contract
+  cli:
+  - runtime
+  - reset
+  - apply
+  operation: control
+  workspace_required: false
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: true
+  result_schemas:
+  - podway.runtime-reset-result/v1
+- name: daemon.runtime_reset
+  availability: reserved_contract
+  cli: []
+  operation: control
+  workspace_required: false
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+  result_schemas:
+  - podway.runtime-reset-control-result/v1

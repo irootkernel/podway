@@ -294,6 +294,14 @@ fn examples() -> BTreeMap<&'static str, Value> {
             json!({"schema":"podway.workspace-mode-apply-result/v1","worktree_root":"/tmp/podway-v2dvc","workspace_uuid":UUID,"source_mode":"prod","target_mode":"dev","config_schema":"podway.workspace/v2","runtime_state_removed":true,"source_registry_retired":true,"target_registry_published":true,"already_applied":false}),
         ),
     ]);
+    let reset_fixtures = runtime_reset_fixtures();
+    for schema in [
+        "podway.runtime-reset-plan-result/v1",
+        "podway.runtime-reset-result/v1",
+        "podway.runtime-reset-control-result/v1",
+    ] {
+        examples.insert(schema, reset_fixtures[schema].clone());
+    }
     examples.insert(
         "podway.observation-result/v1",
         json!({
@@ -328,6 +336,314 @@ fn examples() -> BTreeMap<&'static str, Value> {
         examples.insert(schema, prepared_fixtures["fixtures"][schema].clone());
     }
     examples
+}
+
+fn runtime_reset_fixtures() -> Value {
+    let document: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/v2/compatibility/runtime-reset-contract-reservation.json"
+    ))
+    .unwrap();
+    document["fixtures"].clone()
+}
+
+#[test]
+fn v2frt001_reset_contracts_reject_unsafe_state_combinations() {
+    let fixtures = runtime_reset_fixtures();
+    for (schema, value) in fixtures.as_object().unwrap() {
+        let filename = schema.strip_prefix("podway.").unwrap().replace("/v", "-v");
+        assert_valid(&format!("schemas/{filename}.schema.json"), value);
+    }
+
+    let mut plan = fixtures["podway.runtime-reset-plan-result/v1"].clone();
+    plan["plan_token"] = json!(format!("e30.{}", "a".repeat(64)));
+    assert_invalid("schemas/runtime-reset-plan-result-v1.schema.json", &plan);
+    plan["status"] = json!("ready");
+    plan["expires_at"] = json!("2026-09-09T00:10:00.000Z");
+    plan["targets"][0]["state"] = json!("offline");
+    assert_valid("schemas/runtime-reset-plan-result-v1.schema.json", &plan);
+    plan["targets"][0]["state"] = json!("busy");
+    assert_invalid("schemas/runtime-reset-plan-result-v1.schema.json", &plan);
+    plan["targets"][0]["state"] = json!("offline");
+    plan["targets"] = json!(vec![plan["targets"][0].clone(); 65]);
+    assert_invalid("schemas/runtime-reset-plan-result-v1.schema.json", &plan);
+
+    let mut control = fixtures["podway.runtime-reset-control-input/v1"].clone();
+    control["action"] = json!("reserve");
+    assert_invalid(
+        "schemas/runtime-reset-control-input-v1.schema.json",
+        &control,
+    );
+    control["operation_id"] = json!(UUID);
+    control["token_sha256"] = json!(DIGEST);
+    assert_valid(
+        "schemas/runtime-reset-control-input-v1.schema.json",
+        &control,
+    );
+    control["action"] = json!("snapshot");
+    assert_invalid(
+        "schemas/runtime-reset-control-input-v1.schema.json",
+        &control,
+    );
+    control["reservation_id"] = json!(UUID);
+    assert_valid(
+        "schemas/runtime-reset-control-input-v1.schema.json",
+        &control,
+    );
+
+    let mut result = fixtures["podway.runtime-reset-result/v1"].clone();
+    result["modes"][0]["state"] = json!("pending");
+    assert_invalid("schemas/runtime-reset-result-v1.schema.json", &result);
+    result["status"] = json!("incomplete");
+    assert_valid("schemas/runtime-reset-result-v1.schema.json", &result);
+    assert!(
+        validate_command_result_v2("runtime.reset.apply", result.as_object().unwrap()).is_err()
+    );
+
+    let mut record = fixtures["podway.runtime-reset-record/v1"].clone();
+    record["modes"][0]["entries"] = json!([{
+        "class":"registry", "relative_path_bytes_base64url":"cmVnaXN0cnkuc3FsaXRlMw",
+        "identity":record["plan"]["account_identity"], "kind":"regular", "state":"pending"
+    }]);
+    assert_valid("schemas/runtime-reset-record-v1.schema.json", &record);
+    record["modes"][0]["entries"][0]["class"] = json!("singleton_lock");
+    assert_invalid("schemas/runtime-reset-record-v1.schema.json", &record);
+    record["phase"] = json!("completed");
+    assert_invalid("schemas/runtime-reset-record-v1.schema.json", &record);
+}
+
+#[test]
+fn v2frt001_reset_errors_and_outputs_preserve_account_scope() {
+    let fixtures = runtime_reset_fixtures();
+    let mut error = json!({
+        "schema":"podway.error/v1", "request_id":UUID,
+        "command":"runtime.reset.apply", "generated_at":"2026-09-09T00:00:00.000Z",
+        "code":"RUNTIME_RESET_INCOMPLETE", "exit_code":4, "retryable":true,
+        "message":"Reset requires explicit retry.",
+        "details":{
+            "schema":"podway.runtime-reset-error-details/v1", "mode":"prod", "reason":"io",
+            "result":fixtures["podway.runtime-reset-result/v1"],
+            "retry":{
+                "command":"runtime.reset.apply", "selection":{"kind":"mode","mode":"prod"},
+                "plan_token":format!("e30.{}", "a".repeat(64)), "requires_confirmation":true
+            }
+        }
+    });
+    assert_invalid("schemas/error-v1.schema.json", &error);
+    assert!(serde_json::from_value::<ErrorEnvelopeV1>(error.clone()).is_err());
+    error["details"]["result"]["status"] = json!("incomplete");
+    error["details"]["result"]["modes"][0]["state"] = json!("pending");
+    assert_valid("schemas/error-v1.schema.json", &error);
+    assert!(serde_json::from_value::<ErrorEnvelopeV1>(error.clone()).is_ok());
+    error["workspace"] = json!({"uuid":UUID});
+    assert_invalid("schemas/error-v1.schema.json", &error);
+    assert!(serde_json::from_value::<ErrorEnvelopeV1>(error).is_err());
+
+    for (command, schema) in [
+        ("runtime.reset.plan", "podway.runtime-reset-plan-result/v1"),
+        ("runtime.reset.apply", "podway.runtime-reset-result/v1"),
+        (
+            "daemon.runtime_reset",
+            "podway.runtime-reset-control-result/v1",
+        ),
+    ] {
+        let mut output = json!({
+            "schema":OUTPUT_SCHEMA_V3, "request_id":UUID, "command":command,
+            "generated_at":"2026-09-09T00:00:00.000Z", "result":fixtures[schema], "warnings":[]
+        });
+        assert_valid("schemas/output-v3.schema.json", &output);
+        assert!(serde_json::from_value::<OutputEnvelopeV3>(output.clone()).is_ok());
+        add_workspace_envelope_metadata(&mut output);
+        assert_invalid("schemas/output-v3.schema.json", &output);
+        assert!(serde_json::from_value::<OutputEnvelopeV3>(output).is_err());
+    }
+    assert!(!DAEMON_COMMAND_NAMES_V1.contains(&"daemon.runtime_reset"));
+}
+
+fn reset_error_fixture() -> Value {
+    let mut result = runtime_reset_fixtures()["podway.runtime-reset-result/v1"].clone();
+    result["status"] = json!("incomplete");
+    result["modes"][0]["state"] = json!("pending");
+    json!({
+        "schema":"podway.error/v1", "request_id":UUID, "command":"runtime.reset.apply",
+        "generated_at":"2026-09-09T00:00:00.000Z", "code":"RUNTIME_RESET_INCOMPLETE",
+        "exit_code":4, "retryable":true, "message":"Reset requires explicit retry.",
+        "details":{
+            "schema":"podway.runtime-reset-error-details/v1", "mode":"prod", "reason":"io",
+            "result":result, "retry":{
+                "command":"runtime.reset.apply", "selection":{"kind":"mode","mode":"prod"},
+                "plan_token":format!("e30.{}", "a".repeat(64)), "requires_confirmation":true
+            }
+        }
+    })
+}
+
+fn pad_reset_resources(document: &mut Value, pointer: &str, target_bytes: usize) {
+    *document.pointer_mut(pointer).unwrap() = json!(vec![
+        json!({
+            "class":"registry", "path":{"display":"x", "path_bytes_base64url":"Lw"},
+            "state":"removed"
+        });
+        128
+    ]);
+    let mut remaining = target_bytes
+        .checked_sub(serde_json::to_vec(document).unwrap().len())
+        .unwrap();
+    for entry in document
+        .pointer_mut(pointer)
+        .unwrap()
+        .as_array_mut()
+        .unwrap()
+    {
+        let padding = remaining.min(4095);
+        entry["path"]["display"] = json!("x".repeat(padding + 1));
+        remaining -= padding;
+    }
+    assert_eq!(remaining, 0);
+    assert_eq!(serde_json::to_vec(document).unwrap().len(), target_bytes);
+}
+
+#[test]
+fn v2frt001_reset_serialized_size_bound_is_exact() {
+    for size in [524_287, 524_288, 524_289] {
+        let mut result = runtime_reset_fixtures()["podway.runtime-reset-result/v1"].clone();
+        pad_reset_resources(&mut result, "/modes/0/resources", size);
+        assert_valid("schemas/runtime-reset-result-v1.schema.json", &result);
+        assert_eq!(
+            validate_command_result_v2("runtime.reset.apply", result.as_object().unwrap()).is_ok(),
+            size <= 524_288
+        );
+        let mut error = reset_error_fixture();
+        pad_reset_resources(&mut error["details"], "/result/modes/0/resources", size);
+        assert_valid("schemas/error-v1.schema.json", &error);
+        assert_eq!(
+            serde_json::from_value::<ErrorEnvelopeV1>(error).is_ok(),
+            size <= 524_288
+        );
+    }
+}
+
+#[test]
+fn v2frt001_reset_total_resource_bound_spans_modes() {
+    let resource = json!({
+        "class":"registry", "path":{"display":"/", "path_bytes_base64url":"Lw"},
+        "state":"removed"
+    });
+    for count in [4096, 4097] {
+        let mut result = runtime_reset_fixtures()["podway.runtime-reset-result/v1"].clone();
+        result["selection"] = json!({"kind":"all_modes"});
+        result["modes"] = json!([
+            {"mode":"prod", "state":"complete", "resources":vec![resource.clone(); 2048]},
+            {"mode":"dev", "state":"complete", "resources":vec![resource.clone(); count - 2048]}
+        ]);
+        assert!(serde_json::to_vec(&result).unwrap().len() < 524_288);
+        assert_valid("schemas/runtime-reset-result-v1.schema.json", &result);
+        assert_eq!(
+            validate_command_result_v2("runtime.reset.apply", result.as_object().unwrap()).is_ok(),
+            count <= 4096
+        );
+        let mut plan = runtime_reset_fixtures()["podway.runtime-reset-plan-result/v1"].clone();
+        plan["status"] = json!("ready");
+        plan["selection"] = json!({"kind":"all_modes"});
+        plan["expires_at"] = json!("2026-09-09T00:10:00.000Z");
+        plan["plan_token"] = json!(format!("e30.{}", "a".repeat(64)));
+        plan["targets"] = json!([plan["targets"][0].clone(), plan["targets"][0].clone()]);
+        for (index, mode) in ["prod", "dev"].iter().enumerate() {
+            plan["targets"][index]["mode"] = json!(mode);
+            plan["targets"][index]["state"] = json!("offline");
+            plan["targets"][index]["resources"] = result["modes"][index]["resources"].clone();
+            for resource in plan["targets"][index]["resources"].as_array_mut().unwrap() {
+                resource.as_object_mut().unwrap().remove("state");
+            }
+        }
+        assert_valid("schemas/runtime-reset-plan-result-v1.schema.json", &plan);
+        assert_eq!(
+            validate_command_result_v2("runtime.reset.plan", plan.as_object().unwrap()).is_ok(),
+            count <= 4096
+        );
+        let mut error = reset_error_fixture();
+        result["status"] = json!("incomplete");
+        result["modes"][1]["state"] = json!("incomplete");
+        error["details"]["result"] = result;
+        error["details"]["retry"]["selection"] = json!({"kind":"all_modes"});
+        assert_valid("schemas/error-v1.schema.json", &error);
+        assert_eq!(
+            serde_json::from_value::<ErrorEnvelopeV1>(error).is_ok(),
+            count <= 4096
+        );
+    }
+}
+
+#[test]
+fn v2frt001_reset_state_and_retry_branches_are_closed() {
+    let fixtures = runtime_reset_fixtures();
+    for (field, value) in [
+        ("result", Value::Null),
+        ("retry", Value::Null),
+        ("retry", json!("retry later")),
+    ] {
+        let mut error = reset_error_fixture();
+        error["details"][field] = value;
+        assert_invalid("schemas/error-v1.schema.json", &error);
+        assert!(serde_json::from_value::<ErrorEnvelopeV1>(error).is_err());
+    }
+    let mut control = fixtures["podway.runtime-reset-control-result/v1"].clone();
+    control["state"] = json!("reserved");
+    assert_invalid(
+        "schemas/runtime-reset-control-result-v1.schema.json",
+        &control,
+    );
+    control["operation_id"] = json!(UUID);
+    control["token_sha256"] = json!(DIGEST);
+    control["reservation_id"] = json!(UUID);
+    assert_valid(
+        "schemas/runtime-reset-control-result-v1.schema.json",
+        &control,
+    );
+    control["state"] = json!("idle");
+    assert_invalid(
+        "schemas/runtime-reset-control-result-v1.schema.json",
+        &control,
+    );
+
+    let mut plan = fixtures["podway.runtime-reset-plan-result/v1"].clone();
+    plan["status"] = json!("recovery_required");
+    assert_invalid("schemas/runtime-reset-plan-result-v1.schema.json", &plan);
+    plan["recovery_operation"] = json!({"operation_id":UUID, "token_sha256":DIGEST});
+    assert_valid("schemas/runtime-reset-plan-result-v1.schema.json", &plan);
+    plan["status"] = json!("no_change");
+    assert_invalid("schemas/runtime-reset-plan-result-v1.schema.json", &plan);
+    plan["recovery_operation"] = Value::Null;
+    plan["status"] = json!("blocked");
+    assert_invalid("schemas/runtime-reset-plan-result-v1.schema.json", &plan);
+    plan["targets"][0]["state"] = json!("unsafe");
+    plan["targets"][0]["reason"] = json!("unsafe_path");
+    assert_valid("schemas/runtime-reset-plan-result-v1.schema.json", &plan);
+    plan["status"] = json!("no_change");
+    assert_invalid("schemas/runtime-reset-plan-result-v1.schema.json", &plan);
+
+    for (code, exit_code, retryable) in [
+        ("RUNTIME_RESET_BUSY", 4, false),
+        ("RUNTIME_RESET_UNSAFE", 5, false),
+        ("RUNTIME_RESET_UNSUPPORTED", 3, false),
+        ("RUNTIME_RESET_PLAN_STALE", 4, false),
+        ("RUNTIME_RESET_LIMIT_EXCEEDED", 2, false),
+        ("RUNTIME_RESET_IN_PROGRESS", 4, true),
+    ] {
+        for field in ["result", "retry"] {
+            let mut error = reset_error_fixture();
+            error["code"] = json!(code);
+            error["exit_code"] = json!(exit_code);
+            error["retryable"] = json!(retryable);
+            let non_null = error["details"][field].clone();
+            error["details"]["result"] = Value::Null;
+            error["details"]["retry"] = Value::Null;
+            assert_valid("schemas/error-v1.schema.json", &error);
+            assert!(serde_json::from_value::<ErrorEnvelopeV1>(error.clone()).is_ok());
+            error["details"][field] = non_null;
+            assert_invalid("schemas/error-v1.schema.json", &error);
+            assert!(serde_json::from_value::<ErrorEnvelopeV1>(error).is_err());
+        }
+    }
 }
 
 #[test]
@@ -404,7 +720,7 @@ fn v2grf_preview_uses_one_closed_result_family_for_every_document_outcome() {
 #[test]
 fn v2ctr003_registry_is_versioned_and_covers_exactly_the_v2_authoring_routes() {
     assert_eq!(EXISTING_ROUTE_RESULT_SCHEMAS_V2.len(), 17);
-    assert_eq!(NEW_ROUTE_RESULT_SCHEMAS_V1.len(), 24);
+    assert_eq!(NEW_ROUTE_RESULT_SCHEMAS_V1.len(), 27);
     assert!(
         EXISTING_ROUTE_RESULT_SCHEMAS_V2
             .iter()
@@ -454,9 +770,12 @@ fn v2ctr003_registry_is_versioned_and_covers_exactly_the_v2_authoring_routes() {
             "workspace.remove",
             "workspace.mode.plan",
             "workspace.mode.apply",
+            "runtime.reset.plan",
+            "runtime.reset.apply",
+            "daemon.runtime_reset",
         ])
     );
-    assert_eq!(routes.len(), 26);
+    assert_eq!(routes.len(), 29);
 }
 
 #[test]

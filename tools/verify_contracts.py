@@ -169,6 +169,8 @@ LOCAL_COMMANDS = {
     "preset.explain",
 }
 SERVICE_COMMANDS = {
+    "runtime.reset.plan",
+    "runtime.reset.apply",
     "daemon.install",
     "daemon.uninstall",
     "daemon.start",
@@ -181,6 +183,7 @@ SERVICE_COMMANDS = {
 PROHIBITED_CAPABILITIES = {"command_runner", "git_mutation", "network"}
 DEPENDENCY_TABLES = {"dependencies", "dev-dependencies", "build-dependencies"}
 V2_ROUTE_DELTA = {
+    "runtime.reset.plan", "runtime.reset.apply", "daemon.runtime_reset",
     "procedure.format", "procedure.vet", "procedure.lint", "procedure.check",
     "procedure.graph", "procedure.preview", "procedure.scaffold",
     "session.decide", "session.rework", "goal.define", "goal.revise",
@@ -231,6 +234,9 @@ PROCEDURE_INDEPENDENT_EXECUTABLE_ROUTES = {
     "job.wait", "job.cancel",
 }
 PROCEDURE_INDEPENDENT_RUNTIME_ERROR_CODES = (
+    "RUNTIME_RESET_BUSY", "RUNTIME_RESET_UNSAFE", "RUNTIME_RESET_UNSUPPORTED",
+    "RUNTIME_RESET_PLAN_STALE", "RUNTIME_RESET_LIMIT_EXCEEDED",
+    "RUNTIME_RESET_IN_PROGRESS", "RUNTIME_RESET_INCOMPLETE",
     "DAEMON_NOT_INSTALLED", "DAEMON_UNAVAILABLE", "DAEMON_STARTING",
     "DAEMON_READINESS_TIMEOUT", "DAEMON_SHUTTING_DOWN",
     "DAEMON_VERSION_INCOMPATIBLE", "DAEMON_CONTRACT_MISMATCH",
@@ -490,7 +496,7 @@ def validate_v2_catalog_delta(root: Path) -> int:
     if set(runtime) != {"schema", "exit_codes", "errors"}:
         fail("error catalog has unexpected or missing top-level fields")
     entries = runtime.get("errors")
-    if not isinstance(entries, list) or len(entries) != 104:
+    if not isinstance(entries, list) or len(entries) != 111:
         fail("runtime error catalog must contain the v2-only error set")
     runtime_codes = [entry.get("code") for entry in entries if isinstance(entry, dict)]
     if len(runtime_codes) != len(entries) or len(set(runtime_codes)) != len(runtime_codes):
@@ -750,7 +756,7 @@ def validate_routes(root: Path) -> int:
     if not isinstance(prohibited, list) or set(prohibited) != PROHIBITED_CAPABILITIES or len(prohibited) != len(PROHIBITED_CAPABILITIES):
         fail("command route contract must prohibit command_runner, git_mutation, and network")
     routes = contract["routes"]
-    if not isinstance(routes, list) or len(routes) != 69:
+    if not isinstance(routes, list) or len(routes) != 72:
         fail("command route contract routes must be a list")
 
     expected_commands = catalog_commands(root) | {"completions"}
@@ -1002,11 +1008,16 @@ def run_sentinels(root: Path) -> list[str]:
         copy_contracts(root, route_availability_fixture)
         route_path = route_availability_fixture / ROUTES_PATH
         route_contract = json.loads(route_path.read_text(encoding="utf-8"))
-        route_contract["routes"][-1]["availability"] = "reserved_contract"
-        route_path.write_text(json.dumps(route_contract, sort_keys=True) + "\n", encoding="utf-8")
-        require_known_failure(
-            "route availability mismatch", lambda: validate_routes(route_availability_fixture)
-        )
+        for route in (route_contract["routes"][0], route_contract["routes"][-1]):
+            original = route["availability"]
+            route["availability"] = (
+                "reserved_contract" if original == "executable" else "executable"
+            )
+            route_path.write_text(json.dumps(route_contract, sort_keys=True) + "\n", encoding="utf-8")
+            require_known_failure(
+                "route availability mismatch", lambda: validate_routes(route_availability_fixture)
+            )
+            route["availability"] = original
         completed.append("route_availability_mismatch")
 
         route_growth_fixture = temporary / "route-growth"

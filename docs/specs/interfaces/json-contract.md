@@ -93,6 +93,15 @@ not stable API. `LEGACY_PROCEDURE_STATE_UNSUPPORTED` means the opened runtime co
 Procedure v1 task state. Podway performs no automatic conversion or deletion; after
 backup, `podway reset --all` is the supported recovery.
 
+The reserved runtime-reset families are `runtime-reset-plan-result/v1`,
+`runtime-reset-result/v1`, and `runtime-reset-control-result/v1`, each prefixed
+with `podway.`. Their output branches omit workspace, job and session projections.
+An incomplete reset is accepted only inside the closed
+`podway.runtime-reset-error-details/v1` branch of an error, never a success output.
+The reset-specific `retry` object requires explicit confirmation and is distinct
+from the existing read-only `recovery` recipe. See the
+[runtime reset specification](../operations/runtime-reset.md#public-results-errors-and-bounds).
+
 Canonical request identity excludes transport timing but includes all fields that
 can change execution. The daemon stores bounded semantic terminal projections and
 the exact public terminal envelope required for idempotent replay. A lost response
