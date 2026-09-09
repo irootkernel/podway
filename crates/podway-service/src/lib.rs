@@ -3406,6 +3406,23 @@ where
     C: ServiceClockV1,
     V: DaemonContractVerifierV1,
 {
+    /// Performs production uninstall for a reset coordinator that already owns the service
+    /// transaction and account topology locks in canonical order.
+    pub fn uninstall_for_runtime_reset(
+        &self,
+        paths: &ServiceRuntimePathsV1,
+        options: UninstallOptionsV1,
+        _lifecycle: &RuntimeResetServiceLifecycleV1,
+    ) -> Result<ServiceOutcomeV1, ServiceErrorV1> {
+        match self.uninstall(paths, options)? {
+            ServiceCommandResultV1::Outcome(outcome) => Ok(outcome),
+            _ => Err(ServiceErrorV1::IoV1 {
+                operation: Some(ServiceOperationV1::Uninstall),
+                message: "runtime reset uninstall returned an invalid service result".to_owned(),
+            }),
+        }
+    }
+
     pub fn new_with_contract_verifier(
         filesystem: F,
         launchctl: L,

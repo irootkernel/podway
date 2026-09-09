@@ -17,7 +17,8 @@
       "writes": false
     },
     "apply": {
-      "availability": "reserved_contract",
+      "availability": "executable",
+      "scope": "single_mode",
       "input": "matching explicit selection, original plan token and confirmed=true",
       "output": "podway.runtime-reset-result/v1 or catalogued reset error",
       "writes": "only selected ordinary runtime payload and bounded account control state"
@@ -67,5 +68,5 @@
     "forced_termination",
     "automatic_restart"
   ],
-  "verification_owner": "V2FRT-002"
+  "verification_owner": "V2FRT-004"
 }

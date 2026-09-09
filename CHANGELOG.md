@@ -11,6 +11,9 @@ This file records concise shipped outcomes and the planned next stable release.
   ownership checks that preserve all worktree state.
 - Recognize idle live daemons in runtime-reset plans and reserve their client and
   background admission with process-bound recovery and startup fencing.
+- Retire one explicitly selected ordinary account runtime offline or while idle,
+  with exact service shutdown, bounded deletion, crash-safe recovery, and honest
+  partial results.
 
 ### Changed
 

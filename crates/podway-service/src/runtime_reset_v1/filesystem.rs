@@ -1,7 +1,7 @@
 use std::{
     ffi::{OsStr, OsString},
     fs::File,
-    io::Read,
+    io::{Read, Write},
     os::{fd::OwnedFd, unix::ffi::OsStrExt},
     path::{Path, PathBuf},
 };
@@ -9,9 +9,9 @@ use std::{
 use nix::{
     dir::Dir,
     errno::Errno,
-    fcntl::{AtFlags, OFlag, openat},
+    fcntl::{AtFlags, OFlag, openat, renameat},
     sys::stat::{FileStat, Mode, SFlag, fstat, fstatat, mkdirat},
-    unistd::fsync,
+    unistd::{UnlinkatFlags, fsync, unlinkat},
 };
 use podway_core::RuntimeModeV1;
 use sha2::{Digest, Sha256};
@@ -267,6 +267,76 @@ impl Directory {
         };
         crate::managed_runtime_v3::validate_reset_exclusion_v3(&bytes, &self.path, self.uid, mode)
             .map_err(io_error)?;
+        Ok(true)
+    }
+
+    pub(super) fn write_replace(&self, name: &OsStr, bytes: &[u8]) -> Result<(), Error> {
+        if bytes.len() > super::MAX_RUNTIME_RESET_DOCUMENT_BYTES_V1 {
+            return Err(Error::limit());
+        }
+        let temporary = OsString::from(format!(
+            ".runtime-reset-{}-{}.tmp",
+            std::process::id(),
+            crate::SERVICE_TEMPORARY_SEQUENCE_V1
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed,)
+        ));
+        let fd = openat(
+            &self.fd,
+            temporary.as_os_str(),
+            OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_EXCL | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+            Mode::from_bits_truncate(0o600),
+        )
+        .map_err(io_error)?;
+        let mut file = File::from(fd);
+        let result = (|| {
+            file.write_all(bytes).map_err(io_error)?;
+            file.sync_all().map_err(io_error)?;
+            renameat(&self.fd, temporary.as_os_str(), &self.fd, name).map_err(io_error)?;
+            fsync(&self.fd).map_err(io_error)
+        })();
+        if result.is_err() {
+            let _ = unlinkat(&self.fd, temporary.as_os_str(), UnlinkatFlags::NoRemoveDir);
+        }
+        result
+    }
+
+    pub(super) fn remove_expected(
+        &self,
+        name: &OsStr,
+        expected: &FileIdentity,
+        kind: FileKind,
+    ) -> Result<bool, Error> {
+        let Some(current) = self.identity_optional(name, kind)? else {
+            return Ok(false);
+        };
+        if &current != expected {
+            return Err(Error::unsafe_reason(
+                super::RuntimeResetReasonV1::ResourceChanged,
+            ));
+        }
+        let flags = match kind {
+            FileKind::Regular | FileKind::Socket => UnlinkatFlags::NoRemoveDir,
+        };
+        unlinkat(&self.fd, name, flags).map_err(io_error)?;
+        fsync(&self.fd).map_err(io_error)?;
+        Ok(true)
+    }
+
+    pub(super) fn remove_expected_directory(
+        &self,
+        name: &OsStr,
+        expected: &FileIdentity,
+    ) -> Result<bool, Error> {
+        let Some(child) = self.child_optional(name, true)? else {
+            return Ok(false);
+        };
+        if !child.identity()?.same_directory_anchor(expected) || !child.entries(1)?.is_empty() {
+            return Err(Error::unsafe_reason(
+                super::RuntimeResetReasonV1::ResourceChanged,
+            ));
+        }
+        unlinkat(&self.fd, name, UnlinkatFlags::RemoveDir).map_err(io_error)?;
+        fsync(&self.fd).map_err(io_error)?;
         Ok(true)
     }
 }

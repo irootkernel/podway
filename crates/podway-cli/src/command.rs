@@ -673,6 +673,13 @@ enum RuntimeResetCommand {
         #[arg(long, action = ArgAction::SetTrue)]
         all_modes: bool,
     },
+    /// Apply one confirmed ordinary runtime retirement plan.
+    Apply {
+        #[arg(long, action = ArgAction::SetTrue)]
+        all_modes: bool,
+        #[arg(long, value_name = "TOKEN")]
+        plan_token: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -911,7 +918,18 @@ impl Command {
                 command: PresetCommand::Explain { .. },
             } => "preset.explain",
             Self::Daemon { command } => daemon_command_name(command),
-            Self::Runtime { .. } => "runtime.reset.plan",
+            Self::Runtime {
+                command:
+                    RuntimeCommand::Reset {
+                        command: RuntimeResetCommand::Plan { .. },
+                    },
+            } => "runtime.reset.plan",
+            Self::Runtime {
+                command:
+                    RuntimeCommand::Reset {
+                        command: RuntimeResetCommand::Apply { .. },
+                    },
+            } => "runtime.reset.apply",
             Self::Terminate => "daemon.terminate",
             Self::CompleteDynamic { .. } => "__complete",
             command => command
@@ -3153,6 +3171,34 @@ fn execute_local(cli: &Cli) -> Result<Option<RunResult>, LocalFailure> {
                 "runtime reset plan accepts no daemon request or confirmation flags",
             )?;
             Ok(Some(runtime_reset::execute_plan(cli, *all_modes)?))
+        }
+        Command::Runtime {
+            command:
+                RuntimeCommand::Reset {
+                    command:
+                        RuntimeResetCommand::Apply {
+                            all_modes,
+                            plan_token,
+                        },
+                },
+        } => {
+            let forbidden = cli.worktree.is_some()
+                || cli.timeout.is_some()
+                || cli.socket.is_some()
+                || cli.detach
+                || cli.idempotency_key.is_some()
+                || cli.if_workspace_uuid.is_some()
+                || cli.if_session_id.is_some()
+                || cli.if_session_revision.is_some()
+                || cli.if_attempt.is_some()
+                || cli.if_item_revision.is_some();
+            reject_local_flags(
+                forbidden || cli.if_goal_revision.is_some(),
+                "runtime reset apply accepts only --yes and its reset arguments",
+            )?;
+            Ok(Some(runtime_reset::execute_apply(
+                cli, *all_modes, plan_token,
+            )?))
         }
         Command::Help { topic } => {
             reject_local_flags(local_flags, "help accepts no daemon-only flags")?;
@@ -8315,8 +8361,8 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
         "procedures" => {
             "Procedures:\n  podway procedure scaffold > .podway/procedures/custom.yaml\n  podway procedure format .podway/procedures/custom.yaml --write\n  podway procedure check .podway/procedures/custom.yaml --warnings-as-errors\n  podway procedure preview .podway/procedures/custom.yaml\n  podway start --procedure .podway/procedures/custom.yaml --expect-procedure-digest sha256:<hex> --task 'perform work'\n\nOther Procedure v2 authoring routes are procedure validate, vet, lint, and graph."
         }
-        "runtime" | "runtime.reset.plan" => {
-            "Usage:\n  podway --mode <key> runtime reset plan\n  podway runtime reset plan --all-modes\n\nAn explicit selector is required. Planning is read-only and preserves every worktree. Managed runtimes are excluded. Apply is not yet available."
+        "runtime" | "runtime.reset.plan" | "runtime.reset.apply" => {
+            "Usage:\n  podway --mode <key> runtime reset plan\n  podway runtime reset plan --all-modes\n  podway --mode <key> runtime reset apply --plan-token <token> --yes\n\nAn explicit selector is required. Planning is read-only and preserves every worktree. Apply revalidates the exact token and currently supports one selected ordinary mode. Managed runtimes are excluded."
         }
         "daemon" => {
             "Daemon lifecycle grammar:\n  podway [--mode <key> | --dev] daemon status\n  podway [--mode <key> | --dev] daemon wait-ready [--timeout 120s]\n  podway daemon install --daemon-path /absolute/podwayd\n  podway daemon logs --lines 100"

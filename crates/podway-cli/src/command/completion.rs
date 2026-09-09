@@ -507,6 +507,21 @@ const ROUTES: &[Route] = &[
         dynamic: None,
     },
     Route {
+        words: "runtime reset apply",
+        flags: &[
+            &JSON,
+            &NO_COLOR,
+            &QUIET,
+            &YES,
+            &DEV,
+            &MODE,
+            &ALL_MODES,
+            &PLAN_TOKEN,
+        ],
+        values: "",
+        dynamic: None,
+    },
+    Route {
         words: "daemon install",
         flags: &[&JSON, &NO_COLOR, &QUIET, &SOCKET, &DAEMON_PATH],
         values: "",

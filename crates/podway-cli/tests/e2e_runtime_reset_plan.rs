@@ -420,6 +420,75 @@ fn selectors_and_daemon_flags_fail_before_discovery() {
 }
 
 #[test]
+fn apply_requires_its_exact_selector_confirmation_and_single_mode_scope() {
+    let fixture = Fixture::new();
+    for args in [
+        vec![
+            "runtime",
+            "reset",
+            "apply",
+            "--plan-token",
+            "token",
+            "--yes",
+        ],
+        vec![
+            "--dev",
+            "runtime",
+            "reset",
+            "apply",
+            "--all-modes",
+            "--plan-token",
+            "token",
+            "--yes",
+        ],
+        vec![
+            "--dev",
+            "runtime",
+            "reset",
+            "apply",
+            "--plan-token",
+            "token",
+            "--yes",
+            "--worktree",
+            "/tmp",
+        ],
+    ] {
+        let (output, value) = fixture.run(&args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {value}");
+        assert_eq!(value["code"], "REQUEST_INVALID", "{value}");
+    }
+
+    let (output, value) = fixture.run(&[
+        "--dev",
+        "runtime",
+        "reset",
+        "apply",
+        "--plan-token",
+        "token",
+    ]);
+    assert_eq!(output.status.code(), Some(2), "{value}");
+    assert_eq!(value["code"], "CONFIRMATION_REQUIRED", "{value}");
+
+    let (output, value) = fixture.run(&[
+        "runtime",
+        "reset",
+        "apply",
+        "--all-modes",
+        "--plan-token",
+        "token",
+        "--yes",
+    ]);
+    assert_eq!(output.status.code(), Some(3), "{value}");
+    assert_eq!(value["code"], "RUNTIME_RESET_UNSUPPORTED", "{value}");
+    assert!(!fixture.0.join(".podway").exists());
+
+    let (output, value) = fixture.run(&["reset", "--all", "--yes"]);
+    assert_eq!(output.status.code(), Some(2), "{value}");
+    assert_eq!(value["code"], "REQUEST_INVALID", "{value}");
+    assert!(value["message"].as_str().unwrap().contains("--force"));
+}
+
+#[test]
 fn unsafe_layout_is_reported_without_following_target() {
     let fixture = Fixture::new();
     fixture.file(".podway/modes/dev/run/podwayd.lock", b"");
@@ -901,6 +970,185 @@ fn human_plans_disclose_status_preservation_and_token_availability() {
             assert!(text.contains("blocked: unexpected_entry"), "{text}");
         }
     }
+}
+
+#[test]
+fn confirmed_single_mode_apply_retires_offline_data_and_exact_replay_is_idempotent() {
+    let fixture = Fixture::new();
+    let namespace = fixture.0.join(".podway/modes/dev");
+    fixture.file(".podway/modes/dev/run/podwayd.lock", b"");
+    fixture.file(
+        ".podway/modes/dev/state/workspaces.json",
+        b"corrupt registry must not be parsed",
+    );
+    fixture.file(".podway/modes/dev/logs/podwayd.log", b"retire me");
+    let preserved = fixture.file("worktree/.podway/runtime.db", b"preserved");
+
+    let (output, plan) = fixture.run(&["--dev", "runtime", "reset", "plan"]);
+    assert!(output.status.success(), "{plan}");
+    let token = plan["result"]["plan_token"].as_str().unwrap().to_owned();
+
+    let (output, confirmation) =
+        fixture.run(&["--dev", "runtime", "reset", "apply", "--plan-token", &token]);
+    assert_eq!(output.status.code(), Some(2), "{confirmation}");
+    assert_eq!(confirmation["code"], "CONFIRMATION_REQUIRED");
+    assert!(namespace.join("state/workspaces.json").exists());
+
+    let (output, applied) = fixture.run(&[
+        "--dev",
+        "runtime",
+        "reset",
+        "apply",
+        "--plan-token",
+        &token,
+        "--yes",
+    ]);
+    assert!(output.status.success(), "{applied}");
+    assert_eq!(applied["result"]["status"], "complete");
+    assert!(
+        applied["result"]["preserved"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|resource| resource["class"] == "lock_anchor"
+                && resource["path"]["display"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with("run/podwayd.lock"))
+    );
+    assert_eq!(
+        applied["result"]["preserved"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|resource| resource["class"] == "control_residue")
+            .count(),
+        4
+    );
+    assert!(!namespace.join("state/workspaces.json").exists());
+    assert!(!namespace.join("logs").exists());
+    assert!(namespace.join("run/podwayd.lock").exists());
+    assert_eq!(fs::read(&preserved).unwrap(), b"preserved");
+
+    let (output, replay) = fixture.run(&[
+        "--dev",
+        "runtime",
+        "reset",
+        "apply",
+        "--plan-token",
+        &token,
+        "--yes",
+    ]);
+    assert!(output.status.success(), "{replay}");
+    assert_eq!(replay["result"]["status"], "already_applied");
+    assert_eq!(fs::read(preserved).unwrap(), b"preserved");
+}
+
+#[test]
+fn production_apply_routes_exact_plist_retirement_through_the_service_owner() {
+    let fixture = Fixture::new();
+    fixture.file(".podway/run/podwayd.lock", b"");
+    fixture.file(".podway/state/workspaces.json", b"offline registry");
+    let plist = fixture.file(
+        "Library/LaunchAgents/dev.podway.podwayd.plist",
+        b"fixture service definition",
+    );
+    let unrelated = fixture.file("Library/LaunchAgents/example.keep.plist", b"preserved");
+
+    let (output, plan) = fixture.run(&["--mode", "prod", "runtime", "reset", "plan"]);
+    assert!(output.status.success(), "{plan}");
+    assert_eq!(plan["result"]["status"], "ready");
+    let token = plan["result"]["plan_token"].as_str().unwrap();
+    let (output, applied) = fixture.run(&[
+        "--mode",
+        "prod",
+        "runtime",
+        "reset",
+        "apply",
+        "--plan-token",
+        token,
+        "--yes",
+    ]);
+    assert!(output.status.success(), "{applied}");
+    assert_eq!(applied["result"]["status"], "complete");
+    assert!(!plist.exists());
+    assert_eq!(fs::read(unrelated).unwrap(), b"preserved");
+    assert!(fixture.0.join(".podway/run/podwayd.lock").exists());
+}
+
+#[test]
+fn live_single_mode_apply_uses_reserved_orderly_shutdown_and_finishes_after_exact_exit() {
+    let fixture = Fixture::new();
+    let mut daemon = Daemon::start(&fixture);
+    let namespace = fixture.0.join(".podway/modes/dev");
+    let (output, plan) = fixture.run(&["--dev", "runtime", "reset", "plan"]);
+    assert!(output.status.success(), "{plan}");
+    assert_eq!(plan["result"]["targets"][0]["state"], "live_idle");
+    let token = plan["result"]["plan_token"].as_str().unwrap();
+
+    let mut apply = fixture.command();
+    apply
+        .arg("--json")
+        .args([
+            "--dev",
+            "runtime",
+            "reset",
+            "apply",
+            "--plan-token",
+            token,
+            "--yes",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let output = apply.output().unwrap();
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "{error}: stdout={:?} stderr={:?}",
+            output.stdout, output.stderr
+        )
+    });
+    assert!(
+        output.status.success(),
+        "{value}; stderr={}; daemon={}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&fs::read(fixture.0.join("daemon-stderr")).unwrap())
+    );
+    assert_eq!(value["result"]["status"], "complete");
+    daemon.await_exit();
+    assert!(!namespace.join("run/podwayd.sock").exists());
+    assert!(namespace.join("run/podwayd.lock").exists());
+    assert!(!namespace.join("logs").exists());
+}
+
+#[test]
+fn activity_appearing_after_plan_is_reported_as_busy_before_commit() {
+    let fixture = Fixture::new();
+    let _daemon = Daemon::start(&fixture);
+    let (output, plan) = fixture.run(&["--dev", "runtime", "reset", "plan"]);
+    assert!(output.status.success(), "{plan}");
+    let token = plan["result"]["plan_token"].as_str().unwrap();
+    let socket = fixture.0.join(".podway/modes/dev/run/podwayd.sock");
+    let _active_client = std::os::unix::net::UnixStream::connect(socket).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    let (output, value) = fixture.run(&[
+        "--dev",
+        "runtime",
+        "reset",
+        "apply",
+        "--plan-token",
+        token,
+        "--yes",
+    ]);
+    assert_eq!(output.status.code(), Some(4), "{value}");
+    assert_eq!(value["code"], "RUNTIME_RESET_BUSY", "{value}");
+    assert_eq!(value["details"]["reason"], "activity", "{value}");
+    assert!(
+        !fixture
+            .0
+            .join(".podway/maintenance/runtime-reset.json")
+            .exists()
+    );
 }
 
 #[test]

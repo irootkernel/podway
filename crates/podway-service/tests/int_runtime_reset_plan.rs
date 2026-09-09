@@ -1200,3 +1200,365 @@ fn preserved_inventory_limit_rejects_complete_selection_without_truncation() {
     assert_eq!(error.reason, RuntimeResetReasonV1::BoundExceeded);
     assert_eq!(snapshot(&fixture.0), before);
 }
+
+#[derive(Default)]
+struct OfflineApplyOperator {
+    fail_at: Option<&'static str>,
+    failed: bool,
+    rotate_logs: bool,
+}
+
+impl RuntimeResetOperatorV1 for OfflineApplyOperator {
+    fn reserve(
+        &mut self,
+        _: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        _: &RuntimeResetProcessV1,
+    ) -> Result<String, RuntimeResetErrorV1> {
+        panic!("offline apply must not reserve a daemon")
+    }
+
+    fn snapshot(
+        &mut self,
+        _: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        _: &RuntimeResetProcessV1,
+        _: &str,
+    ) -> Result<(), RuntimeResetErrorV1> {
+        panic!("offline apply must not snapshot a daemon")
+    }
+
+    fn stop(
+        &mut self,
+        paths: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        process: Option<&RuntimeResetProcessV1>,
+        reservation_id: Option<&str>,
+    ) -> Result<(), RuntimeResetErrorV1> {
+        assert!(process.is_none());
+        assert!(reservation_id.is_none());
+        if self.rotate_logs {
+            let active = paths.log_path().as_path();
+            if active.exists() {
+                fs::rename(active, format!("{}.1", active.display())).unwrap();
+                fs::write(active, b"shutdown tail").unwrap();
+                fs::set_permissions(active, fs::Permissions::from_mode(0o600)).unwrap();
+            }
+        }
+        Ok(())
+    }
+
+    fn wait_stopped(
+        &mut self,
+        _: &ServiceRuntimePathsV1,
+        process: Option<&RuntimeResetProcessV1>,
+    ) -> Result<(), RuntimeResetErrorV1> {
+        assert!(process.is_none());
+        Ok(())
+    }
+
+    fn release_uncommitted(
+        &mut self,
+        _: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        _: &RuntimeResetProcessV1,
+        _: &str,
+    ) {
+        panic!("offline apply has no reservation to release")
+    }
+
+    fn checkpoint(&mut self, boundary: &'static str) -> Result<(), RuntimeResetErrorV1> {
+        if !self.failed && self.fail_at == Some(boundary) {
+            self.failed = true;
+            return Err(RuntimeResetErrorV1::unsafe_reason(RuntimeResetReasonV1::Io));
+        }
+        Ok(())
+    }
+}
+
+fn planned_dev_apply(
+    fixture: &Fixture,
+    operator: OfflineApplyOperator,
+) -> (
+    String,
+    RuntimeResetApplyV1<Launchctl, Inspector, OfflineApplyOperator>,
+) {
+    let selection = mode("dev");
+    let plan = fixture.planner().plan(selection, now()).unwrap();
+    assert_eq!(plan.status, RuntimeResetPlanStatusV1::Ready);
+    let token = plan.plan_token.unwrap();
+    let apply = RuntimeResetApplyV1::new(
+        fixture.home(),
+        Launchctl(false),
+        Inspector(RuntimeResetPeerV1::Offline),
+        operator,
+    );
+    (token, apply)
+}
+
+#[test]
+fn single_mode_offline_apply_removes_only_bounded_runtime_data_and_replays_exactly() {
+    let fixture = Fixture::new();
+    let namespace = fixture.namespace("dev");
+    let other = fixture.namespace("other");
+    let binary = fixture.file("bin/podwayd", b"preserved executable");
+    let logs = fixture.file(".podway/modes/dev/logs/podwayd.log", b"before shutdown");
+    let listener =
+        std::os::unix::net::UnixListener::bind(namespace.join("run/podwayd.sock")).unwrap();
+    fs::set_permissions(
+        namespace.join("run/podwayd.sock"),
+        fs::Permissions::from_mode(0o600),
+    )
+    .unwrap();
+    drop(listener);
+
+    let (token, mut apply) = planned_dev_apply(
+        &fixture,
+        OfflineApplyOperator {
+            rotate_logs: true,
+            ..OfflineApplyOperator::default()
+        },
+    );
+    let result = apply.apply(&token, mode("dev"), now()).unwrap();
+    assert_eq!(result.status, RuntimeResetResultStatusV1::Complete);
+    assert_eq!(
+        result.modes[0].state,
+        RuntimeResetModeOutcomeStateV1::Complete
+    );
+    assert!(!namespace.join("state/workspaces.json").exists());
+    assert!(!namespace.join("logs").exists());
+    assert!(!namespace.join("run/podwayd.sock").exists());
+    assert!(namespace.join("run/podwayd.lock").exists());
+    assert_eq!(
+        fs::read(other.join("state/workspaces.json")).unwrap(),
+        b"corrupt registry, never parse or follow"
+    );
+    assert_eq!(fs::read(binary).unwrap(), b"preserved executable");
+    assert!(!logs.exists());
+
+    let replay = apply.apply(&token, mode("dev"), now()).unwrap();
+    assert_eq!(replay.status, RuntimeResetResultStatusV1::AlreadyApplied);
+    assert!(namespace.join("run/podwayd.lock").exists());
+}
+
+#[test]
+fn unlink_before_completion_is_resumed_without_touching_a_recreated_namespace() {
+    let fixture = Fixture::new();
+    let namespace = fixture.namespace("dev");
+    let (token, mut apply) = planned_dev_apply(
+        &fixture,
+        OfflineApplyOperator {
+            fail_at: Some("unlinked"),
+            ..OfflineApplyOperator::default()
+        },
+    );
+    let error = apply.apply(&token, mode("dev"), now()).unwrap_err();
+    assert_eq!(error.code(), "RUNTIME_RESET_INCOMPLETE");
+    assert_eq!(
+        error.result.unwrap().status,
+        RuntimeResetResultStatusV1::Incomplete
+    );
+
+    let mut retry = RuntimeResetApplyV1::new(
+        fixture.home(),
+        Launchctl(false),
+        Inspector(RuntimeResetPeerV1::Offline),
+        OfflineApplyOperator::default(),
+    );
+    let result = retry
+        .apply(&token, mode("dev"), UnixMillis::new(999_999))
+        .unwrap();
+    assert_eq!(result.status, RuntimeResetResultStatusV1::Complete);
+    assert!(namespace.join("run/podwayd.lock").exists());
+
+    fs::write(namespace.join("state"), b"replacement must survive").unwrap();
+    let replay = retry
+        .apply(&token, mode("dev"), UnixMillis::new(999_999))
+        .unwrap();
+    assert_eq!(replay.status, RuntimeResetResultStatusV1::AlreadyApplied);
+    assert_eq!(
+        fs::read(namespace.join("state")).unwrap(),
+        b"replacement must survive"
+    );
+}
+
+#[test]
+fn every_single_mode_durable_boundary_has_an_exact_retry_path() {
+    for boundary in [
+        "commit",
+        "stop_intended",
+        "stopped",
+        "inventory_intended",
+        "inventory_ready",
+        "unlink_intended",
+        "unlinked",
+        "unlink_completed",
+        "completed",
+    ] {
+        let fixture = Fixture::new();
+        let namespace = fixture.namespace("dev");
+        fixture.file(".podway/modes/dev/logs/podwayd.log", b"bounded log");
+        let (token, mut apply) = planned_dev_apply(
+            &fixture,
+            OfflineApplyOperator {
+                fail_at: Some(boundary),
+                ..OfflineApplyOperator::default()
+            },
+        );
+        let error = apply.apply(&token, mode("dev"), now()).unwrap_err();
+        assert_eq!(error.code(), "RUNTIME_RESET_INCOMPLETE", "{boundary}");
+        let partial = error.result.expect("committed failure carries progress");
+        assert_eq!(partial.status, RuntimeResetResultStatusV1::Incomplete);
+        assert_eq!(
+            partial.modes[0].state,
+            RuntimeResetModeOutcomeStateV1::Incomplete
+        );
+        assert!(
+            partial
+                .preserved
+                .iter()
+                .any(|resource| resource.class == RuntimeResetResourceClassV1::LockAnchor),
+            "{boundary}"
+        );
+
+        let mut retry = RuntimeResetApplyV1::new(
+            fixture.home(),
+            Launchctl(false),
+            Inspector(RuntimeResetPeerV1::Offline),
+            OfflineApplyOperator::default(),
+        );
+        let result = retry
+            .apply(&token, mode("dev"), UnixMillis::new(999_999))
+            .unwrap();
+        assert!(
+            matches!(
+                result.status,
+                RuntimeResetResultStatusV1::Complete | RuntimeResetResultStatusV1::AlreadyApplied
+            ),
+            "{boundary}"
+        );
+        assert!(namespace.join("run/podwayd.lock").exists(), "{boundary}");
+        assert!(
+            !namespace.join("state/workspaces.json").exists(),
+            "{boundary}"
+        );
+        assert!(!namespace.join("logs").exists(), "{boundary}");
+    }
+}
+
+struct LiveApplyOperator {
+    singleton: Option<Flock<File>>,
+    listener: Option<std::os::unix::net::UnixListener>,
+    calls: Vec<&'static str>,
+}
+
+impl RuntimeResetOperatorV1 for LiveApplyOperator {
+    fn reserve(
+        &mut self,
+        _: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        _: &RuntimeResetProcessV1,
+    ) -> Result<String, RuntimeResetErrorV1> {
+        self.calls.push("reserve");
+        Ok("00000000-0000-4000-8000-000000000123".to_owned())
+    }
+
+    fn snapshot(
+        &mut self,
+        _: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        _: &RuntimeResetProcessV1,
+        reservation_id: &str,
+    ) -> Result<(), RuntimeResetErrorV1> {
+        assert_eq!(reservation_id, "00000000-0000-4000-8000-000000000123");
+        self.calls.push("snapshot");
+        Ok(())
+    }
+
+    fn stop(
+        &mut self,
+        paths: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        process: Option<&RuntimeResetProcessV1>,
+        reservation_id: Option<&str>,
+    ) -> Result<(), RuntimeResetErrorV1> {
+        assert!(process.is_some());
+        assert_eq!(reservation_id, Some("00000000-0000-4000-8000-000000000123"));
+        self.calls.push("stop");
+        drop(self.listener.take());
+        fs::remove_file(paths.socket_path().as_path()).unwrap();
+        drop(self.singleton.take());
+        Ok(())
+    }
+
+    fn wait_stopped(
+        &mut self,
+        _: &ServiceRuntimePathsV1,
+        process: Option<&RuntimeResetProcessV1>,
+    ) -> Result<(), RuntimeResetErrorV1> {
+        assert!(process.is_some());
+        self.calls.push("wait");
+        Ok(())
+    }
+
+    fn release_uncommitted(
+        &mut self,
+        _: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        _: &RuntimeResetProcessV1,
+        _: &str,
+    ) {
+        self.calls.push("release");
+    }
+}
+
+#[test]
+fn live_single_mode_is_reserved_snapshotted_and_stopped_only_after_durable_intent() {
+    let fixture = Fixture::new();
+    let namespace = fixture.namespace("dev");
+    let socket = namespace.join("run/podwayd.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+    fs::set_permissions(&socket, fs::Permissions::from_mode(0o600)).unwrap();
+    let singleton = Flock::lock(
+        File::open(namespace.join("run/podwayd.lock")).unwrap(),
+        FlockArg::LockExclusiveNonblock,
+    )
+    .unwrap();
+    let executable = fixture.file("bin/podwayd", b"daemon identity");
+    let process = RuntimeResetProcessV1 {
+        pid: std::process::id(),
+        process_id: "00000000-0000-4000-8000-000000000999".to_owned(),
+        executable: RuntimeResetPathV1::new(&executable).unwrap(),
+        started_at_ms: 1,
+    };
+    let selection = mode("dev");
+    let plan = RuntimeResetPlannerV1::new(
+        fixture.home(),
+        Launchctl(false),
+        Inspector(RuntimeResetPeerV1::Live {
+            process: process.clone(),
+            busy_reason: None,
+        }),
+    )
+    .plan(selection.clone(), now())
+    .unwrap();
+    let token = plan.plan_token.unwrap();
+    let operator = LiveApplyOperator {
+        singleton: Some(singleton),
+        listener: Some(listener),
+        calls: Vec::new(),
+    };
+    let mut apply = RuntimeResetApplyV1::new(
+        fixture.home(),
+        Launchctl(false),
+        Inspector(RuntimeResetPeerV1::Live {
+            process,
+            busy_reason: None,
+        }),
+        operator,
+    );
+    let result = apply.apply(&token, selection, now()).unwrap();
+    assert_eq!(result.status, RuntimeResetResultStatusV1::Complete);
+    assert!(!socket.exists());
+    assert!(namespace.join("run/podwayd.lock").exists());
+}

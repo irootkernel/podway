@@ -200,6 +200,7 @@ V2_EXECUTABLE_ROUTES = frozenset(
     {
         "daemon.runtime_reset",
         "runtime.reset.plan",
+        "runtime.reset.apply",
         "procedure.format",
         "procedure.vet",
         "procedure.lint",

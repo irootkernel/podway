@@ -1,23 +1,95 @@
-use std::{env, io, time::SystemTime};
+use std::{
+    env, fs, io, thread,
+    time::{Duration, Instant, SystemTime},
+};
 
 use nix::unistd::geteuid;
-use podway_cli::client::{DaemonClientErrorV1, DaemonClientIoOperationV1, DaemonClientV1};
+use podway_cli::client::{
+    DaemonClientErrorV1, DaemonClientIoOperationV1, DaemonClientV1, RuntimeResetConnectionV1,
+};
 use podway_protocol::{
     CommandNameV1, RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, ResponseEnvelopeV2,
     Rfc3339MillisV1, validate_command_result_v2,
 };
 use podway_service::{
-    PodwayHomeV1, RuntimeResetErrorV1, RuntimeResetInspectorV1, RuntimeResetPathV1,
+    MacosServiceCommandRunnerV1, PodwayHomeV1, RuntimeResetApplyV1, RuntimeResetErrorV1,
+    RuntimeResetInspectorV1, RuntimeResetOperationV1, RuntimeResetOperatorV1, RuntimeResetPathV1,
     RuntimeResetPeerV1, RuntimeResetPlanV1, RuntimeResetPlannerV1, RuntimeResetProcessV1,
-    RuntimeResetReasonV1, RuntimeResetSelectionV1, ServiceClockV1, ServiceRuntimePathsV1,
+    RuntimeResetReasonV1, RuntimeResetSelectionV1, RuntimeResetServiceLifecycleV1, ServiceClockV1,
+    ServiceRuntimePathsV1, StdServiceFilesystemV1, UninstallOptionsV1,
 };
 use serde::Serialize;
 use serde_json::json;
 
 use super::{
-    Cli, LocalFailure, RunResult, build_daemon_status_request, local_result_v2,
-    system_launchctl_runner, system_service_clock, validated_live_daemon_status,
+    Cli, CliDaemonContractVerifierV1, LocalFailure, RunResult, build_daemon_status_request,
+    local_result_v2, system_launchctl_runner, system_service_clock, validated_live_daemon_status,
 };
+
+pub(super) fn execute_apply(
+    cli: &Cli,
+    all_modes: bool,
+    plan_token: &str,
+) -> Result<RunResult, LocalFailure> {
+    if !cli.yes {
+        return Err(LocalFailure::catalog(
+            "CONFIRMATION_REQUIRED",
+            "runtime reset apply requires --yes",
+            "runtime.reset.apply",
+        ));
+    }
+    let explicit_mode = cli.mode.is_some() || cli.dev;
+    if all_modes == explicit_mode || env::var_os("PODWAY_DEV_HOME").is_some() {
+        return Err(LocalFailure::request_invalid(
+            "runtime reset requires exactly one explicit --mode, --dev, or --all-modes selector and no custom runtime root",
+        ));
+    }
+    if plan_token.is_empty() || plan_token.len() > podway_service::MAX_RUNTIME_RESET_TOKEN_BYTES_V1
+    {
+        return Err(LocalFailure::request_invalid(
+            "runtime reset plan token is invalid",
+        ));
+    }
+    if all_modes {
+        return Err(map_apply_error(
+            RuntimeResetErrorV1::unsupported_reason(RuntimeResetReasonV1::UnsupportedPeer),
+            plan_token,
+        ));
+    }
+    let selection = RuntimeResetSelectionV1::Mode {
+        mode: cli.runtime_mode()?,
+    };
+    let home = account_home()?;
+    let operator = ApplyOperator::default();
+    let mut apply =
+        RuntimeResetApplyV1::new(home, system_launchctl_runner(), PeerInspector, operator);
+    let result = apply
+        .apply(
+            plan_token,
+            selection,
+            system_service_clock(SystemTime::now(), "runtime.reset.apply")?.now(),
+        )
+        .map_err(|error| map_apply_error(error, plan_token))?;
+    let result = serde_json::to_value(&result)
+        .map_err(|_| LocalFailure::response_invalid("runtime reset result could not be encoded"))?
+        .as_object()
+        .cloned()
+        .ok_or_else(|| LocalFailure::response_invalid("runtime reset result must be an object"))?;
+    validate_command_result_v2("runtime.reset.apply", &result).map_err(|_| {
+        LocalFailure::response_invalid("runtime reset apply violated its result contract")
+    })?;
+    let status = result
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("complete")
+        .to_owned();
+    Ok(local_result_v2(
+        "runtime.reset.apply",
+        result,
+        format!("Runtime reset: {status}"),
+        0,
+    ))
+}
 
 pub(super) fn execute_plan(cli: &Cli, all_modes: bool) -> Result<RunResult, LocalFailure> {
     let explicit_mode = cli.mode.is_some() || cli.dev;
@@ -176,6 +248,312 @@ fn map_reset_error(error: RuntimeResetErrorV1) -> LocalFailure {
     .expect("reset error details are an object")
     .clone();
     failure
+}
+
+fn map_apply_error(error: RuntimeResetErrorV1, plan_token: &str) -> LocalFailure {
+    let mut failure = LocalFailure::catalog(
+        error.code(),
+        if error.code() == "RUNTIME_RESET_INCOMPLETE" {
+            "runtime reset was committed and requires exact explicit retry"
+        } else {
+            "runtime reset apply failed"
+        },
+        "runtime.reset.apply",
+    );
+    let retry = (error.code() == "RUNTIME_RESET_INCOMPLETE").then(|| {
+        json!({
+            "command": "runtime.reset.apply",
+            "selection": error.result.as_ref().map(|result| &result.selection),
+            "plan_token": plan_token,
+            "requires_confirmation": true,
+        })
+    });
+    failure.details = json!({
+        "schema": "podway.runtime-reset-error-details/v1",
+        "mode": error.mode,
+        "reason": error.reason,
+        "result": error.result,
+        "retry": retry,
+    })
+    .as_object()
+    .expect("reset error details are an object")
+    .clone();
+    failure
+}
+
+#[derive(Default)]
+struct ApplyOperator {
+    connection: Option<RuntimeResetConnectionV1>,
+    service_lifecycle: Option<RuntimeResetServiceLifecycleV1>,
+}
+
+impl ApplyOperator {
+    fn request(
+        paths: &ServiceRuntimePathsV1,
+        process: &RuntimeResetProcessV1,
+        action: &str,
+        operation: &RuntimeResetOperationV1,
+        reservation_id: Option<&str>,
+    ) -> Result<RequestEnvelopeV1, RuntimeResetErrorV1> {
+        let base = build_daemon_status_request()
+            .map_err(|_| RuntimeResetErrorV1::unsafe_reason(RuntimeResetReasonV1::Io))?;
+        let payload = json!({
+            "schema": "podway.runtime-reset-control-input/v1",
+            "action": action,
+            "mode": paths.mode(),
+            "namespace_root": RuntimeResetPathV1::new(
+                paths.podway_home().ok_or_else(|| RuntimeResetErrorV1::unsafe_reason(
+                    RuntimeResetReasonV1::UnsafePath,
+                ))?.as_path(),
+            )?,
+            "expected_process_id": process.process_id,
+            "operation_id": operation.operation_id,
+            "token_sha256": operation.token_sha256,
+            "reservation_id": reservation_id,
+        })
+        .as_object()
+        .expect("control payload is an object")
+        .clone();
+        RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
+            request_id: RequestIdV1::new(uuid::Uuid::new_v4().to_string())
+                .map_err(|_| RuntimeResetErrorV1::unsafe_reason(RuntimeResetReasonV1::Io))?,
+            client: base.client().clone(),
+            operation: base.operation(),
+            command: CommandNameV1::new("daemon.runtime_reset")
+                .map_err(|_| RuntimeResetErrorV1::unsafe_reason(RuntimeResetReasonV1::Io))?,
+            workspace: None,
+            idempotency_key: None,
+            preconditions: base.preconditions().clone(),
+            options: base.options(),
+            payload,
+        })
+        .map_err(|_| RuntimeResetErrorV1::unsafe_reason(RuntimeResetReasonV1::Io))
+    }
+
+    fn output(
+        response: ResponseEnvelopeV2,
+        expected_state: &[&str],
+        process: &RuntimeResetProcessV1,
+        operation: &RuntimeResetOperationV1,
+    ) -> Result<String, RuntimeResetErrorV1> {
+        match response {
+            ResponseEnvelopeV2::OutputV2(output) => {
+                let result = output.result();
+                let state = result.get("state").and_then(serde_json::Value::as_str);
+                if state == Some("busy") {
+                    let reason = serde_json::from_value(result["reason"].clone())
+                        .unwrap_or(RuntimeResetReasonV1::Activity);
+                    return Err(RuntimeResetErrorV1::busy_reason(reason));
+                }
+                let reservation = result
+                    .get("reservation_id")
+                    .and_then(serde_json::Value::as_str);
+                if !state.is_some_and(|state| expected_state.contains(&state))
+                    || result.get("process_id").and_then(serde_json::Value::as_str)
+                        != Some(process.process_id.as_str())
+                    || result
+                        .get("operation_id")
+                        .and_then(serde_json::Value::as_str)
+                        != Some(operation.operation_id.as_str())
+                    || result
+                        .get("token_sha256")
+                        .and_then(serde_json::Value::as_str)
+                        != Some(operation.token_sha256.as_str())
+                {
+                    return Err(RuntimeResetErrorV1::unsafe_reason(
+                        RuntimeResetReasonV1::IdentityChanged,
+                    ));
+                }
+                reservation.map(str::to_owned).ok_or_else(|| {
+                    RuntimeResetErrorV1::unsafe_reason(RuntimeResetReasonV1::ReservationLost)
+                })
+            }
+            ResponseEnvelopeV2::Error(error) => {
+                let reason = serde_json::from_value(error.details()["reason"].clone())
+                    .unwrap_or(RuntimeResetReasonV1::Io);
+                Err(RuntimeResetErrorV1::unsafe_reason(reason))
+            }
+        }
+    }
+
+    fn exchange(
+        &mut self,
+        request: &RequestEnvelopeV1,
+        expected_state: &[&str],
+        process: &RuntimeResetProcessV1,
+        operation: &RuntimeResetOperationV1,
+    ) -> Result<String, RuntimeResetErrorV1> {
+        let response = self
+            .connection
+            .as_mut()
+            .ok_or_else(|| {
+                RuntimeResetErrorV1::unsafe_reason(RuntimeResetReasonV1::ReservationLost)
+            })?
+            .exchange(request)
+            .map_err(|_| {
+                RuntimeResetErrorV1::unsafe_reason(RuntimeResetReasonV1::ReservationLost)
+            })?;
+        Self::output(response, expected_state, process, operation)
+    }
+}
+
+impl RuntimeResetOperatorV1 for ApplyOperator {
+    fn prepare(&mut self, paths: &ServiceRuntimePathsV1) -> Result<(), RuntimeResetErrorV1> {
+        if paths.mode().is_production() {
+            self.service_lifecycle = Some(RuntimeResetServiceLifecycleV1::acquire()?);
+        }
+        Ok(())
+    }
+
+    fn reserve(
+        &mut self,
+        paths: &ServiceRuntimePathsV1,
+        operation: &RuntimeResetOperationV1,
+        process: &RuntimeResetProcessV1,
+    ) -> Result<String, RuntimeResetErrorV1> {
+        let status_request = build_daemon_status_request()
+            .map_err(|_| RuntimeResetErrorV1::unsafe_reason(RuntimeResetReasonV1::Io))?;
+        let client = DaemonClientV1::new(paths.clone());
+        let status = match client.daemon_status(&status_request) {
+            Ok(ResponseEnvelopeV2::OutputV2(output)) => output,
+            _ => {
+                return Err(RuntimeResetErrorV1::unsafe_reason(
+                    RuntimeResetReasonV1::ReservationLost,
+                ));
+            }
+        };
+        let status = validated_live_daemon_status(&status, None, paths, None).map_err(|_| {
+            RuntimeResetErrorV1::unsafe_reason(RuntimeResetReasonV1::IdentityChanged)
+        })?;
+        if status.get("process_id").and_then(serde_json::Value::as_str)
+            != Some(process.process_id.as_str())
+            || status.get("pid").and_then(serde_json::Value::as_u64) != Some(u64::from(process.pid))
+        {
+            return Err(RuntimeResetErrorV1::unsafe_reason(
+                RuntimeResetReasonV1::IdentityChanged,
+            ));
+        }
+        let request = Self::request(paths, process, "reserve", operation, None)?;
+        let (connection, response) = client.runtime_reset_open(&request).map_err(|_| {
+            RuntimeResetErrorV1::unsafe_reason(RuntimeResetReasonV1::ReservationLost)
+        })?;
+        self.connection = Some(connection);
+        Self::output(response, &["reserved", "committed"], process, operation)
+    }
+
+    fn snapshot(
+        &mut self,
+        paths: &ServiceRuntimePathsV1,
+        operation: &RuntimeResetOperationV1,
+        process: &RuntimeResetProcessV1,
+        reservation_id: &str,
+    ) -> Result<(), RuntimeResetErrorV1> {
+        let request = Self::request(paths, process, "snapshot", operation, Some(reservation_id))?;
+        let returned = self.exchange(&request, &["reserved"], process, operation)?;
+        if returned != reservation_id {
+            return Err(RuntimeResetErrorV1::unsafe_reason(
+                RuntimeResetReasonV1::ReservationLost,
+            ));
+        }
+        Ok(())
+    }
+
+    fn stop(
+        &mut self,
+        paths: &ServiceRuntimePathsV1,
+        operation: &RuntimeResetOperationV1,
+        process: Option<&RuntimeResetProcessV1>,
+        reservation_id: Option<&str>,
+    ) -> Result<(), RuntimeResetErrorV1> {
+        if paths.mode().is_production() {
+            let clock = system_service_clock(SystemTime::now(), "runtime.reset.apply")
+                .map_err(|_| RuntimeResetErrorV1::unsafe_reason(RuntimeResetReasonV1::Io))?;
+            let runner = MacosServiceCommandRunnerV1::new_with_contract_verifier(
+                StdServiceFilesystemV1,
+                system_launchctl_runner(),
+                clock,
+                geteuid().as_raw(),
+                CliDaemonContractVerifierV1,
+            )
+            .map_err(|_| RuntimeResetErrorV1::unsafe_reason(RuntimeResetReasonV1::Io))?;
+            runner
+                .uninstall_for_runtime_reset(
+                    paths,
+                    UninstallOptionsV1::new(false),
+                    self.service_lifecycle.as_ref().ok_or_else(|| {
+                        RuntimeResetErrorV1::unsafe_reason(RuntimeResetReasonV1::Io)
+                    })?,
+                )
+                .map_err(|_| RuntimeResetErrorV1::unsafe_reason(RuntimeResetReasonV1::Io))?;
+            self.connection = None;
+            return Ok(());
+        }
+        let Some(process) = process else {
+            return Ok(());
+        };
+        let reservation_id = reservation_id.ok_or_else(|| {
+            RuntimeResetErrorV1::unsafe_reason(RuntimeResetReasonV1::ReservationLost)
+        })?;
+        let request = Self::request(paths, process, "shutdown", operation, Some(reservation_id))?;
+        let returned = self.exchange(&request, &["shutting_down"], process, operation)?;
+        if returned != reservation_id {
+            return Err(RuntimeResetErrorV1::unsafe_reason(
+                RuntimeResetReasonV1::ReservationLost,
+            ));
+        }
+        self.connection = None;
+        Ok(())
+    }
+
+    fn wait_stopped(
+        &mut self,
+        paths: &ServiceRuntimePathsV1,
+        process: Option<&RuntimeResetProcessV1>,
+    ) -> Result<(), RuntimeResetErrorV1> {
+        if process.is_none() {
+            return Ok(());
+        }
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let socket_absent = match fs::symlink_metadata(paths.socket_path().as_path()) {
+                Err(error) if error.kind() == io::ErrorKind::NotFound => true,
+                Ok(metadata)
+                    if std::os::unix::fs::FileTypeExt::is_socket(&metadata.file_type()) =>
+                {
+                    false
+                }
+                _ => {
+                    return Err(RuntimeResetErrorV1::unsafe_reason(
+                        RuntimeResetReasonV1::UnsafePath,
+                    ));
+                }
+            };
+            if socket_absent {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(RuntimeResetErrorV1::unsafe_reason(
+                    RuntimeResetReasonV1::ShutdownTimeout,
+                ));
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    fn release_uncommitted(
+        &mut self,
+        paths: &ServiceRuntimePathsV1,
+        operation: &RuntimeResetOperationV1,
+        process: &RuntimeResetProcessV1,
+        reservation_id: &str,
+    ) {
+        if let Ok(request) =
+            Self::request(paths, process, "release", operation, Some(reservation_id))
+        {
+            let _ = self.exchange(&request, &["released"], process, operation);
+        }
+        self.connection = None;
+    }
 }
 
 struct PeerInspector;

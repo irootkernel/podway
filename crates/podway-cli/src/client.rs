@@ -20,7 +20,7 @@ use podway_protocol::{
     ProcedureV2StartRequestV1, RESERVED_V2_MUTATION_COMMAND_NAMES_V1, RequestEnvelopeV1,
     ResponseEnvelopeV2, SliceErrorV1, SliceRequestV1, WorkspaceModeApplyRequestV1,
     WorkspaceModePlanRequestV1, WorkspaceRemoveRequestV1, decode_response_payload_v2,
-    encode_request_payload_v1, read_single_frame_v1, write_frame_v1,
+    encode_request_payload_v1, read_frame_v1, read_single_frame_v1, write_frame_v1,
 };
 use podway_service::ServiceRuntimePathsV1;
 
@@ -248,6 +248,51 @@ pub struct DaemonClientV1 {
     timeouts: DaemonClientTimeoutsV1,
 }
 
+/// One bounded multi-frame runtime-reset control exchange.
+pub struct RuntimeResetConnectionV1 {
+    stream: UnixStream,
+    read_timeout: Duration,
+    write_timeout: Duration,
+}
+
+impl RuntimeResetConnectionV1 {
+    pub fn exchange(
+        &mut self,
+        request: &RequestEnvelopeV1,
+    ) -> Result<ResponseEnvelopeV2, DaemonClientErrorV1> {
+        if !podway_protocol::validate_runtime_reset_control_request_v1(request) {
+            return Err(DaemonClientErrorV1::RequestAdmission {
+                source: SliceErrorV1::InvalidCommand {
+                    received: request.command().as_str().to_owned(),
+                },
+            });
+        }
+        let payload = encode_request_payload_v1(request)
+            .map_err(|source| DaemonClientErrorV1::RequestEncoding { source })?;
+        let write_deadline = ExchangeDeadlineV1::new(self.write_timeout);
+        {
+            let mut writer = DeadlineStreamV1::for_write(&mut self.stream, write_deadline);
+            write_frame_v1(&mut writer, &payload)
+                .map_err(|error| map_frame_error(error, DaemonClientIoOperationV1::Write))
+                .map_err(DaemonClientErrorV1::possibly_transmitted)?;
+        }
+        let read_deadline = ExchangeDeadlineV1::new(self.read_timeout);
+        let payload = {
+            let mut reader = DeadlineStreamV1::for_read(&mut self.stream, read_deadline);
+            read_frame_v1(&mut reader)
+                .map_err(|error| map_frame_error(error, DaemonClientIoOperationV1::Read))
+                .and_then(|response| response.ok_or(DaemonClientErrorV1::MissingResponse))
+                .map_err(DaemonClientErrorV1::possibly_transmitted)?
+        };
+        let response = decode_response_payload_v2(&payload)
+            .map_err(|source| DaemonClientErrorV1::ResponseDecoding { source })
+            .map_err(DaemonClientErrorV1::possibly_transmitted)?;
+        validate_response_correlation_v2(request, &response)
+            .map_err(DaemonClientErrorV1::possibly_transmitted)?;
+        Ok(response)
+    }
+}
+
 impl DaemonClientV1 {
     /// Creates a client using the service-owned runtime socket and default bounded timeouts.
     pub fn new(runtime_paths: ServiceRuntimePathsV1) -> Self {
@@ -343,6 +388,50 @@ impl DaemonClientV1 {
             });
         }
         self.exchange_v2(request)
+    }
+
+    /// Opens the reserved multi-frame reset exchange and sends its first request.
+    pub fn runtime_reset_open(
+        &self,
+        request: &RequestEnvelopeV1,
+    ) -> Result<(RuntimeResetConnectionV1, ResponseEnvelopeV2), DaemonClientErrorV1> {
+        if !podway_protocol::validate_runtime_reset_control_request_v1(request)
+            || request
+                .payload()
+                .get("action")
+                .and_then(serde_json::Value::as_str)
+                != Some("reserve")
+        {
+            return Err(DaemonClientErrorV1::RequestAdmission {
+                source: SliceErrorV1::InvalidCommand {
+                    received: request.command().as_str().to_owned(),
+                },
+            });
+        }
+        let socket_path = self.runtime_paths.socket_path().as_path();
+        validate_endpoint_path(socket_path)?;
+        let stream = connect_with_timeout(socket_path.to_path_buf(), self.timeouts.connect())?;
+        validate_peer_uid(&stream)?;
+        let timeout = Duration::from_secs(30);
+        stream.set_write_timeout(Some(timeout)).map_err(|source| {
+            DaemonClientErrorV1::SocketConfiguration {
+                operation: DaemonClientIoOperationV1::ConfigureWriteTimeout,
+                source,
+            }
+        })?;
+        stream.set_read_timeout(Some(timeout)).map_err(|source| {
+            DaemonClientErrorV1::SocketConfiguration {
+                operation: DaemonClientIoOperationV1::ConfigureReadTimeout,
+                source,
+            }
+        })?;
+        let mut connection = RuntimeResetConnectionV1 {
+            stream,
+            read_timeout: timeout,
+            write_timeout: timeout,
+        };
+        let response = connection.exchange(request)?;
+        Ok((connection, response))
     }
 
     /// Requests orderly shutdown of a foreground dev daemon.

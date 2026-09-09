@@ -569,7 +569,7 @@
     },
     {
       "command": "runtime.reset.apply",
-      "availability": "reserved_contract",
+      "availability": "executable",
       "owner": "podway-service",
       "path": ["podway-cli", "podway-service"],
       "execution": "service_lifecycle",

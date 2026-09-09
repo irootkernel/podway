@@ -1,14 +1,18 @@
 //! Read-only planning for ordinary account-runtime retirement.
 
+mod apply;
 mod document;
 mod filesystem;
 mod locks;
 
+pub use apply::{RuntimeResetApplyV1, RuntimeResetOperatorV1, RuntimeResetServiceLifecycleV1};
 pub use document::{
-    RuntimeResetErrorV1, RuntimeResetExclusionV1, RuntimeResetOperationV1, RuntimeResetPathV1,
+    RuntimeResetErrorV1, RuntimeResetExclusionV1, RuntimeResetModeOutcomeStateV1,
+    RuntimeResetModeOutcomeV1, RuntimeResetOperationV1, RuntimeResetPathV1,
     RuntimeResetPlanStatusV1, RuntimeResetPlanV1, RuntimeResetProcessV1, RuntimeResetReasonV1,
-    RuntimeResetResourceClassV1, RuntimeResetResourceV1, RuntimeResetSelectionV1,
-    RuntimeResetTargetStateV1, RuntimeResetTargetV1,
+    RuntimeResetResourceClassV1, RuntimeResetResourceOutcomeStateV1, RuntimeResetResourceOutcomeV1,
+    RuntimeResetResourceV1, RuntimeResetResultStatusV1, RuntimeResetResultV1,
+    RuntimeResetSelectionV1, RuntimeResetTargetStateV1, RuntimeResetTargetV1,
 };
 pub use locks::{RuntimeResetLockV1, RuntimeResetParticipantV1, RuntimeResetRecordViewV1};
 
@@ -155,7 +159,7 @@ impl<L: LaunchctlRunnerV1, I: RuntimeResetInspectorV1> RuntimeResetPlannerV1<L, 
         selection: &RuntimeResetSelectionV1,
         now: UnixMillis,
     ) -> Result<(), RuntimeResetErrorV1> {
-        let original = ResetToken::decode(encoded)?;
+        let mut original = ResetToken::decode(encoded)?;
         if original.selection != *selection {
             return Err(RuntimeResetErrorV1::stale(
                 RuntimeResetReasonV1::SelectionChanged,
@@ -165,13 +169,38 @@ impl<L: LaunchctlRunnerV1, I: RuntimeResetInspectorV1> RuntimeResetPlannerV1<L, 
             return Err(RuntimeResetErrorV1::stale(RuntimeResetReasonV1::Expired));
         }
         let current = self.plan(selection.clone(), now)?;
-        let current = current
-            .plan_token
-            .as_deref()
-            .ok_or_else(|| RuntimeResetErrorV1::stale(RuntimeResetReasonV1::IdentityChanged))?;
+        let current = match current.plan_token.as_deref() {
+            Some(token) => token,
+            None => {
+                if let Some(target) = current.targets.iter().find(|target| target.state.blocks()) {
+                    let reason = target
+                        .reason
+                        .unwrap_or(RuntimeResetReasonV1::IdentityChanged);
+                    let error = match target.state {
+                        RuntimeResetTargetStateV1::Busy => RuntimeResetErrorV1::busy_reason(reason),
+                        RuntimeResetTargetStateV1::Unsupported => {
+                            RuntimeResetErrorV1::unsupported_reason(reason)
+                        }
+                        RuntimeResetTargetStateV1::Unsafe => {
+                            RuntimeResetErrorV1::unsafe_reason(reason)
+                        }
+                        _ => unreachable!("only blocking target states are selected"),
+                    };
+                    return Err(error.in_mode(&target.mode));
+                }
+                if current.recovery_operation.is_some() {
+                    return Err(RuntimeResetErrorV1::in_progress());
+                }
+                return Err(RuntimeResetErrorV1::stale(
+                    RuntimeResetReasonV1::IdentityChanged,
+                ));
+            }
+        };
         let mut current = ResetToken::decode(current)?;
         current.created_at_ms = original.created_at_ms;
         current.expires_at_ms = original.expires_at_ms;
+        original.normalize_directory_links();
+        current.normalize_directory_links();
         if current != original {
             return Err(RuntimeResetErrorV1::stale(
                 RuntimeResetReasonV1::IdentityChanged,

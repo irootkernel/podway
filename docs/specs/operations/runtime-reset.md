@@ -4,10 +4,10 @@
 
 [ADR-0032](../../architecture-decision-records/0032-retire-ordinary-user-runtimes.md)
 owns the account-runtime retirement decision. The command catalog admits read-only
-`runtime.reset.plan` and the internal `daemon.runtime_reset` control route. Planning
-inspects live daemons and can issue a token for an idle, supported process.
-`runtime.reset.apply` remains reserved and cannot execute. The active roadmap owns
-remaining implementation work.
+`runtime.reset.plan`, confirmed single-mode `runtime.reset.apply`, and the internal
+`daemon.runtime_reset` control route. Planning inspects live daemons and can issue a
+token for an idle, supported process. Account-wide apply remains reserved for its
+active-roadmap composition task.
 
 ## Selection and preservation
 

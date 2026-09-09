@@ -97,6 +97,7 @@ pub struct RuntimeResetErrorV1 {
     code: &'static str,
     pub mode: Option<RuntimeModeV1>,
     pub reason: RuntimeResetReasonV1,
+    pub result: Option<Box<RuntimeResetResultV1>>,
 }
 
 impl Error {
@@ -112,6 +113,16 @@ impl Error {
             code: "RUNTIME_RESET_UNSAFE",
             mode: None,
             reason,
+            result: None,
+        }
+    }
+    /// Reports activity that appeared between planning and live reservation.
+    pub fn busy_reason(reason: RuntimeResetReasonV1) -> Self {
+        Self {
+            code: "RUNTIME_RESET_BUSY",
+            mode: None,
+            reason,
+            result: None,
         }
     }
     pub(super) fn stale(reason: RuntimeResetReasonV1) -> Self {
@@ -119,6 +130,7 @@ impl Error {
             code: "RUNTIME_RESET_PLAN_STALE",
             mode: None,
             reason,
+            result: None,
         }
     }
     pub(super) fn in_progress() -> Self {
@@ -126,6 +138,16 @@ impl Error {
             code: "RUNTIME_RESET_IN_PROGRESS",
             mode: None,
             reason: RuntimeResetReasonV1::OperationInProgress,
+            result: None,
+        }
+    }
+    /// Reports a selected runtime or peer outside the executable reset scope.
+    pub fn unsupported_reason(reason: RuntimeResetReasonV1) -> Self {
+        Self {
+            code: "RUNTIME_RESET_UNSUPPORTED",
+            mode: None,
+            reason,
+            result: None,
         }
     }
     pub(super) fn invalid_token() -> Self {
@@ -136,11 +158,25 @@ impl Error {
             code: "RUNTIME_RESET_LIMIT_EXCEEDED",
             mode: None,
             reason: RuntimeResetReasonV1::BoundExceeded,
+            result: None,
         }
     }
     pub(super) fn in_mode(mut self, mode: &RuntimeModeV1) -> Self {
         self.mode = Some(mode.clone());
         self
+    }
+    pub(super) fn incomplete(reason: RuntimeResetReasonV1, result: RuntimeResetResultV1) -> Self {
+        let mode = result
+            .modes
+            .iter()
+            .find(|mode| mode.state != RuntimeResetModeOutcomeStateV1::Complete)
+            .map(|mode| mode.mode.clone());
+        Self {
+            code: "RUNTIME_RESET_INCOMPLETE",
+            mode,
+            reason,
+            result: Some(Box::new(result)),
+        }
     }
 }
 
@@ -573,6 +609,23 @@ impl ResetToken {
         }
         Ok(())
     }
+
+    pub(super) fn normalize_directory_links(&mut self) {
+        self.account_identity.links = 1;
+        for target in &mut self.targets {
+            for identity in [
+                &mut target.root_identity,
+                &mut target.run_identity,
+                &mut target.state_identity,
+                &mut target.logs_identity,
+            ]
+            .into_iter()
+            .flatten()
+            {
+                identity.links = 1;
+            }
+        }
+    }
 }
 
 pub(super) fn validate_uuid(value: &str) -> Result<(), Error> {
@@ -597,7 +650,7 @@ fn validate_digest(value: &str) -> Result<(), Error> {
 }
 
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-fn encode_bytes(bytes: &[u8]) -> String {
+pub(super) fn encode_bytes(bytes: &[u8]) -> String {
     let mut result = String::with_capacity((bytes.len() * 4).div_ceil(3));
     for chunk in bytes.chunks(3) {
         result.push(ALPHABET[(chunk[0] >> 2) as usize] as char);
@@ -618,7 +671,7 @@ fn encode_bytes(bytes: &[u8]) -> String {
     }
     result
 }
-fn decode_bytes(value: &str) -> Result<Vec<u8>, Error> {
+pub(super) fn decode_bytes(value: &str) -> Result<Vec<u8>, Error> {
     if value.is_empty() || value.len() % 4 == 1 {
         return Err(Error::invalid_token());
     }
@@ -645,37 +698,37 @@ fn decode_bytes(value: &str) -> Result<Vec<u8>, Error> {
     Ok(result)
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ResetRecord {
-    schema: String,
-    operation_id: String,
-    token_sha256: String,
-    phase: RecordPhase,
+    pub(super) schema: String,
+    pub(super) operation_id: String,
+    pub(super) token_sha256: String,
+    pub(super) phase: RecordPhase,
     #[serde(deserialize_with = "required_option")]
-    plan: Option<ResetToken>,
-    modes: Vec<RecordMode>,
+    pub(super) plan: Option<ResetToken>,
+    pub(super) modes: Vec<RecordMode>,
     #[serde(deserialize_with = "required_option")]
-    result: Option<RecordResult>,
+    pub(super) result: Option<RuntimeResetResultV1>,
 }
-#[derive(Deserialize, Eq, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
-enum RecordPhase {
+pub(super) enum RecordPhase {
     InProgress,
     Completed,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RecordMode {
-    mode: RuntimeModeV1,
-    phase: ModePhase,
+pub(super) struct RecordMode {
+    pub(super) mode: RuntimeModeV1,
+    pub(super) phase: ModePhase,
     #[serde(deserialize_with = "required_option")]
-    reservation_id: Option<String>,
-    entries: Vec<RecordEntry>,
+    pub(super) reservation_id: Option<String>,
+    pub(super) entries: Vec<RecordEntry>,
 }
-#[derive(Deserialize, Eq, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
-enum ModePhase {
+pub(super) enum ModePhase {
     Pending,
     StopIntended,
     Stopped,
@@ -683,77 +736,89 @@ enum ModePhase {
     InventoryReady,
     Complete,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RecordEntry {
-    class: RuntimeResetResourceClassV1,
-    relative_path_bytes_base64url: String,
-    identity: FileIdentity,
-    kind: EntryKind,
-    state: EntryState,
+pub(super) struct RecordEntry {
+    pub(super) class: RuntimeResetResourceClassV1,
+    pub(super) relative_path_bytes_base64url: String,
+    pub(super) identity: FileIdentity,
+    pub(super) kind: EntryKind,
+    pub(super) state: EntryState,
 }
-#[derive(Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
-enum EntryKind {
+pub(super) enum EntryKind {
     Regular,
     Directory,
     Socket,
 }
-#[derive(Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
-enum EntryState {
+pub(super) enum EntryState {
     Pending,
     Intended,
     Completed,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RecordResult {
-    schema: String,
-    status: ResultStatus,
-    operation_id: String,
-    selection: RuntimeResetSelectionV1,
-    modes: Vec<ModeOutcome>,
-    preserved: Vec<RuntimeResetResourceV1>,
-    excluded: Vec<RuntimeResetExclusionV1>,
+pub struct RuntimeResetResultV1 {
+    pub schema: String,
+    pub status: RuntimeResetResultStatusV1,
+    pub operation_id: String,
+    pub selection: RuntimeResetSelectionV1,
+    pub modes: Vec<RuntimeResetModeOutcomeV1>,
+    pub preserved: Vec<RuntimeResetResourceV1>,
+    pub excluded: Vec<RuntimeResetExclusionV1>,
 }
-#[derive(Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
-enum ResultStatus {
+pub enum RuntimeResetResultStatusV1 {
     Complete,
     AlreadyApplied,
     Incomplete,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ModeOutcome {
-    mode: RuntimeModeV1,
-    state: ModeOutcomeState,
-    resources: Vec<ResourceOutcome>,
+pub struct RuntimeResetModeOutcomeV1 {
+    pub mode: RuntimeModeV1,
+    pub state: RuntimeResetModeOutcomeStateV1,
+    pub resources: Vec<RuntimeResetResourceOutcomeV1>,
 }
-#[derive(Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
-enum ModeOutcomeState {
+pub enum RuntimeResetModeOutcomeStateV1 {
     Complete,
     Pending,
     Incomplete,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ResourceOutcome {
-    class: RuntimeResetResourceClassV1,
-    path: RuntimeResetPathV1,
-    state: ResourceOutcomeState,
+pub struct RuntimeResetResourceOutcomeV1 {
+    pub class: RuntimeResetResourceClassV1,
+    pub path: RuntimeResetPathV1,
+    pub state: RuntimeResetResourceOutcomeStateV1,
 }
-#[derive(Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
-enum ResourceOutcomeState {
+pub enum RuntimeResetResourceOutcomeStateV1 {
     Removed,
     AlreadyAbsent,
     Pending,
 }
 
 impl ResetRecord {
+    pub(super) fn decode_for_apply(bytes: &[u8], home: &PodwayHomeV1) -> Result<Self, Error> {
+        Self::decode(bytes, home)
+    }
+
+    pub(super) fn encode(&self, home: &PodwayHomeV1) -> Result<Vec<u8>, Error> {
+        self.validate(home)?;
+        let value = canonicalize_json_v1(self).map_err(|_| Error::limit())?;
+        if value.len() > MAX_RUNTIME_RESET_DOCUMENT_BYTES_V1 {
+            return Err(Error::limit());
+        }
+        Ok(value.into_bytes())
+    }
     pub(super) fn view(
         bytes: &[u8],
         home: &PodwayHomeV1,
@@ -918,7 +983,7 @@ impl ResetRecord {
                 if self.plan.is_some()
                     || !self.modes.is_empty()
                     || result.schema != "podway.runtime-reset-result/v1"
-                    || result.status != ResultStatus::Complete
+                    || result.status != RuntimeResetResultStatusV1::Complete
                     || result.operation_id != self.operation_id
                     || result.modes.is_empty()
                 {
@@ -939,13 +1004,14 @@ impl ResetRecord {
                 }
                 let mut modes = BTreeSet::new();
                 for mode in &result.modes {
-                    if !modes.insert(mode.mode.as_str()) || mode.state != ModeOutcomeState::Complete
+                    if !modes.insert(mode.mode.as_str())
+                        || mode.state != RuntimeResetModeOutcomeStateV1::Complete
                     {
                         return Err(Error::invalid_token());
                     }
                     for resource in &mode.resources {
                         resource.path.validate()?;
-                        if resource.state == ResourceOutcomeState::Pending
+                        if resource.state == RuntimeResetResourceOutcomeStateV1::Pending
                             || !RuntimeResetResourceClassV1::deletion_classes(
                                 mode.mode.is_production(),
                             )

@@ -95,8 +95,9 @@ backup, `podway reset --all` is the supported recovery.
 
 The runtime-reset families are `runtime-reset-plan-result/v1`,
 `runtime-reset-result/v1`, and `runtime-reset-control-result/v1`, each prefixed
-with `podway.`. The plan family is executable; apply and control remain reserved.
-Their output branches omit workspace, job and session projections.
+with `podway.`. Plan, confirmed single-mode apply, and process-bound control are
+executable; account-wide apply remains reserved. Their output branches omit
+workspace, job and session projections.
 An incomplete reset is accepted only inside the closed
 `podway.runtime-reset-error-details/v1` branch of an error, never a success output.
 The reset-specific `retry` object requires explicit confirmation and is distinct

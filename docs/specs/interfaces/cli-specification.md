@@ -64,8 +64,8 @@ uses the same bounded waiter after idempotent service reconciliation.
 
 ## Account-runtime commands
 
-The CLI admits read-only `runtime reset plan`; `runtime reset apply` remains
-reserved. Their explicit selector, confirmation,
+The CLI admits read-only `runtime reset plan` and confirmed single-mode
+`runtime reset apply`; all-mode apply remains reserved. Their explicit selector, confirmation,
 read-only planning, output and failure contracts are owned by the
 [runtime reset specification](../operations/runtime-reset.md). They require no
 worktree and preserve all workspace state. These commands do not add an
