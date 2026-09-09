@@ -251,14 +251,25 @@ requesting the replacement bootstrap. Package upgrade should:
 
 The LaunchAgent plist contains no version-specific workspace paths.
 
-## Reserved runtime-reset coordinator
+## Runtime-reset coordination
 
 The [ordinary runtime reset contract](../specs/operations/runtime-reset.md)
-reserves a service-owned offline coordinator and an injected reset-control
-interface. The CLI implements the protocol adapter; service retains its sole
-internal dependency on core. The existing production service lifecycle lock
+reserves a service-owned offline coordinator and defines an injected reset-control
+interface. The daemon implements process-bound idle reservations; the CLI uses
+the identity handshake and reset inspection when planning live targets. Service
+owns the retained account lock anchors and the validated reset-record projection,
+including ordinary namespace startup fencing, and retains its sole internal
+dependency on core. The existing production service lifecycle lock
 participates in the declared account-reset lock order. External managed roots
 retain their existing lifecycle and never become reset targets.
+
+Ordinary daemon endpoint acquisition prepares namespace directories under the
+topology gate before process logs are opened. Service commands keep the production
+lifecycle transaction while checking that gate, and release the topology gate
+before bootstrap/readiness so the launched daemon can acquire it. Reservation
+snapshots read the record without taking the commit interlock; release and
+disconnect take that interlock before the admission mutex and retain the fence
+when the committed record matches or cannot be safely read.
 
 ## Service tests
 

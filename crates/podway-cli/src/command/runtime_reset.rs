@@ -2,18 +2,21 @@ use std::{env, io, time::SystemTime};
 
 use nix::unistd::geteuid;
 use podway_cli::client::{DaemonClientErrorV1, DaemonClientIoOperationV1, DaemonClientV1};
-use podway_protocol::{Rfc3339MillisV1, validate_command_result_v2};
+use podway_protocol::{
+    CommandNameV1, RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, ResponseEnvelopeV2,
+    Rfc3339MillisV1, validate_command_result_v2,
+};
 use podway_service::{
-    PodwayHomeV1, RuntimeResetErrorV1, RuntimeResetInspectorV1, RuntimeResetPeerV1,
-    RuntimeResetPlanV1, RuntimeResetPlannerV1, RuntimeResetReasonV1, RuntimeResetSelectionV1,
-    ServiceClockV1, ServiceRuntimePathsV1,
+    PodwayHomeV1, RuntimeResetErrorV1, RuntimeResetInspectorV1, RuntimeResetPathV1,
+    RuntimeResetPeerV1, RuntimeResetPlanV1, RuntimeResetPlannerV1, RuntimeResetProcessV1,
+    RuntimeResetReasonV1, RuntimeResetSelectionV1, ServiceClockV1, ServiceRuntimePathsV1,
 };
 use serde::Serialize;
 use serde_json::json;
 
 use super::{
     Cli, LocalFailure, RunResult, build_daemon_status_request, local_result_v2,
-    system_launchctl_runner, system_service_clock,
+    system_launchctl_runner, system_service_clock, validated_live_daemon_status,
 };
 
 pub(super) fn execute_plan(cli: &Cli, all_modes: bool) -> Result<RunResult, LocalFailure> {
@@ -183,11 +186,103 @@ impl RuntimeResetInspectorV1 for PeerInspector {
     ) -> Result<RuntimeResetPeerV1, RuntimeResetErrorV1> {
         let request = build_daemon_status_request()
             .map_err(|_| RuntimeResetErrorV1::unsafe_reason(RuntimeResetReasonV1::Io))?;
-        match DaemonClientV1::new(paths.clone()).daemon_status(&request) {
-            // Live peers become eligible only after the reset control route is admitted.
-            Ok(_) => Ok(RuntimeResetPeerV1::Unsupported),
-            Err(error) => classify_peer_error(error),
+        let client = DaemonClientV1::new(paths.clone());
+        let output = match client.daemon_status(&request) {
+            Ok(ResponseEnvelopeV2::OutputV2(output)) => output,
+            Ok(_) => return Ok(RuntimeResetPeerV1::Unsupported),
+            Err(error) => return classify_peer_error(error),
+        };
+        let status = match validated_live_daemon_status(&output, None, paths, None) {
+            Ok(status) => status,
+            Err(_) => return Ok(RuntimeResetPeerV1::Unsupported),
+        };
+        let invalid = || RuntimeResetErrorV1::unsafe_reason(RuntimeResetReasonV1::UnknownActivity);
+        let field = |name: &str| {
+            status
+                .get(name)
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(invalid)
+        };
+        let process = RuntimeResetProcessV1 {
+            pid: status["pid"]
+                .as_u64()
+                .and_then(|pid| u32::try_from(pid).ok())
+                .ok_or_else(invalid)?,
+            process_id: field("process_id")?.to_owned(),
+            executable: RuntimeResetPathV1::new(std::path::Path::new(field("executable_path")?))?,
+            started_at_ms: Rfc3339MillisV1::new(field("started_at")?)
+                .ok()
+                .and_then(|timestamp| timestamp.to_unix_millis())
+                .ok_or_else(invalid)?,
+        };
+        let root = RuntimeResetPathV1::new(paths.podway_home().ok_or_else(invalid)?.as_path())?;
+        let payload = json!({
+            "schema": "podway.runtime-reset-control-input/v1",
+            "action": "inspect",
+            "mode": paths.mode(),
+            "namespace_root": root,
+            "expected_process_id": process.process_id,
+            "operation_id": null,
+            "token_sha256": null,
+            "reservation_id": null,
+        })
+        .as_object()
+        .expect("control payload is an object")
+        .clone();
+        let inspection = RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
+            request_id: RequestIdV1::new(uuid::Uuid::new_v4().to_string())
+                .map_err(|_| invalid())?,
+            client: request.client().clone(),
+            operation: request.operation(),
+            command: CommandNameV1::new("daemon.runtime_reset").map_err(|_| invalid())?,
+            workspace: None,
+            idempotency_key: None,
+            preconditions: request.preconditions().clone(),
+            options: request.options(),
+            payload,
+        })
+        .map_err(|_| invalid())?;
+        let output = match client.runtime_reset_inspect(&inspection) {
+            Ok(ResponseEnvelopeV2::OutputV2(output)) => output,
+            Ok(ResponseEnvelopeV2::Error(error))
+                if matches!(
+                    error.code().as_str(),
+                    "RUNTIME_RESET_UNSUPPORTED" | "REQUEST_INVALID"
+                ) =>
+            {
+                return Ok(RuntimeResetPeerV1::Unsupported);
+            }
+            Ok(ResponseEnvelopeV2::Error(error))
+                if error.code().as_str() == "RUNTIME_RESET_UNSAFE" =>
+            {
+                let reason = serde_json::from_value(error.details()["reason"].clone())
+                    .map_err(|_| invalid())?;
+                return Err(RuntimeResetErrorV1::unsafe_reason(reason));
+            }
+            _ => return Err(invalid()),
+        };
+        let result = output.result();
+        if result.get("namespace_root") != Some(&json!(root))
+            || result.get("mode") != Some(&json!(paths.mode()))
+            || result.get("process_id").and_then(serde_json::Value::as_str)
+                != Some(process.process_id.as_str())
+        {
+            return Err(RuntimeResetErrorV1::unsafe_reason(
+                RuntimeResetReasonV1::IdentityChanged,
+            ));
         }
+        let busy_reason = match result.get("state").and_then(serde_json::Value::as_str) {
+            Some("unsupported") => return Ok(RuntimeResetPeerV1::Unsupported),
+            Some("idle") if result["reason"].is_null() => None,
+            Some("busy") => {
+                Some(serde_json::from_value(result["reason"].clone()).map_err(|_| invalid())?)
+            }
+            _ => return Err(invalid()),
+        };
+        Ok(RuntimeResetPeerV1::Live {
+            process,
+            busy_reason,
+        })
     }
 }
 

@@ -1007,7 +1007,7 @@ commands:
   result_schemas:
   - podway.runtime-reset-result/v1
 - name: daemon.runtime_reset
-  availability: reserved_contract
+  availability: executable
   cli: []
   operation: control
   workspace_required: false

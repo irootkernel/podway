@@ -102,6 +102,7 @@ impl fmt::Display for EndpointPathViolationV1 {
 #[derive(Debug)]
 pub enum EndpointErrorV1 {
     AlreadyRunning,
+    RuntimeReset(podway_service::RuntimeResetErrorV1),
     UnsafeRuntimeDirectory {
         path: PathBuf,
         violation: EndpointPathViolationV1,
@@ -145,6 +146,7 @@ impl fmt::Display for EndpointErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::AlreadyRunning => formatter.write_str("podwayd is already running for this user"),
+            Self::RuntimeReset(error) => write!(formatter, "runtime startup refused: {error}"),
             Self::UnsafeRuntimeDirectory { path, violation } => {
                 write!(
                     formatter,
@@ -211,6 +213,16 @@ impl SingletonEndpointV1 {
     pub fn acquire(
         paths: &ServiceRuntimePathsV1,
     ) -> Result<SingletonEndpointGuardV1, EndpointErrorV1> {
+        let home = paths.ordinary_account_home().map_err(|_| {
+            EndpointErrorV1::RuntimeReset(podway_service::RuntimeResetErrorV1::unsafe_reason(
+                podway_service::RuntimeResetReasonV1::UnsafePath,
+            ))
+        })?;
+        let _topology = home
+            .as_ref()
+            .map(|home| podway_service::RuntimeResetLockV1::prepare_start(home, paths.mode()))
+            .transpose()
+            .map_err(EndpointErrorV1::RuntimeReset)?;
         let runtime_directory = paths.runtime_directory().as_path();
         let lock_path = paths.global_lock_path().as_path();
         let socket_path = paths.socket_path().as_path();

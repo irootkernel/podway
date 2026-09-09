@@ -68,6 +68,12 @@ struct CrashBetweenDeclaredRemovals {
 }
 
 impl ServiceFilesystemV1 for CrashBetweenDeclaredRemovals {
+    fn runtime_reset_gate(
+        &self,
+        paths: &ServiceRuntimePathsV1,
+    ) -> Result<Option<podway_service::RuntimeResetLockV1>, ServiceErrorV1> {
+        StdServiceFilesystemV1.runtime_reset_gate(paths)
+    }
     fn exists(&self, path: &Path) -> Result<bool, ServiceFilesystemErrorV1> {
         StdServiceFilesystemV1.exists(path)
     }

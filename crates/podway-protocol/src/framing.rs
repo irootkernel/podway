@@ -122,6 +122,16 @@ pub fn decode_single_frame_v1(input: &[u8]) -> Result<&[u8], FrameErrorV1> {
 /// request senders must half-close their write side so this function's EOF probe can distinguish a
 /// complete request from data that may still arrive later.
 pub fn read_single_frame_v1<R: Read>(reader: &mut R) -> Result<Option<Vec<u8>>, FrameErrorV1> {
+    let payload = read_frame_v1(reader)?;
+    if payload.is_some() {
+        require_frame_end_v1(reader)?;
+    }
+    Ok(payload)
+}
+
+/// Reads one bounded frame without consuming the next frame or requiring stream EOF.
+/// Only the closed runtime-reset control exchange may use this for persistent requests.
+pub fn read_frame_v1<R: Read>(reader: &mut R) -> Result<Option<Vec<u8>>, FrameErrorV1> {
     let mut prefix = [0_u8; FRAME_LENGTH_PREFIX_BYTES_V1];
     let received = read_until_eof(reader, &mut prefix, FrameIoPhaseV1::LengthPrefix)?;
     if received == 0 {
@@ -149,10 +159,15 @@ pub fn read_single_frame_v1<R: Read>(reader: &mut R) -> Result<Option<Vec<u8>>, 
         });
     }
 
+    Ok(Some(payload))
+}
+
+/// Requires EOF after an ordinary single request, preserving rejection of trailing bytes.
+pub fn require_frame_end_v1<R: Read>(reader: &mut R) -> Result<(), FrameErrorV1> {
     let mut probe = [0_u8; 1];
     loop {
         match reader.read(&mut probe) {
-            Ok(0) => return Ok(Some(payload)),
+            Ok(0) => return Ok(()),
             Ok(_) => return Err(FrameErrorV1::TrailingData),
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             Err(source) => {

@@ -577,7 +577,7 @@
     },
     {
       "command": "daemon.runtime_reset",
-      "availability": "reserved_contract",
+      "availability": "executable",
       "owner": "podway-daemon",
       "path": ["podway-cli", "podway-protocol", "podway-daemon"],
       "execution": "daemon",

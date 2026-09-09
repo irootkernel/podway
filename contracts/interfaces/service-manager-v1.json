@@ -16,6 +16,7 @@
   "error_type": {
     "name": "ServiceErrorV1",
     "variants": [
+      "RuntimeResetV1",
       "InvalidMetadataV1",
       "IoV1",
       "LaunchctlFailureV1",

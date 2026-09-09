@@ -1239,8 +1239,19 @@ impl WorkspaceMaintenanceKeyV1 {
 struct WorkspaceMaintenanceCoordinatorV1 {
     state: Mutex<WorkspaceMaintenanceCoordinatorStateV1>,
 }
+
+/// Retains the same coordinator fence used by maintenance, activation and worker claims.
+#[derive(Debug)]
+pub(crate) struct RuntimeResetBackgroundFenceV1(Arc<WorkspaceMaintenanceCoordinatorV1>);
+
+impl Drop for RuntimeResetBackgroundFenceV1 {
+    fn drop(&mut self) {
+        mutex_lock(&self.0.state).runtime_reset_reserved = false;
+    }
+}
 #[derive(Debug, Default)]
 struct WorkspaceMaintenanceCoordinatorStateV1 {
+    runtime_reset_reserved: bool,
     maintenance: HashSet<WorkspaceMaintenanceKeyV1>,
     activations: HashMap<WorkspaceMaintenanceKeyV1, usize>,
     claims: HashMap<WorkspaceMaintenanceKeyV1, usize>,
@@ -1255,6 +1266,20 @@ struct WorkspaceSchedulerRetirementStateV1 {
     store_closed: bool,
 }
 impl WorkspaceMaintenanceCoordinatorV1 {
+    fn reserve_runtime_reset(self: &Arc<Self>) -> Option<RuntimeResetBackgroundFenceV1> {
+        let mut state = mutex_lock(&self.state);
+        if state.runtime_reset_reserved
+            || !state.maintenance.is_empty()
+            || !state.activations.is_empty()
+            || !state.claims.is_empty()
+            || !state.rebinds.is_empty()
+        {
+            return None;
+        }
+        state.runtime_reset_reserved = true;
+        Some(RuntimeResetBackgroundFenceV1(Arc::clone(self)))
+    }
+
     fn active_operation_count(&self) -> usize {
         let state = mutex_lock(&self.state);
         state.maintenance.len()
@@ -1268,7 +1293,8 @@ impl WorkspaceMaintenanceCoordinatorV1 {
         key: WorkspaceMaintenanceKeyV1,
     ) -> Option<WorkspaceMaintenanceLeaseV1> {
         let mut state = mutex_lock(&self.state);
-        if state.maintenance.contains(&key)
+        if state.runtime_reset_reserved
+            || state.maintenance.contains(&key)
             || state.activations.contains_key(&key)
             || state.claims.contains_key(&key)
         {
@@ -1285,7 +1311,10 @@ impl WorkspaceMaintenanceCoordinatorV1 {
         key: WorkspaceMaintenanceKeyV1,
     ) -> Option<WorkspaceActivationLeaseV1> {
         let mut state = mutex_lock(&self.state);
-        if state.maintenance.contains(&key) || state.rebinds.contains(&key) {
+        if state.runtime_reset_reserved
+            || state.maintenance.contains(&key)
+            || state.rebinds.contains(&key)
+        {
             return None;
         }
         *state.activations.entry(key.clone()).or_insert(0) += 1;
@@ -1299,7 +1328,10 @@ impl WorkspaceMaintenanceCoordinatorV1 {
         key: WorkspaceMaintenanceKeyV1,
     ) -> Option<WorkspaceClaimLeaseV1> {
         let mut state = mutex_lock(&self.state);
-        if state.maintenance.contains(&key) || state.rebinds.contains(&key) {
+        if state.runtime_reset_reserved
+            || state.maintenance.contains(&key)
+            || state.rebinds.contains(&key)
+        {
             return None;
         }
         *state.claims.entry(key.clone()).or_insert(0) += 1;
@@ -1314,7 +1346,8 @@ impl WorkspaceMaintenanceCoordinatorV1 {
         key: WorkspaceMaintenanceKeyV1,
     ) -> Option<WorkspaceRebindLeaseV1> {
         let mut state = mutex_lock(&self.state);
-        if state.maintenance.contains(&key)
+        if state.runtime_reset_reserved
+            || state.maintenance.contains(&key)
             || state.rebinds.contains(&key)
             || state.claims.contains_key(&key)
             || state.activations.get(&key).copied() != Some(1)
@@ -2077,6 +2110,13 @@ pub struct WorkspaceRuntimeManagerV1 {
 }
 
 impl WorkspaceRuntimeManagerV1 {
+    #[cfg(test)]
+    pub(crate) fn with_isolated_maintenance_for_tests(paths: &ServiceRuntimePathsV1) -> Self {
+        let mut manager = Self::new(paths, SqliteStoreOptionsV1::new(1).unwrap());
+        manager.maintenance = Arc::new(WorkspaceMaintenanceCoordinatorV1::default());
+        manager
+    }
+
     pub fn new(paths: &ServiceRuntimePathsV1, inspection_options: SqliteStoreOptionsV1) -> Self {
         Self::with_observability(paths, inspection_options, None)
     }
@@ -2199,6 +2239,32 @@ impl WorkspaceRuntimeManagerV1 {
         }
         let maintenance = u32::try_from(self.maintenance.active_operation_count()).ok()?;
         Some((registered, active, queued, running, maintenance))
+    }
+
+    pub(crate) fn reserve_runtime_reset(
+        &self,
+        now: UnixMillis,
+    ) -> Result<RuntimeResetBackgroundFenceV1, podway_service::RuntimeResetReasonV1> {
+        use podway_service::RuntimeResetReasonV1;
+        let fence = self
+            .maintenance
+            .reserve_runtime_reset()
+            .ok_or(RuntimeResetReasonV1::Activity)?;
+        if self
+            .schedulers
+            .active_generations()
+            .iter()
+            .any(|scheduler| scheduler.context_snapshot().recovery_required())
+        {
+            return Err(RuntimeResetReasonV1::Recovery);
+        }
+        let (_, _, queued, running, maintenance) = self
+            .daemon_activity_counts(now)
+            .ok_or(RuntimeResetReasonV1::UnknownActivity)?;
+        if queued != 0 || running != 0 || maintenance != 0 {
+            return Err(RuntimeResetReasonV1::Activity);
+        }
+        Ok(fence)
     }
 
     /// Performs one no-follow observation of an exact registry root.
@@ -5364,6 +5430,164 @@ mod tests {
             "same-key admission must not begin after reset preparation acquires maintenance"
         );
         drop(maintenance);
+    }
+
+    #[test]
+    fn runtime_reset_reservation_is_atomic_with_background_leases() {
+        let coordinator = Arc::new(WorkspaceMaintenanceCoordinatorV1::default());
+        let key = WorkspaceMaintenanceKeyV1 {
+            common_directory_fingerprint: CanonicalRequestDigestV1::new(format!(
+                "sha256:{}",
+                "a".repeat(64)
+            ))
+            .unwrap(),
+            worktree_administration_fingerprint: CanonicalRequestDigestV1::new(format!(
+                "sha256:{}",
+                "b".repeat(64)
+            ))
+            .unwrap(),
+        };
+        let maintenance = coordinator.acquire(key.clone()).unwrap();
+        assert!(coordinator.reserve_runtime_reset().is_none());
+        drop(maintenance);
+        let activation = coordinator.acquire_activation(key.clone()).unwrap();
+        let rebind = coordinator.acquire_rebind(key.clone()).unwrap();
+        assert!(coordinator.reserve_runtime_reset().is_none());
+        drop(rebind);
+        assert!(coordinator.reserve_runtime_reset().is_none());
+        drop(activation);
+        let claim = coordinator.acquire_claim(key.clone()).unwrap();
+        assert!(coordinator.reserve_runtime_reset().is_none());
+        drop(claim);
+        let reset = coordinator.reserve_runtime_reset().unwrap();
+        assert!(coordinator.acquire(key.clone()).is_none());
+        assert!(coordinator.acquire_activation(key.clone()).is_none());
+        assert!(coordinator.acquire_claim(key.clone()).is_none());
+        assert!(coordinator.acquire_rebind(key.clone()).is_none());
+        drop(reset);
+        for _ in 0..4 {
+            let start = Barrier::new(3);
+            let finish = Barrier::new(3);
+            let (sent, received) = std::sync::mpsc::channel();
+            thread::scope(|scope| {
+                scope.spawn(|| {
+                    start.wait();
+                    let lease = coordinator.acquire_claim(key.clone());
+                    sent.send(lease.is_some()).unwrap();
+                    finish.wait();
+                });
+                scope.spawn(|| {
+                    start.wait();
+                    let reset = coordinator.reserve_runtime_reset();
+                    sent.send(reset.is_some()).unwrap();
+                    finish.wait();
+                });
+                start.wait();
+                let first = received.recv().unwrap();
+                let second = received.recv().unwrap();
+                finish.wait();
+                assert_ne!(first, second, "exactly one competing admission may succeed");
+            });
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_reset_refuses_real_queued_and_running_store_jobs() {
+        let fixture = Path::new("/private/tmp").join(format!("pw-rb-{}", Uuid::new_v4().simple()));
+        let account = fixture.join("home");
+        let worktree = fixture.join("worktree");
+        fs::create_dir_all(&account).unwrap();
+        fs::set_permissions(&account, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(
+            Command::new("git")
+                .args(["init", "--quiet"])
+                .arg(&worktree)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(&worktree)
+                .args([
+                    "-c",
+                    "user.name=Podway Test",
+                    "-c",
+                    "user.email=fixture@example.invalid",
+                    "commit",
+                    "--allow-empty",
+                    "--quiet",
+                    "-m",
+                    "fixture",
+                ])
+                .status()
+                .unwrap()
+                .success()
+        );
+        let paths =
+            ServiceRuntimePathsV1::for_account_home(&account, nix::unistd::geteuid().as_raw())
+                .unwrap();
+        drop(
+            podway_service::RuntimeResetLockV1::prepare_start(
+                &paths.ordinary_account_home().unwrap().unwrap(),
+                paths.mode(),
+            )
+            .unwrap(),
+        );
+        let manager = WorkspaceRuntimeManagerV1::with_isolated_maintenance_for_tests(&paths);
+        let now = UnixMillis::new(1_800_000_000_000);
+        let observation = WorkspaceRuntimeObservationV1::new(
+            now,
+            Rfc3339MillisV1::from_unix_millis(1_800_000_000_000).unwrap(),
+        );
+        let scheduler = manager
+            .bootstrap(mode_switch_selector(&worktree), observation)
+            .unwrap();
+        drop(manager.reserve_runtime_reset(now).unwrap());
+        let context = scheduler.context_snapshot();
+        let identity = context.binding().identity();
+        context
+            .store_for_mutation()
+            .admit(
+                identity,
+                AdmitRequestV1::new(
+                    podway_store::CommandV1::WorkspaceInitialize,
+                    IdempotencyKeyV1::new("runtime-reset-busy").unwrap(),
+                    JobIdV1::new(Uuid::new_v4().to_string()).unwrap(),
+                    RevisionAttemptItemPreconditionsV1::new(None, None, None, None).unwrap(),
+                    CanonicalRequestDigestV1::new(format!("sha256:{}", "a".repeat(64))).unwrap(),
+                    now,
+                ),
+            )
+            .unwrap();
+        assert!(matches!(
+            manager.reserve_runtime_reset(now),
+            Err(podway_service::RuntimeResetReasonV1::Activity)
+        ));
+        let worker = podway_store::WorkerIdV1::new("runtime-reset-fixture").unwrap();
+        assert!(
+            context
+                .store_for_mutation()
+                .claim_next(identity, worker, now)
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(manager.daemon_activity_counts(now).unwrap().3, 1);
+        assert!(matches!(
+            manager.reserve_runtime_reset(now),
+            Err(podway_service::RuntimeResetReasonV1::Activity)
+        ));
+        context.mark_recovery_required();
+        assert!(matches!(
+            manager.reserve_runtime_reset(now),
+            Err(podway_service::RuntimeResetReasonV1::Recovery)
+        ));
+        drop(context);
+        drop(scheduler);
+        drop(manager);
+        fs::remove_dir_all(fixture).unwrap();
     }
 
     #[test]

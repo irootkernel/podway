@@ -472,6 +472,24 @@ impl ProductionDaemonRuntimeV1 {
                 return Err(ProductionDaemonStartupErrorV1::EndpointAcquire(error));
             }
         };
+        Self::from_endpoint_with_observability(
+            endpoint,
+            paths,
+            inspection_options,
+            configuration,
+            observability,
+        )
+    }
+
+    /// Composes a runtime after endpoint admission, allowing process logging to start only
+    /// after the ordinary namespace topology and committed-reset checks have succeeded.
+    pub fn from_endpoint_with_observability(
+        endpoint: SingletonEndpointGuardV1,
+        paths: &ServiceRuntimePathsV1,
+        inspection_options: SqliteStoreOptionsV1,
+        configuration: ProductionDaemonRuntimeConfigV1,
+        observability: Option<ObservabilityEmitterV1>,
+    ) -> Result<Self, ProductionDaemonStartupErrorV1> {
         let manager = Arc::new(WorkspaceRuntimeManagerV1::with_observability_and_scope(
             paths,
             inspection_options,
@@ -495,8 +513,22 @@ impl ProductionDaemonRuntimeV1 {
         )
         .with_readiness(readiness.clone());
         if let Some(identity) = configuration.process_identity().cloned() {
+            let identity = identity.with_effective_socket_path(endpoint.socket_path());
+            let reset = crate::server::runtime_reset::RuntimeResetControllerV1::new(
+                paths,
+                identity.clone(),
+                Arc::clone(&manager),
+                admission.clone(),
+                readiness.clone(),
+            )
+            .map_err(|error| {
+                ProductionDaemonStartupErrorV1::EndpointAcquire(
+                    crate::endpoint::EndpointErrorV1::RuntimeReset(error),
+                )
+            })?;
             transport = transport
-                .with_process_identity(identity.with_effective_socket_path(endpoint.socket_path()));
+                .with_process_identity(identity)
+                .with_runtime_reset(reset);
         }
         if configuration.dev_mode() {
             transport = transport.with_dev_shutdown(admission.clone());

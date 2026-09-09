@@ -202,6 +202,49 @@ fn request() -> podway_protocol::RequestEnvelopeV1 {
     .expect("fixture request must satisfy the G006 session.status contract")
 }
 
+#[test]
+fn runtime_reset_inspect_rejects_reservation_and_invalid_payload_before_connecting() {
+    let fixture = RuntimeFixture::new();
+    let client = DaemonClientV1::new(fixture.paths.clone());
+    let mut wire = serde_json::to_value(request()).unwrap();
+    wire["command"] = serde_json::json!("daemon.runtime_reset");
+    wire["operation"] = serde_json::json!("control");
+    wire.as_object_mut().unwrap().remove("workspace");
+    wire["options"] = serde_json::json!({"detach": false, "wait_timeout_ms": 0});
+    wire["payload"] = serde_json::json!({
+        "schema": "podway.runtime-reset-control-input/v1", "action": "reserve", "mode": "prod",
+        "namespace_root": podway_service::RuntimeResetPathV1::new(&fixture.root).unwrap(),
+        "expected_process_id": REQUEST_ID, "operation_id": WORKSPACE_ID,
+        "token_sha256": format!("sha256:{}", "0".repeat(64)), "reservation_id": null,
+    });
+    let reserved = serde_json::from_value(wire.clone()).unwrap();
+    assert!(podway_protocol::validate_runtime_reset_control_request_v1(
+        &reserved
+    ));
+    assert!(matches!(
+        client.runtime_reset_inspect(&reserved),
+        Err(DaemonClientErrorV1::RequestAdmission { .. })
+    ));
+    wire["payload"]["action"] = serde_json::json!("inspect");
+    wire["payload"]["operation_id"] = serde_json::Value::Null;
+    wire["payload"]["token_sha256"] = serde_json::Value::Null;
+    let inspect = serde_json::from_value(wire.clone()).unwrap();
+    assert!(matches!(
+        client.runtime_reset_inspect(&inspect),
+        Err(DaemonClientErrorV1::Connection {
+            operation: DaemonClientIoOperationV1::Connect,
+            ..
+        })
+    ));
+    wire["payload"]["unexpected"] = serde_json::json!(true);
+    let invalid = serde_json::from_value(wire).unwrap();
+    assert!(matches!(
+        client.runtime_reset_inspect(&invalid),
+        Err(DaemonClientErrorV1::RequestAdmission { .. })
+    ));
+    assert!(!fixture.socket_path().exists());
+}
+
 fn output_payload(command: &str) -> Vec<u8> {
     if command == "session.start" {
         return v2_start_output_payload();

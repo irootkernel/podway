@@ -28,10 +28,11 @@ use podway_protocol::{
     Rfc3339MillisV1, SUPPORTED_PROTOCOLS_V1, SliceErrorV1, SliceRequestV1,
     WorkspaceModeApplyRequestV1, WorkspaceModePlanRequestV1, WorkspaceRemoveRequestV1,
     build_identity_v1, decode_request_payload_v1, decode_single_frame_v1,
-    encode_response_payload_v2, read_single_frame_v1, validate_frame_payload_length,
-    write_frame_v1,
+    encode_response_payload_v2, validate_frame_payload_length, write_frame_v1,
 };
 use serde_json::{Map, Value};
+
+pub(crate) mod runtime_reset;
 
 use crate::{
     observability::{EventOperationV1, EventOutcomeV1, EventRecordV1, ObservabilityEmitterV1},
@@ -802,6 +803,7 @@ pub struct UnixServerTransportV1<Source, Dispatcher, Metadata = SystemResponseMe
     process_identity: Option<DaemonProcessIdentityV1>,
     readiness: Option<DaemonReadinessV1>,
     dev_shutdown: Option<ShutdownAdmissionV1>,
+    runtime_reset: Option<runtime_reset::RuntimeResetControllerV1>,
 }
 
 impl<Source, Dispatcher> UnixServerTransportV1<Source, Dispatcher, SystemResponseMetadataSourceV1> {
@@ -855,6 +857,7 @@ impl<Source, Dispatcher, Metadata> UnixServerTransportV1<Source, Dispatcher, Met
             process_identity: None,
             readiness: None,
             dev_shutdown: None,
+            runtime_reset: None,
         }
     }
 
@@ -870,6 +873,14 @@ impl<Source, Dispatcher, Metadata> UnixServerTransportV1<Source, Dispatcher, Met
 
     pub fn with_dev_shutdown(mut self, admission: ShutdownAdmissionV1) -> Self {
         self.dev_shutdown = Some(admission);
+        self
+    }
+
+    pub(crate) fn with_runtime_reset(
+        mut self,
+        controller: runtime_reset::RuntimeResetControllerV1,
+    ) -> Self {
+        self.runtime_reset = Some(controller);
         self
     }
 
@@ -951,7 +962,7 @@ where
 
         let (frame, recorded) = {
             let mut recorder = RecordingReaderV1::new(&mut connection);
-            let frame = read_single_frame_v1(&mut recorder);
+            let frame = podway_protocol::read_frame_v1(&mut recorder);
             (frame, recorder.into_bytes())
         };
         let payload = match frame {
@@ -1005,6 +1016,24 @@ where
                 );
             }
         };
+        if request.command().as_str() != "daemon.runtime_reset"
+            && let Err(error) = podway_protocol::require_frame_end_v1(&mut connection)
+        {
+            self.write_transport_error(
+                &mut connection,
+                Some(RequestContextV1::from_request(&request)),
+                classify_frame_error(&error),
+            )?;
+            return match error {
+                FrameErrorV1::Io { phase, source } => {
+                    Err(ServerConnectionErrorV1::RequestFrameIo {
+                        phase,
+                        kind: source.kind(),
+                    })
+                }
+                _ => Ok(()),
+            };
+        }
         let identity = build_identity_v1();
         if request.client().product() != identity.product()
             || request.client().contract_manifest_digest() != identity.contract_manifest_digest()
@@ -1018,6 +1047,9 @@ where
             );
             let response = self.contract_mismatch_response(&request)?;
             return self.write_response(&mut connection, &response);
+        }
+        if request.command().as_str() == "daemon.runtime_reset" {
+            return self.handle_runtime_reset(connection, request);
         }
         if request.command().as_str() == "daemon.status" {
             if !is_daemon_status_request(&request) {
@@ -1049,6 +1081,18 @@ where
                 Some(&request),
                 Some(&response),
             );
+            return self.write_response(&mut connection, &response);
+        }
+        if self
+            .runtime_reset
+            .as_ref()
+            .is_some_and(|reset| !reset.normal_admission_open())
+        {
+            let response = self.runtime_reset_error_response(
+                &request,
+                "DAEMON_SHUTTING_DOWN",
+                podway_service::RuntimeResetReasonV1::OperationInProgress,
+            )?;
             return self.write_response(&mut connection, &response);
         }
         if request.command().as_str() == "daemon.terminate" {
@@ -1866,6 +1910,7 @@ struct ShutdownAdmissionInnerV1 {
 struct ShutdownAdmissionStateV1 {
     accepting: bool,
     in_flight: usize,
+    reservation: Option<runtime_reset::ReservationV1>,
 }
 
 #[derive(Debug)]
@@ -1882,6 +1927,7 @@ impl ShutdownAdmissionV1 {
                 state: Mutex::new(ShutdownAdmissionStateV1 {
                     accepting: true,
                     in_flight: 0,
+                    reservation: None,
                 }),
                 changed: Condvar::new(),
             }),

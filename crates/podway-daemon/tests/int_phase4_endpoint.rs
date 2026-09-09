@@ -274,6 +274,8 @@ fn assert_frozen_daemon_source_inventory(source_root: &Path) {
         "runtime_workspace.rs",
         "scheduler.rs",
         "server.rs",
+        "server/runtime_reset.rs",
+        "server/runtime_reset/tests.rs",
         "v2_read_service.rs",
         "worker.rs",
         "workspace.rs",
@@ -494,14 +496,14 @@ fn use_items(tokens: &[RustTokenV1]) -> Vec<ImportedPathV1> {
     imports
 }
 
-fn is_allowed_nix_peer_credential_path(path: &[String]) -> bool {
+fn is_allowed_nix_local_socket_path(path: &[String]) -> bool {
     matches!(
         path,
         [root, sys, socket, member]
             if root == "nix"
                 && sys == "sys"
                 && socket == "socket"
-                && member == "getsockopt"
+                && matches!(member.as_str(), "getsockopt" | "recv" | "MsgFlags")
     ) || matches!(
         path,
         [root, sys, socket, sockopt, member]
@@ -516,7 +518,9 @@ fn is_allowed_nix_peer_credential_path(path: &[String]) -> bool {
 fn assert_network_path_is_rejected(path: &[String], source: &Path) {
     let rendered = path.join("::");
     let forbidden = match path {
-        [root, net, ..] if root == "std" && net == "net" => true,
+        [root, net, ..] if root == "std" && net == "net" => {
+            !matches!(path, [_, _, member, ..] if member == "Shutdown")
+        }
         [root, os, unix, net, member, ..]
             if root == "std"
                 && os == "os"
@@ -530,7 +534,7 @@ fn assert_network_path_is_rejected(path: &[String], source: &Path) {
             true
         }
         [root, sys, socket, ..] if root == "nix" && sys == "sys" && socket == "socket" => {
-            !is_allowed_nix_peer_credential_path(path)
+            !is_allowed_nix_local_socket_path(path)
         }
         [root, ..] if root == "libc" => true,
         _ => false,
@@ -604,7 +608,10 @@ fn assert_network_proof_sentinels() {
     for forbidden in [
         "std::net::TcpListener::bind",
         "std::net::UdpSocket::bind",
+        "std::net",
         "nix::sys::socket::socket",
+        "nix::sys::socket::connect",
+        "nix::sys::socket::bind",
         "libc::AF_INET6",
         "libc::connect",
     ] {
@@ -615,6 +622,17 @@ fn assert_network_proof_sentinels() {
             rejected.is_err(),
             "PAC-063 sentinel must reject forbidden capability {forbidden}"
         );
+    }
+
+    // These operate on an already-owned UnixStream and cannot create a network endpoint.
+    for allowed in [
+        "std::net::Shutdown::Write",
+        "nix::sys::socket::recv",
+        "nix::sys::socket::MsgFlags",
+    ] {
+        let tokens = rust_tokens(allowed);
+        let (path, _) = path_at(&tokens, 0).expect("sentinel must be a path");
+        assert_network_path_is_rejected(&path, source);
     }
 
     let ordinary_identifier = rust_tokens("network_listener_name = \"std::net::TcpListener\";");

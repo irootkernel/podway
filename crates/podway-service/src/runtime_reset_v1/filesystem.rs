@@ -10,7 +10,8 @@ use nix::{
     dir::Dir,
     errno::Errno,
     fcntl::{AtFlags, OFlag, openat},
-    sys::stat::{FileStat, Mode, SFlag, fstat, fstatat},
+    sys::stat::{FileStat, Mode, SFlag, fstat, fstatat, mkdirat},
+    unistd::fsync,
 };
 use podway_core::RuntimeModeV1;
 use sha2::{Digest, Sha256};
@@ -48,6 +49,50 @@ fn identity(stat: &FileStat) -> Result<FileIdentity, Error> {
 }
 
 impl Directory {
+    pub(super) fn create_child(&self, name: &OsStr) -> Result<Self, Error> {
+        match mkdirat(&self.fd, name, Mode::from_bits_truncate(0o700)) {
+            Ok(()) => fsync(&self.fd).map_err(io_error)?,
+            Err(Errno::EEXIST) => {}
+            Err(error) => return Err(io_error(error)),
+        }
+        self.child_optional(name, true)?
+            .ok_or_else(Error::unsafe_path)
+    }
+
+    pub(super) fn open_lock(&self, name: &OsStr) -> Result<File, Error> {
+        let before = self.regular_optional(name)?;
+        let flags = OFlag::O_RDWR | OFlag::O_NOFOLLOW | OFlag::O_NONBLOCK | OFlag::O_CLOEXEC;
+        let fd = if before.is_some() {
+            openat(&self.fd, name, flags, Mode::empty()).map_err(io_error)?
+        } else {
+            // Concurrent O_CREAT opens can fail with ENOENT on macOS. Create exactly once;
+            // a losing creator opens the existing anchor without allowing its recreation.
+            match openat(
+                &self.fd,
+                name,
+                flags | OFlag::O_CREAT | OFlag::O_EXCL,
+                Mode::from_bits_truncate(0o600),
+            ) {
+                Ok(fd) => fd,
+                Err(Errno::EEXIST) => {
+                    openat(&self.fd, name, flags, Mode::empty()).map_err(io_error)?
+                }
+                Err(error) => return Err(io_error(error)),
+            }
+        };
+        let after = self.validate_file(&fstat(&fd).map_err(io_error)?, FileKind::Regular)?;
+        if before.as_ref().is_some_and(|identity| identity != &after)
+            || self.regular_optional(name)?.as_ref() != Some(&after)
+        {
+            return Err(Error::unsafe_path());
+        }
+        if before.is_none() {
+            fsync(&fd).map_err(io_error)?;
+            fsync(&self.fd).map_err(io_error)?;
+        }
+        Ok(File::from(fd))
+    }
+
     pub(super) fn account(home: &PodwayHomeV1) -> Result<Self, Error> {
         let fd =
             StdServiceFilesystemV1::open_verified_directory_optional(home.account_home(), None)
@@ -100,6 +145,9 @@ impl Directory {
         let stat = fstat(&fd).map_err(io_error)?;
         if stat.st_uid != self.uid
             || identity(&stat)?.device != self.device
+            || !identity(&stat)?.same_directory_anchor(&identity(
+                &fstatat(&self.fd, name, AtFlags::AT_SYMLINK_NOFOLLOW).map_err(io_error)?,
+            )?)
             || (private && stat.st_mode & 0o7777 != 0o700)
             || (!private && stat.st_mode & 0o022 != 0)
         {

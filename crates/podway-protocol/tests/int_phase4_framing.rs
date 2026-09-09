@@ -6,12 +6,134 @@ use podway_protocol::{
     OutputEnvelopeV3, PayloadCodecErrorV1, PreconditionsV1, ProtocolError, RequestEnvelopeInputV1,
     RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, ResponseEnvelopeV2, Rfc3339MillisV1,
     decode_request_payload_v1, decode_response_payload_v2, decode_single_frame_v1, encode_frame_v1,
-    encode_request_payload_v1, encode_response_payload_v2, read_single_frame_v1, write_frame_v1,
+    encode_request_payload_v1, encode_response_payload_v2, read_frame_v1, read_single_frame_v1,
+    require_frame_end_v1, write_frame_v1,
 };
 use serde_json::{Map, Value, json};
 
 const REQUEST_ID: &str = "123e4567-e89b-12d3-a456-426614174000";
 const GENERATED_AT: &str = "2026-07-14T12:34:56.789Z";
+
+#[test]
+fn runtime_reset_process_timestamp_preserves_epoch_and_leap_day_identity() {
+    for millis in [
+        0,
+        1,
+        86_400_000,
+        951_827_696_789,
+        1_800_000_000_123,
+        253_402_300_799_999,
+    ] {
+        assert_eq!(
+            Rfc3339MillisV1::from_unix_millis(millis)
+                .unwrap()
+                .to_unix_millis(),
+            Some(millis)
+        );
+    }
+    assert_eq!(
+        Rfc3339MillisV1::new("2000-02-29T12:34:56.789Z")
+            .unwrap()
+            .to_unix_millis(),
+        Some(951_827_696_789)
+    );
+    assert_eq!(
+        Rfc3339MillisV1::new("1969-12-31T23:59:59.999Z")
+            .unwrap()
+            .to_unix_millis(),
+        None
+    );
+}
+
+#[test]
+fn runtime_reset_control_rejects_open_payloads_and_all_ordinary_options() {
+    let request = RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
+        request_id: RequestIdV1::new(REQUEST_ID).unwrap(),
+        client: ClientInfoV1::new("podway", "0.2.9", 1).unwrap(),
+        operation: OperationV1::Control, command: CommandNameV1::new("daemon.runtime_reset").unwrap(),
+        workspace: None, idempotency_key: None, preconditions: PreconditionsV1::default(), options: RequestOptionsV1::new(false, 0).unwrap(),
+        payload: json!({
+            "schema": "podway.runtime-reset-control-input/v1", "action": "inspect", "mode": "dev",
+            "namespace_root": {"path_bytes_base64url": "L2E", "display": "/a"}, "expected_process_id": REQUEST_ID,
+            "operation_id": null, "token_sha256": null, "reservation_id": null,
+        }).as_object().unwrap().clone(),
+    }).unwrap();
+    assert!(podway_protocol::validate_runtime_reset_control_request_v1(
+        &request
+    ));
+    let wire = serde_json::to_value(request).unwrap();
+    for (section, field, value) in [
+        ("payload", "extra", json!(true)),
+        ("payload", "action", json!("execute")),
+        ("payload", "operation_id", json!(REQUEST_ID)),
+        ("payload", "reservation_id", json!(REQUEST_ID)),
+        ("preconditions", "goal_revision", json!(1)),
+        ("options", "detach", json!(true)),
+        ("options", "wait_timeout_ms", json!(1)),
+    ] {
+        let mut invalid = wire.clone();
+        invalid[section][field] = value;
+        let invalid: RequestEnvelopeV1 = serde_json::from_value(invalid).unwrap();
+        assert!(
+            !podway_protocol::validate_runtime_reset_control_request_v1(&invalid),
+            "{section}.{field}"
+        );
+    }
+    let mut missing = wire;
+    missing["payload"]
+        .as_object_mut()
+        .unwrap()
+        .remove("operation_id");
+    assert!(!podway_protocol::validate_runtime_reset_control_request_v1(
+        &serde_json::from_value(missing).unwrap()
+    ));
+}
+
+#[test]
+fn runtime_reset_frame_read_leaves_following_frames_unconsumed() {
+    let first = encode_frame_v1(b"first").unwrap();
+    let second = encode_frame_v1(b"second").unwrap();
+    let bytes = [first.clone(), second].concat();
+    let mut reader = CappedReader::new(bytes.clone(), 2).with_interrupts([2, 5]);
+    assert_eq!(read_frame_v1(&mut reader).unwrap(), Some(b"first".to_vec()));
+    assert_eq!(reader.position, first.len());
+    assert_eq!(
+        read_frame_v1(&mut reader).unwrap(),
+        Some(b"second".to_vec())
+    );
+    require_frame_end_v1(&mut reader).unwrap();
+    assert!(matches!(
+        read_single_frame_v1(&mut bytes.as_slice()),
+        Err(FrameErrorV1::TrailingData)
+    ));
+}
+
+#[test]
+fn runtime_reset_frame_read_does_not_wait_for_stream_eof() {
+    let frame = encode_frame_v1(b"reserve").unwrap();
+    let mut reader =
+        CappedReader::new(frame.clone(), usize::MAX).with_failure(3, io::ErrorKind::TimedOut);
+    assert_eq!(
+        read_frame_v1(&mut reader).unwrap(),
+        Some(b"reserve".to_vec())
+    );
+    assert_eq!(reader.calls, 2);
+    assert!(matches!(
+        require_frame_end_v1(&mut reader),
+        Err(FrameErrorV1::Io {
+            phase: FrameIoPhaseV1::EndOfStream,
+            ..
+        })
+    ));
+    let mut strict = CappedReader::new(frame, usize::MAX).with_failure(3, io::ErrorKind::TimedOut);
+    assert!(matches!(
+        read_single_frame_v1(&mut strict),
+        Err(FrameErrorV1::Io {
+            phase: FrameIoPhaseV1::EndOfStream,
+            ..
+        })
+    ));
+}
 
 struct CappedReader {
     bytes: Vec<u8>,

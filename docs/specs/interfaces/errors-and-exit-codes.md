@@ -29,8 +29,8 @@ parallel removal-specific error taxonomy.
 The account-runtime reset error family is defined in the
 [runtime reset specification](../operations/runtime-reset.md#public-results-errors-and-bounds)
 and `podway.runtime-reset-error-details/v1`. Its seven `RUNTIME_RESET_*` codes
-are catalogued together; read-only plan errors are executable while apply and
-control remain reserved. Partial
+are catalogued together; read-only plan and process-bound control errors are
+executable while apply remains reserved. Partial
 retirement is a non-success result with exact retry information, never rollback.
 
 ## Exit codes

@@ -349,8 +349,20 @@ fn production_and_named_mode_own_disjoint_complete_namespaces() {
     while (!production_socket.exists() || !named_socket.exists()) && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(10));
     }
-    assert!(production_socket.exists());
-    assert!(named_socket.exists());
+    if !production_socket.exists() || !named_socket.exists() {
+        for child in [&production, &named] {
+            let _ = kill(Pid::from_raw(child.id() as i32), Signal::SIGTERM);
+        }
+        let production_output = production.wait_with_output().unwrap();
+        let named_output = named.wait_with_output().unwrap();
+        panic!(
+            "namespace startup failed: production={:?} {}; named={:?} {}",
+            production_output.status,
+            String::from_utf8_lossy(&production_output.stderr),
+            named_output.status,
+            String::from_utf8_lossy(&named_output.stderr),
+        );
+    }
     assert_eq!(query_ready_status(production_socket)["mode"], "prod");
     assert_eq!(query_ready_status(named_socket)["mode"], "demo");
 

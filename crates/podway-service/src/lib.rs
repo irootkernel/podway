@@ -29,6 +29,7 @@ use serde::{
 };
 use sha2::{Digest, Sha256};
 use std::{
+    borrow::Cow,
     collections::{HashSet, VecDeque},
     error::Error,
     fmt, fs,
@@ -252,6 +253,23 @@ pub struct ServiceRuntimePathsV1 {
 }
 
 impl ServiceRuntimePathsV1 {
+    /// Returns the account owner only for its ordinary, computed namespace root.
+    /// Explicit external runtime roots retain their independent lifecycle.
+    pub fn ordinary_account_home(&self) -> Result<Option<PodwayHomeV1>, ServicePathErrorV1> {
+        let (Some(account_home), Some(user_id), Some(root)) =
+            (&self.account_home, self.account_user_id, &self.podway_home)
+        else {
+            return Ok(None);
+        };
+        let home = PodwayHomeV1::from_account_home(account_home.as_path(), user_id)?;
+        let expected = if self.mode.is_production() {
+            home.as_path().to_path_buf()
+        } else {
+            home.as_path().join("modes").join(self.mode.as_str())
+        };
+        Ok((root.as_path() == expected).then_some(home))
+    }
+
     /// Constructs the legacy `--dev` compatibility layout at an explicit runtime root.
     pub fn for_dev_home(
         account_home: impl AsRef<Path>,
@@ -259,11 +277,23 @@ impl ServiceRuntimePathsV1 {
         user_id: u32,
     ) -> Result<Self, ServicePathErrorV1> {
         let account = PodwayHomeV1::from_account_home(account_home, user_id)?;
-        if dev_home.as_ref() == account.as_path() {
+        let dev_home = dev_home.as_ref();
+        let normalized = normalized_platform_alias(dev_home);
+        if normalized == normalized_platform_alias(account.as_path())
+            || same_existing_directory(dev_home, account.as_path())
+        {
             return Err(ServicePathErrorV1::DevHomeConflictsProduction {
-                path: dev_home.as_ref().to_path_buf(),
+                path: dev_home.to_path_buf(),
             });
         }
+        let ordinary = account.as_path().join("modes/dev");
+        let dev_home = if normalized == normalized_platform_alias(&ordinary)
+            || same_existing_directory(dev_home, &ordinary)
+        {
+            ordinary.as_path()
+        } else {
+            dev_home
+        };
         let mut paths = Self::for_runtime_root(dev_home, RuntimeModeV1::development(), user_id)?;
         paths.account_home = Some(LocalPlatformPathV1::service_global(account.account_home())?);
         paths.account_user_id = Some(user_id);
@@ -507,6 +537,13 @@ impl ServiceRuntimePathsV1 {
         self.socket_path = LocalPlatformPathV1::service_global(socket_path)?;
         Ok(self)
     }
+}
+
+fn same_existing_directory(left: &Path, right: &Path) -> bool {
+    let (Ok(left), Ok(right)) = (fs::metadata(left), fs::metadata(right)) else {
+        return false;
+    };
+    left.is_dir() && right.is_dir() && left.dev() == right.dev() && left.ino() == right.ino()
 }
 
 /// Input used to install or update the fixed v1 LaunchAgent definition.
@@ -1559,6 +1596,7 @@ impl Error for ServiceMetadataErrorV1 {}
 /// Typed failures raised by service adapters and manager result validation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ServiceErrorV1 {
+    RuntimeResetV1(RuntimeResetErrorV1),
     InvalidMetadataV1 {
         message: String,
     },
@@ -1612,6 +1650,7 @@ pub enum ServiceErrorV1 {
 impl fmt::Display for ServiceErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::RuntimeResetV1(error) => error.fmt(formatter),
             Self::InvalidMetadataV1 { message } => {
                 write!(formatter, "service metadata failure: {message}")
             }
@@ -1778,6 +1817,16 @@ fn validate_absolute_normalized_path(
     Ok(())
 }
 
+fn normalized_platform_alias(path: &Path) -> Cow<'_, Path> {
+    if let Ok(suffix) = path.strip_prefix("/var") {
+        Cow::Owned(Path::new("/private/var").join(suffix))
+    } else if let Ok(suffix) = path.strip_prefix("/tmp") {
+        Cow::Owned(Path::new("/private/tmp").join(suffix))
+    } else {
+        Cow::Borrowed(path)
+    }
+}
+
 fn validate_socket_path_capacity(path: &Path) -> Result<(), ServicePathErrorV1> {
     if path.as_os_str().len() >= MACOS_UNIX_SOCKET_PATH_CAPACITY_V1 {
         return Err(ServicePathErrorV1::SocketPathTooLong {
@@ -1803,6 +1852,13 @@ fn validate_service_path(path: &Path, field: &'static str) -> Result<(), Service
 /// Filesystem boundary used by the macOS LaunchAgent adapter. Implementations must perform
 /// `write_atomically` as a same-directory replace so a partially written plist is never loaded.
 pub trait ServiceFilesystemV1: Send + Sync {
+    /// Retains the ordinary namespace topology gate after checking its committed reset fence.
+    /// In-memory adapters model this boundary explicitly; external roots return no account gate.
+    /// Native adapters must validate the record before returning the retained filesystem lock.
+    fn runtime_reset_gate(
+        &self,
+        paths: &ServiceRuntimePathsV1,
+    ) -> Result<Option<RuntimeResetLockV1>, ServiceErrorV1>;
     fn exists(&self, path: &Path) -> Result<bool, ServiceFilesystemErrorV1>;
     fn is_executable(&self, path: &Path) -> Result<bool, ServiceFilesystemErrorV1>;
     fn create_directory(&self, path: &Path, mode: u32) -> Result<(), ServiceFilesystemErrorV1>;
@@ -2001,17 +2057,8 @@ impl StdServiceFilesystemV1 {
         path: &Path,
         create_final_mode: Option<u32>,
     ) -> Result<Option<OwnedFd>, ServiceFilesystemErrorV1> {
-        let normalized;
-        let path = if let Ok(suffix) = path.strip_prefix("/var") {
-            normalized = Path::new("/private/var").join(suffix);
-            normalized.as_path()
-        } else if let Ok(suffix) = path.strip_prefix("/tmp") {
-            normalized = Path::new("/private/tmp").join(suffix);
-            normalized.as_path()
-        } else {
-            path
-        };
-        let components = Self::service_path_components(path)?;
+        let normalized = normalized_platform_alias(path);
+        let components = Self::service_path_components(normalized.as_ref())?;
         let mut directory = open(
             "/",
             OFlag::O_CLOEXEC | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_RDONLY,
@@ -2167,6 +2214,20 @@ impl StdServiceFilesystemV1 {
 }
 
 impl ServiceFilesystemV1 for StdServiceFilesystemV1 {
+    fn runtime_reset_gate(
+        &self,
+        paths: &ServiceRuntimePathsV1,
+    ) -> Result<Option<RuntimeResetLockV1>, ServiceErrorV1> {
+        let Some(home) = paths
+            .ordinary_account_home()
+            .map_err(ServiceErrorV1::PathSafetyV1)?
+        else {
+            return Ok(None);
+        };
+        let gate = RuntimeResetLockV1::gate_start(&home, paths.mode())
+            .map_err(ServiceErrorV1::RuntimeResetV1)?;
+        Ok(Some(gate))
+    }
     fn exists(&self, path: &Path) -> Result<bool, ServiceFilesystemErrorV1> {
         let parent = path.parent().ok_or_else(|| {
             ServiceFilesystemErrorV1::other("service path has no parent directory")
@@ -3587,6 +3648,7 @@ where
         op: ServiceOperationV1,
         paths: &ServiceRuntimePathsV1,
     ) -> Result<(), ServiceErrorV1> {
+        let _topology = self.filesystem.runtime_reset_gate(paths)?;
         let mut directories = vec![
             paths.metadata_index_path().as_path().parent(),
             paths.log_path().as_path().parent(),
@@ -3740,6 +3802,7 @@ where
         let (expected_product, expected_manifest_digest) = &spec.expected_contract_identity;
         self.contract_verifier
             .verify(binary, expected_product, expected_manifest_digest)?;
+        drop(self.filesystem.runtime_reset_gate(paths)?);
         let plist_path = paths.launch_agent_path().as_path();
         let exists = self
             .filesystem
@@ -3974,6 +4037,23 @@ where
                 ServiceCommandV1::Logs { .. } => None,
             };
             let _transaction = transaction;
+            let paths = match &command {
+                // Installation validates the selected binary before creating any account state.
+                ServiceCommandV1::Install { .. } | ServiceCommandV1::Update { .. } => None,
+                ServiceCommandV1::Start { paths, .. }
+                | ServiceCommandV1::Stop { paths, .. }
+                | ServiceCommandV1::Restart { paths, .. }
+                | ServiceCommandV1::Uninstall { paths, .. }
+                | ServiceCommandV1::UninstallWithOptions { paths, .. } => Some(paths),
+                ServiceCommandV1::Status { .. }
+                | ServiceCommandV1::ReadinessStatus { .. }
+                | ServiceCommandV1::Logs { .. } => None,
+            };
+            if let Some(paths) = paths {
+                // The production lifecycle lock remains held, but a launched daemon needs the
+                // topology gate itself before readiness can succeed.
+                drop(self.filesystem.runtime_reset_gate(paths)?);
+            }
             match command {
                 ServiceCommandV1::Install { spec, .. } => {
                     self.install_or_update(ServiceOperationV1::Install, spec, false)
@@ -4780,6 +4860,12 @@ mod tests {
     }
 
     impl ServiceFilesystemV1 for ValidationFilesystemV1 {
+        fn runtime_reset_gate(
+            &self,
+            _: &ServiceRuntimePathsV1,
+        ) -> Result<Option<RuntimeResetLockV1>, ServiceErrorV1> {
+            Ok(None)
+        }
         fn exists(&self, _: &Path) -> Result<bool, ServiceFilesystemErrorV1> {
             Ok(false)
         }

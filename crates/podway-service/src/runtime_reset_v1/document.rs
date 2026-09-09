@@ -92,7 +92,7 @@ pub enum RuntimeResetReasonV1 {
     MissingIntent,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RuntimeResetErrorV1 {
     code: &'static str,
     pub mode: Option<RuntimeModeV1>,
@@ -119,6 +119,13 @@ impl Error {
             code: "RUNTIME_RESET_PLAN_STALE",
             mode: None,
             reason,
+        }
+    }
+    pub(super) fn in_progress() -> Self {
+        Self {
+            code: "RUNTIME_RESET_IN_PROGRESS",
+            mode: None,
+            reason: RuntimeResetReasonV1::OperationInProgress,
         }
     }
     pub(super) fn invalid_token() -> Self {
@@ -340,6 +347,12 @@ pub(super) struct FileIdentity {
     pub links: u32,
 }
 impl FileIdentity {
+    pub(super) fn same_directory_anchor(&self, other: &Self) -> bool {
+        // Creating or retiring child directories changes link count without replacing the anchor.
+        (self.device, self.inode, self.uid, self.mode)
+            == (other.device, other.inode, other.uid, other.mode)
+    }
+
     fn validate(&self, uid: u32) -> Result<(), Error> {
         if self.device > i64::MAX as u64
             || self.inode > i64::MAX as u64
@@ -741,10 +754,55 @@ enum ResourceOutcomeState {
 }
 
 impl ResetRecord {
+    pub(super) fn view(
+        bytes: &[u8],
+        home: &PodwayHomeV1,
+    ) -> Result<Option<super::RuntimeResetRecordViewV1>, Error> {
+        let record = Self::decode(bytes, home)?;
+        if record.phase == RecordPhase::Completed {
+            return Ok(None);
+        }
+        let plan = record
+            .plan
+            .as_ref()
+            .expect("validated in-progress record has a plan");
+        Ok(Some(super::RuntimeResetRecordViewV1 {
+            operation: RuntimeResetOperationV1 {
+                operation_id: record.operation_id.clone(),
+                token_sha256: record.token_sha256.clone(),
+            },
+            participants: record
+                .modes
+                .iter()
+                .zip(&plan.targets)
+                .map(|(mode, target)| super::RuntimeResetParticipantV1 {
+                    mode: mode.mode.clone(),
+                    root: target.root.clone(),
+                    process: target.process.clone(),
+                    reservation_id: mode.reservation_id.clone(),
+                    stop_intended: mode.phase == ModePhase::StopIntended,
+                })
+                .collect(),
+            account_identity: plan.account_identity.clone(),
+        }))
+    }
+
     pub(super) fn operation(
         bytes: &[u8],
         home: &PodwayHomeV1,
     ) -> Result<Option<RuntimeResetOperationV1>, Error> {
+        let record = Self::decode(bytes, home)?;
+        Ok(
+            (record.phase == RecordPhase::InProgress).then_some(RuntimeResetOperationV1 {
+                operation_id: record.operation_id,
+                token_sha256: record.token_sha256,
+            }),
+        )
+    }
+    fn decode(bytes: &[u8], home: &PodwayHomeV1) -> Result<Self, Error> {
+        if bytes.len() > MAX_RUNTIME_RESET_DOCUMENT_BYTES_V1 {
+            return Err(Error::limit());
+        }
         let record: Self = serde_json::from_slice(bytes).map_err(|_| Error::unsafe_path())?;
         record.validate(home).map_err(|error| {
             if error.reason == RuntimeResetReasonV1::BoundExceeded {
@@ -753,12 +811,7 @@ impl ResetRecord {
                 Error::unsafe_path()
             }
         })?;
-        Ok(
-            (record.phase == RecordPhase::InProgress).then_some(RuntimeResetOperationV1 {
-                operation_id: record.operation_id,
-                token_sha256: record.token_sha256,
-            }),
-        )
+        Ok(record)
     }
     fn validate(&self, home: &PodwayHomeV1) -> Result<(), Error> {
         validate_uuid(&self.operation_id)?;

@@ -91,7 +91,7 @@ fn write_executable(path: &Path, bytes: &[u8]) {
     fs::write(path, bytes).expect("write executable fixture");
     fs::set_permissions(path, fs::Permissions::from_mode(0o700)).expect("chmod executable fixture");
 }
-fn native_arm64_macho(marker: u8) -> Vec<u8> {
+pub(super) fn native_arm64_macho(marker: u8) -> Vec<u8> {
     let mut bytes = vec![0_u8; 40];
     bytes[..4].copy_from_slice(&[0xcf, 0xfa, 0xed, 0xfe]);
     bytes[4..8].copy_from_slice(&0x0100_000c_u32.to_le_bytes());
@@ -242,6 +242,8 @@ fn service_mutations_reject_symlinked_ancestors_without_touching_outside_sentine
 fn production_adapters_cover_native_launchagent_lifecycle_without_real_launchctl() {
     let root = unique_root();
     let home = unique_runtime();
+    fs::create_dir(&home).expect("existing account home");
+    fs::set_permissions(&home, fs::Permissions::from_mode(0o700)).expect("private account home");
     let paths = ServiceRuntimePathsV1::for_account_home(&home, geteuid().as_raw())
         .expect("fixture service paths");
 

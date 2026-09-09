@@ -324,6 +324,27 @@ impl DaemonClientV1 {
         self.exchange_v2(request)
     }
 
+    /// Performs the single read-only reset inspection after a verified status handshake.
+    pub fn runtime_reset_inspect(
+        &self,
+        request: &RequestEnvelopeV1,
+    ) -> Result<ResponseEnvelopeV2, DaemonClientErrorV1> {
+        if !podway_protocol::validate_runtime_reset_control_request_v1(request)
+            || request
+                .payload()
+                .get("action")
+                .and_then(serde_json::Value::as_str)
+                != Some("inspect")
+        {
+            return Err(DaemonClientErrorV1::RequestAdmission {
+                source: SliceErrorV1::InvalidCommand {
+                    received: request.command().as_str().to_owned(),
+                },
+            });
+        }
+        self.exchange_v2(request)
+    }
+
     /// Requests orderly shutdown of a foreground dev daemon.
     pub fn daemon_terminate(
         &self,

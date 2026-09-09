@@ -8,8 +8,10 @@ use nix::{
     fcntl::{Flock, FlockArg},
     unistd::geteuid,
 };
-use podway_core::{RuntimeModeV1, UnixMillis};
+use podway_core::{RuntimeModeV1, UnixMillis, canonicalize_json_v1};
 use podway_service::*;
+use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 struct Fixture(PathBuf);
 impl Fixture {
@@ -112,6 +114,361 @@ fn mode(value: &str) -> RuntimeResetSelectionV1 {
 }
 fn now() -> UnixMillis {
     UnixMillis::new(1000)
+}
+
+fn encode_base64url_unpadded(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut encoded = String::with_capacity((bytes.len() * 4).div_ceil(3));
+    for chunk in bytes.chunks(3) {
+        encoded.push(ALPHABET[(chunk[0] >> 2) as usize] as char);
+        encoded.push(
+            ALPHABET[(((chunk[0] & 3) << 4) | (chunk.get(1).copied().unwrap_or(0) >> 4)) as usize]
+                as char,
+        );
+        if chunk.len() > 1 {
+            encoded.push(
+                ALPHABET
+                    [(((chunk[1] & 15) << 2) | (chunk.get(2).copied().unwrap_or(0) >> 6)) as usize]
+                    as char,
+            );
+        }
+        if chunk.len() > 2 {
+            encoded.push(ALPHABET[(chunk[2] & 63) as usize] as char);
+        }
+    }
+    encoded
+}
+
+#[test]
+fn runtime_reset_lock_anchors_are_private_retained_and_exclusive() {
+    let fixture = Fixture::new();
+    let home = fixture.home();
+    let guard = RuntimeResetLockV1::acquire_reset(&home).unwrap();
+    let path = home.as_path().join("maintenance/runtime-reset.lock");
+    let before = fs::metadata(&path).unwrap();
+    assert_eq!(before.mode() & 0o7777, 0o600);
+    assert_eq!(before.nlink(), 1);
+    assert!(
+        matches!(RuntimeResetLockV1::acquire_reset(&home), Err(error) if error.code() == "RUNTIME_RESET_IN_PROGRESS")
+    );
+    drop(guard);
+    let _again = RuntimeResetLockV1::acquire_reset(&home).unwrap();
+    assert_eq!(fs::metadata(path).unwrap().ino(), before.ino());
+}
+
+#[test]
+fn runtime_start_refuses_unsafe_records_before_creating_a_named_namespace() {
+    let fixture = Fixture::new();
+    let record = fixture.file(".podway/maintenance/runtime-reset.json", b"invalid record");
+    let home = fixture.home();
+    assert!(RuntimeResetLockV1::prepare_start(&home, &RuntimeModeV1::development()).is_err());
+    assert!(!home.as_path().join("modes").exists());
+    fs::remove_file(&record).unwrap();
+    let victim = fixture.file("victim/record", b"untouched");
+    symlink(&victim, &record).unwrap();
+    assert!(RuntimeResetLockV1::prepare_start(&home, &RuntimeModeV1::development()).is_err());
+    assert!(!home.as_path().join("modes").exists());
+    assert_eq!(fs::read(victim).unwrap(), b"untouched");
+}
+
+#[test]
+fn runtime_start_fence_applies_only_to_a_recorded_participant_mode() {
+    let fixture = Fixture::new();
+    let home = fixture.home();
+    let root = fixture.directory(".podway/modes/dev");
+    let account_root = home.as_path();
+    let account_metadata = fs::metadata(account_root).unwrap();
+    let root_metadata = fs::metadata(&root).unwrap();
+    let mut fixtures: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/v2/compatibility/runtime-reset-contract-reservation.json"
+    ))
+    .unwrap();
+    let record = &mut fixtures["fixtures"]["podway.runtime-reset-record/v1"];
+    record["plan"]["caller_uid"] = serde_json::json!(geteuid().as_raw());
+    record["plan"]["account_root"] =
+        serde_json::to_value(RuntimeResetPathV1::new(account_root).unwrap()).unwrap();
+    record["plan"]["account_identity"] = serde_json::json!({
+        "device": account_metadata.dev(), "inode": account_metadata.ino(),
+        "uid": account_metadata.uid(), "mode": account_metadata.mode(),
+        "links": account_metadata.nlink(),
+    });
+    record["plan"]["selection"] = serde_json::json!({"kind": "mode", "mode": "dev"});
+    record["plan"]["targets"][0]["mode"] = serde_json::json!("dev");
+    record["plan"]["targets"][0]["root"] =
+        serde_json::to_value(RuntimeResetPathV1::new(&root).unwrap()).unwrap();
+    record["plan"]["targets"][0]["root_identity"] = serde_json::json!({
+        "device": root_metadata.dev(), "inode": root_metadata.ino(),
+        "uid": root_metadata.uid(), "mode": root_metadata.mode(),
+        "links": root_metadata.nlink(),
+    });
+    record["plan"]["targets"][0]["resource_classes"] = serde_json::json!([
+        "registry",
+        "runtime_recovery",
+        "service_metadata",
+        "socket",
+        "daemon_log",
+        "bootstrap_log",
+        "state_directory",
+        "logs_directory"
+    ]);
+    record["modes"][0]["mode"] = serde_json::json!("dev");
+    let encoded = canonicalize_json_v1(&record["plan"]).unwrap();
+    let token = format!(
+        "{}.{:x}",
+        encode_base64url_unpadded(encoded.as_bytes()),
+        Sha256::digest(encoded.as_bytes())
+    );
+    record["token_sha256"] =
+        serde_json::json!(format!("sha256:{:x}", Sha256::digest(token.as_bytes())));
+    fixture.file(
+        ".podway/maintenance/runtime-reset.json",
+        &serde_json::to_vec(record).unwrap(),
+    );
+
+    let production = RuntimeResetLockV1::prepare_start(&home, &RuntimeModeV1::production());
+    assert!(production.is_ok(), "{:?}", production.as_ref().err());
+    drop(production);
+    let development = RuntimeResetLockV1::prepare_start(&home, &RuntimeModeV1::development());
+    assert!(matches!(development, Err(error) if error.code() == "RUNTIME_RESET_IN_PROGRESS"));
+}
+
+#[test]
+fn production_lifecycle_refuses_an_unreadable_reset_record_before_side_effects() {
+    struct MatchingContract;
+    impl DaemonContractVerifierV1 for MatchingContract {
+        fn verify(&self, _: &Path, _: &str, _: &str) -> Result<(), ServiceErrorV1> {
+            Ok(())
+        }
+    }
+    struct NoLaunchctl;
+    impl LaunchctlRunnerV1 for NoLaunchctl {
+        fn run(&self, _: &[String]) -> Result<LaunchctlOutputV1, ServiceErrorV1> {
+            panic!("a fenced service command must not reach launchctl")
+        }
+    }
+    let fixture = Fixture::new();
+    fixture.namespace("prod");
+    fixture.file(
+        ".podway/maintenance/runtime-reset.json",
+        b"invalid committed record",
+    );
+    drop(RuntimeResetLockV1::acquire_topology(&fixture.home()).unwrap());
+    let paths = ServiceRuntimePathsV1::for_account_home(&fixture.0, geteuid().as_raw()).unwrap();
+    let binary = fixture.file(
+        "binary",
+        &super::int_phase6_native_service::native_arm64_macho(0),
+    );
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
+    let spec = InstallSpecV1::new(
+        LocalPlatformPathV1::new(binary).unwrap(),
+        ServiceLabelV1::podwayd(),
+        paths.clone(),
+        "podway",
+        format!("sha256:{}", "0".repeat(64)),
+    );
+    let runner = MacosServiceCommandRunnerV1::new_with_contract_verifier(
+        StdServiceFilesystemV1,
+        NoLaunchctl,
+        FixedServiceClockV1::new(now()),
+        geteuid().as_raw(),
+        MatchingContract,
+    )
+    .unwrap();
+    let before = snapshot(&fixture.0);
+    for command in [
+        ServiceCommandV1::Install {
+            requested_at: now(),
+            spec: spec.clone(),
+        },
+        ServiceCommandV1::Update {
+            requested_at: now(),
+            spec,
+        },
+        ServiceCommandV1::Start {
+            requested_at: now(),
+            paths: paths.clone(),
+        },
+        ServiceCommandV1::Stop {
+            requested_at: now(),
+            paths: paths.clone(),
+        },
+        ServiceCommandV1::Restart {
+            requested_at: now(),
+            paths: paths.clone(),
+        },
+        ServiceCommandV1::Uninstall {
+            requested_at: now(),
+            paths: paths.clone(),
+        },
+        ServiceCommandV1::UninstallWithOptions {
+            requested_at: now(),
+            paths,
+            options: UninstallOptionsV1::new(true),
+        },
+    ] {
+        let operation = command.operation();
+        let outcome = runner.run(command);
+        assert!(
+            matches!(&outcome, Err(ServiceErrorV1::OperationFailureV1 { operation: failed, source }) if *failed == operation && matches!(source.as_ref(), ServiceErrorV1::RuntimeResetV1(_))),
+            "{operation}: {outcome:?}"
+        );
+        assert_eq!(snapshot(&fixture.0), before);
+    }
+}
+
+#[test]
+fn runtime_reset_locks_refuse_symlinks_hardlinks_and_public_permissions() {
+    for case in ["symlink", "hardlink", "permissions"] {
+        let fixture = Fixture::new();
+        let victim = fixture.file("victim/file", b"untouched");
+        let parent = fixture.directory(".podway/maintenance");
+        let lock = parent.join("runtime-reset.lock");
+        match case {
+            "symlink" => symlink(&victim, &lock).unwrap(),
+            "hardlink" => fs::hard_link(&victim, &lock).unwrap(),
+            _ => {
+                fs::write(&lock, b"").unwrap();
+                fs::set_permissions(&lock, fs::Permissions::from_mode(0o644)).unwrap();
+            }
+        }
+        assert!(
+            RuntimeResetLockV1::acquire_reset(&fixture.home()).is_err(),
+            "{case}"
+        );
+        assert_eq!(fs::read(victim).unwrap(), b"untouched");
+    }
+}
+
+#[test]
+fn concurrent_first_starts_share_one_stable_topology_anchor() {
+    for _ in 0..16 {
+        let fixture = Fixture::new();
+        let home = fixture.home();
+        let barrier = std::sync::Barrier::new(2);
+        std::thread::scope(|scope| {
+            let starts = [RuntimeModeV1::production(), RuntimeModeV1::development()].map(|mode| {
+                let home = &home;
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    barrier.wait();
+                    RuntimeResetLockV1::prepare_start(home, &mode).map(drop)
+                })
+            });
+            for start in starts {
+                start.join().unwrap().expect("concurrent first startup");
+            }
+        });
+        assert!(fixture.0.join(".podway/run").is_dir());
+        assert!(fixture.0.join(".podway/modes/dev/run").is_dir());
+        let anchor = fixture.0.join(".podway/maintenance/runtime-start.lock");
+        let inode = fs::metadata(&anchor).unwrap().ino();
+        drop(RuntimeResetLockV1::acquire_topology(&home).unwrap());
+        assert_eq!(fs::metadata(anchor).unwrap().ino(), inode);
+    }
+}
+
+#[test]
+fn topology_gate_serializes_namespace_creation_and_excludes_external_roots() {
+    use std::{
+        sync::{Arc, Barrier, mpsc},
+        thread,
+        time::Duration,
+    };
+    let fixture = Fixture::new();
+    let home = fixture.home();
+    let gate = RuntimeResetLockV1::acquire_topology(&home).unwrap();
+    let ready = Arc::new(Barrier::new(2));
+    let (sent, received) = mpsc::channel();
+    let worker_home = home.clone();
+    let worker_ready = Arc::clone(&ready);
+    let worker = thread::spawn(move || {
+        worker_ready.wait();
+        let result = RuntimeResetLockV1::prepare_start(&worker_home, &RuntimeModeV1::development());
+        sent.send(result.is_ok()).unwrap();
+    });
+    ready.wait();
+    assert!(received.recv_timeout(Duration::from_millis(50)).is_err());
+    assert!(!home.as_path().join("modes").exists());
+    drop(gate);
+    assert!(received.recv_timeout(Duration::from_secs(5)).unwrap());
+    worker.join().unwrap();
+    assert!(home.as_path().join("modes/dev/run").is_dir());
+    let external = ServiceRuntimePathsV1::for_dev_home(
+        &fixture.0,
+        fixture.0.join("external"),
+        geteuid().as_raw(),
+    )
+    .unwrap();
+    assert!(external.ordinary_account_home().unwrap().is_none());
+    assert!(
+        StdServiceFilesystemV1
+            .runtime_reset_gate(&external)
+            .unwrap()
+            .is_none()
+    );
+    assert!(!fixture.0.join("external").exists());
+    let effective =
+        ServiceRuntimePathsV1::for_effective_user_dev(Some(&fixture.0.join("external"))).unwrap();
+    assert!(effective.ordinary_account_home().unwrap().is_none());
+    assert_eq!(
+        effective.runtime_directory().as_path(),
+        fixture.0.join("external/run")
+    );
+}
+
+#[test]
+fn ordinary_dev_platform_aliases_keep_the_account_fence_and_reject_production() {
+    let fixture = Fixture::new();
+    let alias = Path::new("/tmp").join(fixture.0.strip_prefix("/private/tmp").unwrap());
+    let paths = ServiceRuntimePathsV1::for_dev_home(
+        &fixture.0,
+        alias.join(".podway/modes/dev"),
+        geteuid().as_raw(),
+    )
+    .unwrap();
+    assert_eq!(
+        paths.podway_home().unwrap().as_path(),
+        fixture.0.join(".podway/modes/dev")
+    );
+    assert!(paths.ordinary_account_home().unwrap().is_some());
+    fixture.file(
+        ".podway/maintenance/runtime-reset.json",
+        b"invalid committed record",
+    );
+    assert!(StdServiceFilesystemV1.runtime_reset_gate(&paths).is_err());
+    assert!(!fixture.0.join(".podway/modes").exists());
+    assert!(matches!(
+        ServiceRuntimePathsV1::for_dev_home(&fixture.0, alias.join(".podway"), geteuid().as_raw()),
+        Err(ServicePathErrorV1::DevHomeConflictsProduction { .. })
+    ));
+}
+
+#[test]
+fn ordinary_dev_symlink_alias_keeps_the_account_fence_and_rejects_production() {
+    let fixture = Fixture::new();
+    fixture.directory(".podway/modes/dev");
+    let alias = fixture.0.join("account-alias");
+    symlink(&fixture.0, &alias).unwrap();
+    let paths = ServiceRuntimePathsV1::for_dev_home(
+        &fixture.0,
+        alias.join(".podway/modes/dev"),
+        geteuid().as_raw(),
+    )
+    .unwrap();
+    assert_eq!(
+        paths.podway_home().unwrap().as_path(),
+        fixture.0.join(".podway/modes/dev")
+    );
+    assert!(paths.ordinary_account_home().unwrap().is_some());
+    fixture.file(
+        ".podway/maintenance/runtime-reset.json",
+        b"invalid committed record",
+    );
+    assert!(StdServiceFilesystemV1.runtime_reset_gate(&paths).is_err());
+    assert!(matches!(
+        ServiceRuntimePathsV1::for_dev_home(&fixture.0, alias.join(".podway"), geteuid().as_raw()),
+        Err(ServicePathErrorV1::DevHomeConflictsProduction { .. })
+    ));
 }
 fn snapshot(root: &Path) -> Vec<(PathBuf, u64, u32, Vec<u8>)> {
     fn walk(path: &Path, result: &mut Vec<(PathBuf, u64, u32, Vec<u8>)>) {

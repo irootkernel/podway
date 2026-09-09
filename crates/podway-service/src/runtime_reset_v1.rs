@@ -2,6 +2,7 @@
 
 mod document;
 mod filesystem;
+mod locks;
 
 pub use document::{
     RuntimeResetErrorV1, RuntimeResetExclusionV1, RuntimeResetOperationV1, RuntimeResetPathV1,
@@ -9,6 +10,7 @@ pub use document::{
     RuntimeResetResourceClassV1, RuntimeResetResourceV1, RuntimeResetSelectionV1,
     RuntimeResetTargetStateV1, RuntimeResetTargetV1,
 };
+pub use locks::{RuntimeResetLockV1, RuntimeResetParticipantV1, RuntimeResetRecordViewV1};
 
 use std::ffi::OsStr;
 

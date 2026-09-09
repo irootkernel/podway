@@ -340,6 +340,9 @@ fn arc_008_service_v1_exposes_only_manifest_lifecycle_signatures() {
 #[test]
 fn arc_008_service_v1_exposes_exactly_the_manifest_error_surface() {
     for error in [
+        ServiceErrorV1::RuntimeResetV1(podway_service::RuntimeResetErrorV1::unsafe_reason(
+            podway_service::RuntimeResetReasonV1::UnsafePath,
+        )),
         ServiceErrorV1::InvalidMetadataV1 {
             message: "invalid metadata".to_owned(),
         },
@@ -392,6 +395,9 @@ fn arc_008_service_v1_exposes_exactly_the_manifest_error_surface() {
         },
     ] {
         match error {
+            ServiceErrorV1::RuntimeResetV1(error) => {
+                assert_eq!(error.code(), "RUNTIME_RESET_UNSAFE")
+            }
             ServiceErrorV1::InvalidMetadataV1 { message } => {
                 assert_eq!(message, "invalid metadata");
             }
@@ -737,6 +743,12 @@ impl Phase6Filesystem {
 }
 
 impl ServiceFilesystemV1 for Phase6Filesystem {
+    fn runtime_reset_gate(
+        &self,
+        _: &ServiceRuntimePathsV1,
+    ) -> Result<Option<podway_service::RuntimeResetLockV1>, ServiceErrorV1> {
+        Ok(None)
+    }
     fn exists(&self, path: &Path) -> Result<bool, ServiceFilesystemErrorV1> {
         let files = self.files.lock().expect("test lock");
         Ok(files.contains_key(path) || files.keys().any(|entry| entry.parent() == Some(path)))

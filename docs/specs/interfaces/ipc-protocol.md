@@ -119,20 +119,21 @@ family preserves those service and identity fields and adds daemon-owned
 bounded `worktree_recovery` progress. The current
 [`podway.daemon-status-result/v3`](../../../assets/schemas/daemon-status-result-v3.schema.json)
 family adds the selected bounded `mode` and the complete mode-aware service
-projection while retaining v1 and v2 decoding compatibility. The early control plane admits only
-handshake, `daemon.status`, and coordinated
-termination until readiness; every other route fails before workspace lookup or
+projection while retaining v1 and v2 decoding compatibility. Before readiness, the
+control plane admits handshake, `daemon.status`, coordinated termination, and the
+bounded reset-control checks below; reset inspection reports busy and fresh
+reservation is refused until ready. Other routes fail before workspace lookup or
 durable admission with retryable `DAEMON_STARTING`.
 
-## Reserved runtime-reset control
+## Runtime-reset control
 
-`daemon.runtime_reset` is reserved, not dispatched. Its closed input/result
-families, five actions, connection-bound reservation identities, eight-exchange
+`daemon.runtime_reset` is an executable internal control route. Its closed
+input/result families, five actions, connection-bound reservation identities, eight-exchange
 limit and timeout behavior are specified by the
 [runtime reset control contract](../operations/runtime-reset.md#bounded-control-exchange).
 It carries no worktree, job or session state and does not reuse `daemon.terminate`.
-The narrow multi-exchange reservation exception becomes executable only with its
-own admission fence; normal requests retain the single-frame contract.
+The narrow multi-exchange reservation exception uses its own admission fence;
+normal requests retain the single-frame contract.
 
 ## Workspace context
 

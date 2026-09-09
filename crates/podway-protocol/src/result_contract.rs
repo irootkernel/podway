@@ -444,11 +444,34 @@ pub const NEW_ROUTE_RESULT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
     ),
 ];
 
-const RESET_DOCUMENT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[result_schema_v2(
-    "podway.runtime-reset-error-details/v1",
-    "schemas/runtime-reset-error-details-v1.schema.json",
-    &[],
-)];
+const RESET_DOCUMENT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
+    result_schema_v2(
+        "podway.runtime-reset-error-details/v1",
+        "schemas/runtime-reset-error-details-v1.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        "podway.runtime-reset-control-input/v1",
+        "schemas/runtime-reset-control-input-v1.schema.json",
+        &[],
+    ),
+];
+
+/// Validates the closed control envelope before any runtime-reset side effect. Namespace
+/// and process correlation are checked against the receiving daemon's retained identity.
+pub fn validate_runtime_reset_control_request_v1(request: &crate::RequestEnvelopeV1) -> bool {
+    request.command().as_str() == "daemon.runtime_reset"
+        && request.operation() == crate::OperationV1::Control
+        && request.workspace().is_none()
+        && request.idempotency_key().is_none()
+        && request.preconditions() == &crate::PreconditionsV1::default()
+        && !request.options().detach()
+        && request.options().wait_timeout_ms() == 0
+        && validate_embedded_schema_v2(
+            "podway.runtime-reset-control-input/v1",
+            &Value::Object(request.payload().clone()),
+        )
+}
 
 const fn result_schema_v2(
     schema: &'static str,

@@ -15,6 +15,7 @@ use podway_daemon::managed_dev::ManagedDevPurposeV2;
 use podway_daemon::{
     LogSinkV1, ObservabilityCountersV1, ObservabilityFinalizationV1, ObservabilityV1,
     RotatingFileSinkV1, SystemClockV1,
+    endpoint::SingletonEndpointV1,
     managed_dev::ManagedDevRuntimeV2,
     runtime::{ProductionDaemonRuntimeConfigV1, ProductionDaemonRuntimeV1},
     server::{
@@ -250,6 +251,13 @@ fn run_service(
         paths.socket_path().as_path(),
     )?
     .with_runtime_mode(mode.clone());
+    let mut signals = Signals::new([SIGINT, SIGTERM])?;
+    let signal_control = signals.handle();
+    let endpoint = if paths.ordinary_account_home()?.is_some() {
+        Some(SingletonEndpointV1::acquire(&paths)?)
+    } else {
+        None
+    };
     let daemon_id = process_identity.process_id().as_str().to_owned();
     let bootstrap_log_path = paths.bootstrap_log_path().as_path().to_path_buf();
     write_bootstrap_file(
@@ -284,19 +292,27 @@ fn run_service(
         configuration = configuration.with_dev_mode();
     }
     let inspection_options = SqliteStoreOptionsV1::new(1)?;
-    let mut signals = Signals::new([SIGINT, SIGTERM])?;
-    let signal_control = signals.handle();
     let clock = Arc::new(SystemClockV1);
     let observability = match RotatingFileSinkV1::open(paths.log_path().as_path()) {
         Ok(sink) => ObservabilityV1::start_with_daemon_id(Arc::new(sink), clock.clone(), daemon_id),
         Err(_) => ObservabilityV1::start_degraded(clock),
     };
-    let runtime = match ProductionDaemonRuntimeV1::bind_with_observability(
-        &paths,
-        inspection_options,
-        configuration,
-        Some(observability.emitter()),
-    ) {
+    let bound = match endpoint {
+        Some(endpoint) => ProductionDaemonRuntimeV1::from_endpoint_with_observability(
+            endpoint,
+            &paths,
+            inspection_options,
+            configuration,
+            Some(observability.emitter()),
+        ),
+        None => ProductionDaemonRuntimeV1::bind_with_observability(
+            &paths,
+            inspection_options,
+            configuration,
+            Some(observability.emitter()),
+        ),
+    };
+    let runtime = match bound {
         Ok(runtime) => runtime,
         Err(error) => {
             let mut failures = vec![("bind", error.to_string())];
@@ -382,12 +398,20 @@ fn effective_service_paths(
         if mode.as_str() != "dev" {
             return Err("an explicit managed runtime root requires valid v3 metadata".into());
         }
+        #[cfg(debug_assertions)]
+        if let Some(account_root) = env::var_os("PODWAY_TEST_ACCOUNT_ROOT") {
+            return Ok((
+                ServiceRuntimePathsV1::for_dev_home(
+                    account_root,
+                    runtime_root,
+                    geteuid().as_raw(),
+                )?,
+                None,
+                false,
+            ));
+        }
         return Ok((
-            ServiceRuntimePathsV1::for_runtime_root(
-                runtime_root,
-                mode.clone(),
-                geteuid().as_raw(),
-            )?,
+            ServiceRuntimePathsV1::for_effective_user_dev(Some(&runtime_root))?,
             None,
             false,
         ));

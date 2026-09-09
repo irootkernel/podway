@@ -26,8 +26,8 @@ pub use evidence_page::{
     EVIDENCE_PAGE_TOKEN_VERSION_V1, EvidencePageTokenV1, MAX_EVIDENCE_PAGE_TOKEN_CHARS_V1,
 };
 pub use framing::{
-    FrameErrorV1, FrameIoPhaseV1, decode_single_frame_v1, encode_frame_v1, read_single_frame_v1,
-    write_frame_v1,
+    FrameErrorV1, FrameIoPhaseV1, decode_single_frame_v1, encode_frame_v1, read_frame_v1,
+    read_single_frame_v1, require_frame_end_v1, write_frame_v1,
 };
 pub use identity::{BuildIdentityV1, build_identity_v1};
 #[cfg(feature = "release-contract-verifier")]
@@ -36,6 +36,7 @@ pub use release_contract::{
     verify_release_contract_v1,
 };
 use result_contract::is_v2_mutation_contract_command;
+pub use result_contract::validate_runtime_reset_control_request_v1;
 pub use result_contract::{
     EXISTING_ROUTE_RESULT_SCHEMAS_V2, MAX_V2_OUTPUT_WARNINGS, MAX_V2_TERMINAL_ERROR_BYTES,
     MAX_V2_WARNING_CODE_CHARS, MAX_V2_WARNING_MESSAGE_CHARS, MAX_V2_WARNING_PATH_CHARS,
@@ -1058,6 +1059,26 @@ impl Rfc3339MillisV1 {
         Self::new(format!(
             "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z"
         ))
+    }
+
+    /// Returns epoch milliseconds, or no value for a timestamp before the Unix epoch.
+    pub fn to_unix_millis(&self) -> Option<u64> {
+        let number = |start, end| self.0.get(start..end)?.parse::<i64>().ok();
+        let mut year = number(0, 4)?;
+        let month = number(5, 7)?;
+        let day = number(8, 10)?;
+        if month <= 2 {
+            year -= 1;
+        }
+        let era = year.div_euclid(400);
+        let yoe = year - era * 400;
+        let mp = month + if month > 2 { -3 } else { 9 };
+        let doy = (153 * mp + 2) / 5 + day - 1;
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        let days = era * 146_097 + doe - 719_468;
+        let seconds =
+            days * 86_400 + number(11, 13)? * 3_600 + number(14, 16)? * 60 + number(17, 19)?;
+        u64::try_from(seconds * 1_000 + number(20, 23)?).ok()
     }
 
     pub fn into_inner(self) -> String {

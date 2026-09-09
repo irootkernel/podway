@@ -9,6 +9,8 @@ This file records concise shipped outcomes and the planned next stable release.
 - Preview ordinary account-runtime retirement with explicit mode selection,
   bounded confirmation tokens, managed-runtime exclusions, and read-only
   ownership checks that preserve all worktree state.
+- Recognize idle live daemons in runtime-reset plans and reserve their client and
+  background admission with process-bound recovery and startup fencing.
 
 ### Changed
 

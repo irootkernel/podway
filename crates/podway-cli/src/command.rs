@@ -61,9 +61,9 @@ use podway_protocol::{
 use podway_service::{
     DaemonContractVerifierV1, InstallSpecV1, LaunchctlRunnerV1, LocalPlatformPathV1, LogQueryV1,
     MacosServiceCommandRunnerV1, ManagedRuntimeExecutableRoleV3, ManagedRuntimeV3,
-    SERVICE_METADATA_MAX_BYTES_V1, ServiceClockV1, ServiceErrorV1, ServiceFilesystemV1,
-    ServiceLabelV1, ServiceLogStreamV1, ServiceManagerContractV1, ServiceManagerV1,
-    ServiceOutcomeV1, ServicePathErrorV1, ServiceRuntimePathsV1, ServiceStatusV1,
+    RuntimeResetReasonV1, SERVICE_METADATA_MAX_BYTES_V1, ServiceClockV1, ServiceErrorV1,
+    ServiceFilesystemV1, ServiceLabelV1, ServiceLogStreamV1, ServiceManagerContractV1,
+    ServiceManagerV1, ServiceOutcomeV1, ServicePathErrorV1, ServiceRuntimePathsV1, ServiceStatusV1,
     StdServiceFilesystemV1, SystemLaunchctlRunnerV1, UninstallOptionsV1,
     install_socket_path_from_metadata_v1, installed_socket_path_from_metadata_v1,
 };
@@ -3664,9 +3664,9 @@ fn effective_runtime_paths(
     if let Some(account_root) = env::var_os("PODWAY_TEST_ACCOUNT_ROOT") {
         let account_root = PathBuf::from(account_root);
         if let Some(runtime_root) = runtime_root {
-            return ServiceRuntimePathsV1::for_runtime_root(
+            return ServiceRuntimePathsV1::for_dev_home(
+                account_root,
                 runtime_root,
-                mode.clone(),
                 geteuid().as_raw(),
             )
             .map_err(|_| LocalFailure::daemon_unavailable(command));
@@ -3679,12 +3679,8 @@ fn effective_runtime_paths(
         .map_err(|_| LocalFailure::daemon_unavailable(command));
     }
     if let Some(runtime_root) = runtime_root {
-        return ServiceRuntimePathsV1::for_runtime_root(
-            runtime_root,
-            mode.clone(),
-            geteuid().as_raw(),
-        )
-        .map_err(|_| LocalFailure::daemon_unavailable(command));
+        return ServiceRuntimePathsV1::for_effective_user_dev(Some(&runtime_root))
+            .map_err(|_| LocalFailure::daemon_unavailable(command));
     }
     ServiceRuntimePathsV1::for_effective_user_mode(mode.clone())
         .map_err(|_| LocalFailure::daemon_unavailable(command))
@@ -4771,6 +4767,32 @@ fn stream_log_follow_update(
 
 fn map_service_error(error: ServiceErrorV1, command: &str) -> LocalFailure {
     match error {
+        ServiceErrorV1::RuntimeResetV1(error) => {
+            let message = match (error.code(), error.reason) {
+                ("RUNTIME_RESET_IN_PROGRESS", RuntimeResetReasonV1::OperationInProgress) => {
+                    "runtime reset is in progress and fences the service lifecycle"
+                }
+                ("RUNTIME_RESET_UNSAFE", RuntimeResetReasonV1::UnsafePath) => {
+                    "runtime reset found an unsafe service lifecycle path"
+                }
+                ("RUNTIME_RESET_UNSAFE", _) => {
+                    "runtime reset could not safely inspect the service lifecycle"
+                }
+                _ => "runtime reset could not complete the service lifecycle request",
+            };
+            let mut failure = LocalFailure::catalog(error.code(), message, command);
+            failure.details = serde_json::json!({
+                "schema": "podway.runtime-reset-error-details/v1",
+                "mode": error.mode,
+                "reason": error.reason,
+                "result": null,
+                "retry": null,
+            })
+            .as_object()
+            .expect("reset error details are an object")
+            .clone();
+            failure
+        }
         ServiceErrorV1::ContractMismatchV1 {
             expected_product,
             actual_product,

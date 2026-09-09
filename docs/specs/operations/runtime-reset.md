@@ -4,10 +4,10 @@
 
 [ADR-0032](../../architecture-decision-records/0032-retire-ordinary-user-runtimes.md)
 owns the account-runtime retirement decision. The command catalog admits read-only
-`runtime.reset.plan`. `runtime.reset.apply` and `daemon.runtime_reset` remain
-reserved and cannot execute. Until the control route is admitted, a live daemon
-is reported as unsupported and cannot receive a planning token. The active
-roadmap owns remaining implementation work.
+`runtime.reset.plan` and the internal `daemon.runtime_reset` control route. Planning
+inspects live daemons and can issue a token for an idle, supported process.
+`runtime.reset.apply` remains reserved and cannot execute. The active roadmap owns
+remaining implementation work.
 
 ## Selection and preservation
 
@@ -130,6 +130,13 @@ connection is excluded from client activity. Failure releases all prior
 uncommitted reservations without stopping services or removing data. Never hold
 a live participant's singleton while requesting its shutdown.
 
+Reserved daemons retain the bounded `daemon.status` identity handshake and reset
+control transport for explicit recovery. Other requests receive
+`DAEMON_SHUTTING_DOWN`; mutation refusals include `admission.admitted: false`.
+These transport connections remain bounded and count against a fresh reservation's
+idle check. The reservation also fences background activation, claims, rebinding,
+and maintenance through their shared coordinator.
+
 The coordinator holds the commit interlock while revalidating reservation
 generations through read-only snapshots and fsyncing the account record. A
 disconnect/release handler acquires that same interlock before the admission
@@ -155,17 +162,25 @@ A successful
 namespace and process UUID and returns a fresh reservation UUID. The connection
 then accepts only matching snapshot, release, or shutdown actions. Each uses the
 same operation, token, namespace and process identities and the returned
-reservation UUID. Other commands or pipelined frames are rejected. The exchange
-is limited to eight request/response pairs, 1 MiB per frame and a 30-second
-per-frame inactivity timeout; shutdown uses the existing bounded service-exit
-timeout. Normal IPC retains one request/response per connection.
+reservation UUID. Clients must wait for each response before sending the next
+request. Other commands and extra request bytes already queued when validating
+the current request are rejected. The exchange is limited to eight
+request/response pairs and 1 MiB per frame. The initial
+request uses the normal IPC read timeout; after reserve, each continuation has a
+30-second per-frame inactivity timeout. Shutdown uses the existing bounded
+service-exit timeout. Normal IPC retains one request/response per connection.
+
+Reservation binds the supplied operation ID and token digest; the daemon does not
+receive or validate the plan token. The coordinator validates the token before
+durable commit, and shutdown authority comes from the matching durable stop intent.
 
 Snapshot returns the reservation and current committed state without relaxing
 admission. Release before commit restores admission; after commit it reports
 `committed` and leaves admission fenced. Shutdown is admitted only for a matching
 durable stop intent, responds `shutting_down`, closes the exchange, and requests
 orderly exit. Recovery may reserve the same recorded participant again while
-admission remains closed; it cannot adopt another process generation.
+admission remains closed, retaining the record's reservation UUID; it cannot adopt
+another process generation.
 
 ## Durable retirement and recovery
 
