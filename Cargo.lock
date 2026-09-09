@@ -883,6 +883,7 @@ dependencies = [
  "podway-presets",
  "podway-protocol",
  "podway-service",
+ "serde",
  "serde_json",
  "sha2",
  "uuid",
@@ -972,6 +973,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "uuid",
 ]
 
 [[package]]

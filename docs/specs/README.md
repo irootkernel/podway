@@ -8,7 +8,7 @@ daemon as one product and are grouped by concern:
 - [Interfaces](interfaces/): CLI, JSON, IPC, automation, errors, and exit codes.
 - [Storage](storage/): SQLite state, transactions, recovery, and retention.
 - [Operations](operations/): trust, observability, installation, packaging, and the Aquarium development service.
-- [Runtime reset](operations/runtime-reset.md): reserved ordinary account-runtime retirement, preservation, coordination and exact recovery contracts.
+- [Runtime reset](operations/runtime-reset.md): read-only ordinary account-runtime planning and reserved retirement, preservation, coordination and exact recovery contracts.
 - [Quality](quality/): tests, acceptance criteria, and traceability.
 
 Machine-readable counterparts live under [`assets/`](../../assets/) and

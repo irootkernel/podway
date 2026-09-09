@@ -1,0 +1,1147 @@
+use std::{collections::BTreeSet, fmt, os::unix::ffi::OsStrExt, path::Path};
+
+use podway_core::{RuntimeModeV1, canonicalize_json_v1, verify_canonical_json_v1};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+use super::{
+    MAX_RUNTIME_RESET_DOCUMENT_BYTES_V1, MAX_RUNTIME_RESET_MODES_V1,
+    MAX_RUNTIME_RESET_RESOURCES_V1, MAX_RUNTIME_RESET_TOKEN_BYTES_V1,
+    RUNTIME_RESET_TOKEN_LIFETIME_MS_V1,
+};
+use crate::PodwayHomeV1;
+
+type Error = RuntimeResetErrorV1;
+
+const MAX_PRESERVED_RESOURCES: usize = 256;
+const MAX_EXCLUSIONS: usize = 257;
+// The CLI adds the public schema discriminator and RFC 3339 expiry.
+const PUBLIC_RESULT_OVERHEAD_BYTES: usize = 128;
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RuntimeResetSelectionV1 {
+    Mode { mode: RuntimeModeV1 },
+    AllModes,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeResetPathV1 {
+    pub path_bytes_base64url: String,
+    pub display: String,
+}
+
+impl RuntimeResetPathV1 {
+    pub fn new(path: &Path) -> Result<Self, Error> {
+        let bytes = path.as_os_str().as_bytes();
+        if bytes.len() > 4096 {
+            return Err(Error::limit());
+        }
+        let value = Self {
+            path_bytes_base64url: encode_bytes(bytes),
+            display: path.to_string_lossy().into_owned(),
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    fn validate(&self) -> Result<(), Error> {
+        if self.path_bytes_base64url.len() > 5462 || self.display.chars().count() > 4096 {
+            return Err(Error::limit());
+        }
+        let bytes = decode_bytes(&self.path_bytes_base64url)?;
+        if bytes.is_empty()
+            || bytes.len() > 4096
+            || bytes[0] != b'/'
+            || bytes.contains(&0)
+            || self.display != String::from_utf8_lossy(&bytes)
+            || bytes
+                .split(|byte| *byte == b'/')
+                .skip(1)
+                .any(|part| part.is_empty() || part == b"." || part == b"..")
+        {
+            return Err(Error::invalid_token());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeResetReasonV1 {
+    Activity,
+    Recovery,
+    UnknownActivity,
+    ServiceLoaded,
+    LockHeld,
+    UnsafePath,
+    UnexpectedEntry,
+    UnsupportedPeer,
+    ManagedRuntime,
+    IdentityChanged,
+    Expired,
+    InvalidToken,
+    SelectionChanged,
+    OperationInProgress,
+    BoundExceeded,
+    Io,
+    ShutdownTimeout,
+    ReservationLost,
+    ResourceChanged,
+    MissingIntent,
+}
+
+#[derive(Clone, Debug)]
+pub struct RuntimeResetErrorV1 {
+    code: &'static str,
+    pub mode: Option<RuntimeModeV1>,
+    pub reason: RuntimeResetReasonV1,
+}
+
+impl Error {
+    pub fn code(&self) -> &'static str {
+        self.code
+    }
+    pub(super) fn unsafe_path() -> Self {
+        Self::unsafe_reason(RuntimeResetReasonV1::UnsafePath)
+    }
+    /// Reports a failed path, service, or process observation from an infrastructure adapter.
+    pub fn unsafe_reason(reason: RuntimeResetReasonV1) -> Self {
+        Self {
+            code: "RUNTIME_RESET_UNSAFE",
+            mode: None,
+            reason,
+        }
+    }
+    pub(super) fn stale(reason: RuntimeResetReasonV1) -> Self {
+        Self {
+            code: "RUNTIME_RESET_PLAN_STALE",
+            mode: None,
+            reason,
+        }
+    }
+    pub(super) fn invalid_token() -> Self {
+        Self::stale(RuntimeResetReasonV1::InvalidToken)
+    }
+    pub(super) fn limit() -> Self {
+        Self {
+            code: "RUNTIME_RESET_LIMIT_EXCEEDED",
+            mode: None,
+            reason: RuntimeResetReasonV1::BoundExceeded,
+        }
+    }
+    pub(super) fn in_mode(mut self, mode: &RuntimeModeV1) -> Self {
+        self.mode = Some(mode.clone());
+        self
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {:?}", self.code, self.reason)
+    }
+}
+impl std::error::Error for Error {}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeResetResourceClassV1 {
+    Registry,
+    RuntimeRecovery,
+    ServiceMetadata,
+    Socket,
+    DaemonLog,
+    BootstrapLog,
+    StateDirectory,
+    LogsDirectory,
+    ServicePlist,
+    LockAnchor,
+    ControlResidue,
+    NamespaceDirectory,
+}
+
+impl RuntimeResetResourceClassV1 {
+    pub(super) fn deletion_classes(production: bool) -> Vec<Self> {
+        let mut classes = vec![
+            Self::Registry,
+            Self::RuntimeRecovery,
+            Self::ServiceMetadata,
+            Self::Socket,
+            Self::DaemonLog,
+            Self::BootstrapLog,
+            Self::StateDirectory,
+            Self::LogsDirectory,
+        ];
+        if production {
+            classes.push(Self::ServicePlist);
+        }
+        classes
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeResetResourceV1 {
+    pub class: RuntimeResetResourceClassV1,
+    pub path: RuntimeResetPathV1,
+}
+impl RuntimeResetResourceV1 {
+    pub(super) fn new(class: RuntimeResetResourceClassV1, path: &Path) -> Result<Self, Error> {
+        Ok(Self {
+            class,
+            path: RuntimeResetPathV1::new(path)?,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeResetPlanStatusV1 {
+    Ready,
+    NoChange,
+    Blocked,
+    RecoveryRequired,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeResetTargetStateV1 {
+    LiveIdle,
+    Offline,
+    Absent,
+    Busy,
+    Unsupported,
+    Unsafe,
+}
+impl RuntimeResetTargetStateV1 {
+    pub(super) fn blocks(self) -> bool {
+        matches!(self, Self::Busy | Self::Unsupported | Self::Unsafe)
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct RuntimeResetTargetV1 {
+    pub mode: RuntimeModeV1,
+    pub root: RuntimeResetPathV1,
+    pub state: RuntimeResetTargetStateV1,
+    pub reason: Option<RuntimeResetReasonV1>,
+    pub resources: Vec<RuntimeResetResourceV1>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeResetExclusionV1 {
+    #[serde(deserialize_with = "required_option")]
+    pub path: Option<RuntimeResetPathV1>,
+    pub reason: ExclusionReason,
+}
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExclusionReason {
+    ExternalManagedRuntimes,
+    ManagedNamespace,
+}
+impl RuntimeResetExclusionV1 {
+    pub(super) fn managed(path: &Path) -> Result<Self, Error> {
+        Ok(Self {
+            path: Some(RuntimeResetPathV1::new(path)?),
+            reason: ExclusionReason::ManagedNamespace,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeResetOperationV1 {
+    pub operation_id: String,
+    pub token_sha256: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct RuntimeResetPlanV1 {
+    pub status: RuntimeResetPlanStatusV1,
+    pub account_root: RuntimeResetPathV1,
+    pub selection: RuntimeResetSelectionV1,
+    pub targets: Vec<RuntimeResetTargetV1>,
+    pub preserved: Vec<RuntimeResetResourceV1>,
+    pub excluded: Vec<RuntimeResetExclusionV1>,
+    #[serde(skip)]
+    pub expires_at_ms: Option<u64>,
+    pub plan_token: Option<String>,
+    pub recovery_operation: Option<RuntimeResetOperationV1>,
+}
+impl RuntimeResetPlanV1 {
+    pub(super) fn empty(
+        home: &PodwayHomeV1,
+        selection: RuntimeResetSelectionV1,
+    ) -> Result<Self, Error> {
+        Ok(Self {
+            status: RuntimeResetPlanStatusV1::NoChange,
+            account_root: RuntimeResetPathV1::new(home.as_path())?,
+            selection,
+            targets: Vec::new(),
+            preserved: Vec::new(),
+            excluded: vec![RuntimeResetExclusionV1 {
+                path: None,
+                reason: ExclusionReason::ExternalManagedRuntimes,
+            }],
+            expires_at_ms: None,
+            plan_token: None,
+            recovery_operation: None,
+        })
+    }
+    pub(super) fn check_bounds(&self) -> Result<(), Error> {
+        if self.targets.len() > MAX_RUNTIME_RESET_MODES_V1
+            || self.preserved.len() > MAX_PRESERVED_RESOURCES
+            || self.excluded.len() > MAX_EXCLUSIONS
+            || self
+                .targets
+                .iter()
+                .map(|target| target.resources.len())
+                .sum::<usize>()
+                > MAX_RUNTIME_RESET_RESOURCES_V1
+            || serde_json::to_vec(self).map_err(|_| Error::limit())?.len()
+                + PUBLIC_RESULT_OVERHEAD_BYTES
+                > MAX_RUNTIME_RESET_DOCUMENT_BYTES_V1
+        {
+            return Err(Error::limit());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeResetProcessV1 {
+    pub pid: u32,
+    pub process_id: String,
+    pub executable: RuntimeResetPathV1,
+    pub started_at_ms: u64,
+}
+impl RuntimeResetProcessV1 {
+    pub(super) fn validate(&self) -> Result<(), Error> {
+        validate_uuid(&self.process_id)?;
+        self.executable.validate()?;
+        if self.pid == 0 || self.pid > i32::MAX as u32 || self.started_at_ms > i64::MAX as u64 {
+            return Err(Error::invalid_token());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct FileIdentity {
+    pub device: u64,
+    pub inode: u64,
+    pub uid: u32,
+    pub mode: u32,
+    pub links: u32,
+}
+impl FileIdentity {
+    fn validate(&self, uid: u32) -> Result<(), Error> {
+        if self.device > i64::MAX as u64
+            || self.inode > i64::MAX as u64
+            || self.uid != uid
+            || self.mode > 65535
+            || self.links == 0
+        {
+            return Err(Error::invalid_token());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ServiceBinding {
+    pub installed: bool,
+    pub loaded: bool,
+    #[serde(deserialize_with = "required_option")]
+    pub plist_identity: Option<FileIdentity>,
+    #[serde(deserialize_with = "required_option")]
+    pub plist_sha256: Option<String>,
+    #[serde(deserialize_with = "required_option")]
+    pub metadata_identity: Option<FileIdentity>,
+    #[serde(deserialize_with = "required_option")]
+    pub metadata_sha256: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct NamespaceBinding {
+    pub mode: RuntimeModeV1,
+    pub root: RuntimeResetPathV1,
+    #[serde(deserialize_with = "required_option")]
+    pub root_identity: Option<FileIdentity>,
+    #[serde(deserialize_with = "required_option")]
+    pub run_identity: Option<FileIdentity>,
+    #[serde(deserialize_with = "required_option")]
+    pub state_identity: Option<FileIdentity>,
+    #[serde(deserialize_with = "required_option")]
+    pub logs_identity: Option<FileIdentity>,
+    #[serde(deserialize_with = "required_option")]
+    pub lock_identity: Option<FileIdentity>,
+    #[serde(deserialize_with = "required_option")]
+    pub registry_lock_identity: Option<FileIdentity>,
+    #[serde(deserialize_with = "required_option")]
+    pub socket_identity: Option<FileIdentity>,
+    #[serde(deserialize_with = "required_option")]
+    pub process: Option<RuntimeResetProcessV1>,
+    pub service: ServiceBinding,
+    pub resource_classes: Vec<RuntimeResetResourceClassV1>,
+}
+impl NamespaceBinding {
+    pub(super) fn empty(mode: RuntimeModeV1, root: RuntimeResetPathV1) -> Self {
+        Self {
+            mode,
+            root,
+            root_identity: None,
+            run_identity: None,
+            state_identity: None,
+            logs_identity: None,
+            lock_identity: None,
+            registry_lock_identity: None,
+            socket_identity: None,
+            process: None,
+            service: ServiceBinding::default(),
+            resource_classes: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ResetToken {
+    pub schema: String,
+    pub caller_uid: u32,
+    pub account_root: RuntimeResetPathV1,
+    pub account_identity: FileIdentity,
+    pub selection: RuntimeResetSelectionV1,
+    pub mode_inventory: Vec<RuntimeModeV1>,
+    pub targets: Vec<NamespaceBinding>,
+    pub created_at_ms: u64,
+    pub expires_at_ms: u64,
+}
+impl ResetToken {
+    pub(super) fn encode(&self) -> Result<String, Error> {
+        self.validate()?;
+        let canonical = canonicalize_json_v1(self).map_err(|_| Error::invalid_token())?;
+        let encoded = format!(
+            "{}.{:x}",
+            encode_bytes(canonical.as_bytes()),
+            Sha256::digest(canonical.as_bytes())
+        );
+        if encoded.len() > MAX_RUNTIME_RESET_TOKEN_BYTES_V1 {
+            return Err(Error::limit());
+        }
+        Ok(encoded)
+    }
+    pub(super) fn decode(encoded: &str) -> Result<Self, Error> {
+        if encoded.len() > MAX_RUNTIME_RESET_TOKEN_BYTES_V1 {
+            return Err(Error::limit());
+        }
+        let (payload, digest) = encoded.split_once('.').ok_or_else(Error::invalid_token)?;
+        let bytes = decode_bytes(payload)?;
+        if digest != format!("{:x}", Sha256::digest(&bytes)) {
+            return Err(Error::invalid_token());
+        }
+        verify_canonical_json_v1(&bytes).map_err(|_| Error::invalid_token())?;
+        let token: Self = serde_json::from_slice(&bytes).map_err(|_| Error::invalid_token())?;
+        token.validate()?;
+        if canonicalize_json_v1(&token)
+            .map_err(|_| Error::invalid_token())?
+            .as_bytes()
+            != bytes
+        {
+            return Err(Error::invalid_token());
+        }
+        Ok(token)
+    }
+    fn validate(&self) -> Result<(), Error> {
+        if self.schema != "podway.runtime-reset-token/v1"
+            || self.caller_uid == 0
+            || self
+                .created_at_ms
+                .checked_add(RUNTIME_RESET_TOKEN_LIFETIME_MS_V1)
+                != Some(self.expires_at_ms)
+            || self.expires_at_ms > 253_402_300_799_999
+            || self.targets.is_empty()
+        {
+            return Err(Error::invalid_token());
+        }
+        if self.targets.len() > MAX_RUNTIME_RESET_MODES_V1
+            || self.mode_inventory.len() > MAX_RUNTIME_RESET_MODES_V1
+        {
+            return Err(Error::limit());
+        }
+        self.account_root.validate()?;
+        self.account_identity.validate(self.caller_uid)?;
+        let account = decode_bytes(&self.account_root.path_bytes_base64url)?;
+        let mut modes = BTreeSet::new();
+        for target in &self.targets {
+            if !modes.insert(target.mode.as_str()) {
+                return Err(Error::invalid_token());
+            }
+            target.root.validate()?;
+            let mut expected = account.clone();
+            if !target.mode.is_production() {
+                expected.extend_from_slice(format!("/modes/{}", target.mode.as_str()).as_bytes());
+            }
+            if decode_bytes(&target.root.path_bytes_base64url)? != expected
+                || target.resource_classes
+                    != RuntimeResetResourceClassV1::deletion_classes(target.mode.is_production())
+            {
+                return Err(Error::invalid_token());
+            }
+            for identity in [
+                &target.root_identity,
+                &target.run_identity,
+                &target.state_identity,
+                &target.logs_identity,
+                &target.lock_identity,
+                &target.registry_lock_identity,
+                &target.socket_identity,
+                &target.service.plist_identity,
+                &target.service.metadata_identity,
+            ]
+            .into_iter()
+            .flatten()
+            {
+                identity.validate(self.caller_uid)?;
+            }
+            if let Some(process) = &target.process {
+                process.validate()?;
+            }
+            for digest in [
+                &target.service.plist_sha256,
+                &target.service.metadata_sha256,
+            ]
+            .into_iter()
+            .flatten()
+            {
+                validate_digest(digest)?;
+            }
+            if target.service.installed != target.service.plist_identity.is_some()
+                || target.service.plist_identity.is_some() != target.service.plist_sha256.is_some()
+                || target.service.metadata_identity.is_some()
+                    != target.service.metadata_sha256.is_some()
+                || (!target.mode.is_production()
+                    && (target.service.installed || target.service.loaded))
+            {
+                return Err(Error::invalid_token());
+            }
+        }
+        match &self.selection {
+            RuntimeResetSelectionV1::Mode { mode }
+                if !self.mode_inventory.is_empty()
+                    || self.targets.len() != 1
+                    || self.targets[0].mode != *mode =>
+            {
+                return Err(Error::invalid_token());
+            }
+            RuntimeResetSelectionV1::AllModes => {
+                let observed: Vec<_> = self
+                    .targets
+                    .iter()
+                    .map(|target| target.mode.clone())
+                    .collect();
+                let mut sorted = observed.clone();
+                sorted.sort_by_key(|mode| (!mode.is_production(), mode.as_str().to_owned()));
+                if observed != self.mode_inventory
+                    || observed != sorted
+                    || !observed[0].is_production()
+                {
+                    return Err(Error::invalid_token());
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+pub(super) fn validate_uuid(value: &str) -> Result<(), Error> {
+    let uuid = uuid::Uuid::parse_str(value).map_err(|_| Error::invalid_token())?;
+    if uuid.hyphenated().to_string() != value {
+        return Err(Error::invalid_token());
+    }
+    Ok(())
+}
+fn validate_digest(value: &str) -> Result<(), Error> {
+    let hex = value
+        .strip_prefix("sha256:")
+        .ok_or_else(Error::invalid_token)?;
+    if hex.len() != 64
+        || !hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(Error::invalid_token());
+    }
+    Ok(())
+}
+
+const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+fn encode_bytes(bytes: &[u8]) -> String {
+    let mut result = String::with_capacity((bytes.len() * 4).div_ceil(3));
+    for chunk in bytes.chunks(3) {
+        result.push(ALPHABET[(chunk[0] >> 2) as usize] as char);
+        result.push(
+            ALPHABET[(((chunk[0] & 3) << 4) | (chunk.get(1).copied().unwrap_or(0) >> 4)) as usize]
+                as char,
+        );
+        if chunk.len() > 1 {
+            result.push(
+                ALPHABET
+                    [(((chunk[1] & 15) << 2) | (chunk.get(2).copied().unwrap_or(0) >> 6)) as usize]
+                    as char,
+            );
+        }
+        if chunk.len() > 2 {
+            result.push(ALPHABET[(chunk[2] & 63) as usize] as char);
+        }
+    }
+    result
+}
+fn decode_bytes(value: &str) -> Result<Vec<u8>, Error> {
+    if value.is_empty() || value.len() % 4 == 1 {
+        return Err(Error::invalid_token());
+    }
+    let mut result = Vec::with_capacity(value.len() / 4 * 3 + 2);
+    for chunk in value.as_bytes().chunks(4) {
+        let mut sextets = [0u8; 4];
+        for (index, byte) in chunk.iter().enumerate() {
+            sextets[index] = ALPHABET
+                .iter()
+                .position(|item| item == byte)
+                .ok_or_else(Error::invalid_token)? as u8;
+        }
+        result.push((sextets[0] << 2) | (sextets[1] >> 4));
+        if chunk.len() > 2 {
+            result.push((sextets[1] << 4) | (sextets[2] >> 2));
+        }
+        if chunk.len() > 3 {
+            result.push((sextets[2] << 6) | sextets[3]);
+        }
+    }
+    if encode_bytes(&result) != value {
+        return Err(Error::invalid_token());
+    }
+    Ok(result)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ResetRecord {
+    schema: String,
+    operation_id: String,
+    token_sha256: String,
+    phase: RecordPhase,
+    #[serde(deserialize_with = "required_option")]
+    plan: Option<ResetToken>,
+    modes: Vec<RecordMode>,
+    #[serde(deserialize_with = "required_option")]
+    result: Option<RecordResult>,
+}
+#[derive(Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum RecordPhase {
+    InProgress,
+    Completed,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecordMode {
+    mode: RuntimeModeV1,
+    phase: ModePhase,
+    #[serde(deserialize_with = "required_option")]
+    reservation_id: Option<String>,
+    entries: Vec<RecordEntry>,
+}
+#[derive(Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum ModePhase {
+    Pending,
+    StopIntended,
+    Stopped,
+    InventoryIntended,
+    InventoryReady,
+    Complete,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecordEntry {
+    class: RuntimeResetResourceClassV1,
+    relative_path_bytes_base64url: String,
+    identity: FileIdentity,
+    kind: EntryKind,
+    state: EntryState,
+}
+#[derive(Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum EntryKind {
+    Regular,
+    Directory,
+    Socket,
+}
+#[derive(Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum EntryState {
+    Pending,
+    Intended,
+    Completed,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecordResult {
+    schema: String,
+    status: ResultStatus,
+    operation_id: String,
+    selection: RuntimeResetSelectionV1,
+    modes: Vec<ModeOutcome>,
+    preserved: Vec<RuntimeResetResourceV1>,
+    excluded: Vec<RuntimeResetExclusionV1>,
+}
+#[derive(Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum ResultStatus {
+    Complete,
+    AlreadyApplied,
+    Incomplete,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ModeOutcome {
+    mode: RuntimeModeV1,
+    state: ModeOutcomeState,
+    resources: Vec<ResourceOutcome>,
+}
+#[derive(Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum ModeOutcomeState {
+    Complete,
+    Pending,
+    Incomplete,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResourceOutcome {
+    class: RuntimeResetResourceClassV1,
+    path: RuntimeResetPathV1,
+    state: ResourceOutcomeState,
+}
+#[derive(Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum ResourceOutcomeState {
+    Removed,
+    AlreadyAbsent,
+    Pending,
+}
+
+impl ResetRecord {
+    pub(super) fn operation(
+        bytes: &[u8],
+        home: &PodwayHomeV1,
+    ) -> Result<Option<RuntimeResetOperationV1>, Error> {
+        let record: Self = serde_json::from_slice(bytes).map_err(|_| Error::unsafe_path())?;
+        record.validate(home).map_err(|error| {
+            if error.reason == RuntimeResetReasonV1::BoundExceeded {
+                error
+            } else {
+                Error::unsafe_path()
+            }
+        })?;
+        Ok(
+            (record.phase == RecordPhase::InProgress).then_some(RuntimeResetOperationV1 {
+                operation_id: record.operation_id,
+                token_sha256: record.token_sha256,
+            }),
+        )
+    }
+    fn validate(&self, home: &PodwayHomeV1) -> Result<(), Error> {
+        validate_uuid(&self.operation_id)?;
+        validate_digest(&self.token_sha256)?;
+        if self.schema != "podway.runtime-reset-record/v1" {
+            return Err(Error::invalid_token());
+        }
+        if self.modes.len() > MAX_RUNTIME_RESET_MODES_V1
+            || self
+                .modes
+                .iter()
+                .map(|mode| mode.entries.len())
+                .sum::<usize>()
+                > MAX_RUNTIME_RESET_RESOURCES_V1
+        {
+            return Err(Error::limit());
+        }
+        match self.phase {
+            RecordPhase::InProgress => {
+                let plan = self.plan.as_ref().ok_or_else(Error::invalid_token)?;
+                plan.validate()?;
+                if plan.caller_uid != home.user_id()
+                    || plan.account_root != RuntimeResetPathV1::new(home.as_path())?
+                    || self.result.is_some()
+                    || self.modes.len() != plan.targets.len()
+                    || self.token_sha256
+                        != format!("sha256:{:x}", Sha256::digest(plan.encode()?.as_bytes()))
+                {
+                    return Err(Error::invalid_token());
+                }
+                for (mode, target) in self.modes.iter().zip(&plan.targets) {
+                    if mode.mode != target.mode {
+                        return Err(Error::invalid_token());
+                    }
+                    if let Some(reservation) = &mode.reservation_id {
+                        validate_uuid(reservation)?;
+                    }
+                    if matches!(
+                        mode.phase,
+                        ModePhase::Pending
+                            | ModePhase::StopIntended
+                            | ModePhase::Stopped
+                            | ModePhase::InventoryIntended
+                    ) && !mode.entries.is_empty()
+                    {
+                        return Err(Error::invalid_token());
+                    }
+                    let mut paths = BTreeSet::new();
+                    for entry in &mode.entries {
+                        entry.identity.validate(home.user_id())?;
+                        let path = decode_bytes(&entry.relative_path_bytes_base64url)?;
+                        if path.len() > 4096 || !paths.insert(path.clone()) {
+                            return Err(Error::invalid_token());
+                        }
+                        let components: Vec<_> = path.split(|byte| *byte == b'/').collect();
+                        if components.len() > 8
+                            || components.iter().any(|part| {
+                                part.is_empty()
+                                    || *part == b"."
+                                    || *part == b".."
+                                    || part.contains(&0)
+                            })
+                        {
+                            return Err(Error::invalid_token());
+                        }
+                        let path = Path::new(std::ffi::OsStr::from_bytes(&path));
+                        let class = if components.len() == 1 && path == Path::new("state") {
+                            RuntimeResetResourceClassV1::StateDirectory
+                        } else if components.len() == 1 && path == Path::new("logs") {
+                            RuntimeResetResourceClassV1::LogsDirectory
+                        } else if path == Path::new("run/podwayd.sock") {
+                            RuntimeResetResourceClassV1::Socket
+                        } else if components.len() == 2 && components[0] == b"state" {
+                            super::filesystem::state_resource_class(
+                                path.file_name().ok_or_else(Error::invalid_token)?,
+                            )
+                            .ok_or_else(Error::invalid_token)?
+                        } else if components.len() == 2 && components[0] == b"logs" {
+                            super::filesystem::log_resource_class(
+                                path.file_name().ok_or_else(Error::invalid_token)?,
+                            )
+                            .ok_or_else(Error::invalid_token)?
+                        } else {
+                            return Err(Error::invalid_token());
+                        };
+                        let kind = match class {
+                            RuntimeResetResourceClassV1::StateDirectory
+                            | RuntimeResetResourceClassV1::LogsDirectory => EntryKind::Directory,
+                            RuntimeResetResourceClassV1::Socket => EntryKind::Socket,
+                            _ => EntryKind::Regular,
+                        };
+                        if class != entry.class
+                            || kind != entry.kind
+                            || (mode.phase == ModePhase::Complete
+                                && entry.state != EntryState::Completed)
+                        {
+                            return Err(Error::invalid_token());
+                        }
+                    }
+                }
+            }
+            RecordPhase::Completed => {
+                let result = self.result.as_ref().ok_or_else(Error::invalid_token)?;
+                if self.plan.is_some()
+                    || !self.modes.is_empty()
+                    || result.schema != "podway.runtime-reset-result/v1"
+                    || result.status != ResultStatus::Complete
+                    || result.operation_id != self.operation_id
+                    || result.modes.is_empty()
+                {
+                    return Err(Error::invalid_token());
+                }
+                if result.modes.len() > MAX_RUNTIME_RESET_MODES_V1
+                    || result.preserved.len() > MAX_PRESERVED_RESOURCES
+                    || result.excluded.is_empty()
+                    || result.excluded.len() > MAX_EXCLUSIONS
+                    || result
+                        .modes
+                        .iter()
+                        .map(|mode| mode.resources.len())
+                        .sum::<usize>()
+                        > MAX_RUNTIME_RESET_RESOURCES_V1
+                {
+                    return Err(Error::limit());
+                }
+                let mut modes = BTreeSet::new();
+                for mode in &result.modes {
+                    if !modes.insert(mode.mode.as_str()) || mode.state != ModeOutcomeState::Complete
+                    {
+                        return Err(Error::invalid_token());
+                    }
+                    for resource in &mode.resources {
+                        resource.path.validate()?;
+                        if resource.state == ResourceOutcomeState::Pending
+                            || !RuntimeResetResourceClassV1::deletion_classes(
+                                mode.mode.is_production(),
+                            )
+                            .contains(&resource.class)
+                        {
+                            return Err(Error::invalid_token());
+                        }
+                    }
+                }
+                if let RuntimeResetSelectionV1::Mode { mode } = &result.selection
+                    && (result.modes.len() != 1 || result.modes[0].mode != *mode)
+                {
+                    return Err(Error::invalid_token());
+                }
+                for resource in &result.preserved {
+                    resource.path.validate()?;
+                }
+                for exclusion in &result.excluded {
+                    match (&exclusion.path, exclusion.reason) {
+                        (Some(path), ExclusionReason::ManagedNamespace) => path.validate()?,
+                        (None, ExclusionReason::ExternalManagedRuntimes) => {}
+                        _ => return Err(Error::invalid_token()),
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn required_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
+
+    fn token() -> ResetToken {
+        let root = RuntimeResetPathV1::new(Path::new(OsStr::from_bytes(b"/account-\xff/.podway")))
+            .unwrap();
+        let identity = FileIdentity {
+            device: 1,
+            inode: 2,
+            uid: 501,
+            mode: 0o40700,
+            links: 2,
+        };
+        let mut target = NamespaceBinding::empty(RuntimeModeV1::production(), root.clone());
+        target.root_identity = Some(identity.clone());
+        target.resource_classes = RuntimeResetResourceClassV1::deletion_classes(true);
+        ResetToken {
+            schema: "podway.runtime-reset-token/v1".to_owned(),
+            caller_uid: 501,
+            account_root: root,
+            account_identity: identity,
+            selection: RuntimeResetSelectionV1::Mode {
+                mode: RuntimeModeV1::production(),
+            },
+            mode_inventory: Vec::new(),
+            targets: vec![target],
+            created_at_ms: 1000,
+            expires_at_ms: 601000,
+        }
+    }
+
+    #[test]
+    fn plan_document_bound_rejects_bytes_before_resource_count_limit() {
+        let home = PodwayHomeV1::from_account_home("/account", 501).unwrap();
+        let mut plan = RuntimeResetPlanV1::empty(&home, RuntimeResetSelectionV1::AllModes).unwrap();
+        let path = RuntimeResetPathV1::new(Path::new(&format!("/{}", "a".repeat(4000)))).unwrap();
+        for _ in 0..80 {
+            plan.excluded.push(RuntimeResetExclusionV1 {
+                path: Some(path.clone()),
+                reason: ExclusionReason::ManagedNamespace,
+            });
+        }
+        assert!(plan.excluded.len() < MAX_EXCLUSIONS);
+        assert!(serde_json::to_vec(&plan).unwrap().len() > MAX_RUNTIME_RESET_DOCUMENT_BYTES_V1);
+        assert_eq!(
+            plan.check_bounds().unwrap_err().code(),
+            "RUNTIME_RESET_LIMIT_EXCEEDED"
+        );
+        plan.excluded.truncate(2);
+        plan.check_bounds().unwrap();
+    }
+
+    #[test]
+    fn account_record_reader_rejects_malformed_or_unbound_recovery() {
+        let mut token = token();
+        let home = PodwayHomeV1::from_account_home("/account", 501).unwrap();
+        token.account_root = RuntimeResetPathV1::new(home.as_path()).unwrap();
+        token.targets[0].root = token.account_root.clone();
+        let operation_id = uuid::Uuid::new_v4().to_string();
+        let token_sha256 = format!(
+            "sha256:{:x}",
+            Sha256::digest(token.encode().unwrap().as_bytes())
+        );
+        let record = serde_json::json!({
+            "schema": "podway.runtime-reset-record/v1", "operation_id": operation_id,
+            "token_sha256": token_sha256, "phase": "in_progress", "plan": token,
+            "modes": [{"mode": "prod", "phase": "pending", "reservation_id": null, "entries": []}], "result": null,
+        });
+        let operation = ResetRecord::operation(&serde_json::to_vec(&record).unwrap(), &home)
+            .unwrap()
+            .unwrap();
+        assert_eq!(operation.operation_id, operation_id);
+        for (key, value) in [
+            (
+                "token_sha256",
+                serde_json::json!(format!("sha256:{}", "0".repeat(64))),
+            ),
+            ("phase", serde_json::json!("completed")),
+            ("plan", serde_json::Value::Null),
+        ] {
+            let mut altered = record.clone();
+            altered[key] = value;
+            assert!(ResetRecord::operation(&serde_json::to_vec(&altered).unwrap(), &home).is_err());
+        }
+        let mut altered = record.clone();
+        altered.as_object_mut().unwrap().remove("result");
+        assert!(ResetRecord::operation(&serde_json::to_vec(&altered).unwrap(), &home).is_err());
+        let completed = serde_json::json!({
+            "schema": "podway.runtime-reset-record/v1", "operation_id": operation_id,
+            "token_sha256": token_sha256, "phase": "completed", "plan": null, "modes": [],
+            "result": {"schema": "podway.runtime-reset-result/v1", "status": "complete", "operation_id": operation_id,
+                "selection": {"kind": "mode", "mode": "prod"}, "modes": [{"mode":"prod", "state":"complete", "resources":[]}],
+                "preserved": [], "excluded": [{"path":null, "reason":"external_managed_runtimes"}]},
+        });
+        assert!(
+            ResetRecord::operation(&serde_json::to_vec(&completed).unwrap(), &home)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn token_decoder_rejects_inconsistent_identity_and_selection_bindings() {
+        let mut baseline = token();
+        baseline.account_root = RuntimeResetPathV1::new(Path::new("/account/.podway")).unwrap();
+        baseline.targets[0].root = baseline.account_root.clone();
+        let mut named = NamespaceBinding::empty(
+            RuntimeModeV1::development(),
+            RuntimeResetPathV1::new(Path::new("/account/.podway/modes/dev")).unwrap(),
+        );
+        named.root_identity = Some(baseline.account_identity.clone());
+        named.resource_classes = RuntimeResetResourceClassV1::deletion_classes(false);
+        baseline.selection = RuntimeResetSelectionV1::AllModes;
+        baseline.mode_inventory = vec![RuntimeModeV1::production(), RuntimeModeV1::development()];
+        baseline.targets.push(named);
+        assert_eq!(
+            ResetToken::decode(&baseline.encode().unwrap()).unwrap(),
+            baseline
+        );
+        for mutation in 0..8 {
+            let mut altered = baseline.clone();
+            match mutation {
+                0 => altered.caller_uid = 0,
+                1 => altered.account_identity.uid += 1,
+                2 => altered.targets[1].root_identity.as_mut().unwrap().uid += 1,
+                3 => {
+                    altered.targets[1].root =
+                        RuntimeResetPathV1::new(Path::new("/account/.podway/modes/qa")).unwrap()
+                }
+                4 => altered.targets[1].service.loaded = true,
+                5 => {
+                    altered.targets[1].service.installed = true;
+                    altered.targets[1].service.plist_identity =
+                        Some(altered.account_identity.clone());
+                    altered.targets[1].service.plist_sha256 =
+                        Some(format!("sha256:{}", "a".repeat(64)));
+                }
+                6 => {
+                    altered.targets.reverse();
+                    altered.mode_inventory.reverse();
+                }
+                7 => altered.mode_inventory[1] = RuntimeModeV1::production(),
+                _ => unreachable!(),
+            }
+            // Bypass encode's validation to exercise the public token trust boundary.
+            let bytes = canonicalize_json_v1(&altered).unwrap();
+            let encoded = format!(
+                "{}.{:x}",
+                encode_bytes(bytes.as_bytes()),
+                Sha256::digest(bytes.as_bytes())
+            );
+            assert_eq!(
+                ResetToken::decode(&encoded).unwrap_err().reason,
+                RuntimeResetReasonV1::InvalidToken,
+                "mutation {mutation}"
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_tokens_preserve_raw_paths_and_reject_alternate_encodings() {
+        let token = token();
+        let encoded = token.encode().unwrap();
+        assert_eq!(ResetToken::decode(&encoded).unwrap(), token);
+        assert_eq!(
+            decode_bytes(&token.account_root.path_bytes_base64url).unwrap(),
+            b"/account-\xff/.podway"
+        );
+        assert!(token.account_root.display.contains('\u{fffd}'));
+        let (payload, digest) = encoded.split_once('.').unwrap();
+        assert!(ResetToken::decode(&format!("{payload}=.{digest}")).is_err());
+        assert!(ResetToken::decode(&format!("{payload}.{}", "0".repeat(64))).is_err());
+        let mut document = serde_json::to_value(&token).unwrap();
+        for field in ["process", "socket_identity"] {
+            let mut altered = document.clone();
+            altered["targets"][0].as_object_mut().unwrap().remove(field);
+            let bytes = canonicalize_json_v1(&altered).unwrap();
+            let encoded = format!(
+                "{}.{:x}",
+                encode_bytes(bytes.as_bytes()),
+                Sha256::digest(bytes.as_bytes())
+            );
+            assert_eq!(
+                ResetToken::decode(&encoded).unwrap_err().reason,
+                RuntimeResetReasonV1::InvalidToken
+            );
+        }
+        document
+            .as_object_mut()
+            .unwrap()
+            .insert("unexpected".to_owned(), serde_json::Value::Null);
+        let bytes = canonicalize_json_v1(&document).unwrap();
+        let encoded = format!(
+            "{}.{:x}",
+            encode_bytes(bytes.as_bytes()),
+            Sha256::digest(bytes.as_bytes())
+        );
+        assert!(ResetToken::decode(&encoded).is_err());
+        let bytes = serde_json::to_string_pretty(&token).unwrap();
+        let encoded = format!(
+            "{}.{:x}",
+            encode_bytes(bytes.as_bytes()),
+            Sha256::digest(bytes.as_bytes())
+        );
+        assert!(ResetToken::decode(&encoded).is_err());
+        for bytes in [vec![0], vec![0, 255], vec![255, 254, 253], vec![1, 2, 3, 4]] {
+            assert_eq!(decode_bytes(&encode_bytes(&bytes)).unwrap(), bytes);
+        }
+        assert!(decode_bytes("AB").is_err());
+        assert!(decode_bytes("AAB").is_err());
+    }
+}

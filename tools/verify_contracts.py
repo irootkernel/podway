@@ -198,6 +198,7 @@ V2_ROUTE_DELTA = {
 # stays registered forever, and this set records only which of them the build now serves.
 V2_EXECUTABLE_ROUTES = frozenset(
     {
+        "runtime.reset.plan",
         "procedure.format",
         "procedure.vet",
         "procedure.lint",

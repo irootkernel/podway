@@ -26,10 +26,11 @@ behavior. Manifest registration alone does not imply executable capability.
 `WORKSPACE_MAINTENANCE`, and `WORKTREE_GONE` families rather than introducing a
 parallel removal-specific error taxonomy.
 
-The reserved account-runtime reset error family is defined in the
+The account-runtime reset error family is defined in the
 [runtime reset specification](../operations/runtime-reset.md#public-results-errors-and-bounds)
 and `podway.runtime-reset-error-details/v1`. Its seven `RUNTIME_RESET_*` codes
-are catalogued before the corresponding commands become executable. Partial
+are catalogued together; read-only plan errors are executable while apply and
+control remain reserved. Partial
 retirement is a non-success result with exact retry information, never rollback.
 
 ## Exit codes

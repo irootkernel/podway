@@ -7,8 +7,10 @@
 //! clocks, runtime paths, and filesystem access at the composition boundary.
 
 mod managed_runtime_v3;
+mod runtime_reset_v1;
 
 pub use managed_runtime_v3::*;
+pub use runtime_reset_v1::*;
 
 use nix::{
     dir::Dir,

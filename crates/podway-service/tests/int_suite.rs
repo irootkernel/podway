@@ -4,3 +4,5 @@ mod int_phase6_native_service;
 mod int_phase8_crash_boundaries;
 #[path = "int_phase8_observability.rs"]
 mod int_phase8_observability;
+#[path = "int_runtime_reset_plan.rs"]
+mod int_runtime_reset_plan;

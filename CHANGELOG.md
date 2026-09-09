@@ -4,6 +4,12 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ## v0.2.10 - Unreleased
 
+### Added
+
+- Preview ordinary account-runtime retirement with explicit mode selection,
+  bounded confirmation tokens, managed-runtime exclusions, and read-only
+  ownership checks that preserve all worktree state.
+
 ### Changed
 
 - Clarify how Podway cooperates with Codex context management and goals, preserving

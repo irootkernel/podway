@@ -141,6 +141,10 @@ const DAEMON_PATH: Flag = Flag {
     long: "daemon-path",
     takes_value: true,
 };
+const ALL_MODES: Flag = Flag {
+    long: "all-modes",
+    takes_value: false,
+};
 const PURGE_LOGS: Flag = Flag {
     long: "purge-logs",
     takes_value: false,
@@ -493,6 +497,12 @@ const ROUTES: &[Route] = &[
     Route {
         words: "preset explain",
         flags: DISPLAY_FLAGS,
+        values: "",
+        dynamic: None,
+    },
+    Route {
+        words: "runtime reset plan",
+        flags: &[&JSON, &NO_COLOR, &QUIET, &DEV, &MODE, &ALL_MODES],
         values: "",
         dynamic: None,
     },

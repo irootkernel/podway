@@ -1,7 +1,7 @@
 {
   "contract_version": "podway.runtime-reset-contract/v1",
   "owner_crate": "podway-service",
-  "availability": "reserved_contract",
+  "availability": "executable",
   "allowed_dependencies": [
     "podway-core"
   ],
@@ -11,11 +11,13 @@
   ],
   "operations": {
     "plan": {
+      "availability": "executable",
       "input": "explicit ordinary mode or all_modes",
       "output": "podway.runtime-reset-plan-result/v1",
       "writes": false
     },
     "apply": {
+      "availability": "reserved_contract",
       "input": "matching explicit selection, original plan token and confirmed=true",
       "output": "podway.runtime-reset-result/v1 or catalogued reset error",
       "writes": "only selected ordinary runtime payload and bounded account control state"
@@ -52,6 +54,7 @@
   ],
   "preserved_anchors": [
     "run/podwayd.lock",
+    "state/workspaces.json.lock",
     "maintenance/runtime-reset.lock",
     "maintenance/runtime-start.lock",
     "maintenance/runtime-reset-commit.lock"
@@ -64,5 +67,5 @@
     "forced_termination",
     "automatic_restart"
   ],
-  "verification_owner": "V2FRT-001"
+  "verification_owner": "V2FRT-002"
 }

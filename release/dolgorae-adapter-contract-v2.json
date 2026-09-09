@@ -1456,7 +1456,7 @@
       {
         "id": "urn:podway:schema:runtime-reset-components:v1",
         "path": "schemas/runtime-reset-components-v1.schema.json",
-        "sha256": "sha256:5f8fd6e3a7e1860674ff4bd8af5ff7f95159ff66074047712643a98386aaf780"
+        "sha256": "sha256:313b077fc6f8f6313d9c786d0241f0ce6a1c21c30f58fe9878793c5fc5cdd6db"
       },
       {
         "id": "urn:podway:schema:runtime-reset-control-input:v1",

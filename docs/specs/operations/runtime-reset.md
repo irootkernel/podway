@@ -3,10 +3,11 @@
 ## Authority and availability
 
 [ADR-0032](../../architecture-decision-records/0032-retire-ordinary-user-runtimes.md)
-owns the account-runtime retirement decision. The command catalog currently
-reserves `runtime.reset.plan`, `runtime.reset.apply`, and `daemon.runtime_reset`;
-reservation does not admit their execution. The active roadmap owns admission
-and remaining implementation work.
+owns the account-runtime retirement decision. The command catalog admits read-only
+`runtime.reset.plan`. `runtime.reset.apply` and `daemon.runtime_reset` remain
+reserved and cannot execute. Until the control route is admitted, a live daemon
+is reported as unsupported and cannot receive a planning token. The active
+roadmap owns remaining implementation work.
 
 ## Selection and preservation
 
@@ -50,7 +51,9 @@ worktree. Existing `reset`, `reset --all`, workspace removal, uninstall,
 `daemon.terminate`, and Aquarium controller contracts keep their meanings.
 
 The operation preserves each selected namespace's root, `run` directory and
-`run/podwayd.lock` anchor. It also preserves owner-private account control paths
+`run/podwayd.lock` anchor. An existing `state/workspaces.json.lock` registry
+anchor and its containing state directory are also preserved; anchors alone do
+not make a deletion target. It also preserves owner-private account control paths
 `maintenance/runtime-reset.lock`, `maintenance/runtime-start.lock`,
 `maintenance/runtime-reset-commit.lock`, and `maintenance/runtime-reset.json`.
 Their validated ancestry and regular non-symlink identities remain stable across
@@ -66,7 +69,10 @@ reasons. An absent or already retired selection is `no_change` with no token.
 Only lock anchors and completion records do not make a deletion target.
 
 An eligible plan returns `ready`, a token and an expiry. A blocked plan has no
-token. A fresh plan encountering an in-progress record reports
+token. An unsafe selected namespace appears in a blocked plan. Account-wide
+discovery failures, including invalid entries directly under `modes/`, return a
+catalogued error because the complete selection cannot be established.
+A fresh plan encountering an in-progress record reports
 `recovery_required` and its operation ID and token digest; it cannot supersede
 that operation. The operator retains the original token for explicit retry.
 
@@ -74,6 +80,8 @@ The token is unpadded base64url of the canonical UTF-8 JSON
 `podway.runtime-reset-token/v1` document, followed by `.` and the lowercase
 SHA-256 hex digest of those bytes. Canonical JSON uses lexicographically ordered
 object keys, no insignificant whitespace, integers only, and unescaped Unicode.
+Account records and control requests identify the entire encoded token with
+`token_sha256`, the `sha256:`-prefixed digest of its ASCII bytes.
 This checksum detects invalid encoding; it is neither a secret nor a same-user
 security boundary. Noncanonical encodings and unknown fields are rejected.
 

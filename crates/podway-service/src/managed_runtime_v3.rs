@@ -225,6 +225,43 @@ struct ManagedRuntimeDocumentV3 {
     generation: Option<String>,
 }
 
+/// Recognizes an excluded namespace without traversing its executable or sandbox paths.
+pub(crate) fn validate_reset_exclusion_v3(
+    bytes: &[u8],
+    root: &Path,
+    uid: u32,
+    mode: &RuntimeModeV1,
+) -> Result<(), ManagedRuntimeErrorV3> {
+    let document: ManagedRuntimeDocumentV3 =
+        serde_json::from_slice(bytes).map_err(ManagedRuntimeErrorV3::Json)?;
+    if mode.is_production()
+        || document.schema != MANAGED_RUNTIME_SCHEMA_V3
+        || document.metadata_version != MANAGED_RUNTIME_METADATA_VERSION_V3
+        || document.euid != uid
+        || document.mode != mode.as_str()
+        || document.canonical_root != root
+    {
+        return Err(ManagedRuntimeErrorV3::Invalid(
+            "managed exclusion identity is invalid",
+        ));
+    }
+    let paths = ServiceRuntimePathsV1::for_runtime_root(root, mode.clone(), uid)
+        .map_err(|_| ManagedRuntimeErrorV3::Invalid("managed exclusion paths are invalid"))?;
+    if document.paths.lock != paths.global_lock_path().as_path()
+        || document.paths.socket != paths.socket_path().as_path()
+        || document.paths.service_state != paths.metadata_index_path().as_path()
+        || document.paths.registry != paths.workspace_registry_path().as_path()
+        || document.paths.recovery != paths.recovery_path().as_path()
+        || document.paths.log != paths.log_path().as_path()
+        || document.paths.bootstrap_log != paths.bootstrap_log_path().as_path()
+    {
+        return Err(ManagedRuntimeErrorV3::Invalid(
+            "managed exclusion topology is invalid",
+        ));
+    }
+    validate_purpose_shape(&document, mode)
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ManagedRuntimePathsDocumentV3 {

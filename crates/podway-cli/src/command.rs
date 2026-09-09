@@ -1,6 +1,7 @@
 //! Public command-line surface for the Podway command contract.
 
 mod completion;
+mod runtime_reset;
 
 use std::{
     env,
@@ -211,6 +212,11 @@ enum Command {
     Daemon {
         #[command(subcommand)]
         command: DaemonCommand,
+    },
+    /// Inspect ordinary account runtimes without opening a worktree.
+    Runtime {
+        #[command(subcommand)]
+        command: RuntimeCommand,
     },
     /// Orderly stop the isolated foreground dev daemon.
     Terminate,
@@ -652,6 +658,24 @@ enum PresetCommand {
 }
 
 #[derive(Debug, Subcommand)]
+enum RuntimeCommand {
+    /// Preview ordinary runtime retirement.
+    Reset {
+        #[command(subcommand)]
+        command: RuntimeResetCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum RuntimeResetCommand {
+    /// Read target resources and obtain a bounded confirmation token.
+    Plan {
+        #[arg(long, action = ArgAction::SetTrue)]
+        all_modes: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 enum DaemonCommand {
     Install {
         #[arg(long, value_name = "PATH")]
@@ -840,6 +864,7 @@ impl Command {
             | Self::Procedure { .. }
             | Self::Preset { .. }
             | Self::Daemon { .. }
+            | Self::Runtime { .. }
             | Self::Terminate => None,
         }
     }
@@ -886,6 +911,7 @@ impl Command {
                 command: PresetCommand::Explain { .. },
             } => "preset.explain",
             Self::Daemon { command } => daemon_command_name(command),
+            Self::Runtime { .. } => "runtime.reset.plan",
             Self::Terminate => "daemon.terminate",
             Self::CompleteDynamic { .. } => "__complete",
             command => command
@@ -1471,6 +1497,11 @@ impl LocalFailure {
             "ITEM_CONSTRAINT_FAILED" => (1, false),
             "DIGEST_CONFIRMATION_REQUIRED" => (LOCAL_USAGE_EXIT, false),
             "PROCEDURE_DIGEST_MISMATCH" => (4, false),
+            "RUNTIME_RESET_LIMIT_EXCEEDED" => (LOCAL_USAGE_EXIT, false),
+            "RUNTIME_RESET_UNSUPPORTED" => (LOCAL_DAEMON_EXIT, false),
+            "RUNTIME_RESET_BUSY" | "RUNTIME_RESET_PLAN_STALE" => (4, false),
+            "RUNTIME_RESET_UNSAFE" => (5, false),
+            "RUNTIME_RESET_IN_PROGRESS" | "RUNTIME_RESET_INCOMPLETE" => (4, true),
             "PATH_OUTSIDE_WORKTREE" => (5, false),
             "SESSION_START_DECISION_REQUIRED" => (5, false),
             "INTERNAL_ERROR" => (LOCAL_CLIENT_EXIT, false),
@@ -3111,6 +3142,18 @@ fn execute_local(cli: &Cli) -> Result<Option<RunResult>, LocalFailure> {
         || cli.if_item_revision.is_some()
         || cli.yes;
     match &cli.command {
+        Command::Runtime {
+            command:
+                RuntimeCommand::Reset {
+                    command: RuntimeResetCommand::Plan { all_modes },
+                },
+        } => {
+            reject_local_flags(
+                local_flags || cli.if_goal_revision.is_some(),
+                "runtime reset plan accepts no daemon request or confirmation flags",
+            )?;
+            Ok(Some(runtime_reset::execute_plan(cli, *all_modes)?))
+        }
         Command::Help { topic } => {
             reject_local_flags(local_flags, "help accepts no daemon-only flags")?;
             let text = help_text(topic.as_deref())?;
@@ -7136,6 +7179,7 @@ fn daemon_payload(
         | Command::Procedure { .. }
         | Command::Preset { .. }
         | Command::Daemon { .. }
+        | Command::Runtime { .. }
         | Command::Terminate => {
             return Err(LocalFailure::request_invalid("unsupported daemon command"));
         }
@@ -8235,7 +8279,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             .collect::<Vec<_>>()
             .join(", ");
         return Ok(format!(
-            "Podway coordinates durable worktree-local procedures.\n\nTrust boundary:\n  Podway trusts same-user processes connecting through its local socket.\n  It provides no authentication or workspace access key.\n  It does not protect against malicious same-user processes.\n  It records caller assertions and does not judge their semantic truth.\n\nDaemon endpoint:\n  Daemon-backed commands accept --mode <key>; --dev is the exact alias for mode dev.\n  Omitting a mode selects the production per-user endpoint.\n  Production commands may instead accept --socket <absolute-path>.\n\nUsage:\n  podway help [<route>]\n  podway -h\n  podway --help\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'add retry backoff'\n  podway begin\n  podway status --json\n  podway observe --json\n\nProcedure v2 routes:\n  procedure format|vet|lint|check|graph|preview|scaffold\n  session.begin, session.terminal_disposition, session.decide, session.rework\n  goal.define, goal.revise, goal.assess_criterion\n  evidence read\n\nShipped presets: {preset_ids}. Start prepares a session; begin creates its first active attempt. Contributors may use the managed disposable runtime documented by help workflow for isolated development."
+            "Podway coordinates durable worktree-local procedures.\n\nTrust boundary:\n  Podway trusts same-user processes connecting through its local socket.\n  It provides no authentication or workspace access key.\n  It does not protect against malicious same-user processes.\n  It records caller assertions and does not judge their semantic truth.\n\nDaemon endpoint:\n  Daemon-backed commands accept --mode <key>; --dev is the exact alias for mode dev.\n  Omitting a mode selects the production per-user endpoint.\n  Production commands may instead accept --socket <absolute-path>.\n\nUsage:\n  podway help [<route>]\n  podway -h\n  podway --help\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'add retry backoff'\n  podway begin\n  podway status --json\n  podway observe --json\n\nProcedure v2 routes:\n  procedure format|vet|lint|check|graph|preview|scaffold\n  session.begin, session.terminal_disposition, session.decide, session.rework\n  goal.define, goal.revise, goal.assess_criterion\n  evidence read\n\nRuntime planning:\n  podway --mode <key> runtime reset plan\n  podway help runtime\n\nShipped presets: {preset_ids}. Start prepares a session; begin creates its first active attempt. Contributors may use the managed disposable runtime documented by help workflow for isolated development."
         ));
     }
     let text = match topic {
@@ -8248,6 +8292,9 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
         }
         "procedures" => {
             "Procedures:\n  podway procedure scaffold > .podway/procedures/custom.yaml\n  podway procedure format .podway/procedures/custom.yaml --write\n  podway procedure check .podway/procedures/custom.yaml --warnings-as-errors\n  podway procedure preview .podway/procedures/custom.yaml\n  podway start --procedure .podway/procedures/custom.yaml --expect-procedure-digest sha256:<hex> --task 'perform work'\n\nOther Procedure v2 authoring routes are procedure validate, vet, lint, and graph."
+        }
+        "runtime" | "runtime.reset.plan" => {
+            "Usage:\n  podway --mode <key> runtime reset plan\n  podway runtime reset plan --all-modes\n\nAn explicit selector is required. Planning is read-only and preserves every worktree. Managed runtimes are excluded. Apply is not yet available."
         }
         "daemon" => {
             "Daemon lifecycle grammar:\n  podway [--mode <key> | --dev] daemon status\n  podway [--mode <key> | --dev] daemon wait-ready [--timeout 120s]\n  podway daemon install --daemon-path /absolute/podwayd\n  podway daemon logs --lines 100"

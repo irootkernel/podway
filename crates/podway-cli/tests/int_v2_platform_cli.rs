@@ -2750,6 +2750,12 @@ fn help_and_every_completion_target_publish_the_v2_routes_and_flags() {
         one_json(&overview)["result"]["text"]
             .as_str()
             .unwrap()
+            .contains("runtime reset plan")
+    );
+    assert!(
+        one_json(&overview)["result"]["text"]
+            .as_str()
+            .unwrap()
             .contains("analysis-v2")
     );
     assert!(
@@ -2769,6 +2775,7 @@ fn help_and_every_completion_target_publish_the_v2_routes_and_flags() {
         "goal.define",
         "goal.revise",
         "goal.assess_criterion",
+        "runtime.reset.plan",
     ] {
         let fixture = Fixture::new();
         let output = fixture.run(&["--json".to_owned(), "help".to_owned(), topic.to_owned()]);
@@ -2818,6 +2825,8 @@ fn help_and_every_completion_target_publish_the_v2_routes_and_flags() {
             "small-change-v2",
             "evidence",
             "page-token",
+            "runtime",
+            "all-modes",
         ] {
             assert!(script.contains(token), "{shell} completion omits {token}");
         }

@@ -142,7 +142,8 @@
             "state_directory",
             "logs_directory",
             "service_plist"
-          ]
+          ],
+          "registry_lock_identity": null
         }
       ],
       "created_at_ms": 1,
@@ -210,7 +211,8 @@
               "state_directory",
               "logs_directory",
               "service_plist"
-            ]
+            ],
+            "registry_lock_identity": null
           }
         ],
         "created_at_ms": 1,

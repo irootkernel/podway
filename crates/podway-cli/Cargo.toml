@@ -16,6 +16,7 @@ podway-presets = { path = "../podway-presets" }
 podway-service = { path = "../podway-service" }
 clap = { workspace = true }
 nix = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
 

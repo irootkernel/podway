@@ -981,7 +981,7 @@ commands:
   - podway.criterion-assessment-result/v1
   - podway.detached-admission-result/v2
 - name: runtime.reset.plan
-  availability: reserved_contract
+  availability: executable
   cli:
   - runtime
   - reset
