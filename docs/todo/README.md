@@ -84,5 +84,4 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 
 ## Current adopted dossiers
 
-- [User Runtime Factory Reset](TODO-podway-user-runtime-factory-reset.md) —
-  execution dossier for `V2FRT`; task order and status remain in the active roadmap.
+None.
