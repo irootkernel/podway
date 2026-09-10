@@ -465,6 +465,8 @@ impl RuntimeResetOperatorV1 for ApplyOperator {
         operation: &RuntimeResetOperationV1,
         process: Option<&RuntimeResetProcessV1>,
         reservation_id: Option<&str>,
+        production_service_loaded: bool,
+        process_already_stopped: bool,
     ) -> Result<(), RuntimeResetErrorV1> {
         if paths.mode().is_production() {
             let clock = system_service_clock(SystemTime::now(), "runtime.reset.apply")
@@ -486,6 +488,12 @@ impl RuntimeResetOperatorV1 for ApplyOperator {
                     })?,
                 )
                 .map_err(|_| RuntimeResetErrorV1::unsafe_reason(RuntimeResetReasonV1::Io))?;
+            if production_service_loaded || process_already_stopped {
+                self.connections.remove(paths.mode().as_str());
+                return Ok(());
+            }
+        }
+        if process_already_stopped {
             self.connections.remove(paths.mode().as_str());
             return Ok(());
         }

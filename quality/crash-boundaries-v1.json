@@ -10,6 +10,7 @@
       "D01",
       "D02",
       "D03",
+      "D04",
       "S01",
       "S02",
       "S03"
@@ -22,6 +23,7 @@
       "D01",
       "D02",
       "D03",
+      "D04",
       "S01",
       "S02",
       "S03"
@@ -104,6 +106,17 @@
         "recovery": "cold replay removes the exact registry generation and .podway directory",
         "invariant": "the Git worktree survives and explicit removal converges exactly once",
         "source_locator": "crates/podway-daemon/src/runtime_workspace.rs::WorkspaceRemovalMaintenanceV1::complete"
+      }
+    },
+    {
+      "id": "D04",
+      "proof": {
+        "failpoint": "runtime reset durable checkpoints and live stop effect",
+        "test": "crates/podway-service/tests/int_runtime_reset_plan.rs::every_runtime_reset_durable_boundary_converges_after_process_abort_and_cold_replay",
+        "termination": "child abort observed at each injected boundary",
+        "recovery": "cold exact-token replay converges to one complete or already-applied result",
+        "invariant": "exact stopped postconditions recover, selected runtime data retires once, and the stable lock anchor survives",
+        "source_locator": "crates/podway-service/src/runtime_reset_v1/apply.rs::RuntimeResetApplyV1::resume"
       }
     },
     {

@@ -98,6 +98,44 @@ podway daemon logs --lines 100
 podway daemon logs --follow
 ```
 
+## Reset user runtime data
+
+Runtime reset removes ordinary per-user daemon state while preserving Git
+worktrees, each worktree's `.podway` state, installed binaries, and external
+managed runtimes. It has no force mode and refuses busy or ambiguous targets.
+Inspect `podway help runtime`, then create a fresh read-only plan for exactly one
+mode or for the complete ordinary-mode inventory:
+
+```bash
+podway --mode dev runtime reset plan
+podway runtime reset plan --all-modes
+```
+
+Review every selected, excluded, removed, and preserved resource. Apply only the
+same explicit selector and returned token; confirmation is always required:
+
+```bash
+podway --mode dev runtime reset apply --plan-token <token> --yes
+podway runtime reset apply --all-modes --plan-token <token> --yes
+```
+
+If an apply is interrupted after commit, retry only the original selector and
+exact token until it reports `complete` or `already_applied`; do not create a new
+plan or edit the recovery record. A successful reset does not restart a daemon.
+When continued use is intended, explicitly establish a fresh daemon through the
+same mode's normal lifecycle. Production requires an explicit reinstall or a
+foreground `podwayd --service`; an ordinary named mode uses
+`podwayd --mode <key>`. Then retain that exact selector while re-registering and
+checking each worktree:
+
+```bash
+podway --mode <key> --worktree <path> workspace repair
+podway --mode <key> --worktree <path> status
+```
+
+After an all-mode reset, use each retained worktree's configured mode rather
+than defaulting these commands to production.
+
 ## Optional: configure an AI coding agent
 
 Podway does not modify a project's `AGENTS.md` or install an agent skill. Both integrations below are optional. They may be used independently or together, and omitting both does not affect the CLI.

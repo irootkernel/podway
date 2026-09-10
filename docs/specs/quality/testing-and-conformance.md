@@ -122,6 +122,29 @@ claim requires the contract and documentation verifiers, all Rust and Python
 layers, real-binary E2E coverage, Aquarium controller tests, and the isolated
 contributor self-test to pass together through `make test`.
 
+### User runtime reset conformance
+
+Account-runtime reset coverage binds its complete destructive boundary. Isolated
+real CLI and daemon tests exercise read-only planning and confirmed live or
+offline single-mode and all-mode apply, stable legacy command meanings, exact
+selectors and tokens, bounds, partial results, and reservation races. The Store
+inside every retained worktree remains byte-owned by that worktree: after reset,
+an explicitly started fresh daemon must accept public `workspace repair` and
+`status`, restore the registry entry, and expose the same workspace and session
+identity.
+
+Service integration tests use only private account roots and the fake launchctl
+or native-service harness. The `D04` crash proof aborts a child process after
+each durable reset checkpoint and after a live shutdown effect but before its
+`stopped` publication; cold exact-token replay must recognize the exact stopped
+postcondition and converge. Separate all-mode replay and real-daemon E2E prove
+recreated-namespace preservation and retained worktree Store, job, workspace,
+and session identity. Store cold-open and daemon worker-recovery tests separately
+prove stale-running-to-queued recovery and subsequent claim and terminalization,
+so reset conformance does not need to inspect or mutate preserved Store rows. No
+reset test may use the installed production LaunchAgent, user-global state,
+Aquarium's development runtime, or an active contributor worktree.
+
 ## Development and distribution gates
 
 `make test` is the required development gate. It runs preparation and static

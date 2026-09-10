@@ -1,9 +1,12 @@
 use std::{
     cell::RefCell,
     collections::BTreeMap,
+    env,
     fs::{self, File},
     os::unix::fs::{MetadataExt, PermissionsExt, symlink},
+    os::unix::process::ExitStatusExt,
     path::{Path, PathBuf},
+    process::Command,
     rc::Rc,
 };
 
@@ -1207,6 +1210,7 @@ fn prospective_result_preserved_inventory_limit_rejects_before_apply() {
 #[derive(Default)]
 struct OfflineApplyOperator {
     fail_at: Option<&'static str>,
+    abort_at: Option<String>,
     failed: bool,
     rotate_logs: bool,
 }
@@ -1237,6 +1241,8 @@ impl RuntimeResetOperatorV1 for OfflineApplyOperator {
         _: &RuntimeResetOperationV1,
         process: Option<&RuntimeResetProcessV1>,
         reservation_id: Option<&str>,
+        _: bool,
+        _: bool,
     ) -> Result<(), RuntimeResetErrorV1> {
         assert!(process.is_none());
         assert!(reservation_id.is_none());
@@ -1271,6 +1277,9 @@ impl RuntimeResetOperatorV1 for OfflineApplyOperator {
     }
 
     fn checkpoint(&mut self, boundary: &'static str) -> Result<(), RuntimeResetErrorV1> {
+        if self.abort_at.as_deref() == Some(boundary) {
+            std::process::abort();
+        }
         if !self.failed && self.fail_at == Some(boundary) {
             self.failed = true;
             return Err(RuntimeResetErrorV1::unsafe_reason(RuntimeResetReasonV1::Io));
@@ -1449,6 +1458,249 @@ fn every_single_mode_durable_boundary_has_an_exact_retry_path() {
     }
 }
 
+const RUNTIME_RESET_CRASH_CHILD_TEST: &str =
+    "int_runtime_reset_plan::runtime_reset_crash_child_aborts_at_configured_boundary";
+const RUNTIME_RESET_LIVE_CRASH_CHILD_TEST: &str =
+    "int_runtime_reset_plan::runtime_reset_live_stop_effect_crash_child";
+const RUNTIME_RESET_CRASH_ROOT_ENV: &str = "PODWAY_V2FRT006_CRASH_ROOT";
+const RUNTIME_RESET_CRASH_TOKEN_ENV: &str = "PODWAY_V2FRT006_CRASH_TOKEN";
+const RUNTIME_RESET_CRASH_BOUNDARY_ENV: &str = "PODWAY_V2FRT006_CRASH_BOUNDARY";
+
+#[test]
+fn runtime_reset_crash_child_aborts_at_configured_boundary() {
+    let Some(root) = env::var_os(RUNTIME_RESET_CRASH_ROOT_ENV) else {
+        return;
+    };
+    let token = env::var(RUNTIME_RESET_CRASH_TOKEN_ENV).unwrap();
+    let boundary = env::var(RUNTIME_RESET_CRASH_BOUNDARY_ENV).unwrap();
+    let fixture = std::mem::ManuallyDrop::new(Fixture(PathBuf::from(root).canonicalize().unwrap()));
+    let mut apply = RuntimeResetApplyV1::new(
+        fixture.home(),
+        Launchctl(false),
+        Inspector(RuntimeResetPeerV1::Offline),
+        OfflineApplyOperator {
+            abort_at: Some(boundary),
+            ..OfflineApplyOperator::default()
+        },
+    );
+    let result = apply.apply(&token, mode("dev"), now());
+    panic!("configured runtime-reset crash boundary returned without aborting: {result:?}");
+}
+
+struct CrashLiveOperator {
+    singleton: Option<Flock<File>>,
+}
+
+impl RuntimeResetOperatorV1 for CrashLiveOperator {
+    fn reserve(
+        &mut self,
+        _: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        _: &RuntimeResetProcessV1,
+    ) -> Result<String, RuntimeResetErrorV1> {
+        Ok("00000000-0000-4000-8000-000000000301".to_owned())
+    }
+
+    fn snapshot(
+        &mut self,
+        _: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        _: &RuntimeResetProcessV1,
+        _: &str,
+    ) -> Result<(), RuntimeResetErrorV1> {
+        Ok(())
+    }
+
+    fn stop(
+        &mut self,
+        _: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        _: Option<&RuntimeResetProcessV1>,
+        _: Option<&str>,
+        _: bool,
+        _: bool,
+    ) -> Result<(), RuntimeResetErrorV1> {
+        drop(self.singleton.take());
+        Ok(())
+    }
+
+    fn wait_stopped(
+        &mut self,
+        _: &ServiceRuntimePathsV1,
+        _: Option<&RuntimeResetProcessV1>,
+    ) -> Result<(), RuntimeResetErrorV1> {
+        Ok(())
+    }
+
+    fn release_uncommitted(
+        &mut self,
+        _: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        _: &RuntimeResetProcessV1,
+        _: &str,
+    ) {
+        drop(self.singleton.take());
+    }
+
+    fn checkpoint(&mut self, boundary: &'static str) -> Result<(), RuntimeResetErrorV1> {
+        if boundary == "stop_effect" {
+            std::process::abort();
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn runtime_reset_live_stop_effect_crash_child() {
+    let Some(root) = env::var_os(RUNTIME_RESET_CRASH_ROOT_ENV) else {
+        return;
+    };
+    let token = env::var(RUNTIME_RESET_CRASH_TOKEN_ENV).unwrap();
+    let fixture = std::mem::ManuallyDrop::new(Fixture(PathBuf::from(root).canonicalize().unwrap()));
+    let namespace = fixture.0.join(".podway/modes/dev");
+    let singleton = Flock::lock(
+        File::open(namespace.join("run/podwayd.lock")).unwrap(),
+        FlockArg::LockExclusiveNonblock,
+    )
+    .unwrap();
+    let process = RuntimeResetProcessV1 {
+        pid: 4242,
+        process_id: "00000000-0000-4000-8000-000000000399".to_owned(),
+        executable: RuntimeResetPathV1::new(&fixture.0.join("bin/podwayd")).unwrap(),
+        started_at_ms: 1,
+    };
+    let mut apply = RuntimeResetApplyV1::new(
+        fixture.home(),
+        Launchctl(false),
+        Inspector(RuntimeResetPeerV1::Live {
+            process,
+            busy_reason: None,
+        }),
+        CrashLiveOperator {
+            singleton: Some(singleton),
+        },
+    );
+    let result = apply.apply(&token, mode("dev"), now());
+    panic!("configured live stop-effect crash returned without aborting: {result:?}");
+}
+
+#[test]
+fn every_runtime_reset_durable_boundary_converges_after_process_abort_and_cold_replay() {
+    for boundary in [
+        "commit",
+        "stop_intended",
+        "stop_effect",
+        "stopped",
+        "inventory_intended",
+        "inventory_ready",
+        "unlink_intended",
+        "unlinked",
+        "unlink_completed",
+        "completed",
+    ] {
+        let fixture = Fixture::new();
+        let namespace = fixture.namespace("dev");
+        fixture.file(".podway/modes/dev/logs/podwayd.log", b"bounded log");
+        let plan = fixture.planner().plan(mode("dev"), now()).unwrap();
+        let token = plan.plan_token.unwrap();
+        let output = Command::new(env::current_exe().unwrap())
+            .arg("--exact")
+            .arg(RUNTIME_RESET_CRASH_CHILD_TEST)
+            .arg("--nocapture")
+            .env(RUNTIME_RESET_CRASH_ROOT_ENV, &fixture.0)
+            .env(RUNTIME_RESET_CRASH_TOKEN_ENV, &token)
+            .env(RUNTIME_RESET_CRASH_BOUNDARY_ENV, boundary)
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.signal(),
+            Some(nix::libc::SIGABRT),
+            "{boundary}: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let mut retry = RuntimeResetApplyV1::new(
+            fixture.home(),
+            Launchctl(false),
+            Inspector(RuntimeResetPeerV1::Offline),
+            OfflineApplyOperator::default(),
+        );
+        let result = retry
+            .apply(&token, mode("dev"), UnixMillis::new(999_999))
+            .unwrap();
+        assert!(
+            matches!(
+                result.status,
+                RuntimeResetResultStatusV1::Complete | RuntimeResetResultStatusV1::AlreadyApplied
+            ),
+            "{boundary}"
+        );
+        assert!(namespace.join("run/podwayd.lock").exists(), "{boundary}");
+        assert!(
+            !namespace.join("state/workspaces.json").exists(),
+            "{boundary}"
+        );
+        assert!(!namespace.join("logs").exists(), "{boundary}");
+    }
+
+    let fixture = Fixture::new();
+    let namespace = fixture.namespace("dev");
+    let singleton = Flock::lock(
+        File::open(namespace.join("run/podwayd.lock")).unwrap(),
+        FlockArg::LockExclusiveNonblock,
+    )
+    .unwrap();
+    let executable = fixture.file("bin/podwayd", b"daemon identity");
+    let process = RuntimeResetProcessV1 {
+        pid: 4242,
+        process_id: "00000000-0000-4000-8000-000000000399".to_owned(),
+        executable: RuntimeResetPathV1::new(&executable).unwrap(),
+        started_at_ms: 1,
+    };
+    let token = RuntimeResetPlannerV1::new(
+        fixture.home(),
+        Launchctl(false),
+        Inspector(RuntimeResetPeerV1::Live {
+            process,
+            busy_reason: None,
+        }),
+    )
+    .plan(mode("dev"), now())
+    .unwrap()
+    .plan_token
+    .unwrap();
+    drop(singleton);
+    let output = Command::new(env::current_exe().unwrap())
+        .arg("--exact")
+        .arg(RUNTIME_RESET_LIVE_CRASH_CHILD_TEST)
+        .arg("--nocapture")
+        .env(RUNTIME_RESET_CRASH_ROOT_ENV, &fixture.0)
+        .env(RUNTIME_RESET_CRASH_TOKEN_ENV, &token)
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.signal(),
+        Some(nix::libc::SIGABRT),
+        "live stop effect: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let mut retry = RuntimeResetApplyV1::new(
+        fixture.home(),
+        Launchctl(false),
+        Inspector(RuntimeResetPeerV1::Offline),
+        ExactStoppedRecoveryOperator,
+    );
+    let result = retry
+        .apply(&token, mode("dev"), UnixMillis::new(999_999))
+        .unwrap();
+    assert_eq!(result.status, RuntimeResetResultStatusV1::Complete);
+    assert!(namespace.join("run/podwayd.lock").exists());
+    assert!(!namespace.join("state/workspaces.json").exists());
+}
+
 #[test]
 fn all_mode_offline_apply_retires_the_frozen_set_in_order_and_replays_exactly() {
     let fixture = Fixture::new();
@@ -1529,6 +1781,8 @@ impl RuntimeResetOperatorV1 for FailingModeOperator {
         _: &RuntimeResetOperationV1,
         process: Option<&RuntimeResetProcessV1>,
         reservation_id: Option<&str>,
+        _: bool,
+        _: bool,
     ) -> Result<(), RuntimeResetErrorV1> {
         assert!(process.is_none());
         assert!(reservation_id.is_none());
@@ -1755,6 +2009,8 @@ impl RuntimeResetOperatorV1 for FailingSnapshotOperator {
         _: &RuntimeResetOperationV1,
         _: Option<&RuntimeResetProcessV1>,
         _: Option<&str>,
+        _: bool,
+        _: bool,
     ) -> Result<(), RuntimeResetErrorV1> {
         panic!("precommit failure must not stop a daemon")
     }
@@ -1850,6 +2106,180 @@ struct InterruptedLiveOperator {
     listeners: BTreeMap<String, std::os::unix::net::UnixListener>,
 }
 
+struct StopEffectLostOperator {
+    singleton: Option<Flock<File>>,
+    listener: Option<std::os::unix::net::UnixListener>,
+}
+
+impl RuntimeResetOperatorV1 for StopEffectLostOperator {
+    fn reserve(
+        &mut self,
+        _: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        _: &RuntimeResetProcessV1,
+    ) -> Result<String, RuntimeResetErrorV1> {
+        Ok("00000000-0000-4000-8000-000000000201".to_owned())
+    }
+
+    fn snapshot(
+        &mut self,
+        _: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        _: &RuntimeResetProcessV1,
+        _: &str,
+    ) -> Result<(), RuntimeResetErrorV1> {
+        Ok(())
+    }
+
+    fn stop(
+        &mut self,
+        paths: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        _: Option<&RuntimeResetProcessV1>,
+        _: Option<&str>,
+        _: bool,
+        _: bool,
+    ) -> Result<(), RuntimeResetErrorV1> {
+        drop(self.listener.take());
+        fs::remove_file(paths.socket_path().as_path()).unwrap();
+        drop(self.singleton.take());
+        Err(RuntimeResetErrorV1::unsafe_reason(RuntimeResetReasonV1::Io))
+    }
+
+    fn wait_stopped(
+        &mut self,
+        _: &ServiceRuntimePathsV1,
+        _: Option<&RuntimeResetProcessV1>,
+    ) -> Result<(), RuntimeResetErrorV1> {
+        panic!("lost stop response must not continue in the first coordinator")
+    }
+
+    fn release_uncommitted(
+        &mut self,
+        _: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        _: &RuntimeResetProcessV1,
+        _: &str,
+    ) {
+        panic!("committed stop must not be released")
+    }
+}
+
+struct ExactStoppedRecoveryOperator;
+
+impl RuntimeResetOperatorV1 for ExactStoppedRecoveryOperator {
+    fn reserve(
+        &mut self,
+        _: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        _: &RuntimeResetProcessV1,
+    ) -> Result<String, RuntimeResetErrorV1> {
+        Err(RuntimeResetErrorV1::unsafe_reason(
+            RuntimeResetReasonV1::ReservationLost,
+        ))
+    }
+
+    fn snapshot(
+        &mut self,
+        _: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        _: &RuntimeResetProcessV1,
+        _: &str,
+    ) -> Result<(), RuntimeResetErrorV1> {
+        panic!("committed retry must not snapshot")
+    }
+
+    fn stop(
+        &mut self,
+        _: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        _: Option<&RuntimeResetProcessV1>,
+        _: Option<&str>,
+        _: bool,
+        process_already_stopped: bool,
+    ) -> Result<(), RuntimeResetErrorV1> {
+        assert!(process_already_stopped);
+        Ok(())
+    }
+
+    fn wait_stopped(
+        &mut self,
+        _: &ServiceRuntimePathsV1,
+        process: Option<&RuntimeResetProcessV1>,
+    ) -> Result<(), RuntimeResetErrorV1> {
+        assert!(process.is_some());
+        Ok(())
+    }
+
+    fn release_uncommitted(
+        &mut self,
+        _: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        _: &RuntimeResetProcessV1,
+        _: &str,
+    ) {
+        panic!("committed retry must not release")
+    }
+}
+
+#[test]
+fn retry_recognizes_a_live_stop_effect_lost_before_stopped_publication() {
+    let fixture = Fixture::new();
+    let namespace = fixture.namespace("dev");
+    let socket = namespace.join("run/podwayd.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+    fs::set_permissions(&socket, fs::Permissions::from_mode(0o600)).unwrap();
+    let singleton = Flock::lock(
+        File::open(namespace.join("run/podwayd.lock")).unwrap(),
+        FlockArg::LockExclusiveNonblock,
+    )
+    .unwrap();
+    let executable = fixture.file("bin/podwayd", b"daemon identity");
+    let process = RuntimeResetProcessV1 {
+        pid: std::process::id(),
+        process_id: "00000000-0000-4000-8000-000000000299".to_owned(),
+        executable: RuntimeResetPathV1::new(&executable).unwrap(),
+        started_at_ms: 1,
+    };
+    let selection = mode("dev");
+    let peer = RuntimeResetPeerV1::Live {
+        process: process.clone(),
+        busy_reason: None,
+    };
+    let token =
+        RuntimeResetPlannerV1::new(fixture.home(), Launchctl(false), Inspector(peer.clone()))
+            .plan(selection.clone(), now())
+            .unwrap()
+            .plan_token
+            .unwrap();
+    let mut first = RuntimeResetApplyV1::new(
+        fixture.home(),
+        Launchctl(false),
+        Inspector(peer),
+        StopEffectLostOperator {
+            singleton: Some(singleton),
+            listener: Some(listener),
+        },
+    );
+    let error = first.apply(&token, selection.clone(), now()).unwrap_err();
+    assert_eq!(error.code(), "RUNTIME_RESET_INCOMPLETE");
+    assert_eq!(error.reason, RuntimeResetReasonV1::Io);
+    drop(first);
+
+    let mut retry = RuntimeResetApplyV1::new(
+        fixture.home(),
+        Launchctl(false),
+        Inspector(RuntimeResetPeerV1::Offline),
+        ExactStoppedRecoveryOperator,
+    );
+    let result = retry
+        .apply(&token, selection, UnixMillis::new(999_999))
+        .unwrap();
+    assert_eq!(result.status, RuntimeResetResultStatusV1::Complete);
+    assert!(namespace.join("run/podwayd.lock").exists());
+    assert!(!namespace.join("state/workspaces.json").exists());
+}
+
 fn retry_reservation(mode: &str) -> &'static str {
     match mode {
         "prod" => "00000000-0000-4000-8000-000000000101",
@@ -1885,6 +2315,8 @@ impl RuntimeResetOperatorV1 for InterruptedLiveOperator {
         _: &RuntimeResetOperationV1,
         _: Option<&RuntimeResetProcessV1>,
         _: Option<&str>,
+        _: bool,
+        _: bool,
     ) -> Result<(), RuntimeResetErrorV1> {
         assert_eq!(paths.mode().as_str(), "prod");
         assert_eq!(self.singletons.len(), 2);
@@ -1943,6 +2375,8 @@ impl RuntimeResetOperatorV1 for ResumeLiveOperator {
         _: &RuntimeResetOperationV1,
         process: Option<&RuntimeResetProcessV1>,
         reservation_id: Option<&str>,
+        _: bool,
+        _: bool,
     ) -> Result<(), RuntimeResetErrorV1> {
         let mode = paths.mode().as_str();
         assert!(process.is_some());
@@ -2091,6 +2525,8 @@ impl RuntimeResetOperatorV1 for LiveApplyOperator {
         _: &RuntimeResetOperationV1,
         process: Option<&RuntimeResetProcessV1>,
         reservation_id: Option<&str>,
+        _: bool,
+        _: bool,
     ) -> Result<(), RuntimeResetErrorV1> {
         assert!(process.is_some());
         assert_eq!(reservation_id, Some("00000000-0000-4000-8000-000000000123"));

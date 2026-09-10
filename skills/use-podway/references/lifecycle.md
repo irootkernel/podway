@@ -35,6 +35,43 @@ Read this reference only when the user asks to initialize Podway, start or repla
 - Daemon replacement is not a subcommand: replacing the managed daemon means re-running `podway daemon install` with a new binary, and it remains explicit-request-only.
 - Do not edit `.podway/runtime/`, SQLite files, registry metadata, sockets, or LaunchAgent files manually to simulate a supported lifecycle action.
 
+## Reset user runtime data
+
+Use this flow only when the user explicitly requests retirement of one exact
+ordinary runtime mode or all ordinary user runtimes. This is account-runtime
+deletion, not session `reset`, workspace `reset --all`, workspace removal,
+daemon uninstall, or deletion of an external managed runtime.
+
+1. Read `podway help runtime`. Verify the exact account and selector, then run
+   either `podway --mode <key> runtime reset plan` or
+   `podway runtime reset plan --all-modes`. Planning is read-only and is not
+   authorization to apply.
+2. Report the complete selected, blocked, excluded, removed, and preserved
+   inventory and whether the plan is `ready`, `blocked`, `no_change`, or
+   `recovery_required`. Never truncate or reinterpret the structured result.
+3. Apply only after explicit authorization for that exact selector and token.
+   Use `runtime reset apply` with the unchanged selector,
+   `--plan-token <token>`, and `--yes`. There is no force path; stop on busy,
+   unsupported, unsafe, stale, changed, or newly appeared targets.
+4. If a committed operation is incomplete or the response is uncertain, reuse
+   only the original selector and exact token. Do not create a replacement plan,
+   weaken a fence, edit the recovery record, or manually remove residual files.
+5. Confirm `complete` or `already_applied` and report the exact per-mode outcome
+   and preserved resources. Reset does not start, install, or reactivate a
+   daemon.
+6. Establish a fresh daemon only when separately requested, using the same
+   mode's supported lifecycle. Production requires an explicit reinstall or a
+   foreground `podwayd --service`; start an ordinary named runtime with
+   `podwayd --mode <key>`. For every retained worktree that should resume, keep
+   its configured mode explicit in both
+   `podway --mode <key> --worktree <path> workspace repair` and
+   `podway --mode <key> --worktree <path> status`. After an all-mode reset,
+   never default these commands to production.
+
+Never test this flow against the user's actual namespace, installed production
+LaunchAgent, Aquarium development runtime, or an active worktree. Use the
+repository's isolated account-root and service fixtures.
+
 ## Remove Podway from a workspace
 
 Use this flow only when the user explicitly asks to stop using Podway in one exact existing Git worktree and accepts deletion of its complete `.podway` tree. A generic cleanup request, a missing session, or an old registry entry is not workspace-removal authorization.

@@ -63,6 +63,8 @@ pub trait RuntimeResetOperatorV1 {
         operation: &RuntimeResetOperationV1,
         process: Option<&RuntimeResetProcessV1>,
         reservation_id: Option<&str>,
+        production_service_loaded: bool,
+        process_already_stopped: bool,
     ) -> Result<(), Error>;
 
     fn wait_stopped(
@@ -271,23 +273,34 @@ impl<L: LaunchctlRunnerV1, I: RuntimeResetInspectorV1, O: RuntimeResetOperatorV1
             .expect("validated record")
             .targets
             .clone();
+        let mut already_stopped = vec![false; targets.len()];
         if reconnect {
-            for (target, mode) in targets.iter().zip(&record.modes) {
+            for (mode_index, (target, mode)) in targets.iter().zip(&record.modes).enumerate() {
                 if matches!(mode.phase, ModePhase::Pending | ModePhase::StopIntended)
                     && let Some(process) = &target.process
                 {
                     let paths = self.paths(&target.mode)?;
-                    let reservation = self
-                        .operator
-                        .reserve(&paths, &operation, process)
-                        .map_err(|error| error.in_mode(&target.mode))?;
                     let expected = mode.reservation_id.as_deref().ok_or_else(|| {
                         Error::unsafe_reason(RuntimeResetReasonV1::ReservationLost)
                             .in_mode(&target.mode)
                     })?;
-                    if reservation != expected {
-                        return Err(Error::unsafe_reason(RuntimeResetReasonV1::ReservationLost)
+                    match self.operator.reserve(&paths, &operation, process) {
+                        Ok(reservation) if reservation == expected => {}
+                        Ok(_) => {
+                            return Err(Error::unsafe_reason(
+                                RuntimeResetReasonV1::ReservationLost,
+                            )
                             .in_mode(&target.mode));
+                        }
+                        Err(error) if mode.phase == ModePhase::StopIntended => {
+                            if self.operator.wait_stopped(&paths, Some(process)).is_err() {
+                                return Err(error.in_mode(&target.mode));
+                            }
+                            self.verify_singleton(root, target)
+                                .map_err(|error| error.in_mode(&target.mode))?;
+                            already_stopped[mode_index] = true;
+                        }
+                        Err(error) => return Err(error.in_mode(&target.mode)),
                     }
                 }
             }
@@ -317,7 +330,12 @@ impl<L: LaunchctlRunnerV1, I: RuntimeResetInspectorV1, O: RuntimeResetOperatorV1
                         &operation,
                         target.process.as_ref(),
                         record.modes[mode_index].reservation_id.as_deref(),
+                        target.service.loaded,
+                        already_stopped[mode_index],
                     )
+                    .map_err(|error| error.in_mode(&target.mode))?;
+                self.operator
+                    .checkpoint("stop_effect")
                     .map_err(|error| error.in_mode(&target.mode))?;
                 self.operator
                     .wait_stopped(&paths, target.process.as_ref())

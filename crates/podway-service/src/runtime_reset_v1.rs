@@ -124,6 +124,7 @@ impl<L: LaunchctlRunnerV1, I: RuntimeResetInspectorV1> RuntimeResetPlannerV1<L, 
             .any(|target| target.state != RuntimeResetTargetStateV1::Absent)
         {
             plan.check_apply_preserved_bounds(&self.home)?;
+            let prospective_resources = plan.prospective_apply_resources(&bindings)?;
             let root = root.as_ref().ok_or_else(RuntimeResetErrorV1::unsafe_path)?;
             let expires_at_ms = now
                 .get()
@@ -145,6 +146,7 @@ impl<L: LaunchctlRunnerV1, I: RuntimeResetInspectorV1> RuntimeResetPlannerV1<L, 
                 created_at_ms: now.get(),
                 expires_at_ms,
             };
+            token.check_prospective_record_bounds(&prospective_resources, &self.home)?;
             plan.plan_token = Some(token.encode()?);
             plan.expires_at_ms = Some(expires_at_ms);
             plan.status = RuntimeResetPlanStatusV1::Ready;

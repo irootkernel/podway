@@ -1,4 +1,9 @@
-use std::{collections::BTreeSet, fmt, os::unix::ffi::OsStrExt, path::Path};
+use std::{
+    collections::BTreeSet,
+    fmt,
+    os::unix::ffi::OsStrExt,
+    path::{Path, PathBuf},
+};
 
 use podway_core::{RuntimeModeV1, canonicalize_json_v1, verify_canonical_json_v1};
 use serde::{Deserialize, Serialize};
@@ -376,6 +381,63 @@ impl RuntimeResetPlanV1 {
         }
         Ok(())
     }
+
+    pub(super) fn prospective_apply_resources(
+        &self,
+        bindings: &[NamespaceBinding],
+    ) -> Result<Vec<Vec<RuntimeResetResourceV1>>, Error> {
+        if self.targets.len() != bindings.len() {
+            return Err(Error::invalid_token());
+        }
+        let mut prospective = self.clone();
+        for (target, binding) in prospective.targets.iter_mut().zip(bindings) {
+            if binding.process.is_none() {
+                continue;
+            }
+            // A live daemon may fill every retained log slot while shutting down. Keep the
+            // public plan factual, but reserve the complete allowed inventory before issuing
+            // an apply token.
+            let root = PathBuf::from(std::ffi::OsStr::from_bytes(&decode_bytes(
+                &target.root.path_bytes_base64url,
+            )?));
+            let logs = root.join("logs");
+            let directory =
+                RuntimeResetResourceV1::new(RuntimeResetResourceClassV1::LogsDirectory, &logs)?;
+            if !target.resources.contains(&directory) {
+                target.resources.push(directory);
+            }
+            for (base, class, retained) in [
+                (
+                    "podwayd.log",
+                    RuntimeResetResourceClassV1::DaemonLog,
+                    usize::from(crate::SERVICE_LOG_RETAINED_FILES_V1),
+                ),
+                (
+                    "podwayd-bootstrap.log",
+                    RuntimeResetResourceClassV1::BootstrapLog,
+                    usize::from(crate::SERVICE_BOOTSTRAP_LOG_RETAINED_FILES_V1),
+                ),
+            ] {
+                for index in 0..retained {
+                    let name = if index == 0 {
+                        base.to_owned()
+                    } else {
+                        format!("{base}.{index}")
+                    };
+                    let resource = RuntimeResetResourceV1::new(class, &logs.join(name))?;
+                    if !target.resources.contains(&resource) {
+                        target.resources.push(resource);
+                    }
+                }
+            }
+        }
+        prospective.check_bounds()?;
+        Ok(prospective
+            .targets
+            .into_iter()
+            .map(|target| target.resources)
+            .collect())
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -645,6 +707,175 @@ impl ResetToken {
             }
             _ => {}
         }
+        Ok(())
+    }
+
+    pub(super) fn check_prospective_record_bounds(
+        &self,
+        prospective_resources: &[Vec<RuntimeResetResourceV1>],
+        home: &PodwayHomeV1,
+    ) -> Result<(), Error> {
+        if prospective_resources.len() != self.targets.len() {
+            return Err(Error::invalid_token());
+        }
+        let identity = FileIdentity {
+            device: i64::MAX as u64,
+            inode: i64::MAX as u64,
+            uid: home.user_id(),
+            mode: u16::MAX.into(),
+            links: u32::MAX,
+        };
+        // Maximum-width identities and the longest entry state make this a serialized upper
+        // bound for the final in-progress record rather than an estimate of current bytes.
+        let mut modes = Vec::with_capacity(self.targets.len());
+        for (target, resources) in self.targets.iter().zip(prospective_resources) {
+            let root = PathBuf::from(std::ffi::OsStr::from_bytes(&decode_bytes(
+                &target.root.path_bytes_base64url,
+            )?));
+            let mut paths = BTreeSet::new();
+            let mut entries = Vec::with_capacity(resources.len());
+            for resource in resources {
+                if resource.class == RuntimeResetResourceClassV1::ServicePlist {
+                    continue;
+                }
+                let path = PathBuf::from(std::ffi::OsStr::from_bytes(&decode_bytes(
+                    &resource.path.path_bytes_base64url,
+                )?));
+                let relative = path
+                    .strip_prefix(&root)
+                    .map_err(|_| Error::invalid_token())?;
+                if relative.as_os_str().is_empty()
+                    || !paths.insert(relative.as_os_str().as_bytes().to_vec())
+                {
+                    return Err(Error::invalid_token());
+                }
+                let kind = match resource.class {
+                    RuntimeResetResourceClassV1::StateDirectory
+                    | RuntimeResetResourceClassV1::LogsDirectory => EntryKind::Directory,
+                    RuntimeResetResourceClassV1::Socket => EntryKind::Socket,
+                    _ => EntryKind::Regular,
+                };
+                entries.push(RecordEntry {
+                    class: resource.class,
+                    relative_path_bytes_base64url: encode_bytes(relative.as_os_str().as_bytes()),
+                    identity: identity.clone(),
+                    kind,
+                    state: EntryState::Completed,
+                });
+            }
+            modes.push(RecordMode {
+                mode: target.mode.clone(),
+                phase: if target.is_absent() {
+                    ModePhase::Complete
+                } else {
+                    ModePhase::InventoryReady
+                },
+                reservation_id: target
+                    .process
+                    .as_ref()
+                    .map(|_| "00000000-0000-4000-8000-000000000000".to_owned()),
+                entries,
+            });
+        }
+        let encoded = self.encode()?;
+        let operation_id = "00000000-0000-4000-8000-000000000000".to_owned();
+        let token_sha256 = format!("sha256:{:x}", Sha256::digest(encoded.as_bytes()));
+        ResetRecord {
+            schema: "podway.runtime-reset-record/v1".to_owned(),
+            operation_id: operation_id.clone(),
+            token_sha256: token_sha256.clone(),
+            phase: RecordPhase::InProgress,
+            plan: Some(self.clone()),
+            modes,
+            result: None,
+        }
+        .encode(home)?;
+
+        let modes = self
+            .targets
+            .iter()
+            .zip(prospective_resources)
+            .map(|(target, resources)| RuntimeResetModeOutcomeV1 {
+                mode: target.mode.clone(),
+                state: RuntimeResetModeOutcomeStateV1::Complete,
+                resources: resources
+                    .iter()
+                    .map(|resource| RuntimeResetResourceOutcomeV1 {
+                        class: resource.class,
+                        path: resource.path.clone(),
+                        // This is the longest valid terminal state and therefore bounds both
+                        // removed and already-absent outcomes.
+                        state: RuntimeResetResourceOutcomeStateV1::AlreadyAbsent,
+                    })
+                    .collect(),
+            })
+            .collect();
+        let mut preserved = Vec::new();
+        for target in &self.targets {
+            let root = PathBuf::from(std::ffi::OsStr::from_bytes(&decode_bytes(
+                &target.root.path_bytes_base64url,
+            )?));
+            preserved.push(RuntimeResetResourceV1::new(
+                RuntimeResetResourceClassV1::NamespaceDirectory,
+                &root,
+            )?);
+            if target.run_identity.is_some() {
+                preserved.push(RuntimeResetResourceV1::new(
+                    RuntimeResetResourceClassV1::NamespaceDirectory,
+                    &root.join("run"),
+                )?);
+            }
+            if target.lock_identity.is_some() {
+                preserved.push(RuntimeResetResourceV1::new(
+                    RuntimeResetResourceClassV1::LockAnchor,
+                    &root.join("run/podwayd.lock"),
+                )?);
+            }
+            if target.registry_lock_identity.is_some() {
+                preserved.push(RuntimeResetResourceV1::new(
+                    RuntimeResetResourceClassV1::NamespaceDirectory,
+                    &root.join("state"),
+                )?);
+                preserved.push(RuntimeResetResourceV1::new(
+                    RuntimeResetResourceClassV1::LockAnchor,
+                    &root.join("state/workspaces.json.lock"),
+                )?);
+            }
+        }
+        for name in CONTROL_RESIDUE_NAMES {
+            preserved.push(RuntimeResetResourceV1::new(
+                RuntimeResetResourceClassV1::ControlResidue,
+                &home.as_path().join("maintenance").join(name),
+            )?);
+        }
+        preserved.sort_by(|left, right| {
+            left.path
+                .path_bytes_base64url
+                .as_bytes()
+                .cmp(right.path.path_bytes_base64url.as_bytes())
+        });
+        preserved.dedup();
+        ResetRecord {
+            schema: "podway.runtime-reset-record/v1".to_owned(),
+            operation_id: operation_id.clone(),
+            token_sha256,
+            phase: RecordPhase::Completed,
+            plan: None,
+            modes: Vec::new(),
+            result: Some(RuntimeResetResultV1 {
+                schema: "podway.runtime-reset-result/v1".to_owned(),
+                status: RuntimeResetResultStatusV1::Complete,
+                operation_id,
+                selection: self.selection.clone(),
+                modes,
+                preserved,
+                excluded: vec![RuntimeResetExclusionV1 {
+                    path: None,
+                    reason: ExclusionReason::ExternalManagedRuntimes,
+                }],
+            }),
+        }
+        .encode(home)?;
         Ok(())
     }
 
@@ -1140,6 +1371,110 @@ mod tests {
         );
         plan.excluded.truncate(2);
         plan.check_bounds().unwrap();
+    }
+
+    #[test]
+    fn prospective_live_inventory_reserves_every_shutdown_log_rotation() {
+        let home = PodwayHomeV1::from_account_home("/account", 501).unwrap();
+        let mode = RuntimeModeV1::development();
+        let root = RuntimeResetPathV1::new(Path::new("/account/.podway/modes/dev")).unwrap();
+        let mut plan =
+            RuntimeResetPlanV1::empty(&home, RuntimeResetSelectionV1::Mode { mode: mode.clone() })
+                .unwrap();
+        plan.targets.push(RuntimeResetTargetV1 {
+            mode: mode.clone(),
+            root: root.clone(),
+            state: RuntimeResetTargetStateV1::LiveIdle,
+            reason: None,
+            resources: Vec::new(),
+        });
+        let mut binding = NamespaceBinding::empty(mode, root);
+        binding.process = Some(RuntimeResetProcessV1 {
+            pid: 42,
+            process_id: "00000000-0000-4000-8000-000000000042".to_owned(),
+            executable: RuntimeResetPathV1::new(Path::new("/account/bin/podwayd")).unwrap(),
+            started_at_ms: 1,
+        });
+        binding.resource_classes = RuntimeResetResourceClassV1::deletion_classes(false);
+
+        let resources = plan.prospective_apply_resources(&[binding]).unwrap();
+        assert!(plan.targets[0].resources.is_empty());
+        assert_eq!(
+            resources[0]
+                .iter()
+                .filter(|resource| resource.class == RuntimeResetResourceClassV1::DaemonLog)
+                .count(),
+            usize::from(crate::SERVICE_LOG_RETAINED_FILES_V1)
+        );
+        assert_eq!(
+            resources[0]
+                .iter()
+                .filter(|resource| resource.class == RuntimeResetResourceClassV1::BootstrapLog)
+                .count(),
+            usize::from(crate::SERVICE_BOOTSTRAP_LOG_RETAINED_FILES_V1)
+        );
+        assert_eq!(
+            resources[0]
+                .iter()
+                .filter(|resource| resource.class == RuntimeResetResourceClassV1::LogsDirectory)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn prospective_record_size_rejects_before_the_resource_count_limit() {
+        let home = PodwayHomeV1::from_account_home("/account", 501).unwrap();
+        let mut token = token();
+        token.account_root = RuntimeResetPathV1::new(home.as_path()).unwrap();
+        token.targets[0].root = token.account_root.clone();
+        let resources = (0..(MAX_RUNTIME_RESET_RESOURCES_V1 - 1))
+            .map(|index| {
+                RuntimeResetResourceV1::new(
+                    RuntimeResetResourceClassV1::Registry,
+                    &home
+                        .as_path()
+                        .join(format!("state/.podway-registry-v1-1-{index}.tmp")),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(resources.len(), MAX_RUNTIME_RESET_RESOURCES_V1 - 1);
+        assert_eq!(
+            token
+                .check_prospective_record_bounds(&[resources], &home)
+                .unwrap_err()
+                .code(),
+            "RUNTIME_RESET_LIMIT_EXCEEDED"
+        );
+    }
+
+    #[test]
+    fn prospective_completed_receipt_size_is_rejected_before_apply() {
+        let account_root = format!("/{}", "a".repeat(99));
+        let home = PodwayHomeV1::from_account_home(&account_root, 501).unwrap();
+        let mut token = token();
+        token.account_root = RuntimeResetPathV1::new(home.as_path()).unwrap();
+        token.targets[0].root = token.account_root.clone();
+        token.targets[0].registry_lock_identity = Some(token.account_identity.clone());
+        let resources = (0..1_290)
+            .map(|index| {
+                RuntimeResetResourceV1::new(
+                    RuntimeResetResourceClassV1::Registry,
+                    &home
+                        .as_path()
+                        .join(format!("state/.podway-registry-v1-1-{index}.tmp")),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            token
+                .check_prospective_record_bounds(&[resources], &home)
+                .unwrap_err()
+                .code(),
+            "RUNTIME_RESET_LIMIT_EXCEEDED"
+        );
     }
 
     #[test]

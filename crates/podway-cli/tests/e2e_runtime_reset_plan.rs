@@ -17,10 +17,54 @@ impl Fixture {
         fs::create_dir(&root).unwrap();
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
         let fixture = Self(root);
+        fs::create_dir(fixture.launchctl_state()).unwrap();
         let launchctl = fixture.0.join("launchctl");
-        fs::write(&launchctl, format!("#!/bin/sh\n[ \"$1\" = print ] || exit 99\nprintf 'Bad request.\\nCould not find service \"dev.podway.podwayd\" in domain for user gui: {}\\n' >&2\nexit 113\n", geteuid().as_raw())).unwrap();
+        fs::write(
+            &launchctl,
+            format!(
+                r#"#!/bin/sh
+set -eu
+state=${{PODWAY_TEST_LAUNCHCTL_STATE:?}}
+pid_file="$state/pid"
+target="gui/{}/dev.podway.podwayd"
+case "${{1:-}}" in
+  print)
+    if [ -f "$pid_file" ] && /bin/kill -0 "$(/bin/cat "$pid_file")" 2>/dev/null; then
+      printf '%s = {{\n    pid = %s\n}}\n' "$target" "$(/bin/cat "$pid_file")"
+      exit 0
+    fi
+    printf 'Bad request.\nCould not find service "dev.podway.podwayd" in domain for user gui: {}\n' >&2
+    exit 113
+    ;;
+  bootout)
+    if [ -f "$pid_file" ]; then
+      pid=$(/bin/cat "$pid_file")
+      /bin/kill -TERM "$pid" 2>/dev/null || true
+      index=0
+      while /bin/kill -0 "$pid" 2>/dev/null && [ "$index" -lt 200 ]; do
+        /bin/sleep 0.01
+        index=$((index + 1))
+      done
+      /bin/rm -f "$pid_file"
+    fi
+    exit 0
+    ;;
+esac
+exit 99
+"#,
+                geteuid().as_raw(),
+                geteuid().as_raw()
+            ),
+        )
+        .unwrap();
         fs::set_permissions(launchctl, fs::Permissions::from_mode(0o700)).unwrap();
         fixture
+    }
+    fn launchctl_state(&self) -> PathBuf {
+        self.0.join("launchctl-state")
+    }
+    fn mark_production_service_loaded(&self, pid: u32) {
+        fs::write(self.launchctl_state().join("pid"), pid.to_string()).unwrap();
     }
     fn command(&self) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_podway"));
@@ -29,6 +73,7 @@ impl Fixture {
             .current_dir(&self.0)
             .env("PODWAY_TEST_ACCOUNT_ROOT", &self.0)
             .env("PODWAY_TEST_LAUNCHCTL", self.0.join("launchctl"))
+            .env("PODWAY_TEST_LAUNCHCTL_STATE", self.launchctl_state())
             .env("HOME", self.0.join("ignored-home"))
             .env("TMPDIR", self.0.join("ignored-temp"));
         command
@@ -68,18 +113,42 @@ impl Daemon {
 
     fn start_mode(fixture: &Fixture, mode: &str) -> Self {
         let daemon = Path::new(env!("CARGO_BIN_EXE_podway")).with_file_name("podwayd");
-        let child = Command::new(daemon)
+        let mut command = Command::new(daemon);
+        command
             .env_clear()
-            .env("PODWAY_TEST_ACCOUNT_ROOT", &fixture.0)
-            .args(["--mode", mode])
+            .env("PODWAY_TEST_ACCOUNT_ROOT", &fixture.0);
+        if mode == "prod" {
+            command.arg("--service");
+        } else {
+            command.args(["--mode", mode]);
+        }
+        let child = command
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(fs::File::create(fixture.0.join(format!("daemon-{mode}-stderr"))).unwrap())
             .spawn()
             .unwrap();
         let mut daemon = Self(child);
+        let socket = if mode == "prod" {
+            fixture.0.join(".podway/run/podwayd.sock")
+        } else {
+            fixture
+                .0
+                .join(format!(".podway/modes/{mode}/run/podwayd.sock"))
+        };
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
         loop {
+            if mode == "prod" {
+                let (output, plan) = fixture.run(&["--mode", mode, "runtime", "reset", "plan"]);
+                if output.status.success() && plan["result"]["targets"][0]["state"] == "live_idle" {
+                    return daemon;
+                }
+                if std::time::Instant::now() >= deadline {
+                    panic!("daemon readiness timed out: {plan}");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                continue;
+            }
             let (output, status) = fixture.run(&["--mode", mode, "daemon", "status"]);
             if output.status.success() && status["result"]["readiness_state"] == "ready" {
                 assert_eq!(
@@ -88,10 +157,7 @@ impl Daemon {
                 );
                 assert_eq!(
                     status["result"]["effective_socket_path"].as_str(),
-                    fixture
-                        .0
-                        .join(format!(".podway/modes/{mode}/run/podwayd.sock"))
-                        .to_str()
+                    socket.to_str()
                 );
                 return daemon;
             }
@@ -105,6 +171,10 @@ impl Daemon {
             );
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+    }
+
+    fn pid(&self) -> u32 {
+        self.0.id()
     }
 
     fn await_exit(&mut self) {
@@ -1252,6 +1322,60 @@ fn production_apply_routes_exact_plist_retirement_through_the_service_owner() {
 }
 
 #[test]
+fn live_foreground_production_apply_uses_reserved_orderly_shutdown() {
+    let fixture = Fixture::new();
+    let mut daemon = Daemon::start_mode(&fixture, "prod");
+    let (output, plan) = fixture.run(&["--mode", "prod", "runtime", "reset", "plan"]);
+    assert!(output.status.success(), "{plan}");
+    assert_eq!(plan["result"]["targets"][0]["state"], "live_idle");
+    let token = plan["result"]["plan_token"].as_str().unwrap();
+
+    let (output, applied) = fixture.run(&[
+        "--mode",
+        "prod",
+        "runtime",
+        "reset",
+        "apply",
+        "--plan-token",
+        token,
+        "--yes",
+    ]);
+    assert!(output.status.success(), "{applied}");
+    assert_eq!(applied["result"]["status"], "complete");
+    daemon.await_exit();
+    assert!(!fixture.0.join(".podway/run/podwayd.sock").exists());
+    assert!(fixture.0.join(".podway/run/podwayd.lock").exists());
+}
+
+#[test]
+fn loaded_production_service_apply_uses_the_native_service_owner() {
+    let fixture = Fixture::new();
+    let mut daemon = Daemon::start_mode(&fixture, "prod");
+    fixture.mark_production_service_loaded(daemon.pid());
+    let (output, plan) = fixture.run(&["--mode", "prod", "runtime", "reset", "plan"]);
+    assert!(output.status.success(), "{plan}");
+    assert_eq!(plan["result"]["targets"][0]["state"], "live_idle");
+    let token = plan["result"]["plan_token"].as_str().unwrap();
+
+    let (output, applied) = fixture.run(&[
+        "--mode",
+        "prod",
+        "runtime",
+        "reset",
+        "apply",
+        "--plan-token",
+        token,
+        "--yes",
+    ]);
+    assert!(output.status.success(), "{applied}");
+    assert_eq!(applied["result"]["status"], "complete");
+    daemon.await_exit();
+    assert!(!fixture.launchctl_state().join("pid").exists());
+    assert!(!fixture.0.join(".podway/run/podwayd.sock").exists());
+    assert!(fixture.0.join(".podway/run/podwayd.lock").exists());
+}
+
+#[test]
 fn live_single_mode_apply_uses_reserved_orderly_shutdown_and_finishes_after_exact_exit() {
     let fixture = Fixture::new();
     let mut daemon = Daemon::start(&fixture);
@@ -1293,6 +1417,140 @@ fn live_single_mode_apply_uses_reserved_orderly_shutdown_and_finishes_after_exac
     assert!(!namespace.join("run/podwayd.sock").exists());
     assert!(namespace.join("run/podwayd.lock").exists());
     assert!(!namespace.join("logs").exists());
+}
+
+#[test]
+fn retained_workspace_reregisters_after_explicit_fresh_daemon_start() {
+    let fixture = Fixture::new();
+    let mut daemon = Daemon::start(&fixture);
+    let worktree = fixture.0.join("worktree");
+    assert!(
+        Command::new("/usr/bin/git")
+            .args(["init", "--quiet"])
+            .arg(&worktree)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        Command::new("/usr/bin/git")
+            .arg("-C")
+            .arg(&worktree)
+            .args([
+                "-c",
+                "user.name=Podway Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "--allow-empty",
+                "--quiet",
+                "-m",
+                "fixture",
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let scope = worktree.to_str().unwrap();
+    let begin_key = "00000000-0000-4000-8000-000000000501";
+    for command in [
+        vec!["init"],
+        vec![
+            "start",
+            "--preset",
+            "small-change-v2",
+            "--task",
+            "Retained runtime-reset participant",
+        ],
+        vec!["begin"],
+    ] {
+        let mut args = vec!["--mode", "dev", "--worktree", scope];
+        if command[0] == "begin" {
+            args.extend(["--idempotency-key", begin_key]);
+        }
+        args.extend(command);
+        let (output, value) = fixture.run(&args);
+        assert!(output.status.success(), "{args:?}: {value}");
+    }
+    let (output, before) = fixture.run(&["--mode", "dev", "--worktree", scope, "status"]);
+    assert!(output.status.success(), "{before}");
+    let workspace_uuid = before["workspace"]["uuid"].as_str().unwrap().to_owned();
+    let session_id = before["result"]["session"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let session_revision = before["result"]["session"]["revision"].as_u64().unwrap();
+    let (output, job_before) = fixture.run(&[
+        "--mode",
+        "dev",
+        "--worktree",
+        scope,
+        "job",
+        "lookup",
+        "--idempotency-key",
+        begin_key,
+    ]);
+    assert!(output.status.success(), "{job_before}");
+    assert_eq!(job_before["result"]["found"], true);
+    assert_eq!(job_before["result"]["job"]["state"], "succeeded");
+    let store = worktree.join(".podway/runtime/state.sqlite3");
+    assert!(store.exists());
+
+    let (output, plan) = fixture.run(&["--mode", "dev", "runtime", "reset", "plan"]);
+    assert!(output.status.success(), "{plan}");
+    let token = plan["result"]["plan_token"].as_str().unwrap();
+    let (output, applied) = fixture.run(&[
+        "--mode",
+        "dev",
+        "runtime",
+        "reset",
+        "apply",
+        "--plan-token",
+        token,
+        "--yes",
+    ]);
+    assert!(output.status.success(), "{applied}");
+    assert_eq!(applied["result"]["status"], "complete");
+    daemon.await_exit();
+    assert!(store.exists());
+
+    let _fresh_daemon = Daemon::start(&fixture);
+    let (output, ready) = fixture.run(&["--mode", "dev", "daemon", "status"]);
+    assert!(output.status.success(), "{ready}");
+    assert_eq!(ready["result"]["registered_worktree_count"], 0);
+    let (output, repaired) =
+        fixture.run(&["--mode", "dev", "--worktree", scope, "workspace", "repair"]);
+    assert!(output.status.success(), "{repaired}");
+    assert_eq!(repaired["workspace"]["uuid"], workspace_uuid);
+    assert_eq!(repaired["result"]["changed"], true);
+    assert_eq!(
+        repaired["result"]["changes"],
+        serde_json::json!(["registry.last_known_root"])
+    );
+
+    let (output, after) = fixture.run(&["--mode", "dev", "--worktree", scope, "status"]);
+    assert!(output.status.success(), "{after}");
+    assert_eq!(after["workspace"]["uuid"], workspace_uuid);
+    assert_eq!(after["result"]["session"]["id"], session_id);
+    assert_eq!(
+        after["result"]["session"]["revision"].as_u64(),
+        Some(session_revision)
+    );
+    let (output, job_after) = fixture.run(&[
+        "--mode",
+        "dev",
+        "--worktree",
+        scope,
+        "job",
+        "lookup",
+        "--idempotency-key",
+        begin_key,
+    ]);
+    assert!(output.status.success(), "{job_after}");
+    assert_eq!(job_after["result"]["job"], job_before["result"]["job"]);
+    let (output, registered) = fixture.run(&["--mode", "dev", "daemon", "status"]);
+    assert!(output.status.success(), "{registered}");
+    assert_eq!(registered["result"]["registered_worktree_count"], 1);
 }
 
 #[test]

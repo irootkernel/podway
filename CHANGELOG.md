@@ -22,6 +22,14 @@ This file records concise shipped outcomes and the planned next stable release.
 - Clarify how Podway cooperates with Codex context management and goals, preserving
   authorized session boundaries, safe recovery, and evidence-based completion.
 
+### Fixed
+
+- Recover a committed live runtime reset when daemon shutdown finishes before
+  the durable stopped marker, and shut down an unloaded foreground production
+  daemon after retiring its service state.
+- Reject reset plans whose complete shutdown-time log inventory cannot fit the
+  aggregate resource or durable-record bounds before any runtime data is removed.
+
 ## v0.2.9 - 2026-09-06
 
 ### Added
