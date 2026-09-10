@@ -14,6 +14,8 @@ This file records concise shipped outcomes and the planned next stable release.
 - Retire one explicitly selected ordinary account runtime offline or while idle,
   with exact service shutdown, bounded deletion, crash-safe recovery, and honest
   partial results.
+- Retire a frozen all-mode selection in deterministic order with complete
+  preflight, exact partial-failure retry, and replay-safe namespace preservation.
 
 ### Changed
 

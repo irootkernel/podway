@@ -63,20 +63,24 @@ impl Drop for Fixture {
 struct Daemon(std::process::Child);
 impl Daemon {
     fn start(fixture: &Fixture) -> Self {
+        Self::start_mode(fixture, "dev")
+    }
+
+    fn start_mode(fixture: &Fixture, mode: &str) -> Self {
         let daemon = Path::new(env!("CARGO_BIN_EXE_podway")).with_file_name("podwayd");
         let child = Command::new(daemon)
             .env_clear()
             .env("PODWAY_TEST_ACCOUNT_ROOT", &fixture.0)
-            .args(["--mode", "dev"])
+            .args(["--mode", mode])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(fs::File::create(fixture.0.join("daemon-stderr")).unwrap())
+            .stderr(fs::File::create(fixture.0.join(format!("daemon-{mode}-stderr"))).unwrap())
             .spawn()
             .unwrap();
         let mut daemon = Self(child);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
         loop {
-            let (output, status) = fixture.run(&["--mode", "dev", "daemon", "status"]);
+            let (output, status) = fixture.run(&["--mode", mode, "daemon", "status"]);
             if output.status.success() && status["result"]["readiness_state"] == "ready" {
                 assert_eq!(
                     status["result"]["pid"].as_u64(),
@@ -86,7 +90,7 @@ impl Daemon {
                     status["result"]["effective_socket_path"].as_str(),
                     fixture
                         .0
-                        .join(".podway/modes/dev/run/podwayd.sock")
+                        .join(format!(".podway/modes/{mode}/run/podwayd.sock"))
                         .to_str()
                 );
                 return daemon;
@@ -420,7 +424,7 @@ fn selectors_and_daemon_flags_fail_before_discovery() {
 }
 
 #[test]
-fn apply_requires_its_exact_selector_confirmation_and_single_mode_scope() {
+fn apply_requires_its_exact_selector_confirmation_and_token() {
     let fixture = Fixture::new();
     for args in [
         vec![
@@ -478,14 +482,57 @@ fn apply_requires_its_exact_selector_confirmation_and_single_mode_scope() {
         "token",
         "--yes",
     ]);
-    assert_eq!(output.status.code(), Some(3), "{value}");
-    assert_eq!(value["code"], "RUNTIME_RESET_UNSUPPORTED", "{value}");
+    assert_eq!(output.status.code(), Some(4), "{value}");
+    assert_eq!(value["code"], "RUNTIME_RESET_PLAN_STALE", "{value}");
     assert!(!fixture.0.join(".podway").exists());
 
     let (output, value) = fixture.run(&["reset", "--all", "--yes"]);
     assert_eq!(output.status.code(), Some(2), "{value}");
     assert_eq!(value["code"], "REQUEST_INVALID", "{value}");
     assert!(value["message"].as_str().unwrap().contains("--force"));
+}
+
+#[test]
+fn apply_rejects_a_valid_token_under_the_opposite_selector_without_writes() {
+    let fixture = Fixture::new();
+    let registry = fixture.file(
+        ".podway/modes/dev/state/workspaces.json",
+        b"preserved registry",
+    );
+    fixture.file(".podway/modes/dev/run/podwayd.lock", b"");
+    let (output, mode_plan) = fixture.run(&["--dev", "runtime", "reset", "plan"]);
+    assert!(output.status.success(), "{mode_plan}");
+    let mode_token = mode_plan["result"]["plan_token"].as_str().unwrap();
+    let (output, all_plan) = fixture.run(&["runtime", "reset", "plan", "--all-modes"]);
+    assert!(output.status.success(), "{all_plan}");
+    let all_token = all_plan["result"]["plan_token"].as_str().unwrap();
+
+    for args in [
+        vec![
+            "runtime",
+            "reset",
+            "apply",
+            "--all-modes",
+            "--plan-token",
+            mode_token,
+            "--yes",
+        ],
+        vec![
+            "--dev",
+            "runtime",
+            "reset",
+            "apply",
+            "--plan-token",
+            all_token,
+            "--yes",
+        ],
+    ] {
+        let (output, value) = fixture.run(&args);
+        assert_eq!(output.status.code(), Some(4), "{value}");
+        assert_eq!(value["code"], "RUNTIME_RESET_PLAN_STALE", "{value}");
+        assert_eq!(value["details"]["reason"], "selection_changed", "{value}");
+    }
+    assert_eq!(fs::read(registry).unwrap(), b"preserved registry");
 }
 
 #[test]
@@ -1042,6 +1089,134 @@ fn confirmed_single_mode_apply_retires_offline_data_and_exact_replay_is_idempote
     assert!(output.status.success(), "{replay}");
     assert_eq!(replay["result"]["status"], "already_applied");
     assert_eq!(fs::read(preserved).unwrap(), b"preserved");
+}
+
+#[test]
+fn confirmed_all_mode_apply_retires_the_frozen_set_and_replays_exactly() {
+    let fixture = Fixture::new();
+    for mode in ["alpha", "zeta"] {
+        fixture.file(&format!(".podway/modes/{mode}/run/podwayd.lock"), b"");
+        fixture.file(
+            &format!(".podway/modes/{mode}/state/workspaces.json"),
+            b"offline registry",
+        );
+    }
+    let preserved = fixture.file("worktree/.podway/runtime.db", b"preserved");
+    let (output, plan) = fixture.run(&["runtime", "reset", "plan", "--all-modes"]);
+    assert!(output.status.success(), "{plan}");
+    let token = plan["result"]["plan_token"].as_str().unwrap();
+
+    let (output, applied) = fixture.run(&[
+        "runtime",
+        "reset",
+        "apply",
+        "--all-modes",
+        "--plan-token",
+        token,
+        "--yes",
+    ]);
+    assert!(output.status.success(), "{applied}");
+    assert_eq!(applied["result"]["status"], "complete");
+    assert_eq!(
+        applied["result"]["modes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|mode| mode["mode"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["prod", "alpha", "zeta"]
+    );
+    for mode in ["alpha", "zeta"] {
+        assert!(
+            !fixture
+                .0
+                .join(format!(".podway/modes/{mode}/state/workspaces.json"))
+                .exists()
+        );
+    }
+    assert_eq!(fs::read(&preserved).unwrap(), b"preserved");
+
+    fixture.file(
+        ".podway/modes/alpha/state/workspaces.json",
+        b"recreated registry",
+    );
+    let (output, replay) = fixture.run(&[
+        "runtime",
+        "reset",
+        "apply",
+        "--all-modes",
+        "--plan-token",
+        token,
+        "--yes",
+    ]);
+    assert!(output.status.success(), "{replay}");
+    assert_eq!(replay["result"]["status"], "already_applied");
+    assert_eq!(
+        fs::read(fixture.0.join(".podway/modes/alpha/state/workspaces.json")).unwrap(),
+        b"recreated registry"
+    );
+}
+
+#[test]
+fn confirmed_all_mode_apply_reserves_every_live_daemon_before_orderly_shutdown() {
+    let fixture = Fixture::new();
+    let mut alpha = Daemon::start_mode(&fixture, "alpha");
+    let mut zeta = Daemon::start_mode(&fixture, "zeta");
+    let (output, plan) = fixture.run(&["runtime", "reset", "plan", "--all-modes"]);
+    assert!(output.status.success(), "{plan}");
+    assert_eq!(plan["result"]["status"], "ready");
+    assert_eq!(
+        plan["result"]["targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|target| (
+                target["mode"].as_str().unwrap(),
+                target["state"].as_str().unwrap()
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("prod", "absent"),
+            ("alpha", "live_idle"),
+            ("zeta", "live_idle")
+        ]
+    );
+    let token = plan["result"]["plan_token"].as_str().unwrap();
+
+    let (output, applied) = fixture.run(&[
+        "runtime",
+        "reset",
+        "apply",
+        "--all-modes",
+        "--plan-token",
+        token,
+        "--yes",
+    ]);
+    assert!(output.status.success(), "{applied}");
+    assert_eq!(applied["result"]["status"], "complete");
+    assert!(
+        applied["result"]["modes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|mode| mode["state"] == "complete")
+    );
+    alpha.await_exit();
+    zeta.await_exit();
+    for mode in ["alpha", "zeta"] {
+        assert!(
+            fixture
+                .0
+                .join(format!(".podway/modes/{mode}/run/podwayd.lock"))
+                .exists()
+        );
+        assert!(
+            !fixture
+                .0
+                .join(format!(".podway/modes/{mode}/state/workspaces.json"))
+                .exists()
+        );
+    }
 }
 
 #[test]

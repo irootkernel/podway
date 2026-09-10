@@ -8362,7 +8362,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Procedures:\n  podway procedure scaffold > .podway/procedures/custom.yaml\n  podway procedure format .podway/procedures/custom.yaml --write\n  podway procedure check .podway/procedures/custom.yaml --warnings-as-errors\n  podway procedure preview .podway/procedures/custom.yaml\n  podway start --procedure .podway/procedures/custom.yaml --expect-procedure-digest sha256:<hex> --task 'perform work'\n\nOther Procedure v2 authoring routes are procedure validate, vet, lint, and graph."
         }
         "runtime" | "runtime.reset.plan" | "runtime.reset.apply" => {
-            "Usage:\n  podway --mode <key> runtime reset plan\n  podway runtime reset plan --all-modes\n  podway --mode <key> runtime reset apply --plan-token <token> --yes\n\nAn explicit selector is required. Planning is read-only and preserves every worktree. Apply revalidates the exact token and currently supports one selected ordinary mode. Managed runtimes are excluded."
+            "Usage:\n  podway --mode <key> runtime reset plan\n  podway runtime reset plan --all-modes\n  podway --mode <key> runtime reset apply --plan-token <token> --yes\n  podway runtime reset apply --all-modes --plan-token <token> --yes\n\nAn explicit selector is required. Planning is read-only and preserves every worktree. Apply revalidates the exact frozen selection. Managed runtimes are excluded."
         }
         "daemon" => {
             "Daemon lifecycle grammar:\n  podway [--mode <key> | --dev] daemon status\n  podway [--mode <key> | --dev] daemon wait-ready [--timeout 120s]\n  podway daemon install --daemon-path /absolute/podwayd\n  podway daemon logs --lines 100"

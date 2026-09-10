@@ -85,7 +85,7 @@ pub trait RuntimeResetOperatorV1 {
     }
 }
 
-/// Applies one explicitly selected ordinary runtime and resumes its exact durable operation.
+/// Applies an explicitly selected ordinary runtime set and resumes its exact durable operation.
 pub struct RuntimeResetApplyV1<L, I, O> {
     home: PodwayHomeV1,
     planner: RuntimeResetPlannerV1<L, I>,
@@ -109,18 +109,18 @@ impl<L: LaunchctlRunnerV1, I: RuntimeResetInspectorV1, O: RuntimeResetOperatorV1
         selection: RuntimeResetSelectionV1,
         now: UnixMillis,
     ) -> Result<RuntimeResetResultV1, Error> {
-        let RuntimeResetSelectionV1::Mode { .. } = &selection else {
-            return Err(Error::unsupported_reason(
-                RuntimeResetReasonV1::UnsupportedPeer,
-            ));
-        };
         let token_sha256 = format!("sha256:{:x}", Sha256::digest(encoded_token.as_bytes()));
+        let token = ResetToken::decode(encoded_token)?;
+        if token.selection != selection {
+            return Err(Error::stale(RuntimeResetReasonV1::SelectionChanged));
+        }
         let _reset = RuntimeResetLockV1::acquire_reset(&self.home)?;
-        let selected_mode = match &selection {
-            RuntimeResetSelectionV1::Mode { mode } => mode,
-            RuntimeResetSelectionV1::AllModes => unreachable!("single-mode checked above"),
-        };
-        self.operator.prepare(&self.paths(selected_mode)?)?;
+        for target in &token.targets {
+            let paths = self.paths(&target.mode)?;
+            self.operator
+                .prepare(&paths)
+                .map_err(|error| error.in_mode(&target.mode))?;
+        }
         let _topology = RuntimeResetLockV1::acquire_topology(&self.home)?;
         let account = Directory::account(&self.home)?;
         let root = account
@@ -155,42 +155,58 @@ impl<L: LaunchctlRunnerV1, I: RuntimeResetInspectorV1, O: RuntimeResetOperatorV1
 
         self.planner
             .validate_precommit_token(encoded_token, &selection, now)?;
-        let token = ResetToken::decode(encoded_token)?;
-        if token.targets.len() != 1 {
-            return Err(Error::unsupported_reason(
-                RuntimeResetReasonV1::UnsupportedPeer,
-            ));
-        }
         let operation = RuntimeResetOperationV1 {
             operation_id: uuid::Uuid::new_v4().to_string(),
             token_sha256,
         };
-        let target = token.targets[0].clone();
-        let paths = self.paths(&target.mode)?;
-        let reservation = if let Some(process) = &target.process {
-            Some(self.operator.reserve(&paths, &operation, process)?)
-        } else {
-            None
-        };
+        let mut reservations = Vec::with_capacity(token.targets.len());
+        for target in &token.targets {
+            let paths = self.paths(&target.mode)?;
+            let reservation = match &target.process {
+                Some(process) => match self.operator.reserve(&paths, &operation, process) {
+                    Ok(reservation) => Some(reservation),
+                    Err(error) => {
+                        self.release_reservations(&token.targets, &reservations, &operation);
+                        return Err(error.in_mode(&target.mode));
+                    }
+                },
+                None => None,
+            };
+            reservations.push(reservation);
+        }
 
-        let commit = RuntimeResetLockV1::acquire_commit(&self.home)?;
+        let commit = match RuntimeResetLockV1::acquire_commit(&self.home) {
+            Ok(commit) => commit,
+            Err(error) => {
+                self.release_reservations(&token.targets, &reservations, &operation);
+                return Err(error);
+            }
+        };
         let commit_result = (|| {
-            if let (Some(process), Some(reservation)) = (&target.process, &reservation) {
-                self.operator
-                    .snapshot(&paths, &operation, process, reservation)?;
+            for (target, reservation) in token.targets.iter().zip(&reservations) {
+                if let (Some(process), Some(reservation)) = (&target.process, reservation) {
+                    let paths = self.paths(&target.mode)?;
+                    self.operator
+                        .snapshot(&paths, &operation, process, reservation)
+                        .map_err(|error| error.in_mode(&target.mode))?;
+                }
             }
             let record = ResetRecord {
                 schema: "podway.runtime-reset-record/v1".to_owned(),
                 operation_id: operation.operation_id.clone(),
                 token_sha256: operation.token_sha256.clone(),
                 phase: RecordPhase::InProgress,
-                plan: Some(token),
-                modes: vec![RecordMode {
-                    mode: target.mode.clone(),
-                    phase: ModePhase::Pending,
-                    reservation_id: reservation.clone(),
-                    entries: Vec::new(),
-                }],
+                plan: Some(token.clone()),
+                modes: reservations
+                    .iter()
+                    .zip(token.targets.iter())
+                    .map(|(reservation, target)| RecordMode {
+                        mode: target.mode.clone(),
+                        phase: ModePhase::Pending,
+                        reservation_id: reservation.clone(),
+                        entries: Vec::new(),
+                    })
+                    .collect(),
                 result: None,
             };
             self.persist(&maintenance, &record)?;
@@ -210,16 +226,31 @@ impl<L: LaunchctlRunnerV1, I: RuntimeResetInspectorV1, O: RuntimeResetOperatorV1
                 {
                     return Err(self.committed_error(error, &maintenance, Some(&record)));
                 }
-                if let (Some(process), Some(reservation)) = (&target.process, &reservation) {
-                    self.operator
-                        .release_uncommitted(&paths, &operation, process, reservation);
-                }
+                self.release_reservations(&token.targets, &reservations, &operation);
                 return Err(error);
             }
         };
         match self.resume(&root, &maintenance, record, false) {
             Ok(result) => Ok(result),
             Err(error) => Err(self.committed_error(error, &maintenance, None)),
+        }
+    }
+
+    fn release_reservations(
+        &mut self,
+        targets: &[super::document::NamespaceBinding],
+        reservations: &[Option<String>],
+        operation: &RuntimeResetOperationV1,
+    ) {
+        for (target, reservation) in targets.iter().zip(reservations).rev() {
+            if let (Some(process), Some(reservation), Ok(paths)) = (
+                &target.process,
+                reservation.as_deref(),
+                self.paths(&target.mode),
+            ) {
+                self.operator
+                    .release_uncommitted(&paths, operation, process, reservation);
+            }
         }
     }
 
@@ -234,77 +265,121 @@ impl<L: LaunchctlRunnerV1, I: RuntimeResetInspectorV1, O: RuntimeResetOperatorV1
             operation_id: record.operation_id.clone(),
             token_sha256: record.token_sha256.clone(),
         };
-        let target = record.plan.as_ref().expect("validated record").targets[0].clone();
-        let paths = self.paths(&target.mode)?;
-        if reconnect
-            && matches!(
-                record.modes[0].phase,
-                ModePhase::Pending | ModePhase::StopIntended
-            )
-            && let Some(process) = &target.process
-        {
-            let reservation = self.operator.reserve(&paths, &operation, process)?;
-            let expected = record.modes[0]
-                .reservation_id
-                .as_deref()
-                .ok_or_else(|| Error::unsafe_reason(RuntimeResetReasonV1::ReservationLost))?;
-            if reservation != expected {
-                return Err(Error::unsafe_reason(RuntimeResetReasonV1::ReservationLost));
+        let targets = record
+            .plan
+            .as_ref()
+            .expect("validated record")
+            .targets
+            .clone();
+        if reconnect {
+            for (target, mode) in targets.iter().zip(&record.modes) {
+                if matches!(mode.phase, ModePhase::Pending | ModePhase::StopIntended)
+                    && let Some(process) = &target.process
+                {
+                    let paths = self.paths(&target.mode)?;
+                    let reservation = self
+                        .operator
+                        .reserve(&paths, &operation, process)
+                        .map_err(|error| error.in_mode(&target.mode))?;
+                    let expected = mode.reservation_id.as_deref().ok_or_else(|| {
+                        Error::unsafe_reason(RuntimeResetReasonV1::ReservationLost)
+                            .in_mode(&target.mode)
+                    })?;
+                    if reservation != expected {
+                        return Err(Error::unsafe_reason(RuntimeResetReasonV1::ReservationLost)
+                            .in_mode(&target.mode));
+                    }
+                }
             }
         }
 
-        if record.modes[0].phase == ModePhase::Pending {
-            record.modes[0].phase = ModePhase::StopIntended;
-            self.persist(maintenance, &record)?;
-            self.operator.checkpoint("stop_intended")?;
-        }
-        if record.modes[0].phase == ModePhase::StopIntended {
-            self.operator.stop(
-                &paths,
-                &operation,
-                target.process.as_ref(),
-                record.modes[0].reservation_id.as_deref(),
-            )?;
-            self.operator
-                .wait_stopped(&paths, target.process.as_ref())?;
-            self.verify_singleton(root, &target)?;
-            record.modes[0].phase = ModePhase::Stopped;
-            self.persist(maintenance, &record)?;
-            self.operator.checkpoint("stopped")?;
-        }
-        if record.modes[0].phase == ModePhase::Stopped {
-            record.modes[0].phase = ModePhase::InventoryIntended;
-            self.persist(maintenance, &record)?;
-            self.operator.checkpoint("inventory_intended")?;
-        }
-        if record.modes[0].phase == ModePhase::InventoryIntended {
-            record.modes[0].entries = self.inventory(root, &target)?;
-            record.modes[0].phase = ModePhase::InventoryReady;
-            self.persist(maintenance, &record)?;
-            self.operator.checkpoint("inventory_ready")?;
-        }
-
-        for index in 0..record.modes[0].entries.len() {
-            if record.modes[0].entries[index].state == EntryState::Completed {
+        for (mode_index, target) in targets.iter().enumerate() {
+            if record.modes[mode_index].phase == ModePhase::Complete {
                 continue;
             }
-            let had_intent = record.modes[0].entries[index].state == EntryState::Intended;
-            if !had_intent {
-                record.modes[0].entries[index].state = EntryState::Intended;
+            if record.modes[mode_index].phase == ModePhase::Pending && target.is_absent() {
+                record.modes[mode_index].phase = ModePhase::Complete;
                 self.persist(maintenance, &record)?;
-                self.operator.checkpoint("unlink_intended")?;
+                continue;
             }
-            let removed = self.remove_entry(root, &target, &record.modes[0].entries[index])?;
-            if !removed && !had_intent {
-                return Err(Error::unsafe_reason(RuntimeResetReasonV1::ResourceChanged));
+            let paths = self.paths(&target.mode)?;
+            if record.modes[mode_index].phase == ModePhase::Pending {
+                record.modes[mode_index].phase = ModePhase::StopIntended;
+                self.persist(maintenance, &record)?;
+                self.operator
+                    .checkpoint("stop_intended")
+                    .map_err(|error| error.in_mode(&target.mode))?;
             }
-            self.operator.checkpoint("unlinked")?;
-            record.modes[0].entries[index].state = EntryState::Completed;
+            if record.modes[mode_index].phase == ModePhase::StopIntended {
+                self.operator
+                    .stop(
+                        &paths,
+                        &operation,
+                        target.process.as_ref(),
+                        record.modes[mode_index].reservation_id.as_deref(),
+                    )
+                    .map_err(|error| error.in_mode(&target.mode))?;
+                self.operator
+                    .wait_stopped(&paths, target.process.as_ref())
+                    .map_err(|error| error.in_mode(&target.mode))?;
+                self.verify_singleton(root, target)
+                    .map_err(|error| error.in_mode(&target.mode))?;
+                record.modes[mode_index].phase = ModePhase::Stopped;
+                self.persist(maintenance, &record)?;
+                self.operator
+                    .checkpoint("stopped")
+                    .map_err(|error| error.in_mode(&target.mode))?;
+            }
+            if record.modes[mode_index].phase == ModePhase::Stopped {
+                record.modes[mode_index].phase = ModePhase::InventoryIntended;
+                self.persist(maintenance, &record)?;
+                self.operator
+                    .checkpoint("inventory_intended")
+                    .map_err(|error| error.in_mode(&target.mode))?;
+            }
+            if record.modes[mode_index].phase == ModePhase::InventoryIntended {
+                record.modes[mode_index].entries = self
+                    .inventory(root, target)
+                    .map_err(|error| error.in_mode(&target.mode))?;
+                record.modes[mode_index].phase = ModePhase::InventoryReady;
+                self.persist(maintenance, &record)?;
+                self.operator
+                    .checkpoint("inventory_ready")
+                    .map_err(|error| error.in_mode(&target.mode))?;
+            }
+
+            for entry_index in 0..record.modes[mode_index].entries.len() {
+                if record.modes[mode_index].entries[entry_index].state == EntryState::Completed {
+                    continue;
+                }
+                let had_intent =
+                    record.modes[mode_index].entries[entry_index].state == EntryState::Intended;
+                if !had_intent {
+                    record.modes[mode_index].entries[entry_index].state = EntryState::Intended;
+                    self.persist(maintenance, &record)?;
+                    self.operator
+                        .checkpoint("unlink_intended")
+                        .map_err(|error| error.in_mode(&target.mode))?;
+                }
+                let removed = self
+                    .remove_entry(root, target, &record.modes[mode_index].entries[entry_index])
+                    .map_err(|error| error.in_mode(&target.mode))?;
+                if !removed && !had_intent {
+                    return Err(Error::unsafe_reason(RuntimeResetReasonV1::ResourceChanged)
+                        .in_mode(&target.mode));
+                }
+                self.operator
+                    .checkpoint("unlinked")
+                    .map_err(|error| error.in_mode(&target.mode))?;
+                record.modes[mode_index].entries[entry_index].state = EntryState::Completed;
+                self.persist(maintenance, &record)?;
+                self.operator
+                    .checkpoint("unlink_completed")
+                    .map_err(|error| error.in_mode(&target.mode))?;
+            }
+            record.modes[mode_index].phase = ModePhase::Complete;
             self.persist(maintenance, &record)?;
-            self.operator.checkpoint("unlink_completed")?;
         }
-        record.modes[0].phase = ModePhase::Complete;
-        self.persist(maintenance, &record)?;
 
         let result = self.result(&record)?;
         let completed = ResetRecord {
@@ -540,6 +615,8 @@ impl<L: LaunchctlRunnerV1, I: RuntimeResetInspectorV1, O: RuntimeResetOperatorV1
         maintenance: &Directory,
         fallback: Option<&ResetRecord>,
     ) -> Error {
+        let failed_mode = error.mode.clone();
+        let reason = error.reason;
         let current = maintenance
             .read_optional(
                 OsStr::new("runtime-reset.json"),
@@ -554,16 +631,39 @@ impl<L: LaunchctlRunnerV1, I: RuntimeResetInspectorV1, O: RuntimeResetOperatorV1
         if record.phase == RecordPhase::Completed {
             if let Some(mut result) = record.result.clone() {
                 result.status = RuntimeResetResultStatusV1::Incomplete;
-                if let Some(mode) = result.modes.first_mut() {
-                    mode.state = RuntimeResetModeOutcomeStateV1::Incomplete;
-                }
-                return Error::incomplete(error.reason, result);
+                Self::mark_incomplete(&mut result, failed_mode.as_ref());
+                return Error::incomplete(reason, result);
             }
             return error;
         }
         match self.result_with_status(record, RuntimeResetResultStatusV1::Incomplete) {
-            Ok(result) => Error::incomplete(error.reason, result),
+            Ok(mut result) => {
+                Self::mark_incomplete(&mut result, failed_mode.as_ref());
+                Error::incomplete(reason, result)
+            }
             Err(_) => error,
+        }
+    }
+
+    fn mark_incomplete(result: &mut RuntimeResetResultV1, failed_mode: Option<&RuntimeModeV1>) {
+        if result
+            .modes
+            .iter()
+            .any(|mode| mode.state == RuntimeResetModeOutcomeStateV1::Incomplete)
+        {
+            return;
+        }
+        let index = failed_mode
+            .and_then(|failed| result.modes.iter().position(|mode| mode.mode == *failed))
+            .or_else(|| {
+                result
+                    .modes
+                    .iter()
+                    .position(|mode| mode.state == RuntimeResetModeOutcomeStateV1::Pending)
+            })
+            .or_else(|| result.modes.len().checked_sub(1));
+        if let Some(index) = index {
+            result.modes[index].state = RuntimeResetModeOutcomeStateV1::Incomplete;
         }
     }
 
@@ -573,71 +673,96 @@ impl<L: LaunchctlRunnerV1, I: RuntimeResetInspectorV1, O: RuntimeResetOperatorV1
         status: RuntimeResetResultStatusV1,
     ) -> Result<RuntimeResetResultV1, Error> {
         let plan = record.plan.as_ref().expect("in-progress record");
-        let target = &plan.targets[0];
-        let mut resources = record.modes[0]
-            .entries
-            .iter()
-            .map(|entry| {
-                let bytes = decode_bytes(&entry.relative_path_bytes_base64url)?;
-                let mut path = Path::new(OsStr::from_bytes(&decode_bytes(
-                    &target.root.path_bytes_base64url,
-                )?))
-                .to_path_buf();
-                path.push(OsStr::from_bytes(&bytes));
-                Ok(RuntimeResetResourceOutcomeV1 {
-                    class: entry.class,
-                    path: RuntimeResetPathV1::new(&path)?,
-                    state: if entry.state == EntryState::Completed {
-                        RuntimeResetResourceOutcomeStateV1::Removed
-                    } else {
-                        RuntimeResetResourceOutcomeStateV1::Pending
-                    },
+        let mut modes = Vec::with_capacity(record.modes.len());
+        let mut preserved = Vec::new();
+        for (target, mode) in plan.targets.iter().zip(&record.modes) {
+            let mut resources = mode
+                .entries
+                .iter()
+                .map(|entry| {
+                    let bytes = decode_bytes(&entry.relative_path_bytes_base64url)?;
+                    let mut path = Path::new(OsStr::from_bytes(&decode_bytes(
+                        &target.root.path_bytes_base64url,
+                    )?))
+                    .to_path_buf();
+                    path.push(OsStr::from_bytes(&bytes));
+                    Ok(RuntimeResetResourceOutcomeV1 {
+                        class: entry.class,
+                        path: RuntimeResetPathV1::new(&path)?,
+                        state: if entry.state == EntryState::Completed {
+                            RuntimeResetResourceOutcomeStateV1::Removed
+                        } else {
+                            RuntimeResetResourceOutcomeStateV1::Pending
+                        },
+                    })
                 })
-            })
-            .collect::<Result<Vec<_>, Error>>()?;
-        let stopped = matches!(
-            record.modes[0].phase,
-            ModePhase::Stopped
-                | ModePhase::InventoryIntended
-                | ModePhase::InventoryReady
-                | ModePhase::Complete
-        );
-        let post_stop_state = if stopped {
-            RuntimeResetResourceOutcomeStateV1::AlreadyAbsent
-        } else {
-            RuntimeResetResourceOutcomeStateV1::Pending
-        };
-        let paths = self.paths(&target.mode)?;
-        if target.socket_identity.is_some()
-            && !resources
-                .iter()
-                .any(|resource| resource.class == RuntimeResetResourceClassV1::Socket)
-        {
-            resources.push(RuntimeResetResourceOutcomeV1 {
-                class: RuntimeResetResourceClassV1::Socket,
-                path: RuntimeResetPathV1::new(paths.socket_path().as_path())?,
-                state: post_stop_state,
+                .collect::<Result<Vec<_>, Error>>()?;
+            let stopped = matches!(
+                mode.phase,
+                ModePhase::Stopped
+                    | ModePhase::InventoryIntended
+                    | ModePhase::InventoryReady
+                    | ModePhase::Complete
+            );
+            let post_stop_state = if stopped {
+                RuntimeResetResourceOutcomeStateV1::AlreadyAbsent
+            } else {
+                RuntimeResetResourceOutcomeStateV1::Pending
+            };
+            let paths = self.paths(&target.mode)?;
+            if target.socket_identity.is_some()
+                && !resources
+                    .iter()
+                    .any(|resource| resource.class == RuntimeResetResourceClassV1::Socket)
+            {
+                resources.push(RuntimeResetResourceOutcomeV1 {
+                    class: RuntimeResetResourceClassV1::Socket,
+                    path: RuntimeResetPathV1::new(paths.socket_path().as_path())?,
+                    state: post_stop_state,
+                });
+            }
+            if target.service.metadata_identity.is_some()
+                && !resources
+                    .iter()
+                    .any(|resource| resource.class == RuntimeResetResourceClassV1::ServiceMetadata)
+            {
+                resources.push(RuntimeResetResourceOutcomeV1 {
+                    class: RuntimeResetResourceClassV1::ServiceMetadata,
+                    path: RuntimeResetPathV1::new(paths.metadata_index_path().as_path())?,
+                    state: post_stop_state,
+                });
+            }
+            if target.service.plist_identity.is_some() {
+                resources.push(RuntimeResetResourceOutcomeV1 {
+                    class: RuntimeResetResourceClassV1::ServicePlist,
+                    path: RuntimeResetPathV1::new(paths.launch_agent_path().as_path())?,
+                    state: post_stop_state,
+                });
+            }
+            resources.sort_by(|left, right| {
+                left.path
+                    .path_bytes_base64url
+                    .as_bytes()
+                    .cmp(right.path.path_bytes_base64url.as_bytes())
             });
-        }
-        if target.service.metadata_identity.is_some()
-            && !resources
-                .iter()
-                .any(|resource| resource.class == RuntimeResetResourceClassV1::ServiceMetadata)
-        {
-            resources.push(RuntimeResetResourceOutcomeV1 {
-                class: RuntimeResetResourceClassV1::ServiceMetadata,
-                path: RuntimeResetPathV1::new(paths.metadata_index_path().as_path())?,
-                state: post_stop_state,
+            modes.push(RuntimeResetModeOutcomeV1 {
+                mode: target.mode.clone(),
+                state: if mode.phase == ModePhase::Complete {
+                    RuntimeResetModeOutcomeStateV1::Complete
+                } else if mode.phase == ModePhase::Pending {
+                    RuntimeResetModeOutcomeStateV1::Pending
+                } else {
+                    RuntimeResetModeOutcomeStateV1::Incomplete
+                },
+                resources,
             });
+            for resource in self.preserved(target, &paths)? {
+                if !preserved.contains(&resource) {
+                    preserved.push(resource);
+                }
+            }
         }
-        if target.service.plist_identity.is_some() {
-            resources.push(RuntimeResetResourceOutcomeV1 {
-                class: RuntimeResetResourceClassV1::ServicePlist,
-                path: RuntimeResetPathV1::new(paths.launch_agent_path().as_path())?,
-                state: post_stop_state,
-            });
-        }
-        resources.sort_by(|left, right| {
+        preserved.sort_by(|left, right| {
             left.path
                 .path_bytes_base64url
                 .as_bytes()
@@ -648,20 +773,8 @@ impl<L: LaunchctlRunnerV1, I: RuntimeResetInspectorV1, O: RuntimeResetOperatorV1
             status,
             operation_id: record.operation_id.clone(),
             selection: plan.selection.clone(),
-            modes: vec![RuntimeResetModeOutcomeV1 {
-                mode: target.mode.clone(),
-                state: if status == RuntimeResetResultStatusV1::Incomplete {
-                    RuntimeResetModeOutcomeStateV1::Incomplete
-                } else if record.modes[0].phase == ModePhase::Complete {
-                    RuntimeResetModeOutcomeStateV1::Complete
-                } else if record.modes[0].phase == ModePhase::Pending {
-                    RuntimeResetModeOutcomeStateV1::Pending
-                } else {
-                    RuntimeResetModeOutcomeStateV1::Incomplete
-                },
-                resources,
-            }],
-            preserved: self.preserved(target, &paths)?,
+            modes,
+            preserved,
             excluded: vec![RuntimeResetExclusionV1 {
                 path: None,
                 reason: super::document::ExclusionReason::ExternalManagedRuntimes,
@@ -705,12 +818,7 @@ impl<L: LaunchctlRunnerV1, I: RuntimeResetInspectorV1, O: RuntimeResetOperatorV1
             )?);
         }
         let maintenance = self.home.as_path().join("maintenance");
-        for name in [
-            "runtime-reset.lock",
-            "runtime-start.lock",
-            "runtime-reset-commit.lock",
-            "runtime-reset.json",
-        ] {
+        for name in super::document::CONTROL_RESIDUE_NAMES {
             preserved.push(super::document::RuntimeResetResourceV1::new(
                 RuntimeResetResourceClassV1::ControlResidue,
                 &maintenance.join(name),

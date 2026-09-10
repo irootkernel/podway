@@ -1,7 +1,10 @@
 use std::{
+    cell::RefCell,
+    collections::BTreeMap,
     fs::{self, File},
     os::unix::fs::{MetadataExt, PermissionsExt, symlink},
     path::{Path, PathBuf},
+    rc::Rc,
 };
 
 use nix::{
@@ -1181,10 +1184,10 @@ fn service_metadata_inventory_binds_content_and_inode_without_parsing() {
 }
 
 #[test]
-fn preserved_inventory_limit_rejects_complete_selection_without_truncation() {
+fn prospective_result_preserved_inventory_limit_rejects_before_apply() {
     let fixture = Fixture::new();
-    // Five preserved anchors/directories per namespace exceeds 256 below the mode bound.
-    for index in 0..52 {
+    // The plan has 256 preserved anchors, but the result must also report four control residues.
+    for index in 0..51 {
         fixture.namespace(&format!("mode-{index:02}"));
         fixture.file(
             &format!(".podway/modes/mode-{index:02}/state/workspaces.json.lock"),
@@ -1444,6 +1447,613 @@ fn every_single_mode_durable_boundary_has_an_exact_retry_path() {
         );
         assert!(!namespace.join("logs").exists(), "{boundary}");
     }
+}
+
+#[test]
+fn all_mode_offline_apply_retires_the_frozen_set_in_order_and_replays_exactly() {
+    let fixture = Fixture::new();
+    let prod = fixture.namespace("prod");
+    let alpha = fixture.namespace("alpha");
+    let zeta = fixture.namespace("zeta");
+    let selection = RuntimeResetSelectionV1::AllModes;
+    let plan = fixture.planner().plan(selection.clone(), now()).unwrap();
+    assert_eq!(plan.status, RuntimeResetPlanStatusV1::Ready);
+    let token = plan.plan_token.unwrap();
+    let mut apply = RuntimeResetApplyV1::new(
+        fixture.home(),
+        Launchctl(false),
+        Inspector(RuntimeResetPeerV1::Offline),
+        OfflineApplyOperator::default(),
+    );
+
+    let result = apply.apply(&token, selection.clone(), now()).unwrap();
+    assert_eq!(result.status, RuntimeResetResultStatusV1::Complete);
+    assert_eq!(
+        result
+            .modes
+            .iter()
+            .map(|outcome| outcome.mode.as_str())
+            .collect::<Vec<_>>(),
+        ["prod", "alpha", "zeta"]
+    );
+    assert!(
+        result
+            .modes
+            .iter()
+            .all(|outcome| outcome.state == RuntimeResetModeOutcomeStateV1::Complete)
+    );
+    for namespace in [&prod, &alpha, &zeta] {
+        assert!(!namespace.join("state/workspaces.json").exists());
+        assert!(namespace.join("run/podwayd.lock").exists());
+    }
+
+    fs::write(alpha.join("state"), b"recreated namespace data").unwrap();
+    let replay = apply
+        .apply(&token, selection, UnixMillis::new(999_999))
+        .unwrap();
+    assert_eq!(replay.status, RuntimeResetResultStatusV1::AlreadyApplied);
+    assert_eq!(
+        fs::read(alpha.join("state")).unwrap(),
+        b"recreated namespace data"
+    );
+}
+
+struct FailingModeOperator {
+    fail_mode: &'static str,
+    failed: bool,
+}
+
+impl RuntimeResetOperatorV1 for FailingModeOperator {
+    fn reserve(
+        &mut self,
+        _: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        _: &RuntimeResetProcessV1,
+    ) -> Result<String, RuntimeResetErrorV1> {
+        panic!("offline apply must not reserve a daemon")
+    }
+
+    fn snapshot(
+        &mut self,
+        _: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        _: &RuntimeResetProcessV1,
+        _: &str,
+    ) -> Result<(), RuntimeResetErrorV1> {
+        panic!("offline apply must not snapshot a daemon")
+    }
+
+    fn stop(
+        &mut self,
+        paths: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        process: Option<&RuntimeResetProcessV1>,
+        reservation_id: Option<&str>,
+    ) -> Result<(), RuntimeResetErrorV1> {
+        assert!(process.is_none());
+        assert!(reservation_id.is_none());
+        if !self.failed && paths.mode().as_str() == self.fail_mode {
+            self.failed = true;
+            return Err(RuntimeResetErrorV1::unsafe_reason(RuntimeResetReasonV1::Io));
+        }
+        Ok(())
+    }
+
+    fn wait_stopped(
+        &mut self,
+        _: &ServiceRuntimePathsV1,
+        process: Option<&RuntimeResetProcessV1>,
+    ) -> Result<(), RuntimeResetErrorV1> {
+        assert!(process.is_none());
+        Ok(())
+    }
+
+    fn release_uncommitted(
+        &mut self,
+        _: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        _: &RuntimeResetProcessV1,
+        _: &str,
+    ) {
+        panic!("offline apply has no reservation to release")
+    }
+}
+
+#[test]
+fn all_mode_partial_failure_reports_ordered_progress_and_retry_finishes() {
+    let fixture = Fixture::new();
+    for mode in ["prod", "alpha", "beta", "zeta"] {
+        fixture.namespace(mode);
+    }
+    let selection = RuntimeResetSelectionV1::AllModes;
+    let plan = fixture.planner().plan(selection.clone(), now()).unwrap();
+    let token = plan.plan_token.unwrap();
+    let mut apply = RuntimeResetApplyV1::new(
+        fixture.home(),
+        Launchctl(false),
+        Inspector(RuntimeResetPeerV1::Offline),
+        FailingModeOperator {
+            fail_mode: "beta",
+            failed: false,
+        },
+    );
+
+    let error = apply.apply(&token, selection.clone(), now()).unwrap_err();
+    assert_eq!(error.code(), "RUNTIME_RESET_INCOMPLETE");
+    let result = error.result.unwrap();
+    assert_eq!(result.status, RuntimeResetResultStatusV1::Incomplete);
+    assert_eq!(
+        result
+            .modes
+            .iter()
+            .map(|outcome| (outcome.mode.as_str(), outcome.state))
+            .collect::<Vec<_>>(),
+        [
+            ("prod", RuntimeResetModeOutcomeStateV1::Complete),
+            ("alpha", RuntimeResetModeOutcomeStateV1::Complete),
+            ("beta", RuntimeResetModeOutcomeStateV1::Incomplete),
+            ("zeta", RuntimeResetModeOutcomeStateV1::Pending),
+        ]
+    );
+    let newcomer = fixture.namespace("omega");
+
+    let mut retry = RuntimeResetApplyV1::new(
+        fixture.home(),
+        Launchctl(false),
+        Inspector(RuntimeResetPeerV1::Offline),
+        OfflineApplyOperator::default(),
+    );
+    let completed = retry
+        .apply(&token, selection, UnixMillis::new(999_999))
+        .unwrap();
+    assert_eq!(completed.status, RuntimeResetResultStatusV1::Complete);
+    assert!(
+        completed
+            .modes
+            .iter()
+            .all(|outcome| outcome.state == RuntimeResetModeOutcomeStateV1::Complete)
+    );
+    assert!(newcomer.join("state/workspaces.json").exists());
+}
+
+#[test]
+fn all_mode_final_receipt_failure_attributes_the_last_mode_and_replays_exactly() {
+    let fixture = Fixture::new();
+    for mode in ["prod", "alpha"] {
+        fixture.namespace(mode);
+    }
+    let selection = RuntimeResetSelectionV1::AllModes;
+    let token = fixture
+        .planner()
+        .plan(selection.clone(), now())
+        .unwrap()
+        .plan_token
+        .unwrap();
+    let mut apply = RuntimeResetApplyV1::new(
+        fixture.home(),
+        Launchctl(false),
+        Inspector(RuntimeResetPeerV1::Offline),
+        OfflineApplyOperator {
+            fail_at: Some("completed"),
+            ..OfflineApplyOperator::default()
+        },
+    );
+
+    let error = apply.apply(&token, selection.clone(), now()).unwrap_err();
+    assert_eq!(error.code(), "RUNTIME_RESET_INCOMPLETE");
+    let result = error.result.unwrap();
+    assert_eq!(result.status, RuntimeResetResultStatusV1::Incomplete);
+    assert_eq!(
+        result
+            .modes
+            .iter()
+            .map(|mode| (mode.mode.as_str(), mode.state))
+            .collect::<Vec<_>>(),
+        [
+            ("prod", RuntimeResetModeOutcomeStateV1::Complete),
+            ("alpha", RuntimeResetModeOutcomeStateV1::Incomplete),
+        ]
+    );
+
+    let replay = apply
+        .apply(&token, selection, UnixMillis::new(999_999))
+        .unwrap();
+    assert_eq!(replay.status, RuntimeResetResultStatusV1::AlreadyApplied);
+}
+
+#[test]
+fn all_mode_apply_rejects_a_namespace_that_appears_after_planning() {
+    let fixture = Fixture::new();
+    let original = fixture.namespace("alpha");
+    let selection = RuntimeResetSelectionV1::AllModes;
+    let plan = fixture.planner().plan(selection.clone(), now()).unwrap();
+    let token = plan.plan_token.unwrap();
+    let appeared = fixture.namespace("beta");
+    let mut apply = RuntimeResetApplyV1::new(
+        fixture.home(),
+        Launchctl(false),
+        Inspector(RuntimeResetPeerV1::Offline),
+        OfflineApplyOperator::default(),
+    );
+
+    let error = apply.apply(&token, selection, now()).unwrap_err();
+    assert_eq!(error.code(), "RUNTIME_RESET_PLAN_STALE");
+    assert_eq!(error.reason, RuntimeResetReasonV1::IdentityChanged);
+    assert!(original.join("state/workspaces.json").exists());
+    assert!(appeared.join("state/workspaces.json").exists());
+}
+
+#[test]
+fn apply_rejects_valid_tokens_under_the_opposite_selection_without_writes() {
+    let fixture = Fixture::new();
+    fixture.namespace("dev");
+    let mode_selection = mode("dev");
+    let all_selection = RuntimeResetSelectionV1::AllModes;
+    let mode_token = fixture
+        .planner()
+        .plan(mode_selection.clone(), now())
+        .unwrap()
+        .plan_token
+        .unwrap();
+    let all_token = fixture
+        .planner()
+        .plan(all_selection.clone(), now())
+        .unwrap()
+        .plan_token
+        .unwrap();
+    let before = snapshot(&fixture.0);
+
+    for (token, selection) in [(&mode_token, all_selection), (&all_token, mode_selection)] {
+        let mut apply = RuntimeResetApplyV1::new(
+            fixture.home(),
+            Launchctl(false),
+            Inspector(RuntimeResetPeerV1::Offline),
+            OfflineApplyOperator::default(),
+        );
+        let error = apply.apply(token, selection, now()).unwrap_err();
+        assert_eq!(error.code(), "RUNTIME_RESET_PLAN_STALE");
+        assert_eq!(error.reason, RuntimeResetReasonV1::SelectionChanged);
+    }
+    assert_eq!(snapshot(&fixture.0), before);
+}
+
+struct FailingSnapshotOperator {
+    calls: Rc<RefCell<Vec<String>>>,
+}
+
+impl RuntimeResetOperatorV1 for FailingSnapshotOperator {
+    fn reserve(
+        &mut self,
+        paths: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        _: &RuntimeResetProcessV1,
+    ) -> Result<String, RuntimeResetErrorV1> {
+        let mode = paths.mode().as_str();
+        self.calls.borrow_mut().push(format!("reserve:{mode}"));
+        Ok(format!("reservation-{mode}"))
+    }
+
+    fn snapshot(
+        &mut self,
+        paths: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        _: &RuntimeResetProcessV1,
+        reservation_id: &str,
+    ) -> Result<(), RuntimeResetErrorV1> {
+        let mode = paths.mode().as_str();
+        assert_eq!(reservation_id, format!("reservation-{mode}"));
+        self.calls.borrow_mut().push(format!("snapshot:{mode}"));
+        if mode == "alpha" {
+            return Err(RuntimeResetErrorV1::unsafe_reason(RuntimeResetReasonV1::Io));
+        }
+        Ok(())
+    }
+
+    fn stop(
+        &mut self,
+        _: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        _: Option<&RuntimeResetProcessV1>,
+        _: Option<&str>,
+    ) -> Result<(), RuntimeResetErrorV1> {
+        panic!("precommit failure must not stop a daemon")
+    }
+
+    fn wait_stopped(
+        &mut self,
+        _: &ServiceRuntimePathsV1,
+        _: Option<&RuntimeResetProcessV1>,
+    ) -> Result<(), RuntimeResetErrorV1> {
+        panic!("precommit failure must not wait for a daemon")
+    }
+
+    fn release_uncommitted(
+        &mut self,
+        paths: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        _: &RuntimeResetProcessV1,
+        reservation_id: &str,
+    ) {
+        let mode = paths.mode().as_str();
+        assert_eq!(reservation_id, format!("reservation-{mode}"));
+        self.calls.borrow_mut().push(format!("release:{mode}"));
+    }
+}
+
+#[test]
+fn all_mode_reserves_every_live_target_before_stop_and_releases_on_precommit_failure() {
+    let fixture = Fixture::new();
+    let prod = fixture.namespace("prod");
+    let alpha = fixture.namespace("alpha");
+    let _prod_singleton = Flock::lock(
+        File::open(prod.join("run/podwayd.lock")).unwrap(),
+        FlockArg::LockExclusiveNonblock,
+    )
+    .unwrap();
+    let _alpha_singleton = Flock::lock(
+        File::open(alpha.join("run/podwayd.lock")).unwrap(),
+        FlockArg::LockExclusiveNonblock,
+    )
+    .unwrap();
+    let executable = fixture.file("bin/podwayd", b"daemon identity");
+    let process = RuntimeResetProcessV1 {
+        pid: std::process::id(),
+        process_id: "00000000-0000-4000-8000-000000000999".to_owned(),
+        executable: RuntimeResetPathV1::new(&executable).unwrap(),
+        started_at_ms: 1,
+    };
+    let selection = RuntimeResetSelectionV1::AllModes;
+    let plan = RuntimeResetPlannerV1::new(
+        fixture.home(),
+        Launchctl(false),
+        Inspector(RuntimeResetPeerV1::Live {
+            process: process.clone(),
+            busy_reason: None,
+        }),
+    )
+    .plan(selection.clone(), now())
+    .unwrap();
+    let token = plan.plan_token.unwrap();
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let mut apply = RuntimeResetApplyV1::new(
+        fixture.home(),
+        Launchctl(false),
+        Inspector(RuntimeResetPeerV1::Live {
+            process,
+            busy_reason: None,
+        }),
+        FailingSnapshotOperator {
+            calls: Rc::clone(&calls),
+        },
+    );
+
+    let error = apply.apply(&token, selection, now()).unwrap_err();
+    assert_eq!(error.code(), "RUNTIME_RESET_UNSAFE");
+    assert_eq!(error.mode.unwrap().as_str(), "alpha");
+    assert_eq!(
+        calls.borrow().as_slice(),
+        [
+            "reserve:prod",
+            "reserve:alpha",
+            "snapshot:prod",
+            "snapshot:alpha",
+            "release:alpha",
+            "release:prod",
+        ]
+    );
+    assert!(prod.join("state/workspaces.json").exists());
+    assert!(alpha.join("state/workspaces.json").exists());
+}
+
+struct InterruptedLiveOperator {
+    singletons: BTreeMap<String, Flock<File>>,
+    listeners: BTreeMap<String, std::os::unix::net::UnixListener>,
+}
+
+fn retry_reservation(mode: &str) -> &'static str {
+    match mode {
+        "prod" => "00000000-0000-4000-8000-000000000101",
+        "alpha" => "00000000-0000-4000-8000-000000000102",
+        _ => panic!("unexpected retry mode: {mode}"),
+    }
+}
+
+impl RuntimeResetOperatorV1 for InterruptedLiveOperator {
+    fn reserve(
+        &mut self,
+        paths: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        _: &RuntimeResetProcessV1,
+    ) -> Result<String, RuntimeResetErrorV1> {
+        Ok(retry_reservation(paths.mode().as_str()).to_owned())
+    }
+
+    fn snapshot(
+        &mut self,
+        paths: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        _: &RuntimeResetProcessV1,
+        reservation_id: &str,
+    ) -> Result<(), RuntimeResetErrorV1> {
+        assert_eq!(reservation_id, retry_reservation(paths.mode().as_str()));
+        Ok(())
+    }
+
+    fn stop(
+        &mut self,
+        paths: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        _: Option<&RuntimeResetProcessV1>,
+        _: Option<&str>,
+    ) -> Result<(), RuntimeResetErrorV1> {
+        assert_eq!(paths.mode().as_str(), "prod");
+        assert_eq!(self.singletons.len(), 2);
+        assert_eq!(self.listeners.len(), 2);
+        Err(RuntimeResetErrorV1::unsafe_reason(RuntimeResetReasonV1::Io))
+    }
+
+    fn wait_stopped(
+        &mut self,
+        _: &ServiceRuntimePathsV1,
+        _: Option<&RuntimeResetProcessV1>,
+    ) -> Result<(), RuntimeResetErrorV1> {
+        panic!("interrupted stop must not wait")
+    }
+
+    fn release_uncommitted(
+        &mut self,
+        _: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        _: &RuntimeResetProcessV1,
+        _: &str,
+    ) {
+        panic!("committed reservations must not be released")
+    }
+}
+
+struct ResumeLiveOperator {
+    calls: Rc<RefCell<Vec<String>>>,
+}
+
+impl RuntimeResetOperatorV1 for ResumeLiveOperator {
+    fn reserve(
+        &mut self,
+        paths: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        _: &RuntimeResetProcessV1,
+    ) -> Result<String, RuntimeResetErrorV1> {
+        let mode = paths.mode().as_str();
+        self.calls.borrow_mut().push(format!("reserve:{mode}"));
+        Ok(retry_reservation(mode).to_owned())
+    }
+
+    fn snapshot(
+        &mut self,
+        _: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        _: &RuntimeResetProcessV1,
+        _: &str,
+    ) -> Result<(), RuntimeResetErrorV1> {
+        panic!("resume must not snapshot an already committed operation")
+    }
+
+    fn stop(
+        &mut self,
+        paths: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        process: Option<&RuntimeResetProcessV1>,
+        reservation_id: Option<&str>,
+    ) -> Result<(), RuntimeResetErrorV1> {
+        let mode = paths.mode().as_str();
+        assert!(process.is_some());
+        assert_eq!(reservation_id, Some(retry_reservation(mode)));
+        self.calls.borrow_mut().push(format!("stop:{mode}"));
+        fs::remove_file(paths.socket_path().as_path()).unwrap();
+        Ok(())
+    }
+
+    fn wait_stopped(
+        &mut self,
+        paths: &ServiceRuntimePathsV1,
+        process: Option<&RuntimeResetProcessV1>,
+    ) -> Result<(), RuntimeResetErrorV1> {
+        assert!(process.is_some());
+        self.calls
+            .borrow_mut()
+            .push(format!("wait:{}", paths.mode().as_str()));
+        Ok(())
+    }
+
+    fn release_uncommitted(
+        &mut self,
+        _: &ServiceRuntimePathsV1,
+        _: &RuntimeResetOperationV1,
+        _: &RuntimeResetProcessV1,
+        _: &str,
+    ) {
+        panic!("resume is already committed")
+    }
+}
+
+#[test]
+fn all_mode_retry_reconnects_every_live_participant_before_resuming_stops() {
+    let fixture = Fixture::new();
+    let mut singletons = BTreeMap::new();
+    let mut listeners = BTreeMap::new();
+    for mode in ["prod", "alpha"] {
+        let namespace = fixture.namespace(mode);
+        let socket = namespace.join("run/podwayd.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        fs::set_permissions(&socket, fs::Permissions::from_mode(0o600)).unwrap();
+        let singleton = Flock::lock(
+            File::open(namespace.join("run/podwayd.lock")).unwrap(),
+            FlockArg::LockExclusiveNonblock,
+        )
+        .unwrap();
+        singletons.insert(mode.to_owned(), singleton);
+        listeners.insert(mode.to_owned(), listener);
+    }
+    let executable = fixture.file("bin/podwayd", b"daemon identity");
+    let process = RuntimeResetProcessV1 {
+        pid: std::process::id(),
+        process_id: "00000000-0000-4000-8000-000000000999".to_owned(),
+        executable: RuntimeResetPathV1::new(&executable).unwrap(),
+        started_at_ms: 1,
+    };
+    let selection = RuntimeResetSelectionV1::AllModes;
+    let peer = RuntimeResetPeerV1::Live {
+        process: process.clone(),
+        busy_reason: None,
+    };
+    let token =
+        RuntimeResetPlannerV1::new(fixture.home(), Launchctl(false), Inspector(peer.clone()))
+            .plan(selection.clone(), now())
+            .unwrap()
+            .plan_token
+            .unwrap();
+    let mut interrupted = RuntimeResetApplyV1::new(
+        fixture.home(),
+        Launchctl(false),
+        Inspector(peer),
+        InterruptedLiveOperator {
+            singletons,
+            listeners,
+        },
+    );
+    let error = interrupted
+        .apply(&token, selection.clone(), now())
+        .unwrap_err();
+    assert_eq!(error.code(), "RUNTIME_RESET_INCOMPLETE");
+    assert_eq!(error.mode.unwrap().as_str(), "prod");
+    drop(interrupted);
+
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let mut retry = RuntimeResetApplyV1::new(
+        fixture.home(),
+        Launchctl(false),
+        Inspector(RuntimeResetPeerV1::Live {
+            process,
+            busy_reason: None,
+        }),
+        ResumeLiveOperator {
+            calls: Rc::clone(&calls),
+        },
+    );
+    let result = retry
+        .apply(&token, selection, UnixMillis::new(999_999))
+        .unwrap();
+    assert_eq!(result.status, RuntimeResetResultStatusV1::Complete);
+    assert_eq!(
+        calls.borrow().as_slice(),
+        [
+            "reserve:prod",
+            "reserve:alpha",
+            "stop:prod",
+            "wait:prod",
+            "stop:alpha",
+            "wait:alpha",
+        ]
+    );
 }
 
 struct LiveApplyOperator {

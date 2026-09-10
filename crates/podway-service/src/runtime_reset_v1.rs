@@ -123,6 +123,7 @@ impl<L: LaunchctlRunnerV1, I: RuntimeResetInspectorV1> RuntimeResetPlannerV1<L, 
             .iter()
             .any(|target| target.state != RuntimeResetTargetStateV1::Absent)
         {
+            plan.check_apply_preserved_bounds(&self.home)?;
             let root = root.as_ref().ok_or_else(RuntimeResetErrorV1::unsafe_path)?;
             let expires_at_ms = now
                 .get()

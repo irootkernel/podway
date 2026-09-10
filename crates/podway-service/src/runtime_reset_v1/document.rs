@@ -15,6 +15,12 @@ type Error = RuntimeResetErrorV1;
 
 const MAX_PRESERVED_RESOURCES: usize = 256;
 const MAX_EXCLUSIONS: usize = 257;
+pub(super) const CONTROL_RESIDUE_NAMES: [&str; 4] = [
+    "runtime-reset.lock",
+    "runtime-start.lock",
+    "runtime-reset-commit.lock",
+    "runtime-reset.json",
+];
 // The CLI adds the public schema discriminator and RFC 3339 expiry.
 const PUBLIC_RESULT_OVERHEAD_BYTES: usize = 128;
 
@@ -352,6 +358,24 @@ impl RuntimeResetPlanV1 {
         }
         Ok(())
     }
+
+    pub(super) fn check_apply_preserved_bounds(&self, home: &PodwayHomeV1) -> Result<(), Error> {
+        let maintenance = home.as_path().join("maintenance");
+        let mut preserved = self.preserved.clone();
+        for name in CONTROL_RESIDUE_NAMES {
+            let resource = RuntimeResetResourceV1::new(
+                RuntimeResetResourceClassV1::ControlResidue,
+                &maintenance.join(name),
+            )?;
+            if !preserved.contains(&resource) {
+                preserved.push(resource);
+            }
+        }
+        if preserved.len() > MAX_PRESERVED_RESOURCES {
+            return Err(Error::limit());
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -457,6 +481,20 @@ impl NamespaceBinding {
             service: ServiceBinding::default(),
             resource_classes: Vec::new(),
         }
+    }
+
+    pub(super) fn is_absent(&self) -> bool {
+        self.run_identity.is_none()
+            && self.state_identity.is_none()
+            && self.logs_identity.is_none()
+            && self.lock_identity.is_none()
+            && self.registry_lock_identity.is_none()
+            && self.socket_identity.is_none()
+            && self.process.is_none()
+            && !self.service.installed
+            && !self.service.loaded
+            && self.service.plist_identity.is_none()
+            && self.service.metadata_identity.is_none()
     }
 }
 

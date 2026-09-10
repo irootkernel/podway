@@ -18,10 +18,10 @@
     },
     "apply": {
       "availability": "executable",
-      "scope": "single_mode",
+      "scope": "single_mode_or_all_modes",
       "input": "matching explicit selection, original plan token and confirmed=true",
       "output": "podway.runtime-reset-result/v1 or catalogued reset error",
-      "writes": "only selected ordinary runtime payload and bounded account control state"
+      "writes": "only selected ordinary runtime payloads and bounded account control state"
     }
   },
   "injected_control": {
@@ -68,5 +68,5 @@
     "forced_termination",
     "automatic_restart"
   ],
-  "verification_owner": "V2FRT-004"
+  "verification_owner": "V2FRT-005"
 }

@@ -30,9 +30,8 @@ The account-runtime reset error family is defined in the
 [runtime reset specification](../operations/runtime-reset.md#public-results-errors-and-bounds)
 and `podway.runtime-reset-error-details/v1`. Its seven `RUNTIME_RESET_*` codes
 are catalogued together; read-only plan and process-bound control errors are
-executable together with confirmed single-mode apply. Account-wide apply remains
-reserved. Partial retirement is a non-success result with exact retry information,
-never rollback.
+executable together with confirmed single-mode and all-mode apply. Partial
+retirement is a non-success result with exact retry information, never rollback.
 
 ## Exit codes
 

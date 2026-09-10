@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     env, fs, io, thread,
     time::{Duration, Instant, SystemTime},
 };
@@ -50,14 +51,12 @@ pub(super) fn execute_apply(
             "runtime reset plan token is invalid",
         ));
     }
-    if all_modes {
-        return Err(map_apply_error(
-            RuntimeResetErrorV1::unsupported_reason(RuntimeResetReasonV1::UnsupportedPeer),
-            plan_token,
-        ));
-    }
-    let selection = RuntimeResetSelectionV1::Mode {
-        mode: cli.runtime_mode()?,
+    let selection = if all_modes {
+        RuntimeResetSelectionV1::AllModes
+    } else {
+        RuntimeResetSelectionV1::Mode {
+            mode: cli.runtime_mode()?,
+        }
     };
     let home = account_home()?;
     let operator = ApplyOperator::default();
@@ -283,7 +282,7 @@ fn map_apply_error(error: RuntimeResetErrorV1, plan_token: &str) -> LocalFailure
 
 #[derive(Default)]
 struct ApplyOperator {
-    connection: Option<RuntimeResetConnectionV1>,
+    connections: BTreeMap<String, RuntimeResetConnectionV1>,
     service_lifecycle: Option<RuntimeResetServiceLifecycleV1>,
 }
 
@@ -378,14 +377,15 @@ impl ApplyOperator {
 
     fn exchange(
         &mut self,
+        paths: &ServiceRuntimePathsV1,
         request: &RequestEnvelopeV1,
         expected_state: &[&str],
         process: &RuntimeResetProcessV1,
         operation: &RuntimeResetOperationV1,
     ) -> Result<String, RuntimeResetErrorV1> {
         let response = self
-            .connection
-            .as_mut()
+            .connections
+            .get_mut(paths.mode().as_str())
             .ok_or_else(|| {
                 RuntimeResetErrorV1::unsafe_reason(RuntimeResetReasonV1::ReservationLost)
             })?
@@ -399,7 +399,7 @@ impl ApplyOperator {
 
 impl RuntimeResetOperatorV1 for ApplyOperator {
     fn prepare(&mut self, paths: &ServiceRuntimePathsV1) -> Result<(), RuntimeResetErrorV1> {
-        if paths.mode().is_production() {
+        if paths.mode().is_production() && self.service_lifecycle.is_none() {
             self.service_lifecycle = Some(RuntimeResetServiceLifecycleV1::acquire()?);
         }
         Ok(())
@@ -437,7 +437,8 @@ impl RuntimeResetOperatorV1 for ApplyOperator {
         let (connection, response) = client.runtime_reset_open(&request).map_err(|_| {
             RuntimeResetErrorV1::unsafe_reason(RuntimeResetReasonV1::ReservationLost)
         })?;
-        self.connection = Some(connection);
+        self.connections
+            .insert(paths.mode().as_str().to_owned(), connection);
         Self::output(response, &["reserved", "committed"], process, operation)
     }
 
@@ -449,7 +450,7 @@ impl RuntimeResetOperatorV1 for ApplyOperator {
         reservation_id: &str,
     ) -> Result<(), RuntimeResetErrorV1> {
         let request = Self::request(paths, process, "snapshot", operation, Some(reservation_id))?;
-        let returned = self.exchange(&request, &["reserved"], process, operation)?;
+        let returned = self.exchange(paths, &request, &["reserved"], process, operation)?;
         if returned != reservation_id {
             return Err(RuntimeResetErrorV1::unsafe_reason(
                 RuntimeResetReasonV1::ReservationLost,
@@ -485,7 +486,7 @@ impl RuntimeResetOperatorV1 for ApplyOperator {
                     })?,
                 )
                 .map_err(|_| RuntimeResetErrorV1::unsafe_reason(RuntimeResetReasonV1::Io))?;
-            self.connection = None;
+            self.connections.remove(paths.mode().as_str());
             return Ok(());
         }
         let Some(process) = process else {
@@ -495,13 +496,13 @@ impl RuntimeResetOperatorV1 for ApplyOperator {
             RuntimeResetErrorV1::unsafe_reason(RuntimeResetReasonV1::ReservationLost)
         })?;
         let request = Self::request(paths, process, "shutdown", operation, Some(reservation_id))?;
-        let returned = self.exchange(&request, &["shutting_down"], process, operation)?;
+        let returned = self.exchange(paths, &request, &["shutting_down"], process, operation)?;
         if returned != reservation_id {
             return Err(RuntimeResetErrorV1::unsafe_reason(
                 RuntimeResetReasonV1::ReservationLost,
             ));
         }
-        self.connection = None;
+        self.connections.remove(paths.mode().as_str());
         Ok(())
     }
 
@@ -550,9 +551,9 @@ impl RuntimeResetOperatorV1 for ApplyOperator {
         if let Ok(request) =
             Self::request(paths, process, "release", operation, Some(reservation_id))
         {
-            let _ = self.exchange(&request, &["released"], process, operation);
+            let _ = self.exchange(paths, &request, &["released"], process, operation);
         }
-        self.connection = None;
+        self.connections.remove(paths.mode().as_str());
     }
 }
 
