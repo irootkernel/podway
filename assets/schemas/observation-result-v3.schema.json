@@ -144,6 +144,7 @@
         "required_now": { "type": "boolean" },
         "condition_status": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/conditionStatus" },
         "satisfied": { "type": "boolean" },
+        "unsatisfied_reason": { "enum": ["operation_id_mismatch", "operation_digest_mismatch", "outcome_not_accepted"] },
         "revision": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/revision" },
         "constraints": { "$ref": "urn:podway:schema:v2-result-components:v3#/$defs/itemConstraints" },
         "value": {
@@ -162,8 +163,12 @@
             "properties": {
               "value": { "oneOf": [{ "type": "null" }, { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/checkResultPreview" }] },
               "value_truncated": { "const": false }
+            },
+            "dependentSchemas": {
+              "unsatisfied_reason": { "properties": { "satisfied": { "const": false }, "value": { "type": "object" } } }
             }
-          }
+          },
+          "else": { "not": { "required": ["unsatisfied_reason"] } }
         }
       ]
     }

@@ -37,7 +37,7 @@ external timestamps are admitted.
 
 A recorded check result satisfies its item only when its operation ID and digest
 equal the declaration and its outcome is accepted. A structurally valid mismatch
-may be recorded but remains unsatisfied. The complete canonical value contributes
+may be recorded but remains unsatisfied. Observation names the first failed comparison, evaluated in that order, as one closed `unsatisfied_reason` (`operation_id_mismatch`, `operation_digest_mismatch`, or `outcome_not_accepted`) without claiming that any operation ran. The complete canonical value contributes
 to the existing immutable value and item-set digests. At most 128 values times
 32 KiB yields a derived 4 MiB per-attempt check-result product; no second aggregate
 invariant or error code is introduced.

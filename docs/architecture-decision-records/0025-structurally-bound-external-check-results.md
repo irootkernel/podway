@@ -4,6 +4,7 @@
 - Date: 2026-08-20
 - Extends: [ADR-0007](0007-stage-items-not-evidence-ledger.md)
 - Extends: [ADR-0016](0016-recorded-item-workflow-memory.md)
+- Extended by: [ADR-0033](0033-name-unsatisfied-check-result-reasons.md)
 
 ## Context
 

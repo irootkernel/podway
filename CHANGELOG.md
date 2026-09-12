@@ -16,6 +16,7 @@ This file records concise shipped outcomes and the planned next stable release.
   partial results.
 - Retire a frozen all-mode selection in deterministic order with complete
   preflight, exact partial-failure retry, and replay-safe namespace preservation.
+- Name why a stored check result stays unsatisfied with a closed observation `unsatisfied_reason` and a CLI comparison of the declared and recorded operation identity, and withdraw the never-emitted check-result entry branch from the atomic item record result schema.
 
 ### Changed
 

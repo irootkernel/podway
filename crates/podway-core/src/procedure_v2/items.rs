@@ -4,8 +4,8 @@ use std::collections::BTreeSet;
 
 use crate::procedure::validate_media_type;
 use crate::{
-    BoundUnitV2, CheckResultOutcomeV2, DomainError, GraphNodeId, ItemId, ItemTypeV1, OperationId,
-    RecordedItemValueV2, Sha256Digest, validate_text,
+    BoundUnitV2, CheckResultOutcomeV2, CheckResultValueV2, DomainError, GraphNodeId, ItemId,
+    ItemTypeV1, OperationId, RecordedItemValueV2, Sha256Digest, validate_text,
 };
 
 use super::invalid;
@@ -777,6 +777,44 @@ impl CheckResultItemSpecV2 {
     pub fn accepted_outcomes(&self) -> &[CheckResultOutcomeV2] {
         &self.accepted_outcomes
     }
+
+    /// Returns the first declaration comparison that one recorded value fails, in the fixed order
+    /// operation ID, operation digest, then accepted outcome, or `None` when the value satisfies
+    /// this declaration.
+    pub fn unsatisfied_reason(
+        &self,
+        value: &CheckResultValueV2,
+    ) -> Option<CheckResultUnsatisfiedReasonV2> {
+        if value.operation_id() != &self.operation_id {
+            Some(CheckResultUnsatisfiedReasonV2::OperationIdMismatch)
+        } else if value.operation_digest() != &self.operation_digest {
+            Some(CheckResultUnsatisfiedReasonV2::OperationDigestMismatch)
+        } else if !self.accepted_outcomes.contains(&value.outcome()) {
+            Some(CheckResultUnsatisfiedReasonV2::OutcomeNotAccepted)
+        } else {
+            None
+        }
+    }
+}
+
+/// The closed vocabulary naming which declaration comparison a stored check result fails. It is
+/// derived from the declaration and the caller-supplied value alone and claims nothing about
+/// whether the external operation ran.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CheckResultUnsatisfiedReasonV2 {
+    OperationIdMismatch,
+    OperationDigestMismatch,
+    OutcomeNotAccepted,
+}
+
+impl CheckResultUnsatisfiedReasonV2 {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::OperationIdMismatch => "operation_id_mismatch",
+            Self::OperationDigestMismatch => "operation_digest_mismatch",
+            Self::OutcomeNotAccepted => "outcome_not_accepted",
+        }
+    }
 }
 
 /// An immutable specification for one of the seven supported Procedure v2 item types, reusing the
@@ -1035,12 +1073,24 @@ impl ItemSpecV2 {
     /// Reports whether one admitted value satisfies this declaration's progression constraints.
     pub fn is_satisfied_by(&self, value: &RecordedItemValueV2) -> bool {
         match self {
-            Self::CheckResult(specification) => value.as_check_result().is_some_and(|value| {
-                value.operation_id() == specification.operation_id()
-                    && value.operation_digest() == specification.operation_digest()
-                    && specification.accepted_outcomes().contains(&value.outcome())
-            }),
+            Self::CheckResult(specification) => value
+                .as_check_result()
+                .is_some_and(|value| specification.unsatisfied_reason(value).is_none()),
             _ => self.admits_recorded_value(value),
+        }
+    }
+
+    /// Names the declaration comparison that one stored check result fails, or `None` when this
+    /// declaration is not a check result, no check result is stored, or the value satisfies it.
+    pub fn check_result_unsatisfied_reason(
+        &self,
+        value: &RecordedItemValueV2,
+    ) -> Option<CheckResultUnsatisfiedReasonV2> {
+        match self {
+            Self::CheckResult(specification) => value
+                .as_check_result()
+                .and_then(|value| specification.unsatisfied_reason(value)),
+            _ => None,
         }
     }
 }

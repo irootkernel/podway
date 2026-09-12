@@ -67,7 +67,7 @@ These JSON Schema Draft 2020-12 files define Podway's versioned structural contr
 - `stage-transition-result-v2.schema.json`: Procedure v2 action and administrative transitions.
 - `item-mutation-result-v2.schema.json`: Procedure v2 item mutation outcome.
 - `item-record-many-input-v1.schema.json`: closed JSON stdin contract for bounded atomic item recording, including structurally bound external check results.
-- `item-record-many-result-v1.schema.json`: item-ID-ordered atomic recording outcome with a disjoint external check-result record branch.
+- `item-record-many-result-v1.schema.json`: item-ID-ordered atomic recording outcome; every entry reports the same change and revision facts, and only artifact records carry a value digest.
 - `authoring-diagnostic-v1.schema.json`: standalone bounded authoring diagnostic.
 - `procedure-source-result-v1.schema.json`: format and scaffold source output.
 - `procedure-diagnostics-result-v1.schema.json`: shared bounded diagnostics for every Procedure v2 authoring command.
@@ -83,7 +83,7 @@ These JSON Schema Draft 2020-12 files define Podway's versioned structural contr
 - `v2-result-components-v3.schema.json`: shared bounded evidence metadata, page-token, observation status, item constraint, and mutation template components.
 - `observation-result-v2.schema.json`: prepared-aware coherent status, guidance, item, and mutation-template observation.
 - `next-result-v3.schema.json`: bounded progression guidance with evidence metadata, previews, continuation tokens, authoritative allowed option IDs, and guarded-option status.
-- `observation-result-v3.schema.json`: prepared-aware observation composing a compact status projection, guidance, and byte-budgeted item, condition, and template windows.
+- `observation-result-v3.schema.json`: prepared-aware observation composing a compact status projection, guidance, byte-budgeted item, condition, and template windows, and a closed `unsatisfied_reason` on each stored but unsatisfied check result.
 - `evidence-read-result-v1.schema.json`: one bounded snapshot-fenced page of a selected evidence item.
 - `session-reset-not-eligible-details-v1.schema.json`: closed smart-reset eligibility failure details.
 - `session-start-decision-required-details-v1.schema.json`: closed state-aware start decision conflict details.

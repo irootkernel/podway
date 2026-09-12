@@ -4874,12 +4874,101 @@ fn v2ast002_reserves_observation_constraints_and_stdin_template_only_for_record_
             "item_id": "verification",
             "expected_item_revision": 0,
             "changed": true,
-            "item_revision": 1,
-            "type": "check_result",
-            "value_digest": DIGEST
+            "item_revision": 1
         }]
     });
     assert_valid("schemas/item-record-many-result-v1.schema.json", &result);
+    // The result family stays record-kind agnostic. V2AST-002 reserved a disjoint check-result
+    // entry carrying `type` and `value_digest`, but no producer ever emitted it, so the reserved
+    // branch was withdrawn instead of remaining an unreachable published shape.
+    let mut typed_entry = result.clone();
+    typed_entry["items"][0]["type"] = json!("check_result");
+    assert_invalid(
+        "schemas/item-record-many-result-v1.schema.json",
+        &typed_entry,
+    );
+}
+
+#[test]
+fn unsatisfied_check_result_reason_is_closed_and_check_result_only() {
+    let mut item = json!({
+        "item_id": "verification",
+        "type": "check_result",
+        "prompt": "Record the verification result.",
+        "required": true,
+        "required_now": true,
+        "satisfied": false,
+        "unsatisfied_reason": "operation_digest_mismatch",
+        "revision": 1,
+        "constraints": {
+            "operation_id": "make-test",
+            "operation_digest": DIGEST,
+            "accepted_outcomes": ["pass"],
+            "choices_total": 0,
+            "choices_truncated": false
+        },
+        "value": check_result_preview(),
+        "value_truncated": false
+    });
+    for reason in [
+        "operation_id_mismatch",
+        "operation_digest_mismatch",
+        "outcome_not_accepted",
+    ] {
+        item["unsatisfied_reason"] = json!(reason);
+        assert_ref_valid(
+            "urn:podway:schema:observation-result:v3#/$defs/activeItem",
+            &item,
+        );
+    }
+
+    let mut open_vocabulary = item.clone();
+    open_vocabulary["unsatisfied_reason"] = json!("input_basis_mismatch");
+    assert_ref_invalid(
+        "urn:podway:schema:observation-result:v3#/$defs/activeItem",
+        &open_vocabulary,
+    );
+
+    // A reason only accompanies a stored, unsatisfied check result.
+    let mut satisfied = item.clone();
+    satisfied["satisfied"] = json!(true);
+    assert_ref_invalid(
+        "urn:podway:schema:observation-result:v3#/$defs/activeItem",
+        &satisfied,
+    );
+    let mut empty_slot = item.clone();
+    empty_slot["value"] = Value::Null;
+    assert_ref_invalid(
+        "urn:podway:schema:observation-result:v3#/$defs/activeItem",
+        &empty_slot,
+    );
+    let mut unsatisfied_without_reason = item.clone();
+    unsatisfied_without_reason
+        .as_object_mut()
+        .unwrap()
+        .remove("unsatisfied_reason");
+    assert_ref_valid(
+        "urn:podway:schema:observation-result:v3#/$defs/activeItem",
+        &unsatisfied_without_reason,
+    );
+
+    let text_item = json!({
+        "item_id": "notes",
+        "type": "text",
+        "prompt": "Record notes.",
+        "required": true,
+        "required_now": true,
+        "satisfied": false,
+        "unsatisfied_reason": "outcome_not_accepted",
+        "revision": 0,
+        "constraints": {"min_length": 0, "max_length": 4000, "multiline": true, "choices_total": 0, "choices_truncated": false},
+        "value": null,
+        "value_truncated": false
+    });
+    assert_ref_invalid(
+        "urn:podway:schema:observation-result:v3#/$defs/activeItem",
+        &text_item,
+    );
 }
 
 fn typed_guard_predicate_status() -> Value {

@@ -1,11 +1,12 @@
 use crate::procedure_v2::invalid;
 use crate::{
     ArtifactItemSpecV2, ArtifactValueV1, BoundUnitV2, CheckResultExecutorV2,
-    CheckResultInputBasisV2, CheckResultItemSpecV2, CheckResultOutcomeV2, CheckResultValueV2,
-    ChoiceItemSpecV2, ConditionStateV2, DomainError, EvidencePredicateV2, GraphNodeId,
-    IntegerItemSpecV2, ItemCommonV2, ItemConditionV2, ItemId, ItemPredicateOperatorV2,
-    ItemPredicateV2, ItemSpecV2, ItemTypeV1, ListItemSpecV2, OperationId, OptionGuardV2,
-    PredicateActualV2, PredicateScalarV2, RecordedItemValueV2, Sha256Digest, TextItemSpecV2,
+    CheckResultInputBasisV2, CheckResultItemSpecV2, CheckResultOutcomeV2,
+    CheckResultUnsatisfiedReasonV2, CheckResultValueV2, ChoiceItemSpecV2, ConditionStateV2,
+    DomainError, EvidencePredicateV2, GraphNodeId, IntegerItemSpecV2, ItemCommonV2,
+    ItemConditionV2, ItemId, ItemPredicateOperatorV2, ItemPredicateV2, ItemSpecV2, ItemTypeV1,
+    ListItemSpecV2, OperationId, OptionGuardV2, PredicateActualV2, PredicateScalarV2,
+    RecordedItemValueV2, Sha256Digest, TextItemSpecV2,
 };
 
 use super::helpers::item;
@@ -506,4 +507,66 @@ fn item_specs_admit_only_recorded_values_that_satisfy_the_declaration() {
     );
     assert!(!check.is_satisfied_by(&wrong_digest));
     assert!(check.admits_recorded_value(&wrong_digest));
+
+    // The unsatisfied reason names the first failed declaration comparison in the fixed order
+    // operation ID, operation digest, then outcome, and is absent for satisfied or foreign items.
+    assert_eq!(
+        check.check_result_unsatisfied_reason(&wrong_digest),
+        Some(CheckResultUnsatisfiedReasonV2::OperationDigestMismatch)
+    );
+    assert_eq!(
+        check.check_result_unsatisfied_reason(&check_result(
+            "make-test",
+            CheckResultOutcomeV2::Fail
+        )),
+        Some(CheckResultUnsatisfiedReasonV2::OutcomeNotAccepted)
+    );
+    let everything_wrong = RecordedItemValueV2::check_result(
+        CheckResultValueV2::new(
+            OperationId::new("other-test").unwrap(),
+            digest('d'),
+            CheckResultInputBasisV2::new("basis", digest('b')).unwrap(),
+            CheckResultExecutorV2::new("gaori", "1.0.0").unwrap(),
+            CheckResultOutcomeV2::Fail,
+            "Failed.",
+            digest('c'),
+        )
+        .unwrap(),
+    );
+    assert_eq!(
+        check.check_result_unsatisfied_reason(&everything_wrong),
+        Some(CheckResultUnsatisfiedReasonV2::OperationIdMismatch)
+    );
+    assert!(!check.is_satisfied_by(&everything_wrong));
+    assert_eq!(
+        check.check_result_unsatisfied_reason(&check_result(
+            "make-test",
+            CheckResultOutcomeV2::Pass
+        )),
+        None
+    );
+    assert_eq!(
+        text.check_result_unsatisfied_reason(&RecordedItemValueV2::text("okay").unwrap()),
+        None
+    );
+    assert_eq!(
+        check.check_result_unsatisfied_reason(&RecordedItemValueV2::text("okay").unwrap()),
+        None
+    );
+    for (reason, name) in [
+        (
+            CheckResultUnsatisfiedReasonV2::OperationIdMismatch,
+            "operation_id_mismatch",
+        ),
+        (
+            CheckResultUnsatisfiedReasonV2::OperationDigestMismatch,
+            "operation_digest_mismatch",
+        ),
+        (
+            CheckResultUnsatisfiedReasonV2::OutcomeNotAccepted,
+            "outcome_not_accepted",
+        ),
+    ] {
+        assert_eq!(reason.as_str(), name);
+    }
 }

@@ -928,6 +928,69 @@ fn v2ast005_check_result_guidance_is_bounded_copyable_and_required_first() {
     assert_eq!(retry_stdin["operations"][0]["item_id"], "required-check");
     assert_eq!(retry_stdin["operations"][0]["expected_item_revision"], 1);
 
+    // Observation names why a stored check result stays unsatisfied and stays silent for empty
+    // slots, satisfied results, and every other item type.
+    let required_item = |observation: &Map<String, Value>| {
+        observation["active_items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["item_id"] == "required-check")
+            .unwrap()
+            .clone()
+    };
+    assert!(active.get("unsatisfied_reason").is_none());
+    let unsatisfied_item = required_item(&unsatisfied_observation);
+    assert_eq!(unsatisfied_item["satisfied"], false);
+    assert_eq!(
+        unsatisfied_item["unsatisfied_reason"],
+        "outcome_not_accepted"
+    );
+    assert_output_v2("session.observe", unsatisfied_observation.clone());
+    let satisfied_observation = project_graph_observation_v1(&satisfied_required).unwrap();
+    let satisfied_item = required_item(&satisfied_observation);
+    assert_eq!(satisfied_item["satisfied"], true);
+    assert!(satisfied_item.get("unsatisfied_reason").is_none());
+    assert!(
+        satisfied_observation["active_items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["type"] == "check_result" || item.get("unsatisfied_reason").is_none())
+    );
+    let foreign_digest = view(guidance_state_with_required_check_result_value(
+        recorded_check_result_with_outcome_and_digest(
+            CheckResultOutcomeV2::Pass,
+            "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        ),
+    ));
+    let foreign_observation = project_graph_observation_v1(&foreign_digest).unwrap();
+    let foreign_item = required_item(&foreign_observation);
+    assert_eq!(foreign_item["satisfied"], false);
+    assert_eq!(
+        foreign_item["unsatisfied_reason"],
+        "operation_digest_mismatch"
+    );
+    assert_eq!(
+        foreign_item["constraints"]["operation_digest"],
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    );
+    assert_eq!(
+        foreign_item["value"]["operation_digest"],
+        "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    );
+    let compact =
+        project_graph_status_v2(&foreign_digest, GraphStatusTierV2::Compact, None).unwrap();
+    assert!(
+        compact["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item.get("unsatisfied_reason").is_none())
+    );
+    assert_output_v2("session.status", compact);
+    assert_output_v2("session.observe", foreign_observation);
+
     assert_output_v2("session.next", next);
     assert_output_v2("session.observe", observation);
     assert_output_v2("session.next", satisfied_required_next);
@@ -4077,13 +4140,20 @@ fn check_result_readback_state_with_value(
 }
 
 fn recorded_check_result_with_outcome(outcome: CheckResultOutcomeV2) -> RecordedItemValueV2 {
+    recorded_check_result_with_outcome_and_digest(
+        outcome,
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    )
+}
+
+fn recorded_check_result_with_outcome_and_digest(
+    outcome: CheckResultOutcomeV2,
+    operation_digest: &str,
+) -> RecordedItemValueV2 {
     RecordedItemValueV2::check_result(
         CheckResultValueV2::new(
             OperationId::new("make-test").unwrap(),
-            Sha256Digest::new(
-                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            )
-            .unwrap(),
+            Sha256Digest::new(operation_digest).unwrap(),
             CheckResultInputBasisV2::new(
                 "HEAD and dirty-tree snapshot",
                 Sha256Digest::new(
@@ -4137,6 +4207,12 @@ fn maximal_recorded_check_result() -> RecordedItemValueV2 {
 }
 
 fn guidance_state_with_required_check_result(outcome: CheckResultOutcomeV2) -> GraphSessionStateV2 {
+    guidance_state_with_required_check_result_value(recorded_check_result_with_outcome(outcome))
+}
+
+fn guidance_state_with_required_check_result_value(
+    value: RecordedItemValueV2,
+) -> GraphSessionStateV2 {
     let base = fresh_state(
         "check-result-guidance.json",
         CHECK_RESULT_GUIDANCE_PROCEDURE,
@@ -4154,7 +4230,7 @@ fn guidance_state_with_required_check_result(outcome: CheckResultOutcomeV2) -> G
                 original.item_id().clone(),
                 original.item_type(),
                 Revision::new(1),
-                Some(recorded_check_result_with_outcome(outcome)),
+                Some(value.clone()),
                 original.created_at(),
                 UnixMillis::new(original.created_at().get() + 1),
             )

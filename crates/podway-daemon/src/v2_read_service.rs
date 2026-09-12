@@ -1431,6 +1431,12 @@ impl<'a> CurrentProjection<'a> {
                             .is_some_and(|value| spec.is_satisfied_by(value))
                     ),
                 );
+                if let Some(reason) = slot
+                    .value()
+                    .and_then(|value| spec.check_result_unsatisfied_reason(value))
+                {
+                    descriptor.insert("unsatisfied_reason".to_owned(), json!(reason.as_str()));
+                }
                 descriptor.insert("revision".to_owned(), json!(slot.revision().get()));
                 descriptor.insert("constraints".to_owned(), item_constraints(spec));
                 let (value, value_truncated) = slot

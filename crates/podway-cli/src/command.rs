@@ -8068,13 +8068,17 @@ fn render_human_output_v2(
             ),
         )?;
     }
-    if contains_check_result_projection_v1(&Value::Object(output.result().clone())) {
+    let result_value = Value::Object(output.result().clone());
+    if contains_check_result_projection_v1(&result_value) {
         write_text_line(
             stdout,
             format_args!(
                 "note: check_result is a caller-supplied, structurally bound external check result; Podway does not verify or attest it"
             ),
         )?;
+    }
+    for line in unsatisfied_check_result_lines_v1(&result_value) {
+        write_text_line(stdout, format_args!("{line}"))?;
     }
     if output.result().get("schema").and_then(Value::as_str)
         == Some("podway.workspace-removal-result/v1")
@@ -8121,6 +8125,76 @@ fn contains_check_result_projection_v1(value: &Value) -> bool {
         Value::Array(values) => values.iter().any(contains_check_result_projection_v1),
         _ => false,
     }
+}
+
+/// Human-readable lines naming why each stored check result in one result stays unsatisfied.
+///
+/// The machine `unsatisfied_reason` field stays authoritative; these lines only place the declared
+/// and recorded identity side by side so a caller sees the exact mismatch without comparing
+/// digests by eye.
+fn unsatisfied_check_result_lines_v1(value: &Value) -> Vec<String> {
+    let mut lines = Vec::new();
+    collect_unsatisfied_check_result_lines_v1(value, &mut lines);
+    lines
+}
+
+fn collect_unsatisfied_check_result_lines_v1(value: &Value, lines: &mut Vec<String>) {
+    match value {
+        Value::Object(object) => {
+            if object.get("type").and_then(Value::as_str) == Some("check_result")
+                && let Some(reason) = object.get("unsatisfied_reason").and_then(Value::as_str)
+            {
+                lines.push(unsatisfied_check_result_line_v1(object, reason));
+            }
+            object
+                .values()
+                .for_each(|nested| collect_unsatisfied_check_result_lines_v1(nested, lines));
+        }
+        Value::Array(values) => values
+            .iter()
+            .for_each(|nested| collect_unsatisfied_check_result_lines_v1(nested, lines)),
+        _ => {}
+    }
+}
+
+fn unsatisfied_check_result_line_v1(item: &Map<String, Value>, reason: &str) -> String {
+    let item_id = item
+        .get("item_id")
+        .and_then(Value::as_str)
+        .unwrap_or("<item>");
+    let text = |source: &str, field: &str| -> String {
+        item.get(source)
+            .and_then(|value| value.get(field))
+            .map(|value| match value {
+                Value::String(text) => text.clone(),
+                Value::Array(values) => values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(","),
+                other => other.to_string(),
+            })
+            .unwrap_or_else(|| "<unknown>".to_owned())
+    };
+    let detail = match reason {
+        "operation_id_mismatch" => format!(
+            "declared operation_id {}; recorded {}",
+            text("constraints", "operation_id"),
+            text("value", "operation_id")
+        ),
+        "operation_digest_mismatch" => format!(
+            "declared operation_digest {}; recorded {}",
+            text("constraints", "operation_digest"),
+            text("value", "operation_digest")
+        ),
+        "outcome_not_accepted" => format!(
+            "accepted outcomes {}; recorded {}",
+            text("constraints", "accepted_outcomes"),
+            text("value", "outcome")
+        ),
+        _ => "see the machine result".to_owned(),
+    };
+    format!("unsatisfied check_result {item_id}: {reason}; {detail}")
 }
 
 fn render_local_failure(failure: LocalFailure, json_output: bool) -> i32 {
@@ -8591,10 +8665,11 @@ mod tests {
         resolve_daemon_executable, resolve_implicit_daemon_executable_from,
         resolve_installed_service_endpoint, service_outcome_result, service_status_projection,
         service_status_result, stream_log_follow_update, system_service_clock,
-        validate_command_shape, validate_daemon_flags, workspace_removal_confirmation_path,
+        unsatisfied_check_result_lines_v1, validate_command_shape, validate_daemon_flags,
+        workspace_removal_confirmation_path,
     };
     use clap::{Parser, error::ErrorKind};
-    use serde_json::json;
+    use serde_json::{Value, json};
     static VERSION_PROBE_SCRIPT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
     #[test]
@@ -8684,30 +8759,76 @@ mod tests {
             "sha256_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
         })));
 
-        let result = json!({
-            "schema": "podway.item-record-many-result/v1",
-            "admission": {
-                "admitted": true,
-                "job_id": "00000000-0000-4000-8000-000000000003",
-                "workspace_sequence": 1
+        let families: Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/v2/protocol/result-families.json"
+        ))
+        .unwrap();
+        // A running observation: the prepared fixture supplies the closed status shape, the
+        // running next fixture supplies metadata-only guidance, and one stored but unsatisfied
+        // check result carries the named reason.
+        let guidance = families["fixtures"]["podway.next-result/v3"].clone();
+        let mut status = families["fixtures"]["podway.observation-result/v3"]["status"].clone();
+        status["session"] = json!({
+            "id": "00000000-0000-4000-8000-000000000001",
+            "lifecycle": "running",
+            "revision": 1
+        });
+        status["current"] = json!({
+            "node": guidance["node"],
+            "attempt": guidance["attempt"],
+            "readiness": guidance["readiness"],
+            "missing_required_item_count": guidance["missing_required_item_count"],
+            "blockers_total": guidance["blockers_total"]
+        });
+        status["trace_length"] = json!(1);
+        status["counters"] = guidance["counters"].clone();
+        status["items"] = json!([{
+            "item_id": "verification",
+            "type": "check_result",
+            "required": true,
+            "satisfied": false,
+            "revision": 1
+        }]);
+        status["items_total"] = json!(1);
+        let rendered_item = json!({
+            "item_id": "verification",
+            "type": "check_result",
+            "prompt": "Record the verification result.",
+            "required": true,
+            "required_now": true,
+            "satisfied": false,
+            "unsatisfied_reason": "operation_digest_mismatch",
+            "revision": 1,
+            "constraints": {
+                "operation_id": "make-test",
+                "operation_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "accepted_outcomes": ["pass"],
+                "choices_total": 0,
+                "choices_truncated": false
             },
-            "changed": true,
-            "graph_node_id": "verify",
-            "attempt_id": "00000000-0000-4000-8000-000000000001",
-            "attempt_number": 1,
-            "revision": 2,
-            "items": [{
-                "item_id": "verification",
-                "expected_item_revision": 0,
-                "changed": true,
-                "item_revision": 1,
-                "type": "check_result",
-                "value_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-            }]
+            "value": {
+                "operation_id": "make-test",
+                "outcome": "pass",
+                "operation_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                "input_basis": {"digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+                "output_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+            },
+            "value_truncated": false
+        });
+        let result = json!({
+            "schema": "podway.observation-result/v3",
+            "status": status,
+            "guidance": guidance,
+            "active_items": [rendered_item.clone()],
+            "active_items_total": 1,
+            "active_items_truncated": false,
+            "mutation_templates": [],
+            "mutation_templates_total": 0,
+            "mutation_templates_truncated": false
         });
         let output = OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
             request_id: RequestIdV1::new("00000000-0000-4000-8000-000000000002").unwrap(),
-            command: CommandNameV1::new("item.record_many").unwrap(),
+            command: CommandNameV1::new("session.observe").unwrap(),
             generated_at: Rfc3339MillisV1::new("1970-01-01T00:00:00.012Z").unwrap(),
             workspace: Some(
                 WorkspaceOutputV1::new(
@@ -8736,6 +8857,7 @@ mod tests {
         let result = RunResult::Response(Box::new(ResponseEnvelopeV2::OutputV2(output)));
         let clock = FixedClock(UNIX_EPOCH + Duration::from_millis(12));
         let note = "note: check_result is a caller-supplied, structurally bound external check result; Podway does not verify or attest it";
+        let reason_line = "unsatisfied check_result verification: operation_digest_mismatch; declared operation_digest sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; recorded sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
 
         let mut human = Vec::new();
         let mut human_stderr = Vec::new();
@@ -8752,6 +8874,7 @@ mod tests {
         );
         let human = String::from_utf8(human).unwrap();
         assert_eq!(human.matches(note).count(), 1);
+        assert_eq!(human.matches(reason_line).count(), 1);
         assert!(human_stderr.is_empty());
 
         let mut machine = Vec::new();
@@ -8769,7 +8892,42 @@ mod tests {
         );
         let machine = String::from_utf8(machine).unwrap();
         assert!(!machine.contains(note));
+        assert!(!machine.contains("unsatisfied check_result"));
         assert!(machine_stderr.is_empty());
+
+        // Every closed reason renders its own declared-versus-recorded comparison, and items
+        // without a reason (empty, satisfied, or other types) render nothing.
+        let mut outcome_item = rendered_item.clone();
+        outcome_item["unsatisfied_reason"] = json!("outcome_not_accepted");
+        outcome_item["value"]["outcome"] = json!("inconclusive");
+        assert_eq!(
+            unsatisfied_check_result_lines_v1(&json!({"active_items": [outcome_item]})),
+            vec![
+                "unsatisfied check_result verification: outcome_not_accepted; accepted outcomes pass; recorded inconclusive"
+                    .to_owned()
+            ]
+        );
+        let mut identity_item = rendered_item.clone();
+        identity_item["unsatisfied_reason"] = json!("operation_id_mismatch");
+        identity_item["value"]["operation_id"] = json!("other-test");
+        assert_eq!(
+            unsatisfied_check_result_lines_v1(&json!({"active_items": [identity_item]})),
+            vec![
+                "unsatisfied check_result verification: operation_id_mismatch; declared operation_id make-test; recorded other-test"
+                    .to_owned()
+            ]
+        );
+        let mut silent_item = rendered_item;
+        silent_item
+            .as_object_mut()
+            .unwrap()
+            .remove("unsatisfied_reason");
+        assert!(
+            unsatisfied_check_result_lines_v1(&json!({
+                "active_items": [silent_item, {"item_id": "notes", "type": "text", "satisfied": false}]
+            }))
+            .is_empty()
+        );
     }
 
     struct VersionProbeScript {

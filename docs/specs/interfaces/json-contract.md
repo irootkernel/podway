@@ -45,9 +45,7 @@ never substituted where a bounded projection is promised. The complete
 check-result and artifact value branches remain disjoint under exact-one `oneOf`
 validation because both are closed and require non-overlapping field sets.
 
-`item-record-many-input-v1` and `item-record-many-result-v1` admit the new closed
-record kind, and `observation-result/v3` admits the declaration constraints,
-five-field value projection, and conditional `stdin_template`. These are closed
+`item-record-many-input-v1` admits the new closed record kind while `item-record-many-result-v1` stays record-kind agnostic (ADR-0033 withdrew the reserved but never-emitted check-result entry), and `observation-result/v3` admits the declaration constraints, five-field value projection, conditional `stdin_template`, and the closed `unsatisfied_reason` on a stored but unsatisfied check result. These are closed
 kind additions within the exact manifest compatibility gate, not new command
 families. Existing variants retain their field sets and unknown-field closure;
 peers with a different manifest reject the complete contract set.

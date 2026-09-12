@@ -46,3 +46,4 @@ narrative architecture and specifications when sources conflict.
 - [ADR-0030](0030-retire-workspaces-and-prune-stale-registry-entries.md): explicit workspace retirement and stale registry pruning
 - [ADR-0031](0031-keyed-runtime-modes-and-managed-development-service.md): keyed runtime modes and managed development service
 - [ADR-0032](0032-retire-ordinary-user-runtimes.md): bounded ordinary account-runtime retirement
+- [ADR-0033](0033-name-unsatisfied-check-result-reasons.md): named unsatisfied check-result reasons
