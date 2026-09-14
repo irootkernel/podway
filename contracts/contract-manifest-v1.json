@@ -681,9 +681,9 @@
       "sha256": "sha256:23423b1060f6a0fedd1097ac458ca8a1cd8cb3c1a2a7e88aa964d514d01a248a"
     }
   ],
-  "digest": "sha256:734c3ff9baca3249859fbd265590d30c427f4ef7687a94f13590b5e2b03fa94b",
+  "digest": "sha256:bff8af8f57f1390446333cc56775ca71209e99bd3ff6fd556c39906b77a90635",
   "product": "podway",
-  "product_version": "0.2.9",
+  "product_version": "0.2.10",
   "schema_version": "podway.contract-manifest/v1",
   "supported_ipc_ids": [
     "podway.ipc/v1"
