@@ -6,30 +6,20 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ### Added
 
-- Preview ordinary account-runtime retirement with explicit mode selection,
-  bounded confirmation tokens, managed-runtime exclusions, and read-only
-  ownership checks that preserve all worktree state.
-- Recognize idle live daemons in runtime-reset plans and reserve their client and
-  background admission with process-bound recovery and startup fencing.
-- Retire one explicitly selected ordinary account runtime offline or while idle,
-  with exact service shutdown, bounded deletion, crash-safe recovery, and honest
-  partial results.
-- Retire a frozen all-mode selection in deterministic order with complete
-  preflight, exact partial-failure retry, and replay-safe namespace preservation.
-- Name why a stored check result stays unsatisfied with a closed observation `unsatisfied_reason` and a CLI comparison of the declared and recorded operation identity, and withdraw the never-emitted check-result entry branch from the atomic item record result schema.
+- Preview and retire one ordinary account runtime or a frozen all-mode selection
+  through bounded confirmation tokens and fail-closed preflight, with managed-runtime exclusions, idle-daemon coordination, crash-safe recovery, exact partial-failure retry, and preservation of worktree state and unrelated namespaces.
+- Explain why a stored check result remains unsatisfied with a closed
+  `unsatisfied_reason` and a CLI comparison of declared and recorded operation identities.
 
 ### Changed
 
 - Clarify how Podway cooperates with Codex context management and goals, preserving
   authorized session boundaries, safe recovery, and evidence-based completion.
 
-### Fixed
+### Removed
 
-- Recover a committed live runtime reset when daemon shutdown finishes before
-  the durable stopped marker, and shut down an unloaded foreground production
-  daemon after retiring its service state.
-- Reject reset plans whose complete shutdown-time log inventory cannot fit the
-  aggregate resource or durable-record bounds before any runtime data is removed.
+- Remove the never-emitted check-result entry branch from the atomic item-record
+  result schema.
 
 ## v0.2.9 - 2026-09-06
 
