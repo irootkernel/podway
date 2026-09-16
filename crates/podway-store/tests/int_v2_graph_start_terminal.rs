@@ -1444,6 +1444,54 @@ fn archive_completed_session(
 }
 
 #[test]
+fn v2sdg001_populated_direct_store_preserves_current_and_inactive_snapshots() {
+    let temporary = TempDir::new().unwrap();
+    let options = SqliteStoreOptionsV1::new(8).unwrap();
+    let store = open(&temporary, options.clone(), 1);
+    let archived = archive_completed_session(&store, 91_001, 91_002, 30);
+    let current = graph_state(91_003, 91_004, 40);
+    store
+        .create_graph_session_v2(&identity(), current.clone())
+        .unwrap();
+
+    let snapshot_bytes = |path: &Path| -> Vec<(String, String, String)> {
+        let connection = Connection::open(path).unwrap();
+        let mut statement = connection
+            .prepare(
+                "SELECT snapshot_id, digest, canonical_json FROM v2_procedure_snapshots \
+                 ORDER BY snapshot_id",
+            )
+            .unwrap();
+        statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    };
+    let before = snapshot_bytes(&database_path(&temporary));
+    assert_eq!(before.len(), 2);
+    assert!(
+        before
+            .iter()
+            .all(|(_, _, canonical)| !canonical.contains("\"delegation\""))
+    );
+    drop(store);
+
+    let reopened = open(&temporary, options, 50);
+    assert_eq!(
+        reopened.read_graph_session_v2(&identity()).unwrap(),
+        Some(current)
+    );
+    assert_eq!(
+        reopened
+            .read_archived_session_v2(&identity(), archived.trace().session_id())
+            .unwrap(),
+        Some(archived)
+    );
+    assert_eq!(snapshot_bytes(&database_path(&temporary)), before);
+}
+
+#[test]
 fn terminal_archive_list_windows_two_hundred_fifty_seven_inactive_sessions() {
     let temporary = TempDir::new().unwrap();
     let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);

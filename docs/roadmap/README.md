@@ -540,7 +540,7 @@ installation, and runtime activation remain outside this epic.
 
 ## V2SDG — Host-Neutral Supervised Delegation Foundation
 
-Status: Planned.
+Status: In Progress.
 
 Dependencies: completed `V2FRT` and the completed evidence, guard, reference,
 readiness, retention, and named-runtime foundations. There is no live Dolgorae,
@@ -576,7 +576,7 @@ no release or runtime authority.
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `V2SDG-001` | Freeze continuity baseline and qualification matrix | Planned | Capture exact existing contracts, supported paths, offline adapter-review inputs and post-acceptance cases; add isolated compatibility fixtures before product behavior changes. | [Task scope](../todo/TODO-podway-supervised-delegation.md#v2sdg-001-freeze-the-continuity-baseline-and-qualification-matrix), [continuity](../specs/interfaces/supervised-delegation.md#sdg-010-operational-continuity-and-acceptance) |
+| `V2SDG-001` | Freeze continuity baseline and qualification matrix | Completed | Capture exact existing contracts, supported paths, offline adapter-review inputs and post-acceptance cases; add isolated compatibility fixtures before product behavior changes. | [Task scope](../todo/TODO-podway-supervised-delegation.md#v2sdg-001-freeze-the-continuity-baseline-and-qualification-matrix), [continuity](../specs/interfaces/supervised-delegation.md#sdg-010-operational-continuity-and-acceptance) |
 | `V2SDG-002` | Reserve closed delegation contracts | Planned | Close the offline field/authority/digest mapping and classify unavailable real paths before reserving schemas, projections, errors/jobs, bounds and traceability; keep runtime admission closed. | [Task scope](../todo/TODO-podway-supervised-delegation.md#v2sdg-002-reserve-the-closed-contracts-and-traceability), [public versions](../specs/interfaces/supervised-delegation.md#sdg-008-public-contract-generations) |
 | `V2SDG-003` | Add placement semantics and canonical work packages | Planned | Implement optional host-neutral declarations and pure package identity while preserving old canonical bytes, node kinds, and single-cursor behavior. | [Task scope](../todo/TODO-podway-supervised-delegation.md#v2sdg-003-implement-placement-semantics-and-canonical-work-packages), [package](../specs/interfaces/supervised-delegation.md#sdg-004-canonical-work-package) |
 | `V2SDG-004` | Persist immutable attempt receipts safely | Planned | Add receipt storage and byte-preserving migration, atomic job/state results, reconstruction, crash recovery, and isolated downgrade rejection. | [Task scope](../todo/TODO-podway-supervised-delegation.md#v2sdg-004-add-immutable-per-attempt-persistence-and-migration), [persistence](../specs/interfaces/supervised-delegation.md#sdg-009-persistence-and-isolation) |

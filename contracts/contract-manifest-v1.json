@@ -617,6 +617,11 @@
     },
     {
       "kind": "known_answer_fixture",
+      "path": "tests/fixtures/v2/compatibility/supervised-delegation-direct-control.yaml",
+      "sha256": "sha256:a9ddeaf545b264ac1a1445346f3da8ab8f22ebe3db6a3f081a09352e4600cf81"
+    },
+    {
+      "kind": "known_answer_fixture",
       "path": "tests/fixtures/v2/compatibility/typed-condition-reservation.json",
       "sha256": "sha256:b7c98b1ec68d7ed08c4690c4f4d6d19093734e7e9a6a42d9cd90e856602bd084"
     },
@@ -686,7 +691,7 @@
       "sha256": "sha256:7de5f4f024eb795ae7fb73594d4847b833016bea6be9f2737c567b524ae5466e"
     }
   ],
-  "digest": "sha256:d256e12e1a0d65fe78e13d3a65c7e57fb2b258c4c8b5d3176cde64e88a09e776",
+  "digest": "sha256:cd4a8198727639852af1e06ff0021d1c2886f7694b792f52689ccd9cebc0f7fd",
   "product": "podway",
   "product_version": "0.2.10",
   "schema_version": "podway.contract-manifest/v1",

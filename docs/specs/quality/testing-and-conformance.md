@@ -56,6 +56,64 @@ successful `make test` establishes the complete development-gate claim.
 
 ## Persistence and compatibility
 
+### Supervised delegation continuity baseline
+
+`V2SDG-001` freezes the Direct control before delegated product behavior changes.
+The source baseline is `73fd60d78d7117a6d8a3f65ad1cb1faae88b0067`; the
+selected previous stable commit is `f66aa6798ca411748459a3b12a6149e3af51a8f6`
+(`v0.2.10`). The prior Store generation is 10 and the source baseline is 11.
+The earlier release has the 32-inactive-session cap; the source baseline does
+not. These revisions identify comparisons, not a tested upgrade or an installed
+runtime. The source and release contract-manifest file SHA-256 values are
+`b590d08cfb32b9b72f5e1fc875bae3accfe53b2cd4e29dd9d35ce9043c7ea846`
+and `daeeee098730448a56147b3882c842078cf54dbc362cae551256737bd1028b7e`.
+The corresponding public result-family fixture SHA-256 values are
+`7de5f4f024eb795ae7fb73594d4847b833016bea6be9f2737c567b524ae5466e`
+and `23423b1060f6a0fedd1097ac458ca8a1cd8cb3c1a2a7e88aa964d514d01a248a`.
+Later contract additions must retain old result shapes and stored terminal bytes;
+the whole files need not retain these hashes.
+
+The four shipped preset identities are pinned in
+`podway-presets::ANALYSIS_V2_SHIPPED_DIGEST`, `BUG_FIX_V2_SHIPPED_DIGEST`,
+`SMALL_CHANGE_V2_SHIPPED_DIGEST`, and `SW_DEV_V2_SHIPPED_DIGEST`, with exact
+source/digest proof in `int_v2dog003_preset_identity`. The 45 accepted clean,
+failure, rework, paging, and goal paths remain bound by
+`tests/fixtures/v2/presets/reference-paths.json`. The YAML/JSON canonical
+known answer remains bound by `int_v2_procedure_canonical`; the additional
+`supervised-delegation-direct-control.yaml` pins a non-delegated digest for
+subsequent comparison. The isolated Store control in
+`int_v2_graph_start_terminal::v2sdg001_populated_direct_store_preserves_current_and_inactive_snapshots`
+reopens a populated current and inactive session and compares their persisted
+Procedure bytes. Named-mode, manifest, admission, and unrelated-worktree
+controls remain covered by the existing V2DVC and daemon/CLI suites. No fixture
+uses an owner's account or active worktree.
+
+The following matrix names the acceptance proof to add in the owning task. A
+baseline Direct control must accompany each delegated behavior test. A
+successful fixture receipt proves protocol behavior, not real executor work.
+
+| Case | Required result | Proof owner |
+| --- | --- | --- |
+| Unknown, mistyped, over-bound, secret-shaped, duplicate, or mismatched contract fields | Reject before mutation; keep old closed branches | `V2SDG-002` schema/decoder negatives |
+| Delegation on a decision or skip-enabled action; partial implementation | Reject authoring or runtime admission | `V2SDG-003`, `V2SDG-007` admission tests |
+| Package reread or final output recording | Preserve input digest; changed attempt-bound input changes it | `V2SDG-003` package tests |
+| Receipt commit, failure, and response loss | One atomic receipt and replayable job result, or no effect | `V2SDG-004`, `V2SDG-008` Store/crash tests |
+| Incorrect declaration, package, Role, task, rounds, disposition, item readiness, or blocker state | Reject without changing the cursor or receipt | `V2SDG-005` transaction tests |
+| True item no-op; read; unrelated session revision | Preserve accepted receipt applicability | `V2SDG-005`, `V2SDG-008` matrix tests |
+| Actual required, optional, or cosmetic item edit; edit then restore text | Preserve receipt as stale; block completion and require a fresh attempt | `V2SDG-005`, `V2SDG-008` matrix tests |
+| Failed or rolled-back edit; block/unblock without item change | Preserve receipt applicability; open blocker independently gates completion | `V2SDG-005`, `V2SDG-008` matrix tests |
+| Acceptance-key replay after an edit; changed-key duplicate | Return the historic result or reject the duplicate; current view stays stale | `V2SDG-005`, `V2SDG-007`, `V2SDG-008` replay tests |
+| Retry, rework, goal revision, cancellation, reset, or archive | Keep old receipt historical; never relabel it to a fresh attempt | `V2SDG-005`, `V2SDG-008` lifecycle tests |
+| Prepared, running, terminal, and inactive observations | Use only the declared bounded result generation and truthful readiness | `V2SDG-006` projection tests |
+| External and managed Primary restart, late result, unknown worker state | Require exact identity and explicit recovery; no automatic redispatch | `V2SDG-008` controlled-host fixtures |
+| Populated v11 upgrade, interruption, newer-state refusal, independent Direct worktree | Preserve bytes and progress in isolated named runtimes | `V2SDG-008` native migration and mixed-worktree tests |
+
+The offline adapter review inputs are pinned in
+`docs/implementation-tips/delegation-adapter-contract-review.md` at Dolgorae
+commit `5d93f43023ebf15e26b9c33b1ad032a7eeff6bbe`. `V2SDG-002` must
+close generic field/digest meanings and explicitly classify unavailable real
+paths before schema reservation; this baseline does not qualify either adapter.
+
 The store suite creates canonical schema-v10 from an empty database, migrates each
 supported empty or Procedure v2-only predecessor transactionally, binds the
 workspace singleton to its effective runtime mode, preserves v2 domain and

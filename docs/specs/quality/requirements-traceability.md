@@ -27,6 +27,7 @@
 | Typed conditions derive required items and guarded options from bounded current state without adding an expression engine or weakening freshness | ADR-0028; Procedure, transition, automation, and IPC specifications | `V2GRD-002`–`006` schema, domain, authoring, runtime, budget, CLI, and compatibility tests |
 | Exactly four distinct v2 presets ship with pinned identity, exact graphs, and bounded path inventories | Built-in preset spec | Preset embedding, digest, CLI, production tests, and executable reference-path fixture |
 | Public assets and documentation agree | Contract manifest; docs precedence | Contract, quality, documentation, and architecture checks |
+| Delegation leaves the established Direct contract usable at each intermediate commit | ADR-0035; supervised-delegation SDG-010; testing and conformance baseline | `V2SDG-001` direct digest fixture, populated current/inactive Store reopen, shipped preset and result-family known answers; subsequent task gates |
 
 The active roadmap owns completion state. Test success proves only the scope of the
 named check; `make test` is the development gate for the combined revision.

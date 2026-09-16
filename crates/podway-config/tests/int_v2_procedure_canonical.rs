@@ -356,6 +356,27 @@ fn the_fixture_pair_has_one_canonical_form_and_the_contract_digest() {
 }
 
 #[test]
+fn v2sdg001_direct_control_keeps_its_canonical_identity() {
+    let source =
+        fixture("tests/fixtures/v2/compatibility/supervised-delegation-direct-control.yaml");
+    let admitted = accept(
+        std::str::from_utf8(&source).unwrap(),
+        ProcedureDocumentFormat::Yaml,
+    );
+
+    assert_eq!(
+        admitted.digest().as_str(),
+        "sha256:e9a8ba377181df0068d6425704121d371a30371b94cd9fabb27eaea58a9d4df5"
+    );
+    assert!(
+        !admitted
+            .canonical_json()
+            .as_str()
+            .contains("\"delegation\"")
+    );
+}
+
+#[test]
 fn v2ast003_check_result_yaml_and_json_share_one_canonical_declaration() {
     let yaml_source = concat!(
         "schema: podway.procedure/v2\n",
