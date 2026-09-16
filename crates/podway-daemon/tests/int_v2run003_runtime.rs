@@ -4238,6 +4238,133 @@ fn start_supersede_atomically_archives_running_session_and_prepares_successor() 
 }
 
 #[test]
+fn unknown_preset_start_and_replace_fail_without_admission_or_state_change() {
+    let fixture = support_phase4_workspace::git_worktrees();
+    make_runtime_private(fixture.main());
+    let selector = selector(fixture.main());
+    let manager = Arc::new(manager(fixture.temporary_path()));
+    let production = dispatcher(Arc::clone(&manager), "unknown-preset-start");
+
+    let initialize = request(
+        152_001,
+        "workspace.init",
+        &selector,
+        Map::new(),
+        "unknown-preset-init",
+        PreconditionsV1::default(),
+    );
+    let _ = v2_result(dispatch(&production, &initialize), "workspace.init");
+
+    for (number, dry_run) in [(152_002, true), (152_003, false)] {
+        let start = request(
+            number,
+            "session.start",
+            &selector,
+            json!({
+                "preset":"aquarium-goal-v2",
+                "task_title":"Unknown preset",
+                "dry_run":dry_run
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+            "unknown-preset-start-attempt",
+            PreconditionsV1::default(),
+        );
+        let ResponseEnvelopeV2::Error(error) = dispatch(&production, &start) else {
+            panic!("unknown preset must fail before start admission");
+        };
+        assert_eq!(error.command().as_str(), "session.start");
+        assert_eq!(error.code().as_str(), "PRESET_NOT_FOUND");
+        assert_eq!(error.exit_code().get(), 1);
+        assert_eq!(error.details()["admission"]["admitted"], false);
+    }
+
+    let valid_start = request(
+        152_004,
+        "session.start",
+        &selector,
+        json!({"preset":"small-change-v2","task_title":"Current work"})
+            .as_object()
+            .unwrap()
+            .clone(),
+        "known-preset-start",
+        PreconditionsV1::default(),
+    );
+    let started = v2_result(dispatch(&production, &valid_start), "session.start");
+    let session_id = SessionId::new(started["session_id"].as_str().unwrap()).unwrap();
+    let begin = request(
+        152_005,
+        "session.begin",
+        &selector,
+        Map::new(),
+        "known-preset-begin",
+        PreconditionsV1::new(
+            Some(session_id.clone()),
+            Some(Revision::ZERO),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    );
+    let _ = v2_result(dispatch(&production, &begin), "session.begin");
+
+    for (number, dry_run) in [(152_006, true), (152_007, false)] {
+        let replace = request(
+            number,
+            "session.start_replace",
+            &selector,
+            json!({
+                "preset":"aquarium-goal-v2",
+                "task_title":"Unknown successor preset",
+                "resolution":{
+                    "mode":"supersede",
+                    "reason":"The successor has priority."
+                },
+                "dry_run":dry_run
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+            "unknown-preset-replace-attempt",
+            PreconditionsV1::new(
+                Some(session_id.clone()),
+                Some(Revision::new(1)),
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap(),
+        );
+        let ResponseEnvelopeV2::Error(error) = dispatch(&production, &replace) else {
+            panic!("unknown preset must fail before replacement admission");
+        };
+        assert_eq!(error.command().as_str(), "session.start_replace");
+        assert_eq!(error.code().as_str(), "PRESET_NOT_FOUND");
+        assert_eq!(error.exit_code().get(), 1);
+        assert_eq!(error.details()["admission"]["admitted"], false);
+    }
+
+    let current = status(&production, &selector, 152_008, session_id.as_str());
+    assert_eq!(current["session"]["id"], session_id.as_str());
+    assert_eq!(current["session"]["revision"], 1);
+    assert_eq!(current["session"]["lifecycle"], "running");
+    let archives = request(
+        152_009,
+        "session.archive_list",
+        &selector,
+        Map::new(),
+        "unused-unknown-preset-archive-list",
+        PreconditionsV1::default(),
+    );
+    let archives = v2_result(dispatch(&production, &archives), "session.archive_list");
+    assert_archive_list_v2(&archives, 0, false);
+}
+
+#[test]
 fn state_aware_start_delete_shape_rejects_before_durable_admission() {
     let fixture = support_phase4_workspace::git_worktrees();
     make_runtime_private(fixture.main());

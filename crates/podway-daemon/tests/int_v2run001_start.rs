@@ -261,7 +261,6 @@ fn v2run001_injected_preset_requires_its_independent_pinned_digest() {
         ProcedureSnapshotId::new(SNAPSHOT_ID).unwrap(),
         UnixMillis::new(1_700_000_000_000),
     )
-    .unwrap()
     .unwrap();
     assert_eq!(state.snapshot().digest(), admitted.digest());
 

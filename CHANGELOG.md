@@ -9,6 +9,11 @@ This file records concise shipped outcomes and the planned next stable release.
 - Stop failing archival and start when a worktree already retains 32 inactive
   sessions. `archive list` now reports the exact total, a newest-first window, and the oldest summary.
 
+### Fixed
+
+- Return `PRESET_NOT_FOUND` instead of `UNSUPPORTED_V2_CAPABILITY` when a
+  Procedure v2 start or replacement names an unknown built-in preset.
+
 ## v0.2.10 - 2026-09-14
 
 ### Added

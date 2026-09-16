@@ -202,6 +202,7 @@ pub enum ProcedureV2SourceAdmissionErrorV1 {
 #[derive(Debug)]
 pub enum ProcedureV2StartPreparationErrorV1 {
     Source(ProcedureV2SourceAdmissionErrorV1),
+    PresetNotFound,
     DigestConfirmationRequired {
         procedure_digest: Sha256Digest,
     },
@@ -442,13 +443,11 @@ pub fn prepare_preset_procedure_v2_start(
     first_attempt_id: AttemptId,
     snapshot_id: ProcedureSnapshotId,
     created_at: UnixMillis,
-) -> Result<Option<GraphSessionStateV2>, ProcedureV2StartPreparationErrorV1> {
-    let Some((snapshot, pinned_digest)) = provider
+) -> Result<GraphSessionStateV2, ProcedureV2StartPreparationErrorV1> {
+    let (snapshot, pinned_digest) = provider
         .load_preset_snapshot_v2(preset, snapshot_id, created_at)
         .map_err(ProcedureV2StartPreparationErrorV1::Source)?
-    else {
-        return Ok(None);
-    };
+        .ok_or(ProcedureV2StartPreparationErrorV1::PresetNotFound)?;
     verify_pinned_procedure_v2_snapshot(&snapshot, &pinned_digest)?;
     graph_session_state_from_procedure_v2_snapshot(
         snapshot,
@@ -457,7 +456,6 @@ pub fn prepare_preset_procedure_v2_start(
         first_attempt_id,
         created_at,
     )
-    .map(Some)
 }
 
 /// Reconstructs a fresh Procedure v2 graph session exclusively from immutable admitted data.
@@ -2952,13 +2950,11 @@ where
                 now,
             )?,
             SessionStartSourceV1::Preset { preset } => {
-                let Some((snapshot, pinned_digest)) = self
+                let (snapshot, pinned_digest) = self
                     .procedures
                     .load_preset_snapshot_v2(preset, snapshot_id, now)
                     .map_err(ProcedureV2StartPreparationErrorV1::Source)?
-                else {
-                    return Ok(None);
-                };
+                    .ok_or(ProcedureV2StartPreparationErrorV1::PresetNotFound)?;
                 verify_pinned_procedure_v2_snapshot(&snapshot, &pinned_digest)?;
                 graph_session_state_from_procedure_v2_snapshot(
                     snapshot,
@@ -3580,13 +3576,11 @@ where
                 now,
             )?,
             SessionStartSourceV1::Preset { preset } => {
-                let Some((snapshot, pinned_digest)) = self
+                let (snapshot, pinned_digest) = self
                     .procedures
                     .load_preset_snapshot_v2(preset, snapshot_id, now)
                     .map_err(ProcedureV2StartPreparationErrorV1::Source)?
-                else {
-                    return Ok(None);
-                };
+                    .ok_or(ProcedureV2StartPreparationErrorV1::PresetNotFound)?;
                 verify_pinned_procedure_v2_snapshot(&snapshot, &pinned_digest)?;
                 graph_session_state_from_procedure_v2_snapshot(
                     snapshot,
@@ -3855,13 +3849,11 @@ where
                 )?
             }
             SessionStartSourceV1::Preset { preset } => {
-                let Some((snapshot, pinned_digest)) = self
+                let (snapshot, pinned_digest) = self
                     .procedures
                     .load_preset_snapshot_v2(preset, snapshot_id, now)
                     .map_err(ProcedureV2StartPreparationErrorV1::Source)?
-                else {
-                    return Ok(None);
-                };
+                    .ok_or(ProcedureV2StartPreparationErrorV1::PresetNotFound)?;
                 verify_pinned_procedure_v2_snapshot(&snapshot, &pinned_digest)?;
                 graph_prepared_session_state_from_procedure_v2_snapshot(
                     snapshot,

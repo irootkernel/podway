@@ -2188,7 +2188,6 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                             ids.next_procedure_snapshot_id(),
                             now,
                         )
-                        .map(Some)
                     }
                     SessionStartSourceV1::Preset { preset } => prepare_preset_procedure_v2_start(
                         &provider,
@@ -2201,9 +2200,6 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                     ),
                 }
                 .map_err(map_procedure_v2_start_preparation_error)?;
-                let Some(state) = state else {
-                    return Ok(None);
-                };
                 let view = self.read_preview_graph_workspace_view_v2(&readonly, now)?;
                 validate_graph_start_dry_run_view_v2(&expected_current, &view)?;
                 let mut result = json!({
@@ -2903,22 +2899,17 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
             let attempt_id = ids.next_attempt_id();
             let snapshot_id = ids.next_procedure_snapshot_id();
             let state = match &start.source {
-                SessionStartSourceV1::Procedure { procedure } => {
-                    match prepare_custom_procedure_v2_start(
-                        &provider,
-                        readonly.binding(),
-                        procedure,
-                        start.expected_procedure_digest.as_ref(),
-                        &start.task_title,
-                        session_id,
-                        attempt_id,
-                        snapshot_id,
-                        now,
-                    ) {
-                        Ok(state) => Ok(Some(state)),
-                        Err(error) => Err(error),
-                    }
-                }
+                SessionStartSourceV1::Procedure { procedure } => prepare_custom_procedure_v2_start(
+                    &provider,
+                    readonly.binding(),
+                    procedure,
+                    start.expected_procedure_digest.as_ref(),
+                    &start.task_title,
+                    session_id,
+                    attempt_id,
+                    snapshot_id,
+                    now,
+                ),
                 SessionStartSourceV1::Preset { preset } => prepare_preset_procedure_v2_start(
                     &provider,
                     preset,
@@ -2930,9 +2921,6 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                 ),
             }
             .map_err(map_procedure_v2_start_preparation_error)?;
-            let Some(state) = state else {
-                return Ok(None);
-            };
             let expected_current = match slice_request.command() {
                 SliceCommandV1::SessionStart(_) => GraphStartCurrentTaskV2::Absent,
                 SliceCommandV1::SessionStartReplace(replace) => GraphStartCurrentTaskV2::Exact {
@@ -6090,6 +6078,9 @@ fn map_procedure_v2_start_preparation_error(
     error: ProcedureV2StartPreparationErrorV1,
 ) -> DispatchFailureV1 {
     match error {
+        ProcedureV2StartPreparationErrorV1::PresetNotFound => {
+            DispatchFailureV1::new(DispatchFailureKindV1::PresetNotFound)
+        }
         ProcedureV2StartPreparationErrorV1::Source(
             ProcedureV2SourceAdmissionErrorV1::SchemaInvalid { diagnostic_codes },
         ) => DispatchFailureV1::new(DispatchFailureKindV1::ProcedureV2SchemaInvalid).with_details(

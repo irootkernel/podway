@@ -24,8 +24,7 @@ fn embedded_provider_prepares_all_v2_presets_from_their_shipped_digest() {
             ProcedureSnapshotId::new(format!("00000000-0000-4000-8002-{suffix:012}")).unwrap(),
             UnixMillis::new(1_700_000_000_000 + suffix as u64),
         )
-        .expect("shipped preset preparation must succeed")
-        .expect("v2 catalog entry must resolve through the v2 provider");
+        .expect("shipped preset preparation must succeed");
         let snapshot = state.snapshot();
 
         assert_eq!(snapshot.procedure_id(), preset.metadata.id);
@@ -58,6 +57,23 @@ fn embedded_v2_provider_rejects_removed_and_unknown_preset_names() {
             "{name} must not be reinterpreted as a v2 preset"
         );
     }
+}
+
+#[test]
+fn unknown_v2_preset_preparation_has_a_distinct_error() {
+    let result = prepare_preset_procedure_v2_start(
+        &EmbeddedPresetProcedureProviderV1,
+        "aquarium-goal-v2",
+        "Reject an unknown built-in preset",
+        SessionId::new("00000000-0000-4000-8000-000000000001").unwrap(),
+        AttemptId::new("00000000-0000-4000-8001-000000000001").unwrap(),
+        ProcedureSnapshotId::new("00000000-0000-4000-8002-000000000001").unwrap(),
+        UnixMillis::new(1),
+    );
+    assert!(matches!(
+        result,
+        Err(podway_daemon::execution::ProcedureV2StartPreparationErrorV1::PresetNotFound)
+    ));
 }
 
 #[test]
