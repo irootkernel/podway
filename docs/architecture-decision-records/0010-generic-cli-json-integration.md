@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-07-13
+- Extended by: [ADR-0035](0035-host-neutral-supervised-delegation.md), which adopts a planned host-neutral declaration and structural acceptance boundary without adding executable provider adapters or automatic completion.
 
 ## Context
 

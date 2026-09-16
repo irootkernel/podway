@@ -84,4 +84,11 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 
 ## Current adopted dossiers
 
-None.
+- [Host-neutral supervised delegation foundation](TODO-podway-supervised-delegation.md): Podway-only `V2SDG` implementation, explicit opt-in, and mandatory Direct-work continuity. Task order and state live only in the active roadmap; no runtime or deployment is activated by adoption.
+
+## Related candidates
+
+- [Real executor integration](TODO-podway-supervised-delegation-integration.md): live external/managed Primary adapters and qualification excluded from V2SDG.
+- [Graph engineering](TODO-podway-graph-engineering-evolution.md): separately motivated work-unit and parallel graph research.
+- [Continuation generations](TODO-podway-versioned-continuation-generations.md): separately motivated topology replacement and plan lineage.
+- [Web operations console](TODO-podway-web-operations-console.md): human operations after its graph/runtime prerequisites are settled.

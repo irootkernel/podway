@@ -11,7 +11,13 @@
 - Repository scope: Podway only
 - Research and planning baseline: August 17, 2026
 - Related implemented authority: [ADR-0025](../architecture-decision-records/0025-structurally-bound-external-check-results.md), epic `V2AST`
-- Related candidate: [Podway Supervised External Delegation](TODO-podway-supervised-delegation.md)
+- Related adopted foundation: [Host-Neutral Supervised Delegation](TODO-podway-supervised-delegation.md)
+- Related integration candidate: [Real Executor Integration](TODO-podway-supervised-delegation-integration.md)
+
+The September 16 adoption of V2SDG covers a sequential Podway-side delegation
+foundation only. It neither adopts this graph candidate nor satisfies its
+shape-specific experiment and promotion conditions. Live adapters remain a
+separate candidate; they are not prerequisites for local V2SDG conformance.
 
 This document is the single repository location for the research, working
 decisions, rejected directions, unresolved questions, and promotion conditions

@@ -1,409 +1,538 @@
-# Podway Supervised External Delegation
+# Podway Host-Neutral Supervised Delegation Foundation
 
-## Status and authority
+## 1. Status and authority
 
-- Document state: `Candidate`
-- Dossier type: research and design candidate
-- Owning roadmap epic: none
-- Target product release: undecided
-- Candidate contract target: an optional additive extension to
-  `podway.procedure/v2`
-- Repository scope: Podway only
-- Research and planning baseline: September 10, 2026
-- Related candidate:
-  [Podway Graph Engineering Evolution](TODO-podway-graph-engineering-evolution.md)
-- Related accepted authority:
-  [ADR-0010](../architecture-decision-records/0010-generic-cli-json-integration.md)
-  and
-  [ADR-0017](../architecture-decision-records/0017-single-cursor-convergence.md)
+- Document state: `Adopted`
+- Owning roadmap epic: `V2SDG`
+- Adoption date: September 16, 2026
+- Plan refinement: September 17, 2026; offline adapter mapping and post-acceptance recovery coverage
+- Scope: Podway-side contracts, implementation, and isolated conformance only
+- Contract target: optional `podway.procedure/v2` placement extension
+- Acceptance target: development completion through the full `make test` gate
+- Product release: not assigned; release selection and runtime activation require separate owner authorization
+- Decision authority: [ADR-0035](../architecture-decision-records/0035-host-neutral-supervised-delegation.md)
+- Behavioral target: [supervised-delegation specification](../specs/interfaces/supervised-delegation.md)
+- Execution order and status: [V2SDG roadmap](../roadmap/README.md#v2sdg-host-neutral-supervised-delegation-foundation)
 
-This document preserves a candidate design for optional, action-scoped
-supervised delegation. It is not an adopted design dossier, accepted
-architecture decision, roadmap commitment, or specification of implemented
-behavior. No field, command, result, Store row, adapter behavior, or completion
-gate described below exists merely because it appears in this candidate.
+This is the decision-complete implementation dossier for the bounded Podway
+foundation. It replaces the former candidate at this path. No capability is
+implemented, released, installed, or live-qualified merely by this adoption.
+The roadmap is the only task-status owner. This dossier adds no competing
+status table, automatic task start, or deployment authority.
 
-The active [roadmap](../roadmap/README.md) does not own this work. Current
-specifications, canonical assets, executable contracts, source, tests, and
-runtime evidence remain authoritative. The directions below are preferred
-research outcomes to test before promotion, not product requirements.
+The owner explicitly narrowed the work from the earlier live-Dolgorae research
+candidate. ADR-0035 records why local implementation may proceed without that
+candidate's external comparative experiment. No experiment is claimed to have
+run. Real integration, external-versus-managed Primary qualification, and the
+remaining comparison are retained in the separate
+[integration candidate](TODO-podway-supervised-delegation-integration.md).
+Graph engineering, continuation generations, and the Web console remain
+unadopted and are not dependencies of this epic.
 
-## 1. Context
+## 2. Verified context and baseline
 
-Procedure v2 already permits an external agent to keep one action attempt open,
-perform work outside Podway, record bounded results, and explicitly complete the
-placement. Several humans or agents may contribute to that external work while
-Podway retains one authoritative cursor and one active attempt. The current
-product does not, however, provide a machine-readable action-placement field
-that tells a primary agent to delegate the action to a specialist.
+### Podway implementation baseline
 
-The existing Dolgorae handoff is a compatibility contract over Podway's generic
-CLI and versioned JSON. It does not make Podway interpret Dolgorae Workflows or
-Roles, hire a worker, manage a worker lifecycle, or treat worker completion as a
-Podway transition. An author can place delegation prose in an action
-definition's `instructions`, but that prose is not a closed automation contract
-and cannot gate completion.
+The inspected checkout was committed at `1e81399`, following the local
+`0.2.10` source baseline and the opening of an unreleased `0.2.11` cycle.
+That commit removes the former inactive-session cap under
+[ADR-0034](../architecture-decision-records/0034-unbounded-inactive-session-retention.md).
+Store generation 11, not 10, is current. Do not copy the old 32-session cap or
+old schema generation from the original research candidate into new tests.
 
-The motivating workflow is narrower than the parallel fan groups explored by
-the related graph-engineering candidate:
+The following authorities and implementation points support this plan:
 
-1. When the active action placement has no delegation declaration, the primary
-   agent performs it directly as today.
-2. When the placement declares a Dolgorae Role, the primary agent becomes the
-   semantic supervisor for that placement.
-3. The supervisor uses an external adapter to hire or reuse a worker with the
-   exact declared Role, supplies a bounded task package, and gives iterative
-   feedback.
-4. The supervisor accepts the final result only after the action goal is met and
-   the worker has reached the declared post-accept lifecycle state.
-5. Podway records an attempt-bound structural receipt. A later explicit
-   `complete` mutation, not worker completion, advances the cursor.
-
-Dolgorae's External Specialist Engagement is the adjacent executor model: an
-external AI remains the semantic control plane while Dolgorae owns specialist
-hire, task delivery, result recovery, reuse, release, and operational state.
-The September 10, 2026 Dolgorae planning baseline still assigns common and
-project Role sources plus immutable Role resolution to its planned durable
-orchestration work. That external contract must be revalidated before this
-candidate is promoted or qualified; Podway does not own it.
-
-## 2. Goal
-
-Determine whether Podway should make optional supervised delegation visible,
-deterministic, and completion-relevant without becoming an agent runtime or
-changing its single-cursor graph.
-
-A successful design would make these facts inspectable:
-
-- whether the active action is direct or requires supervised delegation;
-- which executor adapter and immutable Role the Procedure expects;
-- the bounded input basis and feedback-round budget for the current attempt;
-- which external engagement, worker, and final task produced the submitted
-  result;
-- whether the supervisor accepted that result;
-- whether the worker was retained idle or released as declared; and
-- why a retry, rework, cancellation, or user decision is required when
-  delegation cannot finish.
-
-The design should remain useful as a sequential Procedure v2 feature. A later
-fan-group design may reuse its work description and receipt, but parallelism is
-not required to justify or ship it.
-
-## 3. Non-goals
-
-This candidate does not propose:
-
-- invoking Dolgorae, a model, a command, or any other executor from Podway;
-- putting Dolgorae credentials, Role source bytes, Profile selection, model
-  selection, access policy, or process controls in a Procedure;
-- authenticating an executor or proving that a model actually performed the
-  reported work;
-- storing worker transcripts, prompts, artifact bytes, or reasoning content;
-- allowing direct execution to fall back when a placement requires delegation;
-- delegating decision nodes, goal assessments, or Podway transition authority;
-- advancing the cursor when a worker finishes or a receipt is accepted;
-- adding parallel active placements, claims, leases, fan groups, or joins;
-- letting a worker change the outer Procedure, routes, goal, or current attempt;
-- making a Specialist responsible for hiring another first-class Specialist;
-- adding a Podway-owned user-notification service; or
-- changing, migrating, or reinterpreting an already admitted Procedure
-  snapshot.
-
-## 4. Rough scope and preferred direction
-
-### 4.1 Authority split
-
-The preferred split is:
-
-| Concern | Owner |
+| Evidence | Consequence |
 |---|---|
-| Action intent, required evidence, cursor, attempt, and completion | Podway |
-| Decision to accept the worker's semantic result | Primary agent acting as supervisor |
-| Role resolution, worker, task, thread, lifecycle, and recovery | External executor such as Dolgorae |
-| Credential handling and executor authorization | Executor adapter |
-| User-facing notification after exhaustion | Primary-agent host |
+| [Placement model](../../crates/podway-core/src/procedure_v2/graph.rs) | Action and Decision remain node kinds; delegation is a placement attribute |
+| [Closed wire parser](../../crates/podway-config/src/procedure_v2_wire.rs) | The current release rejects unknown delegation fields; a prose instruction is not a supported extension |
+| [Session trace](../../crates/podway-core/src/session_v2.rs) | Preserve one active outer attempt and existing retry/rework invalidation |
+| [State transitions](../../crates/podway-store/src/v2_state.rs) | Reuse item gates, blockers, goal rework, and explicit completion |
+| [Batch regression tests](../../crates/podway-store/tests/int_v2_workflow_memory.rs) | Keep atomic item updates, session revision behavior, and cursor stability |
+| [JSON contract](../specs/interfaces/json-contract.md) | New payload shapes require correctly versioned closed result families |
+| [Store schema](../../crates/podway-store/src/schema.rs) | Plan from generation 11 and preserve stored bytes during any additive migration |
+| [Named runtime authority](../architecture-decision-records/0031-keyed-runtime-modes-and-managed-development-service.md) | Do not touch production or Aquarium runtimes to qualify a feature |
 
-Podway retains formal progression authority. The supervisor retains semantic
-judgment. The executor retains operational worker authority. None may infer or
-overwrite another owner's state.
+`V2SCL`, `V2AST`, `V2GRD`, `V2REF`, `V2SKL`, `V2RDY`, `V2RET`, `V2DVC`,
+and `V2FRT` are completed prerequisite foundations in the roadmap. Do not
+reimplement paging, check results, typed guards, archive/reset, or the service
+manager in this epic.
 
-### 4.2 Action-placement declaration
+At planning inspection, six unrelated working-tree changes existed in
+`CHANGELOG.md`, daemon execution/production code, and three daemon test files.
+They are not V2SDG changes. Preserve them and take a fresh baseline before
+implementation; this paragraph is inspection context, not permanent authority
+over a later checkout. Do not reset, stash, stage, commit, or absorb them without
+explicit authorization.
 
-The preferred authoring direction adds one optional closed `delegation` object
-to an action placement, not to a reusable action definition. This permits two
-placements of one definition to select different execution behavior. Decision
-placements reject the field.
+### External context, not an implementation prerequisite
 
-The following shape is illustrative and non-contractual. Field names, string
-patterns, and numeric ceilings are not reserved until an adopted contract owns
-them.
+A local Dolgorae inspection found completed role/task separation and an
+external v3 accepted-task object with inline contexts and criteria. The internal
+Primary orchestration tool still uses a different task shape. Its live Primary
+bridge remains separately planned. These observations justify keeping the
+Podway work contract host-neutral; they do not qualify either real adapter.
 
-```yaml
-graph:
-  nodes:
-    - id: implement
-      use: implementation
-      delegation:
-        executor: dolgorae.external-specialist/v1
-        role_ref: rust-implementer
-        role_snapshot_digest: sha256:<64-lowercase-hex>
-        max_rounds: 8
-        after_accept: retain
-      next: verify
-```
+The September 17 [adapter contract review](../implementation-tips/delegation-adapter-contract-review.md)
+pins the inspected Dolgorae source and maps required receipt fields across both
+paths. In particular, the inspected external aggregate binding hashes Role
+reference bytes while the Broker hashes an installed Role object. Those fields
+are not interchangeable Role-content identities. Internal persistence alone
+also does not prove that a permitted adapter can recover a digest or identity.
 
-Absence means direct execution. Presence means delegation is mandatory for the
-placement and direct fallback is invalid. The declaration contains:
+No developer needs that neighboring checkout, a credential, subscription,
+installed provider, running model, or live agent to complete V2SDG. The offline
+mapping review must nevertheless close the generic field meanings before
+V2SDG-002 reserves them. Use the pinned source observations, mark unavailable
+real paths explicitly, and leave their missing interfaces with the integration
+candidate. A future integration must revalidate its own then-current canonical
+contracts and exact build rather than treating this summary as API authority.
 
-- a bounded, opaque executor-adapter identifier that Podway does not interpret;
-- the executor-owned Role reference;
-- the expected immutable Role snapshot digest;
-- a required positive, bounded feedback-round limit; and
-- a required `retain` or `release` disposition after supervisor acceptance.
+## 3. Goal, scope, and non-goals
 
-The complete declaration participates in canonicalization, the Procedure
-snapshot, and the Procedure digest. Procedure validation checks only the closed
-syntax and Podway-owned bounds. The external adapter resolves the Role and fails
-closed before hire when the Role is absent or its captured digest differs.
+### Required outcome
 
-Role identity does not select a model, Profile, access policy, credential, or
-Agent Configuration. Those remain explicit executor policy. A submitted receipt
-records the resulting immutable Agent Configuration digest so a retained worker
-is reused only when its complete executor-owned configuration remains
-compatible.
+An explicitly authored delegated action can expose one deterministic work
+package, accept one structurally valid attempt-bound receipt, and complete only
+when its ordinary evidence and the receipt agree. The same contract represents
+an external Primary or a runtime-managed Primary. Non-delegated Procedures,
+existing sessions, and ordinary daemon operations keep working without any
+executor integration.
 
-### 4.3 Canonical work package
+### Included work
 
-Observation of an active delegated action should expose a bounded canonical work
-package and its input-basis digest. The package should derive only from admitted
-Podway state:
+- An optional closed action-placement declaration with immutable Role identity
+  and a logical binding reference, independent of a concrete facade.
+- Canonical package and accepted-item-state digests with clear input/output
+  separation and existing evidence-read reuse.
+- Bounded acceptance recording, completion gates, truthful guidance, and
+  historical receipt summaries.
+- New versioned CLI/JSON contracts, exact capability registration, and additive
+  worktree-local persistence.
+- Direct compatibility, crash/replay, migration, and isolated cross-worktree
+  continuity qualification using controlled executor fixtures.
+- Development documentation and a separate release/integration handoff.
 
-- workspace, Procedure, session, placement, and attempt identity;
-- action title, intent, description, instructions, and item prompts;
-- current goal revision and bounded goal criteria when goal tracking is active;
-- explicitly selected upstream evidence identities, complete-value digests, and
-  existing bounded previews; and
-- the delegation declaration.
+### Excluded work
 
-The package is a read projection, not a mutation or an executor request. Full
-selected values continue to use the existing evidence-read contract. The
-supervisor may add turn-local feedback in Dolgorae, but Podway does not store or
-canonicalize that conversation. The final receipt binds to the original package
-digest and a digest of the accepted result.
+- Dolgorae external-facade or internal-Broker adapters, real agent execution,
+  Profile/credential lookup, or provider installation.
+- Podway-created Primary Runs, automatic Run-per-node creation, live Primary
+  replacement, driver ownership generations, or cross-host handoff.
+- Fan groups, parallel cursors, claims, leases, dynamic maps, timers, join,
+  continuation generations, and the Web console.
+- Per-round task storage, transcripts, arbitrary artifact bytes, or a second
+  evidence ledger.
+- Changes to default/built-in/Aquarium Procedure behavior, release metadata,
+  installed tools, runtime modes, LaunchAgents, or active runtime state.
 
-### 4.4 Supervisor and worker loop
+## 4. Accepted design and implementation constraints
 
-The external adapter should derive stable idempotency and provenance from the
-Podway workspace, session, placement, attempt, and round identity. It may open a
-new External Specialist Engagement or recover the existing one, then hire or
-reuse a member whose Role and Agent Configuration match exactly.
+### 4.1 Responsibility model
 
-One round is one external Specialist task accepted for this Podway attempt. The
-initial assignment is round one; every accepted feedback assignment increments
-the count. A failure before external task acceptance does not consume a round.
-An accepted task with an uncertain outcome does consume a round because silently
-reissuing it could duplicate work.
+Follow SDG-001 through SDG-003. A Direct action is Primary-owned. A Delegated
+action has Specialist execution and Primary supervision. Decision and goal
+assessment remain Primary-owned. One continuing Primary may drive many
+placements; a compatible worker may execute multiple tasks without making
+node identity equal Run identity.
 
-The supervisor may continue while the declared budget remains and does not
-submit acceptance merely because the worker returned a response. Podway needs no
-separate delegation-begin mutation in the sequential design: the executor owns
-in-flight recovery, and deterministic external provenance lets a restarted
-supervisor recover the same engagement and task rather than create another one.
+Keep procedure requirement and execution binding separate. `binding_ref` names
+an externally supplied integration choice; it is not a runtime command or a
+new global registry. Role and Role digest are requirements. Actual adapter,
+Primary host, executor scope, worker, task, and accepted-task identity are
+bounded provenance on the receipt. Do not hard-code an external Dolgorae
+engagement ID into the core receipt shape.
 
-### 4.5 Structural acceptance receipt
+The foundation adds no authentication. Any adapter must keep trusted identity
+and Controller authority outside model-controlled payloads. The core must not
+mistake an `external`/`managed` label for authority, select a provider, grant
+write permission, or satisfy a missing human approval.
 
-The preferred public surface is a separate mutation conceptually equivalent to
-`delegation accept --stdin`. The name and exact grammar are illustrative and
-non-contractual. Acceptance records the worker result and supervisor decision
-without advancing the cursor. Ordinary action `complete` subsequently requires
-both the action's normal item satisfaction and one current accepted delegation
-receipt.
+### 4.2 Opt-in and admission sequencing
 
-The closed input should carry normal workspace, session revision, active
-attempt, and idempotency fences plus:
+Absence of `delegation` must be byte-stable and behavior-stable. There is no
+empty declaration, second execution flag, provider availability check, or new
+setup requirement on the Direct path. Delegation rejects skip-enabled action
+placements and every decision placement. No default or tracked workflow is
+silently converted.
 
-- executor adapter identity and version;
-- external engagement, member Run, and final task identities;
-- Role reference and Role snapshot digest;
-- immutable Agent Configuration digest;
-- work-package input-basis digest;
-- used round count;
-- final result digest and a bounded non-secret summary;
-- observed worker disposition, `idle` or `released`; and
-- required supervisor actor attribution and explicit acceptance.
+Authoring/domain work may be implemented before runtime integration, but
+public runtime admission must reject delegated Procedures until storage,
+readiness, acceptance, recovery, and truthful projections are all coherent.
+Use the existing contract registration/admission pattern to separate reserved
+shapes from executable support. Do not introduce an undocumented environment
+flag that lets partial code enter live execution.
 
-Acceptance rejects a Role, basis, attempt, round count, or disposition that does
-not match the active declaration. `retain` requires an idle worker; `release`
-requires completed member release before acceptance. Exact idempotent replay
-returns the original receipt, while same-key drift and stale identities fail
-closed. The receipt is current-attempt state and immutable history after retry or
-rework invalidates it.
+Only V2SDG-007 may activate the complete local feature through explicit
+custom-Procedure opt-in, after it verifies all earlier invariants together.
+That source capability is still not an instruction to deploy it.
 
-All receipt facts remain caller supplied. Podway validates structure, declared
-identity equality, digest format, bounds, freshness, and lifecycle vocabulary.
-It does not query Dolgorae, validate a credential, inspect a transcript, verify
-external bytes, or claim factual attestation. This follows Podway's existing
-same-user and external-check-result trust boundary.
+### 4.3 Input, accepted task, and output identities
 
-### 4.6 Retention, exhaustion, and failure
+The package binds admitted Procedure and attempt input, not mutable current
+output items or the current session revision. It includes exact selected
+upstream evidence identities. The package read uses fresh fences outside its
+digest. Repeated package reads and recording final action evidence do not
+create new assignments.
 
-After acceptance:
+The integration resolves complete evidence through current paging and creates
+its own executor request. Podway package digest and actual accepted-task digest
+are separate. Do not claim that matching an opaque digest proves the external
+request contained all required bytes; that is an adapter conformance obligation.
 
-- `retain` leaves the exact compatible worker idle for possible reuse by a later
-  delegated placement in the same Podway session; and
-- `release` requires the adapter to finish member release before it submits the
-  acceptance receipt.
+Before receipt acceptance, the Primary records the action's final evidence and
+corrections. Acceptance requires ordinary item satisfaction and no open blocker,
+and the daemon freezes the accepted item-state digest. An actual output edit
+after acceptance, including a cosmetic or optional-item correction, makes that
+receipt stale. Preserve the immutable receipt and require explicit retry/rework
+before another acceptance; do not add receipt-replacement or round history.
 
-A later placement may reuse a retained worker only when executor, Role
-reference, Role snapshot digest, and Agent Configuration digest all match. A
-different or uncertain identity requires a new worker. A terminal Podway session
-does not retroactively depend on post-terminal executor cleanup; the adapter
-closes retained engagement state separately and reports any recovery debt. An
-author who requires pre-transition cleanup uses `release` on that placement.
+Implement the complete [post-acceptance matrix](../specs/interfaces/supervised-delegation.md#post-acceptance-behavior-matrix),
+not a blanket invalidation on any session-revision change. True no-ops, reads,
+failed/rolled-back edits, and block/unblock without item changes retain the
+previous receipt applicability. An edit followed by restoring identical text
+remains stale because its item revision changed. Exact acceptance replay returns
+the stored result, not a fresh grant to complete; current observation must still
+report intervening staleness.
 
-When all declared rounds are consumed without supervisor acceptance, the
-primary agent should:
+Use the supported sequence of final evidence, blocker clearance, confirmed
+worker disposition, acceptance, then explicit completion. Guidance must make the
+fresh-attempt cost visible before acceptance and after any accepted-item edit.
+A local retry is neither automatic external redispatch nor permission to copy
+an old receipt to a new package. Explicit artifact reuse/revalidation belongs to
+a qualified integration, not a shortcut added to this foundation.
 
-1. leave the worker idle;
-2. record an ordinary Podway blocker on the active action;
-3. notify the user with the used rounds and a bounded summary of the last known
-   result; and
-4. wait for an explicit choice to retry, rework, or cancel.
+### 4.4 Storage and mutation model
 
-No automatic retry or failure route occurs. Retry creates a fresh action attempt
-and a fresh round budget; it may reuse the exact idle worker. Rework and
-cancellation require the adapter to release affected worker state according to
-its own durable lifecycle. Results or receipts from the old attempt remain
-inspectable history but cannot satisfy the new attempt. A late receipt from an
-invalidated attempt is rejected as stale.
+Use one additive per-attempt receipt table, one immutable receipt per attempt,
+and existing session/attempt foreign keys. The provisional next schema
+allocation is 12, rebased if another adopted change has consumed it. Admission,
+receipt persistence, state revision, and terminal job envelope must share the
+existing atomic state transaction.
 
-Role-resolution failure, digest drift, unavailable executor state, ambiguous
-external outcome, receipt mismatch, and required-release failure also leave the
-action incomplete. Existing blocker, retry, rework, cancellation, response-loss,
-and job-lookup mechanisms remain the control paths; this candidate does not
-invent automatic graph movement for those failures.
+Do not rewrite old snapshots or reserialize old item/goal/trace/terminal data.
+Record nothing new for Direct attempts. Reconstruct with the same fail-closed
+integrity discipline as existing stored state. A fabricated receipt or receipt
+attached to a Direct attempt is corruption, not an alternate execution mode.
 
-### 4.7 Compatibility direction
+A schema bump is not automatically reversible merely because its table is
+additive. Qualification must prove migration and failure recovery on isolated
+copies, and establish older-binary rejection. No implementation task modifies
+production data or promises a downgrade without a tested compatible restore.
 
-The preferred direction is an optional Procedure v2 extension rather than a
-second authoring model or a dependency on the possible Procedure successor in
-the graph-engineering candidate.
+### 4.5 Observation and history
 
-Procedures that omit `delegation` should retain their existing canonical bytes,
-digests, projections, and runtime behavior. Existing admitted sessions continue
-from their immutable snapshots and are never rewritten. A Podway release that
-does not know the new closed field rejects a delegated Procedure rather than
-ignoring it. Automation discovers the new route and result schemas through the
-manifest-bound capability catalogs and never infers support from product version
-text.
+Follow the exact target family allocation in SDG-008. Preserve all old result
+families and stored terminal envelopes. A non-delegated snapshot keeps its old
+result shape. A delegated snapshot uses coherent new prepared, running,
+terminal, graph, and archive projections, including when its current placement
+is Direct.
 
-Promotion must decide the exact versioning of changed observation, preview,
-graph, acceptance, completion-error, and stored-state contracts. An additive
-authoring field does not by itself justify silently adding fields to an existing
-closed result schema.
+The Primary must be able to distinguish ordinary item readiness from delegation
+readiness. No `complete` suggestion may bypass missing or stale acceptance.
+Default status, logs, and progress views reveal only safe identity/status
+summaries, not complete packages, result summaries, credentials, or transcripts.
+Complete explicit reads and bounded history must satisfy the public frame
+contract. Never treat a history receipt as current progression evidence.
 
-### 4.8 Relationship to future parallel work
+### 4.6 Failure handling
 
-This candidate retains exactly one active outer placement and attempt. It adds
-neither an execution frontier nor concurrent Podway work units.
+The target specification owns exact error and replay behavior. In particular:
 
-If the graph-engineering candidate later earns promotion, one fan work unit may
-reuse the delegation descriptor, canonical work-package basis, external result
-identity, and structural receipt. The parallel contract would additionally need
-work-unit identity, claim or lease generation, dependency readiness, effects,
-and join semantics. Those additions remain owned by that candidate and must not
-be smuggled into this sequential feature.
+- Resolve idempotency before considering a lost response to be new work.
+- Keep acceptance and completion as distinct explicit mutations.
+- Do not clear open blockers, repair an unknown external result, or skip required
+  delegation to make a workflow appear successful.
+- Retry/rework/cancel and confirmed maintenance remain locally available under
+  existing rules; none waits for an external executor.
+- A local cancellation is not proof of worker quiescence. The adapter must
+  resolve external writers before dispatching replacement work.
+- Preserve the original failure, evidence, and receipt on mismatches; no broad
+  reset or silent state deletion is an acceptable repair.
+- Test external Primary restart and managed Primary restart using the same
+  stable identity. A different Primary/host is an unsupported handoff, not a
+  restart that may reuse authority automatically.
 
-## 5. Open decisions
+## 5. Non-disruption contract
 
-The preferred direction is not ready for implementation. These questions remain
-material:
+These are blocking acceptance conditions, not performance or quality goals.
 
-1. Whether a real workflow experiment demonstrates a recovery or omission gap
-   that Procedure instructions, ordinary recorded items, and Dolgorae's own
-   durable engagement state cannot already close adequately.
-2. The exact field names, identifier grammar, Unicode and encoded-size limits,
-   and hard maximum for `max_rounds`.
-3. The exact canonical work-package schema, preview budgets, digest domain, and
-   treatment of goal revisions made while the action is active.
-4. The exact acceptance input, result, observation, history, and error schema
-   versions and their manifest registrations.
-5. Whether the receipt belongs in dedicated attempt storage or can reuse an
-   existing immutable recorded-value representation without confusing it with
-   authored evidence items.
-6. The exact adapter configuration that selects executor-owned Profile, model,
-   access, and Agent Configuration without hidden inference or a second Role
-   instruction body.
-7. Whether external engagement and member identifiers may appear in every
-   public history projection or require a more compact opaque correlation
-   identity.
-8. Exact recovery behavior when supervisor acceptance is durable but the later
-   action-complete response is lost, or when executor release succeeds but
-   receipt acceptance does not.
-9. Exact terminal-session cleanup reporting when retained executor state cannot
-   be closed.
-10. Which accepted ADR extends ADR-0010 to allow the generic declaration and
-    structural receipt while preserving its no-adapter and no-auto-completion
-    decisions, and whether ADR-0019 permits this additive Procedure v2 evolution
-    without further amendment.
+| Gate | Required protection |
+|---|---|
+| Existing Direct behavior | Canonical bytes/digests, supported paths, default selection, old result shapes, and domain/error meanings remain unchanged |
+| Existing sessions | Prepared, running, completed, cancelled, and inactive data survive; no admission-time reset, rebind, or snapshot rewrite |
+| Missing external runtime | Cannot affect daemon startup/readiness, ordinary workspace discovery, Direct actions, or local recovery |
+| Mixed worktrees | A delegated action waiting for acceptance cannot stall unrelated Direct work or create provider-driven queue work |
+| Development isolation | No production or Aquarium runtime path, service, socket, registry, mode, or active session is used as a fixture |
+| Migration | Additive data preservation, transaction/crash recovery, exact newer-state rejection, and explicit backup/restore evidence |
+| Strict peer identity | Preserve manifest/mode agreement; no compatibility bypass or fallback to an installed daemon |
+| Intermediate commits | Every commit leaves the established Direct path usable; delegated admission stays closed until coherent |
+| Full acceptance | Complete development gate and independent review; no accepted known regression or waived supported-path test |
+| Deployment | Not authorized by a completed task, epic, test, commit, or published development bundle |
 
-## 6. Roadmap promotion conditions
+A detected regression blocks the current task and the epic. Do not defer it to
+`docs/deferred-feedback/`, remove the relevant test, weaken the expected result,
+or ask the owner to reset their active work as a workaround. Investigate in an
+isolated fixture and restore the preserved Direct behavior before proceeding.
 
-Promotion requires all of the following:
+## 6. Roadmap ownership and commit-sized work
 
-1. Run a preregistered disposable experiment using current Procedure v2 and a
-   real compatible External Specialist Engagement. Cover direct execution,
-   required delegation, repeated feedback, retained reuse, release, supervisor
-   restart, executor restart, response loss, round exhaustion, retry, rework,
-   cancellation, and late results.
-2. Compare prose-only instructions plus executor-owned durable state with the
-   proposed declaration and receipt. Identify a concrete failed invariant or
-   omission that the Podway feature fixes. If the existing composition is
-   sufficient, remove or narrow this candidate instead of promoting it.
-3. Revalidate Dolgorae's then-current checked Role-source, Role-resolution,
-   External Specialist Engagement, immutable Agent Configuration, task-result,
-   reuse, and release contracts. A planned external task or private draft is not
-   an implementation dependency authority.
-4. Close every material decision in section 5, including all bounds, public
-   schema versions, storage ownership, failure semantics, and external adapter
-   prerequisites.
-5. Accept the necessary architecture decision for generic supervised delegation
-   and explicitly confirm preservation of the single-cursor, no-execution,
-   no-provider-core, no-semantic-attestation, and explicit-completion boundaries.
-6. Perform a same-user threat and privacy review covering forged receipts,
-   leaked executor identifiers, credential exclusion, stale external results,
-   idempotency conflicts, and malicious or buggy adapters.
-7. Register one owning roadmap epic and create a decision-complete adopted
-   dossier with implementation tasks, compatibility handling, focused tests,
-   development-gate acceptance, and any later release qualification.
+The roadmap owns order and state. The task sections below own implementation
+scope and acceptance, not status. Execute tasks numerically, one active task at
+a time. One task is one logical implementation-and-test commit. Commit
+operations themselves still require owner authorization.
 
-The adopted verification design must cover at least:
+### V2SDG-001: Freeze the continuity baseline and qualification matrix
 
-- byte- and digest-stable behavior for Procedures without delegation;
-- rejection of delegation on non-action placements and rejection of malformed,
-  unknown, over-bound, or incomplete declarations;
-- deterministic work-package projection and input-basis digesting;
-- refusal to complete without a current accepted receipt;
-- Role, Role-digest, basis, attempt, round, lifecycle, and Agent Configuration
-  mismatches;
-- acceptance idempotency, detached response loss, lookup, replay, daemon restart,
-  and stale-attempt rejection;
-- retained worker reuse and required worker release;
-- exhaustion blocker creation and the user-notification handoff;
-- executor and supervisor restart without duplicate engagement, member, or task
-  creation; and
-- proof that no worker event or receipt acceptance automatically advances the
-  Podway cursor.
+Purpose: turn the non-disruption requirement into executable comparisons before
+changing product behavior.
 
-## 7. References
+- Record the exact implementation baseline and the selected previous stable
+  contract/schema baseline; do not treat a dirty checkout as a release receipt.
+- Inventory existing Procedure/preset canonical identities, result families,
+  Store generation, supported reference paths, and named-mode behavior.
+- Add reusable isolated fixtures for Direct and future delegated scenarios,
+  including a populated Store with current and inactive sessions.
+- Define negative cases, fault points, proof locators, and capability-admission
+  checks before introducing the feature, including every SDG-006 post-acceptance
+  case with unchanged Direct controls.
+- Record the external source/schema baseline and review inputs from the adapter
+  worksheet for the next task. No credential, live call, or runtime dependency
+  is required; this task does not certify either real adapter.
+- Preserve unrelated edits and keep all qualification state outside real
+  account/runtime roots.
 
-- [Documentation authority and precedence](../README.md)
-- [TODO candidate lifecycle](README.md)
-- [ADR-0010: Integrate External Tools Through Generic CLI and JSON](../architecture-decision-records/0010-generic-cli-json-integration.md)
-- [ADR-0017: Permit Single-Cursor Convergence](../architecture-decision-records/0017-single-cursor-convergence.md)
-- [ADR-0019: Make Procedure v2 the Only Product Model](../architecture-decision-records/0019-procedure-v2-only-product.md)
-- [ADR-0025: Bind External Check Results Structurally](../architecture-decision-records/0025-structurally-bound-external-check-results.md)
-- [Procedure and Item Specification](../specs/domain/procedure-and-item-specification.md)
-- [Automation Client Contract](../specs/interfaces/automation-client-contract.md)
-- [User Workflows](../specs/product/user-workflows.md)
-- [Podway Graph Engineering Evolution](TODO-podway-graph-engineering-evolution.md)
+Done when baseline tests pass for the correct reasons and expected deltas are
+explicit. No product behavior or delegation admission changes in this task.
+
+### V2SDG-002: Reserve the closed contracts and traceability
+
+Purpose: close field semantics before encoding the specification, without
+advertising unavailable runtime work.
+
+- Before any public schema reservation, complete the SDG-003 semantic mapping
+  review using the [source-backed worksheet](../implementation-tips/delegation-adapter-contract-review.md).
+  Cover every required execution field, result digest, count and disposition
+  for both Primary-host paths, including authority, permitted access and replay.
+- Close exact digest domains and normalization. Do not equate Role-name hashes
+  with Role snapshots, prepared requests with accepted tasks, or internal
+  Store columns with supported adapter getters. Record each unresolved real
+  path as unavailable pending a named integration prerequisite.
+- An unresolved external implementation does not block a defined Podway
+  contract. An unresolved meaning of the generic contract does block its
+  reservation. Do not weaken required fields, fabricate values, read private
+  executor state, or introduce an external runtime/test dependency to proceed.
+- Reserve the declaration, package, acceptance, receipt, projection, job-wrapper,
+  and error families from SDG-002 through SDG-009 in canonical assets.
+- Update bounded decoding, manifest/catalog registration, known-answer fixtures,
+  and compatibility/requirement traceability through existing reservation rules.
+- Preserve each old closed result's fields and exact stored terminal envelopes.
+- Add decoder negatives for unknown fields, wrong types, over-bound values,
+  secret-shaped prohibited fields, duplicate selectors, and identity mismatch.
+- Keep executable capability advertisement and runtime admission disabled.
+
+Done when the offline field/digest review is recorded, every local field meaning
+is closed, unsupported real mappings have explicit dispositions, schema/contract
+tests and old fixtures pass, the manifest delta is explicit, and unavailable
+runtime routes reject before mutation. Mapping known answers are not claims
+that Podway authenticates external bytes or that a real adapter was tested.
+
+### V2SDG-003: Implement placement semantics and canonical work packages
+
+Purpose: separate execution responsibility from graph type and make input exact.
+
+- Add core values and configuration mapping for the optional declaration.
+- Preserve omitted-field bytes and all old preset digests.
+- Reject delegation on decisions/goal assessments, on skip-enabled placements,
+  and on inputs whose delegated package cannot satisfy the frame budget.
+- Implement the pure package projection, domain-separated digest, and tests
+  proving output recording does not change input identity.
+- Preserve one outer cursor and omit all worker/claim/scheduler abstractions.
+
+Done when YAML/JSON equivalence, bounds, digest sensitivity/stability, and
+Direct compatibility pass. Delegated runtime admission remains closed.
+
+### V2SDG-004: Add immutable per-attempt persistence and migration
+
+Purpose: store a receipt without rewriting existing authority.
+
+- Implement the additive table/migration and closed receipt codec with current
+  session/attempt linkage, uniqueness, immutable bytes, and reconstruction checks.
+- Integrate atomic receipt/state/job outcome persistence and ordinary replay.
+- Preserve old snapshots, item values, goal/trace data, archived state, and job
+  terminal envelopes byte-for-byte where already canonical.
+- Verify crash/transaction failures, orphan rejection, purge/reset lifecycle,
+  populated-Store migration, and unsupported downgrade in isolated fixtures.
+- Register the new crash boundaries in the canonical quality inventory.
+
+Done when native Store tests prove data preservation and atomicity. No live
+migration, managed-generation activation, or public delegated admission occurs.
+
+### V2SDG-005: Enforce acceptance and completion semantics
+
+Purpose: prevent declaration-only supervision from becoming a bypassable label.
+
+- Implement pure acceptance validation, ordinary preconditions, declaration and
+  package matching, round/disposition checks, and daemon-computed item-state digest.
+- Enforce one immutable acceptance per attempt and unchanged cursor on success.
+- Add the delegated completion gate and stale-after-edit behavior; do not add
+  these conditions to Direct attempts.
+- Cover exact replay, same-key drift, different-key duplicate acceptance,
+  retry/rework/goal invalidation, skip rejection, and existing error precedence.
+- Test every SDG-006 matrix row: cosmetic/optional-item edits, true no-op,
+  edit-and-revert, failed/rolled-back writes, block/unblock, ordinary revision
+  changes, and replay after an intervening edit. Acceptance's own session
+  revision increment must not invalidate it.
+- Exercise acceptance/edit/completion ordering at the transaction boundary;
+  use current fences for semantic tests and retain old fence-error precedence
+  in stale-request cases. A warning is never the completion gate.
+- Keep local cancel/retry/rework/reset behavior free of external waits and
+  automatic external redispatch. Never repair staleness by replacing a receipt.
+
+Done when native state/transaction tests prove valid and adversarial paths,
+including unchanged Direct results. Public delegated admission stays closed.
+
+### V2SDG-006: Implement truthful projections and bounded history
+
+Purpose: make every client-visible view agree with the completion gate.
+
+- Implement the new package/acceptance results and delegated snapshot versions
+  of next, observe, status, prepared view, preview, and graph.
+- Mark Direct versus Delegated responsibility without implying a live worker
+  observation or authenticated actor.
+- Suppress unsafe complete suggestions and expose exact missing/stale reasons
+  and supported local recovery. Explain the final-record-before-accept sequence
+  and the fresh-attempt cost of later item edits before acceptance.
+- For a current receipt, explain that an actual accepted-item change will make
+  it stale. For a stale receipt, distinguish a successful item edit from failed
+  completion and point to explicit retry/rework, not automatic acceptance or
+  redispatch. Current observation must not inherit an old replay's success.
+- Keep warnings in permitted carriers and planned delegated projections; no
+  new confirmation, extra JSON prose, or Direct result-field changes.
+- Extend current/retained attempt history with bounded immutable receipt
+  summaries and the explicit single-receipt read, while preserving old Direct
+  result shapes and existing evidence-paging scope.
+- Cover byte limits, truncation/total honesty, Unicode, privacy, and projections
+  across prepared/running/terminal/inactive states.
+
+Done when projection/schema tests prove cross-surface consistency. No user-facing
+capability claims precede the next integration task.
+
+### V2SDG-007: Integrate CLI/daemon routes and coherent opt-in admission
+
+Purpose: expose the complete local feature without a Dolgorae dependency.
+
+- Add the package, accept, and receipt public routes/CLI commands, help/completion, bounded stdin,
+  native dispatch, versioned results, and durable job lookup/wait behavior.
+- Tie runtime admission to the fully implemented contract set. Activate the
+  explicit custom-Procedure path only after all storage, gates, views, and
+  recovery surfaces pass native CLI/daemon tests together.
+- Keep ordinary startup, workspace access, presets, Direct paths, and command
+  selection free of adapter discovery and new setup requirements.
+- Exercise missing receipt, stale receipt, response loss, strict manifest/mode
+  mismatch, and unrelated Direct worktree progress.
+- Verify native help and guidance teach final evidence/corrections and worker
+  settlement before acceptance, then explicit completion. Test stale-after-edit
+  diagnostics, historic-replay versus current-state distinction, and unchanged
+  exit/result semantics for successful edits and Direct commands.
+- Do not add a bundled provider adapter, a mock success command, or a mechanism
+  that turns sample receipts into real-work acceptance.
+
+Done when a controlled test client can complete the whole delegated path and the
+baseline Direct suite still passes. This is source implementation, not rollout.
+
+### V2SDG-008: Qualify lifecycle, migration, and cross-host invariants
+
+Purpose: challenge the integrated path without contacting a real provider.
+
+- Run a deterministic external-runtime fixture through both `external` and
+  `managed` Primary scenarios using identical procedure semantics.
+- Exercise feedback counts, retained/released receipts, incompatible Role,
+  configuration provenance, executor uncertainty, Primary restart, and late results.
+- Inject crashes and lost responses around receipt commit and explicit complete;
+  never rerun external work merely because a Podway response was lost.
+- Prove the full post-acceptance matrix through native calls, including
+  cosmetic/optional-item corrections, true no-op, edit-and-revert, failed
+  transaction, block/unblock, acceptance-response loss followed by an edit,
+  exact lookup/replay, and fresh-attempt history. Use ordinary fences.
+- Count external assignments/effects in the controlled fixture and prove that
+  reads, Podway response-loss recovery, edits and local retry do not cause an
+  automatic redispatch. Keep a relabeled old receipt invalid under the new
+  package; explicit artifact revalidation is an integration obligation, not
+  evidence that a real executor was exercised here.
+- Repeat populated-Store migration and failure recovery through actual binaries
+  in isolated named runtimes, including concurrent unaffected Direct work.
+- Record real adapter and live model qualification as not performed, not passed.
+
+Done when every local acceptance scenario has native proof and no supported
+Direct regression remains. No private runtime is left running after qualification.
+
+### V2SDG-009: Close documentation, full gate, and independent acceptance
+
+Purpose: establish development readiness without implying operational activation.
+
+- Promote implemented behavior into canonical architecture, CLI/IPC/JSON/error,
+  storage, trust, testing, and requirement-traceability owners.
+- Update source-distributed authoring/runtime guidance only for implemented
+  capabilities, preserving opt-in and the lack of live adapters. Do not install it.
+- Run the complete `make test` gate through the repository's prescribed test
+  tooling and obtain an independent whole-epic review against the baseline.
+- Resolve every valid blocking finding; do not turn continuity failures into
+  deferred work or replace runtime proof with mocked success.
+- Replace all dossier-only durable claims/links, remove this dossier and its
+  adopted index entry at completion, and update roadmap evidence.
+- Hand off exact tested source/manifest/Store identities, the reviewed adapter
+  field/digest matrix and unavailable-path prerequisites, the documented
+  post-acceptance correction cost, and separately required full release/upgrade
+  qualification. Preserve the reviewed matrix outside the retiring dossier.
+
+Done when development acceptance and independent review are recorded against
+one coherent candidate. Release selection, tagging, publication, installation,
+Aquarium activation, and live use remain outside this task and epic.
+
+## 7. Requirements and verification traceability
+
+| Requirement | Primary implementation owners | Required proof |
+|---|---|---|
+| SDG-001 responsibilities | 002, 003, 009 | No new node/token/worker model; host-neutral fixture |
+| SDG-002 declaration | 002, 003, 007 | Closed authoring negatives, omitted-field byte stability, coherent opt-in |
+| SDG-003 identity | 001, 002, 005, 008 | Pinned offline field/authority/digest matrix, permitted sources, unavailable real paths, distinct IDs, both host fixtures, no privilege from attribution |
+| SDG-004 package | 003, 006, 008 | Stable input digest, complete-evidence adapter contract, maximum frames |
+| SDG-005 acceptance | 004, 005, 007 | Native atomic commit, replay, exact declaration/input/result linkage |
+| SDG-006 readiness | 005, 006, 007, 008 | Complete post-acceptance matrix, no-op and rollback preservation, edit/revert staleness, replay versus current state, explicit correction cost and safe guidance |
+| SDG-007 lifecycle | 004, 005, 008 | Restart, late result, retry/rework/goals, no automatic external redispatch, no receipt relabeling, external uncertainty without local deadlock |
+| SDG-008 public versions | 002, 006, 007 | Frozen old payloads, closed new branches, mode/manifest mismatch |
+| SDG-009 persistence | 004, 008 | Byte-preserving migration, crashes, corruption, downgrade refusal |
+| SDG-010 continuity | 001, 007, 008, 009 | All baseline paths, cross-worktree progress, full gate, independent review |
+
+Numbers in this table refer to `V2SDG-<number>` with three-digit suffixes.
+Tests and durable evidence locators belong in canonical quality and traceability
+assets, not references to this temporary dossier.
+
+## 8. Release and handoff acceptance
+
+Use the [non-disruptive implementation guidance](../implementation-tips/supervised-delegation.md)
+for isolation, test ordering, and deployment exclusions. A future release owner
+must rebase against the actual previous stable Store and contract generation,
+select the full distribution gate, and execute the existing upgrade QA plus
+V2SDG scenarios on copies. A new schema may prohibit the ordinary Aquarium
+managed-generation activation path; do not bypass that restriction.
+
+The supported claim at epic completion is: the Podway foundation is implemented
+and passed local/native deterministic conformance at the exact tested revision.
+It is not: Dolgorae works end to end, Primary handoff is supported, rollout has
+zero risk, installed state was upgraded, or old clients can talk to a new daemon.
+
+## 9. References
+
+- [Documentation authority](../README.md)
+- [Dossier lifecycle](README.md)
+- [ADR-0035](../architecture-decision-records/0035-host-neutral-supervised-delegation.md)
+- [Target interface specification](../specs/interfaces/supervised-delegation.md)
+- [Implementation and continuity guidance](../implementation-tips/supervised-delegation.md)
+- [Adapter field and digest review](../implementation-tips/delegation-adapter-contract-review.md)
+- [Remaining real integration](TODO-podway-supervised-delegation-integration.md)
+- [Graph engineering candidate](TODO-podway-graph-engineering-evolution.md)
+- [Release upgrade QA](../implementation-tips/release-upgrade-qa.md)
+- [Testing and conformance](../specs/quality/testing-and-conformance.md)
+- [Requirements traceability](../specs/quality/requirements-traceability.md)
