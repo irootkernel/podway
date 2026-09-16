@@ -360,7 +360,7 @@
       ]
     },
     "sessionArchive": { "required": ["workspace", "job"], "properties": { "command": { "const": "session.archive" }, "result": { "$ref": "urn:podway:schema:session-archive-result:v1" } } },
-    "sessionArchiveList": { "required": ["workspace"], "properties": { "command": { "const": "session.archive_list" }, "result": { "$ref": "urn:podway:schema:session-archive-list-result:v1" } }, "not": { "anyOf": [{ "required": ["job"] }, { "required": ["session"] }] } },
+    "sessionArchiveList": { "required": ["workspace"], "properties": { "command": { "const": "session.archive_list" }, "result": { "oneOf": [{ "$ref": "urn:podway:schema:session-archive-list-result:v1" }, { "$ref": "urn:podway:schema:session-archive-list-result:v2" }] } }, "not": { "anyOf": [{ "required": ["job"] }, { "required": ["session"] }] } },
     "sessionArchiveShow": { "required": ["workspace"], "properties": { "command": { "const": "session.archive_show" }, "result": { "$ref": "urn:podway:schema:session-archive-show-result:v1" } }, "not": { "anyOf": [{ "required": ["job"] }, { "required": ["session"] }] } },
     "sessionArchivePurge": { "required": ["workspace"], "properties": { "command": { "const": "session.archive_purge" }, "result": { "$ref": "urn:podway:schema:session-archive-purge-result:v1" } }, "not": { "anyOf": [{ "required": ["job"] }, { "required": ["session"] }] } },
     "status": { "properties": { "command": { "const": "session.status" }, "result": { "oneOf": [{ "$ref": "urn:podway:schema:status-result:v2" }, { "$ref": "urn:podway:schema:status-result:v3" }] } } },

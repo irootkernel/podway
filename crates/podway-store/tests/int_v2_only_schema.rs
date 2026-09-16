@@ -48,6 +48,51 @@ fn populated_graph_state() -> GraphSessionStateV2 {
     crate::int_v2_goal_state::rich_v2_state_for_schema_migration()
 }
 
+fn restore_capped_task_sessions(connection: &Connection, reference: &Connection) {
+    let table_sql: String = reference
+        .query_row(
+            "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'v2_task_sessions'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let index_sqls: Vec<String> = reference
+        .prepare(
+            "SELECT sql FROM sqlite_schema WHERE type = 'index' \
+             AND tbl_name = 'v2_task_sessions' AND sql IS NOT NULL ORDER BY name",
+        )
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    connection
+        .execute_batch(
+            "PRAGMA foreign_keys = OFF;
+             PRAGMA legacy_alter_table = ON;
+             ALTER TABLE v2_task_sessions RENAME TO v2_task_sessions_v11;
+             DROP INDEX IF EXISTS ux_v2_task_sessions_one_current;
+             DROP INDEX IF EXISTS ix_v2_task_sessions_archive_order;",
+        )
+        .unwrap();
+    connection.execute_batch(&table_sql).unwrap();
+    connection
+        .execute_batch(
+            "INSERT INTO v2_task_sessions SELECT * FROM v2_task_sessions_v11;
+             DROP TABLE v2_task_sessions_v11;",
+        )
+        .unwrap();
+    for index_sql in index_sqls {
+        connection.execute_batch(&index_sql).unwrap();
+    }
+    connection
+        .execute_batch(
+            "PRAGMA legacy_alter_table = OFF;
+             PRAGMA foreign_keys = ON;",
+        )
+        .unwrap();
+}
+
 fn restore_schema_v8_shape(connection: &Connection) {
     let reference = Connection::open_in_memory().unwrap();
     for ddl in [
@@ -62,6 +107,7 @@ fn restore_schema_v8_shape(connection: &Connection) {
     ] {
         reference.execute_batch(ddl).unwrap();
     }
+    restore_capped_task_sessions(connection, &reference);
     let evidence_table_sql: String = reference
         .query_row(
             "SELECT sql FROM sqlite_schema WHERE type = 'table' \
@@ -107,12 +153,35 @@ fn restore_schema_v8_shape(connection: &Connection) {
             "INSERT INTO v2_resolved_evidence_references
              SELECT * FROM v2_resolved_evidence_references_v9;
              DROP TABLE v2_resolved_evidence_references_v9;
-             DELETE FROM schema_migrations WHERE version IN (9, 10);
+             DELETE FROM schema_migrations WHERE version IN (9, 10, 11);
              PRAGMA user_version = 8;
              PRAGMA legacy_alter_table = OFF;
              PRAGMA foreign_keys = ON;",
         )
         .unwrap();
+}
+
+fn restore_schema_v10_shape(connection: &Connection) {
+    let reference = Connection::open_in_memory().unwrap();
+    for ddl in [
+        podway_store::schema::sqlite_v1_ddl(),
+        podway_store::schema::sqlite_v2_ddl(),
+        podway_store::schema::sqlite_v3_ddl(),
+        podway_store::schema::sqlite_v4_ddl(),
+        podway_store::schema::sqlite_v5_ddl(),
+        podway_store::schema::sqlite_v6_ddl(),
+        podway_store::schema::sqlite_v7_ddl(),
+        podway_store::schema::sqlite_v8_ddl(),
+        podway_store::schema::sqlite_v9_ddl(),
+        podway_store::schema::sqlite_v10_ddl(),
+    ] {
+        reference.execute_batch(ddl).unwrap();
+    }
+    restore_capped_task_sessions(connection, &reference);
+    connection
+        .execute("DELETE FROM schema_migrations WHERE version = 11", [])
+        .unwrap();
+    connection.pragma_update(None, "user_version", 10).unwrap();
 }
 
 fn restore_schema_v9_shape(connection: &Connection) {
@@ -130,6 +199,7 @@ fn restore_schema_v9_shape(connection: &Connection) {
     ] {
         reference.execute_batch(ddl).unwrap();
     }
+    restore_capped_task_sessions(connection, &reference);
     let workspace_table_sql: String = reference
         .query_row(
             "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'workspace_state'",
@@ -156,7 +226,7 @@ fn restore_schema_v9_shape(connection: &Connection) {
                       next_workspace_sequence, created_at_ms, updated_at_ms
                  FROM workspace_state_v10;
              DROP TABLE workspace_state_v10;
-             DELETE FROM schema_migrations WHERE version = 10;
+             DELETE FROM schema_migrations WHERE version IN (10, 11);
              PRAGMA user_version = 9;
              PRAGMA legacy_alter_table = OFF;
              PRAGMA foreign_keys = ON;",
@@ -288,7 +358,7 @@ pub(crate) fn restore_schema_v4_shape(connection: &Connection) {
     assert_eq!(quick_check, "ok");
     connection
         .execute(
-            "DELETE FROM schema_migrations WHERE version IN (5, 6, 7, 8, 9)",
+            "DELETE FROM schema_migrations WHERE version IN (5, 6, 7, 8, 9, 10, 11)",
             [],
         )
         .unwrap();
@@ -967,6 +1037,76 @@ fn v2dvc002_sqlite_v10_reserves_a_bounded_default_production_mode() {
 }
 
 #[test]
+fn sqlite_v11_migrates_v10_stores_and_drops_the_archive_slot_cap() {
+    let temporary = TempDir::new().unwrap();
+    let path = temporary.path().join("state.sqlite3");
+    drop(
+        SqliteStoreV1::open(
+            &path,
+            &root(),
+            identity(),
+            SqliteStoreOptionsV1::new(8).unwrap(),
+            UnixMillis::new(1),
+        )
+        .unwrap(),
+    );
+    let connection = Connection::open(&path).unwrap();
+    restore_schema_v10_shape(&connection);
+    assert_eq!(
+        connection
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        10
+    );
+    let predecessor_sql: String = connection
+        .query_row(
+            "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'v2_task_sessions'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        predecessor_sql.contains("BETWEEN 1 AND 32"),
+        "v10 fixture must restore the capped archive_slot check: {predecessor_sql}"
+    );
+    drop(connection);
+
+    drop(
+        SqliteStoreV1::open(
+            &path,
+            &root(),
+            identity(),
+            SqliteStoreOptionsV1::new(8).unwrap(),
+            UnixMillis::new(2),
+        )
+        .unwrap(),
+    );
+    let connection = Connection::open(&path).unwrap();
+    assert_eq!(
+        connection
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        11
+    );
+    let table_sql: String = connection
+        .query_row(
+            "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'v2_task_sessions'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        !table_sql.contains("BETWEEN 1 AND 32"),
+        "v11 archive_slot check must not keep the 32-slot cap: {table_sql}"
+    );
+    assert!(
+        table_sql.contains("4294967295"),
+        "v11 archive_slot check must match the u32 public bound: {table_sql}"
+    );
+    assert!(table_sql.contains("archive_slot"));
+}
+
+#[test]
 fn v2dvc004_live_schema_v10_binds_new_and_legacy_stores_to_runtime_mode() {
     let production = TempDir::new().unwrap();
     let production_path = production.path().join("state.sqlite3");
@@ -984,13 +1124,13 @@ fn v2dvc004_live_schema_v10_binds_new_and_legacy_stores_to_runtime_mode() {
     let binding: (u32, String, i64) = connection
         .query_row(
             "SELECT (SELECT user_version FROM pragma_user_version), runtime_mode,
-                    (SELECT COUNT(*) FROM schema_migrations WHERE version = 10)
+                    (SELECT COUNT(*) FROM schema_migrations WHERE version = 11)
              FROM workspace_state WHERE singleton = 1",
             [],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .unwrap();
-    assert_eq!(binding, (10, "prod".to_owned(), 1));
+    assert_eq!(binding, (11, "prod".to_owned(), 1));
     drop(connection);
 
     let before = fs::read(&production_path).unwrap();
@@ -1203,7 +1343,7 @@ fn v2ast004_runtime_migrates_v5_to_v7_without_reencoding_item_values() {
         connection
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        10
+        11
     );
     drop(connection);
 
@@ -1275,7 +1415,7 @@ fn schema_v8_evidence_rows_survive_v9_migration_and_reopen() {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .unwrap();
-    assert_eq!((version, after, migration), (10, before, 1));
+    assert_eq!((version, after, migration), (11, before, 1));
     let mut primary_key = connection
         .prepare(
             "SELECT name FROM pragma_table_info('v2_resolved_evidence_references') \
@@ -1345,7 +1485,7 @@ fn schema_v6_and_v7_upgrade_paths_migrate_to_v9() {
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .unwrap();
-        assert_eq!((version, migrations, foreign_key_violations), (10, 5, 0));
+        assert_eq!((version, migrations, foreign_key_violations), (11, 5, 0));
         let migration: (String, String) = connection
             .query_row(
                 "SELECT name, checksum FROM schema_migrations WHERE version = 9",
@@ -1485,7 +1625,7 @@ fn empty_schema_v4_inspects_read_only_then_migrates_to_v7() {
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!((version, disposition_table_count), (10, 1));
+    assert_eq!((version, disposition_table_count), (11, 1));
 }
 
 #[test]
@@ -1517,7 +1657,7 @@ fn schema_v3_without_legacy_state_migrates_to_retained_terminal_schema_v7() {
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 10);
+    assert_eq!(version, 11);
     let legacy_tables: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name IN \
@@ -1628,7 +1768,7 @@ fn schema_v3_v2_state_and_terminal_receipt_survive_v7_migration_and_reopen() {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
-    assert_eq!((version, migration, legacy_tables), (10, 6, 0));
+    assert_eq!((version, migration, legacy_tables), (11, 6, 0));
     assert_eq!(receipts.0, receipts.1);
 }
 

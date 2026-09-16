@@ -13,7 +13,7 @@ use podway_core::{
     SessionTraceV2, Sha256Digest, TerminalDispositionKindV2, TerminalDispositionV2,
     TraceSequenceV2, UnixMillis, canonicalize_json_v1, verify_canonical_json_v1,
 };
-use rusqlite::{Connection, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
@@ -39,7 +39,11 @@ const PROCEDURE_SCHEMA_DOCUMENT_V2: &str =
 const MAX_GRAPH_NODES_V2: usize = 64;
 const MAX_TASK_TITLE_CHARACTERS_V2: usize = 500;
 const MAX_TERMINAL_REASON_CHARACTERS_V2: usize = 2_000;
-pub const MAX_INACTIVE_SESSIONS_V2: u32 = 32;
+/// Newest-first archive list window. Matches ADR-0034 / protocol `SESSION_ARCHIVE_LIST_WINDOW_V2`.
+pub const MAX_ARCHIVED_SESSION_LIST_WINDOW_V2: usize = 256;
+const MAX_ARCHIVE_SLOT_V2: i64 = u32::MAX as i64;
+const ARCHIVE_SUMMARY_COLUMNS_V2: &str = "session_id, task_title, lifecycle, session_revision, \
+     archive_slot, archived_at_ms, archived_workspace_revision";
 type ActiveCursorColumnsV2<'a> = (Option<&'a str>, Option<&'a str>, Option<i64>);
 
 fn invalid(reason: &'static str) -> StoreValueErrorV1 {
@@ -3387,6 +3391,27 @@ impl SessionArchiveSummaryV2 {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionArchiveListPageV2 {
+    count: u64,
+    sessions: Vec<SessionArchiveSummaryV2>,
+    oldest: Option<SessionArchiveSummaryV2>,
+}
+
+impl SessionArchiveListPageV2 {
+    pub fn count(&self) -> u64 {
+        self.count
+    }
+
+    pub fn sessions(&self) -> &[SessionArchiveSummaryV2] {
+        &self.sessions
+    }
+
+    pub fn oldest(&self) -> Option<&SessionArchiveSummaryV2> {
+        self.oldest.as_ref()
+    }
+}
+
 pub trait StoreSessionArchiveContractV2: Send + Sync {
     fn archive_current_session_v2(
         &self,
@@ -3399,7 +3424,14 @@ pub trait StoreSessionArchiveContractV2: Send + Sync {
     fn list_archived_sessions_v2(
         &self,
         identity: &DurableWorktreeIdentityV1,
-    ) -> Result<Vec<SessionArchiveSummaryV2>, StoreErrorV1>;
+        window: usize,
+    ) -> Result<SessionArchiveListPageV2, StoreErrorV1>;
+
+    fn archived_session_summary_v2(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        session_id: &SessionId,
+    ) -> Result<Option<SessionArchiveSummaryV2>, StoreErrorV1>;
 
     fn read_archived_session_v2(
         &self,
@@ -3661,8 +3693,17 @@ where
     fn list_archived_sessions_v2(
         &self,
         identity: &DurableWorktreeIdentityV1,
-    ) -> Result<Vec<SessionArchiveSummaryV2>, StoreErrorV1> {
-        (**self).list_archived_sessions_v2(identity)
+        window: usize,
+    ) -> Result<SessionArchiveListPageV2, StoreErrorV1> {
+        (**self).list_archived_sessions_v2(identity, window)
+    }
+
+    fn archived_session_summary_v2(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        session_id: &SessionId,
+    ) -> Result<Option<SessionArchiveSummaryV2>, StoreErrorV1> {
+        (**self).archived_session_summary_v2(identity, session_id)
     }
 
     fn read_archived_session_v2(
@@ -4093,28 +4134,7 @@ pub(crate) fn archive_current_session_transaction_v2(
         });
     }
 
-    let mut used = BTreeSet::new();
-    let mut statement = transaction
-        .prepare(
-            "SELECT archive_slot FROM v2_task_sessions \
-             WHERE activity = 'inactive' ORDER BY archive_slot",
-        )
-        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
-    let rows = statement
-        .query_map([], |row| row.get::<_, i64>(0))
-        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
-    for row in rows {
-        used.insert(
-            u32::try_from(row.map_err(|error| record_error(error, StoreRecordKindV1::Session))?)
-                .map_err(|_| corrupt(StoreRecordKindV1::Session))?,
-        );
-    }
-    let archive_slot = (1..=MAX_INACTIVE_SESSIONS_V2)
-        .find(|slot| !used.contains(slot))
-        .ok_or(StoreErrorV1::SessionArchiveLimitReachedV1 {
-            maximum: MAX_INACTIVE_SESSIONS_V2,
-        })?;
-    drop(statement);
+    let archive_slot = next_unused_archive_slot_v2(transaction)?;
 
     let changed = transaction
         .execute(
@@ -4165,18 +4185,120 @@ pub(crate) fn archive_current_session_transaction_v2(
     })
 }
 
-pub(crate) fn list_archived_sessions_connection_v2(
-    connection: &Connection,
-) -> Result<Vec<SessionArchiveSummaryV2>, StoreErrorV1> {
-    let mut statement = connection
-        .prepare(
-            "SELECT session_id, task_title, lifecycle, session_revision, archive_slot, \
-             archived_at_ms, archived_workspace_revision FROM v2_task_sessions \
-             WHERE activity = 'inactive' ORDER BY archived_at_ms DESC, session_id DESC",
+fn next_unused_archive_slot_v2(transaction: &Transaction<'_>) -> Result<u32, StoreErrorV1> {
+    let slot: Option<i64> = transaction
+        .query_row(
+            "SELECT MIN(candidate) FROM ( \
+             SELECT 1 AS candidate \
+             UNION ALL \
+             SELECT archive_slot + 1 FROM v2_task_sessions \
+             WHERE activity = 'inactive' AND archive_slot < ?1 \
+             ) WHERE candidate NOT IN ( \
+             SELECT archive_slot FROM v2_task_sessions WHERE activity = 'inactive' \
+             )",
+            params![MAX_ARCHIVE_SLOT_V2],
+            |row| row.get(0),
         )
         .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+    let slot = slot.ok_or(StoreErrorV1::InternalInvariantViolationV1 {
+        invariant: StoreInvariantV1::ProcedureV2GraphState,
+    })?;
+    u32::try_from(slot).map_err(|_| StoreErrorV1::InternalInvariantViolationV1 {
+        invariant: StoreInvariantV1::ProcedureV2GraphState,
+    })
+}
+
+fn session_archive_summary_from_parts_v2(
+    session_id: String,
+    task_title: String,
+    lifecycle: String,
+    revision: i64,
+    slot: i64,
+    archived_at: i64,
+    workspace_revision: i64,
+) -> Result<SessionArchiveSummaryV2, StoreErrorV1> {
+    Ok(SessionArchiveSummaryV2 {
+        session_id: SessionId::new(session_id).map_err(|_| corrupt(StoreRecordKindV1::Session))?,
+        task_title,
+        lifecycle: parse_session_lifecycle_v2(&lifecycle)?,
+        session_revision: Revision::new(persisted_u64(revision, StoreRecordKindV1::Session)?),
+        archive_slot: u32::try_from(slot).map_err(|_| corrupt(StoreRecordKindV1::Session))?,
+        archived_at: persisted_time_v2(archived_at, StoreRecordKindV1::Session)?,
+        archived_workspace_revision: Revision::new(persisted_u64(
+            workspace_revision,
+            StoreRecordKindV1::Workspace,
+        )?),
+    })
+}
+
+fn query_archive_summary_row_v2(
+    connection: &Connection,
+    sql: &str,
+    params: impl rusqlite::Params,
+) -> Result<Option<SessionArchiveSummaryV2>, StoreErrorV1> {
+    let row = connection
+        .query_row(sql, params, |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
+            ))
+        })
+        .optional()
+        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+    row.map(
+        |(session_id, task_title, lifecycle, revision, slot, archived_at, workspace_revision)| {
+            session_archive_summary_from_parts_v2(
+                session_id,
+                task_title,
+                lifecycle,
+                revision,
+                slot,
+                archived_at,
+                workspace_revision,
+            )
+        },
+    )
+    .transpose()
+}
+
+pub(crate) fn list_archived_sessions_connection_v2(
+    connection: &Connection,
+    window: usize,
+) -> Result<SessionArchiveListPageV2, StoreErrorV1> {
+    if window == 0 || window > MAX_ARCHIVED_SESSION_LIST_WINDOW_V2 {
+        return Err(StoreErrorV1::InvalidStateV1(
+            StoreValueErrorV1::IntegerOutOfRange {
+                field: "archive_list_window",
+            },
+        ));
+    }
+    let count_i64: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM v2_task_sessions WHERE activity = 'inactive'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+    let count = persisted_u64(count_i64, StoreRecordKindV1::Session)?;
+    let limit = i64::try_from(window).map_err(|_| {
+        StoreErrorV1::InvalidStateV1(StoreValueErrorV1::IntegerOutOfRange {
+            field: "archive_list_window",
+        })
+    })?;
+    let mut statement = connection
+        .prepare(&format!(
+            "SELECT {ARCHIVE_SUMMARY_COLUMNS_V2} FROM v2_task_sessions \
+             WHERE activity = 'inactive' \
+             ORDER BY archived_at_ms DESC, session_id DESC LIMIT ?1"
+        ))
+        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
     let rows = statement
-        .query_map([], |row| {
+        .query_map(params![limit], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -4188,24 +4310,60 @@ pub(crate) fn list_archived_sessions_connection_v2(
             ))
         })
         .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
-    rows.map(|row| {
-        let (session_id, task_title, lifecycle, revision, slot, archived_at, workspace_revision) =
-            row.map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
-        Ok(SessionArchiveSummaryV2 {
-            session_id: SessionId::new(session_id)
-                .map_err(|_| corrupt(StoreRecordKindV1::Session))?,
-            task_title,
-            lifecycle: parse_session_lifecycle_v2(&lifecycle)?,
-            session_revision: Revision::new(persisted_u64(revision, StoreRecordKindV1::Session)?),
-            archive_slot: u32::try_from(slot).map_err(|_| corrupt(StoreRecordKindV1::Session))?,
-            archived_at: persisted_time_v2(archived_at, StoreRecordKindV1::Session)?,
-            archived_workspace_revision: Revision::new(persisted_u64(
+    let sessions = rows
+        .map(|row| {
+            let (
+                session_id,
+                task_title,
+                lifecycle,
+                revision,
+                slot,
+                archived_at,
                 workspace_revision,
-                StoreRecordKindV1::Workspace,
-            )?),
+            ) = row.map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+            session_archive_summary_from_parts_v2(
+                session_id,
+                task_title,
+                lifecycle,
+                revision,
+                slot,
+                archived_at,
+                workspace_revision,
+            )
         })
+        .collect::<Result<Vec<_>, _>>()?;
+    let oldest = if count == 0 {
+        None
+    } else {
+        query_archive_summary_row_v2(
+            connection,
+            &format!(
+                "SELECT {ARCHIVE_SUMMARY_COLUMNS_V2} FROM v2_task_sessions \
+                 WHERE activity = 'inactive' \
+                 ORDER BY archived_at_ms ASC, session_id ASC LIMIT 1"
+            ),
+            [],
+        )?
+    };
+    Ok(SessionArchiveListPageV2 {
+        count,
+        sessions,
+        oldest,
     })
-    .collect()
+}
+
+pub(crate) fn archived_session_summary_connection_v2(
+    connection: &Connection,
+    session_id: &SessionId,
+) -> Result<Option<SessionArchiveSummaryV2>, StoreErrorV1> {
+    query_archive_summary_row_v2(
+        connection,
+        &format!(
+            "SELECT {ARCHIVE_SUMMARY_COLUMNS_V2} FROM v2_task_sessions \
+             WHERE activity = 'inactive' AND session_id = ?1"
+        ),
+        [session_id.as_str()],
+    )
 }
 
 pub(crate) fn load_archived_session_connection_v2(
@@ -4256,11 +4414,11 @@ pub(crate) fn purge_archived_session_transaction_v2(
     session_id: &SessionId,
     expected_session_revision: Revision,
 ) -> Result<SessionArchiveSummaryV2, StoreErrorV1> {
-    let summary = list_archived_sessions_connection_v2(transaction)?
-        .into_iter()
-        .find(|summary| summary.session_id() == session_id)
-        .ok_or_else(|| StoreErrorV1::SessionArchiveNotFoundV1 {
-            session_id: session_id.clone(),
+    let summary =
+        archived_session_summary_connection_v2(transaction, session_id)?.ok_or_else(|| {
+            StoreErrorV1::SessionArchiveNotFoundV1 {
+                session_id: session_id.clone(),
+            }
         })?;
     if summary.session_revision() != expected_session_revision {
         return Err(StoreErrorV1::PreconditionConflictV1 {
@@ -4745,20 +4903,31 @@ pub(crate) fn verify_v2_graph_state_connection_v2(
             return Err(corrupt(StoreRecordKindV1::Snapshot));
         }
         load_graph_session_connection_v2(connection)?;
-        let archives = list_archived_sessions_connection_v2(connection)?;
-        if archives.len() > MAX_INACTIVE_SESSIONS_V2 as usize {
+        let invalid_inactive: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM v2_task_sessions \
+                 WHERE activity = 'inactive' \
+                 AND (archive_slot IS NULL OR archive_slot < 1 \
+                      OR archive_slot > ?1 \
+                      OR lifecycle NOT IN ('completed', 'cancelled'))",
+                params![MAX_ARCHIVE_SLOT_V2],
+                |row| row.get(0),
+            )
+            .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+        if invalid_inactive != 0 {
             return Err(corrupt(StoreRecordKindV1::Session));
         }
-        for archive in archives {
-            if archive.archive_slot() == 0
-                || archive.archive_slot() > MAX_INACTIVE_SESSIONS_V2
-                || !matches!(
-                    archive.lifecycle(),
-                    SessionLifecycle::Completed | SessionLifecycle::Cancelled
-                )
-            {
-                return Err(corrupt(StoreRecordKindV1::Session));
-            }
+        let duplicate_slot = connection
+            .query_row(
+                "SELECT 1 FROM v2_task_sessions WHERE activity = 'inactive' \
+                 GROUP BY archive_slot HAVING COUNT(*) > 1 LIMIT 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+        if duplicate_slot.is_some() {
+            return Err(corrupt(StoreRecordKindV1::Session));
         }
         return Ok(());
     }

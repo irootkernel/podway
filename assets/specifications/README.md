@@ -6,10 +6,11 @@
 - `sqlite-v4.sql`: v2-only migration with fail-closed legacy Procedure state rejection.
 - `sqlite-v5.sql`: prepared-session and terminal-disposition migration reservation.
 - `sqlite-v6.sql`: external check-result item discriminator migration reservation.
-- `sqlite-v7.sql`: retained inactive terminal-session migration and bounded archive slots.
+- `sqlite-v7.sql`: retained inactive terminal-session migration and originally bounded archive slots.
 - `sqlite-v8.sql`: successor-linked superseded terminal-disposition migration.
 - `sqlite-v9.sql`: ordinal-keyed duplicate evidence-reference migration.
 - `sqlite-v10.sql`: live workspace runtime-mode binding migration; legacy stores migrate as production and named-mode mismatches fail before normal Store access.
+- `sqlite-v11.sql`: drop the 32-slot inactive-session archive cap while keeping unique archive slots in `1..=4294967295`.
 - `launchagent.plist.template`: reference macOS user LaunchAgent.
 - `error-codes.json`: stable public error and exit-code catalog, including reserved typed-guard failures.
 - `authoring-diagnostics.json`: stable authoring-time diagnostic catalog with ambiguity-based option replacements.

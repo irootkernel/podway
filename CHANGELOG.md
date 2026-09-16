@@ -4,6 +4,11 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ## v0.2.11 - Unreleased
 
+### Changed
+
+- Stop failing archival and start when a worktree already retains 32 inactive
+  sessions. `archive list` now reports the exact total, a newest-first window, and the oldest summary.
+
 ## v0.2.10 - 2026-09-14
 
 ### Added

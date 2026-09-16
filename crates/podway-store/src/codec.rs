@@ -2773,9 +2773,7 @@ impl PersistedGraphMutationFailureV2 {
                         "prepared" | "running" | "completed" | "cancelled"
                     )
             }
-            Self::SessionArchiveLimitReached { maximum } => {
-                *maximum == crate::MAX_INACTIVE_SESSIONS_V2
-            }
+            Self::SessionArchiveLimitReached { maximum } => *maximum == 32,
             Self::SessionStartStateConflict {
                 lifecycle,
                 current_terminal_disposition,

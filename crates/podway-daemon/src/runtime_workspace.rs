@@ -586,8 +586,17 @@ impl StoreSessionArchiveContractV2 for WorkspaceStoreSlotV1 {
     fn list_archived_sessions_v2(
         &self,
         identity: &podway_store::DurableWorktreeIdentityV1,
-    ) -> Result<Vec<podway_store::SessionArchiveSummaryV2>, StoreErrorV1> {
-        self.with_open_store(|store| store.list_archived_sessions_v2(identity))
+        window: usize,
+    ) -> Result<podway_store::SessionArchiveListPageV2, StoreErrorV1> {
+        self.with_open_store(|store| store.list_archived_sessions_v2(identity, window))
+    }
+
+    fn archived_session_summary_v2(
+        &self,
+        identity: &podway_store::DurableWorktreeIdentityV1,
+        session_id: &podway_core::SessionId,
+    ) -> Result<Option<podway_store::SessionArchiveSummaryV2>, StoreErrorV1> {
+        self.with_open_store(|store| store.archived_session_summary_v2(identity, session_id))
     }
 
     fn read_archived_session_v2(

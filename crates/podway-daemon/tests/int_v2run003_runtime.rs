@@ -17,7 +17,10 @@ use podway_config::{
     AuthoringContext, ParsedProcedure, ProcedureDocumentFormat, parse_procedure_document,
     validate_procedure_v2, vet_procedure_v2,
 };
-use podway_core::{AttemptId, BlockerId, ProcedureSnapshotId, Revision, SessionId, UnixMillis};
+use podway_core::{
+    AttemptId, BlockerId, ProcedureSnapshotId, Revision, SessionId, TerminalDispositionV2,
+    UnixMillis,
+};
 use podway_daemon::{
     dispatch::{
         CatalogDispatchErrorMapperV1, DispatcherWorkspaceOutputV1, ProcedureV2AdmissionProofV1,
@@ -44,7 +47,11 @@ use podway_protocol::{
     Rfc3339MillisV1, SliceRequestV1, WorkspaceContextV1, WorktreeSelectorWireV1,
 };
 use podway_service::ServiceRuntimePathsV1;
-use podway_store::{SqliteStoreOptionsV1, SqliteStoreV1, StoreGraphStateContractV2, WorkerIdV1};
+use podway_store::{
+    DurableWorktreeIdentityV1, GraphSessionStateV2, SqliteStoreOptionsV1, SqliteStoreV1,
+    StoreGraphStateContractV2, StoreSessionArchiveContractV2, StoreTerminalDispositionContractV2,
+    WorkerIdV1,
+};
 use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
 use support_phase4_workspace::selector as git_selector;
@@ -374,6 +381,84 @@ pub(super) fn v2_result(response: ResponseEnvelopeV2, command: &str) -> Map<Stri
     };
     assert_eq!(output.command().as_str(), command);
     output.result().clone()
+}
+
+fn assert_archive_list_v2(list: &Map<String, Value>, count: u64, truncated: bool) {
+    assert_eq!(list["schema"], "podway.session-archive-list-result/v2");
+    assert_eq!(list["count"], count);
+    assert_eq!(list["truncated"], truncated);
+    let sessions = list["sessions"].as_array().unwrap();
+    if count == 0 {
+        assert_eq!(list["oldest"], Value::Null);
+        assert!(sessions.is_empty());
+        return;
+    }
+    assert!(list["oldest"].is_object());
+    assert_eq!(
+        sessions.len(),
+        usize::try_from(count)
+            .unwrap()
+            .min(podway_protocol::SESSION_ARCHIVE_LIST_WINDOW_V2)
+    );
+}
+
+fn plant_inactive_archives(
+    store: &SqliteStoreV1,
+    identity: &DurableWorktreeIdentityV1,
+    count: u32,
+) -> Vec<GraphSessionStateV2> {
+    let mut archived = Vec::new();
+    for offset in 0..count {
+        let running = podway_store::test_support::running_archive_fixture_session_v2(
+            20_000 + u64::from(offset),
+            30_000 + u64::from(offset),
+            10,
+        );
+        store
+            .create_graph_session_v2(identity, running.clone())
+            .unwrap();
+        let active = running.trace().active_attempt().unwrap();
+        let completed = running
+            .complete_active_action_v2(
+                running.trace().revision(),
+                active.attempt_id(),
+                None,
+                UnixMillis::new(20),
+            )
+            .unwrap()
+            .into_state();
+        store
+            .replace_graph_session_v2(
+                identity,
+                running.workspace_revision(),
+                running.trace().revision(),
+                completed.clone(),
+            )
+            .unwrap();
+        store
+            .record_terminal_disposition_v2(
+                identity,
+                TerminalDispositionV2::not_required(
+                    completed.trace().session_id().clone(),
+                    completed.trace().revision(),
+                    "No handoff required",
+                    None,
+                    UnixMillis::new(21),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        store
+            .archive_current_session_v2(
+                identity,
+                completed.workspace_revision(),
+                completed.trace().revision(),
+                podway_store::EpochMillisV1::new(30 + u64::from(offset)),
+            )
+            .unwrap();
+        archived.push(completed);
+    }
+    archived
 }
 
 pub(super) fn response_request_id(response: &ResponseEnvelopeV2) -> &RequestIdV1 {
@@ -3539,7 +3624,7 @@ fn v2lif005_eligible_replacement_dry_run_uses_current_reset_eligibility() {
         PreconditionsV1::default(),
     );
     let list = v2_result(dispatch(&production, &list), "session.archive_list");
-    assert_eq!(list["count"], 1);
+    assert_archive_list_v2(&list, 1, false);
     assert_eq!(list["sessions"][0]["session_id"], session_id.as_str());
     assert_eq!(list["sessions"][0]["session_revision"], terminal_revision);
 
@@ -3586,7 +3671,7 @@ fn v2lif005_eligible_replacement_dry_run_uses_current_reset_eligibility() {
         PreconditionsV1::default(),
     );
     let list = v2_result(dispatch(&production, &list), "session.archive_list");
-    assert_eq!(list["count"], 0);
+    assert_archive_list_v2(&list, 0, false);
 
     let missing = request(
         143_016,
@@ -3604,6 +3689,65 @@ fn v2lif005_eligible_replacement_dry_run_uses_current_reset_eligibility() {
     };
     assert_eq!(missing.code().as_str(), "SESSION_ARCHIVE_NOT_FOUND");
     assert_eq!(missing.details()["session_id"], session_id.as_str());
+}
+
+#[test]
+fn session_archive_list_windows_two_hundred_fifty_seven_inactive_sessions() {
+    let fixture = support_phase4_workspace::git_worktrees();
+    make_runtime_private(fixture.main());
+    let selector = selector(fixture.main());
+    let runtime_manager = Arc::new(manager(fixture.temporary_path()));
+    let production = dispatcher(Arc::clone(&runtime_manager), "archive-list-window");
+
+    let initialize = request(
+        156_001,
+        "workspace.init",
+        &selector,
+        Map::new(),
+        "archive-list-window-init",
+        PreconditionsV1::default(),
+    );
+    let _ = v2_result(dispatch(&production, &initialize), "workspace.init");
+    let runtime = runtime_manager
+        .resolve_existing(git_selector(fixture.main()), None, observation())
+        .unwrap();
+    let context = runtime.context_snapshot();
+    let store = SqliteStoreV1::open(
+        context.database_path(),
+        context.workspace_root(),
+        context.binding().identity().clone(),
+        context.store_options().clone(),
+        UnixMillis::new(1),
+    )
+    .unwrap();
+    let archived = plant_inactive_archives(&store, context.binding().identity(), 257);
+    drop(store);
+
+    let list = request(
+        156_002,
+        "session.archive_list",
+        &selector,
+        Map::new(),
+        "unused-archive-list-window",
+        PreconditionsV1::default(),
+    );
+    let list = v2_result(dispatch(&production, &list), "session.archive_list");
+    assert_archive_list_v2(&list, 257, true);
+    assert_eq!(
+        list["sessions"][0]["session_id"],
+        archived[256].trace().session_id().as_str()
+    );
+    assert_eq!(list["sessions"][0]["archive_slot"], 257);
+    assert_eq!(
+        list["sessions"][255]["session_id"],
+        archived[1].trace().session_id().as_str()
+    );
+    assert_eq!(list["sessions"][255]["archive_slot"], 2);
+    assert_eq!(
+        list["oldest"]["session_id"],
+        archived[0].trace().session_id().as_str()
+    );
+    assert_eq!(list["oldest"]["archive_slot"], 1);
 }
 
 #[test]
@@ -3705,7 +3849,7 @@ fn session_archive_is_durably_admitted_and_reaches_the_v8_commit_path() {
         PreconditionsV1::default(),
     );
     let list = v2_result(dispatch(&production, &list), "session.archive_list");
-    assert_eq!(list["count"], 1);
+    assert_archive_list_v2(&list, 1, false);
     assert_eq!(list["sessions"][0]["session_id"], session_id);
 }
 
@@ -4064,7 +4208,7 @@ fn start_supersede_atomically_archives_running_session_and_prepares_successor() 
         PreconditionsV1::default(),
     );
     let list = v2_result(dispatch(&production, &list), "session.archive_list");
-    assert_eq!(list["count"], 1);
+    assert_archive_list_v2(&list, 1, false);
     assert_eq!(list["sessions"][0]["session_id"], current_session.as_str());
     assert_eq!(list["sessions"][0]["lifecycle"], "cancelled");
     assert_eq!(list["sessions"][0]["session_revision"], 2);

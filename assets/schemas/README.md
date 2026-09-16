@@ -59,7 +59,8 @@ These JSON Schema Draft 2020-12 files define Podway's versioned structural contr
 - `compact-status-result-v3.schema.json`: prepared-aware bounded value-free status.
 - `status-result-v3.schema.json`: prepared-aware standard and verbose status.
 - `session-archive-result-v1.schema.json`: terminal-session archival mutation result.
-- `session-archive-list-result-v1.schema.json`: bounded inactive-session summaries.
+- `session-archive-list-result-v1.schema.json`: historical complete inactive-session list with a 32-session cap.
+- `session-archive-list-result-v2.schema.json`: exact inactive-session total, newest-first window, truncation, and oldest summary.
 - `session-archive-show-result-v1.schema.json`: one inactive session with its full read-only status projection.
 - `session-archive-purge-result-v1.schema.json`: confirmed inactive-session deletion result.
 - `next-result-v2.schema.json`: bounded action, decision, and goal-aware machine guidance.
@@ -89,7 +90,7 @@ These JSON Schema Draft 2020-12 files define Podway's versioned structural contr
 - `session-start-decision-required-details-v1.schema.json`: closed state-aware start decision conflict details.
 - `session-start-state-conflict-details-v1.schema.json`: retryable start-policy race details.
 - `session-archive-not-eligible-details-v1.schema.json`: closed archive eligibility failure details.
-- `session-archive-limit-details-v1.schema.json`: closed inactive-session capacity failure details.
+- `session-archive-limit-details-v1.schema.json`: historical inactive-session capacity failure details; current builds do not emit this error.
 - `session-archive-not-found-details-v1.schema.json`: closed missing inactive-session failure details.
 - `v2-runtime-error-details-v1.schema.json`: closed code-bound details for registered Procedure v2 runtime errors.
 - `recoverable-v2-runtime-error-details-v1.schema.json`: stale evidence and goal-revision details with state-refresh recovery.

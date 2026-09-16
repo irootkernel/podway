@@ -4,6 +4,7 @@
 - Date: 2026-08-21
 - Supersedes in part: [ADR-0026](0026-retain-inactive-terminal-sessions.md)
 - Extends: [ADR-0021](0021-separate-session-preparation-from-execution.md)
+- Superseded in part by: [ADR-0034](0034-unbounded-inactive-session-retention.md)
 
 ## Context
 

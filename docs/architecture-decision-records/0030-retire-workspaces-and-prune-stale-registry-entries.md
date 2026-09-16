@@ -5,6 +5,7 @@
 - Extends: [ADR-0003](0003-daemon-single-writer.md)
 - Extends: [ADR-0004](0004-worktree-local-state.md)
 - Extends: [ADR-0026](0026-retain-inactive-terminal-sessions.md)
+- Superseded in part by: [ADR-0034](0034-unbounded-inactive-session-retention.md)
 
 ## Context
 

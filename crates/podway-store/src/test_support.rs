@@ -2,9 +2,17 @@
 
 use std::path::Path;
 
-use podway_core::JobId;
+use podway_core::{
+    AttemptId, AttemptLifecycle, AttemptNumberV2, AttemptValidityV2, CanonicalProcedureJsonV1,
+    GraphNodeId, JobId, ProcedureSnapshotId, ProcedureSourceLabelV1, Revision, SessionAttemptV2,
+    SessionId, SessionLifecycle, SessionTraceV2, Sha256Digest, TraceSequenceV2, UnixMillis,
+    canonicalize_json_v1,
+};
 use rusqlite::{Connection, params};
-use serde_json::Value;
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+
+use crate::{AttemptMetadataV2, GraphNodeCounterV2, GraphSessionStateV2, ProcedureSnapshotV2};
 
 /// Creates an impossible current-session cursor for read-only recovery-path tests.
 pub fn corrupt_current_session_cursor(database_path: &Path) -> Result<(), String> {
@@ -156,7 +164,7 @@ pub fn downgrade_to_schema_v4(database_path: &Path) -> Result<(), String> {
                FROM v2_workspace_state_v7
               WHERE singleton = 1;
              DROP TABLE v2_workspace_state_v7;
-             DELETE FROM schema_migrations WHERE version IN (5, 6, 7, 8, 9, 10);",
+             DELETE FROM schema_migrations WHERE version IN (5, 6, 7, 8, 9, 10, 11);",
         )
         .map_err(|error| error.to_string())?;
     connection
@@ -377,4 +385,85 @@ pub fn rewrite_terminal_as_noncanonical(
         }
     }
     transaction.commit().map_err(|error| error.to_string())
+}
+
+/// Running one-node session used by archive-window integration tests.
+pub fn running_archive_fixture_session_v2(
+    session_number: u64,
+    snapshot_number: u64,
+    created_at: u64,
+) -> GraphSessionStateV2 {
+    let document = json!({
+        "schema": "podway.procedure/v2",
+        "id": "archive-window",
+        "version": "1",
+        "name": "Archive window",
+        "purpose": "Plant inactive sessions for list-window tests.",
+        "node_definitions": {
+            "work": {
+                "type": "action",
+                "title": "Work",
+                "intent": "Work.",
+                "items": [{
+                    "id": "done",
+                    "type": "confirm",
+                    "prompt": "Done",
+                    "required": false
+                }]
+            }
+        },
+        "graph": {
+            "entry": "work",
+            "nodes": [{
+                "id": "work",
+                "use": "work",
+                "skip": {"allowed": true, "reason_required": true},
+                "terminal": true
+            }]
+        }
+    });
+    let canonical = canonicalize_json_v1(&document).unwrap();
+    let procedure_digest =
+        Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))).unwrap();
+    let uuid = |number: u64| format!("00000000-0000-4000-8000-{number:012x}");
+    let snapshot = ProcedureSnapshotV2::new(
+        ProcedureSnapshotId::new(uuid(snapshot_number)).unwrap(),
+        CanonicalProcedureJsonV1::new(canonical).unwrap(),
+        procedure_digest,
+        ProcedureSourceLabelV1::file("procedure.yaml").unwrap(),
+        UnixMillis::new(created_at),
+    )
+    .unwrap();
+    let node = GraphNodeId::new("work").unwrap();
+    let attempt_id = AttemptId::new(uuid(session_number + 1)).unwrap();
+    let attempt = SessionAttemptV2::new(
+        attempt_id.clone(),
+        node.clone(),
+        AttemptNumberV2::FIRST,
+        TraceSequenceV2::FIRST,
+        AttemptLifecycle::Active,
+        AttemptValidityV2::Valid,
+        None,
+    )
+    .unwrap();
+    let trace = SessionTraceV2::from_parts(
+        SessionId::new(uuid(session_number)).unwrap(),
+        SessionLifecycle::Running,
+        Revision::new(1),
+        vec![attempt],
+    )
+    .unwrap();
+    GraphSessionStateV2::new(
+        Revision::new(1),
+        "Archive window",
+        snapshot,
+        trace,
+        vec![GraphNodeCounterV2::new(node, 1, 0)],
+        vec![AttemptMetadataV2::new(attempt_id, UnixMillis::new(created_at), None, None).unwrap()],
+        UnixMillis::new(created_at),
+        None,
+        None,
+        None,
+    )
+    .unwrap()
 }

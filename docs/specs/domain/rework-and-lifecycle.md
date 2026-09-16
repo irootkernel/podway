@@ -77,8 +77,8 @@ session or a terminal session without a current disposition fails with
 prepared or running session. It atomically removes the current-session pointer
 and retains the complete session as immutable inactive state. Inactive sessions
 remain selectable by session ID for bounded list and full read-only status, but
-cannot be restored, reactivated, or mutated. A worktree retains at most 32; a
-full archive blocks without automatic eviction. Confirmed `archive purge`
+cannot be restored, reactivated, or mutated. Archival does not fail because of
+inactive count and never evicts automatically. Confirmed `archive purge`
 permanently removes one inactive session under its exact revision fence.
 
 Force reset requires explicit destructive confirmation (`--yes` for JSON or

@@ -35,11 +35,12 @@ use crate::v2_state::{
     GraphSessionStateV2, GraphStartCurrentTaskV2, GraphWorkspaceViewV2,
     StoreGraphMutationContractV2, StoreGraphReadContractV2, StoreGraphStateContractV2,
     StoreSessionArchiveContractV2, StoreTerminalDispositionContractV2,
-    archive_current_session_transaction_v2, clear_graph_session_transaction_v2,
-    create_graph_session_transaction_v2, list_archived_sessions_connection_v2,
-    load_archived_session_connection_v2, load_graph_session_connection_v2,
-    load_terminal_dispositions_connection_v2, purge_archived_session_transaction_v2,
-    record_terminal_disposition_transaction_v2, replace_graph_session_transaction_v2,
+    archive_current_session_transaction_v2, archived_session_summary_connection_v2,
+    clear_graph_session_transaction_v2, create_graph_session_transaction_v2,
+    list_archived_sessions_connection_v2, load_archived_session_connection_v2,
+    load_graph_session_connection_v2, load_terminal_dispositions_connection_v2,
+    purge_archived_session_transaction_v2, record_terminal_disposition_transaction_v2,
+    replace_graph_session_transaction_v2,
 };
 use crate::{
     AdmitOutcomeV1, AdmitRequestV1, CancelOutcomeV1, CanonicalRequestDigestV1, ClaimTokenV1,
@@ -652,10 +653,21 @@ impl StoreSessionArchiveContractV2 for SqliteStoreV1 {
     fn list_archived_sessions_v2(
         &self,
         identity: &DurableWorktreeIdentityV1,
-    ) -> Result<Vec<crate::SessionArchiveSummaryV2>, StoreErrorV1> {
+        window: usize,
+    ) -> Result<crate::SessionArchiveListPageV2, StoreErrorV1> {
         self.require_identity(identity)?;
         let connection = self.lock_connection()?;
-        list_archived_sessions_connection_v2(&connection)
+        list_archived_sessions_connection_v2(&connection, window)
+    }
+
+    fn archived_session_summary_v2(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        session_id: &podway_core::SessionId,
+    ) -> Result<Option<crate::SessionArchiveSummaryV2>, StoreErrorV1> {
+        self.require_identity(identity)?;
+        let connection = self.lock_connection()?;
+        archived_session_summary_connection_v2(&connection, session_id)
     }
 
     fn read_archived_session_v2(
@@ -7271,9 +7283,7 @@ fn persisted_session_state_failure_matches_v2(
             lifecycle: persisted,
             ..
         } => persisted == lifecycle,
-        PersistedGraphMutationFailureV2::SessionArchiveLimitReached { maximum } => {
-            *maximum == crate::MAX_INACTIVE_SESSIONS_V2
-        }
+        PersistedGraphMutationFailureV2::SessionArchiveLimitReached { maximum } => *maximum == 32,
         _ => false,
     }
 }

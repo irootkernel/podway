@@ -6,6 +6,7 @@
 - Extends: [ADR-0008](0008-relational-state-not-event-sourcing.md)
 - Extends: [ADR-0021](0021-separate-session-preparation-from-execution.md)
 - Superseded in part by: [ADR-0027](0027-state-aware-session-start.md)
+- Superseded in part by: [ADR-0034](0034-unbounded-inactive-session-retention.md)
 
 ## Context
 

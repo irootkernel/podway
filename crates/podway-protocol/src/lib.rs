@@ -66,6 +66,7 @@ pub const MAX_CLIENT_TEXT_SCALARS_V1: usize = 64;
 pub const MAX_WORKSPACE_ROOT_SCALARS_V1: usize = 4096;
 pub const MAX_WAIT_TIMEOUT_MILLIS_V1: u64 = 3_600_000;
 pub const MAX_JSON_DEPTH_V1: usize = 64;
+pub const SESSION_ARCHIVE_LIST_WINDOW_V2: usize = 256;
 
 /// A typed protocol-contract validation failure.
 #[derive(Clone, Debug, Eq, PartialEq)]

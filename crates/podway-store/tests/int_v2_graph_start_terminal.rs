@@ -19,14 +19,14 @@ use podway_store::{
     ActiveItemMutationRequestV2, ActiveItemMutationV2, AdmissionSessionIdentityV1, AdmitRequestV1,
     AttemptMetadataV2, CanonicalExecutionJsonV1, DurableWorktreeIdentityV1, GraphInitialGoalV2,
     GraphNodeCounterV2, GraphSessionStateV2, GraphStartCurrentTaskV2, IdempotencyKeyV1, JobStateV1,
-    PersistedGraphItemMutationV2, PersistedGraphMutationFailureV2,
-    PersistedGraphTerminalOperationV2, PersistedResponseContextV1, ProcedureSnapshotV2,
-    RevisionAttemptItemPreconditionsV1, SqliteStoreOptionsV1, SqliteStoreV1, StoreContractV1,
-    StoreErrorV1, StoreFailpointActionV1, StoreFailpointV1, StoreGraphMutationContractV2,
-    StoreGraphReadContractV2, StoreGraphStateContractV2, StoreIdempotencyReadContractV1,
-    StoreInvariantV1, StoreReadContractV1, StoreSessionArchiveContractV2,
-    StoreTerminalDispositionContractV2, StoreUnavailableReasonV1, TerminalResultV1,
-    ValidatedWorkspaceRootV1, WorkerIdV1,
+    MAX_ARCHIVED_SESSION_LIST_WINDOW_V2, PersistedGraphItemMutationV2,
+    PersistedGraphMutationFailureV2, PersistedGraphTerminalOperationV2, PersistedResponseContextV1,
+    ProcedureSnapshotV2, RevisionAttemptItemPreconditionsV1, SqliteStoreOptionsV1, SqliteStoreV1,
+    StoreContractV1, StoreErrorV1, StoreFailpointActionV1, StoreFailpointV1,
+    StoreGraphMutationContractV2, StoreGraphReadContractV2, StoreGraphStateContractV2,
+    StoreIdempotencyReadContractV1, StoreInvariantV1, StoreReadContractV1,
+    StoreSessionArchiveContractV2, StoreTerminalDispositionContractV2, StoreUnavailableReasonV1,
+    TerminalResultV1, ValidatedWorkspaceRootV1, WorkerIdV1,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -1222,9 +1222,16 @@ fn terminal_archive_preserves_full_state_and_allows_a_new_current_session() {
             .unwrap(),
         Some(completed.clone())
     );
-    let summaries = store.list_archived_sessions_v2(&identity()).unwrap();
-    assert_eq!(summaries.len(), 1);
-    assert_eq!(summaries[0].archive_slot(), 1);
+    let summaries = store
+        .list_archived_sessions_v2(&identity(), MAX_ARCHIVED_SESSION_LIST_WINDOW_V2)
+        .unwrap();
+    assert_eq!(summaries.count(), 1);
+    assert_eq!(summaries.sessions().len(), 1);
+    assert_eq!(summaries.sessions()[0].archive_slot(), 1);
+    assert_eq!(
+        summaries.oldest().map(|oldest| oldest.archive_slot()),
+        Some(1)
+    );
 
     let next = graph_state(8_103, 8_104, 50);
     store
@@ -1243,12 +1250,12 @@ fn terminal_archive_preserves_full_state_and_allows_a_new_current_session() {
         )
         .unwrap();
     assert_eq!(purged.session_id(), completed.trace().session_id());
-    assert!(
-        store
-            .list_archived_sessions_v2(&identity())
-            .unwrap()
-            .is_empty()
-    );
+    let empty = store
+        .list_archived_sessions_v2(&identity(), MAX_ARCHIVED_SESSION_LIST_WINDOW_V2)
+        .unwrap();
+    assert_eq!(empty.count(), 0);
+    assert!(empty.sessions().is_empty());
+    assert!(empty.oldest().is_none());
 }
 
 #[test]
@@ -1321,10 +1328,10 @@ fn archived_goal_history_does_not_corrupt_a_goal_enabled_successor_after_cold_re
 }
 
 #[test]
-fn terminal_archive_limit_blocks_without_deleting_retained_sessions() {
+fn terminal_archive_accepts_more_than_thirty_two_inactive_sessions() {
     let temporary = TempDir::new().unwrap();
     let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
-    for offset in 0..podway_store::MAX_INACTIVE_SESSIONS_V2 {
+    for offset in 0u32..33 {
         let running = graph_state(8_200 + u64::from(offset), 8_300 + u64::from(offset), 10);
         store
             .create_graph_session_v2(&identity(), running.clone())
@@ -1370,7 +1377,27 @@ fn terminal_archive_limit_blocks_without_deleting_retained_sessions() {
             .unwrap();
     }
 
-    let running = graph_state(8_900, 8_901, 10);
+    let summaries = store
+        .list_archived_sessions_v2(&identity(), MAX_ARCHIVED_SESSION_LIST_WINDOW_V2)
+        .unwrap();
+    assert_eq!(summaries.count(), 33);
+    assert_eq!(summaries.sessions().len(), 33);
+    assert_eq!(summaries.sessions()[0].archive_slot(), 33);
+    assert_eq!(summaries.sessions()[32].archive_slot(), 1);
+    assert_eq!(
+        summaries.oldest().map(|oldest| oldest.archive_slot()),
+        Some(1)
+    );
+    assert_eq!(store.read_graph_session_v2(&identity()).unwrap(), None);
+}
+
+fn archive_completed_session(
+    store: &SqliteStoreV1,
+    session_number: u64,
+    snapshot_number: u64,
+    archived_at: u64,
+) -> GraphSessionStateV2 {
+    let running = graph_state(session_number, snapshot_number, 10);
     store
         .create_graph_session_v2(&identity(), running.clone())
         .unwrap();
@@ -1405,42 +1432,104 @@ fn terminal_archive_limit_blocks_without_deleting_retained_sessions() {
             .unwrap(),
         )
         .unwrap();
-    assert!(matches!(
-        store.archive_current_session_v2(
+    store
+        .archive_current_session_v2(
             &identity(),
             completed.workspace_revision(),
             completed.trace().revision(),
-            podway_store::EpochMillisV1::new(100),
-        ),
-        Err(StoreErrorV1::SessionArchiveLimitReachedV1 { maximum: 32 })
-    ));
-    let claimed = admit_and_claim(
-        &store,
-        DomainCommand::SessionStartReplace,
-        "v2-start-at-archive-limit",
-        8_902,
-        AdmissionSessionIdentityV1::Exact(completed.trace().session_id().clone()),
-        Some(completed.trace().revision()),
-    );
-    assert!(matches!(
-        store.commit_graph_start_terminal_v2(
-            claimed.claim().clone(),
-            GraphStartCurrentTaskV2::Eligible {
-                session_id: completed.trace().session_id().clone(),
-                session_revision: completed.trace().revision(),
-            },
-            graph_state(8_903, 8_904, 110),
-            UnixMillis::new(111),
-        ),
-        Err(StoreErrorV1::SessionArchiveLimitReachedV1 { maximum: 32 })
-    ));
+            podway_store::EpochMillisV1::new(archived_at),
+        )
+        .unwrap();
+    completed
+}
+
+#[test]
+fn terminal_archive_list_windows_two_hundred_fifty_seven_inactive_sessions() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
+    let mut archived = Vec::new();
+    for offset in 0u32..257 {
+        archived.push(archive_completed_session(
+            &store,
+            9_200 + u64::from(offset),
+            9_300 + u64::from(offset),
+            30 + u64::from(offset),
+        ));
+    }
+
+    let page = store
+        .list_archived_sessions_v2(&identity(), MAX_ARCHIVED_SESSION_LIST_WINDOW_V2)
+        .unwrap();
+    assert_eq!(page.count(), 257);
+    assert_eq!(page.sessions().len(), 256);
     assert_eq!(
-        store.list_archived_sessions_v2(&identity()).unwrap().len(),
-        32
+        page.sessions()[0].session_id(),
+        archived[256].trace().session_id()
     );
+    assert_eq!(page.sessions()[0].archive_slot(), 257);
     assert_eq!(
-        store.read_graph_session_v2(&identity()).unwrap(),
-        Some(completed)
+        page.sessions()[255].session_id(),
+        archived[1].trace().session_id()
+    );
+    assert_eq!(page.sessions()[255].archive_slot(), 2);
+    let oldest = page.oldest().expect("oldest archive");
+    assert_eq!(oldest.session_id(), archived[0].trace().session_id());
+    assert_eq!(oldest.archive_slot(), 1);
+    assert!(
+        !page
+            .sessions()
+            .iter()
+            .any(|summary| summary.session_id() == oldest.session_id())
+    );
+    assert_eq!(store.read_graph_session_v2(&identity()).unwrap(), None);
+}
+
+#[test]
+fn terminal_archive_reuses_the_first_unused_slot_after_purge() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
+    let first = archive_completed_session(&store, 9_400, 9_500, 30);
+    let second = archive_completed_session(&store, 9_401, 9_501, 31);
+    store
+        .purge_archived_session_v2(
+            &identity(),
+            first.trace().session_id(),
+            first.trace().revision(),
+        )
+        .unwrap();
+    let third = archive_completed_session(&store, 9_402, 9_502, 32);
+    let keyed = store
+        .archived_session_summary_v2(&identity(), third.trace().session_id())
+        .unwrap()
+        .expect("third archive");
+    assert_eq!(keyed.archive_slot(), 1);
+    let page = store
+        .list_archived_sessions_v2(&identity(), MAX_ARCHIVED_SESSION_LIST_WINDOW_V2)
+        .unwrap();
+    assert_eq!(page.count(), 2);
+    assert_eq!(page.sessions()[0].session_id(), third.trace().session_id());
+    assert_eq!(page.sessions()[0].archive_slot(), 1);
+    assert_eq!(page.sessions()[1].session_id(), second.trace().session_id());
+    assert_eq!(page.sessions()[1].archive_slot(), 2);
+}
+
+#[test]
+fn v11_archive_slot_check_rejects_values_above_u32_max() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 1);
+    archive_completed_session(&store, 9_600, 9_700, 30);
+    drop(store);
+    let connection = Connection::open(database_path(&temporary)).unwrap();
+    let error = connection
+        .execute(
+            "UPDATE v2_task_sessions SET archive_slot = 4294967296 WHERE activity = 'inactive'",
+            [],
+        )
+        .unwrap_err();
+    let message = error.to_string();
+    assert!(
+        message.contains("CHECK") || message.contains("constraint"),
+        "expected CHECK rejection, got {message}"
     );
 }
 
@@ -1503,8 +1592,11 @@ fn unreadable_archive_does_not_block_store_open_list_or_purge() {
     drop(connection);
 
     let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap(), 40);
-    let summaries = reopened.list_archived_sessions_v2(&identity()).unwrap();
-    assert_eq!(summaries.len(), 1);
+    let summaries = reopened
+        .list_archived_sessions_v2(&identity(), MAX_ARCHIVED_SESSION_LIST_WINDOW_V2)
+        .unwrap();
+    assert_eq!(summaries.count(), 1);
+    assert_eq!(summaries.sessions().len(), 1);
     assert!(
         reopened
             .read_archived_session_v2(&identity(), completed.trace().session_id())
@@ -1518,12 +1610,12 @@ fn unreadable_archive_does_not_block_store_open_list_or_purge() {
         )
         .unwrap();
     assert_eq!(purged.session_id(), completed.trace().session_id());
-    assert!(
-        reopened
-            .list_archived_sessions_v2(&identity())
-            .unwrap()
-            .is_empty()
-    );
+    let empty = reopened
+        .list_archived_sessions_v2(&identity(), MAX_ARCHIVED_SESSION_LIST_WINDOW_V2)
+        .unwrap();
+    assert_eq!(empty.count(), 0);
+    assert!(empty.sessions().is_empty());
+    assert!(empty.oldest().is_none());
 }
 
 fn apply_schema_migration_fixture(
@@ -1647,7 +1739,7 @@ fn direct_v6_and_v7_upgrades_preserve_terminal_state_and_disposition() {
             connection
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .unwrap(),
-            10
+            11
         );
     }
 }

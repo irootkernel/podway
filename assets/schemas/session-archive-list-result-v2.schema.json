@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:session-archive-list-result:v2",
+  "title": "Podway Session Archive List Result v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "count", "truncated", "oldest", "sessions"],
+  "properties": {
+    "schema": { "const": "podway.session-archive-list-result/v2" },
+    "count": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+    "truncated": { "type": "boolean" },
+    "oldest": {
+      "anyOf": [
+        { "type": "null" },
+        { "$ref": "urn:podway:schema:session-archive-list-result:v1#/$defs/archiveSummary" }
+      ]
+    },
+    "sessions": {
+      "type": "array",
+      "maxItems": 256,
+      "items": { "$ref": "urn:podway:schema:session-archive-list-result:v1#/$defs/archiveSummary" }
+    }
+  }
+}

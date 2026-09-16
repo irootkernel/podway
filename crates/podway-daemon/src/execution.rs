@@ -3747,32 +3747,6 @@ where
         if let Some(error) = rejection {
             return Err(ProcedureV2StartPreparationErrorV1::Execution(error.into()));
         }
-        let archives_current =
-            matches!(
-                expected_current,
-                GraphStartCurrentTaskV2::Supersede { .. }
-                    | GraphStartCurrentTaskV2::DisposeAndArchive { .. }
-            ) || matches!(expected_current, GraphStartCurrentTaskV2::Eligible { .. })
-                && matches!(
-                    lifecycle,
-                    SessionLifecycle::Completed | SessionLifecycle::Cancelled
-                );
-        if archives_current
-            && self
-                .store
-                .list_archived_sessions_v2(binding.identity())
-                .map_err(ExecutionErrorV1::from)
-                .map_err(ProcedureV2StartPreparationErrorV1::Execution)?
-                .len()
-                >= podway_store::MAX_INACTIVE_SESSIONS_V2 as usize
-        {
-            return Err(ProcedureV2StartPreparationErrorV1::Execution(
-                StoreErrorV1::SessionArchiveLimitReachedV1 {
-                    maximum: podway_store::MAX_INACTIVE_SESSIONS_V2,
-                }
-                .into(),
-            ));
-        }
         Ok(())
     }
 

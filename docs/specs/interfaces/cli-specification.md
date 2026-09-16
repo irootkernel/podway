@@ -153,8 +153,9 @@ discarding them. Preserving a running session
 atomically cancels it, records `superseded` with the new session ID, archives it,
 and creates the prepared successor. Recording a disposition during terminal
 start resolution, archiving, and successor creation are also atomic. `archive` explicitly
-retains an eligible terminal session as inactive. `archive list` returns at most
-32 summaries; `archive show --session-id <uuid>` returns one immutable status
+retains an eligible terminal session as inactive. `archive list` returns the exact
+total, a newest-first window of at most 256 summaries, truncation, and the oldest
+summary; `archive show --session-id <uuid>` returns one immutable status
 projection plus its terminal disposition and accepts the normal verbose history controls. `archive purge`
 requires the inactive session ID, `--if-session-revision`, and `--yes` and deletes
 only that retained session. Purge is a fenced, serialized control-plane deletion,

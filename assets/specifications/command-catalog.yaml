@@ -552,6 +552,7 @@ commands:
   destructive_confirmation: false
   result_schemas:
   - podway.session-archive-list-result/v1
+  - podway.session-archive-list-result/v2
 - name: session.archive_show
   availability: executable
   cli:

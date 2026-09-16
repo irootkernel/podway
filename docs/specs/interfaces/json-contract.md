@@ -19,7 +19,10 @@ Prepared-aware routes use `session-start-result/v3`,
 `session-reset-result/v1`, `status-result/v3`, `compact-status-result/v3`, and
 `prepared-next-result/v1`. Running next uses `next-result/v3` and observation uses
 `observation-result/v3`, and the contract adds `evidence-read-result/v1` for the
-`evidence.read` query. All three families are served. Item and graph-transition
+`evidence.read` query. All three families are served. `session.archive_list`
+emits `session-archive-list-result/v2` with the exact total, a newest-first
+window, truncation, and the oldest summary; the v1 list family remains decodable.
+Item and graph-transition
 families retain their current versions, and decision, rework, goal, authoring, and
 platform results remain first-version families where their shapes do not change.
 

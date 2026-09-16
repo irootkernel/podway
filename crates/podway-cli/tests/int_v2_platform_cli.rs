@@ -872,7 +872,7 @@ fn required_result_schema(command: &str) -> &'static str {
         "session.start" | "session.start_replace" => "podway.session-start-result/v3",
         "session.begin" => "podway.session-begin-result/v1",
         "session.archive" => "podway.session-archive-result/v1",
-        "session.archive_list" => "podway.session-archive-list-result/v1",
+        "session.archive_list" => "podway.session-archive-list-result/v2",
         "session.archive_show" => "podway.session-archive-show-result/v1",
         "session.archive_purge" => "podway.session-archive-purge-result/v1",
         "session.decide" => "podway.decision-result/v1",

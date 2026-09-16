@@ -327,6 +327,7 @@ fn examples() -> BTreeMap<&'static str, Value> {
         "podway.session-reset-result/v1",
         "podway.session-archive-result/v1",
         "podway.session-archive-list-result/v1",
+        "podway.session-archive-list-result/v2",
         "podway.session-archive-show-result/v1",
         "podway.session-archive-purge-result/v1",
         "podway.session-start-result/v3",
@@ -720,7 +721,7 @@ fn v2grf_preview_uses_one_closed_result_family_for_every_document_outcome() {
 #[test]
 fn v2ctr003_registry_is_versioned_and_covers_exactly_the_v2_authoring_routes() {
     assert_eq!(EXISTING_ROUTE_RESULT_SCHEMAS_V2.len(), 17);
-    assert_eq!(NEW_ROUTE_RESULT_SCHEMAS_V1.len(), 27);
+    assert_eq!(NEW_ROUTE_RESULT_SCHEMAS_V1.len(), 28);
     assert!(
         EXISTING_ROUTE_RESULT_SCHEMAS_V2
             .iter()

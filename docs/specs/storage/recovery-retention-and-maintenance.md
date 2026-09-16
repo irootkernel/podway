@@ -128,8 +128,9 @@ On startup, an existing marker causes the daemon to finish the reset before serv
 - preserving running work during start atomically cancels and archives it with a
   superseded disposition that records the reason, optional actor, and successor
   session identity;
-- at most 32 inactive sessions are retained per worktree; reaching the limit
-  blocks archival and terminal eligible replacement without eviction;
+- inactive sessions are retained until explicit purge or workspace reset;
+  archival and terminal eligible replacement never evict and do not fail because
+  of inactive count;
 - confirmed purge deletes exactly one inactive session; inactive sessions cannot
   be restored or mutated;
 - reset removes session-scoped idempotency records.

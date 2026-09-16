@@ -319,9 +319,9 @@ prepared or running state. Running deletion additionally requires
 `--progress-summary` and `--yes`. The former `--replace-eligible` and `--replace`
 CLI flags are removed. `reset` remains destructive and never archives implicitly.
 
-Up to 32 inactive sessions are retained per worktree. Podway never evicts one
-automatically; archive or terminal eligible replacement fails when the limit is
-full. Inspect or explicitly remove retained sessions with:
+Inactive sessions are retained per worktree until explicitly purged or the
+workspace runtime is reset. Podway never evicts one automatically. Inspect or
+remove retained sessions with:
 
 ```bash
 podway archive list

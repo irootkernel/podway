@@ -1386,7 +1386,7 @@
       {
         "id": "urn:podway:schema:output:v3",
         "path": "schemas/output-v3.schema.json",
-        "sha256": "sha256:51e6bf217a609f5e1e59c20d56422f2dcc0f849af52f33a503dd548e88772b2d"
+        "sha256": "sha256:9c69ac80ce770339620be334b480e141b20173eeb22bf96136160bbb7728b956"
       },
       {
         "id": "urn:podway:schema:prepared-next-result:v1",
@@ -1501,7 +1501,12 @@
       {
         "id": "urn:podway:schema:session-archive-list-result:v1",
         "path": "schemas/session-archive-list-result-v1.schema.json",
-        "sha256": "sha256:5b426475deb6d4135623ab13307e4ffa20782a1e3074df00e4bbd64b4206f095"
+        "sha256": "sha256:518c4c666232a2b0908ef106e731f3113d629eabe18f9e4b88bd37bbd93decbf"
+      },
+      {
+        "id": "urn:podway:schema:session-archive-list-result:v2",
+        "path": "schemas/session-archive-list-result-v2.schema.json",
+        "sha256": "sha256:640b636abeb787754b41c4bc9f6f3c6440cdc960db66e90998636281399c8692"
       },
       {
         "id": "urn:podway:schema:session-archive-not-eligible-details:v1",
@@ -1674,7 +1679,7 @@
     "authoring_diagnostics": 58,
     "routes": 72,
     "runtime_errors": 111,
-    "schemas": 104
+    "schemas": 105
   },
   "migration_boundary": {
     "adapter_database_access": "forbidden",

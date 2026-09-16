@@ -365,6 +365,11 @@ pub const NEW_ROUTE_RESULT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
         &["session.archive_list"],
     ),
     result_schema_v2(
+        "podway.session-archive-list-result/v2",
+        "schemas/session-archive-list-result-v2.schema.json",
+        &["session.archive_list"],
+    ),
+    result_schema_v2(
         "podway.session-archive-show-result/v1",
         "schemas/session-archive-show-result-v1.schema.json",
         &["session.archive_show"],
@@ -885,6 +890,9 @@ fn required_result_fields_v2(schema: &str) -> &'static [&'static str] {
             "admission",
         ],
         "podway.session-archive-list-result/v1" => &["schema", "maximum", "count", "sessions"],
+        "podway.session-archive-list-result/v2" => {
+            &["schema", "count", "truncated", "oldest", "sessions"]
+        }
         "podway.session-archive-show-result/v1" => &[
             "schema",
             "activity",
@@ -1244,6 +1252,9 @@ fn allowed_result_fields_v2(schema: &str) -> &'static [&'static str] {
             "admission",
         ],
         "podway.session-archive-list-result/v1" => &["schema", "maximum", "count", "sessions"],
+        "podway.session-archive-list-result/v2" => {
+            &["schema", "count", "truncated", "oldest", "sessions"]
+        }
         "podway.session-archive-show-result/v1" => &[
             "schema",
             "activity",

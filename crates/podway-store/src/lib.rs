@@ -52,9 +52,9 @@ pub use v2_state::{
     GraphInitialGoalV2, GraphItemMutationEntryV2, GraphItemMutationOutcomeV2,
     GraphItemsMutationOutcomeV2, GraphNodeCounterV2, GraphNodeSnapshotV2, GraphRetryOutcomeV2,
     GraphSessionStateV2, GraphStartCurrentTaskV2, GraphUnblockOutcomeV2, GraphWorkspaceViewV2,
-    MAX_INACTIVE_SESSIONS_V2, ProcedureSnapshotV2, SessionArchiveSummaryV2,
-    StoreGraphMutationContractV2, StoreGraphReadContractV2, StoreGraphStateContractV2,
-    StoreSessionArchiveContractV2, StoreTerminalDispositionContractV2,
+    MAX_ARCHIVED_SESSION_LIST_WINDOW_V2, ProcedureSnapshotV2, SessionArchiveListPageV2,
+    SessionArchiveSummaryV2, StoreGraphMutationContractV2, StoreGraphReadContractV2,
+    StoreGraphStateContractV2, StoreSessionArchiveContractV2, StoreTerminalDispositionContractV2,
 };
 
 pub const MAX_IDEMPOTENCY_KEY_BYTES_V1: usize = 256;

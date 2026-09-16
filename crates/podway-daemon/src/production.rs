@@ -20,11 +20,12 @@ use podway_git::{
 use podway_protocol::{
     CommandNameV1, IdempotencyKeyV1, JobOutputV1, JobStateV1, OutputEnvelopeInputV3,
     OutputEnvelopeV3, ProcedureV2MutationRequestV1, ProcedureV2StartRequestV1, RequestEnvelopeV1,
-    RequestIdV1, ResponseEnvelopeV2, Rfc3339MillisV1, SessionLifecycleV1, SessionOutputV1,
-    SessionStartSourceV1, SliceCommandV1, SliceRequestV1, TerminalJobCancellationProjectionV1,
-    TerminalJobResponseV1, TerminalJobSuccessResultV1, WorkspaceModeApplyRequestV1,
-    WorkspaceModePlanRequestV1, WorkspaceOutputV1, WorkspaceRemoveRequestV1,
-    WorktreeSelectorWireV1, canonical_reset_all_identity_v1, decode_response_payload_v2,
+    RequestIdV1, ResponseEnvelopeV2, Rfc3339MillisV1, SESSION_ARCHIVE_LIST_WINDOW_V2,
+    SessionLifecycleV1, SessionOutputV1, SessionStartSourceV1, SliceCommandV1, SliceRequestV1,
+    TerminalJobCancellationProjectionV1, TerminalJobResponseV1, TerminalJobSuccessResultV1,
+    WorkspaceModeApplyRequestV1, WorkspaceModePlanRequestV1, WorkspaceOutputV1,
+    WorkspaceRemoveRequestV1, WorktreeSelectorWireV1, canonical_reset_all_identity_v1,
+    decode_response_payload_v2,
 };
 use podway_store::{
     AdmitOutcomeV1, CancelOutcomeV1, CanonicalRequestDigestV1, DurableWorktreeIdentityV1,
@@ -2655,25 +2656,31 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                 let identity = context.binding().identity();
                 match slice_request.command() {
                     SliceCommandV1::SessionArchiveList(_) => {
-                        let archives = context
+                        let page = context
                             .store_for_mutation()
-                            .list_archived_sessions_v2(identity)
+                            .list_archived_sessions_v2(identity, SESSION_ARCHIVE_LIST_WINDOW_V2)
                             .map_err(map_store_error)?;
+                        let count = page.count();
+                        let truncated = count > SESSION_ARCHIVE_LIST_WINDOW_V2 as u64;
+                        let sessions = page
+                            .sessions()
+                            .iter()
+                            .map(archive_summary_value_v2)
+                            .collect::<Vec<_>>();
+                        let oldest = page.oldest().map(archive_summary_value_v2);
                         Ok(json!({
-                            "schema": "podway.session-archive-list-result/v1",
-                            "maximum": podway_store::MAX_INACTIVE_SESSIONS_V2,
-                            "count": archives.len(),
-                            "sessions": archives.iter().map(archive_summary_value_v2).collect::<Vec<_>>(),
+                            "schema": "podway.session-archive-list-result/v2",
+                            "count": count,
+                            "truncated": truncated,
+                            "oldest": oldest,
+                            "sessions": sessions,
                         }))
                     }
                     SliceCommandV1::SessionArchiveShow(input) => {
-                        let archives = context
+                        let summary = context
                             .store_for_mutation()
-                            .list_archived_sessions_v2(identity)
-                            .map_err(map_store_error)?;
-                        let summary = archives
-                            .iter()
-                            .find(|summary| summary.session_id() == &input.session_id)
+                            .archived_session_summary_v2(identity, &input.session_id)
+                            .map_err(map_store_error)?
                             .ok_or_else(|| {
                                 map_store_error(StoreErrorV1::SessionArchiveNotFoundV1 {
                                     session_id: input.session_id.clone(),
@@ -2718,7 +2725,7 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                         Ok(json!({
                             "schema": "podway.session-archive-show-result/v1",
                             "activity": "inactive",
-                            "archive": archive_summary_value_v2(summary),
+                            "archive": archive_summary_value_v2(&summary),
                             "terminal_disposition": terminal_disposition_value_v2(terminal_disposition),
                             "state": status,
                         }))

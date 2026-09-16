@@ -118,7 +118,7 @@ unexpected process transition. Automation must not branch on those messages.
 | `SESSION_NOT_TERMINAL` | 1 | no | Terminal disposition requires a completed or cancelled session |
 | `SESSION_RESET_NOT_ELIGIBLE` | 1 | no | Eligible reset or replacement requires prepared state or a current terminal disposition |
 | `SESSION_ARCHIVE_NOT_ELIGIBLE` | 1 | no | Current session is not terminal with a current disposition |
-| `SESSION_ARCHIVE_LIMIT_REACHED` | 1 | no | Inactive-session archive already contains 32 sessions |
+| `SESSION_ARCHIVE_LIMIT_REACHED` | 1 | no | Historical inactive-session capacity failure; current builds do not emit it |
 | `SESSION_ARCHIVE_NOT_FOUND` | 1 | no | Requested inactive session does not exist |
 | `SESSION_CANCELLED` | 1 | no | Cancelled session cannot perform the operation |
 | `SESSION_REVISION_CONFLICT` | 4 | yes | Observed session revision is stale |
@@ -290,8 +290,9 @@ re-observe before deriving another start request.
 
 Archive failures use three distinct non-retryable codes. `SESSION_ARCHIVE_NOT_ELIGIBLE`
 reports the current lifecycle, disposition state, and the required lifecycle
-action. `SESSION_ARCHIVE_LIMIT_REACHED` reports the fixed maximum of 32 and never
-evicts retained history. `SESSION_ARCHIVE_NOT_FOUND` reports the exact inactive
+action. `SESSION_ARCHIVE_LIMIT_REACHED` remains in the catalog for historical
+documents and is not emitted by current builds; archival never evicts retained
+history. `SESSION_ARCHIVE_NOT_FOUND` reports the exact inactive
 session ID that was not found; after an uncertain purge response, callers
 reconcile with a fresh `archive list` rather than assuming who performed deletion.
 
