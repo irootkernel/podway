@@ -210,6 +210,7 @@ pub enum PersistedDomainCommandV1 {
     ItemAttach { item_id: ItemId },
     ItemClear { item_id: ItemId },
     ItemRecordMany,
+    DelegationAccept,
 }
 
 impl PersistedDomainCommandV1 {
@@ -257,6 +258,7 @@ impl PersistedDomainCommandV1 {
                 item_id: item_id.clone(),
             },
             CommandV1::ItemRecordMany => Self::ItemRecordMany,
+            CommandV1::DelegationAccept => Self::DelegationAccept,
         }
     }
 
@@ -290,6 +292,7 @@ impl PersistedDomainCommandV1 {
             Self::ItemAttach { item_id } => CommandV1::ItemAttach { item_id },
             Self::ItemClear { item_id } => CommandV1::ItemClear { item_id },
             Self::ItemRecordMany => CommandV1::ItemRecordMany,
+            Self::DelegationAccept => CommandV1::DelegationAccept,
         }
     }
 
@@ -327,6 +330,7 @@ impl PersistedDomainCommandV1 {
             Self::ItemAttach { .. } => "item.attach",
             Self::ItemClear { .. } => "item.clear",
             Self::ItemRecordMany => "item.record_many",
+            Self::DelegationAccept => "delegation.accept",
         }
     }
 }
@@ -580,6 +584,7 @@ fn procedure_v2_runtime_command(command: &CommandV1) -> bool {
             | CommandV1::ItemAttach { .. }
             | CommandV1::ItemClear { .. }
             | CommandV1::ItemRecordMany
+            | CommandV1::DelegationAccept
     )
 }
 
@@ -609,6 +614,7 @@ fn procedure_v2_current_session_command(command: &CommandV1) -> bool {
             | CommandV1::ItemAttach { .. }
             | CommandV1::ItemClear { .. }
             | CommandV1::ItemRecordMany
+            | CommandV1::DelegationAccept
     )
 }
 
@@ -677,7 +683,7 @@ fn procedure_v2_preconditions_match(
                 && preconditions.expected_item_id() == Some(item_id)
                 && preconditions.expected_item_revision().is_some()
         }
-        CommandV1::ItemRecordMany => {
+        CommandV1::ItemRecordMany | CommandV1::DelegationAccept => {
             preconditions.expected_session_revision().is_some()
                 && preconditions.expected_attempt_id().is_some()
                 && preconditions.expected_item_id().is_none()
@@ -719,6 +725,7 @@ pub enum PersistedDomainCommandKindV1 {
     ItemAttach,
     ItemClear,
     ItemRecordMany,
+    DelegationAccept,
 }
 
 impl From<DomainCommandKind> for PersistedDomainCommandKindV1 {
@@ -752,6 +759,7 @@ impl From<DomainCommandKind> for PersistedDomainCommandKindV1 {
             DomainCommandKind::ItemAttach => Self::ItemAttach,
             DomainCommandKind::ItemClear => Self::ItemClear,
             DomainCommandKind::ItemRecordMany => Self::ItemRecordMany,
+            DomainCommandKind::DelegationAccept => Self::DelegationAccept,
         }
     }
 }
@@ -793,6 +801,16 @@ pub enum PersistedDomainResultV1 {
         revision_before: RevisionV1,
         revision_after: RevisionV1,
         changed: bool,
+    },
+    DelegationAccepted {
+        receipt_id: podway_core::DelegationReceiptIdV1,
+        workspace_uuid: WorkspaceId,
+        session_id: SessionId,
+        attempt_id: AttemptId,
+        revision_before: RevisionV1,
+        revision_after: RevisionV1,
+        package_digest: Sha256Digest,
+        result_digest: Sha256Digest,
     },
     ItemChanged {
         session_id: SessionId,
@@ -836,6 +854,25 @@ impl PersistedDomainResultV1 {
                 revision_before: *revision_before,
                 revision_after: *revision_after,
                 changed: *changed,
+            },
+            DomainResult::DelegationAccepted {
+                receipt_id,
+                workspace_uuid,
+                session_id,
+                attempt_id,
+                revision_before,
+                revision_after,
+                package_digest,
+                result_digest,
+            } => Self::DelegationAccepted {
+                receipt_id: receipt_id.clone(),
+                workspace_uuid: workspace_uuid.clone(),
+                session_id: session_id.clone(),
+                attempt_id: attempt_id.clone(),
+                revision_before: *revision_before,
+                revision_after: *revision_after,
+                package_digest: package_digest.clone(),
+                result_digest: result_digest.clone(),
             },
             DomainResult::ItemChanged {
                 session_id,
@@ -1283,6 +1320,10 @@ pub enum PersistedGraphTerminalOperationV2 {
         attempt_id: AttemptId,
         attempt_number: u64,
         items: Vec<PersistedGraphItemMutationV2>,
+    },
+    DelegationAccept {
+        attempt_id: AttemptId,
+        receipt_id: podway_core::DelegationReceiptIdV1,
     },
     Failure {
         error: PersistedGraphMutationFailureV2,
@@ -2648,6 +2689,7 @@ impl PersistedGraphTerminalOperationV2 {
                         .windows(2)
                         .all(|pair| pair[0].item_id < pair[1].item_id)
             }
+            Self::DelegationAccept { .. } => true,
             Self::Failure { error } => error.validate(),
         };
         if valid {
@@ -3485,6 +3527,26 @@ impl PersistedTerminalReceiptV1 {
                     && graph.revision_after() == *revision_after
                     && *changed == (*revision_before != *revision_after) => {}
                 (
+                    Some(PersistedGraphTerminalOperationV2::DelegationAccept {
+                        attempt_id,
+                        receipt_id,
+                    }),
+                    PersistedTerminalResultV1::Success(
+                        PersistedDomainResultV1::DelegationAccepted {
+                            receipt_id: result_receipt_id,
+                            session_id,
+                            attempt_id: result_attempt_id,
+                            revision_before,
+                            revision_after,
+                            ..
+                        },
+                    ),
+                ) if graph.session_id() == session_id
+                    && receipt_id == result_receipt_id
+                    && attempt_id == result_attempt_id
+                    && graph.revision_before() == *revision_before
+                    && graph.revision_after() == *revision_after => {}
+                (
                     Some(PersistedGraphTerminalOperationV2::Failure { .. }),
                     PersistedTerminalResultV1::Failure(_),
                 ) if graph.revision_before() == graph.revision_after() => {}
@@ -3565,7 +3627,8 @@ impl PersistedTerminalReceiptV1 {
                 PersistedTerminalResultV1::Success(
                     PersistedDomainResultV1::SessionChanged { .. }
                     | PersistedDomainResultV1::ItemChanged { .. }
-                    | PersistedDomainResultV1::ItemsChanged { .. },
+                    | PersistedDomainResultV1::ItemsChanged { .. }
+                    | PersistedDomainResultV1::DelegationAccepted { .. },
                 ),
                 None,
             ) if self.graph_session_projection.is_some() => {}
@@ -3573,14 +3636,16 @@ impl PersistedTerminalReceiptV1 {
                 PersistedTerminalResultV1::Success(
                     PersistedDomainResultV1::SessionChanged { .. }
                     | PersistedDomainResultV1::ItemChanged { .. }
-                    | PersistedDomainResultV1::ItemsChanged { .. },
+                    | PersistedDomainResultV1::ItemsChanged { .. }
+                    | PersistedDomainResultV1::DelegationAccepted { .. },
                 ),
                 None,
             )
             | (
                 PersistedTerminalResultV1::Success(
                     PersistedDomainResultV1::WorkspaceInitialized { .. }
-                    | PersistedDomainResultV1::WorkspaceReset { .. },
+                    | PersistedDomainResultV1::WorkspaceReset { .. }
+                    | PersistedDomainResultV1::DelegationAccepted { .. },
                 )
                 | PersistedTerminalResultV1::Failure(_)
                 | PersistedTerminalResultV1::Cancelled,
@@ -4549,6 +4614,16 @@ fn validate_success_result_for_command_v1(
                 ..
             },
         ) => monotonic_revisions_are_possible(*revision_before, *revision_after, *changed),
+        (
+            CommandV1::DelegationAccept,
+            PersistedDomainResultV1::DelegationAccepted {
+                revision_before,
+                revision_after,
+                ..
+            },
+        ) => revision_before
+            .checked_next()
+            .is_ok_and(|next| next == *revision_after),
         _ => false,
     };
     compatible

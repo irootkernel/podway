@@ -7,6 +7,8 @@
       "C06",
       "C08",
       "C11",
+      "C12",
+      "C13",
       "D01",
       "D02",
       "D03",
@@ -20,6 +22,8 @@
       "C06",
       "C08",
       "C11",
+      "C12",
+      "C13",
       "D01",
       "D02",
       "D03",
@@ -73,6 +77,28 @@
         "recovery": "restart requeues and one retry commits",
         "invariant": "one graph failure receipt",
         "source_locator": "crates/podway-store/src/sqlite_store.rs::SqliteStoreV1::commit_graph_mutation_terminal_v2"
+      }
+    },
+    {
+      "id": "C12",
+      "proof": {
+        "failpoint": "TerminalAfterRelationalStateUpdatesBeforeJobTerminalUpdate",
+        "test": "crates/podway-store/tests/int_v2sdg004_receipt.rs::v2sdg004_precommit_failure_rolls_back_receipt_state_and_terminal",
+        "termination": "injected failure observed",
+        "recovery": "transaction rolls back receipt, graph revision, and terminal job",
+        "invariant": "delegation receipt and job outcome commit atomically",
+        "source_locator": "crates/podway-store/src/sqlite_store.rs::commit_graph_mutation_terminal_with_receipt_v1"
+      }
+    },
+    {
+      "id": "C13",
+      "proof": {
+        "failpoint": "TerminalAfterCommitBeforeResponse",
+        "test": "crates/podway-store/tests/int_v2sdg004_receipt.rs::v2sdg004_postcommit_response_loss_replays_one_receipt",
+        "termination": "injected response loss observed",
+        "recovery": "cold reopen reads one durable receipt and terminal idempotency result",
+        "invariant": "committed delegation acceptance replays without another receipt",
+        "source_locator": "crates/podway-store/src/sqlite_store.rs::commit_graph_mutation_terminal_with_receipt_v1"
       }
     },
     {

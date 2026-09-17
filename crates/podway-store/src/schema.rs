@@ -68,7 +68,8 @@ pub const SQLITE_SCHEMA_VERSION_V8: u32 = 8;
 pub const SQLITE_SCHEMA_VERSION_V9: u32 = 9;
 pub const SQLITE_SCHEMA_VERSION_V10: u32 = 10;
 pub const SQLITE_SCHEMA_VERSION_V11: u32 = 11;
-pub const SQLITE_SCHEMA_VERSION_CURRENT: u32 = SQLITE_SCHEMA_VERSION_V11;
+pub const SQLITE_SCHEMA_VERSION_V12: u32 = 12;
+pub const SQLITE_SCHEMA_VERSION_CURRENT: u32 = SQLITE_SCHEMA_VERSION_V12;
 pub const SQLITE_INITIAL_MIGRATION_NAME_V1: &str = "schema-0-uninitialized";
 pub const SQLITE_RESPONSE_CONTEXT_MIGRATION_NAME_V2: &str = "schema-1-response-context";
 pub const SQLITE_PROCEDURE_V2_STATE_MIGRATION_NAME_V3: &str = "schema-2-procedure-v2-state";
@@ -85,6 +86,7 @@ pub const SQLITE_DUPLICATE_EVIDENCE_REFERENCE_MIGRATION_NAME_V9: &str =
 pub const SQLITE_RUNTIME_MODE_BINDING_MIGRATION_NAME_V10: &str = "schema-9-runtime-mode-binding";
 pub const SQLITE_UNBOUNDED_INACTIVE_SESSIONS_MIGRATION_NAME_V11: &str =
     "schema-10-unbounded-inactive-sessions";
+pub const SQLITE_DELEGATION_RECEIPTS_MIGRATION_NAME_V12: &str = "schema-11-delegation-receipts";
 
 const SQLITE_V1_DDL: &str = include_str!("../../../assets/specifications/sqlite-v1.sql");
 const SQLITE_V2_DDL: &str = include_str!("../../../assets/specifications/sqlite-v2.sql");
@@ -97,6 +99,7 @@ const SQLITE_V8_DDL: &str = include_str!("../../../assets/specifications/sqlite-
 const SQLITE_V9_DDL: &str = include_str!("../../../assets/specifications/sqlite-v9.sql");
 const SQLITE_V10_DDL: &str = include_str!("../../../assets/specifications/sqlite-v10.sql");
 const SQLITE_V11_DDL: &str = include_str!("../../../assets/specifications/sqlite-v11.sql");
+const SQLITE_V12_DDL: &str = include_str!("../../../assets/specifications/sqlite-v12.sql");
 const CONNECTION_PRAGMA_PREAMBLE_V1: &str = concat!(
     "PRAGMA foreign_keys = ON;\n",
     "PRAGMA journal_mode = WAL;\n",
@@ -115,6 +118,7 @@ const USER_VERSION_SUFFIX_V8: &str = "PRAGMA user_version = 8;\n";
 const USER_VERSION_SUFFIX_V9: &str = "PRAGMA user_version = 9;\n";
 const USER_VERSION_SUFFIX_V10: &str = "PRAGMA user_version = 10;\n";
 const USER_VERSION_SUFFIX_V11: &str = "PRAGMA user_version = 11;\n";
+const USER_VERSION_SUFFIX_V12: &str = "PRAGMA user_version = 12;\n";
 
 /// The exact immutable bytes of the canonical v1 migration.
 pub fn sqlite_v1_ddl() -> &'static str {
@@ -221,6 +225,15 @@ pub fn sqlite_v11_ddl() -> &'static str {
 
 pub fn sqlite_v11_ddl_checksum() -> String {
     let digest = Sha256::digest(SQLITE_V11_DDL.as_bytes());
+    format!("sha256:{digest:x}")
+}
+
+pub fn sqlite_v12_ddl() -> &'static str {
+    SQLITE_V12_DDL
+}
+
+pub fn sqlite_v12_ddl_checksum() -> String {
+    let digest = Sha256::digest(SQLITE_V12_DDL.as_bytes());
     format!("sha256:{digest:x}")
 }
 
@@ -362,6 +375,7 @@ fn migrate_existing_schema_to_current_v1(
                 .map_err(storage_error)?;
             apply_schema_v10_migration_v1(&transaction, migration_now)?;
             apply_schema_v11_migration_v1(&transaction, migration_now)?;
+            apply_schema_v12_migration_v1(&transaction, migration_now)?;
             verify_integrity_connection_inner_v1(
                 &transaction,
                 identity,
@@ -378,6 +392,7 @@ fn migrate_existing_schema_to_current_v1(
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(storage_error)?;
             apply_schema_v11_migration_v1(&transaction, migration_now)?;
+            apply_schema_v12_migration_v1(&transaction, migration_now)?;
             verify_integrity_connection_inner_v1(
                 &transaction,
                 identity,
@@ -389,7 +404,23 @@ fn migrate_existing_schema_to_current_v1(
             options.trigger_failpoint(StoreFailpointV1::SchemaBeforeCommit)?;
             transaction.commit().map_err(storage_error)
         })?,
-        SQLITE_SCHEMA_VERSION_V11 => {}
+        SQLITE_SCHEMA_VERSION_V11 => run_schema_migration_v1(connection, |connection| {
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(storage_error)?;
+            apply_schema_v12_migration_v1(&transaction, migration_now)?;
+            verify_integrity_connection_inner_v1(
+                &transaction,
+                identity,
+                options,
+                IntegrityModeV1::Fast,
+                now,
+                false,
+            )?;
+            options.trigger_failpoint(StoreFailpointV1::SchemaBeforeCommit)?;
+            transaction.commit().map_err(storage_error)
+        })?,
+        SQLITE_SCHEMA_VERSION_V12 => {}
         found if found > SQLITE_SCHEMA_VERSION_CURRENT => {
             return Err(StoreErrorV1::NewerStateV1 {
                 found_schema_version: found,
@@ -529,7 +560,11 @@ pub(crate) fn verify_binding_inspection_schema_v1(
             verify_migration_predecessor_v1(connection, SQLITE_SCHEMA_VERSION_V10)?;
             verify_v2_graph_state_connection_v2(connection)
         }
-        SQLITE_SCHEMA_VERSION_V11 => verify_schema_v1(connection),
+        SQLITE_SCHEMA_VERSION_V11 => {
+            verify_migration_predecessor_v1(connection, SQLITE_SCHEMA_VERSION_V11)?;
+            verify_v2_graph_state_connection_v2(connection)
+        }
+        SQLITE_SCHEMA_VERSION_V12 => verify_schema_v1(connection),
         found if found > SQLITE_SCHEMA_VERSION_CURRENT => Err(StoreErrorV1::NewerStateV1 {
             found_schema_version: found,
             supported_schema_version: SQLITE_SCHEMA_VERSION_CURRENT,
@@ -581,7 +616,11 @@ pub(crate) fn verify_reset_binding_inspection_schema_v1(
             verify_migration_predecessor_v1(connection, SQLITE_SCHEMA_VERSION_V10)?;
             verify_v2_graph_state_connection_v2(connection)
         }
-        SQLITE_SCHEMA_VERSION_V11 => verify_schema_v1(connection),
+        SQLITE_SCHEMA_VERSION_V11 => {
+            verify_migration_predecessor_v1(connection, SQLITE_SCHEMA_VERSION_V11)?;
+            verify_v2_graph_state_connection_v2(connection)
+        }
+        SQLITE_SCHEMA_VERSION_V12 => verify_schema_v1(connection),
         found if found > SQLITE_SCHEMA_VERSION_CURRENT => Err(StoreErrorV1::NewerStateV1 {
             found_schema_version: found,
             supported_schema_version: SQLITE_SCHEMA_VERSION_CURRENT,
@@ -1060,6 +1099,13 @@ fn expected_migrations_through_v1(
             sqlite_v11_ddl_checksum(),
         ));
     }
+    if expected_version >= SQLITE_SCHEMA_VERSION_V12 {
+        expected.push((
+            i64::from(SQLITE_SCHEMA_VERSION_V12),
+            SQLITE_DELEGATION_RECEIPTS_MIGRATION_NAME_V12.to_owned(),
+            sqlite_v12_ddl_checksum(),
+        ));
+    }
     if !(SQLITE_SCHEMA_VERSION_V1..=SQLITE_SCHEMA_VERSION_CURRENT).contains(&expected_version) {
         return Err(integrity_error(StoreIntegrityCheckV1::SchemaVersion));
     }
@@ -1154,6 +1200,11 @@ fn expected_schema_objects_through_v1(
     if expected_version >= SQLITE_SCHEMA_VERSION_V11 {
         reference
             .execute_batch(migration_schema_statements_v11()?)
+            .map_err(storage_error)?;
+    }
+    if expected_version >= SQLITE_SCHEMA_VERSION_V12 {
+        reference
+            .execute_batch(migration_schema_statements_v12()?)
             .map_err(storage_error)?;
     }
     if !(SQLITE_SCHEMA_VERSION_V1..=SQLITE_SCHEMA_VERSION_CURRENT).contains(&expected_version) {
@@ -1632,6 +1683,7 @@ fn initialize_empty_schema_v1(
     apply_schema_v9_migration_v1(&transaction, now)?;
     apply_schema_v10_migration_v1(&transaction, now)?;
     apply_schema_v11_migration_v1(&transaction, now)?;
+    apply_schema_v12_migration_v1(&transaction, now)?;
     transaction
         .execute(
             "INSERT INTO workspace_state (singleton, workspace_uuid, git_common_fingerprint, \
@@ -1801,6 +1853,14 @@ fn migration_schema_statements_v11() -> Result<&'static str, StoreErrorV1> {
     )
 }
 
+fn migration_schema_statements_v12() -> Result<&'static str, StoreErrorV1> {
+    SQLITE_V12_DDL.strip_suffix(USER_VERSION_SUFFIX_V12).ok_or(
+        StoreErrorV1::InternalInvariantViolationV1 {
+            invariant: crate::StoreInvariantV1::SchemaDefinition,
+        },
+    )
+}
+
 fn migrate_schema_v1_to_v7(
     connection: &mut Connection,
     identity: &DurableWorktreeIdentityV1,
@@ -1852,6 +1912,7 @@ fn migrate_schema_v1_to_v7(
     apply_schema_v9_migration_v1(&transaction, now)?;
     apply_schema_v10_migration_v1(&transaction, now)?;
     apply_schema_v11_migration_v1(&transaction, now)?;
+    apply_schema_v12_migration_v1(&transaction, now)?;
     verify_integrity_connection_inner_v1(
         &transaction,
         identity,
@@ -1922,6 +1983,10 @@ fn migrate_schema_v2_to_v7(
         &transaction,
         sqlite_integer_v1(now.get(), "migration timestamp")?,
     )?;
+    apply_schema_v12_migration_v1(
+        &transaction,
+        sqlite_integer_v1(now.get(), "migration timestamp")?,
+    )?;
     verify_integrity_connection_inner_v1(
         &transaction,
         identity,
@@ -1978,6 +2043,10 @@ fn migrate_schema_v3_to_v7(
         &transaction,
         sqlite_integer_v1(now.get(), "migration timestamp")?,
     )?;
+    apply_schema_v12_migration_v1(
+        &transaction,
+        sqlite_integer_v1(now.get(), "migration timestamp")?,
+    )?;
     verify_integrity_connection_inner_v1(
         &transaction,
         identity,
@@ -2030,6 +2099,10 @@ fn migrate_schema_v4_to_v7(
         &transaction,
         sqlite_integer_v1(now.get(), "migration timestamp")?,
     )?;
+    apply_schema_v12_migration_v1(
+        &transaction,
+        sqlite_integer_v1(now.get(), "migration timestamp")?,
+    )?;
     verify_integrity_connection_inner_v1(
         &transaction,
         identity,
@@ -2077,6 +2150,10 @@ fn migrate_schema_v5_to_v7(
         &transaction,
         sqlite_integer_v1(now.get(), "migration timestamp")?,
     )?;
+    apply_schema_v12_migration_v1(
+        &transaction,
+        sqlite_integer_v1(now.get(), "migration timestamp")?,
+    )?;
     verify_integrity_connection_inner_v1(
         &transaction,
         identity,
@@ -2120,6 +2197,10 @@ fn migrate_schema_v6_to_v7(
         &transaction,
         sqlite_integer_v1(now.get(), "migration timestamp")?,
     )?;
+    apply_schema_v12_migration_v1(
+        &transaction,
+        sqlite_integer_v1(now.get(), "migration timestamp")?,
+    )?;
     verify_integrity_connection_inner_v1(
         &transaction,
         identity,
@@ -2159,6 +2240,10 @@ fn migrate_schema_v7_to_v9(
         &transaction,
         sqlite_integer_v1(now.get(), "migration timestamp")?,
     )?;
+    apply_schema_v12_migration_v1(
+        &transaction,
+        sqlite_integer_v1(now.get(), "migration timestamp")?,
+    )?;
     verify_integrity_connection_inner_v1(
         &transaction,
         identity,
@@ -2191,6 +2276,10 @@ fn migrate_schema_v8_to_v9(
         sqlite_integer_v1(now.get(), "migration timestamp")?,
     )?;
     apply_schema_v11_migration_v1(
+        &transaction,
+        sqlite_integer_v1(now.get(), "migration timestamp")?,
+    )?;
+    apply_schema_v12_migration_v1(
         &transaction,
         sqlite_integer_v1(now.get(), "migration timestamp")?,
     )?;
@@ -2360,6 +2449,28 @@ fn apply_schema_v11_migration_v1(connection: &Connection, now: i64) -> Result<()
         .map_err(storage_error)?;
     connection
         .pragma_update(None, "user_version", SQLITE_SCHEMA_VERSION_V11)
+        .map_err(storage_error)?;
+    verify_foreign_keys_v1(connection)
+}
+
+fn apply_schema_v12_migration_v1(connection: &Connection, now: i64) -> Result<(), StoreErrorV1> {
+    connection
+        .execute_batch(migration_schema_statements_v12()?)
+        .map_err(storage_error)?;
+    connection
+        .execute(
+            "INSERT INTO schema_migrations (version, name, checksum, applied_at_ms) \
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                i64::from(SQLITE_SCHEMA_VERSION_V12),
+                SQLITE_DELEGATION_RECEIPTS_MIGRATION_NAME_V12,
+                sqlite_v12_ddl_checksum(),
+                now,
+            ],
+        )
+        .map_err(storage_error)?;
+    connection
+        .pragma_update(None, "user_version", SQLITE_SCHEMA_VERSION_V12)
         .map_err(storage_error)?;
     verify_foreign_keys_v1(connection)
 }

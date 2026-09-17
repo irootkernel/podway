@@ -3670,6 +3670,7 @@ fn durable_command_name(command: &podway_store::CommandV1) -> &'static str {
         podway_store::CommandV1::ItemAttach { .. } => "item.attach",
         podway_store::CommandV1::ItemClear { .. } => "item.clear",
         podway_store::CommandV1::ItemRecordMany => "item.record_many",
+        podway_store::CommandV1::DelegationAccept => "delegation.accept",
     }
 }
 
@@ -3947,7 +3948,8 @@ fn validate_frozen_terminal_error(
             | PersistedGraphTerminalOperationV2::Reset { .. }
             | PersistedGraphTerminalOperationV2::Archive { .. }
             | PersistedGraphTerminalOperationV2::ItemMutation { .. }
-            | PersistedGraphTerminalOperationV2::ItemMutations { .. },
+            | PersistedGraphTerminalOperationV2::ItemMutations { .. }
+            | PersistedGraphTerminalOperationV2::DelegationAccept { .. },
         ) => return Err(terminal_replay_integrity_failure()),
         None => {
             let command = receipt
@@ -4578,6 +4580,52 @@ fn validate_frozen_v2_result_projection(
                         .all(|(key, value)| result.get(key) == Some(value))
                 }) && result.get("revision").and_then(Value::as_u64) == Some(revision_after.get())
             }),
+        (
+            Some("podway.delegation-accept-result/v1"),
+            PersistedTerminalResultV1::Success(PersistedDomainResultV1::DelegationAccepted {
+                receipt_id,
+                workspace_uuid,
+                session_id,
+                attempt_id,
+                revision_before,
+                revision_after,
+                package_digest,
+                result_digest,
+            }),
+        ) => graph_session.is_some_and(|projection| {
+            let Some(PersistedGraphTerminalOperationV2::DelegationAccept {
+                attempt_id: operation_attempt_id,
+                receipt_id: operation_receipt_id,
+            }) = projection.operation()
+            else {
+                return false;
+            };
+            matches!(
+                receipt.lookup_command(),
+                Some(PersistedDomainCommandV1::DelegationAccept)
+            ) && receipt
+                .response_context()
+                .is_some_and(|context| context.workspace_uuid() == workspace_uuid)
+                && projection.session_id() == session_id
+                && projection.lifecycle() == PersistedSessionLifecycleV1::Running
+                && projection.revision_before() == *revision_before
+                && projection.revision_after() == *revision_after
+                && operation_attempt_id == attempt_id
+                && operation_receipt_id == receipt_id
+                && result.len() == 10
+                && result.get("receipt_id").and_then(Value::as_str) == Some(receipt_id.as_str())
+                && result.get("workspace_uuid").and_then(Value::as_str)
+                    == Some(workspace_uuid.as_str())
+                && result.get("session_id").and_then(Value::as_str) == Some(session_id.as_str())
+                && result.get("session_revision").and_then(Value::as_u64)
+                    == Some(revision_after.get())
+                && result.get("attempt_id").and_then(Value::as_str) == Some(attempt_id.as_str())
+                && result.get("package_digest").and_then(Value::as_str)
+                    == Some(package_digest.as_str())
+                && result.get("result_digest").and_then(Value::as_str)
+                    == Some(result_digest.as_str())
+                && result.get("acceptance_state").and_then(Value::as_str) == Some("accepted")
+        }),
         _ => false,
     };
     if matches_projection {
@@ -4616,7 +4664,8 @@ fn expected_stage_transition_v2(command: &PersistedDomainCommandV1) -> Option<&'
         | PersistedDomainCommandV1::ItemRemove { .. }
         | PersistedDomainCommandV1::ItemAttach { .. }
         | PersistedDomainCommandV1::ItemClear { .. }
-        | PersistedDomainCommandV1::ItemRecordMany => None,
+        | PersistedDomainCommandV1::ItemRecordMany
+        | PersistedDomainCommandV1::DelegationAccept => None,
     }
 }
 
@@ -5169,6 +5218,36 @@ fn graph_terminal_envelope_v2(
             .clone();
             graph_success_terminal_envelope_v2(receipt, result)
         }
+        Some(PersistedGraphTerminalOperationV2::DelegationAccept {
+            attempt_id,
+            receipt_id,
+        }) => {
+            let PersistedTerminalResultV1::Success(PersistedDomainResultV1::DelegationAccepted {
+                workspace_uuid,
+                package_digest,
+                result_digest,
+                ..
+            }) = receipt.result()
+            else {
+                return Err(terminal_replay_integrity_failure());
+            };
+            let result = json!({
+                "schema": "podway.delegation-accept-result/v1",
+                "admission": graph_admission_value_v2(receipt)?,
+                "receipt_id": receipt_id,
+                "workspace_uuid": workspace_uuid,
+                "session_id": graph.session_id(),
+                "session_revision": graph.revision_after(),
+                "attempt_id": attempt_id,
+                "package_digest": package_digest,
+                "result_digest": result_digest,
+                "acceptance_state": "accepted",
+            })
+            .as_object()
+            .ok_or_else(terminal_replay_integrity_failure)?
+            .clone();
+            graph_success_terminal_envelope_v2(receipt, result)
+        }
     }
 }
 
@@ -5314,6 +5393,15 @@ fn terminal_job_success_result(result: &PersistedDomainResultV1) -> TerminalJobS
             ..
         } => TerminalJobSuccessResultV1::SessionChanged {
             changed: *changed,
+            revision_before: *revision_before,
+            revision_after: *revision_after,
+        },
+        PersistedDomainResultV1::DelegationAccepted {
+            revision_before,
+            revision_after,
+            ..
+        } => TerminalJobSuccessResultV1::SessionChanged {
+            changed: true,
             revision_before: *revision_before,
             revision_after: *revision_after,
         },
@@ -7792,6 +7880,113 @@ mod tests {
         assert_eq!(envelope["result"]["to_attempt_id"], to_attempt_id.as_str());
         assert_eq!(envelope["result"]["reason"], reason.as_str());
         validate_frozen_terminal_envelope(&receipt, &envelope).unwrap();
+    }
+
+    #[test]
+    fn v2sdg004_delegation_terminal_reconstructs_closed_acceptance_result() {
+        let sequence = 86;
+        let session_id = SessionId::new("00000000-0000-4000-8000-000000000080").unwrap();
+        let attempt_id = AttemptId::new("00000000-0000-4000-8000-000000000081").unwrap();
+        let receipt_id =
+            podway_core::DelegationReceiptIdV1::new("00000000-0000-4000-8000-000000000082")
+                .unwrap();
+        let workspace_uuid = WorkspaceId::new("00000000-0000-4000-8000-000000000099").unwrap();
+        let package_digest = Sha256Digest::new(format!("sha256:{}", "b".repeat(64))).unwrap();
+        let result_digest = Sha256Digest::new(format!("sha256:{}", "c".repeat(64))).unwrap();
+        let graph_projection = PersistedGraphTerminalSessionProjectionV2::new(
+            session_id.clone(),
+            "Delegated receipt session".to_owned(),
+            PersistedSessionLifecycleV1::Running,
+            Revision::new(4),
+            Revision::new(5),
+            Sha256Digest::new(format!("sha256:{}", "a".repeat(64))).unwrap(),
+            GraphNodeId::new("work").unwrap(),
+            false,
+            false,
+        )
+        .unwrap()
+        .with_operation(PersistedGraphTerminalOperationV2::DelegationAccept {
+            attempt_id: attempt_id.clone(),
+            receipt_id: receipt_id.clone(),
+        })
+        .unwrap();
+        let receipt = PersistedTerminalReceiptV1::new_with_graph_projection(
+            fixture_job(sequence),
+            PersistedTerminalResultV1::Success(PersistedDomainResultV1::DelegationAccepted {
+                receipt_id: receipt_id.clone(),
+                workspace_uuid: workspace_uuid.clone(),
+                session_id: session_id.clone(),
+                attempt_id: attempt_id.clone(),
+                revision_before: Revision::new(4),
+                revision_after: Revision::new(5),
+                package_digest: package_digest.clone(),
+                result_digest: result_digest.clone(),
+            }),
+            terminal_job_projection(PersistedTerminalJobStateV1::Succeeded),
+            graph_projection,
+        )
+        .unwrap()
+        .with_lookup_command(PersistedDomainCommandV1::DelegationAccept)
+        .unwrap()
+        .with_response_context(
+            PersistedResponseContextV1::new(
+                "00000000-0000-4000-8000-000000000087",
+                "delegation.accept",
+                workspace_uuid.clone(),
+                "/safe/worktree",
+                sequence,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        let envelope = seal_terminal_receipt_v1(&receipt).unwrap();
+        assert_eq!(
+            envelope["result"]["schema"],
+            "podway.delegation-accept-result/v1"
+        );
+        assert_eq!(envelope["result"]["receipt_id"], receipt_id.as_str());
+        assert_eq!(
+            envelope["result"]["workspace_uuid"],
+            workspace_uuid.as_str()
+        );
+        assert_eq!(envelope["result"]["session_id"], session_id.as_str());
+        assert_eq!(envelope["result"]["session_revision"], 5);
+        assert_eq!(envelope["result"]["attempt_id"], attempt_id.as_str());
+        assert_eq!(
+            envelope["result"]["package_digest"],
+            package_digest.as_str()
+        );
+        assert_eq!(envelope["result"]["result_digest"], result_digest.as_str());
+        assert_eq!(envelope["result"]["acceptance_state"], "accepted");
+        validate_frozen_terminal_envelope(&receipt, &envelope).unwrap();
+
+        for (field, value) in [
+            ("receipt_id", json!("00000000-0000-4000-8000-000000000083")),
+            (
+                "workspace_uuid",
+                json!("00000000-0000-4000-8000-000000000098"),
+            ),
+            ("session_id", json!("00000000-0000-4000-8000-000000000084")),
+            ("session_revision", json!(6)),
+            ("attempt_id", json!("00000000-0000-4000-8000-000000000085")),
+            (
+                "package_digest",
+                json!(format!("sha256:{}", "d".repeat(64))),
+            ),
+            ("result_digest", json!(format!("sha256:{}", "e".repeat(64)))),
+            ("acceptance_state", json!("stale")),
+        ] {
+            let mut changed = envelope.clone();
+            changed["result"][field] = value;
+            assert!(
+                validate_frozen_terminal_envelope(&receipt, &changed).is_err(),
+                "{field}"
+            );
+        }
+        let mut extra = envelope.clone();
+        extra["result"]["extra"] = json!(true);
+        assert!(validate_frozen_terminal_envelope(&receipt, &extra).is_err());
     }
 
     #[test]

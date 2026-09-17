@@ -11,6 +11,7 @@
 - `sqlite-v9.sql`: ordinal-keyed duplicate evidence-reference migration.
 - `sqlite-v10.sql`: live workspace runtime-mode binding migration; legacy stores migrate as production and named-mode mismatches fail before normal Store access.
 - `sqlite-v11.sql`: drop the 32-slot inactive-session archive cap while keeping unique archive slots in `1..=4294967295`.
+- `sqlite-v12.sql`: add one immutable delegation receipt per attempt without rewriting existing state.
 - `launchagent.plist.template`: reference macOS user LaunchAgent.
 - `error-codes.json`: stable public error and exit-code catalog, including reserved typed-guard failures.
 - `authoring-diagnostics.json`: stable authoring-time diagnostic catalog with ambiguity-based option replacements.

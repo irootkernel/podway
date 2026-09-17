@@ -49,6 +49,13 @@ fn populated_graph_state() -> GraphSessionStateV2 {
 }
 
 fn restore_capped_task_sessions(connection: &Connection, reference: &Connection) {
+    connection
+        .execute_batch(
+            "DROP TRIGGER v2_delegation_receipts_immutable;
+             DROP TABLE v2_delegation_receipts;
+             DELETE FROM schema_migrations WHERE version = 12;",
+        )
+        .unwrap();
     let table_sql: String = reference
         .query_row(
             "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'v2_task_sessions'",
@@ -1086,7 +1093,7 @@ fn sqlite_v11_migrates_v10_stores_and_drops_the_archive_slot_cap() {
         connection
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        11
+        12
     );
     let table_sql: String = connection
         .query_row(
@@ -1130,7 +1137,7 @@ fn v2dvc004_live_schema_v10_binds_new_and_legacy_stores_to_runtime_mode() {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .unwrap();
-    assert_eq!(binding, (11, "prod".to_owned(), 1));
+    assert_eq!(binding, (12, "prod".to_owned(), 1));
     drop(connection);
 
     let before = fs::read(&production_path).unwrap();
@@ -1343,7 +1350,7 @@ fn v2ast004_runtime_migrates_v5_to_v7_without_reencoding_item_values() {
         connection
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        11
+        12
     );
     drop(connection);
 
@@ -1415,7 +1422,7 @@ fn schema_v8_evidence_rows_survive_v9_migration_and_reopen() {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .unwrap();
-    assert_eq!((version, after, migration), (11, before, 1));
+    assert_eq!((version, after, migration), (12, before, 1));
     let mut primary_key = connection
         .prepare(
             "SELECT name FROM pragma_table_info('v2_resolved_evidence_references') \
@@ -1485,7 +1492,7 @@ fn schema_v6_and_v7_upgrade_paths_migrate_to_v9() {
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .unwrap();
-        assert_eq!((version, migrations, foreign_key_violations), (11, 5, 0));
+        assert_eq!((version, migrations, foreign_key_violations), (12, 5, 0));
         let migration: (String, String) = connection
             .query_row(
                 "SELECT name, checksum FROM schema_migrations WHERE version = 9",
@@ -1625,7 +1632,7 @@ fn empty_schema_v4_inspects_read_only_then_migrates_to_v7() {
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!((version, disposition_table_count), (11, 1));
+    assert_eq!((version, disposition_table_count), (12, 1));
 }
 
 #[test]
@@ -1657,7 +1664,7 @@ fn schema_v3_without_legacy_state_migrates_to_retained_terminal_schema_v7() {
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 11);
+    assert_eq!(version, 12);
     let legacy_tables: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name IN \
@@ -1768,7 +1775,7 @@ fn schema_v3_v2_state_and_terminal_receipt_survive_v7_migration_and_reopen() {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
-    assert_eq!((version, migration, legacy_tables), (11, 6, 0));
+    assert_eq!((version, migration, legacy_tables), (12, 6, 0));
     assert_eq!(receipts.0, receipts.1);
 }
 

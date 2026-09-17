@@ -324,6 +324,7 @@ macro_rules! procedure_identifier_newtype {
 uuid_newtype!(WorkspaceId);
 uuid_newtype!(SessionId);
 uuid_newtype!(AttemptId);
+uuid_newtype!(DelegationReceiptIdV1);
 uuid_newtype!(JobId);
 uuid_newtype!(ProcedureSnapshotId);
 uuid_newtype!(BlockerId);
@@ -585,6 +586,7 @@ pub enum DomainCommandKind {
     ItemAttach,
     ItemClear,
     ItemRecordMany,
+    DelegationAccept,
 }
 
 /// A pure domain mutation. Payload interpretation remains inside the domain rather than IPC DTOs.
@@ -618,6 +620,7 @@ pub enum DomainCommand {
     ItemAttach { item_id: ItemId },
     ItemClear { item_id: ItemId },
     ItemRecordMany,
+    DelegationAccept,
 }
 
 impl DomainCommand {
@@ -651,6 +654,7 @@ impl DomainCommand {
             Self::ItemAttach { .. } => DomainCommandKind::ItemAttach,
             Self::ItemClear { .. } => DomainCommandKind::ItemClear,
             Self::ItemRecordMany => DomainCommandKind::ItemRecordMany,
+            Self::DelegationAccept => DomainCommandKind::DelegationAccept,
         }
     }
 }
@@ -696,6 +700,16 @@ pub enum DomainResult {
         revision_before: Revision,
         revision_after: Revision,
         changed: bool,
+    },
+    DelegationAccepted {
+        receipt_id: DelegationReceiptIdV1,
+        workspace_uuid: WorkspaceId,
+        session_id: SessionId,
+        attempt_id: AttemptId,
+        revision_before: Revision,
+        revision_after: Revision,
+        package_digest: Sha256Digest,
+        result_digest: Sha256Digest,
     },
     ItemChanged {
         session_id: SessionId,

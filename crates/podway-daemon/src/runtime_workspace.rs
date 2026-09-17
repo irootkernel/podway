@@ -494,6 +494,27 @@ impl StoreGraphMutationContractV2 for WorkspaceStoreSlotV1 {
         })
     }
 
+    fn commit_graph_delegation_accept_terminal_v1(
+        &self,
+        claim: ClaimTokenV1,
+        expected_workspace_revision: RevisionV1,
+        expected_session_revision: RevisionV1,
+        next_state: GraphSessionStateV2,
+        receipt: podway_store::DelegationReceiptV1,
+        now: podway_store::EpochMillisV1,
+    ) -> Result<TerminalReceiptV1, StoreErrorV1> {
+        self.with_open_store(|store| {
+            store.commit_graph_delegation_accept_terminal_v1(
+                claim,
+                expected_workspace_revision,
+                expected_session_revision,
+                next_state,
+                receipt,
+                now,
+            )
+        })
+    }
+
     fn commit_graph_reset_terminal_v2(
         &self,
         claim: ClaimTokenV1,

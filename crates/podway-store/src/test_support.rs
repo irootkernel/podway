@@ -33,6 +33,12 @@ pub fn corrupt_current_session_cursor(database_path: &Path) -> Result<(), String
 /// Restores the exact released schema-v4 shape while preserving Procedure v2 state.
 pub fn downgrade_to_schema_v4(database_path: &Path) -> Result<(), String> {
     let connection = Connection::open(database_path).map_err(|error| error.to_string())?;
+    connection
+        .execute_batch(
+            "DROP TRIGGER v2_delegation_receipts_immutable;
+             DROP TABLE v2_delegation_receipts;",
+        )
+        .map_err(|error| error.to_string())?;
     let reference = Connection::open_in_memory().map_err(|error| error.to_string())?;
     reference
         .execute_batch(crate::schema::sqlite_v1_ddl())
@@ -164,7 +170,7 @@ pub fn downgrade_to_schema_v4(database_path: &Path) -> Result<(), String> {
                FROM v2_workspace_state_v7
               WHERE singleton = 1;
              DROP TABLE v2_workspace_state_v7;
-             DELETE FROM schema_migrations WHERE version IN (5, 6, 7, 8, 9, 10, 11);",
+             DELETE FROM schema_migrations WHERE version IN (5, 6, 7, 8, 9, 10, 11, 12);",
         )
         .map_err(|error| error.to_string())?;
     connection

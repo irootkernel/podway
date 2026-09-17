@@ -26,6 +26,7 @@ pub mod sqlite_store;
 pub mod state_rows;
 #[doc(hidden)]
 pub mod test_support;
+pub mod v2_delegation;
 pub mod v2_goal;
 pub mod v2_memory;
 pub mod v2_state;
@@ -37,6 +38,7 @@ pub use codec::{
     PersistedTerminalJobStateV1, PersistedTerminalReceiptV1, PersistedTerminalSessionProjectionV1,
 };
 pub use sqlite_store::SqliteStoreV1;
+pub use v2_delegation::DelegationReceiptV1;
 pub use v2_goal::{AttemptCriterionAssessmentStateV2, CriterionAssessmentStateV2, GoalStateV2};
 pub use v2_memory::{
     ActiveItemMutationRequestV2, ActiveItemMutationV2, AttemptWorkflowMemoryV2, BlockerStateV2,
@@ -127,6 +129,7 @@ pub(crate) fn command_name_v1(command: &CommandV1) -> &'static str {
         CommandV1::ItemAttach { .. } => "item.attach",
         CommandV1::ItemClear { .. } => "item.clear",
         CommandV1::ItemRecordMany => "item.record_many",
+        CommandV1::DelegationAccept => "delegation.accept",
     }
 }
 pub(crate) fn command_is_session_scoped_v1(command: &CommandV1) -> bool {
@@ -151,6 +154,7 @@ pub(crate) fn command_is_session_scoped_v1(command: &CommandV1) -> bool {
             | CommandV1::ItemAttach { .. }
             | CommandV1::ItemClear { .. }
             | CommandV1::ItemRecordMany
+            | CommandV1::DelegationAccept
     )
 }
 /// A bounded, exact canonical JSON document needed to execute a durable command after restart.
@@ -2024,6 +2028,7 @@ pub enum StoreRecordKindV1 {
     Snapshot,
     Migration,
     Attempt,
+    DelegationReceipt,
     Item,
     Blocker,
     Journal,

@@ -40,7 +40,7 @@ use crate::v2_state::{
     list_archived_sessions_connection_v2, load_archived_session_connection_v2,
     load_graph_session_connection_v2, load_terminal_dispositions_connection_v2,
     purge_archived_session_transaction_v2, record_terminal_disposition_transaction_v2,
-    replace_graph_session_transaction_v2,
+    replace_graph_delegation_accept_transaction_v1, replace_graph_session_transaction_v2,
 };
 use crate::{
     AdmitOutcomeV1, AdmitRequestV1, CancelOutcomeV1, CanonicalRequestDigestV1, ClaimTokenV1,
@@ -715,6 +715,369 @@ impl StoreSessionArchiveContractV2 for SqliteStoreV1 {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn commit_graph_mutation_terminal_with_receipt_v1(
+    store: &SqliteStoreV1,
+    claim: ClaimTokenV1,
+    expected_workspace_revision: RevisionV1,
+    expected_session_revision: RevisionV1,
+    next_state: Option<GraphSessionStateV2>,
+    result: TerminalResultV1,
+    operation: PersistedGraphTerminalOperationV2,
+    now: EpochMillisV1,
+    delegation_receipt: Option<&crate::DelegationReceiptV1>,
+) -> Result<TerminalReceiptV1, StoreErrorV1> {
+    store.require_identity(claim.identity())?;
+    let mut connection = store.lock_connection()?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(storage)?;
+    store.trigger_failpoint(StoreFailpointV1::TerminalAfterTransactionBegin)?;
+    let row: Option<RunningJobRow> = transaction
+            .query_row(
+                "SELECT workspace_sequence, request_digest, command_name, canonical_request_json, \
+                 submitted_at_ms, claimed_at_ms, state, response_context_json FROM jobs WHERE job_id = ?1",
+                [claim.job_id().as_str()],
+                |row| {
+                    Ok(RunningJobRow {
+                        sequence: row.get(0)?,
+                        digest: row.get(1)?,
+                        command_name: row.get(2)?,
+                        request: row.get(3)?,
+                        submitted_at: row.get(4)?,
+                        claimed_at: row.get(5)?,
+                        state: row.get(6)?,
+                        response_context: row.get(7)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|error| storage_record(error, StoreRecordKindV1::Job))?;
+    let Some(row) = row else {
+        return Err(StoreErrorV1::JobNotFoundV1 {
+            job_id: claim.job_id().clone(),
+        });
+    };
+    let digest = digest(row.digest)?;
+    let sequence =
+        u64::try_from(row.sequence).map_err(|_| invariant(StoreInvariantV1::QueueSequence))?;
+    if sequence == 0 {
+        return Err(corrupt(StoreRecordKindV1::Job));
+    }
+    let submitted_at = epoch(row.submitted_at, StoreRecordKindV1::Job)?;
+    let claimed_at = row
+        .claimed_at
+        .map(|value| epoch(value, StoreRecordKindV1::Job))
+        .transpose()?;
+    let valid_generation = claimed_at.map(|claimed_at| {
+        store.claim_generation(
+            claim.identity(),
+            claim.job_id(),
+            &digest,
+            claimed_at,
+            claim.worker(),
+        )
+    });
+    if row.state != "running" || valid_generation != Some(claim.job_revision()) {
+        return Err(StoreErrorV1::ClaimStaleV1 {
+            job_id: claim.job_id().clone(),
+        });
+    }
+    let execution = decode_command_v1(&row.request).map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+    if execution.execution_flavor() != DurableExecutionFlavorV1::ProcedureV2
+        || command_name_v1(execution.command()) != row.command_name
+        || !matches!(
+            execution.command(),
+            crate::CommandV1::SessionBegin
+                | crate::CommandV1::SessionStartReplace
+                | crate::CommandV1::SessionArchive
+                | crate::CommandV1::SessionTerminalDisposition
+                | crate::CommandV1::SessionComplete
+                | crate::CommandV1::SessionDecide
+                | crate::CommandV1::SessionRework
+                | crate::CommandV1::GoalDefine
+                | crate::CommandV1::GoalRevise
+                | crate::CommandV1::GoalAssessCriterion
+                | crate::CommandV1::SessionRetry
+                | crate::CommandV1::SessionSkip
+                | crate::CommandV1::SessionBlock
+                | crate::CommandV1::SessionUnblock
+                | crate::CommandV1::SessionCancel
+                | crate::CommandV1::SessionReset
+                | crate::CommandV1::ItemCheck { .. }
+                | crate::CommandV1::ItemUncheck { .. }
+                | crate::CommandV1::ItemSet { .. }
+                | crate::CommandV1::ItemAdd { .. }
+                | crate::CommandV1::ItemRemove { .. }
+                | crate::CommandV1::ItemAttach { .. }
+                | crate::CommandV1::ItemClear { .. }
+                | crate::CommandV1::ItemRecordMany
+                | crate::CommandV1::DelegationAccept
+        )
+    {
+        return Err(corrupt(StoreRecordKindV1::Job));
+    }
+    verify_persisted_job_scope(&transaction, claim.job_id().as_str())?;
+    let current = load_graph_session_connection_v2(&transaction)?
+        .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+    if current.workspace_revision() != expected_workspace_revision {
+        return Err(StoreErrorV1::PreconditionConflictV1 {
+            expected: Some(expected_workspace_revision),
+            actual: Some(current.workspace_revision()),
+        });
+    }
+    if current.trace().revision() != expected_session_revision {
+        return Err(StoreErrorV1::PreconditionConflictV1 {
+            expected: Some(expected_session_revision),
+            actual: Some(current.trace().revision()),
+        });
+    }
+    if !matches!(
+        execution.session_identity(),
+        crate::AdmissionSessionIdentityV1::Exact(session_id)
+            if session_id == current.trace().session_id()
+    ) {
+        return Err(corrupt(StoreRecordKindV1::Job));
+    }
+    if let PersistedGraphTerminalOperationV2::Reset { mode, .. } = &operation {
+        let dispositions = load_terminal_dispositions_connection_v2(&transaction, &current)?;
+        let current_disposition = crate::v2_state::terminal_disposition_is_current_v2(
+            &dispositions,
+            current.trace().revision(),
+        );
+        if *mode == crate::PersistedGraphResetModeV2::Eligible
+            && !graph_session_is_reset_eligible_v2(&current, current_disposition)
+        {
+            return Err(StoreErrorV1::SessionResetNotEligibleV1 {
+                lifecycle: current.trace().lifecycle(),
+                current_terminal_disposition: current_disposition,
+            });
+        }
+    }
+    if matches!(operation, PersistedGraphTerminalOperationV2::Archive { .. }) {
+        let dispositions = load_terminal_dispositions_connection_v2(&transaction, &current)?;
+        let current_disposition = crate::v2_state::terminal_disposition_is_current_v2(
+            &dispositions,
+            current.trace().revision(),
+        );
+        if !graph_session_is_reset_eligible_v2(&current, current_disposition) {
+            return Err(StoreErrorV1::SessionArchiveNotEligibleV1 {
+                lifecycle: current.trace().lifecycle(),
+                current_terminal_disposition: current_disposition,
+            });
+        }
+    }
+    if delegation_receipt.is_some()
+        != matches!(
+            operation,
+            PersistedGraphTerminalOperationV2::DelegationAccept { .. }
+        )
+    {
+        return Err(invariant(StoreInvariantV1::TransitionMutationShape));
+    }
+    if let Some(delegation_receipt) = delegation_receipt {
+        let TerminalResultV1::Success(podway_core::DomainResult::DelegationAccepted {
+            receipt_id,
+            workspace_uuid,
+            session_id,
+            attempt_id,
+            package_digest,
+            result_digest,
+            ..
+        }) = &result
+        else {
+            return Err(invariant(StoreInvariantV1::TransitionMutationShape));
+        };
+        if receipt_id != &delegation_receipt.receipt_id()
+            || workspace_uuid != claim.identity().workspace_uuid()
+            || session_id != &delegation_receipt.session_id()
+            || attempt_id != &delegation_receipt.attempt_id()
+            || package_digest != &delegation_receipt.package_digest()
+            || result_digest != &delegation_receipt.result_digest()
+            || !delegation_receipt.matches_state(&current, workspace_uuid)
+        {
+            return Err(invariant(StoreInvariantV1::TransitionMutationShape));
+        }
+    }
+    validate_graph_mutation_terminal_shape_v2(
+        &execution,
+        &current,
+        next_state.as_ref(),
+        &result,
+        &operation,
+        now,
+    )?;
+    if let Some(disposition) = terminal_disposition_from_operation_v2(&operation)? {
+        record_terminal_disposition_transaction_v2(&transaction, &disposition)?;
+    }
+    let reset_session_id = matches!(operation, PersistedGraphTerminalOperationV2::Reset { .. })
+        .then(|| current.trace().session_id().as_str().to_owned());
+    let graph_archive = matches!(operation, PersistedGraphTerminalOperationV2::Archive { .. });
+    if reset_session_id.is_none() && !graph_archive {
+        validate_terminal_result_for_command_v1(execution.command(), &result)
+            .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+    }
+    if matches!(operation, PersistedGraphTerminalOperationV2::Reset { .. }) {
+        clear_graph_session_transaction_v2(
+            &transaction,
+            expected_workspace_revision,
+            expected_session_revision,
+        )?;
+    } else if graph_archive {
+        archive_current_session_transaction_v2(
+            &transaction,
+            expected_workspace_revision,
+            expected_session_revision,
+            now,
+        )?;
+    } else if let Some(next_state) = &next_state {
+        if delegation_receipt.is_some() {
+            replace_graph_delegation_accept_transaction_v1(
+                &transaction,
+                expected_workspace_revision,
+                expected_session_revision,
+                next_state,
+            )?;
+        } else {
+            replace_graph_session_transaction_v2(
+                &transaction,
+                expected_workspace_revision,
+                expected_session_revision,
+                next_state,
+            )?;
+        }
+    }
+    if let Some(delegation_receipt) = delegation_receipt {
+        crate::v2_delegation::insert_receipt_transaction_v1(
+            &transaction,
+            delegation_receipt,
+            &current,
+            claim.identity().workspace_uuid(),
+        )?;
+    }
+    store.trigger_failpoint(
+        StoreFailpointV1::TerminalAfterRelationalStateUpdatesBeforeJobTerminalUpdate,
+    )?;
+
+    let receipt = TerminalReceiptV1::new(
+        JobReceiptV1::new(sequence, claim.job_id().clone(), digest),
+        result,
+    );
+    let (job_state, state_text) = match receipt.result() {
+        TerminalResultV1::Success(_) => (PersistedTerminalJobStateV1::Succeeded, "succeeded"),
+        TerminalResultV1::Failure(_) => (PersistedTerminalJobStateV1::Failed, "failed"),
+    };
+    let job_projection =
+        PersistedTerminalJobProjectionV1::new(job_state, submitted_at, claimed_at, now)
+            .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+    let post_state = next_state.as_ref().unwrap_or(&current);
+    let graph_projection = PersistedGraphTerminalSessionProjectionV2::new(
+        post_state.trace().session_id().clone(),
+        post_state.task_title().to_owned(),
+        post_state.trace().lifecycle().into(),
+        expected_session_revision,
+        post_state.trace().revision(),
+        post_state.snapshot().digest().clone(),
+        post_state.snapshot().entry_graph_node_id().clone(),
+        post_state.snapshot().goal_tracking(),
+        post_state.goal_state().current_revision().is_some(),
+    )
+    .and_then(|projection| projection.with_operation(operation))
+    .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+    let mut persisted = PersistedTerminalReceiptV1::new_with_graph_projection(
+        receipt.job().clone(),
+        PersistedTerminalResultV1::from_terminal_result(receipt.result()),
+        job_projection,
+        graph_projection,
+    )
+    .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+    persisted = enrich_terminal_from_execution(persisted, &execution)?;
+    let response_context = row
+        .response_context
+        .as_deref()
+        .ok_or_else(|| corrupt(StoreRecordKindV1::Job))?;
+    persisted = persisted
+        .with_response_context(
+            decode_response_context_v1(response_context)
+                .map_err(|_| corrupt(StoreRecordKindV1::Job))?,
+        )
+        .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+    if persisted
+        .response_context()
+        .is_some_and(|context| context.freezes_public_terminal_envelope())
+        && let Some(seal) = crate::terminal_envelope_sealer_v1()
+    {
+        let envelope = seal(&persisted)?;
+        persisted = persisted
+            .with_public_terminal_envelope(envelope)
+            .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+    }
+    let encoded = encode_persisted_terminal_receipt_v1(&persisted)
+        .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+    let changed = transaction
+        .execute(
+            "UPDATE jobs SET state = ?1, finished_at_ms = ?2, terminal_response_json = ?3 \
+                 WHERE job_id = ?4 AND state = 'running'",
+            params![
+                state_text,
+                sqlite_u64(now.get())?,
+                &encoded,
+                claim.job_id().as_str(),
+            ],
+        )
+        .map_err(storage)?;
+    if changed != 1 {
+        return Err(StoreErrorV1::ClaimStaleV1 {
+            job_id: claim.job_id().clone(),
+        });
+    }
+    store.trigger_failpoint(StoreFailpointV1::TerminalAfterJobTerminalUpdateBeforeCommit)?;
+    let changed = transaction
+        .execute(
+            "UPDATE idempotency_records SET terminal_response_json = ?1, updated_at_ms = ?2 \
+                 WHERE job_id = ?3 AND terminal_response_json IS NULL",
+            params![&encoded, sqlite_u64(now.get())?, claim.job_id().as_str()],
+        )
+        .map_err(storage)?;
+    if changed != 1 {
+        return Err(corrupt(StoreRecordKindV1::IdempotencyRecord));
+    }
+    transaction
+        .execute(
+            "UPDATE workspace_state SET updated_at_ms = ?1 WHERE singleton = 1",
+            [sqlite_u64(now.get())?],
+        )
+        .map_err(storage)?;
+    let graph_reset = reset_session_id.is_some();
+    if let Some(reset_session_id) = reset_session_id {
+        let cleanup_report = cleanup_session_scope_barrier(&transaction, &reset_session_id)?;
+        record_session_barrier_cleanup(
+            &transaction,
+            row.sequence,
+            claim.job_id().as_str(),
+            now,
+            &cleanup_report,
+        )?;
+    }
+    if !graph_reset {
+        let prune_report =
+            prune_terminal_history_transaction(&transaction, now, &store.options, true)?;
+        record_prune_report(
+            &transaction,
+            &prune_report,
+            Some(row.sequence),
+            Some(claim.job_id().as_str()),
+        )?;
+    }
+    if matches!(receipt.result(), TerminalResultV1::Failure(_)) {
+        store.trigger_failpoint(StoreFailpointV1::TerminalFailureBeforeCommit)?;
+    }
+    store.trigger_failpoint(StoreFailpointV1::TerminalBeforeCommit)?;
+    transaction.commit().map_err(storage)?;
+    store.trigger_failpoint(StoreFailpointV1::TerminalAfterCommitBeforeResponse)?;
+    Ok(receipt)
+}
+
 impl StoreGraphMutationContractV2 for SqliteStoreV1 {
     fn commit_graph_start_terminal_v2(
         &self,
@@ -1226,306 +1589,57 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
         operation: PersistedGraphTerminalOperationV2,
         now: EpochMillisV1,
     ) -> Result<TerminalReceiptV1, StoreErrorV1> {
-        self.require_identity(claim.identity())?;
-        let mut connection = self.lock_connection()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(storage)?;
-        self.trigger_failpoint(StoreFailpointV1::TerminalAfterTransactionBegin)?;
-        let row: Option<RunningJobRow> = transaction
-            .query_row(
-                "SELECT workspace_sequence, request_digest, command_name, canonical_request_json, \
-                 submitted_at_ms, claimed_at_ms, state, response_context_json FROM jobs WHERE job_id = ?1",
-                [claim.job_id().as_str()],
-                |row| {
-                    Ok(RunningJobRow {
-                        sequence: row.get(0)?,
-                        digest: row.get(1)?,
-                        command_name: row.get(2)?,
-                        request: row.get(3)?,
-                        submitted_at: row.get(4)?,
-                        claimed_at: row.get(5)?,
-                        state: row.get(6)?,
-                        response_context: row.get(7)?,
-                    })
-                },
-            )
-            .optional()
-            .map_err(|error| storage_record(error, StoreRecordKindV1::Job))?;
-        let Some(row) = row else {
-            return Err(StoreErrorV1::JobNotFoundV1 {
-                job_id: claim.job_id().clone(),
-            });
-        };
-        let digest = digest(row.digest)?;
-        let sequence =
-            u64::try_from(row.sequence).map_err(|_| invariant(StoreInvariantV1::QueueSequence))?;
-        if sequence == 0 {
-            return Err(corrupt(StoreRecordKindV1::Job));
-        }
-        let submitted_at = epoch(row.submitted_at, StoreRecordKindV1::Job)?;
-        let claimed_at = row
-            .claimed_at
-            .map(|value| epoch(value, StoreRecordKindV1::Job))
-            .transpose()?;
-        let valid_generation = claimed_at.map(|claimed_at| {
-            self.claim_generation(
-                claim.identity(),
-                claim.job_id(),
-                &digest,
-                claimed_at,
-                claim.worker(),
-            )
-        });
-        if row.state != "running" || valid_generation != Some(claim.job_revision()) {
-            return Err(StoreErrorV1::ClaimStaleV1 {
-                job_id: claim.job_id().clone(),
-            });
-        }
-        let execution =
-            decode_command_v1(&row.request).map_err(|_| corrupt(StoreRecordKindV1::Job))?;
-        if execution.execution_flavor() != DurableExecutionFlavorV1::ProcedureV2
-            || command_name_v1(execution.command()) != row.command_name
-            || !matches!(
-                execution.command(),
-                crate::CommandV1::SessionBegin
-                    | crate::CommandV1::SessionStartReplace
-                    | crate::CommandV1::SessionArchive
-                    | crate::CommandV1::SessionTerminalDisposition
-                    | crate::CommandV1::SessionComplete
-                    | crate::CommandV1::SessionDecide
-                    | crate::CommandV1::SessionRework
-                    | crate::CommandV1::GoalDefine
-                    | crate::CommandV1::GoalRevise
-                    | crate::CommandV1::GoalAssessCriterion
-                    | crate::CommandV1::SessionRetry
-                    | crate::CommandV1::SessionSkip
-                    | crate::CommandV1::SessionBlock
-                    | crate::CommandV1::SessionUnblock
-                    | crate::CommandV1::SessionCancel
-                    | crate::CommandV1::SessionReset
-                    | crate::CommandV1::ItemCheck { .. }
-                    | crate::CommandV1::ItemUncheck { .. }
-                    | crate::CommandV1::ItemSet { .. }
-                    | crate::CommandV1::ItemAdd { .. }
-                    | crate::CommandV1::ItemRemove { .. }
-                    | crate::CommandV1::ItemAttach { .. }
-                    | crate::CommandV1::ItemClear { .. }
-                    | crate::CommandV1::ItemRecordMany
-            )
-        {
-            return Err(corrupt(StoreRecordKindV1::Job));
-        }
-        verify_persisted_job_scope(&transaction, claim.job_id().as_str())?;
-        let current = load_graph_session_connection_v2(&transaction)?
-            .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
-        if current.workspace_revision() != expected_workspace_revision {
-            return Err(StoreErrorV1::PreconditionConflictV1 {
-                expected: Some(expected_workspace_revision),
-                actual: Some(current.workspace_revision()),
-            });
-        }
-        if current.trace().revision() != expected_session_revision {
-            return Err(StoreErrorV1::PreconditionConflictV1 {
-                expected: Some(expected_session_revision),
-                actual: Some(current.trace().revision()),
-            });
-        }
-        if !matches!(
-            execution.session_identity(),
-            crate::AdmissionSessionIdentityV1::Exact(session_id)
-                if session_id == current.trace().session_id()
-        ) {
-            return Err(corrupt(StoreRecordKindV1::Job));
-        }
-        if let PersistedGraphTerminalOperationV2::Reset { mode, .. } = &operation {
-            let dispositions = load_terminal_dispositions_connection_v2(&transaction, &current)?;
-            let current_disposition = crate::v2_state::terminal_disposition_is_current_v2(
-                &dispositions,
-                current.trace().revision(),
-            );
-            if *mode == crate::PersistedGraphResetModeV2::Eligible
-                && !graph_session_is_reset_eligible_v2(&current, current_disposition)
-            {
-                return Err(StoreErrorV1::SessionResetNotEligibleV1 {
-                    lifecycle: current.trace().lifecycle(),
-                    current_terminal_disposition: current_disposition,
-                });
-            }
-        }
-        if matches!(operation, PersistedGraphTerminalOperationV2::Archive { .. }) {
-            let dispositions = load_terminal_dispositions_connection_v2(&transaction, &current)?;
-            let current_disposition = crate::v2_state::terminal_disposition_is_current_v2(
-                &dispositions,
-                current.trace().revision(),
-            );
-            if !graph_session_is_reset_eligible_v2(&current, current_disposition) {
-                return Err(StoreErrorV1::SessionArchiveNotEligibleV1 {
-                    lifecycle: current.trace().lifecycle(),
-                    current_terminal_disposition: current_disposition,
-                });
-            }
-        }
-        validate_graph_mutation_terminal_shape_v2(
-            &execution,
-            &current,
-            next_state.as_ref(),
-            &result,
-            &operation,
-            now,
-        )?;
-        if let Some(disposition) = terminal_disposition_from_operation_v2(&operation)? {
-            record_terminal_disposition_transaction_v2(&transaction, &disposition)?;
-        }
-        let reset_session_id = matches!(operation, PersistedGraphTerminalOperationV2::Reset { .. })
-            .then(|| current.trace().session_id().as_str().to_owned());
-        let graph_archive = matches!(operation, PersistedGraphTerminalOperationV2::Archive { .. });
-        if reset_session_id.is_none() && !graph_archive {
-            validate_terminal_result_for_command_v1(execution.command(), &result)
-                .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
-        }
-        if matches!(operation, PersistedGraphTerminalOperationV2::Reset { .. }) {
-            clear_graph_session_transaction_v2(
-                &transaction,
-                expected_workspace_revision,
-                expected_session_revision,
-            )?;
-        } else if graph_archive {
-            archive_current_session_transaction_v2(
-                &transaction,
-                expected_workspace_revision,
-                expected_session_revision,
-                now,
-            )?;
-        } else if let Some(next_state) = &next_state {
-            replace_graph_session_transaction_v2(
-                &transaction,
-                expected_workspace_revision,
-                expected_session_revision,
-                next_state,
-            )?;
-        }
-        self.trigger_failpoint(
-            StoreFailpointV1::TerminalAfterRelationalStateUpdatesBeforeJobTerminalUpdate,
-        )?;
-
-        let receipt = TerminalReceiptV1::new(
-            JobReceiptV1::new(sequence, claim.job_id().clone(), digest),
-            result,
-        );
-        let (job_state, state_text) = match receipt.result() {
-            TerminalResultV1::Success(_) => (PersistedTerminalJobStateV1::Succeeded, "succeeded"),
-            TerminalResultV1::Failure(_) => (PersistedTerminalJobStateV1::Failed, "failed"),
-        };
-        let job_projection =
-            PersistedTerminalJobProjectionV1::new(job_state, submitted_at, claimed_at, now)
-                .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
-        let post_state = next_state.as_ref().unwrap_or(&current);
-        let graph_projection = PersistedGraphTerminalSessionProjectionV2::new(
-            post_state.trace().session_id().clone(),
-            post_state.task_title().to_owned(),
-            post_state.trace().lifecycle().into(),
+        commit_graph_mutation_terminal_with_receipt_v1(
+            self,
+            claim,
+            expected_workspace_revision,
             expected_session_revision,
-            post_state.trace().revision(),
-            post_state.snapshot().digest().clone(),
-            post_state.snapshot().entry_graph_node_id().clone(),
-            post_state.snapshot().goal_tracking(),
-            post_state.goal_state().current_revision().is_some(),
+            next_state,
+            result,
+            operation,
+            now,
+            None,
         )
-        .and_then(|projection| projection.with_operation(operation))
-        .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
-        let mut persisted = PersistedTerminalReceiptV1::new_with_graph_projection(
-            receipt.job().clone(),
-            PersistedTerminalResultV1::from_terminal_result(receipt.result()),
-            job_projection,
-            graph_projection,
+    }
+
+    fn commit_graph_delegation_accept_terminal_v1(
+        &self,
+        claim: ClaimTokenV1,
+        expected_workspace_revision: RevisionV1,
+        expected_session_revision: RevisionV1,
+        next_state: GraphSessionStateV2,
+        receipt: crate::DelegationReceiptV1,
+        now: EpochMillisV1,
+    ) -> Result<TerminalReceiptV1, StoreErrorV1> {
+        let receipt_id = receipt.receipt_id();
+        let attempt_id = receipt.attempt_id();
+        let result = TerminalResultV1::Success(podway_core::DomainResult::DelegationAccepted {
+            receipt_id: receipt_id.clone(),
+            workspace_uuid: claim.identity().workspace_uuid().clone(),
+            session_id: receipt.session_id(),
+            attempt_id: attempt_id.clone(),
+            revision_before: expected_session_revision,
+            revision_after: expected_session_revision
+                .checked_next()
+                .map_err(|_| invariant(StoreInvariantV1::TransitionMutationShape))?,
+            package_digest: receipt.package_digest(),
+            result_digest: receipt.result_digest(),
+        });
+        let operation = PersistedGraphTerminalOperationV2::DelegationAccept {
+            attempt_id,
+            receipt_id,
+        };
+        commit_graph_mutation_terminal_with_receipt_v1(
+            self,
+            claim,
+            expected_workspace_revision,
+            expected_session_revision,
+            Some(next_state),
+            result,
+            operation,
+            now,
+            Some(&receipt),
         )
-        .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
-        persisted = enrich_terminal_from_execution(persisted, &execution)?;
-        let response_context = row
-            .response_context
-            .as_deref()
-            .ok_or_else(|| corrupt(StoreRecordKindV1::Job))?;
-        persisted = persisted
-            .with_response_context(
-                decode_response_context_v1(response_context)
-                    .map_err(|_| corrupt(StoreRecordKindV1::Job))?,
-            )
-            .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
-        if persisted
-            .response_context()
-            .is_some_and(|context| context.freezes_public_terminal_envelope())
-            && let Some(seal) = crate::terminal_envelope_sealer_v1()
-        {
-            let envelope = seal(&persisted)?;
-            persisted = persisted
-                .with_public_terminal_envelope(envelope)
-                .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
-        }
-        let encoded = encode_persisted_terminal_receipt_v1(&persisted)
-            .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
-        let changed = transaction
-            .execute(
-                "UPDATE jobs SET state = ?1, finished_at_ms = ?2, terminal_response_json = ?3 \
-                 WHERE job_id = ?4 AND state = 'running'",
-                params![
-                    state_text,
-                    sqlite_u64(now.get())?,
-                    &encoded,
-                    claim.job_id().as_str(),
-                ],
-            )
-            .map_err(storage)?;
-        if changed != 1 {
-            return Err(StoreErrorV1::ClaimStaleV1 {
-                job_id: claim.job_id().clone(),
-            });
-        }
-        self.trigger_failpoint(StoreFailpointV1::TerminalAfterJobTerminalUpdateBeforeCommit)?;
-        let changed = transaction
-            .execute(
-                "UPDATE idempotency_records SET terminal_response_json = ?1, updated_at_ms = ?2 \
-                 WHERE job_id = ?3 AND terminal_response_json IS NULL",
-                params![&encoded, sqlite_u64(now.get())?, claim.job_id().as_str()],
-            )
-            .map_err(storage)?;
-        if changed != 1 {
-            return Err(corrupt(StoreRecordKindV1::IdempotencyRecord));
-        }
-        transaction
-            .execute(
-                "UPDATE workspace_state SET updated_at_ms = ?1 WHERE singleton = 1",
-                [sqlite_u64(now.get())?],
-            )
-            .map_err(storage)?;
-        let graph_reset = reset_session_id.is_some();
-        if let Some(reset_session_id) = reset_session_id {
-            let cleanup_report = cleanup_session_scope_barrier(&transaction, &reset_session_id)?;
-            record_session_barrier_cleanup(
-                &transaction,
-                row.sequence,
-                claim.job_id().as_str(),
-                now,
-                &cleanup_report,
-            )?;
-        }
-        if !graph_reset {
-            let prune_report =
-                prune_terminal_history_transaction(&transaction, now, &self.options, true)?;
-            record_prune_report(
-                &transaction,
-                &prune_report,
-                Some(row.sequence),
-                Some(claim.job_id().as_str()),
-            )?;
-        }
-        if matches!(receipt.result(), TerminalResultV1::Failure(_)) {
-            self.trigger_failpoint(StoreFailpointV1::TerminalFailureBeforeCommit)?;
-        }
-        self.trigger_failpoint(StoreFailpointV1::TerminalBeforeCommit)?;
-        transaction.commit().map_err(storage)?;
-        self.trigger_failpoint(StoreFailpointV1::TerminalAfterCommitBeforeResponse)?;
-        Ok(receipt)
     }
 
     fn commit_graph_archive_terminal_v2(
@@ -1712,6 +1826,7 @@ impl StoreContractV1 for SqliteStoreV1 {
                 | crate::CommandV1::ItemAttach { .. }
                 | crate::CommandV1::ItemClear { .. }
                 | crate::CommandV1::ItemRecordMany
+                | crate::CommandV1::DelegationAccept
         );
         if command_is_session_scoped_v1(request.command()) && !is_v2 {
             return Err(invariant(StoreInvariantV1::TransitionMutationShape));
@@ -2634,7 +2749,10 @@ fn validate_procedure_v2_action_admission_v1(
         return Ok(());
     }
 
-    if matches!(request.command(), crate::CommandV1::ItemRecordMany) {
+    if matches!(
+        request.command(),
+        crate::CommandV1::ItemRecordMany | crate::CommandV1::DelegationAccept
+    ) {
         let expected_revision = preconditions
             .expected_session_revision()
             .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
@@ -6441,6 +6559,41 @@ fn validate_graph_mutation_terminal_shape_v2(
                 && attempt_id == active.attempt_id()
                 && *attempt_number == active.number().get()
                 && graph_item_batch_successor_matches_v2(current, next, items)
+        }
+        (
+            crate::CommandV1::DelegationAccept,
+            TerminalResultV1::Success(podway_core::DomainResult::DelegationAccepted {
+                session_id,
+                attempt_id,
+                revision_before,
+                revision_after,
+                receipt_id,
+                ..
+            }),
+            PersistedGraphTerminalOperationV2::DelegationAccept {
+                attempt_id: operation_attempt_id,
+                receipt_id: operation_receipt_id,
+            },
+        ) => {
+            let active = current
+                .trace()
+                .active_attempt()
+                .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?;
+            session_id == current.trace().session_id()
+                && attempt_id == active.attempt_id()
+                && operation_attempt_id == attempt_id
+                && operation_receipt_id == receipt_id
+                && *revision_before == current.trace().revision()
+                && next.is_some_and(|state| *revision_after == state.trace().revision())
+                && next
+                    == current
+                        .accept_delegation_successor_v1(attempt_id)
+                        .ok()
+                        .as_ref()
+                && preconditions.expected_session_revision() == Some(*revision_before)
+                && preconditions.expected_attempt_id() == Some(attempt_id)
+                && preconditions.expected_item_id().is_none()
+                && preconditions.expected_item_revision().is_none()
         }
         (
             command,

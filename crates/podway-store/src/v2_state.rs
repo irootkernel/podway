@@ -1,7 +1,7 @@
 //! Procedure v2 graph, cursor, counter, and attempt persistence.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use podway_core::{
     ActorAttributionV2, AdvanceTerminalV2, AttemptId, AttemptLifecycle, AttemptNumberV2, BlockerId,
@@ -36,6 +36,8 @@ use crate::{
 const PROCEDURE_SCHEMA_V2: &str = "podway.procedure/v2";
 const PROCEDURE_SCHEMA_DOCUMENT_V2: &str =
     include_str!("../../../assets/schemas/procedure-v2.schema.json");
+const DELEGATION_COMPONENTS_SCHEMA_V1: &str =
+    include_str!("../../../assets/schemas/delegation-components-v1.schema.json");
 const MAX_GRAPH_NODES_V2: usize = 64;
 const MAX_TASK_TITLE_CHARACTERS_V2: usize = 500;
 const MAX_TERMINAL_REASON_CHARACTERS_V2: usize = 2_000;
@@ -89,13 +91,26 @@ fn schema_matches_v2(root: &Value, schema: &Value, instance: &Value) -> bool {
         return false;
     };
     if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
-        let Some(target) = reference
-            .strip_prefix('#')
-            .and_then(|pointer| root.pointer(pointer))
+        let external = reference.strip_prefix("urn:podway:schema:delegation-components:v1#");
+        static DELEGATION_SCHEMA: OnceLock<Option<Value>> = OnceLock::new();
+        let reference_root = if external.is_some() {
+            let Some(schema) = DELEGATION_SCHEMA
+                .get_or_init(|| serde_json::from_str(DELEGATION_COMPONENTS_SCHEMA_V1).ok())
+                .as_ref()
+            else {
+                return false;
+            };
+            schema
+        } else {
+            root
+        };
+        let Some(target) = external
+            .or_else(|| reference.strip_prefix('#'))
+            .and_then(|pointer| reference_root.pointer(pointer))
         else {
             return false;
         };
-        if !schema_matches_v2(root, target, instance) {
+        if !schema_matches_v2(reference_root, target, instance) {
             return false;
         }
     }
@@ -180,12 +195,24 @@ fn schema_string_matches_v2(schema: &serde_json::Map<String, Value>, text: &str)
             .get("maxLength")
             .and_then(Value::as_u64)
             .is_some_and(|maximum| length > maximum as usize)
+        || schema
+            .get("x-podway-max-utf8-bytes")
+            .and_then(Value::as_u64)
+            .is_some_and(|maximum| text.len() > maximum as usize)
     {
         return false;
     }
     match schema.get("pattern").and_then(Value::as_str) {
         None => true,
         Some("^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$") => identifier_pattern_matches_v2(text),
+        Some("^[^\\x00-\\x1f\\x7f-\\x9f]+$") => {
+            !text.chars().any(|character| character.is_control())
+        }
+        Some("^[\\x21-\\x7e]{1,128}$") => {
+            !text.is_empty()
+                && text.len() <= 128
+                && text.bytes().all(|byte| (33..=126).contains(&byte))
+        }
         Some("^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*$") => {
             media_type_pattern_matches_v2(text)
         }
@@ -1153,6 +1180,56 @@ impl GraphWorkspaceViewV2 {
 }
 
 impl GraphSessionStateV2 {
+    pub fn accept_delegation_successor_v1(
+        &self,
+        attempt_id: &AttemptId,
+    ) -> Result<Self, StoreValueErrorV1> {
+        let active = self
+            .trace
+            .active_attempt()
+            .ok_or_else(|| invalid("delegation acceptance requires an active attempt"))?;
+        if active.attempt_id() != attempt_id {
+            return Err(invalid("delegation acceptance attempt is not current"));
+        }
+        let placement = self
+            .snapshot
+            .graph_nodes()
+            .iter()
+            .find(|node| node.graph_node_id() == active.graph_node_id())
+            .ok_or_else(|| invalid("delegation placement is absent"))?;
+        let document: Value = serde_json::from_str(placement.canonical_placement_json())
+            .map_err(|_| invalid("delegation placement is malformed"))?;
+        if document.get("delegation").is_none() {
+            return Err(invalid("delegation acceptance requires a delegated action"));
+        }
+        let trace = SessionTraceV2::from_parts(
+            self.trace.session_id().clone(),
+            self.trace.lifecycle(),
+            self.trace
+                .revision()
+                .checked_next()
+                .map_err(|_| invalid("session revision overflowed"))?,
+            self.trace.attempts().to_vec(),
+        )
+        .map_err(|_| invalid("delegation acceptance trace is invalid"))?;
+        Self::new_with_goal_state(
+            self.workspace_revision
+                .checked_next()
+                .map_err(|_| invalid("workspace revision overflowed"))?,
+            self.task_title.clone(),
+            self.snapshot.clone(),
+            trace,
+            self.counters.clone(),
+            self.attempt_metadata.clone(),
+            self.workflow_memory.clone(),
+            self.goal_state.clone(),
+            self.created_at,
+            self.completed_at,
+            self.cancelled_at,
+            self.cancel_reason.clone(),
+        )
+    }
+
     pub fn prepared(
         workspace_revision: Revision,
         task_title: impl Into<String>,
@@ -3516,6 +3593,16 @@ pub trait StoreGraphMutationContractV2: Send + Sync {
         now: crate::EpochMillisV1,
     ) -> Result<crate::TerminalReceiptV1, StoreErrorV1>;
 
+    fn commit_graph_delegation_accept_terminal_v1(
+        &self,
+        claim: crate::ClaimTokenV1,
+        expected_workspace_revision: Revision,
+        expected_session_revision: Revision,
+        next_state: GraphSessionStateV2,
+        receipt: crate::DelegationReceiptV1,
+        now: crate::EpochMillisV1,
+    ) -> Result<crate::TerminalReceiptV1, StoreErrorV1>;
+
     fn commit_graph_reset_terminal_v2(
         &self,
         claim: crate::ClaimTokenV1,
@@ -3579,6 +3666,25 @@ where
             next_state,
             result,
             operation,
+            now,
+        )
+    }
+
+    fn commit_graph_delegation_accept_terminal_v1(
+        &self,
+        claim: crate::ClaimTokenV1,
+        expected_workspace_revision: Revision,
+        expected_session_revision: Revision,
+        next_state: GraphSessionStateV2,
+        receipt: crate::DelegationReceiptV1,
+        now: crate::EpochMillisV1,
+    ) -> Result<crate::TerminalReceiptV1, StoreErrorV1> {
+        (**self).commit_graph_delegation_accept_terminal_v1(
+            claim,
+            expected_workspace_revision,
+            expected_session_revision,
+            next_state,
+            receipt,
             now,
         )
     }
@@ -3846,6 +3952,37 @@ pub(crate) fn replace_graph_session_transaction_v2(
     expected_session_revision: Revision,
     next: &GraphSessionStateV2,
 ) -> Result<(), StoreErrorV1> {
+    replace_graph_session_transaction_internal_v2(
+        transaction,
+        expected_workspace_revision,
+        expected_session_revision,
+        next,
+        false,
+    )
+}
+
+pub(crate) fn replace_graph_delegation_accept_transaction_v1(
+    transaction: &Transaction<'_>,
+    expected_workspace_revision: Revision,
+    expected_session_revision: Revision,
+    next: &GraphSessionStateV2,
+) -> Result<(), StoreErrorV1> {
+    replace_graph_session_transaction_internal_v2(
+        transaction,
+        expected_workspace_revision,
+        expected_session_revision,
+        next,
+        true,
+    )
+}
+
+fn replace_graph_session_transaction_internal_v2(
+    transaction: &Transaction<'_>,
+    expected_workspace_revision: Revision,
+    expected_session_revision: Revision,
+    next: &GraphSessionStateV2,
+    delegation_accept: bool,
+) -> Result<(), StoreErrorV1> {
     let previous = load_graph_session_connection_v2(transaction)?
         .ok_or_else(|| invalid_store("no current Procedure v2 graph session exists"))?;
     if previous.workspace_revision() != expected_workspace_revision {
@@ -3877,9 +4014,24 @@ pub(crate) fn replace_graph_session_transaction_v2(
         &goal_transition,
     )
     .map_err(StoreErrorV1::InvalidStateV1)?;
-    if previous.workflow_memory() != next.workflow_memory()
-        || previous.goal_state() == next.goal_state()
-        || !matches!(&goal_transition, WorkflowGoalTransitionV2::None)
+    if delegation_accept {
+        let active = previous
+            .trace()
+            .active_attempt()
+            .ok_or_else(|| invalid_store("delegation acceptance has no active attempt"))?;
+        if previous
+            .accept_delegation_successor_v1(active.attempt_id())
+            .ok()
+            .as_ref()
+            != Some(next)
+        {
+            return Err(invalid_store("delegation acceptance successor is invalid"));
+        }
+    }
+    if !delegation_accept
+        && (previous.workflow_memory() != next.workflow_memory()
+            || previous.goal_state() == next.goal_state()
+            || !matches!(&goal_transition, WorkflowGoalTransitionV2::None))
     {
         validate_workflow_memory_successor_v2(
             previous.snapshot(),
@@ -4928,6 +5080,9 @@ pub(crate) fn verify_v2_graph_state_connection_v2(
             .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
         if duplicate_slot.is_some() {
             return Err(corrupt(StoreRecordKindV1::Session));
+        }
+        if schema_version >= 12 {
+            crate::v2_delegation::verify_receipts_connection_v1(connection)?;
         }
         return Ok(());
     }

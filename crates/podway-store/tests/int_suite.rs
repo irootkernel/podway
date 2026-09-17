@@ -10,3 +10,5 @@ mod int_v2_graph_state;
 mod int_v2_only_schema;
 #[path = "int_v2_workflow_memory.rs"]
 mod int_v2_workflow_memory;
+#[path = "int_v2sdg004_receipt.rs"]
+mod int_v2sdg004_receipt;

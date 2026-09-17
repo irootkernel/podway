@@ -1,8 +1,8 @@
 # SQLite Model
 
-The implemented canonical DDL history is `sqlite-v1.sql` through `sqlite-v11.sql`
+The implemented canonical DDL history is `sqlite-v1.sql` through `sqlite-v12.sql`
 under `assets/specifications/`. New databases apply that history in one
-transaction and finish at schema version 11. The v5 contract is
+transaction and finish at schema version 12. The v5 contract is
 normative under ADR-0021; `V2LIF-002` reserved its exact canonical DDL and
 `V2LIF-003` admitted it in runtime. ADR-0025 owns schema v6 for external check
 results; `V2AST-002` reserved its canonical DDL and named migration, and
@@ -22,6 +22,15 @@ unique and in `1..=4294967295` without the 1-through-32 check. Existing inactive
 unchanged. Archival assigns the first unused positive slot with a SQL-side gap
 query. Archive list, keyed summary lookup, and open-time integrity use `COUNT`,
 `LIMIT`, and aggregate checks instead of loading every inactive row.
+
+Schema v12 adds a strict side table for one immutable delegation receipt per
+attempt. Its composite foreign key ties each receipt to the owning session and
+attempt, with cascade on session reset or archive purge. The receipt JSON has a
+bounded byte length and cannot be updated. The migration creates only this table
+and trigger; existing snapshot, item, goal, trace, and terminal envelope bytes
+remain in place.
+Open-time integrity checks scan all retained receipts and match each one to its
+owning attempt, session, procedure snapshot, and placement declaration.
 
 Schema v8 extends terminal dispositions for ADR-0027. It adds the closed
 `superseded` kind and a successor session ID. The migration preserves v7
@@ -111,7 +120,7 @@ transaction, applies the canonical v5 DDL with legacy rename behavior, runs
 `foreign_key_check` before commit, and restores enforcement after commit or
 rollback. The DDL does not toggle `foreign_keys` because SQLite ignores that
 pragma inside an open transaction.
-Opening a schema newer than v11 remains an unsupported downgrade and performs no
+Opening a schema newer than v12 remains an unsupported downgrade and performs no
 mutation.
 
 The daemon is the sole normal writer. Foreign keys, strict tables, application ID,
