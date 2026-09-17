@@ -1,0 +1,205 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:job-result:v5",
+  "title": "Podway Job Status and Wait Result v5",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "job"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.job-result/v5"
+    },
+    "job": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/terminalResponse"
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "terminalSuccessResponse": {
+      "allOf": [
+        {
+          "$ref": "urn:podway:schema:output:v3#/$defs/terminalMutationOutput"
+        },
+        {
+          "properties": {
+            "command": {
+              "enum": [
+                "workspace.init",
+                "workspace.reset_all",
+                "session.start",
+                "session.start_replace",
+                "session.begin",
+                "session.terminal_disposition",
+                "session.complete",
+                "session.skip",
+                "session.retry",
+                "session.block",
+                "session.unblock",
+                "session.cancel",
+                "session.reset",
+                "session.decide",
+                "session.rework",
+                "goal.define",
+                "goal.revise",
+                "goal.assess_criterion",
+                "item.check",
+                "item.uncheck",
+                "item.set",
+                "item.add",
+                "item.remove",
+                "item.attach",
+                "item.clear",
+                "item.record_many",
+                "delegation.accept"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "terminalErrorResponse": {
+      "x-podway-max-json-bytes": 524288,
+      "allOf": [
+        {
+          "$ref": "urn:podway:schema:error:v1"
+        },
+        {
+          "required": [
+            "workspace"
+          ],
+          "propertyNames": {
+            "enum": [
+              "schema",
+              "request_id",
+              "command",
+              "generated_at",
+              "code",
+              "message",
+              "retryable",
+              "exit_code",
+              "workspace",
+              "details"
+            ]
+          },
+          "properties": {
+            "command": {
+              "enum": [
+                "workspace.init",
+                "workspace.reset_all",
+                "session.start",
+                "session.start_replace",
+                "session.begin",
+                "session.terminal_disposition",
+                "session.complete",
+                "session.skip",
+                "session.retry",
+                "session.block",
+                "session.unblock",
+                "session.cancel",
+                "session.reset",
+                "session.decide",
+                "session.rework",
+                "goal.define",
+                "goal.revise",
+                "goal.assess_criterion",
+                "item.check",
+                "item.uncheck",
+                "item.set",
+                "item.add",
+                "item.remove",
+                "item.attach",
+                "item.clear",
+                "item.record_many",
+                "delegation.accept"
+              ]
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "workspace": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "uuid",
+                "root",
+                "latest_workspace_sequence"
+              ],
+              "properties": {
+                "uuid": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "root": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                "latest_workspace_sequence": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 18446744073709551615
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "terminalMutationResponse": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/terminalSuccessResponse"
+        },
+        {
+          "$ref": "#/$defs/terminalErrorResponse"
+        }
+      ]
+    },
+    "cancelledResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "payload"
+      ],
+      "properties": {
+        "kind": {
+          "const": "cancelled"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cancelled"
+          ],
+          "properties": {
+            "cancelled": {
+              "const": true
+            }
+          }
+        }
+      }
+    },
+    "terminalResponse": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/terminalMutationResponse"
+        },
+        {
+          "$ref": "#/$defs/cancelledResponse"
+        }
+      ]
+    }
+  }
+}

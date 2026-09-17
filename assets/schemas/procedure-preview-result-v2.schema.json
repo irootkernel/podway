@@ -1,0 +1,488 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:procedure-preview-result:v2",
+  "title": "Podway Procedure Preview Result v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "file",
+    "admissible",
+    "checks",
+    "diagnostics",
+    "diagnostics_truncated",
+    "diagnostics_total",
+    "delegated_placement_count",
+    "delegated_placements"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.procedure-preview-result/v2"
+    },
+    "file": {
+      "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/path"
+    },
+    "admissible": {
+      "type": "boolean"
+    },
+    "procedure_schema": {
+      "const": "podway.procedure/v2"
+    },
+    "procedure_id": {
+      "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier"
+    },
+    "procedure_version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "purpose": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "procedure_digest": {
+      "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/digest"
+    },
+    "goal_tracking": {
+      "type": "boolean"
+    },
+    "goal_assessment_graph_node_ids": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier"
+      }
+    },
+    "summary": {
+      "$ref": "#/$defs/summary"
+    },
+    "checks": {
+      "$ref": "#/$defs/checks"
+    },
+    "graph": {
+      "$ref": "#/$defs/graph"
+    },
+    "mermaid": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 131072
+    },
+    "start_suggestion": {
+      "$ref": "#/$defs/startSuggestion"
+    },
+    "diagnostics": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "$ref": "urn:podway:schema:authoring-diagnostic:v1"
+      }
+    },
+    "diagnostics_truncated": {
+      "type": "boolean"
+    },
+    "diagnostics_total": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "delegated_placement_count": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 64
+    },
+    "delegated_placements": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "admissible": {
+            "const": true
+          }
+        },
+        "required": [
+          "admissible"
+        ]
+      },
+      "then": {
+        "required": [
+          "procedure_schema",
+          "procedure_id",
+          "procedure_version",
+          "purpose",
+          "procedure_digest",
+          "goal_tracking",
+          "goal_assessment_graph_node_ids",
+          "summary",
+          "graph",
+          "mermaid",
+          "start_suggestion"
+        ],
+        "properties": {
+          "checks": {
+            "properties": {
+              "validate": {
+                "const": true
+              },
+              "vet": {
+                "const": true
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "allOf": [
+          {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "procedure_schema"
+                  ]
+                },
+                {
+                  "required": [
+                    "procedure_id"
+                  ]
+                },
+                {
+                  "required": [
+                    "procedure_version"
+                  ]
+                },
+                {
+                  "required": [
+                    "purpose"
+                  ]
+                },
+                {
+                  "required": [
+                    "procedure_digest"
+                  ]
+                },
+                {
+                  "required": [
+                    "goal_tracking"
+                  ]
+                },
+                {
+                  "required": [
+                    "goal_assessment_graph_node_ids"
+                  ]
+                },
+                {
+                  "required": [
+                    "summary"
+                  ]
+                },
+                {
+                  "required": [
+                    "graph"
+                  ]
+                },
+                {
+                  "required": [
+                    "mermaid"
+                  ]
+                },
+                {
+                  "required": [
+                    "start_suggestion"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "properties": {
+              "diagnostics": {
+                "minItems": 1
+              },
+              "diagnostics_total": {
+                "minimum": 1
+              }
+            }
+          },
+          {
+            "anyOf": [
+              {
+                "properties": {
+                  "checks": {
+                    "properties": {
+                      "validate": {
+                        "const": false
+                      },
+                      "vet": {
+                        "const": false
+                      },
+                      "lint": {
+                        "const": false
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "checks": {
+                    "properties": {
+                      "validate": {
+                        "const": true
+                      },
+                      "vet": {
+                        "const": false
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "validate",
+        "vet",
+        "lint"
+      ],
+      "properties": {
+        "validate": {
+          "type": "boolean"
+        },
+        "vet": {
+          "type": "boolean"
+        },
+        "lint": {
+          "type": "boolean"
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "definition_count",
+        "graph_node_count",
+        "action_node_count",
+        "decision_node_count",
+        "route_count",
+        "cycle_count",
+        "evidence_reference_count",
+        "skippable_node_count",
+        "manual_rework_target_count"
+      ],
+      "properties": {
+        "definition_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "graph_node_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "action_node_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 64
+        },
+        "decision_node_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 64
+        },
+        "route_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 512
+        },
+        "cycle_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 64
+        },
+        "evidence_reference_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 512
+        },
+        "skippable_node_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 64
+        },
+        "manual_rework_target_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 64
+        }
+      }
+    },
+    "graph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entry_graph_node_id",
+        "terminal_graph_node_ids",
+        "nodes",
+        "edges"
+      ],
+      "properties": {
+        "entry_graph_node_id": {
+          "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier"
+        },
+        "terminal_graph_node_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier"
+          }
+        },
+        "nodes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/graphNode"
+          }
+        },
+        "edges": {
+          "type": "array",
+          "maxItems": 512,
+          "items": {
+            "$ref": "#/$defs/graphEdge"
+          }
+        }
+      }
+    },
+    "graphNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "graph_node_id",
+        "node_definition_id",
+        "node_type",
+        "terminal",
+        "skippable"
+      ],
+      "properties": {
+        "graph_node_id": {
+          "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier"
+        },
+        "node_definition_id": {
+          "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier"
+        },
+        "node_type": {
+          "enum": [
+            "action",
+            "decision"
+          ]
+        },
+        "terminal": {
+          "type": "boolean"
+        },
+        "skippable": {
+          "type": "boolean"
+        },
+        "items": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "$ref": "#/$defs/itemCondition"
+          }
+        }
+      }
+    },
+    "itemCondition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "item_id",
+        "required"
+      ],
+      "properties": {
+        "item_id": {
+          "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "required_when": {
+          "$ref": "urn:podway:schema:procedure:v2#/$defs/required_when"
+        }
+      }
+    },
+    "graphEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from_graph_node_id",
+        "to_graph_node_id",
+        "effect"
+      ],
+      "properties": {
+        "from_graph_node_id": {
+          "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier"
+        },
+        "to_graph_node_id": {
+          "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier"
+        },
+        "effect": {
+          "enum": [
+            "advance",
+            "rework"
+          ]
+        },
+        "option_id": {
+          "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier"
+        },
+        "guards": {
+          "$ref": "urn:podway:schema:procedure:v2#/$defs/guards"
+        }
+      }
+    },
+    "startSuggestion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command",
+        "argv"
+      ],
+      "properties": {
+        "command": {
+          "const": "session.start"
+        },
+        "argv": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          }
+        }
+      }
+    }
+  }
+}

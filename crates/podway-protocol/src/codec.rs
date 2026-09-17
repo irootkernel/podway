@@ -14,9 +14,10 @@ static SUPPORTED_RESPONSE_SCHEMAS_V2: &[&str] = &[OUTPUT_SCHEMA_V3, ERROR_SCHEMA
 ///
 /// The 256 KiB compact envelope guard is a property of the compact projection, not of one version
 /// of it, so a new family must be added here or it silently inherits only the 1 MiB frame bound.
-const COMPACT_STATUS_RESULT_SCHEMAS_V2: [&str; 2] = [
+const COMPACT_STATUS_RESULT_SCHEMAS_V2: [&str; 3] = [
     "podway.compact-status-result/v2",
     "podway.compact-status-result/v3",
+    "podway.compact-status-result/v4",
 ];
 
 /// A response envelope carried by Procedure v2-only clients.

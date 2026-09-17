@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:delegation-package-result:v1",
+  "title": "Podway Delegation Package Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "package",
+    "package_digest",
+    "workspace_uuid",
+    "session_id",
+    "session_revision",
+    "attempt_id"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.delegation-package-result/v1"
+    },
+    "package": {
+      "$ref": "urn:podway:schema:delegation-components:v1#/$defs/workPackage"
+    },
+    "package_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "workspace_uuid": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "session_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "session_revision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "attempt_id": {
+      "type": "string",
+      "format": "uuid"
+    }
+  },
+  "x-podway-max-json-bytes": 1000000
+}

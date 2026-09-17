@@ -386,6 +386,9 @@
         "evidence_from": {
           "$ref": "#/$defs/evidence_from"
         },
+        "delegation": {
+          "$ref": "urn:podway:schema:delegation-components:v1#/$defs/declaration"
+        },
         "skip": {
           "$ref": "#/$defs/skip_policy"
         },
@@ -394,6 +397,13 @@
         },
         "terminal": {
           "const": true
+        }
+      },
+      "dependentSchemas": {
+        "delegation": {
+          "not": {
+            "required": ["skip"]
+          }
         }
       },
       "oneOf": [

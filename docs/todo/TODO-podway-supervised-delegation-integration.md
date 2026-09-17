@@ -68,11 +68,26 @@ The external integration must own the logical binding resolution, immutable
 Role/configuration preflight, trusted controller carrier, task construction,
 full evidence materialization, idempotent external requests, accepted-task
 identity, feedback counts, result validation, reuse/release, and recovery.
+Before either real path can be enabled, its (`adapter_id`, `adapter_version`)
+mapping must publish the exact immutable Role, admitted configuration,
+executor-acknowledged task, and complete Primary-accepted result byte domains.
+It must state schema versions, included/excluded fields, canonicalization,
+encoding, SHA-256 input, permitted producer/read surface, durable identity
+linkage, and response-loss recovery. An adapter-specific mapping may not
+reinterpret a Procedure's declared Role-content digest. Reusing one Procedure
+across the external and managed paths remains unsupported until both paths
+prove the same reviewed Role-content identity.
 Carry the reviewed mapping forward for every required execution field, result
 digest, round count and disposition. Establish exact canonical objects and
 permitted response/read/host-binding paths, including recovery after a lost
 acknowledgement. A request prepared locally is not yet an accepted task, and
 an allocated worker ID is not proof of successful provisioning.
+Count durably accepted assignments, including an accepted task with unknown
+outcome, as rounds; do not count polling or transport retries. Verify worker
+idle/quiescent state or completed release instead of treating a release request
+as settlement. The selected Podway foundation leaves both real paths
+unavailable until these obligations and the named source-level gaps in the
+adapter worksheet are closed.
 
 For a managed Primary, use the authorized run-bound Broker path. Never send
 model-selected Controller/source identities or silently fall back to the

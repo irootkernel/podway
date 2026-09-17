@@ -88,6 +88,23 @@ Released v3 job wrappers remain closed over their original command set. `job sta
 while keeping an embedded terminal success as a non-recursive `podway.output/v3`
 document. The output envelope accepts both wrapper generations for compatibility.
 
+V2SDG-002 reserves a separate delegation generation: status and compact status
+v4, running next and observation v4, prepared next v2, preview and graph v2,
+archive show v2, and job status/lookup v5. The older closed result families and
+stored terminal envelopes retain their existing fields. The new package,
+acceptance, receipt, projection, and error-detail schemas are registered in the
+contract manifest, but `delegation.package`, `delegation.accept`, and
+`delegation.receipt` are not executable or advertised yet. The optional
+Procedure declaration also remains rejected at runtime until coherent opt-in
+admission is implemented. The
+[adapter mapping review](../../implementation-tips/delegation-adapter-contract-review.md)
+defines the generic digest meanings and records both real Primary paths as
+unavailable pending separately qualified mappings.
+In the reserved delegated views, a `current_receipt` or stale receipt summary
+must name the enclosing current attempt. Views without a current attempt report
+`inactive`; retained receipt summaries remain historical data. The decoder
+checks these correlations in addition to each closed JSON Schema.
+
 The error envelope contains a catalogued `code`, summary, retryability, exit code,
 request correlation, command, and closed code-specific details. Human messages are
 not stable API. `LEGACY_PROCEDURE_STATE_UNSUPPORTED` means the opened runtime contains

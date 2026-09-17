@@ -47,6 +47,7 @@ These JSON Schema Draft 2020-12 files define Podway's versioned structural contr
 - `job-lookup-result-v3.schema.json`: idempotency-key reconciliation result.
 - `job-result-v4.schema.json`: lifecycle-aware job status/wait wrapper and terminal response.
 - `job-lookup-result-v4.schema.json`: lifecycle-aware idempotency-key reconciliation result.
+- `job-result-v5.schema.json`, `job-lookup-result-v5.schema.json`: reserved delegation acceptance terminal wrappers; v3/v4 remain closed.
 - `procedure-validation-result-v2.schema.json`: metadata-only Procedure v2 validation success.
 - `detached-admission-result-v2.schema.json`: Procedure v2 durable mutation admission.
 - `session-start-result-v2.schema.json`: Procedure v2 dry-run and live start outcomes.
@@ -95,6 +96,18 @@ These JSON Schema Draft 2020-12 files define Podway's versioned structural contr
 - `v2-runtime-error-details-v1.schema.json`: closed code-bound details for registered Procedure v2 runtime errors.
 - `recoverable-v2-runtime-error-details-v1.schema.json`: stale evidence and goal-revision details with state-refresh recovery.
 - `contract-manifest-v1.schema.json`: deterministic integration contract inventory.
+- `delegation-components-v1.schema.json`: shared bounded declaration, execution identity, package, evidence, and receipt definitions.
+- `delegation-work-package-v1.schema.json`, `delegation-accept-input-v1.schema.json`, `delegation-receipt-v1.schema.json`: reserved immutable package, structural acceptance input, and receipt documents.
+- `delegation-package-result-v1.schema.json`, `delegation-accept-result-v1.schema.json`, `delegation-receipt-result-v1.schema.json`: reserved read and mutation results.
+- `delegation-projection-v1.schema.json`, `delegation-error-details-v1.schema.json`: reserved readiness and closed error details.
+- `status-result-v4.schema.json`, `compact-status-result-v4.schema.json`, `next-result-v4.schema.json`, `observation-result-v4.schema.json`, `prepared-next-result-v2.schema.json`, `procedure-preview-result-v2.schema.json`, `procedure-graph-result-v2.schema.json`, `session-archive-show-result-v2.schema.json`: reserved bounded delegation projections; older result generations keep their original field sets.
+
+The delegation families are structural reservations. The CLI and daemon do not
+admit delegation commands or delegated Procedures until the later V2SDG runtime
+tasks establish a coherent opt-in capability.
+`x-podway-max-utf8-bytes` records the production byte cap for selected text
+fields; JSON Schema `maxLength` alone counts Unicode characters. Callers must
+apply both checks before using these reserved documents.
 
 JSON Schema does not express every semantic rule, including duplicate identifiers,
 min/max relationships, graph liveness, path containment, or

@@ -16,9 +16,11 @@ use podway_protocol::{
     RequestIdV1, ResponseEnvelopeV2, Rfc3339MillisV1, V2_RUNTIME_ERROR_CODES_V1, WorkspaceOutputV1,
     decode_response_payload_v2, decode_result_schema_contract_v2, decode_single_frame_v1,
     encode_frame_v1, encode_response_payload_v2, result_schema_top_level_fields_v2,
-    validate_command_result_v2, validate_frame_payload_length, validate_v2_output_warnings,
+    validate_command_result_v2, validate_delegation_document_v1, validate_frame_payload_length,
+    validate_v2_output_warnings,
 };
 use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 
 const SCHEMA_BASE: &str = "https://podway.invalid/schemas/";
 const DIGEST: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -335,6 +337,27 @@ fn examples() -> BTreeMap<&'static str, Value> {
         "podway.terminal-disposition-result/v1",
     ] {
         examples.insert(schema, prepared_fixtures["fixtures"][schema].clone());
+    }
+    let delegation_fixtures: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/v2/compatibility/supervised-delegation-contract-reservation.json"
+    ))
+    .unwrap();
+    for schema in [
+        "podway.compact-status-result/v4",
+        "podway.status-result/v4",
+        "podway.next-result/v4",
+        "podway.observation-result/v4",
+        "podway.prepared-next-result/v2",
+        "podway.procedure-preview-result/v2",
+        "podway.procedure-graph-result/v2",
+        "podway.session-archive-show-result/v2",
+        "podway.job-result/v5",
+        "podway.job-lookup-result/v5",
+        "podway.delegation-package-result/v1",
+        "podway.delegation-accept-result/v1",
+        "podway.delegation-receipt-result/v1",
+    ] {
+        examples.insert(schema, delegation_fixtures["fixtures"][schema].clone());
     }
     examples
 }
@@ -720,8 +743,8 @@ fn v2grf_preview_uses_one_closed_result_family_for_every_document_outcome() {
 
 #[test]
 fn v2ctr003_registry_is_versioned_and_covers_exactly_the_v2_authoring_routes() {
-    assert_eq!(EXISTING_ROUTE_RESULT_SCHEMAS_V2.len(), 17);
-    assert_eq!(NEW_ROUTE_RESULT_SCHEMAS_V1.len(), 28);
+    assert_eq!(EXISTING_ROUTE_RESULT_SCHEMAS_V2.len(), 23);
+    assert_eq!(NEW_ROUTE_RESULT_SCHEMAS_V1.len(), 35);
     assert!(
         EXISTING_ROUTE_RESULT_SCHEMAS_V2
             .iter()
@@ -774,9 +797,12 @@ fn v2ctr003_registry_is_versioned_and_covers_exactly_the_v2_authoring_routes() {
             "runtime.reset.plan",
             "runtime.reset.apply",
             "daemon.runtime_reset",
+            "delegation.package",
+            "delegation.accept",
+            "delegation.receipt",
         ])
     );
-    assert_eq!(routes.len(), 29);
+    assert_eq!(routes.len(), 32);
 }
 
 #[test]
@@ -1159,17 +1185,635 @@ fn v2ctr003_output_v2_validates_every_registered_command_result_pair() {
             });
             if output["result"].get("admission").is_some() {
                 add_admitted_envelope_metadata(&mut output);
-            } else if command.starts_with("session.archive_") {
+            } else if command.starts_with("session.archive_")
+                || matches!(*command, "delegation.package" | "delegation.receipt")
+            {
                 add_workspace_envelope_metadata(&mut output);
             } else if matches!(
                 contract.schema,
-                "podway.job-result/v3" | "podway.job-result/v4"
+                "podway.job-result/v3" | "podway.job-result/v4" | "podway.job-result/v5"
             ) {
                 add_queued_job_envelope_metadata(&mut output);
             }
             assert_valid("schemas/output-v3.schema.json", &output);
         }
     }
+}
+
+#[test]
+fn v2sdg002_delegation_documents_reject_unbounded_and_mismatched_input() {
+    let fixtures = examples();
+    let documents: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/v2/compatibility/supervised-delegation-contract-reservation.json"
+    ))
+    .unwrap();
+    let package = fixtures["podway.delegation-package-result/v1"]["package"].clone();
+    let acceptance = documents["fixtures"]["podway.delegation-accept-input/v1"].clone();
+    let receipt = fixtures["podway.delegation-receipt-result/v1"]["receipt"].clone();
+    for (schema, value) in [
+        ("podway.delegation-work-package/v1", &package),
+        ("podway.delegation-accept-input/v1", &acceptance),
+        ("podway.delegation-receipt/v1", &receipt),
+    ] {
+        assert!(validate_delegation_document_v1(schema, value), "{schema}");
+    }
+
+    let mut unknown = acceptance.clone();
+    unknown["credential"] = json!("secret");
+    assert!(!validate_delegation_document_v1(
+        "podway.delegation-accept-input/v1",
+        &unknown
+    ));
+    let mut wrong_type = acceptance.clone();
+    wrong_type["rounds_used"] = json!("1");
+    assert!(!validate_delegation_document_v1(
+        "podway.delegation-accept-input/v1",
+        &wrong_type
+    ));
+    let mut over_bound = acceptance.clone();
+    over_bound["summary"] = json!("가".repeat(1500));
+    assert!(!validate_delegation_document_v1(
+        "podway.delegation-accept-input/v1",
+        &over_bound
+    ));
+    let mut secret_shaped = package.clone();
+    secret_shaped["prompt_transcript"] = json!("private");
+    assert!(!validate_delegation_document_v1(
+        "podway.delegation-work-package/v1",
+        &secret_shaped
+    ));
+    let mut duplicate_selectors = package.clone();
+    let evidence = json!({"selector":{"node":"source"},"source_attempt_id":UUID,"items":[]});
+    duplicate_selectors["evidence"] = json!([evidence.clone(), evidence]);
+    assert_valid(
+        "schemas/delegation-work-package-v1.schema.json",
+        &duplicate_selectors,
+    );
+    assert!(!validate_delegation_document_v1(
+        "podway.delegation-work-package/v1",
+        &duplicate_selectors
+    ));
+    let mut mismatched = receipt.clone();
+    mismatched["execution"]["role_ref"] = json!("other-role");
+    assert_valid("schemas/delegation-receipt-v1.schema.json", &mismatched);
+    assert!(!validate_delegation_document_v1(
+        "podway.delegation-receipt/v1",
+        &mismatched
+    ));
+    for field in ["binding_ref", "role_snapshot_digest"] {
+        let mut mismatched = receipt.clone();
+        mismatched["execution"][field] = if field == "binding_ref" {
+            json!("other-binding")
+        } else {
+            json!("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+        };
+        assert!(
+            !validate_delegation_document_v1("podway.delegation-receipt/v1", &mismatched),
+            "{field}"
+        );
+    }
+    let mut excessive_rounds = receipt.clone();
+    excessive_rounds["rounds_used"] =
+        json!(receipt["delegation"]["max_rounds"].as_u64().unwrap() + 1);
+    assert!(!validate_delegation_document_v1(
+        "podway.delegation-receipt/v1",
+        &excessive_rounds
+    ));
+    let mut released = receipt.clone();
+    released["delegation"]["after_accept"] = json!("release");
+    released["worker_disposition"] = json!("released");
+    assert!(validate_delegation_document_v1(
+        "podway.delegation-receipt/v1",
+        &released
+    ));
+    released["worker_disposition"] = json!("idle");
+    assert!(!validate_delegation_document_v1(
+        "podway.delegation-receipt/v1",
+        &released
+    ));
+
+    let check_utf8_bound = |schema: &str, baseline: &Value, paths: &[&str], limit: usize| {
+        let exactly = format!("{}{}", "가".repeat(limit / 3), "a".repeat(limit % 3));
+        assert_eq!(exactly.len(), limit);
+        let mut at_limit = baseline.clone();
+        for path in paths {
+            *at_limit.pointer_mut(path).unwrap() = json!(exactly);
+        }
+        assert!(
+            validate_delegation_document_v1(schema, &at_limit),
+            "{schema} {paths:?} at limit"
+        );
+        let mut over_limit = at_limit;
+        for path in paths {
+            *over_limit.pointer_mut(path).unwrap() = json!(format!("{exactly}가"));
+        }
+        assert!(
+            !validate_delegation_document_v1(schema, &over_limit),
+            "{schema} {paths:?} over limit"
+        );
+    };
+    check_utf8_bound(
+        "podway.delegation-work-package/v1",
+        &package,
+        &["/delegation/role_ref"],
+        256,
+    );
+    check_utf8_bound(
+        "podway.delegation-accept-input/v1",
+        &acceptance,
+        &["/idempotency_key"],
+        256,
+    );
+    check_utf8_bound(
+        "podway.delegation-accept-input/v1",
+        &acceptance,
+        &["/summary"],
+        4096,
+    );
+    check_utf8_bound(
+        "podway.delegation-receipt/v1",
+        &receipt,
+        &["/summary"],
+        4096,
+    );
+    check_utf8_bound(
+        "podway.delegation-receipt/v1",
+        &receipt,
+        &["/delegation/role_ref", "/execution/role_ref"],
+        256,
+    );
+    for field in [
+        "scope_ref",
+        "supervisor_ref",
+        "worker_ref",
+        "task_ref",
+        "role_ref",
+    ] {
+        check_utf8_bound(
+            "podway.delegation-accept-input/v1",
+            &acceptance,
+            &[&format!("/execution/{field}")],
+            256,
+        );
+        if field != "role_ref" {
+            check_utf8_bound(
+                "podway.delegation-receipt/v1",
+                &receipt,
+                &[&format!("/execution/{field}")],
+                256,
+            );
+        }
+    }
+}
+
+#[test]
+fn v2sdg002_work_package_json_limit_rejects_schema_valid_oversize() {
+    let fixtures = examples();
+    let mut package = fixtures["podway.delegation-package-result/v1"]["package"].clone();
+    let item = |index: usize| {
+        json!({
+            "id": format!("item-{index}"),
+            "type": "confirm",
+            "prompt": "\u{0001}".repeat(300),
+            "help": "\u{0001}".repeat(1000),
+            "required": true
+        })
+    };
+    package["action"]["items"] = json!([]);
+    let mut below_limit = package.clone();
+    for index in 0..128 {
+        package["action"]["items"]
+            .as_array_mut()
+            .unwrap()
+            .push(item(index));
+        if serde_json::to_vec(&package).unwrap().len() > 950_000 {
+            break;
+        }
+        below_limit = package.clone();
+    }
+    assert!(serde_json::to_vec(&below_limit).unwrap().len() <= 950_000);
+    assert!(serde_json::to_vec(&package).unwrap().len() > 950_000);
+    assert_valid(
+        "schemas/delegation-work-package-v1.schema.json",
+        &below_limit,
+    );
+    assert_valid("schemas/delegation-work-package-v1.schema.json", &package);
+    assert!(validate_delegation_document_v1(
+        "podway.delegation-work-package/v1",
+        &below_limit
+    ));
+    assert!(!validate_delegation_document_v1(
+        "podway.delegation-work-package/v1",
+        &package
+    ));
+}
+
+#[test]
+fn v2sdg002_delegation_result_correlations_reject_mismatched_identities() {
+    let fixtures = examples();
+    for (schema, fields) in [
+        (
+            "podway.delegation-package-result/v1",
+            &["workspace_uuid", "session_id", "attempt_id"][..],
+        ),
+        (
+            "podway.delegation-receipt-result/v1",
+            &["session_id", "attempt_id"][..],
+        ),
+    ] {
+        let result = &fixtures[schema];
+        assert!(decode_result_schema_contract_v2(result.as_object().unwrap()).is_some());
+        for field in fields {
+            let mut mismatched = result.clone();
+            mismatched[field] = json!("00000000-0000-4000-8000-000000000002");
+            assert_valid(
+                match schema {
+                    "podway.delegation-package-result/v1" => {
+                        "schemas/delegation-package-result-v1.schema.json"
+                    }
+                    _ => "schemas/delegation-receipt-result-v1.schema.json",
+                },
+                &mismatched,
+            );
+            assert!(
+                decode_result_schema_contract_v2(mismatched.as_object().unwrap()).is_none(),
+                "{schema} {field}"
+            );
+        }
+    }
+    let mut absent_receipt = fixtures["podway.delegation-receipt-result/v1"].clone();
+    absent_receipt["receipt"] = Value::Null;
+    assert_invalid(
+        "schemas/delegation-receipt-result-v1.schema.json",
+        &absent_receipt,
+    );
+    assert!(decode_result_schema_contract_v2(absent_receipt.as_object().unwrap()).is_none());
+}
+
+#[test]
+fn v2sdg002_delegation_views_bind_current_receipt_to_current_attempt() {
+    let fixtures = examples();
+    let documents: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/v2/compatibility/supervised-delegation-contract-reservation.json"
+    ))
+    .unwrap();
+    let mut next = fixtures["podway.next-result/v4"].clone();
+    next["delegation"]["receipt"]["attempt_id"] = json!("00000000-0000-4000-8000-000000000002");
+    assert_valid("schemas/next-result-v4.schema.json", &next);
+    assert!(decode_result_schema_contract_v2(next.as_object().unwrap()).is_none());
+
+    for (schema, fixture) in [
+        (
+            "podway.status-result/v4",
+            &documents["fixtures"]["podway.status-result/v4"],
+        ),
+        (
+            "podway.compact-status-result/v4",
+            &documents["fixtures"]["podway.compact-status-result/v4"],
+        ),
+    ] {
+        assert!(fixture["current"].is_null());
+        assert_eq!(fixture["delegation"]["state"], "inactive", "{schema}");
+        let mut inconsistent = fixture.clone();
+        inconsistent["delegation"] =
+            documents["fixtures"]["podway.delegation-projection/v1"].clone();
+        assert!(
+            decode_result_schema_contract_v2(inconsistent.as_object().unwrap()).is_none(),
+            "{schema}"
+        );
+
+        let active = &documents["fixtures"]["podway.next-result/v4"];
+        let mut running = fixture.clone();
+        running["session"]["lifecycle"] = json!("running");
+        running["session"]["revision"] = json!(1);
+        running["trace_length"] = json!(1);
+        running["counters"] = active["counters"].clone();
+        running["current"] = json!({
+            "node": active["node"], "attempt": active["attempt"],
+            "readiness": active["readiness"],
+            "missing_required_item_count": 0, "blockers_total": 0
+        });
+        running["delegation"] = documents["fixtures"]["podway.delegation-projection/v1"].clone();
+        if schema == "podway.status-result/v4" {
+            running["terminal"] = json!(true);
+            running["receipt_summaries"] = json!([running["delegation"]["receipt"]]);
+            running["receipt_summaries_total"] = json!(1);
+        }
+        let schema_path = if schema == "podway.status-result/v4" {
+            "schemas/status-result-v4.schema.json"
+        } else {
+            "schemas/compact-status-result-v4.schema.json"
+        };
+        assert_valid(schema_path, &running);
+        assert!(decode_result_schema_contract_v2(running.as_object().unwrap()).is_some());
+        let mut inactive = running.clone();
+        inactive["delegation"] = fixture["delegation"].clone();
+        assert_valid(schema_path, &inactive);
+        assert!(decode_result_schema_contract_v2(inactive.as_object().unwrap()).is_none());
+        running["delegation"]["receipt"]["attempt_id"] =
+            json!("00000000-0000-4000-8000-000000000002");
+        assert_valid(schema_path, &running);
+        assert!(decode_result_schema_contract_v2(running.as_object().unwrap()).is_none());
+    }
+    let mut observation = fixtures["podway.observation-result/v4"].clone();
+    observation["status"]["delegation"] =
+        documents["fixtures"]["podway.delegation-projection/v1"].clone();
+    assert!(decode_result_schema_contract_v2(observation.as_object().unwrap()).is_none());
+    let mut archive = fixtures["podway.session-archive-show-result/v2"].clone();
+    archive["state"]["delegation"] =
+        documents["fixtures"]["podway.delegation-projection/v1"].clone();
+    assert!(decode_result_schema_contract_v2(archive.as_object().unwrap()).is_none());
+}
+
+#[test]
+fn v2sdg002_delegation_projection_and_receipt_states_are_closed() {
+    let fixtures = examples();
+    let documents: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/v2/compatibility/supervised-delegation-contract-reservation.json"
+    ))
+    .unwrap();
+    let projection = documents["fixtures"]["podway.delegation-projection/v1"].clone();
+    let mut inconsistent = projection.clone();
+    inconsistent["safe_next_action"] = json!("continue_direct");
+    assert_invalid(
+        "schemas/delegation-projection-v1.schema.json",
+        &inconsistent,
+    );
+    let mut receipt_result = fixtures["podway.delegation-receipt-result/v1"].clone();
+    receipt_result["reason"] = json!("historical_attempt");
+    assert_invalid(
+        "schemas/delegation-receipt-result-v1.schema.json",
+        &receipt_result,
+    );
+    let receipt_summary = projection["receipt"].clone();
+    for (state, reason, action, has_receipt) in [
+        (
+            "not_applicable",
+            "direct_placement",
+            "continue_direct",
+            false,
+        ),
+        (
+            "awaiting_acceptance",
+            "items_incomplete",
+            "record_items",
+            false,
+        ),
+        (
+            "awaiting_acceptance",
+            "blockers_open",
+            "clear_blockers",
+            false,
+        ),
+        ("awaiting_acceptance", "receipt_required", "accept", false),
+        ("accepted", "current_receipt", "complete", true),
+        (
+            "stale_acceptance",
+            "package_changed",
+            "retry_or_rework",
+            true,
+        ),
+        ("stale_acceptance", "items_changed", "retry_or_rework", true),
+        ("inactive", "historical_attempt", "inspect_history", false),
+        ("inactive", "no_active_attempt", "begin_or_inspect", false),
+    ] {
+        let mut value = json!({
+            "state": state, "reason": reason, "safe_next_action": action,
+        });
+        if has_receipt {
+            value["receipt"] = receipt_summary.clone();
+        }
+        assert_valid("schemas/delegation-projection-v1.schema.json", &value);
+        let mut wrong_action = value.clone();
+        wrong_action["safe_next_action"] = json!("continue_direct");
+        if action != "continue_direct" {
+            assert_invalid(
+                "schemas/delegation-projection-v1.schema.json",
+                &wrong_action,
+            );
+        }
+        let mut wrong_reason = value.clone();
+        wrong_reason["reason"] = json!("current_receipt");
+        if reason != "current_receipt" {
+            assert_invalid(
+                "schemas/delegation-projection-v1.schema.json",
+                &wrong_reason,
+            );
+        }
+        let mut wrong_receipt = value.clone();
+        wrong_receipt["receipt"] = if has_receipt {
+            Value::Null
+        } else {
+            receipt_summary.clone()
+        };
+        assert_invalid(
+            "schemas/delegation-projection-v1.schema.json",
+            &wrong_receipt,
+        );
+    }
+    for (applicability, reason) in [
+        ("accepted", "current_receipt"),
+        ("stale_acceptance", "package_changed"),
+        ("stale_acceptance", "items_changed"),
+        ("historical", "historical_attempt"),
+    ] {
+        let mut value = fixtures["podway.delegation-receipt-result/v1"].clone();
+        value["applicability"] = json!(applicability);
+        value["reason"] = json!(reason);
+        assert_valid("schemas/delegation-receipt-result-v1.schema.json", &value);
+        value["reason"] = json!("receipt_required");
+        assert_invalid("schemas/delegation-receipt-result-v1.schema.json", &value);
+    }
+}
+
+#[test]
+fn v2sdg002_delegated_procedure_cannot_declare_skip() {
+    let mut procedure: Value = serde_yaml::from_str(include_str!(
+        "../../../tests/fixtures/v2/compatibility/supervised-delegation-direct-control.yaml"
+    ))
+    .unwrap();
+    assert_valid("schemas/procedure-v2.schema.json", &procedure);
+    let documents: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/v2/compatibility/supervised-delegation-contract-reservation.json"
+    ))
+    .unwrap();
+    procedure["graph"]["nodes"][0]["delegation"] =
+        documents["fixtures"]["podway.delegation-work-package/v1"]["delegation"].clone();
+    assert_valid("schemas/procedure-v2.schema.json", &procedure);
+    procedure["graph"]["nodes"][0]["skip"] = json!({"allowed":true,"reason_required":true});
+    assert_invalid("schemas/procedure-v2.schema.json", &procedure);
+}
+
+#[test]
+fn v2sdg002_delegation_errors_keep_closed_details_and_catalog_identity() {
+    let catalog = podway_protocol::error_code_catalog_v1()
+        .map(|(code, exit_code, retryable)| (code, (exit_code, retryable)))
+        .collect::<HashMap<_, _>>();
+    for (code, reason) in [
+        ("DELEGATION_NOT_APPLICABLE", "direct_attempt"),
+        ("DELEGATION_RECEIPT_REQUIRED", "receipt_missing"),
+        ("DELEGATION_RECEIPT_STALE", "package_changed"),
+        ("DELEGATION_BINDING_MISMATCH", "binding_mismatch"),
+        ("DELEGATION_ALREADY_ACCEPTED", "duplicate_acceptance"),
+    ] {
+        let (exit_code, retryable) = catalog[code];
+        assert_eq!((exit_code, retryable), (1, false));
+        let mut error = json!({
+            "schema":"podway.error/v1", "request_id":UUID,
+            "command":"delegation.accept", "generated_at":"2026-08-04T00:00:00.000Z",
+            "code":code, "message":"Delegation state must be corrected.",
+            "retryable":retryable, "exit_code":exit_code,
+            "details":{"schema":"podway.delegation-error-details/v1","reason":reason}
+        });
+        assert_valid("schemas/error-v1.schema.json", &error);
+        assert!(serde_json::from_value::<ErrorEnvelopeV1>(error.clone()).is_ok());
+        error["details"]["credential"] = json!("secret");
+        assert_invalid("schemas/error-v1.schema.json", &error);
+        assert!(serde_json::from_value::<ErrorEnvelopeV1>(error).is_err());
+    }
+    for (code, accepted_reasons, rejected_reason) in [
+        ("DELEGATION_NOT_APPLICABLE", &[][..], "receipt_missing"),
+        ("DELEGATION_RECEIPT_REQUIRED", &[][..], "direct_attempt"),
+        (
+            "DELEGATION_RECEIPT_STALE",
+            &["items_changed"][..],
+            "binding_mismatch",
+        ),
+        (
+            "DELEGATION_BINDING_MISMATCH",
+            &["role_mismatch", "disposition_mismatch", "round_limit"][..],
+            "package_changed",
+        ),
+        ("DELEGATION_ALREADY_ACCEPTED", &[][..], "role_mismatch"),
+    ] {
+        for reason in accepted_reasons
+            .iter()
+            .copied()
+            .chain(std::iter::once(rejected_reason))
+        {
+            let error = json!({
+                "schema":"podway.error/v1", "request_id":UUID,
+                "command":"delegation.accept", "generated_at":"2026-08-04T00:00:00.000Z",
+                "code":code, "message":"Delegation state must be corrected.",
+                "retryable":false, "exit_code":1,
+                "details":{"schema":"podway.delegation-error-details/v1","reason":reason}
+            });
+            if reason == rejected_reason {
+                assert_invalid("schemas/error-v1.schema.json", &error);
+            } else {
+                assert_valid("schemas/error-v1.schema.json", &error);
+            }
+            assert_eq!(
+                serde_json::from_value::<ErrorEnvelopeV1>(error).is_ok(),
+                reason != rejected_reason,
+                "{code} {reason}"
+            );
+        }
+    }
+    for reason in ["item_not_ready", "blocker_open"] {
+        let details = json!({"schema":"podway.delegation-error-details/v1","reason":reason});
+        assert_invalid("schemas/delegation-error-details-v1.schema.json", &details);
+    }
+}
+
+#[test]
+fn v2sdg002_mapping_known_answers_keep_distinct_immutable_domains() {
+    let document: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/v2/compatibility/supervised-delegation-contract-reservation.json"
+    ))
+    .unwrap();
+    let answers = &document["mapping_known_answers"];
+    let digest = |value: Value| {
+        let encoded = serde_json::to_vec(&value).unwrap();
+        format!("sha256:{:x}", Sha256::digest(encoded))
+    };
+    for (name, first, second) in [
+        (
+            "role_same_label_changed_content",
+            json!({"role_ref":"reviewer","permissions":["read"]}),
+            json!({"role_ref":"reviewer","permissions":["read","write"]}),
+        ),
+        (
+            "configuration_changed",
+            json!({"model":"one","tools":["read"]}),
+            json!({"model":"two","tools":["read"]}),
+        ),
+        (
+            "task_versus_envelope",
+            json!({"task_id":"task-1","objective":"Review"}),
+            json!({"task_id":"task-1","objective":"Review","delivery_state":"collected"}),
+        ),
+        (
+            "complete_result_versus_summary",
+            json!({"review":"accepted","patch":"diff-bytes"}),
+            json!({"review":"accepted"}),
+        ),
+    ] {
+        assert_eq!(answers[name][0], digest(first), "{name} first domain");
+        assert_eq!(answers[name][1], digest(second), "{name} second domain");
+        assert_ne!(answers[name][0], answers[name][1], "{name} distinction");
+    }
+    assert_eq!(
+        answers["lost_acknowledgement"]["prepared_task_digest"],
+        digest(json!({"objective":"Review"}))
+    );
+    assert!(answers["lost_acknowledgement"]["task_ref"].is_null());
+}
+
+#[test]
+fn v2sdg002_job_v5_keeps_acceptance_terminal_and_job_identity_closed() {
+    let result = examples()["podway.delegation-accept-result/v1"].clone();
+    let mut terminal = json!({
+        "schema":OUTPUT_SCHEMA_V3, "request_id":UUID, "command":"delegation.accept",
+        "generated_at":"2026-08-04T00:00:00.000Z", "result":result, "warnings":[]
+    });
+    add_admitted_envelope_metadata(&mut terminal);
+    let wrapper = json!({
+        "schema":OUTPUT_SCHEMA_V3, "request_id":UUID, "command":"job.status",
+        "generated_at":"2026-08-04T00:00:00.000Z",
+        "workspace":terminal["workspace"], "job":terminal["job"],
+        "result":{"schema":"podway.job-result/v5","job":terminal}, "warnings":[]
+    });
+    assert_valid("schemas/output-v3.schema.json", &wrapper);
+    assert!(decode_response_payload_v2(&serde_json::to_vec(&wrapper).unwrap()).is_ok());
+
+    let mut old_wrapper = wrapper.clone();
+    old_wrapper["result"]["schema"] = json!("podway.job-result/v4");
+    assert_invalid("schemas/output-v3.schema.json", &old_wrapper);
+    assert!(decode_response_payload_v2(&serde_json::to_vec(&old_wrapper).unwrap()).is_err());
+
+    let mut mismatched = wrapper.clone();
+    mismatched["job"]["id"] = json!("00000000-0000-4000-8000-000000000002");
+    assert!(decode_response_payload_v2(&serde_json::to_vec(&mismatched).unwrap()).is_err());
+}
+
+#[test]
+fn v2sdg002_job_lookup_v5_binds_found_acceptance_terminal() {
+    let mut terminal = json!({
+        "schema":OUTPUT_SCHEMA_V3, "request_id":UUID, "command":"delegation.accept",
+        "generated_at":"2026-08-04T00:00:00.000Z",
+        "result":examples()["podway.delegation-accept-result/v1"], "warnings":[]
+    });
+    add_admitted_envelope_metadata(&mut terminal);
+    let lookup = json!({
+        "schema":"podway.job-lookup-result/v5", "found":true,
+        "job":{
+            "id":UUID,"sequence":1,"state":"succeeded",
+            "submitted_at":"2026-08-04T00:00:00.000Z",
+            "claimed_at":"2026-08-04T00:00:00.001Z",
+            "finished_at":"2026-08-04T00:00:00.002Z",
+            "command":"delegation.accept","request_digest":DIGEST,
+            "terminal_response":terminal
+        }
+    });
+    assert_valid("schemas/job-lookup-result-v5.schema.json", &lookup);
+    assert!(decode_result_schema_contract_v2(lookup.as_object().unwrap()).is_some());
+    let mut mismatch = lookup.clone();
+    mismatch["job"]["command"] = json!("session.complete");
+    assert!(decode_result_schema_contract_v2(mismatch.as_object().unwrap()).is_none());
+    let mut old = lookup;
+    old["schema"] = json!("podway.job-lookup-result/v4");
+    assert_invalid("schemas/job-lookup-result-v4.schema.json", &old);
 }
 
 #[test]
@@ -1196,11 +1840,13 @@ fn v2plt006_production_codec_round_trips_every_registered_command_result_pair() 
             });
             if expected["result"].get("admission").is_some() {
                 add_admitted_envelope_metadata(&mut expected);
-            } else if command.starts_with("session.archive_") {
+            } else if command.starts_with("session.archive_")
+                || matches!(*command, "delegation.package" | "delegation.receipt")
+            {
                 add_workspace_envelope_metadata(&mut expected);
             } else if matches!(
                 contract.schema,
-                "podway.job-result/v3" | "podway.job-result/v4"
+                "podway.job-result/v3" | "podway.job-result/v4" | "podway.job-result/v5"
             ) {
                 add_queued_job_envelope_metadata(&mut expected);
             }
@@ -2148,7 +2794,7 @@ fn v2ctr003_decoder_rejects_missing_non_string_and_unregistered_discriminators()
             .iter()
             .filter(|entry| entry.schema.starts_with("podway.job-"))
             .count(),
-        4
+        6
     );
     let mut incomplete = examples()["podway.next-result/v2"].clone();
     incomplete.as_object_mut().unwrap().remove("node");

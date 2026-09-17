@@ -1063,6 +1063,41 @@
         "summary": "A custom Procedure start requires explicit digest confirmation."
       },
       {
+        "code": "DELEGATION_NOT_APPLICABLE",
+        "details_schema": "podway.delegation-error-details/v1",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The selected attempt is Direct and has no delegation receipt."
+      },
+      {
+        "code": "DELEGATION_RECEIPT_REQUIRED",
+        "details_schema": "podway.delegation-error-details/v1",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The delegated attempt has no accepted receipt."
+      },
+      {
+        "code": "DELEGATION_RECEIPT_STALE",
+        "details_schema": "podway.delegation-error-details/v1",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The accepted receipt no longer matches the current delegated attempt."
+      },
+      {
+        "code": "DELEGATION_BINDING_MISMATCH",
+        "details_schema": "podway.delegation-error-details/v1",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The supplied execution identity does not match the declaration or package."
+      },
+      {
+        "code": "DELEGATION_ALREADY_ACCEPTED",
+        "details_schema": "podway.delegation-error-details/v1",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "This attempt already has an immutable delegation receipt."
+      },
+      {
         "code": "UNSUPPORTED_V2_CAPABILITY",
         "details_schema": "podway.v2-runtime-error-details/v1",
         "exit_code": 3,
@@ -1204,6 +1239,11 @@
         "sha256": "sha256:1911f5b2afd922e82a15fa430f864b5f52692d6f510e973c432da0247d018969"
       },
       {
+        "id": "urn:podway:schema:compact-status-result:v4",
+        "path": "schemas/compact-status-result-v4.schema.json",
+        "sha256": "sha256:a578c7672c03ac5d302928ae876ecec119fef1b61207e507069496e230b9d618"
+      },
+      {
         "id": "urn:podway:schema:contract-manifest:v1",
         "path": "schemas/contract-manifest-v1.schema.json",
         "sha256": "sha256:798b3528db2495c819e45b091d9e594a812d49c1c9a6a55f6c429aa3cb2e5340"
@@ -1254,6 +1294,51 @@
         "sha256": "sha256:ced9d63a2e9cf3d69c925d363822acccfcdd4d78a12423c93b4b248408814ad4"
       },
       {
+        "id": "urn:podway:schema:delegation-accept-input:v1",
+        "path": "schemas/delegation-accept-input-v1.schema.json",
+        "sha256": "sha256:0194d8bca39388fbdce24b251099a6c206ad8e4d21d7655021d14dbf46b7daaa"
+      },
+      {
+        "id": "urn:podway:schema:delegation-accept-result:v1",
+        "path": "schemas/delegation-accept-result-v1.schema.json",
+        "sha256": "sha256:efe907bc4e92c59dd94a1174da250ad9afd7548b7cf0b49e19cb7ea233e5cc32"
+      },
+      {
+        "id": "urn:podway:schema:delegation-components:v1",
+        "path": "schemas/delegation-components-v1.schema.json",
+        "sha256": "sha256:010b93ef69b319369a3ee0b11edce44002e465f36f21d9b4a11e61de0daa6c5e"
+      },
+      {
+        "id": "urn:podway:schema:delegation-error-details:v1",
+        "path": "schemas/delegation-error-details-v1.schema.json",
+        "sha256": "sha256:1c575781b91e2ef0a185a1474814d0bb86ae7824f7b1c956100b17a2bc3e1084"
+      },
+      {
+        "id": "urn:podway:schema:delegation-package-result:v1",
+        "path": "schemas/delegation-package-result-v1.schema.json",
+        "sha256": "sha256:efaa22cbdd48977962ecdf697e140352e4d58847185e79fdeda2acaad7e4ddbd"
+      },
+      {
+        "id": "urn:podway:schema:delegation-projection:v1",
+        "path": "schemas/delegation-projection-v1.schema.json",
+        "sha256": "sha256:e629dc05528c86b97df3276f10663246ec662657424e7c5d09771e245f86ee04"
+      },
+      {
+        "id": "urn:podway:schema:delegation-receipt-result:v1",
+        "path": "schemas/delegation-receipt-result-v1.schema.json",
+        "sha256": "sha256:90c12147f45f15feee850867ebbb6932d4707f3880ad455a0c9f4deed06e0898"
+      },
+      {
+        "id": "urn:podway:schema:delegation-receipt:v1",
+        "path": "schemas/delegation-receipt-v1.schema.json",
+        "sha256": "sha256:c97a2d31f0bbf99e4d94d0ebcc56ddd4e318bba6b730eaefa8625084ed3f08fe"
+      },
+      {
+        "id": "urn:podway:schema:delegation-work-package:v1",
+        "path": "schemas/delegation-work-package-v1.schema.json",
+        "sha256": "sha256:00100def97d8afcfa3ad6895226e5f2d4e89b132785fb9cd951a6b1246097417"
+      },
+      {
         "id": "urn:podway:schema:detached-admission-result:v1",
         "path": "schemas/detached-admission-result-v1.schema.json",
         "sha256": "sha256:c0eee4cb3d988f3ac40cad1cf6e1875fc5496cb57675fbddd6d59082c0b6a023"
@@ -1276,7 +1361,7 @@
       {
         "id": "urn:podway:schema:error:v1",
         "path": "schemas/error-v1.schema.json",
-        "sha256": "sha256:8f11621c88b23cf2f19f46a784bbf9bf48f9de6859704f5b72080894503f6aac"
+        "sha256": "sha256:42247c443fd807c4bf986088790135a194098a7f9d733b6bf32e9ef7fe533717"
       },
       {
         "id": "urn:podway:schema:evidence-read-result:v1",
@@ -1334,6 +1419,11 @@
         "sha256": "sha256:f3fa6ceae4fc7ea74e482a0e5833a6b8f451521b2e006e82bd486e8164fd9c37"
       },
       {
+        "id": "urn:podway:schema:job-lookup-result:v5",
+        "path": "schemas/job-lookup-result-v5.schema.json",
+        "sha256": "sha256:1bfa172021defde016dbd0fe0da639f2231ee7eb53fd6abc3c2c938c7bde4b97"
+      },
+      {
         "id": "urn:podway:schema:job-result:v3",
         "path": "schemas/job-result-v3.schema.json",
         "sha256": "sha256:aff69287ed7a8b06626f33d1e9518298b6a81f0192734fa58d6be4281f40aa0d"
@@ -1342,6 +1432,11 @@
         "id": "urn:podway:schema:job-result:v4",
         "path": "schemas/job-result-v4.schema.json",
         "sha256": "sha256:cafbfdb12e92c67c612ad0ee3ded2c484af19439732bd75793e99bc63f6c0b22"
+      },
+      {
+        "id": "urn:podway:schema:job-result:v5",
+        "path": "schemas/job-result-v5.schema.json",
+        "sha256": "sha256:ff2c8312cf7eb028c5a50d994f88daf1570099959dc01b76cdcb21ebce4f1ee9"
       },
       {
         "id": "urn:podway:schema:job-wait-timeout-details:v1",
@@ -1369,6 +1464,11 @@
         "sha256": "sha256:0a4c5ac4aaaeb5067aa882bdc426845e467a7802bb89a93c2881ddab0719597c"
       },
       {
+        "id": "urn:podway:schema:next-result:v4",
+        "path": "schemas/next-result-v4.schema.json",
+        "sha256": "sha256:c8e035f8755f3190122c366b9469e570b56ded4ebff7ce9edce092e85ace1a45"
+      },
+      {
         "id": "urn:podway:schema:observation-result:v1",
         "path": "schemas/observation-result-v1.schema.json",
         "sha256": "sha256:159a649dfd698805d33f4cea6aaaf60622519f1e84c6df08bb923cc360e7362c"
@@ -1384,14 +1484,24 @@
         "sha256": "sha256:435ea163859de56b84a84fcd7d71d570c508db1e524ab54d56ea793deef169bb"
       },
       {
+        "id": "urn:podway:schema:observation-result:v4",
+        "path": "schemas/observation-result-v4.schema.json",
+        "sha256": "sha256:182139d7fc24cde6b308a049022f1a579f7f5e84c5010d767d7166efdf1aca71"
+      },
+      {
         "id": "urn:podway:schema:output:v3",
         "path": "schemas/output-v3.schema.json",
-        "sha256": "sha256:9c69ac80ce770339620be334b480e141b20173eeb22bf96136160bbb7728b956"
+        "sha256": "sha256:867ef2ee7f221caaff71a05501f3ec71c3a788658fe33e9e0bdab585f954d1f8"
       },
       {
         "id": "urn:podway:schema:prepared-next-result:v1",
         "path": "schemas/prepared-next-result-v1.schema.json",
         "sha256": "sha256:26b11d4061e759d324d1f432b9a0a3f516eac99307900746478785c101e5088a"
+      },
+      {
+        "id": "urn:podway:schema:prepared-next-result:v2",
+        "path": "schemas/prepared-next-result-v2.schema.json",
+        "sha256": "sha256:6ca78065fa17a5661474434a99afadedbd5c3d3fd854146b6b91693ef4e05ebe"
       },
       {
         "id": "urn:podway:schema:procedure-diagnostics-result:v1",
@@ -1404,9 +1514,19 @@
         "sha256": "sha256:42551e9592bbfd0171eb1736347da05ba7306cdb5a6517cea6571af9cb41ef72"
       },
       {
+        "id": "urn:podway:schema:procedure-graph-result:v2",
+        "path": "schemas/procedure-graph-result-v2.schema.json",
+        "sha256": "sha256:15d823d4c51d444ae7216f21a65a0eb1d51644a769242700dcf6a1625df8cefe"
+      },
+      {
         "id": "urn:podway:schema:procedure-preview-result:v1",
         "path": "schemas/procedure-preview-result-v1.schema.json",
         "sha256": "sha256:9e37b5b5843fcac6f157954cf8c4b85b6cf4beb8071da3c22bbab345c8fb3dcd"
+      },
+      {
+        "id": "urn:podway:schema:procedure-preview-result:v2",
+        "path": "schemas/procedure-preview-result-v2.schema.json",
+        "sha256": "sha256:5ec23e1532caaa79532bc77e4d2952bd561a6a71081ff5e4d5f7c5794160d32e"
       },
       {
         "id": "urn:podway:schema:procedure-source-result:v1",
@@ -1416,7 +1536,7 @@
       {
         "id": "urn:podway:schema:procedure:v2",
         "path": "schemas/procedure-v2.schema.json",
-        "sha256": "sha256:1d15bcf4816fd926d85c375c209cd891cd22c9354d5d8a42c283a7861e21ddea"
+        "sha256": "sha256:03563329fce766e930f8afc71a5b0a3ab3a8669179e71f3b77836fc054331a4d"
       },
       {
         "id": "urn:podway:schema:procedure-validation-result:v2",
@@ -1534,6 +1654,11 @@
         "sha256": "sha256:142ad6d627625a5241f60dc8bbe649e498431551697254fbc5563e0e68dce96d"
       },
       {
+        "id": "urn:podway:schema:session-archive-show-result:v2",
+        "path": "schemas/session-archive-show-result-v2.schema.json",
+        "sha256": "sha256:d04264c620a1b38629ecc64d75d33837af2cb0db20aae60a8dea5886f9b854cf"
+      },
+      {
         "id": "urn:podway:schema:session-begin-result:v1",
         "path": "schemas/session-begin-result-v1.schema.json",
         "sha256": "sha256:d311a85c4afc0b4e57e16a50604626bea9d44aa043f8d581daca06ea4781a757"
@@ -1587,6 +1712,11 @@
         "id": "urn:podway:schema:status-result:v3",
         "path": "schemas/status-result-v3.schema.json",
         "sha256": "sha256:dbc46ecd80ece3a67488bf8e2532ee9c0889749b6e236c3596193f392db554e1"
+      },
+      {
+        "id": "urn:podway:schema:status-result:v4",
+        "path": "schemas/status-result-v4.schema.json",
+        "sha256": "sha256:047082d31cc013ed396801129e3f0cb8f8dd00cd118fb765424f64c68b073ccb"
       },
       {
         "id": "urn:podway:schema:terminal-disposition-result:v1",
@@ -1678,8 +1808,8 @@
   "current_surface_counts": {
     "authoring_diagnostics": 58,
     "routes": 72,
-    "runtime_errors": 111,
-    "schemas": 105
+    "runtime_errors": 116,
+    "schemas": 124
   },
   "migration_boundary": {
     "adapter_database_access": "forbidden",

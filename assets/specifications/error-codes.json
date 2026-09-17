@@ -659,6 +659,41 @@
       "summary": "A custom Procedure start requires explicit digest confirmation."
     },
     {
+      "code": "DELEGATION_NOT_APPLICABLE",
+      "details_schema": "podway.delegation-error-details/v1",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The selected attempt is Direct and has no delegation receipt."
+    },
+    {
+      "code": "DELEGATION_RECEIPT_REQUIRED",
+      "details_schema": "podway.delegation-error-details/v1",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The delegated attempt has no accepted receipt."
+    },
+    {
+      "code": "DELEGATION_RECEIPT_STALE",
+      "details_schema": "podway.delegation-error-details/v1",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The accepted receipt no longer matches the current delegated attempt."
+    },
+    {
+      "code": "DELEGATION_BINDING_MISMATCH",
+      "details_schema": "podway.delegation-error-details/v1",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "The supplied execution identity does not match the declaration or package."
+    },
+    {
+      "code": "DELEGATION_ALREADY_ACCEPTED",
+      "details_schema": "podway.delegation-error-details/v1",
+      "exit_code": 1,
+      "retryable": false,
+      "summary": "This attempt already has an immutable delegation receipt."
+    },
+    {
       "code": "UNSUPPORTED_V2_CAPABILITY",
       "details_schema": "podway.v2-runtime-error-details/v1",
       "exit_code": 3,

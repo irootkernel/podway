@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:delegation-work-package:v1",
+  "title": "Podway Delegation Work Package v1",
+  "$ref": "urn:podway:schema:delegation-components:v1#/$defs/workPackage",
+  "x-podway-max-json-bytes": 950000
+}

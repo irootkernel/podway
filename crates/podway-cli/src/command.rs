@@ -9241,6 +9241,16 @@ mod tests {
     }
 
     #[test]
+    fn delegation_routes_remain_unavailable_before_runtime_admission() {
+        for route in ["package", "accept", "receipt"] {
+            assert!(
+                Cli::try_parse_from(["podway", "delegation", route]).is_err(),
+                "delegation {route} must be rejected before daemon communication"
+            );
+        }
+    }
+
+    #[test]
     fn parser_accepts_canonical_session_start_and_attachment_forms() {
         let terminate = Cli::try_parse_from(["podway", "--dev", "terminate"]).unwrap();
         assert!(terminate.dev);

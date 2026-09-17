@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:procedure-graph-result:v2",
+  "title": "Podway Procedure Graph Result v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "procedure_schema",
+    "procedure_digest",
+    "format",
+    "projection_digest",
+    "projection",
+    "delegated_placement_count",
+    "delegated_placements"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.procedure-graph-result/v2"
+    },
+    "procedure_schema": {
+      "const": "podway.procedure/v2"
+    },
+    "procedure_digest": {
+      "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/digest"
+    },
+    "format": {
+      "enum": [
+        "json",
+        "mermaid",
+        "plantuml",
+        "dot"
+      ]
+    },
+    "projection_digest": {
+      "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/digest"
+    },
+    "projection": {
+      "type": "string",
+      "maxLength": 131072
+    },
+    "delegated_placement_count": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 64
+    },
+    "delegated_placements": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier"
+      }
+    }
+  }
+}

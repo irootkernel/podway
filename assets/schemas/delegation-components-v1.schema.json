@@ -1,0 +1,697 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:delegation-components:v1",
+  "title": "Podway Delegation Components v1",
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "opaqueRef": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "x-podway-max-utf8-bytes": 256,
+      "pattern": "^[^\\x00-\\x1f\\x7f]+$"
+    },
+    "asciiIdentity": {
+      "type": "string",
+      "pattern": "^[\\x21-\\x7e]{1,128}$"
+    },
+    "declaration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "binding_ref",
+        "role_ref",
+        "role_snapshot_digest",
+        "max_rounds",
+        "after_accept"
+      ],
+      "properties": {
+        "binding_ref": {
+          "$ref": "#/$defs/identifier"
+        },
+        "role_ref": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "role_snapshot_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "max_rounds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32
+        },
+        "after_accept": {
+          "enum": [
+            "retain",
+            "release"
+          ]
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "binding_ref",
+        "adapter_id",
+        "adapter_version",
+        "primary_host",
+        "scope_kind",
+        "scope_ref",
+        "supervisor_ref",
+        "worker_ref",
+        "task_ref",
+        "role_ref",
+        "role_snapshot_digest",
+        "agent_configuration_digest",
+        "accepted_task_digest"
+      ],
+      "properties": {
+        "binding_ref": {
+          "$ref": "#/$defs/identifier"
+        },
+        "adapter_id": {
+          "$ref": "#/$defs/asciiIdentity"
+        },
+        "adapter_version": {
+          "$ref": "#/$defs/asciiIdentity"
+        },
+        "primary_host": {
+          "enum": [
+            "external",
+            "managed"
+          ]
+        },
+        "scope_kind": {
+          "$ref": "#/$defs/asciiIdentity"
+        },
+        "scope_ref": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "supervisor_ref": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "worker_ref": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "task_ref": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "role_ref": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "role_snapshot_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "agent_configuration_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "accepted_task_digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "intent"
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "intent": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "description": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 1000
+        },
+        "instructions": {
+          "$ref": "urn:podway:schema:procedure:v2#/$defs/instructions"
+        },
+        "items": {
+          "$ref": "urn:podway:schema:procedure:v2#/$defs/items"
+        }
+      }
+    },
+    "goal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "revision",
+        "statement",
+        "criteria"
+      ],
+      "properties": {
+        "revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "statement": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "criteria": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "criterion_id",
+              "statement"
+            ],
+            "properties": {
+              "criterion_id": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "statement": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              }
+            }
+          }
+        }
+      }
+    },
+    "evidenceItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "item_id",
+        "state"
+      ],
+      "properties": {
+        "item_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "state": {
+          "enum": [
+            "present",
+            "missing"
+          ]
+        },
+        "item_revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "value_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "value_type": {
+          "enum": [
+            "confirm",
+            "text",
+            "choice",
+            "integer",
+            "list",
+            "artifact",
+            "check_result"
+          ]
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "present"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          "then": {
+            "required": [
+              "item_revision",
+              "value_digest",
+              "value_type",
+              "size_bytes"
+            ]
+          },
+          "else": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "item_revision"
+                  ]
+                },
+                {
+                  "required": [
+                    "value_digest"
+                  ]
+                },
+                {
+                  "required": [
+                    "value_type"
+                  ]
+                },
+                {
+                  "required": [
+                    "size_bytes"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "selector",
+        "source_attempt_id",
+        "items"
+      ],
+      "properties": {
+        "selector": {
+          "$ref": "urn:podway:schema:procedure:v2#/$defs/evidence_reference"
+        },
+        "source_attempt_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "items": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "$ref": "urn:podway:schema:delegation-components:v1#/$defs/evidenceItem"
+          }
+        }
+      }
+    },
+    "workPackage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "workspace_uuid",
+        "procedure_digest",
+        "session_id",
+        "placement_id",
+        "attempt_id",
+        "delegation",
+        "action",
+        "goal",
+        "evidence"
+      ],
+      "properties": {
+        "schema": {
+          "const": "podway.delegation-work-package/v1"
+        },
+        "workspace_uuid": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "procedure_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "session_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "placement_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "attempt_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "delegation": {
+          "$ref": "urn:podway:schema:delegation-components:v1#/$defs/declaration"
+        },
+        "action": {
+          "$ref": "urn:podway:schema:delegation-components:v1#/$defs/action"
+        },
+        "goal": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "urn:podway:schema:delegation-components:v1#/$defs/goal"
+            }
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "$ref": "urn:podway:schema:delegation-components:v1#/$defs/evidence"
+          }
+        }
+      }
+    },
+    "receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "receipt_id",
+        "workspace_uuid",
+        "procedure_digest",
+        "session_id",
+        "placement_id",
+        "attempt_id",
+        "delegation",
+        "package_digest",
+        "execution",
+        "rounds_used",
+        "result_digest",
+        "summary",
+        "worker_disposition",
+        "accepted",
+        "accepted_items_digest",
+        "accepted_at"
+      ],
+      "properties": {
+        "schema": {
+          "const": "podway.delegation-receipt/v1"
+        },
+        "receipt_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "workspace_uuid": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "procedure_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "session_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "placement_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "attempt_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "delegation": {
+          "$ref": "urn:podway:schema:delegation-components:v1#/$defs/declaration"
+        },
+        "package_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "execution": {
+          "$ref": "urn:podway:schema:delegation-components:v1#/$defs/execution"
+        },
+        "rounds_used": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32
+        },
+        "result_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "x-podway-max-utf8-bytes": 4096,
+          "pattern": "^[^\\x00]+$"
+        },
+        "worker_disposition": {
+          "enum": [
+            "idle",
+            "released"
+          ]
+        },
+        "accepted": {
+          "const": true
+        },
+        "accepted_items_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "accepted_at": {
+          "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/timestamp"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "delegation": {
+                "properties": {
+                  "after_accept": {
+                    "const": "retain"
+                  }
+                },
+                "required": [
+                  "after_accept"
+                ]
+              }
+            },
+            "required": [
+              "delegation"
+            ]
+          },
+          "then": {
+            "properties": {
+              "worker_disposition": {
+                "const": "idle"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "delegation": {
+                "properties": {
+                  "after_accept": {
+                    "const": "release"
+                  }
+                },
+                "required": [
+                  "after_accept"
+                ]
+              }
+            },
+            "required": [
+              "delegation"
+            ]
+          },
+          "then": {
+            "properties": {
+              "worker_disposition": {
+                "const": "released"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "receiptSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_id",
+        "attempt_id",
+        "package_digest",
+        "result_digest",
+        "accepted_at"
+      ],
+      "properties": {
+        "receipt_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "attempt_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "package_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "result_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "accepted_at": {
+          "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/timestamp"
+        }
+      }
+    },
+    "projection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "reason",
+        "safe_next_action"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "not_applicable",
+            "awaiting_acceptance",
+            "accepted",
+            "stale_acceptance",
+            "inactive"
+          ]
+        },
+        "reason": {
+          "enum": [
+            "direct_placement",
+            "items_incomplete",
+            "blockers_open",
+            "receipt_required",
+            "current_receipt",
+            "package_changed",
+            "items_changed",
+            "historical_attempt",
+            "no_active_attempt"
+          ]
+        },
+        "safe_next_action": {
+          "enum": [
+            "continue_direct",
+            "record_items",
+            "clear_blockers",
+            "accept",
+            "complete",
+            "retry_or_rework",
+            "inspect_history",
+            "begin_or_inspect"
+          ]
+        },
+        "receipt": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "urn:podway:schema:delegation-components:v1#/$defs/receiptSummary"
+            }
+          ]
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "state": { "const": "not_applicable" },
+            "reason": { "const": "direct_placement" },
+            "safe_next_action": { "const": "continue_direct" },
+            "receipt": { "type": "null" }
+          }
+        },
+        {
+          "properties": {
+            "state": { "const": "awaiting_acceptance" },
+            "reason": { "const": "items_incomplete" },
+            "safe_next_action": { "const": "record_items" },
+            "receipt": { "type": "null" }
+          }
+        },
+        {
+          "properties": {
+            "state": { "const": "awaiting_acceptance" },
+            "reason": { "const": "blockers_open" },
+            "safe_next_action": { "const": "clear_blockers" },
+            "receipt": { "type": "null" }
+          }
+        },
+        {
+          "properties": {
+            "state": { "const": "awaiting_acceptance" },
+            "reason": { "const": "receipt_required" },
+            "safe_next_action": { "const": "accept" },
+            "receipt": { "type": "null" }
+          }
+        },
+        {
+          "required": ["receipt"],
+          "properties": {
+            "state": { "const": "accepted" },
+            "reason": { "const": "current_receipt" },
+            "safe_next_action": { "const": "complete" },
+            "receipt": {
+              "$ref": "urn:podway:schema:delegation-components:v1#/$defs/receiptSummary"
+            }
+          }
+        },
+        {
+          "required": ["receipt"],
+          "properties": {
+            "state": { "const": "stale_acceptance" },
+            "reason": { "enum": ["package_changed", "items_changed"] },
+            "safe_next_action": { "const": "retry_or_rework" },
+            "receipt": {
+              "$ref": "urn:podway:schema:delegation-components:v1#/$defs/receiptSummary"
+            }
+          }
+        },
+        {
+          "properties": {
+            "state": { "const": "inactive" },
+            "reason": { "const": "historical_attempt" },
+            "safe_next_action": { "const": "inspect_history" },
+            "receipt": { "type": "null" }
+          }
+        },
+        {
+          "properties": {
+            "state": { "const": "inactive" },
+            "reason": { "const": "no_active_attempt" },
+            "safe_next_action": { "const": "begin_or_inspect" },
+            "receipt": { "type": "null" }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:delegation-receipt:v1",
+  "title": "Podway Delegation Receipt v1",
+  "$ref": "urn:podway:schema:delegation-components:v1#/$defs/receipt",
+  "x-podway-max-json-bytes": 45000
+}

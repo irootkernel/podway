@@ -131,35 +131,96 @@ these external bytes. It cannot distinguish a forged but well-formed matching
 Role-name hash from a real content hash. Adapter conformance must supply that
 assurance; tests must not claim the Podway decoder proves it.
 
+## V2SDG-002 semantic closure and availability
+
+The Podway-side meaning is closed independently of a real adapter. An adapter
+identity is the pair (`adapter_id`, `adapter_version`); that pair fixes one
+mapping revision, including every digest's object schema, byte domain, and
+recovery rule. Podway accepts only lowercase `sha256:` plus 64 lowercase hex
+digits and compares declared values exactly. It neither rehashes executor
+objects nor equates digests produced by different mapping revisions. There is
+no host-independent canonical byte representation for an executor-owned Role,
+configuration, accepted task, or result. Assigning one here would falsely
+claim that the inspected external and Broker contracts expose the same object.
+
+| Digest | Required immutable object and binding | Exclusions and absence rule |
+|---|---|---|
+| `package_digest` | Podway's `podway.delegation-work-package/v1` canonical JSON with the `podway.delegation-work-package/v1\n` domain prefix, bound to the current attempt; V2SDG-003 implements production derivation | Excludes mutable output items, read timing, and external task identity; V2SDG-002 reserves the field without authenticating fixture placeholder digests |
+| `role_snapshot_digest` | Complete resolved Role content under the selected adapter revision, linked to `role_ref` and the worker's admitted Role | Role label alone, aggregate Role-reference hash, mutable policy lookup, or a missing Role is invalid |
+| `agent_configuration_digest` | Complete admitted worker configuration under that revision, linked to `worker_ref` and the accepted task | Requested but unadmitted configuration, a Profile selector, or missing configuration is invalid |
+| `accepted_task_digest` | Complete final task accepted by the executor under that revision, linked to acknowledged `task_ref` | Locally prepared bytes, a task summary, a transport envelope with mutable delivery fields, or an unacknowledged task is invalid |
+| `result_digest` | Complete immutable selected result accepted by the Primary under that revision, linked to the same task and including every accepted component such as an isolated change | Artifact ID, page summary, mutable collection envelope, omitted patch, or unknown outcome is invalid |
+
+Every mapping revision must state included and excluded fields, schema and
+version, ordering, string/binary encoding, canonicalization, the exact SHA-256
+input bytes, lowercase textual encoding, allowed producing interface, and
+durable acknowledgement linkage. A value absent from a permitted interface is
+unavailable; it is never filled from a private Store or an example digest.
+An adapter may retain exact acknowledged bytes and derive a digest only when
+the selected executor contract proves their identity to the admitted Role,
+configuration, task, or result. Its durable recovery record belongs to the
+integration, not to Podway's worktree receipt. Response loss requires lookup
+by the exact external identity before replay. An uncertain external outcome
+remains unavailable and does not become a new round or new task by assumption.
+
+The inspected Dolgorae source does not provide a complete permitted mapping
+revision for either Primary-host path. Both real paths are therefore
+**unavailable** for V2SDG foundation activation, while the local Podway
+contract and deterministic structural tests may proceed. The integration
+candidate owns these named prerequisites:
+
+1. Choose a versioned external and a separate managed adapter mapping, a
+   trusted binding/configuration owner, and a non-secret stable Primary
+   attribution and recovery path for each.
+2. Expose or prove permitted immutable Role and admitted configuration
+   resolution. Reject the inspected external Role-reference hash as a content
+   digest; verify whether the Broker's installed Role object has the required
+   complete domain and an allowed projection.
+3. Prove final accepted task identity and its complete bytes for each distinct
+   request shape, including lost acknowledgement recovery and durable task-ID
+   linkage. A prepared request hash alone is insufficient.
+4. Prove complete selected result bytes, acceptance by the Primary, durable
+   round accounting, and verified `idle` or completed `released` worker state.
+   The managed path additionally requires its planned trusted Primary bridge.
+5. Qualify each mapping revision with same-label changed-Role, changed
+   configuration, task-versus-envelope, complete-result-versus-summary, and
+   lost-acknowledgement known answers before enabling that real adapter.
+
+These are integration prerequisites, not optional Podway receipt fields. The
+foundation's known-answer fixtures exercise the closed local structure and
+identity distinctions only; they do not certify either real path.
+
 ## Pre-reservation review checklist
 
-- [ ] Record the Podway baseline, selected external commit/schema versions, and
+- [x] Record the Podway baseline, selected external commit/schema versions, and
   source locators, with no live runtime or provider requirement.
-- [ ] Map every required execution field, result digest, round count and
+- [x] Map every required execution field, result digest, round count and
   disposition separately for external and managed Primary paths.
-- [ ] Identify the producing authority, allowed read/result/host-binding path,
+- [x] Identify the producing authority, allowed read/result/host-binding path,
   and response-loss recovery for each value. A DB column alone is insufficient.
-- [ ] Close each digest domain and distinguish an exact acknowledgement from a
+- [x] Close each digest domain and distinguish an exact acknowledgement from a
   request prepared locally or an opaque selector.
-- [ ] For adapter derivation, specify canonical bytes, acceptance/task-ID proof,
+- [x] For adapter derivation, require canonical bytes, acceptance/task-ID proof,
   recovery storage ownership and retention outside Podway, and a known-answer
-  test. Do not invent new Podway round or worker tables.
-- [ ] Classify every unresolved real-path requirement as unsupported pending a
+  test; classify a real path without those exact facts as unavailable. Do not
+  invent new Podway round or worker tables.
+- [x] Classify every unresolved real-path requirement as unsupported pending a
   named integration prerequisite. Do not mark it implicitly compatible.
-- [ ] Resolve ambiguity in the generic Podway field meaning before reserving
+- [x] Resolve ambiguity in the generic Podway field meaning before reserving
   that field. A missing external getter need not block a clear local contract;
   an unclear digest meaning does.
-- [ ] Cover valid and malformed local receipt shapes and add mapping-level
+- [x] Cover valid and malformed local receipt shapes and add mapping-level
   examples for same Role name with changed content, configuration drift,
   task-versus-envelope scope, complete result versus summary, and lost
   acknowledgement. Distinguish simulated mapping tests from real adapter tests.
-- [ ] Preserve fields and Direct behavior already promised by ADR-0035. Any
+- [x] Preserve fields and Direct behavior already promised by ADR-0035. Any
   broader behavior or authority change returns to explicit design review.
-- [ ] Carry remaining real-adapter prerequisites into the integration candidate
+- [x] Carry remaining real-adapter prerequisites into the integration candidate
   and record the review outcome before `V2SDG-002` schema reservation completes.
 
-All entries are initially review work, not completed verification. Completing
-this worksheet neither requires nor authorizes a real model, runtime call,
+The remaining known-answer row closes with the V2SDG-002 local fixture and
+decoder checks. Completing this worksheet neither requires nor authorizes a
+real model, runtime call,
 provider scan, adapter installation, production mutation, or a Dolgorae change.
 The worksheet and source comparison can be reviewed offline. Future tests must
 not fetch external repositories or depend on a developer's neighboring checkout.

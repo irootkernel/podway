@@ -499,16 +499,29 @@ def validate_v2_catalog_delta(root: Path) -> int:
     if set(runtime) != {"schema", "exit_codes", "errors"}:
         fail("error catalog has unexpected or missing top-level fields")
     entries = runtime.get("errors")
-    if not isinstance(entries, list) or len(entries) != 111:
+    delegation_errors = {
+        "DELEGATION_NOT_APPLICABLE",
+        "DELEGATION_RECEIPT_REQUIRED",
+        "DELEGATION_RECEIPT_STALE",
+        "DELEGATION_BINDING_MISMATCH",
+        "DELEGATION_ALREADY_ACCEPTED",
+    }
+    if not isinstance(entries, list) or len(entries) != 116:
         fail("runtime error catalog must contain the v2-only error set")
     runtime_codes = [entry.get("code") for entry in entries if isinstance(entry, dict)]
     if len(runtime_codes) != len(entries) or len(set(runtime_codes)) != len(runtime_codes):
         fail("runtime error catalog codes must be unique strings")
-    expected_codes = set(PROCEDURE_INDEPENDENT_RUNTIME_ERROR_CODES) | V2_RUNTIME_ERROR_CODES | {
+    expected_codes = set(PROCEDURE_INDEPENDENT_RUNTIME_ERROR_CODES) | V2_RUNTIME_ERROR_CODES | delegation_errors | {
         "LEGACY_PROCEDURE_STATE_UNSUPPORTED"
     }
     if set(runtime_codes) != expected_codes:
         fail("runtime error catalog omits a required v2-only code")
+    if any(
+        entry.get("details_schema") != "podway.delegation-error-details/v1"
+        for entry in entries
+        if entry.get("code") in delegation_errors
+    ):
+        fail("every delegation error must bind the closed delegation details schema")
     for entry in entries:
         if not isinstance(entry.get("summary"), str) or not entry["summary"]:
             fail("runtime error entries require a summary")

@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:delegation-error-details:v1",
+  "title": "Podway Delegation Error Details v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "reason"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.delegation-error-details/v1"
+    },
+    "reason": {
+      "enum": [
+        "direct_attempt",
+        "receipt_missing",
+        "package_changed",
+        "items_changed",
+        "binding_mismatch",
+        "role_mismatch",
+        "duplicate_acceptance",
+        "disposition_mismatch",
+        "round_limit"
+      ]
+    },
+    "expected": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "actual": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "admission": {
+      "$ref": "urn:podway:schema:error:v1#/$defs/admission"
+    }
+  },
+  "x-podway-max-json-bytes": 8192
+}

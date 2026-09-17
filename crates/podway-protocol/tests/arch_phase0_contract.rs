@@ -376,6 +376,11 @@ const FROZEN_ERROR_CATALOG: &[(&str, u8, bool)] = &[
     ("FRESH_GOAL_ASSESSMENT_MISSING", 1, false),
     ("GOAL_ASSESSMENT_OUTCOME_NOT_ALLOWED", 1, false),
     ("DIGEST_CONFIRMATION_REQUIRED", 2, false),
+    ("DELEGATION_NOT_APPLICABLE", 1, false),
+    ("DELEGATION_RECEIPT_REQUIRED", 1, false),
+    ("DELEGATION_RECEIPT_STALE", 1, false),
+    ("DELEGATION_BINDING_MISMATCH", 1, false),
+    ("DELEGATION_ALREADY_ACCEPTED", 1, false),
     ("UNSUPPORTED_V2_CAPABILITY", 3, false),
     ("EVIDENCE_NOT_AVAILABLE", 1, false),
     ("ATTEMPT_CONTENT_LIMIT_EXCEEDED", 1, false),
@@ -639,6 +644,16 @@ fn api_004_error_catalog_is_exhaustive_and_error_pairs_fail_closed() {
             "IDEMPOTENCY_KEY_REUSED" => {
                 Map::from_iter([("admission".to_owned(), json!({"admitted": false}))])
             }
+            "DELEGATION_NOT_APPLICABLE" =>
+                Map::from_iter([("reason".to_owned(), json!("direct_attempt"))]),
+            "DELEGATION_RECEIPT_REQUIRED" =>
+                Map::from_iter([("reason".to_owned(), json!("receipt_missing"))]),
+            "DELEGATION_RECEIPT_STALE" =>
+                Map::from_iter([("reason".to_owned(), json!("package_changed"))]),
+            "DELEGATION_BINDING_MISMATCH" =>
+                Map::from_iter([("reason".to_owned(), json!("binding_mismatch"))]),
+            "DELEGATION_ALREADY_ACCEPTED" =>
+                Map::from_iter([("reason".to_owned(), json!("duplicate_acceptance"))]),
             _ => v2_runtime_error_details(code).unwrap_or_default(),
         };
         let envelope = ErrorEnvelopeV1::new(ErrorEnvelopeInputV1 {

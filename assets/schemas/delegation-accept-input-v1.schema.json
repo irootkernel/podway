@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:delegation-accept-input:v1",
+  "title": "Podway Delegation Acceptance Input v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "workspace_uuid",
+    "session_id",
+    "session_revision",
+    "attempt_id",
+    "idempotency_key",
+    "package_digest",
+    "execution",
+    "rounds_used",
+    "result_digest",
+    "summary",
+    "worker_disposition",
+    "accepted"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.delegation-accept-input/v1"
+    },
+    "workspace_uuid": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "session_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "session_revision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "attempt_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "x-podway-max-utf8-bytes": 256
+    },
+    "package_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "execution": {
+      "$ref": "urn:podway:schema:delegation-components:v1#/$defs/execution"
+    },
+    "rounds_used": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 32
+    },
+    "result_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "x-podway-max-utf8-bytes": 4096,
+      "pattern": "^[^\\x00]+$"
+    },
+    "worker_disposition": {
+      "enum": [
+        "idle",
+        "released"
+      ]
+    },
+    "accepted": {
+      "const": true
+    }
+  },
+  "x-podway-max-json-bytes": 32768
+}

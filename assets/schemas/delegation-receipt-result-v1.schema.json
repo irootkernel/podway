@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:delegation-receipt-result:v1",
+  "title": "Podway Delegation Receipt Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "session_id",
+    "attempt_id",
+    "receipt",
+    "applicability",
+    "reason"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.delegation-receipt-result/v1"
+    },
+    "session_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "attempt_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "receipt": {
+      "$ref": "urn:podway:schema:delegation-components:v1#/$defs/receipt"
+    },
+    "applicability": {
+      "enum": [
+        "accepted",
+        "stale_acceptance",
+        "historical"
+      ]
+    },
+    "reason": {
+      "enum": [
+        "current_receipt",
+        "package_changed",
+        "items_changed",
+        "historical_attempt"
+      ]
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "applicability": { "const": "accepted" },
+        "reason": { "const": "current_receipt" }
+      }
+    },
+    {
+      "properties": {
+        "applicability": { "const": "stale_acceptance" },
+        "reason": { "enum": ["package_changed", "items_changed"] }
+      }
+    },
+    {
+      "properties": {
+        "applicability": { "const": "historical" },
+        "reason": { "const": "historical_attempt" }
+      }
+    }
+  ],
+  "x-podway-max-json-bytes": 65536
+}

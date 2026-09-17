@@ -38,7 +38,7 @@
     {
       "kind": "catalog",
       "path": "release/dolgorae-adapter-contract-v2.json",
-      "sha256": "sha256:c0b81ebe31a53f563cd7abbc21c791a55d698143758b705567b4a10db8d4631b"
+      "sha256": "sha256:29642d417c21f6dcdf41a56ede493aa21b731030b984c441151ea5cde66ac1ae"
     },
     {
       "kind": "schema",
@@ -97,6 +97,11 @@
     },
     {
       "kind": "schema",
+      "path": "schemas/compact-status-result-v4.schema.json",
+      "sha256": "sha256:a578c7672c03ac5d302928ae876ecec119fef1b61207e507069496e230b9d618"
+    },
+    {
+      "kind": "schema",
       "path": "schemas/contract-manifest-v1.schema.json",
       "sha256": "sha256:798b3528db2495c819e45b091d9e594a812d49c1c9a6a55f6c429aa3cb2e5340"
     },
@@ -147,6 +152,51 @@
     },
     {
       "kind": "schema",
+      "path": "schemas/delegation-accept-input-v1.schema.json",
+      "sha256": "sha256:0194d8bca39388fbdce24b251099a6c206ad8e4d21d7655021d14dbf46b7daaa"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/delegation-accept-result-v1.schema.json",
+      "sha256": "sha256:efe907bc4e92c59dd94a1174da250ad9afd7548b7cf0b49e19cb7ea233e5cc32"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/delegation-components-v1.schema.json",
+      "sha256": "sha256:010b93ef69b319369a3ee0b11edce44002e465f36f21d9b4a11e61de0daa6c5e"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/delegation-error-details-v1.schema.json",
+      "sha256": "sha256:1c575781b91e2ef0a185a1474814d0bb86ae7824f7b1c956100b17a2bc3e1084"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/delegation-package-result-v1.schema.json",
+      "sha256": "sha256:efaa22cbdd48977962ecdf697e140352e4d58847185e79fdeda2acaad7e4ddbd"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/delegation-projection-v1.schema.json",
+      "sha256": "sha256:e629dc05528c86b97df3276f10663246ec662657424e7c5d09771e245f86ee04"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/delegation-receipt-result-v1.schema.json",
+      "sha256": "sha256:90c12147f45f15feee850867ebbb6932d4707f3880ad455a0c9f4deed06e0898"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/delegation-receipt-v1.schema.json",
+      "sha256": "sha256:c97a2d31f0bbf99e4d94d0ebcc56ddd4e318bba6b730eaefa8625084ed3f08fe"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/delegation-work-package-v1.schema.json",
+      "sha256": "sha256:00100def97d8afcfa3ad6895226e5f2d4e89b132785fb9cd951a6b1246097417"
+    },
+    {
+      "kind": "schema",
       "path": "schemas/detached-admission-result-v1.schema.json",
       "sha256": "sha256:c0eee4cb3d988f3ac40cad1cf6e1875fc5496cb57675fbddd6d59082c0b6a023"
     },
@@ -168,7 +218,7 @@
     {
       "kind": "schema",
       "path": "schemas/error-v1.schema.json",
-      "sha256": "sha256:8f11621c88b23cf2f19f46a784bbf9bf48f9de6859704f5b72080894503f6aac"
+      "sha256": "sha256:42247c443fd807c4bf986088790135a194098a7f9d733b6bf32e9ef7fe533717"
     },
     {
       "kind": "schema",
@@ -227,6 +277,11 @@
     },
     {
       "kind": "schema",
+      "path": "schemas/job-lookup-result-v5.schema.json",
+      "sha256": "sha256:1bfa172021defde016dbd0fe0da639f2231ee7eb53fd6abc3c2c938c7bde4b97"
+    },
+    {
+      "kind": "schema",
       "path": "schemas/job-result-v3.schema.json",
       "sha256": "sha256:aff69287ed7a8b06626f33d1e9518298b6a81f0192734fa58d6be4281f40aa0d"
     },
@@ -234,6 +289,11 @@
       "kind": "schema",
       "path": "schemas/job-result-v4.schema.json",
       "sha256": "sha256:cafbfdb12e92c67c612ad0ee3ded2c484af19439732bd75793e99bc63f6c0b22"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/job-result-v5.schema.json",
+      "sha256": "sha256:ff2c8312cf7eb028c5a50d994f88daf1570099959dc01b76cdcb21ebce4f1ee9"
     },
     {
       "kind": "schema",
@@ -262,6 +322,11 @@
     },
     {
       "kind": "schema",
+      "path": "schemas/next-result-v4.schema.json",
+      "sha256": "sha256:c8e035f8755f3190122c366b9469e570b56ded4ebff7ce9edce092e85ace1a45"
+    },
+    {
+      "kind": "schema",
       "path": "schemas/observation-result-v1.schema.json",
       "sha256": "sha256:159a649dfd698805d33f4cea6aaaf60622519f1e84c6df08bb923cc360e7362c"
     },
@@ -277,13 +342,23 @@
     },
     {
       "kind": "schema",
+      "path": "schemas/observation-result-v4.schema.json",
+      "sha256": "sha256:182139d7fc24cde6b308a049022f1a579f7f5e84c5010d767d7166efdf1aca71"
+    },
+    {
+      "kind": "schema",
       "path": "schemas/output-v3.schema.json",
-      "sha256": "sha256:9c69ac80ce770339620be334b480e141b20173eeb22bf96136160bbb7728b956"
+      "sha256": "sha256:867ef2ee7f221caaff71a05501f3ec71c3a788658fe33e9e0bdab585f954d1f8"
     },
     {
       "kind": "schema",
       "path": "schemas/prepared-next-result-v1.schema.json",
       "sha256": "sha256:26b11d4061e759d324d1f432b9a0a3f516eac99307900746478785c101e5088a"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/prepared-next-result-v2.schema.json",
+      "sha256": "sha256:6ca78065fa17a5661474434a99afadedbd5c3d3fd854146b6b91693ef4e05ebe"
     },
     {
       "kind": "schema",
@@ -297,8 +372,18 @@
     },
     {
       "kind": "schema",
+      "path": "schemas/procedure-graph-result-v2.schema.json",
+      "sha256": "sha256:15d823d4c51d444ae7216f21a65a0eb1d51644a769242700dcf6a1625df8cefe"
+    },
+    {
+      "kind": "schema",
       "path": "schemas/procedure-preview-result-v1.schema.json",
       "sha256": "sha256:9e37b5b5843fcac6f157954cf8c4b85b6cf4beb8071da3c22bbab345c8fb3dcd"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/procedure-preview-result-v2.schema.json",
+      "sha256": "sha256:5ec23e1532caaa79532bc77e4d2952bd561a6a71081ff5e4d5f7c5794160d32e"
     },
     {
       "kind": "schema",
@@ -308,7 +393,7 @@
     {
       "kind": "schema",
       "path": "schemas/procedure-v2.schema.json",
-      "sha256": "sha256:1d15bcf4816fd926d85c375c209cd891cd22c9354d5d8a42c283a7861e21ddea"
+      "sha256": "sha256:03563329fce766e930f8afc71a5b0a3ab3a8669179e71f3b77836fc054331a4d"
     },
     {
       "kind": "schema",
@@ -427,6 +512,11 @@
     },
     {
       "kind": "schema",
+      "path": "schemas/session-archive-show-result-v2.schema.json",
+      "sha256": "sha256:d04264c620a1b38629ecc64d75d33837af2cb0db20aae60a8dea5886f9b854cf"
+    },
+    {
+      "kind": "schema",
       "path": "schemas/session-begin-result-v1.schema.json",
       "sha256": "sha256:d311a85c4afc0b4e57e16a50604626bea9d44aa043f8d581daca06ea4781a757"
     },
@@ -479,6 +569,11 @@
       "kind": "schema",
       "path": "schemas/status-result-v3.schema.json",
       "sha256": "sha256:dbc46ecd80ece3a67488bf8e2532ee9c0889749b6e236c3596193f392db554e1"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/status-result-v4.schema.json",
+      "sha256": "sha256:047082d31cc013ed396801129e3f0cb8f8dd00cd118fb765424f64c68b073ccb"
     },
     {
       "kind": "schema",
@@ -583,7 +678,7 @@
     {
       "kind": "catalog",
       "path": "spec/error-codes.json",
-      "sha256": "sha256:5990a817d72fd9c3ef426f0f8b442f75b731df39a5bb960acb0b8cde667462af"
+      "sha256": "sha256:04d1066b2daed80e016ada0192a1e42ab111084d6583deceb12e7f7f7604803e"
     },
     {
       "kind": "transition_matrix",
@@ -614,6 +709,11 @@
       "kind": "known_answer_fixture",
       "path": "tests/fixtures/v2/compatibility/runtime-reset-contract-reservation.json",
       "sha256": "sha256:72a9447c2692e8aa1cae25bbb9b47e88fbb847a20bb5f80abc362c8741bbdf63"
+    },
+    {
+      "kind": "known_answer_fixture",
+      "path": "tests/fixtures/v2/compatibility/supervised-delegation-contract-reservation.json",
+      "sha256": "sha256:5d963dc3909455a0c9af1e1165d8d1c253f64b391fa36ff033e96b607167beb7"
     },
     {
       "kind": "known_answer_fixture",
@@ -691,7 +791,7 @@
       "sha256": "sha256:7de5f4f024eb795ae7fb73594d4847b833016bea6be9f2737c567b524ae5466e"
     }
   ],
-  "digest": "sha256:cd4a8198727639852af1e06ff0021d1c2886f7694b792f52689ccd9cebc0f7fd",
+  "digest": "sha256:17a0d2fd1c6ac92bf53b920cd9589da74581d9097efe58fd544ef5875411a230",
   "product": "podway",
   "product_version": "0.2.10",
   "schema_version": "podway.contract-manifest/v1",

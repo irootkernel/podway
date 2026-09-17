@@ -377,6 +377,28 @@ fn v2sdg001_direct_control_keeps_its_canonical_identity() {
 }
 
 #[test]
+fn v2sdg002_reserved_delegation_declaration_is_not_yet_admitted() {
+    let source = String::from_utf8(fixture(
+        "tests/fixtures/v2/compatibility/supervised-delegation-direct-control.yaml",
+    ))
+    .unwrap();
+    let delegated = source.replace(
+        "      terminal: true\n",
+        concat!(
+            "      terminal: true\n",
+            "      delegation:\n",
+            "        binding_ref: local-specialist\n",
+            "        role_ref: reviewer\n",
+            "        role_snapshot_digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+            "        max_rounds: 3\n",
+            "        after_accept: retain\n",
+        ),
+    );
+    assert_ne!(delegated, source);
+    assert!(admit(&delegated, ProcedureDocumentFormat::Yaml).is_err());
+}
+
+#[test]
 fn v2ast003_check_result_yaml_and_json_share_one_canonical_declaration() {
     let yaml_source = concat!(
         "schema: podway.procedure/v2\n",

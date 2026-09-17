@@ -44,8 +44,8 @@ pub use result_contract::{
     PROCEDURE_DIAGNOSTICS_RESULT_SCHEMA_V1, ResultSchemaContractV2, SUPPORTED_OUTPUT_SCHEMAS_V3,
     V2_MUTATION_COMMANDS, decode_result_schema_contract_v2,
     ensure_procedure_independent_result_schema_v1, result_schema_top_level_fields_v2,
-    validate_command_result_v2, validate_procedure_independent_result_v1,
-    validate_v2_output_warnings,
+    validate_command_result_v2, validate_delegation_document_v1,
+    validate_procedure_independent_result_v1, validate_v2_output_warnings,
 };
 pub use slice::*;
 
@@ -1930,6 +1930,31 @@ const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
         retryable: false,
     },
     ErrorCodeCatalogEntryV1 {
+        code: "DELEGATION_NOT_APPLICABLE",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "DELEGATION_RECEIPT_REQUIRED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "DELEGATION_RECEIPT_STALE",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "DELEGATION_BINDING_MISMATCH",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "DELEGATION_ALREADY_ACCEPTED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
         code: "UNSUPPORTED_V2_CAPABILITY",
         exit_code: 3,
         retryable: false,
@@ -2419,6 +2444,37 @@ fn validate_closed_error_details_v1(
             validate_workspace_recovery_details_v1(details)
         }
         "INTERNAL_ERROR" => validate_internal_error_details_v1(details),
+        "DELEGATION_NOT_APPLICABLE"
+        | "DELEGATION_RECEIPT_REQUIRED"
+        | "DELEGATION_RECEIPT_STALE"
+        | "DELEGATION_BINDING_MISMATCH"
+        | "DELEGATION_ALREADY_ACCEPTED" => {
+            let reason = details.get("reason").and_then(Value::as_str);
+            let reason_matches = match code {
+                "DELEGATION_NOT_APPLICABLE" => reason == Some("direct_attempt"),
+                "DELEGATION_RECEIPT_REQUIRED" => reason == Some("receipt_missing"),
+                "DELEGATION_RECEIPT_STALE" => {
+                    matches!(reason, Some("package_changed" | "items_changed"))
+                }
+                "DELEGATION_BINDING_MISMATCH" => matches!(
+                    reason,
+                    Some(
+                        "binding_mismatch"
+                            | "role_mismatch"
+                            | "disposition_mismatch"
+                            | "round_limit"
+                    )
+                ),
+                _ => reason == Some("duplicate_acceptance"),
+            };
+            result_contract::validate_embedded_schema_v2(
+                "podway.delegation-error-details/v1",
+                &Value::Object(details.clone()),
+            ) && reason_matches
+                && serde_json::to_vec(details).is_ok_and(|bytes| {
+                    bytes.len() <= result_contract::MAX_DELEGATION_ERROR_DETAILS_BYTES_V1
+                })
+        }
         "ITEM_CONSTRAINT_FAILED" if details.contains_key("field") => {
             validate_v2_runtime_error_details_v1(code, details)
         }
@@ -3608,6 +3664,11 @@ pub fn ensure_error_details_schema_v1(code: &str, details: &mut Map<String, Valu
         "SESSION_ID_MISMATCH" => "podway.session-id-mismatch-details/v2",
         "PROCEDURE_DIGEST_MISMATCH" => "podway.procedure-digest-mismatch-details/v2",
         "MUTATION_OUTCOME_UNKNOWN" => "podway.mutation-outcome-unknown-details/v2",
+        "DELEGATION_NOT_APPLICABLE"
+        | "DELEGATION_RECEIPT_REQUIRED"
+        | "DELEGATION_RECEIPT_STALE"
+        | "DELEGATION_BINDING_MISMATCH"
+        | "DELEGATION_ALREADY_ACCEPTED" => "podway.delegation-error-details/v1",
         _ => return,
     };
     details

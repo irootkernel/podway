@@ -700,6 +700,37 @@
           "details": { "$ref": "urn:podway:schema:blocker-limit-details:v1" }
         }
       }
+    },
+    {
+      "if": {
+        "properties": { "code": { "enum": ["DELEGATION_NOT_APPLICABLE", "DELEGATION_RECEIPT_REQUIRED", "DELEGATION_RECEIPT_STALE", "DELEGATION_BINDING_MISMATCH", "DELEGATION_ALREADY_ACCEPTED"] } },
+        "required": ["code"]
+      },
+      "then": {
+        "properties": {
+          "details": { "$ref": "urn:podway:schema:delegation-error-details:v1" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "code": { "const": "DELEGATION_NOT_APPLICABLE" } }, "required": ["code"] },
+      "then": { "properties": { "details": { "properties": { "reason": { "const": "direct_attempt" } } } } }
+    },
+    {
+      "if": { "properties": { "code": { "const": "DELEGATION_RECEIPT_REQUIRED" } }, "required": ["code"] },
+      "then": { "properties": { "details": { "properties": { "reason": { "const": "receipt_missing" } } } } }
+    },
+    {
+      "if": { "properties": { "code": { "const": "DELEGATION_RECEIPT_STALE" } }, "required": ["code"] },
+      "then": { "properties": { "details": { "properties": { "reason": { "enum": ["package_changed", "items_changed"] } } } } }
+    },
+    {
+      "if": { "properties": { "code": { "const": "DELEGATION_BINDING_MISMATCH" } }, "required": ["code"] },
+      "then": { "properties": { "details": { "properties": { "reason": { "enum": ["binding_mismatch", "role_mismatch", "disposition_mismatch", "round_limit"] } } } } }
+    },
+    {
+      "if": { "properties": { "code": { "const": "DELEGATION_ALREADY_ACCEPTED" } }, "required": ["code"] },
+      "then": { "properties": { "details": { "properties": { "reason": { "const": "duplicate_acceptance" } } } } }
     }
   ]
 }
