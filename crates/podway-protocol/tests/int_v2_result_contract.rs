@@ -1243,7 +1243,7 @@ fn v2sdg002_delegation_documents_reject_unbounded_and_mismatched_input() {
         &secret_shaped
     ));
     let mut duplicate_selectors = package.clone();
-    let evidence = json!({"selector":{"node":"source"},"source_attempt_id":UUID,"items":[]});
+    let evidence = json!({"selector":{"node":"source"},"resolution":"resolved","source_attempt_id":UUID,"source_attempt_number":1,"source_items_digest":DIGEST,"items":[]});
     duplicate_selectors["evidence"] = json!([evidence.clone(), evidence]);
     assert_valid(
         "schemas/delegation-work-package-v1.schema.json",
@@ -1252,6 +1252,75 @@ fn v2sdg002_delegation_documents_reject_unbounded_and_mismatched_input() {
     assert!(!validate_delegation_document_v1(
         "podway.delegation-work-package/v1",
         &duplicate_selectors
+    ));
+    let mut optional_unresolved = package.clone();
+    optional_unresolved["evidence"] = json!([{
+        "selector": {"node": "source", "required": false},
+        "resolution": "unresolved",
+        "items": [{"item_id": "result", "state": "missing"}]
+    }]);
+    assert!(validate_delegation_document_v1(
+        "podway.delegation-work-package/v1",
+        &optional_unresolved
+    ));
+    optional_unresolved["evidence"][0]["source_attempt_id"] = json!(UUID);
+    assert!(!validate_delegation_document_v1(
+        "podway.delegation-work-package/v1",
+        &optional_unresolved
+    ));
+    let mut all_items = package.clone();
+    all_items["evidence"] = json!([{
+        "selector": {"node": "source"},
+        "resolution": "resolved",
+        "source_attempt_id": UUID,
+        "source_attempt_number": 1,
+        "source_items_digest": DIGEST,
+        "items": (0..128).map(|index| json!({
+            "item_id": format!("item-{index}"),
+            "state": "missing"
+        })).collect::<Vec<_>>()
+    }]);
+    assert!(validate_delegation_document_v1(
+        "podway.delegation-work-package/v1",
+        &all_items
+    ));
+    for field in [
+        "source_attempt_id",
+        "source_attempt_number",
+        "source_items_digest",
+    ] {
+        let mut missing_source_field = all_items.clone();
+        missing_source_field["evidence"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove(field);
+        assert!(!validate_delegation_document_v1(
+            "podway.delegation-work-package/v1",
+            &missing_source_field
+        ));
+    }
+    let duplicate_item = json!({"item_id": "same", "state": "missing"});
+    all_items["evidence"][0]["items"] = json!([duplicate_item.clone(), duplicate_item]);
+    assert_valid("schemas/delegation-work-package-v1.schema.json", &all_items);
+    assert!(!validate_delegation_document_v1(
+        "podway.delegation-work-package/v1",
+        &all_items
+    ));
+    let mut skipped_present = package.clone();
+    skipped_present["evidence"] = json!([{
+        "selector": {"node": "source"},
+        "resolution": "skipped",
+        "source_attempt_id": UUID,
+        "source_attempt_number": 1,
+        "source_items_digest": DIGEST,
+        "items": [{
+            "item_id": "result", "state": "present", "item_revision": 1,
+            "value_digest": DIGEST, "value_type": "text", "size_bytes": 5
+        }]
+    }]);
+    assert!(!validate_delegation_document_v1(
+        "podway.delegation-work-package/v1",
+        &skipped_present
     ));
     let mut mismatched = receipt.clone();
     mismatched["execution"]["role_ref"] = json!("other-role");

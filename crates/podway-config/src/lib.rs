@@ -12,6 +12,7 @@ mod procedure_v2_authoring;
 mod procedure_v2_budget;
 mod procedure_v2_canonical;
 mod procedure_v2_check;
+mod procedure_v2_delegation_package;
 mod procedure_v2_diagnostics;
 mod procedure_v2_document;
 mod procedure_v2_dot_projection;
@@ -43,6 +44,10 @@ pub use procedure_v2_budget::{
     procedure_placement_budget_v2,
 };
 pub use procedure_v2_check::{ProcedureCheckReport, check_procedure_v2};
+pub use procedure_v2_delegation_package::{
+    DelegationEvidenceItemV1, DelegationEvidenceResolutionV1, DelegationEvidenceV1,
+    DelegationWorkPackageInputV1, DelegationWorkPackageV1, project_delegation_work_package_v1,
+};
 pub use procedure_v2_diagnostics::{
     AuthoringContext, AuthoringStage, FinalizedDiagnostics, config_error_diagnostic,
     finalize_diagnostics,

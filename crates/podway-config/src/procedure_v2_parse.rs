@@ -8,9 +8,10 @@ use podway_core::{
     ActionDefinitionV2, ActionOutcomeV2, ActionPlacementV2, AssessmentContractV2,
     AssessmentOutcomeMappingV2, AssessmentTargetV2, CheckResultOutcomeV2,
     DecisionDefinitionInputV2, DecisionDefinitionV2, DecisionOptionV2, DecisionPlacementV2,
-    DecisionRouteEntryV2, DecisionRouteMapV2, DecisionRouteV2, DomainError, EvidenceFromListV2,
-    EvidencePredicateV2, EvidenceReferenceV2, GoalOutcome, GoalTrackingOptIn, GraphNodeId,
-    GraphPlacementV2, ItemCommonV2, ItemConditionV2, ItemId, ItemPredicateOperatorV2,
+    DecisionRouteEntryV2, DecisionRouteMapV2, DecisionRouteV2, DelegationAfterAcceptV1,
+    DelegationBindingRefV1, DelegationDeclarationV1, DelegationRoleRefV1, DomainError,
+    EvidenceFromListV2, EvidencePredicateV2, EvidenceReferenceV2, GoalOutcome, GoalTrackingOptIn,
+    GraphNodeId, GraphPlacementV2, ItemCommonV2, ItemConditionV2, ItemId, ItemPredicateOperatorV2,
     ItemPredicateV2, ItemSpecV2, ManualReworkTargetListV2, NodeDefinitionId, OperationId,
     OptionGuardV2, OptionId, PredicateScalarV2, ProcedureGraphV2, ReasonPolicyV2, Sha256Digest,
     SkipPolicyV2, TransitionEffectV2,
@@ -784,6 +785,12 @@ fn map_placement(wire: GraphPlacementWire) -> Result<GraphPlacementV2, ConfigErr
                 reason: DECISION_SKIP_REASON,
             });
         }
+        if wire.delegation.is_some() {
+            return Err(ConfigError::InvalidValue {
+                field: PLACEMENT_FIELD,
+                reason: "a decision placement does not declare delegation",
+            });
+        }
         if wire.next.is_some() || wire.terminal.is_some() {
             return Err(ConfigError::InvalidValue {
                 field: PLACEMENT_FIELD,
@@ -815,6 +822,21 @@ fn map_placement(wire: GraphPlacementWire) -> Result<GraphPlacementV2, ConfigErr
 
     let outcome = map_action_outcome(wire.next, wire.terminal)?;
     let skip = wire.skip.map(map_skip).transpose()?;
+    if let Some(delegation) = wire.delegation {
+        if skip.is_some() {
+            return Err(ConfigError::InvalidValue {
+                field: PLACEMENT_FIELD,
+                reason: "a delegated action cannot declare skip",
+            });
+        }
+        return Ok(GraphPlacementV2::Action(ActionPlacementV2::delegated(
+            id,
+            definition,
+            evidence_from,
+            map_delegation(delegation)?,
+            outcome,
+        )));
+    }
     Ok(GraphPlacementV2::Action(ActionPlacementV2::new(
         id,
         definition,
@@ -822,6 +844,17 @@ fn map_placement(wire: GraphPlacementWire) -> Result<GraphPlacementV2, ConfigErr
         skip,
         outcome,
     )))
+}
+
+fn map_delegation(wire: DelegationWire) -> Result<DelegationDeclarationV1, ConfigError> {
+    DelegationDeclarationV1::new(
+        DelegationBindingRefV1::new(wire.binding_ref).map_err(map_domain_error)?,
+        DelegationRoleRefV1::new(wire.role_ref).map_err(map_domain_error)?,
+        Sha256Digest::new(wire.role_snapshot_digest).map_err(map_domain_error)?,
+        wire.max_rounds,
+        DelegationAfterAcceptV1::from_str(&wire.after_accept).map_err(map_domain_error)?,
+    )
+    .map_err(map_domain_error)
 }
 
 fn map_action_outcome(

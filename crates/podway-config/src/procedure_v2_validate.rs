@@ -40,6 +40,7 @@ use podway_core::{
 use std::str::FromStr;
 
 use crate::procedure_v2_canonical::canonical_projection;
+use crate::procedure_v2_delegation_package::validate_delegation_package_budget_v1;
 use crate::{CanonicalJsonV1, ConfigError, ParsedNodeDefinition, ParsedProcedureV2};
 
 /// A Procedure v2 model that passed closed semantic validation (section 11.2 closed references),
@@ -82,6 +83,7 @@ pub fn validate_procedure_v2(
     parsed: ParsedProcedureV2,
 ) -> Result<ValidatedProcedureV2, ConfigError> {
     validate_closed_references(&parsed)?;
+    validate_delegation_package_budget_v1(&parsed)?;
     let (canonical_json, digest) = canonical_projection(&parsed)?;
     Ok(ValidatedProcedureV2 {
         parsed,

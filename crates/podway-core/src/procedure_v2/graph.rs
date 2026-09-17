@@ -5,8 +5,8 @@ use std::collections::BTreeSet;
 
 use crate::{DomainError, GraphNodeId, ItemId, NodeDefinitionId, OptionId};
 
-use super::NodeKindV2;
 use super::invalid;
+use super::{DelegationDeclarationV1, NodeKindV2};
 
 const MIN_EVIDENCE_REFERENCES_PER_PLACEMENT: usize = 1;
 const MAX_EVIDENCE_REFERENCES_PER_PLACEMENT: usize = 8;
@@ -279,6 +279,7 @@ pub struct ActionPlacementV2 {
     definition: NodeDefinitionId,
     evidence_from: Option<EvidenceFromListV2>,
     skip: Option<SkipPolicyV2>,
+    delegation: Option<DelegationDeclarationV1>,
     outcome: ActionOutcomeV2,
 }
 
@@ -295,6 +296,24 @@ impl ActionPlacementV2 {
             definition,
             evidence_from,
             skip,
+            delegation: None,
+            outcome,
+        }
+    }
+
+    pub fn delegated(
+        id: GraphNodeId,
+        definition: NodeDefinitionId,
+        evidence_from: Option<EvidenceFromListV2>,
+        declaration: DelegationDeclarationV1,
+        outcome: ActionOutcomeV2,
+    ) -> Self {
+        Self {
+            id,
+            definition,
+            evidence_from,
+            skip: None,
+            delegation: Some(declaration),
             outcome,
         }
     }
@@ -313,6 +332,10 @@ impl ActionPlacementV2 {
 
     pub fn skip(&self) -> Option<SkipPolicyV2> {
         self.skip
+    }
+
+    pub fn delegation(&self) -> Option<&DelegationDeclarationV1> {
+        self.delegation.as_ref()
     }
 
     pub fn outcome(&self) -> &ActionOutcomeV2 {

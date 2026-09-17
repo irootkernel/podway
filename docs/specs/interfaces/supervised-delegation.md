@@ -156,6 +156,17 @@ The closed package uses `podway.delegation-work-package/v1` and contains:
 - declared upstream evidence selectors and their frozen resolution, attempt and
   item identities, exact complete-value digests, and typed size metadata.
 
+Each evidence entry keeps its declared selector and names `resolved`, `skipped`,
+or `unresolved`. Resolved and skipped entries carry the source attempt ID,
+attempt number, and frozen complete-item-set digest; unresolved entries omit
+them. An omitted selector item list means all source
+items, up to the Procedure's 128-item definition limit. Missing selected items
+remain explicit in the package. Skipped and unresolved sources have only missing
+selected items; present items retain their declared item type.
+The goal projection uses the existing 1,000-character statement and up to 16
+criteria with 300-character statements; those limits are part of the static
+package budget.
+
 Do not hash the current session revision, job timing, observation timestamp,
 mutable current output values, or external Run identity into the package.
 Recording the action's output items or replaying a read must not create a new

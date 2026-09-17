@@ -23,7 +23,8 @@ mod embedded_schemas {
 }
 
 const EMBEDDED_SCHEMA_BASE_V2: &str = "https://podway.invalid/schemas/";
-const MAX_DELEGATION_WORK_PACKAGE_BYTES_V1: usize = 950_000;
+const MAX_DELEGATION_WORK_PACKAGE_BYTES_V1: usize =
+    podway_core::MAX_DELEGATION_WORK_PACKAGE_BYTES_V1;
 const MAX_DELEGATION_ACCEPT_INPUT_BYTES_V1: usize = 32_768;
 const MAX_DELEGATION_RECEIPT_BYTES_V1: usize = 45_000;
 const MAX_DELEGATION_PROJECTION_BYTES_V1: usize = 16_384;
@@ -175,7 +176,22 @@ pub fn validate_delegation_document_v1(schema: &str, value: &Value) -> bool {
                                 false
                             } else {
                                 selectors.push(selector);
-                                true
+                                entry
+                                    .get("items")
+                                    .and_then(Value::as_array)
+                                    .is_some_and(|items| {
+                                        let mut ids = Vec::new();
+                                        items.iter().all(|item| {
+                                            item.get("item_id").is_some_and(|id| {
+                                                if ids.contains(&id) {
+                                                    false
+                                                } else {
+                                                    ids.push(id);
+                                                    true
+                                                }
+                                            })
+                                        })
+                                    })
                             }
                         })
                     })

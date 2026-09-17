@@ -346,6 +346,15 @@ pub fn workspace_procedure_snapshot_from_bytes_v2(
             diagnostic_codes: vec!["AUTHORING_SCHEMA_INVALID".to_owned()],
         }
     })?;
+    // Declaration authoring is available before acceptance and persistence are wired. A start
+    // cannot admit a snapshot that the current daemon cannot safely complete.
+    if validated.parsed().graph().placements().iter().any(|placement| {
+        matches!(placement, podway_core::GraphPlacementV2::Action(action) if action.delegation().is_some())
+    }) {
+        return Err(ProcedureV2SourceAdmissionErrorV1::Rejected(
+            ExecutionBoundaryErrorV1::procedure_v2_unsupported(),
+        ));
+    }
     let context = AuthoringContext::new(procedure, source_text, format);
     let diagnostics = vet_procedure_v2(&validated, &context);
     if diagnostics

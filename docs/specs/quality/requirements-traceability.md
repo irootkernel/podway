@@ -29,6 +29,7 @@
 | Public assets and documentation agree | Contract manifest; docs precedence | Contract, quality, documentation, and architecture checks |
 | Delegation leaves the established Direct contract usable at each intermediate commit | ADR-0035; supervised-delegation SDG-010; testing and conformance baseline | `V2SDG-001` direct digest fixture, populated current/inactive Store reopen, shipped preset and result-family known answers; subsequent task gates |
 | Delegation declarations and result generations are reserved as closed contracts while real host mappings and runtime admission remain unavailable | ADR-0035; supervised-delegation SDG-002–009; adapter mapping review | `V2SDG-002` schema and manifest verification, protocol known answers and malformed-input checks, old result codec checks, unavailable-route rejection |
+| Delegated action declarations and immutable work-package identity preserve Direct canonical bytes and reject unsupported placements or oversized projections | ADR-0035; supervised-delegation SDG-002, SDG-004 | `V2SDG-003` YAML/JSON equivalence, declaration bounds, Direct digest fixtures, package digest and frozen-evidence tests, static admission budget checks |
 
 The active roadmap owns completion state. Test success proves only the scope of the
 named check; `make test` is the development gate for the combined revision.

@@ -9,12 +9,14 @@
 //! parsing, cross-reference validation, and canonicalization are owned by later tasks.
 
 mod definitions;
+mod delegation;
 mod goal;
 mod graph;
 mod items;
 mod limits;
 
 pub use definitions::*;
+pub use delegation::*;
 pub use goal::*;
 pub use graph::*;
 pub use items::*;

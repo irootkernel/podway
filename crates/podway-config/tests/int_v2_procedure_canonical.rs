@@ -377,7 +377,7 @@ fn v2sdg001_direct_control_keeps_its_canonical_identity() {
 }
 
 #[test]
-fn v2sdg002_reserved_delegation_declaration_is_not_yet_admitted() {
+fn v2sdg003_delegation_declaration_is_canonical_and_opt_in() {
     let source = String::from_utf8(fixture(
         "tests/fixtures/v2/compatibility/supervised-delegation-direct-control.yaml",
     ))
@@ -395,7 +395,73 @@ fn v2sdg002_reserved_delegation_declaration_is_not_yet_admitted() {
         ),
     );
     assert_ne!(delegated, source);
-    assert!(admit(&delegated, ProcedureDocumentFormat::Yaml).is_err());
+    let direct = yaml(&source);
+    let from_yaml = yaml(&delegated);
+    let delegated_json =
+        serde_json::to_string(&serde_yaml::from_str::<Value>(&delegated).unwrap()).unwrap();
+    let from_json = json(&delegated_json);
+    assert_eq!(from_yaml.digest(), from_json.digest());
+    assert_eq!(from_yaml.canonical_json(), from_json.canonical_json());
+    assert_ne!(direct.digest(), from_yaml.digest());
+    assert!(
+        from_yaml
+            .canonical_json()
+            .as_str()
+            .contains("\"delegation\"")
+    );
+
+    let changed = delegated.replace("max_rounds: 3", "max_rounds: 4");
+    assert_ne!(yaml(&changed).digest(), from_yaml.digest());
+    let release = delegated.replace("after_accept: retain", "after_accept: release");
+    assert_ne!(yaml(&release).digest(), from_yaml.digest());
+    assert!(
+        yaml(&delegated.replace("max_rounds: 3", "max_rounds: 32"))
+            .canonical_json()
+            .as_str()
+            .contains("\"max_rounds\":32")
+    );
+
+    for invalid in [
+        source.replace(
+            "      terminal: true\n",
+            "      terminal: true\n      delegation: null\n",
+        ),
+        delegated.replace("binding_ref: local-specialist", "binding_ref: Bad_Binding"),
+        delegated.replace(
+            "binding_ref: local-specialist",
+            &format!("binding_ref: {}", "a".repeat(65)),
+        ),
+        delegated.replace("role_ref: reviewer", "role_ref: null"),
+        delegated.replace("role_ref: reviewer", "role_ref: \"\""),
+        delegated.replace("role_ref: reviewer", "role_ref: \"bad\\u007Frole\""),
+        delegated.replace("role_ref: reviewer", "role_ref: extra\n        command: run"),
+        delegated.replace("role_ref: reviewer", &format!("role_ref: {}", "界".repeat(86))),
+        delegated.replace("max_rounds: 3", "max_rounds: 0"),
+        delegated.replace("max_rounds: 3", "max_rounds: 33"),
+        delegated.replace("after_accept: retain", "after_accept: continue"),
+        delegated.replace("      terminal: true", "      terminal: true\n      skip:\n        allowed: true\n        reason_required: false"),
+    ] {
+        assert!(admit(&invalid, ProcedureDocumentFormat::Yaml).is_err());
+    }
+
+    let decision_source = String::from_utf8(fixture(
+        "tests/fixtures/v2/procedures/equivalent-procedure.yaml",
+    ))
+    .unwrap();
+    let delegated_decision = decision_source.replace(
+        "      routes:\n",
+        concat!(
+            "      delegation:\n",
+            "        binding_ref: local-specialist\n",
+            "        role_ref: reviewer\n",
+            "        role_snapshot_digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+            "        max_rounds: 3\n",
+            "        after_accept: retain\n",
+            "      routes:\n",
+        ),
+    );
+    assert_ne!(delegated_decision, decision_source);
+    assert!(admit(&delegated_decision, ProcedureDocumentFormat::Yaml).is_err());
 }
 
 #[test]

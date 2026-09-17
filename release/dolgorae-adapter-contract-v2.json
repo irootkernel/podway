@@ -1306,7 +1306,7 @@
       {
         "id": "urn:podway:schema:delegation-components:v1",
         "path": "schemas/delegation-components-v1.schema.json",
-        "sha256": "sha256:010b93ef69b319369a3ee0b11edce44002e465f36f21d9b4a11e61de0daa6c5e"
+        "sha256": "sha256:9ff0effa11b4539489d62af09dc46ac6ab115a36e74049afa26d5fb3b2f5cc4a"
       },
       {
         "id": "urn:podway:schema:delegation-error-details:v1",

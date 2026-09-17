@@ -341,12 +341,33 @@ pub(crate) struct GraphPlacementWire {
     pub(crate) evidence_from: Option<Vec<EvidenceReferenceWire>>,
     #[serde(default)]
     pub(crate) skip: Option<SkipPolicyWire>,
+    #[serde(default, deserialize_with = "deserialize_present_delegation")]
+    pub(crate) delegation: Option<DelegationWire>,
     #[serde(default)]
     pub(crate) next: Option<String>,
     #[serde(default)]
     pub(crate) terminal: Option<bool>,
     #[serde(default)]
     pub(crate) routes: Option<OrderedMap<String, RouteWire>>,
+}
+
+fn deserialize_present_delegation<'de, D>(
+    deserializer: D,
+) -> Result<Option<DelegationWire>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    DelegationWire::deserialize(deserializer).map(Some)
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DelegationWire {
+    pub(crate) binding_ref: String,
+    pub(crate) role_ref: String,
+    pub(crate) role_snapshot_digest: String,
+    pub(crate) max_rounds: u8,
+    pub(crate) after_accept: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]

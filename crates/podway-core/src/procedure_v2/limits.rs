@@ -44,6 +44,7 @@ pub const MAX_ATTEMPT_CONTENT_SCALARS_V2: u64 = 16_777_216;
 
 /// The maximum items one node definition may declare and one attempt may record.
 pub const MAX_ITEMS_PER_DEFINITION_V2: usize = 128;
+pub const MAX_DELEGATION_WORK_PACKAGE_BYTES_V1: usize = 950_000;
 
 /// The bytes one Unicode scalar may occupy once JSON-escaped in the worst case.
 ///

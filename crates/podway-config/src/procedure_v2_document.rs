@@ -478,6 +478,19 @@ fn placement_value(placement: &GraphPlacementV2) -> AuthoringValue {
                     "evidence_from",
                     action.evidence_from().map(evidence_from_value),
                 );
+            if let Some(delegation) = action.delegation() {
+                let mut declaration = Entries::new();
+                declaration
+                    .text("binding_ref", delegation.binding_ref().as_str())
+                    .text("role_ref", delegation.role_ref().as_str())
+                    .text(
+                        "role_snapshot_digest",
+                        delegation.role_snapshot_digest().as_str(),
+                    )
+                    .integer("max_rounds", delegation.max_rounds())
+                    .text("after_accept", delegation.after_accept().as_str());
+                value.value("delegation", declaration.finish());
+            }
             if let Some(skip) = action.skip() {
                 let mut policy = Entries::new();
                 // A declared skip policy always carries `allowed: true`; `false` is rejected.

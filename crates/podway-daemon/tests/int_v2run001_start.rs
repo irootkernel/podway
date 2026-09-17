@@ -8,9 +8,9 @@ use podway_core::{
     Sha256Digest, UnixMillis, WorkspaceId,
 };
 use podway_daemon::execution::{
-    ProcedureProviderV1, ProcedureV2SourceAdmissionErrorV1, ProcedureV2StartPreparationErrorV1,
-    prepare_custom_procedure_v2_start, prepare_preset_procedure_v2_start,
-    workspace_procedure_snapshot_from_bytes_v2,
+    ExecutionBoundaryErrorV1, ProcedureProviderV1, ProcedureV2SourceAdmissionErrorV1,
+    ProcedureV2StartPreparationErrorV1, prepare_custom_procedure_v2_start,
+    prepare_preset_procedure_v2_start, workspace_procedure_snapshot_from_bytes_v2,
 };
 use podway_store::{
     DurableWorktreeIdentityV1, ProcedureSnapshotV2, ValidatedWorkspaceRootV1, WorkspaceBindingV1,
@@ -20,6 +20,9 @@ const EQUIVALENT_YAML: &[u8] =
     include_bytes!("../../../tests/fixtures/v2/procedures/equivalent-procedure.yaml");
 const EQUIVALENT_JSON: &[u8] =
     include_bytes!("../../../tests/fixtures/v2/procedures/equivalent-procedure.json");
+const DIRECT_CONTROL_YAML: &str = include_str!(
+    "../../../tests/fixtures/v2/compatibility/supervised-delegation-direct-control.yaml"
+);
 const WORKSPACE_ID: &str = "00000000-0000-4000-8000-000000000001";
 const SESSION_ID: &str = "00000000-0000-4000-8000-000000000002";
 const ATTEMPT_ID: &str = "00000000-0000-4000-8000-000000000003";
@@ -221,6 +224,36 @@ name: Future
         panic!("Procedure v2 fixture was not dispatched as v2")
     };
     assert!(validate_procedure_v2(parsed).is_ok());
+}
+
+#[test]
+fn v2sdg003_delegated_authoring_is_valid_but_start_admission_remains_closed() {
+    let delegated = DIRECT_CONTROL_YAML.replace(
+        "      terminal: true\n",
+        concat!(
+            "      terminal: true\n",
+            "      delegation:\n",
+            "        binding_ref: local-specialist\n",
+            "        role_ref: reviewer\n",
+            "        role_snapshot_digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+            "        max_rounds: 3\n",
+            "        after_accept: retain\n",
+        ),
+    );
+    let ParsedProcedure::V2(parsed) =
+        parse_procedure_document(delegated.as_bytes(), ProcedureDocumentFormat::Yaml).unwrap();
+    assert!(validate_procedure_v2(parsed).is_ok());
+    assert!(matches!(
+        workspace_procedure_snapshot_from_bytes_v2(
+            "workflow.yaml",
+            delegated.as_bytes(),
+            ProcedureSnapshotId::new(SNAPSHOT_ID).unwrap(),
+            UnixMillis::new(1),
+        ),
+        Err(ProcedureV2SourceAdmissionErrorV1::Rejected(
+            ExecutionBoundaryErrorV1::ProcedureV2Unsupported
+        ))
+    ));
 }
 
 #[test]

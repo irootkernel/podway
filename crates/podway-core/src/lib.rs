@@ -333,6 +333,7 @@ procedure_identifier_newtype!(GraphNodeId);
 procedure_identifier_newtype!(OptionId);
 procedure_identifier_newtype!(CriterionId);
 procedure_identifier_newtype!(OperationId);
+procedure_identifier_newtype!(DelegationBindingRefV1);
 
 /// One bounded daemon-runtime namespace key.
 ///
