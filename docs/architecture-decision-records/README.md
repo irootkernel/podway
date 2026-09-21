@@ -49,3 +49,4 @@ narrative architecture and specifications when sources conflict.
 - [ADR-0033](0033-name-unsatisfied-check-result-reasons.md): named unsatisfied check-result reasons
 - [ADR-0034](0034-unbounded-inactive-session-retention.md): remove fail-closed inactive-session retention
 - [ADR-0035](0035-host-neutral-supervised-delegation.md): planned host-neutral delegation foundation with explicit opt-in and Direct-work continuity
+- [ADR-0036](0036-use-canonical-git-paths-for-workspace-identity.md): canonical-path workspace identity with schema-v13 migration and reset recovery

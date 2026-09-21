@@ -1120,9 +1120,10 @@ fn unavailable_reason_from_runtime_error(
         | WorkspaceRuntimeErrorV1::RuntimePathsUnsupportedPlatform => {
             WorkspaceRecoveryUnavailableReasonV1::RegisteredRootInvalid
         }
-        WorkspaceRuntimeErrorV1::Registry(RegistryErrorV1::WorkspaceRootOccupied { .. }) => {
-            WorkspaceRecoveryUnavailableReasonV1::WorkspaceIdentityConflict
-        }
+        WorkspaceRuntimeErrorV1::Registry(
+            RegistryErrorV1::WorkspaceRootOccupied { .. }
+            | RegistryErrorV1::WorkspaceRootConflict { .. },
+        ) => WorkspaceRecoveryUnavailableReasonV1::WorkspaceIdentityConflict,
         WorkspaceRuntimeErrorV1::Layout(_)
         | WorkspaceRuntimeErrorV1::Registry(_)
         | WorkspaceRuntimeErrorV1::Scheduler(_) => {

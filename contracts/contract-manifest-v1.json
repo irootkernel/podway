@@ -38,7 +38,7 @@
     {
       "kind": "catalog",
       "path": "release/dolgorae-adapter-contract-v2.json",
-      "sha256": "sha256:54b605bfb8a2076a794e341840562c1f26e478d5b163c975ad3c6be0fc53373a"
+      "sha256": "sha256:840885b1d8666b4e514e418adbb4204075fcfff1c16aed77b9cf00e08d7c6667"
     },
     {
       "kind": "schema",
@@ -637,6 +637,11 @@
     },
     {
       "kind": "schema",
+      "path": "schemas/workspace-mode-switch-marker-v2.schema.json",
+      "sha256": "sha256:783317600a146df823ab4eda3393bc71af50d08a0840152c6b05b652896d9375"
+    },
+    {
+      "kind": "schema",
       "path": "schemas/workspace-recovery-details-v1.schema.json",
       "sha256": "sha256:d5ac050ba137f9231e0d6e3c79c7d6fda763cecd490c5d9ee31c39defc49a052"
     },
@@ -791,7 +796,7 @@
       "sha256": "sha256:7de5f4f024eb795ae7fb73594d4847b833016bea6be9f2737c567b524ae5466e"
     }
   ],
-  "digest": "sha256:e6399b5a7c8399fd78d775588c12d380e607127de321824d9abc56ccff96ca12",
+  "digest": "sha256:9e4357e41fee2c4c4818bf6847b65fed4914b2b98dc4121bbbfea7cb2ef8263f",
   "product": "podway",
   "product_version": "0.2.10",
   "schema_version": "podway.contract-manifest/v1",

@@ -88,21 +88,19 @@ impl WorkspaceLayoutInitializerV1 {
     ) -> Result<WorkspaceLayoutReportV1, WorkspaceLayoutErrorV1> {
         let revalidated = retry_initial_revalidation(|| self.revalidate(worktree))?;
         if !same_worktree_identity(worktree, &revalidated) {
-            return Err(initialization_error(GitResolverErrorV1::Invariant {
-                problem: GitInvariantViolationV1::MetadataChangedDuringWorkspaceLayout,
-            }));
-        }
-        let root_fingerprint = revalidated
-            .identity()
-            .root_directory_fingerprint()
-            .ok_or_else(|| {
-                initialization_error(GitResolverErrorV1::Invariant {
+            return Err(WorkspaceLayoutErrorV1::Revalidation {
+                source: GitResolverErrorV1::Invariant {
                     problem: GitInvariantViolationV1::MetadataChangedDuringWorkspaceLayout,
-                })
-            })?;
+                },
+            });
+        }
+        #[cfg(test)]
+        synchronize_post_revalidation_root_replacement_for_test(
+            revalidated.roots().worktree_root(),
+        );
         let root = native::open_workspace_layout_root(revalidated.roots().worktree_root())
             .map_err(initialization_error)?;
-        native::validate_workspace_layout_root(&root, root_fingerprint, revalidated.kind())
+        native::validate_workspace_layout_root(&root, &revalidated)
             .map_err(initialization_error)?;
         let snapshot = match default_config_bytes {
             Some(default_config_bytes) => {
@@ -150,6 +148,39 @@ impl WorkspaceLayoutInitializerV1 {
     }
 }
 
+#[cfg(test)]
+static POST_REVALIDATION_ROOT_REPLACEMENT_BARRIER: std::sync::Mutex<
+    Option<(crate::LosslessPathV1, std::sync::Arc<std::sync::Barrier>)>,
+> = std::sync::Mutex::new(None);
+
+#[cfg(test)]
+fn install_post_revalidation_root_replacement_hook_for_test(
+    root: crate::LosslessPathV1,
+    barrier: std::sync::Arc<std::sync::Barrier>,
+) {
+    *POST_REVALIDATION_ROOT_REPLACEMENT_BARRIER
+        .lock()
+        .expect("post-revalidation layout hook lock") = Some((root, barrier));
+}
+
+#[cfg(test)]
+fn synchronize_post_revalidation_root_replacement_for_test(root: &crate::LosslessPathV1) {
+    let barrier = {
+        let mut hook = POST_REVALIDATION_ROOT_REPLACEMENT_BARRIER
+            .lock()
+            .expect("post-revalidation layout hook lock");
+        if hook.as_ref().is_some_and(|(target, _)| target == root) {
+            hook.take().map(|(_, barrier)| barrier)
+        } else {
+            None
+        }
+    };
+    if let Some(barrier) = barrier {
+        barrier.wait();
+        barrier.wait();
+    }
+}
+
 fn retry_initial_revalidation(
     mut revalidate: impl FnMut() -> Result<ValidatedWorktreeV1, WorkspaceLayoutErrorV1>,
 ) -> Result<ValidatedWorktreeV1, WorkspaceLayoutErrorV1> {
@@ -177,6 +208,7 @@ fn status(created: bool) -> WorkspaceLayoutElementStatusV1 {
 
 fn same_worktree_identity(expected: &ValidatedWorktreeV1, actual: &ValidatedWorktreeV1) -> bool {
     expected.identity() == actual.identity()
+        && expected.same_transient_object_evidence(actual)
         && expected.roots() == actual.roots()
         && expected.kind() == actual.kind()
         && actual.containment().workspace_root() == actual.roots().worktree_root()
@@ -323,6 +355,51 @@ mod tests {
             b"opaque default bytes"
         );
     }
+
+    #[test]
+    fn root_replacement_after_revalidation_is_rejected_before_layout_mutation() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("worktree");
+        create_main(&root);
+        let root = fs::canonicalize(&root).expect("canonical worktree");
+        let worktree = resolve(&root);
+        let barrier = Arc::new(Barrier::new(2));
+        install_post_revalidation_root_replacement_hook_for_test(
+            worktree.roots().worktree_root().clone(),
+            Arc::clone(&barrier),
+        );
+
+        let initializer_worktree = worktree.clone();
+        let initializer = thread::spawn(move || {
+            WorkspaceLayoutInitializerV1::new()
+                .initialize_with_config(&initializer_worktree, b"opaque default bytes")
+        });
+
+        barrier.wait();
+        let retired = temporary.path().join("retired-worktree");
+        fs::rename(&root, &retired).expect("retire original worktree");
+        create_main(&root);
+        barrier.wait();
+
+        let result = initializer.join().expect("initializer thread");
+        assert!(matches!(
+            result,
+            Err(WorkspaceLayoutErrorV1::Initialization {
+                source: GitResolverErrorV1::Invariant {
+                    problem: GitInvariantViolationV1::MetadataChangedDuringWorkspaceLayout
+                }
+            })
+        ));
+        assert!(
+            !root.join(".podway").exists(),
+            "replacement worktree must not receive layout mutation"
+        );
+        assert!(
+            !retired.join(".podway").exists(),
+            "initializer must fail before mutating the retired descriptor"
+        );
+    }
+
     #[test]
     fn config_name_replacement_after_open_is_rejected() {
         let temporary = tempfile::tempdir().expect("temporary directory");

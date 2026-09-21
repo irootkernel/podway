@@ -2,19 +2,40 @@
 
 use super::{int_v2run003_runtime as runtime, support_phase4_workspace};
 
-use std::{fs, os::unix::fs::PermissionsExt, path::Path, sync::Arc};
+use std::{
+    env, fs,
+    os::unix::{ffi::OsStrExt, fs::MetadataExt, fs::PermissionsExt, process::ExitStatusExt},
+    path::{Path, PathBuf},
+    process::{Command, Output},
+    sync::Arc,
+};
 
 use podway_core::{
     DomainCommand, JobId, Revision, Sha256Digest, UnixMillis, WorkspaceId, canonicalize_json_v1,
 };
-use podway_daemon::{execution::ResetStoreInspectionV1, workspace::ResetMarkerV1};
-use podway_protocol::{PreconditionsV1, RequestIdV1, ResponseEnvelopeV2, WorktreeSelectorWireV1};
+use podway_daemon::{
+    execution::ResetStoreInspectionV1, runtime_workspace::ResetAllCrashBoundaryV1,
+    workspace::ResetMarkerV1,
+};
+use podway_protocol::{
+    PreconditionsV1, RequestIdV1, ResponseEnvelopeV2, WorktreeSelectorWireV1,
+    canonical_reset_all_identity_v1,
+};
 use podway_store::{
     AdmissionSessionIdentityV1, AdmitRequestV1, CancelOutcomeV1, CanonicalExecutionJsonV1,
     CanonicalRequestDigestV1, IdempotencyKeyV1, JobIdV1, RevisionAttemptItemPreconditionsV1,
     SqliteStoreOptionsV1, SqliteStoreV1, StoreContractV1, StoreReadContractV1,
+    ValidatedWorkspaceRootV1,
 };
 use serde_json::{Map, json};
+use sha2::{Digest as _, Sha256};
+
+const RESET_CRASH_CHILD_TEST_NAME: &str =
+    "int_v2_only_reset_recovery::missing_registry_reset_crash_child";
+const RESET_CRASH_WORKTREE_ENV: &str = "PODWAY_RESET_CRASH_WORKTREE";
+const RESET_CRASH_SERVICE_ROOT_ENV: &str = "PODWAY_RESET_CRASH_SERVICE_ROOT";
+const RESET_CRASH_WORKSPACE_UUID_ENV: &str = "PODWAY_RESET_CRASH_WORKSPACE_UUID";
+const RESET_CRASH_BOUNDARY_ENV: &str = "PODWAY_RESET_CRASH_BOUNDARY";
 
 fn selector_with_workspace(path: &Path, workspace: WorkspaceId) -> WorktreeSelectorWireV1 {
     let canonical = fs::canonicalize(path).unwrap();
@@ -24,6 +45,109 @@ fn selector_with_workspace(path: &Path, workspace: WorkspaceId) -> WorktreeSelec
         Some(workspace),
     )
     .unwrap()
+}
+
+fn reset_request(
+    path: &Path,
+    workspace: WorkspaceId,
+    request_number: u64,
+) -> (
+    podway_protocol::RequestEnvelopeV1,
+    podway_daemon::server::DaemonRequestV1,
+) {
+    runtime::request(
+        request_number,
+        "workspace.reset_all",
+        &selector_with_workspace(path, workspace.clone()),
+        json!({
+            "confirmed": true,
+            "expected_workspace_uuid": workspace,
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+        "missing-registry-reset-crash",
+        PreconditionsV1::default(),
+    )
+}
+
+fn reset_crash_boundary_name(boundary: ResetAllCrashBoundaryV1) -> &'static str {
+    match boundary {
+        ResetAllCrashBoundaryV1::MarkerCreated => "marker-created",
+        ResetAllCrashBoundaryV1::OldDatabaseDeleted => "old-database-deleted",
+        ResetAllCrashBoundaryV1::NewTargetDatabaseCreated => "new-target-database-created",
+        ResetAllCrashBoundaryV1::RegistryReplaced => "registry-replaced",
+        ResetAllCrashBoundaryV1::TargetActivated => "target-activated",
+        ResetAllCrashBoundaryV1::MarkerRemoved => "marker-removed",
+    }
+}
+
+fn parse_reset_crash_boundary(value: &str) -> ResetAllCrashBoundaryV1 {
+    match value {
+        "marker-created" => ResetAllCrashBoundaryV1::MarkerCreated,
+        "old-database-deleted" => ResetAllCrashBoundaryV1::OldDatabaseDeleted,
+        "new-target-database-created" => ResetAllCrashBoundaryV1::NewTargetDatabaseCreated,
+        "registry-replaced" => ResetAllCrashBoundaryV1::RegistryReplaced,
+        "target-activated" => ResetAllCrashBoundaryV1::TargetActivated,
+        "marker-removed" => ResetAllCrashBoundaryV1::MarkerRemoved,
+        other => panic!("unknown reset crash boundary {other}"),
+    }
+}
+
+fn run_reset_crash_child(
+    worktree: &Path,
+    service_root: &Path,
+    workspace: &WorkspaceId,
+    boundary: ResetAllCrashBoundaryV1,
+) -> Output {
+    Command::new(env::current_exe().unwrap())
+        .arg("--exact")
+        .arg(RESET_CRASH_CHILD_TEST_NAME)
+        .arg("--nocapture")
+        .env(RESET_CRASH_WORKTREE_ENV, worktree)
+        .env(RESET_CRASH_SERVICE_ROOT_ENV, service_root)
+        .env(RESET_CRASH_WORKSPACE_UUID_ENV, workspace.as_str())
+        .env(
+            RESET_CRASH_BOUNDARY_ENV,
+            reset_crash_boundary_name(boundary),
+        )
+        .output()
+        .expect("reset crash child must start")
+}
+
+fn install_v12_reset_marker(worktree: &Path, old_workspace: &WorkspaceId) -> WorkspaceId {
+    let database_path = worktree.join(".podway/runtime/state.sqlite3");
+    podway_store::test_support::downgrade_to_schema_v12_identity(&database_path).unwrap();
+    let legacy = SqliteStoreV1::inspect_reset_workspace_binding(
+        &database_path,
+        &SqliteStoreOptionsV1::new(8).unwrap(),
+    )
+    .unwrap()
+    .unwrap();
+    let request = reset_request(worktree, old_workspace.clone(), 95_021);
+    let canonical = canonical_reset_all_identity_v1(
+        request.1.legacy().unwrap(),
+        legacy.identity().common_dir_identity(),
+        legacy.identity().worktree_admin_identity(),
+    )
+    .unwrap();
+    let digest =
+        CanonicalRequestDigestV1::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes())))
+            .unwrap();
+    let target_workspace = WorkspaceId::new("00000000-0000-4000-8000-000000009521").unwrap();
+    let marker = ResetMarkerV1::new_with_response_request_id(
+        JobIdV1::new("00000000-0000-4000-8000-000000009520").unwrap(),
+        IdempotencyKeyV1::new("missing-registry-reset-crash").unwrap(),
+        digest.clone(),
+        old_workspace.clone(),
+        target_workspace.clone(),
+        UnixMillis::new(1_700_000_000_123),
+        RequestIdV1::new("00000000-0000-4000-8000-000000009522").unwrap(),
+    );
+    let marker_path = worktree.join(".podway/runtime/reset.marker");
+    fs::write(&marker_path, marker.canonical_bytes().unwrap()).unwrap();
+    fs::set_permissions(&marker_path, fs::Permissions::from_mode(0o600)).unwrap();
+    target_workspace
 }
 
 #[test]
@@ -76,6 +200,316 @@ fn workspace_repair_restores_a_missing_global_registry_entry() {
             .as_os_str()
             .as_encoded_bytes()
     );
+}
+
+#[test]
+fn existing_v12_workspace_migrates_from_filesystem_to_path_identity() {
+    let fixture = support_phase4_workspace::git_worktrees();
+    runtime::make_runtime_private(fixture.main());
+    let manager = Arc::new(runtime::manager(fixture.temporary_path()));
+    let initialized = manager
+        .bootstrap(
+            support_phase4_workspace::selector(fixture.main()),
+            runtime::observation(),
+        )
+        .unwrap();
+    let workspace_uuid = initialized
+        .context_snapshot()
+        .binding()
+        .identity()
+        .workspace_uuid()
+        .clone();
+    let database_path = fixture.main().join(".podway/runtime/state.sqlite3");
+    drop(initialized);
+    drop(manager);
+
+    podway_store::test_support::downgrade_to_schema_v12_identity(&database_path).unwrap();
+
+    let manager = runtime::manager(fixture.temporary_path());
+    let resolved = manager
+        .resolve_existing(
+            support_phase4_workspace::selector(fixture.main()),
+            Some(&workspace_uuid),
+            runtime::observation(),
+        )
+        .expect("v12 identity must migrate at the same canonical worktree root");
+    assert_eq!(
+        resolved
+            .context_snapshot()
+            .binding()
+            .identity()
+            .workspace_uuid(),
+        &workspace_uuid
+    );
+    drop(resolved);
+
+    let binding = SqliteStoreV1::inspect_workspace_binding(
+        database_path,
+        &SqliteStoreOptionsV1::new(8).unwrap(),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(binding.schema_version(), 13);
+}
+
+#[test]
+fn confirmed_reset_all_recovers_a_store_when_the_registry_entry_is_missing() {
+    let fixture = support_phase4_workspace::git_worktrees();
+    runtime::make_runtime_private(fixture.main());
+    let manager = Arc::new(runtime::manager(fixture.temporary_path()));
+    let initialized = manager
+        .bootstrap(
+            support_phase4_workspace::selector(fixture.main()),
+            runtime::observation(),
+        )
+        .unwrap();
+    let old_workspace = initialized
+        .context_snapshot()
+        .binding()
+        .identity()
+        .workspace_uuid()
+        .clone();
+    let registry_path = manager.registry().registry_path().to_path_buf();
+    drop(initialized);
+    fs::remove_file(&registry_path).unwrap();
+
+    let dispatcher = runtime::dispatcher(Arc::clone(&manager), "reset-missing-registry");
+    let reset = runtime::request(
+        95_010,
+        "workspace.reset_all",
+        &selector_with_workspace(fixture.main(), old_workspace.clone()),
+        json!({
+            "confirmed": true,
+            "expected_workspace_uuid": old_workspace,
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+        "reset-missing-registry-confirmed",
+        PreconditionsV1::default(),
+    );
+    let response = runtime::dispatch(&dispatcher, &reset);
+    let ResponseEnvelopeV2::OutputV2(output) = response else {
+        panic!("confirmed reset-all must recover a missing registry entry: {response:?}");
+    };
+    let new_workspace = output.workspace().unwrap().uuid().clone();
+    assert_ne!(new_workspace, old_workspace);
+    let registry = manager.registry().load().unwrap();
+    assert!(registry.lookup(&old_workspace).is_none());
+    assert_eq!(
+        registry
+            .lookup(&new_workspace)
+            .expect("the reset target must be registered")
+            .last_known_root()
+            .unix_bytes(),
+        fs::canonicalize(fixture.main())
+            .unwrap()
+            .as_os_str()
+            .as_encoded_bytes()
+    );
+}
+
+#[test]
+fn missing_registry_reset_crash_child() {
+    let Some(worktree) = env::var_os(RESET_CRASH_WORKTREE_ENV) else {
+        return;
+    };
+    let service_root = PathBuf::from(env::var_os(RESET_CRASH_SERVICE_ROOT_ENV).unwrap());
+    let workspace = WorkspaceId::new(env::var(RESET_CRASH_WORKSPACE_UUID_ENV).unwrap()).unwrap();
+    let boundary = parse_reset_crash_boundary(&env::var(RESET_CRASH_BOUNDARY_ENV).unwrap());
+    let manager = Arc::new(runtime::manager_with_reset_crash_boundary(
+        &service_root,
+        boundary,
+    ));
+    let dispatcher = runtime::dispatcher(manager, "missing-registry-reset-crash-child");
+    let request = reset_request(Path::new(&worktree), workspace, 95_021);
+    let response = runtime::dispatch(&dispatcher, &request);
+    panic!("configured reset crash boundary returned without aborting: {response:?}");
+}
+
+#[test]
+fn missing_registry_reset_crash_boundaries_converge_on_cold_replay() {
+    for boundary in [
+        ResetAllCrashBoundaryV1::MarkerCreated,
+        ResetAllCrashBoundaryV1::OldDatabaseDeleted,
+        ResetAllCrashBoundaryV1::NewTargetDatabaseCreated,
+        ResetAllCrashBoundaryV1::RegistryReplaced,
+        ResetAllCrashBoundaryV1::TargetActivated,
+        ResetAllCrashBoundaryV1::MarkerRemoved,
+    ] {
+        let fixture = support_phase4_workspace::git_worktrees();
+        runtime::make_runtime_private(fixture.main());
+        let manager = runtime::manager(fixture.temporary_path());
+        let initialized = manager
+            .bootstrap(
+                support_phase4_workspace::selector(fixture.main()),
+                runtime::observation(),
+            )
+            .unwrap();
+        let old_workspace = initialized
+            .context_snapshot()
+            .binding()
+            .identity()
+            .workspace_uuid()
+            .clone();
+        let registry_path = manager.registry().registry_path().to_path_buf();
+        drop(initialized);
+        drop(manager);
+        fs::remove_file(&registry_path).unwrap();
+
+        let output = run_reset_crash_child(
+            fixture.main(),
+            fixture.temporary_path(),
+            &old_workspace,
+            boundary,
+        );
+        assert_eq!(
+            output.status.signal(),
+            Some(6),
+            "{} child must abort: stdout={} stderr={}",
+            reset_crash_boundary_name(boundary),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+
+        let marker_path = fixture.main().join(".podway/runtime/reset.marker");
+        let marker = fs::read(&marker_path)
+            .ok()
+            .map(|bytes| ResetMarkerV1::decode_canonical(&bytes).unwrap());
+        if let Some(marker) = marker.as_ref() {
+            assert_eq!(marker.previous_workspace_uuid(), &old_workspace);
+            assert_ne!(marker.target_workspace_uuid(), &old_workspace);
+        }
+        let database_path = fixture.main().join(".podway/runtime/state.sqlite3");
+        let target_workspace = match boundary {
+            ResetAllCrashBoundaryV1::MarkerCreated => {
+                let binding = SqliteStoreV1::inspect_reset_workspace_binding(
+                    &database_path,
+                    &SqliteStoreOptionsV1::new(8).unwrap(),
+                )
+                .unwrap()
+                .unwrap();
+                assert_eq!(binding.identity().workspace_uuid(), &old_workspace);
+                marker.as_ref().unwrap().target_workspace_uuid().clone()
+            }
+            ResetAllCrashBoundaryV1::OldDatabaseDeleted => {
+                assert!(!database_path.exists());
+                marker.as_ref().unwrap().target_workspace_uuid().clone()
+            }
+            ResetAllCrashBoundaryV1::NewTargetDatabaseCreated
+            | ResetAllCrashBoundaryV1::RegistryReplaced
+            | ResetAllCrashBoundaryV1::TargetActivated
+            | ResetAllCrashBoundaryV1::MarkerRemoved => {
+                let binding = SqliteStoreV1::inspect_workspace_binding(
+                    &database_path,
+                    &SqliteStoreOptionsV1::new(8).unwrap(),
+                )
+                .unwrap()
+                .unwrap();
+                if let Some(marker) = marker.as_ref() {
+                    assert_eq!(
+                        binding.identity().workspace_uuid(),
+                        marker.target_workspace_uuid()
+                    );
+                }
+                binding.identity().workspace_uuid().clone()
+            }
+        };
+
+        if boundary == ResetAllCrashBoundaryV1::MarkerRemoved {
+            assert!(!marker_path.exists());
+        } else {
+            assert!(marker_path.exists());
+        }
+
+        let recovery_manager = Arc::new(runtime::manager(fixture.temporary_path()));
+        let dispatcher = runtime::dispatcher(
+            Arc::clone(&recovery_manager),
+            "missing-registry-reset-recovery",
+        );
+        let recovered = runtime::dispatch(
+            &dispatcher,
+            &reset_request(fixture.main(), old_workspace.clone(), 95_021),
+        );
+        let ResponseEnvelopeV2::OutputV2(output) = recovered else {
+            panic!("reset crash replay must converge: {recovered:?}");
+        };
+        let new_workspace = output.workspace().unwrap().uuid();
+        assert_eq!(new_workspace, &target_workspace);
+        assert!(!marker_path.exists());
+        let registry = recovery_manager.registry().load().unwrap();
+        assert!(registry.lookup(&old_workspace).is_none());
+        assert!(registry.lookup(new_workspace).is_some());
+    }
+}
+
+#[test]
+fn v12_reset_marker_and_completed_receipt_replay_across_path_identity_migration() {
+    for crash_boundary in [
+        None,
+        Some(ResetAllCrashBoundaryV1::OldDatabaseDeleted),
+        Some(ResetAllCrashBoundaryV1::NewTargetDatabaseCreated),
+        Some(ResetAllCrashBoundaryV1::RegistryReplaced),
+    ] {
+        let fixture = support_phase4_workspace::git_worktrees();
+        runtime::make_runtime_private(fixture.main());
+        let manager = runtime::manager(fixture.temporary_path());
+        let initialized = manager
+            .bootstrap(
+                support_phase4_workspace::selector(fixture.main()),
+                runtime::observation(),
+            )
+            .unwrap();
+        let old_workspace = initialized
+            .context_snapshot()
+            .binding()
+            .identity()
+            .workspace_uuid()
+            .clone();
+        drop(initialized);
+        drop(manager);
+
+        let target_workspace = install_v12_reset_marker(fixture.main(), &old_workspace);
+        if let Some(boundary) = crash_boundary {
+            let output = run_reset_crash_child(
+                fixture.main(),
+                fixture.temporary_path(),
+                &old_workspace,
+                boundary,
+            );
+            assert_eq!(
+                output.status.signal(),
+                Some(6),
+                "{} child must abort: stdout={} stderr={}",
+                reset_crash_boundary_name(boundary),
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+        }
+
+        let recovery_manager = Arc::new(runtime::manager(fixture.temporary_path()));
+        let dispatcher =
+            runtime::dispatcher(Arc::clone(&recovery_manager), "v12-reset-marker-recovery");
+        let request = reset_request(fixture.main(), old_workspace.clone(), 95_021);
+        let recovered = runtime::dispatch_after_cold_reopen(&dispatcher, &request);
+        let ResponseEnvelopeV2::OutputV2(output) = recovered else {
+            panic!(
+                "v12 reset marker must replay after migration at {crash_boundary:?}: {recovered:?}"
+            );
+        };
+        assert_eq!(output.workspace().unwrap().uuid(), &target_workspace);
+        assert!(!fixture.main().join(".podway/runtime/reset.marker").exists());
+
+        drop(dispatcher);
+        drop(recovery_manager);
+        let replay_manager = Arc::new(runtime::manager(fixture.temporary_path()));
+        let replay_dispatcher = runtime::dispatcher(replay_manager, "v12-reset-receipt-replay");
+        let replayed = runtime::dispatch_after_cold_reopen(&replay_dispatcher, &request);
+        let ResponseEnvelopeV2::OutputV2(output) = replayed else {
+            panic!("completed v12 reset receipt must replay after migration: {replayed:?}");
+        };
+        assert_eq!(output.workspace().unwrap().uuid(), &target_workspace);
+    }
 }
 
 #[test]
@@ -162,6 +596,168 @@ fn reset_rejects_a_store_bound_to_another_exact_root() {
         error,
         podway_daemon::runtime_workspace::WorkspaceRuntimeErrorV1::ResetSourceAmbiguous
     ));
+}
+
+#[test]
+fn reset_rejects_a_local_store_uuid_registered_at_another_root_before_deletion() {
+    let fixture = support_phase4_workspace::git_worktrees();
+    runtime::make_runtime_private(fixture.main());
+    let manager = runtime::manager(fixture.temporary_path());
+    let initialized = manager
+        .bootstrap(
+            support_phase4_workspace::selector(fixture.main()),
+            runtime::observation(),
+        )
+        .unwrap();
+    let workspace_uuid = initialized
+        .context_snapshot()
+        .binding()
+        .identity()
+        .workspace_uuid()
+        .clone();
+    let registry_path = manager.registry().registry_path().to_path_buf();
+    let database_path = fixture.main().join(".podway/runtime/state.sqlite3");
+    drop(initialized);
+    drop(manager);
+
+    let database_before = fs::read(&database_path).expect("predecessor database bytes");
+    let mut registry: serde_json::Value =
+        serde_json::from_slice(&fs::read(&registry_path).unwrap()).unwrap();
+    let entry = registry["workspaces"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|entry| entry["workspace_uuid"] == workspace_uuid.as_str())
+        .unwrap();
+    let linked_root = fs::canonicalize(fixture.linked()).unwrap();
+    entry["last_known_root"] = serde_json::Value::String(
+        ValidatedWorkspaceRootV1::from_unix_bytes(linked_root.as_os_str().as_bytes().to_vec())
+            .unwrap()
+            .as_encoded()
+            .to_owned(),
+    );
+    fs::write(&registry_path, canonicalize_json_v1(&registry).unwrap()).unwrap();
+
+    let manager = Arc::new(runtime::manager(fixture.temporary_path()));
+    let error = match manager
+        .registered_reset_source_authority(support_phase4_workspace::selector(fixture.main()))
+    {
+        Ok(_) => panic!("a predecessor UUID registered at another root must fail closed"),
+        Err(error) => error,
+    };
+    assert!(
+        matches!(
+            &error,
+            podway_daemon::runtime_workspace::WorkspaceRuntimeErrorV1::Registry(
+                podway_daemon::registry::RegistryErrorV1::WorkspaceRootConflict { .. }
+            )
+        ),
+        "unexpected copied-UUID reset error: {error:?}"
+    );
+    let dispatcher = runtime::dispatcher(Arc::clone(&manager), "copied-uuid-reset");
+    let request = runtime::request(
+        95_013,
+        "workspace.reset_all",
+        &selector_with_workspace(fixture.main(), workspace_uuid.clone()),
+        json!({
+            "confirmed": true,
+            "expected_workspace_uuid": workspace_uuid,
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+        "copied-uuid-reset-rejected",
+        PreconditionsV1::default(),
+    );
+    let response = runtime::dispatch(&dispatcher, &request);
+    let ResponseEnvelopeV2::Error(error) = response else {
+        panic!("copied UUID reset must fail closed: {response:?}");
+    };
+    assert_eq!(error.code().as_str(), "WORKSPACE_ID_CONFLICT");
+    assert_eq!(
+        fs::read(&database_path).expect("rejected reset database bytes"),
+        database_before
+    );
+    assert!(!fixture.main().join(".podway/runtime/reset.marker").exists());
+}
+
+#[test]
+fn reset_rechecks_initially_absent_marker_uuids_after_marker_publication() {
+    for conflict_target in [false, true] {
+        let fixture = support_phase4_workspace::git_worktrees();
+        runtime::make_runtime_private(fixture.main());
+        let manager = runtime::manager(fixture.temporary_path());
+        let initialized = manager
+            .bootstrap(
+                support_phase4_workspace::selector(fixture.main()),
+                runtime::observation(),
+            )
+            .unwrap();
+        let old_workspace = initialized
+            .context_snapshot()
+            .binding()
+            .identity()
+            .workspace_uuid()
+            .clone();
+        let registry_path = manager.registry().registry_path().to_path_buf();
+        let database_path = fixture.main().join(".podway/runtime/state.sqlite3");
+        let database_before = fs::metadata(&database_path).unwrap();
+        drop(initialized);
+        drop(manager);
+        fs::remove_file(&registry_path).unwrap();
+
+        let conflicting_root_path = fs::canonicalize(fixture.linked()).unwrap();
+        let conflicting_root = ValidatedWorkspaceRootV1::from_unix_bytes(
+            conflicting_root_path.as_os_str().as_bytes().to_vec(),
+        )
+        .unwrap();
+        let hook_registry_path = registry_path.clone();
+        let manager = Arc::new(runtime::manager_with_reset_post_marker_hook(
+            fixture.temporary_path(),
+            move |marker| {
+                let workspace_uuid = if conflict_target {
+                    marker.target_workspace_uuid().clone()
+                } else {
+                    marker.previous_workspace_uuid().clone()
+                };
+                let registry = json!({
+                    "schema": "podway.registry/v1",
+                    "workspaces": [{
+                        "last_known_root": conflicting_root.as_encoded(),
+                        "last_seen_at": "2027-01-15T08:00:01.000Z",
+                        "workspace_uuid": workspace_uuid,
+                    }],
+                });
+                fs::write(
+                    &hook_registry_path,
+                    canonicalize_json_v1(&registry).unwrap(),
+                )
+                .unwrap();
+                fs::set_permissions(&hook_registry_path, fs::Permissions::from_mode(0o600))
+                    .unwrap();
+            },
+        ));
+        let dispatcher = runtime::dispatcher(Arc::clone(&manager), "post-marker-uuid-conflict");
+        let response = runtime::dispatch(
+            &dispatcher,
+            &reset_request(fixture.main(), old_workspace.clone(), 95_014),
+        );
+        let ResponseEnvelopeV2::Error(error) = response else {
+            panic!("a post-marker UUID registration must fail closed: {response:?}");
+        };
+        assert_eq!(error.code().as_str(), "WORKSPACE_ID_CONFLICT");
+        let database_after = fs::metadata(&database_path).unwrap();
+        assert_eq!(database_after.dev(), database_before.dev());
+        assert_eq!(database_after.ino(), database_before.ino());
+        let binding = SqliteStoreV1::inspect_reset_workspace_binding(
+            &database_path,
+            &SqliteStoreOptionsV1::new(8).unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(binding.identity().workspace_uuid(), &old_workspace);
+        assert!(fixture.main().join(".podway/runtime/reset.marker").exists());
+    }
 }
 
 #[test]

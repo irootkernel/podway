@@ -21,10 +21,10 @@ use crate::codec::{
     validate_persisted_terminal_result_for_command_v1, validate_terminal_result_for_command_v1,
 };
 use crate::schema::{
-    DatabasePathStateV1, canonical_database_path_v1, inspect_database_path_v1,
-    inspect_database_snapshot_unbound_v1, inspect_database_snapshot_v1,
-    inspect_existing_store_openability_v1, open_or_initialize_v1,
-    open_or_initialize_with_temporary_cleanup_arm_v1, recover_interrupted_publication_v1,
+    DatabasePathStateV1, ExistingDatabaseOpenPolicyV1, canonical_database_path_v1,
+    inspect_database_path_v1, inspect_database_snapshot_unbound_v1, inspect_database_snapshot_v1,
+    inspect_existing_store_openability_v1, open_or_initialize_v1, open_or_initialize_with_guard_v1,
+    recover_interrupted_publication_v1, recover_interrupted_publication_with_guard_v1,
     validate_database_parent_path_v1, validate_existing_database_path_v1,
     validate_existing_regular_private_file_metadata_v1, validate_existing_regular_private_file_v1,
     validate_publication_link_pair_v1, verify_inspection_integrity_connection_v1,
@@ -74,16 +74,87 @@ impl SqliteStoreV1 {
         options: SqliteStoreOptionsV1,
         now: EpochMillisV1,
     ) -> Result<Self, StoreErrorV1> {
+        Self::open_guarded(path, root, identity, options, now, || Ok(()))
+    }
+
+    /// Opens a Store while repeatedly validating authority at every pathname-to-connection and
+    /// new-database publication boundary. The callback must be observational and idempotent.
+    pub fn open_guarded(
+        path: impl AsRef<Path>,
+        root: &ValidatedWorkspaceRootV1,
+        identity: DurableWorktreeIdentityV1,
+        options: SqliteStoreOptionsV1,
+        now: EpochMillisV1,
+        mut validate_authority: impl FnMut() -> Result<(), StoreErrorV1>,
+    ) -> Result<Self, StoreErrorV1> {
+        validate_authority()?;
         let database_path = canonical_database_path_v1(path.as_ref())?;
-        recover_interrupted_publication_v1(&database_path)?;
+        recover_interrupted_publication_with_guard_v1(&database_path, &mut validate_authority)?;
+        validate_authority()?;
         let mut connection = match inspect_database_path_v1(&database_path)? {
-            DatabasePathStateV1::Existing => {
-                open_or_initialize_v1(&database_path, root, &identity, &options, now)?
-            }
-            DatabasePathStateV1::Missing => {
-                initialize_new_database_atomically(&database_path, root, &identity, &options, now)?
-            }
+            DatabasePathStateV1::Existing => open_or_initialize_with_guard_v1(
+                &database_path,
+                root,
+                &identity,
+                &options,
+                now,
+                ExistingDatabaseOpenPolicyV1::initialize_if_empty(),
+                &mut validate_authority,
+            )?,
+            DatabasePathStateV1::Missing => initialize_new_database_atomically_guarded(
+                &database_path,
+                root,
+                &identity,
+                &options,
+                now,
+                &mut validate_authority,
+            )?,
         };
+        crate::schema::verify_integrity_connection_v1(
+            &mut connection,
+            &identity,
+            &options,
+            IntegrityModeV1::Fast,
+            now,
+        )?;
+        let startup_recovery_report = recover_running_connection(&mut connection, &options, now)?;
+        Ok(Self {
+            connection: Mutex::new(connection),
+            database_path,
+            identity,
+            options,
+            startup_recovery_report,
+            claim_hasher: RandomState::new(),
+        })
+    }
+
+    /// Opens an existing Store without ever creating a missing final database path.
+    ///
+    /// This is the recovery form for callers whose durable protocol already recorded that the
+    /// target Store was initialized. The authority callback has the same requirements as
+    /// [`Self::open_guarded`].
+    pub fn open_existing_guarded(
+        path: impl AsRef<Path>,
+        root: &ValidatedWorkspaceRootV1,
+        identity: DurableWorktreeIdentityV1,
+        options: SqliteStoreOptionsV1,
+        now: EpochMillisV1,
+        mut validate_authority: impl FnMut() -> Result<(), StoreErrorV1>,
+    ) -> Result<Self, StoreErrorV1> {
+        validate_authority()?;
+        let database_path = canonical_database_path_v1(path.as_ref())?;
+        recover_interrupted_publication_with_guard_v1(&database_path, &mut validate_authority)?;
+        validate_authority()?;
+        validate_existing_database_path_v1(&database_path)?;
+        let mut connection = open_or_initialize_with_guard_v1(
+            &database_path,
+            root,
+            &identity,
+            &options,
+            now,
+            ExistingDatabaseOpenPolicyV1::require_initialized(),
+            &mut validate_authority,
+        )?;
         crate::schema::verify_integrity_connection_v1(
             &mut connection,
             &identity,
@@ -135,6 +206,7 @@ impl SqliteStoreV1 {
 
         let binding =
             inspect_database_snapshot_unbound_v1(&database_path, options, |connection| {
+                let schema_version = crate::schema::read_user_version_v1(connection)?;
                 if reset_identity_only {
                     crate::schema::verify_reset_binding_inspection_schema_v1(connection)?;
                 } else {
@@ -173,7 +245,11 @@ impl SqliteStoreV1 {
                         connection, &identity, options,
                     )?;
                 }
-                Ok(WorkspaceBindingV1::new(identity, last_validated_root))
+                Ok(WorkspaceBindingV1::new_with_schema_version(
+                    identity,
+                    last_validated_root,
+                    schema_version,
+                ))
             })?;
         Ok(Some(binding))
     }
@@ -204,11 +280,17 @@ impl SqliteStoreV1 {
     /// integrity path using only a disposable snapshot.
     pub fn inspect_existing_openability(
         path: impl AsRef<Path>,
+        expected_root: &ValidatedWorkspaceRootV1,
         expected_identity: &DurableWorktreeIdentityV1,
         options: &SqliteStoreOptionsV1,
     ) -> Result<(), StoreErrorV1> {
         let database_path = canonical_database_path_v1(path.as_ref())?;
-        inspect_existing_store_openability_v1(&database_path, expected_identity, options)
+        inspect_existing_store_openability_v1(
+            &database_path,
+            expected_root,
+            expected_identity,
+            options,
+        )
     }
 
     /// Reads only the workspace sequence needed to identify a diagnostic response.
@@ -3578,36 +3660,42 @@ fn retention_count(count: usize) -> Result<u32, StoreErrorV1> {
     u32::try_from(count).map_err(|_| invariant(StoreInvariantV1::RetentionAccounting))
 }
 
-fn initialize_new_database_atomically(
+fn initialize_new_database_atomically_guarded(
     path: &Path,
     root: &ValidatedWorkspaceRootV1,
     identity: &DurableWorktreeIdentityV1,
     options: &SqliteStoreOptionsV1,
     now: EpochMillisV1,
+    validate_authority: &mut dyn FnMut() -> Result<(), StoreErrorV1>,
 ) -> Result<Connection, StoreErrorV1> {
+    validate_authority()?;
     let temporary = create_temporary_database(path, now)?;
     let mut cleanup_armed = false;
     let result = (|| {
-        let connection = open_or_initialize_with_temporary_cleanup_arm_v1(
+        let connection = open_or_initialize_with_guard_v1(
             &temporary.database,
             root,
             identity,
             options,
             now,
-            Some(&mut cleanup_armed),
+            ExistingDatabaseOpenPolicyV1::initialize_if_empty_with_cleanup(&mut cleanup_armed),
+            validate_authority,
         )?;
         checkpoint_close_and_sync(connection, &temporary.database)?;
         options.trigger_failpoint(StoreFailpointV1::SchemaAfterInitializationBeforePublication)?;
-        match publish_temporary_database_no_clobber(
+        validate_authority()?;
+        match publish_temporary_database_no_clobber_with_guard(
             &temporary.database,
             &temporary._database_file,
             path,
             options,
             false,
+            validate_authority,
         ) {
             Ok(outcome) => Ok(outcome),
             Err(StoreErrorV1::StorageUnavailableV1 { .. })
-                if inspect_publication_destination(path)? == DatabasePathStateV1::Existing =>
+                if inspect_publication_destination_with_guard(path, validate_authority)?
+                    == DatabasePathStateV1::Existing =>
             {
                 Ok(PublicationOutcomeV1::Existing)
             }
@@ -3616,7 +3704,15 @@ fn initialize_new_database_atomically(
     })();
     let cleanup = cleanup_temporary_database(&temporary, cleanup_armed);
     combine_operation_and_cleanup(result, cleanup)?;
-    open_or_initialize_v1(path, root, identity, options, now)
+    open_or_initialize_with_guard_v1(
+        path,
+        root,
+        identity,
+        options,
+        now,
+        ExistingDatabaseOpenPolicyV1::initialize_if_empty(),
+        validate_authority,
+    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3911,9 +4007,16 @@ fn checkpoint_close_and_sync(connection: Connection, path: &Path) -> Result<(), 
 fn inspect_publication_destination(
     destination: &Path,
 ) -> Result<DatabasePathStateV1, StoreErrorV1> {
+    inspect_publication_destination_with_guard(destination, &mut || Ok(()))
+}
+
+fn inspect_publication_destination_with_guard(
+    destination: &Path,
+    validate_authority: &mut dyn FnMut() -> Result<(), StoreErrorV1>,
+) -> Result<DatabasePathStateV1, StoreErrorV1> {
     const MAX_ACTIVE_PUBLICATION_RETRIES_V1: u16 = 1_000;
     for _ in 0..MAX_ACTIVE_PUBLICATION_RETRIES_V1 {
-        match recover_interrupted_publication_v1(destination) {
+        match recover_interrupted_publication_with_guard_v1(destination, validate_authority) {
             Ok(()) => return inspect_database_path_v1(destination),
             Err(StoreErrorV1::StorageUnavailableV1 {
                 reason: StoreUnavailableReasonV1::Busy,
@@ -3933,8 +4036,26 @@ fn publish_temporary_database_no_clobber(
     options: &SqliteStoreOptionsV1,
     reset_cleanup_fault: bool,
 ) -> Result<PublicationOutcomeV1, StoreErrorV1> {
+    publish_temporary_database_no_clobber_with_guard(
+        temporary,
+        temporary_file,
+        destination,
+        options,
+        reset_cleanup_fault,
+        &mut || Ok(()),
+    )
+}
+
+fn publish_temporary_database_no_clobber_with_guard(
+    temporary: &Path,
+    temporary_file: &File,
+    destination: &Path,
+    options: &SqliteStoreOptionsV1,
+    reset_cleanup_fault: bool,
+    validate_authority: &mut dyn FnMut() -> Result<(), StoreErrorV1>,
+) -> Result<PublicationOutcomeV1, StoreErrorV1> {
     validate_owned_temporary_file(temporary, temporary_file, false)?;
-    match inspect_publication_destination(destination)? {
+    match inspect_publication_destination_with_guard(destination, validate_authority)? {
         DatabasePathStateV1::Existing => return Ok(PublicationOutcomeV1::Existing),
         DatabasePathStateV1::Missing => {}
     }
@@ -3943,6 +4064,7 @@ fn publish_temporary_database_no_clobber(
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
+    validate_authority()?;
     match fs::hard_link(temporary, destination) {
         Ok(()) => {
             if let Err(error) = validate_publication_link_pair_v1(temporary, destination) {
@@ -3977,7 +4099,7 @@ fn publish_temporary_database_no_clobber(
             Ok(PublicationOutcomeV1::Published)
         }
         Err(error) if error.kind() == ErrorKind::AlreadyExists => {
-            match inspect_publication_destination(destination)? {
+            match inspect_publication_destination_with_guard(destination, validate_authority)? {
                 DatabasePathStateV1::Existing => Ok(PublicationOutcomeV1::Existing),
                 DatabasePathStateV1::Missing => Err(storage_io(error)),
             }
@@ -4226,12 +4348,24 @@ fn verify_seeded_reset_snapshot(
     epoch(workspace.6, StoreRecordKindV1::Workspace)?;
 
     for table in [
-        "procedure_snapshots",
-        "task_sessions",
-        "stage_progress",
-        "attempts",
-        "item_slots",
-        "blockers",
+        "v2_workspace_state",
+        "v2_procedure_snapshots",
+        "v2_graph_nodes",
+        "v2_task_sessions",
+        "v2_graph_node_counters",
+        "v2_attempts",
+        "v2_item_slots",
+        "v2_blockers",
+        "v2_resolved_evidence_references",
+        "v2_decision_records",
+        "v2_rework_records",
+        "v2_goal_revisions",
+        "v2_goal_criteria",
+        "v2_criterion_assessment_results",
+        "v2_criterion_citations",
+        "v2_goal_assessments",
+        "v2_terminal_dispositions",
+        "v2_delegation_receipts",
     ] {
         let count: i64 = connection
             .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {

@@ -1787,7 +1787,7 @@ fn direct_v6_and_v7_upgrades_preserve_terminal_state_and_disposition() {
             connection
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .unwrap(),
-            12
+            13
         );
     }
 }
@@ -3255,6 +3255,7 @@ fn graph_reset_clear_receipt_and_failpoint_are_one_atomic_boundary() {
     .unwrap();
     SqliteStoreV1::inspect_existing_openability(
         database_path(&temporary),
+        &root(),
         &identity(),
         &SqliteStoreOptionsV1::new(8).unwrap(),
     )
@@ -3375,6 +3376,7 @@ fn v4_missing_reset_mode_migrates_without_discarding_the_current_completed_sessi
     .unwrap();
     SqliteStoreV1::inspect_existing_openability(
         database_path(&temporary),
+        &root(),
         &identity(),
         &SqliteStoreOptionsV1::new(8).unwrap(),
     )

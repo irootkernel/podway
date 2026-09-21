@@ -1609,9 +1609,52 @@ impl ProductionMutationWorkerV1 {
             response_request_id.clone(),
         ) {
             Ok(preparation) => Ok(preparation),
-            Err(ExecutionErrorV1::Store(StoreErrorV1::IdempotencyDigestConflictV1 { .. })) => Err(
-                DispatchFailureV1::new(DispatchFailureKindV1::IdempotencyKeyReused),
-            ),
+            Err(ExecutionErrorV1::Store(StoreErrorV1::IdempotencyDigestConflictV1 { .. })) => {
+                if let Some(legacy_identity) = source.legacy_digest_identity() {
+                    let legacy_digest = reset_all_digest(request, legacy_identity)?;
+                    match context.store().read_idempotent_outcome(
+                        context.binding().identity(),
+                        &idempotency_key,
+                        &legacy_digest,
+                    ) {
+                        Ok(Some(outcome)) => {
+                            return Ok(ResetAllPreparationOutcomeV1::Existing(Box::new(outcome)));
+                        }
+                        Ok(None) | Err(StoreErrorV1::IdempotencyDigestConflictV1 { .. }) => {}
+                        Err(error) => return Err(map_store_error(error)),
+                    }
+                }
+
+                // A completed v12 reset may be replayed only after its target Store has already
+                // migrated, at which point the old filesystem fingerprints no longer exist.
+                // Reset has no variable payload beyond explicit confirmation, so the immutable
+                // terminal command/result pair is sufficient to identify that grandfathered
+                // operation without weakening digest checks for any other mutation.
+                let existing = context
+                    .store()
+                    .read_idempotent_execution(context.binding().identity(), &idempotency_key)
+                    .map_err(map_store_error)?;
+                if let Some(existing) = existing
+                    && let Some(receipt) = terminal_replay(existing.outcome())
+                    && matches!(
+                        receipt.lookup_command(),
+                        Some(PersistedDomainCommandV1::WorkspaceResetAll)
+                    )
+                    && matches!(
+                        receipt.result(),
+                        PersistedTerminalResultV1::Success(
+                            PersistedDomainResultV1::WorkspaceReset { .. }
+                        )
+                    )
+                {
+                    return Ok(ResetAllPreparationOutcomeV1::Existing(Box::new(
+                        existing.outcome().clone(),
+                    )));
+                }
+                Err(DispatchFailureV1::new(
+                    DispatchFailureKindV1::IdempotencyKeyReused,
+                ))
+            }
             Err(error) => Err(map_reset_preparation_error(error)),
         }
     }
@@ -3087,13 +3130,12 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
             .manager
             .begin_reset_maintenance(selector)
             .map_err(map_runtime_error)?;
-        let source_identity = transaction.authority().routing_identity();
         let store_idempotency_key = StoreIdempotencyKeyV1::new(idempotency_key.as_str())
             .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::RequestInvalid))?;
         let existing_marker = transaction.discover_marker().map_err(map_runtime_error)?;
         let mut active = transaction.active_old_scheduler();
         if let Some(marker) = existing_marker {
-            let digest = reset_all_digest(request, &source_identity)?;
+            let digest = reset_replay_digest(request, transaction.authority(), &marker)?;
             transaction
                 .validate_resume_request(&store_idempotency_key, &digest)
                 .map_err(map_runtime_error)?;
@@ -3469,6 +3511,28 @@ fn reset_all_digest(
     .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::RequestInvalid))?;
     CanonicalRequestDigestV1::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes())))
         .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal))
+}
+
+fn reset_replay_digest(
+    request: &SliceRequestV1,
+    source: &ResetSourceAuthorityV1,
+    marker: &crate::workspace::ResetMarkerV1,
+) -> Result<CanonicalRequestDigestV1, DispatchFailureV1> {
+    let current = reset_all_digest(request, &source.routing_identity())?;
+    if marker.request_digest() == &current {
+        return Ok(current);
+    }
+    if let Some(legacy_identity) = source.legacy_digest_identity() {
+        let legacy = reset_all_digest(request, legacy_identity)?;
+        if marker.request_digest() == &legacy {
+            return Ok(legacy);
+        }
+    }
+    // Once a v12 reset has deleted its predecessor database, the marker is the only remaining
+    // source of the filesystem-identity digest. The reset payload has no variable field beyond
+    // `confirmed: true`; selector and workspace UUIDs are independently checked against the
+    // marker and registry generation. Preserve that admitted digest for replay.
+    Ok(marker.request_digest().clone())
 }
 
 fn map_reset_preparation_error(error: ExecutionErrorV1) -> DispatchFailureV1 {
@@ -6552,9 +6616,10 @@ fn map_runtime_error(error: WorkspaceRuntimeErrorV1) -> DispatchFailureV1 {
             DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceInitConflict)
         }
         WorkspaceRuntimeErrorV1::Store(error) => map_store_error(error),
-        WorkspaceRuntimeErrorV1::Registry(RegistryErrorV1::WorkspaceRootOccupied { .. }) => {
-            DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceIdentityConflict)
-        }
+        WorkspaceRuntimeErrorV1::Registry(
+            RegistryErrorV1::WorkspaceRootOccupied { .. }
+            | RegistryErrorV1::WorkspaceRootConflict { .. },
+        ) => DispatchFailureV1::new(DispatchFailureKindV1::WorkspaceIdentityConflict),
         WorkspaceRuntimeErrorV1::Registry(_) | WorkspaceRuntimeErrorV1::Scheduler(_) => {
             DispatchFailureV1::new(DispatchFailureKindV1::DaemonUnavailable)
         }

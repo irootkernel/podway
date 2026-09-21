@@ -764,7 +764,7 @@ fn v2sdg004_populated_v11_migrates_without_changing_graph_bytes() {
         .execute_batch(
             "DROP TRIGGER v2_delegation_receipts_immutable;
          DROP TABLE v2_delegation_receipts;
-         DELETE FROM schema_migrations WHERE version = 12;
+         DELETE FROM schema_migrations WHERE version IN (12, 13);
          PRAGMA user_version = 11;",
         )
         .unwrap();
@@ -813,7 +813,7 @@ fn v2sdg004_populated_v11_migrates_without_changing_graph_bytes() {
     let version: u32 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 12);
+    assert_eq!(version, 13);
 }
 
 #[test]
@@ -823,7 +823,7 @@ fn v2sdg004_newer_schema_is_rejected_without_rewrite() {
     let path = temporary.path().join("state.sqlite3");
     let connection = Connection::open(&path).unwrap();
     connection
-        .execute_batch("PRAGMA user_version = 13;")
+        .execute_batch("PRAGMA user_version = 14;")
         .unwrap();
     drop(connection);
     let result = SqliteStoreV1::open(
@@ -836,15 +836,15 @@ fn v2sdg004_newer_schema_is_rejected_without_rewrite() {
     assert!(matches!(
         result,
         Err(podway_store::StoreErrorV1::NewerStateV1 {
-            found_schema_version: 13,
-            supported_schema_version: 12,
+            found_schema_version: 14,
+            supported_schema_version: 13,
         })
     ));
     let connection = Connection::open(&path).unwrap();
     let version: u32 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 13);
+    assert_eq!(version, 14);
 }
 
 #[test]

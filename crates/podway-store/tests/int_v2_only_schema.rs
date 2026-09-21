@@ -17,8 +17,8 @@ use podway_store::{
     PersistedTerminalJobProjectionV1, PersistedTerminalJobStateV1, PersistedTerminalReceiptV1,
     PersistedTerminalSessionProjectionV1, RevisionAttemptItemPreconditionsV1, SqliteStoreOptionsV1,
     SqliteStoreV1, StoreContractV1, StoreErrorV1, StoreFailpointV1, StoreGraphStateContractV2,
-    StoreIdempotencyReadContractV1, StoreReadContractV1, StoreUnavailableReasonV1,
-    ValidatedWorkspaceRootV1,
+    StoreIdempotencyReadContractV1, StoreIntegrityCheckV1, StoreReadContractV1,
+    StoreUnavailableReasonV1, ValidatedWorkspaceRootV1,
 };
 use rusqlite::{Connection, params};
 use serde_json::{Value, json};
@@ -40,8 +40,125 @@ fn root() -> ValidatedWorkspaceRootV1 {
     ValidatedWorkspaceRootV1::from_path(Path::new("/tmp/podway-v2-only-schema")).unwrap()
 }
 
+fn legacy_filesystem_identity() -> DurableWorktreeIdentityV1 {
+    DurableWorktreeIdentityV1::new(
+        digest('c'),
+        WorkspaceId::new("00000000-0000-4000-8000-000000000001").unwrap(),
+        digest('d'),
+    )
+}
+
+fn downgrade_to_schema_v12(path: &Path) {
+    let connection = Connection::open(path).unwrap();
+    connection
+        .execute(
+            "UPDATE workspace_state SET git_common_fingerprint = ?1, \
+             git_worktree_fingerprint = ?2 WHERE singleton = 1",
+            params![
+                legacy_filesystem_identity().common_dir_identity().as_str(),
+                legacy_filesystem_identity()
+                    .worktree_admin_identity()
+                    .as_str(),
+            ],
+        )
+        .unwrap();
+    connection
+        .execute("DELETE FROM schema_migrations WHERE version = 13", [])
+        .unwrap();
+    connection.pragma_update(None, "user_version", 12).unwrap();
+}
+
+fn schema_v12_identity_snapshot(path: &Path) -> (i64, String, String, String, String, i64) {
+    let connection = Connection::open(path).unwrap();
+    connection
+        .query_row(
+            "SELECT (SELECT user_version FROM pragma_user_version), workspace_uuid, \
+             git_common_fingerprint, git_worktree_fingerprint, last_validated_root, \
+             (SELECT COUNT(*) FROM schema_migrations WHERE version = 13) \
+             FROM workspace_state WHERE singleton = 1",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .unwrap()
+}
+
 fn uuid(number: u64) -> String {
     format!("00000000-0000-4000-8000-{number:012x}")
+}
+
+#[test]
+fn existing_only_guarded_open_never_recreates_a_missing_final_database() {
+    let temporary = TempDir::new().unwrap();
+    let database_path = temporary.path().join("state.sqlite3");
+    drop(
+        SqliteStoreV1::open(
+            &database_path,
+            &root(),
+            identity(),
+            SqliteStoreOptionsV1::new(8).unwrap(),
+            EpochMillisV1::new(1),
+        )
+        .unwrap(),
+    );
+    for suffix in ["", "-wal", "-shm"] {
+        let path = Path::new(&format!("{}{}", database_path.display(), suffix)).to_path_buf();
+        if path.exists() {
+            fs::remove_file(path).unwrap();
+        }
+    }
+
+    assert!(
+        SqliteStoreV1::open_existing_guarded(
+            &database_path,
+            &root(),
+            identity(),
+            SqliteStoreOptionsV1::new(8).unwrap(),
+            EpochMillisV1::new(2),
+            || Ok(()),
+        )
+        .is_err()
+    );
+    assert!(!database_path.exists());
+    assert!(!Path::new(&format!("{}-wal", database_path.display())).exists());
+    assert!(!Path::new(&format!("{}-shm", database_path.display())).exists());
+}
+
+#[test]
+fn existing_only_guarded_open_rejects_an_empty_database_without_initializing_it() {
+    let temporary = TempDir::new().unwrap();
+    let database_path = temporary.path().join("state.sqlite3");
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&database_path)
+        .unwrap();
+    #[cfg(unix)]
+    fs::set_permissions(&database_path, fs::Permissions::from_mode(0o600)).unwrap();
+    drop(file);
+
+    assert!(
+        SqliteStoreV1::open_existing_guarded(
+            &database_path,
+            &root(),
+            identity(),
+            SqliteStoreOptionsV1::new(8).unwrap(),
+            EpochMillisV1::new(2),
+            || Ok(()),
+        )
+        .is_err()
+    );
+    assert_eq!(fs::metadata(&database_path).unwrap().len(), 0);
+    assert!(!Path::new(&format!("{}-wal", database_path.display())).exists());
+    assert!(!Path::new(&format!("{}-shm", database_path.display())).exists());
 }
 
 fn populated_graph_state() -> GraphSessionStateV2 {
@@ -53,7 +170,7 @@ fn restore_capped_task_sessions(connection: &Connection, reference: &Connection)
         .execute_batch(
             "DROP TRIGGER v2_delegation_receipts_immutable;
              DROP TABLE v2_delegation_receipts;
-             DELETE FROM schema_migrations WHERE version = 12;",
+             DELETE FROM schema_migrations WHERE version IN (12, 13);",
         )
         .unwrap();
     let table_sql: String = reference
@@ -1093,7 +1210,7 @@ fn sqlite_v11_migrates_v10_stores_and_drops_the_archive_slot_cap() {
         connection
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        12
+        13
     );
     let table_sql: String = connection
         .query_row(
@@ -1111,6 +1228,182 @@ fn sqlite_v11_migrates_v10_stores_and_drops_the_archive_slot_cap() {
         "v11 archive_slot check must match the u32 public bound: {table_sql}"
     );
     assert!(table_sql.contains("archive_slot"));
+}
+
+#[test]
+fn schema_v12_rebinds_legacy_filesystem_fingerprints_to_canonical_paths() {
+    let temporary = TempDir::new().unwrap();
+    let path = temporary.path().join("state.sqlite3");
+    drop(
+        SqliteStoreV1::open(
+            &path,
+            &root(),
+            identity(),
+            SqliteStoreOptionsV1::new(8).unwrap(),
+            UnixMillis::new(1),
+        )
+        .unwrap(),
+    );
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE workspace_state SET git_common_fingerprint = ?1, \
+             git_worktree_fingerprint = ?2 WHERE singleton = 1",
+            params![
+                legacy_filesystem_identity().common_dir_identity().as_str(),
+                legacy_filesystem_identity()
+                    .worktree_admin_identity()
+                    .as_str(),
+            ],
+        )
+        .unwrap();
+    connection
+        .execute("DELETE FROM schema_migrations WHERE version = 13", [])
+        .unwrap();
+    connection.pragma_update(None, "user_version", 12).unwrap();
+    drop(connection);
+
+    let binding =
+        SqliteStoreV1::inspect_workspace_binding(&path, &SqliteStoreOptionsV1::new(8).unwrap())
+            .unwrap()
+            .unwrap();
+    assert_eq!(binding.schema_version(), 12);
+    assert_eq!(binding.identity(), &legacy_filesystem_identity());
+
+    drop(
+        SqliteStoreV1::open(
+            &path,
+            &root(),
+            identity(),
+            SqliteStoreOptionsV1::new(8).unwrap(),
+            UnixMillis::new(2),
+        )
+        .unwrap(),
+    );
+    let binding =
+        SqliteStoreV1::inspect_workspace_binding(&path, &SqliteStoreOptionsV1::new(8).unwrap())
+            .unwrap()
+            .unwrap();
+    assert_eq!(binding.schema_version(), 13);
+    assert_eq!(binding.identity(), &identity());
+}
+
+#[test]
+fn schema_v12_wrong_root_rejects_without_rewrite() {
+    let temporary = TempDir::new().unwrap();
+    let path = temporary.path().join("state.sqlite3");
+    drop(
+        SqliteStoreV1::open(
+            &path,
+            &root(),
+            identity(),
+            SqliteStoreOptionsV1::new(8).unwrap(),
+            UnixMillis::new(1),
+        )
+        .unwrap(),
+    );
+    downgrade_to_schema_v12(&path);
+    let before = schema_v12_identity_snapshot(&path);
+    let wrong_root =
+        ValidatedWorkspaceRootV1::from_path(Path::new("/tmp/podway-v2-only-schema-wrong-root"))
+            .unwrap();
+
+    let error = match SqliteStoreV1::open(
+        &path,
+        &wrong_root,
+        identity(),
+        SqliteStoreOptionsV1::new(8).unwrap(),
+        UnixMillis::new(2),
+    ) {
+        Ok(_) => panic!("schema-v13 migration must require the exact stored root"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error,
+        StoreErrorV1::StorageIntegrityV1 {
+            check: StoreIntegrityCheckV1::WorkspaceIdentity
+        }
+    );
+    assert_eq!(schema_v12_identity_snapshot(&path), before);
+}
+
+#[test]
+fn schema_v12_wrong_uuid_rejects_without_rewrite() {
+    let temporary = TempDir::new().unwrap();
+    let path = temporary.path().join("state.sqlite3");
+    drop(
+        SqliteStoreV1::open(
+            &path,
+            &root(),
+            identity(),
+            SqliteStoreOptionsV1::new(8).unwrap(),
+            UnixMillis::new(1),
+        )
+        .unwrap(),
+    );
+    downgrade_to_schema_v12(&path);
+    let before = schema_v12_identity_snapshot(&path);
+    let wrong_identity = DurableWorktreeIdentityV1::new(
+        identity().common_dir_identity().clone(),
+        WorkspaceId::new("00000000-0000-4000-8000-000000000099").unwrap(),
+        identity().worktree_admin_identity().clone(),
+    );
+
+    let error = match SqliteStoreV1::open(
+        &path,
+        &root(),
+        wrong_identity,
+        SqliteStoreOptionsV1::new(8).unwrap(),
+        UnixMillis::new(2),
+    ) {
+        Ok(_) => panic!("schema-v13 migration must preserve the stored workspace UUID"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error,
+        StoreErrorV1::StorageIntegrityV1 {
+            check: StoreIntegrityCheckV1::WorkspaceIdentity
+        }
+    );
+    assert_eq!(schema_v12_identity_snapshot(&path), before);
+}
+
+#[test]
+fn schema_v12_precommit_failure_rolls_back_identity_and_ledger() {
+    let temporary = TempDir::new().unwrap();
+    let path = temporary.path().join("state.sqlite3");
+    drop(
+        SqliteStoreV1::open(
+            &path,
+            &root(),
+            identity(),
+            SqliteStoreOptionsV1::new(8).unwrap(),
+            UnixMillis::new(1),
+        )
+        .unwrap(),
+    );
+    downgrade_to_schema_v12(&path);
+    let before = schema_v12_identity_snapshot(&path);
+
+    let error = match SqliteStoreV1::open(
+        &path,
+        &root(),
+        identity(),
+        SqliteStoreOptionsV1::new(8)
+            .unwrap()
+            .with_failpoint(Some(StoreFailpointV1::SchemaBeforeCommit)),
+        UnixMillis::new(2),
+    ) {
+        Ok(_) => panic!("schema-v13 failpoint must abort before commit"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error,
+        StoreErrorV1::StorageUnavailableV1 {
+            reason: StoreUnavailableReasonV1::Recovery
+        }
+    );
+    assert_eq!(schema_v12_identity_snapshot(&path), before);
 }
 
 #[test]
@@ -1137,7 +1430,7 @@ fn v2dvc004_live_schema_v10_binds_new_and_legacy_stores_to_runtime_mode() {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .unwrap();
-    assert_eq!(binding, (12, "prod".to_owned(), 1));
+    assert_eq!(binding, (13, "prod".to_owned(), 1));
     drop(connection);
 
     let before = fs::read(&production_path).unwrap();
@@ -1350,7 +1643,7 @@ fn v2ast004_runtime_migrates_v5_to_v7_without_reencoding_item_values() {
         connection
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        12
+        13
     );
     drop(connection);
 
@@ -1422,7 +1715,7 @@ fn schema_v8_evidence_rows_survive_v9_migration_and_reopen() {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .unwrap();
-    assert_eq!((version, after, migration), (12, before, 1));
+    assert_eq!((version, after, migration), (13, before, 1));
     let mut primary_key = connection
         .prepare(
             "SELECT name FROM pragma_table_info('v2_resolved_evidence_references') \
@@ -1492,7 +1785,7 @@ fn schema_v6_and_v7_upgrade_paths_migrate_to_v9() {
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .unwrap();
-        assert_eq!((version, migrations, foreign_key_violations), (12, 5, 0));
+        assert_eq!((version, migrations, foreign_key_violations), (13, 5, 0));
         let migration: (String, String) = connection
             .query_row(
                 "SELECT name, checksum FROM schema_migrations WHERE version = 9",
@@ -1632,7 +1925,7 @@ fn empty_schema_v4_inspects_read_only_then_migrates_to_v7() {
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!((version, disposition_table_count), (12, 1));
+    assert_eq!((version, disposition_table_count), (13, 1));
 }
 
 #[test]
@@ -1664,7 +1957,7 @@ fn schema_v3_without_legacy_state_migrates_to_retained_terminal_schema_v7() {
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 12);
+    assert_eq!(version, 13);
     let legacy_tables: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name IN \
@@ -1775,7 +2068,7 @@ fn schema_v3_v2_state_and_terminal_receipt_survive_v7_migration_and_reopen() {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
-    assert_eq!((version, migration, legacy_tables), (12, 6, 0));
+    assert_eq!((version, migration, legacy_tables), (13, 6, 0));
     assert_eq!(receipts.0, receipts.1);
 }
 

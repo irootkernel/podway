@@ -8,11 +8,23 @@ This file records concise shipped outcomes and the planned next stable release.
 
 - Stop failing archival and start when a worktree already retains 32 inactive
   sessions. `archive list` now reports the exact total, a newest-first window, and the oldest summary.
+- Derive durable workspace identity from canonical Git paths instead of
+  reboot-unstable filesystem device and inode metadata, with an in-place schema-v13
+  migration for exact-root v12 workspaces.
 
 ### Fixed
 
 - Return `PRESET_NOT_FOUND` instead of `UNSUPPORTED_V2_CAPABILITY` when a
   Procedure v2 start or replacement names an unknown built-in preset.
+- Let confirmed `reset --all` recover an exact local Store binding when its
+  global registry entry is missing.
+- Keep an admitted reset marker until the target scheduler is active, replay
+  schema-v12 reset markers and terminal receipts across the identity migration,
+  and revalidate Git authority after SQLite binds its path but before Store mutation.
+- Prevent existing-workspace activation and recorded mode-switch recovery from
+  recreating an absent or empty Store, bind mode-switch recovery to canonical Git
+  identity, and publish mode-switch files and registry entries at guarded atomic
+  boundaries.
 
 ## v0.2.10 - 2026-09-14
 

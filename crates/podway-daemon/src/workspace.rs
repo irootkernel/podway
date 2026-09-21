@@ -28,15 +28,16 @@ use std::{
 use nix::{
     dir::Dir,
     errno::Errno,
-    fcntl::{AtFlags, OFlag, open, openat},
+    fcntl::{AtFlags, OFlag, open, openat, renameat},
     sys::stat::{Mode, SFlag},
     unistd::{UnlinkatFlags, getuid, linkat, unlinkat},
 };
 use podway_core::{UnixMillis, WorkspaceId, canonicalize_json_v1, verify_canonical_json_v1};
 use podway_git::{
-    DiagnosticPathDisplayV1, DurableWorktreeIdentityV1 as GitWorktreeIdentityV1, GitResolveErrorV1,
-    GitResolverContractV1, LosslessPathV1, NativeGitResolverV1, SelectorValidationErrorV1,
-    ValidatedWorktreeV1, WorkspaceIdentityStateV1, WorktreeMoveMetadataV1, WorktreeSelectorV1,
+    DiagnosticPathDisplayV1, DurableWorktreeIdentityV1 as GitWorktreeIdentityV1,
+    GitInvariantViolationV1, GitResolveErrorV1, GitResolverContractV1, LosslessPathV1,
+    NativeGitResolverV1, SelectorValidationErrorV1, ValidatedWorktreeV1, WorkspaceIdentityStateV1,
+    WorktreeMoveMetadataV1, WorktreeSelectorV1,
 };
 use podway_protocol::{RequestIdV1, Rfc3339MillisV1};
 use podway_store::{
@@ -70,9 +71,11 @@ const MAX_WORKSPACE_REMOVAL_MARKER_BYTES_V1: u64 = 16 * 1024;
 const WORKSPACE_REMOVAL_MARKER_TEMPORARY_NAME_ATTEMPTS_V1: usize = 128;
 const MAX_WORKSPACE_REMOVAL_ENTRIES_V1: usize = 100_000;
 const MAX_WORKSPACE_REMOVAL_DEPTH_V1: usize = 128;
+const MODE_SWITCH_TEMPORARY_NAME_ATTEMPTS_V1: usize = 128;
 
 static RESET_MARKER_TEMPORARY_SEQUENCE_V1: AtomicU64 = AtomicU64::new(0);
 static WORKSPACE_REMOVAL_MARKER_TEMPORARY_SEQUENCE_V1: AtomicU64 = AtomicU64::new(0);
+static MODE_SWITCH_TEMPORARY_SEQUENCE_V1: AtomicU64 = AtomicU64::new(0);
 
 /// Exact durable recovery input for a reset-all operation.
 ///
@@ -547,6 +550,175 @@ pub(crate) struct ValidatedPodwayRemovalDirectoryV1 {
     podway_identity: RemovalObjectIdentityV1,
     #[cfg(unix)]
     current_uid: u32,
+}
+
+/// Fixed-file mode-switch I/O rooted in one freshly validated worktree descriptor.
+///
+/// The descriptor remains bound to the validated `.podway` directory even if the caller-visible
+/// worktree pathname is replaced. Every publication invokes the supplied authority check after
+/// the temporary file is durable and immediately before the descriptor-relative link or rename.
+pub(crate) struct ValidatedModeSwitchDirectoryV1 {
+    #[cfg(unix)]
+    podway: File,
+    #[cfg(unix)]
+    current_uid: u32,
+}
+
+impl ValidatedModeSwitchDirectoryV1 {
+    pub(crate) fn open(
+        worktree: &ValidatedWorktreeV1,
+    ) -> Result<Self, WorkspaceRemovalFilesystemErrorV1> {
+        #[cfg(unix)]
+        {
+            let directory = ValidatedPodwayRemovalDirectoryV1::open(worktree)?
+                .ok_or(WorkspaceRemovalFilesystemErrorV1::UnsafePath)?;
+            Ok(Self {
+                podway: directory.podway,
+                current_uid: directory.current_uid,
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = worktree;
+            Err(WorkspaceRemovalFilesystemErrorV1::UnsupportedPlatform)
+        }
+    }
+
+    pub(crate) fn read_fixed_private_file(
+        &self,
+        name: &str,
+        maximum: usize,
+    ) -> Result<Option<Vec<u8>>, WorkspaceRemovalFilesystemErrorV1> {
+        #[cfg(unix)]
+        {
+            let Some(file) = open_regular_file_optional(&self.podway, name, self.current_uid)?
+            else {
+                return Ok(None);
+            };
+            let metadata = file
+                .metadata()
+                .map_err(|source| removal_path_error("inspect mode-switch file", source))?;
+            if metadata.len() > maximum as u64 {
+                return Err(WorkspaceRemovalFilesystemErrorV1::UnsafePath);
+            }
+            let mut bytes = Vec::with_capacity(metadata.len() as usize);
+            file.take(maximum as u64 + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|source| removal_path_error("read mode-switch file", source))?;
+            if bytes.len() > maximum {
+                return Err(WorkspaceRemovalFilesystemErrorV1::UnsafePath);
+            }
+            Ok(Some(bytes))
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (name, maximum);
+            Err(WorkspaceRemovalFilesystemErrorV1::UnsupportedPlatform)
+        }
+    }
+
+    pub(crate) fn publish_fixed_private_file(
+        &self,
+        name: &str,
+        bytes: &[u8],
+        replace: bool,
+        mut validate_authority: impl FnMut() -> Result<(), WorkspaceRemovalFilesystemErrorV1>,
+    ) -> Result<(), WorkspaceRemovalFilesystemErrorV1> {
+        #[cfg(unix)]
+        {
+            for _ in 0..MODE_SWITCH_TEMPORARY_NAME_ATTEMPTS_V1 {
+                let sequence = MODE_SWITCH_TEMPORARY_SEQUENCE_V1.fetch_add(1, Ordering::Relaxed);
+                let temporary_name =
+                    format!(".podway-mode-switch-{}-{sequence}.tmp", std::process::id());
+                let descriptor = match openat(
+                    &self.podway,
+                    temporary_name.as_str(),
+                    OFlag::O_CLOEXEC
+                        | OFlag::O_CREAT
+                        | OFlag::O_EXCL
+                        | OFlag::O_NOFOLLOW
+                        | OFlag::O_WRONLY,
+                    Mode::S_IRUSR | Mode::S_IWUSR,
+                ) {
+                    Ok(descriptor) => descriptor,
+                    Err(Errno::EEXIST) => continue,
+                    Err(source) => {
+                        return Err(removal_path_error(
+                            "create mode-switch temporary",
+                            source.into(),
+                        ));
+                    }
+                };
+                let mut temporary = File::from(descriptor);
+                let prepared = temporary
+                    .write_all(bytes)
+                    .and_then(|()| temporary.sync_all())
+                    .map_err(|source| removal_path_error("prepare mode-switch temporary", source));
+                drop(temporary);
+                if let Err(error) = prepared {
+                    let _ = unlinkat(
+                        &self.podway,
+                        temporary_name.as_str(),
+                        UnlinkatFlags::NoRemoveDir,
+                    );
+                    return Err(error);
+                }
+                if let Err(error) = validate_authority() {
+                    let _ = unlinkat(
+                        &self.podway,
+                        temporary_name.as_str(),
+                        UnlinkatFlags::NoRemoveDir,
+                    );
+                    return Err(error);
+                }
+                let publication = if replace {
+                    renameat(&self.podway, temporary_name.as_str(), &self.podway, name)
+                } else {
+                    linkat(
+                        &self.podway,
+                        temporary_name.as_str(),
+                        &self.podway,
+                        name,
+                        AtFlags::empty(),
+                    )
+                };
+                if let Err(source) = publication {
+                    let _ = unlinkat(
+                        &self.podway,
+                        temporary_name.as_str(),
+                        UnlinkatFlags::NoRemoveDir,
+                    );
+                    return Err(removal_path_error(
+                        "publish mode-switch file",
+                        source.into(),
+                    ));
+                }
+                self.podway
+                    .sync_all()
+                    .map_err(|source| removal_path_error("sync .podway directory", source))?;
+                if !replace {
+                    unlinkat(
+                        &self.podway,
+                        temporary_name.as_str(),
+                        UnlinkatFlags::NoRemoveDir,
+                    )
+                    .map_err(|source| {
+                        removal_path_error("remove mode-switch temporary", source.into())
+                    })?;
+                    self.podway
+                        .sync_all()
+                        .map_err(|source| removal_path_error("sync .podway directory", source))?;
+                }
+                return Ok(());
+            }
+            Err(WorkspaceRemovalFilesystemErrorV1::UnsafePath)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (name, bytes, replace, &mut validate_authority);
+            Err(WorkspaceRemovalFilesystemErrorV1::UnsupportedPlatform)
+        }
+    }
 }
 
 impl ValidatedPodwayRemovalDirectoryV1 {
@@ -2549,8 +2721,8 @@ impl fmt::Display for WorkspaceGitObservationV1 {
 
 /// A fully validated workspace prepared for the caller's subsequent Store open or update.
 ///
-/// None of these fields uses display text or a filesystem path as identity. `database_path` is
-/// only the exact local SQLite location that the Store must open after resolution succeeds.
+/// Display text is never identity. Canonical Git path bytes feed the durable fingerprints, while
+/// `database_path` is only the exact local SQLite location opened after resolution succeeds.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedWorkspaceV1 {
     worktree: ValidatedWorktreeV1,
@@ -2755,8 +2927,14 @@ where
             _ => {}
         }
 
-        require_matching_git_fingerprints(&preliminary, stored_identity)?;
+        require_matching_git_fingerprints(&preliminary, &binding)?;
         let bound_identity = bound_git_identity(&preliminary, &binding)?;
+        let revalidated_store_identity =
+            if binding.schema_version() < podway_store::schema::SQLITE_SCHEMA_VERSION_V13 {
+                store_identity_from_git(&bound_identity)
+            } else {
+                stored_identity.clone()
+            };
         let bound_selector = WorktreeSelectorV1::new(
             selector.version(),
             Some(bound_identity),
@@ -2775,7 +2953,12 @@ where
         require_revalidated_identity(
             &revalidated,
             WorkspaceIdentityStateV1::Bound,
-            stored_identity,
+            &revalidated_store_identity,
+        )?;
+        require_same_transient_objects(
+            &preliminary,
+            &revalidated,
+            WorkspaceGitObservationV1::BoundRevalidation,
         )?;
         let revalidated_database_path = require_stable_database_path(&database_path, &revalidated)?;
         ResolvedWorkspaceV1::new(revalidated, revalidated_database_path)
@@ -2820,6 +3003,11 @@ where
             &revalidated,
             WorkspaceIdentityStateV1::Candidate,
             &store_identity_from_git(preliminary.identity()),
+        )?;
+        require_same_transient_objects(
+            &preliminary,
+            &revalidated,
+            WorkspaceGitObservationV1::CandidateRevalidation,
         )?;
         let revalidated_database_path = require_stable_database_path(&database_path, &revalidated)?;
         ResetWorkspaceResolutionV1::new(revalidated, revalidated_database_path)
@@ -2873,6 +3061,11 @@ where
             &revalidated,
             WorkspaceIdentityStateV1::Candidate,
             &store_identity_from_git(preliminary.identity()),
+        )?;
+        require_same_transient_objects(
+            &preliminary,
+            &revalidated,
+            WorkspaceGitObservationV1::CandidateRevalidation,
         )?;
 
         let revalidated_database_path = require_stable_database_path(&database_path, &revalidated)?;
@@ -2963,12 +3156,23 @@ fn require_candidate_identity(
 
 fn require_matching_git_fingerprints(
     preliminary: &ValidatedWorktreeV1,
-    stored: &StoreWorktreeIdentityV1,
+    binding: &WorkspaceBindingV1,
 ) -> Result<(), WorkspaceResolutionErrorV1> {
+    let stored = binding.identity();
     if preliminary.identity().common_directory_fingerprint() != stored.common_dir_identity()
         || preliminary.identity().worktree_administration_fingerprint()
             != stored.worktree_admin_identity()
     {
+        let observed_root = preliminary
+            .roots()
+            .worktree_root()
+            .decode_path_bytes()
+            .map_err(|source| WorkspaceResolutionErrorV1::StoredRootPathInvalid { source })?;
+        if binding.schema_version() < podway_store::schema::SQLITE_SCHEMA_VERSION_V13
+            && binding.last_validated_root().unix_bytes() == observed_root
+        {
+            return Ok(());
+        }
         return Err(WorkspaceResolutionErrorV1::GitStoreFingerprintMismatch {
             stored: stored.clone(),
             observed_common_directory_fingerprint: preliminary
@@ -3040,6 +3244,22 @@ fn require_revalidated_identity(
         );
     }
     Ok(())
+}
+
+fn require_same_transient_objects(
+    preliminary: &ValidatedWorktreeV1,
+    revalidated: &ValidatedWorktreeV1,
+    observation: WorkspaceGitObservationV1,
+) -> Result<(), WorkspaceResolutionErrorV1> {
+    if preliminary.same_transient_object_evidence(revalidated) {
+        return Ok(());
+    }
+    Err(WorkspaceResolutionErrorV1::Git {
+        observation,
+        source: GitResolveErrorV1::Invariant {
+            problem: GitInvariantViolationV1::MetadataChangedDuringResolution,
+        },
+    })
 }
 
 fn store_identity_from_git(identity: &GitWorktreeIdentityV1) -> StoreWorktreeIdentityV1 {

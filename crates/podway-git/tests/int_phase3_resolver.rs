@@ -362,7 +362,7 @@ fn podway_and_runtime_symlinks_are_rejected_even_when_they_point_in_tree() {
 }
 
 #[test]
-fn durable_identity_supports_move_but_rejects_copy_delete_and_stale_root_replacement() {
+fn durable_identity_uses_canonical_git_paths_and_supports_linked_root_moves() {
     let temporary = temp();
     let original = temporary.path().join("original");
     create_main(&original);
@@ -392,21 +392,10 @@ fn durable_identity_supports_move_but_rejects_copy_delete_and_stale_root_replace
 
     let moved = temporary.path().join("moved");
     fs::rename(&original, &moved).expect("same-volume rename");
-    let repaired = resolver
-        .resolve(selector(&moved, Some(durable.clone())))
-        .expect("rename preserves descriptor identities");
-    assert!(repaired.move_metadata().relocated_from_prior_root());
-    let RegistryRepairActionV1::UpdateValidatedRoot { previous_root } =
-        repaired.repair_metadata().registry_action()
-    else {
-        panic!("moved worktree must request registry repair");
-    };
-    assert_eq!(
-        previous_root
-            .decode_path_bytes()
-            .expect("previous root bytes"),
-        original.as_os_str().as_bytes()
-    );
+    assert!(matches!(
+        resolver.resolve(selector(&moved, Some(durable.clone()))),
+        Err(GitResolverErrorV1::IdentityMismatch { .. })
+    ));
 
     let copied = temporary.path().join("copied");
     create_main(&copied);
@@ -441,10 +430,9 @@ fn durable_identity_supports_move_but_rejects_copy_delete_and_stale_root_replace
         .concat(),
     )
     .expect("replacement marker");
-    assert!(matches!(
-        resolver.resolve(selector(&linked, Some(linked_durable))),
-        Err(GitResolverErrorV1::IdentityMismatch { .. })
-    ));
+    resolver
+        .resolve(selector(&linked, Some(linked_durable)))
+        .expect("the same canonical Git paths retain the same identity");
     let linked_move = temporary.path().join("linked-move");
     let linked_move_common = temporary.path().join("linked-move-common");
     create_linked(&linked_move, &linked_move_common, "moved-linked");
@@ -479,6 +467,31 @@ fn durable_identity_supports_move_but_rejects_copy_delete_and_stale_root_replace
         resolver.resolve(selector(&moved, Some(durable))),
         Err(GitResolverErrorV1::WorktreeDeleted)
     ));
+}
+
+#[test]
+fn manual_and_long_lived_values_never_claim_native_object_evidence() {
+    let temporary = temp();
+    let worktree = temporary.path().join("worktree");
+    create_main(&worktree);
+    let worktree = fs::canonicalize(&worktree).expect("canonical worktree");
+    let native = NativeGitResolverV1::new()
+        .resolve(selector(&worktree, None))
+        .expect("native worktree validation");
+    let manual = manually_validated(
+        native.identity().clone(),
+        native.roots().worktree_root().clone(),
+        native.repair_metadata().clone(),
+    )
+    .expect("structurally valid manual worktree");
+
+    assert!(native.same_transient_object_evidence(&native.clone()));
+    assert!(!manual.same_transient_object_evidence(&native));
+    assert!(
+        !native
+            .long_lived_snapshot()
+            .same_transient_object_evidence(&native)
+    );
 }
 
 #[test]

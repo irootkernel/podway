@@ -37,7 +37,8 @@ use podway_daemon::{
         ProductionWorkspaceV1,
     },
     runtime_workspace::{
-        WorkspaceRemovalCrashBoundaryV1, WorkspaceRuntimeManagerV1, WorkspaceRuntimeObservationV1,
+        ResetAllCrashBoundaryV1, WorkspaceRemovalCrashBoundaryV1, WorkspaceRuntimeManagerV1,
+        WorkspaceRuntimeObservationV1,
     },
     server::{DaemonRequestV1, RequestDispatcherV1},
 };
@@ -70,6 +71,31 @@ pub(super) fn manager(root: &Path) -> WorkspaceRuntimeManagerV1 {
     manager_with_wal_autocheckpoint(root, 8)
 }
 
+pub(super) fn service_paths(root: &Path) -> ServiceRuntimePathsV1 {
+    let application_support = root.join("Application Support");
+    fs::create_dir_all(&application_support).unwrap();
+    #[cfg(unix)]
+    fs::set_permissions(&application_support, fs::Permissions::from_mode(0o700)).unwrap();
+    ServiceRuntimePathsV1::from_directories(
+        root.join("LaunchAgents"),
+        application_support.join("Podway"),
+        root.join("Logs/Podway"),
+        fixture_runtime_directory(root),
+    )
+    .unwrap()
+}
+
+pub(super) fn manager_with_reset_post_marker_hook(
+    root: &Path,
+    hook: impl Fn(&podway_daemon::workspace::ResetMarkerV1) + Send + Sync + 'static,
+) -> WorkspaceRuntimeManagerV1 {
+    WorkspaceRuntimeManagerV1::with_reset_post_marker_hook_for_tests(
+        &service_paths(root),
+        SqliteStoreOptionsV1::new(8).unwrap(),
+        hook,
+    )
+}
+
 pub(super) fn manager_with_workspace_removal_crash_boundary(
     root: &Path,
     boundary: WorkspaceRemovalCrashBoundaryV1,
@@ -86,6 +112,28 @@ pub(super) fn manager_with_workspace_removal_crash_boundary(
     )
     .unwrap();
     WorkspaceRuntimeManagerV1::with_workspace_removal_crash_boundary_for_tests(
+        &paths,
+        SqliteStoreOptionsV1::new(8).unwrap(),
+        boundary,
+    )
+}
+
+pub(super) fn manager_with_reset_crash_boundary(
+    root: &Path,
+    boundary: ResetAllCrashBoundaryV1,
+) -> WorkspaceRuntimeManagerV1 {
+    let application_support = root.join("Application Support");
+    fs::create_dir_all(&application_support).unwrap();
+    #[cfg(unix)]
+    fs::set_permissions(&application_support, fs::Permissions::from_mode(0o700)).unwrap();
+    let paths = ServiceRuntimePathsV1::from_directories(
+        root.join("LaunchAgents"),
+        application_support.join("Podway"),
+        root.join("Logs/Podway"),
+        fixture_runtime_directory(root),
+    )
+    .unwrap();
+    WorkspaceRuntimeManagerV1::with_reset_crash_boundary_for_tests(
         &paths,
         SqliteStoreOptionsV1::new(8).unwrap(),
         boundary,

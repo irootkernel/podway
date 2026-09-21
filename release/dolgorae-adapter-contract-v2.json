@@ -1779,6 +1779,11 @@
         "sha256": "sha256:48689b616f2ae9d73bafb1f118a0685b76fcff4f6ee85311815f791f8b6b5e6e"
       },
       {
+        "id": "urn:podway:schema:workspace-mode-switch-marker:v2",
+        "path": "schemas/workspace-mode-switch-marker-v2.schema.json",
+        "sha256": "sha256:783317600a146df823ab4eda3393bc71af50d08a0840152c6b05b652896d9375"
+      },
+      {
         "id": "urn:podway:schema:workspace-recovery-details:v1",
         "path": "schemas/workspace-recovery-details-v1.schema.json",
         "sha256": "sha256:d5ac050ba137f9231e0d6e3c79c7d6fda763cecd490c5d9ee31c39defc49a052"
@@ -1809,7 +1814,7 @@
     "authoring_diagnostics": 58,
     "routes": 72,
     "runtime_errors": 116,
-    "schemas": 124
+    "schemas": 125
   },
   "migration_boundary": {
     "adapter_database_access": "forbidden",

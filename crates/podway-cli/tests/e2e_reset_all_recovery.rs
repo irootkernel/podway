@@ -118,7 +118,7 @@ fn cli_output(
 }
 
 #[test]
-fn confirmed_reset_all_recovers_after_git_identity_replacement() {
+fn workspace_survives_git_object_replacement_at_the_same_canonical_paths() {
     let root = PathBuf::from(format!(
         "/tmp/podway-reset-all-recovery-e2e-{}",
         std::process::id()
@@ -147,40 +147,16 @@ fn confirmed_reset_all_recovers_after_git_identity_replacement() {
     fs::remove_dir_all(worktree.join(".git")).unwrap();
     initialize_git_worktree(&worktree, "replacement identity");
     let child = spawn_daemon(&daemon, &home, &paths);
-    let (status, rejected) = cli_output(cli, &home, &paths, &worktree, &["workspace", "show"]);
-    assert!(!status.success());
-    assert_eq!(rejected["code"], "WORKSPACE_ID_CONFLICT");
-
-    let (status, reset) = cli_output(
-        cli,
-        &home,
-        &paths,
-        &worktree,
-        &[
-            "--if-workspace-uuid",
-            &old_workspace_uuid,
-            "--idempotency-key",
-            "reset-all-detached-git-e2e",
-            "reset",
-            "--all",
-            "--force",
-            "--yes",
-        ],
-    );
-    assert!(status.success(), "workspace.reset_all failed: {reset}");
-    assert_eq!(reset["command"], "workspace.reset_all");
-    let new_workspace_uuid = reset["workspace"]["uuid"]
-        .as_str()
-        .expect("workspace.reset_all must return its replacement UUID")
-        .to_owned();
-    assert_ne!(new_workspace_uuid, old_workspace_uuid);
+    let (status, shown) = cli_output(cli, &home, &paths, &worktree, &["workspace", "show"]);
+    assert!(status.success(), "workspace.show failed: {shown}");
+    assert_eq!(shown["workspace"]["uuid"], old_workspace_uuid);
     assert_eq!(fs::read_to_string(&retained).unwrap(), "retained\n");
 
     stop_daemon(child);
     let child = spawn_daemon(&daemon, &home, &paths);
     let (status, shown) = cli_output(cli, &home, &paths, &worktree, &["workspace", "show"]);
     assert!(status.success(), "workspace.show failed: {shown}");
-    assert_eq!(shown["workspace"]["uuid"], new_workspace_uuid);
+    assert_eq!(shown["workspace"]["uuid"], old_workspace_uuid);
 
     stop_daemon(child);
     fs::remove_dir_all(root).unwrap();

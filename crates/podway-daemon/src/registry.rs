@@ -595,6 +595,20 @@ impl RegistryStoreV1 {
         last_known_root: ValidatedWorkspaceRootV1,
         last_seen_at: Rfc3339MillisV1,
     ) -> Result<WorkspaceRegistryEntryV1, RegistryErrorV1> {
+        self.insert_or_refresh_guarded(workspace_uuid, last_known_root, last_seen_at, || Ok(()))
+    }
+
+    /// Publishes an entry only after renewing caller authority under the registry lock.
+    ///
+    /// The callback immediately precedes the durable registry publication and is therefore the
+    /// operation's external-authority linearization point.
+    pub(crate) fn insert_or_refresh_guarded(
+        &self,
+        workspace_uuid: WorkspaceId,
+        last_known_root: ValidatedWorkspaceRootV1,
+        last_seen_at: Rfc3339MillisV1,
+        mut validate_authority: impl FnMut() -> Result<(), RegistryErrorV1>,
+    ) -> Result<WorkspaceRegistryEntryV1, RegistryErrorV1> {
         let entry = WorkspaceRegistryEntryV1::new(
             workspace_uuid.clone(),
             last_known_root.clone(),
@@ -641,6 +655,7 @@ impl RegistryStoreV1 {
                     registry.workspaces.insert(index, entry.clone());
                 }
             }
+            validate_authority()?;
             persist_registry_v1(self, parent, current_uid, &registry)?;
             Ok(entry)
         })
@@ -718,6 +733,15 @@ impl RegistryStoreV1 {
                 return Err(RegistryErrorV1::ResetRootGenerationChanged { root: exact_root });
             }
             if let Some(conflict) = registry.workspaces.iter().find(|entry| {
+                entry.workspace_uuid == *previous_uuid && entry.last_known_root != exact_root
+            }) {
+                return Err(RegistryErrorV1::WorkspaceRootConflict {
+                    workspace_uuid: previous_uuid.clone(),
+                    registered_root: conflict.last_known_root.clone(),
+                    supplied_root: exact_root,
+                });
+            }
+            if let Some(conflict) = registry.workspaces.iter().find(|entry| {
                 entry.workspace_uuid == target_uuid && entry.last_known_root != exact_root
             }) {
                 return Err(RegistryErrorV1::WorkspaceRootConflict {
@@ -728,7 +752,10 @@ impl RegistryStoreV1 {
             }
             let target_already_published =
                 observed_root_workspace_uuids.as_slice() == std::slice::from_ref(&target_uuid);
-            if !target_already_published && !observed_root_workspace_uuids.contains(previous_uuid) {
+            if !target_already_published
+                && !observed_root_workspace_uuids.is_empty()
+                && !observed_root_workspace_uuids.contains(previous_uuid)
+            {
                 return Err(RegistryErrorV1::WorkspaceNotRegistered {
                     workspace_uuid: previous_uuid.clone(),
                 });
@@ -812,6 +839,15 @@ impl RegistryStoreV1 {
         workspace_uuid: &WorkspaceId,
         exact_root: &ValidatedWorkspaceRootV1,
     ) -> Result<ExactRegistryRemovalOutcomeV1, RegistryErrorV1> {
+        self.remove_exact_generation_guarded(workspace_uuid, exact_root, || Ok(()))
+    }
+
+    pub(crate) fn remove_exact_generation_guarded(
+        &self,
+        workspace_uuid: &WorkspaceId,
+        exact_root: &ValidatedWorkspaceRootV1,
+        mut validate_authority: impl FnMut() -> Result<(), RegistryErrorV1>,
+    ) -> Result<ExactRegistryRemovalOutcomeV1, RegistryErrorV1> {
         self.with_locked(|parent, current_uid| {
             let mut registry = read_registry_v1(&self.registry_path, parent, current_uid)?;
             let Ok(index) = registry
@@ -824,6 +860,7 @@ impl RegistryStoreV1 {
                 return Ok(ExactRegistryRemovalOutcomeV1::GenerationChanged);
             }
             let removed = registry.workspaces.remove(index);
+            validate_authority()?;
             persist_registry_v1(self, parent, current_uid, &registry)?;
             Ok(ExactRegistryRemovalOutcomeV1::Removed(removed))
         })

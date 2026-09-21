@@ -6,6 +6,8 @@
 //! display strings. It deliberately exposes no Git mutation operation.
 
 use podway_core::{Sha256Digest, WorkspaceId};
+use std::fs::File;
+use std::sync::Arc;
 
 mod layout;
 mod native;
@@ -182,7 +184,7 @@ impl DurableWorktreeIdentityV1 {
         }
     }
 
-    /// Constructs a store-bound identity with descriptor-derived root evidence.
+    /// Constructs a store-bound identity with canonical root-path evidence.
     pub fn new_with_root_directory_fingerprint(
         workspace_id: WorkspaceId,
         common_directory_fingerprint: Sha256Digest,
@@ -229,7 +231,7 @@ impl DurableWorktreeIdentityV1 {
         &self.worktree_administration_fingerprint
     }
 
-    /// Returns descriptor-derived root evidence when the identity was produced natively.
+    /// Returns canonical root-path evidence when the identity was produced natively.
     pub fn root_directory_fingerprint(&self) -> Option<&Sha256Digest> {
         self.root_directory_fingerprint.as_ref()
     }
@@ -488,6 +490,7 @@ fn quarantine_legacy_uuid_verification(
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ValidatedWorktreeV1 {
     identity: DurableWorktreeIdentityV1,
+    object_evidence: TransientWorktreeEvidenceV1,
     roots: WorktreeRootsV1,
     kind: WorktreeKindV1,
     containment: ContainmentMetadataV1,
@@ -495,9 +498,132 @@ pub struct ValidatedWorktreeV1 {
     repair_metadata: WorktreeRepairMetadataV1,
 }
 
+/// Request-local object evidence is deliberately separate from durable workspace identity.
+/// Native observations retain the original descriptors only while a resolution value remains
+/// request-local. Long-lived snapshots and manually constructed values carry no object evidence.
+#[derive(Clone)]
+pub(crate) enum TransientWorktreeEvidenceV1 {
+    Unavailable,
+    Native {
+        root: Sha256Digest,
+        common: Sha256Digest,
+        administration: Sha256Digest,
+        _held_directories: Arc<[File; 3]>,
+    },
+}
+
+impl std::fmt::Debug for TransientWorktreeEvidenceV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unavailable => formatter.write_str("TransientWorktreeEvidenceV1::Unavailable"),
+            Self::Native {
+                root,
+                common,
+                administration,
+                ..
+            } => formatter
+                .debug_struct("TransientWorktreeEvidenceV1::Native")
+                .field("root", root)
+                .field("common", common)
+                .field("administration", administration)
+                .finish_non_exhaustive(),
+        }
+    }
+}
+
+impl PartialEq for TransientWorktreeEvidenceV1 {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Unavailable, Self::Unavailable) => true,
+            (
+                Self::Native {
+                    root,
+                    common,
+                    administration,
+                    ..
+                },
+                Self::Native {
+                    root: other_root,
+                    common: other_common,
+                    administration: other_administration,
+                    ..
+                },
+            ) => {
+                root == other_root
+                    && common == other_common
+                    && administration == other_administration
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Eq for TransientWorktreeEvidenceV1 {}
+
+impl TransientWorktreeEvidenceV1 {
+    pub(crate) fn native(
+        root: Sha256Digest,
+        common: Sha256Digest,
+        administration: Sha256Digest,
+        held_directories: [File; 3],
+    ) -> Self {
+        Self::Native {
+            root,
+            common,
+            administration,
+            _held_directories: Arc::new(held_directories),
+        }
+    }
+
+    fn root(&self) -> Option<&Sha256Digest> {
+        match self {
+            Self::Unavailable => None,
+            Self::Native { root, .. } => Some(root),
+        }
+    }
+
+    fn common(&self) -> Option<&Sha256Digest> {
+        match self {
+            Self::Unavailable => None,
+            Self::Native { common, .. } => Some(common),
+        }
+    }
+
+    fn administration(&self) -> Option<&Sha256Digest> {
+        match self {
+            Self::Unavailable => None,
+            Self::Native { administration, .. } => Some(administration),
+        }
+    }
+
+    fn same_native(&self, other: &Self) -> bool {
+        matches!((self, other), (Self::Native { .. }, Self::Native { .. })) && self == other
+    }
+}
+
 impl ValidatedWorktreeV1 {
     pub fn new(
         identity: DurableWorktreeIdentityV1,
+        roots: WorktreeRootsV1,
+        kind: WorktreeKindV1,
+        containment: ContainmentMetadataV1,
+        move_metadata: WorktreeMoveMetadataV1,
+        repair_metadata: WorktreeRepairMetadataV1,
+    ) -> Result<Self, ValidatedWorktreeValidationErrorV1> {
+        Self::new_with_object_evidence(
+            identity,
+            TransientWorktreeEvidenceV1::Unavailable,
+            roots,
+            kind,
+            containment,
+            move_metadata,
+            repair_metadata,
+        )
+    }
+
+    pub(crate) fn new_with_object_evidence(
+        identity: DurableWorktreeIdentityV1,
+        object_evidence: TransientWorktreeEvidenceV1,
         roots: WorktreeRootsV1,
         kind: WorktreeKindV1,
         containment: ContainmentMetadataV1,
@@ -583,6 +709,7 @@ impl ValidatedWorktreeV1 {
         }
         Ok(Self {
             identity,
+            object_evidence,
             roots,
             kind,
             containment,
@@ -593,6 +720,33 @@ impl ValidatedWorktreeV1 {
 
     pub fn identity(&self) -> &DurableWorktreeIdentityV1 {
         &self.identity
+    }
+
+    pub(crate) fn root_object_evidence(&self) -> Option<&Sha256Digest> {
+        self.object_evidence.root()
+    }
+
+    pub(crate) fn common_object_evidence(&self) -> Option<&Sha256Digest> {
+        self.object_evidence.common()
+    }
+
+    pub(crate) fn administration_object_evidence(&self) -> Option<&Sha256Digest> {
+        self.object_evidence.administration()
+    }
+
+    /// Returns true only for two native observations of the same request-local filesystem objects.
+    pub fn same_transient_object_evidence(&self, other: &Self) -> bool {
+        self.object_evidence.same_native(&other.object_evidence)
+    }
+
+    /// Returns a long-lived structural snapshot with every retained filesystem descriptor removed.
+    ///
+    /// The result remains suitable for durable identity and layout comparison, but it must never
+    /// be used as request-local replacement-race evidence.
+    pub fn long_lived_snapshot(&self) -> Self {
+        let mut snapshot = self.clone();
+        snapshot.object_evidence = TransientWorktreeEvidenceV1::Unavailable;
+        snapshot
     }
 
     pub fn roots(&self) -> &WorktreeRootsV1 {

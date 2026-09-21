@@ -4,12 +4,12 @@ use crate::support_phase4_workspace;
 
 use std::{
     fs,
-    path::Path,
+    path::{Path, PathBuf},
     sync::atomic::{AtomicUsize, Ordering},
 };
 
 #[cfg(unix)]
-use std::{os::unix::ffi::OsStrExt, process::Command};
+use std::process::Command;
 
 use podway_core::{UnixMillis, WorkspaceId};
 use podway_daemon::workspace;
@@ -39,6 +39,26 @@ fn resolver() -> WorkspaceResolverV1<NativeGitResolverV1, SqliteWorkspaceBinding
 }
 struct RevalidationRaceHookV1 {
     calls: AtomicUsize,
+}
+
+struct SamePathReplacementHookV1 {
+    calls: AtomicUsize,
+    root: PathBuf,
+    replacement: PathBuf,
+    retired: PathBuf,
+}
+
+impl GitResolverContractV1 for SamePathReplacementHookV1 {
+    fn resolve(
+        &self,
+        selector: WorktreeSelectorV1,
+    ) -> Result<ValidatedWorktreeV1, GitResolveErrorV1> {
+        if self.calls.fetch_add(1, Ordering::SeqCst) == 1 {
+            fs::rename(&self.root, &self.retired).expect("retire original worktree root");
+            fs::rename(&self.replacement, &self.root).expect("publish same-path replacement");
+        }
+        NativeGitResolverV1::new().resolve(selector)
+    }
 }
 
 impl RevalidationRaceHookV1 {
@@ -297,6 +317,44 @@ fn deterministic_revalidation_hook_rejects_a_git_race_before_store_mutation() {
 }
 
 #[test]
+fn same_path_root_replacement_between_resolver_passes_is_rejected() {
+    let fixture = git_worktrees();
+    let bootstrap = bootstrap_main(&fixture);
+    let store = bind_bootstrap_workspace(&bootstrap);
+    drop(store);
+    let durable_uuid = bootstrap.store_identity().workspace_uuid().clone();
+    let root = fs::canonicalize(fixture.main()).expect("canonical original root");
+    let replacement = fixture.temporary_path().join("replacement-main");
+    let retired = fixture.temporary_path().join("retired-main");
+    copy_tree(&root, &replacement);
+    let database = bootstrap.database_path().to_path_buf();
+    let before = read_file(&database);
+    let resolver = WorkspaceResolverV1::new(
+        SamePathReplacementHookV1 {
+            calls: AtomicUsize::new(0),
+            root: root.clone(),
+            replacement,
+            retired,
+        },
+        SqliteWorkspaceBindingInspectorV1::new(options()),
+    );
+
+    let error = resolver
+        .resolve_existing(selector(&root), Some(&durable_uuid))
+        .expect_err("same-path replacement must fail request-local object continuity");
+    assert!(matches!(
+        error,
+        WorkspaceResolutionErrorV1::Git {
+            observation: WorkspaceGitObservationV1::BoundRevalidation,
+            source: GitResolveErrorV1::Invariant {
+                problem: GitInvariantViolationV1::MetadataChangedDuringResolution
+            }
+        }
+    ));
+    assert_eq!(read_file(&database), before);
+}
+
+#[test]
 fn root_and_nested_selectors_converge_to_the_same_path_free_scheduler_key() {
     let fixture = git_worktrees();
     let bootstrap = bootstrap_main(&fixture);
@@ -319,45 +377,22 @@ fn root_and_nested_selectors_converge_to_the_same_path_free_scheduler_key() {
 }
 
 #[test]
-fn moved_worktree_preserves_its_key_and_exposes_a_root_repair() {
+fn moved_main_worktree_rejects_the_previous_path_identity() {
     let fixture = git_worktrees();
     let bootstrap = bootstrap_main(&fixture);
     let store = bind_bootstrap_workspace(&bootstrap);
     drop(store);
     let durable_uuid = bootstrap.store_identity().workspace_uuid().clone();
     let original_root = fixture.main().to_path_buf();
-    let canonical_original_root =
-        fs::canonicalize(&original_root).expect("original root must canonicalize");
-    let original_key = bootstrap.scheduler_key().clone();
     let relocated = fixture.temporary_path().join("relocated-main");
     fs::rename(&original_root, &relocated).expect("main worktree must be movable without copying");
-    let canonical_relocated_root =
-        fs::canonicalize(&relocated).expect("relocated root must canonicalize");
-
-    let moved = resolver()
+    let error = resolver()
         .resolve_existing(selector(&relocated), Some(&durable_uuid))
-        .expect("same Git directories at a new root must retain the Store identity");
-    assert_eq!(moved.scheduler_key(), &original_key);
-    assert!(moved.move_metadata().relocated_from_prior_root());
-    #[cfg(unix)]
-    assert_eq!(
-        moved
-            .move_metadata()
-            .previous_root()
-            .expect("move repair retains the prior root")
-            .decode_path_bytes()
-            .expect("prior root bytes must decode"),
-        canonical_original_root.as_os_str().as_bytes()
-    );
-    #[cfg(unix)]
-    assert_eq!(
-        moved
-            .move_metadata()
-            .current_root()
-            .decode_path_bytes()
-            .expect("current root bytes must decode"),
-        canonical_relocated_root.as_os_str().as_bytes()
-    );
+        .expect_err("a main-worktree move must change canonical path identity");
+    assert!(matches!(
+        error,
+        WorkspaceResolutionErrorV1::GitStoreFingerprintMismatch { .. }
+    ));
 }
 
 #[test]

@@ -35,7 +35,8 @@ These JSON Schema Draft 2020-12 files define Podway's versioned structural contr
 - `aquarium-dev-service-result-v1.schema.json`: successful controller apply result.
 - `workspace-mode-plan-result-v1.schema.json`: read-only token issuance and bounded mode-switch readiness result.
 - `workspace-mode-apply-result-v1.schema.json`: convergent mode-switch application result.
-- `workspace-mode-switch-marker-v1.schema.json`: durable bounded recovery marker for an exact mode transition.
+- `workspace-mode-switch-marker-v1.schema.json`: retained decoder contract for legacy mode-switch recovery.
+- `workspace-mode-switch-marker-v2.schema.json`: durable bounded recovery marker binding an exact mode transition to canonical root and Git administration identity.
 - `workspace-mode-mismatch-details-v1.schema.json`: closed pre-Store runtime ownership mismatch details.
 - `version-summary-v1.schema.json`: compact public product name and version.
 - `version-result-v1.schema.json`: detailed static build and contract identity.

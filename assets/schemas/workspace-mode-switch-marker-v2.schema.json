@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:workspace-mode-switch-marker:v2",
+  "title": "Podway Workspace Mode Switch Marker v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "operation_id", "plan_token_digest", "workspace_uuid", "source_mode", "target_mode", "config_digest", "target_config_digest", "root_identity", "completed_steps", "created_at", "updated_at"],
+  "properties": {
+    "schema": { "const": "podway.workspace-mode-switch-marker/v2" },
+    "operation_id": { "type": "string", "format": "uuid" },
+    "plan_token_digest": { "$ref": "#/$defs/digest" },
+    "workspace_uuid": { "type": "string", "format": "uuid" },
+    "source_mode": { "$ref": "#/$defs/mode" },
+    "target_mode": { "$ref": "#/$defs/mode" },
+    "config_digest": { "$ref": "#/$defs/digest" },
+    "target_config_digest": { "$ref": "#/$defs/digest" },
+    "root_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root_path_bytes_base64url", "common_dir_identity", "worktree_admin_identity"],
+      "properties": {
+        "root_path_bytes_base64url": { "type": "string", "minLength": 1 },
+        "common_dir_identity": { "$ref": "#/$defs/digest" },
+        "worktree_admin_identity": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "completed_steps": {
+      "type": "array",
+      "maxItems": 6,
+      "uniqueItems": true,
+      "items": { "enum": ["source_closed", "source_registry_retired", "runtime_removed", "config_updated", "target_initialized", "target_registry_published"] }
+    },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "mode": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" }
+  }
+}

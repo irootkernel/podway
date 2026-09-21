@@ -2094,63 +2094,20 @@ pub(crate) fn fingerprint_directory(
     )
 }
 
-pub(crate) fn validate_workspace_layout_root(
-    root: &OpenedDirectory,
-    expected_fingerprint: &Sha256Digest,
+pub(crate) fn object_evidence_directory(
+    directory: &OpenedDirectory,
+    role: &'static [u8],
     kind: &WorktreeKindV1,
-) -> Result<(), GitResolverErrorV1> {
-    let actual = fingerprint_directory_with_invariant(
-        root,
-        b"worktree-root",
+) -> Result<Sha256Digest, GitResolverErrorV1> {
+    object_evidence_directory_with_invariant(
+        directory,
+        role,
         kind,
-        GitInvariantViolationV1::MetadataChangedDuringWorkspaceLayout,
-    )?;
-    if &actual != expected_fingerprint {
-        return Err(metadata_changed(
-            GitInvariantViolationV1::MetadataChangedDuringWorkspaceLayout,
-        ));
-    }
-    Ok(())
-}
-
-pub(crate) fn validate_open_worktree_root(
-    directory: &File,
-    worktree: &ValidatedWorktreeV1,
-) -> Result<(), GitResolverErrorV1> {
-    let root_bytes = worktree
-        .roots()
-        .worktree_root()
-        .decode_path_bytes()
-        .map_err(GitResolverErrorV1::Selector)?;
-    let path = PathBuf::from(OsString::from_vec(root_bytes));
-    let opened = OpenedDirectory::from_file(
-        directory
-            .try_clone()
-            .map_err(|error| map_io(&path, GitReadOperationV1::ReadGitDirectory, error))?,
-        path,
-        GitReadOperationV1::ReadGitDirectory,
-    )?;
-    let expected = worktree
-        .identity()
-        .root_directory_fingerprint()
-        .ok_or_else(|| {
-            metadata_changed(GitInvariantViolationV1::MetadataChangedDuringResolution)
-        })?;
-    let actual = fingerprint_directory_with_invariant(
-        &opened,
-        b"worktree-root",
-        worktree.kind(),
         GitInvariantViolationV1::MetadataChangedDuringResolution,
-    )?;
-    if &actual != expected {
-        return Err(metadata_changed(
-            GitInvariantViolationV1::MetadataChangedDuringResolution,
-        ));
-    }
-    Ok(())
+    )
 }
 
-fn fingerprint_directory_with_invariant(
+fn object_evidence_directory_with_invariant(
     directory: &OpenedDirectory,
     role: &'static [u8],
     kind: &WorktreeKindV1,
@@ -2159,8 +2116,8 @@ fn fingerprint_directory_with_invariant(
     directory.verify(invariant)?;
     let identity = directory.snapshot.identity;
     let mut hasher = Sha256::new();
-    hasher.update(b"podway-git-directory-fingerprint\0");
-    hasher.update(2_u16.to_be_bytes());
+    hasher.update(b"podway-git-request-object-evidence\0");
+    hasher.update(1_u16.to_be_bytes());
     write_frame(&mut hasher, role);
     write_frame(&mut hasher, layout_kind_tag(kind));
     write_frame(&mut hasher, platform_tag());
@@ -2191,6 +2148,78 @@ fn fingerprint_directory_with_invariant(
             write_frame(&mut hasher, &birth_nanoseconds.to_be_bytes());
         }
     }
+    digest_from_hasher(hasher)
+}
+
+pub(crate) fn retain_directory(directory: &OpenedDirectory) -> Result<File, GitResolverErrorV1> {
+    directory
+        .file
+        .try_clone()
+        .map_err(|error| map_io(&directory.path, GitReadOperationV1::ReadGitDirectory, error))
+}
+
+pub(crate) fn validate_workspace_layout_root(
+    root: &OpenedDirectory,
+    worktree: &ValidatedWorktreeV1,
+) -> Result<(), GitResolverErrorV1> {
+    let expected = worktree.root_object_evidence().ok_or_else(|| {
+        metadata_changed(GitInvariantViolationV1::MetadataChangedDuringWorkspaceLayout)
+    })?;
+    let actual = object_evidence_directory_with_invariant(
+        root,
+        b"worktree-root",
+        worktree.kind(),
+        GitInvariantViolationV1::MetadataChangedDuringWorkspaceLayout,
+    )?;
+    if &actual != expected {
+        return Err(metadata_changed(
+            GitInvariantViolationV1::MetadataChangedDuringWorkspaceLayout,
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_open_worktree_root(
+    directory: &File,
+    worktree: &ValidatedWorktreeV1,
+) -> Result<(), GitResolverErrorV1> {
+    let root_bytes = worktree
+        .roots()
+        .worktree_root()
+        .decode_path_bytes()
+        .map_err(GitResolverErrorV1::Selector)?;
+    let path = PathBuf::from(OsString::from_vec(root_bytes));
+    let opened = OpenedDirectory::from_file(
+        directory
+            .try_clone()
+            .map_err(|error| map_io(&path, GitReadOperationV1::ReadGitDirectory, error))?,
+        path,
+        GitReadOperationV1::ReadGitDirectory,
+    )?;
+    let expected = worktree.root_object_evidence().ok_or_else(|| {
+        metadata_changed(GitInvariantViolationV1::MetadataChangedDuringResolution)
+    })?;
+    let actual = object_evidence_directory(&opened, b"worktree-root", worktree.kind())?;
+    if &actual != expected {
+        return Err(metadata_changed(
+            GitInvariantViolationV1::MetadataChangedDuringResolution,
+        ));
+    }
+    Ok(())
+}
+
+fn fingerprint_directory_with_invariant(
+    directory: &OpenedDirectory,
+    role: &'static [u8],
+    _kind: &WorktreeKindV1,
+    invariant: GitInvariantViolationV1,
+) -> Result<Sha256Digest, GitResolverErrorV1> {
+    directory.verify(invariant)?;
+    let mut hasher = Sha256::new();
+    hasher.update(b"podway-git-directory-fingerprint\0");
+    hasher.update(3_u16.to_be_bytes());
+    write_frame(&mut hasher, role);
+    write_frame(&mut hasher, directory.path.as_os_str().as_bytes());
     digest_from_hasher(hasher)
 }
 

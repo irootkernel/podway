@@ -170,7 +170,7 @@ pub fn downgrade_to_schema_v4(database_path: &Path) -> Result<(), String> {
                FROM v2_workspace_state_v7
               WHERE singleton = 1;
              DROP TABLE v2_workspace_state_v7;
-             DELETE FROM schema_migrations WHERE version IN (5, 6, 7, 8, 9, 10, 11, 12);",
+             DELETE FROM schema_migrations WHERE version IN (5, 6, 7, 8, 9, 10, 11, 12, 13);",
         )
         .map_err(|error| error.to_string())?;
     connection
@@ -252,6 +252,30 @@ pub fn detach_git_identity(database_path: &Path) -> Result<(), String> {
         return Err(format!("expected one workspace binding, changed {changed}"));
     }
     Ok(())
+}
+
+/// Recreates the released v12 identity state with legacy filesystem-derived fingerprints.
+pub fn downgrade_to_schema_v12_identity(database_path: &Path) -> Result<(), String> {
+    let connection = Connection::open(database_path).map_err(|error| error.to_string())?;
+    let changed = connection
+        .execute(
+            "UPDATE workspace_state SET git_common_fingerprint = ?1, \
+             git_worktree_fingerprint = ?2 WHERE singleton = 1",
+            params![
+                format!("sha256:{}", "c".repeat(64)),
+                format!("sha256:{}", "d".repeat(64)),
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+    if changed != 1 {
+        return Err(format!("expected one workspace binding, changed {changed}"));
+    }
+    connection
+        .execute("DELETE FROM schema_migrations WHERE version = 13", [])
+        .map_err(|error| error.to_string())?;
+    connection
+        .pragma_update(None, "user_version", 12)
+        .map_err(|error| error.to_string())
 }
 
 /// Replaces the persisted workspace root with another valid encoded absolute path.

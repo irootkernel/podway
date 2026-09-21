@@ -101,13 +101,21 @@ The database stores:
 - a fingerprint of the specific worktree administrative directory;
 - the most recently validated canonical root.
 
-The fingerprints MUST be derived from stable Git metadata and canonical filesystem identity, not only from path strings. Exact platform details are internal and versioned with the database schema.
+The schema-v13 fingerprints are role-tagged hashes of lossless canonical path
+bytes only. The common-directory path is the parent identity, the
+worktree-administration path is the child identity, and the canonical worktree
+root is location evidence. Device, inode, object type, and birth time are used
+only to detect replacement races during one resolution request; they are not
+durable identity. Native resolution keeps directory descriptors open only until
+the request's resolver and pre-Store revalidation phases agree; scheduler
+contexts retain only the descriptor-free durable path evidence.
 
 The workspace UUID is non-secret. It detects copied runtime state and path reuse.
 
 ## Root move
 
-When a worktree moves:
+When a linked worktree root moves while its common and administration paths stay
+fixed:
 
 1. the CLI discovers the new canonical root;
 2. the daemon opens the local database at that root;
@@ -115,9 +123,11 @@ When a worktree moves:
 4. if both match the registered workspace, the daemon updates `last_known_root`;
 5. queued jobs resume.
 
-`podway workspace repair` performs the same validation explicitly, restores a
-missing global registry entry from the revalidated durable Store identity, and
-reports every change. It MUST NOT adopt a database whose Git identity conflicts.
+`podway workspace repair` restores a missing global registry entry from a
+revalidated durable Store identity and reports every change. Moving a main
+worktree or its Git common directory changes durable path identity and is not
+implicitly adopted. It requires explicit destructive reinitialization until a
+separate path-change repair contract is shipped.
 
 ## Copied runtime state
 

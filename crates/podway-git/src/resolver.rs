@@ -13,9 +13,9 @@ use crate::native;
 use crate::{
     ContainmentMetadataV1, DurableWorktreeIdentityV1, GitInvariantViolationV1, GitReadOperationV1,
     GitResolverContractV1, GitResolverErrorV1, HashedLocalArtifactV1, LocalPathPresenceV1,
-    LosslessPathV1, ReadLocalFileV1, ValidatedWorktreeV1, WorkspaceIdentityStateV1,
-    WorkspaceUuidVerificationV1, WorktreeMoveMetadataV1, WorktreeRepairMetadataV1, WorktreeRootsV1,
-    WorktreeSelectorV1,
+    LosslessPathV1, ReadLocalFileV1, TransientWorktreeEvidenceV1, ValidatedWorktreeV1,
+    WorkspaceIdentityStateV1, WorkspaceUuidVerificationV1, WorktreeMoveMetadataV1,
+    WorktreeRepairMetadataV1, WorktreeRootsV1, WorktreeSelectorV1,
 };
 
 /// A zero-configuration, read-only resolver for supported native Unix Git worktrees.
@@ -77,7 +77,7 @@ impl NativeGitResolverV1 {
     /// Revalidates a caller-opened descriptor against one exact resolved worktree root.
     ///
     /// The descriptor remains read-only authority owned by the caller. This crate performs no
-    /// mutation; it only proves that the open directory has the same descriptor-derived identity
+    /// mutation; it only proves that the open directory has the same request-local object evidence
     /// as the supplied Git resolution and that the absolute root has not been substituted.
     pub fn validate_open_worktree_root(
         &self,
@@ -210,6 +210,21 @@ impl NativeGitResolverV1 {
         let layout = native::discover_worktree(selected)?;
         let root_fingerprint =
             native::fingerprint_directory(&layout.worktree_root, b"worktree-root", &layout.kind)?;
+        let root_object_evidence = native::object_evidence_directory(
+            &layout.worktree_root,
+            b"worktree-root",
+            &layout.kind,
+        )?;
+        let common_object_evidence = native::object_evidence_directory(
+            &layout.common_directory_root,
+            b"common",
+            &layout.kind,
+        )?;
+        let administration_object_evidence = native::object_evidence_directory(
+            &layout.worktree_administration_root,
+            b"worktree-administration",
+            &layout.kind,
+        )?;
         let common_fingerprint =
             native::fingerprint_directory(&layout.common_directory_root, b"common", &layout.kind)?;
         let administration_fingerprint = native::fingerprint_directory(
@@ -251,9 +266,11 @@ impl NativeGitResolverV1 {
                     root_fingerprint.clone(),
                     worktree_root.clone(),
                 );
+                let previous_root = native::decode_lossless_path(expected.last_validated_root())?;
+                let moved = previous_root != layout.worktree_root.path();
                 if expected.common_directory_fingerprint() != &common_fingerprint
                     || expected.worktree_administration_fingerprint() != &administration_fingerprint
-                    || expected.root_directory_fingerprint() != Some(&root_fingerprint)
+                    || (!moved && expected.root_directory_fingerprint() != Some(&root_fingerprint))
                 {
                     return Err(GitResolverErrorV1::IdentityMismatch {
                         expected: Box::new(expected.clone()),
@@ -261,8 +278,6 @@ impl NativeGitResolverV1 {
                     });
                 }
 
-                let previous_root = native::decode_lossless_path(expected.last_validated_root())?;
-                let moved = previous_root != layout.worktree_root.path();
                 let move_metadata = if moved {
                     WorktreeMoveMetadataV1::relocated(
                         expected.last_validated_root().clone(),
@@ -316,8 +331,20 @@ impl NativeGitResolverV1 {
             }
         };
 
-        ValidatedWorktreeV1::new(
+        let held_directories = [
+            native::retain_directory(&layout.worktree_root)?,
+            native::retain_directory(&layout.common_directory_root)?,
+            native::retain_directory(&layout.worktree_administration_root)?,
+        ];
+        let object_evidence = TransientWorktreeEvidenceV1::native(
+            root_object_evidence,
+            common_object_evidence,
+            administration_object_evidence,
+            held_directories,
+        );
+        ValidatedWorktreeV1::new_with_object_evidence(
             identity,
+            object_evidence,
             roots,
             layout.kind,
             containment,
@@ -374,6 +401,32 @@ impl NativeGitResolverV1 {
             || worktree.identity().common_directory_fingerprint() != &common_fingerprint
             || worktree.identity().worktree_administration_fingerprint()
                 != &administration_fingerprint
+        {
+            return Err(artifact_metadata_changed());
+        }
+        let root_object_evidence = native::object_evidence_directory(
+            &layout.worktree_root,
+            b"worktree-root",
+            &layout.kind,
+        )
+        .map_err(map_snapshot_change_to_artifact)?;
+        if worktree.root_object_evidence() != Some(&root_object_evidence) {
+            return Err(artifact_metadata_changed());
+        }
+        let common_object_evidence = native::object_evidence_directory(
+            &layout.common_directory_root,
+            b"common",
+            &layout.kind,
+        )
+        .map_err(map_snapshot_change_to_artifact)?;
+        let administration_object_evidence = native::object_evidence_directory(
+            &layout.worktree_administration_root,
+            b"worktree-administration",
+            &layout.kind,
+        )
+        .map_err(map_snapshot_change_to_artifact)?;
+        if worktree.common_object_evidence() != Some(&common_object_evidence)
+            || worktree.administration_object_evidence() != Some(&administration_object_evidence)
         {
             return Err(artifact_metadata_changed());
         }

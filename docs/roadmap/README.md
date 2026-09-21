@@ -536,6 +536,21 @@ Progress, In Review, or Blocked; later tasks remain Planned. Completing the task
 does not replace independent epic acceptance. Release selection, distribution,
 installation, and runtime activation remain outside this epic.
 
+<a id="v2pid-canonical-path-workspace-identity"></a>
+
+## V2PID — Canonical-Path Workspace Identity
+
+Status: Completed.
+
+This corrective epic replaces reboot-unstable filesystem-object fingerprints
+with canonical Git paths while preserving request-local descriptor race checks.
+It is independent of delegated Procedure behavior and does not activate or
+install a runtime.
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `V2PID-001` | Replace durable filesystem identity with canonical paths | Completed | Add path-only Git identity, exact-root schema-v13 migration, missing-registry reset recovery, regression coverage, and durable architecture guidance. | [ADR-0036](../architecture-decision-records/0036-use-canonical-git-paths-for-workspace-identity.md), [SQLite model](../specs/storage/sqlite-model.md), [Git model](../architecture/git-worktree-and-filesystem.md) |
+
 <a id="v2sdg-host-neutral-supervised-delegation-foundation"></a>
 
 ## V2SDG — Host-Neutral Supervised Delegation Foundation

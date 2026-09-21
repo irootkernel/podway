@@ -1158,6 +1158,7 @@ where
 pub struct WorkspaceBindingV1 {
     identity: DurableWorktreeIdentityV1,
     last_validated_root: ValidatedWorkspaceRootV1,
+    schema_version: u32,
 }
 
 impl WorkspaceBindingV1 {
@@ -1168,6 +1169,19 @@ impl WorkspaceBindingV1 {
         Self {
             identity,
             last_validated_root,
+            schema_version: schema::SQLITE_SCHEMA_VERSION_CURRENT,
+        }
+    }
+
+    pub(crate) fn new_with_schema_version(
+        identity: DurableWorktreeIdentityV1,
+        last_validated_root: ValidatedWorkspaceRootV1,
+        schema_version: u32,
+    ) -> Self {
+        Self {
+            identity,
+            last_validated_root,
+            schema_version,
         }
     }
 
@@ -1177,6 +1191,10 @@ impl WorkspaceBindingV1 {
 
     pub fn last_validated_root(&self) -> &ValidatedWorkspaceRootV1 {
         &self.last_validated_root
+    }
+
+    pub fn schema_version(&self) -> u32 {
+        self.schema_version
     }
 }
 

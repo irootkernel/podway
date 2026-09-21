@@ -63,7 +63,11 @@ open them.
 
 ## Moved worktrees
 
-If a registered path is missing, the entry is removed after a grace-free validation pass. A moved worktree is rediscovered when a CLI request arrives at its new path. Matching Git identity and workspace UUID allow the registry to be rebuilt.
+If a registered path is missing, the entry is removed after a grace-free
+validation pass. A linked worktree root is rediscovered when a CLI request
+arrives at its new path only when its canonical common and administration paths
+and workspace UUID still match. A main-worktree or common-directory move changes
+durable path identity and fails closed.
 
 Acknowledged queued jobs at a moved but not rediscovered path remain in the worktree database and resume after rediscovery.
 
@@ -96,22 +100,33 @@ Podway does not automatically discard state.
 Because the database may be unreadable, reset-all is a daemon maintenance operation guarded by a filesystem marker.
 
 1. validate the Git worktree and path containment; when persisted Git directory
-   fingerprints are detached, reset still requires an exact stored-root match and
-   registry membership for the persisted workspace UUID;
+   fingerprints are detached, reset still requires an exact stored-root match.
+   Registry membership for the persisted UUID is required when a root entry
+   exists; an absent root generation may be recovered from one unambiguous local
+   Store binding only when that UUID is not registered at another root;
 2. acquire the workspace maintenance lock and bind the exact registry-root UUID
    generation to Store identity or an existing reset marker;
 3. stop its scheduler and reject new admissions;
 4. close all database handles;
 5. create `.podway/runtime/reset.marker` atomically; newly published v2 markers contain the operation ID, idempotency key, request digest, predecessor and target workspace UUIDs, submitted time, and original response request ID; v1 markers remain readable only so an upgrade can finish an already-published reset;
-6. remove `state.sqlite3`, `-wal`, and `-shm` files;
-7. create a new database using the target workspace UUID;
+6. re-read the registry and reject any new predecessor or target UUID location,
+   including a UUID that was absent from the initial snapshot, before removing
+   `state.sqlite3`, `-wal`, and `-shm` files;
+7. re-read the same UUID fences and create a new database using the target
+   workspace UUID;
 8. insert a terminal workspace-scoped reset job and v3 idempotency receipt into the new database, including the lookup command and full target-workspace response context;
-9. compare the registry-root generation again and atomically replace every stale
-   exact-root entry with the target UUID;
-10. remove the marker;
-11. restart the scheduler.
+9. compare the registry-root generation and every predecessor/target UUID location
+   again, then atomically replace every stale exact-root entry with the target
+   UUID; an other-root UUID conflict fails without changing the registry;
+10. activate the target scheduler while retaining the marker as crash-replay authority;
+11. remove the marker only after activation succeeds.
 
 On startup, an existing marker causes the daemon to finish the reset before serving the workspace. A lost client response can be retried with the same idempotency key and is answered from the new database. After the terminal job row is pruned, `job.lookup` and exact reset replay reconstruct the same full terminal output from the retained workspace receipt. The operation is idempotent.
+Markers and completed reset receipts written with schema-v12 filesystem-identity
+digests remain replayable after schema v13 migrates the workspace to canonical-path
+identity. This compatibility is limited to an already-admitted marker or an immutable
+successful `workspace.reset_all` terminal receipt; it does not relax digest matching
+for other mutations.
 
 ## Retention policy
 
@@ -213,9 +228,10 @@ non-directories, changed roots, competing markers, and unknown non-empty residua
 fail closed.
 
 Workspace mode switching uses the same exclusive maintenance key and the adjacent
-`podway.workspace-mode-switch-marker/v1`. The marker binds the plan-token digest,
+`podway.workspace-mode-switch-marker/v2`. The marker binds the plan-token digest,
 workspace UUID, source and target modes, original and expected target config
-digests, and the ordered
+digests, canonical root bytes, Git common-directory identity, Git
+worktree-administration identity, and the ordered
 source-close, registry-retirement, runtime-removal, config-update, target-init,
 and target-publication steps. An exact retry resumes only the missing suffix and
 a completed marker returns `already_applied`; a later independently planned switch
@@ -230,7 +246,20 @@ process-local plan record, so the caller must plan again; a restart after marker
 publication resumes with the retained token. If config publication completed but
 the `config_updated` marker step did not, recovery recognizes the exact target
 digest, records the completed step, and continues; any third config digest fails
-closed. Runtime reset never deletes
+closed. Before marker publication, scheduler retirement, source-registry
+retirement, runtime deletion, config publication, target initialization, and
+target-registry publication, the daemon freshly resolves and compares the same
+request-local Git and maintenance authority. Fixed marker and config files are
+read and atomically published relative to an already validated `.podway`
+descriptor; registry authority is renewed under the registry lock immediately
+before publication. A legacy v1 marker is upgraded to v2 only when the live plan
+record or exact source Store and registry still prove its identity. After runtime
+removal, an incomplete v1 marker without that proof fails closed. A completed v1
+marker is accepted only after exact target config, Store, and registry validation.
+A recorded `target_initialized` step
+requires an existing target Store with the exact workspace UUID, root, and target
+mode; recovery never recreates a missing recorded target, and registry publication
+reopens that Store under the same guard. Runtime reset never deletes
 procedures, `.podway/.gitignore`, config
 content unrelated to mode, or Git worktree, index, and ref state.
 

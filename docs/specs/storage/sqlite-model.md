@@ -1,8 +1,8 @@
 # SQLite Model
 
-The implemented canonical DDL history is `sqlite-v1.sql` through `sqlite-v12.sql`
+The implemented canonical DDL history is `sqlite-v1.sql` through `sqlite-v13.sql`
 under `assets/specifications/`. New databases apply that history in one
-transaction and finish at schema version 12. The v5 contract is
+transaction and finish at schema version 13. The v5 contract is
 normative under ADR-0021; `V2LIF-002` reserved its exact canonical DDL and
 `V2LIF-003` admitted it in runtime. ADR-0025 owns schema v6 for external check
 results; `V2AST-002` reserved its canonical DDL and named migration, and
@@ -31,6 +31,15 @@ and trigger; existing snapshot, item, goal, trace, and terminal envelope bytes
 remain in place.
 Open-time integrity checks scan all retained receipts and match each one to its
 owning attempt, session, procedure snapshot, and placement declaration.
+
+Schema v13 marks the canonical-path workspace identity generation under
+ADR-0036. It adds no table or public field. During a supported v12 open, the
+daemon first proves that the stored workspace UUID is unchanged and that the
+stored `last_validated_root` exactly equals the freshly resolved canonical root.
+The migration then rewrites the persisted common-directory and
+worktree-administration hashes from legacy filesystem-object values to
+role-tagged canonical-path values and records migration 13 atomically. A v13
+identity mismatch is not rewritten.
 
 Schema v8 extends terminal dispositions for ADR-0027. It adds the closed
 `superseded` kind and a successor session ID. The migration preserves v7

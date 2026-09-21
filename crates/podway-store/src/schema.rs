@@ -69,7 +69,8 @@ pub const SQLITE_SCHEMA_VERSION_V9: u32 = 9;
 pub const SQLITE_SCHEMA_VERSION_V10: u32 = 10;
 pub const SQLITE_SCHEMA_VERSION_V11: u32 = 11;
 pub const SQLITE_SCHEMA_VERSION_V12: u32 = 12;
-pub const SQLITE_SCHEMA_VERSION_CURRENT: u32 = SQLITE_SCHEMA_VERSION_V12;
+pub const SQLITE_SCHEMA_VERSION_V13: u32 = 13;
+pub const SQLITE_SCHEMA_VERSION_CURRENT: u32 = SQLITE_SCHEMA_VERSION_V13;
 pub const SQLITE_INITIAL_MIGRATION_NAME_V1: &str = "schema-0-uninitialized";
 pub const SQLITE_RESPONSE_CONTEXT_MIGRATION_NAME_V2: &str = "schema-1-response-context";
 pub const SQLITE_PROCEDURE_V2_STATE_MIGRATION_NAME_V3: &str = "schema-2-procedure-v2-state";
@@ -87,6 +88,8 @@ pub const SQLITE_RUNTIME_MODE_BINDING_MIGRATION_NAME_V10: &str = "schema-9-runti
 pub const SQLITE_UNBOUNDED_INACTIVE_SESSIONS_MIGRATION_NAME_V11: &str =
     "schema-10-unbounded-inactive-sessions";
 pub const SQLITE_DELEGATION_RECEIPTS_MIGRATION_NAME_V12: &str = "schema-11-delegation-receipts";
+pub const SQLITE_CANONICAL_PATH_IDENTITY_MIGRATION_NAME_V13: &str =
+    "schema-12-canonical-path-identity";
 
 const SQLITE_V1_DDL: &str = include_str!("../../../assets/specifications/sqlite-v1.sql");
 const SQLITE_V2_DDL: &str = include_str!("../../../assets/specifications/sqlite-v2.sql");
@@ -100,6 +103,7 @@ const SQLITE_V9_DDL: &str = include_str!("../../../assets/specifications/sqlite-
 const SQLITE_V10_DDL: &str = include_str!("../../../assets/specifications/sqlite-v10.sql");
 const SQLITE_V11_DDL: &str = include_str!("../../../assets/specifications/sqlite-v11.sql");
 const SQLITE_V12_DDL: &str = include_str!("../../../assets/specifications/sqlite-v12.sql");
+const SQLITE_V13_DDL: &str = include_str!("../../../assets/specifications/sqlite-v13.sql");
 const CONNECTION_PRAGMA_PREAMBLE_V1: &str = concat!(
     "PRAGMA foreign_keys = ON;\n",
     "PRAGMA journal_mode = WAL;\n",
@@ -119,6 +123,7 @@ const USER_VERSION_SUFFIX_V9: &str = "PRAGMA user_version = 9;\n";
 const USER_VERSION_SUFFIX_V10: &str = "PRAGMA user_version = 10;\n";
 const USER_VERSION_SUFFIX_V11: &str = "PRAGMA user_version = 11;\n";
 const USER_VERSION_SUFFIX_V12: &str = "PRAGMA user_version = 12;\n";
+const USER_VERSION_SUFFIX_V13: &str = "PRAGMA user_version = 13;\n";
 
 /// The exact immutable bytes of the canonical v1 migration.
 pub fn sqlite_v1_ddl() -> &'static str {
@@ -237,6 +242,15 @@ pub fn sqlite_v12_ddl_checksum() -> String {
     format!("sha256:{digest:x}")
 }
 
+pub fn sqlite_v13_ddl() -> &'static str {
+    SQLITE_V13_DDL
+}
+
+pub fn sqlite_v13_ddl_checksum() -> String {
+    let digest = Sha256::digest(SQLITE_V13_DDL.as_bytes());
+    format!("sha256:{digest:x}")
+}
+
 /// Opens a SQLite database only after the current schema, required pragmas, and durable identity verify.
 ///
 /// A version-zero database is initialized only when it has no user schema objects. The validated
@@ -248,40 +262,98 @@ pub fn open_or_initialize_v1(
     options: &SqliteStoreOptionsV1,
     now: EpochMillisV1,
 ) -> Result<Connection, StoreErrorV1> {
-    open_or_initialize_with_temporary_cleanup_arm_v1(
+    open_or_initialize_with_guard_v1(
         path.as_ref(),
         root,
         identity,
         options,
         now,
-        None,
+        ExistingDatabaseOpenPolicyV1::initialize_if_empty(),
+        &mut || Ok(()),
     )
 }
 
-pub(crate) fn open_or_initialize_with_temporary_cleanup_arm_v1(
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ExistingDatabaseOpenIntentV1 {
+    InitializeIfEmpty,
+    RequireInitialized,
+}
+
+pub(crate) struct ExistingDatabaseOpenPolicyV1<'a> {
+    pub(crate) temporary_cleanup_armed: Option<&'a mut bool>,
+    pub(crate) intent: ExistingDatabaseOpenIntentV1,
+}
+
+impl<'a> ExistingDatabaseOpenPolicyV1<'a> {
+    pub(crate) const fn initialize_if_empty() -> Self {
+        Self {
+            temporary_cleanup_armed: None,
+            intent: ExistingDatabaseOpenIntentV1::InitializeIfEmpty,
+        }
+    }
+
+    pub(crate) const fn require_initialized() -> Self {
+        Self {
+            temporary_cleanup_armed: None,
+            intent: ExistingDatabaseOpenIntentV1::RequireInitialized,
+        }
+    }
+
+    pub(crate) fn initialize_if_empty_with_cleanup(armed: &'a mut bool) -> Self {
+        Self {
+            temporary_cleanup_armed: Some(armed),
+            intent: ExistingDatabaseOpenIntentV1::InitializeIfEmpty,
+        }
+    }
+}
+
+pub(crate) fn open_or_initialize_with_guard_v1(
     path: &Path,
     root: &ValidatedWorkspaceRootV1,
     identity: &DurableWorktreeIdentityV1,
     options: &SqliteStoreOptionsV1,
     now: EpochMillisV1,
-    temporary_cleanup_armed: Option<&mut bool>,
+    mut policy: ExistingDatabaseOpenPolicyV1<'_>,
+    validate_authority: &mut dyn FnMut() -> Result<(), StoreErrorV1>,
 ) -> Result<Connection, StoreErrorV1> {
     let path = canonical_database_path_v1(path)?;
-    recover_interrupted_publication_v1(&path)?;
-    prepare_database_path_for_write_open_v1(&path)?;
+    recover_interrupted_publication_with_guard_v1(&path, validate_authority)?;
+    validate_existing_database_path_v1(&path)?;
+    if policy.intent == ExistingDatabaseOpenIntentV1::RequireInitialized {
+        let inspection = Connection::open_with_flags(
+            &path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY
+                | OpenFlags::SQLITE_OPEN_URI
+                | OpenFlags::SQLITE_OPEN_NO_MUTEX
+                | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+        )
+        .map_err(storage_error)?;
+        if read_user_version_v1(&inspection)? == 0 {
+            return Err(integrity_error(
+                StoreIntegrityCheckV1::RequiredSchemaObjects,
+            ));
+        }
+    }
     let mut connection = Connection::open_with_flags(
         &path,
         OpenFlags::SQLITE_OPEN_READ_WRITE
-            | OpenFlags::SQLITE_OPEN_CREATE
             | OpenFlags::SQLITE_OPEN_URI
             | OpenFlags::SQLITE_OPEN_NO_MUTEX
             | OpenFlags::SQLITE_OPEN_NOFOLLOW,
     )
     .map_err(storage_error)?;
     validate_existing_database_path_v1(&path)?;
+    // The connection has now bound the pathname. Revalidate the caller's external authority
+    // before pragmas, migrations, or any other mutation can affect this database generation.
+    validate_authority()?;
+    let schema_version = read_user_version_v1(&connection)?;
+    if schema_version == 0 && policy.intent == ExistingDatabaseOpenIntentV1::RequireInitialized {
+        return Err(integrity_error(
+            StoreIntegrityCheckV1::RequiredSchemaObjects,
+        ));
+    }
     apply_connection_pragmas_v1(&connection, options.busy_timeout_ms())?;
 
-    let schema_version = read_user_version_v1(&connection)?;
     if schema_version == 0 {
         if user_schema_object_count_v1(&connection)? != 0 {
             return Err(integrity_error(
@@ -294,7 +366,7 @@ pub(crate) fn open_or_initialize_with_temporary_cleanup_arm_v1(
         ) = options.failpoint()
         {
             if let (StoreFailpointV1::SchemaAfterPragmasAndTemporaryCleanup, Some(armed)) =
-                (failpoint, temporary_cleanup_armed)
+                (failpoint, policy.temporary_cleanup_armed.as_deref_mut())
             {
                 *armed = true;
             }
@@ -307,6 +379,7 @@ pub(crate) fn open_or_initialize_with_temporary_cleanup_arm_v1(
         migrate_existing_schema_to_current_v1(
             &mut connection,
             schema_version,
+            root,
             identity,
             options,
             now,
@@ -333,6 +406,7 @@ pub(crate) fn open_or_initialize_with_temporary_cleanup_arm_v1(
 fn migrate_existing_schema_to_current_v1(
     connection: &mut Connection,
     schema_version: u32,
+    root: &ValidatedWorkspaceRootV1,
     identity: &DurableWorktreeIdentityV1,
     options: &SqliteStoreOptionsV1,
     now: EpochMillisV1,
@@ -346,28 +420,28 @@ fn migrate_existing_schema_to_current_v1(
     }
     match schema_version {
         SQLITE_SCHEMA_VERSION_V1 => run_schema_migration_v1(connection, |connection| {
-            migrate_schema_v1_to_v7(connection, identity, options, now)
+            migrate_schema_v1_to_v7(connection, root, identity, options, now)
         })?,
         SQLITE_SCHEMA_VERSION_V2 => run_schema_migration_v1(connection, |connection| {
-            migrate_schema_v2_to_v7(connection, identity, options, now)
+            migrate_schema_v2_to_v7(connection, root, identity, options, now)
         })?,
         SQLITE_SCHEMA_VERSION_V3 => run_schema_migration_v1(connection, |connection| {
-            migrate_schema_v3_to_v7(connection, identity, options, now)
+            migrate_schema_v3_to_v7(connection, root, identity, options, now)
         })?,
         SQLITE_SCHEMA_VERSION_V4 => run_schema_migration_v1(connection, |connection| {
-            migrate_schema_v4_to_v7(connection, identity, options, now)
+            migrate_schema_v4_to_v7(connection, root, identity, options, now)
         })?,
         SQLITE_SCHEMA_VERSION_V5 => run_schema_migration_v1(connection, |connection| {
-            migrate_schema_v5_to_v7(connection, identity, options, now)
+            migrate_schema_v5_to_v7(connection, root, identity, options, now)
         })?,
         SQLITE_SCHEMA_VERSION_V6 => run_schema_migration_v1(connection, |connection| {
-            migrate_schema_v6_to_v7(connection, identity, options, now)
+            migrate_schema_v6_to_v7(connection, root, identity, options, now)
         })?,
         SQLITE_SCHEMA_VERSION_V7 => run_schema_migration_v1(connection, |connection| {
-            migrate_schema_v7_to_v9(connection, identity, options, now)
+            migrate_schema_v7_to_v9(connection, root, identity, options, now)
         })?,
         SQLITE_SCHEMA_VERSION_V8 => run_schema_migration_v1(connection, |connection| {
-            migrate_schema_v8_to_v9(connection, identity, options, now)
+            migrate_schema_v8_to_v9(connection, root, identity, options, now)
         })?,
         SQLITE_SCHEMA_VERSION_V9 => run_schema_migration_v1(connection, |connection| {
             let transaction = connection
@@ -376,6 +450,7 @@ fn migrate_existing_schema_to_current_v1(
             apply_schema_v10_migration_v1(&transaction, migration_now)?;
             apply_schema_v11_migration_v1(&transaction, migration_now)?;
             apply_schema_v12_migration_v1(&transaction, migration_now)?;
+            apply_schema_v13_migration_v1(&transaction, root, identity, migration_now)?;
             verify_integrity_connection_inner_v1(
                 &transaction,
                 identity,
@@ -393,6 +468,7 @@ fn migrate_existing_schema_to_current_v1(
                 .map_err(storage_error)?;
             apply_schema_v11_migration_v1(&transaction, migration_now)?;
             apply_schema_v12_migration_v1(&transaction, migration_now)?;
+            apply_schema_v13_migration_v1(&transaction, root, identity, migration_now)?;
             verify_integrity_connection_inner_v1(
                 &transaction,
                 identity,
@@ -409,6 +485,7 @@ fn migrate_existing_schema_to_current_v1(
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(storage_error)?;
             apply_schema_v12_migration_v1(&transaction, migration_now)?;
+            apply_schema_v13_migration_v1(&transaction, root, identity, migration_now)?;
             verify_integrity_connection_inner_v1(
                 &transaction,
                 identity,
@@ -420,7 +497,23 @@ fn migrate_existing_schema_to_current_v1(
             options.trigger_failpoint(StoreFailpointV1::SchemaBeforeCommit)?;
             transaction.commit().map_err(storage_error)
         })?,
-        SQLITE_SCHEMA_VERSION_V12 => {}
+        SQLITE_SCHEMA_VERSION_V12 => run_schema_migration_v1(connection, |connection| {
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(storage_error)?;
+            apply_schema_v13_migration_v1(&transaction, root, identity, migration_now)?;
+            verify_integrity_connection_inner_v1(
+                &transaction,
+                identity,
+                options,
+                IntegrityModeV1::Fast,
+                now,
+                false,
+            )?;
+            options.trigger_failpoint(StoreFailpointV1::SchemaBeforeCommit)?;
+            transaction.commit().map_err(storage_error)
+        })?,
+        SQLITE_SCHEMA_VERSION_V13 => {}
         found if found > SQLITE_SCHEMA_VERSION_CURRENT => {
             return Err(StoreErrorV1::NewerStateV1 {
                 found_schema_version: found,
@@ -564,7 +657,11 @@ pub(crate) fn verify_binding_inspection_schema_v1(
             verify_migration_predecessor_v1(connection, SQLITE_SCHEMA_VERSION_V11)?;
             verify_v2_graph_state_connection_v2(connection)
         }
-        SQLITE_SCHEMA_VERSION_V12 => verify_schema_v1(connection),
+        SQLITE_SCHEMA_VERSION_V12 => {
+            verify_migration_predecessor_v1(connection, SQLITE_SCHEMA_VERSION_V12)?;
+            verify_v2_graph_state_connection_v2(connection)
+        }
+        SQLITE_SCHEMA_VERSION_V13 => verify_schema_v1(connection),
         found if found > SQLITE_SCHEMA_VERSION_CURRENT => Err(StoreErrorV1::NewerStateV1 {
             found_schema_version: found,
             supported_schema_version: SQLITE_SCHEMA_VERSION_CURRENT,
@@ -620,7 +717,11 @@ pub(crate) fn verify_reset_binding_inspection_schema_v1(
             verify_migration_predecessor_v1(connection, SQLITE_SCHEMA_VERSION_V11)?;
             verify_v2_graph_state_connection_v2(connection)
         }
-        SQLITE_SCHEMA_VERSION_V12 => verify_schema_v1(connection),
+        SQLITE_SCHEMA_VERSION_V12 => {
+            verify_migration_predecessor_v1(connection, SQLITE_SCHEMA_VERSION_V12)?;
+            verify_v2_graph_state_connection_v2(connection)
+        }
+        SQLITE_SCHEMA_VERSION_V13 => verify_schema_v1(connection),
         found if found > SQLITE_SCHEMA_VERSION_CURRENT => Err(StoreErrorV1::NewerStateV1 {
             found_schema_version: found,
             supported_schema_version: SQLITE_SCHEMA_VERSION_CURRENT,
@@ -753,6 +854,7 @@ pub(crate) fn inspect_database_snapshot_unbound_v1<T>(
 
 pub(crate) fn inspect_existing_store_openability_v1(
     path: &Path,
+    expected_root: &ValidatedWorkspaceRootV1,
     expected_identity: &DurableWorktreeIdentityV1,
     options: &SqliteStoreOptionsV1,
 ) -> Result<(), StoreErrorV1> {
@@ -765,6 +867,7 @@ pub(crate) fn inspect_existing_store_openability_v1(
         migrate_existing_schema_to_current_v1(
             connection,
             schema_version,
+            expected_root,
             expected_identity,
             options,
             EpochMillisV1::new(0),
@@ -1106,6 +1209,13 @@ fn expected_migrations_through_v1(
             sqlite_v12_ddl_checksum(),
         ));
     }
+    if expected_version >= SQLITE_SCHEMA_VERSION_V13 {
+        expected.push((
+            i64::from(SQLITE_SCHEMA_VERSION_V13),
+            SQLITE_CANONICAL_PATH_IDENTITY_MIGRATION_NAME_V13.to_owned(),
+            sqlite_v13_ddl_checksum(),
+        ));
+    }
     if !(SQLITE_SCHEMA_VERSION_V1..=SQLITE_SCHEMA_VERSION_CURRENT).contains(&expected_version) {
         return Err(integrity_error(StoreIntegrityCheckV1::SchemaVersion));
     }
@@ -1205,6 +1315,11 @@ fn expected_schema_objects_through_v1(
     if expected_version >= SQLITE_SCHEMA_VERSION_V12 {
         reference
             .execute_batch(migration_schema_statements_v12()?)
+            .map_err(storage_error)?;
+    }
+    if expected_version >= SQLITE_SCHEMA_VERSION_V13 {
+        reference
+            .execute_batch(migration_schema_statements_v13()?)
             .map_err(storage_error)?;
     }
     if !(SQLITE_SCHEMA_VERSION_V1..=SQLITE_SCHEMA_VERSION_CURRENT).contains(&expected_version) {
@@ -1684,6 +1799,7 @@ fn initialize_empty_schema_v1(
     apply_schema_v10_migration_v1(&transaction, now)?;
     apply_schema_v11_migration_v1(&transaction, now)?;
     apply_schema_v12_migration_v1(&transaction, now)?;
+    apply_schema_v13_definition_v1(&transaction, now)?;
     transaction
         .execute(
             "INSERT INTO workspace_state (singleton, workspace_uuid, git_common_fingerprint, \
@@ -1861,8 +1977,17 @@ fn migration_schema_statements_v12() -> Result<&'static str, StoreErrorV1> {
     )
 }
 
+fn migration_schema_statements_v13() -> Result<&'static str, StoreErrorV1> {
+    SQLITE_V13_DDL.strip_suffix(USER_VERSION_SUFFIX_V13).ok_or(
+        StoreErrorV1::InternalInvariantViolationV1 {
+            invariant: crate::StoreInvariantV1::SchemaDefinition,
+        },
+    )
+}
+
 fn migrate_schema_v1_to_v7(
     connection: &mut Connection,
+    root: &ValidatedWorkspaceRootV1,
     identity: &DurableWorktreeIdentityV1,
     options: &SqliteStoreOptionsV1,
     now: EpochMillisV1,
@@ -1913,6 +2038,7 @@ fn migrate_schema_v1_to_v7(
     apply_schema_v10_migration_v1(&transaction, now)?;
     apply_schema_v11_migration_v1(&transaction, now)?;
     apply_schema_v12_migration_v1(&transaction, now)?;
+    apply_schema_v13_migration_v1(&transaction, root, identity, now)?;
     verify_integrity_connection_inner_v1(
         &transaction,
         identity,
@@ -1927,6 +2053,7 @@ fn migrate_schema_v1_to_v7(
 
 fn migrate_schema_v2_to_v7(
     connection: &mut Connection,
+    root: &ValidatedWorkspaceRootV1,
     identity: &DurableWorktreeIdentityV1,
     options: &SqliteStoreOptionsV1,
     now: EpochMillisV1,
@@ -1987,6 +2114,12 @@ fn migrate_schema_v2_to_v7(
         &transaction,
         sqlite_integer_v1(now.get(), "migration timestamp")?,
     )?;
+    apply_schema_v13_migration_v1(
+        &transaction,
+        root,
+        identity,
+        sqlite_integer_v1(now.get(), "migration timestamp")?,
+    )?;
     verify_integrity_connection_inner_v1(
         &transaction,
         identity,
@@ -2001,6 +2134,7 @@ fn migrate_schema_v2_to_v7(
 
 fn migrate_schema_v3_to_v7(
     connection: &mut Connection,
+    root: &ValidatedWorkspaceRootV1,
     identity: &DurableWorktreeIdentityV1,
     options: &SqliteStoreOptionsV1,
     now: EpochMillisV1,
@@ -2047,6 +2181,12 @@ fn migrate_schema_v3_to_v7(
         &transaction,
         sqlite_integer_v1(now.get(), "migration timestamp")?,
     )?;
+    apply_schema_v13_migration_v1(
+        &transaction,
+        root,
+        identity,
+        sqlite_integer_v1(now.get(), "migration timestamp")?,
+    )?;
     verify_integrity_connection_inner_v1(
         &transaction,
         identity,
@@ -2061,6 +2201,7 @@ fn migrate_schema_v3_to_v7(
 
 fn migrate_schema_v4_to_v7(
     connection: &mut Connection,
+    root: &ValidatedWorkspaceRootV1,
     identity: &DurableWorktreeIdentityV1,
     options: &SqliteStoreOptionsV1,
     now: EpochMillisV1,
@@ -2103,6 +2244,12 @@ fn migrate_schema_v4_to_v7(
         &transaction,
         sqlite_integer_v1(now.get(), "migration timestamp")?,
     )?;
+    apply_schema_v13_migration_v1(
+        &transaction,
+        root,
+        identity,
+        sqlite_integer_v1(now.get(), "migration timestamp")?,
+    )?;
     verify_integrity_connection_inner_v1(
         &transaction,
         identity,
@@ -2117,6 +2264,7 @@ fn migrate_schema_v4_to_v7(
 
 fn migrate_schema_v5_to_v7(
     connection: &mut Connection,
+    root: &ValidatedWorkspaceRootV1,
     identity: &DurableWorktreeIdentityV1,
     options: &SqliteStoreOptionsV1,
     now: EpochMillisV1,
@@ -2154,6 +2302,12 @@ fn migrate_schema_v5_to_v7(
         &transaction,
         sqlite_integer_v1(now.get(), "migration timestamp")?,
     )?;
+    apply_schema_v13_migration_v1(
+        &transaction,
+        root,
+        identity,
+        sqlite_integer_v1(now.get(), "migration timestamp")?,
+    )?;
     verify_integrity_connection_inner_v1(
         &transaction,
         identity,
@@ -2168,6 +2322,7 @@ fn migrate_schema_v5_to_v7(
 
 fn migrate_schema_v6_to_v7(
     connection: &mut Connection,
+    root: &ValidatedWorkspaceRootV1,
     identity: &DurableWorktreeIdentityV1,
     options: &SqliteStoreOptionsV1,
     now: EpochMillisV1,
@@ -2201,6 +2356,12 @@ fn migrate_schema_v6_to_v7(
         &transaction,
         sqlite_integer_v1(now.get(), "migration timestamp")?,
     )?;
+    apply_schema_v13_migration_v1(
+        &transaction,
+        root,
+        identity,
+        sqlite_integer_v1(now.get(), "migration timestamp")?,
+    )?;
     verify_integrity_connection_inner_v1(
         &transaction,
         identity,
@@ -2215,6 +2376,7 @@ fn migrate_schema_v6_to_v7(
 
 fn migrate_schema_v7_to_v9(
     connection: &mut Connection,
+    root: &ValidatedWorkspaceRootV1,
     identity: &DurableWorktreeIdentityV1,
     options: &SqliteStoreOptionsV1,
     now: EpochMillisV1,
@@ -2244,6 +2406,12 @@ fn migrate_schema_v7_to_v9(
         &transaction,
         sqlite_integer_v1(now.get(), "migration timestamp")?,
     )?;
+    apply_schema_v13_migration_v1(
+        &transaction,
+        root,
+        identity,
+        sqlite_integer_v1(now.get(), "migration timestamp")?,
+    )?;
     verify_integrity_connection_inner_v1(
         &transaction,
         identity,
@@ -2258,6 +2426,7 @@ fn migrate_schema_v7_to_v9(
 
 fn migrate_schema_v8_to_v9(
     connection: &mut Connection,
+    root: &ValidatedWorkspaceRootV1,
     identity: &DurableWorktreeIdentityV1,
     options: &SqliteStoreOptionsV1,
     now: EpochMillisV1,
@@ -2281,6 +2450,12 @@ fn migrate_schema_v8_to_v9(
     )?;
     apply_schema_v12_migration_v1(
         &transaction,
+        sqlite_integer_v1(now.get(), "migration timestamp")?,
+    )?;
+    apply_schema_v13_migration_v1(
+        &transaction,
+        root,
+        identity,
         sqlite_integer_v1(now.get(), "migration timestamp")?,
     )?;
     verify_integrity_connection_inner_v1(
@@ -2475,6 +2650,69 @@ fn apply_schema_v12_migration_v1(connection: &Connection, now: i64) -> Result<()
     verify_foreign_keys_v1(connection)
 }
 
+fn apply_schema_v13_migration_v1(
+    connection: &Connection,
+    root: &ValidatedWorkspaceRootV1,
+    identity: &DurableWorktreeIdentityV1,
+    now: i64,
+) -> Result<(), StoreErrorV1> {
+    let authority: Option<(String, String)> = connection
+        .query_row(
+            "SELECT workspace_uuid, last_validated_root FROM workspace_state WHERE singleton = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(storage_error)?;
+    if authority.as_ref()
+        != Some(&(
+            identity.workspace_uuid().as_str().to_owned(),
+            root.as_encoded().to_owned(),
+        ))
+    {
+        return Err(integrity_error(StoreIntegrityCheckV1::WorkspaceIdentity));
+    }
+    let changed = connection
+        .execute(
+            "UPDATE workspace_state SET git_common_fingerprint = ?1, \
+             git_worktree_fingerprint = ?2 WHERE singleton = 1 AND workspace_uuid = ?3 \
+             AND last_validated_root = ?4",
+            params![
+                identity.common_dir_identity().as_str(),
+                identity.worktree_admin_identity().as_str(),
+                identity.workspace_uuid().as_str(),
+                root.as_encoded(),
+            ],
+        )
+        .map_err(storage_error)?;
+    if changed != 1 {
+        return Err(integrity_error(StoreIntegrityCheckV1::WorkspaceIdentity));
+    }
+    apply_schema_v13_definition_v1(connection, now)
+}
+
+fn apply_schema_v13_definition_v1(connection: &Connection, now: i64) -> Result<(), StoreErrorV1> {
+    connection
+        .execute_batch(migration_schema_statements_v13()?)
+        .map_err(storage_error)?;
+    connection
+        .execute(
+            "INSERT INTO schema_migrations (version, name, checksum, applied_at_ms) \
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                i64::from(SQLITE_SCHEMA_VERSION_V13),
+                SQLITE_CANONICAL_PATH_IDENTITY_MIGRATION_NAME_V13,
+                sqlite_v13_ddl_checksum(),
+                now,
+            ],
+        )
+        .map_err(storage_error)?;
+    connection
+        .pragma_update(None, "user_version", SQLITE_SCHEMA_VERSION_V13)
+        .map_err(storage_error)?;
+    verify_foreign_keys_v1(connection)
+}
+
 fn verify_runtime_mode_v1(
     connection: &Connection,
     expected: &RuntimeModeV1,
@@ -2642,7 +2880,7 @@ fn verify_migration_predecessor_v1(
     verify_foreign_keys_v1(connection)
 }
 
-fn read_user_version_v1(connection: &Connection) -> Result<u32, StoreErrorV1> {
+pub(crate) fn read_user_version_v1(connection: &Connection) -> Result<u32, StoreErrorV1> {
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .map_err(storage_error)?;
@@ -2853,14 +3091,21 @@ fn wait_at_publication_recovery_link_count_for_test(destination: &Path) {
 }
 
 pub(crate) fn recover_interrupted_publication_v1(destination: &Path) -> Result<(), StoreErrorV1> {
+    recover_interrupted_publication_with_guard_v1(destination, &mut || Ok(()))
+}
+
+pub(crate) fn recover_interrupted_publication_with_guard_v1(
+    destination: &Path,
+    validate_authority: &mut dyn FnMut() -> Result<(), StoreErrorV1>,
+) -> Result<(), StoreErrorV1> {
     validate_database_parent_path_v1(destination)?;
     let destination_metadata = match fs::symlink_metadata(destination) {
         Ok(_) => validate_existing_regular_private_file_metadata_v1(destination)?,
         Err(error) if error.kind() == ErrorKind::NotFound => {
             #[cfg(unix)]
             {
-                recover_abandoned_publication_temporary_v1(destination)?;
-                return recover_orphaned_ownership_markers_v1(destination);
+                recover_abandoned_publication_temporary_v1(destination, validate_authority)?;
+                return recover_orphaned_ownership_markers_v1(destination, validate_authority);
             }
             #[cfg(not(unix))]
             return Ok(());
@@ -2871,8 +3116,8 @@ pub(crate) fn recover_interrupted_publication_v1(destination: &Path) -> Result<(
     {
         match destination_metadata.nlink() {
             1 => {
-                recover_abandoned_publication_temporary_v1(destination)?;
-                recover_orphaned_ownership_markers_v1(destination)?;
+                recover_abandoned_publication_temporary_v1(destination, validate_authority)?;
+                recover_orphaned_ownership_markers_v1(destination, validate_authority)?;
                 return Ok(());
             }
             2 => {}
@@ -2954,8 +3199,13 @@ pub(crate) fn recover_interrupted_publication_v1(destination: &Path) -> Result<(
             return Err(unsafe_database_path_error());
         }
     };
-    match unlink_publication_link_for_recovery_v1(&temporary, destination, &marker, &temporary_file)
-    {
+    match unlink_publication_link_for_recovery_v1(
+        &temporary,
+        destination,
+        &marker,
+        &temporary_file,
+        validate_authority,
+    ) {
         Ok(()) => {}
         Err(error)
             if matches!(error, StoreErrorV1::StorageUnavailableV1 { .. })
@@ -2990,6 +3240,7 @@ fn unlink_publication_link_for_recovery_v1(
     destination: &Path,
     marker: &File,
     temporary_file: &File,
+    validate_authority: &mut dyn FnMut() -> Result<(), StoreErrorV1>,
 ) -> Result<(), StoreErrorV1> {
     validate_publication_link_pair_v1(temporary, destination)?;
     let path_metadata = validate_existing_regular_private_file_metadata_v1(temporary)?;
@@ -3006,15 +3257,20 @@ fn unlink_publication_link_for_recovery_v1(
             sidecar_files.push((sidecar, file));
         }
     }
+    validate_authority()?;
     for (sidecar, file) in &sidecar_files {
         unlink_revalidated_recovery_file_v1(sidecar, file)?;
     }
+    validate_publication_link_pair_v1(temporary, destination)?;
     fs::remove_file(temporary).map_err(storage_io_error)?;
     unlink_revalidated_ownership_marker_v1(&marker_path, marker, temporary_file)
 }
 
 #[cfg(unix)]
-fn recover_abandoned_publication_temporary_v1(destination: &Path) -> Result<(), StoreErrorV1> {
+fn recover_abandoned_publication_temporary_v1(
+    destination: &Path,
+    validate_authority: &mut dyn FnMut() -> Result<(), StoreErrorV1>,
+) -> Result<(), StoreErrorV1> {
     validate_database_parent_path_v1(destination)?;
     let parent = destination
         .parent()
@@ -3065,6 +3321,7 @@ fn recover_abandoned_publication_temporary_v1(destination: &Path) -> Result<(), 
                 sidecar_files.push((sidecar, file));
             }
         }
+        validate_authority()?;
         for (sidecar, file) in &sidecar_files {
             unlink_revalidated_recovery_file_v1(sidecar, file)?;
         }
@@ -3081,7 +3338,10 @@ fn recover_abandoned_publication_temporary_v1(destination: &Path) -> Result<(), 
         .map_err(storage_io_error)
 }
 #[cfg(unix)]
-fn recover_orphaned_ownership_markers_v1(destination: &Path) -> Result<(), StoreErrorV1> {
+fn recover_orphaned_ownership_markers_v1(
+    destination: &Path,
+    validate_authority: &mut dyn FnMut() -> Result<(), StoreErrorV1>,
+) -> Result<(), StoreErrorV1> {
     let parent = destination
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -3102,7 +3362,7 @@ fn recover_orphaned_ownership_markers_v1(destination: &Path) -> Result<(), Store
         if is_store_temporary_database_name_v1(&temporary, destination) {
             match fs::symlink_metadata(&temporary) {
                 Err(error) if error.kind() == ErrorKind::NotFound => {
-                    reap_orphaned_ownership_marker_v1(&marker, &temporary)?;
+                    reap_orphaned_ownership_marker_v1(&marker, &temporary, validate_authority)?;
                 }
                 Ok(_) => {}
                 Err(error) => return Err(storage_io_error(error)),
@@ -3116,7 +3376,11 @@ fn recover_orphaned_ownership_markers_v1(destination: &Path) -> Result<(), Store
 }
 
 #[cfg(unix)]
-fn reap_orphaned_ownership_marker_v1(marker: &Path, temporary: &Path) -> Result<(), StoreErrorV1> {
+fn reap_orphaned_ownership_marker_v1(
+    marker: &Path,
+    temporary: &Path,
+    validate_authority: &mut dyn FnMut() -> Result<(), StoreErrorV1>,
+) -> Result<(), StoreErrorV1> {
     let marker_file = match open_recovery_file_after_marker_v1(marker, false) {
         Ok(Some(marker_file)) => marker_file,
         Ok(None) => return Ok(()),
@@ -3145,10 +3409,15 @@ fn reap_orphaned_ownership_marker_v1(marker: &Path, temporary: &Path) -> Result<
         Err(error) => return Err(storage_io_error(error)),
     }
     let sidecars = ["-wal", "-shm"].map(|suffix| sqlite_sidecar_path_v1(temporary, suffix));
+    let mut sidecar_files = Vec::with_capacity(sidecars.len());
     for sidecar in &sidecars {
         if let Some(file) = open_recovery_file_after_marker_v1(sidecar, false)? {
-            unlink_revalidated_recovery_file_v1(sidecar, &file)?;
+            sidecar_files.push((sidecar, file));
         }
+    }
+    validate_authority()?;
+    for (sidecar, file) in sidecar_files {
+        unlink_revalidated_recovery_file_v1(sidecar, &file)?;
     }
     unlink_revalidated_recovery_file_v1(marker, &marker_file)
 }
@@ -3357,6 +3626,58 @@ mod publication_recovery_tests {
             );
         }
     }
+
+    #[test]
+    fn guarded_recovery_preserves_every_file_when_authority_is_revoked() {
+        let directory = TempDir::new().expect("publication recovery directory");
+        let destination = directory.path().join("state.sqlite3");
+        let temporary = directory.path().join(".state.sqlite3.201.1.0.tmp");
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temporary)
+            .expect("private temporary database");
+        file.write_all(b"abandoned").expect("temporary bytes");
+        file.sync_all().expect("temporary sync");
+        let marker_path = temporary_ownership_marker_path_v1(&temporary);
+        let mut marker = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&marker_path)
+            .expect("private temporary ownership marker");
+        write_temporary_ownership_marker_v1(&mut marker, &file).expect("ownership marker bytes");
+        let sidecars = ["-wal", "-shm"].map(|suffix| sqlite_sidecar_path_v1(&temporary, suffix));
+        for sidecar in &sidecars {
+            let mut sidecar_file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(sidecar)
+                .expect("private sidecar");
+            sidecar_file.write_all(b"sidecar").expect("sidecar bytes");
+            sidecar_file.sync_all().expect("sidecar sync");
+        }
+
+        let error = recover_interrupted_publication_with_guard_v1(&destination, &mut || {
+            Err(StoreErrorV1::StorageUnavailableV1 {
+                reason: StoreUnavailableReasonV1::Recovery,
+            })
+        })
+        .expect_err("revoked authority must stop recovery before unlink");
+        assert!(matches!(
+            error,
+            StoreErrorV1::StorageUnavailableV1 {
+                reason: StoreUnavailableReasonV1::Recovery
+            }
+        ));
+        assert!(temporary.exists());
+        assert!(marker_path.exists());
+        assert!(sidecars.iter().all(|sidecar| sidecar.exists()));
+        assert!(!destination.exists());
+    }
+
     #[test]
     fn concurrent_finalization_without_a_directory_candidate_is_accepted() {
         let directory = TempDir::new().expect("publication recovery directory");
@@ -3552,34 +3873,6 @@ pub(crate) fn validate_existing_regular_private_file_metadata_v1(
         return Err(unsafe_database_path_error());
     }
     Ok(metadata)
-}
-
-fn prepare_database_path_for_write_open_v1(path: &Path) -> Result<(), StoreErrorV1> {
-    if inspect_database_path_v1(path)? == DatabasePathStateV1::Missing {
-        create_private_file_if_missing_v1(path)?;
-    }
-    for suffix in ["-wal", "-shm"] {
-        create_private_file_if_missing_v1(&sqlite_sidecar_path_v1(path, suffix))?;
-    }
-    validate_existing_database_path_v1(path)
-}
-
-fn create_private_file_if_missing_v1(path: &Path) -> Result<(), StoreErrorV1> {
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    options.mode(0o600);
-
-    match options.open(path) {
-        Ok(file) => {
-            drop(file);
-            validate_existing_regular_private_file_v1(path)
-        }
-        Err(error) if error.kind() == ErrorKind::AlreadyExists => {
-            validate_existing_regular_private_file_v1(path)
-        }
-        Err(error) => Err(storage_io_error(error)),
-    }
 }
 
 fn sqlite_sidecar_path_v1(path: &Path, suffix: &str) -> std::path::PathBuf {

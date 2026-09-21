@@ -324,7 +324,7 @@ fn root_and_nested_aliases_share_one_path_free_scheduler() {
 }
 
 #[test]
-fn move_rebind_preserves_generation_and_updates_registry_with_git_provenance() {
+fn main_worktree_move_changes_path_identity_without_rebinding_the_registry() {
     let fixture = git_worktrees();
     let manager = manager(fixture.temporary_path());
     let initial = bootstrap_main(&manager, fixture.main());
@@ -334,39 +334,73 @@ fn move_rebind_preserves_generation_and_updates_registry_with_git_provenance() {
         .identity()
         .workspace_uuid()
         .clone();
-    let initial_key = initial.key().clone();
-    let initial_generation = initial.generation();
+    let original_root = initial_context.workspace_root().clone();
     let relocated = fixture.temporary_path().join("relocated-main");
     fs::rename(fixture.main(), &relocated).expect("real Git worktree must move atomically");
-    let canonical_relocated =
-        fs::canonicalize(&relocated).expect("relocated worktree must canonicalize");
-
-    let rebound = manager
-        .resolve_existing(selector(&relocated), Some(&workspace_id), observation())
-        .expect("moved worktree must rebind through the durable Store identity");
-    let rebound_context = rebound.context_snapshot();
-
-    assert!(Arc::ptr_eq(&initial, &rebound));
-    assert_eq!(rebound.key(), &initial_key);
-    assert_eq!(rebound.generation(), initial_generation);
-    assert_ne!(
-        initial_context.workspace_root(),
-        rebound_context.workspace_root(),
-        "a moved root must replace future scheduler context snapshots"
-    );
-    assert_eq!(
-        rebound_context.workspace_root().to_path_buf(),
-        canonical_relocated
-    );
+    let error =
+        match manager.resolve_existing(selector(&relocated), Some(&workspace_id), observation()) {
+            Ok(_) => panic!("moving a main worktree must change canonical path identity"),
+            Err(error) => error,
+        };
+    assert!(matches!(
+        error,
+        WorkspaceRuntimeErrorV1::Resolution(
+            WorkspaceResolutionErrorV1::GitStoreFingerprintMismatch { .. }
+        )
+    ));
     let registry = manager
         .registry()
         .lookup(&workspace_id)
         .expect("metadata registry must remain readable")
-        .expect("moved workspace metadata must remain registered");
+        .expect("the prior workspace metadata must remain registered");
+    assert_eq!(registry.last_known_root(), &original_root);
+}
+
+#[test]
+fn linked_worktree_move_rebinds_store_and_registry_to_the_exact_new_root() {
+    let fixture = git_worktrees();
+    let manager = manager(fixture.temporary_path());
+    let initial = bootstrap_main(&manager, fixture.linked());
+    let workspace_id = initial
+        .context_snapshot()
+        .binding()
+        .identity()
+        .workspace_uuid()
+        .clone();
+    let relocated = fixture.temporary_path().join("relocated-linked");
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(fixture.main())
+        .arg("worktree")
+        .arg("move")
+        .arg(fixture.linked())
+        .arg(&relocated)
+        .status()
+        .expect("git worktree move must execute");
+    assert!(status.success(), "git worktree move must succeed");
+
+    let rebound = manager
+        .resolve_existing(selector(&relocated), Some(&workspace_id), observation())
+        .expect("linked worktree move must retain its durable Git identity");
+    let expected_root = fs::canonicalize(&relocated).expect("relocated linked root");
     assert_eq!(
-        registry.last_known_root().to_path_buf(),
-        canonical_relocated
+        rebound.context_snapshot().workspace_root().to_path_buf(),
+        expected_root
     );
+    let binding = podway_store::SqliteStoreV1::inspect_workspace_binding(
+        relocated.join(".podway/runtime/state.sqlite3"),
+        &SqliteStoreOptionsV1::new(8).unwrap(),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(binding.identity().workspace_uuid(), &workspace_id);
+    assert_eq!(binding.last_validated_root().to_path_buf(), expected_root);
+    let registry = manager
+        .registry()
+        .lookup(&workspace_id)
+        .unwrap()
+        .expect("moved linked worktree must remain registered");
+    assert_eq!(registry.last_known_root().to_path_buf(), expected_root);
 }
 
 #[test]

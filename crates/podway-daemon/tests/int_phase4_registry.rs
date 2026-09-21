@@ -1002,6 +1002,85 @@ fn reset_replacement_atomically_converges_a_legacy_duplicate_root_generation() {
 }
 
 #[test]
+fn reset_replacement_rejects_a_changed_root_generation_without_mutation() {
+    let fixture = RegistryFixture::new();
+    let previous = workspace(84);
+    let concurrent = workspace(85);
+    let target = workspace(86);
+    let exact_root = root("/tmp/registry-reset-cas-conflict");
+    let store = RegistryStoreV1::new(&fixture.paths);
+    store
+        .insert_or_refresh(concurrent.clone(), exact_root.clone(), timestamp())
+        .expect("concurrent root generation must be registered");
+
+    assert!(matches!(
+        store.replace_for_reset(
+            &previous,
+            std::slice::from_ref(&previous),
+            target.clone(),
+            exact_root.clone(),
+            timestamp(),
+        ),
+        Err(RegistryErrorV1::ResetRootGenerationChanged { root }) if root == exact_root
+    ));
+
+    let registry = store
+        .load()
+        .expect("a rejected reset replacement must preserve the registry");
+    assert!(registry.lookup(&previous).is_none());
+    assert!(registry.lookup(&target).is_none());
+    assert_eq!(
+        registry
+            .lookup(&concurrent)
+            .expect("the concurrent root generation must remain")
+            .last_known_root(),
+        &exact_root
+    );
+}
+
+#[test]
+fn reset_replacement_rejects_predecessor_registered_at_another_root() {
+    let fixture = RegistryFixture::new();
+    let previous = workspace(87);
+    let target = workspace(88);
+    let registered_root = root("/tmp/registry-reset-copied-source");
+    let supplied_root = root("/tmp/registry-reset-copied-target");
+    let store = RegistryStoreV1::new(&fixture.paths);
+    store
+        .insert_or_refresh(previous.clone(), registered_root.clone(), timestamp())
+        .expect("predecessor registration must exist");
+
+    assert!(matches!(
+        store.replace_for_reset(
+            &previous,
+            &[],
+            target.clone(),
+            supplied_root.clone(),
+            timestamp(),
+        ),
+        Err(RegistryErrorV1::WorkspaceRootConflict {
+            workspace_uuid,
+            registered_root: actual_registered_root,
+            supplied_root: actual_supplied_root,
+        }) if workspace_uuid == previous
+            && actual_registered_root == registered_root
+            && actual_supplied_root == supplied_root
+    ));
+
+    let registry = store
+        .load()
+        .expect("rejected replacement must preserve the registry");
+    assert_eq!(
+        registry
+            .lookup(&previous)
+            .expect("predecessor must remain registered")
+            .last_known_root(),
+        &registered_root
+    );
+    assert!(registry.lookup(&target).is_none());
+}
+
+#[test]
 fn exact_missing_root_removal_is_compare_and_swap_guarded() {
     let fixture = RegistryFixture::new();
     let workspace_uuid = workspace(90);
