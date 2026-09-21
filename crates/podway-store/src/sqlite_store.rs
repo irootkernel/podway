@@ -596,6 +596,21 @@ impl StoreGraphReadContractV2 for SqliteStoreV1 {
         transaction.commit().map_err(storage)?;
         Ok(view)
     }
+
+    fn read_delegation_readiness_v1(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+    ) -> Result<crate::v2_delegation::DelegationReadinessV1, StoreErrorV1> {
+        self.require_identity(identity)?;
+        let connection = self.lock_connection()?;
+        let state = load_graph_session_connection_v2(&connection)?
+            .ok_or_else(|| invariant(StoreInvariantV1::ProcedureV2GraphState))?;
+        crate::v2_delegation::completion_readiness_connection_v1(
+            &connection,
+            &state,
+            identity.workspace_uuid(),
+        )
+    }
 }
 
 impl StoreTerminalDispositionContractV2 for SqliteStoreV1 {
@@ -726,6 +741,7 @@ fn commit_graph_mutation_terminal_with_receipt_v1(
     operation: PersistedGraphTerminalOperationV2,
     now: EpochMillisV1,
     delegation_receipt: Option<&crate::DelegationReceiptV1>,
+    expected_package_digest: Option<&podway_core::Sha256Digest>,
 ) -> Result<TerminalReceiptV1, StoreErrorV1> {
     store.require_identity(claim.identity())?;
     let mut connection = store.lock_connection()?;
@@ -875,7 +891,34 @@ fn commit_graph_mutation_terminal_with_receipt_v1(
     {
         return Err(invariant(StoreInvariantV1::TransitionMutationShape));
     }
+    if delegation_receipt.is_some() != expected_package_digest.is_some() {
+        return Err(invariant(StoreInvariantV1::TransitionMutationShape));
+    }
     if let Some(delegation_receipt) = delegation_receipt {
+        if execution.preconditions().expected_session_revision() != Some(current.trace().revision())
+        {
+            return Err(StoreErrorV1::PreconditionConflictV1 {
+                expected: execution.preconditions().expected_session_revision(),
+                actual: Some(current.trace().revision()),
+            });
+        }
+        let (_, acceptance_input) =
+            procedure_v2_operation_payload_v1(&execution, "delegation.accept", 8)?;
+        let idempotency_key: String = transaction
+            .query_row(
+                "SELECT idempotency_key FROM jobs WHERE job_id = ?1",
+                [claim.job_id().as_str()],
+                |row| row.get(0),
+            )
+            .map_err(|_| corrupt(StoreRecordKindV1::Job))?;
+        if !crate::v2_delegation::acceptance_input_matches_receipt_v1(
+            &serde_json::Value::Object(acceptance_input),
+            delegation_receipt,
+            current.trace().revision().get(),
+            &idempotency_key,
+        ) {
+            return Err(invariant(StoreInvariantV1::TransitionMutationShape));
+        }
         let TerminalResultV1::Success(podway_core::DomainResult::DelegationAccepted {
             receipt_id,
             workspace_uuid,
@@ -894,10 +937,41 @@ fn commit_graph_mutation_terminal_with_receipt_v1(
             || attempt_id != &delegation_receipt.attempt_id()
             || package_digest != &delegation_receipt.package_digest()
             || result_digest != &delegation_receipt.result_digest()
-            || !delegation_receipt.matches_state(&current, workspace_uuid)
         {
             return Err(invariant(StoreInvariantV1::TransitionMutationShape));
         }
+        crate::v2_delegation::validate_acceptance_v1(
+            &current,
+            workspace_uuid,
+            expected_package_digest
+                .ok_or_else(|| invariant(StoreInvariantV1::TransitionMutationShape))?,
+            delegation_receipt,
+        )?;
+    }
+    let delegation_readiness = if execution.command() == &crate::CommandV1::SessionComplete {
+        crate::v2_delegation::completion_readiness_connection_v1(
+            &transaction,
+            &current,
+            claim.identity().workspace_uuid(),
+        )?
+    } else {
+        crate::v2_delegation::DelegationReadinessV1::Direct
+    };
+    if matches!(
+        operation,
+        PersistedGraphTerminalOperationV2::Complete { .. }
+    ) && next_state.is_some()
+        && !matches!(
+            delegation_readiness,
+            crate::v2_delegation::DelegationReadinessV1::Direct
+                | crate::v2_delegation::DelegationReadinessV1::ReceiptCurrent
+        )
+    {
+        return Err(StoreErrorV1::InvalidStateV1(
+            crate::StoreValueErrorV1::InvalidProcedureV2State {
+                reason: "delegation receipt is missing or stale",
+            },
+        ));
     }
     validate_graph_mutation_terminal_shape_v2(
         &execution,
@@ -905,6 +979,7 @@ fn commit_graph_mutation_terminal_with_receipt_v1(
         next_state.as_ref(),
         &result,
         &operation,
+        delegation_readiness,
         now,
     )?;
     if let Some(disposition) = terminal_disposition_from_operation_v2(&operation)? {
@@ -1599,15 +1674,18 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
             operation,
             now,
             None,
+            None,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn commit_graph_delegation_accept_terminal_v1(
         &self,
         claim: ClaimTokenV1,
         expected_workspace_revision: RevisionV1,
         expected_session_revision: RevisionV1,
         next_state: GraphSessionStateV2,
+        expected_package_digest: podway_core::Sha256Digest,
         receipt: crate::DelegationReceiptV1,
         now: EpochMillisV1,
     ) -> Result<TerminalReceiptV1, StoreErrorV1> {
@@ -1639,6 +1717,7 @@ impl StoreGraphMutationContractV2 for SqliteStoreV1 {
             operation,
             now,
             Some(&receipt),
+            Some(&expected_package_digest),
         )
     }
 
@@ -5574,6 +5653,7 @@ fn validate_graph_mutation_terminal_shape_v2(
     next: Option<&GraphSessionStateV2>,
     result: &TerminalResultV1,
     operation: &PersistedGraphTerminalOperationV2,
+    delegation_readiness: crate::v2_delegation::DelegationReadinessV1,
     now: EpochMillisV1,
 ) -> Result<(), StoreErrorV1> {
     let preconditions = execution.preconditions();
@@ -6632,6 +6712,7 @@ fn validate_graph_mutation_terminal_shape_v2(
                     current,
                     admitted_skip_reason.as_ref(),
                     error,
+                    delegation_readiness,
                 )
         }
         _ => false,
@@ -6647,6 +6728,7 @@ fn graph_mutation_failure_matches_v2(
     current: &crate::GraphSessionStateV2,
     admitted_skip_reason: Option<&Option<String>>,
     error: &PersistedGraphMutationFailureV2,
+    delegation_readiness: crate::v2_delegation::DelegationReadinessV1,
 ) -> bool {
     let command = execution.command();
     let active = current.trace().active_attempt();
@@ -6976,6 +7058,21 @@ fn graph_mutation_failure_matches_v2(
             );
             if matches!(error, PersistedGraphMutationFailureV2::ArtifactChanged) {
                 return observed.is_ok() && graph_has_recorded_required_artifact_v2(current);
+            }
+            if observed.is_ok() {
+                return matches!(
+                    (error, delegation_readiness),
+                    (
+                        PersistedGraphMutationFailureV2::DelegationReceiptRequired,
+                        crate::v2_delegation::DelegationReadinessV1::ReceiptMissing
+                    ) | (
+                        PersistedGraphMutationFailureV2::DelegationPackageChanged,
+                        crate::v2_delegation::DelegationReadinessV1::PackageChanged
+                    ) | (
+                        PersistedGraphMutationFailureV2::DelegationItemsChanged,
+                        crate::v2_delegation::DelegationReadinessV1::ItemsChanged
+                    )
+                );
             }
             observed
                 .err()

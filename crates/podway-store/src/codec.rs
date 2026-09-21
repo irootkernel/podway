@@ -1395,6 +1395,9 @@ impl PersistedGraphItemMutationV2 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PersistedGraphMutationFailureV2 {
+    DelegationReceiptRequired,
+    DelegationPackageChanged,
+    DelegationItemsChanged,
     GoalTrackingNotEnabled,
     SessionGoalAlreadyDefined {
         goal_revision: u64,
@@ -2862,6 +2865,9 @@ impl PersistedGraphMutationFailureV2 {
             | Self::ListValueNotFound
             | Self::ListValueDuplicate
             | Self::ArtifactChanged
+            | Self::DelegationReceiptRequired
+            | Self::DelegationPackageChanged
+            | Self::DelegationItemsChanged
             | Self::BlockersPresent
             | Self::SessionGoalMissing => true,
             Self::ItemConstraintBound {

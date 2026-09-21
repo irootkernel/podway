@@ -53,6 +53,7 @@ pub struct DispatchErrorDetailsV1 {
     session_archive_failure: Option<Box<SessionArchiveFailureDetailsV1>>,
     session_start_state_conflict: Option<Box<SessionStartStateConflictDetailsV1>>,
     workspace_mode_mismatch: Option<Box<WorkspaceModeMismatchDetailsV1>>,
+    delegation_reason: Option<&'static str>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -249,6 +250,11 @@ enum V2RuntimeErrorDetailsV1 {
 }
 
 impl DispatchErrorDetailsV1 {
+    pub fn with_delegation_reason(mut self, reason: &'static str) -> Self {
+        self.delegation_reason = Some(reason);
+        self
+    }
+
     pub fn with_session_reset_not_eligible(
         mut self,
         lifecycle: podway_core::SessionLifecycle,
@@ -769,6 +775,16 @@ impl DispatchErrorDetailsV1 {
     }
 
     pub(crate) fn into_json(self, requires_admission: bool) -> Map<String, Value> {
+        if let Some(reason) = self.delegation_reason {
+            return json!({
+                "schema": "podway.delegation-error-details/v1",
+                "reason": reason,
+                "admission": admission_value_v1(self.job_id.as_ref(), self.job_sequence),
+            })
+            .as_object()
+            .expect("delegation error details are an object")
+            .clone();
+        }
         if let Some(mismatch) = self.workspace_mode_mismatch {
             return json!({
                 "schema": "podway.workspace-mode-mismatch-details/v1",
@@ -1307,6 +1323,8 @@ pub enum DispatchFailureKindV1 {
     ManualReworkTargetNotAllowed,
     ManualReworkTargetNotOnTrace,
     StageNotSkippable,
+    DelegationReceiptRequired,
+    DelegationReceiptStale,
     RequiredItemsMissing,
     BlockersPresent,
     SessionGoalMissing,
@@ -1376,6 +1394,7 @@ impl DispatchFailureV1 {
                 session_archive_failure: None,
                 session_start_state_conflict: None,
                 workspace_mode_mismatch: None,
+                delegation_reason: None,
             }),
         }
     }
@@ -3336,6 +3355,18 @@ fn catalog_error_spec_v1(kind: DispatchFailureKindV1) -> (&'static str, &'static
         DispatchFailureKindV1::StageNotSkippable => (
             "STAGE_NOT_SKIPPABLE",
             "The active stage cannot be skipped.",
+            false,
+            1,
+        ),
+        DispatchFailureKindV1::DelegationReceiptRequired => (
+            "DELEGATION_RECEIPT_REQUIRED",
+            "The delegated attempt has no accepted receipt.",
+            false,
+            1,
+        ),
+        DispatchFailureKindV1::DelegationReceiptStale => (
+            "DELEGATION_RECEIPT_STALE",
+            "The accepted receipt no longer matches the current delegated attempt.",
             false,
             1,
         ),

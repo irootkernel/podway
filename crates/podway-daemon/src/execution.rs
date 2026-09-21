@@ -346,8 +346,9 @@ pub fn workspace_procedure_snapshot_from_bytes_v2(
             diagnostic_codes: vec!["AUTHORING_SCHEMA_INVALID".to_owned()],
         }
     })?;
-    // Declaration authoring is available before acceptance and persistence are wired. A start
-    // cannot admit a snapshot that the current daemon cannot safely complete.
+    // Declaration authoring and Store receipt semantics are available before the public package
+    // and acceptance routes are wired. A start cannot admit a snapshot that the current daemon
+    // cannot yet drive through that complete lifecycle.
     if validated.parsed().graph().placements().iter().any(|placement| {
         matches!(placement, podway_core::GraphPlacementV2::Action(action) if action.delegation().is_some())
     }) {
@@ -5702,6 +5703,26 @@ where
                             error => Err(ExecutionErrorV1::from_boundary(error.into())),
                         };
                     }
+                }
+                let delegation_failure = match self
+                    .store
+                    .read_delegation_readiness_v1(claimed.claim().identity())?
+                {
+                    podway_store::v2_delegation::DelegationReadinessV1::Direct
+                    | podway_store::v2_delegation::DelegationReadinessV1::ReceiptCurrent => None,
+                    podway_store::v2_delegation::DelegationReadinessV1::ReceiptMissing => {
+                        Some(PersistedGraphMutationFailureV2::DelegationReceiptRequired)
+                    }
+                    podway_store::v2_delegation::DelegationReadinessV1::PackageChanged => {
+                        Some(PersistedGraphMutationFailureV2::DelegationPackageChanged)
+                    }
+                    podway_store::v2_delegation::DelegationReadinessV1::ItemsChanged => {
+                        Some(PersistedGraphMutationFailureV2::DelegationItemsChanged)
+                    }
+                };
+                if let Some(failure) = delegation_failure {
+                    return self
+                        .commit_persisted_graph_mutation_failure_v2(claimed, state, failure, now);
                 }
                 let operation = PersistedGraphTerminalOperationV2::complete(
                     outcome.from_graph_node_id().clone(),

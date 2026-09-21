@@ -19,11 +19,11 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
-fn digest(nibble: char) -> Sha256Digest {
+pub(super) fn digest(nibble: char) -> Sha256Digest {
     Sha256Digest::new(format!("sha256:{}", nibble.to_string().repeat(64))).unwrap()
 }
 
-fn identity() -> DurableWorktreeIdentityV1 {
+pub(super) fn identity() -> DurableWorktreeIdentityV1 {
     DurableWorktreeIdentityV1::new(
         digest('a'),
         WorkspaceId::new("00000000-0000-4000-8000-000000000401").unwrap(),
@@ -35,7 +35,7 @@ fn root() -> ValidatedWorkspaceRootV1 {
     ValidatedWorkspaceRootV1::from_path(Path::new("/tmp/podway-v2sdg004-receipt")).unwrap()
 }
 
-fn open(temporary: &TempDir, failpoint: Option<StoreFailpointV1>) -> SqliteStoreV1 {
+pub(super) fn open(temporary: &TempDir, failpoint: Option<StoreFailpointV1>) -> SqliteStoreV1 {
     SqliteStoreV1::open(
         temporary.path().join("state.sqlite3"),
         &root(),
@@ -48,7 +48,7 @@ fn open(temporary: &TempDir, failpoint: Option<StoreFailpointV1>) -> SqliteStore
     .unwrap()
 }
 
-fn declaration() -> serde_json::Value {
+pub(super) fn declaration() -> serde_json::Value {
     json!({
         "binding_ref": "local-specialist",
         "role_ref": "reviewer",
@@ -58,7 +58,7 @@ fn declaration() -> serde_json::Value {
     })
 }
 
-fn session_state() -> GraphSessionStateV2 {
+pub(super) fn session_state() -> GraphSessionStateV2 {
     let document = json!({
         "schema": "podway.procedure/v2",
         "id": "delegated-receipt",
@@ -103,7 +103,7 @@ fn session_state() -> GraphSessionStateV2 {
         .into_state()
 }
 
-fn receipt(state: &GraphSessionStateV2) -> DelegationReceiptV1 {
+pub(super) fn receipt(state: &GraphSessionStateV2) -> DelegationReceiptV1 {
     DelegationReceiptV1::new(json!({
         "schema": "podway.delegation-receipt/v1",
         "receipt_id": "00000000-0000-4000-8000-000000000405",
@@ -134,25 +134,27 @@ fn receipt(state: &GraphSessionStateV2) -> DelegationReceiptV1 {
         "summary": "Reviewed result",
         "worker_disposition": "idle",
         "accepted": true,
-        "accepted_items_digest": digest('2'),
+        "accepted_items_digest": podway_store::v2_delegation::accepted_items_digest_v1(state).unwrap(),
         "accepted_at": "2026-09-17T00:00:00.000Z",
     }))
     .unwrap()
 }
 
-fn admit_and_claim(
+pub(super) fn admit_and_claim(
     store: &SqliteStoreV1,
     state: &GraphSessionStateV2,
 ) -> podway_store::ClaimedJobV1 {
     admit_and_claim_with(store, state, "delegation-receipt-key", 0x406)
 }
 
-fn admit_and_claim_with(
+pub(super) fn admit_and_claim_with(
     store: &SqliteStoreV1,
     state: &GraphSessionStateV2,
     key: &str,
     job_number: u64,
 ) -> podway_store::ClaimedJobV1 {
+    let accepted = receipt(state);
+    let accepted = accepted.value();
     let execution = CanonicalExecutionJsonV1::new(
         canonicalize_json_v1(&json!({
             "attached_artifact": null,
@@ -160,7 +162,21 @@ fn admit_and_claim_with(
             "execution_version": 8,
             "fresh_attempt_id": null,
             "fresh_blocker_id": null,
-            "payload": {},
+            "payload": {
+                "schema": "podway.delegation-accept-input/v1",
+                "workspace_uuid": accepted["workspace_uuid"],
+                "session_id": accepted["session_id"],
+                "session_revision": state.trace().revision().get(),
+                "attempt_id": accepted["attempt_id"],
+                "idempotency_key": key,
+                "package_digest": accepted["package_digest"],
+                "execution": accepted["execution"],
+                "rounds_used": accepted["rounds_used"],
+                "result_digest": accepted["result_digest"],
+                "summary": accepted["summary"],
+                "worker_disposition": accepted["worker_disposition"],
+                "accepted": true,
+            },
             "preconditions": {},
             "selector": {},
             "workspace_id": identity().workspace_uuid().as_str(),
@@ -415,6 +431,7 @@ fn v2sdg004_receipt_rejects_wrong_parent_without_state_or_job_commit() {
                     state.workspace_revision(),
                     state.trace().revision(),
                     next,
+                    digest('d'),
                     wrong,
                     UnixMillis::new(7)
                 )
@@ -460,6 +477,7 @@ fn v2sdg004_second_acceptance_of_same_attempt_rolls_back() {
             state.workspace_revision(),
             state.trace().revision(),
             accepted.clone(),
+            digest('d'),
             receipt(&state),
             UnixMillis::new(7),
         )
@@ -477,6 +495,7 @@ fn v2sdg004_second_acceptance_of_same_attempt_rolls_back() {
                 accepted.workspace_revision(),
                 accepted.trace().revision(),
                 next,
+                digest('d'),
                 DelegationReceiptV1::new(duplicate).unwrap(),
                 UnixMillis::new(8)
             )
@@ -522,6 +541,7 @@ fn v2sdg004_duplicate_receipt_id_across_attempts_rolls_back() {
             state.workspace_revision(),
             state.trace().revision(),
             accepted.clone(),
+            digest('d'),
             first_receipt.clone(),
             UnixMillis::new(7),
         )
@@ -555,6 +575,7 @@ fn v2sdg004_duplicate_receipt_id_across_attempts_rolls_back() {
         retried.workspace_revision(),
         retried.trace().revision(),
         next,
+        digest('d'),
         duplicate,
         UnixMillis::new(9),
     );
@@ -619,6 +640,7 @@ fn v2sdg004_receipt_state_and_job_commit_atomically() {
             state.workspace_revision(),
             state.trace().revision(),
             next.clone(),
+            digest('d'),
             receipt.clone(),
             UnixMillis::new(7),
         )
@@ -692,6 +714,7 @@ fn v2sdg004_precommit_failure_rolls_back_receipt_state_and_terminal() {
                 state.workspace_revision(),
                 state.trace().revision(),
                 next,
+                digest('d'),
                 receipt(&state),
                 UnixMillis::new(7),
             )
@@ -842,6 +865,7 @@ fn v2sdg004_reset_removes_receipt_with_owning_attempt() {
             state.workspace_revision(),
             state.trace().revision(),
             next.clone(),
+            digest('d'),
             receipt(&state),
             UnixMillis::new(7),
         )
@@ -885,6 +909,7 @@ fn v2sdg004_postcommit_response_loss_replays_one_receipt() {
                 state.workspace_revision(),
                 state.trace().revision(),
                 next.clone(),
+                digest('d'),
                 receipt(&state),
                 UnixMillis::new(7)
             )
@@ -974,6 +999,7 @@ fn v2sdg004_reopen_rejects_well_formed_mismatched_and_noncanonical_receipts() {
                 state.workspace_revision(),
                 state.trace().revision(),
                 accepted.clone(),
+                digest('d'),
                 original.clone(),
                 UnixMillis::new(7),
             )
@@ -1101,6 +1127,7 @@ fn v2sdg004_archived_receipt_survives_reopen_then_purges_with_session() {
             state.workspace_revision(),
             state.trace().revision(),
             accepted.clone(),
+            digest('d'),
             receipt(&state),
             UnixMillis::new(7),
         )

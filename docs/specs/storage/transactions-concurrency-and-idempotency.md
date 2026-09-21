@@ -172,6 +172,22 @@ requeues a pre-terminal running job, and an exact replay observes the one retain
 receipt. The command reuses existing item, job, and receipt tables and introduces
 no SQLite migration.
 
+For a delegated Procedure v2 action, acceptance stores the immutable attempt
+receipt only when its facts match the admitted acceptance input, current item
+state, and ordinary action gates. The transaction compares the input's session
+revision and idempotency key with the admitted job before writing the receipt,
+compares its package digest with the trusted expected digest supplied by the
+daemon, and computes the accepted item-state digest from current Store state.
+Completion checks that receipt and its accepted item-state digest inside the
+same Store transaction that advances the cursor and publishes the terminal job.
+A receipt is package-current only while its workspace, session, attempt,
+placement, procedure, and declaration binding still matches the live state.
+Public package projection and the daemon-supplied expected digest arrive with
+the V2SDG-007 route; V2SDG-005 does not expose delegated admission.
+A missing or stale receipt leaves both cursor and terminal result unchanged. Blocker-only
+and session-revision-only changes do not alter the accepted item-state digest;
+actual item edits do, including optional items and edits later reverted.
+
 ## No-op behavior
 
 A semantic no-op, such as clearing an already-unset item with current preconditions:

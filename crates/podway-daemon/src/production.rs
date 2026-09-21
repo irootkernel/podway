@@ -6073,6 +6073,18 @@ fn map_graph_mutation_failure_v2(error: &PersistedGraphMutationFailureV2) -> Dis
         PersistedGraphMutationFailureV2::RequiredItemsMissing { .. } => {
             DispatchFailureV1::new(DispatchFailureKindV1::RequiredItemsMissing)
         }
+        PersistedGraphMutationFailureV2::DelegationReceiptRequired => DispatchFailureV1::new(
+            DispatchFailureKindV1::DelegationReceiptRequired,
+        )
+        .with_details(DispatchErrorDetailsV1::default().with_delegation_reason("receipt_missing")),
+        PersistedGraphMutationFailureV2::DelegationPackageChanged => DispatchFailureV1::new(
+            DispatchFailureKindV1::DelegationReceiptStale,
+        )
+        .with_details(DispatchErrorDetailsV1::default().with_delegation_reason("package_changed")),
+        PersistedGraphMutationFailureV2::DelegationItemsChanged => DispatchFailureV1::new(
+            DispatchFailureKindV1::DelegationReceiptStale,
+        )
+        .with_details(DispatchErrorDetailsV1::default().with_delegation_reason("items_changed")),
         PersistedGraphMutationFailureV2::BlockersPresent => {
             DispatchFailureV1::new(DispatchFailureKindV1::BlockersPresent)
         }
@@ -6847,6 +6859,34 @@ mod tests {
         PersistedResponseContextV1, PersistedTerminalJobProjectionV1, PersistedTerminalJobStateV1,
         PersistedTerminalSessionProjectionV1, RevisionAttemptItemPreconditionsV1,
     };
+
+    #[test]
+    fn v2sdg005_completion_failures_use_closed_delegation_errors() {
+        for (failure, kind, reason) in [
+            (
+                PersistedGraphMutationFailureV2::DelegationReceiptRequired,
+                DispatchFailureKindV1::DelegationReceiptRequired,
+                "receipt_missing",
+            ),
+            (
+                PersistedGraphMutationFailureV2::DelegationPackageChanged,
+                DispatchFailureKindV1::DelegationReceiptStale,
+                "package_changed",
+            ),
+            (
+                PersistedGraphMutationFailureV2::DelegationItemsChanged,
+                DispatchFailureKindV1::DelegationReceiptStale,
+                "items_changed",
+            ),
+        ] {
+            let mapped = map_graph_mutation_failure_v2(&failure);
+            assert_eq!(mapped.kind(), kind);
+            let details = mapped.into_details().into_json(true);
+            assert_eq!(details["schema"], "podway.delegation-error-details/v1");
+            assert_eq!(details["reason"], reason);
+            assert_eq!(details["admission"]["admitted"], false);
+        }
+    }
 
     /// V2SCL-003: only the per-attempt content aggregate becomes ATTEMPT_CONTENT_LIMIT_EXCEEDED,
     /// whose closed details fix `unit` to scalars. Every other scale bound stays an item constraint

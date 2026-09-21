@@ -88,8 +88,9 @@ Procedure bytes. Named-mode, manifest, admission, and unrelated-worktree
 controls remain covered by the existing V2DVC and daemon/CLI suites. No fixture
 uses an owner's account or active worktree.
 
-The following matrix names the acceptance proof to add in the owning task. A
-baseline Direct control must accompany each delegated behavior test. A
+The following matrix names the acceptance proof to add in the owning task. Each
+affected mutation path must retain a baseline Direct control, either beside the
+delegated test or in an existing registered suite cited by the owning task. A
 successful fixture receipt proves protocol behavior, not real executor work.
 
 | Case | Required result | Proof owner |

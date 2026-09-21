@@ -240,6 +240,13 @@ impl StoreGraphReadContractV2 for WorkspaceStoreReadFacadeV1 {
     ) -> Result<GraphWorkspaceViewV2, StoreErrorV1> {
         self.slot.read_graph_workspace_view_v2(identity)
     }
+
+    fn read_delegation_readiness_v1(
+        &self,
+        identity: &podway_store::DurableWorktreeIdentityV1,
+    ) -> Result<podway_store::v2_delegation::DelegationReadinessV1, StoreErrorV1> {
+        self.slot.read_delegation_readiness_v1(identity)
+    }
 }
 
 impl StoreIdempotencyReadContractV1 for WorkspaceStoreReadFacadeV1 {
@@ -494,12 +501,14 @@ impl StoreGraphMutationContractV2 for WorkspaceStoreSlotV1 {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn commit_graph_delegation_accept_terminal_v1(
         &self,
         claim: ClaimTokenV1,
         expected_workspace_revision: RevisionV1,
         expected_session_revision: RevisionV1,
         next_state: GraphSessionStateV2,
+        expected_package_digest: podway_core::Sha256Digest,
         receipt: podway_store::DelegationReceiptV1,
         now: podway_store::EpochMillisV1,
     ) -> Result<TerminalReceiptV1, StoreErrorV1> {
@@ -509,6 +518,7 @@ impl StoreGraphMutationContractV2 for WorkspaceStoreSlotV1 {
                 expected_workspace_revision,
                 expected_session_revision,
                 next_state,
+                expected_package_digest,
                 receipt,
                 now,
             )
@@ -583,6 +593,13 @@ impl StoreGraphReadContractV2 for WorkspaceStoreSlotV1 {
         identity: &podway_store::DurableWorktreeIdentityV1,
     ) -> Result<GraphWorkspaceViewV2, StoreErrorV1> {
         self.with_open_store(|store| store.read_graph_workspace_view_v2(identity))
+    }
+
+    fn read_delegation_readiness_v1(
+        &self,
+        identity: &podway_store::DurableWorktreeIdentityV1,
+    ) -> Result<podway_store::v2_delegation::DelegationReadinessV1, StoreErrorV1> {
+        self.with_open_store(|store| store.read_delegation_readiness_v1(identity))
     }
 }
 

@@ -12,3 +12,5 @@ mod int_v2_only_schema;
 mod int_v2_workflow_memory;
 #[path = "int_v2sdg004_receipt.rs"]
 mod int_v2sdg004_receipt;
+#[path = "int_v2sdg005_semantics.rs"]
+mod int_v2sdg005_semantics;

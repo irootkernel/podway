@@ -4,8 +4,9 @@ use podway_core::{
     AttemptId, DelegationReceiptIdV1, GraphNodeId, SessionId, Sha256Digest, WorkspaceId,
     canonicalize_json_v1, verify_canonical_json_v1,
 };
-use rusqlite::{Connection, Transaction, params};
-use serde_json::{Map, Value};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use serde_json::{Map, Value, json};
+use sha2::{Digest as _, Sha256};
 
 use crate::{
     GraphSessionStateV2, RusqliteErrorContextV1, StoreErrorV1, StoreRecordKindV1,
@@ -13,6 +14,16 @@ use crate::{
 };
 
 pub const MAX_DELEGATION_RECEIPT_BYTES_V1: usize = 45_000;
+const ACCEPTED_ITEMS_DIGEST_DOMAIN_V1: &str = "podway.delegation-accepted-items/v1\n";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DelegationReadinessV1 {
+    Direct,
+    ReceiptMissing,
+    ReceiptCurrent,
+    PackageChanged,
+    ItemsChanged,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DelegationReceiptV1 {
@@ -89,6 +100,11 @@ impl DelegationReceiptV1 {
         Sha256Digest::new(field(self.value.as_object().unwrap(), "result_digest").unwrap()).unwrap()
     }
 
+    pub fn accepted_items_digest(&self) -> Sha256Digest {
+        Sha256Digest::new(field(self.value.as_object().unwrap(), "accepted_items_digest").unwrap())
+            .unwrap()
+    }
+
     pub fn matches_state(&self, state: &GraphSessionStateV2, workspace_uuid: &WorkspaceId) -> bool {
         let Some(attempt) = state.trace().active_attempt() else {
             return false;
@@ -113,6 +129,167 @@ impl DelegationReceiptV1 {
                 == Some(state.snapshot().digest().as_str())
             && placement.get("delegation") == self.value.get("delegation")
     }
+}
+
+/// Binds every active slot, including optional and currently unset items, to one acceptance.
+pub fn accepted_items_digest_v1(
+    state: &GraphSessionStateV2,
+) -> Result<Sha256Digest, StoreValueErrorV1> {
+    let active =
+        state
+            .trace()
+            .active_attempt()
+            .ok_or(StoreValueErrorV1::InvalidProcedureV2State {
+                reason: "delegation acceptance requires an active attempt",
+            })?;
+    let memory = state
+        .workflow_memory()
+        .attempts()
+        .iter()
+        .find(|memory| memory.attempt_id() == active.attempt_id())
+        .ok_or(StoreValueErrorV1::InvalidProcedureV2State {
+            reason: "delegation acceptance memory is absent",
+        })?;
+    let mut slots = memory.item_slots().iter().collect::<Vec<_>>();
+    slots.sort_unstable_by(|left, right| left.item_id().as_str().cmp(right.item_id().as_str()));
+    let values = slots
+        .into_iter()
+        .map(|slot| {
+            Ok(json!({
+                "item_id": slot.item_id().as_str(),
+                "revision": slot.revision().get(),
+                "disposition": if slot.value().is_some() { "recorded" } else { "unset" },
+                "value_digest": slot
+                    .value()
+                    .map(crate::v2_memory::recorded_value_digest_v2)
+                    .transpose()?
+                    .map(|digest| digest.as_str().to_owned()),
+            }))
+        })
+        .collect::<Result<Vec<_>, StoreValueErrorV1>>()?;
+    let canonical =
+        canonicalize_json_v1(&values).map_err(|_| StoreValueErrorV1::InvalidProcedureV2State {
+            reason: "delegation accepted item state is not canonicalizable",
+        })?;
+    let mut hasher = Sha256::new();
+    hasher.update(ACCEPTED_ITEMS_DIGEST_DOMAIN_V1);
+    hasher.update(canonical.as_bytes());
+    Sha256Digest::new(format!("sha256:{:x}", hasher.finalize())).map_err(|_| {
+        StoreValueErrorV1::InvalidProcedureV2State {
+            reason: "delegation accepted item digest is invalid",
+        }
+    })
+}
+
+pub fn validate_acceptance_v1(
+    state: &GraphSessionStateV2,
+    workspace_uuid: &WorkspaceId,
+    expected_package_digest: &Sha256Digest,
+    receipt: &DelegationReceiptV1,
+) -> Result<(), StoreErrorV1> {
+    if !receipt.matches_state(state, workspace_uuid)
+        || receipt.package_digest() != *expected_package_digest
+        || receipt.accepted_items_digest()
+            != accepted_items_digest_v1(state).map_err(StoreErrorV1::InvalidStateV1)?
+        || state
+            .accept_delegation_successor_v1(&receipt.attempt_id())
+            .is_err()
+    {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+/// The admitted request is immutable; its acceptance facts must be the ones persisted.
+pub(crate) fn acceptance_input_matches_receipt_v1(
+    input: &Value,
+    receipt: &DelegationReceiptV1,
+    session_revision: u64,
+    idempotency_key: &str,
+) -> bool {
+    let Some(object) = input.as_object() else {
+        return false;
+    };
+    if !exact_keys(
+        object,
+        &[
+            "schema",
+            "workspace_uuid",
+            "session_id",
+            "session_revision",
+            "attempt_id",
+            "idempotency_key",
+            "package_digest",
+            "execution",
+            "rounds_used",
+            "result_digest",
+            "summary",
+            "worker_disposition",
+            "accepted",
+        ],
+    ) || field(object, "schema") != Some("podway.delegation-accept-input/v1")
+        || object.get("session_revision").and_then(Value::as_u64) != Some(session_revision)
+        || field(object, "idempotency_key") != Some(idempotency_key)
+    {
+        return false;
+    }
+    const SHARED_FIELDS: [&str; 10] = [
+        "workspace_uuid",
+        "session_id",
+        "attempt_id",
+        "package_digest",
+        "execution",
+        "rounds_used",
+        "result_digest",
+        "summary",
+        "worker_disposition",
+        "accepted",
+    ];
+    SHARED_FIELDS
+        .iter()
+        .all(|field| object.get(*field) == receipt.value().get(*field))
+}
+
+pub(crate) fn completion_readiness_connection_v1(
+    connection: &Connection,
+    state: &GraphSessionStateV2,
+    workspace_uuid: &WorkspaceId,
+) -> Result<DelegationReadinessV1, StoreErrorV1> {
+    let Some(active) = state.trace().active_attempt() else {
+        return Ok(DelegationReadinessV1::Direct);
+    };
+    let placement = state
+        .snapshot()
+        .graph_nodes()
+        .iter()
+        .find(|node| node.graph_node_id() == active.graph_node_id())
+        .ok_or_else(corrupt)?;
+    let document: Value =
+        serde_json::from_str(placement.canonical_placement_json()).map_err(|_| corrupt())?;
+    if document.get("delegation").is_none() {
+        return Ok(DelegationReadinessV1::Direct);
+    }
+    let receipt_json: Option<String> = connection
+        .query_row(
+            "SELECT receipt_json FROM v2_delegation_receipts WHERE attempt_id = ?1 AND session_id = ?2",
+            params![active.attempt_id().as_str(), state.trace().session_id().as_str()],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|_| corrupt())?;
+    let Some(receipt_json) = receipt_json else {
+        return Ok(DelegationReadinessV1::ReceiptMissing);
+    };
+    let receipt = DelegationReceiptV1::decode(&receipt_json)?;
+    if !receipt.matches_state(state, workspace_uuid) {
+        return Ok(DelegationReadinessV1::PackageChanged);
+    }
+    if receipt.accepted_items_digest()
+        != accepted_items_digest_v1(state).map_err(StoreErrorV1::InvalidStateV1)?
+    {
+        return Ok(DelegationReadinessV1::ItemsChanged);
+    }
+    Ok(DelegationReadinessV1::ReceiptCurrent)
 }
 
 pub(crate) fn insert_receipt_transaction_v1(

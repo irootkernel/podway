@@ -11,7 +11,7 @@ use podway_core::{
     NodeDefinitionId, NodeKindV2, OptionId, ProcedureSnapshotId, ProcedureSourceKindV1,
     ProcedureSourceLabelV1, ReasonV2, Revision, SessionAttemptV2, SessionId, SessionLifecycle,
     SessionTraceV2, Sha256Digest, TerminalDispositionKindV2, TerminalDispositionV2,
-    TraceSequenceV2, UnixMillis, canonicalize_json_v1, verify_canonical_json_v1,
+    TraceSequenceV2, UnixMillis, WorkspaceId, canonicalize_json_v1, verify_canonical_json_v1,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde_json::Value;
@@ -1183,13 +1183,19 @@ impl GraphSessionStateV2 {
     pub fn accept_delegation_successor_v1(
         &self,
         attempt_id: &AttemptId,
-    ) -> Result<Self, StoreValueErrorV1> {
+    ) -> Result<Self, GraphMutationErrorV2> {
+        if self.trace.lifecycle() != SessionLifecycle::Running {
+            return Err(GraphMutationErrorV2::SessionNotRunning);
+        }
         let active = self
             .trace
             .active_attempt()
-            .ok_or_else(|| invalid("delegation acceptance requires an active attempt"))?;
+            .ok_or(GraphMutationErrorV2::SessionNotRunning)?;
         if active.attempt_id() != attempt_id {
-            return Err(invalid("delegation acceptance attempt is not current"));
+            return Err(GraphMutationErrorV2::AttemptNotCurrent {
+                expected: attempt_id.clone(),
+                actual: Some(active.attempt_id().clone()),
+            });
         }
         let placement = self
             .snapshot
@@ -1200,8 +1206,10 @@ impl GraphSessionStateV2 {
         let document: Value = serde_json::from_str(placement.canonical_placement_json())
             .map_err(|_| invalid("delegation placement is malformed"))?;
         if document.get("delegation").is_none() {
-            return Err(invalid("delegation acceptance requires a delegated action"));
+            return Err(invalid("delegation acceptance requires a delegated action").into());
         }
+        self.workflow_memory
+            .validate_active_action_ready_v2(&self.snapshot, &self.trace)?;
         let trace = SessionTraceV2::from_parts(
             self.trace.session_id().clone(),
             self.trace.lifecycle(),
@@ -1212,7 +1220,7 @@ impl GraphSessionStateV2 {
             self.trace.attempts().to_vec(),
         )
         .map_err(|_| invalid("delegation acceptance trace is invalid"))?;
-        Self::new_with_goal_state(
+        Ok(Self::new_with_goal_state(
             self.workspace_revision
                 .checked_next()
                 .map_err(|_| invalid("workspace revision overflowed"))?,
@@ -1227,7 +1235,7 @@ impl GraphSessionStateV2 {
             self.completed_at,
             self.cancelled_at,
             self.cancel_reason.clone(),
-        )
+        )?)
     }
 
     pub fn prepared(
@@ -3412,6 +3420,11 @@ pub trait StoreGraphReadContractV2: Send + Sync {
         &self,
         identity: &DurableWorktreeIdentityV1,
     ) -> Result<GraphWorkspaceViewV2, StoreErrorV1>;
+
+    fn read_delegation_readiness_v1(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+    ) -> Result<crate::v2_delegation::DelegationReadinessV1, StoreErrorV1>;
 }
 
 pub trait StoreTerminalDispositionContractV2: Send + Sync {
@@ -3593,12 +3606,14 @@ pub trait StoreGraphMutationContractV2: Send + Sync {
         now: crate::EpochMillisV1,
     ) -> Result<crate::TerminalReceiptV1, StoreErrorV1>;
 
+    #[allow(clippy::too_many_arguments)]
     fn commit_graph_delegation_accept_terminal_v1(
         &self,
         claim: crate::ClaimTokenV1,
         expected_workspace_revision: Revision,
         expected_session_revision: Revision,
         next_state: GraphSessionStateV2,
+        expected_package_digest: Sha256Digest,
         receipt: crate::DelegationReceiptV1,
         now: crate::EpochMillisV1,
     ) -> Result<crate::TerminalReceiptV1, StoreErrorV1>;
@@ -3670,12 +3685,14 @@ where
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn commit_graph_delegation_accept_terminal_v1(
         &self,
         claim: crate::ClaimTokenV1,
         expected_workspace_revision: Revision,
         expected_session_revision: Revision,
         next_state: GraphSessionStateV2,
+        expected_package_digest: Sha256Digest,
         receipt: crate::DelegationReceiptV1,
         now: crate::EpochMillisV1,
     ) -> Result<crate::TerminalReceiptV1, StoreErrorV1> {
@@ -3684,6 +3701,7 @@ where
             expected_workspace_revision,
             expected_session_revision,
             next_state,
+            expected_package_digest,
             receipt,
             now,
         )
@@ -3754,6 +3772,13 @@ where
         identity: &DurableWorktreeIdentityV1,
     ) -> Result<GraphWorkspaceViewV2, StoreErrorV1> {
         (**self).read_graph_workspace_view_v2(identity)
+    }
+
+    fn read_delegation_readiness_v1(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+    ) -> Result<crate::v2_delegation::DelegationReadinessV1, StoreErrorV1> {
+        (**self).read_delegation_readiness_v1(identity)
     }
 }
 
@@ -4014,6 +4039,35 @@ fn replace_graph_session_transaction_internal_v2(
         &goal_transition,
     )
     .map_err(StoreErrorV1::InvalidStateV1)?;
+    if !delegation_accept
+        && previous.trace().active_attempt().is_some_and(|active| {
+            next.trace().attempts().iter().any(|attempt| {
+                attempt.attempt_id() == active.attempt_id()
+                    && attempt.lifecycle() == AttemptLifecycle::Completed
+            })
+        })
+    {
+        let workspace_uuid: String = transaction
+            .query_row(
+                "SELECT workspace_uuid FROM workspace_state WHERE singleton = 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|_| corrupt(StoreRecordKindV1::Workspace))?;
+        let workspace_uuid =
+            WorkspaceId::new(workspace_uuid).map_err(|_| corrupt(StoreRecordKindV1::Workspace))?;
+        if !matches!(
+            crate::v2_delegation::completion_readiness_connection_v1(
+                transaction,
+                &previous,
+                &workspace_uuid,
+            )?,
+            crate::v2_delegation::DelegationReadinessV1::Direct
+                | crate::v2_delegation::DelegationReadinessV1::ReceiptCurrent
+        ) {
+            return Err(invalid_store("delegation receipt is missing or stale"));
+        }
+    }
     if delegation_accept {
         let active = previous
             .trace()

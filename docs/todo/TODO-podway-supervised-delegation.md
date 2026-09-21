@@ -182,7 +182,8 @@ request contained all required bytes; that is an adapter conformance obligation.
 
 Before receipt acceptance, the Primary records the action's final evidence and
 corrections. Acceptance requires ordinary item satisfaction and no open blocker,
-and the daemon freezes the accepted item-state digest. An actual output edit
+and the Store computes and freezes the accepted item-state digest in the
+acceptance transaction. An actual output edit
 after acceptance, including a cosmetic or optional-item correction, makes that
 receipt stale. Preserve the immutable receipt and require explicit retry/rework
 before another acceptance; do not add receipt-replacement or round history.
@@ -373,7 +374,7 @@ migration, managed-generation activation, or public delegated admission occurs.
 Purpose: prevent declaration-only supervision from becoming a bypassable label.
 
 - Implement pure acceptance validation, ordinary preconditions, declaration and
-  package matching, round/disposition checks, and daemon-computed item-state digest.
+  package matching, round/disposition checks, and Store-computed item-state digest.
 - Enforce one immutable acceptance per attempt and unchanged cursor on success.
 - Add the delegated completion gate and stale-after-edit behavior; do not add
   these conditions to Direct attempts.

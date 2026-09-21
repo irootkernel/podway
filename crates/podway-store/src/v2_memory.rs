@@ -1127,48 +1127,8 @@ impl WorkflowMemoryStateV2 {
         next_trace: &SessionTraceV2,
         ended_at: UnixMillis,
     ) -> Result<Self, GraphMutationErrorV2> {
-        let source = previous_trace
-            .active_attempt()
-            .ok_or(GraphMutationErrorV2::SessionNotRunning)?;
-        let source_memory = self
-            .attempts
-            .iter()
-            .find(|memory| memory.attempt_id() == source.attempt_id())
-            .ok_or_else(|| invalid("active Procedure v2 workflow memory is absent"))?;
+        self.validate_active_action_ready_v2(snapshot, previous_trace)?;
         let model = SnapshotMemoryModelV2::from_snapshot(snapshot)?;
-        let source_specification = model.node(source.graph_node_id())?;
-        if source_specification.node_kind != podway_core::NodeKindV2::Action {
-            return Err(GraphMutationErrorV2::GraphNodeTypeMismatch {
-                graph_node_id: source.graph_node_id().clone(),
-                actual: source_specification.node_kind,
-            });
-        }
-        let missing = source_specification
-            .items
-            .iter()
-            .zip(source_memory.item_slots())
-            .enumerate()
-            .filter(|(index, (specification, slot))| {
-                required_now_v2(
-                    &source_specification.items,
-                    source_memory.item_slots(),
-                    *index,
-                ) && !slot
-                    .value()
-                    .is_some_and(|value| specification.is_satisfied_by(value))
-            })
-            .map(|(_, (specification, _))| specification.id().clone())
-            .collect::<Vec<_>>();
-        if !missing.is_empty() {
-            return Err(GraphMutationErrorV2::RequiredItemsMissing { item_ids: missing });
-        }
-        if source_memory
-            .blockers()
-            .iter()
-            .any(|blocker| blocker.state() == BlockerState::Open)
-        {
-            return Err(GraphMutationErrorV2::BlockersPresent);
-        }
 
         let mut attempts = self.attempts.clone();
         if let Some(fresh) = next_trace.active_attempt() {
@@ -1198,6 +1158,53 @@ impl WorkflowMemoryStateV2 {
             )?);
         }
         Self::new(attempts, self.decisions.clone(), self.reworks.clone()).map_err(Into::into)
+    }
+
+    pub(crate) fn validate_active_action_ready_v2(
+        &self,
+        snapshot: &ProcedureSnapshotV2,
+        trace: &SessionTraceV2,
+    ) -> Result<(), GraphMutationErrorV2> {
+        let active = trace
+            .active_attempt()
+            .ok_or(GraphMutationErrorV2::SessionNotRunning)?;
+        let memory = self
+            .attempts
+            .iter()
+            .find(|memory| memory.attempt_id() == active.attempt_id())
+            .ok_or_else(|| invalid("active Procedure v2 workflow memory is absent"))?;
+        let model = SnapshotMemoryModelV2::from_snapshot(snapshot)?;
+        let specification = model.node(active.graph_node_id())?;
+        if specification.node_kind != podway_core::NodeKindV2::Action {
+            return Err(GraphMutationErrorV2::GraphNodeTypeMismatch {
+                graph_node_id: active.graph_node_id().clone(),
+                actual: specification.node_kind,
+            });
+        }
+        let missing = specification
+            .items
+            .iter()
+            .zip(memory.item_slots())
+            .enumerate()
+            .filter(|(index, (item, slot))| {
+                required_now_v2(&specification.items, memory.item_slots(), *index)
+                    && !slot
+                        .value()
+                        .is_some_and(|value| item.is_satisfied_by(value))
+            })
+            .map(|(_, (item, _))| item.id().clone())
+            .collect::<Vec<_>>();
+        if !missing.is_empty() {
+            return Err(GraphMutationErrorV2::RequiredItemsMissing { item_ids: missing });
+        }
+        if memory
+            .blockers()
+            .iter()
+            .any(|blocker| blocker.state() == BlockerState::Open)
+        {
+            return Err(GraphMutationErrorV2::BlockersPresent);
+        }
+        Ok(())
     }
 
     pub(crate) fn retry_successor_v2(

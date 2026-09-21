@@ -1,20 +1,18 @@
-version: 3
+version: 4
 project:
   name: "podway"
 providers:
-  zcode:
-    timeout: "60m"
-  agy:
+  grok:
     timeout: "60m"
 execution:
   workspace_access: "none"
 roles:
-  logic: {enabled: true, primary_provider: "zcode"}
-  security: {enabled: true, primary_provider: "zcode"}
-  maintainability: {enabled: true, primary_provider: "zcode"}
-  product: {enabled: true, primary_provider: "zcode"}
-  documentation: {enabled: true, primary_provider: "agy"}
-  testing: {enabled: true, primary_provider: "zcode"}
+  logic: {enabled: true, primary_provider: "grok"}
+  security: {enabled: true, primary_provider: "grok"}
+  maintainability: {enabled: true, primary_provider: "grok"}
+  product: {enabled: true, primary_provider: "grok"}
+  documentation: {enabled: true, primary_provider: "grok"}
+  testing: {enabled: true, primary_provider: "grok"}
 review:
   required_roles: ["logic"]
   request_changes_on: ["high", "critical", "blocker"]

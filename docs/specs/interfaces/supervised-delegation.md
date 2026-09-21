@@ -219,14 +219,25 @@ before acceptance. The Primary must record the final action evidence before
 submitting acceptance; the package remains stable because it excludes those
 mutable outputs.
 
-The daemon computes and stores `accepted_items_digest` over the ordered active
-item IDs, revisions, dispositions, and canonical recorded-value digests. The
-caller cannot choose this value. Store one immutable receipt for the attempt,
+The Store computes `accepted_items_digest` from the current state inside the
+acceptance transaction and verifies the receipt field before storing it. The
+caller cannot choose this value. Until V2SDG-007 wires the public route, the
+Store receives the expected package digest from its trusted daemon caller; that
+route owns projecting the package and supplying its digest. Store one immutable receipt for the attempt,
 including the declared binding, package digest, execution object, result,
 summary, round count, disposition, and accepted item-state digest. The mutation
 advances the session revision once and never changes the cursor or active
 attempt. Success uses `podway.delegation-accept-result/v1` with receipt identity,
 current fences, package/result digests, and acceptance state.
+
+For v1, sort the active attempt's complete item slots by item ID and encode each
+as `item_id`, numeric `revision`, `disposition` (`recorded` or `unset`), and
+`value_digest` (the existing canonical recorded-value digest, or `null` when
+unset). Hash the canonical JSON array with SHA-256 after the UTF-8 prefix
+`podway.delegation-accepted-items/v1\n`. Include optional and unset slots. This
+digest excludes the session revision, blocker state, and read activity. Check
+the receipt's digest against current slots again inside the completion write
+transaction; a preflight observation cannot authorize completion on its own.
 
 Exact-key replay returns the original result and does not re-evaluate external
 state. Same-key changed input is the existing idempotency conflict. A second
@@ -246,6 +257,13 @@ normal completion additionally requires a current receipt whose package and
 accepted item-state digest still match. An empty receipt slot is not success.
 A malformed, mismatched, or stale receipt is not silently discarded or treated
 as Direct execution.
+
+The V2SDG-005 Store increment defines package currency as the immutable receipt
+remaining bound to the live workspace, session, attempt, placement, procedure,
+and declaration; it rechecks that binding and the accepted item-state digest in
+the completion transaction. V2SDG-007 adds the public package/accept route and
+supplies the daemon-projected package digest at acceptance. Public delegated
+admission remains closed until that route exists.
 
 The active delegated projection reports `awaiting_acceptance`, `accepted`, or
 `stale_acceptance`, with a machine-readable reason and safe next action. These
