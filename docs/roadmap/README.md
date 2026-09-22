@@ -578,6 +578,12 @@ schema, install or activate a runtime, or alter unrelated 64-entry collections.
 
 Status: In Progress.
 
+Conditional release target: `v0.2.12`. Inclusion requires completion of
+`V2SDG-006` through `V2SDG-009`, the required development acceptance, and a
+separately authorized stable-release qualification. The `v0.2.11` source and
+release candidate contain completed internal foundations through `V2SDG-005`,
+but no supported end-to-end delegation capability.
+
 Dependencies: completed `V2FRT`, completed `V2GSC` before `V2SDG-006`, and the
 completed evidence, guard, reference, readiness, retention, and named-runtime foundations. There is no live Dolgorae,
 Primary bridge, graph-engineering, continuation-generation, or Web-console
@@ -600,6 +606,12 @@ reserve executable assets, start a task, change a release target, or authorize
 commit, provider use, installation, mode switching, daemon restart, or production
 and Aquarium runtime activation. Real executor integration remains a
 [separate candidate](../todo/TODO-podway-supervised-delegation-integration.md).
+
+Reviewers must not infer epic completion or product availability from the
+reserved contracts, canonical packages, persisted receipts, or completion gates
+implemented by `V2SDG-001` through `V2SDG-005`. Truthful projections, public
+routes and coherent opt-in admission, lifecycle qualification, and final
+acceptance remain owned by `V2SDG-006` through `V2SDG-009`.
 
 Before `V2SDG-002` reserves public schemas, complete the offline
 [adapter field/authority/digest review](../implementation-tips/delegation-adapter-contract-review.md).
@@ -629,7 +641,9 @@ commit, subject to separate commit authorization. A supported-path regression
 blocks acceptance and must not be deferred or hidden by changing default
 procedures. Partial delegated runtime admission is forbidden before V2SDG-007.
 
-The completion target is development acceptance, not a specific stable release.
-Full distribution and upgrade qualification, real Dolgorae integration, and
-runtime rollout are separate authorized work. A schema change must not bypass
+The conditional stable-release target is `v0.2.12`. Completing this epic proves
+development acceptance but does not by itself authorize or prove release,
+installation, or runtime activation; the stable candidate must still pass its
+separately authorized release and upgrade qualification. Real Dolgorae or managed
+Primary integration remains outside this epic. A schema change must not bypass
 ADR-0031's managed-generation migration restrictions.

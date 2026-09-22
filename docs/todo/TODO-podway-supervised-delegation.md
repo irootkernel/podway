@@ -9,7 +9,8 @@
 - Scope: Podway-side contracts, implementation, and isolated conformance only
 - Contract target: optional `podway.procedure/v2` placement extension
 - Acceptance target: development completion through the full `make test` gate
-- Product release: not assigned; release selection and runtime activation require separate owner authorization
+- Product release: conditional `v0.2.12` target after `V2SDG-006` through
+  `V2SDG-009` and separately authorized stable-release qualification
 - Decision authority: [ADR-0035](../architecture-decision-records/0035-host-neutral-supervised-delegation.md)
 - Behavioral target: [supervised-delegation specification](../specs/interfaces/supervised-delegation.md)
 - Execution order and status: [V2SDG roadmap](../roadmap/README.md#v2sdg-host-neutral-supervised-delegation-foundation)
@@ -19,6 +20,14 @@ foundation. It replaces the former candidate at this path. No capability is
 implemented, released, installed, or live-qualified merely by this adoption.
 The roadmap is the only task-status owner. This dossier adds no competing
 status table, automatic task start, or deployment authority.
+
+Current checkpoint: `V2SDG-001` through `V2SDG-005` are completed internal
+foundations, while `V2SDG-006` through `V2SDG-009` remain incomplete. The
+`v0.2.11` source and release candidate therefore do not provide a supported
+end-to-end delegation capability. Reserved contracts, package projection,
+receipt persistence, and completion gates must not be reviewed as equivalent to
+truthful public projections, native routes, coherent admission, lifecycle
+qualification, or final epic acceptance.
 
 The owner explicitly narrowed the work from the earlier live-Dolgorae research
 candidate. ADR-0035 records why local implementation may proceed without that
@@ -513,16 +522,20 @@ assets, not references to this temporary dossier.
 ## 8. Release and handoff acceptance
 
 Use the [non-disruptive implementation guidance](../implementation-tips/supervised-delegation.md)
-for isolation, test ordering, and deployment exclusions. A future release owner
-must rebase against the actual previous stable Store and contract generation,
-select the full distribution gate, and execute the existing upgrade QA plus
-V2SDG scenarios on copies. A new schema may prohibit the ordinary Aquarium
+for isolation, test ordering, and deployment exclusions. `v0.2.12` is the
+conditional release target, not an assertion that the feature is complete or
+published. Its release owner must rebase against the actual previous stable
+Store and contract generation, obtain separate release authorization, select
+the full distribution gate, and execute the existing upgrade QA plus V2SDG
+scenarios on copies. A new schema may prohibit the ordinary Aquarium
 managed-generation activation path; do not bypass that restriction.
 
 The supported claim at epic completion is: the Podway foundation is implemented
 and passed local/native deterministic conformance at the exact tested revision.
 It is not: Dolgorae works end to end, Primary handoff is supported, rollout has
 zero risk, installed state was upgraded, or old clients can talk to a new daemon.
+Only a later successful release workflow may turn that completed foundation into
+a `v0.2.12` shipped claim.
 
 ## 9. References
 

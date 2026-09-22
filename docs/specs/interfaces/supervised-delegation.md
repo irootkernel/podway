@@ -5,11 +5,14 @@
 This is the accepted target contract for
 [ADR-0035](../../architecture-decision-records/0035-host-neutral-supervised-delegation.md)
 and [V2SDG](../../roadmap/README.md#v2sdg-host-neutral-supervised-delegation-foundation).
-The feature is not implemented or advertised by writing this document. Existing
-machine assets and runtime behavior remain the implemented baseline until the
-owning tasks install and qualify their coherent replacement. All commands,
-fields, schema generations, and errors below are implementation targets, not
-instructions to use them with an installed release.
+Internal foundations through `V2SDG-005` are implemented, but they do not form a
+coherent supported capability: public delegation routes and runtime admission
+remain closed, and `V2SDG-006` through `V2SDG-009` remain incomplete. The
+[roadmap](../../roadmap/README.md#v2sdg-host-neutral-supervised-delegation-foundation)
+owns the current task status and conditional `v0.2.12` release target. Until
+those tasks and a separately authorized release qualification complete, the
+commands, fields, schema generations, and errors below are target contracts, not
+instructions to use delegation with an installed release.
 
 This specification covers the Podway foundation only. It does not claim a
 working external Dolgorae adapter, managed Primary bridge, live model test, or
