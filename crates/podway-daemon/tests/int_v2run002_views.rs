@@ -432,7 +432,7 @@ fn assert_maximum_production_output_v2(
     command: &str,
     result: Map<String, Value>,
     maximum_bytes: usize,
-) {
+) -> usize {
     let output = maximum_production_output(command, result);
     let workspace = output.workspace().unwrap();
     assert_eq!(workspace.root().chars().count(), 4_096);
@@ -465,6 +465,7 @@ fn assert_maximum_production_output_v2(
     assert_eq!(decode_response_payload_v2(&encoded).unwrap(), response);
     let frame = encode_frame_v1(&encoded).unwrap();
     assert_eq!(decode_single_frame_v1(&frame).unwrap(), encoded);
+    encoded.len()
 }
 
 fn assert_output_v2(command: &str, result: Map<String, Value>) {
@@ -2469,11 +2470,11 @@ fn combined_maximum_verbose_state() -> GraphSessionStateV2 {
 }
 
 #[test]
-fn v2rel002_maximum_compact_status_with_large_u64_fields_fits_automation_cap() {
+fn v2rel002_compact_status_with_maximum_non_graph_fields_fits_automation_cap() {
     let compact =
         project_graph_status_v2(&maximum_compact_view(), GraphStatusTierV2::Compact, None).unwrap();
     let counters = compact["counters"].as_array().unwrap();
-    assert_eq!(counters.len(), 64);
+    assert_eq!(counters.len(), 64, "the graph maximum is proved separately");
     assert!(counters.iter().all(|counter| {
         counter["graph_node_id"]
             .as_str()
@@ -2765,15 +2766,6 @@ fn v2rel002_escape_heavy_next_charge_dominates_every_encoded_component() {
     assert_output_v2("session.next", next.as_object().unwrap().clone());
 }
 
-fn component(fields: &Map<String, Value>, names: &[&str]) -> Value {
-    Value::Object(
-        names
-            .iter()
-            .map(|name| ((*name).to_owned(), fields[*name].clone()))
-            .collect(),
-    )
-}
-
 fn maximum_payload_identifier(prefix: char, index: usize) -> String {
     format!("{prefix}{}{:02}", "0".repeat(61), index)
 }
@@ -2992,40 +2984,47 @@ fn complete_maximum_next_result() -> Map<String, Value> {
 }
 
 #[test]
-fn v2rel002_complete_maximum_next_binds_component_charges_to_production_framing() {
+fn v2rel002_boundary_rich_next_recipe_matches_current_budgets_and_framing() {
     const FRAME_BYTES: usize = 1_048_576;
-    const BUDGETS: [usize; 6] = [65_536, 262_144, 524_288, 73_728, 49_152, 40_960];
     let recipe: Value = serde_json::from_slice(MAXIMUM_NEXT_RECIPE).unwrap();
     assert_eq!(recipe["frame_bytes"], FRAME_BYTES);
-    assert_eq!(recipe["charged_bytes"], 1_015_808);
-    assert_eq!(recipe["headroom_bytes"], 32_768);
     for (name, budget) in [
-        ("ENVELOPE_RESERVE", BUDGETS[0]),
-        ("NEXT_STATIC_BUDGET", BUDGETS[1]),
-        ("READBACK_BUDGET", BUDGETS[2]),
-        ("GOAL_DISPLAY_MAX", BUDGETS[3]),
-        ("BLOCKER_WINDOW_MAX", BUDGETS[4]),
-        ("COUNTERS_MAX", BUDGETS[5]),
+        (
+            "NEXT_SERIALIZATION_RESERVE",
+            podway_config::NEXT_SERIALIZATION_RESERVE as usize,
+        ),
+        (
+            "NEXT_STATIC_BUDGET",
+            podway_config::NEXT_STATIC_BUDGET as usize,
+        ),
+        (
+            "DECISION_RECORD_BUDGET",
+            podway_config::DECISION_RECORD_BUDGET as usize,
+        ),
+        ("READBACK_BUDGET", podway_config::READBACK_BUDGET as usize),
+        (
+            "EVIDENCE_PREVIEW_BUDGET",
+            podway_config::EVIDENCE_PREVIEW_BUDGET as usize,
+        ),
+        (
+            "PAGE_TOKEN_BUDGET",
+            podway_config::PAGE_TOKEN_BUDGET as usize,
+        ),
+        (
+            "OBSERVATION_STATIC_MEMBERS_BUDGET",
+            podway_core::MAX_OBSERVATION_STATIC_MEMBERS_BYTES_V2,
+        ),
     ] {
         assert_eq!(recipe["components"][name], budget);
     }
-    assert_eq!(BUDGETS.iter().sum::<usize>(), 1_015_808);
-    assert_eq!(FRAME_BYTES - BUDGETS.iter().sum::<usize>(), 32_768);
+    assert_eq!(podway_config::NEXT_FRAME_BUDGET as usize, FRAME_BYTES);
+    assert_eq!(
+        FRAME_BYTES - podway_config::NEXT_SERIALIZATION_RESERVE as usize,
+        999_424
+    );
 
     let result = complete_maximum_next_result();
-    let static_suggestions = result["suggestions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|suggestion| {
-            !matches!(
-                suggestion["command"].as_str().unwrap(),
-                "goal.assess_criterion" | "goal.define"
-            )
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    let goal_suggestions = result["suggestions"]
+    let goal_suggestion_count = result["suggestions"]
         .as_array()
         .unwrap()
         .iter()
@@ -3035,9 +3034,8 @@ fn v2rel002_complete_maximum_next_binds_component_charges_to_production_framing(
                 "goal.assess_criterion" | "goal.define"
             )
         })
-        .cloned()
-        .collect::<Vec<_>>();
-    assert_eq!(goal_suggestions.len(), 16);
+        .count();
+    assert_eq!(goal_suggestion_count, 16);
     assert_eq!(result["blockers_total"], 64);
     assert!(result["blockers"].as_array().unwrap().len() >= 7);
     assert_eq!(result["counters"].as_array().unwrap().len(), 64);
@@ -3094,66 +3092,6 @@ fn v2rel002_complete_maximum_next_binds_component_charges_to_production_framing(
         "every field applicable to the schema-valid action shape must be assigned once"
     );
 
-    let mut envelope_fields = component(
-        &result,
-        &[
-            "schema",
-            "procedure_schema",
-            "procedure_digest",
-            "node",
-            "attempt",
-            "queue",
-            "revision",
-            "missing_required_item_count",
-            "readiness",
-            "suggestions_total",
-            "suggestions_truncated",
-            "readback_items_total",
-            "readback_items_truncated",
-        ],
-    );
-    let mut static_fields = component(
-        &result,
-        &[
-            "allowed_actions",
-            "allowed_manual_rework_targets",
-            "allowed_option_ids",
-            "description",
-            "evidence_guidance",
-            "missing_required_items",
-            "missing_required_items_truncated",
-            "objective",
-            "options",
-            "prompt",
-            "reason_policy",
-            "title",
-        ],
-    );
-    static_fields
-        .as_object_mut()
-        .unwrap()
-        .insert("suggestions".into(), json!(static_suggestions));
-    let readback_fields = component(&result, &["readback", "references"]);
-    let mut goal_fields = component(
-        &result,
-        &[
-            "goal",
-            "goal_defined",
-            "goal_revision",
-            "goal_tracking",
-            "latest_goal_outcome",
-        ],
-    );
-    goal_fields
-        .as_object_mut()
-        .unwrap()
-        .insert("suggestions".into(), json!(goal_suggestions));
-    let blocker_fields = component(
-        &result,
-        &["blockers", "blockers_total", "blockers_truncated"],
-    );
-    let counter_fields = component(&result, &["counters", "trace_length"]);
-
     let warnings = (0..4)
         .map(|_| {
             json!({
@@ -3193,59 +3131,6 @@ fn v2rel002_complete_maximum_next_binds_component_charges_to_production_framing(
     .unwrap();
     let output_value = serde_json::to_value(&output).unwrap();
     assert_eq!(output_value["warnings"].as_array().unwrap().len(), 4);
-    let envelope_object = output_value.as_object().unwrap();
-    envelope_fields.as_object_mut().unwrap().extend(
-        [
-            "request_id",
-            "command",
-            "generated_at",
-            "workspace",
-            "job",
-            "session",
-            "warnings",
-        ]
-        .into_iter()
-        .filter_map(|field| {
-            envelope_object
-                .get(field)
-                .map(|value| (field.to_owned(), value.clone()))
-        }),
-    );
-    envelope_fields
-        .as_object_mut()
-        .unwrap()
-        .insert("output_schema".into(), envelope_object["schema"].clone());
-    envelope_fields
-        .as_object_mut()
-        .unwrap()
-        .insert("frame_length_prefix_bytes".into(), json!(4));
-
-    let components = [
-        ("ENVELOPE_RESERVE", envelope_fields, BUDGETS[0]),
-        ("NEXT_STATIC_BUDGET", static_fields, BUDGETS[1]),
-        ("READBACK_BUDGET", readback_fields, BUDGETS[2]),
-        ("GOAL_DISPLAY_MAX", goal_fields, BUDGETS[3]),
-        ("BLOCKER_WINDOW_MAX", blocker_fields, BUDGETS[4]),
-        ("COUNTERS_MAX", counter_fields, BUDGETS[5]),
-    ];
-    for (name, value, budget) in &components {
-        let encoded = serde_json::to_vec(value).unwrap().len();
-        let charged = conservative_json_charge(value);
-        assert!(
-            encoded <= charged,
-            "{name}: encoded={encoded}, charged={charged}"
-        );
-        assert!(
-            charged <= *budget,
-            "{name}: charged={charged}, budget={budget}"
-        );
-    }
-    assert!(BUDGETS[1] - conservative_json_charge(&components[1].1) < 16_384);
-    // The readback surface no longer carries values, so it cannot fill the superseded 512 KiB
-    // value budget and a tight-fit assertion here would be meaningless. Every component is still
-    // proved within budget above, and the composed frame is proved below. V2SCL-005 owns
-    // re-deriving the six named allocations ADR-0024 defines and asserting tightness against them.
-    assert!(conservative_json_charge(&components[2].1) <= BUDGETS[2]);
 
     let response = ResponseEnvelopeV2::OutputV2(output);
     let encoded = encode_response_payload_v2(&response).unwrap();
@@ -5713,9 +5598,9 @@ fn v2scl004_evidence_read_pages_deterministically_and_fails_exactly() {
 
 #[test]
 fn v2scl005_the_widest_compact_status_fits_its_allocation() {
-    // The 32 KiB status allocation is the tightest of the five, and its rationale was a comment
-    // rather than a measurement. The widest a definition can make it is 128 items with maximal
-    // identifiers on a graph with the most placements it may declare, so that is what is measured.
+    // The widest a definition can make compact status is 128 items with maximal identifiers on a
+    // graph with the most placements it may declare, so that complete 1,024-counter shape is
+    // measured together with the guidance member that duplicates the counter set.
     let items: Vec<Value> = (0..128)
         .map(|index| {
             json!({
@@ -5741,17 +5626,17 @@ fn v2scl005_the_widest_compact_status_fits_its_allocation() {
             }
         },
         "graph": {
-            "entry": format!("{}000", "n".repeat(61)),
-            "nodes": (0..64)
+            "entry": format!("{}0000", "n".repeat(60)),
+            "nodes": (0..1_024)
                 .map(|index| {
-                    let id = format!("{}{index:03}", "n".repeat(61));
-                    if index == 63 {
+                    let id = format!("{}{index:04}", "n".repeat(60));
+                    if index == 1_023 {
                         json!({"id": id, "use": "work", "terminal": true})
                     } else {
                         json!({
                             "id": id,
                             "use": "work",
-                            "next": format!("{}{:03}", "n".repeat(61), index + 1)
+                            "next": format!("{}{:04}", "n".repeat(60), index + 1)
                         })
                     }
                 })
@@ -5759,31 +5644,74 @@ fn v2scl005_the_widest_compact_status_fits_its_allocation() {
         }
     }))
     .unwrap();
-    // Counters are the other half of the widest case: a graph declares at most 64 placements and
-    // their identifiers reach 64 scalars. Their counts cannot be made adversarially large — state
+    let ParsedProcedure::V2(parsed) =
+        parse_procedure_document(&source, ProcedureDocumentFormat::Json).unwrap();
+    let validated = validate_procedure_v2(parsed).unwrap();
+    let first_id = GraphNodeId::new(format!("{}0000", "n".repeat(60))).unwrap();
+    let budget = procedure_placement_budget_v2(&validated, &first_id).unwrap();
+    assert_eq!(budget.counters(), 172_033);
+    // Counters are the other half of the widest case: a graph declares at most 1,024 placements
+    // and their identifiers reach 64 scalars. Their counts cannot be made adversarially large — state
     // validation ties every counter to the trace, so the schema's u64 ceiling is not independently
     // reachable — but the identifier width and the placement count are, and both are present here.
-    let session_view = view(wide_graph_state(&source, &format!("{}000", "n".repeat(61))));
+    let session_view = view(wide_graph_state(
+        &source,
+        &format!("{}0000", "n".repeat(60)),
+    ));
 
     let compact = project_graph_status_v2(&session_view, GraphStatusTierV2::Compact, None).unwrap();
     assert_eq!(compact["items"].as_array().unwrap().len(), 128);
-    assert_eq!(compact["counters"].as_array().unwrap().len(), 64);
+    assert_eq!(compact["counters"].as_array().unwrap().len(), 1_024);
     let charged = serde_json::to_vec(&compact).unwrap().len();
     // Pinned so a widening of the item or placement ceiling shows up here as a number rather than
     // as an observation that suddenly cannot be answered.
-    assert_eq!(charged, 27_628);
+    assert_eq!(charged, 152_428);
+    assert_maximum_production_output_v2("session.status", compact.clone(), 262_144);
+
+    let next = project_graph_next_v2(&session_view).unwrap();
+    assert_eq!(next["counters"].as_array().unwrap().len(), 1_024);
+    let counter_ids = next["counters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|counter| counter["graph_node_id"].as_str().unwrap().len());
+    let counter_charge = podway_core::maximum_graph_counter_array_json_bytes_v2(counter_ids);
+    let encoded_counters = serde_json::to_vec(&next["counters"]).unwrap().len();
+    assert_eq!(encoded_counters, 133_121);
+    assert!(encoded_counters <= counter_charge);
+    let next_envelope_bytes = assert_maximum_production_output_v2("session.next", next, 1_048_576);
+    assert_eq!(next_envelope_bytes, 213_927);
+    let mut status_without_counters = compact.clone();
+    status_without_counters.remove("counters");
+    let non_counter_bytes = serde_json::to_vec(&status_without_counters).unwrap().len();
     assert!(
-        charged <= podway_core::MAX_OBSERVATION_STATUS_BYTES_V2,
-        "the widest compact status charged {charged} bytes against {}",
-        podway_core::MAX_OBSERVATION_STATUS_BYTES_V2
+        non_counter_bytes <= podway_core::MAX_OBSERVATION_STATUS_NON_COUNTER_BYTES_V2,
+        "compact status without counters charged {non_counter_bytes} bytes"
     );
 
     // The same member inside an observation must fit the same allocation.
     let observation = project_graph_observation_v1(&session_view).unwrap();
+    let expected_counter_ids = (0..1_024)
+        .map(|index| format!("{}{:04}", "n".repeat(60), index))
+        .collect::<Vec<_>>();
+    for member in ["status", "guidance"] {
+        let counter_ids = observation[member]["counters"]
+            .as_array()
+            .expect("observation member carries complete counters")
+            .iter()
+            .map(|counter| counter["graph_node_id"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            counter_ids, expected_counter_ids,
+            "observation {member} must carry every graph counter in placement order"
+        );
+    }
     let embedded = serde_json::to_vec(&observation["status"]).unwrap().len();
+    let guidance = serde_json::to_vec(&observation["guidance"]).unwrap().len();
     assert!(
-        embedded <= podway_core::MAX_OBSERVATION_STATUS_BYTES_V2,
-        "the embedded status charged {embedded} bytes"
+        embedded + guidance <= podway_core::MAX_OBSERVATION_STATIC_MEMBERS_BYTES_V2,
+        "the complete static members charged {} bytes",
+        embedded + guidance,
     );
     assert_output_v2("session.observe", observation);
 }
@@ -5875,20 +5803,12 @@ fn v2scl005_observation_windows_are_bounded_by_bytes_and_report_their_exact_tota
         encoded.len()
     );
 
-    // The compact status member is the tightest allocation of the five, so its worst case is
-    // measured rather than described. Identifiers reach 64 scalars and a graph declares 64
-    // placements, which is the widest status a definition can produce.
-    let widest_status = serde_json::to_vec(&observation["status"]).unwrap().len();
-    assert!(
-        widest_status <= 32 * 1_024,
-        "the widest compact status charged {widest_status} bytes against its 32 KiB allocation"
-    );
+    let static_members = serde_json::to_vec(&observation["status"]).unwrap().len()
+        + serde_json::to_vec(&observation["guidance"]).unwrap().len();
+    assert!(static_members <= podway_core::MAX_OBSERVATION_STATIC_MEMBERS_BYTES_V2);
 
-    // Every observation member fits its own published allocation, which is what makes the
-    // composition a proof rather than a description.
+    // The independently truncated windows retain their own published allocations.
     for (member, allocation) in [
-        ("status", 32 * 1_024),
-        ("guidance", 736 * 1_024),
         ("active_items", 128 * 1_024),
         ("mutation_templates", 64 * 1_024),
     ] {

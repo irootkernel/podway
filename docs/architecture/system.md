@@ -232,10 +232,11 @@ podway-config + podway-protocol + podway-presets
 
 Podway is optimized for local task state, not bulk workflow data.
 
-Design limits are owned by [ADR-0024](../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md). Every length below counts Unicode scalar values, not bytes.
+Evidence limits are owned by [ADR-0024](../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md), and the Procedure graph limit is owned by [ADR-0037](../architecture-decision-records/0037-bound-procedure-graphs-at-1024-nodes.md). Every text length below counts Unicode scalar values, not bytes.
 
 - at most one session per workspace;
-- at most 64 graph placements per procedure;
+- at most 1,024 node definitions per procedure;
+- at most 1,024 graph placements per procedure;
 - at most 128 items per node definition and per attempt;
 - at most 256 queued jobs by default per workspace;
 - IPC frame size at most 1 MiB;

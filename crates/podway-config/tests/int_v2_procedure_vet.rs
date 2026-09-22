@@ -5,6 +5,7 @@ use podway_config::{
     parse_procedure_document, validate_procedure_v2, vet_procedure_v2,
 };
 use podway_core::{AuthoringDiagnostic, AuthoringDiagnosticCode};
+use serde_json::json;
 
 const SOURCE_PATH: &str = "workflow.yaml";
 
@@ -290,6 +291,126 @@ fn decision_readback_document(sources: usize) -> String {
     )
 }
 
+/// One assessment record plus a variable number of maximum-length placement identifiers.
+///
+/// The active consumer is intentionally content-heavy while the padding placements are thin. This
+/// isolates the graph-wide counter charge that observation carries twice from every independent
+/// placement-local allocation.
+fn observation_budget_document(node_count: usize) -> String {
+    assert!((2..=podway_core::MAX_GRAPH_NODES_PER_PROCEDURE_V2).contains(&node_count));
+    let padding = node_count - 2;
+    let ids = (0..padding)
+        .map(|index| {
+            let prefix = format!("n-{index:04}-");
+            format!("{prefix}{}", "x".repeat(64 - prefix.len()))
+        })
+        .collect::<Vec<_>>();
+    let first_target = ids.first().map_or("consumer", String::as_str);
+    let mut nodes = format!(
+        "    - id: review\n      use: review\n      routes:\n        achieved:\n          to: {first_target}\n          effect: advance\n        not-achieved:\n          to: {first_target}\n          effect: advance\n        superseded:\n          to: {first_target}\n          effect: advance\n"
+    );
+    for (index, id) in ids.iter().enumerate() {
+        let next = ids.get(index + 1).map_or("consumer", String::as_str);
+        nodes.push_str(&format!(
+            "    - id: {id}\n      use: work\n      next: {next}\n"
+        ));
+    }
+    nodes.push_str(
+        "    - id: consumer\n      use: work\n      evidence_from:\n        - node: review\n          required: true\n      terminal: true\n",
+    );
+    let instructions = (0..16)
+        .map(|_| format!("      - {}\n", "i".repeat(1_000)))
+        .collect::<String>();
+    let items = (0..40)
+        .map(|index| {
+            format!(
+                "      - id: result-{index}\n        type: text\n        prompt: {}\n        required: true\n        max_length: 1\n",
+                "p".repeat(300)
+            )
+        })
+        .collect::<String>();
+    format!(
+        "schema: podway.procedure/v2\nid: observation-budget\nversion: \"1\"\nname: Observation budget\npurpose: Exercise the shared observation status and guidance allocation.\ngoal_tracking: true\nnode_definitions:\n  review:\n    type: decision\n    title: Review\n    objective: Judge the work.\n    prompt: What is the outcome?\n    options:\n      - id: achieved\n        label: Achieved\n      - id: not-achieved\n        label: Not achieved\n      - id: superseded\n        label: Superseded\n    reason:\n      required: true\n    assessment:\n      target: session_goal\n      outcomes:\n        achieved: achieved\n        not-achieved: not_achieved\n        superseded: superseded\n  work:\n    type: action\n    title: Work\n    intent: Continue the procedure.\n    description: {}\n    instructions:\n{instructions}    items:\n{items}graph:\n  entry: review\n  nodes:\n{nodes}",
+        "d".repeat(1_000)
+    )
+}
+
+/// One assessment source and seven maximally selected artifact sources feeding a content-rich
+/// consumer, plus maximum-length padding placements. Every placement-local allocation remains
+/// within its independent ceiling; only the graph-wide counter array can push the combined
+/// `session.next` charge over its aggregate admission boundary.
+fn next_aggregate_budget_document(node_count: usize) -> String {
+    assert!((9..=podway_core::MAX_GRAPH_NODES_PER_PROCEDURE_V2).contains(&node_count));
+    let padding = node_count - 9;
+    let mut definitions = String::new();
+    let mut nodes = String::from(
+        "    - id: review\n      use: review\n      routes:\n        achieved:\n          to: source-0\n          effect: advance\n        not-achieved:\n          to: source-0\n          effect: advance\n        superseded:\n          to: source-0\n          effect: advance\n",
+    );
+    let mut evidence = String::from("        - node: review\n          required: true\n");
+    for source in 0..7 {
+        let items = (0..16)
+            .map(|item| {
+                format!(
+                    "      - id: artifact-{source}-{item:02}\n        type: artifact\n        prompt: {}\n        required: false\n",
+                    "p".repeat(300)
+                )
+            })
+            .collect::<String>();
+        definitions.push_str(&format!(
+            "  producer-{source}:\n    type: action\n    title: Producer {source}\n    intent: Record selected artifacts.\n    items:\n{items}"
+        ));
+        let next = if source == 6 {
+            if padding == 0 {
+                "consumer".to_owned()
+            } else {
+                format!("{}0000", "n".repeat(60))
+            }
+        } else {
+            format!("source-{}", source + 1)
+        };
+        nodes.push_str(&format!(
+            "    - id: source-{source}\n      use: producer-{source}\n      next: {next}\n"
+        ));
+        let selected = (0..16)
+            .map(|item| format!("            - artifact-{source}-{item:02}\n"))
+            .collect::<String>();
+        evidence.push_str(&format!(
+            "        - node: source-{source}\n          required: true\n          items:\n{selected}"
+        ));
+    }
+    for index in 0..padding {
+        let id = format!("{}{:04}", "n".repeat(60), index);
+        let next = if index + 1 == padding {
+            "consumer".to_owned()
+        } else {
+            format!("{}{:04}", "n".repeat(60), index + 1)
+        };
+        nodes.push_str(&format!(
+            "    - id: {id}\n      use: padding\n      next: {next}\n"
+        ));
+    }
+    nodes.push_str(&format!(
+        "    - id: consumer\n      use: consumer\n      evidence_from:\n{evidence}      terminal: true\n"
+    ));
+    let instructions = (0..16)
+        .map(|_| format!("      - {}\n", "i".repeat(1_000)))
+        .collect::<String>();
+    let consumer_items = (0..40)
+        .map(|index| {
+            format!(
+                "      - id: result-{index}\n        type: text\n        prompt: {}\n        required: true\n        max_length: 1\n",
+                "q".repeat(300)
+            )
+        })
+        .collect::<String>();
+    format!(
+        "schema: podway.procedure/v2\nid: next-aggregate-budget\nversion: \"1\"\nname: Next aggregate budget\npurpose: Prove complete counters participate in aggregate admission.\ngoal_tracking: true\nnode_definitions:\n  review:\n    type: decision\n    title: Review\n    objective: Judge the work.\n    prompt: What is the outcome?\n    options:\n      - id: achieved\n        label: Achieved\n      - id: not-achieved\n        label: Not achieved\n      - id: superseded\n        label: Superseded\n    reason:\n      required: true\n    assessment:\n      target: session_goal\n      outcomes:\n        achieved: achieved\n        not-achieved: not_achieved\n        superseded: superseded\n{definitions}  padding:\n    type: action\n    title: Padding\n    intent: Carry one graph counter.\n  consumer:\n    type: action\n    title: {}\n    intent: {}\n    description: {}\n    instructions:\n{instructions}    items:\n{consumer_items}graph:\n  entry: review\n  nodes:\n{nodes}",
+        "t".repeat(120),
+        "n".repeat(300),
+        "d".repeat(1_000),
+    )
+}
+
 fn readback_document(selector: Option<&str>, required: bool, unreachable_consumer: bool) -> String {
     let evidence = match selector {
         Some(item) => format!(
@@ -364,6 +485,68 @@ fn v2grf001_rejects_an_advance_only_subcycle_inside_the_complete_graph() {
         .expect("advance-only cycle must be rejected");
     assert_eq!(cycle.graph_node_id(), Some("start"));
     assert_eq!(cycle.related_graph_node_ids(), ["start", "review"]);
+}
+
+#[test]
+fn v2gsc004_large_production_graph_reports_the_exact_advance_only_subcycle() {
+    let mut nodes = (0..128)
+        .map(|index| {
+            json!({
+                "id": format!("n-{index}"),
+                "use": "work",
+                "next": format!("n-{}", index + 1),
+            })
+        })
+        .collect::<Vec<_>>();
+    nodes.push(json!({
+        "id": "n-128",
+        "use": "review",
+        "routes": {
+            "cycle": {"to": "n-129", "effect": "advance"},
+            "finish": {"to": "done", "effect": "advance"},
+            "retry": {"to": "n-127", "effect": "rework"},
+        }
+    }));
+    nodes.push(json!({"id": "n-129", "use": "work", "next": "n-128"}));
+    nodes.push(json!({"id": "done", "use": "work", "terminal": true}));
+    let source = serde_json::to_string(&json!({
+        "schema": "podway.procedure/v2",
+        "id": "large-cycle",
+        "version": "1",
+        "name": "Large cycle",
+        "purpose": "Exercise cycle analysis beyond the second bitset word.",
+        "node_definitions": {
+            "work": {"type": "action", "title": "Work", "intent": "Continue."},
+            "review": {
+                "type": "decision",
+                "title": "Review",
+                "objective": "Choose a route.",
+                "prompt": "Where next?",
+                "options": [
+                    {"id": "cycle", "label": "Cycle"},
+                    {"id": "finish", "label": "Finish"},
+                    {"id": "retry", "label": "Retry"}
+                ],
+                "reason": {"required": true}
+            }
+        },
+        "graph": {"entry": "n-0", "nodes": nodes}
+    }))
+    .unwrap();
+    let validated =
+        match parse_procedure_document(source.as_bytes(), ProcedureDocumentFormat::Json).unwrap() {
+            ParsedProcedure::V2(parsed) => validate_procedure_v2(parsed).unwrap(),
+        };
+    let findings = vet_procedure_v2(
+        &validated,
+        &AuthoringContext::new("large-cycle.json", &source, ProcedureDocumentFormat::Json),
+    );
+    let cycle = findings
+        .iter()
+        .find(|finding| finding.code() == AuthoringDiagnosticCode::GraphCycleInvalid)
+        .expect("the advance-only subcycle must be rejected");
+    assert_eq!(cycle.graph_node_id(), Some("n-128"));
+    assert_eq!(cycle.related_graph_node_ids(), ["n-128", "n-129"]);
 }
 
 #[test]
@@ -614,6 +797,137 @@ fn v2scl005_a_second_decision_source_exceeds_the_decision_record_allocation() {
     assert_eq!(finding.graph_node_id(), Some("consumer"));
     assert_eq!(finding.field(), "graph.nodes[consumer].evidence_from");
     assert_eq!(finding.related_graph_node_ids(), ["review-0", "review-1"]);
+}
+
+#[test]
+fn v2gsc004_observation_admission_counts_both_complete_counter_arrays() {
+    let allocation = podway_core::MAX_OBSERVATION_STATIC_MEMBERS_BYTES_V2 as u64;
+    let mut admitted = 2;
+    let mut rejected = podway_core::MAX_GRAPH_NODES_PER_PROCEDURE_V2;
+    let maximum_charge =
+        placement_charges(&observation_budget_document(rejected)).observation_static_members();
+    assert!(
+        maximum_charge > allocation,
+        "the maximum graph charges {maximum_charge} bytes and must make the {allocation}-byte shared observation allocation bind"
+    );
+    while rejected - admitted > 1 {
+        let candidate = admitted + (rejected - admitted) / 2;
+        let charge =
+            placement_charges(&observation_budget_document(candidate)).observation_static_members();
+        if charge <= allocation {
+            admitted = candidate;
+        } else {
+            rejected = candidate;
+        }
+    }
+    let first_rejected = rejected;
+    let rejected_charge = placement_charges(&observation_budget_document(first_rejected))
+        .observation_static_members();
+    assert!(
+        first_rejected > 2,
+        "the allocation must admit a smaller graph"
+    );
+
+    let accepted_source = observation_budget_document(first_rejected - 1);
+    let accepted_charge = placement_charges(&accepted_source).observation_static_members();
+    assert!(
+        accepted_charge <= podway_core::MAX_OBSERVATION_STATIC_MEMBERS_BYTES_V2 as u64,
+        "the immediately smaller graph charges {accepted_charge} bytes"
+    );
+    assert!(!codes(&accepted_source).contains(&"OBSERVATION_STATIC_MEMBERS_BUDGET_EXCEEDED"));
+
+    let rejected_source = observation_budget_document(first_rejected);
+    let finding = vet(&rejected_source)
+        .into_iter()
+        .find(|finding| {
+            finding.code() == AuthoringDiagnosticCode::ObservationStaticMembersBudgetExceeded
+                && finding.graph_node_id() == Some("consumer")
+        })
+        .expect("the first over-budget graph must be rejected at its heavy consumer");
+    assert!(finding.message().contains(&rejected_charge.to_string()));
+    assert_eq!(finding.field(), "graph.nodes[consumer]");
+}
+
+#[test]
+fn v2gsc004_next_aggregate_admission_requires_the_complete_counter_array() {
+    let admissible = podway_config::NEXT_FRAME_BUDGET - podway_config::NEXT_SERIALIZATION_RESERVE;
+    let minimum = next_aggregate_budget_document(9);
+    assert!(
+        placement_charges(&minimum).charged_total() <= admissible,
+        "the smallest graph must remain aggregate-admissible"
+    );
+    let maximum = next_aggregate_budget_document(podway_core::MAX_GRAPH_NODES_PER_PROCEDURE_V2);
+    assert!(
+        placement_charges(&maximum).charged_total() > admissible,
+        "the maximum graph must make the counter-inclusive aggregate bind"
+    );
+
+    let mut admitted = 9;
+    let mut rejected = podway_core::MAX_GRAPH_NODES_PER_PROCEDURE_V2;
+    while rejected - admitted > 1 {
+        let candidate = admitted + (rejected - admitted) / 2;
+        let source = next_aggregate_budget_document(candidate);
+        if placement_charges(&source).charged_total() <= admissible {
+            admitted = candidate;
+        } else {
+            rejected = candidate;
+        }
+    }
+
+    let admitted_source = next_aggregate_budget_document(admitted);
+    assert!(
+        !codes(&admitted_source).contains(&"NEXT_FRAME_BUDGET_EXCEEDED"),
+        "the immediately smaller graph must pass aggregate admission"
+    );
+    let source = next_aggregate_budget_document(rejected);
+    let budget = placement_charges(&source);
+    for (charged, allocation) in [
+        (budget.next_static(), podway_config::NEXT_STATIC_BUDGET),
+        (
+            budget.decision_records(),
+            podway_config::DECISION_RECORD_BUDGET,
+        ),
+        (budget.readback(), podway_config::READBACK_BUDGET),
+        (
+            budget.evidence_preview(),
+            podway_config::EVIDENCE_PREVIEW_BUDGET,
+        ),
+        (budget.page_tokens(), podway_config::PAGE_TOKEN_BUDGET),
+    ] {
+        assert!(
+            charged <= allocation,
+            "independent charge {charged} exceeds its {allocation}-byte ceiling"
+        );
+    }
+    assert!(
+        budget.charged_total() - budget.counters() <= admissible,
+        "the placement-local charges must fit without counters: {:?}",
+        budget
+    );
+    assert!(
+        budget.charged_total() > admissible,
+        "the complete counters must make the aggregate bind: {:?}",
+        budget
+    );
+    assert_eq!(
+        rejected,
+        admitted + 1,
+        "the fixture must pin adjacent graph-size outcomes"
+    );
+
+    let finding = vet(&source)
+        .into_iter()
+        .find(|finding| {
+            finding.code() == AuthoringDiagnosticCode::NextFrameBudgetExceeded
+                && finding.graph_node_id() == Some("consumer")
+        })
+        .expect("counter-inclusive aggregate must reject the consumer placement");
+    assert!(
+        finding
+            .message()
+            .contains(&budget.charged_total().to_string())
+    );
+    assert_eq!(finding.field(), "graph.nodes[consumer]");
 }
 
 #[test]

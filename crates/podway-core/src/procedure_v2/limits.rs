@@ -94,22 +94,46 @@ pub const MAX_ACTIVE_ITEM_WINDOW_V2: usize = MAX_ITEMS_PER_DEFINITION_V2;
 /// The maximum mutation templates one observation carries; the exact count stays separate.
 pub const MAX_MUTATION_TEMPLATE_WINDOW_V2: usize = 384;
 
-/// The bytes one `session.observe` compact-status member may occupy.
+/// The bytes one `session.observe` status and guidance pair may occupy.
 ///
-/// The compact projection carries no item values. Its widest reachable form — 128 items and 64
-/// placements, all with maximal identifiers — measures 27,628 bytes, which a test pins. The
-/// schema permits u64 counter magnitudes that would push it further, but state validation ties
-/// every counter to the trace, so those are not independently reachable. The remaining headroom
-/// is thin by design: this allocation was sized last, after guidance was fixed at the sum of the
-/// three `session.next` allocations it carries.
-pub const MAX_OBSERVATION_STATUS_BYTES_V2: usize = 32 * 1_024;
+/// Both members carry the complete graph-wide counter set. A shared allocation lets a long graph
+/// spend more bytes on counters while a content-rich active placement spends more on guidance,
+/// without either author-controlled dimension escaping the fixed response frame.
+pub const MAX_OBSERVATION_STATIC_MEMBERS_BYTES_V2: usize = 768 * 1_024;
 
-/// The bytes one `session.observe` guidance member may occupy.
+/// The conservative non-counter bytes reserved for observation compact status.
 ///
-/// Guidance is `next-result/v3` with previews and page tokens removed, so its worst case is the
-/// three remaining `session.next` allocations. Sizing it below their sum would make a legitimate
-/// maximal Procedure unobservable, so the allocation is exactly that sum.
-pub const MAX_OBSERVATION_GUIDANCE_BYTES_V2: usize = 736 * 1_024;
+/// `podway-config` adds this reserve to the complete guidance charge and two complete counter
+/// arrays when proving that every admitted running observation fits the shared allocation. The
+/// daemon pins the widest production status projection without its counter array below this bound.
+pub const MAX_OBSERVATION_STATUS_NON_COUNTER_BYTES_V2: usize = 32 * 1_024;
+
+/// Fixed compact-JSON bytes in one maximum-valued graph counter, excluding its identifier.
+///
+/// The daemon owns the public projection. This shared resource calculation is checked against
+/// that production encoder so authoring admission cannot silently retain an obsolete wire width.
+pub const MAX_GRAPH_COUNTER_FIXED_JSON_BYTES_V2: usize = 103;
+
+/// Exact compact-JSON bytes for a complete graph-counter array at maximum counter values.
+///
+/// Identifier lengths are bytes. Procedure identifiers are ASCII, so their scalar and encoded
+/// byte lengths are identical. Arithmetic saturates because this function is an admission bound.
+pub fn maximum_graph_counter_array_json_bytes_v2(
+    identifier_byte_lengths: impl IntoIterator<Item = usize>,
+) -> usize {
+    let mut bytes = 2usize;
+    let mut count = 0usize;
+    for identifier_bytes in identifier_byte_lengths {
+        if count != 0 {
+            bytes = bytes.saturating_add(1);
+        }
+        bytes = bytes
+            .saturating_add(MAX_GRAPH_COUNTER_FIXED_JSON_BYTES_V2)
+            .saturating_add(identifier_bytes);
+        count = count.saturating_add(1);
+    }
+    bytes
+}
 
 /// The bytes the `session.observe` active-item window may occupy.
 pub const MAX_OBSERVATION_ACTIVE_ITEM_BYTES_V2: usize = 128 * 1_024;
@@ -144,6 +168,20 @@ pub const MAX_OBSERVATION_CHOICE_WINDOW_V2: usize = 8;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn v2gsc004_graph_counter_array_charge_has_one_saturating_owner() {
+        assert_eq!(maximum_graph_counter_array_json_bytes_v2([]), 2);
+        assert_eq!(maximum_graph_counter_array_json_bytes_v2([64]), 169);
+        assert_eq!(
+            maximum_graph_counter_array_json_bytes_v2([64; 1_024]),
+            172_033
+        );
+        assert_eq!(
+            maximum_graph_counter_array_json_bytes_v2([usize::MAX, usize::MAX]),
+            usize::MAX
+        );
+    }
 
     #[test]
     fn v2scl003_declared_worst_case_list_content_cannot_exceed_the_attempt_aggregate() {
@@ -198,19 +236,12 @@ mod tests {
         // Observation composes its own budget rather than embedding an unbounded duplicate of
         // `session.next`, so its components have to add up on their own.
         const FRAME_BYTES: usize = 1_024 * 1_024;
-        let total = MAX_OBSERVATION_STATUS_BYTES_V2
-            + MAX_OBSERVATION_GUIDANCE_BYTES_V2
+        let total = MAX_OBSERVATION_STATIC_MEMBERS_BYTES_V2
             + MAX_OBSERVATION_ACTIVE_ITEM_BYTES_V2
             + MAX_OBSERVATION_TEMPLATE_BYTES_V2
             + OBSERVATION_SERIALIZATION_RESERVE_V2;
         assert_eq!(total, FRAME_BYTES);
-        // Guidance must hold every `session.next` allocation it still carries, or a Procedure that
-        // `next` admits would be one `observe` cannot answer.
-        assert_eq!(
-            MAX_OBSERVATION_GUIDANCE_BYTES_V2,
-            (256 + 264 + 216) * 1_024,
-            "guidance must hold the static, decision-record, and metadata allocations"
-        );
+        assert_eq!(MAX_OBSERVATION_STATIC_MEMBERS_BYTES_V2, 768 * 1_024);
     }
 
     #[test]

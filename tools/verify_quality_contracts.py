@@ -12,6 +12,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 CRASH_PATH = ROOT / "quality/crash-boundaries-v1.json"
 REFERENCE_PATHS = ROOT / "tests/fixtures/v2/presets/reference-paths.json"
+PAYLOAD_RECIPES = ROOT / "tests/fixtures/v2/payload"
 FUNCTION_RE_TEMPLATE = r"\bfn\s+{name}\s*(?:<[^>]*>)?\s*\("
 
 
@@ -186,6 +187,78 @@ def locator_parts(locator: Any, label: str) -> tuple[Path, str]:
     return repository_file(relative, label), symbol
 
 
+def validate_payload_proof(proof: Any, label: str) -> int:
+    if not isinstance(proof, dict):
+        fail(f"{label} must be an object")
+    kind = proof.get("kind")
+    if kind == "cargo-test-set":
+        members = proof.get("members")
+        if not isinstance(members, list) or not members:
+            fail(f"{label} cargo-test-set must contain members")
+        return sum(
+            validate_payload_proof(member, f"{label} member {index}")
+            for index, member in enumerate(members)
+        )
+    if kind not in {"cargo-test", "cargo-unit-test"}:
+        fail(f"{label} has unsupported proof kind {kind!r}")
+    path = repository_file(proof.get("path"), f"{label} path")
+    function = proof.get("function")
+    command = proof.get("command")
+    if not isinstance(function, str) or not function:
+        fail(f"{label} function must be a non-empty string")
+    if not isinstance(command, str) or not command:
+        fail(f"{label} command must be a non-empty string")
+    if function not in command:
+        fail(f"{label} command does not select its function")
+    source = path.read_text(encoding="utf-8")
+    if re.search(FUNCTION_RE_TEMPLATE.format(name=re.escape(function)), source) is None:
+        fail(f"{label} function is missing")
+    return 1
+
+
+def validate_payload_recipes() -> int:
+    proof_count = 0
+    paths = sorted(PAYLOAD_RECIPES.glob("*.json"))
+    if not paths:
+        fail("payload recipe inventory is empty")
+    for path in paths:
+        recipe = load_object(path)
+        if recipe.get("schema") != "podway.v2-fixture-recipe/v1":
+            fail(f"{path.relative_to(ROOT)} schema is unsupported")
+        recipe_proofs = 0
+        if "production_proof" in recipe:
+            recipe_proofs += validate_payload_proof(
+                recipe["production_proof"],
+                f"{path.relative_to(ROOT)} production proof",
+            )
+        production_proofs = recipe.get("production_proofs")
+        if production_proofs is not None:
+            if not isinstance(production_proofs, dict) or not production_proofs:
+                fail(f"{path.relative_to(ROOT)} production_proofs must be a non-empty object")
+            for proof_name, proof in production_proofs.items():
+                recipe_proofs += validate_payload_proof(
+                    proof,
+                    f"{path.relative_to(ROOT)} production proof {proof_name}",
+                )
+        cases = recipe.get("cases")
+        if cases is not None:
+            if not isinstance(cases, list) or not cases:
+                fail(f"{path.relative_to(ROOT)} cases must be a non-empty array")
+            for index, case in enumerate(cases):
+                if not isinstance(case, dict):
+                    fail(f"{path.relative_to(ROOT)} case {index} must be an object")
+                case_id = case.get("id")
+                if not isinstance(case_id, str) or not case_id:
+                    fail(f"{path.relative_to(ROOT)} case {index} must have an ID")
+                recipe_proofs += validate_payload_proof(
+                    case.get("proof"), f"{path.relative_to(ROOT)} case {case_id} proof"
+                )
+        if recipe_proofs == 0:
+            fail(f"{path.relative_to(ROOT)} contains no production proof locator")
+        proof_count += recipe_proofs
+    return proof_count
+
+
 def validate_crash_registry() -> int:
     registry = load_object(CRASH_PATH)
     if registry.get("schema") != "podway.crash-boundaries/v1" or registry.get("version") != 1:
@@ -239,6 +312,7 @@ def main() -> int:
     try:
         semantic_checks = validate_v2_contract_semantics()
         reference_paths = validate_reference_paths()
+        payload_proofs = validate_payload_recipes()
         crash_windows = validate_crash_registry()
     except ContractError as error:
         print(f"quality contract verification failed: {error}")
@@ -246,6 +320,7 @@ def main() -> int:
     print(
         "quality contracts verified: "
         f"{semantic_checks} v2 semantic checks, {reference_paths} reference paths, "
+        f"{payload_proofs} payload proofs, "
         f"{crash_windows} crash windows"
     )
     return 0

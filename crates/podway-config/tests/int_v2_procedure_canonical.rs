@@ -21,7 +21,7 @@ use podway_config::{
     parse_procedure_document, validate_procedure_v2,
 };
 use podway_core::{SOURCE_PROJECTION_MAX_CHARACTERS, verify_canonical_json_v1};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 // ---------------------------------------------------------------------------------------------
 // Stage helpers
@@ -699,73 +699,120 @@ fn node_definition_map_order_is_not_meaning_but_graph_node_array_order_is() {
 // 6. The canonical source projection budget
 // ---------------------------------------------------------------------------------------------
 
-/// A document carrying `count` maximal choice items in one definition. Every filler item is
-/// identical in width — fixed-width identifier, maximum-length help, maximum choice set — so the
-/// item count is an exactly linear dial on the canonical projection size.
-fn projection_document(count: usize) -> String {
-    let choices: String = (0..32)
-        .map(|index| format!("          - \"{:c<118}{index:02}\"\n", ""))
-        .collect();
-    let items: String = (0..count)
+/// A document with all 1,024 definitions present and omitted text-item defaults. Description
+/// characters are a one-byte-at-a-time dial, while canonical default materialization leaves the
+/// source itself below its input-byte ceiling when the projection reaches its boundary.
+fn projection_document(filler_characters: usize, multibyte_characters: usize) -> String {
+    assert!(filler_characters >= podway_core::MAX_NODE_DEFINITIONS_PER_PROCEDURE_V2);
+    assert!(filler_characters <= podway_core::MAX_NODE_DEFINITIONS_PER_PROCEDURE_V2 * 1_000);
+    assert!(multibyte_characters <= filler_characters);
+    let mut remaining = filler_characters;
+    let mut remaining_multibyte = multibyte_characters;
+    let definitions = (0..podway_core::MAX_NODE_DEFINITIONS_PER_PROCEDURE_V2)
         .map(|index| {
-            format!(
-                "      - id: i{index:02}\n        type: choice\n        prompt: \"{}\"\n        help: \"{}\"\n        required: true\n        choices:\n{choices}",
-                "p".repeat(300),
-                "h".repeat(1_000),
+            let definitions_left = podway_core::MAX_NODE_DEFINITIONS_PER_PROCEDURE_V2 - index;
+            let characters = remaining.saturating_sub(definitions_left - 1).min(1_000);
+            remaining -= characters;
+            let multibyte = remaining_multibyte.min(characters);
+            remaining_multibyte -= multibyte;
+            let description = format!(
+                "{}{}",
+                "한".repeat(multibyte),
+                "a".repeat(characters - multibyte)
+            );
+            (
+                format!("d{index:04}"),
+                json!({
+                    "type": "action",
+                    "title": "Work",
+                    "description": description,
+                    "intent": "Record a value.",
+                    "items": [{
+                        "id": "value",
+                        "type": "text",
+                        "prompt": "Value?",
+                        "required": false,
+                    }],
+                }),
             )
         })
-        .collect();
-    format!(
-        "schema: podway.procedure/v2\nid: projection\nversion: \"1\"\nname: Projection\npurpose: Fill the canonical projection budget.\nnode_definitions:\n  bulk:\n    type: action\n    title: Bulk\n    intent: Hold the filler items.\n    items:\n{items}graph:\n  entry: n\n  nodes:\n    - id: n\n      use: bulk\n      terminal: true\n",
-    )
-}
-
-fn projection_characters(count: usize) -> usize {
-    yaml(&projection_document(count))
-        .canonical_json()
-        .as_str()
-        .chars()
-        .count()
+        .collect::<serde_json::Map<_, _>>();
+    assert_eq!(remaining, 0);
+    assert_eq!(remaining_multibyte, 0);
+    json!({
+        "schema": "podway.procedure/v2",
+        "id": "projection",
+        "version": "1",
+        "name": "Projection",
+        "purpose": "Fill the canonical projection budget.",
+        "node_definitions": definitions,
+        "graph": {
+            "entry": "n",
+            "nodes": [{"id": "n", "use": "d0000", "terminal": true}],
+        }
+    })
+    .to_string()
 }
 
 #[test]
-fn the_canonical_projection_budget_accepts_the_limit_and_rejects_one_filler_item_over() {
-    let one = projection_characters(1);
-    let step = projection_characters(2) - one;
-    let at_limit = 1 + (SOURCE_PROJECTION_MAX_CHARACTERS - one) / step;
+fn v2gsc004_canonical_projection_enforces_exact_character_and_byte_boundaries() {
+    let minimum_filler = podway_core::MAX_NODE_DEFINITIONS_PER_PROCEDURE_V2;
+    let minimum = json(&projection_document(minimum_filler, 0));
+    let minimum_characters = minimum.canonical_json().as_str().chars().count();
+    let exact_filler = minimum_filler + SOURCE_PROJECTION_MAX_CHARACTERS - minimum_characters;
 
-    let accepted = yaml(&projection_document(at_limit));
-    let characters = accepted.canonical_json().as_str().chars().count();
-    assert!(
-        characters <= SOURCE_PROJECTION_MAX_CHARACTERS,
-        "the at-limit document must fit: {characters}"
+    let exact_characters = json(&projection_document(exact_filler, 0));
+    assert_eq!(
+        exact_characters.canonical_json().as_str().chars().count(),
+        SOURCE_PROJECTION_MAX_CHARACTERS
+    );
+    assert_eq!(
+        exact_characters.canonical_json().as_str().len(),
+        podway_core::MAX_PROCEDURE_DOCUMENT_BYTES
     );
     assert!(
-        characters + step > SOURCE_PROJECTION_MAX_CHARACTERS,
-        "the at-limit document must sit within one filler item of the budget: {characters}"
+        projection_document(exact_filler, 0).len() <= podway_core::MAX_PROCEDURE_DOCUMENT_BYTES,
+        "the source input itself must remain admissible"
     );
-    assert!(
-        characters * 10 >= SOURCE_PROJECTION_MAX_CHARACTERS * 9,
-        "the at-limit document must be within ten percent of the budget: {characters}"
-    );
-
-    let over = projection_document(at_limit + 1);
-    let first = admit(&over, ProcedureDocumentFormat::Yaml).expect_err("one over must be rejected");
-    let second =
-        admit(&over, ProcedureDocumentFormat::Yaml).expect_err("one over must be rejected");
-    assert_eq!(first, second, "the rejection must be deterministic");
-    assert!(
-        matches!(
-            first,
-            ConfigError::OutOfBounds {
-                field: "canonical source projection",
-                min: 1,
-                max: SOURCE_PROJECTION_MAX_CHARACTERS,
-                actual,
-            } if actual > SOURCE_PROJECTION_MAX_CHARACTERS
+    assert!(matches!(
+        admit(
+            &projection_document(exact_filler + 1, 0),
+            ProcedureDocumentFormat::Json
         ),
-        "{first:?}"
+        Err(ConfigError::OutOfBounds {
+            field: "canonical source projection characters",
+            actual,
+            max: SOURCE_PROJECTION_MAX_CHARACTERS,
+            ..
+        }) if actual == SOURCE_PROJECTION_MAX_CHARACTERS + 1
+    ));
+
+    const MULTIBYTE_CHARACTERS: usize = 1_000;
+    let exact_byte_filler = exact_filler - 2 * MULTIBYTE_CHARACTERS;
+    let exact_bytes = json(&projection_document(
+        exact_byte_filler,
+        MULTIBYTE_CHARACTERS,
+    ));
+    assert_eq!(
+        exact_bytes.canonical_json().as_str().chars().count(),
+        SOURCE_PROJECTION_MAX_CHARACTERS - 2 * MULTIBYTE_CHARACTERS
     );
+    assert_eq!(
+        exact_bytes.canonical_json().as_str().len(),
+        podway_core::MAX_PROCEDURE_DOCUMENT_BYTES
+    );
+    assert!(matches!(
+        admit(
+            &projection_document(exact_byte_filler + 1, MULTIBYTE_CHARACTERS),
+            ProcedureDocumentFormat::Json
+        ),
+        Err(ConfigError::OutOfBounds {
+            field: "canonical source projection encoded bytes",
+            actual,
+            max: podway_core::MAX_PROCEDURE_DOCUMENT_BYTES,
+            ..
+        }) if actual == podway_core::MAX_PROCEDURE_DOCUMENT_BYTES + 1
+    ));
 }
 
 // ---------------------------------------------------------------------------------------------

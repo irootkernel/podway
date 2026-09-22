@@ -6,6 +6,9 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ### Changed
 
+- Raise the Procedure v2 definition and graph-placement ceiling from 64 to 1,024,
+  with bounded iterative graph analysis, complete counter projections, and
+  aggregate `next` and observation admission that preserves the 1 MiB frame.
 - Stop failing archival and start when a worktree already retains 32 inactive
   sessions. `archive list` now reports the exact total, a newest-first window, and the oldest summary.
 - Derive durable workspace identity from canonical Git paths instead of
@@ -14,6 +17,12 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ### Fixed
 
+- Show Procedure authoring diagnostic codes and the `procedure check` remediation path in
+  human-readable start failures, including the shell-safe custom Procedure path,
+  without changing the JSON error contract.
+- Make bounded human diagnostic output disclose truncation, distinguish canonical
+  projection character and encoded-byte failures, and verify payload-recipe test
+  locators against their current source symbols.
 - Return `PRESET_NOT_FOUND` instead of `UNSUPPORTED_V2_CAPABILITY` when a
   Procedure v2 start or replacement names an unknown built-in preset.
 - Let confirmed `reset --all` recover an exact local Store binding when its

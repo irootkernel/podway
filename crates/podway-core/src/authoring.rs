@@ -128,6 +128,7 @@ authoring_diagnostic_catalog! {
     EvidencePreviewBudgetExceeded => ("EVIDENCE_PREVIEW_BUDGET_EXCEEDED", Error),
     PageTokenBudgetExceeded => ("PAGE_TOKEN_BUDGET_EXCEEDED", Error),
     NextFrameBudgetExceeded => ("NEXT_FRAME_BUDGET_EXCEEDED", Error),
+    ObservationStaticMembersBudgetExceeded => ("OBSERVATION_STATIC_MEMBERS_BUDGET_EXCEEDED", Error),
     AttemptContentBudgetExceeded => ("ATTEMPT_CONTENT_BUDGET_EXCEEDED", Warning),
     DecisionSkipNotAllowed => ("DECISION_SKIP_NOT_ALLOWED", Error),
     GraphCycleInvalid => ("GRAPH_CYCLE_INVALID", Error),
@@ -416,8 +417,8 @@ mod tests {
             );
             assert_eq!(code.severity(), (*code).severity());
         }
-        assert_eq!(codes.len(), 58);
-        assert_eq!(AuthoringDiagnosticCode::ALL.len(), 58);
+        assert_eq!(codes.len(), 59);
+        assert_eq!(AuthoringDiagnosticCode::ALL.len(), 59);
     }
 
     #[test]
@@ -430,8 +431,9 @@ mod tests {
             .iter()
             .filter(|code| code.severity() == AuthoringSeverity::Warning)
             .count();
-        // V2SCL-005 added the four remaining `session.next` allocation diagnostics, all blocking.
-        assert_eq!(errors, 34);
+        // Response-budget authoring diagnostics are blocking because runtime projections may not
+        // truncate complete members.
+        assert_eq!(errors, 35);
         assert_eq!(warnings, 24);
     }
 

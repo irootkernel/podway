@@ -2,6 +2,7 @@
 
 use podway_config::{FormatRequest, ProcedureDocumentFormat, preview_procedure_v2};
 use podway_core::{AuthoringSeverity, MAX_AUTHORING_DIAGNOSTICS};
+use serde_json::json;
 
 const CLEAN_YAML: &str = r#"schema: podway.procedure/v2
 id: preview-clean
@@ -172,6 +173,62 @@ fn preview<'a>(
         source_path,
         format,
     })
+}
+
+fn mermaid_overflow_document() -> String {
+    let graph_node_ids = (0..podway_core::MAX_GRAPH_NODES_PER_PROCEDURE_V2)
+        .map(|index| {
+            let prefix = format!("n-{index:04}-");
+            format!("{prefix}{}", "x".repeat(64 - prefix.len()))
+        })
+        .collect::<Vec<_>>();
+    let options = (0..podway_core::MAX_ROUTES_PER_DECISION_V2)
+        .map(|index| json!({"id": format!("o-{index}"), "label": format!("Option {index}")}))
+        .collect::<Vec<_>>();
+    let nodes = graph_node_ids
+        .iter()
+        .enumerate()
+        .map(|(index, id)| {
+            if let Some(target) = graph_node_ids.get(index + 1) {
+                let routes = (0..podway_core::MAX_ROUTES_PER_DECISION_V2)
+                    .map(|option| {
+                        (
+                            format!("o-{option}"),
+                            json!({"to": target, "effect": "advance"}),
+                        )
+                    })
+                    .collect::<serde_json::Map<_, _>>();
+                json!({"id": id, "use": "choose", "routes": routes})
+            } else {
+                json!({"id": id, "use": "finish", "terminal": true})
+            }
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "schema": "podway.procedure/v2",
+        "id": "preview-overflow",
+        "version": "1",
+        "name": "Preview overflow",
+        "purpose": "Prove that an oversized required Mermaid projection fails closed.",
+        "node_definitions": {
+            "choose": {
+                "type": "decision",
+                "title": "D".repeat(120),
+                "objective": "Choose the next transition.",
+                "prompt": "Which route?",
+                "options": options,
+                "reason": {"required": true},
+            },
+            "finish": {
+                "type": "action",
+                "title": "Finish",
+                "intent": "Finish the procedure.",
+            },
+        },
+        "graph": {"entry": graph_node_ids[0], "nodes": nodes},
+        "manual_rework": {"allowed_targets": [graph_node_ids[0].clone()]},
+    })
+    .to_string()
 }
 
 #[test]
@@ -409,6 +466,30 @@ fn v2grf007_vet_failure_still_runs_lint_and_withholds_details() {
         report.diagnostics()[..first_warning]
             .iter()
             .all(|diagnostic| diagnostic.severity() == AuthoringSeverity::Error)
+    );
+}
+
+#[test]
+fn v2gsc004_preview_fails_closed_when_its_required_mermaid_projection_overflows() {
+    let source = mermaid_overflow_document();
+    assert!(source.len() <= podway_core::MAX_PROCEDURE_DOCUMENT_BYTES);
+    let report = preview(&source, "overflow.json", ProcedureDocumentFormat::Json);
+
+    assert!(!report.admissible());
+    assert_eq!(
+        (
+            report.checks().validate(),
+            report.checks().vet(),
+            report.checks().lint(),
+        ),
+        (true, false, false)
+    );
+    assert!(report.details().is_none());
+    assert!(
+        report
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| { diagnostic.code().as_str() == "GRAPH_PROJECTION_BUDGET_EXCEEDED" })
     );
 }
 

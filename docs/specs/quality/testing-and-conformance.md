@@ -20,6 +20,12 @@ failure, guarded, conditional, paging, goal-outcome, and manual-rework inventory
 for all four shipped presets. Every shipped preset must validate and retain its
 pinned canonical digest.
 
+The Procedure scale contract accepts exactly 1,024 node definitions and graph
+placements, rejects 1,025, exercises graph analysis across the first 64-bit word
+and a full-length chain without recursion, and pins every current or reserved
+public result ceiling that follows the domain envelope. Frozen historical result
+families retain their released 64-counter bounds.
+
 ### Shipped reference-path evidence
 
 [`reference-paths.json`](../../../tests/fixtures/v2/presets/reference-paths.json)

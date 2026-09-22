@@ -4,7 +4,16 @@ Procedure definitions are YAML or JSON documents conforming to
 `podway.procedure/v2`. The normative machine contract is
 [`procedure-v2.schema.json`](../../../assets/schemas/procedure-v2.schema.json).
 
-A procedure declares `id`, `version`, `name`, `purpose`, optional description and goal tracking, reusable `node_definitions`, and a closed `graph`. The graph names one entry placement and between one and 64 placements. Every reference must resolve; all reachable execution paths must terminate; advance cycles are rejected; and a manual rework target must be explicitly declared.
+A procedure declares `id`, `version`, `name`, `purpose`, optional description and goal tracking, between one and 1,024 reusable `node_definitions`, and a closed `graph`. The graph names one entry placement and between one and 1,024 placements. Every reference must resolve; all reachable execution paths must terminate; advance cycles are rejected; and a manual rework target must be explicitly declared.
+
+[ADR-0037](../../architecture-decision-records/0037-bound-procedure-graphs-at-1024-nodes.md)
+owns the Procedure graph scale envelope:
+
+| Graph dimension | Hard maximum |
+|---|---:|
+| Node definitions per Procedure | 1,024 |
+| Graph placements per Procedure | 1,024 |
+| Directed edges implied by placement routes | 8,192 |
 
 Action definitions may contain `confirm`, `text`, `choice`, `integer`, `list`,
 `artifact`, and `check_result` items, at most 128 per definition. Each item has a
@@ -81,7 +90,7 @@ option unavailable without changing recorded state.
 
 ## Item bounds
 
-[ADR-0024](../../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md) owns the scale envelope. Every length counts Unicode scalar values, not bytes. `podway-core` holds these numbers as public constants and configuration, runtime records, persistence reconstruction, protocol request slices, and budget calculation consume them, so one envelope binds every layer.
+[ADR-0024](../../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md) owns the item-content scale envelope. Every length counts Unicode scalar values, not bytes. `podway-core` holds these numbers as public constants and configuration, runtime records, persistence reconstruction, protocol request slices, and budget calculation consume them, so one envelope binds every layer.
 
 | Dimension | Hard maximum | Default |
 |---|---:|---:|

@@ -56,35 +56,34 @@ pub fn goal_revision_safe_targets_v2(procedure: &ParsedProcedureV2) -> Vec<Graph
         .collect()
 }
 
-/// The maximum number of placements a Procedure v2 graph can hold (`ProcedureGraphV2::new`).
-///
-/// [`NodeSet`] is a single `u64` because of this bound, not by coincidence: the domain caps the
-/// graph at 64 nodes, so one machine word holds any node set exactly.
-const MAX_GRAPH_NODES: usize = 64;
+const NODE_SET_WORDS: usize =
+    podway_core::MAX_GRAPH_NODES_PER_PROCEDURE_V2.div_ceil(u64::BITS as usize);
 
-/// A set of graph node indices, held as one 64-bit word.
+/// A fixed-size set of graph node indices covering the complete Procedure v2 graph bound.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct NodeSet(u64);
+pub(crate) struct NodeSet([u64; NODE_SET_WORDS]);
 
 impl NodeSet {
     const fn empty() -> Self {
-        Self(0)
+        Self([0; NODE_SET_WORDS])
     }
 
-    /// Adds a node. An out-of-range index is ignored rather than wrapping the shift, which keeps
-    /// the set total over `usize` without a panicking path.
+    /// Adds a node. An out-of-range index is ignored, keeping the set total over `usize`.
     fn insert(&mut self, node: usize) {
-        if node < MAX_GRAPH_NODES {
-            self.0 |= 1_u64 << node;
+        if node < podway_core::MAX_GRAPH_NODES_PER_PROCEDURE_V2 {
+            self.0[node / u64::BITS as usize] |= 1_u64 << (node % u64::BITS as usize);
         }
     }
 
     fn intersect(&mut self, other: Self) {
-        self.0 &= other.0;
+        for (word, other) in self.0.iter_mut().zip(other.0) {
+            *word &= other;
+        }
     }
 
-    pub(crate) const fn contains(self, node: usize) -> bool {
-        node < MAX_GRAPH_NODES && (self.0 & (1_u64 << node)) != 0
+    pub(crate) fn contains(self, node: usize) -> bool {
+        node < podway_core::MAX_GRAPH_NODES_PER_PROCEDURE_V2
+            && (self.0[node / u64::BITS as usize] & (1_u64 << (node % u64::BITS as usize))) != 0
     }
 }
 
@@ -266,9 +265,11 @@ impl<'a> GraphIndex<'a> {
             }
         }
 
+        let mut traversal = self.depth_first_finish_order(self.entry, true);
+        traversal.reverse();
         for _ in 0..=count {
             let mut changed = false;
-            for node in 0..count {
+            for node in traversal.iter().copied() {
                 if node == self.entry || !reachable.contains(node) {
                     continue;
                 }
@@ -338,7 +339,7 @@ impl<'a> GraphIndex<'a> {
         distances
     }
 
-    /// The strongly connected components of the graph (Tarjan), each sorted in author order and the
+    /// The strongly connected components of the graph, each sorted in author order and the
     /// components themselves ordered by their author-earliest member.
     ///
     /// Components rather than simple cycles: enumerating every simple cycle is exponential in the
@@ -385,20 +386,48 @@ impl<'a> GraphIndex<'a> {
 
     fn components(&self, include_rework: bool) -> Vec<Vec<usize>> {
         let count = self.node_count();
-        let mut state = TarjanState {
-            index: vec![None; count],
-            lowlink: vec![0; count],
-            on_stack: vec![false; count],
-            stack: Vec::new(),
-            next_index: 0,
-            components: Vec::new(),
-        };
+        let mut visited = vec![false; count];
+        let mut finish_order = Vec::with_capacity(count);
         for node in 0..count {
-            if state.index[node].is_none() {
-                self.visit(node, include_rework, &mut state);
+            if visited[node] {
+                continue;
+            }
+            finish_order.extend(self.depth_first_finish_order_with_visited(
+                node,
+                include_rework,
+                &mut visited,
+            ));
+        }
+
+        let mut reverse = vec![Vec::new(); count];
+        for source in 0..count {
+            for edge in self.successors(source) {
+                if include_rework || edge.effect() != Some(TransitionEffectV2::Rework) {
+                    reverse[edge.target()].push(source);
+                }
             }
         }
-        let mut components = state.components;
+
+        let mut assigned = vec![false; count];
+        let mut components = Vec::new();
+        for start in finish_order.into_iter().rev() {
+            if assigned[start] {
+                continue;
+            }
+            assigned[start] = true;
+            let mut stack = vec![start];
+            let mut component = Vec::new();
+            while let Some(node) = stack.pop() {
+                component.push(node);
+                for predecessor in reverse[node].iter().rev().copied() {
+                    if !assigned[predecessor] {
+                        assigned[predecessor] = true;
+                        stack.push(predecessor);
+                    }
+                }
+            }
+            components.push(component);
+        }
         for component in &mut components {
             component.sort_unstable();
         }
@@ -406,41 +435,45 @@ impl<'a> GraphIndex<'a> {
         components
     }
 
-    fn visit(&self, node: usize, include_rework: bool, state: &mut TarjanState) {
-        state.index[node] = Some(state.next_index);
-        state.lowlink[node] = state.next_index;
-        state.next_index = state.next_index.saturating_add(1);
-        state.stack.push(node);
-        state.on_stack[node] = true;
+    fn depth_first_finish_order(&self, start: usize, include_rework: bool) -> Vec<usize> {
+        let mut visited = vec![false; self.node_count()];
+        self.depth_first_finish_order_with_visited(start, include_rework, &mut visited)
+    }
 
-        for successor in self.successors(node) {
-            if !include_rework && successor.effect() == Some(TransitionEffectV2::Rework) {
-                continue;
-            }
-            let target = successor.target();
-            match state.index.get(target).copied().flatten() {
-                None => {
-                    self.visit(target, include_rework, state);
-                    state.lowlink[node] = state.lowlink[node].min(state.lowlink[target]);
-                }
-                Some(target_index) if state.on_stack[target] => {
-                    state.lowlink[node] = state.lowlink[node].min(target_index);
-                }
-                Some(_) => {}
-            }
+    fn depth_first_finish_order_with_visited(
+        &self,
+        start: usize,
+        include_rework: bool,
+        visited: &mut [bool],
+    ) -> Vec<usize> {
+        if start >= self.node_count() || visited[start] {
+            return Vec::new();
         }
-
-        if state.index[node] == Some(state.lowlink[node]) {
-            let mut component = Vec::new();
-            while let Some(member) = state.stack.pop() {
-                state.on_stack[member] = false;
-                component.push(member);
-                if member == node {
+        visited[start] = true;
+        let mut finish_order = Vec::new();
+        let mut stack = vec![(start, 0usize)];
+        while let Some((node, next_edge)) = stack.last_mut() {
+            let edges = self.successors(*node);
+            let mut target = None;
+            while *next_edge < edges.len() {
+                let edge = edges[*next_edge];
+                *next_edge += 1;
+                if include_rework || edge.effect() != Some(TransitionEffectV2::Rework) {
+                    target = Some(edge.target());
                     break;
                 }
             }
-            state.components.push(component);
+            if let Some(target) = target {
+                if !visited[target] {
+                    visited[target] = true;
+                    stack.push((target, 0));
+                }
+            } else {
+                finish_order.push(*node);
+                stack.pop();
+            }
         }
+        finish_order
     }
 
     /// The least fixpoint `Unsafe = { n : ¬assessment(n) ∧ (terminal(n) ∨ ∃ s ∈ succ(n). s ∈ Unsafe) }`.
@@ -451,53 +484,39 @@ impl<'a> GraphIndex<'a> {
     /// through its own placement. A cycle that never reaches a terminal contributes no path and
     /// therefore never enters the set — the fixpoint is least, not greatest.
     ///
-    /// Computed by monotone iteration to stability. The set only grows and is bounded by the node
-    /// count, so at most `node_count + 1` passes run.
+    /// Computed as one reverse traversal from non-assessment terminal nodes. Assessment nodes are
+    /// barriers, so every discovered predecessor has one terminal path that avoids assessment.
     pub(crate) fn assessment_free_to_terminal(
         &self,
         is_assessment: impl Fn(usize) -> bool,
     ) -> NodeSet {
-        let count = self.node_count();
         let mut unsafe_nodes = NodeSet::empty();
-        for _ in 0..=count {
-            let mut changed = false;
-            for node in 0..count {
-                if unsafe_nodes.contains(node) || is_assessment(node) {
-                    continue;
-                }
-                let escapes = self.is_terminal(node)
-                    || self
-                        .successors(node)
-                        .iter()
-                        .any(|successor| unsafe_nodes.contains(successor.target()));
-                if escapes {
-                    unsafe_nodes.insert(node);
-                    changed = true;
-                }
+        let mut frontier = VecDeque::new();
+        for node in 0..self.node_count() {
+            if self.is_terminal(node) && !is_assessment(node) {
+                unsafe_nodes.insert(node);
+                frontier.push_back(node);
             }
-            if !changed {
-                break;
+        }
+        while let Some(node) = frontier.pop_front() {
+            for predecessor in &self.predecessors[node] {
+                if !unsafe_nodes.contains(*predecessor) && !is_assessment(*predecessor) {
+                    unsafe_nodes.insert(*predecessor);
+                    frontier.push_back(*predecessor);
+                }
             }
         }
         unsafe_nodes
     }
 }
 
-/// Tarjan's working state, kept in one value so the recursive walk borrows a single mutable
-/// reference rather than six.
-struct TarjanState {
-    index: Vec<Option<u32>>,
-    lowlink: Vec<u32>,
-    on_stack: Vec<bool>,
-    stack: Vec<usize>,
-    next_index: u32,
-    components: Vec<Vec<usize>>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use podway_core::{ActionPlacementV2, GraphNodeId, NodeDefinitionId};
+    use podway_core::{
+        ActionPlacementV2, DecisionPlacementV2, DecisionRouteEntryV2, DecisionRouteMapV2,
+        DecisionRouteV2, GraphNodeId, NodeDefinitionId, OptionId,
+    };
 
     #[test]
     fn goal_revision_targets_require_an_assessment_on_every_terminal_path() {
@@ -532,6 +551,348 @@ mod tests {
             safe.iter().map(GraphNodeId::as_str).collect::<Vec<_>>(),
             vec!["assessment"]
         );
+    }
+
+    #[test]
+    fn v2gsc002_full_length_chain_uses_bounded_iterative_analysis() {
+        let ids: Vec<GraphNodeId> = (0..podway_core::MAX_GRAPH_NODES_PER_PROCEDURE_V2)
+            .map(|node| GraphNodeId::new(format!("n-{node}")).expect("test id"))
+            .collect();
+        let definition = NodeDefinitionId::new("work").expect("test definition id");
+        let placements: Vec<GraphPlacementV2> = ids
+            .iter()
+            .enumerate()
+            .map(|(node, id)| {
+                let outcome = ids
+                    .get(node + 1)
+                    .cloned()
+                    .map_or_else(ActionOutcomeV2::terminal, ActionOutcomeV2::next);
+                GraphPlacementV2::Action(ActionPlacementV2::new(
+                    id.clone(),
+                    definition.clone(),
+                    None,
+                    None,
+                    outcome,
+                ))
+            })
+            .collect();
+        let graph = ProcedureGraphV2::new(ids[0].clone(), placements, None).expect("full graph");
+        let index = GraphIndex::new(&graph);
+        let last = ids.len() - 1;
+
+        assert_eq!(index.distances_from(0)[last], Some(last as u32));
+        assert!(index.terminal_reachable_nodes().contains(0));
+        assert_eq!(index.strongly_connected_components().len(), ids.len());
+        assert!(index.dominates(&index.dominators(), 0, last));
+        assert!(index.assessment_free_to_terminal(|_| false).contains(0));
+    }
+
+    #[test]
+    fn v2gsc004_production_index_crosses_three_words_for_cycles_and_dominators() {
+        const NODE_COUNT: usize = 131;
+        let ids: Vec<GraphNodeId> = (0..NODE_COUNT)
+            .map(|node| GraphNodeId::new(format!("n-{node}")).expect("test id"))
+            .collect();
+        let action = NodeDefinitionId::new("work").unwrap();
+        let decision = NodeDefinitionId::new("review").unwrap();
+        let routes = |entries: Vec<(&str, usize, TransitionEffectV2)>| {
+            DecisionRouteMapV2::new(
+                entries
+                    .into_iter()
+                    .map(|(option, target, effect)| {
+                        DecisionRouteEntryV2::new(
+                            OptionId::new(option).unwrap(),
+                            DecisionRouteV2::new(ids[target].clone(), effect),
+                        )
+                    })
+                    .collect(),
+            )
+            .unwrap()
+        };
+        let placements = (0..NODE_COUNT)
+            .map(|node| match node {
+                125 => GraphPlacementV2::Decision(DecisionPlacementV2::new(
+                    ids[node].clone(),
+                    decision.clone(),
+                    None,
+                    routes(vec![
+                        ("left", 126, TransitionEffectV2::Advance),
+                        ("right", 127, TransitionEffectV2::Advance),
+                    ]),
+                )),
+                128 => GraphPlacementV2::Decision(DecisionPlacementV2::new(
+                    ids[node].clone(),
+                    decision.clone(),
+                    None,
+                    routes(vec![
+                        ("cycle", 129, TransitionEffectV2::Advance),
+                        ("finish", 130, TransitionEffectV2::Advance),
+                        ("retry", 125, TransitionEffectV2::Rework),
+                    ]),
+                )),
+                126 | 127 => GraphPlacementV2::Action(ActionPlacementV2::new(
+                    ids[node].clone(),
+                    action.clone(),
+                    None,
+                    None,
+                    ActionOutcomeV2::next(ids[128].clone()),
+                )),
+                129 => GraphPlacementV2::Action(ActionPlacementV2::new(
+                    ids[node].clone(),
+                    action.clone(),
+                    None,
+                    None,
+                    ActionOutcomeV2::next(ids[128].clone()),
+                )),
+                130 => GraphPlacementV2::Action(ActionPlacementV2::new(
+                    ids[node].clone(),
+                    action.clone(),
+                    None,
+                    None,
+                    ActionOutcomeV2::terminal(),
+                )),
+                _ => GraphPlacementV2::Action(ActionPlacementV2::new(
+                    ids[node].clone(),
+                    action.clone(),
+                    None,
+                    None,
+                    ActionOutcomeV2::next(ids[node + 1].clone()),
+                )),
+            })
+            .collect();
+        let graph = ProcedureGraphV2::new(ids[0].clone(), placements, None).unwrap();
+        let index = GraphIndex::new(&graph);
+
+        assert!(
+            index
+                .strongly_connected_components()
+                .iter()
+                .any(|component| component == &[125, 126, 127, 128, 129])
+        );
+        assert_eq!(index.advance_only_cycles(), vec![vec![128, 129]]);
+        let dominators = index.dominators();
+        assert!(index.dominates(&dominators, 125, 128));
+        assert!(!index.dominates(&dominators, 126, 128));
+        assert!(!index.dominates(&dominators, 127, 128));
+        assert!(index.terminal_reachable_nodes().contains(0));
+    }
+
+    #[test]
+    fn v2grf001_assessment_free_reachability_is_existential_across_branches() {
+        let ids =
+            ["branch", "direct", "assessment", "guarded"].map(|id| GraphNodeId::new(id).unwrap());
+        let action = NodeDefinitionId::new("work").unwrap();
+        let decision = NodeDefinitionId::new("review").unwrap();
+        let route_map = |entries: Vec<(&str, usize)>| {
+            DecisionRouteMapV2::new(
+                entries
+                    .into_iter()
+                    .map(|(option, target)| {
+                        DecisionRouteEntryV2::new(
+                            OptionId::new(option).unwrap(),
+                            DecisionRouteV2::new(ids[target].clone(), TransitionEffectV2::Advance),
+                        )
+                    })
+                    .collect(),
+            )
+            .unwrap()
+        };
+        let graph = ProcedureGraphV2::new(
+            ids[0].clone(),
+            vec![
+                GraphPlacementV2::Decision(DecisionPlacementV2::new(
+                    ids[0].clone(),
+                    decision.clone(),
+                    None,
+                    route_map(vec![("unsafe", 1), ("assessed", 2)]),
+                )),
+                GraphPlacementV2::Action(ActionPlacementV2::new(
+                    ids[1].clone(),
+                    action.clone(),
+                    None,
+                    None,
+                    ActionOutcomeV2::terminal(),
+                )),
+                GraphPlacementV2::Decision(DecisionPlacementV2::new(
+                    ids[2].clone(),
+                    decision,
+                    None,
+                    route_map(vec![("continue", 3)]),
+                )),
+                GraphPlacementV2::Action(ActionPlacementV2::new(
+                    ids[3].clone(),
+                    action,
+                    None,
+                    None,
+                    ActionOutcomeV2::terminal(),
+                )),
+            ],
+            None,
+        )
+        .unwrap();
+        let index = GraphIndex::new(&graph);
+        let unsafe_nodes = index.assessment_free_to_terminal(|node| node == 2);
+
+        assert!(unsafe_nodes.contains(0));
+        assert!(unsafe_nodes.contains(1));
+        assert!(!unsafe_nodes.contains(2));
+        assert!(unsafe_nodes.contains(3));
+    }
+
+    #[test]
+    fn v2gsc004_graph_analysis_crosses_the_first_node_set_word() {
+        const NODE_COUNT: usize = 70;
+        let ids: Vec<GraphNodeId> = (0..NODE_COUNT)
+            .map(|node| GraphNodeId::new(format!("n-{node}")).expect("test id"))
+            .collect();
+        let definition = NodeDefinitionId::new("work").expect("test definition id");
+        let placements: Vec<GraphPlacementV2> = ids
+            .iter()
+            .enumerate()
+            .map(|(node, id)| {
+                let outcome = ids
+                    .get(node + 1)
+                    .cloned()
+                    .map_or_else(ActionOutcomeV2::terminal, ActionOutcomeV2::next);
+                GraphPlacementV2::Action(ActionPlacementV2::new(
+                    id.clone(),
+                    definition.clone(),
+                    None,
+                    None,
+                    outcome,
+                ))
+            })
+            .collect();
+        let index_by_id = placements
+            .iter()
+            .enumerate()
+            .map(|(index, placement)| (placement.id().as_str(), index))
+            .collect();
+        let mut successors = vec![Vec::new(); NODE_COUNT];
+        for (source, edges) in successors.iter_mut().enumerate().take(63) {
+            edges.push(Successor {
+                target: source + 1,
+                effect: Some(TransitionEffectV2::Advance),
+            });
+        }
+        successors[63].push(Successor {
+            target: 64,
+            effect: Some(TransitionEffectV2::Advance),
+        });
+        successors[64].extend([
+            Successor {
+                target: 63,
+                effect: Some(TransitionEffectV2::Rework),
+            },
+            Successor {
+                target: 65,
+                effect: Some(TransitionEffectV2::Advance),
+            },
+        ]);
+        successors[65].extend([
+            Successor {
+                target: 66,
+                effect: Some(TransitionEffectV2::Advance),
+            },
+            Successor {
+                target: 67,
+                effect: Some(TransitionEffectV2::Advance),
+            },
+        ]);
+        successors[66].push(Successor {
+            target: 68,
+            effect: Some(TransitionEffectV2::Advance),
+        });
+        successors[67].push(Successor {
+            target: 68,
+            effect: Some(TransitionEffectV2::Advance),
+        });
+        successors[68].push(Successor {
+            target: 69,
+            effect: Some(TransitionEffectV2::Advance),
+        });
+        let mut predecessors = vec![Vec::new(); NODE_COUNT];
+        for (source, edges) in successors.iter().enumerate() {
+            for edge in edges {
+                predecessors[edge.target()].push(source);
+            }
+        }
+        let graph = GraphIndex {
+            placements: &placements,
+            index_by_id,
+            successors,
+            predecessors,
+            entry: 0,
+        };
+
+        assert!(graph.reachable_from(0).contains(69));
+        assert!(
+            graph
+                .strongly_connected_components()
+                .iter()
+                .any(|component| component == &[63, 64])
+        );
+        let dominators = graph.dominators();
+        assert!(graph.dominates(&dominators, 64, 68));
+        assert!(graph.dominates(&dominators, 65, 68));
+        assert!(!graph.dominates(&dominators, 66, 68));
+        assert!(!graph.dominates(&dominators, 67, 68));
+        assert!(graph.terminal_reachable_nodes().contains(64));
+        assert!(graph.advance_only_cycles().is_empty());
+
+        let assessment_free = graph.assessment_free_to_terminal(|node| node == 64);
+        assert!(assessment_free.contains(65));
+        assert!(!assessment_free.contains(64));
+        assert!(!assessment_free.contains(63));
+
+        let mut advance_successors = graph.successors.clone();
+        advance_successors[64][0].effect = Some(TransitionEffectV2::Advance);
+        let mut advance_predecessors = vec![Vec::new(); NODE_COUNT];
+        for (source, edges) in advance_successors.iter().enumerate() {
+            for edge in edges {
+                advance_predecessors[edge.target()].push(source);
+            }
+        }
+        let advance_graph = GraphIndex {
+            placements: &placements,
+            index_by_id: graph.index_by_id.clone(),
+            successors: advance_successors,
+            predecessors: advance_predecessors,
+            entry: 0,
+        };
+        assert!(
+            advance_graph
+                .advance_only_cycles()
+                .iter()
+                .any(|component| component == &[63, 64])
+        );
+
+        let mut isolated_cycle_successors = vec![Vec::new(); NODE_COUNT];
+        isolated_cycle_successors[0].push(Successor {
+            target: 1,
+            effect: Some(TransitionEffectV2::Advance),
+        });
+        isolated_cycle_successors[1].push(Successor {
+            target: 0,
+            effect: Some(TransitionEffectV2::Advance),
+        });
+        let mut isolated_cycle_predecessors = vec![Vec::new(); NODE_COUNT];
+        for (source, edges) in isolated_cycle_successors.iter().enumerate() {
+            for edge in edges {
+                isolated_cycle_predecessors[edge.target()].push(source);
+            }
+        }
+        let isolated_cycle_graph = GraphIndex {
+            placements: &placements,
+            index_by_id: graph.index_by_id.clone(),
+            successors: isolated_cycle_successors,
+            predecessors: isolated_cycle_predecessors,
+            entry: 0,
+        };
+        let isolated_assessment_free = isolated_cycle_graph.assessment_free_to_terminal(|_| false);
+        assert!(!isolated_assessment_free.contains(0));
+        assert!(!isolated_assessment_free.contains(1));
+        assert!(isolated_assessment_free.contains(69));
     }
 
     /// Runs a check against a synthetic three-node index. The placements provide terminal

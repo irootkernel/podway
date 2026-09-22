@@ -16,7 +16,7 @@
     "latest_goal_outcome": { "enum": ["achieved", "not_achieved", "superseded"] },
     "goal": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/goalDisplay" },
     "trace_length": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
-    "counters": { "type": "array", "maxItems": 64, "items": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/counter" } },
+    "counters": { "type": "array", "maxItems": 1024, "items": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/counter" } },
     "items": { "type": "array", "maxItems": 128, "items": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/compactItem" } },
     "queue": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/queue" },
     "missing_required_item_ids": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/identifier" } },

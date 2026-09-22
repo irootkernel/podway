@@ -25,7 +25,6 @@ const MAX_PROCEDURE_NAME_CHARS: usize = 120;
 const MAX_PROCEDURE_PURPOSE_CHARS: usize = 500;
 const MAX_PROCEDURE_DESCRIPTION_CHARS: usize = 1_000;
 const MIN_NODE_DEFINITIONS: usize = 1;
-const MAX_NODE_DEFINITIONS: usize = 64;
 
 /// The `field` [`map_domain_error`] reports when a core constructor rejects a value without naming
 /// an authored path.
@@ -337,7 +336,7 @@ pub(crate) fn map_document(
         "node_definitions",
         node_definitions.len(),
         MIN_NODE_DEFINITIONS,
-        MAX_NODE_DEFINITIONS,
+        podway_core::MAX_NODE_DEFINITIONS_PER_PROCEDURE_V2,
     )?;
 
     let manual_rework = document.manual_rework.map(map_manual_rework).transpose()?;

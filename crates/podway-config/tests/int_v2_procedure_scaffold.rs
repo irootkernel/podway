@@ -40,7 +40,7 @@ const MINIMAL_TEMPLATE_DIGEST: &str =
 
 /// The largest a template may grow and still be a document a reviewer reads in one sitting.
 ///
-/// Far below the 131,072-character projection bound the emitter enforces: that bound stops an
+/// Far below the 1,048,576-character projection bound the emitter enforces: that bound stops an
 /// unprintable document, while this one keeps a *starting point* from becoming a workflow.
 const REVIEWABLE_TEMPLATE_MAX_CHARACTERS: usize = 4096;
 

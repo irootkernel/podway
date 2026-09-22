@@ -245,12 +245,13 @@ fn graph_assembly_rejects_duplicates_missing_entry_and_overflow() {
     );
     assert_eq!(
         ProcedureGraphV2::new(n1, Vec::new(), None),
-        Err(invalid("graph node count must be between one and 64"))
+        Err(invalid("graph node count must be between one and 1024"))
     );
-    let sixty_five: Vec<GraphPlacementV2> = (0..65).map(|i| placement(&format!("n-{i}"))).collect();
-    let entry_sixty_five = sixty_five[0].id().clone();
+    let one_over: Vec<GraphPlacementV2> =
+        (0..1_025).map(|i| placement(&format!("n-{i}"))).collect();
+    let entry = one_over[0].id().clone();
     assert_eq!(
-        ProcedureGraphV2::new(entry_sixty_five, sixty_five, None),
-        Err(invalid("graph node count must be between one and 64"))
+        ProcedureGraphV2::new(entry, one_over, None),
+        Err(invalid("graph node count must be between one and 1024"))
     );
 }

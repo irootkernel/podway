@@ -435,10 +435,10 @@ impl<'a> Vet<'a, '_> {
                 self.findings.push(finding);
             }
 
-            // The five caps sum to exactly the admissible frame, so passing all five implies
-            // passing this. It is defence for the day a cap is raised without re-deriving the
-            // table: the frame is the bound the response actually has to satisfy, and it should
-            // not be reachable only through the parts.
+            // The placement-local caps retain their independent diagnostics. The aggregate also
+            // charges the complete graph-wide counter array, which grows with declarations rather
+            // than with the active placement and therefore has no independent allocation. This is
+            // the authoritative check that the complete response remains frame-admissible.
             let charged_total = budget.charged_total();
             let admissible = NEXT_FRAME_BUDGET.saturating_sub(NEXT_SERIALIZATION_RESERVE);
             if exceeds_budget(charged_total, admissible) {
@@ -448,6 +448,27 @@ impl<'a> Vet<'a, '_> {
                         &node_path(node),
                         format!(
                             "Graph node `{graph_node_id}` charges {charged_total} bytes across every next allocation, over the {admissible} bytes that remain once the {NEXT_SERIALIZATION_RESERVE}-byte serialization reserve is held back.",
+                        ),
+                    )
+                    .with_graph_node_id(graph_node_id.clone())
+                    .with_node_definition_id(definition_id.clone())
+                    .with_related_graph_node_ids(related_sources.clone());
+                self.findings.push(finding);
+            }
+
+            // Observation duplicates the complete counter set: once in compact status and once in
+            // preview-stripped guidance. Prove that every admitted active placement fits the shared
+            // allocation before a session can begin; runtime measurement remains a defensive guard.
+            let observation_static_members = budget.observation_static_members();
+            let observation_allocation =
+                podway_core::MAX_OBSERVATION_STATIC_MEMBERS_BYTES_V2 as u64;
+            if exceeds_budget(observation_static_members, observation_allocation) {
+                let finding = self
+                    .diagnostic(
+                        AuthoringDiagnosticCode::ObservationStaticMembersBudgetExceeded,
+                        &node_path(node),
+                        format!(
+                            "Graph node `{graph_node_id}` charges {observation_static_members} bytes of worst-case complete observation status and guidance, over their shared {observation_allocation}-byte allocation.",
                         ),
                     )
                     .with_graph_node_id(graph_node_id)

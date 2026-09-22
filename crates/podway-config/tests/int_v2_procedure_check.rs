@@ -173,6 +173,14 @@ fn check(source: &str) -> ProcedureCheckReport {
     })
 }
 
+fn check_json(source: &str) -> ProcedureCheckReport {
+    check_procedure_v2(FormatRequest {
+        source,
+        source_path: SOURCE_PATH,
+        format: ProcedureDocumentFormat::Json,
+    })
+}
+
 fn codes(report: &ProcedureCheckReport) -> Vec<&'static str> {
     report
         .diagnostics()
@@ -187,6 +195,15 @@ fn admit(source: &str) -> ValidatedProcedureV2 {
             validate_procedure_v2(parsed).expect("the fixture must validate")
         }
         Err(error) => panic!("the fixture must parse: {error}\n{source}"),
+    }
+}
+
+fn admit_json(source: &str) -> ValidatedProcedureV2 {
+    match parse_procedure_document(source.as_bytes(), ProcedureDocumentFormat::Json) {
+        Ok(ParsedProcedure::V2(parsed)) => {
+            validate_procedure_v2(parsed).expect("the fixture must validate")
+        }
+        Err(error) => panic!("the fixture must parse: {error}"),
     }
 }
 
@@ -211,7 +228,7 @@ fn serialized(diagnostics: &[AuthoringDiagnostic]) -> Vec<Value> {
         .collect()
 }
 
-/// The complete graph-vet code set delivered by V2GRF-001 and V2GRF-002.
+/// The complete graph-vet code set delivered by V2GRF-001, V2GRF-002, and V2GSC-004.
 const VET_SUBSET: &[AuthoringDiagnosticCode] = &[
     AuthoringDiagnosticCode::UnreachableGraphNode,
     AuthoringDiagnosticCode::NoTerminalPath,
@@ -228,6 +245,7 @@ const VET_SUBSET: &[AuthoringDiagnosticCode] = &[
     AuthoringDiagnosticCode::EvidencePreviewBudgetExceeded,
     AuthoringDiagnosticCode::PageTokenBudgetExceeded,
     AuthoringDiagnosticCode::NextFrameBudgetExceeded,
+    AuthoringDiagnosticCode::ObservationStaticMembersBudgetExceeded,
 ];
 
 // ---------------------------------------------------------------------------------------------
@@ -315,32 +333,44 @@ fn v2aut005_a_construct_violation_suppresses_drift_but_not_lint() {
     );
 }
 
-/// A model that has no canonical authoring text because it is too large behaves exactly like one
-/// that has none because of an unsupported construct: a format-stage finding, no drift comparison,
-/// and the advisory stages still run.
-///
-/// Section 6 of the design tables the construct case and is silent on this one; they are the same
-/// event, so they are treated the same way. The generator is ported from
-/// `int_v2_procedure_format.rs`: block YAML with materialized defaults is materially wider than
-/// compact Canonical JSON v1, so a document can validate and still have no canonical authoring form.
 #[test]
-fn v2aut005_a_document_over_the_projection_budget_skips_drift_and_still_lints() {
-    let source = projection_document(projection_item_count_at_canonical_limit());
-    let report = check(&source);
-
+fn v2gsc004_check_reports_canonical_projection_character_and_byte_overflow() {
+    let exact_filler = projection_filler_at_canonical_limit();
+    let accepted_source = projection_document(exact_filler);
     assert_eq!(
-        codes(&report).first().copied(),
-        Some("SOURCE_PROJECTION_BUDGET_EXCEEDED"),
+        admit_json(&accepted_source)
+            .canonical_json()
+            .as_str()
+            .chars()
+            .count(),
+        SOURCE_PROJECTION_MAX_CHARACTERS,
+        "the baseline must be the exact canonical boundary"
     );
-    assert!(!codes(&report).contains(&"FORMAT_NOT_CANONICAL"));
-    assert_eq!(codes(&report)[1..], lint_codes(&source)[..]);
+
+    let rejected = check_json(&projection_document(exact_filler + 1));
+    assert_eq!(codes(&rejected), ["SOURCE_PROJECTION_BUDGET_EXCEEDED"]);
+    assert!(rejected.diagnostics()[0].message().contains("characters"));
+    assert_eq!(rejected.digest(), None);
+
+    const MULTIBYTE_CHARACTERS: usize = 1_000;
+    let exact_byte_filler = exact_filler - 2 * MULTIBYTE_CHARACTERS;
+    let accepted_source =
+        projection_document_with_multibyte(exact_byte_filler, MULTIBYTE_CHARACTERS);
+    assert_eq!(
+        admit_json(&accepted_source).canonical_json().as_str().len(),
+        podway_core::MAX_PROCEDURE_DOCUMENT_BYTES,
+    );
+    let rejected = check_json(&projection_document_with_multibyte(
+        exact_byte_filler + 1,
+        MULTIBYTE_CHARACTERS,
+    ));
+    assert_eq!(codes(&rejected), ["SOURCE_PROJECTION_BUDGET_EXCEEDED"]);
     assert!(
-        codes(&report).contains(&"NO_REACTIVATION_PATH"),
-        "the advisory stages must have run on the model: {:?}",
-        codes(&report),
+        rejected.diagnostics()[0]
+            .message()
+            .contains("encoded bytes")
     );
-    assert!(!report.valid());
-    assert_eq!(report.digest(), Some(admit(&source).digest()));
+    assert_eq!(rejected.digest(), None);
 }
 
 /// A document with no model stops everything: one finding, no digest, and no advisory noise beside
@@ -466,7 +496,7 @@ fn v2grf002_the_check_pipeline_runs_the_complete_vet_rule_set() {
         .iter()
         .map(|code| AuthoringDiagnosticCode::as_str(*code))
         .collect();
-    assert_eq!(codes_owned.len(), 15, "vet owns fifteen blocking codes");
+    assert_eq!(codes_owned.len(), 16, "vet owns sixteen blocking codes");
 
     let source = MINIMAL_YAML.replace(
         "    - id: only\n",
@@ -635,47 +665,69 @@ fn finding_heavy_document() -> String {
     )
 }
 
-/// A document carrying `count` maximal choice items in one definition, ported from
-/// `int_v2_procedure_format.rs`: every filler item is identical in width, so the item count is an
-/// exactly linear dial on the projection size.
-fn projection_document(count: usize) -> String {
-    let choices: String = (0..32)
-        .map(|index| format!("          - \"{:c<118}{index:02}\"\n", ""))
-        .collect();
-    let items: String = (0..count)
-        .map(|index| {
-            format!(
-                "      - id: i{index:02}\n        type: choice\n        prompt: \"{}\"\n        \
-                 help: \"{}\"\n        required: true\n        choices:\n{choices}",
-                "p".repeat(300),
-                "h".repeat(1_000),
-            )
-        })
-        .collect();
-    format!(
-        "schema: podway.procedure/v2\nid: projection\nversion: \"1\"\nname: Projection\n\
-         purpose: Fill the canonical projection budget.\nnode_definitions:\n  bulk:\n    \
-         type: action\n    title: Bulk\n    intent: Hold the filler items.\n    items:\n{items}\
-         graph:\n  entry: n\n  nodes:\n    - id: n\n      use: bulk\n      terminal: true\n",
-    )
+/// A compact JSON source whose canonical form is larger because omitted text defaults are
+/// materialized. Every added ASCII description character grows the projection by exactly one.
+fn projection_document(filler_characters: usize) -> String {
+    projection_document_with_multibyte(filler_characters, 0)
 }
 
-/// The largest filler-item count whose *canonical* projection still fits, which is therefore the
-/// largest document that validates and still has no canonical authoring form.
-fn projection_item_count_at_canonical_limit() -> usize {
-    let characters = |count: usize| {
-        admit(&projection_document(count))
-            .canonical_json()
-            .as_str()
-            .chars()
-            .count()
-    };
-    let one = characters(1);
-    let step = characters(2) - one;
-    let count = 1 + (SOURCE_PROJECTION_MAX_CHARACTERS - one) / step;
-    assert!(
-        characters(count) <= SOURCE_PROJECTION_MAX_CHARACTERS,
-        "the at-limit document must still validate",
-    );
-    count
+fn projection_document_with_multibyte(
+    filler_characters: usize,
+    multibyte_characters: usize,
+) -> String {
+    let mut remaining = filler_characters;
+    let mut remaining_multibyte = multibyte_characters;
+    let definitions = (0..podway_core::MAX_NODE_DEFINITIONS_PER_PROCEDURE_V2)
+        .map(|index| {
+            let definitions_left = podway_core::MAX_NODE_DEFINITIONS_PER_PROCEDURE_V2 - index;
+            let characters = remaining.saturating_sub(definitions_left - 1).min(1_000);
+            remaining -= characters;
+            let multibyte = remaining_multibyte.min(characters);
+            remaining_multibyte -= multibyte;
+            (
+                format!("d{index:04}"),
+                serde_json::json!({
+                    "type": "action",
+                    "title": "Work",
+                    "description": format!(
+                        "{}{}",
+                        "한".repeat(multibyte),
+                        "a".repeat(characters - multibyte),
+                    ),
+                    "intent": "Record a value.",
+                    "items": [{
+                        "id": "value",
+                        "type": "text",
+                        "prompt": "Value?",
+                        "required": false,
+                    }],
+                }),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    assert_eq!(remaining, 0);
+    assert_eq!(remaining_multibyte, 0);
+    serde_json::json!({
+        "schema": "podway.procedure/v2",
+        "id": "projection",
+        "version": "1",
+        "name": "Projection",
+        "purpose": "Fill the canonical projection budget.",
+        "node_definitions": definitions,
+        "graph": {
+            "entry": "n",
+            "nodes": [{"id": "n", "use": "d0000", "terminal": true}],
+        }
+    })
+    .to_string()
+}
+
+fn projection_filler_at_canonical_limit() -> usize {
+    let minimum = podway_core::MAX_NODE_DEFINITIONS_PER_PROCEDURE_V2;
+    let base = admit_json(&projection_document(minimum))
+        .canonical_json()
+        .as_str()
+        .chars()
+        .count();
+    minimum + SOURCE_PROJECTION_MAX_CHARACTERS - base
 }

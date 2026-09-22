@@ -9,7 +9,7 @@
     "schema": { "const": "podway.procedure-source-result/v1" },
     "operation": { "enum": ["format", "scaffold"] },
     "target_schema": { "const": "podway.procedure/v2" },
-    "document": { "type": "string", "minLength": 1, "maxLength": 131072 },
+    "document": { "type": "string", "minLength": 1, "maxLength": 1048576 },
     "target_digest": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/digest" },
     "file": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/path" },
     "mode": { "enum": ["stdout", "check", "write"] },

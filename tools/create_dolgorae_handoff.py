@@ -187,7 +187,7 @@ def adapter_contract() -> dict[str, Any]:
     diagnostic_codes = catalog_codes(
         diagnostic_catalog, "diagnostics", "authoring diagnostic catalog"
     )
-    if len(diagnostic_codes) != 58:
+    if len(diagnostic_codes) != 59:
         fail("authoring diagnostic catalog does not contain the exact v2 inventory")
 
     schema_assets = [
@@ -259,7 +259,7 @@ def adapter_contract() -> dict[str, Any]:
             "schema_pins": schema_pins,
         },
         "current_surface_counts": {
-            "authoring_diagnostics": 58,
+            "authoring_diagnostics": 59,
             "routes": len(route_inventory),
             "runtime_errors": len(runtime_error_codes),
             "schemas": len(schema_pins),

@@ -38,7 +38,6 @@ const PROCEDURE_SCHEMA_DOCUMENT_V2: &str =
     include_str!("../../../assets/schemas/procedure-v2.schema.json");
 const DELEGATION_COMPONENTS_SCHEMA_V1: &str =
     include_str!("../../../assets/schemas/delegation-components-v1.schema.json");
-const MAX_GRAPH_NODES_V2: usize = 64;
 const MAX_TASK_TITLE_CHARACTERS_V2: usize = 500;
 const MAX_TERMINAL_REASON_CHARACTERS_V2: usize = 2_000;
 /// Newest-first archive list window. Matches ADR-0034 / protocol `SESSION_ARCHIVE_LIST_WINDOW_V2`.
@@ -492,7 +491,8 @@ impl ProcedureSnapshotV2 {
             .get("nodes")
             .and_then(Value::as_array)
             .ok_or_else(|| invalid("Procedure v2 graph placements are missing"))?;
-        if placements.is_empty() || placements.len() > MAX_GRAPH_NODES_V2 {
+        if placements.is_empty() || placements.len() > podway_core::MAX_GRAPH_NODES_PER_PROCEDURE_V2
+        {
             return Err(invalid("Procedure v2 graph node count is out of bounds"));
         }
 
@@ -4147,7 +4147,10 @@ fn replace_graph_session_transaction_internal_v2(
     {
         insert_attempt_v2(transaction, next, attempt, metadata)?;
     }
-    for counter in next.counters() {
+    for (previous_counter, counter) in previous.counters().iter().zip(next.counters()) {
+        if previous_counter == counter {
+            continue;
+        }
         let changed = transaction
             .execute(
                 "UPDATE v2_graph_node_counters SET attempt_count = ?1, rework_traversal_count = ?2 \

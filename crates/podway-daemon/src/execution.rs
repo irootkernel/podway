@@ -17,10 +17,10 @@ use podway_config::{
 };
 use podway_core::{
     ActorAttributionV2, ArtifactLocationKindV1, ArtifactValueV1, AttemptId, AttemptLifecycle,
-    AttemptNumberV2, AttemptValidityV2, AuthoringSeverity, BlockerId, CanonicalProcedureJsonV1,
-    CriterionAssessmentReasonV2, CriterionAssessmentResultV2, CriterionCitationV2,
-    CriterionStatusV2, DecisionRecordV2, DomainCommand, DomainError, DomainResult,
-    GoalAssessmentRecordV2, GoalCriterionV2, GoalDefinitionV2, GoalRevisionNumberV2,
+    AttemptNumberV2, AttemptValidityV2, AuthoringDiagnostic, AuthoringSeverity, BlockerId,
+    CanonicalProcedureJsonV1, CriterionAssessmentReasonV2, CriterionAssessmentResultV2,
+    CriterionCitationV2, CriterionStatusV2, DecisionRecordV2, DomainCommand, DomainError,
+    DomainResult, GoalAssessmentRecordV2, GoalCriterionV2, GoalDefinitionV2, GoalRevisionNumberV2,
     GoalRevisionReasonV2, GoalStatementV2, GraphPlacementV2, ItemId, JobId, ProcedureSnapshotId,
     ProcedureSourceLabelV1, ReasonV2, ResolvedEvidenceReferenceV2, Revision, SessionAttemptV2,
     SessionId, SessionLifecycle, SessionTraceV2, Sha256Digest, TraceSequenceV2, UnixMillis,
@@ -362,14 +362,7 @@ pub fn workspace_procedure_snapshot_from_bytes_v2(
         .iter()
         .any(|diagnostic| diagnostic.severity() == AuthoringSeverity::Error)
     {
-        let mut diagnostic_codes: Vec<String> = diagnostics
-            .iter()
-            .filter(|diagnostic| diagnostic.severity() == AuthoringSeverity::Error)
-            .map(|diagnostic| diagnostic.code().as_str().to_owned())
-            .take(256)
-            .collect();
-        diagnostic_codes.sort();
-        diagnostic_codes.dedup();
+        let diagnostic_codes = distinct_error_diagnostic_codes(&diagnostics);
         return Err(ProcedureV2SourceAdmissionErrorV1::SchemaInvalid { diagnostic_codes });
     }
     let canonical_json = CanonicalProcedureJsonV1::new(
@@ -395,6 +388,18 @@ pub fn workspace_procedure_snapshot_from_bytes_v2(
             },
         ))
     })
+}
+
+fn distinct_error_diagnostic_codes(diagnostics: &[AuthoringDiagnostic]) -> Vec<String> {
+    let mut diagnostic_codes: Vec<String> = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity() == AuthoringSeverity::Error)
+        .map(|diagnostic| diagnostic.code().as_str().to_owned())
+        .collect();
+    diagnostic_codes.sort();
+    diagnostic_codes.dedup();
+    diagnostic_codes.truncate(256);
+    diagnostic_codes
 }
 
 /// Resolves and confirms one custom Procedure v2 source, then constructs the complete fresh
@@ -7704,6 +7709,50 @@ mod tests {
     use crate::observability::{ClockErrorV1, ClockV1, LogSinkV1, ObservabilityV1};
 
     use super::*;
+
+    #[test]
+    fn schema_admission_deduplicates_error_codes_before_applying_the_wire_cap() {
+        use podway_core::{AuthoringDiagnosticCode, SourceLocation};
+
+        let repeated = AuthoringDiagnostic::new(
+            AuthoringDiagnosticCode::AuthoringSchemaInvalid,
+            "workflow.yaml",
+            SourceLocation::document_start(),
+            "$",
+            "Invalid schema.",
+            "Correct the schema.",
+        );
+        let distinct = AuthoringDiagnostic::new(
+            AuthoringDiagnosticCode::UnreachableGraphNode,
+            "workflow.yaml",
+            SourceLocation::document_start(),
+            "graph",
+            "Node is unreachable.",
+            "Connect the node.",
+        );
+        let warning = AuthoringDiagnostic::new(
+            AuthoringDiagnosticCode::WeakPurposeGuidance,
+            "workflow.yaml",
+            SourceLocation::document_start(),
+            "purpose",
+            "Purpose is weak.",
+            "Make the purpose specific.",
+        );
+        let mut diagnostics = Vec::with_capacity(601);
+        for _ in 0..300 {
+            diagnostics.push(repeated.clone());
+            diagnostics.push(distinct.clone());
+        }
+        diagnostics.push(warning);
+
+        assert_eq!(
+            distinct_error_diagnostic_codes(&diagnostics),
+            vec![
+                "AUTHORING_SCHEMA_INVALID".to_owned(),
+                "UNREACHABLE_GRAPH_NODE".to_owned(),
+            ],
+        );
+    }
 
     #[derive(Default)]
     struct CaptureSink(Mutex<Vec<String>>);

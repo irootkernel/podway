@@ -290,22 +290,35 @@ limit.
 
 `session.next` and `session.observe` each have a closed byte composition proved against the 1,048,576-byte frame. Authoring validation charges every allocation separately and names the one an author exceeded, because the remedies differ. Every windowed collection reports its exact total and whether it was truncated; silent truncation is forbidden.
 
-| `session.next` allocation | Maximum |
+| `session.next` charge | Independent ceiling or aggregate |
 |---|---:|
 | Procedure and runtime static content | 256 KiB |
 | Complete decision records | 264 KiB |
 | Reference and item metadata, at most 128 items | 216 KiB |
 | Preview data, at most 32 slots | 176 KiB |
 | Up to 32 page tokens | 64 KiB |
-| Serialization and envelope safety | 48 KiB |
-| **Total** | **1 MiB** |
+| Complete graph counters (included in aggregate; not an extra reservation) | variable, at most 172,033 bytes |
+| **Actual five charges plus counters** | **976 KiB aggregate** |
+| Serialization and envelope reserve | 48 KiB |
+| **Frame** | **1 MiB** |
 
-The preview and page-token allocations hold the widest selection a selector can request — thirty-two slots and one token per slot — however many items the reference names, so a Procedure cannot exceed them. The other three bind. Authored text binds the static allocation. One complete goal-assessment record nearly fills its allocation, so a placement may read back from at most one goal-assessment decision source. A decision record without an assessment is an order of magnitude smaller, so several of those fit. And metadata binds through selector-less references: an omitted selector requests every item of its source, so a reference to a 128-item definition charges far more than the sixteen items an explicit selector may name, and two such references exceed the metadata allocation.
+The five placement-local ceilings are independent limits, not simultaneously
+available reservations. Authoring adds their actual worst-case charges to the
+exact complete counter-array charge and admits the placement only when that sum
+fits the 976 KiB aggregate payload. The preview and page-token ceilings hold the
+widest selection a selector can request — thirty-two slots and one token per slot
+— however many items the reference names. Authored text binds the static ceiling.
+One complete goal-assessment record nearly fills its ceiling, so a placement may
+read back from at most one goal-assessment decision source. A decision record
+without an assessment is an order of magnitude smaller, so several of those fit.
+Metadata binds through selector-less references: an omitted selector requests
+every item of its source, so a reference to a 128-item definition charges far more
+than the sixteen items an explicit selector may name, and two such references
+exceed the metadata ceiling.
 
 | `session.observe` component | Maximum |
 |---|---:|
-| Compact status | 32 KiB |
-| Bounded `next-result/v3` guidance | 736 KiB |
+| Complete compact status and bounded `next-result/v3` guidance | 768 KiB shared |
 | Active item window | 128 KiB |
 | Mutation template window | 64 KiB |
 | Serialization and outer-envelope safety | 64 KiB |
@@ -319,11 +332,32 @@ item charges about 2.4 KiB for one predicate or 9.5 KiB for four predicates
 inside the existing 128 KiB observation active-item window. The existing exact
 totals and truncation fields remain authoritative when fewer active items fit.
 
-Guidance carries `next-result/v3` without its previews or page tokens, so its allocation is exactly the sum of the three `session.next` allocations that remain. Sizing it lower would make a Procedure that `session.next` admits into one `session.observe` cannot answer. Status and guidance are single structured members rather than windows — there is no honest way to return half a status — so they are measured against their allocations and a member that outgrows one fails closed. The active-item and template windows are cut and publish what they cut.
+Guidance carries `next-result/v3` without its previews or page tokens. Status and
+guidance both carry the complete graph-wide counter set, so they share the 768 KiB
+that their former 32 KiB and 736 KiB allocations occupied. This lets long graphs
+spend more on counters while content-rich placements spend more on guidance.
+They remain complete structured members rather than windows: there is no honest
+way to return half of either one, so their combined encoded size is measured and
+fails closed if it exceeds the shared allocation. The active-item and template
+windows are cut and publish what they cut.
+
+Authoring admission proves the same shared observation bound before a session can
+start. For every placement it charges procedure-static guidance, decision records,
+read-back metadata, two complete counter arrays, and a 32 KiB reserve for compact
+status fields other than counters. `OBSERVATION_STATIC_MEMBERS_BUDGET_EXCEEDED`
+identifies a Procedure that is individually valid for `session.next` but cannot
+produce a complete observation.
 
 An omitted evidence item selector means metadata-only. Explicit selectors receive previews in declaration order for at most 32 items, and later admitted items remain metadata-only. At most 128 item metadata records may appear across all references in one response. Metadata costs the same for every item kind, so the byte allocation does not imply that ceiling: a wide selection of small items can stay inside the allocation and still exceed it. Graph vetting therefore counts records as well as bytes and rejects a larger declared selection, recommending the smallest useful selectors. Metadata remains complete for every item in an admitted `session.next` projection, so that response never marks its evidence metadata window truncated.
 
-Observation composes its own budget rather than embedding an unbounded duplicate of `session.next`. Its guidance emits evidence metadata only, with no previews or page tokens, and its evidence metadata window may be truncated. The active-item and mutation-template members are the two byte-budgeted windows. Compact-status items are a bounded collection inside the measured status member, not a window of their own: a status member that outgrows its allocation fails closed rather than cutting its item array. The active-item window admits in declaration order until its allocation is spent. The template window first reserves the first template of every command, so no action named by `allowed_actions` loses its template, and then fills the remainder, admitting a later template that fits after skipping one that does not. Active-item choice constraints expose at most eight choices plus the exact choice count and a truncation flag, while the complete declaration remains available from the Procedure inspection routes. Template argv elements are limited to 4,096 scalars.
+Observation composes its own budget rather than embedding an unbounded duplicate of `session.next`. Its guidance emits evidence metadata only, with no previews or page tokens, and its evidence metadata window may be truncated. The active-item and mutation-template members are the two byte-budgeted windows. Compact-status items are a bounded collection inside the measured shared status-and-guidance member, not a window of their own: a combined member that outgrows its allocation fails closed rather than cutting status or guidance. The active-item window admits in declaration order until its allocation is spent. The template window first reserves the first template of every command, so no action named by `allowed_actions` loses its template, and then fills the remainder, admitting a later template that fits after skipping one that does not. Active-item choice constraints expose at most eight choices plus the exact choice count and a truncation flag, while the complete declaration remains available from the Procedure inspection routes. Template argv elements are limited to 4,096 scalars.
+
+Procedure preview is likewise all-or-nothing. Its normalized graph and Mermaid
+projection are required details, not truncatable windows. If Mermaid text exceeds
+1,048,576 characters, preview reports `GRAPH_PROJECTION_BUDGET_EXCEEDED`, marks
+the vet check false, withholds all preview details, and remains inadmissible. Any
+other normalization or projection failure keeps its own authoring diagnostic and
+also withholds the required details.
 
 Every derived collection was audited against the declaration it projects. A collection whose ceiling equals its declaration's own ceiling is complete and carries no truncation flag: decision options, evidence guidance, instructions, allowed actions, graph counters, and manual rework targets are all of this kind. A collection that can be narrower than what a declaration may produce is a window, and a window always publishes its exact total and whether it was cut. Raising items per definition to 128 left three collections in the standard status tier able to exceed their own published ceilings: `missing_required_item_ids`, `item_values`, and the `items_total` that describes it. `status-result/v3` is released and served, so each was corrected by raising its numeric ceiling to what a definition can declare rather than by windowing it. Windowing would have required a new member, and a released family never grows one; a bounded numeric update changes no field set and no unknown-field closure, which is the only in-place change the contract permits.
 

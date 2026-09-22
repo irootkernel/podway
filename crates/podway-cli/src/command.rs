@@ -49,12 +49,12 @@ use podway_core::{
 };
 use podway_presets::{PresetError, catalog_v2};
 use podway_protocol::{
-    ClientInfoV1, CommandNameV1, IdempotencyKeyV1, ItemRecordManyInputV1, JobStateV1,
-    MAX_FRAME_PAYLOAD_BYTES_V1, MAX_SLICE_ITEM_TEXT_SCALARS_V1, MAX_WAIT_TIMEOUT_MILLIS_V1,
-    OperationV1, OutputEnvelopeInputV3, OutputEnvelopeV3, PreconditionsV1, RequestEnvelopeInputV1,
-    RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, ResponseEnvelopeV2, Rfc3339MillisV1,
-    WorkspaceContextV1, WorktreeSelectorWireV1, build_identity_v1,
-    decode_item_record_many_input_v1, ensure_error_details_schema_v1,
+    ClientInfoV1, CommandNameV1, ErrorEnvelopeV1, IdempotencyKeyV1, ItemRecordManyInputV1,
+    JobStateV1, MAX_FRAME_PAYLOAD_BYTES_V1, MAX_SLICE_ITEM_TEXT_SCALARS_V1,
+    MAX_WAIT_TIMEOUT_MILLIS_V1, OperationV1, OutputEnvelopeInputV3, OutputEnvelopeV3,
+    PreconditionsV1, RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, RequestOptionsV1,
+    ResponseEnvelopeV2, Rfc3339MillisV1, WorkspaceContextV1, WorktreeSelectorWireV1,
+    build_identity_v1, decode_item_record_many_input_v1, ensure_error_details_schema_v1,
     ensure_procedure_independent_result_schema_v1, validate_command_result_v2,
     validate_procedure_independent_result_v1,
 };
@@ -1708,6 +1708,10 @@ impl LocalFailure {
 
 enum RunResult {
     Response(Box<ResponseEnvelopeV2>),
+    StartResponse {
+        response: Box<ResponseEnvelopeV2>,
+        procedure_check_path: String,
+    },
     VersionSummary {
         name: &'static str,
         version: String,
@@ -1733,6 +1737,19 @@ enum RunResult {
         path: PathBuf,
         initial: String,
     },
+}
+
+fn daemon_response_result(command: &Command, response: ResponseEnvelopeV2) -> RunResult {
+    match command {
+        Command::Start(StartArgs {
+            procedure: Some(procedure),
+            ..
+        }) => RunResult::StartResponse {
+            response: Box::new(response),
+            procedure_check_path: procedure.clone(),
+        },
+        _ => RunResult::Response(Box::new(response)),
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2063,7 +2080,7 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
                         },
                     )?;
                     return request_daemon(&client, &request)
-                        .map(|response| RunResult::Response(Box::new(response)));
+                        .map(|response| daemon_response_result(&cli.command, response));
                 }
                 let terminal_disposed = if matches!(
                     preflight.facts.lifecycle.as_str(),
@@ -2154,7 +2171,7 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
                             },
                         )?;
                         return request_daemon(&client, &request)
-                            .map(|response| RunResult::Response(Box::new(response)));
+                            .map(|response| daemon_response_result(&cli.command, response));
                     }
                 }
             }
@@ -2274,7 +2291,7 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
             },
         )?;
         return request_daemon(&client, &request)
-            .map(|response| RunResult::Response(Box::new(response)));
+            .map(|response| daemon_response_result(&cli.command, response));
     }
 
     let (operation, mut payload) =
@@ -2302,7 +2319,7 @@ fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
             payload,
         },
     )?;
-    request_daemon(&client, &request).map(|response| RunResult::Response(Box::new(response)))
+    request_daemon(&client, &request).map(|response| daemon_response_result(&cli.command, response))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -5217,7 +5234,7 @@ fn procedure_validate_v2_diagnostics(
         Some(digest) if report.diagnostics().is_empty() => {
             format!("{source_path}: valid ({})\n", digest.as_str())
         }
-        _ => render_authoring_diagnostics(report.diagnostics()),
+        _ => render_authoring_diagnostics(report.diagnostics(), report.truncated(), report.total()),
     };
     let exit_code = i32::from(!report.valid());
     let Value::Object(mut result) = json!({
@@ -5494,7 +5511,8 @@ fn procedure_format_diagnostics(
             .map(|diagnostic| (AuthoringStage::Format, diagnostic))
             .collect(),
     );
-    let text = render_authoring_diagnostics(report.diagnostics());
+    let text =
+        render_authoring_diagnostics(report.diagnostics(), report.truncated(), report.total());
     let Value::Object(result) = json!({
         "schema": "podway.procedure-diagnostics-result/v1",
         "operation": "format",
@@ -5580,7 +5598,7 @@ fn procedure_vet_diagnostics(
     let text = if report.diagnostics().is_empty() {
         format!("{source_path}: graph vetting passed\n")
     } else {
-        render_authoring_diagnostics(report.diagnostics())
+        render_authoring_diagnostics(report.diagnostics(), report.truncated(), report.total())
     };
     let Value::Object(mut result) = json!({
         "schema": "podway.procedure-diagnostics-result/v1",
@@ -5747,7 +5765,8 @@ fn procedure_graph_diagnostics(
             .map(|diagnostic| (stage, diagnostic))
             .collect(),
     );
-    let text = render_authoring_diagnostics(report.diagnostics());
+    let text =
+        render_authoring_diagnostics(report.diagnostics(), report.truncated(), report.total());
     let Value::Object(mut result) = json!({
         "schema": "podway.procedure-diagnostics-result/v1",
         "operation": "graph",
@@ -5903,7 +5922,11 @@ fn execute_procedure_preview(file: &Path) -> Result<RunResult, LocalFailure> {
             .clone(),
         );
 
-        let mut text = render_authoring_diagnostics(report.diagnostics());
+        let mut text = render_authoring_diagnostics(
+            report.diagnostics(),
+            report.diagnostics_truncated(),
+            report.diagnostics_total(),
+        );
         let assessments = if details.goal_assessment_graph_node_ids().is_empty() {
             "none".to_owned()
         } else {
@@ -5975,7 +5998,11 @@ fn execute_procedure_preview(file: &Path) -> Result<RunResult, LocalFailure> {
         ));
         text
     } else {
-        render_authoring_diagnostics(report.diagnostics())
+        render_authoring_diagnostics(
+            report.diagnostics(),
+            report.diagnostics_truncated(),
+            report.diagnostics_total(),
+        )
     };
     let exit_code = i32::from(!report.admissible());
     Ok(local_result_v2(NAME, result, text, exit_code))
@@ -6207,7 +6234,7 @@ fn procedure_lint_diagnostics(
     let text = if report.diagnostics().is_empty() {
         no_lint_findings_summary(source_path)
     } else {
-        render_authoring_diagnostics(report.diagnostics())
+        render_authoring_diagnostics(report.diagnostics(), report.truncated(), report.total())
     };
     let Value::Object(mut result) = json!({
         "schema": "podway.procedure-diagnostics-result/v1",
@@ -6282,7 +6309,7 @@ fn execute_procedure_check(
     let text = if report.diagnostics().is_empty() {
         all_checks_passed_summary(&source_path)
     } else {
-        render_authoring_diagnostics(report.diagnostics())
+        render_authoring_diagnostics(report.diagnostics(), report.truncated(), report.total())
     };
     let Value::Object(mut result) = json!({
         "schema": "podway.procedure-diagnostics-result/v1",
@@ -6362,7 +6389,11 @@ fn execute_procedure_scaffold(template: &str) -> RunResult {
 /// The format is `<source_path>:<line>:<column> <severity> <code> <message>`, mirroring the
 /// position-first convention every editor's error parser already understands. The machine-readable
 /// form — locations, hints, and graph identities included — is the JSON result.
-fn render_authoring_diagnostics(diagnostics: &[podway_core::AuthoringDiagnostic]) -> String {
+fn render_authoring_diagnostics(
+    diagnostics: &[podway_core::AuthoringDiagnostic],
+    truncated: bool,
+    total: u32,
+) -> String {
     let mut text = String::new();
     for diagnostic in diagnostics {
         text.push_str(&format!(
@@ -6373,6 +6404,12 @@ fn render_authoring_diagnostics(diagnostics: &[podway_core::AuthoringDiagnostic]
             diagnostic.severity().as_str(),
             diagnostic.code().as_str(),
             diagnostic.message(),
+        ));
+    }
+    if truncated {
+        text.push_str(&format!(
+            "diagnostics truncated: showing {} of {total}\n",
+            diagnostics.len(),
         ));
     }
     text
@@ -7866,6 +7903,19 @@ fn render_result_with_clock_and_writers(
     match result {
         RunResult::Response(response) => render_response_v2_with_clock_and_writers(
             response,
+            None,
+            json_output,
+            quiet,
+            clock,
+            stdout,
+            stderr,
+        ),
+        RunResult::StartResponse {
+            response,
+            procedure_check_path,
+        } => render_response_v2_with_clock_and_writers(
+            response,
+            Some(procedure_check_path),
             json_output,
             quiet,
             clock,
@@ -7992,6 +8042,7 @@ fn render_clock_failure_to(failure: LocalFailure, stderr: &mut dyn Write) -> i32
 
 fn render_response_v2_with_clock_and_writers(
     response: &ResponseEnvelopeV2,
+    procedure_check_path: Option<&str>,
     json_output: bool,
     quiet: bool,
     clock: &impl LocalEnvelopeClock,
@@ -8007,10 +8058,9 @@ fn render_response_v2_with_clock_and_writers(
             ResponseEnvelopeV2::OutputV2(output) if !quiet => {
                 render_human_output_v2(output, stdout)
             }
-            ResponseEnvelopeV2::Error(error) => write_text_line(
-                stderr,
-                format_args!("error: {}: {}", error.code().as_str(), error.message()),
-            ),
+            ResponseEnvelopeV2::Error(error) => {
+                render_human_error_v2(error, procedure_check_path, stderr)
+            }
             ResponseEnvelopeV2::OutputV2(_) => Ok(()),
         };
         if let Err(failure) = rendered {
@@ -8023,6 +8073,49 @@ fn render_response_v2_with_clock_and_writers(
         ResponseEnvelopeV2::OutputV2(_) => 0,
         ResponseEnvelopeV2::Error(error) => i32::from(error.exit_code().get()),
     }
+}
+
+fn render_human_error_v2(
+    error: &ErrorEnvelopeV1,
+    procedure_check_path: Option<&str>,
+    stderr: &mut dyn Write,
+) -> Result<(), LocalFailure> {
+    write_text_line(
+        stderr,
+        format_args!("error: {}: {}", error.code().as_str(), error.message()),
+    )?;
+    if error.code().as_str() != "PROCEDURE_V2_SCHEMA_INVALID" {
+        return Ok(());
+    }
+
+    if let Some(codes) = error
+        .details()
+        .get("diagnostic_codes")
+        .and_then(Value::as_array)
+    {
+        let rendered = codes
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>()
+            .join(", ");
+        if !rendered.is_empty() {
+            write_text_line(stderr, format_args!("diagnostics: {rendered}"))?;
+        }
+    }
+    if let Some(path) = procedure_check_path {
+        let hint = render_preview_start_command(&[
+            "podway".to_owned(),
+            "procedure".to_owned(),
+            "check".to_owned(),
+            "--".to_owned(),
+            path.to_owned(),
+        ]);
+        write_text_line(
+            stderr,
+            format_args!("hint: {hint} for field-level diagnostics and remediation guidance"),
+        )?;
+    }
+    Ok(())
 }
 
 fn render_human_output_v2(
@@ -8658,9 +8751,10 @@ mod tests {
         Cli, Command, CommandNameV1, DaemonCommand, LocalEnvelopeClock, LocalFailure, OperationV1,
         OutputEnvelopeInputV3, OutputEnvelopeV3, ParseFailureCommandContext, RequestIdV1,
         ResponseEnvelopeV2, Rfc3339MillisV1, RunResult, WorkspaceTarget, build_identity_v1,
-        contains_check_result_projection_v1, daemon_payload, local_generated_at, local_result,
-        map_service_error, parse_failure_command_context, parse_timeout_millis,
-        probe_daemon_identity, probe_daemon_identity_with_runner,
+        contains_check_result_projection_v1, daemon_payload, daemon_response_result,
+        local_generated_at, local_result, map_service_error, parse_failure_command_context,
+        parse_timeout_millis, probe_daemon_identity, probe_daemon_identity_with_runner,
+        procedure_validate_v2_diagnostics, render_authoring_diagnostics,
         render_local_failure_with_clock_and_writers, render_result_with_clock_and_writers,
         resolve_daemon_executable, resolve_implicit_daemon_executable_from,
         resolve_installed_service_endpoint, service_outcome_result, service_status_projection,
@@ -9757,6 +9851,243 @@ mod tests {
             "1970-01-01T00:00:00.012Z"
         );
     }
+
+    #[test]
+    fn procedure_start_human_error_names_diagnostics_and_the_authoring_check() {
+        let response: ResponseEnvelopeV2 = serde_json::from_value(json!({
+            "schema": "podway.error/v1",
+            "request_id": "00000000-0000-4000-8000-000000000001",
+            "command": "session.start",
+            "generated_at": "2026-09-22T00:00:00.000Z",
+            "code": "PROCEDURE_V2_SCHEMA_INVALID",
+            "message": "The Procedure v2 document violates its closed schema.",
+            "retryable": false,
+            "exit_code": 1,
+            "details": {
+                "schema": "podway.v2-runtime-error-details/v1",
+                "kind": "PROCEDURE_V2_SCHEMA_INVALID",
+                "diagnostic_codes": [
+                    "GRAPH_NODE_COUNT_OUT_OF_RANGE",
+                    "OBSERVATION_STATIC_MEMBERS_BUDGET_EXCEEDED"
+                ],
+                "admission": {"admitted": false}
+            }
+        }))
+        .expect("fixture is a valid Procedure admission error");
+        let expected_json = serde_json::to_value(&response).expect("serialize fixture");
+        let cli = Cli::try_parse_from([
+            "podway",
+            "start",
+            "--procedure",
+            ".podway/procedures/review's workflow.yaml",
+            "--task",
+            "review",
+        ])
+        .unwrap();
+        let result = daemon_response_result(&cli.command, response);
+        let clock = FixedClock(UNIX_EPOCH + Duration::from_millis(12));
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        assert_eq!(
+            render_result_with_clock_and_writers(
+                &result,
+                false,
+                false,
+                &clock,
+                &mut stdout,
+                &mut stderr,
+            ),
+            1
+        );
+        assert!(stdout.is_empty());
+        assert_eq!(
+            String::from_utf8(stderr).unwrap(),
+            concat!(
+                "error: PROCEDURE_V2_SCHEMA_INVALID: The Procedure v2 document violates its closed schema.\n",
+                "diagnostics: GRAPH_NODE_COUNT_OUT_OF_RANGE, OBSERVATION_STATIC_MEMBERS_BUDGET_EXCEEDED\n",
+                "hint: podway procedure check -- '.podway/procedures/review'\\''s workflow.yaml' for field-level diagnostics and remediation guidance\n",
+            )
+        );
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        assert_eq!(
+            render_result_with_clock_and_writers(
+                &result,
+                true,
+                false,
+                &clock,
+                &mut stdout,
+                &mut stderr,
+            ),
+            1
+        );
+        assert!(stderr.is_empty());
+        assert_eq!(
+            serde_json::from_slice::<Value>(&stdout).expect("JSON output"),
+            expected_json,
+        );
+    }
+
+    #[test]
+    fn procedure_start_human_error_preserves_leading_dash_paths_and_custom_scope() {
+        fn response(code: &str) -> ResponseEnvelopeV2 {
+            let details = if code == "PROCEDURE_V2_SCHEMA_INVALID" {
+                json!({
+                    "schema": "podway.v2-runtime-error-details/v1",
+                    "kind": code,
+                    "diagnostic_codes": ["GRAPH_NODE_COUNT_OUT_OF_RANGE"],
+                    "admission": {"admitted": false}
+                })
+            } else {
+                json!({
+                    "schema": "podway.v2-runtime-error-details/v1",
+                    "kind": code,
+                    "admission": {"admitted": false}
+                })
+            };
+            serde_json::from_value(json!({
+                "schema": "podway.error/v1",
+                "request_id": "00000000-0000-4000-8000-000000000001",
+                "command": "session.start",
+                "generated_at": "2026-09-22T00:00:00.000Z",
+                "code": code,
+                "message": "Admission failed.",
+                "retryable": false,
+                "exit_code": 1,
+                "details": details
+            }))
+            .unwrap()
+        }
+
+        let custom = Cli::try_parse_from([
+            "podway",
+            "start",
+            "--procedure=--note.yaml",
+            "--task",
+            "review",
+        ])
+        .unwrap();
+        let result =
+            daemon_response_result(&custom.command, response("PROCEDURE_V2_SCHEMA_INVALID"));
+        let clock = FixedClock(UNIX_EPOCH + Duration::from_millis(12));
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        assert_eq!(
+            render_result_with_clock_and_writers(
+                &result,
+                false,
+                false,
+                &clock,
+                &mut stdout,
+                &mut stderr,
+            ),
+            1
+        );
+        assert_eq!(
+            String::from_utf8(stderr).unwrap(),
+            concat!(
+                "error: PROCEDURE_V2_SCHEMA_INVALID: Admission failed.\n",
+                "diagnostics: GRAPH_NODE_COUNT_OUT_OF_RANGE\n",
+                "hint: podway procedure check -- --note.yaml for field-level diagnostics and remediation guidance\n",
+            )
+        );
+
+        let preset = Cli::try_parse_from([
+            "podway",
+            "start",
+            "--preset",
+            "sw-dev-v2",
+            "--task",
+            "review",
+        ])
+        .unwrap();
+        let result =
+            daemon_response_result(&preset.command, response("PROCEDURE_V2_SCHEMA_INVALID"));
+        let mut stderr = Vec::new();
+        assert_eq!(
+            render_result_with_clock_and_writers(
+                &result,
+                false,
+                false,
+                &clock,
+                &mut Vec::new(),
+                &mut stderr,
+            ),
+            1
+        );
+        let rendered = String::from_utf8(stderr).unwrap();
+        assert!(rendered.contains("diagnostics: GRAPH_NODE_COUNT_OUT_OF_RANGE\n"));
+        assert!(!rendered.contains("procedure check"));
+
+        let result = daemon_response_result(&custom.command, response("GOAL_TRACKING_NOT_ENABLED"));
+        let mut stderr = Vec::new();
+        assert_eq!(
+            render_result_with_clock_and_writers(
+                &result,
+                false,
+                false,
+                &clock,
+                &mut Vec::new(),
+                &mut stderr,
+            ),
+            1
+        );
+        assert_eq!(
+            String::from_utf8(stderr).unwrap(),
+            "error: GOAL_TRACKING_NOT_ENABLED: Admission failed.\n"
+        );
+    }
+
+    #[test]
+    fn human_authoring_output_discloses_diagnostic_truncation() {
+        use podway_core::{AuthoringDiagnostic, AuthoringDiagnosticCode, SourceLocation};
+
+        let diagnostic = AuthoringDiagnostic::new(
+            AuthoringDiagnosticCode::AuthoringSchemaInvalid,
+            "workflow.yaml",
+            SourceLocation::document_start(),
+            "$",
+            "Invalid schema.",
+            "Correct the schema.",
+        );
+        let diagnostics = vec![diagnostic.clone(); 256];
+        let rendered = render_authoring_diagnostics(&diagnostics, true, 300);
+
+        assert!(rendered.ends_with("diagnostics truncated: showing 256 of 300\n"));
+        assert_eq!(rendered.matches("AUTHORING_SCHEMA_INVALID").count(), 256);
+
+        let complete = render_authoring_diagnostics(&diagnostics[..1], false, 1);
+        assert!(!complete.contains("diagnostics truncated:"));
+
+        let result =
+            procedure_validate_v2_diagnostics("workflow.yaml", None, vec![diagnostic; 300]);
+        let clock = FixedClock(UNIX_EPOCH + Duration::from_millis(12));
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        assert_eq!(
+            render_result_with_clock_and_writers(
+                &result,
+                true,
+                false,
+                &clock,
+                &mut stdout,
+                &mut stderr,
+            ),
+            1
+        );
+        assert!(stderr.is_empty());
+        let output: Value = serde_json::from_slice(&stdout).unwrap();
+        assert_eq!(output["result"]["diagnostics_truncated"], true);
+        assert_eq!(output["result"]["diagnostics_total"], 300);
+        assert!(
+            !String::from_utf8(stdout)
+                .unwrap()
+                .contains("diagnostics truncated: showing")
+        );
+    }
+
     #[test]
     fn broken_writers_return_the_client_exit_code_for_text_and_json() {
         let clock = FixedClock(UNIX_EPOCH + Duration::from_millis(12));

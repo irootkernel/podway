@@ -149,7 +149,7 @@ unexpected process transition. Automation must not branch on those messages.
 |---|---:|---:|---|
 | `BLOCKER_NOT_FOUND` | 1 | no | Blocker ID does not exist |
 | `BLOCKER_NOT_CURRENT` | 4 | yes | Blocker belongs to an old attempt |
-| `BLOCKER_LIMIT_REACHED` | 1 | no | Active attempt already has 1,024 open blockers |
+| `BLOCKER_LIMIT_REACHED` | 1 | no | Active attempt already has 64 open blockers |
 
 ## Job and idempotency errors
 
@@ -206,9 +206,16 @@ separately enumerates every validate, vet, graph-projection, and lint condition 
 including the mandatory stable codes
 `EVIDENCE_SOURCE_DOES_NOT_DOMINATE_CONSUMER`, `SKIPPABLE_EVIDENCE_SOURCE`,
 `EVIDENCE_SELECTOR_UNKNOWN_ITEM`, `READBACK_BUDGET_EXCEEDED`,
-`NEXT_STATIC_BUDGET_EXCEEDED`, `GRAPH_PROJECTION_BUDGET_EXCEEDED`,
+`NEXT_STATIC_BUDGET_EXCEEDED`, `OBSERVATION_STATIC_MEMBERS_BUDGET_EXCEEDED`,
+`SOURCE_PROJECTION_BUDGET_EXCEEDED`, `GRAPH_PROJECTION_BUDGET_EXCEEDED`,
 `REWORK_TARGET_NOT_DOMINATING`, and
 `NO_REACTIVATION_PATH`.
+
+Canonical-source projection diagnostics distinguish Unicode-character overflow
+from encoded-byte overflow in their human detail while retaining the same stable
+code. Bounded human diagnostic lists state when they are truncated and report the
+shown and total counts; machine output carries the existing structured
+`diagnostics_truncated` and `diagnostics_total` fields.
 
 `INTERNAL_ERROR` is never marked retryable. A client may make an out-of-band retry decision, but the daemon does not prove that an unexpected failure committed no mutation. When the daemon cannot reconstruct a mutation response after durable admission, `podway.internal-error-details/v1` uses the `ADMITTED_RESPONSE_RECONSTRUCTION_FAILED` discriminator, carries a diagnostic ID equal to the current response request ID, and retains the admitted job ID and workspace sequence. This classification avoids emitting an invalid `podway.workspace-recovery-details/v1` object, whose recovery contract permits only pre-admission failures.
 

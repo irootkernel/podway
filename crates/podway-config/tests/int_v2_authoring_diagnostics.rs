@@ -593,11 +593,20 @@ fn every_config_error_variant() -> Vec<(&'static str, ConfigError)> {
         // independent witness that the constant `procedure_v2_canonical` reports under and the one
         // `procedure_v2_diagnostics` switches on are the same string.
         (
-            "OutOfBounds at the projection bound",
+            "OutOfBounds at the projection character bound",
             ConfigError::OutOfBounds {
-                field: "canonical source projection",
+                field: "canonical source projection characters",
                 min: 1,
-                max: 131_072,
+                max: 1_048_576,
+                actual: 131_073,
+            },
+        ),
+        (
+            "OutOfBounds at the projection byte bound",
+            ConfigError::OutOfBounds {
+                field: "canonical source projection encoded bytes",
+                min: 1,
+                max: 1_048_576,
                 actual: 131_073,
             },
         ),
@@ -606,7 +615,7 @@ fn every_config_error_variant() -> Vec<(&'static str, ConfigError)> {
             ConfigError::OutOfBounds {
                 field: "graph projection",
                 min: 1,
-                max: 131_072,
+                max: 1_048_576,
                 actual: 131_073,
             },
         ),
@@ -845,7 +854,7 @@ fn v2grf003_graph_projection_budget_has_its_own_document_level_diagnostic() {
         &ConfigError::OutOfBounds {
             field: "graph projection",
             min: 1,
-            max: 131_072,
+            max: 1_048_576,
             actual: 131_073,
         },
         BASE,
@@ -869,6 +878,36 @@ fn v2grf003_graph_projection_budget_has_its_own_document_level_diagnostic() {
         "Split the graph or shorten its generated text to fit the graph projection budget."
     );
     assert_diagnostic_shape(&diagnostic);
+}
+
+#[test]
+fn v2gsc004_source_projection_diagnostics_preserve_the_measured_unit() {
+    for (field, unit) in [
+        ("canonical source projection characters", "characters"),
+        ("canonical source projection encoded bytes", "encoded bytes"),
+    ] {
+        let diagnostic = diagnose_error(
+            &ConfigError::OutOfBounds {
+                field,
+                min: 1,
+                max: 1_048_576,
+                actual: 1_048_577,
+            },
+            BASE,
+        );
+
+        assert_eq!(
+            diagnostic.code(),
+            AuthoringDiagnosticCode::SourceProjectionBudgetExceeded
+        );
+        assert_eq!(diagnostic.field(), "canonical source projection");
+        assert!(
+            diagnostic.message().contains(unit),
+            "diagnostic must name the measured unit {unit}: {}",
+            diagnostic.message(),
+        );
+        assert_diagnostic_shape(&diagnostic);
+    }
 }
 
 #[test]

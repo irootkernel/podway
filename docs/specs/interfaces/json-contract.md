@@ -61,9 +61,10 @@ complete bounded `option_guard_statuses`. Observation active items expose author
 `required`, derived `required_now`, and bounded condition status. Text and list
 statuses expose only derived counts, never recorded content.
 
-These fields are added to the unreleased `next-result/v3` and
-`observation-result/v3` families under the exact manifest compatibility gate.
-They do not create v4 families or widen a released peer silently. The closed
+These fields were incorporated into the served `next-result/v3` and
+`observation-result/v3` families under the exact manifest compatibility gate
+before peers could interoperate with a different contract set. They do not create
+v4 families or widen a manifest-matched peer silently. The closed
 `OPTION_GUARD_UNSATISFIED` details branch carries the selected option ID and the
 same bounded predicate-status shape.
 

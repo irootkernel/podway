@@ -37,7 +37,7 @@
 //! Numbers are integers only, which Canonical JSON v1 requires; the v2 model has no non-integer
 //! number.
 
-use podway_core::{SOURCE_PROJECTION_MAX_CHARACTERS, Sha256Digest};
+use podway_core::{MAX_PROCEDURE_DOCUMENT_BYTES, SOURCE_PROJECTION_MAX_CHARACTERS, Sha256Digest};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
@@ -49,7 +49,10 @@ use crate::{CanonicalJsonV1, ConfigError, ParsedProcedureV2, canonical_json_from
 /// Shared by the bound check below and by `procedure_v2_diagnostics`, which switches on it to emit
 /// `SOURCE_PROJECTION_BUDGET_EXCEEDED` rather than the generic schema code. Two literals could
 /// drift; one constant cannot.
-pub(crate) const CANONICAL_PROJECTION_FIELD: &str = "canonical source projection";
+pub(crate) const CANONICAL_PROJECTION_CHARACTERS_FIELD: &str =
+    "canonical source projection characters";
+pub(crate) const CANONICAL_PROJECTION_BYTES_FIELD: &str =
+    "canonical source projection encoded bytes";
 
 /// Builds the canonical bytes and digest of an already closed-reference-validated model.
 ///
@@ -57,16 +60,22 @@ pub(crate) const CANONICAL_PROJECTION_FIELD: &str = "canonical source projection
 /// exists: no earlier stage can measure a document that is only produced by canonicalization. The
 /// rejection is reported as `SOURCE_PROJECTION_BUDGET_EXCEEDED` (sections 11.1 and 11.2) by the
 /// production mapping in [`crate::procedure_v2_diagnostics::config_error_diagnostic`], which selects
-/// it by the [`CANONICAL_PROJECTION_FIELD`] constant this check reports under.
+/// it by the two canonical-projection field constants this check reports under.
 pub(crate) fn canonical_projection(
     parsed: &ParsedProcedureV2,
 ) -> Result<(CanonicalJsonV1, Sha256Digest), ConfigError> {
     let canonical_json = canonical_json_from_serializable(&canonical_document_value(parsed))?;
     crate::validate_count(
-        CANONICAL_PROJECTION_FIELD,
+        CANONICAL_PROJECTION_CHARACTERS_FIELD,
         canonical_json.as_str().chars().count(),
         1,
         SOURCE_PROJECTION_MAX_CHARACTERS,
+    )?;
+    crate::validate_count(
+        CANONICAL_PROJECTION_BYTES_FIELD,
+        canonical_json.as_str().len(),
+        1,
+        MAX_PROCEDURE_DOCUMENT_BYTES,
     )?;
     let digest = Sha256Digest::new(format!(
         "sha256:{:x}",

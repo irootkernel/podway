@@ -778,7 +778,7 @@ fn constructor_bounds_fail_closed_during_mapping() {
 }
 
 #[test]
-fn v2_does_not_perform_semantic_or_canonical_validation() {
+fn v2_does_not_perform_semantic_validation() {
     let yaml = concat!(
         "schema: podway.procedure/v2\n",
         "id: semantic-deferred\n",
@@ -805,45 +805,6 @@ fn v2_does_not_perform_semantic_or_canonical_validation() {
         "      next: start\n",
     );
     v2(yaml).expect("syntactically valid but semantically invalid still maps");
-
-    // The canonical half of the same claim: parsing also defers the canonical projection budget
-    // (dossier V2ACC-002) to validation, so a closed-reference-valid document that is merely
-    // oversized still parses, and only `validate_procedure_v2` rejects it.
-    //
-    // Reuses `int_v2_procedure_canonical.rs`'s linear filler-item technique — maximal `choice`
-    // items whose canonical size scales linearly with item count — sized generously past the
-    // budget rather than pinned to its exact edge.
-    fn oversized_projection_document(count: usize) -> String {
-        let choices: String = (0..32)
-            .map(|index| format!("          - \"{:c<118}{index:02}\"\n", ""))
-            .collect();
-        let items: String = (0..count)
-            .map(|index| {
-                format!(
-                    "      - id: i{index:02}\n        type: choice\n        prompt: \"{}\"\n        help: \"{}\"\n        required: true\n        choices:\n{choices}",
-                    "p".repeat(300),
-                    "h".repeat(1_000),
-                )
-            })
-            .collect();
-        format!(
-            "schema: podway.procedure/v2\nid: projection\nversion: \"1\"\nname: Projection\npurpose: Exceed the canonical projection budget.\nnode_definitions:\n  bulk:\n    type: action\n    title: Bulk\n    intent: Hold the filler items.\n    items:\n{items}graph:\n  entry: n\n  nodes:\n    - id: n\n      use: bulk\n      terminal: true\n",
-        )
-    }
-
-    let oversized = oversized_projection_document(40);
-    let parsed =
-        v2(&oversized).expect("closed-reference-valid but oversized document still parses");
-    assert!(
-        matches!(
-            validate_procedure_v2(parsed),
-            Err(ConfigError::OutOfBounds {
-                field: "canonical source projection",
-                ..
-            })
-        ),
-        "closed-reference-valid but oversized document must fail validation on the projection budget"
-    );
 }
 
 #[test]
@@ -900,16 +861,16 @@ fn v2_procedure_description_accepts_at_limit_and_rejects_one_over() {
 }
 
 #[test]
-fn v2_node_definitions_count_accepts_64_and_rejects_65() {
-    let sixty_four = many_action_node_definitions(64);
-    v2(&v2_doc(&sixty_four, &terminal_using("a0")))
-        .expect("64 node definitions at the ceiling parse");
+fn v2_node_definitions_count_accepts_1024_and_rejects_1025() {
+    let at_limit = many_action_node_definitions(1_024);
+    v2(&v2_doc(&at_limit, &terminal_using("a0")))
+        .expect("1024 node definitions at the ceiling parse");
 
-    let sixty_five = many_action_node_definitions(65);
+    let one_over = many_action_node_definitions(1_025);
     assert!(matches!(
-        err(&v2_doc(&sixty_five, &terminal_using("a0"))),
+        err(&v2_doc(&one_over, &terminal_using("a0"))),
         ConfigError::OutOfBounds { field, actual, .. }
-            if field == "node_definitions" && actual == 65
+            if field == "node_definitions" && actual == 1_025
     ));
 }
 

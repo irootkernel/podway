@@ -76,4 +76,8 @@ This ADR is adopted authority, not a description of shipped behavior. At accepta
 - Adding the literal `max_total_length` default rotates the canonical digest of every Procedure that declares a list item, exactly once. A Procedure with no list item keeps its digest, so `small-change-v2` is unaffected while `bug-fix-v2` and `sw-dev-v2` are re-pinned in the owning task. Stored sessions keep their stored canonical snapshots, and digest-pinned automation receives `DIGEST_CONFIRMATION_REQUIRED` until it re-pins.
 - A maximal list is reachable through bounded `item.add` mutations but cannot be replaced atomically in one `item.record_many` frame, so a crash between additions can leave a valid partial list.
 - Observation consumers that read history from the observation status member move to `session.status --verbose`; current progression guidance and active-item mutation information remain self-contained in observation.
-- Response budgets become a composition of named allocations rather than two numbers, so every future surface added to `next` or `observe` must claim its allocation explicitly instead of consuming slack.
+- Response budgets become a composition of explicit bounded charges rather than two numbers. A
+  future surface added to `next` or `observe` must either receive a named reservation or contribute
+  a measured dynamic charge to a published aggregate; it must never consume unmeasured slack.
+  [ADR-0037](0037-bound-procedure-graphs-at-1024-nodes.md) applies the latter rule to complete
+  graph-counter arrays while preserving the fixed response frames.

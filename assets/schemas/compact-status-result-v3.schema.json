@@ -28,7 +28,7 @@
     "goal_revision": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 },
     "latest_goal_outcome": { "enum": ["achieved", "not_achieved", "superseded"] },
     "trace_length": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
-    "counters": { "type": "array", "maxItems": 64, "items": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/counter" } },
+    "counters": { "type": "array", "maxItems": 1024, "items": { "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/counter" } },
     "items": {
       "type": "array", "maxItems": 128,
       "items": {

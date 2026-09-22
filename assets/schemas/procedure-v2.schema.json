@@ -43,7 +43,7 @@
     "node_definitions": {
       "type": "object",
       "minProperties": 1,
-      "maxProperties": 64,
+      "maxProperties": 1024,
       "propertyNames": {
         "$ref": "#/$defs/identifier"
       },
@@ -352,7 +352,7 @@
         "nodes": {
           "type": "array",
           "minItems": 1,
-          "maxItems": 64,
+          "maxItems": 1024,
           "items": {
             "$ref": "#/$defs/graph_node"
           }

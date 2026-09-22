@@ -39,8 +39,7 @@ use podway_core::{
     MAX_MUTATION_TEMPLATE_WINDOW_V2,
     MAX_OBSERVATION_ACTIVE_ITEM_BYTES_V2,
     MAX_OBSERVATION_CHOICE_WINDOW_V2,
-    MAX_OBSERVATION_GUIDANCE_BYTES_V2,
-    MAX_OBSERVATION_STATUS_BYTES_V2,
+    MAX_OBSERVATION_STATIC_MEMBERS_BYTES_V2,
     MAX_OBSERVATION_TEMPLATE_BYTES_V2,
     MAX_SUGGESTION_WINDOW_V2,
     PROCEDURE_SCHEMA_V2,
@@ -767,13 +766,14 @@ pub fn project_graph_observation_v1(
         Value::Null
     };
 
-    // Status and guidance are single structured members, not windows: there is no honest way to
-    // trim half a status or half a guidance object, and their own collections are already
-    // bounded. So they are measured rather than cut, and a member that outgrows its allocation is
-    // an inconsistency in the composition rather than something to silently ship over budget.
+    // Status and guidance are single structured members, not windows. Both carry the complete
+    // graph-wide counter set, so they share one allocation: long graphs spend more on counters,
+    // while content-rich active placements spend more on guidance. Neither member is trimmed.
     let status = Value::Object(status);
-    admit_member_within_bytes_v1(&status, MAX_OBSERVATION_STATUS_BYTES_V2)?;
-    admit_member_within_bytes_v1(&guidance, MAX_OBSERVATION_GUIDANCE_BYTES_V2)?;
+    admit_members_within_bytes_v1(
+        [&status, &guidance],
+        MAX_OBSERVATION_STATIC_MEMBERS_BYTES_V2,
+    )?;
 
     let mut result = Map::new();
     result.insert("schema".to_owned(), json!("podway.observation-result/v3"));
@@ -829,15 +829,21 @@ pub fn project_graph_observation_v1(
     Ok(result)
 }
 
-/// Measures one whole observation member against its allocation.
+/// Measures complete observation members against their shared allocation.
 ///
 /// A member is not a window: there is no honest way to return half a status or half a guidance
 /// object, and their own collections are already bounded. So a member that outgrows its allocation
 /// is an inconsistency in the composition rather than something to ship over budget.
-fn admit_member_within_bytes_v1(member: &Value, allocation: usize) -> Result<(), GraphViewErrorV2> {
-    if serialized_bytes_v1(member) > allocation {
+fn admit_members_within_bytes_v1<const N: usize>(
+    members: [&Value; N],
+    allocation: usize,
+) -> Result<(), GraphViewErrorV2> {
+    let charged = members.iter().fold(0usize, |total, member| {
+        total.saturating_add(serialized_bytes_v1(member))
+    });
+    if charged > allocation {
         return Err(GraphViewErrorV2::InconsistentState(
-            "an observation member exceeded its published byte allocation",
+            "the complete observation members exceeded their shared byte allocation",
         ));
     }
     Ok(())
@@ -2350,15 +2356,24 @@ fn counters(state: &GraphSessionStateV2) -> Value {
     if state.trace().lifecycle() == SessionLifecycle::Prepared {
         return Value::Array(Vec::new());
     }
+    encode_graph_counters_v2(state.counters().iter().map(|counter| {
+        (
+            counter.graph_node_id().as_str(),
+            counter.attempt_count(),
+            counter.rework_traversal_count(),
+        )
+    }))
+}
+
+fn encode_graph_counters_v2<'a>(counters: impl IntoIterator<Item = (&'a str, u64, u64)>) -> Value {
     Value::Array(
-        state
-            .counters()
-            .iter()
-            .map(|counter| {
+        counters
+            .into_iter()
+            .map(|(graph_node_id, attempt_count, rework_traversal_count)| {
                 json!({
-                    "graph_node_id": counter.graph_node_id().as_str(),
-                    "attempt_count": counter.attempt_count(),
-                    "rework_traversal_count": counter.rework_traversal_count(),
+                    "graph_node_id": graph_node_id,
+                    "attempt_count": attempt_count,
+                    "rework_traversal_count": rework_traversal_count,
                 })
             })
             .collect(),
@@ -3694,6 +3709,24 @@ fn civil_date_from_unix_days(days: u64) -> (i128, i128, i128) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn v2gsc004_production_counter_encoder_matches_the_shared_maximum_charge() {
+        let identifiers = (0..podway_core::MAX_GRAPH_NODES_PER_PROCEDURE_V2)
+            .map(|index| format!("{}{:04}", "n".repeat(60), index))
+            .collect::<Vec<_>>();
+        let counters = encode_graph_counters_v2(
+            identifiers
+                .iter()
+                .map(|identifier| (identifier.as_str(), u64::MAX, u64::MAX)),
+        );
+        let encoded = serde_json::to_vec(&counters).unwrap();
+        let charged = podway_core::maximum_graph_counter_array_json_bytes_v2(
+            identifiers.iter().map(String::len),
+        );
+        assert_eq!(encoded.len(), charged);
+        assert_eq!(charged, 172_033);
+    }
+
     fn entry(width: usize) -> Value {
         json!({ "id": "x".repeat(width) })
     }
@@ -3722,22 +3755,33 @@ mod tests {
     }
 
     #[test]
-    fn v2scl005_an_observation_member_over_its_allocation_fails_closed() {
-        // Status and guidance are measured rather than cut, and the composition makes the breach
-        // unreachable, so this drives the comparison directly: a member over its allocation must
-        // refuse rather than ship, because shipping it would break the frame proof silently.
-        let oversized = json!({ "padding": "x".repeat(MAX_OBSERVATION_STATUS_BYTES_V2) });
+    fn v2gsc002_complete_observation_members_over_their_shared_allocation_fail_closed() {
+        let oversized = json!({ "padding": "x".repeat(MAX_OBSERVATION_STATIC_MEMBERS_BYTES_V2) });
         assert!(matches!(
-            admit_member_within_bytes_v1(&oversized, MAX_OBSERVATION_STATUS_BYTES_V2),
+            admit_members_within_bytes_v1(
+                [&oversized, &Value::Null],
+                MAX_OBSERVATION_STATIC_MEMBERS_BYTES_V2
+            ),
             Err(GraphViewErrorV2::InconsistentState(_))
         ));
         assert!(
-            admit_member_within_bytes_v1(
-                &json!({ "padding": "x" }),
-                MAX_OBSERVATION_STATUS_BYTES_V2
+            admit_members_within_bytes_v1(
+                [&json!({ "padding": "x" }), &Value::Null],
+                MAX_OBSERVATION_STATIC_MEMBERS_BYTES_V2
             )
             .is_ok()
         );
+
+        // Each member fits independently. Their measured sum is accepted at equality and rejected
+        // exactly one byte over, proving the helper cannot regress to max(member) or `>=`.
+        let left = Value::String("x".repeat(40));
+        let right = Value::String("y".repeat(40));
+        let exact = serialized_bytes_v1(&left) + serialized_bytes_v1(&right);
+        assert!(admit_members_within_bytes_v1([&left, &right], exact).is_ok());
+        assert!(matches!(
+            admit_members_within_bytes_v1([&left, &right], exact - 1),
+            Err(GraphViewErrorV2::InconsistentState(_))
+        ));
     }
 
     #[test]

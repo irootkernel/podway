@@ -3,6 +3,10 @@
 `podway` is the only supported user and automation CLI. It discovers the owning
 Git worktree, communicates with `podwayd` for runtime operations, and emits either
 human-readable text or one JSON document. It never writes SQLite directly.
+Human error rendering may add invocation-local context, such as the exact
+Procedure path supplied to `start`, and a visible truncation summary after a
+bounded diagnostic window. Those additions are guidance only. JSON mode emits
+only the closed machine envelope and is the sole automation contract.
 
 ## Command groups
 
@@ -91,6 +95,9 @@ Built-in catalog commands expose only `analysis-v2`, `bug-fix-v2`,
 path, an optional expected Procedure digest for file sources, a nonempty task
 title, and the documented existing-session policy and dry-run controls. Start creates a
 prepared session and never accepts or creates initial goal state.
+When a custom Procedure fails with `PROCEDURE_V2_SCHEMA_INVALID`, human output points
+`procedure check --` at that exact path using shell-safe rendering; JSON output remains the
+unchanged error envelope. Other admission failures retain their code-specific remediation.
 
 `begin` accepts optional initial goal inputs and actor attribution, fences the
 prepared session, and atomically creates the first running attempt. Goal input is

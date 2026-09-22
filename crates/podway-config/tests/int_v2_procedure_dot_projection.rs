@@ -125,8 +125,8 @@ fn json_over_dot_under_source() -> String {
     let option_ids = (0..8)
         .map(|index| format!("option-{index:02}-{}", "x".repeat(54)))
         .collect::<Vec<_>>();
-    let node_ids = (0..63)
-        .map(|index| format!("node-{index:02}-{}", "x".repeat(56)))
+    let node_ids = (0..511)
+        .map(|index| format!("node-{index:04}-{}", "x".repeat(54)))
         .collect::<Vec<_>>();
     let terminal_id = format!("terminal-{}", "x".repeat(55));
     let options = option_ids

@@ -16,7 +16,8 @@
 //!   iterating model slices and ordered maps, and the collected vector is *stably* sorted by
 //!   `(line, column, code, field)`. Two lints of the same document produce byte-identical output.
 //! - **Nothing is unbounded.** The pairwise rules — indistinguishable labels, duplicated
-//!   definitions, confusable identifiers — are quadratic in a 64-node, 64-definition model and are
+//!   definitions, confusable identifiers — are quadratic in a bounded 1,024-node,
+//!   1,024-definition model and are
 //!   capped at [`PAIRWISE_RULE_MAX_FINDINGS`] findings each, so a pathological document produces a
 //!   report a human can still read.
 //!
@@ -65,7 +66,7 @@ const WEAK_GUIDANCE_MIN_WORDS: usize = 2;
 /// the entry placement plus two more levels.
 const GOAL_CLARIFICATION_PREFIX_NODES: u32 = 3;
 /// The greatest nearest-terminal distance a session-goal assessment may sit at before it is placed
-/// long before the work it assesses. The graph is capped at 64 nodes, so this is a real prefix.
+/// long before the work it assesses. The graph is bounded, so this is a real prefix.
 const GOAL_ASSESSMENT_TERMINAL_DISTANCE: u32 = 4;
 /// The fewest manual rework targets that can count as broad, combined with covering at least half
 /// the graph.

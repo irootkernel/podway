@@ -26,7 +26,9 @@ use podway_core::{
     SourceLocation,
 };
 
-use crate::procedure_v2_canonical::CANONICAL_PROJECTION_FIELD;
+use crate::procedure_v2_canonical::{
+    CANONICAL_PROJECTION_BYTES_FIELD, CANONICAL_PROJECTION_CHARACTERS_FIELD,
+};
 use crate::procedure_v2_graph_projection::GRAPH_PROJECTION_FIELD;
 use crate::procedure_v2_parse::{
     ACTION_OUTCOME_ABSENT_REASON, ACTION_OUTCOME_BOTH_REASON, DECISION_SKIP_REASON,
@@ -403,13 +405,18 @@ fn classify(error: &ConfigError) -> Classification<'_> {
         ConfigError::InvalidScalar { field, value, .. } => {
             Classification::schema_invalid(authored_field(field)).with_value(value.as_str())
         }
-        // The canonical projection bound is a document-level budget, not an authored field, so it
-        // reports the document root. `CANONICAL_PROJECTION_FIELD` is shared with the bound check
-        // itself so the two cannot drift.
-        ConfigError::OutOfBounds { field, .. } if *field == CANONICAL_PROJECTION_FIELD => {
+        // The canonical projection is generated rather than authored, but naming its measured
+        // surface and unit is more actionable than reporting the document root. The two field
+        // constants are shared with the bound checks so classification cannot drift from them.
+        ConfigError::OutOfBounds { field, .. }
+            if matches!(
+                *field,
+                CANONICAL_PROJECTION_CHARACTERS_FIELD | CANONICAL_PROJECTION_BYTES_FIELD
+            ) =>
+        {
             Classification {
                 code: Code::SourceProjectionBudgetExceeded,
-                field: None,
+                field: Some("canonical source projection"),
                 shape: None,
                 value: None,
             }
@@ -743,7 +750,10 @@ pub(crate) const fn diagnostic_hint(code: AuthoringDiagnosticCode) -> &'static s
             "Name fewer items in the evidence selector, so fewer previews publish a continuation token."
         }
         Code::NextFrameBudgetExceeded => {
-            "Reduce whichever allocation this node charges most: node text, decision sources, selected items, or previews."
+            "Reduce the graph's placement count or identifier length, or whichever placement allocation charges most."
+        }
+        Code::ObservationStaticMembersBudgetExceeded => {
+            "Reduce the graph's placement count or identifier length, or shorten static guidance, decision records, or selected evidence metadata."
         }
         Code::NextStaticBudgetExceeded => {
             "Shorten the node's instructions, prompts, and help text."

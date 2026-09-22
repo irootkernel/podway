@@ -1,36 +1,35 @@
 {
   "schema": "podway.v2-fixture-recipe/v1",
-  "fixture_class": "maximum-size",
+  "fixture_class": "boundary-rich",
   "evidence_level": "production-serialization",
   "implementation_status": "automated",
   "production_proof_required": false,
   "frame_bytes": 1048576,
-  "charged_bytes": 1015808,
-  "headroom_bytes": 32768,
   "components": {
-    "ENVELOPE_RESERVE": 65536,
+    "NEXT_SERIALIZATION_RESERVE": 49152,
     "NEXT_STATIC_BUDGET": 262144,
-    "READBACK_BUDGET": 524288,
-    "GOAL_DISPLAY_MAX": 73728,
-    "BLOCKER_WINDOW_MAX": 49152,
-    "COUNTERS_MAX": 40960
+    "DECISION_RECORD_BUDGET": 270336,
+    "READBACK_BUDGET": 221184,
+    "EVIDENCE_PREVIEW_BUDGET": 180224,
+    "PAGE_TOKEN_BUDGET": 65536,
+    "OBSERVATION_STATIC_MEMBERS_BUDGET": 786432
   },
   "proof_acceptance_id": "V2ACC-078",
   "proof_requirement_id": "V2PAY-002",
   "production_proof": {
     "kind": "cargo-test",
     "path": "crates/podway-daemon/tests/int_v2rel002_maximum_next.rs",
-    "function": "v2rel002_admitted_maximum_next_uses_the_production_projector_and_frame",
-    "command": "cargo test -p podway-daemon --test int_suite int_v2rel002_maximum_next::v2rel002_admitted_maximum_next_uses_the_production_projector_and_frame --locked -- --exact"
+    "function": "v2rel002_admitted_boundary_rich_next_uses_the_production_projector_and_frame",
+    "command": "cargo test -p podway-daemon --test int_suite int_v2rel002_maximum_next::v2rel002_admitted_boundary_rich_next_uses_the_production_projector_and_frame --locked -- --exact"
   },
   "construction": [
-    "materialize every applicable next-result-v2 field exactly once while the schema and payload matrix exhaustively assign every conditional field",
-    "admit and vet a maximum Procedure v2, construct a consistent GraphSessionStateV2, and project the complete next result through project_graph_next_v2",
+    "materialize every applicable next-result-v3 field exactly once while the schema and payload matrix exhaustively assign every conditional field",
+    "admit and vet a boundary-rich Procedure v2, construct a consistent GraphSessionStateV2, and project the complete next result through project_graph_next_v2",
     "serialize the projected next result directly in one podway.output/v3 envelope",
-    "fill procedure-static content to NEXT_STATIC_BUDGET",
-    "fill read-back to READBACK_BUDGET",
+    "place procedure-static content immediately below NEXT_STATIC_BUDGET",
+    "keep read-back at or below READBACK_BUDGET",
     "include 16 criteria and their runtime suggestion argv",
-    "include 64 blockers, 64 graph-node counters, and maximal warnings",
+    "include 64 blockers, 64 graph-node counters, and maximal warnings; this recipe does not claim the independent 1024-node graph maximum",
     "use escape-heavy control characters for the six-byte accounting factor"
   ],
   "verified_assertions": [

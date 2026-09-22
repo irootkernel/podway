@@ -85,7 +85,7 @@
     },
     "counters": {
       "type": "array",
-      "maxItems": 64,
+      "maxItems": 1024,
       "items": {
         "$ref": "urn:podway:schema:v2-result-components:v1#/$defs/counter"
       }

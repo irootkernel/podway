@@ -1347,7 +1347,7 @@ const DIMENSIONS_COVERED_ELSEWHERE: &[(&str, &str)] = &[
     ),
     (
         "node definitions",
-        "int_v2_procedure.rs::v2_node_definitions_count_accepts_64_and_rejects_65",
+        "int_v2_procedure.rs::v2_node_definitions_count_accepts_1024_and_rejects_1025",
     ),
 ];
 
@@ -1511,9 +1511,9 @@ fn document_bound_cases() -> Vec<BoundCase> {
         ),
         bound_case(
             "graph nodes",
-            64,
-            65,
-            bound_violation("graph node count must be between one and 64"),
+            1_024,
+            1_025,
+            bound_violation("graph node count must be between one and 1024"),
             |count| {
                 let nodes: String = (0..count)
                     .map(|index| {
@@ -1999,8 +1999,9 @@ fn every_fixture_bound_dimension_is_exercised_here_or_named_elsewhere() {
     );
 }
 
-/// ADR-0024 keeps one scale envelope in `podway-core` and requires the canonical schema, which
-/// cannot import a Rust constant, to be proved equal to it rather than merely reviewed.
+/// ADR-0024 and ADR-0037 keep one scale envelope in `podway-core` and require the canonical and
+/// public result schemas, which cannot import Rust constants, to be proved equal to it rather than
+/// merely reviewed.
 #[test]
 fn v2scl003_procedure_schema_bounds_equal_the_domain_scale_envelope() {
     let schema: serde_json::Value = serde_json::from_str(include_str!(
@@ -2057,4 +2058,163 @@ fn v2scl003_procedure_schema_bounds_equal_the_domain_scale_envelope() {
         defs["items"]["maxItems"],
         podway_core::MAX_ITEMS_PER_DEFINITION_V2
     );
+    assert_eq!(
+        schema["properties"]["node_definitions"]["maxProperties"],
+        podway_core::MAX_NODE_DEFINITIONS_PER_PROCEDURE_V2
+    );
+    assert_eq!(
+        defs["graph"]["properties"]["nodes"]["maxItems"],
+        podway_core::MAX_GRAPH_NODES_PER_PROCEDURE_V2
+    );
+    assert_eq!(
+        defs["decision_placement"]["properties"]["routes"]["maxProperties"],
+        podway_core::MAX_ROUTES_PER_DECISION_V2
+    );
+
+    let diagnostic_schema: Value = serde_json::from_str(include_str!(
+        "../../../assets/schemas/authoring-diagnostic-v1.schema.json"
+    ))
+    .expect("authoring diagnostic schema parses");
+    assert_eq!(
+        diagnostic_schema["properties"]["related_graph_node_ids"]["maxItems"],
+        podway_core::MAX_AUTHORING_DIAGNOSTIC_RELATED_GRAPH_NODES
+    );
+
+    for preview_schema in [
+        include_str!("../../../assets/schemas/procedure-preview-result-v1.schema.json"),
+        include_str!("../../../assets/schemas/procedure-preview-result-v2.schema.json"),
+    ] {
+        let preview: Value = serde_json::from_str(preview_schema).expect("preview schema parses");
+        for field in [
+            "definition_count",
+            "graph_node_count",
+            "action_node_count",
+            "decision_node_count",
+            "cycle_count",
+            "skippable_node_count",
+        ] {
+            assert_eq!(
+                preview["$defs"]["summary"]["properties"][field]["maximum"],
+                podway_core::MAX_GRAPH_NODES_PER_PROCEDURE_V2,
+                "preview summary {field} must follow the graph scale envelope"
+            );
+        }
+        assert_eq!(
+            preview["$defs"]["summary"]["properties"]["route_count"]["maximum"],
+            podway_core::MAX_GRAPH_EDGES_PER_PROCEDURE_V2
+        );
+        assert_eq!(
+            preview["$defs"]["summary"]["properties"]["evidence_reference_count"]["maximum"],
+            podway_core::MAX_EVIDENCE_REFERENCES_PER_PROCEDURE_V2
+        );
+        assert_eq!(
+            preview["$defs"]["summary"]["properties"]["manual_rework_target_count"]["maximum"],
+            64
+        );
+        assert_eq!(
+            preview["properties"]["goal_assessment_graph_node_ids"]["maxItems"],
+            podway_core::MAX_GRAPH_NODES_PER_PROCEDURE_V2
+        );
+        assert_eq!(
+            preview["properties"]["mermaid"]["maxLength"],
+            podway_core::SOURCE_PROJECTION_MAX_CHARACTERS
+        );
+        assert_eq!(
+            preview["$defs"]["graph"]["properties"]["nodes"]["maxItems"],
+            podway_core::MAX_GRAPH_NODES_PER_PROCEDURE_V2
+        );
+        assert_eq!(
+            preview["$defs"]["graph"]["properties"]["terminal_graph_node_ids"]["maxItems"],
+            podway_core::MAX_GRAPH_NODES_PER_PROCEDURE_V2
+        );
+        assert_eq!(
+            preview["$defs"]["graph"]["properties"]["edges"]["maxItems"],
+            podway_core::MAX_GRAPH_EDGES_PER_PROCEDURE_V2
+        );
+    }
+
+    for graph_schema in [
+        include_str!("../../../assets/schemas/procedure-graph-result-v1.schema.json"),
+        include_str!("../../../assets/schemas/procedure-graph-result-v2.schema.json"),
+    ] {
+        let graph: Value = serde_json::from_str(graph_schema).expect("graph schema parses");
+        assert_eq!(
+            graph["properties"]["projection"]["maxLength"],
+            podway_core::SOURCE_PROJECTION_MAX_CHARACTERS
+        );
+    }
+    let graph_v2: Value = serde_json::from_str(include_str!(
+        "../../../assets/schemas/procedure-graph-result-v2.schema.json"
+    ))
+    .expect("graph v2 schema parses");
+    assert_eq!(
+        graph_v2["properties"]["delegated_placement_count"]["maximum"],
+        podway_core::MAX_GRAPH_NODES_PER_PROCEDURE_V2
+    );
+    assert_eq!(
+        graph_v2["properties"]["delegated_placements"]["maxItems"],
+        podway_core::MAX_GRAPH_NODES_PER_PROCEDURE_V2
+    );
+
+    let source_result: Value = serde_json::from_str(include_str!(
+        "../../../assets/schemas/procedure-source-result-v1.schema.json"
+    ))
+    .expect("source result schema parses");
+    assert_eq!(
+        source_result["properties"]["document"]["maxLength"],
+        podway_core::SOURCE_PROJECTION_MAX_CHARACTERS
+    );
+
+    for (result_schema, counter_pointer) in [
+        (
+            include_str!("../../../assets/schemas/next-result-v3.schema.json"),
+            "/properties/counters/maxItems",
+        ),
+        (
+            include_str!("../../../assets/schemas/next-result-v4.schema.json"),
+            "/properties/counters/maxItems",
+        ),
+        (
+            include_str!("../../../assets/schemas/status-result-v3.schema.json"),
+            "/properties/counters/maxItems",
+        ),
+        (
+            include_str!("../../../assets/schemas/status-result-v4.schema.json"),
+            "/properties/counters/maxItems",
+        ),
+        (
+            include_str!("../../../assets/schemas/compact-status-result-v3.schema.json"),
+            "/properties/counters/maxItems",
+        ),
+        (
+            include_str!("../../../assets/schemas/compact-status-result-v4.schema.json"),
+            "/properties/counters/maxItems",
+        ),
+        (
+            include_str!("../../../assets/schemas/v2-result-components-v3.schema.json"),
+            "/$defs/observationStatus/properties/counters/maxItems",
+        ),
+        (
+            include_str!("../../../assets/schemas/observation-result-v4.schema.json"),
+            "/$defs/delegationObservationStatus/properties/counters/maxItems",
+        ),
+    ] {
+        let result: Value = serde_json::from_str(result_schema).expect("result schema parses");
+        assert_eq!(
+            result.pointer(counter_pointer),
+            Some(&json!(podway_core::MAX_GRAPH_NODES_PER_PROCEDURE_V2))
+        );
+    }
+
+    for frozen_schema in [
+        include_str!("../../../assets/schemas/next-result-v2.schema.json"),
+        include_str!("../../../assets/schemas/status-result-v2.schema.json"),
+        include_str!("../../../assets/schemas/compact-status-result-v2.schema.json"),
+    ] {
+        let frozen: Value = serde_json::from_str(frozen_schema).expect("frozen schema parses");
+        assert_eq!(
+            frozen["properties"]["counters"]["maxItems"], 64,
+            "released v2 result families retain their frozen counter bound"
+        );
+    }
 }

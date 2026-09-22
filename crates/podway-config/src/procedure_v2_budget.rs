@@ -1,8 +1,10 @@
 //! Conservative Procedure v2 `next` component accounting.
 //!
-//! ADR-0024 closes `session.next` at a fixed set of named byte allocations that sum to the 1 MiB
-//! frame. This module charges the five of them whose size depends on one graph placement; the
-//! sixth is the serialization reserve, which no placement can spend. It mirrors the canonical
+//! ADR-0024 closes `session.next` at a fixed set of named byte allocations inside the 1 MiB frame.
+//! This module charges the five placement-local allocations plus the complete graph-wide counter
+//! array against the frame after its serialization reserve. It separately proves that observation
+//! can carry preview-stripped guidance and compact status, including both complete counter copies,
+//! inside their shared allocation. It mirrors the canonical
 //! `next-result-v3` and shared result-component schemas: a bounded string costs six bytes per
 //! Unicode scalar, every object field reserves 64 bytes, and every array element reserves another
 //! eight bytes. All arithmetic saturates so future bound increases cannot turn a resource
@@ -41,11 +43,11 @@ pub const PAGE_TOKEN_BUDGET: u64 = 64 * 1_024;
 
 /// Bytes reserved for serialization and the outer envelope.
 ///
-/// No placement charges against this: it exists so the five charged allocations plus the envelope
-/// they travel in provably fit the frame.
+/// No placement charges against this. The five placement-local maxima are independent ceilings;
+/// their aggregate plus counters must fit the remaining frame payload.
 pub const NEXT_SERIALIZATION_RESERVE: u64 = 48 * 1_024;
 
-/// The frame payload the six allocations must exactly fill.
+/// The complete `session.next` frame payload.
 pub const NEXT_FRAME_BUDGET: u64 = 1_024 * 1_024;
 
 /// The item metadata records one `next` result may carry across every reference.
@@ -110,6 +112,7 @@ pub struct ProcedurePlacementBudgetV2 {
     pub(crate) readback_records: u64,
     pub(crate) evidence_preview: u64,
     pub(crate) page_tokens: u64,
+    pub(crate) counters: u64,
 }
 
 impl ProcedurePlacementBudgetV2 {
@@ -146,13 +149,33 @@ impl ProcedurePlacementBudgetV2 {
         self.page_tokens
     }
 
-    /// The five charged allocations together.
+    /// Exact compact-JSON bytes for the complete graph-wide counter array at maximum values.
+    pub const fn counters(&self) -> u64 {
+        self.counters
+    }
+
+    /// The five placement-local charges plus the complete graph-wide counter array.
     pub const fn charged_total(&self) -> u64 {
         self.next_static
             .saturating_add(self.decision_records)
             .saturating_add(self.readback)
             .saturating_add(self.evidence_preview)
             .saturating_add(self.page_tokens)
+            .saturating_add(self.counters)
+    }
+
+    /// Worst-case bytes for complete observation compact status plus preview-stripped guidance.
+    ///
+    /// Guidance retains the three allocations it can publish and one complete counter array.
+    /// Compact status carries the second counter array plus a separately pinned non-counter
+    /// reserve. Preview and page-token bytes are absent from observation guidance.
+    pub const fn observation_static_members(&self) -> u64 {
+        self.next_static
+            .saturating_add(self.decision_records)
+            .saturating_add(self.readback)
+            .saturating_add(self.counters)
+            .saturating_add(self.counters)
+            .saturating_add(podway_core::MAX_OBSERVATION_STATUS_NON_COUNTER_BYTES_V2 as u64)
     }
 }
 
@@ -191,6 +214,7 @@ pub(crate) fn placement_budget(
             readback_records: u64::MAX,
             evidence_preview: u64::MAX,
             page_tokens: u64::MAX,
+            counters: u64::MAX,
         };
     };
     let evidence = evidence_charges(procedure, placement);
@@ -201,7 +225,19 @@ pub(crate) fn placement_budget(
         readback_records: evidence.metadata_records,
         evidence_preview: evidence.preview,
         page_tokens: evidence.page_tokens,
+        counters: graph_counters_charge(procedure),
     }
+}
+
+fn graph_counters_charge(procedure: &ParsedProcedureV2) -> u64 {
+    u64::try_from(podway_core::maximum_graph_counter_array_json_bytes_v2(
+        procedure
+            .graph()
+            .placements()
+            .iter()
+            .map(|placement| placement.id().as_str().len()),
+    ))
+    .unwrap_or(u64::MAX)
 }
 
 pub(crate) const fn exceeds_budget(charged: u64, budget: u64) -> bool {
@@ -817,7 +853,7 @@ mod tests {
         assert!(exceeds_budget(READBACK_BUDGET + 1, READBACK_BUDGET));
     }
 
-    fn preset_maxima(source: &[u8]) -> [u64; 5] {
+    fn preset_maxima(source: &[u8]) -> [u64; 6] {
         let ParsedProcedure::V2(parsed) =
             parse_procedure_document(source, ProcedureDocumentFormat::Yaml)
                 .expect("a shipped preset must parse");
@@ -842,10 +878,11 @@ mod tests {
             maximum(|usage| usage.readback),
             maximum(|usage| usage.evidence_preview),
             maximum(|usage| usage.page_tokens),
+            maximum(|usage| usage.counters),
         ]
     }
 
-    fn assert_preset_fits(name: &str, maxima: [u64; 5]) {
+    fn assert_preset_fits(name: &str, maxima: [u64; 6]) {
         for (charged, allocation, bucket) in [
             (maxima[0], NEXT_STATIC_BUDGET, "static"),
             (maxima[1], DECISION_RECORD_BUDGET, "decision records"),
@@ -863,12 +900,24 @@ mod tests {
             !exceeds_budget(total, NEXT_FRAME_BUDGET - NEXT_SERIALIZATION_RESERVE),
             "{name} charges {total} bytes across every allocation"
         );
+        let observation = maxima[0]
+            .saturating_add(maxima[1])
+            .saturating_add(maxima[2])
+            .saturating_add(maxima[5].saturating_mul(2))
+            .saturating_add(podway_core::MAX_OBSERVATION_STATUS_NON_COUNTER_BYTES_V2 as u64);
+        assert!(
+            !exceeds_budget(
+                observation,
+                podway_core::MAX_OBSERVATION_STATIC_MEMBERS_BYTES_V2 as u64,
+            ),
+            "{name} charges {observation} bytes of complete observation status and guidance"
+        );
     }
 
     #[test]
     fn v2ref_analysis_preset_records_budget_headroom() {
         let maxima = preset_maxima(include_bytes!("../../../assets/presets/analysis-v2.yaml"));
-        assert_eq!(maxima, [17_642, 262_186, 47_651, 84_420, 24_000]);
+        assert_eq!(maxima, [17_642, 262_186, 47_651, 84_420, 24_000, 1_137]);
         assert_preset_fits("analysis-v2", maxima);
     }
 
@@ -877,14 +926,14 @@ mod tests {
         // Every shipped preset must sit well inside every allocation. The exact charges are pinned
         // so a change to the charge model shows up here as a number, not as a silent shift.
         let maxima = preset_maxima(include_bytes!("../../../assets/presets/sw-dev-v2.yaml"));
-        assert_eq!(maxima, [18_276, 262_186, 31_886, 56_280, 16_000]);
+        assert_eq!(maxima, [18_276, 262_186, 31_886, 56_280, 16_000, 1_025]);
         assert_preset_fits("sw-dev-v2", maxima);
     }
 
     #[test]
     fn v2dog002_bug_fix_preset_records_budget_headroom() {
         let maxima = preset_maxima(include_bytes!("../../../assets/presets/bug-fix-v2.yaml"));
-        assert_eq!(maxima, [12_658, 262_186, 26_360, 33_768, 9_600]);
+        assert_eq!(maxima, [12_658, 262_186, 26_360, 33_768, 9_600, 1_030]);
         assert_preset_fits("bug-fix-v2", maxima);
     }
 
@@ -893,7 +942,7 @@ mod tests {
         let maxima = preset_maxima(include_bytes!(
             "../../../assets/presets/small-change-v2.yaml"
         ));
-        assert_eq!(maxima, [7_832, 0, 19_082, 22_512, 6_400]);
+        assert_eq!(maxima, [7_832, 0, 19_082, 22_512, 6_400, 557]);
         assert_preset_fits("small-change-v2", maxima);
     }
 
@@ -972,9 +1021,9 @@ mod tests {
     }
 
     #[test]
-    fn v2scl005_the_six_allocations_exactly_fill_the_frame() {
-        // ADR-0024 publishes a closed composition. If these stop summing to the frame the table is
-        // no longer a proof of anything, so the arithmetic is checked rather than described.
+    fn v2scl005_the_five_local_maxima_and_reserve_span_the_frame() {
+        // These are independent maxima inside one aggregate frame. Counters are a sixth dynamic
+        // charge, so a placement at every local maximum is deliberately rejected by the aggregate.
         const ALLOCATIONS: [u64; 6] = [
             NEXT_STATIC_BUDGET,
             DECISION_RECORD_BUDGET,
@@ -986,21 +1035,74 @@ mod tests {
         let total: u64 = ALLOCATIONS.iter().copied().sum();
         assert_eq!(
             total, NEXT_FRAME_BUDGET,
-            "the published allocations must exactly fill the {NEXT_FRAME_BUDGET}-byte frame"
+            "the local maxima and reserve must span the {NEXT_FRAME_BUDGET}-byte frame"
         );
         assert_eq!(NEXT_FRAME_BUDGET, 1_048_576);
     }
 
     #[test]
-    fn v2scl005_observation_guidance_holds_every_allocation_it_still_carries() {
-        // Guidance is `next-result/v3` without its previews or page tokens, so its observation
-        // allocation must equal the three that remain. podway-core owns the observation constant
-        // and cannot see these, so this is the only place the derivation can be checked: without
-        // it, rebalancing this table inside its own frame would silently make a Procedure that
-        // `session.next` admits into one `session.observe` cannot answer.
+    fn v2gsc002_observation_static_members_and_status_reserve_are_explicit() {
         assert_eq!(
-            podway_core::MAX_OBSERVATION_GUIDANCE_BYTES_V2 as u64,
-            NEXT_STATIC_BUDGET + DECISION_RECORD_BUDGET + READBACK_BUDGET,
+            podway_core::MAX_OBSERVATION_STATIC_MEMBERS_BYTES_V2 as u64,
+            podway_core::MAX_OBSERVATION_STATUS_NON_COUNTER_BYTES_V2 as u64
+                + NEXT_STATIC_BUDGET
+                + DECISION_RECORD_BUDGET
+                + READBACK_BUDGET,
+        );
+        assert_eq!(
+            podway_core::MAX_OBSERVATION_STATUS_NON_COUNTER_BYTES_V2,
+            32 * 1_024,
+        );
+    }
+
+    #[test]
+    fn v2gsc004_counter_charge_uses_the_shared_worst_case_calculation() {
+        let nodes = (0..podway_core::MAX_GRAPH_NODES_PER_PROCEDURE_V2)
+            .map(|index| {
+                let id = format!("{}{:04}", "n".repeat(60), index);
+                if index + 1 == podway_core::MAX_GRAPH_NODES_PER_PROCEDURE_V2 {
+                    serde_json::json!({"id": id, "use": "work", "terminal": true})
+                } else {
+                    serde_json::json!({
+                        "id": id,
+                        "use": "work",
+                        "next": format!("{}{:04}", "n".repeat(60), index + 1),
+                    })
+                }
+            })
+            .collect::<Vec<_>>();
+        let source = serde_json::to_vec(&serde_json::json!({
+            "schema": "podway.procedure/v2",
+            "id": "counter-charge",
+            "version": "1",
+            "name": "Counter charge",
+            "purpose": "Prove the graph-wide counter serialization charge.",
+            "node_definitions": {
+                "work": {"type": "action", "title": "Work", "intent": "Record work."}
+            },
+            "graph": {"entry": format!("{}0000", "n".repeat(60)), "nodes": nodes}
+        }))
+        .unwrap();
+        let ParsedProcedure::V2(parsed) =
+            parse_procedure_document(&source, ProcedureDocumentFormat::Json).unwrap();
+        assert_eq!(graph_counters_charge(&parsed), 172_033);
+    }
+
+    #[test]
+    fn v2gsc004_aggregate_charges_include_counters_once_and_twice() {
+        let budget = ProcedurePlacementBudgetV2 {
+            next_static: 1,
+            decision_records: 2,
+            readback: 3,
+            readback_records: 4,
+            evidence_preview: 5,
+            page_tokens: 6,
+            counters: 7,
+        };
+        assert_eq!(budget.charged_total(), 24);
+        assert_eq!(
+            budget.observation_static_members(),
+            1 + 2 + 3 + 7 + 7 + podway_core::MAX_OBSERVATION_STATUS_NON_COUNTER_BYTES_V2 as u64
         );
     }
 

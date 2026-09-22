@@ -53,6 +53,20 @@ fn admission() -> Value {
     json!({"admitted":true,"job_id":UUID,"workspace_sequence":1})
 }
 
+fn graph_counters(count: usize) -> Value {
+    Value::Array(
+        (0..count)
+            .map(|index| {
+                json!({
+                    "graph_node_id": format!("node-{index}"),
+                    "attempt_count": 0,
+                    "rework_traversal_count": 0,
+                })
+            })
+            .collect(),
+    )
+}
+
 fn add_admitted_envelope_metadata(output: &mut Value) {
     output["workspace"] = json!({
         "uuid":UUID,"root":"/tmp/podway-v2ctr","latest_workspace_sequence":1
@@ -2811,7 +2825,7 @@ fn v2ctr003_authoring_diagnostic_is_standalone_closed_and_bounded() {
         })
         .collect::<BTreeSet<_>>();
     assert_eq!(schema_pairs, catalog_pairs);
-    assert_eq!(schema_pairs.len(), 58);
+    assert_eq!(schema_pairs.len(), 59);
 
     for (code, severity) in &catalog_pairs {
         diagnostic["code"] = json!(code);
@@ -3241,6 +3255,91 @@ fn v2scl002_observation_result_v3_pins_every_lifecycle_window() {
         "schemas/observation-result-v3.schema.json",
         &guidance_metadata_only,
     );
+}
+
+#[test]
+fn v2gsc004_current_and_frozen_counter_schemas_accept_their_exact_boundaries() {
+    let fixtures = examples();
+    let mut current_fixtures = vec![
+        (
+            "schemas/next-result-v3.schema.json",
+            fixtures["podway.next-result/v3"].clone(),
+        ),
+        (
+            "schemas/status-result-v3.schema.json",
+            fixtures["podway.status-result/v2"].clone(),
+        ),
+        (
+            "schemas/compact-status-result-v3.schema.json",
+            fixtures["podway.compact-status-result/v2"].clone(),
+        ),
+    ];
+    current_fixtures[1].1["schema"] = json!("podway.status-result/v3");
+    current_fixtures[2].1["schema"] = json!("podway.compact-status-result/v3");
+    for (schema, mut at_limit) in current_fixtures {
+        at_limit["counters"] = graph_counters(1_024);
+        assert_valid(schema, &at_limit);
+        at_limit["counters"] = graph_counters(1_025);
+        assert_invalid(schema, &at_limit);
+    }
+
+    let mut running_observation = fixtures["podway.observation-result/v3"].clone();
+    running_observation["status"]["session"] =
+        json!({"id":UUID,"lifecycle":"running","revision":4});
+    running_observation["status"]["current"] = json!({
+        "node": {"node_definition_id":"work","graph_node_id":"work","node_type":"action"},
+        "attempt": {"attempt_id":UUID,"attempt_number":1},
+        "readiness": {"items_satisfied":true,"unblocked":true,"goal_ready":true,"can_advance":true},
+        "missing_required_item_count": 0,
+        "blockers_total": 0
+    });
+    running_observation["status"]["trace_length"] = json!(1);
+    running_observation["guidance"] = fixtures["podway.next-result/v3"].clone();
+    running_observation["mutation_templates"] = json!([{
+        "command": "session.reset",
+        "argv": ["podway", "reset"],
+        "preconditions": {
+            "workspace_uuid": UUID,
+            "session_id": UUID,
+            "session_revision": 4
+        },
+        "authority": "optimistic_concurrency_only",
+        "idempotency_key_required": true,
+        "requires_explicit_authorization": true
+    }]);
+    running_observation["mutation_templates_total"] = json!(1);
+    running_observation["status"]["counters"] = graph_counters(1_024);
+    running_observation["guidance"]["counters"] = graph_counters(1_024);
+    assert_valid(
+        "schemas/observation-result-v3.schema.json",
+        &running_observation,
+    );
+    running_observation["guidance"]["counters"] = graph_counters(1_025);
+    assert_invalid(
+        "schemas/observation-result-v3.schema.json",
+        &running_observation,
+    );
+
+    for (schema, family) in [
+        (
+            "schemas/next-result-v2.schema.json",
+            "podway.next-result/v2",
+        ),
+        (
+            "schemas/status-result-v2.schema.json",
+            "podway.status-result/v2",
+        ),
+        (
+            "schemas/compact-status-result-v2.schema.json",
+            "podway.compact-status-result/v2",
+        ),
+    ] {
+        let mut at_limit = fixtures[family].clone();
+        at_limit["counters"] = graph_counters(64);
+        assert_valid(schema, &at_limit);
+        at_limit["counters"] = graph_counters(65);
+        assert_invalid(schema, &at_limit);
+    }
 }
 
 #[test]
@@ -5938,7 +6037,7 @@ fn v2grd002_freezes_catalog_replacements_before_runtime_admission() {
     assert!(codes.contains("OPTION_CRITERIA_WEAK"));
     assert!(!codes.contains("LARGE_OPTION_SET"));
     assert!(!codes.contains("LARGE_CYCLE"));
-    assert_eq!(codes.len(), 58, "the replacement is exact, not count-only");
+    assert_eq!(codes.len(), 59, "the replacement is exact, not count-only");
 
     let errors: Value = serde_json::from_slice(
         &fs::read(root().join("assets/specifications/error-codes.json")).unwrap(),

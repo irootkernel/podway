@@ -323,7 +323,7 @@ Dependencies: completed `V2LIF` epic.
 | `V2SCL-002` | Reserve pageable evidence read contracts | Completed | Register `evidence.read`, `next-result/v3`, `observation-result/v3`, the closed `output-v3` branch, shared and record-many schema bounds, public errors, command routes, manifest digests, and compatibility fixtures without premature runtime admission. | [IPC evidence paging](../specs/interfaces/ipc-protocol.md#evidence-paging), [evidence scale failures](../specs/interfaces/errors-and-exit-codes.md#bounded-evidence-scale-failures) |
 | `V2SCL-003` | Align item limits and structured diagnostics | Completed | Unify authoring and runtime limits, protocol slices, total-list and attempt bounds, re-pin the rotated preset digests, and report exact exceeded fields and maxima. | [item bounds](../specs/domain/procedure-and-item-specification.md#item-bounds), [ADR-0024](../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md) |
 | `V2SCL-004` | Implement snapshot-bound evidence paging | Completed | Serve deterministic bounded text and list pages under current evidence identity, freshness, page-token, metadata, and IPC constraints. | [evidence paging](../specs/interfaces/ipc-protocol.md#evidence-paging), [evidence reads](../specs/interfaces/cli-specification.md#evidence-reads) |
-| `V2SCL-005` | Integrate observation budgets and close conformance | Completed | Derive the six `session.next` allocations and the five observation windows from the published composition, bound every window by bytes with an exact total and a truthful truncation flag, close the compact-status envelope guard and the stale read-back projection, promote durable documentation, remove the completed dossier, and pass the development gate. | [response budgets](../specs/interfaces/ipc-protocol.md#response-budgets), [ADR-0024](../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md) |
+| `V2SCL-005` | Integrate observation budgets and close conformance | Completed | Derive the original response-budget composition, bound every window by bytes with an exact total and a truthful truncation flag, close the compact-status envelope guard and the stale read-back projection, promote durable documentation, remove the completed dossier, and pass the development gate. `V2GSC-004` later corrected the composition for 1,024 complete graph counters. | [response budgets](../specs/interfaces/ipc-protocol.md#response-budgets), [ADR-0024](../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md) |
 
 ## V2AST — External Check Result Typing
 
@@ -551,14 +551,35 @@ install a runtime.
 |---|---|---|---|---|
 | `V2PID-001` | Replace durable filesystem identity with canonical paths | Completed | Add path-only Git identity, exact-root schema-v13 migration, missing-registry reset recovery, regression coverage, and durable architecture guidance. | [ADR-0036](../architecture-decision-records/0036-use-canonical-git-paths-for-workspace-identity.md), [SQLite model](../specs/storage/sqlite-model.md), [Git model](../architecture/git-worktree-and-filesystem.md) |
 
+<a id="v2gsc-procedure-graph-scale-correction"></a>
+
+## V2GSC — Procedure Graph Scale Correction
+
+Status: Completed.
+
+Dependencies: completed `V2PID` epic. `V2SDG-006` and later tasks depend on this
+correction because their complete projections must preserve the graph-wide
+counter set.
+
+This corrective epic raises the accidental 64-placement ceiling while preserving
+Podway's bounded-input and single-cursor contracts. It does not change storage
+schema, install or activate a runtime, or alter unrelated 64-entry collections.
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `V2GSC-001` | Adopt the 1,024-node graph authority | Completed | Establish one portable graph ceiling and preserve all independent collection and frame bounds. | [ADR-0037](../architecture-decision-records/0037-bound-procedure-graphs-at-1024-nodes.md) |
+| `V2GSC-002` | Scale graph analysis, persistence, and contracts | Completed | Use bounded non-recursive analysis, complete 1,024-counter result contracts, exact response admission, and changed-row-only counter persistence without a Store migration. | [Procedure specification](../specs/domain/procedure-and-item-specification.md), [system architecture](../architecture/system.md) |
+| `V2GSC-003` | Close graph-scale conformance | Completed | Prove 1,024 acceptance, 1,025 rejection, contract consistency, and regression safety through the development gate. | [Testing and conformance](../specs/quality/testing-and-conformance.md) |
+| `V2GSC-004` | Close response-admission and boundary-proof gaps | Completed | Charge both observation counter copies, prove exact canonical and multiword graph boundaries, keep preview fail-closed, and align public schemas, fixtures, and documentation. | [IPC protocol](../specs/interfaces/ipc-protocol.md), [ADR-0037](../architecture-decision-records/0037-bound-procedure-graphs-at-1024-nodes.md) |
+
 <a id="v2sdg-host-neutral-supervised-delegation-foundation"></a>
 
 ## V2SDG — Host-Neutral Supervised Delegation Foundation
 
 Status: In Progress.
 
-Dependencies: completed `V2FRT` and the completed evidence, guard, reference,
-readiness, retention, and named-runtime foundations. There is no live Dolgorae,
+Dependencies: completed `V2FRT`, completed `V2GSC` before `V2SDG-006`, and the
+completed evidence, guard, reference, readiness, retention, and named-runtime foundations. There is no live Dolgorae,
 Primary bridge, graph-engineering, continuation-generation, or Web-console
 dependency for this Podway-only epic.
 

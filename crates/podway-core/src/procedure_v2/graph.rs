@@ -9,14 +9,13 @@ use super::invalid;
 use super::{DelegationDeclarationV1, NodeKindV2};
 
 const MIN_EVIDENCE_REFERENCES_PER_PLACEMENT: usize = 1;
-const MAX_EVIDENCE_REFERENCES_PER_PLACEMENT: usize = 8;
+/// The maximum number of evidence references one graph placement may declare.
+pub const MAX_EVIDENCE_REFERENCES_PER_PLACEMENT_V2: usize = 8;
 const MIN_SELECTED_ITEMS_PER_REFERENCE: usize = 1;
 const MAX_SELECTED_ITEMS_PER_REFERENCE: usize = 16;
 const MIN_ROUTES_PER_DECISION: usize = 1;
-const MAX_ROUTES_PER_DECISION: usize = 8;
 const MIN_MANUAL_REWORK_TARGETS: usize = 1;
 const MAX_MANUAL_REWORK_TARGETS: usize = 64;
-const MAX_GRAPH_NODES_PER_PROCEDURE: usize = 64;
 
 /// The exact `DomainError::InvalidState` reason [`ProcedureGraphV2::new`] reports when `graph.entry`
 /// names no declared placement.
@@ -113,7 +112,9 @@ pub struct DecisionRouteMapV2 {
 
 impl DecisionRouteMapV2 {
     pub fn new(entries: Vec<DecisionRouteEntryV2>) -> Result<Self, DomainError> {
-        if entries.len() < MIN_ROUTES_PER_DECISION || entries.len() > MAX_ROUTES_PER_DECISION {
+        if entries.len() < MIN_ROUTES_PER_DECISION
+            || entries.len() > super::MAX_ROUTES_PER_DECISION_V2
+        {
             return Err(invalid("route count must be between one and eight"));
         }
         let mut seen = BTreeSet::new();
@@ -258,7 +259,7 @@ pub struct EvidenceFromListV2 {
 impl EvidenceFromListV2 {
     pub fn new(entries: Vec<EvidenceReferenceV2>) -> Result<Self, DomainError> {
         if entries.len() < MIN_EVIDENCE_REFERENCES_PER_PLACEMENT
-            || entries.len() > MAX_EVIDENCE_REFERENCES_PER_PLACEMENT
+            || entries.len() > MAX_EVIDENCE_REFERENCES_PER_PLACEMENT_V2
         {
             return Err(invalid(
                 "evidence reference count must be between one and eight",
@@ -439,7 +440,8 @@ impl GraphPlacementV2 {
 
 /// The declarative single-cursor Procedure v2 graph: one entry placement, the bounded set of placed
 /// nodes, and the optional manual rework target list. Construction enforces only structural
-/// assembly — one to 64 placements, unique graph node ids, and the entry present. Branches, declared
+/// assembly — one to 1,024 placements, unique graph node ids, and the entry present. Branches,
+/// declared
 /// rework cycles, and convergence are accepted as declarative data; closed-reference validation
 /// lives in podway-config (delivered), and graph vetting is owned by V2GRF-001.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -455,8 +457,8 @@ impl ProcedureGraphV2 {
         placements: Vec<GraphPlacementV2>,
         manual_rework: Option<ManualReworkTargetListV2>,
     ) -> Result<Self, DomainError> {
-        if placements.is_empty() || placements.len() > MAX_GRAPH_NODES_PER_PROCEDURE {
-            return Err(invalid("graph node count must be between one and 64"));
+        if placements.is_empty() || placements.len() > super::MAX_GRAPH_NODES_PER_PROCEDURE_V2 {
+            return Err(invalid("graph node count must be between one and 1024"));
         }
         let mut seen = BTreeSet::new();
         let mut entry_present = false;

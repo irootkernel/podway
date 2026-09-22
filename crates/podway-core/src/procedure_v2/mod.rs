@@ -33,7 +33,24 @@ pub const PROCEDURE_SCHEMA_V2: &str = "podway.procedure/v2";
 /// canonicalization; the bound is enforced where that projection is built, and exceeding it is
 /// reported as `SOURCE_PROJECTION_BUDGET_EXCEEDED` (sections 11.1, 11.2) by the production mapping
 /// in `podway-config`'s `procedure_v2_diagnostics::config_error_diagnostic`.
-pub const SOURCE_PROJECTION_MAX_CHARACTERS: usize = 131_072;
+pub const SOURCE_PROJECTION_MAX_CHARACTERS: usize = 1_048_576;
+
+/// The maximum number of reusable node definitions in one Procedure v2 document.
+pub const MAX_NODE_DEFINITIONS_PER_PROCEDURE_V2: usize = 1_024;
+
+/// The maximum number of graph placements in one Procedure v2 document.
+pub const MAX_GRAPH_NODES_PER_PROCEDURE_V2: usize = 1_024;
+
+/// The maximum number of declared routes on one decision placement.
+pub const MAX_ROUTES_PER_DECISION_V2: usize = 8;
+
+/// The maximum number of graph edges implied by the placement and route bounds.
+pub const MAX_GRAPH_EDGES_PER_PROCEDURE_V2: usize =
+    MAX_GRAPH_NODES_PER_PROCEDURE_V2 * MAX_ROUTES_PER_DECISION_V2;
+
+/// The maximum number of evidence references across every graph placement.
+pub const MAX_EVIDENCE_REFERENCES_PER_PROCEDURE_V2: usize =
+    MAX_GRAPH_NODES_PER_PROCEDURE_V2 * MAX_EVIDENCE_REFERENCES_PER_PLACEMENT_V2;
 
 const fn invalid(reason: &'static str) -> DomainError {
     DomainError::InvalidState { reason }

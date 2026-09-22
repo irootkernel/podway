@@ -19,8 +19,8 @@
     "compact": {
       "kind": "cargo-test",
       "path": "crates/podway-daemon/tests/int_v2run002_views.rs",
-      "function": "v2rel002_maximum_compact_status_with_large_u64_fields_fits_automation_cap",
-      "command": "cargo test -p podway-daemon --test int_suite int_v2run002_views::v2rel002_maximum_compact_status_with_large_u64_fields_fits_automation_cap --locked -- --exact"
+      "function": "v2scl005_the_widest_compact_status_fits_its_allocation",
+      "command": "cargo test -p podway-daemon --test int_suite int_v2run002_views::v2scl005_the_widest_compact_status_fits_its_allocation --locked -- --exact"
     },
     "verbose": {
       "kind": "cargo-test",
@@ -30,7 +30,7 @@
     }
   },
   "verified_assertions": [
-    "the compact production projection maximizes reachable identities, counters, item revisions, and integer fields and stays within its automation cap",
+    "the widest admitted compact production projection carries 1024 counters and 128 items, then stays within its automation cap inside a maximum outer envelope",
     "one admitted GraphSessionStateV2 places the near-cap values window and actual omissions in all six history families in the same verbose production projection",
     "the complete combined verbose projection serializes through the production result and framing path within one frame",
     "status contains reference metadata but no read-back values",

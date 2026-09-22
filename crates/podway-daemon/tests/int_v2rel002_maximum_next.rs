@@ -1,4 +1,4 @@
-//! V2REL-002 production projection proof for the complete `next` payload budget.
+//! V2REL-002 production projection proof for a boundary-rich `next` payload.
 
 use podway_config::{
     AuthoringContext, ParsedProcedure, ProcedureDocumentFormat, parse_procedure_document,
@@ -563,7 +563,7 @@ fn v2grd_review_guarded_maximum_is_charged_before_runtime_projection() {
         findings
             .iter()
             .all(|finding| finding.code().severity() != podway_core::AuthoringSeverity::Error),
-        "guarded maximum fixture must pass production vet: {findings:?}"
+        "guarded boundary fixture must pass production vet: {findings:?}"
     );
     let budget =
         procedure_placement_budget_v2(&validated, &GraphNodeId::new("consume").unwrap()).unwrap();
@@ -597,7 +597,9 @@ fn v2grd_review_guarded_maximum_is_charged_before_runtime_projection() {
     assert!(u64::try_from(static_encoded).unwrap() <= budget.next_static());
 
     let observation = project_graph_observation_v1(&view).unwrap();
-    assert!(serde_json::to_vec(&observation["guidance"]).unwrap().len() <= 736 * 1_024);
+    let static_members = serde_json::to_vec(&observation["status"]).unwrap().len()
+        + serde_json::to_vec(&observation["guidance"]).unwrap().len();
+    assert!(static_members <= podway_core::MAX_OBSERVATION_STATIC_MEMBERS_BYTES_V2);
     assert!(serde_json::to_vec(&observation).unwrap().len() <= 983_040);
 
     let rejected_source = guarded_maximum_source(300);
@@ -633,7 +635,7 @@ const BLOCKER_SELECTORS: &[&str] = &["blockers", "blockers_total", "blockers_tru
 const COUNTER_SELECTORS: &[&str] = &["counters", "trace_length"];
 
 #[test]
-fn v2rel002_admitted_maximum_next_uses_the_production_projector_and_frame() {
+fn v2rel002_admitted_boundary_rich_next_uses_the_production_projector_and_frame() {
     let source = maximum_source();
     let ParsedProcedure::V2(parsed) =
         parse_procedure_document(&source, ProcedureDocumentFormat::Json).unwrap()
@@ -654,14 +656,16 @@ fn v2rel002_admitted_maximum_next_uses_the_production_projector_and_frame() {
         findings
             .iter()
             .all(|finding| finding.code().severity() != podway_core::AuthoringSeverity::Error),
-        "maximum fixture must pass production vet: {findings:?}"
+        "boundary-rich fixture must pass production vet: {findings:?}"
     );
     let production_budget =
         procedure_placement_budget_v2(&validated, &GraphNodeId::new("consume").unwrap()).unwrap();
-    // V2SCL-005 replaced the two-bucket model with the six published allocations. The fixture's
-    // purpose is to sit just inside the static allocation, which is the one authored text can
-    // actually exhaust; the evidence allocations are sized to hold the schema maximum, so what
-    // they must show here is that they stay inside it rather than that they approach it.
+    // V2SCL-005 replaced the two-bucket model with five placement-local ceilings plus the complete
+    // counter charge inside one aggregate. This fixture's purpose is to sit just inside the static
+    // ceiling, which is the one authored text can actually exhaust, while also exercising every
+    // other payload family. It is not a maximum graph-size fixture; the 1,024-counter production
+    // `next` frame is covered independently in
+    // `v2scl005_the_widest_compact_status_fits_its_allocation`.
     assert!(production_budget.next_static() <= podway_config::NEXT_STATIC_BUDGET);
     assert!(production_budget.next_static() >= 260_000);
     assert!(production_budget.decision_records() <= podway_config::DECISION_RECORD_BUDGET);
@@ -671,7 +675,7 @@ fn v2rel002_admitted_maximum_next_uses_the_production_projector_and_frame() {
     assert!(
         production_budget.charged_total()
             <= podway_config::NEXT_FRAME_BUDGET - podway_config::NEXT_SERIALIZATION_RESERVE,
-        "the maximum fixture charges {} bytes across every allocation",
+        "the boundary-rich fixture charges {} bytes across every allocation",
         production_budget.charged_total()
     );
 
@@ -709,20 +713,20 @@ fn v2rel002_admitted_maximum_next_uses_the_production_projector_and_frame() {
     let observation_bytes = serde_json::to_vec(&observation).unwrap().len();
     assert!(
         observation_bytes <= 983_040,
-        "maximum observation exceeds the frame minus 64 KiB envelope reserve: {observation_bytes} bytes"
+        "boundary-rich observation exceeds the frame minus 64 KiB envelope reserve: {observation_bytes} bytes"
     );
-    // The frame bound alone would let one component overflow while another under-fills, so the
-    // maximum fixture also has to show every published component allocation holding on its own.
+    let static_members = serde_json::to_vec(&observation["status"]).unwrap().len()
+        + serde_json::to_vec(&observation["guidance"]).unwrap().len();
+    assert!(static_members <= podway_core::MAX_OBSERVATION_STATIC_MEMBERS_BYTES_V2);
+    // The two independently truncated windows retain their own allocations.
     for (member, allocation) in [
-        ("status", 32 * 1_024),
-        ("guidance", 736 * 1_024),
         ("active_items", 128 * 1_024),
         ("mutation_templates", 64 * 1_024),
     ] {
         let encoded = serde_json::to_vec(&observation[member]).unwrap().len();
         assert!(
             encoded <= allocation,
-            "the maximum observation charged {encoded} bytes of {member} against {allocation}"
+            "the boundary-rich observation charged {encoded} bytes of {member} against {allocation}"
         );
     }
     assert_eq!(next["node"]["node_type"], "decision");
@@ -815,7 +819,6 @@ fn v2rel002_admitted_maximum_next_uses_the_production_projector_and_frame() {
     for (name, value, maximum, minimum) in [
         ("goal", goal_component, 73_728, 39_000),
         ("blockers", fields(&next, BLOCKER_SELECTORS), 49_152, 40_000),
-        ("counters", fields(&next, COUNTER_SELECTORS), 40_960, 0),
     ] {
         let encoded = serde_json::to_vec(&value).unwrap().len();
         let charged = charge(&value);
@@ -832,9 +835,16 @@ fn v2rel002_admitted_maximum_next_uses_the_production_projector_and_frame() {
             "{name}: encoded={encoded}, minimum={minimum}"
         );
     }
+    let counter_fields = fields(&next, COUNTER_SELECTORS);
+    let counter_encoded = serde_json::to_vec(&counter_fields).unwrap().len();
+    assert!(
+        u64::try_from(counter_encoded).unwrap() <= production_budget.counters(),
+        "counters: encoded={counter_encoded}, charged={}",
+        production_budget.counters()
+    );
     assert!(
         charge(&fields(&next, COUNTER_SELECTORS)) >= 30_000,
-        "counter worst-case charge must materially exercise COUNTERS_MAX"
+        "the boundary-rich fixture must materially exercise counter accounting"
     );
 
     let warnings = (0..4)
