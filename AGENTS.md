@@ -365,9 +365,9 @@ trivial changes with no meaningful decision context.
 - Outside the `$aquarium:task-handler` workflow, use Mulgae only when master
   explicitly requests a review. An explicit task-handler invocation authorizes
   its task-scoped Mulgae review phase.
-- Configure the `logic`, `security`, `maintainability`, `product`, and `testing`
-  roles with ZCode as their only provider. Configure the `documentation` role
-  with AGY as its only provider. Use a `60m` provider timeout for both providers.
+- Configure the `logic`, `security`, `maintainability`, `product`,
+  `documentation`, and `testing` roles with ZCode as their only provider. Use a
+  `60m` provider timeout for ZCode.
 - Use `--diff origin/main...HEAD` for a branch or pull request, `--stage` for
   staged changes, `--dirty` for staged and unstaged changes, or `--workspace`
   only when master explicitly requests all tracked files. Preflight the same
