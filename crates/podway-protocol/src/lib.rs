@@ -3365,7 +3365,8 @@ fn validate_workspace_mode_mismatch_details_v1(details: &Map<String, Value>) -> 
                     .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
         })
     }
-    details.len() == 4
+    (details.len() == 4
+        || (details.len() == 5 && validate_not_admitted_value_v1(details.get("admission"))))
         && details.get("schema").and_then(Value::as_str)
             == Some("podway.workspace-mode-mismatch-details/v1")
         && details

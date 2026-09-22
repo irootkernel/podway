@@ -786,7 +786,7 @@ impl DispatchErrorDetailsV1 {
             .clone();
         }
         if let Some(mismatch) = self.workspace_mode_mismatch {
-            return json!({
+            let mut details = json!({
                 "schema": "podway.workspace-mode-mismatch-details/v1",
                 "expected_mode": mismatch.expected.as_str(),
                 "actual_mode": mismatch.actual.as_str(),
@@ -795,6 +795,13 @@ impl DispatchErrorDetailsV1 {
             .as_object()
             .expect("workspace-mode mismatch details are an object")
             .clone();
+            if requires_admission {
+                details.insert(
+                    "admission".to_owned(),
+                    admission_value_v1(self.job_id.as_ref(), self.job_sequence),
+                );
+            }
+            return details;
         }
         if let Some(details) = self.session_archive_failure {
             let admission = admission_value_v1(self.job_id.as_ref(), self.job_sequence);

@@ -11,12 +11,11 @@ This file records concise shipped outcomes and the planned next stable release.
   aggregate `next` and observation admission that preserves the 1 MiB frame.
 - Stop failing archival and start when a worktree already retains 32 inactive
   sessions. `archive list` now reports the exact total, a newest-first window, and the oldest summary.
-- Derive durable workspace identity from canonical Git paths instead of
-  reboot-unstable filesystem device and inode metadata, with an in-place schema-v13
-  migration for exact-root v12 workspaces.
+- Derive durable workspace identity from canonical Git paths, with an in-place schema-v13 migration for exact-root schema-v10 through schema-v12 workspaces that preserves runtime-mode ownership.
 
 ### Fixed
 
+- Preserve structured `WORKSPACE_MODE_MISMATCH` details, including pre-admission state, instead of masking mutation preflight failures as `INTERNAL_ERROR`.
 - Show Procedure authoring diagnostic codes and the `procedure check` remediation path in
   human-readable start failures, including the shell-safe custom Procedure path,
   without changing the JSON error contract.

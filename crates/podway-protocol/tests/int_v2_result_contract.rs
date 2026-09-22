@@ -987,6 +987,17 @@ fn v2dvc002_reserves_closed_runtime_mode_contracts_without_runtime_admission() {
         "schemas/workspace-mode-mismatch-details-v1.schema.json",
         &mismatch,
     );
+    let mut mutation_mismatch = mismatch.clone();
+    mutation_mismatch["admission"] = json!({"admitted":false});
+    assert_valid(
+        "schemas/workspace-mode-mismatch-details-v1.schema.json",
+        &mutation_mismatch,
+    );
+    mutation_mismatch["admission"] = admission();
+    assert_invalid(
+        "schemas/workspace-mode-mismatch-details-v1.schema.json",
+        &mutation_mismatch,
+    );
 
     let status = json!({
         "schema":"podway.daemon-status-result/v3","mode":"dev",

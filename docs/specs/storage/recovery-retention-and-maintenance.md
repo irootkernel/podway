@@ -57,7 +57,7 @@ one.
 The registry contains no task title, procedure, graph node, attempt, item, blocker, artifact, or job payload data.
 
 Each runtime mode has a separate registry namespace. A worktree is admitted only
-when config, the Store's schema-v10 mode binding, and that namespace agree. Legacy
+when config, the Store's schema-v10-or-later mode binding, and that namespace agree. Legacy
 stores without a mode column belong to `prod`; a named daemon does not migrate or
 open them.
 

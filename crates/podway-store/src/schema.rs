@@ -748,7 +748,9 @@ pub(crate) fn verify_binding_inspection_identity_v1(
     } else {
         verify_connection_pragmas_v1(connection, options.busy_timeout_ms())?;
         verify_workspace_identity_v1(connection, expected_identity)?;
-        if !options.runtime_mode().is_production() {
+        if version >= SQLITE_SCHEMA_VERSION_V10 {
+            verify_runtime_mode_v1(connection, options.runtime_mode())?;
+        } else if !options.runtime_mode().is_production() {
             return Err(StoreErrorV1::RuntimeModeMismatchV1 {
                 expected: options.runtime_mode().clone(),
                 actual: RuntimeModeV1::production(),
@@ -765,7 +767,7 @@ pub(crate) fn verify_reset_binding_inspection_identity_v1(
 ) -> Result<(), StoreErrorV1> {
     verify_connection_pragmas_v1(connection, options.busy_timeout_ms())?;
     verify_workspace_identity_v1(connection, expected_identity)?;
-    if read_user_version_v1(connection)? == SQLITE_SCHEMA_VERSION_CURRENT {
+    if read_user_version_v1(connection)? >= SQLITE_SCHEMA_VERSION_V10 {
         verify_runtime_mode_v1(connection, options.runtime_mode())
     } else if options.runtime_mode().is_production() {
         Ok(())

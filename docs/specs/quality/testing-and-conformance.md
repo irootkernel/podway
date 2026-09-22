@@ -7,7 +7,7 @@ ordering, crash ambiguity, filesystem boundaries, and public contract stability.
 
 1. Pure graph, goal, item, decision, retry, and rework domain tests.
 2. Procedure v2 parsing, validation, canonicalization, and preset identity tests.
-3. SQLite schema-v10 initialization, migration, runtime-mode binding, rollback,
+3. SQLite schema-v13 initialization, migration, runtime-mode binding, rollback,
    and legacy-state rejection.
 4. Daemon queue, idempotency, concurrency, restart, and crash-injection tests.
 5. IPC framing, bounded decoding, schema validation, and fuzzing.
@@ -121,7 +121,7 @@ commit `5d93f43023ebf15e26b9c33b1ad032a7eeff6bbe`. `V2SDG-002` must
 close generic field/digest meanings and explicitly classify unavailable real
 paths before schema reservation; this baseline does not qualify either adapter.
 
-The store suite creates canonical schema-v10 from an empty database, migrates each
+The store suite creates canonical schema-v13 from an empty database, migrates each
 supported empty or Procedure v2-only predecessor transactionally, binds the
 workspace singleton to its effective runtime mode, preserves v2 domain and
 receipt state, rejects newer schemas, and rejects every nonempty or mixed

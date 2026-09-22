@@ -267,7 +267,7 @@ def adapter_contract() -> dict[str, Any]:
         "migration_boundary": {
             "adapter_database_access": "forbidden",
             "development_state_migration_promise": False,
-            "released_workspace_upgrade": "transactional-empty-or-v2-only-predecessor-to-v10",
+            "released_workspace_upgrade": "transactional-empty-or-v2-only-predecessor-to-v13-with-named-mode-v10-floor",
             "released_workspace_upgrade_owner": "podway-daemon",
             "legacy_procedure_state": "rejected-without-conversion-or-deletion",
             "v2_downgrade": "forbidden",

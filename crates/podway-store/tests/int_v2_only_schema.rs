@@ -308,6 +308,27 @@ fn restore_schema_v10_shape(connection: &Connection) {
     connection.pragma_update(None, "user_version", 10).unwrap();
 }
 
+fn restore_schema_v11_shape(connection: &Connection) {
+    let reference = Connection::open_in_memory().unwrap();
+    for ddl in [
+        podway_store::schema::sqlite_v1_ddl(),
+        podway_store::schema::sqlite_v2_ddl(),
+        podway_store::schema::sqlite_v3_ddl(),
+        podway_store::schema::sqlite_v4_ddl(),
+        podway_store::schema::sqlite_v5_ddl(),
+        podway_store::schema::sqlite_v6_ddl(),
+        podway_store::schema::sqlite_v7_ddl(),
+        podway_store::schema::sqlite_v8_ddl(),
+        podway_store::schema::sqlite_v9_ddl(),
+        podway_store::schema::sqlite_v10_ddl(),
+        podway_store::schema::sqlite_v11_ddl(),
+    ] {
+        reference.execute_batch(ddl).unwrap();
+    }
+    restore_capped_task_sessions(connection, &reference);
+    connection.pragma_update(None, "user_version", 11).unwrap();
+}
+
 fn restore_schema_v9_shape(connection: &Connection) {
     let reference = Connection::open_in_memory().unwrap();
     for ddl in [
@@ -1534,6 +1555,80 @@ fn v2dvc004_live_schema_v10_binds_new_and_legacy_stores_to_runtime_mode() {
             .unwrap(),
         "dev"
     );
+}
+
+#[test]
+fn schema_v10_through_v12_named_mode_bindings_inspect_and_migrate_to_v13() {
+    for predecessor in 10..=12 {
+        let temporary = TempDir::new().unwrap();
+        let path = temporary
+            .path()
+            .join(format!("schema-v{predecessor}.sqlite3"));
+        let options = SqliteStoreOptionsV1::new(8)
+            .unwrap()
+            .with_runtime_mode(RuntimeModeV1::development());
+        drop(
+            SqliteStoreV1::open(
+                &path,
+                &root(),
+                identity(),
+                options.clone(),
+                UnixMillis::new(1),
+            )
+            .unwrap(),
+        );
+        match predecessor {
+            10 => {
+                let connection = Connection::open(&path).unwrap();
+                restore_schema_v10_shape(&connection);
+            }
+            11 => {
+                let connection = Connection::open(&path).unwrap();
+                restore_schema_v11_shape(&connection);
+            }
+            12 => downgrade_to_schema_v12(&path),
+            _ => unreachable!(),
+        }
+
+        let binding = SqliteStoreV1::inspect_workspace_binding(&path, &options)
+            .unwrap()
+            .expect("predecessor binding must exist");
+        assert_eq!(binding.schema_version(), predecessor);
+        assert!(
+            SqliteStoreV1::inspect_workspace_migration_required(
+                &path,
+                binding.identity(),
+                &options,
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            SqliteStoreV1::inspect_reset_workspace_binding(&path, &options)
+                .unwrap()
+                .expect("reset predecessor binding must exist")
+                .schema_version(),
+            predecessor
+        );
+
+        drop(SqliteStoreV1::open(&path, &root(), identity(), options, UnixMillis::new(2)).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        let migrated: (u32, String, String) = connection
+            .query_row(
+                "SELECT (SELECT user_version FROM pragma_user_version), runtime_mode, workspace_uuid
+                 FROM workspace_state WHERE singleton = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            migrated,
+            (
+                13,
+                "dev".to_owned(),
+                identity().workspace_uuid().as_str().to_owned()
+            )
+        );
+    }
 }
 
 #[test]

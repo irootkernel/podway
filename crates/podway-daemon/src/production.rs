@@ -7356,6 +7356,38 @@ mod tests {
     }
 
     #[test]
+    fn workspace_mode_mismatch_mutation_preserves_pre_admission_details() {
+        let response = crate::dispatch::render_dispatch_failure_v1(
+            RequestIdV1::new("00000000-0000-4000-8000-000000000009").unwrap(),
+            CommandNameV1::new("session.complete").unwrap(),
+            Rfc3339MillisV1::new("2026-09-22T00:00:00.000Z").unwrap(),
+            map_store_error(StoreErrorV1::RuntimeModeMismatchV1 {
+                expected: RuntimeModeV1::development(),
+                actual: RuntimeModeV1::production(),
+            }),
+            true,
+            &CatalogDispatchErrorMapperV1,
+        );
+        let ResponseEnvelopeV2::Error(envelope) = response else {
+            panic!("workspace mode mismatch must render an error envelope");
+        };
+        assert_eq!(envelope.code().as_str(), "WORKSPACE_MODE_MISMATCH");
+        assert_eq!(
+            envelope.details(),
+            &Map::from_iter([
+                (
+                    "schema".to_owned(),
+                    json!("podway.workspace-mode-mismatch-details/v1"),
+                ),
+                ("boundary".to_owned(), json!("store")),
+                ("expected_mode".to_owned(), json!("dev")),
+                ("actual_mode".to_owned(), json!("prod")),
+                ("admission".to_owned(), json!({"admitted":false})),
+            ])
+        );
+    }
+
+    #[test]
     fn recon002_reset_marker_failures_preserve_unknown_and_admitted_public_evidence() {
         let request_id = RequestIdV1::new("00000000-0000-4000-8000-000000000074").unwrap();
         let key = StoreIdempotencyKeyV1::new("reset-admission-boundary").unwrap();

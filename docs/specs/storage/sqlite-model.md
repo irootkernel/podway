@@ -129,7 +129,7 @@ transaction, applies the canonical v5 DDL with legacy rename behavior, runs
 `foreign_key_check` before commit, and restores enforcement after commit or
 rollback. The DDL does not toggle `foreign_keys` because SQLite ignores that
 pragma inside an open transaction.
-Opening a schema newer than v12 remains an unsupported downgrade and performs no
+Opening a schema newer than v13 remains an unsupported downgrade and performs no
 mutation.
 
 The daemon is the sole normal writer. Foreign keys, strict tables, application ID,

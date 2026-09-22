@@ -341,9 +341,11 @@ identity errors are non-retryable exit-4 conflicts: callers must observe fresh
 identity before deciding whether a new operation is valid.
 
 `WORKSPACE_MODE_MISMATCH` is a non-retryable exit-4 conflict. Its closed
-`podway.workspace-mode-mismatch-details/v1` object contains only the bounded
+`podway.workspace-mode-mismatch-details/v1` object contains the bounded
 `expected_mode`, `actual_mode`, and one of the `endpoint`, `daemon`, `config`,
-`store`, or `registry` boundaries. It deliberately excludes raw paths.
+`store`, or `registry` boundaries. Mutation errors also contain exactly
+`{ "admitted": false }`; query errors omit `admission`. It deliberately excludes
+raw paths.
 
 `PROCEDURE_DIGEST_MISMATCH` is a non-retryable exit-4 conflict. Its closed
 `podway.procedure-digest-mismatch-details/v2` object contains the expected and actual canonical

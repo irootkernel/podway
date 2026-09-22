@@ -186,6 +186,7 @@ impl Drop for Fixture {
 enum Reply {
     Unsupported,
     WorkspaceError,
+    WorkspaceModeMismatch,
     ResetAll,
     GoalDefinition,
     StatusV2,
@@ -312,6 +313,22 @@ fn response_for(request: &RequestEnvelopeV1, reply: Reply) -> Value {
             "retryable": false,
             "exit_code": 5,
             "details": {}
+        }),
+        Reply::WorkspaceModeMismatch => json!({
+            "schema": "podway.error/v1",
+            "request_id": request.request_id().as_str(),
+            "command": request.command().as_str(),
+            "generated_at": "2026-09-22T00:00:00.000Z",
+            "code": "WORKSPACE_MODE_MISMATCH",
+            "message": "workspace runtime mode does not match the selected endpoint",
+            "retryable": false,
+            "exit_code": 4,
+            "details": {
+                "schema": "podway.workspace-mode-mismatch-details/v1",
+                "boundary": "store",
+                "expected_mode": "dev",
+                "actual_mode": "prod"
+            }
         }),
         Reply::ResetAll => json!({
             "schema": "podway.output/v3",
@@ -1751,6 +1768,36 @@ fn state_mutations_with_omitted_fences_use_v2_status_preflight() {
         }
         assert_eq!(one_json(&output)["schema"], "podway.output/v3");
     }
+}
+
+#[test]
+fn mutation_status_preflight_preserves_workspace_mode_mismatch_details() {
+    let fixture = Fixture::new();
+    let daemon = RecordingDaemon::start(&fixture.socket, Reply::WorkspaceModeMismatch);
+    let output = fixture.run(&[
+        "--json".to_owned(),
+        "--socket".to_owned(),
+        fixture.socket.display().to_string(),
+        "--worktree".to_owned(),
+        fixture.root.display().to_string(),
+        "--idempotency-key".to_owned(),
+        "v2pid001-mode-mismatch".to_owned(),
+        "complete".to_owned(),
+    ]);
+    assert_eq!(output.status.code(), Some(4), "{output:?}");
+    let request = daemon.finish();
+    assert_eq!(request["command"], "session.status");
+    let error = one_json(&output);
+    assert_eq!(error["command"], "session.complete");
+    assert_eq!(error["code"], "WORKSPACE_MODE_MISMATCH");
+    assert_eq!(
+        error["details"]["schema"],
+        "podway.workspace-mode-mismatch-details/v1"
+    );
+    assert_eq!(error["details"]["boundary"], "store");
+    assert_eq!(error["details"]["expected_mode"], "dev");
+    assert_eq!(error["details"]["actual_mode"], "prod");
+    assert_eq!(error["details"]["admission"], json!({"admitted":false}));
 }
 
 #[test]

@@ -1771,7 +1771,7 @@
       {
         "id": "urn:podway:schema:workspace-mode-mismatch-details:v1",
         "path": "schemas/workspace-mode-mismatch-details-v1.schema.json",
-        "sha256": "sha256:fbd95a3d7e0c1a66f06c9aa543cb24b3a11ad56016f0596cde6a37485e77aebf"
+        "sha256": "sha256:3c4ac5e24323e324021b9396b34b67c42d6d2b0aafe4a04a55edc967f5a78ff2"
       },
       {
         "id": "urn:podway:schema:workspace-mode-plan-result:v1",
@@ -1824,7 +1824,7 @@
   "migration_boundary": {
     "adapter_database_access": "forbidden",
     "development_state_migration_promise": false,
-    "released_workspace_upgrade": "transactional-empty-or-v2-only-predecessor-to-v10",
+    "released_workspace_upgrade": "transactional-empty-or-v2-only-predecessor-to-v13-with-named-mode-v10-floor",
     "released_workspace_upgrade_owner": "podway-daemon",
     "legacy_procedure_state": "rejected-without-conversion-or-deletion",
     "v2_downgrade": "forbidden"
