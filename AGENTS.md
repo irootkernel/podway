@@ -17,13 +17,13 @@ caution over speed; apply them proportionally for trivial work.
 ### 2. Reuse Verified Information
 
 - Inspect the requested code and its named authorities before changing anything. Resolve
-  discoverable facts before asking master.
+  discoverable facts before asking Master.
 - Reuse established facts instead of reading or searching for them again. Recheck only
   the affected information when relevant state changes, evidence conflicts, or missing
   context makes it unreliable.
 - State material assumptions and surface meaningful trade-offs. Ask when unresolved
   ambiguity would materially change the result, and push back on conflicts with
-  repository authority, safety, or master's goal.
+  repository authority, safety, or Master's goal.
 
 - Read relevant tests and the nearest authoritative document or machine contract.
 - Present materially different interpretations and recommend one before implementation.
@@ -98,10 +98,10 @@ caution over speed; apply them proportionally for trivial work.
 
 - Use English for internal planning, but never reveal private chain-of-thought.
   Provide concise conclusions and useful evidence instead.
-- Respond to master in Korean using polite speech. When directly addressing the
-  user, use exactly `master`.
+- Respond to Master in Korean using polite speech. When directly addressing the
+  user, use exactly `Master`.
 - Keep code, comments, documentation, prompts, templates, CLI/help text, logs,
-  reports, schemas, and artifacts in English unless master explicitly requests
+  reports, schemas, and artifacts in English unless Master explicitly requests
   another language.
 
 ## Aquarium Development Guide
@@ -124,7 +124,7 @@ caution over speed; apply them proportionally for trivial work.
 - Use `$use-gaori` when a selected long or noisy check is routed through Gaori or
   existing Gaori evidence must be inspected.
 - Use `$use-gaori-status` for Gaori-calculated duration and outcome history.
-- Let Aquarium workflows use Podway by default for Git-backed work unless master opts
+- Let Aquarium workflows use Podway by default for Git-backed work unless Master opts
   out before the first managed-session mutation. Use `$use-podway` directly for an
   explicitly requested Procedure v2 lifecycle, goal, diagnosis, recovery,
   cancellation, or discard operation. Route Procedure authoring to the separately
@@ -141,6 +141,7 @@ caution over speed; apply them proportionally for trivial work.
   the default `evidence/aquarium/` root only for an approved
   `aquarium.promoted-evidence/v1` package when a downstream consumer requires it.
 - Repository-specific rules in Project Configuration override these defaults.
+- Use `$use-sorage` only when Master explicitly requests a broker operation. Check only the requested inbox or outbox; Project registration does not authorize discovery. Resolve Handoff, review, revision, retention, deletion, and Vault operations through that skill; never edit the managed Vault or derived `.sorage/INBOX.md` directly.
 
 ## Project Configuration
 
@@ -311,11 +312,11 @@ trivial changes with no meaningful decision context.
 - This subsection is the single source of truth for agent-operated release gate
   selection and confirmation. Documentation that describes `make dist` applies to
   the full gate and does not override this agent workflow.
-- When master requests a release, first ask whether to use the full gate or the
+- When Master requests a release, first ask whether to use the full gate or the
   reduced patch gate. Do not infer the choice from an earlier release.
 - Use `make dist` for the full gate.
 - The reduced gate is available only for an exact patch-version increment after
-  the same clean code candidate passed `make test`. Ask master separately whether
+  the same clean code candidate passed `make test`. Ask Master separately whether
   that `make test` run succeeded. Proceed only after an explicit yes.
 - Record the tested baseline commit before changing version metadata, then run
   `make dist-patch PRIOR_MAKE_TEST_PASSED=yes PATCH_BASE_COMMIT=<sha>` from the
@@ -362,7 +363,7 @@ trivial changes with no meaningful decision context.
 
 ##### Mulgae Code Review Overrides
 
-- Outside the `$aquarium:task-handler` workflow, use Mulgae only when master
+- Outside the `$aquarium:task-handler` workflow, use Mulgae only when Master
   explicitly requests a review. An explicit task-handler invocation authorizes
   its task-scoped Mulgae review phase.
 - Configure the `logic`, `security`, `maintainability`, `product`,
@@ -370,7 +371,7 @@ trivial changes with no meaningful decision context.
   `60m` provider timeout for ZCode.
 - Use `--diff origin/main...HEAD` for a branch or pull request, `--stage` for
   staged changes, `--dirty` for staged and unstaged changes, or `--workspace`
-  only when master explicitly requests all tracked files. Preflight the same
+  only when Master explicitly requests all tracked files. Preflight the same
   target and confirm the captured paths and required provider routing before
   review.
 - Track `.mulgae/config.yaml` and `.mulgaeignore`. Keep `.mulgae/local.yaml`,

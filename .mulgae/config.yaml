@@ -4,6 +4,8 @@ project:
 providers:
   zcode:
     timeout: "60m"
+  grok: {}
+  codex: {}
 execution:
   workspace_access: "none"
 roles:
