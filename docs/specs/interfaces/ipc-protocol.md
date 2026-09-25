@@ -318,7 +318,7 @@ exceed the metadata ceiling.
 
 | `session.observe` component | Maximum |
 |---|---:|
-| Complete compact status and bounded `next-result/v3` guidance | 768 KiB shared |
+| Complete compact status and bounded `next-result/v3` or delegated `next-result/v4` guidance | 768 KiB shared |
 | Active item window | 128 KiB |
 | Mutation template window | 64 KiB |
 | Serialization and outer-envelope safety | 64 KiB |
@@ -332,8 +332,10 @@ item charges about 2.4 KiB for one predicate or 9.5 KiB for four predicates
 inside the existing 128 KiB observation active-item window. The existing exact
 totals and truncation fields remain authoritative when fewer active items fit.
 
-Guidance carries `next-result/v3` without its previews or page tokens. Status and
-guidance both carry the complete graph-wide counter set, so they share the 768 KiB
+Running guidance carries `next-result/v3`, or `next-result/v4` for a Procedure
+with delegation, without its previews or page tokens. Prepared guidance carries
+the cursor-free `prepared-next-result/v1` or delegated `/v2`. Status and guidance
+both carry the complete graph-wide counter set, so they share the 768 KiB
 that their former 32 KiB and 736 KiB allocations occupied. This lets long graphs
 spend more on counters while content-rich placements spend more on guidance.
 They remain complete structured members rather than windows: there is no honest

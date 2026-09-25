@@ -17,9 +17,11 @@ Procedure runtime results identify `procedure_schema: podway.procedure/v2`.
 Prepared-aware routes use `session-start-result/v3`,
 `session-begin-result/v1`, `terminal-disposition-result/v1`,
 `session-reset-result/v1`, `status-result/v3`, `compact-status-result/v3`, and
-`prepared-next-result/v1`. Running next uses `next-result/v3` and observation uses
-`observation-result/v3`, and the contract adds `evidence-read-result/v1` for the
-`evidence.read` query. All three families are served. `session.archive_list`
+`prepared-next-result/v1` for Direct Procedures. A Procedure with delegation
+selects status and compact status v4 and prepared next v2. Running next and
+observation use v3 for Direct Procedures and v4 for delegated Procedures. The
+contract adds `evidence-read-result/v1` for the `evidence.read` query. These
+result families are served. `session.archive_list`
 emits `session-archive-list-result/v2` with the exact total, a newest-first
 window, truncation, and the oldest summary; the v1 list family remains decodable.
 Item and graph-transition
@@ -98,6 +100,9 @@ contract manifest, but `delegation.package`, `delegation.accept`, and
 `delegation.receipt` are not executable or advertised yet. The optional
 Procedure declaration also remains rejected at runtime until coherent opt-in
 admission is implemented. The
+authoring `procedure preview` and `procedure graph` commands select their v2
+results for parseable delegated documents and validated delegated graphs,
+respectively, without opening runtime admission. The
 [adapter mapping review](../../implementation-tips/delegation-adapter-contract-review.md)
 defines the generic digest meanings and records both real Primary paths as
 unavailable pending separately qualified mappings.

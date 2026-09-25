@@ -33,19 +33,19 @@ use podway_cli::client::{
 };
 use podway_config::{
     AuthoringContext, AuthoringStage, ConfigError, FormatFailure, FormatRequest,
-    FormattedProcedureV2, MAX_PROCEDURE_DOCUMENT_BYTES, ParsedProcedure, ProcedureDocumentFormat,
-    ScaffoldTemplate, check_procedure_v2, config_error_diagnostic, finalize_diagnostics,
-    format_procedure_v2, lint_procedure_v2, normalize_procedure_v2_graph, parse_procedure_document,
-    preview_procedure_v2, project_procedure_v2_dot, project_procedure_v2_graph,
-    project_procedure_v2_mermaid, project_procedure_v2_plantuml, scaffold_procedure_v2,
-    validate_procedure_v2, vet_procedure_v2,
+    FormattedProcedureV2, MAX_PROCEDURE_DOCUMENT_BYTES, ParsedProcedure, ParsedProcedureV2,
+    ProcedureDocumentFormat, ScaffoldTemplate, check_procedure_v2, config_error_diagnostic,
+    finalize_diagnostics, format_procedure_v2, lint_procedure_v2, normalize_procedure_v2_graph,
+    parse_procedure_document, preview_procedure_v2, project_procedure_v2_dot,
+    project_procedure_v2_graph, project_procedure_v2_mermaid, project_procedure_v2_plantuml,
+    scaffold_procedure_v2, validate_procedure_v2, vet_procedure_v2,
 };
 use podway_core::{
     ActorAttributionV2, AttemptId, CriterionAssessmentReasonV2, CriterionId, GoalCriterionV2,
     GoalDefinitionV2, GoalRevisionNumberV2, GoalRevisionReasonV2, GoalStatementV2, GraphNodeId,
-    ItemConditionV2, ItemId, ItemPredicateOperatorV2, OptionGuardV2, OptionId, PROCEDURE_SCHEMA_V2,
-    PredicateScalarV2, ReasonV2, Revision, RuntimeModeV1, SessionId, Sha256Digest, UnixMillis,
-    WorkspaceId,
+    GraphPlacementV2, ItemConditionV2, ItemId, ItemPredicateOperatorV2, OptionGuardV2, OptionId,
+    PROCEDURE_SCHEMA_V2, PredicateScalarV2, ReasonV2, Revision, RuntimeModeV1, SessionId,
+    Sha256Digest, UnixMillis, WorkspaceId,
 };
 use podway_presets::{PresetError, catalog_v2};
 use podway_protocol::{
@@ -1160,7 +1160,7 @@ impl StatusPreflight {
         let result = output.result();
         if !matches!(
             result.get("schema").and_then(Value::as_str),
-            Some("podway.status-result/v2" | "podway.status-result/v3")
+            Some("podway.status-result/v2" | "podway.status-result/v3" | "podway.status-result/v4")
         ) {
             return Err(LocalFailure::response_invalid(
                 "status preflight did not return the standard Procedure v2 status result",
@@ -5740,7 +5740,7 @@ fn execute_procedure_graph(file: &Path, format_name: &str) -> Result<RunResult, 
         }
     };
     let text = format!("{projection}\n");
-    let Value::Object(result) = json!({
+    let Value::Object(mut result) = json!({
         "schema": "podway.procedure-graph-result/v1",
         "procedure_schema": PROCEDURE_SCHEMA_V2,
         "procedure_digest": validated.digest().as_str(),
@@ -5750,7 +5750,33 @@ fn execute_procedure_graph(file: &Path, format_name: &str) -> Result<RunResult, 
     }) else {
         unreachable!("the static graph result is a JSON object");
     };
+    let delegated = delegated_placements_v1(validated.parsed());
+    if !delegated.is_empty() {
+        result.insert(
+            "schema".to_owned(),
+            json!("podway.procedure-graph-result/v2"),
+        );
+        result.insert(
+            "delegated_placement_count".to_owned(),
+            json!(delegated.len()),
+        );
+        result.insert("delegated_placements".to_owned(), json!(delegated));
+    }
     Ok(local_result_v2(PROCEDURE_GRAPH_COMMAND, result, text, 0))
+}
+
+fn delegated_placements_v1(procedure: &ParsedProcedureV2) -> Vec<String> {
+    procedure
+        .graph()
+        .placements()
+        .iter()
+        .filter_map(|placement| match placement {
+            GraphPlacementV2::Action(action) if action.delegation().is_some() => {
+                Some(action.id().as_str().to_owned())
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 fn procedure_graph_diagnostics(
@@ -5840,6 +5866,20 @@ fn execute_procedure_preview(file: &Path) -> Result<RunResult, LocalFailure> {
     }) else {
         unreachable!("the static preview result is a JSON object");
     };
+    if let Ok(ParsedProcedure::V2(parsed)) = parse_procedure_document(source.as_bytes(), format) {
+        let delegated = delegated_placements_v1(&parsed);
+        if !delegated.is_empty() {
+            result.insert(
+                "schema".to_owned(),
+                json!("podway.procedure-preview-result/v2"),
+            );
+            result.insert(
+                "delegated_placement_count".to_owned(),
+                json!(delegated.len()),
+            );
+            result.insert("delegated_placements".to_owned(), json!(delegated));
+        }
+    }
 
     let text = if let Some(details) = report.details() {
         let summary = details.summary();
@@ -8428,7 +8468,7 @@ fn empty_dynamic_completion() -> RunResult {
 fn dynamic_candidates_v2(result: &Map<String, Value>, kind: &str) -> Vec<String> {
     if !matches!(
         result.get("schema").and_then(Value::as_str),
-        Some("podway.status-result/v2" | "podway.status-result/v3")
+        Some("podway.status-result/v2" | "podway.status-result/v3" | "podway.status-result/v4")
     ) {
         return Vec::new();
     }
@@ -8750,10 +8790,11 @@ mod tests {
     use super::{
         Cli, Command, CommandNameV1, DaemonCommand, LocalEnvelopeClock, LocalFailure, OperationV1,
         OutputEnvelopeInputV3, OutputEnvelopeV3, ParseFailureCommandContext, RequestIdV1,
-        ResponseEnvelopeV2, Rfc3339MillisV1, RunResult, WorkspaceTarget, build_identity_v1,
-        contains_check_result_projection_v1, daemon_payload, daemon_response_result,
-        local_generated_at, local_result, map_service_error, parse_failure_command_context,
-        parse_timeout_millis, probe_daemon_identity, probe_daemon_identity_with_runner,
+        ResponseEnvelopeV2, Rfc3339MillisV1, RunResult, StatusPreflight, WorkspaceTarget,
+        build_identity_v1, contains_check_result_projection_v1, daemon_payload,
+        daemon_response_result, dynamic_candidates_v2, local_generated_at, local_result,
+        map_service_error, parse_failure_command_context, parse_timeout_millis,
+        probe_daemon_identity, probe_daemon_identity_with_runner,
         procedure_validate_v2_diagnostics, render_authoring_diagnostics,
         render_local_failure_with_clock_and_writers, render_result_with_clock_and_writers,
         resolve_daemon_executable, resolve_implicit_daemon_executable_from,
@@ -8765,6 +8806,58 @@ mod tests {
     use clap::{Parser, error::ErrorKind};
     use serde_json::{Value, json};
     static VERSION_PROBE_SCRIPT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn v2sdg006_cli_accepts_delegated_status_generation_for_preflight_and_completion() {
+        use podway_core::{SessionId, WorkspaceId};
+        use podway_protocol::WorkspaceOutputV1;
+
+        let mut result: Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/v2/protocol/result-families.json"
+        ))
+        .unwrap();
+        result = result["fixtures"]["podway.status-result/v3"].take();
+        result["schema"] = json!("podway.status-result/v4");
+        result["delegation"] = json!({
+            "state":"inactive",
+            "reason":"no_active_attempt",
+            "safe_next_action":"begin_or_inspect"
+        });
+        result["receipt_summaries"] = json!([]);
+        result["receipt_summaries_total"] = json!(0);
+        result["receipt_summaries_truncated"] = json!(false);
+        let output = OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
+            request_id: RequestIdV1::new("00000000-0000-4000-8000-000000000002").unwrap(),
+            command: CommandNameV1::new("session.status").unwrap(),
+            generated_at: Rfc3339MillisV1::new("1970-01-01T00:00:00.012Z").unwrap(),
+            workspace: Some(
+                WorkspaceOutputV1::new(
+                    WorkspaceId::new("00000000-0000-4000-8000-000000000004").unwrap(),
+                    "/tmp/podway-v2sdg006-cli",
+                    1,
+                )
+                .unwrap(),
+            ),
+            job: None,
+            session: None,
+            result: result.as_object().unwrap().clone(),
+            warnings: Vec::new(),
+        })
+        .unwrap();
+        let preflight = StatusPreflight::from_output_v2(&output).unwrap();
+        assert_eq!(
+            preflight.facts.session_id,
+            SessionId::new("00000000-0000-4000-8000-000000000001").unwrap()
+        );
+        let candidates = json!({
+            "schema":"podway.status-result/v4",
+            "items":[{"item_id":"review"}]
+        });
+        assert_eq!(
+            dynamic_candidates_v2(candidates.as_object().unwrap(), "items"),
+            ["review"]
+        );
+    }
 
     #[test]
     fn v2ret004_workspace_remove_requires_automation_fences_and_builds_control_payload() {

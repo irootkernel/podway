@@ -333,6 +333,16 @@ impl StoreGraphReadContractV2 for WorkspaceStoreReadFacadeV1 {
     ) -> Result<podway_store::v2_delegation::DelegationReadinessV1, StoreErrorV1> {
         self.slot.read_delegation_readiness_v1(identity)
     }
+
+    fn read_delegation_receipt_v1(
+        &self,
+        identity: &podway_store::DurableWorktreeIdentityV1,
+        session_id: &podway_core::SessionId,
+        attempt_id: &podway_core::AttemptId,
+    ) -> Result<Option<podway_store::DelegationReceiptV1>, StoreErrorV1> {
+        self.slot
+            .read_delegation_receipt_v1(identity, session_id, attempt_id)
+    }
 }
 
 impl StoreIdempotencyReadContractV1 for WorkspaceStoreReadFacadeV1 {
@@ -687,6 +697,17 @@ impl StoreGraphReadContractV2 for WorkspaceStoreSlotV1 {
     ) -> Result<podway_store::v2_delegation::DelegationReadinessV1, StoreErrorV1> {
         self.with_open_store(|store| store.read_delegation_readiness_v1(identity))
     }
+
+    fn read_delegation_receipt_v1(
+        &self,
+        identity: &podway_store::DurableWorktreeIdentityV1,
+        session_id: &podway_core::SessionId,
+        attempt_id: &podway_core::AttemptId,
+    ) -> Result<Option<podway_store::DelegationReceiptV1>, StoreErrorV1> {
+        self.with_open_store(|store| {
+            store.read_delegation_receipt_v1(identity, session_id, attempt_id)
+        })
+    }
 }
 
 impl StoreSessionArchiveContractV2 for WorkspaceStoreSlotV1 {
@@ -729,6 +750,17 @@ impl StoreSessionArchiveContractV2 for WorkspaceStoreSlotV1 {
         session_id: &podway_core::SessionId,
     ) -> Result<Option<GraphSessionStateV2>, StoreErrorV1> {
         self.with_open_store(|store| store.read_archived_session_v2(identity, session_id))
+    }
+
+    fn read_archived_delegation_receipts_v1(
+        &self,
+        identity: &podway_store::DurableWorktreeIdentityV1,
+        session_id: &podway_core::SessionId,
+    ) -> Result<Option<podway_store::v2_delegation::DelegationReceiptSnapshotV1>, StoreErrorV1>
+    {
+        self.with_open_store(|store| {
+            store.read_archived_delegation_receipts_v1(identity, session_id)
+        })
     }
 
     fn read_archived_terminal_dispositions_v2(

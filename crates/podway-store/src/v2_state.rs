@@ -1118,6 +1118,7 @@ impl GraphActionCompletionOutcomeV2 {
 pub struct GraphWorkspaceViewV2 {
     identity: DurableWorktreeIdentityV1,
     graph_state: Option<GraphSessionStateV2>,
+    delegation_receipts: crate::v2_delegation::DelegationReceiptSnapshotV1,
     current_terminal_disposition: bool,
     queued_job_count: u32,
     running_job_id: Option<JobIdV1>,
@@ -1137,6 +1138,7 @@ impl GraphWorkspaceViewV2 {
         Self {
             identity,
             graph_state,
+            delegation_receipts: crate::v2_delegation::DelegationReceiptSnapshotV1::empty(),
             current_terminal_disposition: false,
             queued_job_count,
             running_job_id,
@@ -1148,6 +1150,18 @@ impl GraphWorkspaceViewV2 {
     pub fn with_current_terminal_disposition(mut self, current_terminal_disposition: bool) -> Self {
         self.current_terminal_disposition = current_terminal_disposition;
         self
+    }
+
+    pub fn with_delegation_receipts(
+        mut self,
+        receipts: crate::v2_delegation::DelegationReceiptSnapshotV1,
+    ) -> Self {
+        self.delegation_receipts = receipts;
+        self
+    }
+
+    pub fn delegation_receipts(&self) -> &crate::v2_delegation::DelegationReceiptSnapshotV1 {
+        &self.delegation_receipts
     }
 
     pub fn identity(&self) -> &DurableWorktreeIdentityV1 {
@@ -3425,6 +3439,13 @@ pub trait StoreGraphReadContractV2: Send + Sync {
         &self,
         identity: &DurableWorktreeIdentityV1,
     ) -> Result<crate::v2_delegation::DelegationReadinessV1, StoreErrorV1>;
+
+    fn read_delegation_receipt_v1(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        session_id: &SessionId,
+        attempt_id: &AttemptId,
+    ) -> Result<Option<crate::v2_delegation::DelegationReceiptV1>, StoreErrorV1>;
 }
 
 pub trait StoreTerminalDispositionContractV2: Send + Sync {
@@ -3528,6 +3549,12 @@ pub trait StoreSessionArchiveContractV2: Send + Sync {
         identity: &DurableWorktreeIdentityV1,
         session_id: &SessionId,
     ) -> Result<Option<GraphSessionStateV2>, StoreErrorV1>;
+
+    fn read_archived_delegation_receipts_v1(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        session_id: &SessionId,
+    ) -> Result<Option<crate::v2_delegation::DelegationReceiptSnapshotV1>, StoreErrorV1>;
 
     fn read_archived_terminal_dispositions_v2(
         &self,
@@ -3780,6 +3807,15 @@ where
     ) -> Result<crate::v2_delegation::DelegationReadinessV1, StoreErrorV1> {
         (**self).read_delegation_readiness_v1(identity)
     }
+
+    fn read_delegation_receipt_v1(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        session_id: &SessionId,
+        attempt_id: &AttemptId,
+    ) -> Result<Option<crate::v2_delegation::DelegationReceiptV1>, StoreErrorV1> {
+        (**self).read_delegation_receipt_v1(identity, session_id, attempt_id)
+    }
 }
 
 impl<Store> StoreTerminalDispositionContractV2 for Arc<Store>
@@ -3843,6 +3879,14 @@ where
         session_id: &SessionId,
     ) -> Result<Option<GraphSessionStateV2>, StoreErrorV1> {
         (**self).read_archived_session_v2(identity, session_id)
+    }
+
+    fn read_archived_delegation_receipts_v1(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        session_id: &SessionId,
+    ) -> Result<Option<crate::v2_delegation::DelegationReceiptSnapshotV1>, StoreErrorV1> {
+        (**self).read_archived_delegation_receipts_v1(identity, session_id)
     }
 
     fn read_archived_terminal_dispositions_v2(

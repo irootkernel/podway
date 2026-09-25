@@ -1311,7 +1311,7 @@
       {
         "id": "urn:podway:schema:delegation-components:v1",
         "path": "schemas/delegation-components-v1.schema.json",
-        "sha256": "sha256:9ff0effa11b4539489d62af09dc46ac6ab115a36e74049afa26d5fb3b2f5cc4a"
+        "sha256": "sha256:3cf2f9fc2842fc1dc8a607bc19077d2686ccc81e800b095eebd9b41e7ec59023"
       },
       {
         "id": "urn:podway:schema:delegation-error-details:v1",
@@ -1506,7 +1506,7 @@
       {
         "id": "urn:podway:schema:prepared-next-result:v2",
         "path": "schemas/prepared-next-result-v2.schema.json",
-        "sha256": "sha256:6ca78065fa17a5661474434a99afadedbd5c3d3fd854146b6b91693ef4e05ebe"
+        "sha256": "sha256:4d21673f076402b80c77f000d47325ddbd0dd884ecc19e2a5b11fc3d10ecfeb3"
       },
       {
         "id": "urn:podway:schema:procedure-diagnostics-result:v1",

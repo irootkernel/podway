@@ -142,7 +142,7 @@
     "delegated_placement_count": {
       "type": "integer",
       "minimum": 1,
-      "maximum": 64
+      "maximum": 1024
     }
   }
 }

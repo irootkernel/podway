@@ -661,6 +661,11 @@
             "begin_or_inspect"
           ]
         },
+        "guidance": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
         "receipt": {
           "oneOf": [
             {

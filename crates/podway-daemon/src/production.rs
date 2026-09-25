@@ -88,7 +88,8 @@ use crate::{
     },
     v2_read_service::{
         EvidenceReadErrorV2, GraphStatusTierV2, GraphViewErrorV2, project_evidence_read_v1,
-        project_graph_next_v2, project_graph_observation_v1, project_graph_status_v2,
+        project_graph_archive_show_result_v2, project_graph_next_v2, project_graph_observation_v1,
+        project_graph_status_v2,
     },
     worker::{
         DaemonWorkerV1, WorkerClockV1, WorkerCompletionModeV1, WorkerErrorV1, WorkerExecutionV1,
@@ -2742,6 +2743,13 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                         let terminal_disposition = dispositions.last().ok_or_else(|| {
                             DispatchFailureV1::new(DispatchFailureKindV1::Internal)
                         })?;
+                        let delegation_receipts = context
+                            .store_for_mutation()
+                            .read_archived_delegation_receipts_v1(identity, &input.session_id)
+                            .map_err(map_store_error)?
+                            .ok_or_else(|| {
+                                DispatchFailureV1::new(DispatchFailureKindV1::Internal)
+                            })?;
                         let view = GraphWorkspaceViewV2::new(
                             identity.clone(),
                             Some(state),
@@ -2749,7 +2757,8 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                             None,
                             workspace.output.latest_workspace_sequence(),
                             EpochMillisV1::new(self.clock.now().get()),
-                        );
+                        )
+                        .with_delegation_receipts(delegation_receipts);
                         let tier = if input.verbose {
                             GraphStatusTierV2::Verbose
                         } else {
@@ -2761,13 +2770,13 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                             input.history_before.map(TraceSequenceV2::new),
                         )
                         .map_err(map_graph_view_error_v2)?;
-                        Ok(json!({
-                            "schema": "podway.session-archive-show-result/v1",
-                            "activity": "inactive",
-                            "archive": archive_summary_value_v2(&summary),
-                            "terminal_disposition": terminal_disposition_value_v2(terminal_disposition),
-                            "state": status,
-                        }))
+                        project_graph_archive_show_result_v2(
+                            &view,
+                            status,
+                            archive_summary_value_v2(&summary),
+                            terminal_disposition_value_v2(terminal_disposition),
+                        )
+                        .map_err(map_graph_view_error_v2)
                     }
                     SliceCommandV1::SessionArchivePurge(input) => {
                         let purged = context

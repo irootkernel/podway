@@ -1,8 +1,9 @@
 //! Focused V2RUN-002 coverage for deterministic Procedure v2 status and next projections.
 
 use podway_config::{
-    ParsedProcedure, ProcedureDocumentFormat, ValidatedProcedureV2, parse_procedure_document,
-    procedure_placement_budget_v2, validate_procedure_v2,
+    DelegationWorkPackageInputV1, ParsedProcedure, ProcedureDocumentFormat, ValidatedProcedureV2,
+    parse_procedure_document, procedure_placement_budget_v2, project_delegation_work_package_v1,
+    validate_procedure_v2,
 };
 use podway_core::{
     ActorAttributionV2, ArtifactValueV1, AttemptId, AttemptLifecycle, AttemptNumberV2,
@@ -23,8 +24,10 @@ use podway_daemon::{
         workspace_procedure_snapshot_from_bytes_v2,
     },
     v2_read_service::{
-        EvidenceReadErrorV2, GraphStatusTierV2, GraphViewErrorV2, project_evidence_read_v1,
-        project_graph_next_v2, project_graph_observation_v1, project_graph_status_v2,
+        EvidenceReadErrorV2, GraphStatusTierV2, GraphViewErrorV2,
+        project_delegation_package_result_v1, project_delegation_receipt_result_v1,
+        project_evidence_read_v1, project_graph_next_v2, project_graph_observation_v1,
+        project_graph_status_v2,
     },
 };
 use podway_protocol::{
@@ -33,11 +36,13 @@ use podway_protocol::{
     WorkspaceOutputV1, decode_response_payload_v2, decode_single_frame_v1, encode_frame_v1,
     encode_response_payload_v2, validate_frame_payload_length,
 };
+use podway_store::v2_delegation::{DelegationReadinessV1, DelegationReceiptSnapshotV1};
 use podway_store::{
-    AttemptCriterionAssessmentStateV2, AttemptMetadataV2, AttemptWorkflowMemoryV2, BlockerStateV2,
-    CriterionAssessmentStateV2, DurableWorktreeIdentityV1, EvidenceResolutionStateV2, GoalStateV2,
-    GraphNodeCounterV2, GraphSessionStateV2, GraphWorkspaceViewV2, ItemSlotStateV2,
-    ProcedureSnapshotV2, ValidatedWorkspaceRootV1, WorkflowMemoryStateV2, WorkspaceBindingV1,
+    ActiveItemMutationV2, AttemptCriterionAssessmentStateV2, AttemptMetadataV2,
+    AttemptWorkflowMemoryV2, BlockerStateV2, CriterionAssessmentStateV2, DurableWorktreeIdentityV1,
+    EvidenceResolutionStateV2, GoalStateV2, GraphNodeCounterV2, GraphSessionStateV2,
+    GraphWorkspaceViewV2, ItemSlotStateV2, ProcedureSnapshotV2, ValidatedWorkspaceRootV1,
+    WorkflowMemoryStateV2, WorkspaceBindingV1,
 };
 use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
@@ -53,6 +58,21 @@ const SESSION_ID: &str = "00000000-0000-4000-8000-000000002002";
 const ATTEMPT_ID: &str = "00000000-0000-4000-8000-000000002003";
 const SNAPSHOT_ID: &str = "00000000-0000-4000-8000-000000002004";
 const REQUEST_ID: &str = "00000000-0000-4000-8000-000000002005";
+const DELEGATED_PROCEDURE: &[u8] = br#"{
+  "schema":"podway.procedure/v2",
+  "id":"delegated-view",
+  "version":"1",
+  "name":"Delegated view",
+  "purpose":"Project delegation readiness.",
+  "node_definitions":{
+    "work":{"type":"action","title":"Work","intent":"Review the result.",
+      "instructions":["1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16"]}
+  },
+  "graph":{"entry":"work","nodes":[{"id":"work","use":"work","terminal":true,
+    "delegation":{"binding_ref":"local-specialist","role_ref":"reviewer",
+      "role_snapshot_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "max_rounds":3,"after_accept":"retain"}}]}
+}"#;
 const IDENTITY_DIGEST: &str =
     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const ASSESSMENT_PROCEDURE: &[u8] = br#"{
@@ -369,6 +389,588 @@ fn prepared_state() -> GraphSessionStateV2 {
         running.created_at(),
     )
     .unwrap()
+}
+
+fn delegated_prepared_state() -> GraphSessionStateV2 {
+    delegated_prepared_state_from(DELEGATED_PROCEDURE)
+}
+
+fn delegated_prepared_state_from(source: &[u8]) -> GraphSessionStateV2 {
+    let validated = validated_json_procedure(source);
+    let snapshot = ProcedureSnapshotV2::new(
+        ProcedureSnapshotId::new(SNAPSHOT_ID).unwrap(),
+        CanonicalProcedureJsonV1::new(validated.canonical_json().as_str().to_owned()).unwrap(),
+        validated.digest().clone(),
+        podway_core::ProcedureSourceLabelV1::file("delegated.json").unwrap(),
+        UnixMillis::new(1_700_000_000_000),
+    )
+    .unwrap();
+    GraphSessionStateV2::prepared(
+        Revision::new(1),
+        "Delegated projection",
+        snapshot,
+        SessionId::new(SESSION_ID).unwrap(),
+        UnixMillis::new(1_700_000_000_000),
+    )
+    .unwrap()
+}
+
+#[test]
+fn v2sdg006_delegation_guidance_distinguishes_items_blockers_and_direct_placement() {
+    let mut document: Value = serde_json::from_slice(DELEGATED_PROCEDURE).unwrap();
+    document["node_definitions"]["work"]["items"] = json!([{
+        "id":"result", "type":"text", "prompt":"Record the final result.", "required":true
+    }]);
+    let source = serde_json::to_vec(&document).unwrap();
+    let state = delegated_prepared_state_from(&source)
+        .begin_v2(
+            Revision::ZERO,
+            AttemptId::new(ATTEMPT_ID).unwrap(),
+            None,
+            UnixMillis::new(1_700_000_000_001),
+        )
+        .unwrap()
+        .into_state();
+    assert_delegation_action(
+        &state,
+        "awaiting_acceptance",
+        "items_incomplete",
+        "record_items",
+    );
+
+    let attempt_id = state.trace().active_attempt().unwrap().attempt_id().clone();
+    let recorded = state
+        .mutate_active_item_v2(
+            &attempt_id,
+            &ItemId::new("result").unwrap(),
+            Revision::ZERO,
+            ActiveItemMutationV2::Set {
+                value: "Final result".to_owned(),
+            },
+            UnixMillis::new(1_700_000_000_002),
+        )
+        .unwrap()
+        .into_state();
+    assert_delegation_action(
+        &recorded,
+        "awaiting_acceptance",
+        "receipt_required",
+        "accept",
+    );
+    let blocked = recorded
+        .block_active_attempt_v2(
+            recorded.trace().revision(),
+            &attempt_id,
+            BlockerId::new("00000000-0000-4000-8000-000000002099").unwrap(),
+            "Resolve the blocker",
+            UnixMillis::new(1_700_000_000_003),
+        )
+        .unwrap()
+        .into_state();
+    assert_delegation_action(
+        &blocked,
+        "awaiting_acceptance",
+        "blockers_open",
+        "clear_blockers",
+    );
+
+    document["graph"]["entry"] = json!("direct");
+    document["graph"]["nodes"] = json!([
+        {"id":"direct", "use":"work", "next":"work"},
+        document["graph"]["nodes"][0].clone(),
+    ]);
+    let source = serde_json::to_vec(&document).unwrap();
+    let direct = delegated_prepared_state_from(&source)
+        .begin_v2(
+            Revision::ZERO,
+            AttemptId::new(ATTEMPT_ID).unwrap(),
+            None,
+            UnixMillis::new(1_700_000_000_001),
+        )
+        .unwrap()
+        .into_state();
+    assert_delegation_action(
+        &direct,
+        "not_applicable",
+        "direct_placement",
+        "continue_direct",
+    );
+}
+
+fn assert_delegation_action(
+    state: &GraphSessionStateV2,
+    expected_state: &str,
+    expected_reason: &str,
+    expected_action: &str,
+) {
+    let view = view(state.clone());
+    let next = project_graph_next_v2(&view).unwrap();
+    let status = project_graph_status_v2(&view, GraphStatusTierV2::Standard, None).unwrap();
+    let observation = project_graph_observation_v1(&view).unwrap();
+    assert_eq!(next["schema"], "podway.next-result/v4");
+    assert_eq!(status["schema"], "podway.status-result/v4");
+    assert_eq!(observation["schema"], "podway.observation-result/v4");
+    podway_protocol::validate_command_result_v2("session.next", &next).unwrap();
+    podway_protocol::validate_command_result_v2("session.status", &status).unwrap();
+    podway_protocol::validate_command_result_v2("session.observe", &observation).unwrap();
+    for delegation in [
+        &next["delegation"],
+        &status["delegation"],
+        &observation["status"]["delegation"],
+    ] {
+        assert_eq!(delegation["state"], expected_state);
+        assert_eq!(delegation["reason"], expected_reason);
+        assert_eq!(delegation["safe_next_action"], expected_action);
+    }
+    output("session.next", next);
+    output("session.status", status);
+    output("session.observe", observation);
+}
+
+#[test]
+fn v2sdg006_delegated_prepared_and_missing_receipt_views_are_truthful() {
+    let prepared = view(delegated_prepared_state());
+    let prepared_next = project_graph_next_v2(&prepared).unwrap();
+    output("session.next", prepared_next.clone());
+    assert_eq!(prepared_next["schema"], "podway.prepared-next-result/v2");
+    assert_eq!(prepared_next["delegated_placement_count"], 1);
+    let prepared_status =
+        project_graph_status_v2(&prepared, GraphStatusTierV2::Standard, None).unwrap();
+    output("session.status", prepared_status.clone());
+    assert_eq!(prepared_status["schema"], "podway.status-result/v4");
+    assert_eq!(prepared_status["delegation"]["state"], "inactive");
+    assert_eq!(prepared_status["delegation"]["reason"], "no_active_attempt");
+    assert_eq!(
+        prepared_status["delegation"]["safe_next_action"],
+        "begin_or_inspect"
+    );
+    let prepared_compact =
+        project_graph_status_v2(&prepared, GraphStatusTierV2::Compact, None).unwrap();
+    output("session.status", prepared_compact.clone());
+    assert_eq!(
+        prepared_compact["schema"],
+        "podway.compact-status-result/v4"
+    );
+    assert_eq!(
+        prepared_compact["delegation"],
+        prepared_status["delegation"]
+    );
+    let prepared_observation = project_graph_observation_v1(&prepared).unwrap();
+    output("session.observe", prepared_observation.clone());
+    assert_eq!(
+        prepared_observation["schema"],
+        "podway.observation-result/v4"
+    );
+    assert_eq!(
+        prepared_observation["status"]["delegation"],
+        prepared_status["delegation"]
+    );
+    assert!(prepared_observation["guidance"]["delegation"].is_null());
+    let running = delegated_prepared_state()
+        .begin_v2(
+            Revision::ZERO,
+            AttemptId::new(ATTEMPT_ID).unwrap(),
+            None,
+            UnixMillis::new(1_700_000_000_001),
+        )
+        .unwrap()
+        .into_state();
+    let running = view(running).with_delegation_receipts(
+        DelegationReceiptSnapshotV1::new(DelegationReadinessV1::ReceiptMissing, None, vec![], 0)
+            .unwrap(),
+    );
+    let next = project_graph_next_v2(&running).unwrap();
+    output("session.next", next.clone());
+    assert_eq!(next["schema"], "podway.next-result/v4");
+    assert_eq!(next["delegation"]["state"], "awaiting_acceptance");
+    assert_eq!(next["delegation"]["reason"], "receipt_required");
+    assert_eq!(next["instructions"].as_array().unwrap().len(), 16);
+    assert!(
+        next["delegation"]["guidance"]
+            .as_str()
+            .unwrap()
+            .contains("later item edits require a fresh attempt")
+    );
+    assert_eq!(next["readiness"]["can_advance"], false);
+    assert!(
+        !next["allowed_actions"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("session.complete"))
+    );
+    assert!(
+        !next["suggestions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value["command"] == "session.complete")
+    );
+    let observation = project_graph_observation_v1(&running).unwrap();
+    output("session.observe", observation.clone());
+    assert_eq!(observation["schema"], "podway.observation-result/v4");
+    assert_eq!(observation["status"]["delegation"], next["delegation"]);
+    assert_eq!(observation["guidance"]["delegation"], next["delegation"]);
+}
+
+#[test]
+fn v2sdg006_prepared_projection_accepts_maximum_delegated_placements() {
+    let mut document: Value = serde_json::from_slice(DELEGATED_PROCEDURE).unwrap();
+    let declaration = document["graph"]["nodes"][0]["delegation"].clone();
+    document["graph"]["entry"] = json!("work-0");
+    document["graph"]["nodes"] = json!(
+        (0..1024)
+            .map(|index| {
+                let mut placement = json!({
+                    "id":format!("work-{index}"),
+                    "use":"work",
+                    "delegation":declaration.clone(),
+                });
+                if index == 1023 {
+                    placement["terminal"] = json!(true);
+                } else {
+                    placement["next"] = json!(format!("work-{}", index + 1));
+                }
+                placement
+            })
+            .collect::<Vec<_>>()
+    );
+    let bytes = serde_json::to_vec(&document).unwrap();
+    let validated = validated_json_procedure(&bytes);
+    let snapshot = ProcedureSnapshotV2::new(
+        ProcedureSnapshotId::new(SNAPSHOT_ID).unwrap(),
+        CanonicalProcedureJsonV1::new(validated.canonical_json().as_str().to_owned()).unwrap(),
+        validated.digest().clone(),
+        podway_core::ProcedureSourceLabelV1::file("delegated-many.json").unwrap(),
+        UnixMillis::new(1_700_000_000_000),
+    )
+    .unwrap();
+    let prepared = GraphSessionStateV2::prepared(
+        Revision::new(1),
+        "Many delegated placements",
+        snapshot,
+        SessionId::new(SESSION_ID).unwrap(),
+        UnixMillis::new(1_700_000_000_000),
+    )
+    .unwrap();
+    let next = project_graph_next_v2(&view(prepared)).unwrap();
+    assert_eq!(next["schema"], "podway.prepared-next-result/v2");
+    assert_eq!(next["delegated_placement_count"], 1024);
+    output("session.next", next);
+}
+
+fn delegated_receipt(state: &GraphSessionStateV2) -> podway_store::DelegationReceiptV1 {
+    let active = state.trace().active_attempt().unwrap();
+    podway_store::DelegationReceiptV1::new(json!({
+        "schema":"podway.delegation-receipt/v1",
+        "receipt_id":"00000000-0000-4000-8000-000000002006",
+        "workspace_uuid":WORKSPACE_ID,
+        "procedure_digest":state.snapshot().digest().as_str(),
+        "session_id":state.trace().session_id().as_str(),
+        "placement_id":active.graph_node_id().as_str(),
+        "attempt_id":active.attempt_id().as_str(),
+        "delegation":{
+            "binding_ref":"local-specialist","role_ref":"reviewer",
+            "role_snapshot_digest":IDENTITY_DIGEST,"max_rounds":3,"after_accept":"retain"
+        },
+        "package_digest":IDENTITY_DIGEST,
+        "execution":{
+            "binding_ref":"local-specialist","adapter_id":"adapter","adapter_version":"1",
+            "primary_host":"external","scope_kind":"session","scope_ref":"scope-1",
+            "supervisor_ref":"supervisor-1","worker_ref":"worker-1","task_ref":"task-1",
+            "role_ref":"reviewer","role_snapshot_digest":IDENTITY_DIGEST,
+            "agent_configuration_digest":IDENTITY_DIGEST,"accepted_task_digest":IDENTITY_DIGEST
+        },
+        "rounds_used":1,"result_digest":IDENTITY_DIGEST,"summary":"Result reviewed: 界",
+        "worker_disposition":"idle","accepted":true,
+        "accepted_items_digest":podway_store::v2_delegation::accepted_items_digest_v1(state).unwrap().as_str(),
+        "accepted_at":"2026-09-17T00:00:00.000Z"
+    }))
+    .unwrap()
+}
+
+#[test]
+fn v2sdg006_current_receipt_does_not_override_an_open_blocker() {
+    let state = delegated_prepared_state()
+        .begin_v2(
+            Revision::ZERO,
+            AttemptId::new(ATTEMPT_ID).unwrap(),
+            None,
+            UnixMillis::new(1_700_000_000_001),
+        )
+        .unwrap()
+        .into_state();
+    let receipt = delegated_receipt(&state);
+    let accepted = state
+        .accept_delegation_successor_v1(state.trace().active_attempt().unwrap().attempt_id())
+        .unwrap();
+    let blocked = accepted
+        .block_active_attempt_v2(
+            accepted.trace().revision(),
+            accepted.trace().active_attempt().unwrap().attempt_id(),
+            BlockerId::new("00000000-0000-4000-8000-000000002099").unwrap(),
+            "Resolve the blocker",
+            UnixMillis::new(1_700_000_000_002),
+        )
+        .unwrap()
+        .into_state();
+    let view = view(blocked).with_delegation_receipts(
+        DelegationReceiptSnapshotV1::new(
+            DelegationReadinessV1::ReceiptCurrent,
+            Some(receipt.clone()),
+            vec![receipt.summary()],
+            1,
+        )
+        .unwrap(),
+    );
+    let next = project_graph_next_v2(&view).unwrap();
+    assert_eq!(next["delegation"]["state"], "accepted");
+    assert_eq!(next["readiness"]["unblocked"], false);
+    assert_eq!(next["readiness"]["can_advance"], false);
+    assert!(
+        !next["allowed_actions"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("session.complete"))
+    );
+    assert!(
+        !next["suggestions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value["command"] == "session.complete")
+    );
+    let status = project_graph_status_v2(&view, GraphStatusTierV2::Standard, None).unwrap();
+    assert_eq!(status["delegation"]["state"], "accepted");
+    output("session.next", next);
+    output("session.status", status);
+}
+
+#[test]
+fn v2sdg006_current_and_stale_receipts_gate_completion_across_views() {
+    let state = delegated_prepared_state()
+        .begin_v2(
+            Revision::ZERO,
+            AttemptId::new(ATTEMPT_ID).unwrap(),
+            None,
+            UnixMillis::new(1_700_000_000_001),
+        )
+        .unwrap()
+        .into_state();
+    let validated = validated_json_procedure(DELEGATED_PROCEDURE);
+    let package = project_delegation_work_package_v1(DelegationWorkPackageInputV1 {
+        procedure: &validated,
+        workspace_uuid: identity().workspace_uuid(),
+        session_id: state.trace().session_id(),
+        placement_id: state.trace().active_attempt().unwrap().graph_node_id(),
+        attempt_id: state.trace().active_attempt().unwrap().attempt_id(),
+        goal: None,
+        evidence: &[],
+    })
+    .unwrap();
+    let package_result =
+        project_delegation_package_result_v1(&view(state.clone()), &package).unwrap();
+    podway_protocol::validate_command_result_v2("delegation.package", &package_result).unwrap();
+    assert!(
+        project_delegation_package_result_v1(&view(delegated_prepared_state()), &package).is_err()
+    );
+    let wrong_attempt = AttemptId::new("00000000-0000-4000-8000-000000002099").unwrap();
+    let mismatched_package = project_delegation_work_package_v1(DelegationWorkPackageInputV1 {
+        procedure: &validated,
+        workspace_uuid: identity().workspace_uuid(),
+        session_id: state.trace().session_id(),
+        placement_id: state.trace().active_attempt().unwrap().graph_node_id(),
+        attempt_id: &wrong_attempt,
+        goal: None,
+        evidence: &[],
+    })
+    .unwrap();
+    assert!(
+        project_delegation_package_result_v1(&view(state.clone()), &mismatched_package).is_err()
+    );
+    let receipt = delegated_receipt(&state);
+    assert!(podway_protocol::validate_delegation_document_v1(
+        "podway.delegation-receipt/v1",
+        receipt.value(),
+    ));
+    assert!(project_delegation_receipt_result_v1(&view(state.clone()), &receipt).is_err());
+    let mut foreign = receipt.value().clone();
+    foreign["workspace_uuid"] = json!("00000000-0000-4000-8000-000000002099");
+    let foreign = podway_store::DelegationReceiptV1::new(foreign).unwrap();
+    let current_view = view(state.clone()).with_delegation_receipts(
+        DelegationReceiptSnapshotV1::new(
+            DelegationReadinessV1::ReceiptCurrent,
+            Some(receipt.clone()),
+            vec![receipt.summary()],
+            1,
+        )
+        .unwrap(),
+    );
+    assert!(project_delegation_receipt_result_v1(&current_view, &foreign).is_err());
+    for (readiness, expected_state, expected_reason, complete) in [
+        (
+            DelegationReadinessV1::ReceiptCurrent,
+            "accepted",
+            "current_receipt",
+            true,
+        ),
+        (
+            DelegationReadinessV1::ItemsChanged,
+            "stale_acceptance",
+            "items_changed",
+            false,
+        ),
+        (
+            DelegationReadinessV1::PackageChanged,
+            "stale_acceptance",
+            "package_changed",
+            false,
+        ),
+    ] {
+        let summary = receipt.summary();
+        let view = view(state.clone()).with_delegation_receipts(
+            DelegationReceiptSnapshotV1::new(readiness, Some(receipt.clone()), vec![summary], 1)
+                .unwrap(),
+        );
+        let next = project_graph_next_v2(&view).unwrap();
+        let status = project_graph_status_v2(&view, GraphStatusTierV2::Standard, None).unwrap();
+        let compact = project_graph_status_v2(&view, GraphStatusTierV2::Compact, None).unwrap();
+        let verbose = project_graph_status_v2(&view, GraphStatusTierV2::Verbose, None).unwrap();
+        let observation = project_graph_observation_v1(&view).unwrap();
+        for projection in [&next, &status] {
+            assert_eq!(projection["delegation"]["state"], expected_state);
+            assert_eq!(projection["delegation"]["reason"], expected_reason);
+        }
+        assert_eq!(compact["delegation"], status["delegation"]);
+        assert_eq!(verbose["schema"], "podway.status-result/v4");
+        assert_eq!(verbose["delegation"], status["delegation"]);
+        assert_eq!(verbose["receipt_summaries"], status["receipt_summaries"]);
+        podway_protocol::validate_command_result_v2("session.status", &compact).unwrap();
+        podway_protocol::validate_command_result_v2("session.status", &verbose).unwrap();
+        output("session.status", compact);
+        output("session.status", verbose);
+        assert_eq!(observation["status"]["delegation"]["state"], expected_state);
+        assert!(
+            next["delegation"]["guidance"]
+                .as_str()
+                .unwrap()
+                .contains(if complete {
+                    "makes the receipt stale"
+                } else {
+                    "Retry or rework"
+                })
+        );
+        assert_eq!(next["readiness"]["can_advance"], complete);
+        assert_eq!(
+            next["allowed_actions"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("session.complete")),
+            complete
+        );
+        assert_eq!(status["receipt_summaries_total"], 1);
+        assert!(
+            serde_json::to_string(&status["receipt_summaries"])
+                .unwrap()
+                .find("界")
+                .is_none()
+        );
+        podway_protocol::validate_command_result_v2("session.next", &next).unwrap();
+        podway_protocol::validate_command_result_v2("session.status", &status).unwrap();
+        podway_protocol::validate_command_result_v2("session.observe", &observation).unwrap();
+        output("session.next", next);
+        output("session.status", status);
+        output("session.observe", observation);
+        let receipt_result = project_delegation_receipt_result_v1(&view, &receipt).unwrap();
+        assert_eq!(receipt_result["applicability"], expected_state);
+        assert_eq!(receipt_result["reason"], expected_reason);
+        assert_eq!(receipt_result["receipt"]["summary"], "Result reviewed: 界");
+        OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
+            request_id: RequestIdV1::new(REQUEST_ID).unwrap(),
+            command: CommandNameV1::new("delegation.receipt").unwrap(),
+            generated_at: Rfc3339MillisV1::new("2026-08-09T00:00:00.000Z").unwrap(),
+            workspace: Some(
+                WorkspaceOutputV1::new(WorkspaceId::new(WORKSPACE_ID).unwrap(), "/worktree", 1)
+                    .unwrap(),
+            ),
+            job: None,
+            session: None,
+            result: receipt_result,
+            warnings: Vec::new(),
+        })
+        .unwrap();
+    }
+    let truncated = view(state.clone()).with_delegation_receipts(
+        DelegationReceiptSnapshotV1::new(
+            DelegationReadinessV1::ReceiptCurrent,
+            Some(receipt.clone()),
+            vec![receipt.summary()],
+            2,
+        )
+        .unwrap(),
+    );
+    let status = project_graph_status_v2(&truncated, GraphStatusTierV2::Standard, None).unwrap();
+    assert_eq!(status["receipt_summaries"].as_array().unwrap().len(), 1);
+    assert_eq!(status["receipt_summaries_total"], 2);
+    assert_eq!(status["receipt_summaries_truncated"], true);
+    output("session.status", status);
+    let accepted = state
+        .accept_delegation_successor_v1(state.trace().active_attempt().unwrap().attempt_id())
+        .unwrap();
+    let retried = accepted
+        .retry_active_attempt_v2(
+            accepted.trace().revision(),
+            accepted.trace().active_attempt().unwrap().attempt_id(),
+            AttemptId::new("00000000-0000-4000-8000-000000002098").unwrap(),
+            ReasonV2::new("Inspect the next attempt").unwrap(),
+            UnixMillis::new(1_700_000_000_002),
+        )
+        .unwrap()
+        .into_state();
+    let retried_view = view(retried).with_delegation_receipts(
+        DelegationReceiptSnapshotV1::new(
+            DelegationReadinessV1::ReceiptMissing,
+            None,
+            vec![receipt.summary()],
+            1,
+        )
+        .unwrap(),
+    );
+    let historical_during_run =
+        project_delegation_receipt_result_v1(&retried_view, &receipt).unwrap();
+    assert_eq!(historical_during_run["applicability"], "historical");
+    assert_eq!(historical_during_run["reason"], "historical_attempt");
+    assert_eq!(historical_during_run["receipt"], *receipt.value());
+    let completed = accepted
+        .complete_active_action_v2(
+            accepted.trace().revision(),
+            accepted.trace().active_attempt().unwrap().attempt_id(),
+            None,
+            UnixMillis::new(1_700_000_000_002),
+        )
+        .unwrap()
+        .into_state();
+    let terminal = view(completed).with_delegation_receipts(
+        DelegationReceiptSnapshotV1::new(
+            DelegationReadinessV1::Direct,
+            None,
+            vec![receipt.summary()],
+            1,
+        )
+        .unwrap(),
+    );
+    let status = project_graph_status_v2(&terminal, GraphStatusTierV2::Standard, None).unwrap();
+    let observation = project_graph_observation_v1(&terminal).unwrap();
+    assert_eq!(status["delegation"]["state"], "inactive");
+    assert_eq!(status["delegation"]["reason"], "historical_attempt");
+    assert_eq!(status["delegation"]["safe_next_action"], "inspect_history");
+    assert_eq!(status["receipt_summaries_total"], 1);
+    assert_eq!(observation["status"]["delegation"], status["delegation"]);
+    assert!(observation["guidance"].is_null());
+    let historical = project_delegation_receipt_result_v1(&terminal, &receipt).unwrap();
+    assert_eq!(historical["applicability"], "historical");
+    assert_eq!(historical["reason"], "historical_attempt");
+    output("session.status", status);
+    output("session.observe", observation);
 }
 
 fn output(command: &str, result: Map<String, Value>) -> OutputEnvelopeV3 {

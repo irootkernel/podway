@@ -21,8 +21,8 @@ implemented, released, installed, or live-qualified merely by this adoption.
 The roadmap is the only task-status owner. This dossier adds no competing
 status table, automatic task start, or deployment authority.
 
-Current checkpoint: `V2SDG-001` through `V2SDG-005` are completed internal
-foundations, while `V2SDG-006` through `V2SDG-009` remain incomplete. The
+Current checkpoint: `V2SDG-001` through `V2SDG-006` are completed internal
+foundations, while `V2SDG-007` through `V2SDG-009` remain incomplete. The
 `v0.2.11` source and release candidate therefore do not provide a supported
 end-to-end delegation capability. Reserved contracts, package projection,
 receipt persistence, and completion gates must not be reviewed as equivalent to
@@ -437,6 +437,9 @@ Purpose: expose the complete local feature without a Dolgorae dependency.
 - Tie runtime admission to the fully implemented contract set. Activate the
   explicit custom-Procedure path only after all storage, gates, views, and
   recovery surfaces pass native CLI/daemon tests together.
+- Charge the delegated status and next members against the vet-time observation
+  budget before enabling runtime admission, and pin a delegated boundary case
+  against the runtime observation limit.
 - Keep ordinary startup, workspace access, presets, Direct paths, and command
   selection free of adapter discovery and new setup requirements.
 - Exercise missing receipt, stale receipt, response loss, strict manifest/mode

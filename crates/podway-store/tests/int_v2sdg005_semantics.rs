@@ -716,6 +716,12 @@ fn v2sdg005_receipt_stales_only_after_committed_item_change() {
         store.read_delegation_readiness_v1(&identity()).unwrap(),
         DelegationReadinessV1::ItemsChanged
     );
+    let observed = store.read_graph_workspace_view_v2(&identity()).unwrap();
+    assert_eq!(
+        observed.delegation_receipts().readiness(),
+        DelegationReadinessV1::ItemsChanged
+    );
+    assert_eq!(observed.delegation_receipts().total(), 1);
     assert_eq!(
         store
             .read_idempotency_lookup(

@@ -25,6 +25,76 @@ pub enum DelegationReadinessV1 {
     ItemsChanged,
 }
 
+pub const MAX_DELEGATION_RECEIPT_SUMMARIES_V1: usize = 32;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DelegationReceiptSnapshotV1 {
+    readiness: DelegationReadinessV1,
+    current_receipt: Option<DelegationReceiptV1>,
+    summaries: Vec<Value>,
+    total: u64,
+}
+
+impl DelegationReceiptSnapshotV1 {
+    pub fn empty() -> Self {
+        Self {
+            readiness: DelegationReadinessV1::Direct,
+            current_receipt: None,
+            summaries: Vec::new(),
+            total: 0,
+        }
+    }
+
+    pub fn new(
+        readiness: DelegationReadinessV1,
+        current_receipt: Option<DelegationReceiptV1>,
+        summaries: Vec<Value>,
+        total: u64,
+    ) -> Result<Self, StoreErrorV1> {
+        let requires_receipt = matches!(
+            readiness,
+            DelegationReadinessV1::ReceiptCurrent
+                | DelegationReadinessV1::PackageChanged
+                | DelegationReadinessV1::ItemsChanged
+        );
+        if requires_receipt != current_receipt.is_some()
+            || summaries.len() > MAX_DELEGATION_RECEIPT_SUMMARIES_V1
+            || summaries.len() as u64 > total
+            || current_receipt
+                .as_ref()
+                .is_some_and(|receipt| summaries.first() != Some(&receipt.summary()))
+        {
+            return Err(invalid());
+        }
+        Ok(Self {
+            readiness,
+            current_receipt,
+            summaries,
+            total,
+        })
+    }
+
+    pub fn readiness(&self) -> DelegationReadinessV1 {
+        self.readiness
+    }
+
+    pub fn current_receipt(&self) -> Option<&DelegationReceiptV1> {
+        self.current_receipt.as_ref()
+    }
+
+    pub fn summaries(&self) -> &[Value] {
+        &self.summaries
+    }
+
+    pub fn total(&self) -> u64 {
+        self.total
+    }
+
+    pub fn truncated(&self) -> bool {
+        (self.summaries.len() as u64) < self.total
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DelegationReceiptV1 {
     canonical_json: String,
@@ -78,8 +148,26 @@ impl DelegationReceiptV1 {
         &self.value
     }
 
+    pub fn summary(&self) -> Value {
+        let value = self
+            .value
+            .as_object()
+            .expect("validated receipt is an object");
+        json!({
+            "receipt_id": value["receipt_id"],
+            "attempt_id": value["attempt_id"],
+            "package_digest": value["package_digest"],
+            "result_digest": value["result_digest"],
+            "accepted_at": value["accepted_at"],
+        })
+    }
+
     pub fn session_id(&self) -> SessionId {
         SessionId::new(field(self.value.as_object().unwrap(), "session_id").unwrap()).unwrap()
+    }
+
+    pub fn workspace_uuid(&self) -> WorkspaceId {
+        WorkspaceId::new(field(self.value.as_object().unwrap(), "workspace_uuid").unwrap()).unwrap()
     }
 
     pub fn attempt_id(&self) -> AttemptId {
@@ -290,6 +378,111 @@ pub(crate) fn completion_readiness_connection_v1(
         return Ok(DelegationReadinessV1::ItemsChanged);
     }
     Ok(DelegationReadinessV1::ReceiptCurrent)
+}
+
+/// Read the active receipt and newest bounded history for a supplied graph state.
+pub(crate) fn receipt_snapshot_connection_v1(
+    connection: &Connection,
+    state: &GraphSessionStateV2,
+    workspace_uuid: &WorkspaceId,
+) -> Result<DelegationReceiptSnapshotV1, StoreErrorV1> {
+    if !state
+        .snapshot()
+        .graph_nodes()
+        .iter()
+        .any(|node| node.canonical_placement_json().contains("\"delegation\":"))
+    {
+        return Ok(DelegationReceiptSnapshotV1::empty());
+    }
+    let total: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM v2_attempts a WHERE a.session_id = ?1 AND EXISTS (\
+             SELECT 1 FROM v2_delegation_receipts r \
+             WHERE r.attempt_id = a.attempt_id AND r.session_id = a.session_id)",
+            [state.trace().session_id().as_str()],
+            |row| row.get(0),
+        )
+        .map_err(|_| corrupt())?;
+    let mut statement = connection
+        .prepare(
+            "SELECT a.attempt_id, r.receipt_id, r.receipt_json FROM v2_attempts a \
+             JOIN v2_delegation_receipts r ON r.attempt_id = a.attempt_id AND r.session_id = a.session_id \
+             WHERE a.session_id = ?1 ORDER BY a.trace_sequence DESC LIMIT ?2",
+        )
+        .map_err(|_| corrupt())?;
+    let receipt_rows = statement
+        .query_map(
+            params![
+                state.trace().session_id().as_str(),
+                MAX_DELEGATION_RECEIPT_SUMMARIES_V1 as i64
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .map_err(|_| corrupt())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| corrupt())?;
+    let receipts = receipt_rows
+        .iter()
+        .map(|(attempt_id, receipt_id, json)| {
+            let receipt = DelegationReceiptV1::decode(json)?;
+            if receipt.session_id() != *state.trace().session_id()
+                || receipt.attempt_id().as_str() != attempt_id
+                || receipt.receipt_id().as_str() != receipt_id
+                || receipt.workspace_uuid() != *workspace_uuid
+            {
+                return Err(corrupt());
+            }
+            Ok(receipt)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let current_receipt = state.trace().active_attempt().and_then(|attempt| {
+        receipts
+            .iter()
+            .find(|receipt| receipt.attempt_id() == *attempt.attempt_id())
+            .cloned()
+    });
+    let readiness = completion_readiness_connection_v1(connection, state, workspace_uuid)?;
+    let summaries = receipts.iter().map(DelegationReceiptV1::summary).collect();
+    DelegationReceiptSnapshotV1::new(
+        readiness,
+        current_receipt,
+        summaries,
+        u64::try_from(total).map_err(|_| corrupt())?,
+    )
+}
+
+pub(crate) fn read_receipt_connection_v1(
+    connection: &Connection,
+    workspace_uuid: &WorkspaceId,
+    session_id: &SessionId,
+    attempt_id: &AttemptId,
+) -> Result<Option<DelegationReceiptV1>, StoreErrorV1> {
+    let row: Option<(String, String)> = connection
+        .query_row(
+            "SELECT receipt_id, receipt_json FROM v2_delegation_receipts WHERE session_id = ?1 AND attempt_id = ?2",
+            params![session_id.as_str(), attempt_id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|_| corrupt())?;
+    row.map(|(receipt_id, json)| {
+        let receipt = DelegationReceiptV1::decode(&json)?;
+        if receipt.session_id() != *session_id
+            || receipt.attempt_id() != *attempt_id
+            || receipt.receipt_id().as_str() != receipt_id
+            || receipt.workspace_uuid() != *workspace_uuid
+        {
+            return Err(corrupt());
+        }
+        Ok(receipt)
+    })
+    .transpose()
 }
 
 pub(crate) fn insert_receipt_transaction_v1(

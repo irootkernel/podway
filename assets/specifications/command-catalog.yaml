@@ -334,6 +334,8 @@ commands:
   - podway.compact-status-result/v2
   - podway.status-result/v3
   - podway.compact-status-result/v3
+  - podway.status-result/v4
+  - podway.compact-status-result/v4
 - name: session.next
   availability: executable
   cli:
@@ -349,6 +351,8 @@ commands:
   - podway.next-result/v2
   - podway.next-result/v3
   - podway.prepared-next-result/v1
+  - podway.next-result/v4
+  - podway.prepared-next-result/v2
 - name: session.observe
   availability: executable
   cli:
@@ -364,6 +368,7 @@ commands:
   - podway.observation-result/v1
   - podway.observation-result/v2
   - podway.observation-result/v3
+  - podway.observation-result/v4
 - name: evidence.read
   availability: executable
   cli:
@@ -565,6 +570,7 @@ commands:
   destructive_confirmation: false
   result_schemas:
   - podway.session-archive-show-result/v1
+  - podway.session-archive-show-result/v2
 - name: session.archive_purge
   availability: executable
   cli:
@@ -860,6 +866,7 @@ commands:
   destructive_confirmation: false
   result_schemas:
   - podway.procedure-graph-result/v1
+  - podway.procedure-graph-result/v2
   - podway.procedure-diagnostics-result/v1
 - name: procedure.preview
   availability: executable
@@ -873,6 +880,7 @@ commands:
   destructive_confirmation: false
   result_schemas:
   - podway.procedure-preview-result/v1
+  - podway.procedure-preview-result/v2
 - name: procedure.scaffold
   availability: executable
   cli:

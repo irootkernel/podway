@@ -274,6 +274,8 @@ are delegation states, not new session lifecycle values. Do not report a
 complete-ready action or emit a `complete` suggestion while its delegation gate
 is unsatisfied. Do not fabricate a copyable successful receipt filled with
 example external identities, successful outcomes, or a preapproved decision.
+The delegated `safe_next_action` describes the delegation gate only; clients
+must also honor ordinary `readiness` and `allowed_actions` before completing.
 
 Ordinary item edits remain permitted, but a changed item revision/disposition
 or recorded value makes an earlier acceptance stale. Restoring identical text
@@ -321,6 +323,9 @@ current. Do not add routine item-recording steps after acceptance.
 Delegated guidance must explain before acceptance that later item changes,
 including small corrections, require a fresh attempt. While a receipt is
 current, guidance must identify the consequence of editing accepted items.
+The bounded `delegation.guidance` member carries this explanation in delegated
+views even when the action already has the maximum number of authored
+instructions; authored instructions remain intact.
 After a committed edit, report `stale_acceptance`, its item-state reason, and
 explicit retry/rework recovery. Retrying or reworking is an operator/Primary
 choice, not an automatic response to the edit. A successful edit must not be

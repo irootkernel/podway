@@ -1001,6 +1001,21 @@ graph:
     let result = envelope["result"].as_object().unwrap();
     assert_eq!(result["schema"], "podway.procedure-preview-result/v1");
     assert!(decode_result_schema_contract_v2(result).is_some());
+    let direct_graph = fixture.run_from_root(&[
+        "--json".to_owned(),
+        "procedure".to_owned(),
+        "graph".to_owned(),
+        "typed-guards.yaml".to_owned(),
+        "--format".to_owned(),
+        "json".to_owned(),
+    ]);
+    assert!(direct_graph.status.success(), "{direct_graph:?}");
+    let direct_graph = one_json(&direct_graph);
+    assert_eq!(
+        direct_graph["result"]["schema"],
+        "podway.procedure-graph-result/v1"
+    );
+    assert!(direct_graph["result"].get("delegated_placements").is_none());
     let collect = result["graph"]["nodes"]
         .as_array()
         .unwrap()
@@ -1024,6 +1039,107 @@ graph:
             "non_empty": true
         }])
     );
+}
+
+#[test]
+fn v2sdg006_delegated_preview_and_graph_select_v2_without_changing_direct_results() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.root.join("delegated.yaml"),
+        concat!(
+            "schema: podway.procedure/v2\n",
+            "id: delegated-preview\n",
+            "version: '1'\n",
+            "name: Delegated preview\n",
+            "purpose: Review the delegation graph.\n",
+            "node_definitions:\n",
+            "  work:\n",
+            "    type: action\n",
+            "    title: Work\n",
+            "    intent: Review the result.\n",
+            "graph:\n",
+            "  entry: work\n",
+            "  nodes:\n",
+            "    - id: work\n",
+            "      use: work\n",
+            "      terminal: true\n",
+            "      delegation:\n",
+            "        binding_ref: local-specialist\n",
+            "        role_ref: reviewer\n",
+            "        role_snapshot_digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+            "        max_rounds: 3\n",
+            "        after_accept: retain\n",
+        ),
+    )
+    .unwrap();
+    for (subcommand, expected_schema) in [
+        ("preview", "podway.procedure-preview-result/v2"),
+        ("graph", "podway.procedure-graph-result/v2"),
+    ] {
+        let mut arguments = vec![
+            "--json".to_owned(),
+            "procedure".to_owned(),
+            subcommand.to_owned(),
+            "delegated.yaml".to_owned(),
+        ];
+        if subcommand == "graph" {
+            arguments.extend(["--format".to_owned(), "json".to_owned()]);
+        }
+        let output = fixture.run_from_root(&arguments);
+        assert!(output.status.success(), "{output:?}");
+        let envelope = one_json(&output);
+        assert_eq!(envelope["result"]["schema"], expected_schema);
+        assert_eq!(envelope["result"]["delegated_placement_count"], 1);
+        assert_eq!(envelope["result"]["delegated_placements"], json!(["work"]));
+        assert!(
+            decode_result_schema_contract_v2(envelope["result"].as_object().unwrap()).is_some()
+        );
+    }
+    let graph = fixture.run_from_root(&[
+        "--json".to_owned(),
+        "procedure".to_owned(),
+        "graph".to_owned(),
+        "delegated.yaml".to_owned(),
+        "--format".to_owned(),
+        "mermaid".to_owned(),
+    ]);
+    assert!(graph.status.success(), "{graph:?}");
+    let graph = one_json(&graph);
+    assert_eq!(
+        graph["result"]["schema"],
+        "podway.procedure-graph-result/v2"
+    );
+    assert_eq!(graph["result"]["delegated_placements"], json!(["work"]));
+    assert!(
+        graph["result"]["projection"]
+            .as_str()
+            .unwrap()
+            .contains("flowchart TD")
+    );
+    let invalid = fs::read_to_string(fixture.root.join("delegated.yaml"))
+        .unwrap()
+        .replace(
+            "    - id: work\n",
+            "    - id: stranded\n      use: work\n      terminal: true\n    - id: work\n",
+        );
+    fs::write(fixture.root.join("delegated-invalid.yaml"), invalid).unwrap();
+    let output = fixture.run_from_root(&[
+        "--json".to_owned(),
+        "procedure".to_owned(),
+        "preview".to_owned(),
+        "delegated-invalid.yaml".to_owned(),
+    ]);
+    assert!(!output.status.success(), "{output:?}");
+    let envelope = one_json(&output);
+    assert_eq!(
+        envelope["result"]["schema"],
+        "podway.procedure-preview-result/v2"
+    );
+    assert_eq!(envelope["result"]["admissible"], false);
+    assert_eq!(envelope["result"]["checks"]["vet"], false);
+    assert_eq!(envelope["result"]["delegated_placement_count"], 1);
+    assert_eq!(envelope["result"]["delegated_placements"], json!(["work"]));
+    assert!(decode_result_schema_contract_v2(envelope["result"].as_object().unwrap()).is_some());
 }
 
 #[test]

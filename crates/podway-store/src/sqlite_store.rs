@@ -693,6 +693,22 @@ impl StoreGraphReadContractV2 for SqliteStoreV1 {
             identity.workspace_uuid(),
         )
     }
+
+    fn read_delegation_receipt_v1(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        session_id: &podway_core::SessionId,
+        attempt_id: &podway_core::AttemptId,
+    ) -> Result<Option<crate::DelegationReceiptV1>, StoreErrorV1> {
+        self.require_identity(identity)?;
+        let connection = self.lock_connection()?;
+        crate::v2_delegation::read_receipt_connection_v1(
+            &connection,
+            identity.workspace_uuid(),
+            session_id,
+            attempt_id,
+        )
+    }
 }
 
 impl StoreTerminalDispositionContractV2 for SqliteStoreV1 {
@@ -775,6 +791,24 @@ impl StoreSessionArchiveContractV2 for SqliteStoreV1 {
         self.require_identity(identity)?;
         let connection = self.lock_connection()?;
         load_archived_session_connection_v2(&connection, session_id)
+    }
+
+    fn read_archived_delegation_receipts_v1(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+        session_id: &podway_core::SessionId,
+    ) -> Result<Option<crate::v2_delegation::DelegationReceiptSnapshotV1>, StoreErrorV1> {
+        self.require_identity(identity)?;
+        let connection = self.lock_connection()?;
+        let Some(state) = load_archived_session_connection_v2(&connection, session_id)? else {
+            return Ok(None);
+        };
+        crate::v2_delegation::receipt_snapshot_connection_v1(
+            &connection,
+            &state,
+            identity.workspace_uuid(),
+        )
+        .map(Some)
     }
 
     fn read_archived_terminal_dispositions_v2(
@@ -8219,6 +8253,17 @@ fn read_graph_workspace_view_connection_v2(
         })
         .transpose()?
         .unwrap_or(false);
+    let delegation_receipts = graph_state
+        .as_ref()
+        .map(|state| {
+            crate::v2_delegation::receipt_snapshot_connection_v1(
+                connection,
+                state,
+                identity.workspace_uuid(),
+            )
+        })
+        .transpose()?
+        .unwrap_or_else(crate::v2_delegation::DelegationReceiptSnapshotV1::empty);
     let queued: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM jobs WHERE state = 'queued'",
@@ -8250,7 +8295,8 @@ fn read_graph_workspace_view_connection_v2(
             .map_err(|_| corrupt(StoreRecordKindV1::Workspace))?,
         epoch(observed_at, StoreRecordKindV1::Workspace)?,
     )
-    .with_current_terminal_disposition(current_terminal_disposition))
+    .with_current_terminal_disposition(current_terminal_disposition)
+    .with_delegation_receipts(delegation_receipts))
 }
 
 fn read_job_state_connection_v1(

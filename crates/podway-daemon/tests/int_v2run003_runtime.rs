@@ -18,8 +18,9 @@ use podway_config::{
     validate_procedure_v2, vet_procedure_v2,
 };
 use podway_core::{
-    AttemptId, BlockerId, ProcedureSnapshotId, Revision, SessionId, TerminalDispositionV2,
-    UnixMillis,
+    AttemptId, BlockerId, CanonicalProcedureJsonV1, DomainCommand, ProcedureSnapshotId,
+    ProcedureSourceLabelV1, ReasonV2, Revision, SessionId, Sha256Digest, TerminalDispositionV2,
+    UnixMillis, canonicalize_json_v1,
 };
 use podway_daemon::{
     dispatch::{
@@ -49,9 +50,11 @@ use podway_protocol::{
 };
 use podway_service::ServiceRuntimePathsV1;
 use podway_store::{
-    DurableWorktreeIdentityV1, GraphSessionStateV2, SqliteStoreOptionsV1, SqliteStoreV1,
-    StoreGraphStateContractV2, StoreSessionArchiveContractV2, StoreTerminalDispositionContractV2,
-    WorkerIdV1,
+    AdmissionSessionIdentityV1, AdmitRequestV1, CanonicalExecutionJsonV1, DelegationReceiptV1,
+    DurableWorktreeIdentityV1, GraphSessionStateV2, PersistedResponseContextV1,
+    ProcedureSnapshotV2, RevisionAttemptItemPreconditionsV1, SqliteStoreOptionsV1, SqliteStoreV1,
+    StoreContractV1, StoreGraphMutationContractV2, StoreGraphStateContractV2,
+    StoreSessionArchiveContractV2, StoreTerminalDispositionContractV2, WorkerIdV1,
 };
 use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
@@ -507,6 +510,307 @@ fn plant_inactive_archives(
         archived.push(completed);
     }
     archived
+}
+
+#[test]
+fn v2sdg006_delegated_archived_session_show_uses_v2_result() {
+    let fixture = support_phase4_workspace::git_worktrees();
+    make_runtime_private(fixture.main());
+    let selector = selector(fixture.main());
+    let runtime_manager = Arc::new(manager(fixture.temporary_path()));
+    let production = dispatcher(Arc::clone(&runtime_manager), "delegated-archive-show");
+    let initialize = request(
+        156_101,
+        "workspace.init",
+        &selector,
+        Map::new(),
+        "delegated-archive-show-init",
+        PreconditionsV1::default(),
+    );
+    let _ = v2_result(dispatch(&production, &initialize), "workspace.init");
+    let runtime = runtime_manager
+        .resolve_existing(git_selector(fixture.main()), None, observation())
+        .unwrap();
+    let context = runtime.context_snapshot();
+    let store = SqliteStoreV1::open(
+        context.database_path(),
+        context.workspace_root(),
+        context.binding().identity().clone(),
+        context.store_options().clone(),
+        UnixMillis::new(1),
+    )
+    .unwrap();
+    let document = json!({
+        "schema":"podway.procedure/v2",
+        "id":"delegated-archive-show",
+        "version":"1",
+        "name":"Delegated archive show",
+        "purpose":"Exercise the retained delegated result.",
+        "node_definitions":{"work":{"type":"action","title":"Work","intent":"Review work."}},
+        "graph":{"entry":"work","nodes":[{"id":"work","use":"work","terminal":true,
+            "delegation":{"binding_ref":"local-specialist","role_ref":"reviewer",
+                "role_snapshot_digest":format!("sha256:{}", "a".repeat(64)),
+                "max_rounds":3,"after_accept":"retain"}}]}
+    });
+    let canonical = canonicalize_json_v1(&document).unwrap();
+    let digest =
+        Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))).unwrap();
+    let snapshot = ProcedureSnapshotV2::new(
+        ProcedureSnapshotId::new("00000000-0000-4000-8000-000000015101").unwrap(),
+        CanonicalProcedureJsonV1::new(canonical).unwrap(),
+        digest,
+        ProcedureSourceLabelV1::file("delegated-archive-show.yaml").unwrap(),
+        UnixMillis::new(2),
+    )
+    .unwrap();
+    let running = GraphSessionStateV2::prepared(
+        Revision::new(1),
+        "Delegated archive show",
+        snapshot,
+        SessionId::new("00000000-0000-4000-8000-000000015102").unwrap(),
+        UnixMillis::new(3),
+    )
+    .unwrap()
+    .begin_v2(
+        Revision::ZERO,
+        AttemptId::new("00000000-0000-4000-8000-000000015103").unwrap(),
+        None,
+        UnixMillis::new(4),
+    )
+    .unwrap()
+    .into_state();
+    let identity = context.binding().identity();
+    store
+        .create_graph_session_v2(identity, running.clone())
+        .unwrap();
+    let check_live_views = |base, expected_state, expected_total| {
+        let preconditions = PreconditionsV1::new(
+            Some(running.trace().session_id().clone()),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let status = status(
+            &production,
+            &selector,
+            base,
+            running.trace().session_id().as_str(),
+        );
+        assert_eq!(status["schema"], "podway.status-result/v4");
+        assert_eq!(status["delegation"]["state"], expected_state);
+        assert_eq!(status["receipt_summaries_total"], expected_total);
+        for (offset, command) in [(1, "session.next"), (2, "session.observe")] {
+            let request = request(
+                base + offset,
+                command,
+                &selector,
+                Map::new(),
+                "unused-delegated-live-view",
+                preconditions.clone(),
+            );
+            let result = v2_result(dispatch(&production, &request), command);
+            podway_protocol::validate_command_result_v2(command, &result).unwrap();
+            if command == "session.next" {
+                assert_eq!(result["schema"], "podway.next-result/v4");
+                assert_eq!(result["delegation"], status["delegation"]);
+            } else {
+                assert_eq!(result["schema"], "podway.observation-result/v4");
+                assert_eq!(result["status"]["delegation"], status["delegation"]);
+                assert_eq!(result["guidance"]["delegation"], status["delegation"]);
+            }
+        }
+    };
+    check_live_views(156_110, "awaiting_acceptance", 0);
+    let digest = |nibble: char| {
+        Sha256Digest::new(format!("sha256:{}", nibble.to_string().repeat(64))).unwrap()
+    };
+    let receipt = DelegationReceiptV1::new(json!({
+        "schema":"podway.delegation-receipt/v1",
+        "receipt_id":"00000000-0000-4000-8000-000000015104",
+        "workspace_uuid":identity.workspace_uuid(),
+        "procedure_digest":running.snapshot().digest(),
+        "session_id":running.trace().session_id(),
+        "placement_id":"work",
+        "attempt_id":running.trace().active_attempt().unwrap().attempt_id(),
+        "delegation":document["graph"]["nodes"][0]["delegation"],
+        "package_digest":digest('d'),
+        "execution":{
+            "binding_ref":"local-specialist",
+            "adapter_id":"adapter",
+            "adapter_version":"1",
+            "primary_host":"external",
+            "scope_kind":"session",
+            "scope_ref":"scope-1",
+            "supervisor_ref":"supervisor-1",
+            "worker_ref":"worker-1",
+            "task_ref":"task-1",
+            "role_ref":"reviewer",
+            "role_snapshot_digest":digest('a'),
+            "agent_configuration_digest":digest('e'),
+            "accepted_task_digest":digest('f')
+        },
+        "rounds_used":1,
+        "result_digest":digest('1'),
+        "summary":"Reviewed archived result",
+        "worker_disposition":"idle",
+        "accepted":true,
+        "accepted_items_digest":podway_store::v2_delegation::accepted_items_digest_v1(&running).unwrap(),
+        "accepted_at":"2026-09-17T00:00:00.000Z"
+    }))
+    .unwrap();
+    let key = "delegated-archive-accept";
+    let value = receipt.value();
+    let execution = CanonicalExecutionJsonV1::new(
+        canonicalize_json_v1(&json!({
+            "attached_artifact":null,
+            "command":"delegation.accept",
+            "execution_version":8,
+            "fresh_attempt_id":null,
+            "fresh_blocker_id":null,
+            "payload":{
+                "schema":"podway.delegation-accept-input/v1",
+                "workspace_uuid":value["workspace_uuid"],
+                "session_id":value["session_id"],
+                "session_revision":running.trace().revision().get(),
+                "attempt_id":value["attempt_id"],
+                "idempotency_key":key,
+                "package_digest":value["package_digest"],
+                "execution":value["execution"],
+                "rounds_used":value["rounds_used"],
+                "result_digest":value["result_digest"],
+                "summary":value["summary"],
+                "worker_disposition":value["worker_disposition"],
+                "accepted":true
+            },
+            "preconditions":{},
+            "selector":{},
+            "workspace_id":identity.workspace_uuid().as_str()
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let admit = AdmitRequestV1::new_with_canonical_execution(
+        DomainCommand::DelegationAccept,
+        podway_store::IdempotencyKeyV1::new(key).unwrap(),
+        podway_core::JobId::new("00000000-0000-4000-9000-000000015105").unwrap(),
+        RevisionAttemptItemPreconditionsV1::new(
+            Some(running.trace().revision()),
+            Some(
+                running
+                    .trace()
+                    .active_attempt()
+                    .unwrap()
+                    .attempt_id()
+                    .clone(),
+            ),
+            None,
+            None,
+        )
+        .unwrap(),
+        digest('9'),
+        UnixMillis::new(5),
+        execution,
+    )
+    .with_procedure_v2_execution()
+    .with_session_identity(AdmissionSessionIdentityV1::Exact(
+        running.trace().session_id().clone(),
+    ))
+    .with_response_context(
+        PersistedResponseContextV1::new(
+            "00000000-0000-4000-8000-000000015106",
+            "delegation.accept",
+            identity.workspace_uuid().clone(),
+            fixture.main().to_string_lossy().as_ref(),
+            0,
+        )
+        .unwrap(),
+    );
+    store.admit(identity, admit).unwrap();
+    let claimed = store
+        .claim_next(
+            identity,
+            WorkerIdV1::new("archive-show-worker").unwrap(),
+            UnixMillis::new(6),
+        )
+        .unwrap()
+        .unwrap();
+    let accepted = running
+        .accept_delegation_successor_v1(running.trace().active_attempt().unwrap().attempt_id())
+        .unwrap();
+    store
+        .commit_graph_delegation_accept_terminal_v1(
+            claimed.claim().clone(),
+            running.workspace_revision(),
+            running.trace().revision(),
+            accepted.clone(),
+            digest('d'),
+            receipt.clone(),
+            UnixMillis::new(7),
+        )
+        .unwrap();
+    check_live_views(156_120, "accepted", 1);
+    let running = accepted;
+    let cancelled = running
+        .cancel_active_session_v2(
+            running.trace().revision(),
+            running.trace().active_attempt().unwrap().attempt_id(),
+            ReasonV2::new("Retain the delegated session").unwrap(),
+            UnixMillis::new(5),
+        )
+        .unwrap()
+        .into_state();
+    store
+        .replace_graph_session_v2(
+            identity,
+            running.workspace_revision(),
+            running.trace().revision(),
+            cancelled.clone(),
+        )
+        .unwrap();
+    store
+        .record_terminal_disposition_v2(
+            identity,
+            TerminalDispositionV2::not_required(
+                cancelled.trace().session_id().clone(),
+                cancelled.trace().revision(),
+                "No external handoff is required",
+                None,
+                UnixMillis::new(6),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    store
+        .archive_current_session_v2(
+            identity,
+            cancelled.workspace_revision(),
+            cancelled.trace().revision(),
+            podway_store::EpochMillisV1::new(7),
+        )
+        .unwrap();
+    drop(store);
+
+    let show = request(
+        156_102,
+        "session.archive_show",
+        &selector,
+        json!({"session_id":cancelled.trace().session_id()})
+            .as_object()
+            .unwrap()
+            .clone(),
+        "unused-delegated-archive-show",
+        PreconditionsV1::default(),
+    );
+    let show = v2_result(dispatch(&production, &show), "session.archive_show");
+    assert_eq!(show["schema"], "podway.session-archive-show-result/v2");
+    podway_protocol::validate_command_result_v2("session.archive_show", &show).unwrap();
+    assert_eq!(show["state"]["schema"], "podway.status-result/v4");
+    assert_eq!(show["receipt_summaries"], json!([receipt.summary()]));
+    assert_eq!(show["receipt_summaries_total"], 1);
+    assert_eq!(show["receipt_summaries_truncated"], false);
 }
 
 pub(super) fn response_request_id(response: &ResponseEnvelopeV2) -> &RequestIdV1 {
@@ -3688,6 +3992,7 @@ fn v2lif005_eligible_replacement_dry_run_uses_current_reset_eligibility() {
         PreconditionsV1::default(),
     );
     let show = v2_result(dispatch(&production, &show), "session.archive_show");
+    assert_eq!(show["schema"], "podway.session-archive-show-result/v1");
     assert_eq!(show["activity"], "inactive");
     assert_eq!(show["state"]["session"]["id"], session_id.as_str());
     assert_eq!(show["state"]["session"]["lifecycle"], "cancelled");

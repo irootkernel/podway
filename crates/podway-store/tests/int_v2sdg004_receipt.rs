@@ -9,10 +9,10 @@ use podway_store::{
     AdmissionSessionIdentityV1, AdmitRequestV1, CanonicalExecutionJsonV1, DelegationReceiptV1,
     DurableWorktreeIdentityV1, GraphSessionStateV2, IdempotencyKeyV1, PersistedResponseContextV1,
     RevisionAttemptItemPreconditionsV1, SqliteStoreOptionsV1, SqliteStoreV1, StoreContractV1,
-    StoreErrorV1, StoreFailpointV1, StoreGraphMutationContractV2, StoreGraphStateContractV2,
-    StoreIdempotencyReadContractV1, StoreIntegrityCheckV1, StoreReadContractV1,
-    StoreSessionArchiveContractV2, StoreTerminalDispositionContractV2, ValidatedWorkspaceRootV1,
-    WorkerIdV1,
+    StoreErrorV1, StoreFailpointV1, StoreGraphMutationContractV2, StoreGraphReadContractV2,
+    StoreGraphStateContractV2, StoreIdempotencyReadContractV1, StoreIntegrityCheckV1,
+    StoreReadContractV1, StoreSessionArchiveContractV2, StoreTerminalDispositionContractV2,
+    ValidatedWorkspaceRootV1, WorkerIdV1,
 };
 use rusqlite::{Connection, params};
 use serde_json::json;
@@ -623,6 +623,16 @@ fn v2sdg004_receipt_state_and_job_commit_atomically() {
     store
         .create_graph_session_v2(&identity(), state.clone())
         .unwrap();
+    let initial = store.read_graph_workspace_view_v2(&identity()).unwrap();
+    let initial_receipts = initial.delegation_receipts();
+    assert_eq!(
+        initial_receipts.readiness(),
+        podway_store::v2_delegation::DelegationReadinessV1::ReceiptMissing
+    );
+    assert!(initial_receipts.current_receipt().is_none());
+    assert_eq!(initial_receipts.total(), 0);
+    assert!(initial_receipts.summaries().is_empty());
+    assert!(!initial_receipts.truncated());
     let claimed = admit_and_claim(&store, &state);
     let next = state
         .accept_delegation_successor_v1(
@@ -645,6 +655,21 @@ fn v2sdg004_receipt_state_and_job_commit_atomically() {
             UnixMillis::new(7),
         )
         .unwrap();
+    let observed = store.read_graph_workspace_view_v2(&identity()).unwrap();
+    let receipts = observed.delegation_receipts();
+    assert_eq!(
+        receipts.readiness(),
+        podway_store::v2_delegation::DelegationReadinessV1::ReceiptCurrent
+    );
+    assert_eq!(receipts.current_receipt(), Some(&receipt));
+    assert_eq!(receipts.total(), 1);
+    assert_eq!(receipts.summaries(), &[receipt.summary()]);
+    assert_eq!(
+        store
+            .read_delegation_receipt_v1(&identity(), &receipt.session_id(), &receipt.attempt_id())
+            .unwrap(),
+        Some(receipt.clone())
+    );
     assert_eq!(
         store.read_graph_session_v2(&identity()).unwrap(),
         Some(next.clone())
@@ -690,6 +715,285 @@ fn v2sdg004_receipt_state_and_job_commit_atomically() {
         reopened.read_graph_session_v2(&identity()).unwrap(),
         Some(next)
     );
+}
+
+#[test]
+fn v2sdg006_prepared_delegated_session_reads_with_empty_receipt_snapshot() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, None);
+    let running = session_state();
+    let prepared = GraphSessionStateV2::prepared(
+        running.workspace_revision(),
+        "Delegated task",
+        running.snapshot().clone(),
+        running.trace().session_id().clone(),
+        UnixMillis::new(3),
+    )
+    .unwrap();
+    store
+        .create_graph_session_v2(&identity(), prepared.clone())
+        .unwrap();
+    let view = store.read_graph_workspace_view_v2(&identity()).unwrap();
+    assert_eq!(view.graph_state(), Some(&prepared));
+    let receipts = view.delegation_receipts();
+    assert_eq!(
+        receipts.readiness(),
+        podway_store::v2_delegation::DelegationReadinessV1::Direct
+    );
+    assert!(receipts.current_receipt().is_none());
+    assert_eq!(receipts.total(), 0);
+    assert!(receipts.summaries().is_empty());
+    assert!(!receipts.truncated());
+}
+
+#[test]
+fn v2sdg006_live_receipt_reads_reject_row_identity_mismatch() {
+    for field in ["session_id", "workspace_uuid", "attempt_id", "receipt_id"] {
+        let temporary = TempDir::new().unwrap();
+        let store = open(&temporary, None);
+        let state = session_state();
+        store
+            .create_graph_session_v2(&identity(), state.clone())
+            .unwrap();
+        let claimed = admit_and_claim(&store, &state);
+        let accepted = state
+            .accept_delegation_successor_v1(state.trace().active_attempt().unwrap().attempt_id())
+            .unwrap();
+        let original = receipt(&state);
+        store
+            .commit_graph_delegation_accept_terminal_v1(
+                claimed.claim().clone(),
+                state.workspace_revision(),
+                state.trace().revision(),
+                accepted,
+                digest('d'),
+                original.clone(),
+                UnixMillis::new(7),
+            )
+            .unwrap();
+        let mut changed = original.value().clone();
+        changed[field] = json!("00000000-0000-4000-8000-000000000499");
+        let changed = DelegationReceiptV1::new(changed).unwrap();
+        let connection = Connection::open(temporary.path().join("state.sqlite3")).unwrap();
+        connection
+            .execute("DELETE FROM v2_delegation_receipts", [])
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO v2_delegation_receipts (attempt_id, session_id, receipt_id, receipt_json) VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    original.attempt_id().as_str(),
+                    original.session_id().as_str(),
+                    original.receipt_id().as_str(),
+                    changed.canonical_json(),
+                ],
+            )
+            .unwrap();
+        assert!(store.read_graph_workspace_view_v2(&identity()).is_err());
+        assert!(
+            store
+                .read_delegation_receipt_v1(
+                    &identity(),
+                    &original.session_id(),
+                    &original.attempt_id(),
+                )
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn v2sdg006_receipt_snapshot_rejects_incoherent_window_and_readiness() {
+    use podway_store::v2_delegation::{DelegationReadinessV1, DelegationReceiptSnapshotV1};
+
+    let receipt = receipt(&session_state());
+    let summary = receipt.summary();
+    assert!(
+        DelegationReceiptSnapshotV1::new(DelegationReadinessV1::ReceiptCurrent, None, vec![], 0)
+            .is_err()
+    );
+    assert!(
+        DelegationReceiptSnapshotV1::new(
+            DelegationReadinessV1::Direct,
+            Some(receipt.clone()),
+            vec![summary.clone()],
+            1,
+        )
+        .is_err()
+    );
+    assert!(
+        DelegationReceiptSnapshotV1::new(
+            DelegationReadinessV1::ReceiptCurrent,
+            Some(receipt.clone()),
+            vec![summary.clone(); 33],
+            33,
+        )
+        .is_err()
+    );
+    assert!(
+        DelegationReceiptSnapshotV1::new(
+            DelegationReadinessV1::ReceiptCurrent,
+            Some(receipt.clone()),
+            vec![summary.clone(), summary.clone()],
+            1,
+        )
+        .is_err()
+    );
+    let mut other = summary.clone();
+    other["receipt_id"] = json!("00000000-0000-4000-8000-000000000499");
+    assert!(
+        DelegationReceiptSnapshotV1::new(
+            DelegationReadinessV1::ReceiptCurrent,
+            Some(receipt),
+            vec![other],
+            1,
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn v2sdg006_receipt_history_reports_exact_total_and_newest_bounded_window() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, None);
+    let mut state = session_state();
+    store
+        .create_graph_session_v2(&identity(), state.clone())
+        .unwrap();
+    let mut receipt_ids = Vec::new();
+
+    for index in 0..33_u64 {
+        let claimed = admit_and_claim_with(
+            &store,
+            &state,
+            &format!("receipt-window-{index}"),
+            0x800 + index,
+        );
+        let mut value = receipt(&state).value().clone();
+        value["receipt_id"] = json!(format!("00000000-0000-4000-8000-{:012x}", 0x600 + index));
+        let accepted_receipt = DelegationReceiptV1::new(value).unwrap();
+        receipt_ids.push(accepted_receipt.receipt_id().as_str().to_owned());
+        let accepted = state
+            .accept_delegation_successor_v1(state.trace().active_attempt().unwrap().attempt_id())
+            .unwrap();
+        store
+            .commit_graph_delegation_accept_terminal_v1(
+                claimed.claim().clone(),
+                state.workspace_revision(),
+                state.trace().revision(),
+                accepted.clone(),
+                digest('d'),
+                accepted_receipt,
+                UnixMillis::new(10 + index * 3),
+            )
+            .unwrap();
+        state = accepted;
+        if index < 32 {
+            let retried = state
+                .retry_active_attempt_v2(
+                    state.trace().revision(),
+                    state.trace().active_attempt().unwrap().attempt_id(),
+                    AttemptId::new(format!("00000000-0000-4000-8000-{:012x}", 0x700 + index))
+                        .unwrap(),
+                    ReasonV2::new("Inspect the next accepted attempt").unwrap(),
+                    UnixMillis::new(11 + index * 3),
+                )
+                .unwrap()
+                .into_state();
+            store
+                .replace_graph_session_v2(
+                    &identity(),
+                    state.workspace_revision(),
+                    state.trace().revision(),
+                    retried.clone(),
+                )
+                .unwrap();
+            state = retried;
+            if index == 0 {
+                let retry_view = store.read_graph_workspace_view_v2(&identity()).unwrap();
+                let retry_receipts = retry_view.delegation_receipts();
+                assert_eq!(
+                    retry_receipts.readiness(),
+                    podway_store::v2_delegation::DelegationReadinessV1::ReceiptMissing
+                );
+                assert!(retry_receipts.current_receipt().is_none());
+                assert_eq!(retry_receipts.total(), 1);
+                assert_eq!(retry_receipts.summaries().len(), 1);
+                assert!(!retry_receipts.truncated());
+            }
+        }
+    }
+
+    let view = store.read_graph_workspace_view_v2(&identity()).unwrap();
+    let receipts = view.delegation_receipts();
+    assert_eq!(receipts.total(), 33);
+    assert_eq!(receipts.summaries().len(), 32);
+    assert!(receipts.truncated());
+    assert_eq!(
+        receipts.current_receipt().unwrap().summary(),
+        receipts.summaries()[0]
+    );
+    let selected: Vec<_> = receipts
+        .summaries()
+        .iter()
+        .map(|summary| summary["receipt_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        selected,
+        receipt_ids[1..]
+            .iter()
+            .rev()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+    );
+
+    let completed = state
+        .complete_active_action_v2(
+            state.trace().revision(),
+            state.trace().active_attempt().unwrap().attempt_id(),
+            None,
+            UnixMillis::new(110),
+        )
+        .unwrap()
+        .into_state();
+    store
+        .replace_graph_session_v2(
+            &identity(),
+            state.workspace_revision(),
+            state.trace().revision(),
+            completed.clone(),
+        )
+        .unwrap();
+    store
+        .record_terminal_disposition_v2(
+            &identity(),
+            TerminalDispositionV2::not_required(
+                completed.trace().session_id().clone(),
+                completed.trace().revision(),
+                "No handoff required",
+                None,
+                UnixMillis::new(111),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    store
+        .archive_current_session_v2(
+            &identity(),
+            completed.workspace_revision(),
+            completed.trace().revision(),
+            UnixMillis::new(112),
+        )
+        .unwrap();
+    let archived = store
+        .read_archived_delegation_receipts_v1(&identity(), completed.trace().session_id())
+        .unwrap()
+        .unwrap();
+    assert_eq!(archived.total(), 33);
+    assert_eq!(archived.summaries().len(), 32);
+    assert!(archived.truncated());
+    assert!(archived.current_receipt().is_none());
+    assert_eq!(archived.summaries(), receipts.summaries());
 }
 
 #[test]
@@ -981,6 +1285,7 @@ fn v2sdg004_reopen_rejects_well_formed_mismatched_and_noncanonical_receipts() {
         "delegation",
         "noncanonical",
         "archived_procedure_digest",
+        "archived_receipt_id",
     ] {
         let temporary = TempDir::new().unwrap();
         let store = open(&temporary, None);
@@ -1004,7 +1309,7 @@ fn v2sdg004_reopen_rejects_well_formed_mismatched_and_noncanonical_receipts() {
                 UnixMillis::new(7),
             )
             .unwrap();
-        if variant == "archived_procedure_digest" {
+        if matches!(variant, "archived_procedure_digest" | "archived_receipt_id") {
             let completed = accepted
                 .complete_active_action_v2(
                     accepted.trace().revision(),
@@ -1054,6 +1359,9 @@ fn v2sdg004_reopen_rejects_well_formed_mismatched_and_noncanonical_receipts() {
             }
             "procedure_digest" | "archived_procedure_digest" => {
                 value["procedure_digest"] = json!(digest('9'));
+            }
+            "archived_receipt_id" => {
+                value["receipt_id"] = json!("00000000-0000-4000-8000-000000000499");
             }
             "placement_id" => value["placement_id"] = json!("other-work"),
             "delegation" => {
@@ -1107,6 +1415,62 @@ fn v2sdg004_reopen_rejects_well_formed_mismatched_and_noncanonical_receipts() {
             "{variant}: {error:?}"
         );
     }
+}
+
+#[test]
+fn v2sdg006_archived_delegated_session_without_receipt_has_empty_history() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, None);
+    let running = session_state();
+    store
+        .create_graph_session_v2(&identity(), running.clone())
+        .unwrap();
+    let cancelled = running
+        .cancel_active_session_v2(
+            running.trace().revision(),
+            running.trace().active_attempt().unwrap().attempt_id(),
+            podway_core::ReasonV2::new("Cancelled before acceptance").unwrap(),
+            UnixMillis::new(8),
+        )
+        .unwrap()
+        .into_state();
+    store
+        .replace_graph_session_v2(
+            &identity(),
+            running.workspace_revision(),
+            running.trace().revision(),
+            cancelled.clone(),
+        )
+        .unwrap();
+    store
+        .record_terminal_disposition_v2(
+            &identity(),
+            TerminalDispositionV2::not_required(
+                cancelled.trace().session_id().clone(),
+                cancelled.trace().revision(),
+                "No handoff required",
+                None,
+                UnixMillis::new(9),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    store
+        .archive_current_session_v2(
+            &identity(),
+            cancelled.workspace_revision(),
+            cancelled.trace().revision(),
+            UnixMillis::new(10),
+        )
+        .unwrap();
+    let archived = store
+        .read_archived_delegation_receipts_v1(&identity(), cancelled.trace().session_id())
+        .unwrap()
+        .unwrap();
+    assert_eq!(archived.total(), 0);
+    assert!(archived.summaries().is_empty());
+    assert!(!archived.truncated());
+    assert!(archived.current_receipt().is_none());
 }
 
 #[test]
@@ -1172,6 +1536,19 @@ fn v2sdg004_archived_receipt_survives_reopen_then_purges_with_session() {
         .unwrap();
     drop(store);
     let reopened = open(&temporary, None);
+    let archived_receipts = reopened
+        .read_archived_delegation_receipts_v1(&identity(), completed.trace().session_id())
+        .unwrap()
+        .unwrap();
+    assert_eq!(archived_receipts.total(), 1);
+    assert!(archived_receipts.current_receipt().is_none());
+    let original = receipt(&state);
+    assert_eq!(
+        reopened
+            .read_delegation_receipt_v1(&identity(), &original.session_id(), &original.attempt_id())
+            .unwrap(),
+        Some(original.clone())
+    );
     let connection = Connection::open(temporary.path().join("state.sqlite3")).unwrap();
     let count: i64 = connection
         .query_row("SELECT COUNT(*) FROM v2_delegation_receipts", [], |row| {
@@ -1194,4 +1571,10 @@ fn v2sdg004_archived_receipt_survives_reopen_then_purges_with_session() {
         })
         .unwrap();
     assert_eq!(count, 0);
+    assert_eq!(
+        reopened
+            .read_delegation_receipt_v1(&identity(), &original.session_id(), &original.attempt_id())
+            .unwrap(),
+        None
+    );
 }

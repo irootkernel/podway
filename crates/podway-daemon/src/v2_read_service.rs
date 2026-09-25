@@ -6,8 +6,9 @@
 use std::{error::Error, fmt};
 
 use podway_config::{
-    ParsedNodeDefinition, ParsedProcedure, ParsedProcedureV2, ProcedureDocumentFormat,
-    goal_revision_safe_targets_v2, parse_procedure_document, validate_procedure_v2,
+    DelegationWorkPackageV1, ParsedNodeDefinition, ParsedProcedure, ParsedProcedureV2,
+    ProcedureDocumentFormat, goal_revision_safe_targets_v2, parse_procedure_document,
+    validate_procedure_v2,
 };
 use podway_core::{
     ArtifactLocationKindV1,
@@ -54,6 +55,7 @@ use podway_core::{
     canonicalize_json_v1,
 };
 use podway_protocol::{EVIDENCE_PAGE_TOKEN_VERSION_V1, EvidencePageTokenV1};
+use podway_store::v2_delegation::{DelegationReadinessV1, DelegationReceiptV1};
 use podway_store::{
     AttemptWorkflowMemoryV2, EvidenceLookupErrorV2, EvidenceReadbackV2, EvidenceResolutionStateV2,
     GraphSessionStateV2, GraphWorkspaceViewV2, recorded_value_digest_v2,
@@ -67,6 +69,9 @@ const BLOCKER_WINDOW_BYTES_MAX: usize = 49_152;
 const HISTORY_WINDOW_BYTES_MAX: usize = 65_536;
 const OBSERVATION_ITEM_VALUE_CHARS_MAX: usize = 128;
 const OBSERVATION_ITEM_VALUE_BYTES_MAX: usize = 1_024;
+// The reserved result schemas bound these values independently of the frame cap.
+const MAX_DELEGATION_PACKAGE_RESULT_BYTES_V1: usize = 1_000_000;
+const MAX_DELEGATION_RECEIPT_RESULT_BYTES_V1: usize = 65_536;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GraphStatusTierV2 {
@@ -106,6 +111,161 @@ impl fmt::Display for GraphViewErrorV2 {
 
 impl Error for GraphViewErrorV2 {}
 
+fn delegated_placement_count(procedure: &ParsedProcedureV2) -> usize {
+    procedure
+        .graph()
+        .placements()
+        .iter()
+        .filter(|placement| {
+            matches!(placement, GraphPlacementV2::Action(action) if action.delegation().is_some())
+        })
+        .count()
+}
+
+fn delegation_projection(
+    view: &GraphWorkspaceViewV2,
+    state: &GraphSessionStateV2,
+    current: Option<&CurrentProjection<'_>>,
+) -> Value {
+    let Some(current) = current else {
+        return if state.trace().lifecycle() == SessionLifecycle::Prepared {
+            json!({"state":"inactive","reason":"no_active_attempt","safe_next_action":"begin_or_inspect"})
+        } else {
+            json!({"state":"inactive","reason":"historical_attempt","safe_next_action":"inspect_history"})
+        };
+    };
+    if !current.delegated() {
+        return json!({"state":"not_applicable","reason":"direct_placement","safe_next_action":"continue_direct"});
+    }
+    let receipts = view.delegation_receipts();
+    match receipts.readiness() {
+        DelegationReadinessV1::ReceiptCurrent => json!({
+            "state":"accepted", "reason":"current_receipt", "safe_next_action":"complete",
+            "guidance":"Changing an accepted item makes the receipt stale; complete while its item state is current.",
+            "receipt":receipts.current_receipt().map(|receipt| receipt.summary()),
+        }),
+        DelegationReadinessV1::PackageChanged | DelegationReadinessV1::ItemsChanged => json!({
+            "state":"stale_acceptance",
+            "reason": if receipts.readiness() == DelegationReadinessV1::PackageChanged {"package_changed"} else {"items_changed"},
+            "safe_next_action":"retry_or_rework",
+            "guidance":"The acceptance is stale. Retry or rework for a fresh attempt; do not redispatch automatically.",
+            "receipt":receipts.current_receipt().map(|receipt| receipt.summary()),
+        }),
+        DelegationReadinessV1::Direct | DelegationReadinessV1::ReceiptMissing => {
+            let (reason, action) = if !current.items_satisfied {
+                ("items_incomplete", "record_items")
+            } else if !current.open_blockers.is_empty() {
+                ("blockers_open", "clear_blockers")
+            } else {
+                ("receipt_required", "accept")
+            };
+            json!({"state":"awaiting_acceptance","reason":reason,"safe_next_action":action,
+                "guidance":"Finish all items and corrections before acceptance; later item edits require a fresh attempt."})
+        }
+    }
+}
+
+pub fn project_delegation_package_result_v1(
+    view: &GraphWorkspaceViewV2,
+    package: &DelegationWorkPackageV1,
+) -> Result<Map<String, Value>, GraphViewErrorV2> {
+    let state = graph_state(view)?;
+    let active = state
+        .trace()
+        .active_attempt()
+        .ok_or(GraphViewErrorV2::InconsistentState(
+            "delegation package requires an active attempt",
+        ))?;
+    let value = package.package();
+    if value.get("workspace_uuid") != Some(&json!(view.identity().workspace_uuid()))
+        || value.get("session_id") != Some(&json!(state.trace().session_id()))
+        || value.get("attempt_id") != Some(&json!(active.attempt_id()))
+        || value.get("placement_id") != Some(&json!(active.graph_node_id()))
+        || value.get("procedure_digest") != Some(&json!(state.snapshot().digest()))
+    {
+        return Err(GraphViewErrorV2::InconsistentState(
+            "delegation package does not match the selected attempt",
+        ));
+    }
+    let result = json!({
+        "schema":"podway.delegation-package-result/v1",
+        "package":value,
+        "package_digest":package.digest().as_str(),
+        "workspace_uuid":view.identity().workspace_uuid().as_str(),
+        "session_id":state.trace().session_id().as_str(),
+        "session_revision":state.trace().revision().get(),
+        "attempt_id":active.attempt_id().as_str(),
+    });
+    if serialized_bytes_v1(&result) > MAX_DELEGATION_PACKAGE_RESULT_BYTES_V1 {
+        return Err(GraphViewErrorV2::InconsistentState(
+            "delegation package result exceeds its byte allocation",
+        ));
+    }
+    Ok(result
+        .as_object()
+        .expect("package result is an object")
+        .clone())
+}
+
+pub fn project_delegation_receipt_result_v1(
+    view: &GraphWorkspaceViewV2,
+    receipt: &DelegationReceiptV1,
+) -> Result<Map<String, Value>, GraphViewErrorV2> {
+    let state = graph_state(view)?;
+    if receipt.workspace_uuid() != *view.identity().workspace_uuid()
+        || receipt.session_id() != *state.trace().session_id()
+        || !state
+            .trace()
+            .attempts()
+            .iter()
+            .any(|attempt| attempt.attempt_id() == &receipt.attempt_id())
+    {
+        return Err(GraphViewErrorV2::InconsistentState(
+            "delegation receipt does not belong to the selected session",
+        ));
+    }
+    let active = state
+        .trace()
+        .active_attempt()
+        .is_some_and(|attempt| attempt.attempt_id() == &receipt.attempt_id());
+    if active && view.delegation_receipts().current_receipt() != Some(receipt) {
+        return Err(GraphViewErrorV2::InconsistentState(
+            "active delegation receipt differs from the coherent workspace view",
+        ));
+    }
+    let (applicability, reason) = if !active {
+        ("historical", "historical_attempt")
+    } else {
+        match view.delegation_receipts().readiness() {
+            DelegationReadinessV1::ReceiptCurrent => ("accepted", "current_receipt"),
+            DelegationReadinessV1::PackageChanged => ("stale_acceptance", "package_changed"),
+            DelegationReadinessV1::ItemsChanged => ("stale_acceptance", "items_changed"),
+            DelegationReadinessV1::Direct | DelegationReadinessV1::ReceiptMissing => {
+                return Err(GraphViewErrorV2::InconsistentState(
+                    "active delegation receipt has no applicable readiness",
+                ));
+            }
+        }
+    };
+    let result = json!({
+        "schema":"podway.delegation-receipt-result/v1",
+        "session_id":receipt.session_id().as_str(),
+        "attempt_id":receipt.attempt_id().as_str(),
+        "receipt":receipt.value(),
+        "applicability":applicability,
+        "reason":reason,
+    });
+    if serialized_bytes_v1(&result) > MAX_DELEGATION_RECEIPT_RESULT_BYTES_V1 {
+        return Err(GraphViewErrorV2::InconsistentState(
+            "delegation receipt result exceeds its byte allocation",
+        ));
+    }
+    Ok(result
+        .as_object()
+        .expect("receipt result is an object")
+        .clone())
+}
+
 pub fn project_graph_status_v2(
     view: &GraphWorkspaceViewV2,
     tier: GraphStatusTierV2,
@@ -123,11 +283,16 @@ pub fn project_graph_status_v2(
         ));
     }
     let procedure = rehydrate_snapshot(state)?;
-    let current = CurrentProjection::derive(state, &procedure)?;
+    let current = CurrentProjection::derive(view, state, &procedure)?;
+    let delegated = delegated_placement_count(&procedure) != 0;
 
     let mut result = Map::new();
     let schema = match tier {
+        GraphStatusTierV2::Compact if delegated => "podway.compact-status-result/v4",
         GraphStatusTierV2::Compact => "podway.compact-status-result/v3",
+        GraphStatusTierV2::Standard | GraphStatusTierV2::Verbose if delegated => {
+            "podway.status-result/v4"
+        }
         GraphStatusTierV2::Standard | GraphStatusTierV2::Verbose => "podway.status-result/v3",
     };
     result.insert("schema".to_owned(), json!(schema));
@@ -174,8 +339,26 @@ pub fn project_graph_status_v2(
         ),
     );
     result.insert("queue".to_owned(), queue(view));
+    if delegated {
+        result.insert(
+            "delegation".to_owned(),
+            delegation_projection(view, state, current.as_ref()),
+        );
+    }
     if tier == GraphStatusTierV2::Compact {
         return Ok(result);
+    }
+    if delegated {
+        let receipts = view.delegation_receipts();
+        result.insert("receipt_summaries".to_owned(), json!(receipts.summaries()));
+        result.insert(
+            "receipt_summaries_total".to_owned(),
+            json!(receipts.total()),
+        );
+        result.insert(
+            "receipt_summaries_truncated".to_owned(),
+            json!(receipts.truncated()),
+        );
     }
 
     result.insert("purpose".to_owned(), json!(state.snapshot().purpose()));
@@ -231,6 +414,29 @@ pub fn project_graph_status_v2(
     }
     if tier == GraphStatusTierV2::Verbose {
         add_histories(&mut result, state, &procedure, history_before)?;
+    }
+    Ok(result)
+}
+
+pub fn project_graph_archive_show_result_v2(
+    view: &GraphWorkspaceViewV2,
+    status: Map<String, Value>,
+    archive: Value,
+    terminal_disposition: Value,
+) -> Result<Value, GraphViewErrorV2> {
+    let delegated = delegated_placement_count(&rehydrate_snapshot(graph_state(view)?)?) != 0;
+    let mut result = json!({
+        "schema": if delegated { "podway.session-archive-show-result/v2" } else { "podway.session-archive-show-result/v1" },
+        "activity": "inactive",
+        "archive": archive,
+        "terminal_disposition": terminal_disposition,
+        "state": status,
+    });
+    if delegated {
+        let receipts = view.delegation_receipts();
+        result["receipt_summaries"] = json!(receipts.summaries());
+        result["receipt_summaries_total"] = json!(receipts.total());
+        result["receipt_summaries_truncated"] = json!(receipts.truncated());
     }
     Ok(result)
 }
@@ -601,13 +807,27 @@ pub fn project_graph_next_v2(
 ) -> Result<Map<String, Value>, GraphViewErrorV2> {
     let state = graph_state(view)?;
     if state.trace().lifecycle() == SessionLifecycle::Prepared {
-        return Ok(project_prepared_next_v1(view, state));
+        return project_prepared_next_v1(view, state);
     }
     let procedure = rehydrate_snapshot(state)?;
-    let current = CurrentProjection::derive(state, &procedure)?
+    let current = CurrentProjection::derive(view, state, &procedure)?
         .ok_or(GraphViewErrorV2::TerminalSessionHasNoNext)?;
+    let delegated = delegated_placement_count(&procedure) != 0;
     let mut result = Map::new();
-    result.insert("schema".to_owned(), json!("podway.next-result/v3"));
+    result.insert(
+        "schema".to_owned(),
+        json!(if delegated {
+            "podway.next-result/v4"
+        } else {
+            "podway.next-result/v3"
+        }),
+    );
+    if delegated {
+        result.insert(
+            "delegation".to_owned(),
+            delegation_projection(view, state, Some(&current)),
+        );
+    }
     result.insert("procedure_schema".to_owned(), json!("podway.procedure/v2"));
     result.insert(
         "procedure_digest".to_owned(),
@@ -753,11 +973,18 @@ pub fn project_graph_observation_v1(
 ) -> Result<Map<String, Value>, GraphViewErrorV2> {
     let state = graph_state(view)?;
     let procedure = rehydrate_snapshot(state)?;
-    let current = CurrentProjection::derive(state, &procedure)?;
+    let current = CurrentProjection::derive(view, state, &procedure)?;
+    let delegated = delegated_placement_count(&procedure) != 0;
     // ADR-0024 reduces the observation status member to a value-free compact projection: guidance
     // and the active-item window already carry what a mutation needs, and a caller that wants the
     // standard or verbose status projection calls `session.status`.
-    let status = observation_status_v1(view, state, current.as_ref())?;
+    let mut status = observation_status_v1(view, state, current.as_ref())?;
+    if delegated {
+        status.insert(
+            "delegation".to_owned(),
+            delegation_projection(view, state, current.as_ref()),
+        );
+    }
     let guidance = if current.is_some() || state.trace().lifecycle() == SessionLifecycle::Prepared {
         let mut next = project_graph_next_v2(view)?;
         strip_evidence_previews_v1(&mut next);
@@ -776,7 +1003,14 @@ pub fn project_graph_observation_v1(
     )?;
 
     let mut result = Map::new();
-    result.insert("schema".to_owned(), json!("podway.observation-result/v3"));
+    result.insert(
+        "schema".to_owned(),
+        json!(if delegated {
+            "podway.observation-result/v4"
+        } else {
+            "podway.observation-result/v3"
+        }),
+    );
     result.insert("status".to_owned(), status);
     result.insert("guidance".to_owned(), guidance);
     let active_items = current
@@ -1016,8 +1250,9 @@ fn strip_evidence_previews_v1(next: &mut Map<String, Value>) {
 fn project_prepared_next_v1(
     view: &GraphWorkspaceViewV2,
     state: &GraphSessionStateV2,
-) -> Map<String, Value> {
-    json!({
+) -> Result<Map<String, Value>, GraphViewErrorV2> {
+    let delegated_placement_count = delegated_placement_count(&rehydrate_snapshot(state)?);
+    let mut result = json!({
         "schema": "podway.prepared-next-result/v1",
         "procedure_schema": "podway.procedure/v2",
         "procedure_digest": state.snapshot().digest().as_str(),
@@ -1037,7 +1272,15 @@ fn project_prepared_next_v1(
     })
     .as_object()
     .expect("prepared next is an object")
-    .clone()
+    .clone();
+    if delegated_placement_count != 0 {
+        result.insert("schema".to_owned(), json!("podway.prepared-next-result/v2"));
+        result.insert(
+            "delegated_placement_count".to_owned(),
+            json!(delegated_placement_count),
+        );
+    }
+    Ok(result)
 }
 
 fn prepared_mutation_templates(
@@ -1131,10 +1374,12 @@ struct CurrentProjection<'a> {
     goal_ready: bool,
     evidence_ready: bool,
     evidence_readback: Vec<EvidenceReadbackV2>,
+    delegation_readiness: DelegationReadinessV1,
 }
 
 impl<'a> CurrentProjection<'a> {
     fn derive(
+        view: &GraphWorkspaceViewV2,
         state: &'a GraphSessionStateV2,
         procedure: &'a ParsedProcedureV2,
     ) -> Result<Option<Self>, GraphViewErrorV2> {
@@ -1263,6 +1508,7 @@ impl<'a> CurrentProjection<'a> {
             goal_ready,
             evidence_ready,
             evidence_readback,
+            delegation_readiness: view.delegation_receipts().readiness(),
         }))
     }
 
@@ -1300,6 +1546,12 @@ impl<'a> CurrentProjection<'a> {
             && self.open_blockers.is_empty()
             && self.goal_ready
             && self.evidence_ready
+            && (!self.delegated()
+                || self.delegation_readiness == DelegationReadinessV1::ReceiptCurrent)
+    }
+
+    fn delegated(&self) -> bool {
+        matches!(self.placement, GraphPlacementV2::Action(action) if action.delegation().is_some())
     }
 
     fn readiness_value(&self) -> Value {

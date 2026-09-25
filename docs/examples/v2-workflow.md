@@ -182,7 +182,7 @@ podway --json observe --wait-for-idle
 ```
 
 Automation uses the JSON contract, never human-readable text. The observation
-returns `podway.observation-result/v3`; read these stable fields:
+returns `podway.observation-result/v3` for a Direct Procedure or `podway.observation-result/v4` for a Procedure with delegation; read these stable fields:
 
 | JSON field | CLI precondition or use |
 |---|---|
