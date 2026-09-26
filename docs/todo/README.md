@@ -84,7 +84,7 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 
 ## Current adopted dossiers
 
-- [Host-neutral supervised delegation foundation](TODO-podway-supervised-delegation.md): Podway-only `V2SDG` implementation, explicit opt-in, and mandatory Direct-work continuity. Task order and state live only in the active roadmap; no runtime or deployment is activated by adoption.
+There are no current adopted dossiers.
 
 ## Related candidates
 

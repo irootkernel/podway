@@ -576,11 +576,11 @@ schema, install or activate a runtime, or alter unrelated 64-entry collections.
 
 ## V2SDG — Host-Neutral Supervised Delegation Foundation
 
-Status: In Progress.
+Status: Completed.
 
-Conditional release target: `v0.2.12`. Inclusion requires completion of
-`V2SDG-006` through `V2SDG-009`, the required development acceptance, and a
-separately authorized stable-release qualification. The `v0.2.11` stable
+Conditional release target: `v0.2.12`. The source foundation and development
+acceptance are complete. Release inclusion still requires separately authorized
+stable-release qualification. The `v0.2.11` stable
 release contains the earlier internal foundations. Current source implements
 native routes and opt-in admission, with native lifecycle and migration
 qualification through `V2SDG-008`. No supported stable release contains the
@@ -593,7 +593,6 @@ dependency for this Podway-only epic.
 
 Authority: [ADR-0035](../architecture-decision-records/0035-host-neutral-supervised-delegation.md).
 Target behavior: [supervised-delegation specification](../specs/interfaces/supervised-delegation.md).
-Implementation owner: [adopted V2SDG dossier](../todo/TODO-podway-supervised-delegation.md).
 Operational constraints: [non-disruptive development guidance](../implementation-tips/supervised-delegation.md).
 
 Goal: add an explicitly opt-in, host-neutral action-delegation declaration,
@@ -615,8 +614,9 @@ closed the Podway meanings before schema reservation. Both real integration
 paths remain unavailable pending their named prerequisites. The local native
 fixture covers both host labels, single acceptance, the post-acceptance matrix,
 and recovery without automatic redispatch; it does not qualify a real adapter.
-Final development acceptance and the independent epic audit remain separate
-from completed member implementation.
+Development acceptance passed the full `make test` gate and the independent
+committed-epic audit. All nine members are complete; the adopted dossier was
+retired after its lasting content moved to the authorities linked above.
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
