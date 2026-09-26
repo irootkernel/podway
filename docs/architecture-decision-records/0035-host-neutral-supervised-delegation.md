@@ -5,7 +5,7 @@
 - Extends: [ADR-0010](0010-generic-cli-json-integration.md)
 - Preserves: [ADR-0003](0003-daemon-single-writer.md), [ADR-0006](0006-same-user-local-trust.md), [ADR-0017](0017-single-cursor-convergence.md), [ADR-0019](0019-procedure-v2-only-product.md), [ADR-0031](0031-keyed-runtime-modes-and-managed-development-service.md)
 - Delivery owner: [V2SDG](../roadmap/README.md#v2sdg-host-neutral-supervised-delegation-foundation)
-- Implementation availability: planned; this decision enables no executable capability.
+- Implementation availability: the source foundation is implemented; the linked roadmap owns release and live-integration status.
 
 ## Context
 
@@ -147,6 +147,7 @@ and join contracts.
 
 The target behavior is specified in the
 [supervised-delegation contract](../specs/interfaces/supervised-delegation.md).
-The adopted dossier owns the unfinished implementation breakdown; the roadmap
-alone owns task status and ordering. Neither this ADR nor a test adapter is a
-claim that live integration or rollout has occurred.
+The [requirement traceability matrix](../specs/quality/requirements-traceability.md#supervised-delegation-ownership-and-proof)
+maps the implementation and its proof; the roadmap alone owns task status and
+ordering. Neither this ADR nor a test adapter is a claim that live integration
+or rollout has occurred.
