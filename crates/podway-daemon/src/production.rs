@@ -7195,7 +7195,11 @@ mod tests {
             .find(|contract| contract.schema == "podway.detached-admission-result/v2")
             .expect("the v2 detached-admission family is registered");
         assert_eq!(
-            registered,
+            registered
+                .iter()
+                .copied()
+                .chain(["delegation.accept"])
+                .collect::<std::collections::BTreeSet<_>>(),
             detached.commands.iter().copied().collect(),
             "every registered v2 mutation must support detached admission"
         );

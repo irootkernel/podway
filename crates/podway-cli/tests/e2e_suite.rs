@@ -12,3 +12,5 @@ mod e2e_runtime_reset_plan;
 mod e2e_v2_native_qualification;
 #[path = "e2e_v2ret005_workspace_removal.rs"]
 mod e2e_v2ret005_workspace_removal;
+#[path = "e2e_v2sdg008_qualification.rs"]
+mod e2e_v2sdg008_qualification;

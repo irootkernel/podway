@@ -853,9 +853,9 @@ def require_error_code(envelope: dict[str, Any], expected: str, *, label: str) -
 
 
 def response_loss_relay(
-    proxy_socket: Path, daemon_socket: Path
+    proxy_socket: Path, daemon_socket: Path, *, discard_command: str | None = None
 ) -> tuple[threading.Thread, dict[str, bytes | BaseException]]:
-    """Forward one request, consume one response, and deliberately discard it."""
+    """Discard one response, optionally forwarding bounded CLI status preflights first."""
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     listener.bind(proxy_socket.as_posix())
     os.chmod(proxy_socket, FILE_MODE)
@@ -884,20 +884,29 @@ def response_loss_relay(
     def relay() -> None:
         try:
             listener.settimeout(10)
-            downstream, _ = listener.accept()
-            with downstream:
-                downstream.settimeout(10)
-                request = read_single_frame(downstream, label="response-loss request")
-                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as upstream:
-                    upstream.settimeout(10)
-                    upstream.connect(daemon_socket.as_posix())
-                    upstream.sendall(request)
-                    upstream.shutdown(socket.SHUT_WR)
-                    response = read_single_frame(upstream, label="response-loss response")
-                outcome["request"] = request
-                outcome["response"] = response
-                # Closing downstream without forwarding response creates the exact response-loss
-                # boundary observed by the CLI.
+            for _ in range(8):
+                downstream, _ = listener.accept()
+                with downstream:
+                    downstream.settimeout(10)
+                    request = read_single_frame(downstream, label="response-loss request")
+                    command = json.loads(request[4:])["command"]
+                    discard = discard_command is None or command == discard_command
+                    if not discard and command != "session.status":
+                        fail(f"unexpected preflight before {discard_command}: {command}")
+                    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as upstream:
+                        upstream.settimeout(10)
+                        upstream.connect(daemon_socket.as_posix())
+                        upstream.sendall(request)
+                        upstream.shutdown(socket.SHUT_WR)
+                        response = read_single_frame(upstream, label="response-loss response")
+                    if discard:
+                        outcome["request"] = request
+                        outcome["response"] = response
+                        # Closing downstream discards exactly the selected response.
+                        return
+                    downstream.sendall(response)
+                    downstream.shutdown(socket.SHUT_WR)
+            fail("response-loss relay exceeded its preflight bound")
         except BaseException as error:
             outcome["error"] = error
         finally:
@@ -1147,7 +1156,9 @@ def probe_daemon_readiness(
     if len(payload) > IPC_MAX_PAYLOAD_BYTES:
         fail("daemon status request exceeds the IPC frame bound")
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-        connection.settimeout(1.0)
+        # Match the native CLI: status inspects every active Store and can exceed
+        # one second while a populated debug runtime is recovering.
+        connection.settimeout(5.0)
         connection.connect(socket_path.as_posix())
         connection.sendall(len(payload).to_bytes(4, "big") + payload)
         connection.shutdown(socket.SHUT_WR)

@@ -403,6 +403,7 @@ is:
 | `procedure-preview-result/v2`, `procedure-graph-result/v2` | Delegated documents only; non-delegated inputs retain v1 |
 | `session-archive-show-result/v2` | Retained delegated snapshots only, including bounded receipt summaries |
 | `job-result/v5`, `job-lookup-result/v5` | Wrappers needed for the new acceptance job; old job families and stored terminal envelopes stay decodable |
+| `detached-admission-result/v2` | `delegation.accept --detach` uses the existing closed admission shape; acceptance completion remains the separate `/v1` result |
 
 All result identifiers in this table carry the `podway.` prefix. The Procedure
 identifier stays `podway.procedure/v2`; this is an opt-in placement extension,

@@ -14,6 +14,15 @@ make test           # required development gate
 make dist           # complete gate, qualification, handoff, and final verification
 ```
 
+To run one registered native case through the same binary-building entry point:
+
+```bash
+make test-e2e-exact E2E_TEST=podway-cli::e2e_suite::e2e_v2sdg008_qualification::v2sdg008_native_lifecycle_migration_and_host_qualification
+```
+
+Use `make test-e2e` for the complete E2E suite. The focused result does not
+replace the full `make test` development gate.
+
 Run the narrowest relevant layer while iterating and `make test` before sharing a
 development revision. `make dist` always reruns that gate, adds bounded fuzzing,
 all-target Clippy, and qualification of the release-profile distribution before

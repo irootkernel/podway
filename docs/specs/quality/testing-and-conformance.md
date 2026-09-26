@@ -115,6 +115,33 @@ successful fixture receipt proves protocol behavior, not real executor work.
 | External and managed Primary restart, late result, unknown worker state | Require exact identity and explicit recovery; no automatic redispatch | `V2SDG-008` controlled-host fixtures |
 | Populated v11 upgrade, interruption, newer-state refusal, independent Direct worktree | Preserve bytes and progress in isolated named runtimes | `V2SDG-008` native migration and mixed-worktree tests |
 
+The registered CLI E2E case
+`e2e_v2sdg008_qualification::v2sdg008_native_lifecycle_migration_and_host_qualification`
+runs `tools/qualify_supervised_delegation.py` against actual debug CLI and daemon
+binaries. Its controlled external runtime persists assignment identities, feedback,
+and effect counts across disposable Primary processes. Both host labels use the
+same Procedure semantics. The native matrix covers receipt provenance and worker
+disposition, unchanged reads/no-ops, failed atomic recording, blockers, required
+and optional edits, edit/revert, immutable lookup/replay, and fresh retry/rework
+and goal attempts. A named-runtime socket relay discards acceptance and completion
+responses; daemon SIGKILL/restart and exact job lookup reconcile their outcomes.
+A separate SIGKILL after durable acceptance admission reconciles the same job
+to one receipt and one session-revision increment. This timing case permits
+either pending or already committed execution at the kill boundary; it does
+not claim a deterministic interruption inside the receipt transaction.
+The fixture also exercises populated v11 migration, SIGKILL during startup
+recovery while its migration writer is locked, transaction failure after v12
+DDL, newer schema refusal, and backup restore. It compares the preexisting v2
+table rows and permits another Direct worktree to finish while migration fails.
+It never uses an installed runtime.
+
+This qualification asserts explicit runtime cleanup. Its JSON result records
+`live_adapter` and `live_model` as `not_performed`. Assignment/effect counters prove
+only the controlled recovery pattern; they do not attest to external artifacts,
+model quality, real adapter behavior, or arbitrary same-user execution. Store
+transaction failpoints in the registered integration suites also cover
+uncommitted receipt and item writes.
+
 The offline adapter review inputs are pinned in
 `docs/implementation-tips/delegation-adapter-contract-review.md` at Dolgorae
 commit `5d93f43023ebf15e26b9c33b1ad032a7eeff6bbe`. `V2SDG-002` must

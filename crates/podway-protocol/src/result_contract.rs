@@ -317,6 +317,7 @@ pub const EXISTING_ROUTE_RESULT_SCHEMAS_V2: &[ResultSchemaContractV2] = &[
             "item.attach",
             "item.clear",
             "item.record_many",
+            "delegation.accept",
         ],
     ),
     result_schema_v2(

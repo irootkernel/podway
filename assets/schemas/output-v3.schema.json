@@ -325,7 +325,7 @@
     "detachedAdmission": {
       "required": ["workspace", "job"],
       "properties": {
-        "command": { "enum": ["session.start", "session.start_replace", "session.begin", "session.terminal_disposition", "session.complete", "session.skip", "session.retry", "session.block", "session.unblock", "session.cancel", "session.reset", "session.archive", "session.decide", "session.rework", "goal.define", "goal.revise", "goal.assess_criterion", "item.check", "item.uncheck", "item.set", "item.add", "item.remove", "item.attach", "item.clear", "item.record_many"] },
+        "command": { "enum": ["session.start", "session.start_replace", "session.begin", "session.terminal_disposition", "session.complete", "session.skip", "session.retry", "session.block", "session.unblock", "session.cancel", "session.reset", "session.archive", "session.decide", "session.rework", "goal.define", "goal.revise", "goal.assess_criterion", "item.check", "item.uncheck", "item.set", "item.add", "item.remove", "item.attach", "item.clear", "item.record_many", "delegation.accept"] },
         "result": { "$ref": "urn:podway:schema:detached-admission-result:v2" }
       },
       "allOf": [

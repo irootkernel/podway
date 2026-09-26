@@ -1505,7 +1505,7 @@
       {
         "id": "urn:podway:schema:output:v3",
         "path": "schemas/output-v3.schema.json",
-        "sha256": "sha256:867ef2ee7f221caaff71a05501f3ec71c3a788658fe33e9e0bdab585f954d1f8"
+        "sha256": "sha256:72dc0712ef8b01d5ef94e0ce4c9af8d728d7b62034740db8b297f8ade37bb820"
       },
       {
         "id": "urn:podway:schema:prepared-next-result:v1",

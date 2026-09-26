@@ -14,7 +14,7 @@ PRESET_DIR ?= assets/presets
 PRESET_VALIDATOR ?= target/debug/podway
 export PRESET_ID PRESET_NAME PRESET_DESCRIPTION PRESET_FILE PRESET_DIR PRESET_VALIDATOR
 
-.PHONY: test test-prepare release-prepare dist-preflight patch-release-preflight release-version-check test-rust test-unit test-int test-fuzzing test-e2e contract-verifier-test \
+.PHONY: test test-prepare release-prepare dist-preflight patch-release-preflight release-version-check test-rust test-unit test-int test-fuzzing test-e2e test-e2e-exact contract-verifier-test \
 	toolchain format format-check vet lint lint-all architecture architecture-static preset-validator \
 	preset-create preset-import preset-tool-test contract-manifest dist dist-patch \
 	dev-daemon dev-runtime-test aquarium-dev-describe aquarium-dev-build aquarium-dev-test
@@ -159,6 +159,10 @@ test-fuzzing:
 test-e2e:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_test_layout.py --check
 	$(RUST_GATE_ENV) python3 tools/run_e2e.py
+
+test-e2e-exact:
+	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_test_layout.py --check
+	$(RUST_GATE_ENV) python3 tools/run_e2e.py --exact-test "$(E2E_TEST)"
 
 release-version-check:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/release_archive.py verify-version \

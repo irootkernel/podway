@@ -1863,6 +1863,35 @@ fn v2sdg002_mapping_known_answers_keep_distinct_immutable_domains() {
 }
 
 #[test]
+fn v2sdg008_detached_acceptance_decodes_without_widening_old_job_families() {
+    let result = examples()["podway.detached-admission-result/v2"].clone();
+    assert!(validate_command_result_v2("delegation.accept", result.as_object().unwrap()).is_ok());
+    let mut output = json!({
+        "schema":OUTPUT_SCHEMA_V3, "request_id":UUID, "command":"delegation.accept",
+        "generated_at":"2026-08-04T00:00:00.000Z", "result":result, "warnings":[]
+    });
+    add_workspace_envelope_metadata(&mut output);
+    add_queued_job_envelope_metadata(&mut output);
+    assert_valid("schemas/output-v3.schema.json", &output);
+    let decoded = decode_response_payload_v2(&serde_json::to_vec(&output).unwrap()).unwrap();
+    assert_eq!(serde_json::to_value(decoded).unwrap(), output);
+    for command in ["delegation.package", "delegation.receipt"] {
+        let mut read = output.clone();
+        read["command"] = json!(command);
+        assert_invalid("schemas/output-v3.schema.json", &read);
+        assert!(decode_response_payload_v2(&serde_json::to_vec(&read).unwrap()).is_err());
+    }
+    // Detached admission is not a terminal result, including in the new job family.
+    for version in [3, 4, 5] {
+        let wrapper = json!({"schema":format!("podway.job-result/v{version}"),"job":output});
+        assert_invalid(
+            &format!("schemas/job-result-v{version}.schema.json"),
+            &wrapper,
+        );
+    }
+}
+
+#[test]
 fn v2sdg002_job_v5_keeps_acceptance_terminal_and_job_identity_closed() {
     let result = examples()["podway.delegation-accept-result/v1"].clone();
     let mut terminal = json!({

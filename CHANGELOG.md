@@ -8,6 +8,10 @@ This file records concise shipped outcomes and the planned next stable release.
 
 - Add local opt-in supervised delegation for custom Procedure v2 actions with work-package, acceptance, and receipt commands and explicit completion gating.
 
+### Fixed
+
+- Return the declared detached admission response for supervised-delegation acceptance so callers can reconcile its durable job.
+
 ## v0.2.11 - 2026-09-23
 
 ### Changed
