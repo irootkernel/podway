@@ -12,6 +12,15 @@ podway.ipc/v1
 
 ## Transport
 
+Supervised delegation uses this same local protocol and frame limit.
+`delegation.package` and `delegation.receipt` are read queries;
+`delegation.accept` is an ordinary queued, idempotent mutation with the declared
+acceptance input and result families. Detached admission uses the existing
+`detached-admission-result/v2`; it is not the terminal acceptance result.
+The [delegation contract](supervised-delegation.md#sdg-008-public-contract-generations)
+owns the exact new families and preserves old Direct families. There is no
+executor transport, remote callback, or provider invocation in IPC.
+
 - Unix-domain stream socket;
 - user-private socket path defined by the macOS service specification;
 - no TCP, UDP, HTTP, WebSocket, or network fallback;

@@ -582,8 +582,9 @@ Conditional release target: `v0.2.12`. Inclusion requires completion of
 `V2SDG-006` through `V2SDG-009`, the required development acceptance, and a
 separately authorized stable-release qualification. The `v0.2.11` stable
 release contains the earlier internal foundations. Current source implements
-native routes and opt-in admission through `V2SDG-007`, but no supported
-stable release contains the end-to-end delegation capability.
+native routes and opt-in admission, with native lifecycle and migration
+qualification through `V2SDG-008`. No supported stable release contains the
+end-to-end delegation capability.
 
 Dependencies: completed `V2FRT`, completed `V2GSC` before `V2SDG-006`, and the
 completed evidence, guard, reference, readiness, retention, and named-runtime foundations. There is no live Dolgorae,
@@ -602,38 +603,32 @@ Dolgorae-managed without changing the procedure's execution responsibility.
 Existing snapshots, preset digests, Direct result shapes, and supported lifecycle
 and recovery behavior are compatibility gates, not migration conveniences.
 
-This adoption registers work only. It does not advertise a supported command,
-reserve executable assets, start a task, change a release target, or authorize
-commit, provider use, installation, mode switching, daemon restart, or production
-and Aquarium runtime activation. Real executor integration remains a
+Implemented behavior and proof are mapped in the
+[requirement traceability matrix](../specs/quality/requirements-traceability.md#supervised-delegation-ownership-and-proof).
+Source capability does not grant publication, installation, mode switching,
+daemon restart, or production and Aquarium runtime activation. Real executor
+integration remains a
 [separate candidate](../todo/TODO-podway-supervised-delegation-integration.md).
 
-Reviewers must not infer epic completion or product availability from the
-reserved contracts, canonical packages, persisted receipts, or completion gates
-implemented by `V2SDG-001` through `V2SDG-005`. Truthful projections, public
-routes and coherent opt-in admission, lifecycle qualification, and final
-acceptance remain owned by `V2SDG-006` through `V2SDG-009`.
-
-Before `V2SDG-002` reserves public schemas, complete the offline
-[adapter field/authority/digest review](../implementation-tips/delegation-adapter-contract-review.md).
-Unclear Podway field meaning blocks its reservation; an unavailable real
-executor interface is an explicit integration prerequisite, not a live-provider
-dependency for this epic. Preserve the single-acceptance policy and qualify the
-full post-acceptance matrix, correction guidance, and no-automatic-redispatch
-behavior in the owning tasks below. This refinement starts no task and changes
-no release or runtime authority.
+The offline [adapter field/authority/digest review](../implementation-tips/delegation-adapter-contract-review.md)
+closed the Podway meanings before schema reservation. Both real integration
+paths remain unavailable pending their named prerequisites. The local native
+fixture covers both host labels, single acceptance, the post-acceptance matrix,
+and recovery without automatic redispatch; it does not qualify a real adapter.
+Final development acceptance and the independent epic audit remain separate
+from completed member implementation.
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `V2SDG-001` | Freeze continuity baseline and qualification matrix | Completed | Capture exact existing contracts, supported paths, offline adapter-review inputs and post-acceptance cases; add isolated compatibility fixtures before product behavior changes. | [Task scope](../todo/TODO-podway-supervised-delegation.md#v2sdg-001-freeze-the-continuity-baseline-and-qualification-matrix), [continuity](../specs/interfaces/supervised-delegation.md#sdg-010-operational-continuity-and-acceptance) |
-| `V2SDG-002` | Reserve closed delegation contracts | Completed | Close the offline field/authority/digest mapping and classify unavailable real paths before reserving schemas, projections, errors/jobs, bounds and traceability; keep runtime admission closed. | [Task scope](../todo/TODO-podway-supervised-delegation.md#v2sdg-002-reserve-the-closed-contracts-and-traceability), [public versions](../specs/interfaces/supervised-delegation.md#sdg-008-public-contract-generations) |
-| `V2SDG-003` | Add placement semantics and canonical work packages | Completed | Implement optional host-neutral declarations and pure package identity while preserving old canonical bytes, node kinds, and single-cursor behavior. | [Task scope](../todo/TODO-podway-supervised-delegation.md#v2sdg-003-implement-placement-semantics-and-canonical-work-packages), [package](../specs/interfaces/supervised-delegation.md#sdg-004-canonical-work-package) |
-| `V2SDG-004` | Persist immutable attempt receipts safely | Completed | Add receipt storage and byte-preserving migration, atomic job/state results, reconstruction, crash recovery, and isolated downgrade rejection. | [Task scope](../todo/TODO-podway-supervised-delegation.md#v2sdg-004-add-immutable-per-attempt-persistence-and-migration), [persistence](../specs/interfaces/supervised-delegation.md#sdg-009-persistence-and-isolation) |
-| `V2SDG-005` | Enforce acceptance and completion semantics | Completed | Validate exact identities and final item state; enforce the full post-acceptance matrix, no-op/rollback preservation, replay and transaction-time gates without changing Direct paths. | [Task scope](../todo/TODO-podway-supervised-delegation.md#v2sdg-005-enforce-acceptance-and-completion-semantics), [acceptance](../specs/interfaces/supervised-delegation.md#sdg-005-structural-acceptance) |
-| `V2SDG-006` | Add truthful projections and bounded receipt history | Completed | Expose bounded work/receipt views and truthful missing/current/stale states; explain final recording before acceptance and the fresh-attempt cost of later edits without changing Direct output. | [Task scope](../todo/TODO-podway-supervised-delegation.md#v2sdg-006-implement-truthful-projections-and-bounded-history), [readiness](../specs/interfaces/supervised-delegation.md#sdg-006-readiness-and-subsequent-changes) |
-| `V2SDG-007` | Integrate native routes and coherent opt-in admission | Completed | Wire CLI, daemon, job recovery and opt-in admission only when coherent; verify correction/replay guidance in permitted carriers and preserve no-executor Direct operation. | [Task scope](../todo/TODO-podway-supervised-delegation.md#v2sdg-007-integrate-clidaemon-routes-and-coherent-opt-in-admission), [public versions](../specs/interfaces/supervised-delegation.md#sdg-008-public-contract-generations) |
-| `V2SDG-008` | Qualify lifecycle migration and host-neutral recovery | Completed | Prove native crash/replay and the post-acceptance matrix, no automatic external redispatch, both simulated hosts, Store upgrade and independent Direct progress without live providers. | [Task scope](../todo/TODO-podway-supervised-delegation.md#v2sdg-008-qualify-lifecycle-migration-and-cross-host-invariants), [recovery](../specs/interfaces/supervised-delegation.md#sdg-007-runtime-lifecycle-and-external-recovery) |
-| `V2SDG-009` | Close full gate independent review and durable guidance | Planned | Promote durable authorities and reviewed mappings, pass make test and independent review, resolve regressions, document correction/integration limits, and retire the dossier without deployment. | [Task scope](../todo/TODO-podway-supervised-delegation.md#v2sdg-009-close-documentation-full-gate-and-independent-acceptance), [operational guidance](../implementation-tips/supervised-delegation.md) |
+| `V2SDG-001` | Freeze continuity baseline and qualification matrix | Completed | Capture exact existing contracts, supported paths, offline adapter-review inputs and post-acceptance cases; add isolated compatibility fixtures before product behavior changes. | [continuity](../specs/interfaces/supervised-delegation.md#sdg-010-operational-continuity-and-acceptance) |
+| `V2SDG-002` | Reserve closed delegation contracts | Completed | Close the offline field/authority/digest mapping and classify unavailable real paths before reserving schemas, projections, errors/jobs, bounds and traceability; keep runtime admission closed. | [public versions](../specs/interfaces/supervised-delegation.md#sdg-008-public-contract-generations) |
+| `V2SDG-003` | Add placement semantics and canonical work packages | Completed | Implement optional host-neutral declarations and pure package identity while preserving old canonical bytes, node kinds, and single-cursor behavior. | [package](../specs/interfaces/supervised-delegation.md#sdg-004-canonical-work-package) |
+| `V2SDG-004` | Persist immutable attempt receipts safely | Completed | Add receipt storage and byte-preserving migration, atomic job/state results, reconstruction, crash recovery, and isolated downgrade rejection. | [persistence](../specs/interfaces/supervised-delegation.md#sdg-009-persistence-and-isolation) |
+| `V2SDG-005` | Enforce acceptance and completion semantics | Completed | Validate exact identities and final item state; enforce the full post-acceptance matrix, no-op/rollback preservation, replay and transaction-time gates without changing Direct paths. | [acceptance](../specs/interfaces/supervised-delegation.md#sdg-005-structural-acceptance) |
+| `V2SDG-006` | Add truthful projections and bounded receipt history | Completed | Expose bounded work/receipt views and truthful missing/current/stale states; explain final recording before acceptance and the fresh-attempt cost of later edits without changing Direct output. | [readiness](../specs/interfaces/supervised-delegation.md#sdg-006-readiness-and-subsequent-changes) |
+| `V2SDG-007` | Integrate native routes and coherent opt-in admission | Completed | Wire CLI, daemon, job recovery and opt-in admission only when coherent; verify correction/replay guidance in permitted carriers and preserve no-executor Direct operation. | [public versions](../specs/interfaces/supervised-delegation.md#sdg-008-public-contract-generations) |
+| `V2SDG-008` | Qualify lifecycle migration and host-neutral recovery | Completed | Prove native crash/replay and the post-acceptance matrix, no automatic external redispatch, both simulated hosts, Store upgrade and independent Direct progress without live providers. | [recovery](../specs/interfaces/supervised-delegation.md#sdg-007-runtime-lifecycle-and-external-recovery) |
+| `V2SDG-009` | Close full gate independent review and durable guidance | Completed | Promote durable authorities and reviewed mappings, pass make test and independent review, resolve regressions, document correction/integration limits, and retire the dossier without deployment. | [operational guidance](../implementation-tips/supervised-delegation.md) |
 
 Tasks execute in numeric order with one active task across this epic. At most
 the first incomplete task may be In Progress, In Review, or Blocked; every later

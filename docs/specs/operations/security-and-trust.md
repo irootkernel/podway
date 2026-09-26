@@ -41,6 +41,16 @@ conditions, not semantic truth. A met predicate does not authenticate an actor,
 verify check-result claims, inspect artifact bytes, or establish that recorded
 text, choices, integers, or lists are factually correct.
 
+A supervised-delegation receipt is also a structural assertion. Podway checks
+the declared binding and Role, exact package identity, bounded execution
+provenance, rounds, worker disposition, and final local item state. It does not
+authenticate the Primary or worker, retrieve executor-owned bytes, verify their
+digests, establish actual quiescence, or judge the accepted result. The adapter
+owns those proofs through permitted interfaces; neither a host label nor a
+matching digest grants approval or permission. No credential belongs in receipt
+provenance. The [adapter mapping review](../../implementation-tips/delegation-adapter-contract-review.md)
+records the unavailable real integration paths and their prerequisites.
+
 ## Why there is no workspace access key
 
 A worktree access key would be stored in a location readable by the same user that can:

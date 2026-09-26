@@ -11,7 +11,7 @@
 - Repository scope: Podway only
 - Research and planning baseline: August 17, 2026
 - Related implemented authority: [ADR-0025](../architecture-decision-records/0025-structurally-bound-external-check-results.md), epic `V2AST`
-- Related adopted foundation: [Host-Neutral Supervised Delegation](TODO-podway-supervised-delegation.md)
+- Related foundation: [Host-Neutral Supervised Delegation](../specs/interfaces/supervised-delegation.md)
 - Related integration candidate: [Real Executor Integration](TODO-podway-supervised-delegation-integration.md)
 
 The September 16 adoption of V2SDG covers a sequential Podway-side delegation

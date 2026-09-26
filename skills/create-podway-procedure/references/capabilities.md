@@ -57,6 +57,16 @@ rework. Do not enlarge evidence merely to demonstrate paging.
 
 ## Preserve lifecycle semantics
 
+An exact binary that supports supervised delegation may admit one closed
+`delegation` object on an action placement. It declares the logical binding,
+immutable Role identity, round bound, and worker disposition; it is not a node
+kind, executor hook, or provider configuration. It rejects decisions and
+skip-enabled actions. Keep the omitted declaration byte-stable and preserve
+Direct defaults. A matching package and one structurally accepted receipt add
+a completion gate; they do not prove real work. After acceptance, a changed
+item requires a fresh attempt before another acceptance. Qualify a real adapter
+separately and never infer availability from this source inventory or semver.
+
 - `skip` is an authored placement policy, not a general bypass. Do not make required
   evidence or a decision-owning phase skippable; prefer an explicit `not-applicable`
   choice when the phase must account for that outcome.

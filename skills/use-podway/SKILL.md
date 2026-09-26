@@ -87,6 +87,32 @@ Active-session item updates and justified progression do not require a separate 
 
 ## Follow the Procedure v2 graph
 
+### Explicitly delegated actions
+
+Use delegation only for an explicitly opted-in Procedure on a compatible exact
+binary/manifest. The source foundation supplies local protocol support and
+ships no live executor adapter. An absent or unqualified integration is not
+permission to fabricate provenance or accept a fixture receipt for real work.
+
+Read the current package through `delegation package --json` and resolve its
+selected evidence through the supported paging interface. Keep the package
+digest distinct from the executor's accepted-task and result digests. Before
+`delegation accept --stdin --json`, the Primary must accept the actual result,
+finish all required and optional item recording, clear blockers, and verify
+the declared worker disposition through the qualified integration. Acceptance
+is one immutable receipt per attempt; completion is a separate fenced mutation.
+
+A changed item after acceptance, including a cosmetic or optional edit, makes
+the receipt stale. Reads, true no-ops, and rolled-back edits do not; reverting
+text does not restore its item revision. Reconcile a lost response using the
+original idempotency key and current observation. Historical success from
+lookup or exact replay does not establish current completion readiness.
+Choose retry or rework explicitly when needed. Neither operation redispatches
+external work or authorizes relabeling an old receipt. Resolve uncertain
+external effects and any artifact revalidation through the integration owner.
+
+### Declared graph movement
+
 - Follow the graph cursor and use `decide` for a declared decision and `rework` for an allowed trace target. The `decide` reason is mandatory and non-blank, and the option must come from the reported `allowed_option_ids`.
 - A `rework` or `goal revise` on a completed session reactivates it, and the result reports `reactivated: true`. Cancelled sessions never reactivate.
 - The goal commands are `goal define`, `goal revise`, and `goal assess-criterion`, and they require the Procedure to opt into goal tracking. `define` is accepted exactly once and requires the applicable workspace, session identity, and session revision fences, but no goal revision fence. `revise` and `assess-criterion` additionally require the exact current goal revision through `--if-goal-revision`.

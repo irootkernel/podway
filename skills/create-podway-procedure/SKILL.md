@@ -31,6 +31,15 @@ Before editing, read the repository authorities and identify:
 
 Stop when unresolved product intent would change the graph, trust boundary, compatibility, or completion claim. Do not infer those decisions from a preset example.
 
+For explicitly requested supervised delegation, first confirm that the exact
+validation binary admits the closed action-placement `delegation` object.
+Unreleased source support is not stable-release support. Keep ordinary Direct
+placements unchanged; delegation is unavailable on decisions or skip-enabled
+actions. The logical binding and immutable Role-content digest require a
+reviewed integration mapping. Do not invent provider commands, convert default
+Procedures, or treat a Role-name hash as Role content. Podway's source foundation
+ships no live adapter; authoring success alone does not qualify execution.
+
 Read [references/authoring.md](references/authoring.md) and the complete [capability inventory](references/capabilities.md) before creating or changing Procedure source. For a Procedure shipped to other repositories or installed as a managed bundle, also read [references/distribution.md](references/distribution.md).
 
 ## Author the smallest complete graph

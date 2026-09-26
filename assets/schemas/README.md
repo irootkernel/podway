@@ -104,9 +104,12 @@ These JSON Schema Draft 2020-12 files define Podway's versioned structural contr
 - `status-result-v4.schema.json`, `compact-status-result-v4.schema.json`, `next-result-v4.schema.json`, `observation-result-v4.schema.json`, `prepared-next-result-v2.schema.json`, `procedure-preview-result-v2.schema.json`, `procedure-graph-result-v2.schema.json`, `session-archive-show-result-v2.schema.json`: bounded delegation projections selected for delegated Procedures or authoring views; older result generations keep their original field sets.
 
 Source implementation through V2SDG-007 admits these delegation commands and
-explicitly supplied custom Procedures with delegated actions. V2SDG-008 and
-V2SDG-009 qualification and closeout remain incomplete; these schemas do not
-claim that an installed stable release or live external adapter supports delegation.
+explicitly supplied custom Procedures with delegated actions. Native lifecycle
+and migration qualification and its limits are documented in the
+[conformance inventory](../../docs/specs/quality/testing-and-conformance.md).
+The [roadmap](../../docs/roadmap/README.md#v2sdg-host-neutral-supervised-delegation-foundation)
+owns completion status; these schemas do not claim that an installed stable
+release or live external adapter supports delegation.
 `x-podway-max-utf8-bytes` records the production byte cap for selected text
 fields; JSON Schema `maxLength` alone counts Unicode characters. Callers must
 apply both checks before using these documents.

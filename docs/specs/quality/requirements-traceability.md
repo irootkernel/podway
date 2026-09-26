@@ -32,5 +32,33 @@
 | Delegation declarations and result generations remain closed and versioned; explicit custom-Procedure admission and native routes are implemented in source, while real host mappings remain unavailable | ADR-0035; supervised-delegation SDG-002–009; adapter mapping review | `V2SDG-002` schema and manifest verification, protocol known answers and malformed-input checks, old result codec checks; `V2SDG-007` route, admission, delegation-error, and Direct compatibility tests |
 | Delegated action declarations and immutable work-package identity preserve Direct canonical bytes and reject unsupported placements or oversized projections | ADR-0035; supervised-delegation SDG-002, SDG-004 | `V2SDG-003` YAML/JSON equivalence, declaration bounds, Direct digest fixtures, package digest and frozen-evidence tests, static admission budget checks |
 
+## Supervised delegation ownership and proof
+
+The [supervised-delegation specification](../interfaces/supervised-delegation.md)
+owns SDG-001 through SDG-010. The rows below connect its requirements to current
+production boundaries and executable proof; they do not establish live adapter
+support. Test modules are registered in their crate's aggregate `int_suite`,
+except the named CLI `e2e_suite` case.
+
+| Requirement and durable owner | Production implementation | Executable proof |
+|---|---|---|
+| SDG-001 responsibilities; [system architecture](../../architecture/system.md#supervised-delegation) | [Core placement values](../../../crates/podway-core/src/procedure_v2/delegation.rs) and the existing single-cursor state model | [Native host fixture](../../../tools/qualify_supervised_delegation.py): identical external/managed semantics; [Direct route control](../../../crates/podway-daemon/tests/int_v2sdg007_routes.rs) |
+| SDG-002 declaration; [declaration contract](../interfaces/supervised-delegation.md#sdg-002-explicit-opt-in-declaration) | [Closed v2 wire parser](../../../crates/podway-config/src/procedure_v2_wire.rs) and canonical Procedure schema | [Authoring and package tests](../../../crates/podway-config/tests/int_v2sdg003_package.rs); [closed-contract negatives](../../../crates/podway-protocol/tests/int_v2_result_contract.rs) |
+| SDG-003 execution identity; [adapter field/digest mapping](../../implementation-tips/delegation-adapter-contract-review.md) and [trust model](../operations/security-and-trust.md) | [Protocol result validation](../../../crates/podway-protocol/src/result_contract.rs) and [receipt validation](../../../crates/podway-store/src/v2_delegation.rs) | Protocol mapping known answers; [receipt codec negatives](../../../crates/podway-store/tests/int_v2sdg004_receipt.rs); native Role/provenance/round/disposition matrix |
+| SDG-004 package and evidence | [Canonical package builder](../../../crates/podway-config/src/procedure_v2_delegation_package.rs) and [daemon reads](../../../crates/podway-daemon/src/v2_read_service.rs) | Package domain separation, attempt/goal/frozen-evidence binding and size limits in `int_v2sdg003_package`; native recorded-source route tests |
+| SDG-005 atomic structural acceptance; [transaction contract](../storage/transactions-concurrency-and-idempotency.md) | [Daemon execution](../../../crates/podway-daemon/src/execution.rs), Store receipt validation and state transaction | `int_v2sdg004_receipt` atomic commit/rollback/replay; [acceptance and completion tests](../../../crates/podway-store/tests/int_v2sdg005_semantics.rs); `int_v2sdg007_routes` |
+| SDG-006 currency and correction cost; [operator guidance](../../implementation-tips/supervised-delegation.md#finish-recording-before-acceptance) | Store accepted item-state digest and transaction-time completion; daemon projections | `int_v2sdg005_semantics` no-op/rollback/edit/revert/blocker matrix; [truthful views](../../../crates/podway-daemon/tests/int_v2run002_views.rs); native correction matrix |
+| SDG-007 lifecycle and recovery; [recovery guidance](../../implementation-tips/supervised-delegation.md#recover-without-repeating-external-effects-automatically) | Existing jobs, idempotency, retry/rework/goals and immutable historical receipts | Store response-loss, cancellation, retry/rework, goal and purge tests; native crash/restart/lost-response fixture with durable external effect counts |
+| SDG-008 closed result generations; [JSON contract](../interfaces/json-contract.md), [CLI](../interfaces/cli-specification.md#delegation-commands), [IPC](../interfaces/ipc-protocol.md), [errors](../interfaces/errors-and-exit-codes.md#delegation-failures) | Protocol command/result registry, daemon route admission and CLI rendering | `int_v2_result_contract`, including detached acceptance without widening old jobs; native route tests; [archive projection tests](../../../crates/podway-daemon/tests/int_v2run003_runtime.rs) |
+| SDG-009 persistence and isolation; [SQLite model](../storage/sqlite-model.md) | [Canonical v12 DDL](../../../assets/specifications/sqlite-v12.sql), [migration driver](../../../crates/podway-store/src/schema.rs), receipt foreign keys and reconstruction | Populated v11 preservation, corruption, rollback, replay, newer-state rejection and cascade tests in `int_v2sdg004_receipt`; native migration failure/recovery/restore fixture |
+| SDG-010 continuity and acceptance; [conformance inventory](testing-and-conformance.md) | Unchanged Direct path, per-worktree queue and named-runtime isolation | Frozen [Direct control](../../../tests/fixtures/v2/compatibility/supervised-delegation-direct-control.yaml), full `make test`, native mixed-worktree progress and explicit cleanup; independent epic acceptance |
+
+The native case is
+`podway-cli::e2e_suite::e2e_v2sdg008_qualification::v2sdg008_native_lifecycle_migration_and_host_qualification`.
+It uses real CLI/daemon binaries with deterministic external fixtures. It does
+not prove a live executor, actual model work, arbitrary external writer
+settlement, or release upgrade readiness. The conformance inventory distinguishes
+its admission-time crash case from deterministic transaction-interior failpoints.
+
 The active roadmap owns completion state. Test success proves only the scope of the
 named check; `make test` is the development gate for the combined revision.

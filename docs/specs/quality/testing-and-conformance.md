@@ -144,9 +144,9 @@ uncommitted receipt and item writes.
 
 The offline adapter review inputs are pinned in
 `docs/implementation-tips/delegation-adapter-contract-review.md` at Dolgorae
-commit `5d93f43023ebf15e26b9c33b1ad032a7eeff6bbe`. `V2SDG-002` must
-close generic field/digest meanings and explicitly classify unavailable real
-paths before schema reservation; this baseline does not qualify either adapter.
+commit `5d93f43023ebf15e26b9c33b1ad032a7eeff6bbe`. That review closes generic
+field/digest meanings and explicitly classifies unavailable real paths; its
+source comparison and local known answers do not qualify either adapter.
 
 The store suite creates canonical schema-v13 from an empty database, migrates each
 supported empty or Procedure v2-only predecessor transactionally, binds the

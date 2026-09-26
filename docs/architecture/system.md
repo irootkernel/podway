@@ -133,6 +133,26 @@ The store owns:
 
 SQLite relational state is authoritative. There is no event-sourced rebuild path.
 
+### Supervised delegation
+
+An explicitly authored action placement may require delegation under
+[ADR-0035](../architecture-decision-records/0035-host-neutral-supervised-delegation.md).
+It retains the ordinary single cursor and active attempt. The config layer
+constructs the immutable work package; the daemon exposes bounded package and
+receipt reads and admits acceptance through the existing worktree queue. The
+Store atomically persists one immutable attempt receipt, its accepted item-state
+digest, and the terminal job result. Explicit completion rechecks ordinary gates
+and receipt currency inside the state transaction.
+
+The Primary and worker remain external to Podway. The integration owns task
+dispatch, feedback, executor identity, result acceptance, worker settlement, and
+recovery of uncertain external effects. Podway performs no provider lookup or
+execution, and an `external` or `managed` host label grants no authority. Direct
+Procedures need no adapter or receipt. See the
+[interface contract](../specs/interfaces/supervised-delegation.md) and
+[implementation guidance](../implementation-tips/supervised-delegation.md) for
+the correction, replay, and integration boundaries.
+
 ### Git worktree resolver
 
 The resolver:

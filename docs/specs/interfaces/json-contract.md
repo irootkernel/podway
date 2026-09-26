@@ -100,8 +100,9 @@ acceptance, receipt, projection, and error-detail schemas are registered in the
 contract manifest. Source implementation through V2SDG-007 makes
 `delegation.package`, `delegation.accept`, and `delegation.receipt` executable
 and admits explicitly supplied custom Procedures with delegated actions.
-This source capability is not an installed stable-release claim. V2SDG-008
-qualifies local lifecycle behavior; durable closeout remains V2SDG-009 work. The
+This source capability is not an installed stable-release claim. Native lifecycle
+qualification and its limits are described by the
+[conformance inventory](../quality/testing-and-conformance.md). The
 authoring `procedure preview` and `procedure graph` commands select their v2
 results for parseable delegated documents and validated delegated graphs,
 respectively. The

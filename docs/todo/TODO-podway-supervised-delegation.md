@@ -24,9 +24,11 @@ status table, automatic task start, or deployment authority.
 Current checkpoint: `V2SDG-001` through `V2SDG-007` implement the local source
 foundation, including native routes and explicit custom-Procedure admission.
 `V2SDG-008` qualifies native lifecycle and migration with both deterministic host
-fixtures. `V2SDG-009` and final epic acceptance remain incomplete. The `v0.2.11`
-installed release does not provide the feature; local qualification does not
-establish release readiness or live adapter support.
+fixtures. `V2SDG-009` completes durable guidance and member-level development
+acceptance. Final committed-epic validation and dossier retirement remain; this
+dossier stays available until that closeout. The `v0.2.11` installed release does
+not provide the feature; local qualification does not establish release readiness
+or live adapter support.
 
 The owner explicitly narrowed the work from the earlier live-Dolgorae research
 candidate. ADR-0035 records why local implementation may proceed without that

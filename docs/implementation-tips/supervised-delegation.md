@@ -2,7 +2,7 @@
 
 ## Applicability
 
-This guidance applies to the in-progress
+This guidance applies to the source implementation of the
 [host-neutral delegation foundation](../specs/interfaces/supervised-delegation.md)
 under [ADR-0035](../architecture-decision-records/0035-host-neutral-supervised-delegation.md).
 It does not authorize any service operation or claim an installed release.
@@ -24,8 +24,11 @@ activation authority.
 
 At task start inspect Git state and the affected authorities. Preserve unrelated
 work. Record the exact baseline for executable comparison, including the real
-current Store generation. The planning baseline was generation 11 and included
-an inactive-retention change; do not resurrect the obsolete 32-session cap.
+current Store generation. The planning baseline was generation 11; the current
+Store is generation 13. Delegation receipts were added in generation 12 and
+canonical-path workspace identity in generation 13. The
+[SQLite model](../specs/storage/sqlite-model.md) owns migration details. Do not
+resurrect the obsolete 32-session inactive-retention cap.
 
 ## Use established isolated runtimes
 
@@ -62,11 +65,11 @@ turn the feature on. Source-distributed skill changes must distinguish
 implemented local capability from absent real adapters and require explicit
 feature use; do not install those changes into the owner's environment.
 
-## Review adapter semantics before schema reservation
+## Preserve the reviewed adapter semantics
 
-Use the [adapter contract review](delegation-adapter-contract-review.md) before
-V2SDG-002 reserves its closed public schemas. Record the external and managed
-field mappings, producing authority, permitted retrieval path, exact digest
+Use the [adapter contract review](delegation-adapter-contract-review.md), which
+closed the Podway field meanings before schema reservation. Preserve the external
+and managed field mappings, producing authority, permitted retrieval path, exact digest
 scope, and response-loss recovery. Never map fields solely by spelling or treat
 an internal database column as a supported adapter interface.
 
@@ -171,8 +174,8 @@ another isolated worktree continues its ordinary Direct workflow.
    Gaori entry point and independently review the complete epic against its
    baseline. A focused test or mock cannot substitute for these claims.
 
-Use only narrowly scoped, read-only document checks for a planning-only edit
-such as this adoption. Do not run formatting targets that may rewrite unrelated
+Use only narrowly scoped, read-only document checks for a planning-only edit.
+Do not run formatting targets that may rewrite unrelated
 source merely to validate Markdown. After all checks inspect Git status and the
 complete intended diff, including new files.
 

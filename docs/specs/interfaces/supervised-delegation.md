@@ -6,8 +6,8 @@ This is the accepted target contract for
 [ADR-0035](../../architecture-decision-records/0035-host-neutral-supervised-delegation.md)
 and [V2SDG](../../roadmap/README.md#v2sdg-host-neutral-supervised-delegation-foundation).
 Source foundations through `V2SDG-007` implement the native package, acceptance,
-and receipt routes with explicit custom-Procedure admission. `V2SDG-008` and
-`V2SDG-009` remain incomplete. The
+and receipt routes with explicit custom-Procedure admission. `V2SDG-008`
+qualifies native lifecycle, migration, and deterministic host behavior. The
 [roadmap](../../roadmap/README.md#v2sdg-host-neutral-supervised-delegation-foundation)
 owns the current task status and conditional `v0.2.12` release target. Until
 those tasks and a separately authorized release qualification complete, this
@@ -329,7 +329,7 @@ explicit retry/rework recovery. Retrying or reworking is an operator/Primary
 choice, not an automatic response to the edit. A successful edit must not be
 reported as rejected merely because it invalidated acceptance.
 
-Use the planned delegation-aware projections and existing permitted diagnostic
+Use the delegation-aware projections and existing permitted diagnostic
 carriers. Do not widen a released item-mutation result, append prose to JSON,
 add a new confirmation to ordinary edits, or alter Direct output to deliver the
 warning. Exact historic replay may contain the original success state; clients
@@ -453,10 +453,12 @@ reinterpret a published schema.
 
 ## SDG-009: Persistence and isolation
 
-At the inspected baseline, Store generation 11 is current. Plan the next
-unallocated generation, provisionally 12, as an additive side table keyed by
-existing session and attempt identities. Never rebuild or rewrite old snapshot,
-item, trace, goal, terminal-envelope, or archived-session values for delegation.
+Schema v12 adds the immutable receipt side table keyed by existing session and
+attempt identities. The current Store is v13, which additionally implements
+ADR-0036 canonical-path workspace identity; the
+[SQLite model](../storage/sqlite-model.md) owns the complete migration history.
+Delegation must not rebuild or rewrite old snapshot, item, trace, goal,
+terminal-envelope, or archived-session values.
 Use one receipt per attempt, referential integrity, immutable receipt bytes,
 and the existing transaction/job completion boundary. No worker/lease/round
 tables or global agent registry belong here.
