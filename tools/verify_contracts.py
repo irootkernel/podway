@@ -189,6 +189,7 @@ V2_ROUTE_DELTA = {
     "session.decide", "session.rework", "goal.define", "goal.revise",
     "goal.assess_criterion", "session.begin", "session.terminal_disposition",
     "evidence.read",
+    "delegation.package", "delegation.accept", "delegation.receipt",
     "daemon.wait-ready",
     "workspace.remove",
     "workspace.mode.plan",
@@ -216,6 +217,9 @@ V2_EXECUTABLE_ROUTES = frozenset(
         "session.begin",
         "session.terminal_disposition",
         "evidence.read",
+        "delegation.package",
+        "delegation.accept",
+        "delegation.receipt",
         "daemon.wait-ready",
         "workspace.remove",
         "workspace.mode.plan",
@@ -259,7 +263,7 @@ PROCEDURE_INDEPENDENT_RUNTIME_ERROR_CODES = (
     "SESSION_START_STATE_CONFLICT", "SESSION_ARCHIVE_NOT_ELIGIBLE",
     "SESSION_ARCHIVE_LIMIT_REACHED", "SESSION_ARCHIVE_NOT_FOUND",
     "SESSION_CANCELLED", "SESSION_REVISION_CONFLICT",
-    "ATTEMPT_NOT_CURRENT", "STAGE_NOT_SKIPPABLE",
+    "ATTEMPT_NOT_CURRENT", "ATTEMPT_NOT_FOUND", "STAGE_NOT_SKIPPABLE",
     "REQUIRED_ITEMS_MISSING", "BLOCKERS_PRESENT", "BLOCKER_LIMIT_REACHED", "ITEM_NOT_FOUND",
     "ITEM_TYPE_MISMATCH", "ITEM_CONSTRAINT_FAILED", "ITEM_REVISION_CONFLICT",
     "ITEM_ALREADY_SET", "LIST_VALUE_NOT_FOUND", "LIST_VALUE_DUPLICATE", "ARTIFACT_NOT_FOUND",
@@ -507,7 +511,7 @@ def validate_v2_catalog_delta(root: Path) -> int:
         "DELEGATION_BINDING_MISMATCH",
         "DELEGATION_ALREADY_ACCEPTED",
     }
-    if not isinstance(entries, list) or len(entries) != 116:
+    if not isinstance(entries, list) or len(entries) != 117:
         fail("runtime error catalog must contain the v2-only error set")
     runtime_codes = [entry.get("code") for entry in entries if isinstance(entry, dict)]
     if len(runtime_codes) != len(entries) or len(set(runtime_codes)) != len(runtime_codes):
@@ -773,7 +777,7 @@ def validate_routes(root: Path) -> int:
     if not isinstance(prohibited, list) or set(prohibited) != PROHIBITED_CAPABILITIES or len(prohibited) != len(PROHIBITED_CAPABILITIES):
         fail("command route contract must prohibit command_runner, git_mutation, and network")
     routes = contract["routes"]
-    if not isinstance(routes, list) or len(routes) != 72:
+    if not isinstance(routes, list) or len(routes) != 75:
         fail("command route contract routes must be a list")
 
     expected_commands = catalog_commands(root) | {"completions"}

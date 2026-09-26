@@ -1680,6 +1680,11 @@ const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
         retryable: true,
     },
     ErrorCodeCatalogEntryV1 {
+        code: "ATTEMPT_NOT_FOUND",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
         code: "STAGE_NOT_SKIPPABLE",
         exit_code: 1,
         retryable: false,

@@ -123,6 +123,7 @@ unexpected process transition. Automation must not branch on those messages.
 | `SESSION_CANCELLED` | 1 | no | Cancelled session cannot perform the operation |
 | `SESSION_REVISION_CONFLICT` | 4 | yes | Observed session revision is stale |
 | `ATTEMPT_NOT_CURRENT` | 4 | yes | Observed attempt is no longer active |
+| `ATTEMPT_NOT_FOUND` | 1 | no | Requested attempt does not exist in the selected session |
 | `STAGE_NOT_SKIPPABLE` | 1 | no | Skip is not permitted |
 | `REQUIRED_ITEMS_MISSING` | 1 | no | Active action node lacks required satisfied items |
 | `BLOCKERS_PRESENT` | 1 | no | Open blockers prevent completion |
@@ -262,7 +263,34 @@ meanings and may accompany the replacement diagnostics when both rules apply.
 
 `EVIDENCE_PAGE_TOKEN_STALE` uses the state-refresh recovery recipe, matching `EVIDENCE_REFERENCE_STALE`, and `EVIDENCE_PAGE_TOKEN_EXHAUSTED` is a usage failure because the daemon never issues a token past the logical end. Only the per-attempt aggregate maps to `ATTEMPT_CONTENT_LIMIT_EXCEEDED`; every other scale bound is a declaration-time rejection and keeps its own constraint failure. A genuinely stale reference keeps `EVIDENCE_REFERENCE_STALE`; `EVIDENCE_NOT_AVAILABLE` never substitutes for it. An availability failure is decided before any token comparison, so a token supplied against a reference that has since become unreadable answers `EVIDENCE_NOT_AVAILABLE` rather than a token code. A recorded value of zero scalars or zero entries is complete, not exhausted: it answers with one empty terminal page. Malformed, oversized, cross-session, and wrong-binding tokens are decoding failures and return `REQUEST_INVALID` before any state comparison. No evidence-read failure changes state.
 
-Bound failures carry structured details containing `field`, `actual`, `maximum`, and `unit`, and name the constraint actually violated: entry count, per-entry length, total list content, or the per-attempt aggregate. A generic message such as `invalid constraints` is not sufficient when the exact exceeded limit is known. `REQUEST_TOO_LARGE` is the intentional exception, because frame decoding precedes JSON parsing and no field path exists.
+Bound failures carry structured details containing `field`, `actual`, `maximum`, and `unit`, and name the constraint actually violated: entry count, per-entry length, total list content, or the per-attempt aggregate. A generic message such as `invalid constraints` is not sufficient when the exact exceeded limit is known. `REQUEST_TOO_LARGE` is the intentional exception for pre-parse frame decoding and bounded CLI acceptance stdin reads, where no parsed field path exists.
+
+## Delegation failures
+
+The explicit delegated route and completion gate use these closed errors. All
+five have exit code 1, are non-retryable for the unchanged request, and carry
+`podway.delegation-error-details/v1`.
+
+| Code | Meaning |
+|---|---|
+| `DELEGATION_NOT_APPLICABLE` | The selected attempt is Direct. |
+| `DELEGATION_RECEIPT_REQUIRED` | The delegated attempt has no accepted receipt. |
+| `DELEGATION_RECEIPT_STALE` | The accepted receipt no longer matches the current package or recorded items. |
+| `DELEGATION_BINDING_MISMATCH` | The supplied package or execution identity disagrees with the declaration. |
+| `DELEGATION_ALREADY_ACCEPTED` | The attempt already has an immutable receipt. |
+
+`delegation.package` returns `SESSION_NOT_RUNNING` when the session has no
+active attempt. `delegation.accept` requires a current attempt fence; an
+already terminal attempt is rejected before admission. `delegation.receipt` returns the
+non-retryable `ATTEMPT_NOT_FOUND` when the requested attempt never existed in
+the selected session.
+
+The details `reason` is one of `direct_attempt`, `receipt_missing`,
+`package_changed`, `items_changed`, `binding_mismatch`, `role_mismatch`,
+`duplicate_acceptance`, `disposition_mismatch`, or `round_limit`. Automation
+branches on code and details, never on the human message. A stale receipt
+requires an explicit fresh attempt after an accepted item edit; exact durable
+job replay still returns its original result.
 
 ## Prepared lifecycle failures
 

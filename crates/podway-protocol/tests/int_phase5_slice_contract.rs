@@ -373,6 +373,58 @@ fn route_cases() -> Vec<RouteCase> {
             preconditions: PreconditionsV1::default(),
         },
         RouteCase {
+            command: "delegation.package",
+            operation: OperationV1::Query,
+            durable: false,
+            payload: json!({"selector": selector.clone()}),
+            preconditions: PreconditionsV1::default(),
+        },
+        RouteCase {
+            command: "delegation.receipt",
+            operation: OperationV1::Query,
+            durable: false,
+            payload: json!({"selector": selector.clone(), "session_id": SESSION_ID, "attempt_id": ATTEMPT_ID}),
+            preconditions: PreconditionsV1::default(),
+        },
+        RouteCase {
+            command: "delegation.accept",
+            operation: OperationV1::Mutate,
+            durable: true,
+            payload: json!({
+                "selector": selector.clone(),
+                "input": {
+                    "schema": "podway.delegation-accept-input/v1",
+                    "workspace_uuid": WORKSPACE_ID,
+                    "session_id": SESSION_ID,
+                    "session_revision": 3,
+                    "attempt_id": ATTEMPT_ID,
+                    "idempotency_key": "phase5-contract",
+                    "package_digest": DIGEST,
+                    "execution": {
+                        "binding_ref": "local-specialist",
+                        "adapter_id": "fixture",
+                        "adapter_version": "1",
+                        "primary_host": "external",
+                        "scope_kind": "test",
+                        "scope_ref": "scope-1",
+                        "supervisor_ref": "supervisor-1",
+                        "worker_ref": "worker-1",
+                        "task_ref": "task-1",
+                        "role_ref": "reviewer",
+                        "role_snapshot_digest": DIGEST,
+                        "agent_configuration_digest": DIGEST,
+                        "accepted_task_digest": DIGEST,
+                    },
+                    "rounds_used": 1,
+                    "result_digest": DIGEST,
+                    "summary": "Final evidence is recorded.",
+                    "worker_disposition": "idle",
+                    "accepted": true,
+                },
+            }),
+            preconditions: session_preconditions(),
+        },
+        RouteCase {
             command: "session.complete",
             operation: OperationV1::Mutate,
             durable: true,
@@ -557,10 +609,10 @@ fn route_cases() -> Vec<RouteCase> {
 }
 
 #[test]
-fn recon001_exhaustively_admits_only_the_38_canonical_daemon_routes() {
+fn recon001_exhaustively_admits_only_the_41_canonical_daemon_routes() {
     let cases = route_cases();
-    assert_eq!(cases.len(), 38);
-    assert_eq!(DAEMON_COMMAND_NAMES_V1.len(), 38);
+    assert_eq!(cases.len(), 41);
+    assert_eq!(DAEMON_COMMAND_NAMES_V1.len(), 41);
     assert_eq!(
         cases.iter().map(|case| case.command).collect::<Vec<_>>(),
         DAEMON_COMMAND_NAMES_V1.to_vec(),
@@ -636,6 +688,35 @@ fn recon001_exhaustively_admits_only_the_38_canonical_daemon_routes() {
     match init_repair.command() {
         podway_protocol::SliceCommandV1::WorkspaceInit(input) => assert!(input.repair),
         command => panic!("unexpected command {}", command.command_name()),
+    }
+}
+
+#[test]
+fn v2sdg007_acceptance_document_identity_must_match_the_request() {
+    let case = route_cases()
+        .into_iter()
+        .find(|case| case.command == "delegation.accept")
+        .unwrap();
+    for (field, value) in [
+        ("workspace_uuid", json!(OTHER_WORKSPACE_ID)),
+        ("session_id", json!(OTHER_SESSION_ID)),
+        ("session_revision", json!(4)),
+        ("attempt_id", json!(BLOCKER_ID)),
+        ("idempotency_key", json!("other-key")),
+    ] {
+        let mut payload = case.payload.clone();
+        payload["input"][field] = value;
+        assert_eq!(
+            SliceRequestV1::from_envelope(&envelope(
+                case.command,
+                case.operation,
+                case.durable,
+                payload,
+                case.preconditions.clone(),
+            )),
+            Err(SliceErrorV1::InvalidValue { field: "input" }),
+            "{field}"
+        );
     }
 }
 

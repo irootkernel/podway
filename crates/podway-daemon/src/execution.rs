@@ -8,6 +8,7 @@ use std::{error::Error, fmt};
 
 use crate::{
     observability::{EventOperationV1, EventOutcomeV1, EventRecordV1, ObservabilityEmitterV1},
+    v2_read_service::delegation_work_package_from_view_v1,
     workspace::ResetMarkerV1,
 };
 use podway_config::{
@@ -28,17 +29,17 @@ use podway_core::{
 };
 use podway_presets::{EmbeddedPresetV2, catalog_v2};
 use podway_protocol::{
-    GoalAssessCriterionV2, GoalCriterionWireV2, GoalDefineV2, GoalReviseV2, ItemAddV1,
-    ItemAttachSourceV1, ItemAttachV1, ItemCheckV1, ItemClearV1, ItemRecordManyDispositionV1,
-    ItemRecordValueV1, ItemRemoveV1, ItemSetV1, ItemUncheckV1, ProcedureV2MutationCommandV1,
-    ProcedureV2MutationRequestV1, ProcedureV2StartCommandV1, ProcedureV2StartRequestV1,
-    RequestIdV1, Rfc3339MillisV1, SessionArchiveV1, SessionBlockV1, SessionCancelV1,
-    SessionCompleteV1, SessionDecideV2, SessionDeletionModeV1, SessionMutationPreconditionsWireV1,
-    SessionResetV1, SessionRetryV1, SessionReworkV2, SessionSkipV1, SessionStartSourceV1,
-    SessionStartV1, SessionUnblockV1, SliceCommandV1, SliceRequestV1, TerminalDispositionInputV1,
-    WorktreeSelectorWireV1, canonical_procedure_v2_mutation_identity_v1,
-    canonical_procedure_v2_start_identity_v1, canonical_reset_all_identity_v1,
-    decode_item_record_many_operations_v1,
+    DelegationAcceptV1, GoalAssessCriterionV2, GoalCriterionWireV2, GoalDefineV2, GoalReviseV2,
+    ItemAddV1, ItemAttachSourceV1, ItemAttachV1, ItemCheckV1, ItemClearV1,
+    ItemRecordManyDispositionV1, ItemRecordValueV1, ItemRemoveV1, ItemSetV1, ItemUncheckV1,
+    ProcedureV2MutationCommandV1, ProcedureV2MutationRequestV1, ProcedureV2StartCommandV1,
+    ProcedureV2StartRequestV1, RequestIdV1, Rfc3339MillisV1, SessionArchiveV1, SessionBlockV1,
+    SessionCancelV1, SessionCompleteV1, SessionDecideV2, SessionDeletionModeV1,
+    SessionMutationPreconditionsWireV1, SessionResetV1, SessionRetryV1, SessionReworkV2,
+    SessionSkipV1, SessionStartSourceV1, SessionStartV1, SessionUnblockV1, SliceCommandV1,
+    SliceRequestV1, TerminalDispositionInputV1, WorktreeSelectorWireV1,
+    canonical_procedure_v2_mutation_identity_v1, canonical_procedure_v2_start_identity_v1,
+    canonical_reset_all_identity_v1, decode_item_record_many_operations_v1,
 };
 use podway_store::{
     ActiveItemMutationRequestV2, ActiveItemMutationV2, AdmissionSessionIdentityV1, AdmitOutcomeV1,
@@ -346,16 +347,6 @@ pub fn workspace_procedure_snapshot_from_bytes_v2(
             diagnostic_codes: vec!["AUTHORING_SCHEMA_INVALID".to_owned()],
         }
     })?;
-    // Declaration authoring and Store receipt semantics are available before the public package
-    // and acceptance routes are wired. A start cannot admit a snapshot that the current daemon
-    // cannot yet drive through that complete lifecycle.
-    if validated.parsed().graph().placements().iter().any(|placement| {
-        matches!(placement, podway_core::GraphPlacementV2::Action(action) if action.delegation().is_some())
-    }) {
-        return Err(ProcedureV2SourceAdmissionErrorV1::Rejected(
-            ExecutionBoundaryErrorV1::procedure_v2_unsupported(),
-        ));
-    }
     let context = AuthoringContext::new(procedure, source_text, format);
     let diagnostics = vet_procedure_v2(&validated, &context);
     if diagnostics
@@ -1222,6 +1213,7 @@ fn is_procedure_v2_graph_mutation_v8(command: &SliceCommandV1) -> bool {
             | SliceCommandV1::SessionCancel(_)
             | SliceCommandV1::SessionArchive(_)
             | SliceCommandV1::SessionReset(_)
+            | SliceCommandV1::DelegationAccept(_)
     )
 }
 
@@ -1441,7 +1433,7 @@ fn decode_procedure_v2_mutation_execution_v1(
         | SliceCommandV1::ItemRemove(_)
         | SliceCommandV1::ItemClear(_)
             if attached_artifact.is_none() && fresh_attempt_id.is_none() => {}
-        SliceCommandV1::ItemRecordMany(_)
+        SliceCommandV1::ItemRecordMany(_) | SliceCommandV1::DelegationAccept(_)
             if attached_artifact.is_none()
                 && fresh_attempt_id.is_none()
                 && fresh_blocker_id.is_none() => {}
@@ -5684,6 +5676,131 @@ where
         let expected_workspace_revision = state.workspace_revision();
         let expected_session_revision = state.trace().revision();
         match &admitted.command {
+            SliceCommandV1::DelegationAccept(input) => {
+                if input.preconditions.expected_session_revision != expected_session_revision {
+                    return self.commit_persisted_graph_mutation_failure_v2(
+                        claimed,
+                        state,
+                        PersistedGraphMutationFailureV2::SessionRevisionConflict {
+                            expected: input.preconditions.expected_session_revision,
+                            actual: expected_session_revision,
+                        },
+                        now,
+                    );
+                }
+                let Some(active) = state.trace().active_attempt() else {
+                    return self.commit_persisted_graph_mutation_failure_v2(
+                        claimed,
+                        state,
+                        PersistedGraphMutationFailureV2::SessionNotRunning,
+                        now,
+                    );
+                };
+                if active.attempt_id() != &input.preconditions.expected_attempt_id {
+                    return self.commit_graph_mutation_failure_v2(
+                        claimed,
+                        state,
+                        &GraphMutationErrorV2::AttemptNotCurrent {
+                            expected: input.preconditions.expected_attempt_id.clone(),
+                            actual: Some(active.attempt_id().clone()),
+                        },
+                        now,
+                    );
+                }
+                let package = match delegation_work_package_from_view_v1(&view) {
+                    Ok(package) => package,
+                    Err(crate::v2_read_service::GraphViewErrorV2::DelegationNotApplicable) => {
+                        return self.commit_persisted_graph_mutation_failure_v2(
+                            claimed,
+                            state,
+                            PersistedGraphMutationFailureV2::DelegationNotApplicable,
+                            now,
+                        );
+                    }
+                    Err(_) => {
+                        return Err(invalid_execution_v1(
+                            "delegation package cannot be projected",
+                        ));
+                    }
+                };
+                if view.delegation_receipts().readiness()
+                    != podway_store::v2_delegation::DelegationReadinessV1::ReceiptMissing
+                {
+                    return self.commit_persisted_graph_mutation_failure_v2(
+                        claimed,
+                        state,
+                        PersistedGraphMutationFailureV2::DelegationAlreadyAccepted,
+                        now,
+                    );
+                }
+                if input.input.get("package_digest").and_then(Value::as_str)
+                    != Some(package.digest().as_str())
+                {
+                    return self.commit_persisted_graph_mutation_failure_v2(
+                        claimed,
+                        state,
+                        PersistedGraphMutationFailureV2::DelegationBindingMismatch {
+                            reason: podway_store::v2_delegation::DelegationBindingMismatchReasonV1::PackageMismatch,
+                        },
+                        now,
+                    );
+                }
+                let declaration = &package.package()["delegation"];
+                let mismatch = podway_store::v2_delegation::acceptance_binding_mismatch_v1(
+                    declaration,
+                    &input.input,
+                );
+                if let Some(reason) = mismatch {
+                    return self.commit_persisted_graph_mutation_failure_v2(
+                        claimed,
+                        state,
+                        PersistedGraphMutationFailureV2::DelegationBindingMismatch { reason },
+                        now,
+                    );
+                }
+                let outcome = match state.accept_delegation_successor_v1(active.attempt_id()) {
+                    Ok(outcome) => outcome,
+                    Err(error) => {
+                        return self.commit_graph_mutation_failure_v2(claimed, state, &error, now);
+                    }
+                };
+                let accepted_items_digest =
+                    podway_store::v2_delegation::accepted_items_digest_v1(state)
+                        .map_err(ExecutionErrorV1::InvalidStoreValue)?;
+                let receipt_id =
+                    podway_core::DelegationReceiptIdV1::new(self.ids.next_job_id().as_str())
+                        .map_err(|_| invalid_execution_v1("delegation receipt ID is invalid"))?;
+                let receipt = podway_store::DelegationReceiptV1::new(json!({
+                    "schema": "podway.delegation-receipt/v1",
+                    "receipt_id": receipt_id.as_str(),
+                    "workspace_uuid": claimed.claim().identity().workspace_uuid().as_str(),
+                    "procedure_digest": state.snapshot().digest().as_str(),
+                    "session_id": state.trace().session_id().as_str(),
+                    "placement_id": active.graph_node_id().as_str(),
+                    "attempt_id": active.attempt_id().as_str(),
+                    "delegation": package.package()["delegation"],
+                    "package_digest": package.digest().as_str(),
+                    "execution": input.input["execution"],
+                    "rounds_used": input.input["rounds_used"],
+                    "result_digest": input.input["result_digest"],
+                    "summary": input.input["summary"],
+                    "worker_disposition": input.input["worker_disposition"],
+                    "accepted": true,
+                    "accepted_items_digest": accepted_items_digest.as_str(),
+                    "accepted_at": rfc3339_millis_execution_v1(now)?,
+                }))?;
+                self.store
+                    .commit_graph_delegation_accept_terminal_v1(
+                        claimed.claim().clone(),
+                        expected_workspace_revision,
+                        expected_session_revision,
+                        outcome,
+                        package.digest().clone(),
+                        receipt,
+                        now,
+                    )
+                    .map_err(Into::into)
+            }
             SliceCommandV1::SessionComplete(input) => {
                 let outcome = match state.complete_active_action_v2(
                     input.preconditions.expected_session_revision,
@@ -6493,6 +6610,7 @@ fn command_for_admission_v1(command: &SliceCommandV1) -> Result<DomainCommand, E
             item_id: input.item_id.clone(),
         },
         SliceCommandV1::ItemRecordMany(_) => DomainCommand::ItemRecordMany,
+        SliceCommandV1::DelegationAccept(_) => DomainCommand::DelegationAccept,
         SliceCommandV1::WorkspaceDoctor(_)
         | SliceCommandV1::WorkspaceShow(_)
         | SliceCommandV1::WorkspaceRepair(_)
@@ -6503,6 +6621,8 @@ fn command_for_admission_v1(command: &SliceCommandV1) -> Result<DomainCommand, E
         | SliceCommandV1::SessionArchiveShow(_)
         | SliceCommandV1::SessionArchivePurge(_)
         | SliceCommandV1::EvidenceRead(_)
+        | SliceCommandV1::DelegationPackage(_)
+        | SliceCommandV1::DelegationReceipt(_)
         | SliceCommandV1::JobList(_)
         | SliceCommandV1::JobLookup(_)
         | SliceCommandV1::JobStatus(_)
@@ -6544,6 +6664,9 @@ fn store_preconditions_v1(
         SliceCommandV1::ItemRecordMany(input) => {
             session_store_preconditions_v1(&input.preconditions)
         }
+        SliceCommandV1::DelegationAccept(input) => {
+            session_store_preconditions_v1(&input.preconditions)
+        }
         SliceCommandV1::SessionComplete(input) => {
             session_store_preconditions_v1(&input.preconditions)
         }
@@ -6578,6 +6701,8 @@ fn store_preconditions_v1(
         | SliceCommandV1::SessionArchiveShow(_)
         | SliceCommandV1::SessionArchivePurge(_)
         | SliceCommandV1::EvidenceRead(_)
+        | SliceCommandV1::DelegationPackage(_)
+        | SliceCommandV1::DelegationReceipt(_)
         | SliceCommandV1::JobList(_)
         | SliceCommandV1::JobLookup(_)
         | SliceCommandV1::JobStatus(_)
@@ -6613,6 +6738,7 @@ fn expected_session_id_v1(command: &SliceCommandV1) -> Option<&SessionId> {
         SliceCommandV1::ItemAttach(input) => Some(&input.preconditions.expected_session_id),
         SliceCommandV1::ItemClear(input) => Some(&input.preconditions.expected_session_id),
         SliceCommandV1::ItemRecordMany(input) => Some(&input.preconditions.expected_session_id),
+        SliceCommandV1::DelegationAccept(input) => Some(&input.preconditions.expected_session_id),
         SliceCommandV1::WorkspaceInit(_)
         | SliceCommandV1::WorkspaceResetAll(_)
         | SliceCommandV1::SessionStart(_)
@@ -6626,6 +6752,8 @@ fn expected_session_id_v1(command: &SliceCommandV1) -> Option<&SessionId> {
         | SliceCommandV1::SessionArchiveShow(_)
         | SliceCommandV1::SessionArchivePurge(_)
         | SliceCommandV1::EvidenceRead(_)
+        | SliceCommandV1::DelegationPackage(_)
+        | SliceCommandV1::DelegationReceipt(_)
         | SliceCommandV1::JobList(_)
         | SliceCommandV1::JobLookup(_)
         | SliceCommandV1::JobStatus(_)
@@ -6965,6 +7093,10 @@ fn execution_components_v1(command: &SliceCommandV1) -> (Value, Value) {
             session_preconditions_value_v1(&input.preconditions),
             json!({"operations": input.operations}),
         ),
+        SliceCommandV1::DelegationAccept(input) => (
+            session_preconditions_value_v1(&input.preconditions),
+            input.input.clone(),
+        ),
         SliceCommandV1::WorkspaceDoctor(_)
         | SliceCommandV1::WorkspaceShow(_)
         | SliceCommandV1::WorkspaceRepair(_)
@@ -6975,6 +7107,8 @@ fn execution_components_v1(command: &SliceCommandV1) -> (Value, Value) {
         | SliceCommandV1::SessionArchiveShow(_)
         | SliceCommandV1::SessionArchivePurge(_)
         | SliceCommandV1::EvidenceRead(_)
+        | SliceCommandV1::DelegationPackage(_)
+        | SliceCommandV1::DelegationReceipt(_)
         | SliceCommandV1::JobList(_)
         | SliceCommandV1::JobLookup(_)
         | SliceCommandV1::JobStatus(_)
@@ -7369,6 +7503,21 @@ fn decode_command_components_v1(
         "session.complete" => {
             require_exact_keys_v1(payload, &[])?;
             Ok(SliceCommandV1::SessionComplete(SessionCompleteV1 {
+                preconditions: decode_session_preconditions_v1(preconditions)?,
+            }))
+        }
+        "delegation.accept" => {
+            let input = Value::Object(payload.clone());
+            if !podway_protocol::validate_delegation_document_v1(
+                "podway.delegation-accept-input/v1",
+                &input,
+            ) {
+                return Err(invalid_execution_v1(
+                    "delegation acceptance input is invalid",
+                ));
+            }
+            Ok(SliceCommandV1::DelegationAccept(DelegationAcceptV1 {
+                input,
                 preconditions: decode_session_preconditions_v1(preconditions)?,
             }))
         }

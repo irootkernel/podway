@@ -182,8 +182,8 @@ Completion checks that receipt and its accepted item-state digest inside the
 same Store transaction that advances the cursor and publishes the terminal job.
 A receipt is package-current only while its workspace, session, attempt,
 placement, procedure, and declaration binding still matches the live state.
-Public package projection and the daemon-supplied expected digest arrive with
-the V2SDG-007 route; V2SDG-005 does not expose delegated admission.
+V2SDG-007 supplies the public package projection and trusted expected digest
+from the daemon. Its explicit custom-Procedure path admits delegated actions.
 A missing or stale receipt leaves both cursor and terminal result unchanged. Blocker-only
 and session-revision-only changes do not alter the accepted item-state digest;
 actual item edits do, including optional items and edits later reverted.

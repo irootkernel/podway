@@ -2339,6 +2339,16 @@ pub fn recorded_value_digest_v2(
         .map_err(|_| invalid("Procedure v2 recorded value digest is invalid"))
 }
 
+/// Encoded size of the same complete typed value whose bytes are digested above.
+pub fn recorded_value_encoded_size_v2(
+    value: &RecordedItemValueV2,
+) -> Result<u64, StoreValueErrorV1> {
+    let canonical = canonicalize_json_v1(&item_value_json_v2(value)?)
+        .map_err(|_| invalid("Procedure v2 recorded value is not canonicalizable"))?;
+    u64::try_from(canonical.len())
+        .map_err(|_| invalid("Procedure v2 recorded value size is out of range"))
+}
+
 /// SHA-256 over canonical JSON of complete recorded values in Procedure author order.
 pub fn recorded_items_digest_v2(
     items: &RecordedItemSetV2,

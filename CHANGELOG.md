@@ -4,6 +4,10 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ## v0.2.12 - Unreleased
 
+### Added
+
+- Add local opt-in supervised delegation for custom Procedure v2 actions with work-package, acceptance, and receipt commands and explicit completion gating.
+
 ## v0.2.11 - 2026-09-23
 
 ### Changed

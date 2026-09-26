@@ -229,6 +229,79 @@ fn admit_complete_and_claim(
 }
 
 #[test]
+fn v2sdg007_acceptance_revision_race_persists_a_terminal_conflict() {
+    let temporary = TempDir::new().unwrap();
+    let store = open(&temporary, None);
+    let initial = session_state_with_items();
+    let attempt_id = initial
+        .trace()
+        .active_attempt()
+        .unwrap()
+        .attempt_id()
+        .clone();
+    let ready = initial
+        .mutate_active_item_v2(
+            &attempt_id,
+            &ItemId::new("result").unwrap(),
+            Revision::ZERO,
+            ActiveItemMutationV2::Set {
+                value: "Final result".to_owned(),
+            },
+            UnixMillis::new(5),
+        )
+        .unwrap()
+        .into_state();
+    store
+        .create_graph_session_v2(&identity(), ready.clone())
+        .unwrap();
+    let claimed = admit_and_claim(&store, &ready);
+    let changed = ready
+        .mutate_active_item_v2(
+            &attempt_id,
+            &ItemId::new("note").unwrap(),
+            Revision::ZERO,
+            ActiveItemMutationV2::Set {
+                value: "New evidence".to_owned(),
+            },
+            UnixMillis::new(7),
+        )
+        .unwrap()
+        .into_state();
+    store
+        .replace_graph_session_v2(
+            &identity(),
+            ready.workspace_revision(),
+            ready.trace().revision(),
+            changed.clone(),
+        )
+        .unwrap();
+
+    store
+        .commit_graph_mutation_terminal_v2(
+            claimed.claim().clone(),
+            changed.workspace_revision(),
+            changed.trace().revision(),
+            None,
+            TerminalResultV1::Failure(DomainError::InvalidState {
+                reason: "Procedure v2 graph mutation failed",
+            }),
+            PersistedGraphTerminalOperationV2::failure(
+                PersistedGraphMutationFailureV2::SessionRevisionConflict {
+                    expected: ready.trace().revision(),
+                    actual: changed.trace().revision(),
+                },
+            )
+            .unwrap(),
+            UnixMillis::new(8),
+        )
+        .unwrap();
+    assert_eq!(
+        store.read_graph_session_v2(&identity()).unwrap().unwrap(),
+        changed
+    );
+}
+
+#[test]
 fn v2sdg005_acceptance_requires_final_items_and_clear_blockers() {
     assert_eq!(
         podway_store::v2_delegation::accepted_items_digest_v1(&session_state())

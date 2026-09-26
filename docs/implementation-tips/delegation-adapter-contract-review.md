@@ -104,8 +104,8 @@ The following distinctions are mandatory:
 - `package_digest` is Podway's attempt-bound input identity, not an executor task
   hash. It remains defined by SDG-004.
 - `accepted_items_digest` is Store-computed final item state, including item
-  revisions, not either external digest. The daemon supplies the trusted expected
-  package digest until V2SDG-007 wires the public route. The item digest remains
+  revisions, not either external digest. The V2SDG-007 daemon supplies the trusted
+  expected package digest for the public route. The item digest remains
   defined by SDG-005.
 - A Role reference hash cannot substitute for an immutable Role-content digest.
   Changing content while retaining the same Role label must not preserve its

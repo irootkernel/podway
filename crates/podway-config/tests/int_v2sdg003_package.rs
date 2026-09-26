@@ -4,8 +4,8 @@ use std::path::Path;
 use podway_config::{
     ConfigError, DelegationEvidenceItemV1, DelegationEvidenceResolutionV1, DelegationEvidenceV1,
     DelegationWorkPackageInputV1, FormatRequest, ParsedProcedure, ProcedureDocumentFormat,
-    format_procedure_v2, parse_procedure_document, project_delegation_work_package_v1,
-    validate_procedure_v2,
+    format_procedure_v2, parse_procedure_document, procedure_placement_budget_v2,
+    project_delegation_work_package_v1, validate_procedure_v2,
 };
 use podway_core::{
     AttemptId, AttemptNumberV2, CriterionId, GoalCriterionV2, GoalDefinitionV2,
@@ -40,6 +40,29 @@ fn admit(source: &str) -> podway_config::ValidatedProcedureV2 {
     let ParsedProcedure::V2(parsed) =
         parse_procedure_document(source.as_bytes(), ProcedureDocumentFormat::Yaml).unwrap();
     validate_procedure_v2(parsed).unwrap()
+}
+
+#[test]
+fn v2sdg007_delegated_observation_charges_both_projection_copies() {
+    let direct_source = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("tests/fixtures/v2/compatibility/supervised-delegation-direct-control.yaml"),
+    )
+    .unwrap();
+    let direct = admit(&direct_source);
+    let delegated = admit(&delegated_source());
+    let placement = GraphNodeId::new("work").unwrap();
+    let direct_charge = procedure_placement_budget_v2(&direct, &placement).unwrap();
+    let delegated_charge = procedure_placement_budget_v2(&delegated, &placement).unwrap();
+    assert_eq!(
+        delegated_charge.next_static() - direct_charge.next_static(),
+        8 * 1_024
+    );
+    assert_eq!(
+        delegated_charge.observation_static_members() - direct_charge.observation_static_members(),
+        16 * 1_024
+    );
 }
 
 #[test]

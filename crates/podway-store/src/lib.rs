@@ -45,7 +45,7 @@ pub use v2_memory::{
     EvidenceLookupErrorV2, EvidenceReadbackV2, EvidenceResolutionStateV2, GraphMutationErrorV2,
     ItemSlotStateV2, MAX_ACTIVE_ITEM_MUTATIONS_V2, MAX_OPEN_BLOCKERS_V2, SelectedEvidenceItemV2,
     WorkflowMemoryStateV2, canonical_recorded_items_json_v2, recorded_items_digest_v2,
-    recorded_value_digest_v2,
+    recorded_value_digest_v2, recorded_value_encoded_size_v2,
 };
 pub use v2_state::{
     AttemptMetadataV2, GraphActionCompletionOutcomeV2, GraphActionSkipOutcomeV2,

@@ -326,6 +326,7 @@ const FROZEN_ERROR_CATALOG: &[(&str, u8, bool)] = &[
     ("SESSION_CANCELLED", 1, false),
     ("SESSION_REVISION_CONFLICT", 4, true),
     ("ATTEMPT_NOT_CURRENT", 4, true),
+    ("ATTEMPT_NOT_FOUND", 1, false),
     ("STAGE_NOT_SKIPPABLE", 1, false),
     ("REQUIRED_ITEMS_MISSING", 1, false),
     ("BLOCKERS_PRESENT", 1, false),

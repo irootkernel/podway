@@ -5,14 +5,13 @@
 This is the accepted target contract for
 [ADR-0035](../../architecture-decision-records/0035-host-neutral-supervised-delegation.md)
 and [V2SDG](../../roadmap/README.md#v2sdg-host-neutral-supervised-delegation-foundation).
-Internal foundations through `V2SDG-005` are implemented, but they do not form a
-coherent supported capability: public delegation routes and runtime admission
-remain closed, and `V2SDG-006` through `V2SDG-009` remain incomplete. The
+Source foundations through `V2SDG-007` implement the native package, acceptance,
+and receipt routes with explicit custom-Procedure admission. `V2SDG-008` and
+`V2SDG-009` remain incomplete. The
 [roadmap](../../roadmap/README.md#v2sdg-host-neutral-supervised-delegation-foundation)
 owns the current task status and conditional `v0.2.12` release target. Until
-those tasks and a separately authorized release qualification complete, the
-commands, fields, schema generations, and errors below are target contracts, not
-instructions to use delegation with an installed release.
+those tasks and a separately authorized release qualification complete, this
+source capability is not an instruction to use delegation with an installed release.
 
 This specification covers the Podway foundation only. It does not claim a
 working external Dolgorae adapter, managed Primary bridge, live model test, or
@@ -224,9 +223,8 @@ mutable outputs.
 
 The Store computes `accepted_items_digest` from the current state inside the
 acceptance transaction and verifies the receipt field before storing it. The
-caller cannot choose this value. Until V2SDG-007 wires the public route, the
-Store receives the expected package digest from its trusted daemon caller; that
-route owns projecting the package and supplying its digest. Store one immutable receipt for the attempt,
+caller cannot choose this value. The daemon projects and supplies the expected
+package digest to the Store. Store one immutable receipt for the attempt,
 including the declared binding, package digest, execution object, result,
 summary, round count, disposition, and accepted item-state digest. The mutation
 advances the session revision once and never changes the cursor or active
@@ -264,9 +262,9 @@ as Direct execution.
 The V2SDG-005 Store increment defines package currency as the immutable receipt
 remaining bound to the live workspace, session, attempt, placement, procedure,
 and declaration; it rechecks that binding and the accepted item-state digest in
-the completion transaction. V2SDG-007 adds the public package/accept route and
-supplies the daemon-projected package digest at acceptance. Public delegated
-admission remains closed until that route exists.
+the completion transaction. The public package/accept routes supply the
+daemon-projected package digest at acceptance. Explicit custom-Procedure
+admission requires the complete native route and Store contract.
 
 The active delegated projection reports `awaiting_acceptance`, `accepted`, or
 `stale_acceptance`, with a machine-readable reason and safe next action. These
@@ -431,11 +429,12 @@ This explicit read may include the bounded summary and non-secret attribution;
 default status and logs still may not. It cannot mutate, reactivate, or import
 historical evidence. A Direct attempt returns `DELEGATION_NOT_APPLICABLE`; an
 existing delegated attempt without a receipt returns
-`DELEGATION_RECEIPT_REQUIRED`. Missing workspace/session/attempt identities use
-the existing read-error categories. No opaque cursor, arbitrary history-value
-query, or provider access is introduced.
+`DELEGATION_RECEIPT_REQUIRED`. Missing workspace and session identities use the
+existing read-error categories. An unknown attempt in the selected session
+returns non-retryable `ATTEMPT_NOT_FOUND`. No opaque cursor, arbitrary
+history-value query, or provider access is introduced.
 
-New closed public errors are `DELEGATION_NOT_APPLICABLE`,
+New closed public errors are `ATTEMPT_NOT_FOUND`, `DELEGATION_NOT_APPLICABLE`,
 `DELEGATION_RECEIPT_REQUIRED`, `DELEGATION_RECEIPT_STALE`,
 `DELEGATION_BINDING_MISMATCH`, and `DELEGATION_ALREADY_ACCEPTED`.
 Map malformed inputs and stale workspace/session/attempt/idempotency identities

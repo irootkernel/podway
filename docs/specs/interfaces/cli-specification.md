@@ -14,12 +14,12 @@ only the closed machine envelope and is the sole automation contract.
   `reset --all`.
 - Procedures: `preset list|show|explain` and `procedure
   validate|show|format|vet|graph|preview|lint|check|scaffold`.
-- Session reads: `status`, `next`, `observe`, `evidence read`, `archive list|show`, and
+- Session reads: `status`, `next`, `observe`, `evidence read`, `delegation package|receipt`, `archive list|show`, and
   `job list|status|wait|lookup|cancel`.
 - Session mutations: `start`, `begin`, `complete`, `skip`, `retry`, `block`,
   `unblock`, `cancel`, `disposition handed-off|not-required`, `reset`, `archive`,
   `archive purge`, `decide`,
-  `rework`, `goal define|revise|assess-criterion`,
+  `rework`, `goal define|revise|assess-criterion`, `delegation accept --stdin`,
   `check|uncheck|set|add|remove|attach|clear`, and `record --stdin`.
 
 The executable grammar is owned by the command catalog and clap definitions.
@@ -109,6 +109,23 @@ existing goal and criterion bounds.
 `evidence read --source <graph-node-id> --item <item-id> [--page-token <token>]` returns one bounded page of an item selected by a currently resolved, declared evidence reference of the current consumer attempt. It is a query: it creates no durable job, no session revision, and no state change, and it cannot browse arbitrary attempts or stale history.
 
 A read without a token starts at the beginning of the value. A response carries the complete-value digest, the total logical size, the page, a `truncated` flag, and a nullable continuation token. Text offsets and sizes count Unicode scalar values, list offsets and sizes count entries, and scalar item types return one terminal page. The token is opaque, bounded to 256 base64url characters, and is not an authentication or authorization credential.
+
+## Delegation commands
+
+`delegation package` reads the current delegated attempt's immutable work package
+and digest. `delegation receipt --session <uuid> --attempt <uuid>` reads one exact
+immutable receipt from the current or retained session; it does not accept
+session precondition flags. Both commands are read-only.
+
+`delegation accept --stdin` reads one closed acceptance document of at most
+32 KiB and creates a durable job. The document alone supplies workspace,
+session, revision, attempt, and idempotency identities; command-line identity
+flags cannot override it. `session_revision` and `rounds_used` require unsigned
+integer JSON literals; a zero-fraction float such as `1.0` is rejected even
+though JSON Schema's `integer` type admits it. Record final action evidence and
+settle the worker before acceptance. Acceptance does not complete the action:
+the caller must run `complete` while the receipt remains current. Recover a lost
+response with `job lookup` using the same idempotency key before replay.
 
 ## Mutation rules
 

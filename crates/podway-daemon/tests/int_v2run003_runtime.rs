@@ -379,6 +379,8 @@ fn request_with_options(
             | "session.archive_list"
             | "session.archive_show"
             | "evidence.read"
+            | "delegation.package"
+            | "delegation.receipt"
             | "job.list"
             | "job.lookup"
             | "job.status"

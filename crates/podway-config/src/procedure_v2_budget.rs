@@ -77,6 +77,9 @@ const MAX_RECORD_REFERENCES: u64 = 8;
 const MAX_PREDICATE_TEXT_CHARS: u64 = 120;
 const MAX_CONDITION_STATE_CHARS: u64 = 11;
 const MAX_CONDITION_COUNT_BYTES: u64 = 5;
+// Covers the escaped guidance and complete receipt summary in the delegation projection.
+// A delegated snapshot publishes it in both next guidance and compact observation status.
+const DELEGATION_PROJECTION_CHARGE: u64 = 8 * 1_024;
 
 const ALL_ALLOWED_ACTIONS: &[&str] = &[
     "session.complete",
@@ -113,6 +116,7 @@ pub struct ProcedurePlacementBudgetV2 {
     pub(crate) evidence_preview: u64,
     pub(crate) page_tokens: u64,
     pub(crate) counters: u64,
+    pub(crate) delegated_snapshot: bool,
 }
 
 impl ProcedurePlacementBudgetV2 {
@@ -176,6 +180,11 @@ impl ProcedurePlacementBudgetV2 {
             .saturating_add(self.counters)
             .saturating_add(self.counters)
             .saturating_add(podway_core::MAX_OBSERVATION_STATUS_NON_COUNTER_BYTES_V2 as u64)
+            .saturating_add(if self.delegated_snapshot {
+                DELEGATION_PROJECTION_CHARGE
+            } else {
+                0
+            })
     }
 }
 
@@ -215,17 +224,22 @@ pub(crate) fn placement_budget(
             evidence_preview: u64::MAX,
             page_tokens: u64::MAX,
             counters: u64::MAX,
+            delegated_snapshot: false,
         };
     };
     let evidence = evidence_charges(procedure, placement);
+    let delegated_snapshot = procedure.graph().placements().iter().any(|candidate| {
+        matches!(candidate, GraphPlacementV2::Action(action) if action.delegation().is_some())
+    });
     ProcedurePlacementBudgetV2 {
-        next_static: next_static_charge(procedure, placement, definition),
+        next_static: next_static_charge(procedure, placement, definition, delegated_snapshot),
         decision_records: evidence.decision_records,
         readback: evidence.metadata,
         readback_records: evidence.metadata_records,
         evidence_preview: evidence.preview,
         page_tokens: evidence.page_tokens,
         counters: graph_counters_charge(procedure),
+        delegated_snapshot,
     }
 }
 
@@ -248,6 +262,7 @@ fn next_static_charge(
     procedure: &ParsedProcedureV2,
     placement: &GraphPlacementV2,
     definition: &ParsedNodeDefinition,
+    delegated_snapshot: bool,
 ) -> u64 {
     // `goal_tracking` is a required `next` field derived directly from the immutable snapshot.
     // `goal_defined` is runtime state and belongs to GOAL_DISPLAY_MAX instead.
@@ -357,6 +372,9 @@ fn next_static_charge(
     }
 
     charge = add(charge, suggestion_charge(placement, definition));
+    if delegated_snapshot {
+        charge = add(charge, DELEGATION_PROJECTION_CHARGE);
+    }
     charge
 }
 
@@ -1098,6 +1116,7 @@ mod tests {
             evidence_preview: 5,
             page_tokens: 6,
             counters: 7,
+            delegated_snapshot: false,
         };
         assert_eq!(budget.charged_total(), 24);
         assert_eq!(

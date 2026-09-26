@@ -335,6 +335,21 @@ fn observation_budget_document(node_count: usize) -> String {
     )
 }
 
+fn delegated_observation_budget_document(node_count: usize) -> String {
+    observation_budget_document(node_count).replace(
+        "      terminal: true\n",
+        concat!(
+            "      terminal: true\n",
+            "      delegation:\n",
+            "        binding_ref: local-specialist\n",
+            "        role_ref: reviewer\n",
+            "        role_snapshot_digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+            "        max_rounds: 3\n",
+            "        after_accept: retain\n",
+        ),
+    )
+}
+
 /// One assessment source and seven maximally selected artifact sources feeding a content-rich
 /// consumer, plus maximum-length padding placements. Every placement-local allocation remains
 /// within its independent ceiling; only the graph-wide counter array can push the combined
@@ -846,6 +861,39 @@ fn v2gsc004_observation_admission_counts_both_complete_counter_arrays() {
         .expect("the first over-budget graph must be rejected at its heavy consumer");
     assert!(finding.message().contains(&rejected_charge.to_string()));
     assert_eq!(finding.field(), "graph.nodes[consumer]");
+}
+
+#[test]
+fn v2sdg007_delegated_observation_boundary_is_vetted_before_admission() {
+    let allocation = podway_core::MAX_OBSERVATION_STATIC_MEMBERS_BYTES_V2 as u64;
+    let mut admitted = 2;
+    let mut rejected = podway_core::MAX_GRAPH_NODES_PER_PROCEDURE_V2;
+    assert!(
+        placement_charges(&delegated_observation_budget_document(rejected))
+            .observation_static_members()
+            > allocation
+    );
+    while rejected - admitted > 1 {
+        let candidate = admitted + (rejected - admitted) / 2;
+        if placement_charges(&delegated_observation_budget_document(candidate))
+            .observation_static_members()
+            <= allocation
+        {
+            admitted = candidate;
+        } else {
+            rejected = candidate;
+        }
+    }
+    let admitted_source = delegated_observation_budget_document(admitted);
+    let rejected_source = delegated_observation_budget_document(rejected);
+    assert!(placement_charges(&admitted_source).observation_static_members() <= allocation);
+    assert!(!codes(&admitted_source).contains(&"OBSERVATION_STATIC_MEMBERS_BUDGET_EXCEEDED"));
+    assert!(placement_charges(&rejected_source).observation_static_members() > allocation);
+    assert!(codes(&rejected_source).contains(&"OBSERVATION_STATIC_MEMBERS_BUDGET_EXCEEDED"));
+    assert!(
+        placement_charges(&observation_budget_document(rejected)).observation_static_members()
+            < placement_charges(&rejected_source).observation_static_members()
+    );
 }
 
 #[test]

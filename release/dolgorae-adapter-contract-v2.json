@@ -376,6 +376,9 @@
       "session.next",
       "session.observe",
       "evidence.read",
+      "delegation.package",
+      "delegation.accept",
+      "delegation.receipt",
       "session.complete",
       "session.skip",
       "session.retry",
@@ -736,6 +739,12 @@
         "summary": "The target attempt is no longer active."
       },
       {
+        "code": "ATTEMPT_NOT_FOUND",
+        "exit_code": 1,
+        "retryable": false,
+        "summary": "The requested attempt was not found in the session."
+      },
+      {
         "code": "STAGE_NOT_SKIPPABLE",
         "exit_code": 1,
         "retryable": false,
@@ -1072,7 +1081,7 @@
         "details_schema": "podway.delegation-error-details/v1",
         "exit_code": 1,
         "retryable": false,
-        "summary": "The selected attempt is Direct and has no delegation receipt."
+        "summary": "The selected attempt is not a delegated action."
       },
       {
         "code": "DELEGATION_RECEIPT_REQUIRED",
@@ -1817,8 +1826,8 @@
   },
   "current_surface_counts": {
     "authoring_diagnostics": 59,
-    "routes": 72,
-    "runtime_errors": 116,
+    "routes": 75,
+    "runtime_errors": 117,
     "schemas": 125
   },
   "migration_boundary": {

@@ -346,7 +346,9 @@ windows are cut and publish what they cut.
 Authoring admission proves the same shared observation bound before a session can
 start. For every placement it charges procedure-static guidance, decision records,
 read-back metadata, two complete counter arrays, and a 32 KiB reserve for compact
-status fields other than counters. `OBSERVATION_STATIC_MEMBERS_BUDGET_EXCEEDED`
+status fields other than counters. A Procedure containing a delegated placement
+also reserves 8 KiB for the delegated projection in next guidance and 8 KiB for
+its observation copy. `OBSERVATION_STATIC_MEMBERS_BUDGET_EXCEEDED`
 identifies a Procedure that is individually valid for `session.next` but cannot
 produce a complete observation.
 

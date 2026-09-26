@@ -2,10 +2,10 @@
 
 ## Applicability
 
-This guidance applies to the planned
+This guidance applies to the in-progress
 [host-neutral delegation foundation](../specs/interfaces/supervised-delegation.md)
 under [ADR-0035](../architecture-decision-records/0035-host-neutral-supervised-delegation.md).
-It does not make the feature executable or authorize any service operation.
+It does not authorize any service operation or claim an installed release.
 The [roadmap](../roadmap/README.md#v2sdg-host-neutral-supervised-delegation-foundation)
 owns delivery status.
 
@@ -44,8 +44,9 @@ A fixture receipt proves a protocol case, not that real delegated work happened.
 ## Layer changes without opening an incomplete path
 
 Contract reservation, domain types, storage, and projections may land in
-separate task commits, but delegated runtime admission remains closed until the
-whole path is implemented and natively verified. Existing Direct behavior must
+separate task commits. Delegated runtime admission stays closed at intermediate
+commits until the complete path is natively verified; V2SDG-007 opens the
+explicit custom-Procedure path in source. Existing Direct behavior must
 remain usable at every step. Do not advertise a route merely because its schema
 or help text has been generated.
 

@@ -87,7 +87,9 @@ use crate::{
         DaemonActivityV1, DaemonRequestV1, ResponseMetadataSourceV1, SystemResponseMetadataSourceV1,
     },
     v2_read_service::{
-        EvidenceReadErrorV2, GraphStatusTierV2, GraphViewErrorV2, project_evidence_read_v1,
+        EvidenceReadErrorV2, GraphStatusTierV2, GraphViewErrorV2,
+        delegation_work_package_from_view_v1, project_delegation_package_result_v1,
+        project_delegation_receipt_read_result_v1, project_evidence_read_v1,
         project_graph_archive_show_result_v2, project_graph_next_v2, project_graph_observation_v1,
         project_graph_status_v2,
     },
@@ -170,6 +172,7 @@ fn is_shared_v2_automation_mutation(command: &str) -> bool {
             | "item.attach"
             | "item.clear"
             | "item.record_many"
+            | "delegation.accept"
     )
 }
 
@@ -1156,12 +1159,19 @@ fn job_lookup_missing_result_v4() -> Map<String, Value> {
     ])
 }
 
-fn job_lookup_found_result_v4(job: Value) -> Map<String, Value> {
+fn job_result_schema_v1(command: &str, lookup: bool) -> &'static str {
+    match (command == "delegation.accept", lookup) {
+        (true, true) => "podway.job-lookup-result/v5",
+        (true, false) => "podway.job-result/v5",
+        (false, true) => "podway.job-lookup-result/v4",
+        (false, false) => "podway.job-result/v4",
+    }
+}
+
+fn job_lookup_found_result_v1(job: Value) -> Map<String, Value> {
+    let schema = job_result_schema_v1(job["command"].as_str().unwrap_or_default(), true);
     Map::from_iter([
-        (
-            "schema".to_owned(),
-            Value::String("podway.job-lookup-result/v4".to_owned()),
-        ),
+        ("schema".to_owned(), Value::String(schema.to_owned())),
         ("found".to_owned(), Value::Bool(true)),
         ("job".to_owned(), job),
     ])
@@ -1253,7 +1263,7 @@ impl DispatcherReadServiceV1<ProductionWorkspaceV1> for ProductionReadServiceV1 
                 job.insert("terminal_response".to_owned(), Value::Null);
                 return Ok(DispatcherReconciliationOutputV1::new(
                     Some(workspace),
-                    job_lookup_found_result_v4(Value::Object(job.clone())),
+                    job_lookup_found_result_v1(Value::Object(job.clone())),
                     Vec::new(),
                 ));
             }
@@ -1313,7 +1323,7 @@ impl DispatcherReadServiceV1<ProductionWorkspaceV1> for ProductionReadServiceV1 
             "request_digest".to_owned(),
             Value::String(binding.request_digest().as_str().to_owned()),
         );
-        let result = job_lookup_found_result_v4(Value::Object(job.clone()));
+        let result = job_lookup_found_result_v1(Value::Object(job.clone()));
         Ok(DispatcherReconciliationOutputV1::new(
             Some(workspace),
             result,
@@ -1332,12 +1342,10 @@ impl DispatcherReadServiceV1<ProductionWorkspaceV1> for ProductionReadServiceV1 
             .service(workspace)
             .job(context.binding().identity(), job_id, self.wait(wait)?)
             .map_err(map_read_error)?;
+        let schema = job_result_schema_v1(durable_command_name(view.execution().command()), false);
         let (job, result) = job_read_projection(&view)?;
         let result = Map::from_iter([
-            (
-                "schema".to_owned(),
-                Value::String("podway.job-result/v4".to_owned()),
-            ),
+            ("schema".to_owned(), Value::String(schema.to_owned())),
             ("job".to_owned(), result),
         ]);
         Ok(DispatcherJobOutputV1::new(job, result, Vec::new()))
@@ -2479,6 +2487,7 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                 | SliceCommandV1::SessionNext(_)
                 | SliceCommandV1::SessionObserve(_)
                 | SliceCommandV1::EvidenceRead(_)
+                | SliceCommandV1::DelegationPackage(_)
         ) {
             let selector = selector_from_wire(slice_request.selector())?;
             let readonly = self
@@ -2513,6 +2522,10 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                 // A page read answers from the current authoritative state and declares no queue
                 // barrier of its own, so it reads immediately rather than waiting for idle.
                 SliceCommandV1::EvidenceRead(input) => (
+                    RequestReadWaitV1::Immediate,
+                    input.preconditions.expected_session_id.as_ref(),
+                ),
+                SliceCommandV1::DelegationPackage(input) => (
                     RequestReadWaitV1::Immediate,
                     input.preconditions.expected_session_id.as_ref(),
                 ),
@@ -2654,6 +2667,12 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                     )
                     .map_err(map_evidence_read_error_v2)
                 }
+                SliceCommandV1::DelegationPackage(_) => {
+                    let package = delegation_work_package_from_view_v1(&view)
+                        .map_err(map_graph_view_error_v2)?;
+                    project_delegation_package_result_v1(&view, &package)
+                        .map_err(map_graph_view_error_v2)
+                }
                 _ => unreachable!("non-read requests returned above"),
             }?;
             let workspace = WorkspaceOutputV1::new(
@@ -2672,6 +2691,71 @@ impl MutationAdmissionWorkerV1<ProductionWorkspaceV1> for ProductionMutationWork
                 command: request.command().clone(),
                 generated_at: self.clock.generated_at(),
                 workspace: Some(workspace),
+                job: None,
+                session: None,
+                result,
+                warnings: Vec::new(),
+            })
+            .map(ResponseEnvelopeV2::OutputV2)
+            .map(Some)
+            .map_err(|_| DispatchFailureV1::new(DispatchFailureKindV1::Internal));
+        }
+        if let SliceCommandV1::DelegationReceipt(input) = slice_request.command() {
+            let runtime = ProductionWorkspaceRuntimeV1::new(
+                Arc::clone(&self.manager),
+                Arc::clone(&self.clock),
+            );
+            let workspace = runtime.resolve_existing(slice_request.selector())?;
+            let result = workspace.scheduler.with_serialized(|context| {
+                let identity = context.binding().identity();
+                let current = context
+                    .store()
+                    .read_graph_workspace_view_v2(identity)
+                    .map_err(map_store_error)?;
+                let view = if current
+                    .graph_state()
+                    .is_some_and(|state| state.trace().session_id() == &input.session_id)
+                {
+                    current
+                } else {
+                    let state = context
+                        .store_for_mutation()
+                        .read_archived_session_v2(identity, &input.session_id)
+                        .map_err(map_store_error)?
+                        .ok_or_else(|| {
+                            DispatchFailureV1::new(DispatchFailureKindV1::SessionNotFound)
+                        })?;
+                    let receipts = context
+                        .store_for_mutation()
+                        .read_archived_delegation_receipts_v1(identity, &input.session_id)
+                        .map_err(map_store_error)?
+                        .ok_or_else(|| DispatchFailureV1::new(DispatchFailureKindV1::Internal))?;
+                    GraphWorkspaceViewV2::new(
+                        identity.clone(),
+                        Some(state),
+                        0,
+                        None,
+                        workspace.output.latest_workspace_sequence(),
+                        EpochMillisV1::new(self.clock.now().get()),
+                    )
+                    .with_delegation_receipts(receipts)
+                };
+                let receipt = context
+                    .store()
+                    .read_delegation_receipt_v1(identity, &input.session_id, &input.attempt_id)
+                    .map_err(map_store_error)?;
+                project_delegation_receipt_read_result_v1(
+                    &view,
+                    &input.attempt_id,
+                    receipt.as_ref(),
+                )
+                .map_err(map_graph_view_error_v2)
+            })?;
+            return OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
+                request_id: request.request_id().clone(),
+                command: request.command().clone(),
+                generated_at: self.clock.generated_at(),
+                workspace: Some(workspace.output),
                 job: None,
                 session: None,
                 result,
@@ -3809,6 +3893,12 @@ fn validate_terminal_receipt_projection(
             | (
                 Some(PersistedGraphTerminalOperationV2::ItemMutations { .. }),
                 PersistedTerminalResultV1::Success(PersistedDomainResultV1::ItemsChanged {
+                    ..
+                }),
+            )
+            | (
+                Some(PersistedGraphTerminalOperationV2::DelegationAccept { .. }),
+                PersistedTerminalResultV1::Success(PersistedDomainResultV1::DelegationAccepted {
                     ..
                 }),
             )
@@ -6146,6 +6236,10 @@ fn map_graph_mutation_failure_v2(error: &PersistedGraphMutationFailureV2) -> Dis
         PersistedGraphMutationFailureV2::RequiredItemsMissing { .. } => {
             DispatchFailureV1::new(DispatchFailureKindV1::RequiredItemsMissing)
         }
+        PersistedGraphMutationFailureV2::DelegationNotApplicable => DispatchFailureV1::new(
+            DispatchFailureKindV1::DelegationNotApplicable,
+        )
+        .with_details(DispatchErrorDetailsV1::default().with_delegation_reason("direct_attempt")),
         PersistedGraphMutationFailureV2::DelegationReceiptRequired => DispatchFailureV1::new(
             DispatchFailureKindV1::DelegationReceiptRequired,
         )
@@ -6158,6 +6252,16 @@ fn map_graph_mutation_failure_v2(error: &PersistedGraphMutationFailureV2) -> Dis
             DispatchFailureKindV1::DelegationReceiptStale,
         )
         .with_details(DispatchErrorDetailsV1::default().with_delegation_reason("items_changed")),
+        PersistedGraphMutationFailureV2::DelegationBindingMismatch { reason } => {
+            DispatchFailureV1::new(DispatchFailureKindV1::DelegationBindingMismatch).with_details(
+                DispatchErrorDetailsV1::default().with_delegation_reason(reason.public_reason()),
+            )
+        }
+        PersistedGraphMutationFailureV2::DelegationAlreadyAccepted => {
+            DispatchFailureV1::new(DispatchFailureKindV1::DelegationAlreadyAccepted).with_details(
+                DispatchErrorDetailsV1::default().with_delegation_reason("duplicate_acceptance"),
+            )
+        }
         PersistedGraphMutationFailureV2::BlockersPresent => {
             DispatchFailureV1::new(DispatchFailureKindV1::BlockersPresent)
         }
@@ -6570,6 +6674,20 @@ fn map_graph_view_error_v2(error: GraphViewErrorV2) -> DispatchFailureV1 {
         GraphViewErrorV2::TerminalSessionHasNoNext => {
             DispatchFailureV1::new(DispatchFailureKindV1::SessionNotRunning)
         }
+        GraphViewErrorV2::NoActiveAttempt => {
+            DispatchFailureV1::new(DispatchFailureKindV1::SessionNotRunning)
+        }
+        GraphViewErrorV2::DelegationNotApplicable => DispatchFailureV1::new(
+            DispatchFailureKindV1::DelegationNotApplicable,
+        )
+        .with_details(DispatchErrorDetailsV1::default().with_delegation_reason("direct_attempt")),
+        GraphViewErrorV2::DelegationReceiptMissing => DispatchFailureV1::new(
+            DispatchFailureKindV1::DelegationReceiptRequired,
+        )
+        .with_details(DispatchErrorDetailsV1::default().with_delegation_reason("receipt_missing")),
+        GraphViewErrorV2::AttemptNotFound => {
+            DispatchFailureV1::new(DispatchFailureKindV1::AttemptNotFound)
+        }
         GraphViewErrorV2::TimestampOutOfRange => {
             DispatchFailureV1::new(DispatchFailureKindV1::Internal)
         }
@@ -6586,6 +6704,10 @@ fn graph_view_error_kind_v2(error: &GraphViewErrorV2) -> &'static str {
         GraphViewErrorV2::MissingGraphSession => "missing_graph_session",
         GraphViewErrorV2::PendingMutationsForCompact => "pending_mutations_for_compact",
         GraphViewErrorV2::TerminalSessionHasNoNext => "terminal_session_has_no_next",
+        GraphViewErrorV2::NoActiveAttempt => "no_active_attempt",
+        GraphViewErrorV2::DelegationNotApplicable => "delegation_not_applicable",
+        GraphViewErrorV2::DelegationReceiptMissing => "delegation_receipt_missing",
+        GraphViewErrorV2::AttemptNotFound => "attempt_not_found",
         GraphViewErrorV2::InvalidSnapshot => "invalid_snapshot",
         GraphViewErrorV2::InconsistentState(_) => "inconsistent_state",
         GraphViewErrorV2::TimestampOutOfRange => "timestamp_out_of_range",
@@ -7461,7 +7583,7 @@ mod tests {
         assert_eq!(mismatched_key.get("found"), Some(&Value::Bool(false)));
         assert!(podway_protocol::decode_result_schema_contract_v2(&mismatched_key).is_some());
 
-        let matched_key = job_lookup_found_result_v4(json!({
+        let matched_key = job_lookup_found_result_v1(json!({
             "id": "00000000-0000-4000-8000-000000000071",
             "sequence": 1,
             "state": "running",

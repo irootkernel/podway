@@ -25,9 +25,9 @@ use podway_daemon::{
     },
     v2_read_service::{
         EvidenceReadErrorV2, GraphStatusTierV2, GraphViewErrorV2,
-        project_delegation_package_result_v1, project_delegation_receipt_result_v1,
-        project_evidence_read_v1, project_graph_next_v2, project_graph_observation_v1,
-        project_graph_status_v2,
+        delegation_work_package_from_view_v1, project_delegation_package_result_v1,
+        project_delegation_receipt_result_v1, project_evidence_read_v1, project_graph_next_v2,
+        project_graph_observation_v1, project_graph_status_v2,
     },
 };
 use podway_protocol::{
@@ -658,6 +658,61 @@ fn v2sdg006_prepared_projection_accepts_maximum_delegated_placements() {
     output("session.next", next);
 }
 
+#[test]
+fn v2sdg007_running_delegated_projection_fits_observation_allocation() {
+    let mut document: Value = serde_json::from_slice(DELEGATED_PROCEDURE).unwrap();
+    let declaration = document["graph"]["nodes"][0]["delegation"].clone();
+    document["graph"]["entry"] = json!("work-0");
+    document["graph"]["nodes"] = json!(
+        (0..1_024)
+            .map(|index| {
+                let mut placement = json!({
+                    "id":format!("work-{index}"),
+                    "use":"work",
+                    "delegation":declaration.clone(),
+                });
+                if index == 1_023 {
+                    placement["terminal"] = json!(true);
+                } else {
+                    placement["next"] = json!(format!("work-{}", index + 1));
+                }
+                placement
+            })
+            .collect::<Vec<_>>()
+    );
+    let bytes = serde_json::to_vec(&document).unwrap();
+    let validated = validated_json_procedure(&bytes);
+    let charge =
+        procedure_placement_budget_v2(&validated, &GraphNodeId::new("work-0").unwrap()).unwrap();
+    assert!(
+        charge.observation_static_members()
+            <= podway_core::MAX_OBSERVATION_STATIC_MEMBERS_BYTES_V2 as u64
+    );
+    let running = delegated_prepared_state_from(&bytes)
+        .begin_v2(
+            Revision::ZERO,
+            AttemptId::new(ATTEMPT_ID).unwrap(),
+            None,
+            UnixMillis::new(1_700_000_000_001),
+        )
+        .unwrap()
+        .into_state();
+    let running = view(running);
+    let status = project_graph_status_v2(&running, GraphStatusTierV2::Compact, None).unwrap();
+    let next = project_graph_next_v2(&running).unwrap();
+    let observation = project_graph_observation_v1(&running).unwrap();
+    assert_eq!(status["delegation"]["state"], "awaiting_acceptance");
+    assert_eq!(next["delegation"], observation["guidance"]["delegation"]);
+    assert_eq!(status["delegation"], observation["status"]["delegation"]);
+    assert_eq!(next["counters"].as_array().unwrap().len(), 1_024);
+    let static_members = serde_json::to_vec(&observation["status"]).unwrap().len()
+        + serde_json::to_vec(&observation["guidance"]).unwrap().len();
+    assert!(static_members <= podway_core::MAX_OBSERVATION_STATIC_MEMBERS_BYTES_V2);
+    assert_maximum_production_output_v2("session.status", status, 262_144);
+    assert_maximum_production_output_v2("session.next", next, 1_048_576);
+    assert_maximum_production_output_v2("session.observe", observation, 1_048_576);
+}
+
 fn delegated_receipt(state: &GraphSessionStateV2) -> podway_store::DelegationReceiptV1 {
     let active = state.trace().active_attempt().unwrap();
     podway_store::DelegationReceiptV1::new(json!({
@@ -767,6 +822,9 @@ fn v2sdg006_current_and_stale_receipts_gate_completion_across_views() {
         evidence: &[],
     })
     .unwrap();
+    let projected = delegation_work_package_from_view_v1(&view(state.clone())).unwrap();
+    assert_eq!(projected.digest(), package.digest());
+    assert!(delegation_work_package_from_view_v1(&view(delegated_prepared_state())).is_err());
     let package_result =
         project_delegation_package_result_v1(&view(state.clone()), &package).unwrap();
     podway_protocol::validate_command_result_v2("delegation.package", &package_result).unwrap();

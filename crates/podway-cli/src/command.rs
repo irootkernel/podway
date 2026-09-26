@@ -242,6 +242,11 @@ enum Command {
         #[command(subcommand)]
         command: EvidenceCommand,
     },
+    /// Read delegated work or record a durable acceptance.
+    Delegation {
+        #[command(subcommand)]
+        command: DelegationCommand,
+    },
     Complete,
     Decide(DecideArgs),
     Rework(ReworkArgs),
@@ -773,6 +778,29 @@ enum JobCommand {
     },
 }
 
+#[derive(Debug, Subcommand)]
+enum DelegationCommand {
+    /// Read the immutable work package for the current delegated attempt.
+    Package,
+    /// Record final evidence and settle a delegated attempt from bounded JSON stdin.
+    Accept(DelegationAcceptArgs),
+    /// Read one immutable receipt from a current or retained session.
+    Receipt {
+        #[arg(long, value_name = "SESSION_ID")]
+        session: String,
+        #[arg(long, value_name = "ATTEMPT_ID")]
+        attempt: String,
+    },
+}
+
+#[derive(Debug, Args)]
+struct DelegationAcceptArgs {
+    #[arg(long, required = true, action = ArgAction::SetTrue)]
+    stdin: bool,
+    #[arg(skip)]
+    input: Option<Value>,
+}
+
 impl Command {
     const fn daemon_wire_name(&self) -> Option<&'static str> {
         match self {
@@ -812,6 +840,15 @@ impl Command {
             Self::Next(_) => Some("session.next"),
             Self::Observe(_) => Some("session.observe"),
             Self::Evidence { .. } => Some("evidence.read"),
+            Self::Delegation {
+                command: DelegationCommand::Package,
+            } => Some("delegation.package"),
+            Self::Delegation {
+                command: DelegationCommand::Receipt { .. },
+            } => Some("delegation.receipt"),
+            Self::Delegation {
+                command: DelegationCommand::Accept(_),
+            } => Some("delegation.accept"),
             Self::Complete => Some("session.complete"),
             Self::Decide(_) => Some("session.decide"),
             Self::Rework(_) => Some("session.rework"),
@@ -961,6 +998,9 @@ impl Command {
             | Self::Attach(_)
             | Self::Clear { .. }
             | Self::Record(_) => true,
+            Self::Delegation {
+                command: DelegationCommand::Accept(_),
+            } => true,
             Self::Start(args) => !args.dry_run,
             Self::Reset(args) => !args.dry_run,
             _ => false,
@@ -1024,6 +1064,7 @@ impl Command {
                 | Self::Next(_)
                 | Self::Observe(_)
                 | Self::Evidence { .. }
+                | Self::Delegation { .. }
                 | Self::Complete
                 | Self::Decide(_)
                 | Self::Rework(_)
@@ -1065,6 +1106,9 @@ impl Command {
             | Self::Next(_)
             | Self::Observe(_)
             | Self::Evidence { .. }
+            | Self::Delegation {
+                command: DelegationCommand::Package | DelegationCommand::Accept(_),
+            }
             | Self::Complete
             | Self::Decide(_)
             | Self::Rework(_)
@@ -1839,6 +1883,18 @@ fn parse_failure_command_context_from_matches(
         "next" => ParseFailureCommandContext::new("session.next", false),
         "observe" => ParseFailureCommandContext::new("session.observe", false),
         "evidence" => ParseFailureCommandContext::new("evidence.read", false),
+        "delegation" => {
+            let route = nested_parse_failure_context(
+                matches,
+                &[
+                    ("package", "delegation.package"),
+                    ("accept", "delegation.accept"),
+                    ("receipt", "delegation.receipt"),
+                ],
+            )?
+            .route;
+            ParseFailureCommandContext::new(route, route == "delegation.accept")
+        }
         "complete" => ParseFailureCommandContext::new("session.complete", true),
         "decide" => ParseFailureCommandContext::new("session.decide", true),
         "rework" => ParseFailureCommandContext::new("session.rework", true),
@@ -2780,11 +2836,14 @@ fn direct_preconditions(
             )
             .map_err(|_| LocalFailure::request_invalid("start-replace preconditions are invalid"))
         }
-        Command::Status(_) | Command::Next(_) | Command::Observe(_) | Command::Evidence { .. } => {
-            PreconditionsV1::new(explicit.session_id.clone(), None, None, None, None, None).map_err(
-                |_| LocalFailure::request_invalid("session identity precondition is invalid"),
-            )
-        }
+        Command::Status(_)
+        | Command::Next(_)
+        | Command::Observe(_)
+        | Command::Evidence { .. }
+        | Command::Delegation {
+            command: DelegationCommand::Package,
+        } => PreconditionsV1::new(explicit.session_id.clone(), None, None, None, None, None)
+            .map_err(|_| LocalFailure::request_invalid("session identity precondition is invalid")),
         Command::Decide(_) => v2_session_preconditions(explicit, true, false),
         Command::Begin(_) | Command::Disposition { .. } => {
             v2_session_preconditions(explicit, false, false)
@@ -2797,6 +2856,9 @@ fn direct_preconditions(
             v2_session_preconditions(explicit, true, false)
         }
         Command::Record(_) => v2_session_preconditions(explicit, true, false),
+        Command::Delegation {
+            command: DelegationCommand::Accept(_),
+        } => v2_session_preconditions(explicit, true, false),
         Command::Reset(ResetArgs {
             all: false,
             dry_run: false,
@@ -6505,7 +6567,15 @@ fn validate_daemon_flags(cli: &Cli) -> Result<(), LocalFailure> {
             "--if-session-id does not apply to this command",
         ));
     }
-    if explicit.any_transition() && !command.needs_preflight() {
+    if explicit.any_transition()
+        && !command.needs_preflight()
+        && !matches!(
+            command,
+            Command::Delegation {
+                command: DelegationCommand::Accept(_)
+            }
+        )
+    {
         return Err(LocalFailure::request_invalid(
             "explicit preconditions do not apply to this command",
         ));
@@ -7103,6 +7173,25 @@ fn daemon_payload(
                 payload.insert("page_token".to_owned(), Value::String(token.clone()));
             }
         }
+        Command::Delegation {
+            command: DelegationCommand::Package,
+        } => {}
+        Command::Delegation {
+            command: DelegationCommand::Receipt { session, attempt },
+        } => {
+            payload.insert("session_id".to_owned(), Value::String(session.clone()));
+            payload.insert("attempt_id".to_owned(), Value::String(attempt.clone()));
+        }
+        Command::Delegation {
+            command: DelegationCommand::Accept(args),
+        } => {
+            payload.insert(
+                "input".to_owned(),
+                args.input
+                    .clone()
+                    .expect("delegation acceptance stdin was prepared"),
+            );
+        }
         Command::Complete => {}
         Command::Decide(args) => {
             payload.insert("option_id".to_owned(), Value::String(args.option.clone()));
@@ -7430,12 +7519,79 @@ fn prepare_stdin_payload(command: &mut Command) -> Result<(), LocalFailure> {
                 }
             })?);
         }
+        Command::Delegation {
+            command: DelegationCommand::Accept(args),
+        } if args.stdin => {
+            const MAX_BYTES: usize = 32 * 1_024;
+            let mut bytes = Vec::with_capacity(MAX_BYTES);
+            io::stdin()
+                .take((MAX_BYTES + 1) as u64)
+                .read_to_end(&mut bytes)
+                .map_err(|_| {
+                    LocalFailure::request_invalid("cannot read delegation acceptance stdin")
+                })?;
+            if bytes.len() > MAX_BYTES {
+                return Err(LocalFailure::catalog(
+                    "REQUEST_TOO_LARGE",
+                    "delegation acceptance stdin exceeds 32 KiB",
+                    "cli",
+                ));
+            }
+            let input: Value = serde_json::from_slice(&bytes).map_err(|_| {
+                LocalFailure::request_invalid("delegation acceptance stdin is not JSON")
+            })?;
+            if !podway_protocol::validate_delegation_document_v1(
+                "podway.delegation-accept-input/v1",
+                &input,
+            ) {
+                return Err(LocalFailure::request_invalid(
+                    "delegation acceptance input is invalid",
+                ));
+            }
+            args.input = Some(input);
+        }
         _ => {}
     }
     Ok(())
 }
 
 fn apply_record_input(cli: &mut Cli) -> Result<(), LocalFailure> {
+    if let Command::Delegation {
+        command: DelegationCommand::Accept(args),
+    } = &cli.command
+    {
+        let input = args
+            .input
+            .as_ref()
+            .ok_or_else(|| LocalFailure::request_invalid("delegation accept requires --stdin"))?;
+        if cli.idempotency_key.is_some()
+            || cli.if_workspace_uuid.is_some()
+            || cli.if_session_id.is_some()
+            || cli.if_session_revision.is_some()
+            || cli.if_attempt.is_some()
+            || cli.if_item_revision.is_some()
+            || cli.if_goal_revision.is_some()
+        {
+            return Err(LocalFailure::request_invalid(
+                "delegation acceptance identity and idempotency must come only from stdin",
+            ));
+        }
+        let field = |name: &str| {
+            input
+                .get(name)
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .ok_or_else(|| {
+                    LocalFailure::request_invalid("delegation acceptance input identity is invalid")
+                })
+        };
+        cli.idempotency_key = Some(field("idempotency_key")?);
+        cli.if_workspace_uuid = Some(field("workspace_uuid")?);
+        cli.if_session_id = Some(field("session_id")?);
+        cli.if_session_revision = input.get("session_revision").and_then(Value::as_u64);
+        cli.if_attempt = Some(field("attempt_id")?);
+        return Ok(());
+    }
     let input = match &cli.command {
         Command::Record(args) => args
             .input
@@ -8124,6 +8280,11 @@ fn render_human_error_v2(
         stderr,
         format_args!("error: {}: {}", error.code().as_str(), error.message()),
     )?;
+    if error.code().as_str().starts_with("DELEGATION_")
+        && let Some(reason) = error.details().get("reason").and_then(Value::as_str)
+    {
+        write_text_line(stderr, format_args!("reason: {reason}"))?;
+    }
     if error.code().as_str() != "PROCEDURE_V2_SCHEMA_INVALID" {
         return Ok(());
     }
@@ -8554,7 +8715,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             .collect::<Vec<_>>()
             .join(", ");
         return Ok(format!(
-            "Podway coordinates durable worktree-local procedures.\n\nTrust boundary:\n  Podway trusts same-user processes connecting through its local socket.\n  It provides no authentication or workspace access key.\n  It does not protect against malicious same-user processes.\n  It records caller assertions and does not judge their semantic truth.\n\nDaemon endpoint:\n  Daemon-backed commands accept --mode <key>; --dev is the exact alias for mode dev.\n  Omitting a mode selects the production per-user endpoint.\n  Production commands may instead accept --socket <absolute-path>.\n\nUsage:\n  podway help [<route>]\n  podway -h\n  podway --help\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'add retry backoff'\n  podway begin\n  podway status --json\n  podway observe --json\n\nProcedure v2 routes:\n  procedure format|vet|lint|check|graph|preview|scaffold\n  session.begin, session.terminal_disposition, session.decide, session.rework\n  goal.define, goal.revise, goal.assess_criterion\n  evidence read\n\nRuntime planning:\n  podway --mode <key> runtime reset plan\n  podway help runtime\n\nShipped presets: {preset_ids}. Start prepares a session; begin creates its first active attempt. Contributors may use the managed disposable runtime documented by help workflow for isolated development."
+            "Podway coordinates durable worktree-local procedures.\n\nTrust boundary:\n  Podway trusts same-user processes connecting through its local socket.\n  It provides no authentication or workspace access key.\n  It does not protect against malicious same-user processes.\n  It records caller assertions and does not judge their semantic truth.\n\nDaemon endpoint:\n  Daemon-backed commands accept --mode <key>; --dev is the exact alias for mode dev.\n  Omitting a mode selects the production per-user endpoint.\n  Production commands may instead accept --socket <absolute-path>.\n\nUsage:\n  podway help [<route>]\n  podway -h\n  podway --help\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'add retry backoff'\n  podway begin\n  podway status --json\n  podway observe --json\n\nProcedure v2 routes:\n  procedure format|vet|lint|check|graph|preview|scaffold\n  session.begin, session.terminal_disposition, session.decide, session.rework\n  goal.define, goal.revise, goal.assess_criterion\n  evidence read\n  delegation package|accept|receipt\n\nRuntime planning:\n  podway --mode <key> runtime reset plan\n  podway help runtime\n\nShipped presets: {preset_ids}. Start prepares a session; begin creates its first active attempt. Contributors may use the managed disposable runtime documented by help workflow for isolated development."
         ));
     }
     let text = match topic {
@@ -8694,6 +8855,15 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
         "evidence.read" => {
             "Usage:\n  podway evidence read --source <graph-node-id> --item <item-id> [--page-token <token>] [--if-workspace-uuid <uuid>] [--if-session-id <uuid>]\n\nReturns one bounded page of an item selected by a currently resolved, declared evidence reference of the current attempt. It creates no durable job and no session revision. Text offsets count Unicode scalars, list offsets count entries, and other item types return one terminal page. The page token is opaque and is not an authorization credential.\n\nExample:\n  podway --json evidence read --source implement --item notes"
         }
+        "delegation.package" => {
+            "Usage:\n  podway delegation package [--json] [--if-workspace-uuid <uuid>] [--if-session-id <uuid>]\n\nReads the immutable assignment for the current delegated action. Read complete upstream evidence through evidence read before assigning external work. The package digest is stable across action item edits and reads."
+        }
+        "delegation.accept" => {
+            "Usage:\n  podway delegation accept --stdin [--json] [--detach]\n\nThe closed JSON input supplies workspace UUID, session ID and revision, attempt ID, idempotency key, package digest, execution identity, result digest, rounds, summary, and worker disposition. Record final action evidence and settle the worker before acceptance. Acceptance does not complete the action; run complete while the receipt is current. After an accepted item edit, retry or rework to a fresh attempt. Recover a lost response through job lookup with the same key before any replay."
+        }
+        "delegation.receipt" => {
+            "Usage:\n  podway delegation receipt --session <uuid> --attempt <uuid> [--json] [--if-workspace-uuid <uuid>]\n\nReads one exact immutable receipt from the current or retained session. Historical replay preserves the original result; reread current status before completion. Editing an accepted item makes acceptance stale and requires a deliberate fresh attempt."
+        }
         "session.complete" => {
             "Usage:\n  podway complete [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>] [--if-attempt <uuid>]\n\nExample:\n  podway complete --if-session-revision 12 --if-attempt <uuid>"
         }
@@ -8804,8 +8974,53 @@ mod tests {
         workspace_removal_confirmation_path,
     };
     use clap::{Parser, error::ErrorKind};
+    use podway_protocol::ErrorEnvelopeV1;
     use serde_json::{Value, json};
     static VERSION_PROBE_SCRIPT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn delegated_human_errors_render_the_reason_without_changing_other_errors() {
+        let mut error: ErrorEnvelopeV1 = serde_json::from_value(json!({
+            "schema": "podway.error/v1",
+            "request_id": "00000000-0000-4000-8000-000000000002",
+            "command": "delegation.package",
+            "generated_at": "1970-01-01T00:00:00.012Z",
+            "code": "DELEGATION_BINDING_MISMATCH",
+            "message": "The acceptance does not match the package.",
+            "retryable": false,
+            "exit_code": 1,
+            "details": {
+                "schema": "podway.delegation-error-details/v1",
+                "reason": "binding_mismatch"
+            }
+        }))
+        .unwrap();
+        error.validate().unwrap();
+        let mut stderr = Vec::new();
+        super::render_human_error_v2(&error, None, &mut stderr).unwrap();
+        assert!(
+            String::from_utf8(stderr)
+                .unwrap()
+                .contains("reason: binding_mismatch\n")
+        );
+
+        error = serde_json::from_value(json!({
+            "schema": "podway.error/v1",
+            "request_id": "00000000-0000-4000-8000-000000000002",
+            "command": "delegation.package",
+            "generated_at": "1970-01-01T00:00:00.012Z",
+            "code": "WORKSPACE_NOT_INITIALIZED",
+            "message": "No workspace exists.",
+            "retryable": false,
+            "exit_code": 5,
+            "details": {}
+        }))
+        .unwrap();
+        error.validate().unwrap();
+        let mut stderr = Vec::new();
+        super::render_human_error_v2(&error, None, &mut stderr).unwrap();
+        assert!(!String::from_utf8(stderr).unwrap().contains("reason:"));
+    }
 
     #[test]
     fn v2sdg006_cli_accepts_delegated_status_generation_for_preflight_and_completion() {
@@ -9428,13 +9643,32 @@ mod tests {
     }
 
     #[test]
-    fn delegation_routes_remain_unavailable_before_runtime_admission() {
-        for route in ["package", "accept", "receipt"] {
-            assert!(
-                Cli::try_parse_from(["podway", "delegation", route]).is_err(),
-                "delegation {route} must be rejected before daemon communication"
-            );
-        }
+    fn v2sdg007_delegation_routes_require_closed_arguments() {
+        assert!(Cli::try_parse_from(["podway", "delegation", "package"]).is_ok());
+        assert!(Cli::try_parse_from(["podway", "delegation", "accept"]).is_err());
+        assert!(Cli::try_parse_from(["podway", "delegation", "accept", "--stdin"]).is_ok());
+        assert!(Cli::try_parse_from(["podway", "delegation", "receipt"]).is_err());
+        assert!(
+            Cli::try_parse_from([
+                "podway",
+                "delegation",
+                "receipt",
+                "--session",
+                "00000000-0000-4000-8000-000000000001",
+                "--attempt",
+                "00000000-0000-4000-8000-000000000002",
+            ])
+            .is_ok()
+        );
+        let arguments = [
+            OsString::from("podway"),
+            OsString::from("delegation"),
+            OsString::from("accept"),
+        ];
+        assert_eq!(
+            parse_failure_command_context(&arguments),
+            Some(ParseFailureCommandContext::new("delegation.accept", true))
+        );
     }
 
     #[test]

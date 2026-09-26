@@ -13,7 +13,7 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     ErrorCodeV1, EvidencePageTokenV1, ExitCodeV1, IdempotencyKeyV1, OperationV1, PreconditionsV1,
-    RequestEnvelopeV1, SessionOutputV1,
+    RequestEnvelopeV1, SessionOutputV1, validate_delegation_document_v1,
 };
 
 /// The only selector representation accepted by the G006 daemon boundary.
@@ -552,6 +552,26 @@ pub struct EvidenceReadV1 {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct DelegationPackageV1 {
+    pub preconditions: SessionReadPreconditionsWireV1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DelegationReceiptReadV1 {
+    pub session_id: SessionId,
+    pub attempt_id: AttemptId,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DelegationAcceptV1 {
+    pub input: Value,
+    pub preconditions: SessionMutationPreconditionsWireV1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ItemCheckV1 {
     pub item_id: ItemId,
     pub preconditions: ItemMutationPreconditionsWireV1,
@@ -1073,7 +1093,7 @@ pub struct WorkspaceModeApplyRequestV1 {
 }
 
 /// The authoritative G006 daemon route set. No aliases are admitted at the protocol boundary.
-pub const DAEMON_COMMAND_NAMES_V1: [&str; 38] = [
+pub const DAEMON_COMMAND_NAMES_V1: [&str; 41] = [
     "workspace.init",
     "workspace.doctor",
     "workspace.show",
@@ -1087,6 +1107,9 @@ pub const DAEMON_COMMAND_NAMES_V1: [&str; 38] = [
     "session.next",
     "session.observe",
     "evidence.read",
+    "delegation.package",
+    "delegation.receipt",
+    "delegation.accept",
     "session.complete",
     "session.skip",
     "session.retry",
@@ -1128,6 +1151,9 @@ pub enum SliceCommandV1 {
     SessionNext(SessionNextV1),
     SessionObserve(SessionObserveV1),
     EvidenceRead(EvidenceReadV1),
+    DelegationPackage(DelegationPackageV1),
+    DelegationReceipt(DelegationReceiptReadV1),
+    DelegationAccept(DelegationAcceptV1),
     SessionComplete(SessionCompleteV1),
     SessionSkip(SessionSkipV1),
     SessionRetry(SessionRetryV1),
@@ -1168,6 +1194,9 @@ impl SliceCommandV1 {
             Self::SessionNext(_) => "session.next",
             Self::SessionObserve(_) => "session.observe",
             Self::EvidenceRead(_) => "evidence.read",
+            Self::DelegationPackage(_) => "delegation.package",
+            Self::DelegationReceipt(_) => "delegation.receipt",
+            Self::DelegationAccept(_) => "delegation.accept",
             Self::SessionComplete(_) => "session.complete",
             Self::SessionSkip(_) => "session.skip",
             Self::SessionRetry(_) => "session.retry",
@@ -1231,6 +1260,8 @@ impl SliceCommandV1 {
             | Self::SessionArchiveList(_)
             | Self::SessionArchiveShow(_)
             | Self::EvidenceRead(_)
+            | Self::DelegationPackage(_)
+            | Self::DelegationReceipt(_)
             | Self::JobList(_)
             | Self::JobLookup(_)
             | Self::JobStatus(_)
@@ -1249,6 +1280,7 @@ impl SliceCommandV1 {
             | Self::ItemAttach(_)
             | Self::ItemClear(_)
             | Self::ItemRecordMany(_) => OperationV1::Mutate,
+            Self::DelegationAccept(_) => OperationV1::Mutate,
         }
     }
 
@@ -1277,6 +1309,7 @@ impl SliceCommandV1 {
                     | Self::ItemAttach(_)
                     | Self::ItemClear(_)
                     | Self::ItemRecordMany(_)
+                    | Self::DelegationAccept(_)
             ),
         }
     }
@@ -1459,6 +1492,58 @@ impl SliceRequestV1 {
                         source: payload.source,
                         item_id: payload.item_id,
                         page_token,
+                        preconditions,
+                    }),
+                )
+            }
+            "delegation.package" => {
+                require_envelope(envelope, "delegation.package", OperationV1::Query, false)?;
+                let preconditions = require_session_read_preconditions(envelope.preconditions())?;
+                let payload: SelectorOnlyPayloadV1 = parse_payload(envelope)?;
+                (
+                    payload.selector,
+                    SliceCommandV1::DelegationPackage(DelegationPackageV1 { preconditions }),
+                )
+            }
+            "delegation.receipt" => {
+                require_envelope(envelope, "delegation.receipt", OperationV1::Query, false)?;
+                require_no_preconditions(envelope.preconditions())?;
+                let payload: DelegationReceiptReadPayloadV1 = parse_payload(envelope)?;
+                (
+                    payload.selector,
+                    SliceCommandV1::DelegationReceipt(DelegationReceiptReadV1 {
+                        session_id: payload.session_id,
+                        attempt_id: payload.attempt_id,
+                    }),
+                )
+            }
+            "delegation.accept" => {
+                require_envelope(envelope, "delegation.accept", OperationV1::Mutate, true)?;
+                let preconditions = require_session_preconditions(envelope.preconditions())?;
+                let payload: DelegationAcceptPayloadV1 = parse_payload(envelope)?;
+                if !validate_delegation_document_v1(
+                    "podway.delegation-accept-input/v1",
+                    &payload.input,
+                ) || payload.input.get("workspace_uuid").and_then(Value::as_str)
+                    != payload.selector.expected_uuid().map(WorkspaceId::as_str)
+                    || payload.input.get("session_id").and_then(Value::as_str)
+                        != Some(preconditions.expected_session_id.as_str())
+                    || payload
+                        .input
+                        .get("session_revision")
+                        .and_then(Value::as_u64)
+                        != Some(preconditions.expected_session_revision.get())
+                    || payload.input.get("attempt_id").and_then(Value::as_str)
+                        != Some(preconditions.expected_attempt_id.as_str())
+                    || payload.input.get("idempotency_key").and_then(Value::as_str)
+                        != envelope.idempotency_key().map(IdempotencyKeyV1::as_str)
+                {
+                    return Err(SliceErrorV1::InvalidValue { field: "input" });
+                }
+                (
+                    payload.selector,
+                    SliceCommandV1::DelegationAccept(DelegationAcceptV1 {
+                        input: payload.input,
                         preconditions,
                     }),
                 )
@@ -2463,6 +2548,21 @@ struct EvidenceReadPayloadV1 {
     item_id: ItemId,
     #[serde(default, deserialize_with = "deserialize_optional_non_null")]
     page_token: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DelegationReceiptReadPayloadV1 {
+    selector: WorktreeSelectorWireV1,
+    session_id: SessionId,
+    attempt_id: AttemptId,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DelegationAcceptPayloadV1 {
+    selector: WorktreeSelectorWireV1,
+    input: Value,
 }
 
 #[derive(Deserialize)]
@@ -4056,6 +4156,10 @@ pub fn canonical_mutation_identity_v1(
             session_preconditions_json(&item.preconditions),
             json!({"operations": &item.operations}),
         ),
+        SliceCommandV1::DelegationAccept(input) => (
+            session_preconditions_json(&input.preconditions),
+            input.input.clone(),
+        ),
         SliceCommandV1::WorkspaceDoctor(_)
         | SliceCommandV1::WorkspaceShow(_)
         | SliceCommandV1::WorkspaceRepair(_)
@@ -4066,6 +4170,8 @@ pub fn canonical_mutation_identity_v1(
         | SliceCommandV1::SessionArchiveShow(_)
         | SliceCommandV1::SessionArchivePurge(_)
         | SliceCommandV1::EvidenceRead(_)
+        | SliceCommandV1::DelegationPackage(_)
+        | SliceCommandV1::DelegationReceipt(_)
         | SliceCommandV1::JobList(_)
         | SliceCommandV1::JobLookup(_)
         | SliceCommandV1::JobStatus(_)

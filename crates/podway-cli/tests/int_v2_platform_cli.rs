@@ -68,6 +68,160 @@ fn v2agt004_record_stdin_builds_one_fully_fenced_atomic_request_without_prefligh
     assert_eq!(request["payload"]["operations"][1]["item_id"], "zeta");
 }
 
+#[test]
+fn v2sdg007_delegation_cli_routes_preserve_public_wire_identity() {
+    let package_fixture = Fixture::new();
+    let package_daemon = RecordingDaemon::start(&package_fixture.socket, Reply::WorkspaceError);
+    let package = package_fixture.run(&[
+        "--json".to_owned(),
+        "--socket".to_owned(),
+        package_fixture.socket.display().to_string(),
+        "--worktree".to_owned(),
+        package_fixture.root.display().to_string(),
+        "--if-workspace-uuid".to_owned(),
+        WORKSPACE_ID.to_owned(),
+        "--if-session-id".to_owned(),
+        SESSION_ID.to_owned(),
+        "delegation".to_owned(),
+        "package".to_owned(),
+    ]);
+    assert_eq!(package.status.code(), Some(5), "{package:?}");
+    let package_request = package_daemon.finish();
+    assert_eq!(package_request["command"], "delegation.package");
+    assert_eq!(package_request["operation"], "query");
+    assert_eq!(package_request["preconditions"]["session_id"], SESSION_ID);
+    assert!(package_request["idempotency_key"].is_null());
+
+    let receipt_fixture = Fixture::new();
+    let receipt_daemon = RecordingDaemon::start(&receipt_fixture.socket, Reply::WorkspaceError);
+    let receipt = receipt_fixture.run(&[
+        "--json".to_owned(),
+        "--socket".to_owned(),
+        receipt_fixture.socket.display().to_string(),
+        "--worktree".to_owned(),
+        receipt_fixture.root.display().to_string(),
+        "--if-workspace-uuid".to_owned(),
+        WORKSPACE_ID.to_owned(),
+        "delegation".to_owned(),
+        "receipt".to_owned(),
+        "--session".to_owned(),
+        SESSION_ID.to_owned(),
+        "--attempt".to_owned(),
+        ATTEMPT_ID.to_owned(),
+    ]);
+    assert_eq!(receipt.status.code(), Some(5), "{receipt:?}");
+    let receipt_request = receipt_daemon.finish();
+    assert_eq!(receipt_request["command"], "delegation.receipt");
+    assert_eq!(receipt_request["workspace"]["expected_uuid"], WORKSPACE_ID);
+    assert_eq!(receipt_request["payload"]["session_id"], SESSION_ID);
+    assert_eq!(receipt_request["payload"]["attempt_id"], ATTEMPT_ID);
+    let receipt_with_fence = receipt_fixture.run(&[
+        "--json".to_owned(),
+        "--if-session-id".to_owned(),
+        SESSION_ID.to_owned(),
+        "delegation".to_owned(),
+        "receipt".to_owned(),
+        "--session".to_owned(),
+        SESSION_ID.to_owned(),
+        "--attempt".to_owned(),
+        ATTEMPT_ID.to_owned(),
+    ]);
+    assert_eq!(
+        receipt_with_fence.status.code(),
+        Some(2),
+        "{receipt_with_fence:?}"
+    );
+    assert_eq!(one_json(&receipt_with_fence)["code"], "REQUEST_INVALID");
+
+    let accept_fixture = Fixture::new();
+    let accept_daemon = RecordingDaemon::start(&accept_fixture.socket, Reply::WorkspaceError);
+    let input = serde_json::to_vec(&json!({
+        "schema":"podway.delegation-accept-input/v1",
+        "workspace_uuid":WORKSPACE_ID, "session_id":SESSION_ID,
+        "session_revision":7, "attempt_id":ATTEMPT_ID,
+        "idempotency_key":"v2sdg007-cli-accept", "package_digest":PROCEDURE_DIGEST,
+        "execution":{
+            "binding_ref":"local-specialist", "adapter_id":"fixture", "adapter_version":"1",
+            "primary_host":"external", "scope_kind":"test", "scope_ref":"scope-1",
+            "supervisor_ref":"supervisor-1", "worker_ref":"worker-1", "task_ref":"task-1",
+            "role_ref":"reviewer", "role_snapshot_digest":PROCEDURE_DIGEST,
+            "agent_configuration_digest":PROCEDURE_DIGEST,
+            "accepted_task_digest":PROCEDURE_DIGEST
+        },
+        "rounds_used":1, "result_digest":PROCEDURE_DIGEST,
+        "summary":"Final evidence is recorded.", "worker_disposition":"idle", "accepted":true
+    }))
+    .unwrap();
+    let accept = accept_fixture.run_with_stdin(
+        &[
+            "--json".to_owned(),
+            "--socket".to_owned(),
+            accept_fixture.socket.display().to_string(),
+            "--worktree".to_owned(),
+            accept_fixture.root.display().to_string(),
+            "delegation".to_owned(),
+            "accept".to_owned(),
+            "--stdin".to_owned(),
+        ],
+        &input,
+    );
+    assert_eq!(accept.status.code(), Some(5), "{accept:?}");
+    let accept_request = accept_daemon.finish();
+    assert_eq!(accept_request["command"], "delegation.accept");
+    assert_eq!(accept_request["operation"], "mutate");
+    assert_eq!(accept_request["idempotency_key"], "v2sdg007-cli-accept");
+    assert_eq!(accept_request["workspace"]["expected_uuid"], WORKSPACE_ID);
+    assert_eq!(accept_request["preconditions"]["session_revision"], 7);
+    assert_eq!(accept_request["preconditions"]["attempt_id"], ATTEMPT_ID);
+    assert_eq!(
+        accept_request["payload"]["input"]["execution"]["task_ref"],
+        "task-1"
+    );
+
+    let invalid_fixture = Fixture::new();
+    let arguments = [
+        "--json".to_owned(),
+        "--socket".to_owned(),
+        invalid_fixture.socket.display().to_string(),
+        "--worktree".to_owned(),
+        invalid_fixture.root.display().to_string(),
+        "delegation".to_owned(),
+        "accept".to_owned(),
+        "--stdin".to_owned(),
+    ];
+    for (body, code) in [
+        (vec![b' '; 32 * 1024 + 1], "REQUEST_TOO_LARGE"),
+        (vec![b'x'; 32 * 1024], "REQUEST_INVALID"),
+        (b"not-json".to_vec(), "REQUEST_INVALID"),
+    ] {
+        let output = invalid_fixture.run_with_stdin(&arguments, &body);
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+        assert_eq!(one_json(&output)["code"], code);
+    }
+    let mut invalid = serde_json::from_slice::<Value>(&input).unwrap();
+    invalid.as_object_mut().unwrap().remove("summary");
+    let output = invalid_fixture.run_with_stdin(&arguments, &serde_json::to_vec(&invalid).unwrap());
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert_eq!(one_json(&output)["code"], "REQUEST_INVALID");
+    for field in ["session_revision", "rounds_used"] {
+        let mut invalid = serde_json::from_slice::<Value>(&input).unwrap();
+        invalid[field] = json!(1.0);
+        let output =
+            invalid_fixture.run_with_stdin(&arguments, &serde_json::to_vec(&invalid).unwrap());
+        assert_eq!(output.status.code(), Some(2), "{field}: {output:?}");
+        assert_eq!(one_json(&output)["code"], "REQUEST_INVALID");
+    }
+    let mut flagged = arguments.to_vec();
+    flagged.splice(5..5, ["--if-session-id".to_owned(), SESSION_ID.to_owned()]);
+    let output = invalid_fixture.run_with_stdin(&flagged, &input);
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert_eq!(one_json(&output)["code"], "REQUEST_INVALID");
+
+    let help = invalid_fixture.run(&["help".to_owned()]);
+    assert_eq!(help.status.code(), Some(0), "{help:?}");
+    assert!(String::from_utf8_lossy(&help.stdout).contains("delegation package|accept|receipt"));
+}
+
 static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 struct Fixture {
@@ -2935,6 +3089,9 @@ fn help_and_every_completion_target_publish_the_v2_routes_and_flags() {
         "session.reset",
         "session.decide",
         "session.rework",
+        "delegation.package",
+        "delegation.accept",
+        "delegation.receipt",
         "goal.define",
         "goal.revise",
         "goal.assess_criterion",
@@ -2948,6 +3105,35 @@ fn help_and_every_completion_target_publish_the_v2_routes_and_flags() {
                 .as_str()
                 .unwrap()
                 .contains("Usage:")
+        );
+    }
+    let accept_help = fixture.run(&[
+        "--json".to_owned(),
+        "help".to_owned(),
+        "delegation.accept".to_owned(),
+    ]);
+    let guidance = one_json(&accept_help)["result"]["text"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(guidance.contains("accept --stdin [--json] [--detach]"));
+    assert!(guidance.contains("Record final action evidence and settle the worker"));
+    assert!(guidance.contains("job lookup with the same key"));
+    for (topic, usage) in [
+        ("delegation.package", "delegation package [--json]"),
+        (
+            "delegation.receipt",
+            "delegation receipt --session <uuid> --attempt <uuid> [--json] [--if-workspace-uuid <uuid>]",
+        ),
+    ] {
+        let output = fixture.run(&["--json".to_owned(), "help".to_owned(), topic.to_owned()]);
+        assert!(output.status.success(), "{topic}: {output:?}");
+        assert!(
+            one_json(&output)["result"]["text"]
+                .as_str()
+                .unwrap()
+                .contains(usage),
+            "{topic} help omits {usage}"
         );
     }
     let fixture = Fixture::new();
@@ -2987,11 +3173,25 @@ fn help_and_every_completion_target_publish_the_v2_routes_and_flags() {
             "analysis-v2",
             "small-change-v2",
             "evidence",
+            "delegation package",
+            "delegation accept",
+            "delegation receipt",
             "page-token",
             "runtime",
             "all-modes",
         ] {
             assert!(script.contains(token), "{shell} completion omits {token}");
+        }
+        for flag in ["session", "attempt", "stdin"] {
+            let rendered = if shell == "fish" {
+                format!("-l {flag}")
+            } else {
+                format!("--{flag}")
+            };
+            assert!(
+                script.contains(&rendered),
+                "{shell} completion omits {rendered}"
+            );
         }
         for removed in [
             "procedure convert",

@@ -21,13 +21,11 @@ implemented, released, installed, or live-qualified merely by this adoption.
 The roadmap is the only task-status owner. This dossier adds no competing
 status table, automatic task start, or deployment authority.
 
-Current checkpoint: `V2SDG-001` through `V2SDG-006` are completed internal
-foundations, while `V2SDG-007` through `V2SDG-009` remain incomplete. The
-`v0.2.11` source and release candidate therefore do not provide a supported
-end-to-end delegation capability. Reserved contracts, package projection,
-receipt persistence, and completion gates must not be reviewed as equivalent to
-truthful public projections, native routes, coherent admission, lifecycle
-qualification, or final epic acceptance.
+Current checkpoint: `V2SDG-001` through `V2SDG-007` implement the local source
+foundation, including native routes and explicit custom-Procedure admission.
+`V2SDG-008` and `V2SDG-009` remain incomplete. The `v0.2.11` installed release
+does not provide the feature; the source implementation does not establish
+cross-host lifecycle qualification, release readiness, or live adapter support.
 
 The owner explicitly narrowed the work from the earlier live-Dolgorae research
 candidate. ADR-0035 records why local implementation may proceed without that

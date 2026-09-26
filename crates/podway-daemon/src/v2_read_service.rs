@@ -6,12 +6,14 @@
 use std::{error::Error, fmt};
 
 use podway_config::{
-    DelegationWorkPackageV1, ParsedNodeDefinition, ParsedProcedure, ParsedProcedureV2,
-    ProcedureDocumentFormat, goal_revision_safe_targets_v2, parse_procedure_document,
-    validate_procedure_v2,
+    DelegationEvidenceItemV1, DelegationEvidenceResolutionV1, DelegationEvidenceV1,
+    DelegationWorkPackageInputV1, DelegationWorkPackageV1, ParsedNodeDefinition, ParsedProcedure,
+    ParsedProcedureV2, ProcedureDocumentFormat, goal_revision_safe_targets_v2,
+    parse_procedure_document, project_delegation_work_package_v1, validate_procedure_v2,
 };
 use podway_core::{
     ArtifactLocationKindV1,
+    AttemptId,
     AttemptLifecycle,
     AttemptValidityV2,
     BlockerState,
@@ -59,6 +61,7 @@ use podway_store::v2_delegation::{DelegationReadinessV1, DelegationReceiptV1};
 use podway_store::{
     AttemptWorkflowMemoryV2, EvidenceLookupErrorV2, EvidenceReadbackV2, EvidenceResolutionStateV2,
     GraphSessionStateV2, GraphWorkspaceViewV2, recorded_value_digest_v2,
+    recorded_value_encoded_size_v2,
 };
 use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
@@ -85,6 +88,10 @@ pub enum GraphViewErrorV2 {
     MissingGraphSession,
     PendingMutationsForCompact,
     TerminalSessionHasNoNext,
+    NoActiveAttempt,
+    DelegationNotApplicable,
+    DelegationReceiptMissing,
+    AttemptNotFound,
     InvalidSnapshot,
     InconsistentState(&'static str),
     TimestampOutOfRange,
@@ -100,6 +107,12 @@ impl fmt::Display for GraphViewErrorV2 {
             Self::TerminalSessionHasNoNext => {
                 formatter.write_str("a terminal Procedure v2 session has no next action")
             }
+            Self::NoActiveAttempt => formatter.write_str("no active attempt exists"),
+            Self::DelegationNotApplicable => formatter.write_str("no delegated action is current"),
+            Self::DelegationReceiptMissing => {
+                formatter.write_str("no accepted receipt exists for the attempt")
+            }
+            Self::AttemptNotFound => formatter.write_str("the selected attempt does not exist"),
             Self::InvalidSnapshot => {
                 formatter.write_str("the stored Procedure v2 snapshot cannot be rehydrated")
             }
@@ -163,6 +176,152 @@ fn delegation_projection(
                 "guidance":"Finish all items and corrections before acceptance; later item edits require a fresh attempt."})
         }
     }
+}
+
+pub fn delegation_work_package_from_view_v1(
+    view: &GraphWorkspaceViewV2,
+) -> Result<DelegationWorkPackageV1, GraphViewErrorV2> {
+    let state = graph_state(view)?;
+    let procedure = rehydrate_snapshot(state)?;
+    let current = CurrentProjection::derive(view, state, &procedure)?
+        .ok_or(GraphViewErrorV2::NoActiveAttempt)?;
+    let GraphPlacementV2::Action(action) = current.placement else {
+        return Err(GraphViewErrorV2::DelegationNotApplicable);
+    };
+    if action.delegation().is_none() {
+        return Err(GraphViewErrorV2::DelegationNotApplicable);
+    }
+    let validated =
+        validate_procedure_v2(procedure.clone()).map_err(|_| GraphViewErrorV2::InvalidSnapshot)?;
+    let readback = state
+        .selected_evidence_readback(current.attempt.attempt_id())
+        .map_err(|_| GraphViewErrorV2::InconsistentState("delegation evidence is invalid"))?;
+    let selectors = action
+        .evidence_from()
+        .map(|references| references.entries());
+    if selectors.map_or(0, |entries| entries.len()) != readback.len() {
+        return Err(GraphViewErrorV2::InconsistentState(
+            "delegation evidence selector count is inconsistent",
+        ));
+    }
+    let mut evidence = Vec::with_capacity(readback.len());
+    for (selector, entry) in selectors.into_iter().flatten().zip(&readback) {
+        if entry.stale() || selector.source_node() != entry.reference().resolution().source_node() {
+            return Err(GraphViewErrorV2::InconsistentState(
+                "delegation evidence selector is stale or inconsistent",
+            ));
+        }
+        let resolution = match entry.reference().resolution() {
+            ResolvedEvidenceReferenceV2::Resolved(snapshot) => {
+                DelegationEvidenceResolutionV1::Resolved {
+                    source_attempt_id: snapshot.source_attempt_id().clone(),
+                    source_attempt_number: snapshot.source_attempt_number(),
+                    source_items_digest: snapshot.items_digest().clone(),
+                }
+            }
+            ResolvedEvidenceReferenceV2::Skipped(snapshot) => {
+                DelegationEvidenceResolutionV1::Skipped {
+                    source_attempt_id: snapshot.source_attempt_id().clone(),
+                    source_attempt_number: snapshot.source_attempt_number(),
+                    source_items_digest: snapshot.items_digest().clone(),
+                }
+            }
+            ResolvedEvidenceReferenceV2::Unresolved { .. } => {
+                DelegationEvidenceResolutionV1::Unresolved
+            }
+        };
+        let source = procedure
+            .graph()
+            .placements()
+            .iter()
+            .find(|placement| placement.id() == selector.source_node())
+            .ok_or(GraphViewErrorV2::InvalidSnapshot)?;
+        let definition_id = match source {
+            GraphPlacementV2::Action(source) => source.definition(),
+            GraphPlacementV2::Decision(source) => source.definition(),
+        };
+        let definition = procedure
+            .node_definitions()
+            .iter()
+            .find(|definition| definition.id() == definition_id)
+            .ok_or(GraphViewErrorV2::InvalidSnapshot)?;
+        let specs = match definition {
+            ParsedNodeDefinition::Action(source) => source.items(),
+            ParsedNodeDefinition::Decision(source) => source.items(),
+        };
+        let item_ids: Vec<&ItemId> = selector.selected_items().map_or_else(
+            || specs.iter().map(ItemSpecV2::id).collect(),
+            |selected| selected.iter().collect(),
+        );
+        let source_memory = entry
+            .reference()
+            .resolution()
+            .snapshot()
+            .and_then(|snapshot| {
+                state
+                    .workflow_memory()
+                    .attempts()
+                    .iter()
+                    .find(|memory| memory.attempt_id() == snapshot.source_attempt_id())
+            });
+        let items = item_ids
+            .into_iter()
+            .map(|item_id| {
+                let Some(value) = entry
+                    .items()
+                    .items()
+                    .iter()
+                    .find(|item| item.id() == item_id)
+                else {
+                    return Ok(DelegationEvidenceItemV1::Missing {
+                        item_id: item_id.clone(),
+                    });
+                };
+                let revision = source_memory
+                    .and_then(|memory| {
+                        memory
+                            .item_slots()
+                            .iter()
+                            .find(|slot| slot.item_id() == item_id)
+                    })
+                    .map(|slot| slot.revision())
+                    .ok_or(GraphViewErrorV2::InconsistentState(
+                        "delegation evidence item has no source slot",
+                    ))?;
+                Ok(DelegationEvidenceItemV1::Present {
+                    item_id: item_id.clone(),
+                    item_revision: revision,
+                    value_digest: recorded_value_digest_v2(value.value())
+                        .map_err(|_| GraphViewErrorV2::InvalidSnapshot)?,
+                    value_type: value.value().item_type(),
+                    size_bytes: recorded_value_encoded_size_v2(value.value())
+                        .map_err(|_| GraphViewErrorV2::InvalidSnapshot)?,
+                })
+            })
+            .collect::<Result<Vec<_>, GraphViewErrorV2>>()?;
+        evidence.push(DelegationEvidenceV1 {
+            selector: selector.clone(),
+            resolution,
+            items,
+        });
+    }
+    let goal = current.attempt.goal_revision().and_then(|revision| {
+        state
+            .goal_state()
+            .revisions()
+            .iter()
+            .find(|record| record.revision() == revision)
+    });
+    project_delegation_work_package_v1(DelegationWorkPackageInputV1 {
+        procedure: &validated,
+        workspace_uuid: view.identity().workspace_uuid(),
+        session_id: state.trace().session_id(),
+        placement_id: current.attempt.graph_node_id(),
+        attempt_id: current.attempt.attempt_id(),
+        goal,
+        evidence: &evidence,
+    })
+    .map_err(|_| GraphViewErrorV2::InvalidSnapshot)
 }
 
 pub fn project_delegation_package_result_v1(
@@ -264,6 +423,32 @@ pub fn project_delegation_receipt_result_v1(
         .as_object()
         .expect("receipt result is an object")
         .clone())
+}
+
+pub fn project_delegation_receipt_read_result_v1(
+    view: &GraphWorkspaceViewV2,
+    attempt_id: &AttemptId,
+    receipt: Option<&DelegationReceiptV1>,
+) -> Result<Map<String, Value>, GraphViewErrorV2> {
+    let state = graph_state(view)?;
+    let attempt = state
+        .trace()
+        .attempts()
+        .iter()
+        .find(|attempt| attempt.attempt_id() == attempt_id)
+        .ok_or(GraphViewErrorV2::AttemptNotFound)?;
+    let procedure = rehydrate_snapshot(state)?;
+    let delegated = procedure.graph().placements().iter().any(|placement| {
+        placement.id() == attempt.graph_node_id()
+            && matches!(placement, GraphPlacementV2::Action(action) if action.delegation().is_some())
+    });
+    if !delegated {
+        return Err(GraphViewErrorV2::DelegationNotApplicable);
+    }
+    project_delegation_receipt_result_v1(
+        view,
+        receipt.ok_or(GraphViewErrorV2::DelegationReceiptMissing)?,
+    )
 }
 
 pub fn project_graph_status_v2(

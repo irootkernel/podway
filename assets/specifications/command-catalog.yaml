@@ -383,6 +383,51 @@ commands:
   - session_id_optional
   result_schemas:
   - podway.evidence-read-result/v1
+- name: delegation.package
+  availability: executable
+  cli:
+  - delegation
+  - package
+  operation: query
+  workspace_required: true
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+  preconditions:
+  - session_id_optional
+  result_schemas:
+  - podway.delegation-package-result/v1
+- name: delegation.receipt
+  availability: executable
+  cli:
+  - delegation
+  - receipt
+  operation: query
+  workspace_required: true
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+  result_schemas:
+  - podway.delegation-receipt-result/v1
+- name: delegation.accept
+  availability: executable
+  cli:
+  - delegation
+  - accept
+  operation: mutate
+  workspace_required: true
+  durable_job: true
+  session_mutation: true
+  destructive_confirmation: false
+  preconditions:
+  - workspace_uuid
+  - session_id
+  - session_revision
+  - attempt_id
+  idempotency_scope: session
+  result_schemas:
+  - podway.delegation-accept-result/v1
+  - podway.detached-admission-result/v2
 - name: session.complete
   availability: executable
   cli:
@@ -769,6 +814,7 @@ commands:
   destructive_confirmation: false
   result_schemas:
   - podway.job-lookup-result/v4
+  - podway.job-lookup-result/v5
 - name: job.status
   availability: executable
   cli:
@@ -781,6 +827,7 @@ commands:
   destructive_confirmation: false
   result_schemas:
   - podway.job-result/v4
+  - podway.job-result/v5
 - name: job.wait
   availability: executable
   cli:
@@ -793,6 +840,7 @@ commands:
   destructive_confirmation: false
   result_schemas:
   - podway.job-result/v4
+  - podway.job-result/v5
 - name: job.cancel
   availability: executable
   cli:

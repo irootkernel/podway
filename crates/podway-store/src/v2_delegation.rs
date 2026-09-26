@@ -5,6 +5,7 @@ use podway_core::{
     canonicalize_json_v1, verify_canonical_json_v1,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
 
@@ -15,6 +16,53 @@ use crate::{
 
 pub const MAX_DELEGATION_RECEIPT_BYTES_V1: usize = 45_000;
 const ACCEPTED_ITEMS_DIGEST_DOMAIN_V1: &str = "podway.delegation-accepted-items/v1\n";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DelegationBindingMismatchReasonV1 {
+    PackageMismatch,
+    BindingMismatch,
+    RoleMismatch,
+    RoundLimit,
+    DispositionMismatch,
+}
+
+impl DelegationBindingMismatchReasonV1 {
+    pub const fn public_reason(self) -> &'static str {
+        match self {
+            Self::PackageMismatch | Self::BindingMismatch => "binding_mismatch",
+            Self::RoleMismatch => "role_mismatch",
+            Self::RoundLimit => "round_limit",
+            Self::DispositionMismatch => "disposition_mismatch",
+        }
+    }
+}
+
+pub fn acceptance_binding_mismatch_v1(
+    declaration: &Value,
+    input: &Value,
+) -> Option<DelegationBindingMismatchReasonV1> {
+    use DelegationBindingMismatchReasonV1 as Reason;
+
+    let execution = &input["execution"];
+    if execution["binding_ref"] != declaration["binding_ref"] {
+        Some(Reason::BindingMismatch)
+    } else if execution["role_ref"] != declaration["role_ref"]
+        || execution["role_snapshot_digest"] != declaration["role_snapshot_digest"]
+    {
+        Some(Reason::RoleMismatch)
+    } else if input["rounds_used"].as_u64().unwrap_or(0)
+        > declaration["max_rounds"].as_u64().unwrap_or(0)
+    {
+        Some(Reason::RoundLimit)
+    } else if (declaration["after_accept"] == "retain" && input["worker_disposition"] != "idle")
+        || (declaration["after_accept"] == "release" && input["worker_disposition"] != "released")
+    {
+        Some(Reason::DispositionMismatch)
+    } else {
+        None
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DelegationReadinessV1 {

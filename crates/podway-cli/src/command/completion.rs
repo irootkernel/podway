@@ -93,6 +93,14 @@ const SESSION_ID: Flag = Flag {
     long: "session-id",
     takes_value: true,
 };
+const SESSION: Flag = Flag {
+    long: "session",
+    takes_value: true,
+};
+const ATTEMPT: Flag = Flag {
+    long: "attempt",
+    takes_value: true,
+};
 const IF_SESSION_REVISION: Flag = Flag {
     long: "if-session-revision",
     takes_value: true,
@@ -741,6 +749,47 @@ const ROUTES: &[Route] = &[
             &SOURCE,
             &ITEM,
             &PAGE_TOKEN,
+        ],
+        values: "",
+        dynamic: None,
+    },
+    Route {
+        words: "delegation package",
+        flags: &[
+            &JSON,
+            &DEV,
+            &WORKTREE,
+            &TIMEOUT,
+            &SOCKET,
+            &NO_COLOR,
+            &QUIET,
+            &IF_WORKSPACE_UUID,
+            &IF_SESSION_ID,
+        ],
+        values: "",
+        dynamic: None,
+    },
+    Route {
+        words: "delegation accept",
+        flags: &[
+            &JSON, &DEV, &WORKTREE, &TIMEOUT, &SOCKET, &NO_COLOR, &QUIET, &DETACH, &STDIN,
+        ],
+        values: "",
+        dynamic: None,
+    },
+    Route {
+        words: "delegation receipt",
+        flags: &[
+            &JSON,
+            &DEV,
+            &WORKTREE,
+            &TIMEOUT,
+            &SOCKET,
+            &NO_COLOR,
+            &QUIET,
+            &IF_WORKSPACE_UUID,
+            &SESSION,
+            &ATTEMPT,
         ],
         values: "",
         dynamic: None,
@@ -1595,7 +1644,16 @@ fn write_fish_flag(script: &mut String, route: &str, flag: &Flag, dynamic: Optio
 
 #[cfg(test)]
 mod tests {
-    use super::{ROUTES, Shell, children, parents};
+    use super::{IF_WORKSPACE_UUID, ROUTES, Shell, children, parents};
+
+    #[test]
+    fn delegation_receipt_completes_the_accepted_workspace_fence() {
+        let receipt = ROUTES
+            .iter()
+            .find(|route| route.words == "delegation receipt")
+            .expect("delegation receipt completion route must exist");
+        assert!(receipt.flags.contains(&&IF_WORKSPACE_UUID));
+    }
 
     #[test]
     fn daemon_wait_ready_is_present_in_every_completion_script() {

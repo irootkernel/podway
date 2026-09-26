@@ -1064,7 +1064,10 @@ fn commit_graph_mutation_terminal_with_receipt_v1(
             delegation_receipt,
         )?;
     }
-    let delegation_readiness = if execution.command() == &crate::CommandV1::SessionComplete {
+    let delegation_readiness = if matches!(
+        execution.command(),
+        crate::CommandV1::SessionComplete | crate::CommandV1::DelegationAccept
+    ) {
         crate::v2_delegation::completion_readiness_connection_v1(
             &transaction,
             &current,
@@ -7246,6 +7249,92 @@ fn graph_mutation_failure_matches_v2(
                 .err()
                 .and_then(|failure| PersistedGraphMutationFailureV2::try_from(&failure).ok())
                 .is_some_and(|failure| &failure == error)
+        }
+        crate::CommandV1::DelegationAccept => {
+            let (Some(expected_revision), Some(expected_attempt)) = (
+                preconditions.expected_session_revision(),
+                preconditions.expected_attempt_id(),
+            ) else {
+                return false;
+            };
+            if let PersistedGraphMutationFailureV2::SessionRevisionConflict { expected, actual } =
+                error
+            {
+                return expected_revision == *expected
+                    && current.trace().revision() == *actual
+                    && expected != actual;
+            }
+            if current.trace().revision() != expected_revision {
+                return false;
+            }
+            if let PersistedGraphMutationFailureV2::SessionNotRunning = error {
+                return current.trace().lifecycle() != podway_core::SessionLifecycle::Running
+                    && active.is_none();
+            }
+            if let PersistedGraphMutationFailureV2::AttemptNotCurrent { expected, actual } = error {
+                return expected_attempt == expected
+                    && active.map(podway_core::SessionAttemptV2::attempt_id) == actual.as_ref()
+                    && active.map(podway_core::SessionAttemptV2::attempt_id) != Some(expected);
+            }
+            let Some(active) = active else {
+                return false;
+            };
+            if active.attempt_id() != expected_attempt {
+                return false;
+            }
+            let Ok((_, payload)) =
+                procedure_v2_operation_payload_v1(execution, "delegation.accept", 8)
+            else {
+                return false;
+            };
+            let declaration = current
+                .snapshot()
+                .graph_node(active.graph_node_id())
+                .and_then(|node| {
+                    serde_json::from_str::<serde_json::Value>(node.canonical_placement_json()).ok()
+                })
+                .and_then(|placement| placement.get("delegation").cloned());
+            match error {
+                PersistedGraphMutationFailureV2::DelegationNotApplicable => {
+                    declaration.is_none()
+                        && delegation_readiness
+                            == crate::v2_delegation::DelegationReadinessV1::Direct
+                }
+                PersistedGraphMutationFailureV2::DelegationAlreadyAccepted => {
+                    declaration.is_some()
+                        && !matches!(
+                            delegation_readiness,
+                            crate::v2_delegation::DelegationReadinessV1::Direct
+                                | crate::v2_delegation::DelegationReadinessV1::ReceiptMissing
+                        )
+                }
+                PersistedGraphMutationFailureV2::DelegationBindingMismatch { reason } => {
+                    let Some(declaration) = declaration else {
+                        return false;
+                    };
+                    if delegation_readiness
+                        != crate::v2_delegation::DelegationReadinessV1::ReceiptMissing
+                    {
+                        return false;
+                    }
+                    *reason
+                        == crate::v2_delegation::DelegationBindingMismatchReasonV1::PackageMismatch
+                        || crate::v2_delegation::acceptance_binding_mismatch_v1(
+                            &declaration,
+                            &serde_json::Value::Object(payload),
+                        ) == Some(*reason)
+                }
+                _ => {
+                    current
+                        .accept_delegation_successor_v1(expected_attempt)
+                        .err()
+                        .and_then(|failure| {
+                            PersistedGraphMutationFailureV2::try_from(&failure).ok()
+                        })
+                        .as_ref()
+                        == Some(error)
+                }
+            }
         }
         crate::CommandV1::SessionRetry => match error {
             PersistedGraphMutationFailureV2::SessionNotRunning => {

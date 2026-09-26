@@ -1316,6 +1316,7 @@ pub enum DispatchFailureKindV1 {
     SessionCancelled,
     SessionRevisionConflict,
     AttemptNotCurrent,
+    AttemptNotFound,
     GraphNodeTypeMismatch,
     OptionNotAllowed,
     OptionGuardUnsatisfied,
@@ -1330,8 +1331,11 @@ pub enum DispatchFailureKindV1 {
     ManualReworkTargetNotAllowed,
     ManualReworkTargetNotOnTrace,
     StageNotSkippable,
+    DelegationNotApplicable,
     DelegationReceiptRequired,
     DelegationReceiptStale,
+    DelegationBindingMismatch,
+    DelegationAlreadyAccepted,
     RequiredItemsMissing,
     BlockersPresent,
     SessionGoalMissing,
@@ -2265,7 +2269,9 @@ where
                 "podway.job-result/v3"
                     | "podway.job-lookup-result/v3"
                     | "podway.job-result/v4"
-                    | "podway.job-lookup-result/v4",
+                    | "podway.job-lookup-result/v4"
+                    | "podway.job-result/v5"
+                    | "podway.job-lookup-result/v5",
             )
         ) {
             return OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
@@ -2755,6 +2761,9 @@ where
                     | SliceCommandV1::SessionNext(_)
                     | SliceCommandV1::SessionObserve(_)
                     | SliceCommandV1::EvidenceRead(_)
+                    | SliceCommandV1::DelegationPackage(_)
+                    | SliceCommandV1::DelegationReceipt(_)
+                    | SliceCommandV1::DelegationAccept(_)
                     | SliceCommandV1::SessionComplete(_)
                     | SliceCommandV1::SessionSkip(_)
                     | SliceCommandV1::SessionRetry(_)
@@ -2780,6 +2789,7 @@ where
                 SliceCommandV1::SessionStart(_)
                     | SliceCommandV1::SessionStartReplace(_)
                     | SliceCommandV1::SessionComplete(_)
+                    | SliceCommandV1::DelegationAccept(_)
                     | SliceCommandV1::SessionSkip(_)
                     | SliceCommandV1::SessionRetry(_)
                     | SliceCommandV1::SessionBlock(_)
@@ -3215,6 +3225,12 @@ fn catalog_error_spec_v1(kind: DispatchFailureKindV1) -> (&'static str, &'static
             true,
             4,
         ),
+        DispatchFailureKindV1::AttemptNotFound => (
+            "ATTEMPT_NOT_FOUND",
+            "The requested attempt was not found in the session.",
+            false,
+            1,
+        ),
         DispatchFailureKindV1::GraphNodeTypeMismatch => (
             "GRAPH_NODE_TYPE_MISMATCH",
             "The active graph node has the wrong type for this command.",
@@ -3365,6 +3381,12 @@ fn catalog_error_spec_v1(kind: DispatchFailureKindV1) -> (&'static str, &'static
             false,
             1,
         ),
+        DispatchFailureKindV1::DelegationNotApplicable => (
+            "DELEGATION_NOT_APPLICABLE",
+            "The selected attempt is not a delegated action.",
+            false,
+            1,
+        ),
         DispatchFailureKindV1::DelegationReceiptRequired => (
             "DELEGATION_RECEIPT_REQUIRED",
             "The delegated attempt has no accepted receipt.",
@@ -3374,6 +3396,18 @@ fn catalog_error_spec_v1(kind: DispatchFailureKindV1) -> (&'static str, &'static
         DispatchFailureKindV1::DelegationReceiptStale => (
             "DELEGATION_RECEIPT_STALE",
             "The accepted receipt no longer matches the current delegated attempt.",
+            false,
+            1,
+        ),
+        DispatchFailureKindV1::DelegationBindingMismatch => (
+            "DELEGATION_BINDING_MISMATCH",
+            "The acceptance does not match the delegated work package.",
+            false,
+            1,
+        ),
+        DispatchFailureKindV1::DelegationAlreadyAccepted => (
+            "DELEGATION_ALREADY_ACCEPTED",
+            "The delegated attempt already has an accepted receipt.",
             false,
             1,
         ),

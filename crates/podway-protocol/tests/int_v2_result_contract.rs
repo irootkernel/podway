@@ -1255,6 +1255,14 @@ fn v2sdg002_delegation_documents_reject_unbounded_and_mismatched_input() {
         "podway.delegation-accept-input/v1",
         &wrong_type
     ));
+    for field in ["session_revision", "rounds_used"] {
+        let mut float_form = acceptance.clone();
+        float_form[field] = json!(1.0);
+        assert!(
+            !validate_delegation_document_v1("podway.delegation-accept-input/v1", &float_form),
+            "{field} must use an unsigned integer JSON representation"
+        );
+    }
     let mut over_bound = acceptance.clone();
     over_bound["summary"] = json!("가".repeat(1500));
     assert!(!validate_delegation_document_v1(

@@ -8,9 +8,9 @@ use podway_core::{
     Sha256Digest, UnixMillis, WorkspaceId,
 };
 use podway_daemon::execution::{
-    ExecutionBoundaryErrorV1, ProcedureProviderV1, ProcedureV2SourceAdmissionErrorV1,
-    ProcedureV2StartPreparationErrorV1, prepare_custom_procedure_v2_start,
-    prepare_preset_procedure_v2_start, workspace_procedure_snapshot_from_bytes_v2,
+    ProcedureProviderV1, ProcedureV2SourceAdmissionErrorV1, ProcedureV2StartPreparationErrorV1,
+    prepare_custom_procedure_v2_start, prepare_preset_procedure_v2_start,
+    workspace_procedure_snapshot_from_bytes_v2,
 };
 use podway_store::{
     DurableWorktreeIdentityV1, ProcedureSnapshotV2, ValidatedWorkspaceRootV1, WorkspaceBindingV1,
@@ -227,7 +227,7 @@ name: Future
 }
 
 #[test]
-fn v2sdg003_delegated_authoring_is_valid_but_start_admission_remains_closed() {
+fn v2sdg007_delegated_custom_procedure_start_admits_complete_local_contract() {
     let delegated = DIRECT_CONTROL_YAML.replace(
         "      terminal: true\n",
         concat!(
@@ -242,18 +242,15 @@ fn v2sdg003_delegated_authoring_is_valid_but_start_admission_remains_closed() {
     );
     let ParsedProcedure::V2(parsed) =
         parse_procedure_document(delegated.as_bytes(), ProcedureDocumentFormat::Yaml).unwrap();
-    assert!(validate_procedure_v2(parsed).is_ok());
-    assert!(matches!(
-        workspace_procedure_snapshot_from_bytes_v2(
-            "workflow.yaml",
-            delegated.as_bytes(),
-            ProcedureSnapshotId::new(SNAPSHOT_ID).unwrap(),
-            UnixMillis::new(1),
-        ),
-        Err(ProcedureV2SourceAdmissionErrorV1::Rejected(
-            ExecutionBoundaryErrorV1::ProcedureV2Unsupported
-        ))
-    ));
+    let validated = validate_procedure_v2(parsed).unwrap();
+    let snapshot = workspace_procedure_snapshot_from_bytes_v2(
+        "workflow.yaml",
+        delegated.as_bytes(),
+        ProcedureSnapshotId::new(SNAPSHOT_ID).unwrap(),
+        UnixMillis::new(1),
+    )
+    .unwrap();
+    assert_eq!(snapshot.digest(), validated.digest());
 }
 
 #[test]

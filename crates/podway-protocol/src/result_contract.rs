@@ -216,6 +216,14 @@ pub fn validate_delegation_document_v1(schema: &str, value: &Value) -> bool {
             }
             if schema == "podway.delegation-accept-input/v1" {
                 bounded(document, "idempotency_key", 256)
+                    && document
+                        .get("session_revision")
+                        .and_then(Value::as_u64)
+                        .is_some()
+                    && document
+                        .get("rounds_used")
+                        .and_then(Value::as_u64)
+                        .is_some()
             } else {
                 let Some(declaration) = document.get("delegation").and_then(Value::as_object)
                 else {

@@ -93,16 +93,18 @@ document. The output envelope accepts both wrapper generations for compatibility
 
 V2SDG-002 reserves a separate delegation generation: status and compact status
 v4, running next and observation v4, prepared next v2, preview and graph v2,
-archive show v2, and job status/lookup v5. The older closed result families and
-stored terminal envelopes retain their existing fields. The new package,
+archive show v2, and job status/wait/lookup v5. The older closed result families and
+stored terminal envelopes retain their existing fields. A `job lookup` miss
+remains v4 because no stored command identifies a v5 job. The new package,
 acceptance, receipt, projection, and error-detail schemas are registered in the
-contract manifest, but `delegation.package`, `delegation.accept`, and
-`delegation.receipt` are not executable or advertised yet. The optional
-Procedure declaration also remains rejected at runtime until coherent opt-in
-admission is implemented. The
+contract manifest. Source implementation through V2SDG-007 makes
+`delegation.package`, `delegation.accept`, and `delegation.receipt` executable
+and admits explicitly supplied custom Procedures with delegated actions.
+This source capability is not an installed stable-release claim; lifecycle
+qualification and durable closeout remain V2SDG-008 and V2SDG-009 work. The
 authoring `procedure preview` and `procedure graph` commands select their v2
 results for parseable delegated documents and validated delegated graphs,
-respectively, without opening runtime admission. The
+respectively. The
 [adapter mapping review](../../implementation-tips/delegation-adapter-contract-review.md)
 defines the generic digest meanings and records both real Primary paths as
 unavailable pending separately qualified mappings.
