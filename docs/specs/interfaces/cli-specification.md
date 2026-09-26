@@ -210,9 +210,8 @@ verified, trusted, attested, or secure evidence.
 
 Successful JSON output uses `podway.output/v3`; failures use `podway.error/v1`.
 Machine clients consume schema IDs, command names, stable fields, and error codes,
-never text. Text mode is advisory rendering of the same result. Exit 0 is success;
-1 is a valid negative authoring/check result; 2 is usage; 3 is configuration; 4 is
-daemon communication; 5 is state/precondition rejection; and 6 is internal failure.
+never text. Text mode is advisory rendering of the same result. Exit status follows
+the canonical [exit-code table](errors-and-exit-codes.md#exit-codes).
 
 Every JSON invocation emits exactly one bounded newline-terminated object on stdout.
 Diagnostics go to the structured envelope in JSON mode and stderr only where the
