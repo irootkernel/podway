@@ -156,6 +156,23 @@ fn large_delegated_source(help_chars: usize) -> String {
     .to_string()
 }
 
+fn decision_sources(source: &str) -> String {
+    let mut document: serde_json::Value = serde_json::from_str(source).unwrap();
+    let items = document["node_definitions"]["work"]["items"].clone();
+    document["node_definitions"]["source"] = serde_json::json!({
+        "type": "decision", "title": "Choose input", "objective": "Record source evidence.",
+        "prompt": "Proceed?", "items": items,
+        "options": [{"id": "go", "label": "Go"}], "reason": {"required": true},
+    });
+    for node in document["graph"]["nodes"].as_array_mut().unwrap() {
+        if let Some(next) = node.as_object_mut().unwrap().remove("next") {
+            node["use"] = serde_json::json!("source");
+            node["routes"] = serde_json::json!({"go": {"to": next, "effect": "advance"}});
+        }
+    }
+    document.to_string()
+}
+
 #[test]
 fn v2sdg003_static_package_budget_rejects_before_canonical_admission() {
     let below = large_delegated_source(800);
@@ -173,6 +190,134 @@ fn v2sdg003_static_package_budget_rejects_before_canonical_admission() {
             ..
         })
     ));
+}
+
+#[test]
+fn v2sdg003_decision_source_items_count_toward_static_package_budget() {
+    let below = decision_sources(&large_delegated_source(800));
+    let ParsedProcedure::V2(parsed) =
+        parse_procedure_document(below.as_bytes(), ProcedureDocumentFormat::Json).unwrap();
+    assert!(validate_procedure_v2(parsed).is_ok());
+
+    let over = decision_sources(&large_delegated_source(900));
+    let ParsedProcedure::V2(parsed) =
+        parse_procedure_document(over.as_bytes(), ProcedureDocumentFormat::Json).unwrap();
+    assert!(matches!(
+        validate_procedure_v2(parsed),
+        Err(ConfigError::OutOfBounds {
+            field: "delegation work package worst-case JSON bytes",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn v2sdg003_decision_evidence_preserves_selection_and_declared_types() {
+    for selected in [false, true] {
+        let mut document: serde_json::Value = serde_yaml::from_str(&delegated_source()).unwrap();
+        document["node_definitions"]["source"] = serde_json::json!({
+            "type": "decision", "title": "Choose input", "objective": "Record source evidence.",
+            "prompt": "Proceed?", "options": [{"id": "go", "label": "Go"}],
+            "reason": {"required": true},
+            "items": [
+                {"id": "input", "type": "text", "prompt": "Input", "required": false},
+                {"id": "count", "type": "integer", "prompt": "Count", "required": false},
+            ],
+        });
+        document["graph"]["entry"] = serde_json::json!("source");
+        let mut selector = serde_json::json!({"node": "source", "required": false});
+        if selected {
+            selector["items"] = serde_json::json!(["input"]);
+        }
+        document["graph"]["nodes"][0]["evidence_from"] = serde_json::json!([selector]);
+        document["graph"]["nodes"].as_array_mut().unwrap().insert(
+            0,
+            serde_json::json!({
+                "id": "source", "use": "source",
+                "routes": {"go": {"to": "work", "effect": "advance"}},
+            }),
+        );
+        let procedure = admit(&serde_yaml::to_string(&document).unwrap());
+        let podway_core::GraphPlacementV2::Action(action) =
+            &procedure.parsed().graph().placements()[1]
+        else {
+            panic!("expected action")
+        };
+        let selector = action.evidence_from().unwrap().entries()[0].clone();
+        let digest = Sha256Digest::new(format!("sha256:{}", "a".repeat(64))).unwrap();
+        for resolved in [false, true] {
+            let items = [("input", ItemTypeV1::Text), ("count", ItemTypeV1::Integer)]
+                .into_iter()
+                .take(if selected { 1 } else { 2 })
+                .map(|(id, value_type)| {
+                    let item_id = ItemId::new(id).unwrap();
+                    if resolved {
+                        DelegationEvidenceItemV1::Present {
+                            item_id,
+                            item_revision: Revision::new(1),
+                            value_digest: digest.clone(),
+                            value_type,
+                            size_bytes: 5,
+                        }
+                    } else {
+                        DelegationEvidenceItemV1::Missing { item_id }
+                    }
+                })
+                .collect();
+            let mut evidence = [DelegationEvidenceV1 {
+                selector: selector.clone(),
+                resolution: if resolved {
+                    DelegationEvidenceResolutionV1::Resolved {
+                        source_attempt_id: AttemptId::new("55555555-5555-4555-8555-555555555555")
+                            .unwrap(),
+                        source_attempt_number: AttemptNumberV2::FIRST,
+                        source_items_digest: digest.clone(),
+                    }
+                } else {
+                    DelegationEvidenceResolutionV1::Unresolved
+                },
+                items,
+            }];
+            let project = |evidence: &[DelegationEvidenceV1]| {
+                project_delegation_work_package_v1(DelegationWorkPackageInputV1 {
+                    procedure: &procedure,
+                    workspace_uuid: &WorkspaceId::new("11111111-1111-4111-8111-111111111111")
+                        .unwrap(),
+                    session_id: &SessionId::new("22222222-2222-4222-8222-222222222222").unwrap(),
+                    placement_id: &GraphNodeId::new("work").unwrap(),
+                    attempt_id: &AttemptId::new("33333333-3333-4333-8333-333333333333").unwrap(),
+                    goal: None,
+                    evidence,
+                })
+            };
+            let package = project(&evidence).unwrap();
+            let projected = package.package()["evidence"][0]["items"]
+                .as_array()
+                .unwrap();
+            assert_eq!(projected.len(), if selected { 1 } else { 2 });
+            assert_eq!(projected[0]["item_id"], "input");
+            if !selected {
+                assert_eq!(projected[1]["item_id"], "count");
+            }
+            if resolved {
+                assert_eq!(projected[0]["value_type"], "text");
+                if !selected {
+                    assert_eq!(projected[1]["value_type"], "integer");
+                }
+                let mut wrong_type = evidence.clone();
+                if let DelegationEvidenceItemV1::Present { value_type, .. } =
+                    &mut wrong_type[0].items[0]
+                {
+                    *value_type = ItemTypeV1::Confirm;
+                }
+                assert!(project(&wrong_type).is_err());
+            } else {
+                assert!(projected.iter().all(|item| item["state"] == "missing"));
+            }
+            evidence[0].items.pop();
+            assert!(project(&evidence).is_err());
+        }
+    }
 }
 
 #[test]

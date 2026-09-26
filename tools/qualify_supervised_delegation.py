@@ -138,7 +138,7 @@ class Fixture:
         return envelope
 
     def workspace(self, name: str, disposition: str | None = "retain", *, goal: bool = False,
-                  upstream: bool = False) -> Path:
+                  upstream: str | None = None) -> Path:
         worktree = self.root / name
         worktree.mkdir(mode=0o700)
         subprocess.run(["git", "init", "--quiet", str(worktree)], check=True,
@@ -167,14 +167,25 @@ class Fixture:
             ]
         if upstream:
             document["node_definitions"]["source"] = {
-                "type": "action", "title": "Source", "intent": "Record upstream input.",
+                "type": upstream, "title": "Source",
                 "items": [{"id": "input", "type": "text", "prompt": "Input", "required": True}],
             }
+            source = document["node_definitions"]["source"]
+            source_node = {"id": "source", "use": "source"}
+            evidence = {"node": "source", "required": True}
+            if upstream == "decision":
+                source.update(objective="Record upstream input.", prompt="Proceed?",
+                              options=[{"id": "go", "label": "Go"}], reason={"required": True})
+                source_node["routes"] = {"go": {"to": "work", "effect": "advance"}}
+            else:
+                source["intent"] = "Record upstream input."
+                source_node["next"] = "work"
+                evidence["items"] = ["input"]
             document["graph"]["nodes"][0]["evidence_from"] = [
-                {"node": "source", "required": True, "items": ["input"]},
+                evidence,
             ]
             document["graph"]["entry"] = "source"
-            document["graph"]["nodes"].insert(0, {"id": "source", "use": "source", "next": "work"})
+            document["graph"]["nodes"].insert(0, source_node)
         (worktree / "procedure.json").write_text(json.dumps(document))
         preview = self.call(worktree, ["procedure", "preview", "procedure.json"])["result"]
         assert preview["admissible"] is True, preview
@@ -187,7 +198,10 @@ class Fixture:
         self.mutate(worktree, begin, attempt=False)
         if upstream:
             self.mutate(worktree, ["set", "input", "Immutable source input"], item="input")
-            self.mutate(worktree, ["complete"])
+            if upstream == "decision":
+                self.mutate(worktree, ["decide", "--option", "go", "--reason", "Use the recorded input."])
+            else:
+                self.mutate(worktree, ["complete"])
         self.mutate(worktree, ["set", "result", "Final output"], item="result")
         return worktree
 
@@ -278,8 +292,26 @@ def same_replay(original: dict, replay: dict) -> None:
     }, (original, replay)
 
 
+def decision_evidence(f: Fixture) -> None:
+    worktree = f.workspace("decision-evidence", upstream="decision")
+    package = f.call(worktree, ["delegation", "package"])["result"]
+    evidence = package["package"]["evidence"][0]
+    assert evidence["resolution"] == "resolved"
+    assert evidence["selector"]["node"] == "source"
+    assert len(evidence["items"]) == 1
+    assert evidence["items"][0]["item_id"] == "input"
+    assert evidence["items"][0]["state"] == "present"
+    assert evidence["items"][0]["value_type"] == "text"
+    payload, external = f.acceptance(worktree, "external")
+    assert external["effects"] == 1
+    assert payload["package_digest"] == package["package_digest"]
+    f.accept(worktree, payload)
+    f.mutate(worktree, ["complete"])
+    assert f.receipt(worktree, payload)["applicability"] == "historical"
+
+
 def host_matrix(f: Fixture, host: str) -> None:
-    worktree = f.workspace(host, upstream=True)
+    worktree = f.workspace(host, upstream="action")
     payload, external = f.acceptance(worktree, host)
     assert external["effects"] == 1 and len(external["assignments"][-1]["feedback"]) == 2
     for field, value, code in [
@@ -576,6 +608,8 @@ def main() -> None:
                 for host in ("external", "managed"):
                     host_matrix(f, host)
                     checks[host] = True
+                decision_evidence(f)
+                checks["decision_evidence"] = True
             if args.scenario in ("all", "recovery"):
                 recovery(f)
                 checks["recovery"] = True

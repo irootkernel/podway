@@ -388,7 +388,7 @@ fn source_items<'a>(
         .ok_or_else(invalid_evidence)?;
     Ok(match definition {
         ParsedNodeDefinition::Action(action) => action.items(),
-        ParsedNodeDefinition::Decision(_) => &[],
+        ParsedNodeDefinition::Decision(decision) => decision.items(),
     })
 }
 

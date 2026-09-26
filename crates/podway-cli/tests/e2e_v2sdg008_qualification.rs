@@ -28,7 +28,13 @@ fn v2sdg008_native_lifecycle_migration_and_host_qualification() {
     assert_eq!(evidence["live_adapter"], "not_performed");
     assert_eq!(evidence["live_model"], "not_performed");
     assert_eq!(evidence["runtime_cleanup"], true);
-    for check in ["external", "managed", "recovery", "migration"] {
+    for check in [
+        "external",
+        "managed",
+        "decision_evidence",
+        "recovery",
+        "migration",
+    ] {
         assert_eq!(evidence["checks"][check], true, "{check}");
     }
 }

@@ -11,6 +11,7 @@ This file records concise shipped outcomes and the planned next stable release.
 ### Fixed
 
 - Return the declared detached admission response for supervised-delegation acceptance so callers can reconcile its durable job.
+- Preserve decision-node evidence in delegated work packages and account for it in package size limits.
 
 ## v0.2.11 - 2026-09-23
 
