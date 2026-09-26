@@ -437,8 +437,10 @@ by the JSON contract and the existing complete frame limit; the open outer v2
 envelope is not permission for unbounded warnings or oversized encoded
 responses.
 
-Typed conditions retain `podway.ipc/v1`, `podway.error/v1`,
-`podway.output/v3`, `next-result/v3`, and `observation-result/v3`. Exact manifest
+Typed conditions retain `podway.ipc/v1`, `podway.error/v1`, and
+`podway.output/v3`. Direct Procedures use `next-result/v3` and
+`observation-result/v3`; Procedures with delegation use `next-result/v4` and
+`observation-result/v4`. Exact manifest
 identity makes older peers reject the changed closed schema set rather than
 silently accepting or dropping condition fields.
 
