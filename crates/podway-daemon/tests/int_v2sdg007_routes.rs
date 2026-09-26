@@ -273,6 +273,47 @@ fn v2sdg007_direct_attempt_rejects_delegation_reads_without_changing_direct_work
         "session.complete",
     );
     assert_eq!(result["schema"], "podway.stage-transition-result/v2");
+    let completed = runtime::status(&dispatcher, &selector, 772_009, session_id);
+    let terminal_fence = PreconditionsV1::new(
+        Some(SessionId::new(session_id).unwrap()),
+        Some(Revision::new(
+            completed["session"]["revision"].as_u64().unwrap(),
+        )),
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    let disposition = runtime::request(
+        772_010,
+        "session.terminal_disposition",
+        &selector,
+        fields(json!({"kind":"not_required", "reason":"No handoff is required."})),
+        "v2sdg007-direct-disposition",
+        terminal_fence.clone(),
+    );
+    runtime::v2_result(
+        runtime::dispatch(&dispatcher, &disposition),
+        "session.terminal_disposition",
+    );
+    let archive = runtime::request(
+        772_011,
+        "session.archive",
+        &selector,
+        Map::new(),
+        "v2sdg007-direct-archive",
+        terminal_fence,
+    );
+    let archived = runtime::v2_result(runtime::dispatch(&dispatcher, &archive), "session.archive");
+    assert_eq!(archived["activity"], "inactive");
+    assert_eq!(
+        error_code_and_reason(runtime::dispatch(&dispatcher, &receipt)),
+        (
+            "DELEGATION_NOT_APPLICABLE".to_owned(),
+            "direct_attempt".to_owned()
+        )
+    );
 }
 
 #[test]
@@ -1101,6 +1142,10 @@ fn v2sdg007_native_delegation_round_trip_and_closed_failures() {
         "session.complete",
     );
     assert_eq!(completed["schema"], "podway.stage-transition-result/v2");
+    assert_eq!(
+        error_code(runtime::dispatch(&dispatcher, &package)),
+        "SESSION_NOT_RUNNING"
+    );
     let historical = runtime::v2_result(
         runtime::dispatch(&dispatcher, &receipt),
         "delegation.receipt",
