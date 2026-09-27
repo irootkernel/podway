@@ -23,6 +23,11 @@ make test-e2e-exact E2E_TEST=podway-cli::e2e_suite::e2e_v2sdg008_qualification::
 Use `make test-e2e` for the complete E2E suite. The focused result does not
 replace the full `make test` development gate.
 
+The supervised-delegation case also executes the exact
+[documented review Procedure](../examples/supervised-delegation.md), including
+authoring checks, acceptance, stale receipts, and fresh-attempt correction.
+Its executor is deterministic; neither host label proves a live integration.
+
 Run the narrowest relevant layer while iterating and `make test` before sharing a
 development revision. `make dist` always reruns that gate, adds bounded fuzzing,
 all-target Clippy, and qualification of the release-profile distribution before

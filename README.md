@@ -162,13 +162,13 @@ mkdir -p "$podway_skill_dir/references"
 curl -fsSLo "$podway_skill_dir/SKILL.md" \
   https://raw.githubusercontent.com/irootkernel/podway/main/skills/use-podway/SKILL.md
 
-for reference in lifecycle goal recovery; do
+for reference in lifecycle goal recovery delegation; do
   curl -fsSLo "$podway_skill_dir/references/$reference.md" \
     "https://raw.githubusercontent.com/irootkernel/podway/main/skills/use-podway/references/$reference.md"
 done
 ```
 
-The runtime skill covers the active-session loop and loads separate references only for less frequent lifecycle, session-goal, or recovery work.
+The runtime skill covers the active-session loop and loads separate references only for lifecycle, session-goal, recovery, or explicitly delegated work.
 
 Install [`create-podway-procedure`](https://github.com/irootkernel/podway/tree/main/skills/create-podway-procedure) separately only when the agent needs to create, revise, review, or harden custom Procedure source:
 
@@ -179,7 +179,7 @@ mkdir -p "$procedure_skill_dir/references" "$procedure_skill_dir/agents"
 curl -fsSLo "$procedure_skill_dir/SKILL.md" \
   https://raw.githubusercontent.com/irootkernel/podway/main/skills/create-podway-procedure/SKILL.md
 
-for reference in authoring capabilities distribution; do
+for reference in authoring capabilities distribution delegation; do
   curl -fsSLo "$procedure_skill_dir/references/$reference.md" \
     "https://raw.githubusercontent.com/irootkernel/podway/main/skills/create-podway-procedure/references/$reference.md"
 done
@@ -189,6 +189,11 @@ curl -fsSLo "$procedure_skill_dir/agents/openai.yaml" \
 ```
 
 The authoring skill produces and validates declarative source, then hands off preview's exact digest-fenced start suggestion without starting or mutating a session. Consult the agent's documentation for skill reload requirements. The commands above require network access and `curl`, and overwrite existing files with the same names. Replace `main` with one exact release tag or commit SHA when a reproducible, pinned skill version is required.
+
+For supervised delegation, follow the [worked review example](docs/examples/supervised-delegation.md)
+and its canonical YAML. The example is exercised by the real CLI and daemon in
+an isolated test with a synthetic executor. It is not a built-in preset or a live
+Dolgorae adapter; source validation does not establish installed-release support.
 
 ## Build from source
 

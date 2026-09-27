@@ -40,6 +40,10 @@ reviewed integration mapping. Do not invent provider commands, convert default
 Procedures, or treat a Role-name hash as Role content. Podway's source foundation
 ships no live adapter; authoring success alone does not qualify execution.
 
+Read [references/delegation.md](references/delegation.md) before authoring a
+delegated placement. It covers the five required declaration fields, evidence
+and correction design, and the isolated supervised-review example.
+
 Read [references/authoring.md](references/authoring.md) and the complete [capability inventory](references/capabilities.md) before creating or changing Procedure source. For a Procedure shipped to other repositories or installed as a managed bundle, also read [references/distribution.md](references/distribution.md).
 
 ## Author the smallest complete graph

@@ -407,6 +407,94 @@ def host_matrix(f: Fixture, host: str) -> None:
     assert f.observe(released)["result"]["status"]["session"]["lifecycle"] == "completed"
 
 
+def documented_example(f: Fixture) -> dict:
+    """Exercise the published YAML bytes, not a reconstructed example graph."""
+    source = Path(__file__).resolve().parent.parent / "docs/examples/procedures/supervised-review-v2.yaml"
+    original = source.read_bytes()
+    worktree = f.root / "documented-example"
+    worktree.mkdir(mode=0o700)
+    subprocess.run(["git", "init", "--quiet", str(worktree)], check=True,
+                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    f.call(worktree, ["init"])
+    relative = ".podway/procedures/supervised-review-v2.yaml"
+    target = worktree / relative
+    target.parent.mkdir(exist_ok=True)
+    target.write_bytes(original)
+    formatted = f.call(worktree, ["procedure", "format", relative, "--check"])["result"]
+    assert formatted["changed"] is False
+    assert formatted["document"].encode() == original
+    for operation, flags in (("validate", []), ("vet", []),
+                             ("lint", ["--warnings-as-errors"]), ("check", ["--warnings-as-errors"])):
+        result = f.call(worktree, ["procedure", operation, relative, *flags])["result"]
+        assert result["valid"] is True, result
+    preview = f.call(worktree, ["procedure", "preview", relative])["result"]
+    assert preview["admissible"] is True, preview
+    f.call(worktree, ["start", "--procedure", relative, "--expect-procedure-digest",
+                      preview["procedure_digest"], "--task", "Documented supervised review",
+                      "--idempotency-key", "start-documented-example"])
+    f.mutate(worktree, ["begin"], attempt=False)
+    f.mutate(worktree, ["set", "input", "Review the bounded change against its acceptance criteria."], item="input")
+    f.mutate(worktree, ["complete"])
+    package = f.call(worktree, ["delegation", "package"])["result"]
+    assert package["package"]["placement_id"] == "work", package
+    evidence = package["package"]["evidence"][0]
+    assert evidence["selector"] == {"node": "source", "required": True, "items": ["input"]}, evidence
+    readback = f.call(worktree, ["evidence", "read", "--source", "source", "--item", "input"])["result"]
+    assert readback["truncated"] is False, readback
+    f.mutate(worktree, ["set", "result", "Final output"], item="result")
+    f.mutate(worktree, ["complete"], error="DELEGATION_RECEIPT_REQUIRED")
+    payload, external = f.acceptance(worktree)
+    assert payload["package_digest"] == package["package_digest"]
+    for kind in ("role", "package", "rounds"):
+        invalid = deepcopy(payload)
+        invalid["idempotency_key"] = str(uuid.uuid4())
+        if kind == "role":
+            invalid["execution"]["role_ref"] = "wrong-role"
+        elif kind == "package":
+            invalid["package_digest"] = digest("wrong-package")
+        else:
+            invalid["rounds_used"] = 4
+        f.accept(worktree, invalid, "DELEGATION_BINDING_MISMATCH")
+        f.state(worktree, "awaiting_acceptance")
+    before = f.observe(worktree)["result"]["status"]["current"]
+    accepted = f.accept(worktree, payload)
+    after = f.state(worktree, "accepted")["result"]["status"]["current"]
+    assert after["node"] == before["node"] and after["attempt"] == before["attempt"]
+    assert before["readiness"]["can_advance"] is False
+    assert after["readiness"]["can_advance"] is True
+    f.mutate(worktree, ["set", "note", "A clarification after acceptance"], item="note")
+    f.state(worktree, "stale_acceptance")
+    f.mutate(worktree, ["complete"], error="DELEGATION_RECEIPT_STALE")
+    same_replay(accepted, f.accept(worktree, payload))
+    f.state(worktree, "stale_acceptance")
+    for transition in (["retry", "--reason", "Revalidate the corrected review"],
+                       ["rework", "--to", "work", "--reason", "Revalidate through the declared route"]):
+        previous_attempt = f.observe(worktree)["result"]["status"]["current"]["attempt"]["attempt_id"]
+        f.mutate(worktree, transition)
+        current = f.state(worktree, "awaiting_acceptance")["result"]["status"]
+        assert current["current"]["attempt"]["attempt_id"] != previous_attempt
+        assert f.external(worktree, "inspect") == external, "Podway redispatched example work"
+        f.mutate(worktree, ["set", "result", "Final output"], item="result")
+        relabeled = deepcopy(payload)
+        relabeled.update(idempotency_key=str(uuid.uuid4()),
+                         session_revision=f.observe(worktree)["result"]["status"]["session"]["revision"],
+                         attempt_id=current["current"]["attempt"]["attempt_id"])
+        f.accept(worktree, relabeled, "DELEGATION_BINDING_MISMATCH")
+    fresh, _ = f.acceptance(worktree)
+    f.accept(worktree, fresh)
+    f.mutate(worktree, ["complete"])
+    assert f.receipt(worktree, fresh)["applicability"] == "historical"
+    assert [item["item_id"] for item in f.observe(worktree)["result"]["active_items"]] == ["closeout"]
+    f.call(worktree, ["evidence", "read", "--source", "work", "--item", "result"])
+    f.mutate(worktree, ["set", "closeout", "The fixture review is complete; no live executor was used."], item="closeout")
+    f.mutate(worktree, ["complete"])
+    assert f.observe(worktree)["result"]["status"]["session"]["lifecycle"] == "completed"
+    assert source.read_bytes() == target.read_bytes() == original
+    return {"source": source.relative_to(source.parents[3]).as_posix(),
+            "source_sha256": hashlib.sha256(original).hexdigest(),
+            "procedure_digest": preview["procedure_digest"]}
+
+
 def recovery(f: Fixture) -> None:
     worktree = f.workspace("recovery", goal=True)
     payload, state = f.acceptance(worktree, uncertain=True)
@@ -584,7 +672,7 @@ def main() -> None:
     parser.add_argument("--podway", type=Path)
     parser.add_argument("--podwayd", type=Path)
     parser.add_argument("--fixture-ledger", type=Path)
-    parser.add_argument("--scenario", choices=("all", "hosts", "recovery", "migration"), default="all")
+    parser.add_argument("--scenario", choices=("all", "example", "hosts", "recovery", "migration"), default="all")
     args = parser.parse_args()
     if args.fixture_ledger:
         fixture_process(args.fixture_ledger)
@@ -599,11 +687,15 @@ def main() -> None:
     binaries = {name: runtime.release_archive.sha256_file(path)
                 for name, path in (("podway", cli), ("podwayd", daemon))}
     checks = {}
+    example = None
     with tempfile.TemporaryDirectory(prefix="pw-sdg-", dir="/private/tmp") as directory:
         f = Fixture(cli, daemon, Path(directory))
         try:
             f.start()
             identity = runtime.daemon_contract_identity(cli, f.account, f.home)
+            if args.scenario in ("all", "example"):
+                example = documented_example(f)
+                checks["example"] = True
             if args.scenario in ("all", "hosts"):
                 for host in ("external", "managed"):
                     host_matrix(f, host)
@@ -622,7 +714,7 @@ def main() -> None:
     assert binaries == {name: runtime.release_archive.sha256_file(path)
                         for name, path in (("podway", cli), ("podwayd", daemon))}
     print(json.dumps({"schema": "podway.v2sdg008-qualification/v1", "checks": checks,
-                      "binaries": binaries, "contract_identity": identity,
+                      "binaries": binaries, "contract_identity": identity, "example": example,
                       "runtime_cleanup": True, "live_adapter": "not_performed",
                       "live_model": "not_performed"}, sort_keys=True, separators=(",", ":")))
 

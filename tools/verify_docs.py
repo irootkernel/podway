@@ -51,12 +51,14 @@ EXPECTED_SKILL_FILES = {
         "references/authoring.md",
         "references/capabilities.md",
         "references/distribution.md",
+        "references/delegation.md",
     },
     "use-podway": {
         "SKILL.md",
         "references/goal.md",
         "references/lifecycle.md",
         "references/recovery.md",
+        "references/delegation.md",
     },
 }
 

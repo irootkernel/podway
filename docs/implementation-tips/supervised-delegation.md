@@ -2,6 +2,11 @@
 
 ## Applicability
 
+For a runnable learning path, use the
+[supervised review walkthrough](../examples/supervised-delegation.md). Its
+canonical YAML is exercised through the isolated native qualification helper;
+its synthetic executor is not a live adapter.
+
 This guidance applies to the source implementation of the
 [host-neutral delegation foundation](../specs/interfaces/supervised-delegation.md)
 under [ADR-0035](../architecture-decision-records/0035-host-neutral-supervised-delegation.md).

@@ -7,6 +7,7 @@ This file records concise shipped outcomes and the planned next stable release.
 ### Added
 
 - Add local opt-in supervised delegation for custom Procedure v2 actions with work-package, acceptance, and receipt commands and explicit completion gating.
+- Add a tested custom Procedure and step-by-step Podway skill guidance for supervised delegation.
 
 ### Fixed
 

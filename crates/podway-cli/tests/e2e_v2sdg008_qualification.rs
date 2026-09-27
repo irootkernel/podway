@@ -28,7 +28,18 @@ fn v2sdg008_native_lifecycle_migration_and_host_qualification() {
     assert_eq!(evidence["live_adapter"], "not_performed");
     assert_eq!(evidence["live_model"], "not_performed");
     assert_eq!(evidence["runtime_cleanup"], true);
+    assert_eq!(
+        evidence["example"]["source"],
+        "docs/examples/procedures/supervised-review-v2.yaml"
+    );
+    assert!(
+        evidence["example"]["procedure_digest"]
+            .as_str()
+            .expect("example digest")
+            .starts_with("sha256:")
+    );
     for check in [
+        "example",
         "external",
         "managed",
         "decision_evidence",

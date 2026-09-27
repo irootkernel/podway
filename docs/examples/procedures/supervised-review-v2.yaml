@@ -1,0 +1,85 @@
+schema: podway.procedure/v2
+id: supervised-review-v2
+version: "1"
+name: Supervised Review v2
+purpose: Learn supervised review with a deterministic executor in an isolated test workspace.
+description: The fixture binding and Role digest are synthetic test data, not a live Dolgorae integration.
+node_definitions:
+  prepare-review:
+    type: action
+    title: Prepare the review scope
+    intent: Record the exact material and criteria that the Specialist should review.
+    items:
+      - id: input
+        type: text
+        prompt: Describe the review target and acceptance criteria in English.
+        required: true
+        min_length: 1
+        max_length: 4000
+        multiline: true
+  specialist-review:
+    type: action
+    title: Supervise the Specialist review
+    intent: Have the Primary assess the Specialist result and record final evidence before acceptance.
+    instructions:
+      - Read the complete selected source evidence before constructing the external task.
+      - Resolve feedback and verify that the worker is idle before submitting acceptance.
+      - Record final result and any optional note before acceptance; subsequent changes require a fresh attempt.
+    items:
+      - id: result
+        type: text
+        prompt: Record the final review result accepted by the Primary.
+        required: true
+        min_length: 1
+        max_length: 4000
+        multiline: true
+      - id: note
+        type: text
+        prompt: Record any optional clarification before submitting acceptance.
+        required: false
+        min_length: 1
+        max_length: 2000
+        multiline: true
+  finish-review:
+    type: action
+    title: Record the Primary closeout
+    intent: Summarize the accepted review and its remaining limitations.
+    items:
+      - id: closeout
+        type: text
+        prompt: Record the Primary conclusion from the accepted review in English.
+        required: true
+        min_length: 1
+        max_length: 2000
+        multiline: true
+graph:
+  entry: source
+  nodes:
+    - id: source
+      use: prepare-review
+      next: work
+    - id: work
+      use: specialist-review
+      evidence_from:
+        - node: source
+          required: true
+          items:
+            - input
+      delegation:
+        binding_ref: fixture-specialist
+        role_ref: reviewer
+        role_snapshot_digest: sha256:325ce61be20bada5e07f17861c317827cd39252a55b05113433f069dbeacdda7
+        max_rounds: 3
+        after_accept: retain
+      next: closeout
+    - id: closeout
+      use: finish-review
+      evidence_from:
+        - node: work
+          required: true
+          items:
+            - result
+      terminal: true
+manual_rework:
+  allowed_targets:
+    - work

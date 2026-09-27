@@ -94,22 +94,13 @@ binary/manifest. The source foundation supplies local protocol support and
 ships no live executor adapter. An absent or unqualified integration is not
 permission to fabricate provenance or accept a fixture receipt for real work.
 
-Read the current package through `delegation package --json` and resolve its
-selected evidence through the supported paging interface. Keep the package
-digest distinct from the executor's accepted-task and result digests. Before
-`delegation accept --stdin --json`, the Primary must accept the actual result,
-finish all required and optional item recording, clear blockers, and verify
-the declared worker disposition through the qualified integration. Acceptance
-is one immutable receipt per attempt; completion is a separate fenced mutation.
-
-A changed item after acceptance, including a cosmetic or optional edit, makes
-the receipt stale. Reads, true no-ops, and rolled-back edits do not; reverting
-text does not restore its item revision. Reconcile a lost response using the
-original idempotency key and current observation. Historical success from
-lookup or exact replay does not establish current completion readiness.
-Choose retry or rework explicitly when needed. Neither operation redispatches
-external work or authorizes relabeling an old receipt. Resolve uncertain
-external effects and any artifact revalidation through the integration owner.
+Before operating a delegated action, read
+[references/delegation.md](references/delegation.md) for the package-to-acceptance
+sequence, authoritative input field sources, receipt inspection, and correction
+or uncertain-response recovery. It also links the isolated worked example.
+Record final item values before acceptance; later changes require a fresh
+attempt. Acceptance never advances the cursor, and retry/rework never dispatches
+external work.
 
 ### Declared graph movement
 

@@ -66,6 +66,7 @@ Direct defaults. A matching package and one structurally accepted receipt add
 a completion gate; they do not prove real work. After acceptance, a changed
 item requires a fresh attempt before another acceptance. Qualify a real adapter
 separately and never infer availability from this source inventory or semver.
+For field selection and a worked example, read [delegation authoring](delegation.md).
 
 - `skip` is an authored placement policy, not a general bypass. Do not make required
   evidence or a decision-owning phase skippable; prefer an explicit `not-applicable`
