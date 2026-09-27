@@ -563,6 +563,10 @@ with open(daemon_log, "ab", buffering=0) as log:
 with open(pid_file, "w", encoding="ascii") as destination:
     destination.write(str(child.pid))
 PY
+    if [ -f "$state/delay-bootstrap-once" ]; then
+      /bin/rm -f "$state/delay-bootstrap-once"
+      /bin/sleep 6
+    fi
     /bin/sleep 0.1
     if ! /bin/kill -0 "$(/bin/cat "$pid_file")" 2>/dev/null; then
       /bin/cat "$daemon_log" >&2
@@ -1384,8 +1388,14 @@ fn aut_t_install_timeout_preserves_slow_registered_worktrees_and_retry_converges
         .map(|worktree| worktree.join(".podway/runtime/state.sqlite3"))
         .collect::<Vec<_>>();
 
+    // Bootstrap may bind the socket before returning within its supported ten-second budget.
+    fs::write(
+        fixture.launchctl_state.join("delay-bootstrap-once"),
+        b"delay\n",
+    )
+    .expect("one-shot bootstrap delay marker must be written");
     let started_at = Instant::now();
-    let install = fixture.spawn(&controlled_path, &["--json", "daemon", "install"]);
+    let mut install = fixture.spawn(&controlled_path, &["--json", "daemon", "install"]);
     let pid_path = fixture.launchctl_state.join("pid");
     let publication_deadline = Instant::now() + Duration::from_secs(10);
     while !(metadata_path.exists()
@@ -1405,7 +1415,9 @@ fn aut_t_install_timeout_preserves_slow_registered_worktrees_and_retry_converges
         .parse::<u64>()
         .expect("fake launchctl PID must be numeric");
     let mut barrier = SuspendedProcessV1::suspend(daemon_pid);
-    let receipt_deadline = Instant::now() + Duration::from_secs(5);
+    // Socket binding precedes bootstrap completion and binary revalidation. This is a fixture
+    // setup watchdog, not the readiness deadline, which starts only after the receipt is durable.
+    let receipt_deadline = Instant::now() + Duration::from_secs(60);
     loop {
         let metadata: Value = serde_json::from_slice(
             &fs::read(&metadata_path).expect("service metadata during publication"),
@@ -1414,11 +1426,26 @@ fn aut_t_install_timeout_preserves_slow_registered_worktrees_and_retry_converges
         if metadata["publication_state"] == "receipt_durable" {
             break;
         }
-        assert!(
-            Instant::now() < receipt_deadline,
-            "install did not publish its durable service receipt"
-        );
-        thread::sleep(Duration::from_millis(1));
+        let exited = install
+            .try_wait()
+            .expect("install process status must be readable");
+        if exited.is_some() || Instant::now() >= receipt_deadline {
+            if exited.is_none() {
+                install
+                    .kill()
+                    .expect("stalled fixture install must be terminated");
+            }
+            let output = install
+                .wait_with_output()
+                .expect("failed fixture install must be reaped");
+            panic!(
+                "install did not publish its durable service receipt: status={} stdout={} stderr={}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        thread::sleep(Duration::from_millis(10));
     }
     let service_snapshot = [
         fs::read(&metadata_path).expect("service metadata after bootstrap"),
@@ -1439,6 +1466,14 @@ fn aut_t_install_timeout_preserves_slow_registered_worktrees_and_retry_converges
         "install readiness timeout returned before its supported deadline: {elapsed:?}"
     );
     assert_eq!(failure["details"]["operation"], "install");
+    assert_eq!(failure["details"]["deadline_ms"], 120_000);
+    assert!(
+        failure["details"]["elapsed_ms"]
+            .as_u64()
+            .expect("readiness elapsed time must be an unsigned integer")
+            >= 120_000,
+        "readiness wait must reach its deadline independently of bootstrap time: {failure}"
+    );
     assert_eq!(failure["details"]["readiness_state"], "unreachable");
     assert!(failure["details"]["readiness_stage"].is_null());
     assert_eq!(failure["details"]["installed"], true);
