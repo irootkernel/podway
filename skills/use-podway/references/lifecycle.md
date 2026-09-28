@@ -4,8 +4,8 @@ Read this reference only when the user asks to initialize Podway, start or repla
 
 ## Diagnose first
 
-1. Run `podway version --json` and `podway daemon status` when installation or daemon health is relevant.
-2. Inside the target Git worktree, inspect `.podway/config.yaml`, then use `podway workspace show`, `podway doctor`, and `podway status --json` as applicable.
+1. Run `podway version --json` when binary identity or installation is relevant. Use `podway daemon status` only for an explicit daemon-wide diagnostic; do not make it a session-start preflight.
+2. Inside an initialized target Git worktree, inspect `.podway/config.yaml` and use `podway observe --json --wait-for-idle` for current session state. Use `podway workspace show` and `podway doctor` when workspace identity or health needs diagnosis. Do not use `daemon wait-ready` as routine session entry.
 3. Use `podway help <route>` before every unfamiliar lifecycle command.
 4. Do not install, uninstall, start, stop, restart, or replace a daemon solely to make a diagnostic pass succeed.
 

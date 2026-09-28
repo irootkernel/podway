@@ -328,7 +328,7 @@ impl DaemonClientV1 {
     ) -> Result<ResponseEnvelopeV2, DaemonClientErrorV1> {
         SliceRequestV1::from_envelope(request)
             .map_err(|source| DaemonClientErrorV1::RequestAdmission { source })?;
-        self.exchange_v2(request)
+        self.exchange_v2(request, None)
     }
 
     /// Exchanges one request through the Procedure v2-only contract boundary.
@@ -338,13 +338,30 @@ impl DaemonClientV1 {
     ) -> Result<ResponseEnvelopeV2, DaemonClientErrorV1> {
         admit_version_aware_request(request)
             .map_err(|source| DaemonClientErrorV1::RequestAdmission { source })?;
-        self.exchange_v2(request)
+        self.exchange_v2(request, None)
     }
 
     /// Exchanges the exact read-only daemon process status probe outside the durable command slice.
     pub fn daemon_status(
         &self,
         request: &RequestEnvelopeV1,
+    ) -> Result<ResponseEnvelopeV2, DaemonClientErrorV1> {
+        self.daemon_status_with_deadline(request, None)
+    }
+
+    /// Applies one absolute deadline across the complete read-only status exchange.
+    pub fn daemon_status_until(
+        &self,
+        request: &RequestEnvelopeV1,
+        deadline: Instant,
+    ) -> Result<ResponseEnvelopeV2, DaemonClientErrorV1> {
+        self.daemon_status_with_deadline(request, Some(deadline))
+    }
+
+    fn daemon_status_with_deadline(
+        &self,
+        request: &RequestEnvelopeV1,
+        deadline: Option<Instant>,
     ) -> Result<ResponseEnvelopeV2, DaemonClientErrorV1> {
         if request.command().as_str() != "daemon.status"
             || request.operation() != OperationV1::Control
@@ -366,7 +383,7 @@ impl DaemonClientV1 {
                 },
             });
         }
-        self.exchange_v2(request)
+        self.exchange_v2(request, deadline)
     }
 
     /// Performs the single read-only reset inspection after a verified status handshake.
@@ -387,7 +404,7 @@ impl DaemonClientV1 {
                 },
             });
         }
-        self.exchange_v2(request)
+        self.exchange_v2(request, None)
     }
 
     /// Opens the reserved multi-frame reset exchange and sends its first request.
@@ -459,47 +476,69 @@ impl DaemonClientV1 {
                 },
             });
         }
-        self.exchange_v2(request)
+        self.exchange_v2(request, None)
     }
 
     fn exchange_v2(
         &self,
         request: &RequestEnvelopeV1,
+        deadline: Option<Instant>,
     ) -> Result<ResponseEnvelopeV2, DaemonClientErrorV1> {
-        let response = self.exchange_payload(request)?;
+        let response = self.exchange_payload(request, deadline)?;
         let response = decode_response_payload_v2(&response)
             .map_err(|source| DaemonClientErrorV1::ResponseDecoding { source })
             .map_err(DaemonClientErrorV1::possibly_transmitted)?;
         validate_response_correlation_v2(request, &response)
             .map_err(DaemonClientErrorV1::possibly_transmitted)?;
+        remaining_exchange_timeout(
+            deadline,
+            self.timeouts.read(),
+            DaemonClientIoOperationV1::Read,
+        )?;
         Ok(response)
     }
 
     fn exchange_payload(
         &self,
         request: &RequestEnvelopeV1,
+        deadline: Option<Instant>,
     ) -> Result<Vec<u8>, DaemonClientErrorV1> {
         let payload = encode_request_payload_v1(request)
             .map_err(|source| DaemonClientErrorV1::RequestEncoding { source })?;
 
         let socket_path = self.runtime_paths.socket_path().as_path();
         validate_endpoint_path(socket_path)?;
-        let mut stream = connect_with_timeout(socket_path.to_path_buf(), self.timeouts.connect())?;
+        let connect_timeout = remaining_exchange_timeout(
+            deadline,
+            self.timeouts.connect(),
+            DaemonClientIoOperationV1::Connect,
+        )?;
+        let mut stream = connect_with_timeout(socket_path.to_path_buf(), connect_timeout)?;
         validate_peer_uid(&stream)?;
+        let write_timeout = remaining_exchange_timeout(
+            deadline,
+            self.timeouts.write(),
+            DaemonClientIoOperationV1::Write,
+        )?;
         stream
-            .set_write_timeout(Some(self.timeouts.write()))
+            .set_write_timeout(Some(write_timeout))
             .map_err(|source| DaemonClientErrorV1::SocketConfiguration {
                 operation: DaemonClientIoOperationV1::ConfigureWriteTimeout,
                 source,
             })?;
+        let read_timeout = remaining_exchange_timeout(
+            deadline,
+            self.timeouts.read(),
+            DaemonClientIoOperationV1::Read,
+        )?;
         stream
-            .set_read_timeout(Some(self.timeouts.read()))
+            .set_read_timeout(Some(read_timeout))
             .map_err(|source| DaemonClientErrorV1::SocketConfiguration {
                 operation: DaemonClientIoOperationV1::ConfigureReadTimeout,
                 source,
             })?;
 
-        let write_deadline = ExchangeDeadlineV1::new(self.timeouts.write());
+        let write_deadline = ExchangeDeadlineV1::new(write_timeout).min(deadline);
         {
             let mut writer = DeadlineStreamV1::for_write(&mut stream, write_deadline);
             write_frame_v1(&mut writer, &payload)
@@ -515,7 +554,13 @@ impl DaemonClientV1 {
             .map_err(|source| map_io_error(DaemonClientIoOperationV1::ShutdownWrite, source))
             .map_err(DaemonClientErrorV1::possibly_transmitted)?;
 
-        let read_deadline = ExchangeDeadlineV1::new(self.timeouts.read());
+        let read_timeout = remaining_exchange_timeout(
+            deadline,
+            self.timeouts.read(),
+            DaemonClientIoOperationV1::Read,
+        )
+        .map_err(DaemonClientErrorV1::possibly_transmitted)?;
+        let read_deadline = ExchangeDeadlineV1::new(read_timeout).min(deadline);
         let response = {
             let mut reader = DeadlineStreamV1::for_read(&mut stream, read_deadline);
             read_single_frame_v1(&mut reader)
@@ -673,6 +718,12 @@ impl ExchangeDeadlineV1 {
         }
     }
 
+    fn min(self, deadline: Option<Instant>) -> Self {
+        Self {
+            instant: deadline.map_or(self.instant, |deadline| self.instant.min(deadline)),
+        }
+    }
+
     fn check(self) -> io::Result<()> {
         self.remaining().map(|_| ())
     }
@@ -684,6 +735,21 @@ impl ExchangeDeadlineV1 {
             .ok_or_else(|| {
                 io::Error::new(io::ErrorKind::TimedOut, "daemon exchange deadline elapsed")
             })
+    }
+}
+
+fn remaining_exchange_timeout(
+    deadline: Option<Instant>,
+    phase_timeout: Duration,
+    operation: DaemonClientIoOperationV1,
+) -> Result<Duration, DaemonClientErrorV1> {
+    match deadline {
+        None => Ok(phase_timeout),
+        Some(deadline) => deadline
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .map(|remaining| remaining.min(phase_timeout))
+            .ok_or(DaemonClientErrorV1::Timeout { operation }),
     }
 }
 

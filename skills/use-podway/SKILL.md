@@ -35,6 +35,10 @@ Enter a worktree only after explicit activation for the current workflow.
    podway observe --json --wait-for-idle
    ```
 
+   Do not preflight session entry or start with `daemon status`, `daemon wait-ready`, or
+   `doctor`. A successful observation proves that this worktree's daemon route is
+   usable; `SESSION_NOT_FOUND` means it has no current session.
+
 4. On success, require `result.schema` to identify `podway.observation-result/v3` for a Direct Procedure or `podway.observation-result/v4` for a Procedure with delegation. If observation returns `SESSION_NOT_FOUND`, record that the initialized workspace has no current session and continue to the archive advisory. Handle every other error normally.
 5. Treat a successful observation as authoritative. Do not rely on chat memory. Read identity and queue facts from `status`, current guidance from `guidance`, item declarations and bounded values from `active_items`, and fenced mutation recipes from `mutation_templates`. Add any CLI-required semantic subcommand or value described by command help; the template deliberately does not invent them. Prepared guidance has no cursor and offers begin, eligible reset, and start with explicit deletion policy. A null `guidance` means the session is completed or cancelled: an undisposed terminal revision offers only terminal disposition, while a disposed terminal revision is eligible for archive, reset, or automatic archival by the next start. Use `status --verbose` only when history is needed and `next` only for compatibility with callers that need its narrower result.
 6. After a successful observation or `SESSION_NOT_FOUND`, run `podway archive list --json` once for this workflow entry and require `result.schema` to identify `podway.session-archive-list-result/v2`. The `sessions` window is newest first. If `count` is greater than 10, tell the user the current count and present exactly these two alternatives:

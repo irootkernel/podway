@@ -3460,18 +3460,57 @@ fn execute_named_runtime_status(
         "daemon.status"
     };
     let paths = effective_runtime_paths(mode, route)?;
-    let deadline = matches!(command, DaemonCommand::WaitReady).then(|| {
-        Instant::now()
-            + Duration::from_millis(timeout_ms.unwrap_or(DEFAULT_DAEMON_READINESS_TIMEOUT_MS))
-    });
+    execute_named_runtime_status_with_paths(command, mode, timeout_ms, &paths)
+}
+
+fn execute_named_runtime_status_with_paths(
+    command: &DaemonCommand,
+    mode: &RuntimeModeV1,
+    timeout_ms: Option<u64>,
+    paths: &ServiceRuntimePathsV1,
+) -> Result<RunResult, LocalFailure> {
+    let route = if matches!(command, DaemonCommand::WaitReady) {
+        "daemon.wait-ready"
+    } else {
+        "daemon.status"
+    };
+    let started = Instant::now();
+    let timeout = Duration::from_millis(timeout_ms.unwrap_or(DEFAULT_DAEMON_READINESS_TIMEOUT_MS));
+    let deadline = matches!(command, DaemonCommand::WaitReady).then(|| started + timeout);
+    let mut last_observation = named_runtime_unreachable_projection(mode, paths);
     loop {
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            return Err(daemon_readiness_timeout(
+                route,
+                "wait_ready",
+                started.elapsed(),
+                timeout,
+                &last_observation,
+                paths,
+            ));
+        }
         let request = build_daemon_status_request()?;
         let client = DaemonClientV1::new(paths.clone());
-        match client.daemon_status(&request) {
+        let response = match deadline {
+            Some(deadline) => client.daemon_status_until(&request, deadline),
+            None => client.daemon_status(&request),
+        };
+        match response {
             Ok(ResponseEnvelopeV2::OutputV2(output)) => {
-                let live = validated_live_daemon_status(&output, None, &paths, None)?;
+                let live = validated_live_daemon_status(&output, None, paths, None)?;
                 let ready = live.get("readiness_state").and_then(Value::as_str) == Some("ready");
+                last_observation = live.clone();
                 if !matches!(command, DaemonCommand::WaitReady) || ready {
+                    if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                        return Err(daemon_readiness_timeout(
+                            route,
+                            "wait_ready",
+                            started.elapsed(),
+                            timeout,
+                            &last_observation,
+                            paths,
+                        ));
+                    }
                     return Ok(local_result(
                         route,
                         Value::Object(live),
@@ -3492,22 +3531,39 @@ fn execute_named_runtime_status(
             }
             Err(error) => {
                 if !matches!(command, DaemonCommand::WaitReady) {
-                    return Ok(named_runtime_unreachable_result(route, mode, &paths));
+                    return Ok(named_runtime_unreachable_result(route, mode, paths));
                 }
-                if !matches!(
-                    error,
-                    DaemonClientErrorV1::Connection { .. }
-                        | DaemonClientErrorV1::SocketConfiguration { .. }
-                        | DaemonClientErrorV1::Timeout { .. }
-                ) {
+                if !named_readiness_retryable_error(&error) {
                     return Err(map_client_error(error).with_command(route));
                 }
             }
         }
-        if deadline.is_none_or(|deadline| Instant::now() >= deadline) {
-            return Ok(named_runtime_unreachable_result(route, mode, &paths));
+        if let Some(deadline) = deadline {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(daemon_readiness_timeout(
+                    route,
+                    "wait_ready",
+                    started.elapsed(),
+                    timeout,
+                    &last_observation,
+                    paths,
+                ));
+            }
+            thread::sleep(DAEMON_READINESS_POLL_INTERVAL.min(remaining));
         }
-        thread::sleep(DAEMON_READINESS_POLL_INTERVAL);
+    }
+}
+
+fn named_readiness_retryable_error(error: &DaemonClientErrorV1) -> bool {
+    match error {
+        DaemonClientErrorV1::Connection { .. }
+        | DaemonClientErrorV1::SocketConfiguration { .. }
+        | DaemonClientErrorV1::Timeout { .. } => true,
+        DaemonClientErrorV1::RequestPossiblyTransmitted { source } => {
+            named_readiness_retryable_error(source)
+        }
+        _ => false,
     }
 }
 
@@ -3518,7 +3574,16 @@ fn named_runtime_unreachable_result(
 ) -> RunResult {
     local_result(
         route,
-        json!({
+        Value::Object(named_runtime_unreachable_projection(mode, paths)),
+        "daemon not running".to_owned(),
+    )
+}
+
+fn named_runtime_unreachable_projection(
+    mode: &RuntimeModeV1,
+    paths: &ServiceRuntimePathsV1,
+) -> Map<String, Value> {
+    json!({
             "schema": "podway.daemon-status-result/v3",
             "mode": mode.as_str(),
             "status": "not_installed",
@@ -3551,9 +3616,10 @@ fn named_runtime_unreachable_result(
             "readiness_stage": Value::Null,
             "readiness_elapsed_ms": Value::Null,
             "worktree_recovery": Value::Null,
-        }),
-        "daemon not running".to_owned(),
-    )
+    })
+    .as_object()
+    .expect("named daemon status is an object")
+    .clone()
 }
 
 fn remove_stale_dev_socket(socket_path: &Path) -> Result<(), LocalFailure> {
@@ -4299,9 +4365,6 @@ fn wait_for_readiness_observations_with_runtime(
             .saturating_sub(elapsed)
             .max(Duration::from_millis(1));
         let observed = observe(remaining)?;
-        if observed.verified_v2_ready {
-            return Ok(observed.result);
-        }
         let elapsed = runtime.elapsed();
         if elapsed >= timeout {
             return Err(daemon_readiness_timeout(
@@ -4312,6 +4375,9 @@ fn wait_for_readiness_observations_with_runtime(
                 &observed.result,
                 paths,
             ));
+        }
+        if observed.verified_v2_ready {
+            return Ok(observed.result);
         }
         runtime.wait(DAEMON_READINESS_POLL_INTERVAL.min(timeout - elapsed));
     }
@@ -4512,7 +4578,11 @@ fn service_status_projection(
             }
             None => DaemonClientV1::new(paths.clone()),
         };
-        match client.daemon_status(&request) {
+        let response = match readiness_deadline {
+            Some(deadline) => client.daemon_status_until(&request, deadline),
+            None => client.daemon_status(&request),
+        };
+        match response {
             Ok(ResponseEnvelopeV2::Error(error)) => {
                 return Ok((
                     RunResult::Response(Box::new(ResponseEnvelopeV2::Error(error))),
@@ -10693,7 +10763,7 @@ mod phase6_health_tests {
         time::{Duration, Instant},
     };
 
-    use podway_core::UnixMillis;
+    use podway_core::{RuntimeModeV1, UnixMillis};
     use podway_protocol::{
         ResponseEnvelopeV2, build_identity_v1, decode_request_payload_v1, decode_single_frame_v1,
         encode_frame_v1, ensure_error_details_schema_v1,
@@ -10795,6 +10865,50 @@ mod phase6_health_tests {
         .expect("timeout must serialize through the public error contract");
         assert_eq!(fs::read(&sentinel).expect("sentinel remains"), b"preserved");
         fs::remove_dir_all(runtime_root).expect("remove timeout fixture");
+    }
+
+    #[test]
+    fn readiness_arriving_after_the_deadline_is_a_timeout() {
+        let runtime_root =
+            std::env::temp_dir().join(format!("podway-cli-late-readiness-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&runtime_root);
+        fs::create_dir_all(&runtime_root).expect("late readiness fixture runtime");
+        fs::set_permissions(&runtime_root, fs::Permissions::from_mode(0o700))
+            .expect("late readiness fixture runtime must be private");
+        let paths = ServiceRuntimePathsV1::from_directories(
+            runtime_root.join("LaunchAgents"),
+            runtime_root.join("ApplicationSupport"),
+            runtime_root.join("Logs"),
+            &runtime_root,
+        )
+        .expect("late readiness fixture paths");
+        let result = json!({
+            "readiness_state":"ready","readiness_stage":"ready",
+            "installed":true,"loaded":true,"reachable":true,
+            "worktree_recovery":{"total":0,"completed":0,"failed":0}
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        let mut runtime = SimulatedReadinessRuntime {
+            elapsed: Duration::from_millis(5),
+        };
+        let failure = wait_for_readiness_observations_with_runtime(
+            |_| {
+                Ok::<ReadinessObservation, super::LocalFailure>(ReadinessObservation {
+                    result: result.clone(),
+                    verified_v2_ready: true,
+                })
+            },
+            &paths,
+            "daemon.wait-ready",
+            "wait_ready",
+            Duration::from_millis(5),
+            &mut runtime,
+        )
+        .expect_err("readiness after the deadline must not count as success");
+        assert_eq!(failure.code, "DAEMON_READINESS_TIMEOUT");
+        fs::remove_dir_all(runtime_root).expect("remove late readiness fixture");
     }
 
     #[test]
@@ -10944,6 +11058,81 @@ mod phase6_health_tests {
         }
         responder.join().expect("readiness probe responder");
         fs::remove_dir_all(runtime).expect("remove readiness probe fixture");
+    }
+
+    #[test]
+    fn named_wait_ready_caps_a_stalled_status_exchange_to_the_deadline() {
+        let runtime = std::env::temp_dir().join(format!("pwnr-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&runtime);
+        fs::create_dir_all(&runtime).expect("named readiness fixture runtime");
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))
+            .expect("named readiness fixture runtime must be private");
+        let paths = ServiceRuntimePathsV1::from_directories(
+            runtime.join("LaunchAgents"),
+            runtime.join("ApplicationSupport"),
+            runtime.join("Logs"),
+            &runtime,
+        )
+        .expect("named readiness fixture paths");
+        let listener = UnixListener::bind(paths.socket_path().as_path())
+            .expect("named readiness fixture socket");
+        fs::set_permissions(
+            paths.socket_path().as_path(),
+            fs::Permissions::from_mode(0o600),
+        )
+        .expect("named readiness fixture socket must be private");
+        let responder = std::thread::spawn(move || {
+            let (_stream, _) = listener.accept().expect("named readiness probe connection");
+            std::thread::sleep(Duration::from_millis(500));
+        });
+
+        let started = Instant::now();
+        let failure = match super::execute_named_runtime_status_with_paths(
+            &super::DaemonCommand::WaitReady,
+            &RuntimeModeV1::development(),
+            Some(20),
+            &paths,
+        ) {
+            Err(failure) => failure,
+            Ok(_) => panic!("stalled status exchange must expire with a typed timeout"),
+        };
+        assert!(started.elapsed() < Duration::from_millis(100));
+        assert_eq!(failure.code, "DAEMON_READINESS_TIMEOUT");
+        assert_eq!(failure.details["operation"], "wait_ready");
+        assert_eq!(failure.details["deadline_ms"], 20);
+        responder.join().expect("named readiness fixture responder");
+        fs::remove_dir_all(runtime).expect("remove named readiness fixture");
+    }
+
+    #[test]
+    fn named_wait_ready_caps_poll_sleep_when_endpoint_is_absent() {
+        let runtime = std::env::temp_dir().join(format!("pwnp-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&runtime);
+        fs::create_dir_all(&runtime).expect("named readiness fixture runtime");
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))
+            .expect("named readiness fixture runtime must be private");
+        let paths = ServiceRuntimePathsV1::from_directories(
+            runtime.join("LaunchAgents"),
+            runtime.join("ApplicationSupport"),
+            runtime.join("Logs"),
+            &runtime,
+        )
+        .expect("named readiness fixture paths");
+
+        let started = Instant::now();
+        let failure = match super::execute_named_runtime_status_with_paths(
+            &super::DaemonCommand::WaitReady,
+            &RuntimeModeV1::development(),
+            Some(20),
+            &paths,
+        ) {
+            Err(failure) => failure,
+            Ok(_) => panic!("absent endpoint must expire with a typed timeout"),
+        };
+        assert!(started.elapsed() < Duration::from_millis(100));
+        assert_eq!(failure.code, "DAEMON_READINESS_TIMEOUT");
+        assert_eq!(failure.details["reachable"], false);
+        fs::remove_dir_all(runtime).expect("remove named readiness fixture");
     }
 
     #[test]

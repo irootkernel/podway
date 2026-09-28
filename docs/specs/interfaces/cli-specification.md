@@ -65,6 +65,11 @@ It succeeds only after a current status response proves matching live identity,
 matching contract identity, and `readiness_state: ready`; it never starts,
 installs, restarts, repairs, or otherwise mutates the service. `daemon install`
 uses the same bounded waiter after idempotent service reconciliation.
+Each named-runtime status probe uses one absolute readiness deadline across
+connection, request write, and response read. A probe completed after that
+deadline cannot establish readiness. The interval between probes is bounded by
+the remaining time, and deadline expiry reports `DAEMON_READINESS_TIMEOUT` with
+the last bounded observation.
 
 ## Account-runtime commands
 
