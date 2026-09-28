@@ -578,13 +578,11 @@ schema, install or activate a runtime, or alter unrelated 64-entry collections.
 
 Status: Completed.
 
-Conditional release target: `v0.2.12`. The source foundation and development
-acceptance are complete. Release inclusion still requires separately authorized
-stable-release qualification. The `v0.2.11` stable
-release contains the earlier internal foundations. Current source implements
-native routes and opt-in admission, with native lifecycle and migration
-qualification through `V2SDG-008`. No supported stable release contains the
-end-to-end delegation capability.
+Release target: `v0.2.12`. The source foundation and development acceptance
+are complete. The `v0.2.11` stable release contains the earlier internal
+foundations. The source targeting `v0.2.12` implements native routes and
+opt-in admission, with native lifecycle and migration qualification through
+`V2SDG-008`. Public support follows release qualification and publication.
 
 Dependencies: completed `V2FRT`, completed `V2GSC` before `V2SDG-006`, and the
 completed evidence, guard, reference, readiness, retention, and named-runtime foundations. There is no live Dolgorae,
