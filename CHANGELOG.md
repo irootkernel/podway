@@ -11,6 +11,7 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ### Fixed
 
+- Keep `daemon status` responsive with many active worktrees by reading live job counts without copying workspace databases.
 - Return the declared detached admission response for supervised-delegation acceptance so callers can reconcile its durable job.
 - Preserve decision-node evidence in delegated work packages and account for it in package size limits.
 - Correct the optional agent-policy template to accept delegated observation responses.

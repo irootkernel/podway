@@ -1332,7 +1332,10 @@ where
         .as_object()
         .expect("daemon status is an object")
         .clone();
-        if let Some(activity) = self.dispatcher.daemon_activity() {
+        let readiness = self.readiness.as_ref().map(DaemonReadinessV1::snapshot);
+        if readiness.is_none_or(|snapshot| snapshot.state() == DaemonReadinessStateV1::Ready)
+            && let Some(activity) = self.dispatcher.daemon_activity()
+        {
             result.insert(
                 "registered_worktree_count".to_owned(),
                 Value::from(activity.registered_worktrees),
@@ -1362,8 +1365,7 @@ where
                 Value::from(in_flight.saturating_sub(1) as u64),
             );
         }
-        if let Some(readiness) = &self.readiness {
-            let snapshot = readiness.snapshot();
+        if let Some(snapshot) = readiness {
             let worktrees = snapshot.worktrees();
             result.insert(
                 "readiness_state".to_owned(),

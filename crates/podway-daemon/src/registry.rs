@@ -11,7 +11,7 @@ use std::{
     os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::{
-        Arc, Barrier, Mutex,
+        Arc, Barrier, Mutex, TryLockError,
         atomic::{AtomicU64, Ordering},
     },
 };
@@ -555,6 +555,20 @@ impl RegistryStoreV1 {
         result
     }
 
+    /// Returns no observation when another registry operation owns either lock.
+    pub(crate) fn try_load(&self) -> Result<Option<WorkspaceRegistryV1>, RegistryErrorV1> {
+        let result = self.with_try_locked(|parent, current_uid| {
+            read_registry_v1(&self.registry_path, parent, current_uid)
+        });
+        if result.is_err() {
+            self.emit(EventRecordV1::new(
+                EventOperationV1::IntegrityCheck,
+                EventOutcomeV1::Failed,
+            ));
+        }
+        result
+    }
+
     /// Performs an exact UUID lookup against a consistently loaded registry document.
     pub fn lookup(
         &self,
@@ -900,6 +914,56 @@ impl RegistryStoreV1 {
             (Ok(value), Ok(file)) => {
                 drop(file);
                 Ok(value)
+            }
+            (Err(error), Ok(file)) => {
+                drop(file);
+                Err(error)
+            }
+            (Ok(_), Err(error)) | (Err(_), Err(error)) => Err(error),
+        }
+    }
+
+    fn with_try_locked<T>(
+        &self,
+        operation: impl FnOnce(&Path, u32) -> Result<T, RegistryErrorV1>,
+    ) -> Result<Option<T>, RegistryErrorV1> {
+        let _in_process_guard = match self.in_process_lock.try_lock() {
+            Ok(guard) => guard,
+            Err(TryLockError::WouldBlock) => return Ok(None),
+            Err(TryLockError::Poisoned(_)) => {
+                return Err(RegistryErrorV1::InProcessLockPoisoned);
+            }
+        };
+        let parent = self.parent_directory()?;
+        let current_uid = geteuid().as_raw();
+        ensure_private_parent_v1(&parent, current_uid)?;
+
+        let lock_path = self.lock_path(&parent)?;
+        let lock_file = open_registry_lock_v1(&lock_path, current_uid)?;
+        let lock = match Flock::lock(lock_file, FlockArg::LockExclusiveNonblock) {
+            Ok(lock) => lock,
+            Err((_, Errno::EWOULDBLOCK)) => return Ok(None),
+            Err((_, source)) => {
+                return Err(RegistryErrorV1::LockAcquire {
+                    path: lock_path,
+                    source,
+                });
+            }
+        };
+
+        let result = (|| {
+            ensure_private_parent_v1(&parent, current_uid)?;
+            operation(&parent, current_uid)
+        })();
+        let unlock = Flock::unlock(lock).map_err(|(_, source)| RegistryErrorV1::LockRelease {
+            path: lock_path,
+            source,
+        });
+
+        match (result, unlock) {
+            (Ok(value), Ok(file)) => {
+                drop(file);
+                Ok(Some(value))
             }
             (Err(error), Ok(file)) => {
                 drop(file);

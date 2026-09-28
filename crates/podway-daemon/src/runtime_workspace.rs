@@ -18,7 +18,7 @@ use std::{
     io::{self, Read},
     path::{Path, PathBuf},
     sync::{
-        Arc, Condvar, Mutex, MutexGuard, OnceLock,
+        Arc, Condvar, Mutex, MutexGuard, OnceLock, TryLockError,
         atomic::{AtomicU64, Ordering},
     },
 };
@@ -506,6 +506,23 @@ impl WorkspaceStoreSlotV1 {
                 }),
                 Err(error) => Err(error.clone()),
             },
+        }
+    }
+
+    fn try_read_job_activity_counts(
+        &self,
+        identity: &podway_store::DurableWorktreeIdentityV1,
+    ) -> Result<Option<(u32, u32)>, StoreErrorV1> {
+        match self.state.try_lock() {
+            Ok(state) => match &*state {
+                WorkspaceStoreStateV1::Open(store) => {
+                    store.try_read_job_activity_counts_v1(identity)
+                }
+                WorkspaceStoreStateV1::Closed(Ok(())) => Err(read_only_store_mutation_error()),
+                WorkspaceStoreStateV1::Closed(Err(error)) => Err(error.clone()),
+            },
+            Err(TryLockError::WouldBlock) => Ok(None),
+            Err(TryLockError::Poisoned(_)) => Err(read_only_store_mutation_error()),
         }
     }
 }
@@ -1451,6 +1468,16 @@ impl WorkspaceMaintenanceCoordinatorV1 {
             + state.rebinds.len()
             + state.activations.values().sum::<usize>()
             + state.claims.values().sum::<usize>()
+    }
+
+    fn try_active_operation_count(&self) -> Option<usize> {
+        let state = self.state.try_lock().ok()?;
+        Some(
+            state.maintenance.len()
+                + state.rebinds.len()
+                + state.activations.values().sum::<usize>()
+                + state.claims.values().sum::<usize>(),
+        )
     }
 
     fn acquire(
@@ -2490,6 +2517,25 @@ impl WorkspaceRuntimeManagerV1 {
             running = running.checked_add(state.running_jobs())?;
         }
         let maintenance = u32::try_from(self.maintenance.active_operation_count()).ok()?;
+        Some((registered, active, queued, running, maintenance))
+    }
+
+    pub fn daemon_status_activity_counts(&self) -> Option<(u32, u32, u32, u32, u32)> {
+        let registered = u32::try_from(self.registry.try_load().ok()??.workspaces().len()).ok()?;
+        let schedulers = self.schedulers.try_active_generations()?;
+        let active = u32::try_from(schedulers.len()).ok()?;
+        let mut queued = 0_u32;
+        let mut running = 0_u32;
+        for scheduler in schedulers {
+            let context = scheduler.try_context_snapshot()?;
+            let (scheduler_queued, scheduler_running) = context
+                .store
+                .try_read_job_activity_counts(context.binding().identity())
+                .ok()??;
+            queued = queued.checked_add(scheduler_queued)?;
+            running = running.checked_add(scheduler_running)?;
+        }
+        let maintenance = u32::try_from(self.maintenance.try_active_operation_count()?).ok()?;
         Some((registered, active, queued, running, maintenance))
     }
 
@@ -7053,6 +7099,27 @@ mod tests {
         drop(manager.reserve_runtime_reset(now).unwrap());
         let context = scheduler.context_snapshot();
         let identity = context.binding().identity();
+        assert_eq!(
+            manager.daemon_status_activity_counts(),
+            Some((1, 1, 0, 0, 0))
+        );
+        let store_guard = context.store.state.lock().unwrap();
+        assert_eq!(manager.daemon_status_activity_counts(), None);
+        drop(store_guard);
+        let maintenance_guard = manager.maintenance.state.lock().unwrap();
+        assert_eq!(manager.daemon_status_activity_counts(), None);
+        drop(maintenance_guard);
+        let mut lock_name = manager.registry.registry_path().as_os_str().to_os_string();
+        lock_name.push(".lock");
+        let lock_file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(Path::new(&lock_name))
+            .unwrap();
+        let registry_lock =
+            nix::fcntl::Flock::lock(lock_file, nix::fcntl::FlockArg::LockExclusive).unwrap();
+        assert_eq!(manager.daemon_status_activity_counts(), None);
+        drop(nix::fcntl::Flock::unlock(registry_lock).unwrap());
         context
             .store_for_mutation()
             .admit(
@@ -7067,6 +7134,10 @@ mod tests {
                 ),
             )
             .unwrap();
+        assert_eq!(
+            manager.daemon_status_activity_counts(),
+            Some((1, 1, 1, 0, 0))
+        );
         assert!(matches!(
             manager.reserve_runtime_reset(now),
             Err(podway_service::RuntimeResetReasonV1::Activity)
@@ -7080,6 +7151,10 @@ mod tests {
                 .is_some()
         );
         assert_eq!(manager.daemon_activity_counts(now).unwrap().3, 1);
+        assert_eq!(
+            manager.daemon_status_activity_counts(),
+            Some((1, 1, 0, 1, 0))
+        );
         assert!(matches!(
             manager.reserve_runtime_reset(now),
             Err(podway_service::RuntimeResetReasonV1::Activity)

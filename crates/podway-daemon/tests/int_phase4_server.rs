@@ -1161,7 +1161,15 @@ fn v2rdy002_control_status_is_live_while_normal_dispatch_remains_closed() {
     let calls = Arc::new(AtomicUsize::new(0));
     let readiness = DaemonReadinessV1::new();
     let transport = status_transport_with_readiness(
-        TestDispatcher::new(DispatcherOutcome::Success, Arc::clone(&calls)),
+        TestDispatcher::new(DispatcherOutcome::Success, Arc::clone(&calls)).with_activity(
+            DaemonActivityV1 {
+                registered_worktrees: 3,
+                active_schedulers: 2,
+                queued_jobs: 4,
+                running_jobs: 1,
+                maintenance_operations: 5,
+            },
+        ),
         readiness.clone(),
     );
 
@@ -1179,6 +1187,7 @@ fn v2rdy002_control_status_is_live_while_normal_dispatch_remains_closed() {
     assert_eq!(output.result()["mode"], "prod");
     assert_eq!(output.result()["in_flight_client_count"], Value::Null);
     assert_eq!(output.result()["maintenance_operation_count"], Value::Null);
+    assert_eq!(output.result()["queued_job_count"], Value::Null);
     assert_eq!(output.result()["readiness_state"], "starting");
     assert_eq!(output.result()["readiness_stage"], "endpoint");
 

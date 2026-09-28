@@ -7,7 +7,7 @@ use std::io::ErrorKind;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, TryLockError};
 
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, TransactionBehavior, params};
 
@@ -433,6 +433,42 @@ impl SqliteStoreV1 {
                 })?,
             ))
         })
+    }
+
+    /// Reads only the live queue counts needed by daemon status. A busy Store returns no
+    /// observation so status can remain responsive without weakening maintenance checks.
+    pub fn try_read_job_activity_counts_v1(
+        &self,
+        identity: &DurableWorktreeIdentityV1,
+    ) -> Result<Option<(u32, u32)>, StoreErrorV1> {
+        self.require_identity(identity)?;
+        let mut connection = match self.connection.try_lock() {
+            Ok(connection) => connection,
+            Err(TryLockError::WouldBlock) => return Ok(None),
+            Err(TryLockError::Poisoned(_)) => {
+                return Err(StoreErrorV1::StorageUnavailableV1 {
+                    reason: StoreUnavailableReasonV1::Recovery,
+                });
+            }
+        };
+        let transaction = connection.transaction().map_err(storage)?;
+        let (queued, running): (i64, i64) = transaction
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM jobs WHERE state = 'queued'), \
+                        (SELECT COUNT(*) FROM jobs WHERE state = 'running')",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(storage)?;
+        transaction.commit().map_err(storage)?;
+        Ok(Some((
+            u32::try_from(queued).map_err(|_| StoreErrorV1::CorruptStateV1 {
+                record: StoreRecordKindV1::Job,
+            })?,
+            u32::try_from(running).map_err(|_| StoreErrorV1::CorruptStateV1 {
+                record: StoreRecordKindV1::Job,
+            })?,
+        )))
     }
 
     /// Checkpoints and closes the sole SQLite connection before daemon-owned maintenance.

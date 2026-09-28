@@ -140,6 +140,15 @@ the manifest are verified, and the daemon-owned state is ready. The daemon emits
 this projection from its early control plane while registry, worktree, and job
 recovery are still in progress.
 
+Status must remain responsive without cloning or integrity-scanning every
+registered workspace database. Before readiness, its activity counts may be
+`null`. After readiness, the daemon attempts the registry locks without waiting
+and reads queued and running counts from each active Store in a short read
+transaction. If registry, scheduler, maintenance, or Store access is busy, or
+the aggregate cannot be proved, the daemon reports `null` counts. This status
+read does not replace the stronger disposable-state inspection required by
+runtime reset and workspace maintenance.
+
 ## Workspace status observability
 
 `podway status` includes:

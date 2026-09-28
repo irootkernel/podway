@@ -429,7 +429,7 @@ impl WorkspaceRuntimeV1 for ProductionWorkspaceRuntimeV1 {
             queued_jobs,
             running_jobs,
             maintenance_operations,
-        ) = self.manager.daemon_activity_counts(self.clock.now())?;
+        ) = self.manager.daemon_status_activity_counts()?;
         Some(DaemonActivityV1 {
             registered_worktrees,
             active_schedulers,

@@ -18,6 +18,7 @@ use std::{
 };
 
 use crate::registry_under_test;
+use nix::fcntl::{Flock, FlockArg};
 use podway_core::WorkspaceId;
 use podway_protocol::Rfc3339MillisV1;
 use podway_service::ServiceRuntimePathsV1;
@@ -743,6 +744,26 @@ fn concurrent_registry_writers_serialize_without_losing_observations() {
             "workspace {number} must not be lost"
         );
     }
+}
+
+#[test]
+fn status_registry_read_does_not_wait_for_an_exclusive_lock() {
+    let fixture = RegistryFixture::new();
+    let store = RegistryStoreV1::new(&fixture.paths);
+    assert!(store.try_load().unwrap().unwrap().workspaces().is_empty());
+
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(fixture.registry_lock_path())
+        .expect("registry lock fixture must exist");
+    let lock = Flock::lock(file, FlockArg::LockExclusive).expect("fixture owns registry lock");
+    let started = std::time::Instant::now();
+    assert!(store.try_load().unwrap().is_none());
+    assert!(started.elapsed() < std::time::Duration::from_millis(250));
+    drop(Flock::unlock(lock).expect("release registry lock"));
+
+    assert!(store.try_load().unwrap().unwrap().workspaces().is_empty());
 }
 
 #[test]

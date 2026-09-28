@@ -152,6 +152,14 @@ impl<C> WorkspaceSchedulerV1<C> {
         Arc::clone(&read_lock(&self.context))
     }
 
+    /// Returns no status observation while a context replacement owns the write lock.
+    pub(crate) fn try_context_snapshot(&self) -> Option<Arc<C>> {
+        self.context
+            .try_read()
+            .ok()
+            .map(|context| Arc::clone(&context))
+    }
+
     /// Retires the current context while serialization is held, then publishes its replacement.
     ///
     /// The replacement is not visible when retirement fails.
@@ -510,6 +518,22 @@ impl<C> WorkspaceSchedulerRegistryV1<C> {
                 WorkspaceSchedulerRegistrySlotV1::Retiring { .. } => None,
             })
             .collect()
+    }
+
+    pub(crate) fn try_active_generations(&self) -> Option<Vec<Arc<WorkspaceSchedulerV1<C>>>> {
+        let state = self.inner.state.try_lock().ok()?;
+        Some(
+            state
+                .slots
+                .values()
+                .filter_map(|slot| match slot {
+                    WorkspaceSchedulerRegistrySlotV1::Active(scheduler) => {
+                        Some(Arc::clone(scheduler))
+                    }
+                    WorkspaceSchedulerRegistrySlotV1::Retiring { .. } => None,
+                })
+                .collect(),
+        )
     }
 
     /// Atomically returns the active scheduler or reserves exactly one generation for `factory`.
@@ -872,6 +896,15 @@ mod tests {
     }
 
     #[test]
+    fn status_snapshot_does_not_wait_for_scheduler_registry_lock() {
+        let registry = WorkspaceSchedulerRegistryV1::<()>::new();
+        let guard = registry.inner.state.lock().unwrap();
+        assert!(registry.try_active_generations().is_none());
+        drop(guard);
+        assert!(registry.try_active_generations().unwrap().is_empty());
+    }
+
+    #[test]
     fn stale_close_completion_does_not_remove_a_replacement_generation() {
         let registry = WorkspaceSchedulerRegistryV1::new();
         let key = test_key();
@@ -935,8 +968,10 @@ mod tests {
     fn lifecycle_rebind_retires_before_replacement_and_preserves_on_failure() {
         let scheduler =
             WorkspaceSchedulerV1::new(test_key(), SchedulerGenerationV1::initial(), 11_usize);
+        assert_eq!(*scheduler.try_context_snapshot().unwrap(), 11);
         let rejected = scheduler.rebind_context_serialized_after(Arc::new(22), |current| {
             assert_eq!(**current, 11);
+            assert!(scheduler.try_context_snapshot().is_none());
             Err::<(), _>("retirement failed")
         });
         assert_eq!(rejected, Err("retirement failed"));
