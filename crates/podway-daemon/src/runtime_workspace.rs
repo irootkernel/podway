@@ -974,6 +974,14 @@ impl WorkspaceSchedulerContextV1 {
         WorkspaceStoreReadFacadeV1::new(Arc::clone(&self.store))
     }
 
+    pub(crate) fn recovered_queue_known_empty(&self) -> bool {
+        matches!(
+            self.store
+                .try_read_job_activity_counts(self.binding.identity()),
+            Ok(Some((0, 0)))
+        )
+    }
+
     pub(crate) fn store_for_mutation(&self) -> Arc<WorkspaceStoreSlotV1> {
         Arc::clone(&self.store)
     }
@@ -3520,12 +3528,48 @@ impl WorkspaceRuntimeManagerV1 {
         observation: WorkspaceRuntimeObservationV1,
     ) -> Result<Arc<WorkspaceSchedulerV1<WorkspaceSchedulerContextV1>>, WorkspaceRuntimeErrorV1>
     {
+        self.resolve_existing_with_inspector(selector, expected_workspace_id, observation, None)
+    }
+
+    pub(crate) fn resolve_existing_for_startup_recovery(
+        &self,
+        selector: WorktreeSelectorV1,
+        expected_workspace_id: Option<&WorkspaceId>,
+        observation: WorkspaceRuntimeObservationV1,
+    ) -> Result<Arc<WorkspaceSchedulerV1<WorkspaceSchedulerContextV1>>, WorkspaceRuntimeErrorV1>
+    {
+        let inspector = SqliteWorkspaceBindingInspectorV1::for_startup_recovery(
+            self.inspection_options.clone(),
+        );
+        self.resolve_existing_with_inspector(
+            selector,
+            expected_workspace_id,
+            observation,
+            Some(&inspector),
+        )
+    }
+
+    fn resolve_existing_with_inspector(
+        &self,
+        selector: WorktreeSelectorV1,
+        expected_workspace_id: Option<&WorkspaceId>,
+        observation: WorkspaceRuntimeObservationV1,
+        inspector: Option<&SqliteWorkspaceBindingInspectorV1>,
+    ) -> Result<Arc<WorkspaceSchedulerV1<WorkspaceSchedulerContextV1>>, WorkspaceRuntimeErrorV1>
+    {
         self.resume_workspace_removal_if_marked(selector.clone())?;
         self.require_selector_config_mode(&selector)?;
-        let resolved = self
-            .resolver
-            .resolve_existing(selector, expected_workspace_id)
-            .map_err(WorkspaceRuntimeErrorV1::Resolution)?;
+        let resolved = match inspector {
+            Some(inspector) => self.resolver.resolve_existing_with_inspector(
+                selector,
+                expected_workspace_id,
+                inspector,
+            ),
+            None => self
+                .resolver
+                .resolve_existing(selector, expected_workspace_id),
+        }
+        .map_err(WorkspaceRuntimeErrorV1::Resolution)?;
         self.ensure_workspace_removal_marker_clear(resolved.worktree())?;
         self.activate_existing_resolved(resolved, observation)
     }
@@ -3946,11 +3990,14 @@ impl WorkspaceRuntimeManagerV1 {
 
         let options = self.store_options_for(&config)?;
         let binding_before_open =
-            SqliteStoreV1::inspect_workspace_binding(resolved.database_path(), &options)
-                .map_err(WorkspaceRuntimeErrorV1::Store)?
-                .ok_or_else(|| WorkspaceRuntimeErrorV1::BindingDisappeared {
-                    database_path: resolved.database_path().to_path_buf(),
-                })?;
+            SqliteStoreV1::inspect_workspace_binding_identity_read_transaction(
+                resolved.database_path(),
+                &options,
+            )
+            .map_err(WorkspaceRuntimeErrorV1::Store)?
+            .ok_or_else(|| WorkspaceRuntimeErrorV1::BindingDisappeared {
+                database_path: resolved.database_path().to_path_buf(),
+            })?;
         validate_pre_open_binding(&resolved, &binding_before_open)?;
         self.revalidate_before_store_open(&resolved)?;
 
@@ -5428,11 +5475,12 @@ fn require_exact_binding(
     options: &SqliteStoreOptionsV1,
     expected: &WorkspaceBindingV1,
 ) -> Result<WorkspaceBindingV1, WorkspaceRuntimeErrorV1> {
-    let actual = SqliteStoreV1::inspect_workspace_binding(database_path, options)
-        .map_err(WorkspaceRuntimeErrorV1::Store)?
-        .ok_or_else(|| WorkspaceRuntimeErrorV1::BindingDisappeared {
-            database_path: database_path.to_path_buf(),
-        })?;
+    let actual =
+        SqliteStoreV1::inspect_workspace_binding_identity_read_transaction(database_path, options)
+            .map_err(WorkspaceRuntimeErrorV1::Store)?
+            .ok_or_else(|| WorkspaceRuntimeErrorV1::BindingDisappeared {
+                database_path: database_path.to_path_buf(),
+            })?;
     if &actual != expected {
         return Err(WorkspaceRuntimeErrorV1::BindingMismatch {
             expected: Box::new(expected.clone()),

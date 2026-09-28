@@ -22,7 +22,8 @@ use crate::codec::{
 };
 use crate::schema::{
     DatabasePathStateV1, ExistingDatabaseOpenPolicyV1, canonical_database_path_v1,
-    inspect_database_path_v1, inspect_database_snapshot_unbound_v1, inspect_database_snapshot_v1,
+    inspect_database_path_v1, inspect_database_read_transaction_unbound_v1,
+    inspect_database_snapshot_unbound_v1, inspect_database_snapshot_v1,
     inspect_existing_store_openability_v1, open_or_initialize_v1, open_or_initialize_with_guard_v1,
     recover_interrupted_publication_v1, recover_interrupted_publication_with_guard_v1,
     validate_database_parent_path_v1, validate_existing_database_path_v1,
@@ -63,6 +64,14 @@ pub struct SqliteStoreV1 {
     options: SqliteStoreOptionsV1,
     startup_recovery_report: RecoveryReportV1,
     claim_hasher: RandomState,
+}
+
+#[derive(Clone, Copy)]
+enum BindingInspectionDepthV1 {
+    FullSnapshot,
+    FullReadTransaction,
+    IdentityReadTransaction,
+    ResetSnapshot,
 }
 
 impl SqliteStoreV1 {
@@ -178,7 +187,37 @@ impl SqliteStoreV1 {
         path: impl AsRef<Path>,
         options: &SqliteStoreOptionsV1,
     ) -> Result<Option<WorkspaceBindingV1>, StoreErrorV1> {
-        Self::inspect_workspace_binding_with(path, options, false)
+        Self::inspect_workspace_binding_with_depth(
+            path,
+            options,
+            BindingInspectionDepthV1::FullSnapshot,
+        )
+    }
+
+    /// Reads the normal daemon binding from one authoritative SQLite read transaction.
+    /// The Store open still performs its own integrity preflight before mutation.
+    pub fn inspect_workspace_binding_read_transaction(
+        path: impl AsRef<Path>,
+        options: &SqliteStoreOptionsV1,
+    ) -> Result<Option<WorkspaceBindingV1>, StoreErrorV1> {
+        Self::inspect_workspace_binding_with_depth(
+            path,
+            options,
+            BindingInspectionDepthV1::FullReadTransaction,
+        )
+    }
+
+    /// Rechecks binding authority during an already validated activation. The subsequent Store
+    /// open performs the complete integrity preflight before any mutation is admitted.
+    pub fn inspect_workspace_binding_identity_read_transaction(
+        path: impl AsRef<Path>,
+        options: &SqliteStoreOptionsV1,
+    ) -> Result<Option<WorkspaceBindingV1>, StoreErrorV1> {
+        Self::inspect_workspace_binding_with_depth(
+            path,
+            options,
+            BindingInspectionDepthV1::IdentityReadTransaction,
+        )
     }
 
     /// Reads only the validated binding needed to select an explicit reset predecessor.
@@ -187,13 +226,17 @@ impl SqliteStoreV1 {
         path: impl AsRef<Path>,
         options: &SqliteStoreOptionsV1,
     ) -> Result<Option<WorkspaceBindingV1>, StoreErrorV1> {
-        Self::inspect_workspace_binding_with(path, options, true)
+        Self::inspect_workspace_binding_with_depth(
+            path,
+            options,
+            BindingInspectionDepthV1::ResetSnapshot,
+        )
     }
 
-    fn inspect_workspace_binding_with(
+    fn inspect_workspace_binding_with_depth(
         path: impl AsRef<Path>,
         options: &SqliteStoreOptionsV1,
-        reset_identity_only: bool,
+        depth: BindingInspectionDepthV1,
     ) -> Result<Option<WorkspaceBindingV1>, StoreErrorV1> {
         let database_path = canonical_database_path_v1(path.as_ref())?;
         match inspect_database_path_v1(&database_path)? {
@@ -201,18 +244,17 @@ impl SqliteStoreV1 {
             DatabasePathStateV1::Existing => {}
         }
 
-        // The preflight rejects interrupted publication links and the unbound snapshot helper
-        // never invokes recovery, so this inspection cannot finalize a publish.
+        // The preflight rejects interrupted publication links. Neither inspection helper
+        // finalizes a publish or mutates authoritative database rows.
 
-        let binding =
-            inspect_database_snapshot_unbound_v1(&database_path, options, |connection| {
-                let schema_version = crate::schema::read_user_version_v1(connection)?;
-                if reset_identity_only {
-                    crate::schema::verify_reset_binding_inspection_schema_v1(connection)?;
-                } else {
-                    crate::schema::verify_binding_inspection_schema_v1(connection)?;
-                }
-                let (
+        let inspect_binding = |connection: &mut Connection| {
+            let schema_version = crate::schema::read_user_version_v1(connection)?;
+            if matches!(depth, BindingInspectionDepthV1::ResetSnapshot) {
+                crate::schema::verify_reset_binding_inspection_schema_v1(connection)?;
+            } else {
+                crate::schema::verify_binding_inspection_schema_v1(connection)?;
+            }
+            let (
                     workspace_uuid,
                     common_dir_identity,
                     worktree_admin_identity,
@@ -225,32 +267,42 @@ impl SqliteStoreV1 {
                         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
                     )
                     .map_err(|error| storage_record(error, StoreRecordKindV1::Workspace))?;
-                let identity = DurableWorktreeIdentityV1::new(
-                    CanonicalRequestDigestV1::new(common_dir_identity)
-                        .map_err(|_| corrupt(StoreRecordKindV1::Workspace))?,
-                    crate::WorkspaceUuidV1::new(workspace_uuid)
-                        .map_err(|_| corrupt(StoreRecordKindV1::Workspace))?,
-                    CanonicalRequestDigestV1::new(worktree_admin_identity)
-                        .map_err(|_| corrupt(StoreRecordKindV1::Workspace))?,
-                );
-                let last_validated_root =
-                    ValidatedWorkspaceRootV1::from_encoded(last_validated_root)
-                        .map_err(|_| corrupt(StoreRecordKindV1::Workspace))?;
-                if reset_identity_only {
-                    crate::schema::verify_reset_binding_inspection_identity_v1(
-                        connection, &identity, options,
-                    )?;
-                } else {
-                    crate::schema::verify_binding_inspection_identity_v1(
-                        connection, &identity, options,
-                    )?;
-                }
-                Ok(WorkspaceBindingV1::new_with_schema_version(
-                    identity,
-                    last_validated_root,
-                    schema_version,
-                ))
-            })?;
+            let identity = DurableWorktreeIdentityV1::new(
+                CanonicalRequestDigestV1::new(common_dir_identity)
+                    .map_err(|_| corrupt(StoreRecordKindV1::Workspace))?,
+                crate::WorkspaceUuidV1::new(workspace_uuid)
+                    .map_err(|_| corrupt(StoreRecordKindV1::Workspace))?,
+                CanonicalRequestDigestV1::new(worktree_admin_identity)
+                    .map_err(|_| corrupt(StoreRecordKindV1::Workspace))?,
+            );
+            let last_validated_root = ValidatedWorkspaceRootV1::from_encoded(last_validated_root)
+                .map_err(|_| corrupt(StoreRecordKindV1::Workspace))?;
+            if matches!(
+                depth,
+                BindingInspectionDepthV1::ResetSnapshot
+                    | BindingInspectionDepthV1::IdentityReadTransaction
+            ) {
+                crate::schema::verify_binding_identity_and_mode_v1(connection, &identity, options)?;
+            } else {
+                crate::schema::verify_binding_inspection_identity_v1(
+                    connection, &identity, options,
+                )?;
+            }
+            Ok(WorkspaceBindingV1::new_with_schema_version(
+                identity,
+                last_validated_root,
+                schema_version,
+            ))
+        };
+        let binding = if matches!(
+            depth,
+            BindingInspectionDepthV1::FullReadTransaction
+                | BindingInspectionDepthV1::IdentityReadTransaction
+        ) {
+            inspect_database_read_transaction_unbound_v1(&database_path, options, inspect_binding)?
+        } else {
+            inspect_database_snapshot_unbound_v1(&database_path, options, inspect_binding)?
+        };
         Ok(Some(binding))
     }
 
@@ -306,7 +358,7 @@ impl SqliteStoreV1 {
         let database_path = canonical_database_path_v1(path.as_ref())?;
         inspect_database_snapshot_unbound_v1(&database_path, options, |connection| {
             crate::schema::verify_reset_binding_inspection_schema_v1(connection)?;
-            crate::schema::verify_reset_binding_inspection_identity_v1(
+            crate::schema::verify_binding_identity_and_mode_v1(
                 connection,
                 expected_identity,
                 options,

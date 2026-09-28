@@ -760,7 +760,7 @@ pub(crate) fn verify_binding_inspection_identity_v1(
     Ok(())
 }
 
-pub(crate) fn verify_reset_binding_inspection_identity_v1(
+pub(crate) fn verify_binding_identity_and_mode_v1(
     connection: &Connection,
     expected_identity: &DurableWorktreeIdentityV1,
     options: &SqliteStoreOptionsV1,
@@ -852,6 +852,38 @@ pub(crate) fn inspect_database_snapshot_unbound_v1<T>(
     .map_err(storage_error)?;
     apply_inspection_pragmas_v1(&connection, options.busy_timeout_ms())?;
     inspect(&mut connection)
+}
+
+/// Reads the authoritative database through one SQLite snapshot without copying its bytes.
+/// The connection cannot write the database; normal daemon resolution may let SQLite create
+/// WAL sidecars before the Store is opened for mutation. Disposable inspections keep using a clone.
+pub(crate) fn inspect_database_read_transaction_unbound_v1<T>(
+    path: &Path,
+    options: &SqliteStoreOptionsV1,
+    inspect: impl FnOnce(&mut Connection) -> Result<T, StoreErrorV1>,
+) -> Result<T, StoreErrorV1> {
+    let path = canonical_database_path_v1(path)?;
+    validate_existing_database_path_v1(&path)?;
+    let mut connection = Connection::open_with_flags(
+        &path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_URI
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .map_err(storage_error)?;
+    validate_existing_database_path_v1(&path)?;
+    apply_inspection_pragmas_v1(&connection, options.busy_timeout_ms())?;
+    connection
+        .execute_batch("BEGIN DEFERRED")
+        .map_err(storage_error)?;
+    let result = inspect(&mut connection);
+    let rollback = connection.execute_batch("ROLLBACK").map_err(storage_error);
+    match (result, rollback) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(error), Ok(())) => Err(error),
+        (_, Err(error)) => Err(error),
+    }
 }
 
 pub(crate) fn inspect_existing_store_openability_v1(
@@ -4202,6 +4234,50 @@ mod inspection_snapshot_tests {
         );
         assert_eq!(directory_entries(directory.path()), entries_before);
         assert!(publication.exists());
+    }
+
+    #[test]
+    fn live_read_transaction_does_not_clone_or_write_the_database() {
+        let directory = TempDir::new().expect("live inspection source directory");
+        let source = directory.path().join("state.sqlite3");
+        let connection = Connection::open(&source).expect("create live inspection source");
+        connection
+            .execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE marker (value INTEGER); INSERT INTO marker VALUES (7)")
+            .expect("populate live inspection source");
+        drop(connection);
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o600))
+            .expect("private live inspection source");
+
+        let copy_calls = Arc::new(AtomicUsize::new(0));
+        let hook_calls = Arc::clone(&copy_calls);
+        let hook = install_inspection_snapshot_copy_hook_for_test_v1(move |_| {
+            hook_calls.fetch_add(1, Ordering::SeqCst);
+        });
+        let before = fs::read(&source).expect("authoritative bytes before live inspection");
+        let value = inspect_database_read_transaction_unbound_v1(
+            &source,
+            &SqliteStoreOptionsV1::new(8).expect("live inspection options"),
+            |connection| {
+                let value = connection
+                    .query_row("SELECT value FROM marker", [], |row| row.get::<_, i64>(0))
+                    .map_err(storage_error)?;
+                assert!(
+                    connection
+                        .execute("UPDATE marker SET value = 8", [])
+                        .is_err()
+                );
+                Ok(value)
+            },
+        )
+        .expect("read live inspection source");
+        drop(hook);
+
+        assert_eq!(value, 7);
+        assert_eq!(copy_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            fs::read(&source).expect("authoritative bytes after live inspection"),
+            before
+        );
     }
 
     #[test]

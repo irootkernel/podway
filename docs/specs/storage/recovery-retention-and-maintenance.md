@@ -21,6 +21,22 @@ On startup:
 
 A worktree with unreadable state is isolated. It does not prevent other worktrees from operating.
 
+For a registered worktree without a reset marker, startup proceeds directly to
+ordinary activation. Startup binding inspection uses a read-only SQLite
+connection and one read transaction against the authoritative database, including
+its WAL, without copying database bytes. Store activation independently validates
+the complete state before mutation. Its intervening and post-open binding
+rechecks validate schema, workspace identity, and runtime mode without repeating
+the full integrity scan. Startup skips the worker drain only when the recovered
+Store reports zero queued and running jobs; an unavailable count follows the
+normal drain path. A present reset marker still requires reset
+source authority and the disposable inspection needed to validate its predecessor.
+Other workspace resolution retains disposable inspection so rejected copies remain
+untouched and active-Store reads survive missing WAL sidecar paths. Deep doctor
+and maintenance inspections also retain their stronger disposable checks.
+SQLite may create WAL sidecars while opening the read-only connection; the
+inspection does not write database rows or migrate schema.
+
 ## Minimal global registry
 
 Accepted v0.1.0 target location:

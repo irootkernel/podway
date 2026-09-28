@@ -2499,11 +2499,22 @@ pub trait WorkspaceBindingInspectorV1: Send + Sync {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SqliteWorkspaceBindingInspectorV1 {
     options: SqliteStoreOptionsV1,
+    live_read_transaction: bool,
 }
 
 impl SqliteWorkspaceBindingInspectorV1 {
     pub fn new(options: SqliteStoreOptionsV1) -> Self {
-        Self { options }
+        Self {
+            options,
+            live_read_transaction: false,
+        }
+    }
+
+    pub fn for_startup_recovery(options: SqliteStoreOptionsV1) -> Self {
+        Self {
+            options,
+            live_read_transaction: true,
+        }
     }
 
     pub fn options(&self) -> &SqliteStoreOptionsV1 {
@@ -2527,8 +2538,12 @@ impl WorkspaceBindingInspectorV1 for SqliteWorkspaceBindingInspectorV1 {
             }
             _ => {}
         }
-        SqliteStoreV1::inspect_workspace_binding(database_path, &self.options)
-            .map_err(WorkspaceBindingInspectionErrorV1::Store)
+        let binding = if self.live_read_transaction {
+            SqliteStoreV1::inspect_workspace_binding_read_transaction(database_path, &self.options)
+        } else {
+            SqliteStoreV1::inspect_workspace_binding(database_path, &self.options)
+        };
+        binding.map_err(WorkspaceBindingInspectionErrorV1::Store)
     }
 
     fn inspect_reset_workspace_binding(
@@ -2876,7 +2891,21 @@ where
         selector: WorktreeSelectorV1,
         expected_workspace_id: Option<&WorkspaceId>,
     ) -> Result<ResolvedWorkspaceV1, WorkspaceResolutionErrorV1> {
-        self.resolve_existing_with_inspection(selector, expected_workspace_id, false)
+        self.resolve_existing_with_inspection(
+            selector,
+            expected_workspace_id,
+            false,
+            &self.binding_inspector,
+        )
+    }
+
+    pub fn resolve_existing_with_inspector(
+        &self,
+        selector: WorktreeSelectorV1,
+        expected_workspace_id: Option<&WorkspaceId>,
+        inspector: &impl WorkspaceBindingInspectorV1,
+    ) -> Result<ResolvedWorkspaceV1, WorkspaceResolutionErrorV1> {
+        self.resolve_existing_with_inspection(selector, expected_workspace_id, false, inspector)
     }
 
     pub fn resolve_existing_for_reset(
@@ -2884,7 +2913,12 @@ where
         selector: WorktreeSelectorV1,
         expected_workspace_id: Option<&WorkspaceId>,
     ) -> Result<ResolvedWorkspaceV1, WorkspaceResolutionErrorV1> {
-        self.resolve_existing_with_inspection(selector, expected_workspace_id, true)
+        self.resolve_existing_with_inspection(
+            selector,
+            expected_workspace_id,
+            true,
+            &self.binding_inspector,
+        )
     }
 
     fn resolve_existing_with_inspection(
@@ -2892,6 +2926,7 @@ where
         selector: WorktreeSelectorV1,
         expected_workspace_id: Option<&WorkspaceId>,
         reset_identity_only: bool,
+        inspector: &impl WorkspaceBindingInspectorV1,
     ) -> Result<ResolvedWorkspaceV1, WorkspaceResolutionErrorV1> {
         self.require_selector_scope(&selector)?;
         let preliminary_selector = preliminary_selector(&selector)?;
@@ -2907,11 +2942,9 @@ where
 
         let database_path = database_path_from_worktree(&preliminary)?;
         let binding = if reset_identity_only {
-            self.binding_inspector
-                .inspect_reset_workspace_binding(&database_path)
+            inspector.inspect_reset_workspace_binding(&database_path)
         } else {
-            self.binding_inspector
-                .inspect_workspace_binding(&database_path)
+            inspector.inspect_workspace_binding(&database_path)
         }
         .map_err(|source| WorkspaceResolutionErrorV1::BindingInspection { source })?
         .ok_or(WorkspaceResolutionErrorV1::ExistingBindingMissing)?;

@@ -43,7 +43,7 @@ use crate::{
         BoundedAcceptLoopV1, DaemonProcessIdentityV1, DaemonReadinessV1, ServerAcceptLoopErrorV1,
         ServerTransportTimeoutsV1, ShutdownAdmissionV1, UnixServerTransportV1,
     },
-    worker::WorkerErrorV1,
+    worker::{WorkerDrainReportV1, WorkerErrorV1},
     workspace::{WorkspaceBindingInspectionErrorV1, WorkspaceResolutionErrorV1},
 };
 
@@ -892,6 +892,37 @@ fn recover_registered_workspaces(
             }
         }
         let observation = WorkspaceRuntimeObservationV1::new(clock.now(), clock.generated_at());
+        // Most restarts have no reset marker. Avoid the reset-authority inspection,
+        // which clones and validates the Store before ordinary activation does so again.
+        if matches!(manager.discover_reset_marker(selector.clone()), Ok(None)) {
+            match manager.resolve_existing_for_startup_recovery(
+                selector,
+                Some(&workspace_uuid),
+                observation,
+            ) {
+                Ok(scheduler) => {
+                    let requeued_job_count = scheduler
+                        .context_snapshot()
+                        .store()
+                        .startup_recovery_report()
+                        .requeued_job_count();
+                    outcomes.push(None);
+                    recovered.push((index, workspace_uuid, requeued_job_count, scheduler));
+                    readiness.record_worktree_recovery(false);
+                }
+                Err(error) => {
+                    emit_runtime_failure(observability, &workspace_uuid, &error);
+                    outcomes.push(Some(WorkspaceRecoveryEntryV1::Unavailable(
+                        UnavailableWorkspaceReportV1::new(
+                            workspace_uuid,
+                            unavailable_reason_from_runtime_error(error),
+                        ),
+                    )));
+                    readiness.record_worktree_recovery(true);
+                }
+            }
+            continue;
+        }
         match manager.begin_reset_maintenance(selector.clone()) {
             Ok(transaction) => match transaction.discover_marker() {
                 Ok(Some(marker)) => {
@@ -997,13 +1028,19 @@ fn recover_registered_workspaces(
         return ProductionDaemonRecoveryReportV1::new(outcomes.into_iter().flatten().collect());
     }
     readiness.begin_job_recovery();
-    let drains = worker.drain_recovered_queues(
-        recovered
-            .iter()
-            .map(|(_, _, _, scheduler)| Arc::clone(scheduler)),
-    );
-    for ((index, workspace_uuid, requeued_job_count, _), drain) in recovered.into_iter().zip(drains)
-    {
+    for (index, workspace_uuid, requeued_job_count, scheduler) in recovered {
+        // Startup dispatch remains closed here. A proven empty Store queue needs no worker
+        // attempt; a busy or failed count retains the ordinary revalidation and drain path.
+        let drain = if requeued_job_count == 0
+            && scheduler.context_snapshot().recovered_queue_known_empty()
+        {
+            Ok(WorkerDrainReportV1::default())
+        } else {
+            worker
+                .drain_recovered_queues([scheduler])
+                .pop()
+                .expect("one scheduler produces one drain result")
+        };
         let entry = match drain {
             Ok(report) => WorkspaceRecoveryEntryV1::Recovered(RecoveredWorkspaceReportV1::new(
                 workspace_uuid,

@@ -91,4 +91,5 @@ There are no current adopted dossiers.
 - [Real executor integration](TODO-podway-supervised-delegation-integration.md): live external/managed Primary adapters and qualification excluded from V2SDG.
 - [Graph engineering](TODO-podway-graph-engineering-evolution.md): separately motivated work-unit and parallel graph research.
 - [Continuation generations](TODO-podway-versioned-continuation-generations.md): separately motivated topology replacement and plan lineage.
+- [Startup recovery performance](TODO-podway-startup-recovery-performance.md): profile and bound large-Store cold recovery without weakening validation.
 - [Web operations console](TODO-podway-web-operations-console.md): human operations after its graph/runtime prerequisites are settled.

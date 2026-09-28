@@ -647,6 +647,10 @@ fn graph_workspace_view_reads_graph_queue_and_sequence_from_one_store_boundary()
     store
         .create_graph_session_v2(&identity(), state.clone())
         .unwrap();
+    assert_eq!(
+        store.try_read_job_activity_counts_v1(&identity()).unwrap(),
+        Some((0, 0))
+    );
 
     let queued_job = job_id(1);
     let request = AdmitRequestV1::new(
@@ -661,6 +665,26 @@ fn graph_workspace_view_reads_graph_queue_and_sequence_from_one_store_boundary()
         store.admit(&identity(), request),
         Ok(AdmitOutcomeV1::New(_))
     ));
+    assert_eq!(
+        store.try_read_job_activity_counts_v1(&identity()).unwrap(),
+        Some((1, 0))
+    );
+    let live_binding = SqliteStoreV1::inspect_workspace_binding_read_transaction(
+        database_path(&temporary),
+        &options(),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(live_binding.identity(), &identity());
+    assert_eq!(
+        SqliteStoreV1::inspect_workspace_binding_identity_read_transaction(
+            database_path(&temporary),
+            &options(),
+        )
+        .unwrap()
+        .unwrap(),
+        live_binding
+    );
 
     let queued = store.read_graph_workspace_view_v2(&identity()).unwrap();
     assert_eq!(queued.identity(), &identity());
@@ -679,6 +703,10 @@ fn graph_workspace_view_reads_graph_queue_and_sequence_from_one_store_boundary()
         .unwrap()
         .expect("the queued job must be claimable");
     assert_eq!(claimed.claim().job_id(), &queued_job);
+    assert_eq!(
+        store.try_read_job_activity_counts_v1(&identity()).unwrap(),
+        Some((0, 1))
+    );
     let running = store.read_graph_workspace_view_v2(&identity()).unwrap();
     assert_eq!(running.graph_state(), Some(&state));
     assert_eq!(running.queued_job_count(), 0);
@@ -687,6 +715,12 @@ fn graph_workspace_view_reads_graph_queue_and_sequence_from_one_store_boundary()
 
     drop(store);
     let reopened = open(&temporary, options());
+    assert_eq!(
+        reopened
+            .try_read_job_activity_counts_v1(&identity())
+            .unwrap(),
+        Some((1, 0))
+    );
     let recovered = reopened.read_graph_workspace_view_v2(&identity()).unwrap();
     assert_eq!(recovered.graph_state(), Some(&state));
     assert_eq!(recovered.queued_job_count(), 1);

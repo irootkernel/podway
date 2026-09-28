@@ -1467,6 +1467,30 @@ fn v2dvc004_live_schema_v10_binds_new_and_legacy_stores_to_runtime_mode() {
             actual: RuntimeModeV1::production(),
         })
     );
+    assert_eq!(
+        SqliteStoreV1::inspect_workspace_binding_read_transaction(
+            &production_path,
+            &SqliteStoreOptionsV1::new(8)
+                .unwrap()
+                .with_runtime_mode(RuntimeModeV1::development()),
+        ),
+        Err(StoreErrorV1::RuntimeModeMismatchV1 {
+            expected: RuntimeModeV1::development(),
+            actual: RuntimeModeV1::production(),
+        })
+    );
+    assert_eq!(
+        SqliteStoreV1::inspect_workspace_binding_identity_read_transaction(
+            &production_path,
+            &SqliteStoreOptionsV1::new(8)
+                .unwrap()
+                .with_runtime_mode(RuntimeModeV1::development()),
+        ),
+        Err(StoreErrorV1::RuntimeModeMismatchV1 {
+            expected: RuntimeModeV1::development(),
+            actual: RuntimeModeV1::production(),
+        })
+    );
     assert_eq!(fs::read(&production_path).unwrap(), before);
 
     let connection = Connection::open(&production_path).unwrap();

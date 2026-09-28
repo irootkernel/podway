@@ -643,3 +643,45 @@ installation, or runtime activation; the stable candidate must still pass its
 separately authorized release and upgrade qualification. Real Dolgorae or managed
 Primary integration remains outside this epic. A schema change must not bypass
 ADR-0031's managed-generation migration restrictions.
+
+## V2DHP — Fast Daemon Status and Readiness
+
+Status: Completed.
+
+Dependencies: completed `V2RDY` and `V2DVC` epics. `daemon status` acquired
+aggregate activity counts in `V2DVC-005` (first released in v0.2.8); its
+disposable inspection copied and checked every active workspace database and
+WAL, causing a live daemon to exceed the CLI's five-second read timeout on a
+host with 22 active schedulers and about 133 MB of main databases. This
+corrective epic uses indexed counts from short read transactions for status,
+while retaining stronger disposable inspection for runtime reset and workspace
+maintenance. It also bounds named-runtime readiness probes by the caller's
+deadline and starts Podway sessions with worktree observation.
+
+Development acceptance: the complete `make test` gate passed. An isolated
+debug daemon with 22 active schedulers and 22 worktrees returned `daemon
+status` in 12.71 ms median and 14.32 ms maximum; `daemon wait-ready` took
+11.73 ms. Each worktree received six
+supported `record --stdin` batches of 16 optional text items containing
+55,000 characters each. The live SQLite main databases totaled 138,493,952
+bytes, with another 115,307,144 bytes in WAL files. This measures the actual
+CLI-to-daemon path at the reported scale. After an orderly stop, the initial
+cold-recovery implementation remained in `recovering` beyond 180 seconds.
+`V2DHP-003` removed redundant database copies and integrity scans from startup
+activation while retaining the complete guarded Store preflight. An optimization
+trial on the isolated 22-worktree fixture reached `ready` in 47.31 seconds.
+After read transactions were limited to startup to preserve ordinary resolution
+safety, the final route reached `ready` in 7.76 seconds on two worktrees with
+14,925,824 bytes of checkpointed main databases. The 22-worktree fixture was
+not rerun after that routing correction. Broader cold-recovery scale questions
+remain in [the startup recovery performance candidate](../todo/TODO-podway-startup-recovery-performance.md).
+No release, installation, or active-daemon replacement was performed.
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `V2DHP-001` | Read live activity without database copies | Completed | Count queued and running jobs through bounded Store reads; leave unproven counts null and preserve deeper maintenance checks. | [Daemon status](../specs/operations/observability.md#daemon-status) |
+| `V2DHP-002` | Bound readiness waiting and align session entry | Completed | Clamp named-runtime probes to the readiness deadline, use worktree observation for session entry, and prove status and wait-ready behavior through the development gate. | [CLI specification](../specs/interfaces/cli-specification.md#command-groups), [runtime skill](../../skills/use-podway/SKILL.md) |
+| `V2DHP-003` | Remove redundant cold recovery inspections | Completed | Use read transactions for startup binding checks, retain the guarded Store integrity preflight, and skip proven empty recovered queues. | [Recovery specification](../specs/storage/recovery-retention-and-maintenance.md#daemon-restart) |
+
+Tasks execute in numeric order. Development acceptance does not authorize a
+release, installation, or replacement of an active daemon.
