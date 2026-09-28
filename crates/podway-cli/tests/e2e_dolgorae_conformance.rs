@@ -547,6 +547,7 @@ case "${1:-}" in
     socket=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:3' "$plist")
     daemon_log="$state/daemon.log"
     /usr/bin/python3 - "$daemon" "$socket" "$pid_file" "$daemon_log" <<'PY'
+import os
 import subprocess
 import sys
 
@@ -560,8 +561,10 @@ with open(daemon_log, "ab", buffering=0) as log:
         start_new_session=True,
         close_fds=True,
     )
-with open(pid_file, "w", encoding="ascii") as destination:
+temporary_pid_file = pid_file + ".tmp"
+with open(temporary_pid_file, "w", encoding="ascii") as destination:
     destination.write(str(child.pid))
+os.replace(temporary_pid_file, pid_file)
 PY
     if [ -f "$state/delay-bootstrap-once" ]; then
       /bin/rm -f "$state/delay-bootstrap-once"
