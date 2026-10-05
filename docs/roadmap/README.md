@@ -683,3 +683,56 @@ No release, installation, or active-daemon replacement was performed.
 
 Tasks execute in numeric order. Development acceptance does not authorize a
 release, installation, or replacement of an active daemon.
+
+<a id="v2dfc-daemon-free-core"></a>
+
+## V2DFC — Daemon-Free Core
+
+Status: Planned.
+
+Conditional release target: `v0.2.13`. Inclusion requires completion of
+`V2DFC-001` through `V2DFC-010`, the required development acceptance, and a
+separately authorized stable-release qualification. Installation additionally
+requires Aquarium and Dolgorae releases that support the new contract
+generation.
+
+Dependencies: completed `V2DHP` and the completed foundations it builds on.
+There is no graph-engineering, continuation-generation, Web-console, or live
+Dolgorae dependency.
+
+Authority: [ADR-0038](../architecture-decision-records/0038-remove-the-daemon.md),
+proposed and accepted by `V2DFC-002` after the feasibility gate.
+Implementation owner: [adopted V2DFC dossier](../todo/TODO-podway-daemon-free-core.md).
+
+Goal: remove `podwayd` so that every command runs to completion in the invoking
+process and commits each mutation in one SQLite transaction on the owning
+worktree's Store. The release publishes a new public contract generation
+without backward compatibility. Daemon-era runtime state fails closed and is
+reset without migration.
+
+This adoption registers work only. It does not change shipped behavior,
+supersede an accepted ADR, start a task, or authorize commit, release,
+installation, or removal of an installed daemon.
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `V2DFC-001` | Prove the direct-write model against pre-registered thresholds | Planned | Measure contention, crash, maintenance, preparation-race, latency, open-cost, WAL, and legacy-classification checks with a test-only prototype; any failure blocks the epic. | [Task scope](../todo/TODO-podway-daemon-free-core.md#v2dfc-001-prove-the-direct-write-model-against-pre-registered-thresholds), [gate](../todo/TODO-podway-daemon-free-core.md#71-feasibility-gate) |
+| `V2DFC-002` | Accept the daemon-free architecture authority | Planned | Accept ADR-0038 with the gate evidence, link supersessions in both directions, and add AGENTS.md transition wording without changing contracts or code. | [Task scope](../todo/TODO-podway-daemon-free-core.md#v2dfc-002-accept-the-daemon-free-architecture-authority), [ADR-0038](../architecture-decision-records/0038-remove-the-daemon.md) |
+| `V2DFC-003` | Reserve the daemon-free contract generation | Planned | Reserve the new schemas, error codes, outcome lookup route, retired-command table, generation-14 Store DDL, and verifier counts without changing runtime output. | [Task scope](../todo/TODO-podway-daemon-free-core.md#v2dfc-003-reserve-the-daemon-free-contract-generation), [JSON contract](../specs/interfaces/json-contract.md) |
+| `V2DFC-004` | Extract host-independent domain services into podway-engine | Planned | Move read projections, preparation, request digests, workspace resolution, and marker codecs into a new engine crate without behavior change. | [Task scope](../todo/TODO-podway-daemon-free-core.md#v2dfc-004-extract-host-independent-domain-services-into-podway-engine) |
+| `V2DFC-005` | Build the direct Store and maintenance primitives beside the legacy Store | Planned | Add the generation-14 Store with write-free classification and reads, the maintenance lock and markers, writer identity, and single-transaction success outcomes. | [Task scope](../todo/TODO-podway-daemon-free-core.md#v2dfc-005-build-the-direct-store-and-maintenance-primitives-beside-the-legacy-store), [recovery](../specs/storage/recovery-retention-and-maintenance.md) |
+| `V2DFC-006` | Execute every retained command through the direct engine | Planned | Run every retained read, mutation, and maintenance command in-process with revalidated preparation and validated new-generation envelopes. | [Task scope](../todo/TODO-podway-daemon-free-core.md#v2dfc-006-execute-every-retained-command-through-the-direct-engine), [transactions](../specs/storage/transactions-concurrency-and-idempotency.md) |
+| `V2DFC-007` | Switch the CLI to the direct engine and delete the daemon host | Planned | Route the CLI through the engine, emit the new contract, return retired-command guidance, and delete the daemon crate and binary. | [Task scope](../todo/TODO-podway-daemon-free-core.md#v2dfc-007-switch-the-cli-to-the-direct-engine-and-delete-the-daemon-host) |
+| `V2DFC-008` | Retire residual daemon-era infrastructure and contracts | Planned | Delete the service crate, IPC protocol, legacy Store and migrations, runtime modes, and daemon-only schemas and errors, and retarget fuzzing. | [Task scope](../todo/TODO-podway-daemon-free-core.md#v2dfc-008-retire-residual-daemon-era-infrastructure-and-contracts) |
+| `V2DFC-009` | Rebuild release and development tooling around one binary | Planned | Package and qualify one binary, regenerate identity and handoff contracts, retire the Aquarium development service, and rewrite release QA. | [Task scope](../todo/TODO-podway-daemon-free-core.md#v2dfc-009-rebuild-release-and-development-tooling-around-one-binary) |
+| `V2DFC-010` | Promote durable documentation and close the epic | Planned | Promote lasting decisions to specifications, architecture, README, skills, and AGENTS.md, update related candidates, and retire the dossier. | [Task scope](../todo/TODO-podway-daemon-free-core.md#v2dfc-010-promote-durable-documentation-and-close-the-epic) |
+
+Tasks execute in numeric order with one active task across this epic. At most
+the first incomplete task may be In Progress, In Review, or Blocked; every later
+task remains Planned. Each task is one logical implementation-and-verification
+commit that passes `make test`, subject to separate commit authorization. If
+any feasibility check in `V2DFC-001` fails, that task becomes Blocked and the
+epic returns to the owner; there is no automatic fallback. No patch release is
+cut from the main branch between `V2DFC-007` and `V2DFC-009`. Development
+acceptance does not authorize a release, installation, or removal of an
+installed daemon.

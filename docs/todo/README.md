@@ -84,12 +84,12 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 
 ## Current adopted dossiers
 
-There are no current adopted dossiers.
+- [Daemon-free core](TODO-podway-daemon-free-core.md): `V2DFC` removal of `podwayd`, in-process Store transactions, and a new contract generation for the conditional `v0.2.13` target. Task order and state live only in the active roadmap; adoption activates no runtime, release, or installation.
 
 ## Related candidates
 
 - [Real executor integration](TODO-podway-supervised-delegation-integration.md): live external/managed Primary adapters and qualification excluded from V2SDG.
-- [Graph engineering](TODO-podway-graph-engineering-evolution.md): separately motivated work-unit and parallel graph research.
+- [Graph engineering](TODO-podway-graph-engineering-evolution.md): separately motivated work-unit and parallel graph research. The adopted `V2DFC` dossier supersedes its daemon assumptions.
 - [Continuation generations](TODO-podway-versioned-continuation-generations.md): separately motivated topology replacement and plan lineage.
-- [Startup recovery performance](TODO-podway-startup-recovery-performance.md): profile and bound large-Store cold recovery without weakening validation.
-- [Web operations console](TODO-podway-web-operations-console.md): human operations after its graph/runtime prerequisites are settled.
+- [Startup recovery performance](TODO-podway-startup-recovery-performance.md): profile and bound large-Store cold recovery without weakening validation. Obsoleted by `V2DFC` and retired when that epic completes.
+- [Web operations console](TODO-podway-web-operations-console.md): human operations after its graph/runtime prerequisites are settled. The adopted `V2DFC` dossier supersedes its preferred `podwayd` control plane.

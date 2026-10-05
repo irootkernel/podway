@@ -6,6 +6,10 @@
 - Owning roadmap epic: none
 - Release target: not assigned
 
+The adopted [daemon-free core dossier](TODO-podway-daemon-free-core.md) removes
+daemon startup recovery under epic `V2DFC`. This candidate becomes obsolete and
+is retired by `V2DFC-010`.
+
 An isolated development daemon with 22 initialized worktrees and about 164 MB
 of checkpointed SQLite main files originally remained in `recovering` beyond
 180 seconds after restart. The fixture used supported Podway commands to create

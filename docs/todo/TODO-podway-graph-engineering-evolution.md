@@ -14,6 +14,11 @@
 - Related foundation: [Host-Neutral Supervised Delegation](../specs/interfaces/supervised-delegation.md)
 - Related integration candidate: [Real Executor Integration](TODO-podway-supervised-delegation-integration.md)
 
+The adopted [daemon-free core dossier](TODO-podway-daemon-free-core.md) removes
+`podwayd` under epic `V2DFC`. Daemon-specific assumptions below, such as a
+daemon-supplied recorded instant and daemon-owned claim arbitration, map to
+in-process Store transactions under that dossier; `V2DFC-010` revises them.
+
 The September 16 adoption of V2SDG covers a sequential Podway-side delegation
 foundation only. It neither adopts this graph candidate nor satisfies its
 shape-specific experiment and promotion conditions. Live adapters remain a

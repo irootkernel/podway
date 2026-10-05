@@ -9,6 +9,11 @@
 - Related candidate:
   [Podway Graph Engineering Evolution](TODO-podway-graph-engineering-evolution.md)
 
+The adopted [daemon-free core dossier](TODO-podway-daemon-free-core.md) removes
+`podwayd` under epic `V2DFC`. This candidate's preferred direction of retaining
+`podwayd` as a central control plane no longer matches adopted work and must be
+revised before promotion; `V2DFC-010` updates it.
+
 This document preserves a possible local Web operations console for later
 evaluation. It is not an adopted design dossier, accepted architecture decision,
 roadmap commitment, or specification of implemented behavior. No command,

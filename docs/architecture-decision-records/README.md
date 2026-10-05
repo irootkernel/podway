@@ -51,3 +51,4 @@ narrative architecture and specifications when sources conflict.
 - [ADR-0035](0035-host-neutral-supervised-delegation.md): host-neutral delegation foundation with explicit opt-in and Direct-work continuity
 - [ADR-0036](0036-use-canonical-git-paths-for-workspace-identity.md): canonical-path workspace identity with schema-v13 migration and reset recovery
 - [ADR-0037](0037-bound-procedure-graphs-at-1024-nodes.md): bounded 1,024-node Procedure graphs
+- [ADR-0038](0038-remove-the-daemon.md): proposed daemon-free core with in-process Store transactions
