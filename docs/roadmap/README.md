@@ -688,7 +688,7 @@ release, installation, or replacement of an active daemon.
 
 ## V2DFC — Daemon-Free Core
 
-Status: Planned.
+Status: In Progress.
 
 Conditional release target: `v0.2.13`. Inclusion requires completion of
 `V2DFC-001` through `V2DFC-010`, the required development acceptance, and a
@@ -716,7 +716,7 @@ installation, or removal of an installed daemon.
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `V2DFC-001` | Prove the direct-write model against pre-registered thresholds | Planned | Measure contention, crash, maintenance, preparation-race, latency, open-cost, WAL, and legacy-classification checks with a test-only prototype; any failure blocks the epic. | [Task scope](../todo/TODO-podway-daemon-free-core.md#v2dfc-001-prove-the-direct-write-model-against-pre-registered-thresholds), [gate](../todo/TODO-podway-daemon-free-core.md#71-feasibility-gate) |
+| `V2DFC-001` | Prove the direct-write model against pre-registered thresholds | Completed | Measure contention, crash, maintenance, preparation-race, latency, open-cost, WAL, and legacy-classification checks with a test-only prototype; any failure blocks the epic. | [Task scope](../todo/TODO-podway-daemon-free-core.md#v2dfc-001-prove-the-direct-write-model-against-pre-registered-thresholds), [gate](../todo/TODO-podway-daemon-free-core.md#71-feasibility-gate) |
 | `V2DFC-002` | Accept the daemon-free architecture authority | Planned | Accept ADR-0038 with the gate evidence, link supersessions in both directions, and add AGENTS.md transition wording without changing contracts or code. | [Task scope](../todo/TODO-podway-daemon-free-core.md#v2dfc-002-accept-the-daemon-free-architecture-authority), [ADR-0038](../architecture-decision-records/0038-remove-the-daemon.md) |
 | `V2DFC-003` | Reserve the daemon-free contract generation | Planned | Reserve the new schemas, error codes, outcome lookup route, retired-command table, generation-14 Store DDL, and verifier counts without changing runtime output. | [Task scope](../todo/TODO-podway-daemon-free-core.md#v2dfc-003-reserve-the-daemon-free-contract-generation), [JSON contract](../specs/interfaces/json-contract.md) |
 | `V2DFC-004` | Extract host-independent domain services into podway-engine | Planned | Move read projections, preparation, request digests, workspace resolution, and marker codecs into a new engine crate without behavior change. | [Task scope](../todo/TODO-podway-daemon-free-core.md#v2dfc-004-extract-host-independent-domain-services-into-podway-engine) |

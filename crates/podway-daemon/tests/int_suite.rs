@@ -38,6 +38,8 @@ mod int_post_admission_reconstruction;
 mod int_v2_only_reset_recovery;
 #[path = "int_v2agt006_small_change_preset.rs"]
 mod int_v2agt006_small_change_preset;
+#[path = "int_v2dfc001_feasibility.rs"]
+mod int_v2dfc001_feasibility;
 #[path = "int_v2dog003_embedded_presets.rs"]
 mod int_v2dog003_embedded_presets;
 #[path = "int_v2drw001_decide.rs"]

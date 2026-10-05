@@ -490,8 +490,12 @@ or product change. A failed check blocks the epic.
   the writer-identity read; a child-process re-exec harness; and a
   release-profile example binary for full-invocation timing.
 - Location: ignored integration tests and an example inside
-  `crates/podway-daemon`, deleted with that crate in `V2DFC-007`. Never in an
-  `e2e_*` target, because the end-to-end runner includes ignored tests.
+  `crates/podway-daemon`; hidden test-only Store primitives in
+  `podway_store::test_support::v2dfc001`, because the relational helpers are
+  crate-private; and the measurement driver `tools/v2dfc_gate.py`, because only
+  `e2e_*` targets may launch the real binaries. Never in an `e2e_*` target,
+  because the end-to-end runner includes ignored tests. `V2DFC-007` deletes all
+  of them.
 
 Done when every check in section 7.1 has its method, host, build profile, commit,
 sample size, percentiles, and verdict recorded in this dossier; raw logs stay
@@ -646,6 +650,9 @@ Purpose: make shipped behavior daemon-free in one commit.
   retarget or retire `tools/qualify_supervised_delegation.py`, delete
   `docs/implementation-tips/dev-runtime.md` with link repair, and update the
   `use-podway` skill grammar.
+- After re-measuring G7 and G8, delete the `V2DFC-001` prototype:
+  `podway_store::test_support::v2dfc001` and `tools/v2dfc_gate.py` leave with
+  the daemon crate's feasibility tests and example.
 
 Done when `make test` passes, no `podwayd`, socket, or IPC use remains outside
 retirement guidance, and checks G7 and G8 are re-measured with the real binary
@@ -760,6 +767,278 @@ Evidence recorded without a threshold:
 - E3: an audit confirming that no retained behavior needs a resident process.
 - E4: the cost of `quick_check` and `integrity_check` on fixture L, justifying
   their move to `doctor` and maintenance.
+
+#### Gate results
+
+`V2DFC-001` measured the gate on October 5, 2026 (UTC). Every harness verdict
+was pass, although the G5 harness admitted `WORKSPACE_NOT_INITIALIZED`, including
+the removal race described below. The completion review then found that the G1,
+G4, and G9 harness departed from the approved methods and that a prototype open
+could race a removal. After those corrections, G1, G2, G4, G5, and G9 were
+measured again the same day, and every check passed. The owner accepted the G4
+and G5 readings below after measurement. These results are the baseline that
+`V2DFC-002` summarizes and that `V2DFC-007` re-measures against.
+
+Conditions:
+
+- Host: Apple M5 Pro with 18 logical CPUs and 64 GiB of memory, macOS 27.0.1
+  (26A434), AC power, Low Power Mode off. Other work shared the host; the load
+  average rose from about 4 to between 8 and 10 during each run. During the L
+  daemon block of the first run, an unrelated reinstall replaced the installed
+  binaries and launchd restarted the production daemon. The gate never addressed
+  that daemon, and iteration times around the restart stayed on trend.
+- Build: release profile, Rust 1.97.1, and the bundled SQLite, for both paths.
+- Commit: base `32082fe` plus the prototype as committed by `V2DFC-001`. G1, G2,
+  the 1,024-node run, G4, G5, and G9 ran on that prototype. G3, G6, G7, G8, G10,
+  E1, and E4 ran on the first candidate, which differed only in the G1, G4, G5,
+  and G9 harness code and in the error an open reports when the Store or a lock
+  file disappears during maintenance; none of those paths runs in these checks.
+- Statistics: nearest-rank percentiles over measured samples, excluding
+  warm-up. Times are milliseconds, given as p50 / p95 / p99 / max.
+- Raw logs and samples stayed in the ignored `artifacts/` directory.
+
+Fixtures and workload:
+
+- The G7 fixtures and G1, G2, G5, and G9 use one Procedure: a 300-node linear
+  chain whose nodes reuse one definition with 16 optional text items
+  (`max_length` 65,536). G3 and G4 use an 8-node chain of that definition, G6 a
+  3-node chain with an added artifact item, and G10 a 3-node session.
+- S starts a session at the first node. M fills the first node with six
+  `record --stdin` batches of 16 items × 55,000 characters and completes it. L
+  repeats that fill node by node until the main database reaches at least
+  43,384,832 bytes, the largest single Store observed on the maintainer host; it
+  reached 45,150,208 bytes after seven nodes. The daemon built every fixture
+  through supported commands.
+- G1, G2, G5, and G9 start a fresh session of the same Procedure, as the owner
+  decided before measurement. G1 and G5 write 64-character values; G9 writes
+  4,096-character values. A G1 and G2 run at 1,024 nodes, the maximum Procedure
+  size, is information only.
+
+Method notes:
+
+- G7 daemon path: the release `podway` runs `--socket <runtime socket> --json`
+  against an isolated release-qualification `podwayd`. This is the production
+  CLI exchange without the managed runtime's per-call hashing of both binaries.
+- G7 direct path: the release example `v2dfc001_direct` performs the whole
+  invocation: argument parsing, Git resolution, classification, the shared lock,
+  the open with its identity checks, payload validation and the canonical
+  request digest, the transaction, the projection or result envelope, the
+  shipped result validator, and JSON output.
+- G7 iteration: `observe`; `set` with 4,096 characters; `record --stdin` with
+  16 items of 4,096 characters; and `complete`, which advances the chain. Every
+  mutation is fenced and carries an idempotency key. The daemon path runs as
+  shipped, including the session-status preflight of `set` and `complete`.
+- G7 blocks: for each fixture, 20 warm-up and 220 measured iterations ran on the
+  daemon from a runtime-state snapshot. The same snapshot was then restored at
+  the same path and converted to the prototype for the direct path. The driver
+  ran the three daemon blocks first and then the three direct blocks. Both paths
+  slow as a block accumulates history. From the first to the last 24
+  iterations, the mean daemon iteration grew from 2.1 to 10.5 s on S and from
+  10.8 to 19.4 s on L; the direct iteration grew from 0.35 to 0.58 s on S and
+  from 0.41 to 0.64 s on L.
+- G1: each writer mixes `set`, `record`, and `complete` 78:20:2, retries every
+  success with the same key, and retries a stale fence with a new key.
+- G2 times every IMMEDIATE transaction of G1 from its hooks: commits, same-key
+  replays, and fence rejections. The wait ends when BEGIN returns; the hold ends
+  at COMMIT or when the rolled-back attempt returns.
+- G3: a controller holds the write lock from before each attempt until after it
+  returns, which outlasts the 500 ms deadline.
+- G4: random delays span the median writer lifetime, and only kills that ended a
+  live writer count toward the 200. Kills at each reset-all step cover the fifth
+  boundary; G5 kills removal at each of its steps.
+- G5: each cycle runs one reset-all and one removal followed by re-creation, and
+  kills each operation once at every marker step before its exact retry.
+- G8 follows G7 on S and M. On L it follows E1, which restored L from its fixture
+  snapshot, and E4 follows G8 on that Store.
+- G9: a monitor holds one idle connection for the whole run, so the WAL cannot
+  shrink by being deleted on the last close. Each writer owes a `complete` every
+  192nd attempt, up to 36, and retries it until it lands.
+- G10: generations 1, 4, 10, and 13, each with the generation in the header and
+  with the generation only in the WAL's page 1; each daemon-era marker alone;
+  and generation 13 with every marker.
+
+| ID | Sample | Result | Verdict |
+|---|---|---|---|
+| G1 | 8 writers × 1,000 acknowledged mutations, each replayed with its key; 4,280 stale-fence rejections retried; 2 observers with 56,637 reads | 0 lost or unacknowledged commits, 0 stale-fence commits, 0 `SQLITE_BUSY` at a caller, and 0 observer violations; replaying the outcome log reproduces the final state, which also rules out duplicated effects | Pass |
+| G2 | 20,280 IMMEDIATE transactions: 8,000 commits, 8,000 replays, and 4,280 rejections | Wait 25.7 / 87.5 / 131.2 / 269.6; hold 3.61 / 12.1 / 13.0 / 22.8; the slowest writer took 1.06× the fastest | Pass |
+| G3 | 200 attempts after 20 warm-up attempts | Every attempt returned `WORKSPACE_BUSY` with no outcome and no state change, in 500.4 / 500.7 / 500.9 / 501.5 | Pass |
+| G4 | 300 kills: 20 at each transaction boundary, 20 across the reset-all steps, and 200 random kills that ended a live writer, 155 of them before the commit, from 311 attempts | The cheap open succeeded after every transaction and random kill and after 8 reset-all kills; after the other 12, which left the reset marker in place, it returned `WORKSPACE_MAINTENANCE` until the exact retry completed the reset. Every key showed one effect with a record and a replay, or no effect and one apply on retry; the final `integrity_check` returned ok | Pass |
+| G5 | 100 cycles with 1,100 maintenance runs, 800 of them killed, against 4 writers and 4 readers | 0 of 1,204 acknowledged commits lost; every interrupted operation completed once; exclusive acquisition 0.10 / 38.4 / 39.3 / 41.6 over 1,000 acquisitions; contender outcomes below | Pass |
+| G6 | 500 state and 500 artifact races | 1,000 rejected (500 `PRECONDITION_FAILED`, 500 `ARTIFACT_CHANGED`); 0 stale commits | Pass |
+| G7 | 220 runs per command, path, and fixture | Every direct sample was faster than every daemon sample in all 12 cells | Pass |
+| G8 | 220 opens per mode and state | L warm p99 0.42; L cold p99 2.07 | Pass |
+| G9 | 600 s with 8 writers and 4 readers, sampled every 100 ms | 14,457 writes and 128 completes committed; the WAL peaked at 5.14 MiB under load and was 3.66 MiB 5 s after load stopped | Pass |
+| G10 | 13 cases | Every case returned `LEGACY_RUNTIME_STATE_UNSUPPORTED` with the `podway reset --all --yes` recipe, left the SHA-256 of every file unchanged, and created no `-shm` file | Pass |
+
+By transaction kind, G2 commits waited 21.5 / 74.6 / 111.2 / 226.2 and held
+10.9 / 12.5 / 13.9 / 22.8, replays waited 25.8 / 88.9 / 130.6 / 269.6 and held
+at most 0.43, and rejections waited 33.7 / 104.6 / 159.7 / 244.2 and held
+3.61 / 4.57 / 4.98 / 6.07.
+
+G4's threshold says the cheap open succeeds after every kill. While a kill
+leaves a reset marker in place, section 4.6 requires `WORKSPACE_MAINTENANCE`
+instead. The harness accepted that outcome before measurement without disclosing
+it, and the owner accepted this reading after measurement.
+
+G5 contender outcomes in the re-run were 1,204 successful writes, 1,228
+successful reads, 20,546 `WORKSPACE_MAINTENANCE`, and 11,242
+`WORKSPACE_NOT_INITIALIZED`, and nothing else. The harness admitted
+`WORKSPACE_NOT_INITIALIZED` without prior owner approval. In the first run, an
+open waiting on the shared lock while a removal deleted the lock files also
+returned it although the removal marker remained. The corrected prototype
+re-checks the marker when the Store or a lock file is missing and reports
+`WORKSPACE_MAINTENANCE` while a marker remains, so in the re-run
+`WORKSPACE_NOT_INITIALIZED` comes from opens that found a file missing and no
+marker. In G5 that means after a removal unlinked its marker and before
+re-creation; this follows from the code, because the contender logs do not
+record when each outcome occurred. The owner accepted that outcome after
+measurement as one that a removal necessarily causes.
+
+G7 results (220 measured runs per cell):
+
+| Fixture | Command | Daemon | Direct |
+|---|---|---|---|
+| S | `observe` | 684.4 / 1,056.5 / 1,088.8 / 1,092.7 | 90.6 / 106.2 / 112.0 / 118.9 |
+| S | `set` | 2,163.7 / 3,405.2 / 3,518.2 / 3,525.0 | 113.6 / 142.4 / 150.7 / 154.1 |
+| S | `record --stdin` | 1,659.3 / 2,616.8 / 2,669.5 / 2,697.0 | 133.4 / 169.9 / 184.7 / 202.4 |
+| S | `complete` | 2,210.2 / 3,494.5 / 3,609.9 / 3,689.3 | 133.7 / 171.9 / 194.4 / 208.3 |
+| M | `observe` | 806.7 / 1,198.0 / 1,290.0 / 1,603.6 | 94.2 / 106.0 / 109.5 / 119.8 |
+| M | `set` | 2,605.7 / 3,863.6 / 4,027.0 / 6,445.3 | 119.4 / 142.3 / 147.9 / 162.9 |
+| M | `record --stdin` | 1,961.8 / 2,945.5 / 3,545.5 / 3,914.9 | 137.1 / 167.8 / 183.0 / 205.0 |
+| M | `complete` | 2,631.0 / 3,906.6 / 4,422.4 / 4,743.9 | 139.6 / 174.1 / 183.4 / 248.5 |
+| L | `observe` | 1,562.9 / 1,929.4 / 1,977.0 / 2,093.9 | 98.4 / 111.1 / 121.0 / 127.1 |
+| L | `set` | 5,075.6 / 6,357.6 / 7,659.0 / 8,435.0 | 130.9 / 157.1 / 165.1 / 207.7 |
+| L | `record --stdin` | 3,808.6 / 4,832.0 / 5,194.8 / 5,615.7 | 153.3 / 183.5 / 188.9 / 196.2 |
+| L | `complete` | 5,121.5 / 6,512.4 / 7,054.9 / 7,747.9 | 156.8 / 192.6 / 203.4 / 222.6 |
+
+A managed-mode control on S ran after the S block on its grown Store, so history
+growth confounds any comparison with the block; it is information only.
+
+G8 results (220 measured opens per cell; each hot WAL was about 4.2 MB):
+
+| Fixture | Database bytes | Read-only warm | Mutation warm | Read-only cold | Mutation cold |
+|---|---:|---|---|---|---|
+| S | 37,335,040 | 0.29 / 0.34 / 0.41 / 0.45 | 0.29 / 0.33 / 0.38 / 0.41 | 1.33 / 1.50 / 1.69 / 1.83 | 1.37 / 1.55 / 1.66 / 1.83 |
+| M | 43,581,440 | 0.29 / 0.34 / 0.43 / 0.46 | 0.30 / 0.38 / 0.46 / 0.60 | 1.38 / 5.29 / 6.00 / 6.32 | 1.33 / 1.53 / 1.64 / 2.42 |
+| L | 78,041,088 | 0.29 / 0.32 / 0.39 / 0.41 | 0.29 / 0.35 / 0.42 / 0.45 | 1.40 / 1.73 / 2.07 / 2.42 | 1.40 / 1.53 / 1.79 / 2.24 |
+
+The 1,024-node run, information only, acknowledged 8 × 200 mutations with 0
+lost, unacknowledged, or stale-fence commits. Over its 4,018 IMMEDIATE
+transactions, wait was 71.5 / 261.5 / 392.0 / 632.8 and hold 11.0 / 32.3 /
+34.4 / 42.7, and the slowest writer took 1.11× the fastest. Its commits alone
+held 30.9 / 33.3 / 39.7 / 42.7.
+
+E1, direct-path phases on L (200 measured runs per command, p50 / p95):
+
+| Phase | `observe` | `set` | `record --stdin` | `complete` |
+|---|---|---|---|---|
+| Git resolution | 1.43 / 1.71 | 1.41 / 1.59 | 1.43 / 1.68 | 1.42 / 1.71 |
+| Classification, lock, and open | 0.80 / 0.94 | 0.94 / 1.23 | 0.81 / 0.93 | 0.82 / 0.97 |
+| Preparation | — | 0.05 / 0.06 | 0.24 / 0.26 | 23.8 / 33.6 |
+| Result-validator compilation | 63.5 / 69.7, with the envelope | 63.6 / 70.9 | 63.3 / 71.8 | 63.8 / 71.8 |
+| Snapshot read and projection | 24.2 / 33.6 and 0.91 / 1.02 | — | — | — |
+| Transaction, including the response | — | 56.4 / 79.9 | 78.1 / 104.9 | 56.1 / 79.5 |
+| Whole invocation | 93.8 / 105.1 | 123.7 / 146.6 | 146.7 / 173.2 | 147.8 / 182.4 |
+
+Argument parsing, input decoding, and output each took at most 1.4 ms at p95.
+
+E2 lists 1,510 tests at base `32082fe` with
+`cargo test --workspace --locked -- --list` and classifies them by top-level
+module:
+
+| Crate | Port | Rewrite | Retire | Unaffected |
+|---|---:|---:|---:|---:|
+| `podway-cli` | 0 | 96 | 41 | 0 |
+| `podway-config` | 0 | 6 | 0 | 273 |
+| `podway-core` | 0 | 5 | 2 | 98 |
+| `podway-daemon` | 236 | 37 | 154 | 0 |
+| `podway-git` | 0 | 6 | 0 | 57 |
+| `podway-presets` | 0 | 0 | 0 | 2 |
+| `podway-protocol` | 0 | 131 | 22 | 15 |
+| `podway-service` | 0 | 0 | 112 | 0 |
+| `podway-store` | 169 | 14 | 34 | 0 |
+| Total | 405 | 295 | 365 | 445 |
+
+- Port: domain behavior that keeps its meaning and moves to the engine or the
+  direct Store, such as the daemon's dispatcher-level Procedure tests and the
+  Store's relational tests.
+- Rewrite: surfaces whose contract changes, such as the CLI command surface,
+  end-to-end qualification, protocol envelopes and the result contract, reset
+  and removal, the schema, and architecture contracts.
+- Retire: deleted infrastructure, such as IPC framing, the scheduler, server,
+  registry, observability, endpoints, startup recovery, the service crate,
+  runtime modes, runtime reset plans, and legacy-schema migration.
+- Unaffected: Procedure authoring and validation, pure core types, Git
+  resolution, and presets.
+
+A module that mixes kinds counts under its main kind, so the tasks that move
+tests classify them individually.
+
+E3, resident-behavior audit:
+
+| Resident behavior today | Direct model |
+|---|---|
+| Connection threads and IPC framing | Retired; the command runs in the invoking process |
+| Scheduler queue, condition variables, and the detached drain of admitted jobs | The SQLite write lock and fences; each mutation commits inside its command |
+| Startup recovery and post-admission reconstruction | Retired; no admitted but uncommitted state exists, and markers resume on an exact retry |
+| Observability writer thread and log flushing | Retired; command error envelopes and the Store's bounded journal (section 4.8) |
+| Workspace registry and its pruning | Retired with `~/.podway` (section 4.8) |
+| Readiness, the signal relay, and the LaunchAgent | Retired |
+| Outcome and journal retention | Pruned inside the mutation transaction |
+
+No lease, timer, or expiry in `podway-core`, `podway-store`, or `podway-config`
+needs a running process.
+
+E4, on L at 78,868,480 bytes after E1 and G8 (20 measured runs after 3 warm-up
+runs): `quick_check` 12.6 / 13.0 / 13.1 / 13.1 and `integrity_check` 20.9 /
+21.6 / 21.9 / 21.9.
+
+#### Gate findings for later tasks
+
+These items hand gate evidence to the named tasks. Each consuming task updates
+or removes its item when it acts on it, and `V2DFC-002` decides whether any item
+changes a design decision in this dossier.
+
+- Transaction cost grows with the session (`V2DFC-002`, `V2DFC-005`,
+  `V2DFC-006`). Each prototype mutation loads the whole session state, and the
+  existing relational helper reloads and validates the whole successor, so the
+  cost grows with both Procedure size and session content. G1 and G2 ran on a
+  fresh session with 64-character values: commits held 13.9 ms at p99 on 300
+  nodes and 39.7 ms on the 1,024-node maximum, where wait p99 reached 392.0 ms,
+  above the G2 threshold. On L, E1's uncontended transaction phase, which also
+  closes the connection, took 56.1 ms (`complete`) to 78.1 ms (`record --stdin`)
+  at p50, above the G2 hold bound of 50 ms. Bound per-transaction work, for
+  example by writing only changed rows, and re-run G1 and G2 on an L-scale
+  session and at 1,024 nodes before relying on G2 for realistic Stores.
+- Busy waiting (`V2DFC-005`). SQLite's default busy handler backs off up to
+  100 ms per retry, which lets a waiter lose many consecutive releases. The
+  prototype retries the write lock every 100 µs plus 0 to 400 µs of random
+  jitter until the command deadline; with it, the slowest of eight G1 writers
+  finished within 1.06× the fastest.
+- WAL bound (`V2DFC-005`). In development runs, `journal_size_limit` of 4 MiB
+  alone left the WAL at that limit after load. When a mutation connection closes
+  with the WAL above 4 MiB, the prototype runs `wal_checkpoint(TRUNCATE)` with up
+  to 100 ms of busy waiting, which produced the G9 result.
+- Classification (`V2DFC-005`). A Store whose header still reads `user_version`
+  0 can carry its generation only in the WAL, so the classifier reads the last
+  committed page 1 from the WAL. Maintenance that sets the generation should
+  checkpoint so that the header carries it.
+- Maintenance race (`V2DFC-005`). An open that passes the first marker check
+  can race a reset or removal that deletes the Store or its lock files. The
+  first G5 run reported `WORKSPACE_NOT_INITIALIZED` there; the prototype now
+  re-checks the marker when either is missing and reports
+  `WORKSPACE_MAINTENANCE` while a marker remains. Keep that re-check. A reset can
+  also finish between the missing file and the re-check, so when no marker
+  remains, re-classify within the deadline instead of reporting
+  `WORKSPACE_NOT_INITIALIZED`.
+- Validator compilation (`V2DFC-006`). Compiling the shipped result validators
+  took about 63 ms of every direct invocation on L, 43 to 68% of the total (E1),
+  so startup cost matters: compile lazily per schema.
+- Re-measurement (`V2DFC-007`). G7 depends on block history, so re-measure with
+  the same fixture recipes, payloads, block order, and 20 + 220 iterations per
+  block, and compare the real binary with the daemon columns above. G8's L Store
+  carried E1's 220 iterations, so a matched G8 re-measurement repeats them first.
+  `tools/v2dfc_gate.py` runs that protocol until `V2DFC-007` deletes it.
 
 ### 7.2 Stop rule
 

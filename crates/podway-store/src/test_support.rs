@@ -1,5 +1,7 @@
 //! Test-only compatibility fixtures for Store integration consumers.
 
+pub mod v2dfc001;
+
 use std::path::Path;
 
 use podway_core::{
