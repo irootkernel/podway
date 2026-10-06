@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:session-id-mismatch-details:v3",
+  "title": "Podway Session Id Mismatch Details v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "expected_session_id",
+    "actual_session_id",
+    "recovery"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.session-id-mismatch-details/v3"
+    },
+    "expected_session_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "actual_session_id": {
+      "oneOf": [
+        {
+          "type": "string",
+          "format": "uuid"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "recovery": {
+      "$ref": "urn:podway:schema:recovery-recipe:v2",
+      "properties": {
+        "action": {
+          "const": "refresh_state"
+        },
+        "command": {
+          "const": "session.observe"
+        },
+        "requires_explicit_authorization": {
+          "const": false
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:workspace-recovery-details:v2",
+  "title": "Podway Workspace Recovery Details v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "recovery"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.workspace-recovery-details/v2"
+    },
+    "recovery": {
+      "$ref": "urn:podway:schema:recovery-recipe:v2",
+      "properties": {
+        "action": {
+          "const": "diagnose_workspace"
+        },
+        "command": {
+          "const": "workspace.doctor"
+        },
+        "requires_explicit_authorization": {
+          "const": false
+        }
+      }
+    }
+  },
+  "$defs": {},
+  "$comment": "Reserved by V2DFC-003; not emitted before the owning daemon-free cutover task."
+}

@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:legacy-runtime-state-unsupported-details:v1",
+  "title": "Podway Legacy Runtime State Unsupported Details v1",
+  "$comment": "Reserved by V2DFC-003; not emitted before the owning daemon-free cutover task.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "store_schema_version",
+    "markers",
+    "recovery"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.legacy-runtime-state-unsupported-details/v1"
+    },
+    "store_schema_version": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "maximum": 13
+    },
+    "markers": {
+      "type": "array",
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "reset.marker",
+          "workspace-removal.marker",
+          "mode-switch.json",
+          "development-v2.marker"
+        ]
+      }
+    },
+    "recovery": {
+      "$ref": "urn:podway:schema:recovery-recipe:v2",
+      "properties": {
+        "action": {
+          "const": "reset_legacy_state"
+        },
+        "command": {
+          "const": "workspace.reset_all"
+        },
+        "requires_explicit_authorization": {
+          "const": true
+        }
+      }
+    }
+  }
+}

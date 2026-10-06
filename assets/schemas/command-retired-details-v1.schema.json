@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:command-retired-details:v1",
+  "title": "Podway Command Retired Details v1",
+  "$comment": "Reserved by V2DFC-003; not emitted before the owning daemon-free cutover task.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "retired",
+    "replacement",
+    "guidance"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.command-retired-details/v1"
+    },
+    "retired": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "replacement": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "guidance": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    }
+  }
+}

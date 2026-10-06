@@ -556,6 +556,27 @@ Done when `tools/verify_contracts.py --check`, `--sentinels`,
 `tools/contract_manifest.py --check`, the Dolgorae handoff self-test, the
 protocol family tests, and `make test` pass, and runtime output is unchanged.
 
+#### Integration delta reserved by V2DFC-003
+
+Aquarium's Podway integration must consume output v4 and error v2, direct
+mutation success and read-only outcome lookup. It must replace job/admission
+settlement with committed outcomes, remove daemon readiness and runtime-mode
+routing, and use scratch worktrees for development isolation. The single-cursor
+Procedure v2 lifecycle, fences, Goal/evidence/delegation semantics, input/output
+bounds and idempotency requirements remain. This repository reserves the new
+schemas and records the handoff; it does not modify Aquarium or claim consumer
+qualification.
+
+Dolgorae must adopt a new adapter generation in its own repository. The current
+v2 adapter catalog is regenerated with the reserved route, schema pins, new
+error entries, retired-command table and Store baseline. Its explicit
+`daemon_free_reservations` block distinguishes the planned cutover from the
+still-shipped output-v3/error-v1 envelope dispatch. `V2DFC-009` owns the new
+single-binary release adapter generation; registration here neither activates
+that release nor proves Dolgorae adoption. Consumers must use exact manifest
+identity and the reserved availability rather than infer capabilities from
+version text.
+
 ### V2DFC-004: Extract host-independent domain services into podway-engine
 
 Purpose: move domain logic out of the daemon crate without changing behavior.

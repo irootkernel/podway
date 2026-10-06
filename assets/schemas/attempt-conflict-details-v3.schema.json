@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:attempt-conflict-details:v3",
+  "title": "Podway Attempt Conflict Details v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "expected_attempt_id",
+    "recovery"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.attempt-conflict-details/v3"
+    },
+    "expected_attempt_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "actual_attempt_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "recovery": {
+      "$ref": "urn:podway:schema:recovery-recipe:v2",
+      "properties": {
+        "action": {
+          "const": "refresh_state"
+        },
+        "command": {
+          "const": "session.observe"
+        },
+        "requires_explicit_authorization": {
+          "const": false
+        }
+      }
+    }
+  },
+  "$comment": "Reserved by V2DFC-003; not emitted before the owning daemon-free cutover task."
+}

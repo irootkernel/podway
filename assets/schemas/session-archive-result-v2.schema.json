@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:session-archive-result:v2",
+  "title": "Podway Session Archive Result v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "session_id",
+    "session_revision",
+    "activity",
+    "lifecycle"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.session-archive-result/v2"
+    },
+    "session_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "session_revision": {
+      "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/runningSessionRevision"
+    },
+    "activity": {
+      "const": "inactive"
+    },
+    "lifecycle": {
+      "enum": [
+        "completed",
+        "cancelled"
+      ]
+    }
+  },
+  "$comment": "Reserved by V2DFC-003; not emitted before the owning daemon-free cutover task."
+}

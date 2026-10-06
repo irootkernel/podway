@@ -466,3 +466,29 @@ Error details may include local paths needed for remediation. They MUST NOT incl
 - file contents;
 - secrets or access tokens;
 - artifact bytes.
+
+## Reserved daemon-free errors
+
+`V2DFC-003` reserves these entries without changing shipped error envelopes:
+
+| Code | Exit | Retryable | Detail schema |
+|---|---:|---:|---|
+| `WORKSPACE_BUSY` | 4 | yes | `podway.workspace-busy-details/v1` |
+| `LEGACY_RUNTIME_STATE_UNSUPPORTED` | 5 | no | `podway.legacy-runtime-state-unsupported-details/v1` |
+| `WORKSPACE_CONTRACT_MISMATCH` | 5 | no | `podway.workspace-contract-mismatch-details/v1` |
+| `COMMAND_RETIRED` | 2 | no | `podway.command-retired-details/v1` |
+
+The reserved error envelope is `podway.error/v2`. It excludes retired daemon,
+IPC, job, runtime-reset and workspace-mode failures and exit class 3. Existing
+error generations remain the shipped contract until `V2DFC-007`.
+`WORKSPACE_MAINTENANCE` keeps exit 4 and retryability, with reserved
+`podway.workspace-maintenance-details/v1` for process-independent exclusion.
+`MUTATION_OUTCOME_UNKNOWN` is reserved for uncertain COMMIT I/O only; its new
+details point to read-only `outcome.lookup`, never job lookup or a new mutation.
+
+The canonical [retired-command table](../../../assets/specifications/retired-commands-v1.json)
+is reserved for cutover. Every listed command and flag must then fail before
+Store access. A null replacement means no replacement exists. Maintenance
+recipes distinguish read-only diagnosis from destructive reset or exact retry;
+destructive recipes require explicit authorization and preserve the operation's
+idempotency key. Merely reading a recipe never resumes maintenance.

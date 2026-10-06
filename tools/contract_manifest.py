@@ -32,6 +32,8 @@ STATIC_ASSETS = {
     "spec/authoring-diagnostics.json": "catalog",
     "spec/command-catalog.yaml": "catalog",
     "spec/error-codes.json": "catalog",
+    "spec/retired-commands-v1.json": "catalog",
+    "spec/sqlite-v14.sql": "store_schema",
     "spec/state-transition-matrix.csv": "transition_matrix",
     "spec/canonicalization-v1.json": "canonicalization_rules",
 }

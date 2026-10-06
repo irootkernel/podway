@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:workspace-reset-marker:v1",
+  "title": "Podway Workspace Reset Marker v1",
+  "$comment": "Reserved by V2DFC-003; not emitted before the owning daemon-free cutover task.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "operation_id",
+    "idempotency_key",
+    "request_digest",
+    "response_request_id",
+    "workspace_uuid",
+    "root_identity",
+    "contract_manifest_digest",
+    "created_at",
+    "command",
+    "phase"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.workspace-reset-marker/v1"
+    },
+    "operation_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "request_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "response_request_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "workspace_uuid": {
+      "oneOf": [
+        {
+          "type": "string",
+          "format": "uuid"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "root_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root_path_bytes_base64url",
+        "common_dir_identity",
+        "worktree_admin_identity"
+      ],
+      "properties": {
+        "root_path_bytes_base64url": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 5462,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "common_dir_identity": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "worktree_admin_identity": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "contract_manifest_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "command": {
+      "const": "workspace.reset_all"
+    },
+    "phase": {
+      "enum": [
+        "prepared",
+        "runtime_removed",
+        "store_created"
+      ]
+    }
+  }
+}

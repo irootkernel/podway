@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:terminal-disposition-result:v2",
+  "title": "Podway Terminal Disposition Result v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "session_id",
+    "session_revision",
+    "disposition"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.terminal-disposition-result/v2"
+    },
+    "session_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "session_revision": {
+      "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/runningSessionRevision"
+    },
+    "disposition": {
+      "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/terminalDisposition"
+    }
+  },
+  "$comment": "Reserved by V2DFC-003; not emitted before the owning daemon-free cutover task."
+}

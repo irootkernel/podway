@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:session-archive-not-found-details:v2",
+  "title": "Podway Session Archive Not Found Details v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "session_id"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.session-archive-not-found-details/v2"
+    },
+    "session_id": {
+      "type": "string",
+      "format": "uuid"
+    }
+  },
+  "$comment": "Reserved by V2DFC-003; not emitted before the owning daemon-free cutover task."
+}

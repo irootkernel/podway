@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:item-mutation-result:v3",
+  "title": "Podway Item Mutation Result v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "changed",
+    "graph_node_id",
+    "attempt_id",
+    "attempt_number",
+    "item_id",
+    "revision"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.item-mutation-result/v3"
+    },
+    "changed": {
+      "type": "boolean"
+    },
+    "graph_node_id": {
+      "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/identifier"
+    },
+    "attempt_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "attempt_number": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 18446744073709551615
+    },
+    "item_id": {
+      "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/identifier"
+    },
+    "revision": {
+      "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/runningSessionRevision"
+    },
+    "value_digest": {
+      "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/digest"
+    }
+  },
+  "$comment": "Reserved by V2DFC-003; not emitted before the owning daemon-free cutover task."
+}

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:workspace-init-result:v2",
+  "title": "Podway Workspace Initialization Result v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "initialized",
+    "revision"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.workspace-init-result/v2"
+    },
+    "initialized": {
+      "const": true
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    }
+  },
+  "$comment": "Reserved by V2DFC-003; not emitted before the owning daemon-free cutover task."
+}

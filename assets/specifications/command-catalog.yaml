@@ -1073,3 +1073,15 @@ commands:
   destructive_confirmation: false
   result_schemas:
   - podway.runtime-reset-control-result/v1
+- name: outcome.lookup
+  availability: reserved_contract
+  cli:
+  - outcome
+  - lookup
+  operation: query
+  workspace_required: true
+  durable_job: false
+  session_mutation: false
+  destructive_confirmation: false
+  result_schemas:
+  - podway.outcome-lookup-result/v1

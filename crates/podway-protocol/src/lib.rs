@@ -38,13 +38,14 @@ pub use release_contract::{
 use result_contract::is_v2_mutation_contract_command;
 pub use result_contract::validate_runtime_reset_control_request_v1;
 pub use result_contract::{
-    EXISTING_ROUTE_RESULT_SCHEMAS_V2, MAX_V2_OUTPUT_WARNINGS, MAX_V2_TERMINAL_ERROR_BYTES,
+    DAEMON_FREE_DOCUMENT_SCHEMAS_V1, EXISTING_ROUTE_RESULT_SCHEMAS_V2, MAX_DIRECT_INPUT_BYTES_V1,
+    MAX_DIRECT_OUTPUT_BYTES_V1, MAX_V2_OUTPUT_WARNINGS, MAX_V2_TERMINAL_ERROR_BYTES,
     MAX_V2_WARNING_CODE_CHARS, MAX_V2_WARNING_MESSAGE_CHARS, MAX_V2_WARNING_PATH_CHARS,
     NEW_ROUTE_RESULT_SCHEMAS_V1, OUTPUT_SCHEMA_V3, OutputEnvelopeInputV3, OutputEnvelopeV3,
     PROCEDURE_DIAGNOSTICS_RESULT_SCHEMA_V1, ResultSchemaContractV2, SUPPORTED_OUTPUT_SCHEMAS_V3,
     V2_MUTATION_COMMANDS, decode_result_schema_contract_v2,
     ensure_procedure_independent_result_schema_v1, result_schema_top_level_fields_v2,
-    validate_command_result_v2, validate_delegation_document_v1,
+    validate_command_result_v2, validate_daemon_free_document_v1, validate_delegation_document_v1,
     validate_procedure_independent_result_v1, validate_v2_output_warnings,
 };
 pub use slice::*;
@@ -1983,6 +1984,26 @@ const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
         code: "EVIDENCE_PAGE_TOKEN_STALE",
         exit_code: 4,
         retryable: true,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "WORKSPACE_BUSY",
+        exit_code: 4,
+        retryable: true,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "LEGACY_RUNTIME_STATE_UNSUPPORTED",
+        exit_code: 5,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "WORKSPACE_CONTRACT_MISMATCH",
+        exit_code: 5,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "COMMAND_RETIRED",
+        exit_code: 2,
+        retryable: false,
     },
 ];
 /// Returns the complete frozen public error catalog in wire order.

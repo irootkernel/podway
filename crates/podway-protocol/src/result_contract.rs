@@ -3304,3 +3304,365 @@ mod tests {
         );
     }
 }
+
+/// Unemitted daemon-free documents; registration never enables a shipped route.
+pub const DAEMON_FREE_DOCUMENT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
+    result_schema_v2(
+        "podway.session-archive-limit-details/v2",
+        "schemas/session-archive-limit-details-v2.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        "podway.attempt-conflict-details/v3",
+        "schemas/attempt-conflict-details-v3.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        "podway.blocker-limit-details/v2",
+        "schemas/blocker-limit-details-v2.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        "podway.command-retired-details/v1",
+        "schemas/command-retired-details-v1.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        "podway.compact-status-result/v5",
+        "schemas/compact-status-result-v5.schema.json",
+        &["session.status"],
+    ),
+    result_schema_v2(
+        "podway.contract-manifest/v2",
+        "schemas/contract-manifest-v2.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        "podway.criterion-assessment-result/v2",
+        "schemas/criterion-assessment-result-v2.schema.json",
+        &["goal.assess_criterion"],
+    ),
+    result_schema_v2(
+        "podway.decision-result/v2",
+        "schemas/decision-result-v2.schema.json",
+        &["session.decide"],
+    ),
+    result_schema_v2(
+        "podway.delegation-accept-result/v2",
+        "schemas/delegation-accept-result-v2.schema.json",
+        &["delegation.accept"],
+    ),
+    result_schema_v2(
+        "podway.delegation-error-details/v2",
+        "schemas/delegation-error-details-v2.schema.json",
+        &[],
+    ),
+    result_schema_v2("podway.error/v2", "schemas/error-v2.schema.json", &[]),
+    result_schema_v2(
+        "podway.goal-definition-result/v2",
+        "schemas/goal-definition-result-v2.schema.json",
+        &["goal.define"],
+    ),
+    result_schema_v2(
+        "podway.goal-revision-result/v2",
+        "schemas/goal-revision-result-v2.schema.json",
+        &["goal.revise"],
+    ),
+    result_schema_v2(
+        "podway.idempotency-key-reused-details/v2",
+        "schemas/idempotency-key-reused-details-v2.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        "podway.internal-error-details/v2",
+        "schemas/internal-error-details-v2.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        "podway.item-mutation-result/v3",
+        "schemas/item-mutation-result-v3.schema.json",
+        &[
+            "item.check",
+            "item.uncheck",
+            "item.set",
+            "item.add",
+            "item.remove",
+            "item.attach",
+            "item.clear",
+        ],
+    ),
+    result_schema_v2(
+        "podway.item-record-many-result/v2",
+        "schemas/item-record-many-result-v2.schema.json",
+        &["item.record_many"],
+    ),
+    result_schema_v2(
+        "podway.legacy-runtime-state-unsupported-details/v1",
+        "schemas/legacy-runtime-state-unsupported-details-v1.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        "podway.mutation-outcome-unknown-details/v3",
+        "schemas/mutation-outcome-unknown-details-v3.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        "podway.next-result/v5",
+        "schemas/next-result-v5.schema.json",
+        &["session.next"],
+    ),
+    result_schema_v2(
+        "podway.observation-result/v5",
+        "schemas/observation-result-v5.schema.json",
+        &["session.observe"],
+    ),
+    result_schema_v2(
+        "podway.outcome-lookup-result/v1",
+        "schemas/outcome-lookup-result-v1.schema.json",
+        &["outcome.lookup"],
+    ),
+    result_schema_v2("podway.output/v4", "schemas/output-v4.schema.json", &[]),
+    result_schema_v2(
+        "podway.prepared-next-result/v3",
+        "schemas/prepared-next-result-v3.schema.json",
+        &["session.next"],
+    ),
+    result_schema_v2(
+        "podway.procedure-digest-mismatch-details/v3",
+        "schemas/procedure-digest-mismatch-details-v3.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        "podway.recoverable-v2-runtime-error-details/v2",
+        "schemas/recoverable-v2-runtime-error-details-v2.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        "podway.recovery-recipe/v2",
+        "schemas/recovery-recipe-v2.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        "podway.revision-conflict-details/v3",
+        "schemas/revision-conflict-details-v3.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        "podway.rework-result/v2",
+        "schemas/rework-result-v2.schema.json",
+        &["session.rework"],
+    ),
+    result_schema_v2(
+        "podway.session-archive-not-eligible-details/v2",
+        "schemas/session-archive-not-eligible-details-v2.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        "podway.session-archive-not-found-details/v2",
+        "schemas/session-archive-not-found-details-v2.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        "podway.session-archive-result/v2",
+        "schemas/session-archive-result-v2.schema.json",
+        &["session.archive"],
+    ),
+    result_schema_v2(
+        "podway.session-archive-show-result/v3",
+        "schemas/session-archive-show-result-v3.schema.json",
+        &["session.archive_show"],
+    ),
+    result_schema_v2(
+        "podway.session-begin-result/v2",
+        "schemas/session-begin-result-v2.schema.json",
+        &["session.begin"],
+    ),
+    result_schema_v2(
+        "podway.session-id-mismatch-details/v3",
+        "schemas/session-id-mismatch-details-v3.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        "podway.session-reset-not-eligible-details/v2",
+        "schemas/session-reset-not-eligible-details-v2.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        "podway.session-reset-result/v2",
+        "schemas/session-reset-result-v2.schema.json",
+        &["session.reset"],
+    ),
+    result_schema_v2(
+        "podway.session-start-decision-required-details/v2",
+        "schemas/session-start-decision-required-details-v2.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        "podway.session-start-result/v4",
+        "schemas/session-start-result-v4.schema.json",
+        &["session.start", "session.start_replace"],
+    ),
+    result_schema_v2(
+        "podway.session-start-state-conflict-details/v2",
+        "schemas/session-start-state-conflict-details-v2.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        "podway.stage-transition-result/v3",
+        "schemas/stage-transition-result-v3.schema.json",
+        &[
+            "session.complete",
+            "session.skip",
+            "session.retry",
+            "session.block",
+            "session.unblock",
+            "session.cancel",
+            "session.reset",
+        ],
+    ),
+    result_schema_v2(
+        "podway.status-result/v5",
+        "schemas/status-result-v5.schema.json",
+        &["session.status"],
+    ),
+    result_schema_v2(
+        "podway.terminal-disposition-result/v2",
+        "schemas/terminal-disposition-result-v2.schema.json",
+        &["session.terminal_disposition"],
+    ),
+    result_schema_v2(
+        "podway.v2-runtime-error-details/v2",
+        "schemas/v2-runtime-error-details-v2.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        "podway.version-result/v2",
+        "schemas/version-result-v2.schema.json",
+        &["version"],
+    ),
+    result_schema_v2(
+        "podway.workspace-busy-details/v1",
+        "schemas/workspace-busy-details-v1.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        "podway.workspace-contract-mismatch-details/v1",
+        "schemas/workspace-contract-mismatch-details-v1.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        "podway.workspace-init-result/v2",
+        "schemas/workspace-init-result-v2.schema.json",
+        &["workspace.init"],
+    ),
+    result_schema_v2(
+        "podway.workspace-maintenance-details/v1",
+        "schemas/workspace-maintenance-details-v1.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        "podway.workspace-maintenance-intent-marker/v1",
+        "schemas/workspace-maintenance-intent-marker-v1.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        "podway.workspace-recovery-details/v2",
+        "schemas/workspace-recovery-details-v2.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        "podway.workspace-removal-marker/v2",
+        "schemas/workspace-removal-marker-v2.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        "podway.workspace-removal-result/v2",
+        "schemas/workspace-removal-result-v2.schema.json",
+        &["workspace.remove"],
+    ),
+    result_schema_v2(
+        "podway.workspace-reset-marker/v1",
+        "schemas/workspace-reset-marker-v1.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        "podway.workspace-uuid-mismatch-details/v3",
+        "schemas/workspace-uuid-mismatch-details-v3.schema.json",
+        &[],
+    ),
+    result_schema_v2(
+        "podway.writer-predecessor-declaration/v1",
+        "schemas/writer-predecessor-declaration-v1.schema.json",
+        &[],
+    ),
+];
+
+/// Preserved input and output budgets, independent of IPC framing.
+pub const MAX_DIRECT_INPUT_BYTES_V1: usize = 1_048_576;
+pub const MAX_DIRECT_OUTPUT_BYTES_V1: usize = 1_048_576;
+
+static DAEMON_FREE_VALIDATORS_V1: OnceLock<Result<HashMap<&'static str, Validator>, String>> =
+    OnceLock::new();
+
+fn build_daemon_free_validators_v1() -> Result<HashMap<&'static str, Validator>, String> {
+    let retriever = embedded_schema_resources_v2()?;
+    let mut validators = HashMap::new();
+    for contract in DAEMON_FREE_DOCUMENT_SCHEMAS_V1 {
+        let filename = contract
+            .schema_path
+            .strip_prefix("schemas/")
+            .ok_or_else(|| "invalid daemon-free schema path".to_owned())?;
+        let source = embedded_schemas::EMBEDDED_JSON_SCHEMAS_V1
+            .iter()
+            .find(|(_, name, _)| *name == filename)
+            .ok_or_else(|| format!("missing daemon-free schema {filename}"))?
+            .2;
+        let mut schema: Value = serde_json::from_str(source).map_err(|error| error.to_string())?;
+        schema
+            .as_object_mut()
+            .ok_or_else(|| "invalid daemon-free schema object".to_owned())?
+            .remove("$id");
+        let validator = jsonschema::draft202012::options()
+            .with_base_uri(format!("{EMBEDDED_SCHEMA_BASE_V2}{filename}"))
+            .with_retriever(retriever.clone())
+            .should_validate_formats(true)
+            .build(&schema)
+            .map_err(|error| format!("daemon-free schema {filename} does not compile: {error}"))?;
+        validators.insert(contract.schema, validator);
+    }
+    Ok(validators)
+}
+
+/// Validate a reserved document explicitly, without changing runtime decoding.
+pub fn validate_daemon_free_document_v1(schema: &str, value: &Value) -> bool {
+    validate_json_document_depth(value).is_ok()
+        && serde_json::to_vec(value).is_ok_and(|bytes| bytes.len() <= MAX_DIRECT_OUTPUT_BYTES_V1)
+        && DAEMON_FREE_VALIDATORS_V1
+            .get_or_init(build_daemon_free_validators_v1)
+            .as_ref()
+            .ok()
+            .and_then(|validators| validators.get(schema))
+            .is_some_and(|validator| validator.is_valid(value))
+        && daemon_free_recovery_identity_v1(schema, value)
+}
+
+fn daemon_free_recovery_identity_v1(schema: &str, value: &Value) -> bool {
+    let details = match schema {
+        "podway.mutation-outcome-unknown-details/v3" => value,
+        "podway.error/v2" if value["code"] == "MUTATION_OUTCOME_UNKNOWN" => &value["details"],
+        _ => return true,
+    };
+    let Some(key) = details["idempotency_key"].as_str() else {
+        return false;
+    };
+    details["reconcile"]["idempotency_key"].as_str() == Some(key)
+        && details["recovery"]["argv"][5].as_str() == Some(key)
+}
+
+#[cfg(test)]
+mod daemon_free_tests {
+    #[test]
+    fn all_reserved_schemas_compile() {
+        super::build_daemon_free_validators_v1().expect("reserved schema compilation");
+    }
+}

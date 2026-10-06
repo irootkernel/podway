@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import re
 import shutil
+import sqlite3
 import tempfile
 import tomllib
 from typing import Any, Callable
@@ -183,6 +184,7 @@ SERVICE_COMMANDS = {
 PROHIBITED_CAPABILITIES = {"command_runner", "git_mutation", "network"}
 DEPENDENCY_TABLES = {"dependencies", "dev-dependencies", "build-dependencies"}
 V2_ROUTE_DELTA = {
+    "outcome.lookup",
     "runtime.reset.plan", "runtime.reset.apply", "daemon.runtime_reset",
     "procedure.format", "procedure.vet", "procedure.lint", "procedure.check",
     "procedure.graph", "procedure.preview", "procedure.scaffold",
@@ -511,13 +513,15 @@ def validate_v2_catalog_delta(root: Path) -> int:
         "DELEGATION_BINDING_MISMATCH",
         "DELEGATION_ALREADY_ACCEPTED",
     }
-    if not isinstance(entries, list) or len(entries) != 117:
+    if not isinstance(entries, list) or len(entries) != 121:
         fail("runtime error catalog must contain the v2-only error set")
     runtime_codes = [entry.get("code") for entry in entries if isinstance(entry, dict)]
     if len(runtime_codes) != len(entries) or len(set(runtime_codes)) != len(runtime_codes):
         fail("runtime error catalog codes must be unique strings")
     expected_codes = set(PROCEDURE_INDEPENDENT_RUNTIME_ERROR_CODES) | V2_RUNTIME_ERROR_CODES | delegation_errors | {
-        "LEGACY_PROCEDURE_STATE_UNSUPPORTED"
+        "LEGACY_PROCEDURE_STATE_UNSUPPORTED",
+        "WORKSPACE_BUSY", "LEGACY_RUNTIME_STATE_UNSUPPORTED",
+        "WORKSPACE_CONTRACT_MISMATCH", "COMMAND_RETIRED",
     }
     if set(runtime_codes) != expected_codes:
         fail("runtime error catalog omits a required v2-only code")
@@ -579,6 +583,17 @@ def validate_v2_catalog_delta(root: Path) -> int:
     }
     if actual_recovery_schemas != recovery_details_schemas:
         fail("structured recovery errors must bind their exact closed details schemas")
+    reserved_errors = {
+        "WORKSPACE_BUSY": (4, True, "podway.workspace-busy-details/v1"),
+        "LEGACY_RUNTIME_STATE_UNSUPPORTED": (5, False, "podway.legacy-runtime-state-unsupported-details/v1"),
+        "WORKSPACE_CONTRACT_MISMATCH": (5, False, "podway.workspace-contract-mismatch-details/v1"),
+        "COMMAND_RETIRED": (2, False, "podway.command-retired-details/v1"),
+    }
+    for entry in entries:
+        if entry["code"] in reserved_errors and (
+            entry["exit_code"], entry["retryable"], entry.get("details_schema")
+        ) != reserved_errors[entry["code"]]:
+            fail("daemon-free reserved errors must preserve their exact catalog identity")
 
     authoring = read_json(
         root, Path("assets/specifications/authoring-diagnostics.json"),
@@ -777,7 +792,7 @@ def validate_routes(root: Path) -> int:
     if not isinstance(prohibited, list) or set(prohibited) != PROHIBITED_CAPABILITIES or len(prohibited) != len(PROHIBITED_CAPABILITIES):
         fail("command route contract must prohibit command_runner, git_mutation, and network")
     routes = contract["routes"]
-    if not isinstance(routes, list) or len(routes) != 75:
+    if not isinstance(routes, list) or len(routes) != 76:
         fail("command route contract routes must be a list")
 
     expected_commands = catalog_commands(root) | {"completions"}
@@ -805,7 +820,11 @@ def validate_routes(root: Path) -> int:
         expected_availability = expected_route_availability(command)
         if availability != expected_availability:
             fail(f"route availability is invalid for {command}")
-        if command in LOCAL_COMMANDS:
+        if command == "outcome.lookup":
+            expected_owner, expected_path, expected_execution = (
+                "podway-engine", ["podway-cli", "podway-engine"], "direct"
+            )
+        elif command in LOCAL_COMMANDS:
             expected_owner, expected_path, expected_execution = "podway-cli", ["podway-cli"], "local"
         elif command in SERVICE_COMMANDS:
             expected_owner, expected_path, expected_execution = (
@@ -827,6 +846,91 @@ def validate_routes(root: Path) -> int:
     if commands != expected_commands:
         fail(f"command routes do not exactly cover catalog commands; missing={sorted(expected_commands - commands)}")
     return len(commands)
+def validate_daemon_free_reservations(root: Path) -> int:
+    retired = read_json(root, Path("assets/specifications/retired-commands-v1.json"), "retired command table")
+    routes = read_json(root, ROUTES_PATH, "command routes")["routes"]
+    expected_commands = {
+        route["command"] for route in routes
+        if route["command"].startswith(("daemon.", "runtime.reset.", "job.", "workspace.mode."))
+    }
+    expected = {
+        "schema": "podway.retired-command-table/v1",
+        "availability": "reserved_contract",
+        "commands": [{"command": command, "replacement": "outcome.lookup" if command == "job.lookup" else None}
+                     for command in sorted(expected_commands)],
+        "flags": [{"flag": flag, "replacement": None} for flag in
+                  ["--mode", "--dev", "--socket", "--detach", "--wait-for-idle", "--after-job"]],
+    }
+    if retired != expected:
+        fail("retired command table must match the exact reserved cutover surface")
+    answers = read_json(root, Path("docs/examples/json/daemon-free-contract-reservation-v1.json"), "daemon-free known answers")
+    replacements = {entry["command"]: entry["replacement"] for entry in retired["commands"]}
+    replacements.update({entry["flag"]: entry["replacement"] for entry in retired["flags"]})
+    examples = list(answers["fixtures"].values()) + [case["value"] for case in answers["cases"]]
+    for example in examples:
+        details = example.get("details", example)
+        if isinstance(details, dict) and details.get("schema") == "podway.command-retired-details/v1":
+            if details["retired"] not in replacements or details["replacement"] != replacements[details["retired"]]:
+                fail("retired-command known answer disagrees with its canonical replacement")
+    ddl_path = repository_assets.checked_path(root, Path("assets/specifications/sqlite-v14.sql"), "Store v14 baseline")
+    ddl = ddl_path.read_text(encoding="utf-8")
+    if re.search(r"\b(?:ALTER|DROP)\s+TABLE\b", ddl, flags=re.IGNORECASE):
+        fail("Store v14 must be a complete baseline, not a legacy migration")
+    try:
+        with sqlite3.connect(":memory:") as connection:
+            connection.executescript(ddl)
+            tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")}
+            expected_tables = {
+                "workspace_state", "operational_journal", "writer_contract", "mutation_outcomes",
+                "v2_workspace_state", "v2_procedure_snapshots", "v2_graph_nodes", "v2_task_sessions",
+                "v2_graph_node_counters", "v2_attempts", "v2_item_slots", "v2_blockers",
+                "v2_resolved_evidence_references", "v2_decision_records", "v2_rework_records",
+                "v2_goal_revisions", "v2_goal_criteria", "v2_criterion_assessment_results",
+                "v2_criterion_citations", "v2_goal_assessments", "v2_terminal_dispositions",
+                "v2_delegation_receipts",
+            }
+            if tables != expected_tables or connection.execute("PRAGMA user_version").fetchone() != (14,):
+                fail("Store v14 baseline has an unexpected table inventory or generation")
+            for table in sorted(tables):
+                parents = {row[2] for row in connection.execute(f'PRAGMA foreign_key_list("{table}")')}
+                missing = parents - tables
+                if missing:
+                    fail(f"Store v14 {table} references missing foreign-key parents: {sorted(missing)}")
+            if connection.execute("PRAGMA foreign_key_check").fetchall():
+                fail("Store v14 baseline has invalid foreign keys")
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(workspace_state)")}
+            if "runtime_mode" in columns:
+                fail("Store v14 must not persist daemon runtime modes")
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(operational_journal)")}
+            if "job_id" in columns:
+                fail("Store v14 must not persist daemon job metadata")
+            digest = "sha256:" + "a" * 64
+            sql = "INSERT INTO mutation_outcomes VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            connection.execute(sql, ("success", digest, "workspace.init", 1, "workspace", None,
+                                     '{"schema":"podway.output/v4"}', 0))
+            for key, sequence, scope, session, response in [
+                ("failure", 2, "workspace", None, '{"schema":"podway.error/v2"}'),
+                ("missing-schema", 2, "workspace", None, '{}'),
+                ("missing-session", 2, "session", None, '{"schema":"podway.output/v4"}'),
+                ("duplicate-sequence", 1, "workspace", None, '{"schema":"podway.output/v4"}'),
+                ("negative-sequence", -1, "workspace", None, '{"schema":"podway.output/v4"}'),
+            ]:
+                try:
+                    connection.execute(sql, (key, digest, "workspace.init", sequence, scope, session, response, 0))
+                except sqlite3.IntegrityError:
+                    continue
+                fail(f"Store v14 accepted an invalid success outcome: {key}")
+            try:
+                connection.execute("INSERT INTO writer_contract VALUES (1, 'foreign', 'generation', 0)")
+            except sqlite3.IntegrityError:
+                pass
+            else:
+                fail("Store v14 accepted a malformed writer contract digest")
+    except sqlite3.Error as error:
+        fail(f"Store v14 baseline cannot instantiate: {error}")
+    return len(expected_tables)
+
+
 def validate_makefile_contract(root: Path) -> int:
     path = repository_assets.checked_path(root, MAKEFILE_PATH, "Makefile")
     if not path.is_file():
@@ -1041,6 +1145,49 @@ def run_sentinels(root: Path) -> list[str]:
             route["availability"] = original
         completed.append("route_availability_mismatch")
 
+        direct_fixture = temporary / "reserved-direct-route"
+        direct_fixture.mkdir()
+        shutil.copytree(root / "assets", direct_fixture / "assets")
+        copy_contracts(root, direct_fixture)
+        direct_contract = read_json(direct_fixture, ROUTES_PATH, "command routes")
+        direct_route = next(route for route in direct_contract["routes"] if route["command"] == "outcome.lookup")
+        for field, value in (("availability", "executable"), ("execution", "daemon")):
+            original = direct_route[field]
+            direct_route[field] = value
+            (direct_fixture / ROUTES_PATH).write_text(json.dumps(direct_contract) + "\n", encoding="utf-8")
+            require_known_failure("reserved direct route drift", lambda: validate_routes(direct_fixture))
+            direct_route[field] = original
+        completed.append("reserved_direct_route_drift")
+
+        reservation_fixture = temporary / "daemon-free-reservations"
+        reservation_fixture.mkdir()
+        shutil.copytree(root / "assets", reservation_fixture / "assets")
+        copy_contracts(root, reservation_fixture)
+        examples = reservation_fixture / "docs/examples/json"
+        examples.mkdir(parents=True)
+        known_answers = root / "docs/examples/json/daemon-free-contract-reservation-v1.json"
+        answer_path = examples / known_answers.name
+        shutil.copy2(known_answers, answer_path)
+        answer = json.loads(answer_path.read_text(encoding="utf-8"))
+        answer["fixtures"]["podway.command-retired-details/v1"]["replacement"] = None
+        answer_path.write_text(json.dumps(answer) + "\n", encoding="utf-8")
+        require_known_failure("retired known-answer replacement drift", lambda: validate_daemon_free_reservations(reservation_fixture))
+        shutil.copy2(known_answers, answer_path)
+        retired_path = reservation_fixture / "assets/specifications/retired-commands-v1.json"
+        retired = json.loads(retired_path.read_text(encoding="utf-8"))
+        retired["flags"].pop()
+        retired_path.write_text(json.dumps(retired) + "\n", encoding="utf-8")
+        require_known_failure("missing retired flag", lambda: validate_daemon_free_reservations(reservation_fixture))
+        shutil.copy2(root / "assets/specifications/retired-commands-v1.json", retired_path)
+        ddl_path = reservation_fixture / "assets/specifications/sqlite-v14.sql"
+        ddl_path.write_text(ddl_path.read_text(encoding="utf-8") + "\nCREATE TABLE jobs (job_id TEXT);\n", encoding="utf-8")
+        require_known_failure("daemon table in direct baseline", lambda: validate_daemon_free_reservations(reservation_fixture))
+        shutil.copy2(root / "assets/specifications/sqlite-v14.sql", ddl_path)
+        ddl = ddl_path.read_text(encoding="utf-8")
+        ddl_path.write_text(ddl.replace('REFERENCES "v2_task_sessions"', 'REFERENCES "v2_task_sessions_missing"', 1), encoding="utf-8")
+        require_known_failure("missing direct session foreign-key parent", lambda: validate_daemon_free_reservations(reservation_fixture))
+        completed.append("daemon_free_reservation_drift")
+
         route_growth_fixture = temporary / "route-growth"
         route_growth_fixture.mkdir()
         shutil.copytree(root / "assets", route_growth_fixture / "assets")
@@ -1130,6 +1277,7 @@ def production_checks(root: Path) -> dict[str, int]:
         "v2_catalog_delta": validate_v2_catalog_delta(root),
         "cargo_adjacency": validate_adjacency(root),
         "command_routes": validate_routes(root),
+        "daemon_free_reservations": validate_daemon_free_reservations(root),
         "makefile_contract": validate_makefile_contract(root),
         "release_contract_verifier": validate_release_contract_verifier(root),
         "contract_manifest_assets": contract_manifest.check(root),

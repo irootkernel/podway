@@ -1,0 +1,246 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:recovery-recipe:v2",
+  "title": "Podway Recovery Recipe v2",
+  "$comment": "Reserved by V2DFC-003. Destructive maintenance recipes require explicit authorization.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "action",
+    "command",
+    "argv",
+    "reason",
+    "requires_explicit_authorization"
+  ],
+  "properties": {
+    "action": {
+      "enum": [
+        "refresh_state",
+        "reconcile_mutation",
+        "diagnose_workspace",
+        "resume_maintenance",
+        "reset_legacy_state"
+      ]
+    },
+    "command": {
+      "enum": [
+        "session.observe",
+        "outcome.lookup",
+        "workspace.doctor",
+        "workspace.reset_all",
+        "workspace.remove"
+      ]
+    },
+    "argv": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 10,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256
+      }
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "requires_explicit_authorization": {
+      "type": "boolean"
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "command": {
+          "const": "session.observe"
+        },
+        "action": {
+          "const": "refresh_state"
+        },
+        "argv": {
+          "const": [
+            "podway",
+            "--json",
+            "observe"
+          ]
+        },
+        "requires_explicit_authorization": {
+          "const": false
+        }
+      }
+    },
+    {
+      "properties": {
+        "command": {
+          "const": "workspace.doctor"
+        },
+        "action": {
+          "const": "diagnose_workspace"
+        },
+        "argv": {
+          "const": [
+            "podway",
+            "--json",
+            "doctor"
+          ]
+        },
+        "requires_explicit_authorization": {
+          "const": false
+        }
+      }
+    },
+    {
+      "properties": {
+        "command": {
+          "const": "outcome.lookup"
+        },
+        "action": {
+          "const": "reconcile_mutation"
+        },
+        "requires_explicit_authorization": {
+          "const": false
+        },
+        "argv": {
+          "type": "array",
+          "minItems": 6,
+          "maxItems": 6,
+          "prefixItems": [
+            {
+              "const": "podway"
+            },
+            {
+              "const": "--json"
+            },
+            {
+              "const": "outcome"
+            },
+            {
+              "const": "lookup"
+            },
+            {
+              "const": "--idempotency-key"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          ],
+          "items": false
+        }
+      }
+    },
+    {
+      "properties": {
+        "command": {
+          "const": "workspace.reset_all"
+        },
+        "action": {
+          "const": "reset_legacy_state"
+        },
+        "requires_explicit_authorization": {
+          "const": true
+        },
+        "argv": {
+          "const": [
+            "podway",
+            "--json",
+            "reset",
+            "--all",
+            "--yes"
+          ]
+        }
+      }
+    },
+    {
+      "properties": {
+        "command": {
+          "const": "workspace.reset_all"
+        },
+        "action": {
+          "const": "resume_maintenance"
+        },
+        "requires_explicit_authorization": {
+          "const": true
+        },
+        "argv": {
+          "type": "array",
+          "minItems": 7,
+          "maxItems": 7,
+          "prefixItems": [
+            {
+              "const": "podway"
+            },
+            {
+              "const": "--json"
+            },
+            {
+              "const": "reset"
+            },
+            {
+              "const": "--all"
+            },
+            {
+              "const": "--yes"
+            },
+            {
+              "const": "--idempotency-key"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          ],
+          "items": false
+        }
+      }
+    },
+    {
+      "properties": {
+        "command": {
+          "const": "workspace.remove"
+        },
+        "action": {
+          "const": "resume_maintenance"
+        },
+        "requires_explicit_authorization": {
+          "const": true
+        },
+        "argv": {
+          "type": "array",
+          "minItems": 7,
+          "maxItems": 7,
+          "prefixItems": [
+            {
+              "const": "podway"
+            },
+            {
+              "const": "--json"
+            },
+            {
+              "const": "workspace"
+            },
+            {
+              "const": "remove"
+            },
+            {
+              "const": "--yes"
+            },
+            {
+              "const": "--idempotency-key"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          ],
+          "items": false
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:internal-error-details:v2",
+  "title": "Podway Internal Error Details v2",
+  "$comment": "Reserved by V2DFC-003; not emitted before the owning daemon-free cutover task.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "diagnostic_id"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.internal-error-details/v2"
+    },
+    "diagnostic_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "message": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    }
+  }
+}

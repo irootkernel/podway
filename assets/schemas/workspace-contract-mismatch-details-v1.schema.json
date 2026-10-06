@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:workspace-contract-mismatch-details:v1",
+  "title": "Podway Workspace Contract Mismatch Details v1",
+  "$comment": "Reserved by V2DFC-003; not emitted before the owning daemon-free cutover task.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "expected_contract_manifest_digest",
+    "actual_contract_manifest_digest",
+    "recovery"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.workspace-contract-mismatch-details/v1"
+    },
+    "expected_contract_manifest_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "actual_contract_manifest_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "recovery": {
+      "$ref": "urn:podway:schema:recovery-recipe:v2",
+      "properties": {
+        "action": {
+          "const": "diagnose_workspace"
+        },
+        "command": {
+          "const": "workspace.doctor"
+        },
+        "requires_explicit_authorization": {
+          "const": false
+        }
+      }
+    }
+  }
+}

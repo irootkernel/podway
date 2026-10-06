@@ -173,12 +173,12 @@ def adapter_contract() -> dict[str, Any]:
         or len(route_inventory) != len(set(route_inventory))
     ):
         fail("command route catalog contains invalid or duplicate commands")
-    if len(route_inventory) != 75:
+    if len(route_inventory) != 76:
         fail("command route catalog does not contain the v2-only route inventory")
 
     error_catalog = read_object(ROOT / "assets/specifications/error-codes.json", "error catalog")
     runtime_error_codes = catalog_codes(error_catalog, "errors", "error catalog")
-    if len(runtime_error_codes) != 117:
+    if len(runtime_error_codes) != 121:
         fail("error catalog does not contain the v2-only runtime inventory")
 
     diagnostic_catalog = read_object(
@@ -257,6 +257,17 @@ def adapter_contract() -> dict[str, Any]:
             "routes": route_inventory,
             "runtime_errors": error_catalog["errors"],
             "schema_pins": schema_pins,
+        },
+        "daemon_free_reservations": {
+            "activation_task": "V2DFC-007",
+            "availability": "reserved_contract",
+            "output_schema": "podway.output/v4",
+            "error_schema": "podway.error/v2",
+            "recovery_recipe_schema": "podway.recovery-recipe/v2",
+            "routes": [route for route in routes if route["availability"] == "reserved_contract"],
+            "store_schema": "spec/sqlite-v14.sql",
+            "retired_command_table": "spec/retired-commands-v1.json",
+            "consumer_adoption": "requires-separate-Aquarium-and-Dolgorae-work",
         },
         "current_surface_counts": {
             "authoring_diagnostics": 59,

@@ -137,3 +137,31 @@ page-size and journal pragmas, migration checksums, and reconstructed Procedure 
 graph invariants are verified on open. A mismatch fails closed before serving the
 workspace. Paths, JSON blobs, collections, terminal receipts, and journal retention
 remain bounded by their executable contracts.
+
+## Reserved daemon-free baseline
+
+[`sqlite-v14.sql`](../../../assets/specifications/sqlite-v14.sql) is the complete
+reserved baseline under ADR-0038 and `V2DFC-003`. It is not an additional step in
+the shipped v1–v13 migration chain. `V2DFC-005` owns its direct Store admission;
+`V2DFC-007` owns CLI cutover. Daemon-era databases are rejected without writes
+and require explicitly confirmed reset-all; no automatic conversion is promised.
+
+The baseline preserves all current Procedure v2 snapshot, graph, session,
+attempt, item, blocker, evidence, decision, rework, goal, criterion, assessment,
+terminal-disposition and delegation-receipt constraints. Workspace identity and
+its committed mutation sequence remain worktree-local. It omits jobs,
+job-backed idempotency records, runtime modes, linear Procedure v1 state and the
+legacy migration ledger. Journal rows retain the committed workspace sequence
+without job identity. Journal pruning remains part of each mutation transaction
+under the existing 10,000-row, seven-day and newest-200 bounds.
+
+`writer_contract` records the creating or last-migrating manifest digest and
+Store generation identity. A different digest is rejected unless an explicit
+release-owned predecessor declaration permits forward migration. Version
+`v0.2.13` declares no predecessor. `mutation_outcomes` stores only successful
+`podway.output/v4` responses with a unique committed sequence, request digest,
+idempotency key, retention scope and recorded time. Domain state, outcome,
+journal and pruning commit atomically. Session-scoped retention ends only on
+session reset or worktree reset; it has no cascading foreign key to archived
+session rows. Workspace-scoped retention is at most 100 entries or 30 days.
+Rejections leave no outcome. The outcome response byte bound is 1,048,576.

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:blocker-limit-details:v2",
+  "title": "Podway Open Blocker Limit Details v2",
+  "$comment": "Reserved by V2DFC-003; not emitted before the owning daemon-free cutover task.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "maximum_open_blockers"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.blocker-limit-details/v2"
+    },
+    "maximum_open_blockers": {
+      "const": 64
+    }
+  }
+}

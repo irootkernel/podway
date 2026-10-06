@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:workspace-maintenance-details:v1",
+  "title": "Podway Workspace Maintenance Details v1",
+  "$comment": "Reserved by V2DFC-003; not emitted before the owning daemon-free cutover task.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "boundary",
+    "timeout_ms",
+    "recovery"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.workspace-maintenance-details/v1"
+    },
+    "boundary": {
+      "enum": [
+        "maintenance_lock",
+        "intent_marker",
+        "reset_marker",
+        "removal_marker",
+        "predecessor_migration"
+      ]
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3600000
+    },
+    "recovery": {
+      "$ref": "urn:podway:schema:recovery-recipe:v2"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "boundary": {
+            "enum": [
+              "maintenance_lock",
+              "intent_marker",
+              "predecessor_migration"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "recovery": {
+            "properties": {
+              "action": {
+                "enum": [
+                  "refresh_state",
+                  "diagnose_workspace"
+                ]
+              },
+              "command": {
+                "enum": [
+                  "session.observe",
+                  "workspace.doctor"
+                ]
+              },
+              "requires_explicit_authorization": {
+                "const": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "boundary": {
+            "const": "reset_marker"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "recovery": {
+            "properties": {
+              "action": {
+                "const": "resume_maintenance"
+              },
+              "command": {
+                "const": "workspace.reset_all"
+              },
+              "requires_explicit_authorization": {
+                "const": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "boundary": {
+            "const": "removal_marker"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "recovery": {
+            "properties": {
+              "action": {
+                "const": "resume_maintenance"
+              },
+              "command": {
+                "const": "workspace.remove"
+              },
+              "requires_explicit_authorization": {
+                "const": true
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

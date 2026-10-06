@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:decision-result:v2",
+  "title": "Podway Decision Result v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "graph_node_id",
+    "attempt_id",
+    "attempt_number",
+    "option_id",
+    "effect",
+    "target_graph_node_id",
+    "target_attempt_id",
+    "revision",
+    "session_state",
+    "record"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.decision-result/v2"
+    },
+    "graph_node_id": {
+      "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/identifier"
+    },
+    "attempt_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "attempt_number": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 18446744073709551615
+    },
+    "option_id": {
+      "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/identifier"
+    },
+    "effect": {
+      "enum": [
+        "advance",
+        "rework"
+      ]
+    },
+    "target_graph_node_id": {
+      "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/identifier"
+    },
+    "target_attempt_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "revision": {
+      "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/runningSessionRevision"
+    },
+    "session_state": {
+      "const": "running"
+    },
+    "record": {
+      "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/decisionRecord"
+    }
+  },
+  "$comment": "Reserved by V2DFC-003; not emitted before the owning daemon-free cutover task."
+}

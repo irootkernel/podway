@@ -782,6 +782,34 @@
       "exit_code": 4,
       "retryable": true,
       "summary": "A committed runtime reset requires exact explicit retry."
+    },
+    {
+      "code": "WORKSPACE_BUSY",
+      "exit_code": 4,
+      "retryable": true,
+      "details_schema": "podway.workspace-busy-details/v1",
+      "summary": "The direct write deadline expired without a state effect."
+    },
+    {
+      "code": "LEGACY_RUNTIME_STATE_UNSUPPORTED",
+      "exit_code": 5,
+      "retryable": false,
+      "details_schema": "podway.legacy-runtime-state-unsupported-details/v1",
+      "summary": "Daemon-era state requires explicitly confirmed reset-all."
+    },
+    {
+      "code": "WORKSPACE_CONTRACT_MISMATCH",
+      "exit_code": 5,
+      "retryable": false,
+      "details_schema": "podway.workspace-contract-mismatch-details/v1",
+      "summary": "The Store writer contract is not supported by this binary."
+    },
+    {
+      "code": "COMMAND_RETIRED",
+      "exit_code": 2,
+      "retryable": false,
+      "details_schema": "podway.command-retired-details/v1",
+      "summary": "The daemon-free command or flag has been retired."
     }
   ]
 }

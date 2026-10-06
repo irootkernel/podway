@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:mutation-outcome-unknown-details:v3",
+  "title": "Podway Mutation Outcome Unknown Details v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "outcome",
+    "idempotency_key",
+    "reconcile",
+    "recovery"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.mutation-outcome-unknown-details/v3"
+    },
+    "outcome": {
+      "const": "unknown"
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "reconcile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command",
+        "idempotency_key"
+      ],
+      "properties": {
+        "command": {
+          "const": "outcome.lookup"
+        },
+        "idempotency_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      }
+    },
+    "recovery": {
+      "$ref": "urn:podway:schema:recovery-recipe:v2",
+      "properties": {
+        "action": {
+          "const": "reconcile_mutation"
+        },
+        "command": {
+          "const": "outcome.lookup"
+        },
+        "requires_explicit_authorization": {
+          "const": false
+        }
+      }
+    }
+  }
+}

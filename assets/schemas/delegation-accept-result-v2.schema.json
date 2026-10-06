@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:delegation-accept-result:v2",
+  "title": "Podway Delegation Acceptance Result v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "receipt_id",
+    "workspace_uuid",
+    "session_id",
+    "session_revision",
+    "attempt_id",
+    "package_digest",
+    "result_digest",
+    "acceptance_state"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.delegation-accept-result/v2"
+    },
+    "receipt_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "workspace_uuid": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "session_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "session_revision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "attempt_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "package_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "result_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "acceptance_state": {
+      "const": "accepted"
+    }
+  },
+  "x-podway-max-json-bytes": 8192,
+  "$comment": "Reserved by V2DFC-003; not emitted before the owning daemon-free cutover task."
+}

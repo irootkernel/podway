@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:outcome-lookup-result:v1",
+  "title": "Podway Outcome Lookup Result v1",
+  "$comment": "Reserved by V2DFC-003; not emitted before the owning daemon-free cutover task.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "idempotency_key",
+    "found",
+    "outcome"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.outcome-lookup-result/v1"
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "found": {
+      "type": "boolean"
+    },
+    "outcome": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "request_digest",
+            "recorded_at",
+            "scope",
+            "response"
+          ],
+          "properties": {
+            "request_digest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "recorded_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "scope": {
+              "enum": [
+                "session",
+                "workspace"
+              ]
+            },
+            "response": {
+              "$ref": "urn:podway:schema:output:v4#/$defs/mutationOutput"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "found": {
+            "const": false
+          }
+        },
+        "required": [
+          "found"
+        ]
+      },
+      "then": {
+        "properties": {
+          "outcome": {
+            "type": "null"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "outcome": {
+            "type": "object"
+          }
+        }
+      }
+    }
+  ]
+}

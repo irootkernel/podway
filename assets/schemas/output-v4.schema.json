@@ -1,0 +1,769 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:output:v4",
+  "title": "Podway Success Output v4",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "request_id",
+    "command",
+    "generated_at",
+    "result",
+    "warnings"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.output/v4"
+    },
+    "request_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "command": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "generated_at": {
+      "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/timestamp"
+    },
+    "workspace": {
+      "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/workspace"
+    },
+    "session": {
+      "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/sessionOutput"
+    },
+    "result": {
+      "type": "object"
+    },
+    "warnings": {
+      "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/warnings"
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/procedureIndependent"
+    },
+    {
+      "$ref": "#/$defs/version"
+    },
+    {
+      "$ref": "#/$defs/workspaceInit"
+    },
+    {
+      "$ref": "#/$defs/workspaceRemoval"
+    },
+    {
+      "$ref": "#/$defs/procedureValidation"
+    },
+    {
+      "$ref": "#/$defs/sessionStart"
+    },
+    {
+      "$ref": "#/$defs/sessionBegin"
+    },
+    {
+      "$ref": "#/$defs/terminalDisposition"
+    },
+    {
+      "$ref": "#/$defs/sessionReset"
+    },
+    {
+      "$ref": "#/$defs/sessionArchive"
+    },
+    {
+      "$ref": "#/$defs/sessionArchiveList"
+    },
+    {
+      "$ref": "#/$defs/sessionArchiveShow"
+    },
+    {
+      "$ref": "#/$defs/sessionArchivePurge"
+    },
+    {
+      "$ref": "#/$defs/status"
+    },
+    {
+      "$ref": "#/$defs/compactStatus"
+    },
+    {
+      "$ref": "#/$defs/next"
+    },
+    {
+      "$ref": "#/$defs/observation"
+    },
+    {
+      "$ref": "#/$defs/evidenceRead"
+    },
+    {
+      "$ref": "#/$defs/delegationPackage"
+    },
+    {
+      "$ref": "#/$defs/delegationAccept"
+    },
+    {
+      "$ref": "#/$defs/delegationReceipt"
+    },
+    {
+      "$ref": "#/$defs/stageTransition"
+    },
+    {
+      "$ref": "#/$defs/itemMutation"
+    },
+    {
+      "$ref": "#/$defs/itemRecordMany"
+    },
+    {
+      "$ref": "#/$defs/procedureSource"
+    },
+    {
+      "$ref": "#/$defs/procedureDiagnostics"
+    },
+    {
+      "$ref": "#/$defs/procedureGraph"
+    },
+    {
+      "$ref": "#/$defs/procedurePreview"
+    },
+    {
+      "$ref": "#/$defs/decision"
+    },
+    {
+      "$ref": "#/$defs/rework"
+    },
+    {
+      "$ref": "#/$defs/goalDefinition"
+    },
+    {
+      "$ref": "#/$defs/goalRevision"
+    },
+    {
+      "$ref": "#/$defs/criterionAssessment"
+    },
+    {
+      "$ref": "#/$defs/outcomeLookup"
+    }
+  ],
+  "$defs": {
+    "procedureIndependent": {
+      "properties": {
+        "command": {
+          "enum": [
+            "help",
+            "completions",
+            "preset.list",
+            "preset.show",
+            "preset.explain",
+            "procedure.show",
+            "workspace.show",
+            "workspace.doctor",
+            "workspace.repair",
+            "workspace.reset_all",
+            "__complete"
+          ]
+        },
+        "result": {
+          "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/genericObject"
+        }
+      }
+    },
+    "version": {
+      "properties": {
+        "command": {
+          "const": "version"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:version-result:v2"
+        }
+      },
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "workspace"
+            ]
+          },
+          {
+            "required": [
+              "session"
+            ]
+          }
+        ]
+      }
+    },
+    "workspaceInit": {
+      "required": [
+        "workspace"
+      ],
+      "properties": {
+        "command": {
+          "const": "workspace.init"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:workspace-init-result:v2"
+        }
+      },
+      "not": {
+        "required": [
+          "session"
+        ]
+      }
+    },
+    "workspaceRemoval": {
+      "properties": {
+        "command": {
+          "const": "workspace.remove"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:workspace-removal-result:v2"
+        }
+      },
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "workspace"
+            ]
+          },
+          {
+            "required": [
+              "session"
+            ]
+          }
+        ]
+      }
+    },
+    "procedureValidation": {
+      "properties": {
+        "command": {
+          "const": "procedure.validate"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:procedure-validation-result:v2"
+        }
+      }
+    },
+    "sessionStart": {
+      "properties": {
+        "command": {
+          "enum": [
+            "session.start",
+            "session.start_replace"
+          ]
+        },
+        "result": {
+          "$ref": "urn:podway:schema:session-start-result:v4"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "result": {
+                "properties": {
+                  "dry_run": {
+                    "const": false
+                  }
+                },
+                "required": [
+                  "dry_run"
+                ]
+              }
+            },
+            "required": [
+              "result"
+            ]
+          },
+          "then": {
+            "required": [
+              "workspace"
+            ]
+          }
+        }
+      ]
+    },
+    "sessionBegin": {
+      "required": [
+        "workspace"
+      ],
+      "properties": {
+        "command": {
+          "const": "session.begin"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:session-begin-result:v2"
+        }
+      }
+    },
+    "terminalDisposition": {
+      "required": [
+        "workspace"
+      ],
+      "properties": {
+        "command": {
+          "const": "session.terminal_disposition"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:terminal-disposition-result:v2"
+        }
+      }
+    },
+    "sessionReset": {
+      "properties": {
+        "command": {
+          "const": "session.reset"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:session-reset-result:v2"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "result": {
+                "properties": {
+                  "dry_run": {
+                    "const": false
+                  }
+                },
+                "required": [
+                  "dry_run"
+                ]
+              }
+            },
+            "required": [
+              "result"
+            ]
+          },
+          "then": {
+            "required": [
+              "workspace"
+            ]
+          }
+        }
+      ]
+    },
+    "sessionArchive": {
+      "required": [
+        "workspace"
+      ],
+      "properties": {
+        "command": {
+          "const": "session.archive"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:session-archive-result:v2"
+        }
+      }
+    },
+    "sessionArchiveList": {
+      "required": [
+        "workspace"
+      ],
+      "properties": {
+        "command": {
+          "const": "session.archive_list"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:session-archive-list-result:v2"
+        }
+      },
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "session"
+            ]
+          }
+        ]
+      }
+    },
+    "sessionArchiveShow": {
+      "required": [
+        "workspace"
+      ],
+      "properties": {
+        "command": {
+          "const": "session.archive_show"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:session-archive-show-result:v3"
+        }
+      },
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "session"
+            ]
+          }
+        ]
+      }
+    },
+    "sessionArchivePurge": {
+      "required": [
+        "workspace"
+      ],
+      "properties": {
+        "command": {
+          "const": "session.archive_purge"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:session-archive-purge-result:v1"
+        }
+      },
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "session"
+            ]
+          }
+        ]
+      }
+    },
+    "status": {
+      "properties": {
+        "command": {
+          "const": "session.status"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:status-result:v5"
+        }
+      }
+    },
+    "compactStatus": {
+      "properties": {
+        "command": {
+          "const": "session.status"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:compact-status-result:v5"
+        }
+      }
+    },
+    "next": {
+      "properties": {
+        "command": {
+          "const": "session.next"
+        },
+        "result": {
+          "oneOf": [
+            {
+              "$ref": "urn:podway:schema:next-result:v5"
+            },
+            {
+              "$ref": "urn:podway:schema:prepared-next-result:v3"
+            }
+          ]
+        }
+      }
+    },
+    "observation": {
+      "properties": {
+        "command": {
+          "const": "session.observe"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:observation-result:v5"
+        }
+      }
+    },
+    "evidenceRead": {
+      "properties": {
+        "command": {
+          "const": "evidence.read"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:evidence-read-result:v1"
+        }
+      }
+    },
+    "delegationPackage": {
+      "required": [
+        "workspace"
+      ],
+      "properties": {
+        "command": {
+          "const": "delegation.package"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:delegation-package-result:v1"
+        }
+      }
+    },
+    "delegationAccept": {
+      "required": [
+        "workspace"
+      ],
+      "properties": {
+        "command": {
+          "const": "delegation.accept"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:delegation-accept-result:v2"
+        }
+      }
+    },
+    "delegationReceipt": {
+      "required": [
+        "workspace"
+      ],
+      "properties": {
+        "command": {
+          "const": "delegation.receipt"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:delegation-receipt-result:v1"
+        }
+      }
+    },
+    "stageTransition": {
+      "required": [
+        "workspace"
+      ],
+      "properties": {
+        "command": {
+          "enum": [
+            "session.complete",
+            "session.skip",
+            "session.retry",
+            "session.block",
+            "session.unblock",
+            "session.cancel",
+            "session.reset"
+          ]
+        },
+        "result": {
+          "$ref": "urn:podway:schema:stage-transition-result:v3"
+        }
+      }
+    },
+    "itemMutation": {
+      "required": [
+        "workspace"
+      ],
+      "properties": {
+        "command": {
+          "enum": [
+            "item.check",
+            "item.uncheck",
+            "item.set",
+            "item.add",
+            "item.remove",
+            "item.attach",
+            "item.clear"
+          ]
+        },
+        "result": {
+          "$ref": "urn:podway:schema:item-mutation-result:v3"
+        }
+      }
+    },
+    "itemRecordMany": {
+      "required": [
+        "workspace"
+      ],
+      "properties": {
+        "command": {
+          "const": "item.record_many"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:item-record-many-result:v2"
+        }
+      }
+    },
+    "procedureSource": {
+      "properties": {
+        "command": {
+          "enum": [
+            "procedure.format",
+            "procedure.scaffold"
+          ]
+        },
+        "result": {
+          "$ref": "urn:podway:schema:procedure-source-result:v1"
+        }
+      }
+    },
+    "procedureDiagnostics": {
+      "properties": {
+        "command": {
+          "enum": [
+            "procedure.format",
+            "procedure.validate",
+            "procedure.vet",
+            "procedure.lint",
+            "procedure.check",
+            "procedure.graph",
+            "procedure.scaffold"
+          ]
+        },
+        "result": {
+          "$ref": "urn:podway:schema:procedure-diagnostics-result:v1"
+        }
+      }
+    },
+    "procedureGraph": {
+      "properties": {
+        "command": {
+          "const": "procedure.graph"
+        },
+        "result": {
+          "oneOf": [
+            {
+              "$ref": "urn:podway:schema:procedure-graph-result:v1"
+            },
+            {
+              "$ref": "urn:podway:schema:procedure-graph-result:v2"
+            }
+          ]
+        }
+      }
+    },
+    "procedurePreview": {
+      "properties": {
+        "command": {
+          "const": "procedure.preview"
+        },
+        "result": {
+          "oneOf": [
+            {
+              "$ref": "urn:podway:schema:procedure-preview-result:v1"
+            },
+            {
+              "$ref": "urn:podway:schema:procedure-preview-result:v2"
+            }
+          ]
+        }
+      }
+    },
+    "decision": {
+      "required": [
+        "workspace"
+      ],
+      "properties": {
+        "command": {
+          "const": "session.decide"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:decision-result:v2"
+        }
+      }
+    },
+    "rework": {
+      "required": [
+        "workspace"
+      ],
+      "properties": {
+        "command": {
+          "const": "session.rework"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:rework-result:v2"
+        }
+      }
+    },
+    "goalDefinition": {
+      "required": [
+        "workspace"
+      ],
+      "properties": {
+        "command": {
+          "const": "goal.define"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:goal-definition-result:v2"
+        }
+      }
+    },
+    "goalRevision": {
+      "required": [
+        "workspace"
+      ],
+      "properties": {
+        "command": {
+          "const": "goal.revise"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:goal-revision-result:v2"
+        }
+      }
+    },
+    "criterionAssessment": {
+      "required": [
+        "workspace"
+      ],
+      "properties": {
+        "command": {
+          "const": "goal.assess_criterion"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:criterion-assessment-result:v2"
+        }
+      }
+    },
+    "outcomeLookup": {
+      "required": [
+        "workspace"
+      ],
+      "properties": {
+        "command": {
+          "const": "outcome.lookup"
+        },
+        "result": {
+          "$ref": "urn:podway:schema:outcome-lookup-result:v1"
+        }
+      }
+    },
+    "mutationOutput": {
+      "allOf": [
+        {
+          "$ref": "urn:podway:schema:output:v4"
+        },
+        {
+          "properties": {
+            "command": {
+              "enum": [
+                "workspace.init",
+                "workspace.repair",
+                "workspace.reset_all",
+                "workspace.remove",
+                "session.start",
+                "session.start_replace",
+                "session.begin",
+                "session.terminal_disposition",
+                "session.complete",
+                "session.skip",
+                "session.retry",
+                "session.block",
+                "session.unblock",
+                "session.cancel",
+                "session.reset",
+                "session.archive",
+                "session.archive_purge",
+                "session.decide",
+                "session.rework",
+                "goal.define",
+                "goal.revise",
+                "goal.assess_criterion",
+                "item.check",
+                "item.uncheck",
+                "item.set",
+                "item.add",
+                "item.remove",
+                "item.attach",
+                "item.clear",
+                "item.record_many",
+                "delegation.accept"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  },
+  "$comment": "Reserved by V2DFC-003; not emitted before V2DFC-007."
+}

@@ -606,6 +606,14 @@
       "path": ["podway-cli", "podway-protocol", "podway-daemon"],
       "execution": "daemon",
       "capabilities": []
+    },
+    {
+      "command": "outcome.lookup",
+      "availability": "reserved_contract",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
+      "capabilities": []
     }
   ]
 }

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:procedure-digest-mismatch-details:v3",
+  "title": "Podway Procedure Digest Mismatch Details v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "expected_procedure_digest",
+    "actual_procedure_digest",
+    "recovery"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.procedure-digest-mismatch-details/v3"
+    },
+    "expected_procedure_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "actual_procedure_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "recovery": {
+      "$ref": "urn:podway:schema:recovery-recipe:v2",
+      "properties": {
+        "action": {
+          "const": "refresh_state"
+        },
+        "command": {
+          "const": "session.observe"
+        },
+        "requires_explicit_authorization": {
+          "const": false
+        }
+      }
+    }
+  }
+}

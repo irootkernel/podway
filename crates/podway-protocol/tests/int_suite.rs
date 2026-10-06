@@ -19,3 +19,5 @@ mod int_v2_result_contract;
 mod int_v2agt004_record_many;
 #[path = "int_v2agt005_recovery.rs"]
 mod int_v2agt005_recovery;
+#[path = "int_v2dfc003_contract_reservation.rs"]
+mod int_v2dfc003_contract_reservation;

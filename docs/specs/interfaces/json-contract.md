@@ -140,3 +140,46 @@ Contract assets are canonical under `assets/schemas/`; the generated manifest un
 `contracts/` records exact bytes and digests. New result families require a new
 schema identifier. Additive envelope fields are allowed only where the schema leaves
 the object open; automation must ignore unknown open-envelope metadata.
+
+## Reserved daemon-free generation
+
+`V2DFC-003` reserves `podway.output/v4`, `podway.error/v2`, and
+`podway.recovery-recipe/v2`. They are not emitted by the daemon-based runtime.
+The direct engine adopts the generation in `V2DFC-006`; CLI cutover occurs in
+`V2DFC-007`. Reserved validators are explicit APIs, separate from the shipped
+output decoder and its supported-generation constants.
+
+The new result and detail generations remove admission, job, queue, endpoint,
+registry, and runtime-mode metadata. Direct and delegated status, compact status,
+next, and observation converge on v5; prepared next converges on v3. Session
+start becomes v4. Families without a daemon-dependent shape keep their current
+identifier. Author-authored item content remains valid even when it contains
+words or object keys such as `job`; removed metadata is rejected at protocol
+positions, not by searching application content. Existing unnamed generic
+results and diagnostic details retain their JSON-object compatibility boundary,
+subject to the preserved byte and nesting-depth bounds.
+
+`podway.outcome-lookup-result/v1` is reserved for `outcome.lookup`. A successful
+lookup carries a committed mutation response; not-found carries a null outcome.
+The reserved route uses the `direct` execution class and `podway-engine` owner.
+Registration does not enable the current CLI route. Input and output budgets
+remain 1,048,576 bytes independently of IPC framing.
+
+Recovery recipes are constrained by the owning error. `MUTATION_OUTCOME_UNKNOWN`
+uses read-only `outcome.lookup` with the original idempotency key; its detail,
+reconciliation field, and recovery argv must agree on that key. Lock contention
+permits only read-only state refresh or workspace diagnosis. Legacy state requires
+explicit reset-all authorization. Reset and removal markers name their respective
+resuming command, while maintenance lock, intent, and predecessor contention keep
+read-only recovery. The reserved Rust validator enforces agreement among keys
+in both unknown-outcome details and error envelopes.
+Retained revision, attempt, session, Procedure digest, and stale-goal/evidence
+conflicts keep read-only `session.observe` recovery. Workspace identity, Store
+state/schema, and writer-contract diagnosis keep read-only `workspace.doctor`
+recovery. Their reserved detail schemas exclude legacy reset, maintenance retry,
+and outcome lookup recipes; error/v2 applies the same owning detail constraints.
+
+`podway.version-result/v2` and `podway.contract-manifest/v2` omit
+`supported_ipc_ids`. The currently generated manifest and version result remain
+v1 until their owning cutover work. Store v14 DDL is enrolled in the current
+manifest with asset kind `store_schema` so its bytes affect writer identity.

@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:session-reset-result:v2",
+  "title": "Podway Smart Session Reset Result v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "dry_run",
+    "mode",
+    "session_id",
+    "session_revision",
+    "lifecycle",
+    "current_terminal_disposition",
+    "eligible",
+    "required_action",
+    "reset"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.session-reset-result/v2"
+    },
+    "dry_run": {
+      "type": "boolean"
+    },
+    "mode": {
+      "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/resetMode"
+    },
+    "session_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "session_revision": {
+      "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/sessionRevision"
+    },
+    "lifecycle": {
+      "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/sessionLifecycle"
+    },
+    "current_terminal_disposition": {
+      "type": "boolean"
+    },
+    "eligible": {
+      "type": "boolean"
+    },
+    "required_action": {
+      "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/resetRequiredAction"
+    },
+    "reset": {
+      "type": "boolean"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "dry_run": {
+            "const": true
+          }
+        },
+        "required": [
+          "dry_run"
+        ]
+      },
+      "then": {
+        "properties": {
+          "reset": {
+            "const": false
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "reset": {
+            "const": true
+          },
+          "required_action": {
+            "const": "none"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "eligible": {
+            "const": true
+          }
+        },
+        "required": [
+          "eligible"
+        ]
+      },
+      "then": {
+        "properties": {
+          "required_action": {
+            "const": "none"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "lifecycle": {
+            "const": "prepared"
+          }
+        },
+        "required": [
+          "lifecycle"
+        ]
+      },
+      "then": {
+        "properties": {
+          "session_revision": {
+            "const": 0
+          },
+          "current_terminal_disposition": {
+            "const": false
+          },
+          "eligible": {
+            "const": true
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "session_revision": {
+            "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/runningSessionRevision"
+          }
+        }
+      }
+    }
+  ],
+  "$comment": "Reserved by V2DFC-003; not emitted before the owning daemon-free cutover task."
+}

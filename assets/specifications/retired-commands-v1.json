@@ -1,0 +1,108 @@
+{
+  "schema": "podway.retired-command-table/v1",
+  "availability": "reserved_contract",
+  "commands": [
+    {
+      "command": "daemon.install",
+      "replacement": null
+    },
+    {
+      "command": "daemon.logs",
+      "replacement": null
+    },
+    {
+      "command": "daemon.restart",
+      "replacement": null
+    },
+    {
+      "command": "daemon.runtime_reset",
+      "replacement": null
+    },
+    {
+      "command": "daemon.start",
+      "replacement": null
+    },
+    {
+      "command": "daemon.status",
+      "replacement": null
+    },
+    {
+      "command": "daemon.stop",
+      "replacement": null
+    },
+    {
+      "command": "daemon.terminate",
+      "replacement": null
+    },
+    {
+      "command": "daemon.uninstall",
+      "replacement": null
+    },
+    {
+      "command": "daemon.wait-ready",
+      "replacement": null
+    },
+    {
+      "command": "job.cancel",
+      "replacement": null
+    },
+    {
+      "command": "job.list",
+      "replacement": null
+    },
+    {
+      "command": "job.lookup",
+      "replacement": "outcome.lookup"
+    },
+    {
+      "command": "job.status",
+      "replacement": null
+    },
+    {
+      "command": "job.wait",
+      "replacement": null
+    },
+    {
+      "command": "runtime.reset.apply",
+      "replacement": null
+    },
+    {
+      "command": "runtime.reset.plan",
+      "replacement": null
+    },
+    {
+      "command": "workspace.mode.apply",
+      "replacement": null
+    },
+    {
+      "command": "workspace.mode.plan",
+      "replacement": null
+    }
+  ],
+  "flags": [
+    {
+      "flag": "--mode",
+      "replacement": null
+    },
+    {
+      "flag": "--dev",
+      "replacement": null
+    },
+    {
+      "flag": "--socket",
+      "replacement": null
+    },
+    {
+      "flag": "--detach",
+      "replacement": null
+    },
+    {
+      "flag": "--wait-for-idle",
+      "replacement": null
+    },
+    {
+      "flag": "--after-job",
+      "replacement": null
+    }
+  ]
+}

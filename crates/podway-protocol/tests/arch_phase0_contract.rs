@@ -387,6 +387,10 @@ const FROZEN_ERROR_CATALOG: &[(&str, u8, bool)] = &[
     ("ATTEMPT_CONTENT_LIMIT_EXCEEDED", 1, false),
     ("EVIDENCE_PAGE_TOKEN_EXHAUSTED", 2, false),
     ("EVIDENCE_PAGE_TOKEN_STALE", 4, true),
+    ("WORKSPACE_BUSY", 4, true),
+    ("LEGACY_RUNTIME_STATE_UNSUPPORTED", 5, false),
+    ("WORKSPACE_CONTRACT_MISMATCH", 5, false),
+    ("COMMAND_RETIRED", 2, false),
 ];
 
 fn v2_runtime_error_details(code: &str) -> Option<Map<String, Value>> {

@@ -222,6 +222,58 @@ fn v2sdg007_delegation_cli_routes_preserve_public_wire_identity() {
     assert!(String::from_utf8_lossy(&help.stdout).contains("delegation package|accept|receipt"));
 }
 
+#[test]
+fn v2dfc003_reserved_output_preserves_large_admitted_procedure_show() {
+    let fixture = Fixture::new();
+    let definitions = (0..128)
+        .map(|index| {
+            (
+                format!("d{index:04}"),
+                json!({
+                    "type": "action",
+                    "title": "Work",
+                    "description": "a".repeat(1_000),
+                    "intent": "Record a value.",
+                    "items": [{"id": "value", "type": "text", "prompt": "Value?", "required": false}],
+                }),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    let source = json!({
+        "schema": "podway.procedure/v2",
+        "id": "large-projection",
+        "version": "1",
+        "name": "Large projection",
+        "purpose": "Preserve the admitted canonical projection in a generic result.",
+        "node_definitions": definitions,
+        "graph": {
+            "entry": "work",
+            "nodes": [{"id": "work", "use": "d0000", "terminal": true}],
+        },
+    });
+    let path = fixture.root.join("large-projection.json");
+    fs::write(&path, serde_json::to_vec(&source).unwrap()).unwrap();
+    let output = fixture.run(&[
+        "--json".to_owned(),
+        "procedure".to_owned(),
+        "show".to_owned(),
+        path.display().to_string(),
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let mut envelope = one_json(&output);
+    assert_eq!(envelope["schema"], "podway.output/v3");
+    assert_eq!(envelope["command"], "procedure.show");
+    let canonical = envelope["result"]["canonical_json"].as_str().unwrap();
+    assert!(canonical.len() > 65_536);
+    podway_core::verify_canonical_json_v1(canonical.as_bytes()).unwrap();
+    assert!(output.stdout.len() < podway_protocol::MAX_DIRECT_OUTPUT_BYTES_V1);
+    envelope["schema"] = json!("podway.output/v4");
+    assert!(podway_protocol::validate_daemon_free_document_v1(
+        "podway.output/v4",
+        &envelope
+    ));
+}
+
 static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 struct Fixture {

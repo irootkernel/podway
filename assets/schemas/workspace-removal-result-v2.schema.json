@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:podway:schema:workspace-removal-result:v2",
+  "title": "Podway Workspace Removal Result v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "worktree_root",
+    "workspace_uuid",
+    "podway_directory_removed",
+    "already_absent"
+  ],
+  "properties": {
+    "schema": {
+      "const": "podway.workspace-removal-result/v2"
+    },
+    "worktree_root": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^/"
+    },
+    "workspace_uuid": {
+      "oneOf": [
+        {
+          "type": "string",
+          "format": "uuid"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "podway_directory_removed": {
+      "type": "boolean"
+    },
+    "already_absent": {
+      "type": "boolean"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "already_absent": {
+            "const": true
+          }
+        },
+        "required": [
+          "already_absent"
+        ]
+      },
+      "then": {
+        "properties": {
+          "workspace_uuid": {
+            "type": "null"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "workspace_uuid": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      }
+    }
+  ],
+  "$comment": "Reserved by V2DFC-003; not emitted before the owning daemon-free cutover task."
+}
