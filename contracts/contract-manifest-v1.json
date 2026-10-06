@@ -1003,7 +1003,7 @@
     {
       "kind": "known_answer_fixture",
       "path": "tests/fixtures/v2/compatibility/external-check-result-reservation.json",
-      "sha256": "sha256:dcf9c549ce3d6abf43c030eac60f6b58cbb975790192d94f5b8f874e34023130"
+      "sha256": "sha256:30fd98144e2e34806c936b5dbde47f16f4ea211fc5b4fe7a84a109cf20bc24a1"
     },
     {
       "kind": "known_answer_fixture",
@@ -1048,12 +1048,12 @@
     {
       "kind": "known_answer_fixture",
       "path": "tests/fixtures/v2/payload/maximum-next-recipe.json",
-      "sha256": "sha256:a0a93bbc523672c4b7877e72acea6dd77bc95fbd4e4a31d4baea4e62bce48018"
+      "sha256": "sha256:9e1a42e5b37406f5af0d328ebd9db77e8e260a5aafff7cbc1bdb71045bf81a7a"
     },
     {
       "kind": "known_answer_fixture",
       "path": "tests/fixtures/v2/payload/maximum-status-recipe.json",
-      "sha256": "sha256:5f2d5121bbfbd35bb6bffa81092067c896daabc2b00f299351295dded83b8daa"
+      "sha256": "sha256:3f6f725175a9b132fc6b2916dedb949570751b905d2578644fafb35aea0fbe92"
     },
     {
       "kind": "known_answer_fixture",
@@ -1063,7 +1063,7 @@
     {
       "kind": "known_answer_fixture",
       "path": "tests/fixtures/v2/payload/truncation-and-overflow-recipe.json",
-      "sha256": "sha256:ff46c420ddb9075bf02c891a12ae95a479c8f8ba6678fbdb7b5a4b2a271e9434"
+      "sha256": "sha256:745dfa80441b718fe0e48741fc6319ec8550e669e605a4d9123c08e6148db869"
     },
     {
       "kind": "known_answer_fixture",
@@ -1096,7 +1096,7 @@
       "sha256": "sha256:7de5f4f024eb795ae7fb73594d4847b833016bea6be9f2737c567b524ae5466e"
     }
   ],
-  "digest": "sha256:8667f42878d00725268f12ad30263deffb5dd9a872186931e4e12f58a69bca81",
+  "digest": "sha256:9d2a563f51c820035de27f7bf29adeea618221e61f85ac7aedd3799a5c605359",
   "product": "podway",
   "product_version": "0.2.12",
   "schema_version": "podway.contract-manifest/v1",

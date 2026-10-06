@@ -143,7 +143,9 @@ fn bootstrap_then_existing_uses_the_store_uuid_and_real_main_and_linked_worktree
         bootstrap.worktree().identity().state(),
         &WorkspaceIdentityStateV1::Candidate
     );
-    let bootstrap_key = bootstrap.scheduler_key().clone();
+    let bootstrap_key = podway_daemon::scheduler::WorkspaceSchedulerKeyV1::from_durable_identity(
+        bootstrap.store_identity(),
+    );
     let durable_uuid = bootstrap.store_identity().workspace_uuid().clone();
     let store = bind_bootstrap_workspace(&bootstrap);
     drop(store);
@@ -156,9 +158,17 @@ fn bootstrap_then_existing_uses_the_store_uuid_and_real_main_and_linked_worktree
         &WorkspaceIdentityStateV1::Bound
     );
     assert_eq!(existing.store_identity().workspace_uuid(), &durable_uuid);
-    assert_eq!(existing.scheduler_key(), &bootstrap_key);
     assert_eq!(
-        existing.scheduler_key().workspace_uuid(),
+        podway_daemon::scheduler::WorkspaceSchedulerKeyV1::from_durable_identity(
+            existing.store_identity()
+        ),
+        bootstrap_key
+    );
+    assert_eq!(
+        podway_daemon::scheduler::WorkspaceSchedulerKeyV1::from_durable_identity(
+            existing.store_identity()
+        )
+        .workspace_uuid(),
         existing.store_identity().workspace_uuid()
     );
 
@@ -371,7 +381,14 @@ fn root_and_nested_selectors_converge_to_the_same_path_free_scheduler_key() {
         .resolve_existing(selector(&nested), Some(&durable_uuid))
         .expect("nested alias must resolve to the same worktree");
 
-    assert_eq!(root.scheduler_key(), nested.scheduler_key());
+    assert_eq!(
+        podway_daemon::scheduler::WorkspaceSchedulerKeyV1::from_durable_identity(
+            root.store_identity()
+        ),
+        podway_daemon::scheduler::WorkspaceSchedulerKeyV1::from_durable_identity(
+            nested.store_identity()
+        )
+    );
     assert_eq!(root.store_identity(), nested.store_identity());
     assert_eq!(root.database_path(), nested.database_path());
 }

@@ -198,8 +198,12 @@ change, release, installation, or external consumer modification.
 - `podway-store`, `podway-git`, and `podway-service` own SQLite persistence, read-only
   Git/worktree discovery, and macOS service integration respectively.
 - `podway-presets` embeds and validates the reviewable YAML in `assets/presets/`.
-- `podway-daemon` composes infrastructure and owns the socket server, registry,
-  scheduler, durable jobs, workers, and observability.
+- `podway-engine` owns host-independent projections, preparation, request digests,
+  native execution boundaries, workspace resolution, filesystem primitives, and
+  marker codecs. It must not depend on service or daemon hosting.
+- `podway-daemon` composes the engine and hosting infrastructure and owns admission,
+  claimed execution, runtime-workspace maintenance protocols, the socket server,
+  registry, scheduler, durable jobs, workers, and observability.
 - `podway-cli` owns command grammar, daemon communication, rendering, help, and shell
   completion. It must not reach into store internals.
 - Preserve the dependency direction documented in

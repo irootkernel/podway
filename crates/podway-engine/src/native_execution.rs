@@ -1,6 +1,6 @@
-//! Native production adapters for daemon-owned execution.
+//! Native production adapters for host-independent execution.
 //!
-//! This module keeps host concerns at the daemon boundary.  Workspace identity is always
+//! These adapters implement native boundaries without daemon hosting. Workspace identity is always
 //! re-established through the Store/Git two-pass resolver; local artifact bytes remain outside
 //! durable state and are read only through the descriptor-anchored Git resolver.
 

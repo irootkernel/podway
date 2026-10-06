@@ -12,7 +12,7 @@ pub mod dispatch;
 pub mod endpoint;
 pub mod execution;
 pub mod managed_dev;
-pub mod native_execution;
+pub use podway_engine::native_execution;
 pub mod observability;
 pub mod peer;
 pub mod production;
@@ -22,9 +22,9 @@ pub mod runtime;
 pub mod runtime_workspace;
 pub mod scheduler;
 pub mod server;
-pub mod v2_read_service;
+pub use podway_engine::v2_read_service;
 pub mod worker;
-pub mod workspace;
+pub use podway_engine::workspace;
 use std::{
     error::Error,
     fmt,

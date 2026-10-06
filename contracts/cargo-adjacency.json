@@ -14,7 +14,8 @@
         "podway-service",
         "podway-presets",
         "podway-daemon",
-        "podway-cli"
+        "podway-cli",
+        "podway-engine"
       ]
     },
     {
@@ -30,7 +31,8 @@
         "podway-service",
         "podway-presets",
         "podway-daemon",
-        "podway-cli"
+        "podway-cli",
+        "podway-engine"
       ]
     },
     {
@@ -46,7 +48,8 @@
         "podway-service",
         "podway-presets",
         "podway-daemon",
-        "podway-cli"
+        "podway-cli",
+        "podway-engine"
       ]
     },
     {
@@ -62,7 +65,8 @@
         "podway-service",
         "podway-presets",
         "podway-daemon",
-        "podway-cli"
+        "podway-cli",
+        "podway-engine"
       ]
     },
     {
@@ -78,7 +82,8 @@
         "podway-service",
         "podway-presets",
         "podway-daemon",
-        "podway-cli"
+        "podway-cli",
+        "podway-engine"
       ]
     },
     {
@@ -94,7 +99,8 @@
         "podway-git",
         "podway-presets",
         "podway-daemon",
-        "podway-cli"
+        "podway-cli",
+        "podway-engine"
       ]
     },
     {
@@ -110,6 +116,24 @@
         "podway-git",
         "podway-service",
         "podway-daemon",
+        "podway-cli",
+        "podway-engine"
+      ]
+    },
+    {
+      "name": "podway-engine",
+      "path": "crates/podway-engine",
+      "approved_dependencies": [
+        "podway-core",
+        "podway-protocol",
+        "podway-config",
+        "podway-store",
+        "podway-git",
+        "podway-presets"
+      ],
+      "forbidden_dependencies": [
+        "podway-service",
+        "podway-daemon",
         "podway-cli"
       ]
     },
@@ -123,7 +147,8 @@
         "podway-store",
         "podway-git",
         "podway-service",
-        "podway-presets"
+        "podway-presets",
+        "podway-engine"
       ],
       "forbidden_dependencies": [
         "podway-cli"
@@ -142,7 +167,8 @@
       "forbidden_dependencies": [
         "podway-store",
         "podway-git",
-        "podway-daemon"
+        "podway-daemon",
+        "podway-engine"
       ]
     }
   ]

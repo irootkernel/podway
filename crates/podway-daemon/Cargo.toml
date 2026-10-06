@@ -13,6 +13,7 @@ default = []
 development-v2-admission = []
 
 [dependencies]
+podway-engine = { path = "../podway-engine" }
 podway-core = { path = "../podway-core" }
 podway-protocol = { path = "../podway-protocol" }
 podway-config = { path = "../podway-config" }

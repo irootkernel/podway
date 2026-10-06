@@ -7,7 +7,7 @@ use podway_core::{
     AttemptId, AttemptLifecycle, ProcedureSnapshotId, Revision, SessionId, SessionLifecycle,
     Sha256Digest, UnixMillis, WorkspaceId,
 };
-use podway_daemon::execution::{
+use podway_engine::execution::{
     ProcedureProviderV1, ProcedureV2SourceAdmissionErrorV1, ProcedureV2StartPreparationErrorV1,
     prepare_custom_procedure_v2_start, prepare_preset_procedure_v2_start,
     workspace_procedure_snapshot_from_bytes_v2,

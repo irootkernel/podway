@@ -18,7 +18,7 @@ use podway_core::{
     SessionAttemptV2, SessionId, SessionLifecycle, SessionTraceV2, Sha256Digest, TraceSequenceV2,
     TransitionEffectV2, UnixMillis, WorkspaceId, canonicalize_json_v1,
 };
-use podway_daemon::{
+use podway_engine::{
     execution::{
         ProcedureProviderV1, ProcedureV2SourceAdmissionErrorV1, prepare_custom_procedure_v2_start,
         workspace_procedure_snapshot_from_bytes_v2,

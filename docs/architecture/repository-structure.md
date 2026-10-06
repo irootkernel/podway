@@ -26,16 +26,21 @@ artifacts/              Ignored, host-local verification output
 | `podway-store` | SQLite schema, repositories, durable jobs, transactions, and recovery |
 | `podway-git` | Worktree discovery, identity, containment, and layout |
 | `podway-service` | Platform paths, service-manager contract, and macOS LaunchAgent integration |
-| `podway-daemon` | Socket server, registry, scheduler, dispatch, workers, and observability |
+| `podway-engine` | Host-independent read projections, preparation, request identity, native workspace boundaries, and marker codecs |
+| `podway-daemon` | Socket server, registry, scheduler, admission, claimed execution, dispatch, workers, and observability |
 | `podway-cli` | Command grammar, daemon client, rendering, help, and shell completion |
 
 ## Dependency direction
 
 `podway-core` has no infrastructure dependencies. Config and protocol may depend
 on core value types. Store, Git, and service code implement infrastructure around
-those contracts. The daemon composes infrastructure; the CLI communicates through
-the protocol and never reaches into store internals. Cycles and reverse edges are
-rejected by executable architecture contracts.
+those contracts. `podway-engine` composes core, protocol, config, Store, Git, and
+presets for host-independent domain services. The daemon uses the engine while
+retaining admission, claimed execution, runtime-workspace maintenance protocols,
+and hosting. During `V2DFC-004`, the CLI communicates through the protocol and
+has no engine dependency; its direct-engine cutover belongs to `V2DFC-007`.
+Cycles, reverse edges, and direct CLI access to Store internals are rejected by
+executable architecture contracts.
 
 ## Tests
 

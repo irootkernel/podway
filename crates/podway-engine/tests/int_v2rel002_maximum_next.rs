@@ -12,7 +12,7 @@ use podway_core::{
     ResolvedEvidenceReferenceV2, Revision, SessionAttemptV2, SessionId, SessionLifecycle,
     SessionTraceV2, Sha256Digest, TraceSequenceV2, UnixMillis, WorkspaceId,
 };
-use podway_daemon::{
+use podway_engine::{
     execution::{
         ProcedureProviderV1, ProcedureV2SourceAdmissionErrorV1, prepare_custom_procedure_v2_start,
         workspace_procedure_snapshot_from_bytes_v2,

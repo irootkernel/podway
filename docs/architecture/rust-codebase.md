@@ -10,6 +10,7 @@ crates/
   podway-config/
   podway-core/
   podway-daemon/
+  podway-engine/
   podway-git/
   podway-presets/
   podway-protocol/
@@ -27,8 +28,10 @@ tools/
 
 Each crate owns its Cargo integration-test targets under `crates/<crate>/tests/`.
 Those targets use the mechanically checked `arch_*`, `int_*`, and `e2e_*` prefixes;
-only `e2e_*` targets may launch the real `podway` or `podwayd` binaries. The root
-`tests/fixtures/` directory contains shared contract fixtures rather than test
+`int_*` targets may exercise a CLI process boundary, while `e2e_*` targets
+exercise complete real-binary scenarios. Architecture targets cannot launch
+product binaries. The executable test-layout contract owns these distinctions.
+The root `tests/fixtures/` directory contains shared contract fixtures rather than test
 targets. The repository commits `Cargo.lock` because Podway is an application.
 
 ## Crate responsibilities
@@ -118,6 +121,23 @@ Owns:
 The source YAML under `assets/presets/` is the reviewable source. The crate embeds
 exactly those files at build time.
 
+### `podway-engine`
+
+Owns the host-independent services extracted by `V2DFC-004`:
+
+- deterministic Procedure v2 status, next, observation, evidence, and delegation projections;
+- start, snapshot, and item preparation and canonical request digests;
+- execution boundary values and native identifier, clock, Procedure, and artifact adapters;
+- workspace resolution, Store binding inspection, validated filesystem directories, and marker codecs.
+
+The engine depends on core, protocol, config, Store, Git, and presets. It has no
+service or daemon dependency. The daemon derives scheduler keys from the engine's
+validated durable Store identity and owns the runtime-workspace protocols. Its
+exclusive maintenance lease and Store-first source checks precede issuance of the
+filesystem maintenance token. Moving filesystem primitives does not move those
+host barriers. Direct command execution is implemented by `V2DFC-006` before the
+CLI switches in `V2DFC-007`; the extraction alone changes no emitted output.
+
 ### `podway-daemon`
 
 Owns:
@@ -128,7 +148,8 @@ Owns:
 - peer-user checks;
 - worktree scheduler registry;
 - durable admission and job execution;
-- read query service;
+- read query hosting through engine projections;
+- runtime-workspace maintenance protocols;
 - graceful shutdown;
 - structured logging.
 
@@ -150,7 +171,8 @@ Owns:
 - `podway-core` has no infrastructure dependencies.
 - `podway-config` and `podway-protocol` may depend on core value types, not daemon or store.
 - `podway-store`, `podway-git`, and `podway-service` may depend on `podway-core` only.
-- `podway-daemon` composes all infrastructure crates.
+- `podway-engine` composes core, protocol, config, Store, Git, and presets without service or daemon dependencies.
+- `podway-daemon` composes the engine and retained hosting infrastructure.
 - `podway-cli` depends on protocol and presentation types, not store internals.
 - Cyclic crate dependencies are prohibited.
 

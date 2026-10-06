@@ -54,7 +54,7 @@
         "termination": "restart observed",
         "recovery": "claimed job survives",
         "invariant": "verification is daemon-owned",
-        "source_locator": "crates/podway-daemon/src/native_execution.rs::NativeArtifactVerifierV1::hash_verified_local_artifact"
+        "source_locator": "crates/podway-engine/src/native_execution.rs::NativeArtifactVerifierV1::hash_verified_local_artifact"
       }
     },
     {
@@ -105,11 +105,11 @@
       "id": "D01",
       "proof": {
         "failpoint": "reset marker publish",
-        "test": "crates/podway-daemon/src/workspace.rs::d01_reset_marker_publication_interrupted_before_link_publishes_no_marker",
+        "test": "crates/podway-engine/src/workspace.rs::d01_reset_marker_publication_interrupted_before_link_publishes_no_marker",
         "termination": "in-process failure observed",
         "recovery": "retry converges to one durable marker",
         "invariant": "reset marker publication is atomic",
-        "source_locator": "crates/podway-daemon/src/workspace.rs::ValidatedRuntimeDirectoryV1::publish_reset_marker"
+        "source_locator": "crates/podway-engine/src/workspace.rs::ValidatedRuntimeDirectoryV1::publish_reset_marker"
       }
     },
     {

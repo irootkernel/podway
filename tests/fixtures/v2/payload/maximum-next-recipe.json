@@ -18,9 +18,9 @@
   "proof_requirement_id": "V2PAY-002",
   "production_proof": {
     "kind": "cargo-test",
-    "path": "crates/podway-daemon/tests/int_v2rel002_maximum_next.rs",
+    "path": "crates/podway-engine/tests/int_v2rel002_maximum_next.rs",
     "function": "v2rel002_admitted_boundary_rich_next_uses_the_production_projector_and_frame",
-    "command": "cargo test -p podway-daemon --test int_suite int_v2rel002_maximum_next::v2rel002_admitted_boundary_rich_next_uses_the_production_projector_and_frame --locked -- --exact"
+    "command": "cargo test -p podway-engine --test int_suite int_v2rel002_maximum_next::v2rel002_admitted_boundary_rich_next_uses_the_production_projector_and_frame --locked -- --exact"
   },
   "construction": [
     "materialize every applicable next-result-v3 field exactly once while the schema and payload matrix exhaustively assign every conditional field",

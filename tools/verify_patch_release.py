@@ -28,6 +28,7 @@ PRODUCT_PACKAGES = {
     "podway-cli",
     "podway-config",
     "podway-core",
+    "podway-engine",
     "podway-daemon",
     "podway-git",
     "podway-presets",

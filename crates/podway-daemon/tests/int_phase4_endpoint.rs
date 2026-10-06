@@ -131,7 +131,7 @@ fn rust_tokens(source: &str) -> Vec<RustTokenV1> {
                             cursor += 2;
                         }
                         (Some(_), _) => cursor += 1,
-                        (None, _) => panic!("unterminated block comment in daemon source"),
+                        (None, _) => panic!("unterminated block comment in audited source"),
                     }
                 }
             }
@@ -150,7 +150,10 @@ fn rust_tokens(source: &str) -> Vec<RustTokenV1> {
                     }
                     cursor += 1;
                 }
-                assert!(cursor < bytes.len(), "unterminated string in daemon source");
+                assert!(
+                    cursor < bytes.len(),
+                    "unterminated string in audited source"
+                );
                 tokens.push(RustTokenV1::StringLiteral(source[start..cursor].to_owned()));
                 cursor = quote + (cursor - quote) + 1;
             }
@@ -183,7 +186,7 @@ fn rust_tokens(source: &str) -> Vec<RustTokenV1> {
                 cursor = content_start;
                 loop {
                     let Some(end_quote) = source[cursor..].find('"') else {
-                        panic!("unterminated raw string in daemon source");
+                        panic!("unterminated raw string in audited source");
                     };
                     cursor += end_quote + 1;
                     if bytes[cursor..].starts_with(&vec![b'#'; hashes]) {
@@ -218,22 +221,22 @@ fn rust_tokens(source: &str) -> Vec<RustTokenV1> {
     tokens
 }
 
-fn daemon_source_inventory(source_root: &Path) -> BTreeSet<PathBuf> {
+fn source_inventory(source_root: &Path) -> BTreeSet<PathBuf> {
     fn visit(directory: &Path, source_root: &Path, sources: &mut BTreeSet<PathBuf>) {
         for entry in fs::read_dir(directory).unwrap_or_else(|error| {
             panic!(
-                "daemon source directory {} must be readable: {error}",
+                "audited source directory {} must be readable: {error}",
                 directory.display()
             )
         }) {
-            let entry = entry.expect("daemon source directory entries must be readable");
+            let entry = entry.expect("audited source directory entries must be readable");
             let path = entry.path();
             if path.is_dir() {
                 visit(&path, source_root, sources);
             } else if path.extension().is_some_and(|extension| extension == "rs") {
                 sources.insert(
                     path.strip_prefix(source_root)
-                        .expect("daemon source must remain below src")
+                        .expect("audited source must remain below src")
                         .to_owned(),
                 );
             }
@@ -245,58 +248,30 @@ fn daemon_source_inventory(source_root: &Path) -> BTreeSet<PathBuf> {
     sources
 }
 
-fn assert_frozen_daemon_source_inventory(source_root: &Path) {
+fn assert_frozen_source_inventory(source_root: &Path, expected: &[&str]) {
     assert!(
         !source_root
             .parent()
-            .expect("daemon source root must have a package directory")
+            .expect("audited source root must have a package directory")
             .join("build.rs")
             .exists(),
-        "PAC-063 rejects an unclassified daemon build-script source input"
+        "PAC-063 rejects an unclassified build-script source input"
     );
-    let expected = [
-        "blocking.rs",
-        "development_v2.rs",
-        "dispatch.rs",
-        "endpoint.rs",
-        "execution.rs",
-        "execution/int_v2gol_epic_execution_integrity/mod.rs",
-        "lib.rs",
-        "main.rs",
-        "managed_dev.rs",
-        "native_execution.rs",
-        "observability.rs",
-        "peer.rs",
-        "production.rs",
-        "read_service.rs",
-        "registry.rs",
-        "runtime.rs",
-        "runtime_workspace.rs",
-        "scheduler.rs",
-        "server.rs",
-        "server/runtime_reset.rs",
-        "server/runtime_reset/tests.rs",
-        "v2_read_service.rs",
-        "worker.rs",
-        "workspace.rs",
-    ]
-    .into_iter()
-    .map(PathBuf::from)
-    .collect::<BTreeSet<_>>();
-    let actual = daemon_source_inventory(source_root);
+    let expected = expected.iter().map(PathBuf::from).collect::<BTreeSet<_>>();
+    let actual = source_inventory(source_root);
     assert_eq!(
         actual, expected,
-        "PAC-063 source inventory is frozen: every daemon .rs input under src must be explicitly reviewed"
+        "PAC-063 source inventory is frozen: every .rs input under src must be explicitly reviewed"
     );
 
     for relative_source in &actual {
         let source_path = source_root.join(relative_source);
         let parent = source_path
             .parent()
-            .expect("daemon source must have a parent");
+            .expect("audited source must have a parent");
         let tokens = rust_tokens(&fs::read_to_string(&source_path).unwrap_or_else(|error| {
             panic!(
-                "daemon source {} must be readable: {error}",
+                "audited source {} must be readable: {error}",
                 source_path.display()
             )
         }));
@@ -332,20 +307,20 @@ fn assert_frozen_daemon_source_inventory(source_root: &Path) {
                         Some(RustTokenV1::Punct(']')),
                     ) => parent.join(path),
                     _ => panic!(
-                        "daemon source {} has an unclassified include! input; generated and macro-composed inputs require an explicit inventory review",
+                        "audited source {} has an unclassified include! input; generated and macro-composed inputs require an explicit inventory review",
                         source_path.display()
                     ),
                 };
                 let relative_input = input.strip_prefix(source_root).unwrap_or_else(|_| {
                     panic!(
-                        "daemon source {} includes unclassified external input {}",
+                        "audited source {} includes unclassified external input {}",
                         source_path.display(),
                         input.display()
                     )
                 });
                 assert!(
                     actual.contains(relative_input),
-                    "daemon source {} includes unclassified source input {}",
+                    "audited source {} includes unclassified source input {}",
                     source_path.display(),
                     input.display()
                 );
@@ -377,7 +352,7 @@ fn assert_frozen_daemon_source_inventory(source_root: &Path) {
                             .expect("daemon module source must have a file stem"),
                     ),
                     None => panic!(
-                        "daemon source {} must have a file name",
+                        "audited source {} must have a file name",
                         source_path.display()
                     ),
                 };
@@ -388,14 +363,14 @@ fn assert_frozen_daemon_source_inventory(source_root: &Path) {
                     .unwrap_or_else(|| if flat.is_file() { flat } else { nested });
                 let relative_input = input.strip_prefix(source_root).unwrap_or_else(|_| {
                     panic!(
-                        "daemon source {} declares unclassified external module input {}",
+                        "audited source {} declares unclassified external module input {}",
                         source_path.display(),
                         input.display()
                     )
                 });
                 assert!(
                     actual.contains(relative_input),
-                    "daemon source {} declares module {} with unclassified input {}",
+                    "audited source {} declares module {} with unclassified input {}",
                     source_path.display(),
                     module,
                     input.display()
@@ -546,7 +521,7 @@ fn assert_network_path_is_rejected(path: &[String], source: &Path) {
     );
 }
 
-fn assert_no_forbidden_daemon_apis(source_root: &Path) {
+fn assert_no_forbidden_source_apis(source_root: &Path) {
     const ALLOWED_MACROS: &[&str] = &[
         "assert",
         "assert_eq",
@@ -564,11 +539,11 @@ fn assert_no_forbidden_daemon_apis(source_root: &Path) {
         "write",
     ];
 
-    for relative_source in daemon_source_inventory(source_root) {
+    for relative_source in source_inventory(source_root) {
         let source_path = source_root.join(&relative_source);
         let tokens = rust_tokens(&fs::read_to_string(&source_path).unwrap_or_else(|error| {
             panic!(
-                "daemon source {} must be readable: {error}",
+                "audited source {} must be readable: {error}",
                 source_path.display()
             )
         }));
@@ -871,8 +846,48 @@ fn pac063_daemon_exposes_only_a_private_unix_endpoint_and_no_network_surface() {
     );
 
     let source_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
-    assert_frozen_daemon_source_inventory(&source_root);
-    assert_no_forbidden_daemon_apis(&source_root);
+    assert_frozen_source_inventory(
+        &source_root,
+        &[
+            "blocking.rs",
+            "development_v2.rs",
+            "dispatch.rs",
+            "endpoint.rs",
+            "execution.rs",
+            "execution/int_v2gol_epic_execution_integrity/mod.rs",
+            "lib.rs",
+            "main.rs",
+            "managed_dev.rs",
+            "observability.rs",
+            "peer.rs",
+            "production.rs",
+            "read_service.rs",
+            "registry.rs",
+            "runtime.rs",
+            "runtime_workspace.rs",
+            "scheduler.rs",
+            "server.rs",
+            "server/runtime_reset.rs",
+            "server/runtime_reset/tests.rs",
+            "worker.rs",
+        ],
+    );
+    assert_no_forbidden_source_apis(&source_root);
+    let engine_source_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("daemon package must belong to the crates directory")
+        .join("podway-engine/src");
+    assert_frozen_source_inventory(
+        &engine_source_root,
+        &[
+            "execution.rs",
+            "lib.rs",
+            "native_execution.rs",
+            "v2_read_service.rs",
+            "workspace.rs",
+        ],
+    );
+    assert_no_forbidden_source_apis(&engine_source_root);
     assert_network_proof_sentinels();
     let (direct_dependencies, resolved_packages) = resolved_daemon_packages();
     assert_eq!(
@@ -881,6 +896,7 @@ fn pac063_daemon_exposes_only_a_private_unix_endpoint_and_no_network_surface() {
             "nix",
             "podway-config",
             "podway-core",
+            "podway-engine",
             "podway-git",
             "podway-presets",
             "podway-protocol",

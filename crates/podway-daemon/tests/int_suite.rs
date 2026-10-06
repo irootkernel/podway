@@ -40,8 +40,6 @@ mod int_v2_only_reset_recovery;
 mod int_v2agt006_small_change_preset;
 #[path = "int_v2dfc001_feasibility.rs"]
 mod int_v2dfc001_feasibility;
-#[path = "int_v2dog003_embedded_presets.rs"]
-mod int_v2dog003_embedded_presets;
 #[path = "int_v2drw001_decide.rs"]
 mod int_v2drw001_decide;
 #[path = "int_v2drw003_rework.rs"]
@@ -72,18 +70,12 @@ mod int_v2grd004_option_guards;
 mod int_v2ref005_bug_fix_paths;
 #[path = "int_v2ref_analysis_paths.rs"]
 mod int_v2ref_analysis_paths;
-#[path = "int_v2rel002_maximum_next.rs"]
-mod int_v2rel002_maximum_next;
 #[path = "int_v2ret003_registry_pruning.rs"]
 mod int_v2ret003_registry_pruning;
 #[path = "int_v2ret004_workspace_removal.rs"]
 mod int_v2ret004_workspace_removal;
 #[path = "int_v2ret005_retirement_conformance.rs"]
 mod int_v2ret005_retirement_conformance;
-#[path = "int_v2run001_start.rs"]
-mod int_v2run001_start;
-#[path = "int_v2run002_views.rs"]
-mod int_v2run002_views;
 #[path = "int_v2run003_runtime.rs"]
 mod int_v2run003_runtime;
 #[path = "int_v2run004_retry.rs"]

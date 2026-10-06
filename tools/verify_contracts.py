@@ -124,6 +124,7 @@ CRATE_ORDER = (
     "podway-git",
     "podway-service",
     "podway-presets",
+    "podway-engine",
     "podway-daemon",
     "podway-cli",
 )
@@ -135,7 +136,16 @@ EXPECTED_ADJACENCY = {
     "podway-git": {"podway-core"},
     "podway-service": {"podway-core"},
     "podway-presets": {"podway-core", "podway-config"},
+    "podway-engine": {
+        "podway-core",
+        "podway-protocol",
+        "podway-config",
+        "podway-store",
+        "podway-git",
+        "podway-presets",
+    },
     "podway-daemon": {
+        "podway-engine",
         "podway-core",
         "podway-protocol",
         "podway-config",
@@ -681,7 +691,7 @@ def load_adjacency_contract(root: Path) -> list[dict[str, Any]]:
         fail("Cargo adjacency contract has an invalid v1 identity or owner")
     crates = contract["crates"]
     if not isinstance(crates, list) or len(crates) != len(CRATE_ORDER):
-        fail("Cargo adjacency contract must define all nine crates exactly once")
+        fail("Cargo adjacency contract must define all ten crates exactly once")
 
     seen: set[str] = set()
     known = set(CRATE_ORDER)
@@ -766,7 +776,7 @@ def validate_adjacency(root: Path) -> int:
     members = workspace["members"]
     expected_members = {entry["path"] for entry in crates}
     if not all(isinstance(member, str) for member in members) or set(members) != expected_members or len(members) != len(expected_members):
-        fail("workspace members drift from the exact nine-crate adjacency contract")
+        fail("workspace members drift from the exact ten-crate adjacency contract")
 
     for crate in crates:
         name = crate["name"]

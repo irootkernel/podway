@@ -1,9 +1,9 @@
-//! Daemon-authoritative, read-only workspace resolution.
+//! Host-independent, read-only workspace resolution.
 //!
 //! Git first establishes a validated worktree snapshot. The Store binding is then inspected
 //! without mutation, and Git is resolved again with the durable binding before a caller may open
-//! or update SQLite. Paths remain diagnostic and routing data; the scheduler key is derived only
-//! from the store-validated UUID and Git administration fingerprints.
+//! or update SQLite. Paths remain diagnostic and routing data. The hosting caller can derive
+//! its scheduler key from the Store-validated UUID and Git administration fingerprints.
 
 use std::{
     error::Error,
@@ -47,8 +47,6 @@ use podway_store::{
     WorkspaceBindingV1,
 };
 
-use crate::scheduler::WorkspaceSchedulerKeyV1;
-
 const STATE_DATABASE_FILE_NAME_V1: &str = "state.sqlite3";
 const STORED_ROOT_DIAGNOSTIC_V1: &str = "store-validated workspace root";
 /// The sole reset-marker schema accepted as destructive-reset recovery authority.
@@ -58,7 +56,7 @@ pub const RESET_MARKER_SCHEMA_V2: &str = "podway.reset-marker/v2";
 /// Reset-marker decoding is bounded before parsing so a local corrupt file cannot amplify recovery.
 pub const MAX_RESET_MARKER_BYTES_V1: u64 = 16 * 1024;
 const RESET_MARKER_FILE_NAME_V1: &str = "reset.marker";
-pub(crate) const DEVELOPMENT_V2_MARKER_FILE_NAME_V1: &str = "development-v2.marker";
+pub const DEVELOPMENT_V2_MARKER_FILE_NAME_V1: &str = "development-v2.marker";
 pub(crate) const MAX_DEVELOPMENT_V2_MARKER_BYTES_V1: u64 = 4 * 1024;
 const STATE_DATABASE_FILE_WAL_NAME_V1: &str = "state.sqlite3-wal";
 const STATE_DATABASE_FILE_SHM_NAME_V1: &str = "state.sqlite3-shm";
@@ -331,13 +329,15 @@ impl fmt::Display for RuntimeDirectoryPathViolationV1 {
         }
     }
 }
-/// Opaque manager-issued authority for descriptor-relative destructive reset maintenance.
-pub(crate) struct ResetMaintenanceFilesystemTokenV1 {
+/// Opaque host-issued authority for descriptor-relative destructive reset maintenance.
+/// The host must acquire its exclusive maintenance lease and verify the Store-first source
+/// authority before constructing this token; filesystem primitives do not own host scheduling.
+pub struct ResetMaintenanceFilesystemTokenV1 {
     _private: (),
 }
 
 impl ResetMaintenanceFilesystemTokenV1 {
-    pub(crate) const fn issue() -> Self {
+    pub const fn issue() -> Self {
         Self { _private: () }
     }
 }
@@ -541,7 +541,7 @@ impl RemovalObjectIdentityV1 {
 }
 
 /// A `.podway` directory opened relative to one freshly validated Git worktree root.
-pub(crate) struct ValidatedPodwayRemovalDirectoryV1 {
+pub struct ValidatedPodwayRemovalDirectoryV1 {
     #[cfg(unix)]
     root: File,
     #[cfg(unix)]
@@ -557,7 +557,7 @@ pub(crate) struct ValidatedPodwayRemovalDirectoryV1 {
 /// The descriptor remains bound to the validated `.podway` directory even if the caller-visible
 /// worktree pathname is replaced. Every publication invokes the supplied authority check after
 /// the temporary file is durable and immediately before the descriptor-relative link or rename.
-pub(crate) struct ValidatedModeSwitchDirectoryV1 {
+pub struct ValidatedModeSwitchDirectoryV1 {
     #[cfg(unix)]
     podway: File,
     #[cfg(unix)]
@@ -565,9 +565,7 @@ pub(crate) struct ValidatedModeSwitchDirectoryV1 {
 }
 
 impl ValidatedModeSwitchDirectoryV1 {
-    pub(crate) fn open(
-        worktree: &ValidatedWorktreeV1,
-    ) -> Result<Self, WorkspaceRemovalFilesystemErrorV1> {
+    pub fn open(worktree: &ValidatedWorktreeV1) -> Result<Self, WorkspaceRemovalFilesystemErrorV1> {
         #[cfg(unix)]
         {
             let directory = ValidatedPodwayRemovalDirectoryV1::open(worktree)?
@@ -584,7 +582,7 @@ impl ValidatedModeSwitchDirectoryV1 {
         }
     }
 
-    pub(crate) fn read_fixed_private_file(
+    pub fn read_fixed_private_file(
         &self,
         name: &str,
         maximum: usize,
@@ -617,7 +615,7 @@ impl ValidatedModeSwitchDirectoryV1 {
         }
     }
 
-    pub(crate) fn publish_fixed_private_file(
+    pub fn publish_fixed_private_file(
         &self,
         name: &str,
         bytes: &[u8],
@@ -722,7 +720,7 @@ impl ValidatedModeSwitchDirectoryV1 {
 }
 
 impl ValidatedPodwayRemovalDirectoryV1 {
-    pub(crate) fn open(
+    pub fn open(
         worktree: &ValidatedWorktreeV1,
     ) -> Result<Option<Self>, WorkspaceRemovalFilesystemErrorV1> {
         #[cfg(unix)]
@@ -786,7 +784,7 @@ impl ValidatedPodwayRemovalDirectoryV1 {
         }
     }
 
-    pub(crate) fn read_marker(
+    pub fn read_marker(
         &self,
     ) -> Result<Option<WorkspaceRemovalMarkerV1>, WorkspaceRemovalFilesystemErrorV1> {
         #[cfg(unix)]
@@ -811,7 +809,7 @@ impl ValidatedPodwayRemovalDirectoryV1 {
         }
     }
 
-    pub(crate) fn publish_marker(
+    pub fn publish_marker(
         &self,
         marker: &WorkspaceRemovalMarkerV1,
     ) -> Result<(), WorkspaceRemovalFilesystemErrorV1> {
@@ -917,7 +915,7 @@ impl ValidatedPodwayRemovalDirectoryV1 {
         }
     }
 
-    pub(crate) fn remove_all_with_marker_last(
+    pub fn remove_all_with_marker_last(
         &self,
         expected: &WorkspaceRemovalMarkerV1,
     ) -> Result<(), WorkspaceRemovalFilesystemErrorV1> {
@@ -999,7 +997,7 @@ impl ValidatedPodwayRemovalDirectoryV1 {
 
     /// Removes only the contents of the descriptor-validated `.podway/runtime` directory.
     /// Configuration, procedures, Git state, and every sibling under `.podway` are retained.
-    pub(crate) fn clear_runtime_contents(&self) -> Result<(), WorkspaceRemovalFilesystemErrorV1> {
+    pub fn clear_runtime_contents(&self) -> Result<(), WorkspaceRemovalFilesystemErrorV1> {
         #[cfg(unix)]
         {
             let runtime = self
@@ -1033,7 +1031,7 @@ impl ValidatedPodwayRemovalDirectoryV1 {
         }
     }
 
-    pub(crate) fn remove_empty_residual(&self) -> Result<(), WorkspaceRemovalFilesystemErrorV1> {
+    pub fn remove_empty_residual(&self) -> Result<(), WorkspaceRemovalFilesystemErrorV1> {
         #[cfg(unix)]
         {
             let mut inspection_budget = RemovalTraversalBudgetV1::new();
@@ -1214,7 +1212,7 @@ pub enum ValidatedRuntimeDirectoryErrorV1 {
 impl ValidatedRuntimeDirectoryErrorV1 {
     /// Returns true only when opening the validated runtime directory proved it does not exist.
     /// Other path errors remain fail-closed.
-    pub(crate) fn is_missing_directory(&self) -> bool {
+    pub fn is_missing_directory(&self) -> bool {
         matches!(
             self,
             Self::Path {
@@ -1357,7 +1355,7 @@ impl ValidatedRuntimeDirectoryV1 {
     /// Reads the fixed development-v2 marker through the already validated runtime-directory
     /// descriptor. The admission policy owns decoding; this boundary owns symlink-safe bounded
     /// filesystem access.
-    pub(crate) fn read_development_v2_marker_bytes(
+    pub fn read_development_v2_marker_bytes(
         &self,
     ) -> Result<Option<Vec<u8>>, ValidatedRuntimeDirectoryErrorV1> {
         #[cfg(unix)]
@@ -1381,7 +1379,7 @@ impl ValidatedRuntimeDirectoryV1 {
     }
 
     /// Atomically publishes a strict marker with no replacement of an existing marker.
-    pub(crate) fn publish_reset_marker(
+    pub fn publish_reset_marker(
         &self,
         _authority: &ResetMaintenanceFilesystemTokenV1,
         marker: &ResetMarkerV1,
@@ -1419,7 +1417,7 @@ impl ValidatedRuntimeDirectoryV1 {
     }
 
     /// Removes the marker only after re-opening, decoding, and identity-checking the exact marker.
-    pub(crate) fn remove_reset_marker(
+    pub fn remove_reset_marker(
         &self,
         _authority: &ResetMaintenanceFilesystemTokenV1,
         expected: &ResetMarkerV1,
@@ -1440,7 +1438,7 @@ impl ValidatedRuntimeDirectoryV1 {
     ///
     /// Missing names are idempotent; links, non-regular files, foreign owners, non-private modes,
     /// a missing marker, or a changed marker fail closed.
-    pub(crate) fn remove_reset_database_files(
+    pub fn remove_reset_database_files(
         &self,
         _authority: &ResetMaintenanceFilesystemTokenV1,
         expected_marker: &ResetMarkerV1,
@@ -2744,7 +2742,6 @@ pub struct ResolvedWorkspaceV1 {
     store_identity: StoreWorktreeIdentityV1,
     workspace_root: ValidatedWorkspaceRootV1,
     database_path: PathBuf,
-    scheduler_key: WorkspaceSchedulerKeyV1,
     move_metadata: WorktreeMoveMetadataV1,
 }
 
@@ -2755,14 +2752,12 @@ impl ResolvedWorkspaceV1 {
     ) -> Result<Self, WorkspaceResolutionErrorV1> {
         let store_identity = store_identity_from_git(worktree.identity());
         let workspace_root = store_root_from_worktree(&worktree)?;
-        let scheduler_key = WorkspaceSchedulerKeyV1::from_durable_identity(&store_identity);
         let move_metadata = worktree.move_metadata().clone();
         Ok(Self {
             worktree,
             store_identity,
             workspace_root,
             database_path,
-            scheduler_key,
             move_metadata,
         })
     }
@@ -2781,10 +2776,6 @@ impl ResolvedWorkspaceV1 {
 
     pub fn database_path(&self) -> &Path {
         &self.database_path
-    }
-
-    pub fn scheduler_key(&self) -> &WorkspaceSchedulerKeyV1 {
-        &self.scheduler_key
     }
 
     pub fn move_metadata(&self) -> &WorktreeMoveMetadataV1 {

@@ -18,15 +18,15 @@
   "production_proofs": {
     "compact": {
       "kind": "cargo-test",
-      "path": "crates/podway-daemon/tests/int_v2run002_views.rs",
+      "path": "crates/podway-engine/tests/int_v2run002_views.rs",
       "function": "v2scl005_the_widest_compact_status_fits_its_allocation",
-      "command": "cargo test -p podway-daemon --test int_suite int_v2run002_views::v2scl005_the_widest_compact_status_fits_its_allocation --locked -- --exact"
+      "command": "cargo test -p podway-engine --test int_suite int_v2run002_views::v2scl005_the_widest_compact_status_fits_its_allocation --locked -- --exact"
     },
     "verbose": {
       "kind": "cargo-test",
-      "path": "crates/podway-daemon/tests/int_v2run002_views.rs",
+      "path": "crates/podway-engine/tests/int_v2run002_views.rs",
       "function": "v2rel002_one_maximum_verbose_projection_combines_every_bounded_family",
-      "command": "cargo test -p podway-daemon --test int_suite int_v2run002_views::v2rel002_one_maximum_verbose_projection_combines_every_bounded_family --locked -- --exact"
+      "command": "cargo test -p podway-engine --test int_suite int_v2run002_views::v2rel002_one_maximum_verbose_projection_combines_every_bounded_family --locked -- --exact"
     }
   },
   "verified_assertions": [

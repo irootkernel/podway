@@ -3599,21 +3599,20 @@ impl WorkspaceRuntimeManagerV1 {
         );
         let runtime_directory_path = runtime_directory_path(&resolved)?;
         self.revalidate_before_store_open(&resolved)?;
-        let active_scheduler =
-            self.schedulers
-                .get_active(resolved.scheduler_key())
-                .filter(|scheduler| {
-                    let context = scheduler.context_snapshot();
-                    database_file_identity(resolved.database_path())
-                        .is_some_and(|identity| identity == *context.database_file_identity())
-                        && context.binding() == &binding
-                        && context.database_path() == resolved.database_path()
-                        && context.runtime_directory_path() == runtime_directory_path.as_path()
-                        && same_durable_git_root_evidence(
-                            context.git_evidence(),
-                            resolved.worktree(),
-                        )
-                });
+        let active_scheduler = self
+            .schedulers
+            .get_active(&WorkspaceSchedulerKeyV1::from_durable_identity(
+                resolved.store_identity(),
+            ))
+            .filter(|scheduler| {
+                let context = scheduler.context_snapshot();
+                database_file_identity(resolved.database_path())
+                    .is_some_and(|identity| identity == *context.database_file_identity())
+                    && context.binding() == &binding
+                    && context.database_path() == resolved.database_path()
+                    && context.runtime_directory_path() == runtime_directory_path.as_path()
+                    && same_durable_git_root_evidence(context.git_evidence(), resolved.worktree())
+            });
         Ok(ReadonlyWorkspaceResolutionV1 {
             binding,
             workspace_root: resolved.workspace_root().clone(),
@@ -3723,7 +3722,8 @@ impl WorkspaceRuntimeManagerV1 {
         ) {
             Ok(resolved) => {
                 let expected = scheduler.key().clone();
-                let actual = resolved.scheduler_key().clone();
+                let actual =
+                    WorkspaceSchedulerKeyV1::from_durable_identity(resolved.store_identity());
                 if expected != actual {
                     return Ok(WorkspaceSchedulerRevalidationV1::RetireRequired {
                         key: expected,
@@ -3937,7 +3937,7 @@ impl WorkspaceRuntimeManagerV1 {
     ) -> Result<Arc<WorkspaceSchedulerV1<WorkspaceSchedulerContextV1>>, WorkspaceRuntimeErrorV1>
     {
         let maintenance_key = WorkspaceMaintenanceKeyV1::from_worktree(resolved.worktree());
-        let key = resolved.scheduler_key().clone();
+        let key = WorkspaceSchedulerKeyV1::from_durable_identity(resolved.store_identity());
         let config = read_admitted_workspace_config(&resolved)?;
         self.require_config_mode(&config)?;
         if let Some(scheduler) = self.schedulers.get_active(&key) {

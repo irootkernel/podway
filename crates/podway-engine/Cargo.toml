@@ -1,0 +1,24 @@
+[package]
+name = "podway-engine"
+version = "0.2.12"
+edition = "2024"
+license = "MIT"
+publish = false
+autotests = false
+
+[dependencies]
+podway-core = { path = "../podway-core" }
+podway-protocol = { path = "../podway-protocol" }
+podway-config = { path = "../podway-config" }
+podway-store = { path = "../podway-store" }
+podway-git = { path = "../podway-git" }
+podway-presets = { path = "../podway-presets" }
+nix.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+uuid.workspace = true
+
+[[test]]
+name = "int_suite"
+path = "tests/int_suite.rs"
