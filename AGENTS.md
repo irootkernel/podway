@@ -241,25 +241,16 @@ Apply these distinctions as well:
 
 ### Commit Messages
 
-Every commit title must begin with exactly one bracketed header. Inspect the active
-roadmap and the adopted task dossier before choosing it:
+- Every developer-authored subject uses one header and a concise English imperative summary: `[FEAT]`, `[FIX]`, `[DEV]`, `[TEST]`, `[DOC]`, `[CI]`, `[REL]`, or `[INT]`.
+- Use `[FEAT]` for new user-facing capabilities, `[FIX]` for defects, and `[DEV]` for development tools, build configuration, dependencies, or internal integration. Use `[TEST]`, `[DOC]`, or `[CI]` for changes limited to that concern, and `[INT]` for internal contracts or refactoring.
+- Release metadata commits use exactly `[REL] Release v<version>`. Tool-generated commits retain their native subjects and provenance; never hand-author a `[SANHO]` synchronization commit.
+- End every developer-authored message with one trailer block containing exactly one `Aquarium-Workflow:`, `Aquarium-Epic:`, and `Aquarium-Task:`, in that order. Separate the block from the subject or optional body with one blank line; do not put blank lines between trailers.
+- `Aquarium-Workflow` records the responsible `aquarium:<canonical-skill-name>`. Preserve a verified original skill through later commits, including changes from documentation, development, or test setup. Child phases and reviews inherit an established parent's owner; independently approved workflows own their candidate. Use `aquarium:task-commit` only for a direct commit without an original Aquarium workflow, and `none` for work outside Aquarium.
+- Resolve a Task and its parent Epic from the accepted relationship and canonical roadmap, including a standing `EPIC-000` where applicable. Preserve native IDs, suffixes, and scope qualification. Epic-owned work uses `Aquarium-Task: none`; work without either owner uses `none` for both. Resolve unknown relationships instead of treating them as absent.
+- Put primary work IDs in these attributes rather than the subject or legacy `Task:` and `Task-Relationship:` aliases. Use `$lore-commits` for useful decision context on non-trivial changes; optional Lore trailers may repeat. Preserve required evidence, release-note, and tool provenance trailers.
+- Parse the prepared message and actual post-hook commit with `git interpret-trailers --parse`; verify all three attributes against the accepted candidate. Attribution never grants staging, commit, amend, push, or publication authority.
 
-- If the commit implements or directly verifies one specific roadmap task, use that
-  task's exact ID, for example `[V2CTR-001] docs: promote v2 decisions` or the
-  retained historical form `[REL12003] fix: repair version identity`.
-- If no specific task owns the change but it designs an epic or corrects epic-level
-  content not covered by a task, use the exact epic ID, for example
-  `[V2MOD] docs: reconcile the procedure model epic`. A task ID takes precedence
-  whenever one task directly owns the work.
-- Do not substitute a release program ID such as `PV2GA` for a task or epic ID. If
-  neither a specific roadmap task nor an epic owns the change, use `[INT]`, for
-  example `[INT] docs: adopt local review tooling`.
-- For the metadata-only release commit created by `$aquarium:release-handler`, use
-  its exact required title `[REL] Release v<version>`. This is the only exception
-  to the task, epic, or `[INT]` header and conventional `type: summary` form.
-- Keep the remainder of the title concise and imperative, matching the repository's
-  conventional `type: summary` style. The header is required even for trivial
-  commits.
+- Inspect the active roadmap and adopted task dossier before resolving the primary work relationship. Do not substitute a release program ID for a Task or Epic ID.
 
 Use the installed `lore-commits` skill whenever preparing a non-trivial commit.
 After the title and any useful body, append only the git trailers that preserve
