@@ -1,6 +1,7 @@
 # ADR-0004: Store Task State Inside the Worktree
 
 - Status: Accepted
+- Superseded in part by: [ADR-0038](0038-remove-the-daemon.md)
 - Date: 2026-07-13
 
 ## Context

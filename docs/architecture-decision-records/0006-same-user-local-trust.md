@@ -1,6 +1,7 @@
 # ADR-0006: Use Same-User Local Trust Without an Access Key
 
 - Status: Accepted
+- Superseded in part by: [ADR-0038](0038-remove-the-daemon.md)
 - Date: 2026-07-13
 
 ## Context

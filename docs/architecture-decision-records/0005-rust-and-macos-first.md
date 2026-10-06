@@ -1,6 +1,7 @@
 # ADR-0005: Implement in Rust and Deliver macOS First
 
 - Status: Accepted
+- Superseded in part by: [ADR-0038](0038-remove-the-daemon.md)
 - Date: 2026-07-13
 - Platform scope: Partially superseded by ADR-0013
 

@@ -1,6 +1,6 @@
 # ADR-0012: Explicit Daemon Endpoint and Canonical Per-User Podway Home
 
-- Status: Accepted
+- Status: Superseded by [ADR-0038](0038-remove-the-daemon.md)
 - Date: 2026-07-23
 
 The statement below that every daemon instance contends on the production lock is

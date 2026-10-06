@@ -176,6 +176,17 @@ Apply these distinctions as well:
 - Use `Makefile` as the entry point for repository-standard checks. Read the nearest
   relevant authority rather than copying detailed feature design into this file.
 
+#### V2DFC Transition
+
+[ADR-0038](docs/architecture-decision-records/0038-remove-the-daemon.md) accepts
+the daemon-free target. The daemon writer invariants, current crate ownership,
+and global-state rules below describe shipped behavior until `V2DFC-007`.
+Only the ordered `V2DFC` tasks may change them, as defined by the
+[adopted dossier](docs/todo/TODO-podway-daemon-free-core.md); earlier tasks keep
+the shipped daemon path working. Treat reserved contracts as unemitted until
+their owning cutover task. This transition authorizes no installed-runtime
+change, release, installation, or external consumer modification.
+
 #### Architecture and Ownership
 
 - `podway-core` owns pure domain values, invariants, transitions, item satisfaction,

@@ -1,6 +1,7 @@
 # ADR-0035: Prepare Host-Neutral Supervised Delegation Without Disrupting Direct Work
 
 - Status: Accepted
+- Superseded in part by: [ADR-0038](0038-remove-the-daemon.md)
 - Date: 2026-09-16
 - Extends: [ADR-0010](0010-generic-cli-json-integration.md)
 - Preserves: [ADR-0003](0003-daemon-single-writer.md), [ADR-0006](0006-same-user-local-trust.md), [ADR-0017](0017-single-cursor-convergence.md), [ADR-0019](0019-procedure-v2-only-product.md), [ADR-0031](0031-keyed-runtime-modes-and-managed-development-service.md)

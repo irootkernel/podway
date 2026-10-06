@@ -1,6 +1,6 @@
 # ADR-0023: Daemon-Owned Bootstrap Log
 
-- Status: Accepted
+- Status: Superseded by [ADR-0038](0038-remove-the-daemon.md)
 - Date: 2026-08-19
 - Supersedes in part: [ADR-0022](0022-bounded-correlated-daemon-logs.md)
 

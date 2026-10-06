@@ -1,6 +1,6 @@
 # ADR-0029: Serve Phase-Aware Daemon Readiness
 
-- Status: Accepted
+- Status: Superseded by [ADR-0038](0038-remove-the-daemon.md)
 - Date: 2026-08-25
 - Extends: [ADR-0012](0012-explicit-daemon-endpoint-and-canonical-per-user-podway-home.md)
 - Preserves: [ADR-0003](0003-daemon-single-writer.md)

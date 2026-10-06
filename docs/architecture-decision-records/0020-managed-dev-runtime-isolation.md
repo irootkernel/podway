@@ -1,6 +1,6 @@
 # ADR-0020: Managed Dev Runtime Isolation
 
-- Status: Accepted
+- Status: Superseded by [ADR-0038](0038-remove-the-daemon.md)
 - Date: 2026-08-16
 - Supersedes: the assertion in ADR-0012 that every daemon instance contends on
   the production singleton lock

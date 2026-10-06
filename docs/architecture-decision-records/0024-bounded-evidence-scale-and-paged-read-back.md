@@ -1,6 +1,7 @@
 # ADR-0024: Bounded Evidence Scale and Paged Read-back
 
 - Status: Accepted
+- Superseded in part by: [ADR-0038](0038-remove-the-daemon.md)
 - Date: 2026-08-19
 - Extends: [ADR-0007](0007-stage-items-not-evidence-ledger.md)
 - Extends: [ADR-0016](0016-recorded-item-workflow-memory.md)

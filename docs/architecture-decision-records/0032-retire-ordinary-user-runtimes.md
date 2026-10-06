@@ -1,6 +1,6 @@
 # ADR-0032: Retire Ordinary User Runtimes
 
-- Status: Accepted
+- Status: Superseded by [ADR-0038](0038-remove-the-daemon.md)
 - Date: 2026-09-09
 - Extends: [ADR-0003](0003-daemon-single-writer.md),
   [ADR-0006](0006-same-user-local-trust.md),

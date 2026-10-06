@@ -16,16 +16,16 @@ narrative architecture and specifications when sources conflict.
 
 - [ADR-0001](0001-current-task-session-focus.md): focus on the current task session
 - [ADR-0002](0002-single-active-stage.md): one active stage attempt
-- [ADR-0003](0003-daemon-single-writer.md): daemon as sole normal writer
-- [ADR-0004](0004-worktree-local-state.md): worktree-local task state
-- [ADR-0005](0005-rust-and-macos-first.md): Rust implementation and macOS delivery
-- [ADR-0006](0006-same-user-local-trust.md): same-user local trust
+- [ADR-0003](0003-daemon-single-writer.md): daemon as sole normal writer (superseded by ADR-0038)
+- [ADR-0004](0004-worktree-local-state.md): worktree-local task state (superseded in part by ADR-0038)
+- [ADR-0005](0005-rust-and-macos-first.md): Rust implementation and macOS delivery (superseded in part by ADR-0038)
+- [ADR-0006](0006-same-user-local-trust.md): same-user local trust (superseded in part by ADR-0038)
 - [ADR-0007](0007-stage-items-not-evidence-ledger.md): typed stage items
 - [ADR-0008](0008-relational-state-not-event-sourcing.md): relational current state
 - [ADR-0009](0009-artifact-metadata-only.md): artifact metadata only
 - [ADR-0010](0010-generic-cli-json-integration.md): generic CLI and JSON integration
 - [ADR-0011](0011-local-make-test-release-gate.md): local release gate
-- [ADR-0012](0012-explicit-daemon-endpoint-and-canonical-per-user-podway-home.md): canonical user home and endpoint
+- [ADR-0012](0012-explicit-daemon-endpoint-and-canonical-per-user-podway-home.md): canonical user home and endpoint (superseded by ADR-0038)
 - [ADR-0013](0013-native-apple-silicon-macos-only.md): native Apple Silicon macOS support
 - [ADR-0014](0014-single-canonical-asset-tree.md): one canonical build asset tree
 - [ADR-0015](0015-constrained-single-cursor-graph.md): constrained single-cursor graph (superseded by ADR-0017)
@@ -33,22 +33,22 @@ narrative architecture and specifications when sources conflict.
 - [ADR-0017](0017-single-cursor-convergence.md): single-cursor convergence
 - [ADR-0018](0018-v2-success-envelope.md): versioned Procedure v2 success envelope
 - [ADR-0019](0019-procedure-v2-only-product.md): Procedure v2-only product and unified success envelope
-- [ADR-0020](0020-managed-dev-runtime-isolation.md): isolated managed `--dev` runtimes
+- [ADR-0020](0020-managed-dev-runtime-isolation.md): isolated managed `--dev` runtimes (superseded by ADR-0038)
 - [ADR-0021](0021-separate-session-preparation-from-execution.md): separate session preparation from execution
-- [ADR-0022](0022-bounded-correlated-daemon-logs.md): bounded correlated daemon and bootstrap logs
-- [ADR-0023](0023-daemon-owned-bootstrap-log.md): daemon-owned bounded bootstrap logging
-- [ADR-0024](0024-bounded-evidence-scale-and-paged-read-back.md): bounded evidence scale and paged read-back
+- [ADR-0022](0022-bounded-correlated-daemon-logs.md): bounded correlated daemon and bootstrap logs (superseded by ADR-0038)
+- [ADR-0023](0023-daemon-owned-bootstrap-log.md): daemon-owned bounded bootstrap logging (superseded by ADR-0038)
+- [ADR-0024](0024-bounded-evidence-scale-and-paged-read-back.md): bounded evidence scale and paged read-back (superseded in part by ADR-0038)
 - [ADR-0025](0025-structurally-bound-external-check-results.md): structurally bound external check results
 - [ADR-0026](0026-retain-inactive-terminal-sessions.md): bounded inactive terminal-session retention
-- [ADR-0027](0027-state-aware-session-start.md): lifecycle-aware interactive and automated session start
+- [ADR-0027](0027-state-aware-session-start.md): lifecycle-aware interactive and automated session start (superseded in part by ADR-0038)
 - [ADR-0028](0028-bounded-typed-procedure-guards.md): bounded typed Procedure guards
-- [ADR-0029](0029-serve-phase-aware-daemon-readiness.md): phase-aware daemon readiness
-- [ADR-0030](0030-retire-workspaces-and-prune-stale-registry-entries.md): explicit workspace retirement and stale registry pruning
-- [ADR-0031](0031-keyed-runtime-modes-and-managed-development-service.md): keyed runtime modes and managed development service
-- [ADR-0032](0032-retire-ordinary-user-runtimes.md): bounded ordinary account-runtime retirement
+- [ADR-0029](0029-serve-phase-aware-daemon-readiness.md): phase-aware daemon readiness (superseded by ADR-0038)
+- [ADR-0030](0030-retire-workspaces-and-prune-stale-registry-entries.md): explicit workspace retirement and stale registry pruning (superseded in part by ADR-0038)
+- [ADR-0031](0031-keyed-runtime-modes-and-managed-development-service.md): keyed runtime modes and managed development service (superseded by ADR-0038)
+- [ADR-0032](0032-retire-ordinary-user-runtimes.md): bounded ordinary account-runtime retirement (superseded by ADR-0038)
 - [ADR-0033](0033-name-unsatisfied-check-result-reasons.md): named unsatisfied check-result reasons
 - [ADR-0034](0034-unbounded-inactive-session-retention.md): remove fail-closed inactive-session retention
-- [ADR-0035](0035-host-neutral-supervised-delegation.md): host-neutral delegation foundation with explicit opt-in and Direct-work continuity
-- [ADR-0036](0036-use-canonical-git-paths-for-workspace-identity.md): canonical-path workspace identity with schema-v13 migration and reset recovery
+- [ADR-0035](0035-host-neutral-supervised-delegation.md): host-neutral delegation foundation with explicit opt-in and Direct-work continuity (superseded in part by ADR-0038)
+- [ADR-0036](0036-use-canonical-git-paths-for-workspace-identity.md): canonical-path workspace identity with schema-v13 migration and reset recovery (superseded in part by ADR-0038)
 - [ADR-0037](0037-bound-procedure-graphs-at-1024-nodes.md): bounded 1,024-node Procedure graphs
-- [ADR-0038](0038-remove-the-daemon.md): proposed daemon-free core with in-process Store transactions
+- [ADR-0038](0038-remove-the-daemon.md): accepted daemon-free core with in-process Store transactions

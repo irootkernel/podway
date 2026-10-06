@@ -1,6 +1,7 @@
 # ADR-0036: Use Canonical Git Paths for Workspace Identity
 
 - Status: Accepted
+- Superseded in part by: [ADR-0038](0038-remove-the-daemon.md)
 - Date: 2026-09-21
 - Supersedes in part: [ADR-0030](0030-retire-workspaces-and-prune-stale-registry-entries.md)
 - Preserves: [ADR-0003](0003-daemon-single-writer.md), [ADR-0004](0004-worktree-local-state.md), [ADR-0006](0006-same-user-local-trust.md)

@@ -1,6 +1,7 @@
 # ADR-0027: State-Aware Session Start
 
 - Status: Accepted
+- Superseded in part by: [ADR-0038](0038-remove-the-daemon.md)
 - Date: 2026-08-21
 - Supersedes in part: [ADR-0026](0026-retain-inactive-terminal-sessions.md)
 - Extends: [ADR-0021](0021-separate-session-preparation-from-execution.md)

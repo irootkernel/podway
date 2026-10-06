@@ -1,17 +1,19 @@
 # ADR-0038: Remove the Daemon and Commit Mutations In-Process
 
-- Status: Proposed
+- Status: Accepted
+- Acceptance date: 2026-10-06
 - Date: 2026-10-05
-- Acceptance owner: `V2DFC-002`, after the `V2DFC-001` feasibility gate passes
+- Acceptance owner: `V2DFC-002`, following the `V2DFC-001` feasibility gate
 - Delivery owner: [V2DFC](../roadmap/README.md#v2dfc-daemon-free-core)
 - Implementation plan: [adopted V2DFC dossier](../todo/TODO-podway-daemon-free-core.md)
-- Supersedes on acceptance: [ADR-0003](0003-daemon-single-writer.md), [ADR-0012](0012-explicit-daemon-endpoint-and-canonical-per-user-podway-home.md), [ADR-0020](0020-managed-dev-runtime-isolation.md), [ADR-0022](0022-bounded-correlated-daemon-logs.md), [ADR-0023](0023-daemon-owned-bootstrap-log.md), [ADR-0029](0029-serve-phase-aware-daemon-readiness.md), [ADR-0031](0031-keyed-runtime-modes-and-managed-development-service.md), [ADR-0032](0032-retire-ordinary-user-runtimes.md)
-- Supersedes in part on acceptance: [ADR-0004](0004-worktree-local-state.md), [ADR-0005](0005-rust-and-macos-first.md), [ADR-0006](0006-same-user-local-trust.md), [ADR-0024](0024-bounded-evidence-scale-and-paged-read-back.md), [ADR-0027](0027-state-aware-session-start.md), [ADR-0030](0030-retire-workspaces-and-prune-stale-registry-entries.md), [ADR-0035](0035-host-neutral-supervised-delegation.md), [ADR-0036](0036-use-canonical-git-paths-for-workspace-identity.md)
+- Supersedes: [ADR-0003](0003-daemon-single-writer.md), [ADR-0012](0012-explicit-daemon-endpoint-and-canonical-per-user-podway-home.md), [ADR-0020](0020-managed-dev-runtime-isolation.md), [ADR-0022](0022-bounded-correlated-daemon-logs.md), [ADR-0023](0023-daemon-owned-bootstrap-log.md), [ADR-0029](0029-serve-phase-aware-daemon-readiness.md), [ADR-0031](0031-keyed-runtime-modes-and-managed-development-service.md), [ADR-0032](0032-retire-ordinary-user-runtimes.md)
+- Supersedes in part: [ADR-0004](0004-worktree-local-state.md), [ADR-0005](0005-rust-and-macos-first.md), [ADR-0006](0006-same-user-local-trust.md), [ADR-0024](0024-bounded-evidence-scale-and-paged-read-back.md), [ADR-0027](0027-state-aware-session-start.md), [ADR-0030](0030-retire-workspaces-and-prune-stale-registry-entries.md), [ADR-0035](0035-host-neutral-supervised-delegation.md), [ADR-0036](0036-use-canonical-git-paths-for-workspace-identity.md)
 - Preserves: [ADR-0010](0010-generic-cli-json-integration.md), [ADR-0013](0013-native-apple-silicon-macos-only.md), [ADR-0021](0021-separate-session-preparation-from-execution.md), [ADR-0037](0037-bound-procedure-graphs-at-1024-nodes.md)
 
-This ADR is a proposal. Until `V2DFC-002` accepts it, the ADRs listed above
-remain the accepted authority for shipped behavior, and no linked record changes
-status.
+This ADR accepts the daemon-free target architecture. Delivery remains ordered
+by the roadmap: the existing executable contracts describe shipped behavior
+until the CLI switches in `V2DFC-007`. Acceptance neither activates that behavior
+nor authorizes installation or removal of an installed daemon.
 
 ## Context
 
@@ -40,6 +42,47 @@ publish a new public contract generation without backward compatibility, to
 delete daemon-era runtime state by reset without migration, and to make removed
 commands fail with guidance. The evidence and the review of the earlier
 proposal are recorded in the adopted dossier.
+
+## Feasibility evidence and limits
+
+The `V2DFC-001` release-profile prototype measured G1 through G10 on native
+Apple Silicon on October 5, 2026. After the completion-review corrections, G1,
+G2, G4, G5, and G9 were measured again; all gate verdicts were pass. The
+[adopted dossier](../todo/TODO-podway-daemon-free-core.md#gate-results) retains
+the fixture recipes, sample sizes, percentiles, and matching protocol. Lasting
+requirements and baselines are promoted by `V2DFC-010` before the Epic audit;
+the separately accepted final Epic closeout retires the dossier.
+
+- G1 acknowledged 8,000 mutations and replayed each key, with no lost,
+  duplicated, or stale-fence effects and no observer invariant violation.
+- G2 on the fresh 300-node fixture measured wait p99 of 131.2 ms, maximum wait
+  of 269.6 ms, and hold p99 of 13.0 ms; the slowest writer took 1.06 times the
+  fastest. These figures do not establish fairness or cost on a large Store.
+- G3 returned a structured busy error without state or outcome changes within
+  501.5 ms at maximum for a 500 ms deadline.
+- G4 covered 300 kills and passed integrity and exact-effect recovery checks.
+  Its pre-registered cheap-open wording conflicted with the required refusal
+  while a reset marker remains. The owner accepted that maintenance-error
+  reading after measurement; it was not a pre-registered threshold change.
+- G5 recovered every interrupted maintenance operation without losing any of
+  1,204 acknowledged writes. The owner accepted `WORKSPACE_NOT_INITIALIZED`
+  after a completed removal and before re-creation after measurement. The
+  timing of individual contender outcomes was inferred from corrected code,
+  rather than recorded by the contender logs.
+- G6 rejected all 1,000 preparation races. Every direct G7 sample was faster
+  than every daemon sample across the 12 command/fixture cells. G8 measured L
+  warm p99 of 0.42 ms and cold p99 of 2.07 ms.
+- G9 kept the WAL below 64 MiB under load and below 4 MiB five seconds after
+  load stopped. G10 classified all 13 legacy cases without changing any file
+  digest or creating an SHM file.
+
+The 1,024-node information-only run exceeded G2's wait-p99 threshold, and E1
+showed growing transaction costs on L. The direct implementation must bound
+per-transaction persistence work and re-measure G1 and G2 on an L-scale session
+and at 1,024 nodes before relying on the fresh-session figures. E1 also measured
+about 63 ms of result-validator compilation per invocation, supporting lazy
+compilation of only the needed schema. Neither this acceptance nor the
+prototype results qualify the production engine, a release, or live clients.
 
 ## Decision
 

@@ -1,6 +1,6 @@
 # ADR-0003: Make the Daemon the Sole Normal Writer
 
-- Status: Accepted
+- Status: Superseded by [ADR-0038](0038-remove-the-daemon.md)
 - Date: 2026-07-13
 
 ## Context

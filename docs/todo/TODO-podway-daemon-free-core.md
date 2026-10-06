@@ -9,7 +9,7 @@
 - Contract target: a new public contract generation without backward compatibility
 - Acceptance target: the full `make test` gate for every task; `make dist` at the release commit
 - Product release: conditional `v0.2.13` target after `V2DFC-001` through `V2DFC-010` and a separately authorized stable-release qualification
-- Decision authority: [ADR-0038](../architecture-decision-records/0038-remove-the-daemon.md), Proposed until `V2DFC-002` accepts it after the feasibility gate
+- Decision authority: [ADR-0038](../architecture-decision-records/0038-remove-the-daemon.md), Accepted after the `V2DFC-001` feasibility gate
 - Execution order and status: [V2DFC roadmap](../roadmap/README.md#v2dfc-daemon-free-core)
 
 This is the decision-complete implementation dossier for removing `podwayd`.
@@ -21,9 +21,9 @@ The dossier replaces an untracked proposal draft written on the same day and
 incorporates an independent review of that draft. Section 2.5 records how each
 review finding is resolved. Neither draft is an authority.
 
-Until `V2DFC-002` accepts ADR-0038, ADR-0003 and the other daemon decisions
-remain the accepted authority for shipped behavior. `V2DFC-001` changes no
-product behavior, so it needs no new authority.
+ADR-0038 now owns the daemon-free target architecture. The existing executable
+contracts continue to describe shipped behavior until `V2DFC-007`; earlier
+tasks must preserve the daemon path. `V2DFC-001` changed no product behavior.
 
 ## 2. Verified context and evidence
 
@@ -260,6 +260,12 @@ A mutation:
 8. writes state, the success outcome, the operational journal entry, and any
    pruning in the same transaction; and
 9. commits and prints the response.
+
+Per-transaction persistence must be bounded to the changed state rather than
+rewriting the whole successor session. `V2DFC-005` and `V2DFC-006` preserve domain
+validation while bounding that work and re-measure G1 and G2 on an L-scale
+session and at 1,024 nodes. The fresh-session gate alone is not their scale
+acceptance evidence.
 
 A rejection rolls back and leaves no record. A read opens one WAL read
 transaction, observes one committed snapshot, and never waits: an acknowledged
@@ -708,9 +714,9 @@ Done when `make test`, `make release-prepare`, and `make test-fuzzing` pass and
 a native dry run (package with a non-distribution class, qualify, hand off, and
 verify the bundle) passes. The full `make dist` runs at the release commit.
 
-### V2DFC-010: Promote durable documentation and close the epic
+### V2DFC-010: Promote durable documentation
 
-Purpose: make every lasting decision durable and retire this dossier.
+Purpose: make every lasting decision durable before the independent Epic audit.
 
 - Specifications: CLI, automation client, JSON contract, errors and exit codes,
   observability (journal only), release and packaging, security and trust,
@@ -727,11 +733,26 @@ Purpose: make every lasting decision durable and retire this dossier.
   model, delete the startup-recovery candidate with link repair, resolve
   deferred feedback DF-001, DF-009, DF-010, and DF-015, and retire
   `release/dolgorae-acceptance-matrix-v1.json`.
-- Replace every link to this dossier with durable authorities, remove its index
-  entry, and delete it.
+- Preserve this dossier and its current roadmap link for the final Epic audit;
+  promote every lasting requirement, including the G7/G8 baseline and matching
+  protocol, so none will exist only in the dossier when it is deleted.
 
-Done when `make test` passes, the independent review is resolved, and the epic
-is Completed. Release, installation, and activation remain separately
+Done when documentation promotion is complete, `make test` passes, and the
+Task's independent completion review is resolved. The Task may become Completed
+while the Epic remains In Progress pending the separate final audit and owner
+acceptance.
+
+### Final Epic closeout
+
+After every member Task completes, audit the complete Epic and resolve its
+independent review. Prepare one Epic-owned closeout candidate that replaces
+every remaining link to this dossier with durable authorities, removes its TODO
+index entry, deletes it, and marks the Epic Completed. Inventory every consumer
+before deletion and retain the dossier if another consumer still requires it.
+
+The owner accepts the exact completed Epic and closeout candidate before its
+separate closeout commit. Until then the authoritative committed roadmap keeps
+the Epic In Progress. Release, installation, and activation remain separately
 authorized.
 
 ## 7. Verification and release acceptance
@@ -999,8 +1020,8 @@ These items hand gate evidence to the named tasks. Each consuming task updates
 or removes its item when it acts on it, and `V2DFC-002` decides whether any item
 changes a design decision in this dossier.
 
-- Transaction cost grows with the session (`V2DFC-002`, `V2DFC-005`,
-  `V2DFC-006`). Each prototype mutation loads the whole session state, and the
+- Transaction cost grows with the session (`V2DFC-005`, `V2DFC-006`). Each
+  prototype mutation loads the whole session state, and the
   existing relational helper reloads and validates the whole successor, so the
   cost grows with both Procedure size and session content. G1 and G2 ran on a
   fresh session with 64-character values: commits held 13.9 ms at p99 on 300
@@ -1063,7 +1084,8 @@ permanent tests:
 | Latency re-measured against the gate baseline | `V2DFC-007` |
 | Single-binary release with test hooks proven disabled | `V2DFC-009` |
 | Aquarium and Dolgorae integration deltas delivered | `V2DFC-003`, `V2DFC-010` |
-| Documentation promotion and dossier retirement | `V2DFC-010` |
+| Documentation promotion before the Epic audit | `V2DFC-010` |
+| Dossier retirement after final owner acceptance | Final Epic closeout |
 
 ### 7.4 Release acceptance
 

@@ -1,6 +1,7 @@
 # ADR-0030: Retire Workspaces and Prune Stale Registry Entries
 
 - Status: Accepted
+- Superseded in part by: [ADR-0038](0038-remove-the-daemon.md)
 - Date: 2026-08-26
 - Extends: [ADR-0003](0003-daemon-single-writer.md)
 - Extends: [ADR-0004](0004-worktree-local-state.md)
