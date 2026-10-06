@@ -15,7 +15,12 @@
       "D04",
       "S01",
       "S02",
-      "S03"
+      "S03",
+      "DS01",
+      "DS02",
+      "DS03",
+      "DS04",
+      "DS05"
     ],
     "covered": [
       "C05",
@@ -30,7 +35,12 @@
       "D04",
       "S01",
       "S02",
-      "S03"
+      "S03",
+      "DS01",
+      "DS02",
+      "DS03",
+      "DS04",
+      "DS05"
     ],
     "percent": 100
   },
@@ -176,6 +186,61 @@
         "recovery": "retry removes remaining service files",
         "invariant": "worktree and logs survive non-purge uninstall",
         "source_locator": "crates/podway-service/src/lib.rs::MacosServiceCommandRunnerV1::uninstall"
+      }
+    },
+    {
+      "id": "DS01",
+      "proof": {
+        "failpoint": "BeforeBegin",
+        "test": "crates/podway-store/tests/int_v2dfc005_direct_store.rs::sigkill_at_each_transaction_boundary_preserves_effect_once_recovery",
+        "termination": "20 real child SIGKILLs observed at this boundary",
+        "recovery": "cold reopen has the prior state; exact retry commits once",
+        "invariant": "no outcome before BEGIN",
+        "source_locator": "crates/podway-store/src/direct_store/transaction.rs::DirectStoreV1::mutate"
+      }
+    },
+    {
+      "id": "DS02",
+      "proof": {
+        "failpoint": "AfterBegin",
+        "test": "crates/podway-store/tests/int_v2dfc005_direct_store.rs::sigkill_at_each_transaction_boundary_preserves_effect_once_recovery",
+        "termination": "20 real child SIGKILLs observed at this boundary",
+        "recovery": "cold reopen rolls back the abandoned transaction; exact retry commits once",
+        "invariant": "no state or outcome from an uncommitted transaction",
+        "source_locator": "crates/podway-store/src/direct_store/transaction.rs::DirectStoreV1::mutate"
+      }
+    },
+    {
+      "id": "DS03",
+      "proof": {
+        "failpoint": "AfterStateBeforeOutcome",
+        "test": "crates/podway-store/tests/int_v2dfc005_direct_store.rs::sigkill_at_each_transaction_boundary_preserves_effect_once_recovery",
+        "termination": "20 real child SIGKILLs observed at this boundary",
+        "recovery": "cold reopen rolls back relational updates; exact retry commits state and outcome once",
+        "invariant": "domain state and successful outcome remain atomic",
+        "source_locator": "crates/podway-store/src/direct_store/transaction.rs::DirectStoreV1::mutate"
+      }
+    },
+    {
+      "id": "DS04",
+      "proof": {
+        "failpoint": "AfterCommitBeforeOutput",
+        "test": "crates/podway-store/tests/int_v2dfc005_direct_store.rs::sigkill_at_each_transaction_boundary_preserves_effect_once_recovery",
+        "termination": "20 real child SIGKILLs observed at this boundary",
+        "recovery": "cold reopen returns the original recorded success without repeating the callback or clock",
+        "invariant": "response loss preserves effect-once success and original response UUID",
+        "source_locator": "crates/podway-store/src/direct_store/transaction.rs::DirectStoreV1::mutate"
+      }
+    },
+    {
+      "id": "DS05",
+      "proof": {
+        "failpoint": "BeforeMaintenancePublication",
+        "test": "crates/podway-store/tests/int_v2dfc005_direct_store.rs::sigkill_before_private_store_publication_never_exposes_a_partial_store",
+        "termination": "20 real child SIGKILLs observed before private bootstrap publication",
+        "recovery": "ordinary read leaves private bytes unchanged; explicit bootstrap retry publishes one complete Store",
+        "invariant": "private bootstrap COMMIT never exposes partial authoritative state; reset/removal protocols are covered separately",
+        "source_locator": "crates/podway-store/src/direct_store/transaction.rs::DirectStoreV1::bootstrap"
       }
     }
   ]

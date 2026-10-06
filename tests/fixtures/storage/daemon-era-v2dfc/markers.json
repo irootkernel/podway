@@ -1,0 +1,6 @@
+[
+  {"relative_path": ".podway/runtime/reset.marker", "bytes_utf8": "{\"schema\":\"legacy\"}"},
+  {"relative_path": ".podway/runtime/workspace-removal.marker", "bytes_utf8": "{\"schema\":\"legacy\"}"},
+  {"relative_path": ".podway/runtime/development-v2.marker", "bytes_utf8": "{\"schema\":\"legacy\"}"},
+  {"relative_path": ".podway/mode-switch.json", "bytes_utf8": "{\"schema\":\"legacy\"}"}
+]

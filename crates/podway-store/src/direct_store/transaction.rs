@@ -1,0 +1,799 @@
+use std::{cell::OnceCell, fs, sync::Arc, time::Instant};
+
+use podway_core::{
+    Revision, SessionId, Sha256Digest, TerminalDispositionV2, UnixMillis, WorkspaceId,
+};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+
+use crate::{
+    CanonicalExecutionJsonV1, DelegationReceiptV1, GraphSessionStateV2, IdempotencyKeyV1,
+    SessionArchiveSummaryV2, WorkspaceBindingV1, v2_delegation, v2_state,
+};
+
+use super::{
+    DirectStoreErrorV1, DirectStoreResultV1, DirectStoreV1, ExclusiveMaintenanceLeaseV1,
+    connection::{configure_connection, ensure_deadline},
+    maintenance::DirectOpenLease,
+};
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DirectOutcomeScopeV1 {
+    Workspace,
+    Session(SessionId),
+}
+
+#[derive(Clone, Debug)]
+pub struct DirectMutationRequestV1 {
+    key: IdempotencyKeyV1,
+    digest: Sha256Digest,
+    command: String,
+    response_id: String,
+    scope: DirectOutcomeScopeV1,
+}
+
+impl DirectMutationRequestV1 {
+    pub fn new(
+        key: IdempotencyKeyV1,
+        digest: Sha256Digest,
+        command: impl Into<String>,
+        response_id: impl Into<String>,
+        scope: DirectOutcomeScopeV1,
+    ) -> DirectStoreResultV1<Self> {
+        let command = command.into();
+        let response_id = response_id.into();
+        if command.is_empty()
+            || command.len() > 128
+            || !command
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || matches!(byte, b'.' | b'_'))
+        {
+            return Err(DirectStoreErrorV1::InvalidInput {
+                reason: "invalid mutation command",
+            });
+        }
+        // Reuse the core canonical UUID validator without adding a protocol dependency.
+        WorkspaceId::new(response_id.clone()).map_err(|_| DirectStoreErrorV1::InvalidInput {
+            reason: "invalid response UUID",
+        })?;
+        Ok(Self {
+            key,
+            digest,
+            command,
+            response_id,
+            scope,
+        })
+    }
+    pub fn key(&self) -> &IdempotencyKeyV1 {
+        &self.key
+    }
+    pub fn digest(&self) -> &Sha256Digest {
+        &self.digest
+    }
+    pub fn command(&self) -> &str {
+        &self.command
+    }
+    pub fn response_id(&self) -> &str {
+        &self.response_id
+    }
+    pub fn scope(&self) -> &DirectOutcomeScopeV1 {
+        &self.scope
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirectRecordedOutcomeV1 {
+    digest: Sha256Digest,
+    command: String,
+    sequence: u64,
+    scope: DirectOutcomeScopeV1,
+    response: CanonicalExecutionJsonV1,
+    recorded_at: UnixMillis,
+}
+
+impl DirectRecordedOutcomeV1 {
+    pub fn digest(&self) -> &Sha256Digest {
+        &self.digest
+    }
+    pub fn command(&self) -> &str {
+        &self.command
+    }
+    pub fn sequence(&self) -> u64 {
+        self.sequence
+    }
+    pub fn scope(&self) -> &DirectOutcomeScopeV1 {
+        &self.scope
+    }
+    pub fn response(&self) -> &CanonicalExecutionJsonV1 {
+        &self.response
+    }
+    pub fn recorded_at(&self) -> UnixMillis {
+        self.recorded_at
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirectMutationResultV1 {
+    outcome: DirectRecordedOutcomeV1,
+    replayed: bool,
+}
+
+impl DirectMutationResultV1 {
+    pub fn outcome(&self) -> &DirectRecordedOutcomeV1 {
+        &self.outcome
+    }
+    pub fn replayed(&self) -> bool {
+        self.replayed
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectTransactionBoundaryV1 {
+    BeforeBegin,
+    AfterBegin,
+    AfterStateBeforeOutcome,
+    AfterCommitBeforeOutput,
+    BeforeMaintenancePublication,
+}
+
+/// The connection and transaction are private. Only validated domain operations
+/// and a lazily read injected clock are available to the engine callback.
+pub struct DirectTransactionV1<'transaction, 'connection, Clock> {
+    transaction: &'transaction Transaction<'connection>,
+    binding: WorkspaceBindingV1,
+    root: crate::ValidatedWorkspaceRootV1,
+    previous: OnceCell<Option<Arc<GraphSessionStateV2>>>,
+    state_written: bool,
+    clock: Option<Clock>,
+    now: Option<UnixMillis>,
+}
+
+impl<Clock: FnOnce() -> UnixMillis> DirectTransactionV1<'_, '_, Clock> {
+    pub fn binding(&self) -> &WorkspaceBindingV1 {
+        &self.binding
+    }
+
+    /// The engine calls this only after fences and prepared inputs are revalidated.
+    /// Further calls return the cached value and never read the injected clock again.
+    pub fn now(&mut self) -> UnixMillis {
+        if let Some(now) = self.now {
+            return now;
+        }
+        let now = self
+            .clock
+            .take()
+            .expect("direct transaction clock is read once")();
+        self.now = Some(now);
+        now
+    }
+
+    pub fn current_graph(&self) -> DirectStoreResultV1<Option<&GraphSessionStateV2>> {
+        if self.previous.get().is_none() {
+            let graph = v2_state::load_graph_session_connection_v2(self.transaction)?.map(Arc::new);
+            let _ = self.previous.set(graph);
+        }
+        Ok(self.previous.get().and_then(Option::as_deref))
+    }
+
+    /// Revalidate the opaque prepared snapshot before clock/state effects. The
+    /// successful-mutation sequence also detects disposition/archive-only writes.
+    pub fn use_prepared_graph(
+        &mut self,
+        prepared: &super::DirectPreparedGraphV1,
+    ) -> DirectStoreResultV1<()> {
+        if self.state_written || self.now.is_some() {
+            return Err(DirectStoreErrorV1::InvalidInput {
+                reason: "prepared graph must be validated before clock or state effects",
+            });
+        }
+        let (sequence, generation, manifest, uuid, root): (i64,String,String,String,String) = self.transaction.query_row(
+            "SELECT w.next_workspace_sequence,c.generation_id,c.contract_manifest_digest,w.workspace_uuid,w.last_validated_root \
+             FROM workspace_state w JOIN writer_contract c ON c.singleton=w.singleton WHERE w.singleton=1",
+            [], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?)))?;
+        let sequence = u64::try_from(sequence).map_err(|_| DirectStoreErrorV1::Unreadable)?;
+        if sequence != prepared.sequence
+            || generation != prepared.generation_id
+            || manifest != prepared.manifest.as_str()
+            || uuid != prepared.workspace.as_str()
+            || prepared.root != self.root
+            || self.binding.last_validated_root().as_encoded() != root
+        {
+            return Err(DirectStoreErrorV1::PreparedStateChanged {
+                expected_sequence: prepared.sequence,
+                actual_sequence: sequence,
+            });
+        }
+        let stamps: Option<(String,i64,i64,String,String)> = self.transaction.query_row(
+            "SELECT s.session_id,s.session_revision,w.workspace_revision,s.procedure_snapshot_id,p.digest \
+             FROM v2_workspace_state w JOIN v2_task_sessions s ON s.session_id=w.current_session_id \
+             JOIN v2_procedure_snapshots p ON p.snapshot_id=s.procedure_snapshot_id WHERE w.singleton=1",
+            [], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?))).optional()?;
+        let graph = prepared.graph();
+        if stamps.as_ref().is_none_or(
+            |(id, session_revision, workspace_revision, snapshot, digest)| {
+                id != graph.trace().session_id().as_str()
+                    || u64::try_from(*session_revision).ok() != Some(graph.trace().revision().get())
+                    || u64::try_from(*workspace_revision).ok()
+                        != Some(graph.workspace_revision().get())
+                    || snapshot != graph.snapshot().snapshot_id().as_str()
+                    || digest != graph.snapshot().digest().as_str()
+            },
+        ) {
+            return Err(DirectStoreErrorV1::PreparedStateChanged {
+                expected_sequence: prepared.sequence,
+                actual_sequence: sequence,
+            });
+        }
+        self.previous.take();
+        let _ = self.previous.set(Some(Arc::clone(&prepared.graph)));
+        Ok(())
+    }
+
+    fn require_clock(&self) -> DirectStoreResultV1<UnixMillis> {
+        self.now.ok_or(DirectStoreErrorV1::InvalidInput {
+            reason: "read the clock after validation before persisting state",
+        })
+    }
+
+    pub fn create_graph(&mut self, state: &GraphSessionStateV2) -> DirectStoreResultV1<()> {
+        self.require_clock()?;
+        self.state_written = true;
+        v2_state::create_graph_session_transaction_v2(self.transaction, state)?;
+        self.previous.take();
+        Ok(())
+    }
+
+    pub fn replace_graph(
+        &mut self,
+        workspace_revision: Revision,
+        session_revision: Revision,
+        next: &GraphSessionStateV2,
+    ) -> DirectStoreResultV1<()> {
+        self.replace(workspace_revision, session_revision, next, false)
+    }
+
+    fn replace(
+        &mut self,
+        workspace_revision: Revision,
+        session_revision: Revision,
+        next: &GraphSessionStateV2,
+        delegation: bool,
+    ) -> DirectStoreResultV1<()> {
+        self.require_clock()?;
+        let previous = self
+            .current_graph()?
+            .ok_or(DirectStoreErrorV1::InvalidInput {
+                reason: "no current graph",
+            })?;
+        v2_state::replace_direct_graph_session_transaction_v2(
+            self.transaction,
+            previous,
+            workspace_revision,
+            session_revision,
+            next,
+            delegation,
+        )?;
+        self.state_written = true;
+        self.previous.take();
+        let _ = self.previous.set(Some(Arc::new(next.clone())));
+        Ok(())
+    }
+
+    pub fn accept_delegation(
+        &mut self,
+        workspace_revision: Revision,
+        session_revision: Revision,
+        next: &GraphSessionStateV2,
+        receipt: &DelegationReceiptV1,
+    ) -> DirectStoreResultV1<()> {
+        self.replace(workspace_revision, session_revision, next, true)?;
+        v2_delegation::insert_receipt_transaction_v1(
+            self.transaction,
+            receipt,
+            next,
+            self.binding.identity().workspace_uuid(),
+        )?;
+        Ok(())
+    }
+
+    pub fn clear_graph(
+        &mut self,
+        workspace_revision: Revision,
+        session_revision: Revision,
+    ) -> DirectStoreResultV1<()> {
+        self.require_clock()?;
+        self.state_written = true;
+        let session = self
+            .current_graph()?
+            .map(|state| state.trace().session_id().clone());
+        v2_state::clear_graph_session_transaction_v2(
+            self.transaction,
+            workspace_revision,
+            session_revision,
+        )?;
+        if let Some(session) = session {
+            self.transaction.execute(
+                "DELETE FROM mutation_outcomes WHERE scope_kind='session' AND scope_session_id=?1",
+                [session.as_str()],
+            )?;
+        }
+        self.previous.take();
+        Ok(())
+    }
+
+    pub fn archive_graph(
+        &mut self,
+        workspace_revision: Revision,
+        session_revision: Revision,
+    ) -> DirectStoreResultV1<SessionArchiveSummaryV2> {
+        let now = self.require_clock()?;
+        self.state_written = true;
+        let summary = v2_state::archive_current_session_transaction_v2(
+            self.transaction,
+            workspace_revision,
+            session_revision,
+            now,
+        )?;
+        self.previous.take();
+        Ok(summary)
+    }
+
+    pub fn purge_archive(
+        &mut self,
+        session: &SessionId,
+        session_revision: Revision,
+    ) -> DirectStoreResultV1<SessionArchiveSummaryV2> {
+        self.require_clock()?;
+        self.state_written = true;
+        // Outcomes have no session FK and intentionally survive archive purging.
+        Ok(v2_state::purge_archived_session_transaction_v2(
+            self.transaction,
+            session,
+            session_revision,
+        )?)
+    }
+
+    pub fn record_disposition(
+        &mut self,
+        disposition: &TerminalDispositionV2,
+    ) -> DirectStoreResultV1<()> {
+        self.require_clock()?;
+        self.state_written = true;
+        Ok(v2_state::record_terminal_disposition_transaction_v2(
+            self.transaction,
+            disposition,
+        )?)
+    }
+}
+
+impl DirectStoreV1 {
+    /// Original-key replay precedes the callback, its fences, and its clock. Every
+    /// new success includes state, outcome, journal, pruning and rebinding in one commit.
+    pub fn mutate<Clock, Execute>(
+        &self,
+        request: &DirectMutationRequestV1,
+        deadline: Instant,
+        clock: Clock,
+        execute: Execute,
+    ) -> DirectStoreResultV1<DirectMutationResultV1>
+    where
+        Clock: FnOnce() -> UnixMillis,
+        Execute: FnOnce(
+            &mut DirectTransactionV1<'_, '_, Clock>,
+        ) -> DirectStoreResultV1<CanonicalExecutionJsonV1>,
+    {
+        let lease = DirectOpenLease::acquire(&self.layout, deadline)?;
+        let _connection_gate = super::connection::connection_gate(deadline)?;
+        let database = super::classification::open_read_nofollow(&self.layout.database())?;
+        // A foreign or corrupt Store is rejected before a read-write SQLite open
+        // could create SHM. This preflight does not replace transaction revalidation.
+        self.qualified_read(deadline, lease.heap_snapshot(), |_, _| {
+            self.revalidate_files(&lease, &database)?;
+            Ok(())
+        })?;
+        let mut connection = self.open_connection(false, deadline)?;
+        self.boundary(DirectTransactionBoundaryV1::BeforeBegin);
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        self.boundary(DirectTransactionBoundaryV1::AfterBegin);
+        let binding = self.validate_connection(&transaction)?;
+        self.revalidate_files(&lease, &database)?;
+        if let Some(outcome) = read_outcome(&transaction, &request.key)? {
+            if outcome.digest != request.digest {
+                return Err(DirectStoreErrorV1::IdempotencyKeyReused);
+            }
+            return Ok(DirectMutationResultV1 {
+                outcome,
+                replayed: true,
+            });
+        }
+        let mut context = DirectTransactionV1 {
+            transaction: &transaction,
+            binding,
+            root: self.layout.root().clone(),
+            previous: OnceCell::new(),
+            state_written: false,
+            clock: Some(clock),
+            now: None,
+        };
+        let response = execute(&mut context)?;
+        let now = context.require_clock()?;
+        validate_success(request, &response)?;
+        self.boundary(DirectTransactionBoundaryV1::AfterStateBeforeOutcome);
+        let outcome = persist_success(&transaction, &self.layout, request, response, now)?;
+        drop(context);
+        self.revalidate_files(&lease, &database)?;
+        ensure_deadline(deadline)?;
+        commit(transaction)?;
+        self.boundary(DirectTransactionBoundaryV1::AfterCommitBeforeOutput);
+        checkpoint_after_success(&connection, &self.layout);
+        Ok(DirectMutationResultV1 {
+            outcome,
+            replayed: false,
+        })
+    }
+
+    /// Bootstrap a private complete Store under an already held exclusive lease.
+    /// All initialization state is checkpointed and synced before no-clobber publication.
+    #[allow(clippy::too_many_arguments)]
+    pub fn bootstrap<Clock, Execute>(
+        &self,
+        lease: &ExclusiveMaintenanceLeaseV1,
+        workspace: WorkspaceId,
+        generation_id: &str,
+        request: &DirectMutationRequestV1,
+        deadline: Instant,
+        clock: Clock,
+        execute: Execute,
+    ) -> DirectStoreResultV1<DirectMutationResultV1>
+    where
+        Clock: FnOnce() -> UnixMillis,
+        Execute: FnOnce(
+            &mut DirectTransactionV1<'_, '_, Clock>,
+        ) -> DirectStoreResultV1<CanonicalExecutionJsonV1>,
+    {
+        let _connection_gate = super::connection::connection_gate(deadline)?;
+        lease.revalidate(&self.layout)?;
+        if generation_id.is_empty()
+            || generation_id.len() > 64
+            || request.scope != DirectOutcomeScopeV1::Workspace
+        {
+            return Err(DirectStoreErrorV1::InvalidInput {
+                reason: "invalid Store bootstrap identity or outcome scope",
+            });
+        }
+        if super::classification::classify_unmarked_store_v1(&self.layout)?
+            != super::DirectStoreClassificationV1::Missing
+        {
+            return Err(DirectStoreErrorV1::InvalidInput {
+                reason: "Store bootstrap requires a missing database",
+            });
+        }
+        ensure_deadline(deadline)?;
+        let temporary = tempfile::Builder::new()
+            .prefix(".direct-store-")
+            .tempfile_in(self.layout.runtime_directory())?;
+        let path = temporary.path().to_path_buf();
+        let cleanup = PrivateSidecars(path.clone());
+        let mut connection = Connection::open_with_flags(
+            &path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
+        )?;
+        connection.execute_batch(super::DIRECT_STORE_DDL_V1)?;
+        configure_connection(&connection, false, deadline)?;
+        self.boundary(DirectTransactionBoundaryV1::BeforeBegin);
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        self.boundary(DirectTransactionBoundaryV1::AfterBegin);
+        // No persisted command fences exist during first creation. The engine's
+        // pure preparation is complete before bootstrap is entered.
+        let now = clock();
+        let millis = sqlite_time(now)?;
+        transaction.execute("INSERT INTO workspace_state (singleton,workspace_uuid,git_common_fingerprint,git_worktree_fingerprint,last_validated_root,next_workspace_sequence,created_at_ms,updated_at_ms) VALUES(1,?1,?2,?3,?4,0,?5,?5)",
+            params![workspace.as_str(), self.common.as_str(), self.admin.as_str(), self.layout.root().as_encoded(), millis])?;
+        transaction.execute(
+            "INSERT INTO writer_contract VALUES(1,?1,?2,?3)",
+            params![self.manifest.as_str(), generation_id, millis],
+        )?;
+        let binding = self.validate_connection(&transaction)?;
+        let mut context = DirectTransactionV1 {
+            transaction: &transaction,
+            binding,
+            root: self.layout.root().clone(),
+            previous: OnceCell::new(),
+            state_written: false,
+            clock: None::<Clock>,
+            now: Some(now),
+        };
+        let response = execute(&mut context)?;
+        validate_success(request, &response)?;
+        self.boundary(DirectTransactionBoundaryV1::AfterStateBeforeOutcome);
+        let outcome = persist_success(&transaction, &self.layout, request, response, now)?;
+        drop(context);
+        lease.revalidate(&self.layout)?;
+        ensure_deadline(deadline)?;
+        // This commit affects only an unpublished private inode. Its failure
+        // cannot make the public mutation outcome uncertain.
+        transaction.commit()?;
+        let checkpoint: (i64, i64, i64) =
+            connection.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?;
+        if checkpoint.0 != 0 || checkpoint.1 != 0 || checkpoint.2 != 0 {
+            return Err(DirectStoreErrorV1::Busy);
+        }
+        drop(connection);
+        temporary.as_file().sync_all()?;
+        lease.revalidate(&self.layout)?;
+        self.boundary(DirectTransactionBoundaryV1::BeforeMaintenancePublication);
+        // A write-free WAL reader needs existing sidecars. Publish the fully
+        // checkpointed WAL/index before the main file, under the exclusive lease;
+        // the main file is the publication point. Never create missing sidecars in
+        // an ordinary read. Engine maintenance can repair an interrupted publication.
+        let mut sidecars = PublishedSidecars::default();
+        for (source, target) in [
+            (super::sidecar(&path, "-wal"), self.layout.wal()),
+            (super::sidecar(&path, "-shm"), self.layout.shm()),
+        ] {
+            fs::hard_link(&source, &target)?;
+            let file = super::classification::open_read_nofollow(&target)?;
+            file.sync_all()?;
+            sidecars.files.push((target, file));
+        }
+        // persist_noclobber links the private inode without replacing another Store.
+        let published = temporary
+            .persist_noclobber(self.layout.database())
+            .map_err(|error| DirectStoreErrorV1::Storage(error.error))?;
+        published.sync_all()?;
+        super::maintenance::open_directory(&self.layout.runtime_directory())?.sync_all()?;
+        sidecars.published = true;
+        drop(cleanup);
+        self.boundary(DirectTransactionBoundaryV1::AfterCommitBeforeOutput);
+        Ok(DirectMutationResultV1 {
+            outcome,
+            replayed: false,
+        })
+    }
+}
+
+struct PrivateSidecars(std::path::PathBuf);
+impl Drop for PrivateSidecars {
+    fn drop(&mut self) {
+        for suffix in ["-wal", "-shm"] {
+            let _ = fs::remove_file(super::sidecar(&self.0, suffix));
+        }
+    }
+}
+
+#[derive(Default)]
+struct PublishedSidecars {
+    files: Vec<(std::path::PathBuf, std::fs::File)>,
+    published: bool,
+}
+
+impl Drop for PublishedSidecars {
+    fn drop(&mut self) {
+        if !self.published {
+            for (path, file) in &self.files {
+                if super::maintenance::same_file(file, path).unwrap_or(false) {
+                    let _ = fs::remove_file(path);
+                }
+            }
+        }
+    }
+}
+
+fn validate_success(
+    request: &DirectMutationRequestV1,
+    response: &CanonicalExecutionJsonV1,
+) -> DirectStoreResultV1<()> {
+    // Engine owns complete command-result schema validation. Store independently
+    // requires the complete canonical success, its command and original response UUID.
+    let document: serde_json::Value =
+        serde_json::from_str(response.as_str()).map_err(|_| DirectStoreErrorV1::Unreadable)?;
+    let object = document
+        .as_object()
+        .ok_or(DirectStoreErrorV1::InvalidInput {
+            reason: "success must be an object",
+        })?;
+    let allowed = [
+        "schema",
+        "request_id",
+        "command",
+        "generated_at",
+        "workspace",
+        "session",
+        "result",
+        "warnings",
+    ];
+    if object.keys().any(|key| !allowed.contains(&key.as_str()))
+        || document.get("schema").and_then(serde_json::Value::as_str) != Some("podway.output/v4")
+        || document
+            .get("request_id")
+            .and_then(serde_json::Value::as_str)
+            != Some(request.response_id())
+        || document.get("command").and_then(serde_json::Value::as_str) != Some(request.command())
+        || !document
+            .get("generated_at")
+            .is_some_and(serde_json::Value::is_string)
+        || !document
+            .get("result")
+            .is_some_and(serde_json::Value::is_object)
+        || !document
+            .get("warnings")
+            .is_some_and(serde_json::Value::is_array)
+    {
+        return Err(DirectStoreErrorV1::InvalidInput {
+            reason: "incomplete or mismatched canonical success envelope",
+        });
+    }
+    Ok(())
+}
+
+fn sqlite_time(now: UnixMillis) -> DirectStoreResultV1<i64> {
+    i64::try_from(now.get()).map_err(|_| DirectStoreErrorV1::InvalidInput {
+        reason: "clock is outside SQLite timestamp range",
+    })
+}
+
+fn persist_success(
+    transaction: &Transaction<'_>,
+    layout: &super::DirectWorkspaceLayoutV1,
+    request: &DirectMutationRequestV1,
+    response: CanonicalExecutionJsonV1,
+    now: UnixMillis,
+) -> DirectStoreResultV1<DirectRecordedOutcomeV1> {
+    let millis = sqlite_time(now)?;
+    let sequence: i64 = transaction.query_row(
+        "UPDATE workspace_state SET next_workspace_sequence=next_workspace_sequence+1, last_validated_root=?1, updated_at_ms=?2 \
+         WHERE singleton=1 AND next_workspace_sequence<9223372036854775807 RETURNING next_workspace_sequence",
+        params![layout.root().as_encoded(), millis], |row| row.get(0))?;
+    let (kind, session) = match &request.scope {
+        DirectOutcomeScopeV1::Workspace => ("workspace", None),
+        DirectOutcomeScopeV1::Session(session) => ("session", Some(session.as_str())),
+    };
+    transaction.execute("INSERT INTO mutation_outcomes (idempotency_key,request_digest,command_name,workspace_sequence,scope_kind,scope_session_id,response_json,recorded_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+        params![request.key.as_str(), request.digest.as_str(), request.command, sequence, kind, session, response.as_str(), millis])?;
+    transaction.execute("INSERT INTO operational_journal (recorded_at_ms,level,event_name,workspace_sequence,summary) VALUES(?1,'info','mutation_committed',?2,?3)", params![millis,sequence,request.command])?;
+    // Workspace bounds only: session outcomes intentionally survive archive purges.
+    transaction.execute("DELETE FROM mutation_outcomes WHERE scope_kind='workspace' AND (recorded_at_ms<?1 OR workspace_sequence NOT IN (SELECT workspace_sequence FROM mutation_outcomes WHERE scope_kind='workspace' ORDER BY workspace_sequence DESC LIMIT 100))",
+        [millis.saturating_sub(30*24*60*60*1000)])?;
+    transaction.execute("DELETE FROM operational_journal WHERE journal_id NOT IN (SELECT journal_id FROM operational_journal ORDER BY journal_id DESC LIMIT 200) AND (recorded_at_ms<?1 OR journal_id NOT IN (SELECT journal_id FROM operational_journal ORDER BY journal_id DESC LIMIT 10000))",
+        [millis.saturating_sub(7*24*60*60*1000)])?;
+    Ok(DirectRecordedOutcomeV1 {
+        digest: request.digest.clone(),
+        command: request.command.clone(),
+        sequence: u64::try_from(sequence).map_err(|_| DirectStoreErrorV1::Unreadable)?,
+        scope: request.scope.clone(),
+        response,
+        recorded_at: now,
+    })
+}
+
+pub(super) fn read_outcome(
+    connection: &Connection,
+    key: &IdempotencyKeyV1,
+) -> DirectStoreResultV1<Option<DirectRecordedOutcomeV1>> {
+    type PersistedOutcomeRow = (
+        String,
+        String,
+        i64,
+        String,
+        Option<String>,
+        String,
+        i64,
+        i64,
+    );
+    let row: Option<PersistedOutcomeRow> = connection.query_row(
+        "SELECT request_digest,command_name,workspace_sequence,scope_kind,scope_session_id, \
+         CASE WHEN length(CAST(response_json AS BLOB))<=1048576 THEN response_json ELSE NULL END,recorded_at_ms, \
+         (SELECT next_workspace_sequence FROM workspace_state WHERE singleton=1) \
+         FROM mutation_outcomes WHERE idempotency_key=?1", [key.as_str()],
+        |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?))).optional()?;
+    row.map(
+        |(digest, command, sequence, kind, session, response, time, committed_sequence)| {
+            if sequence < 1 || sequence > committed_sequence {
+                return Err(DirectStoreErrorV1::Unreadable);
+            }
+            let sequence = u64::try_from(sequence).map_err(|_| DirectStoreErrorV1::Unreadable)?;
+            let time = u64::try_from(time).map_err(|_| DirectStoreErrorV1::Unreadable)?;
+            let scope = match (kind.as_str(), session) {
+                ("workspace", None) => DirectOutcomeScopeV1::Workspace,
+                ("session", Some(id)) => DirectOutcomeScopeV1::Session(
+                    SessionId::new(id).map_err(|_| DirectStoreErrorV1::Unreadable)?,
+                ),
+                _ => return Err(DirectStoreErrorV1::Unreadable),
+            };
+            let response = CanonicalExecutionJsonV1::new(response)
+                .map_err(|_| DirectStoreErrorV1::Unreadable)?;
+            let document: serde_json::Value = serde_json::from_str(response.as_str())
+                .map_err(|_| DirectStoreErrorV1::Unreadable)?;
+            let response_id = document
+                .get("request_id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or(DirectStoreErrorV1::Unreadable)?;
+            let validation = DirectMutationRequestV1::new(
+                key.clone(),
+                Sha256Digest::new(digest.clone()).map_err(|_| DirectStoreErrorV1::Unreadable)?,
+                command.clone(),
+                response_id,
+                scope.clone(),
+            )
+            .map_err(|_| DirectStoreErrorV1::Unreadable)?;
+            validate_success(&validation, &response).map_err(|_| DirectStoreErrorV1::Unreadable)?;
+            if sequence == 0 {
+                return Err(DirectStoreErrorV1::Unreadable);
+            }
+            Ok(DirectRecordedOutcomeV1 {
+                digest: Sha256Digest::new(digest).map_err(|_| DirectStoreErrorV1::Unreadable)?,
+                command,
+                sequence,
+                scope,
+                response,
+                recorded_at: UnixMillis::new(time),
+            })
+        },
+    )
+    .transpose()
+}
+
+fn commit(transaction: Transaction<'_>) -> DirectStoreResultV1<()> {
+    transaction.commit().map_err(commit_error)
+}
+
+fn commit_error(error: rusqlite::Error) -> DirectStoreErrorV1 {
+    if error.sqlite_error_code() == Some(rusqlite::ErrorCode::SystemIoFailure) {
+        DirectStoreErrorV1::MutationOutcomeUnknown
+    } else {
+        error.into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uncertain_outcome_is_only_the_commit_io_error_mapping() {
+        let io = || {
+            rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_IOERR_WRITE),
+                None,
+            )
+        };
+        assert!(matches!(
+            DirectStoreErrorV1::from(io()),
+            DirectStoreErrorV1::Sqlite(_)
+        ));
+        assert!(matches!(
+            commit_error(io()),
+            DirectStoreErrorV1::MutationOutcomeUnknown
+        ));
+        assert!(matches!(
+            commit_error(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+                None
+            )),
+            DirectStoreErrorV1::Busy
+        ));
+        assert!(matches!(
+            commit_error(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_FULL),
+                None
+            )),
+            DirectStoreErrorV1::Sqlite(_)
+        ));
+    }
+}
+
+fn checkpoint_after_success(connection: &Connection, layout: &super::DirectWorkspaceLayoutV1) {
+    // A committed success must not become an error because best-effort bounded
+    // checkpointing meets another active snapshot or writer. Passive work never
+    // waits; an oversized WAL gets at most 100 ms to truncate on close.
+    let _ = connection.busy_timeout(std::time::Duration::ZERO);
+    let _ = connection.execute_batch("PRAGMA wal_checkpoint(PASSIVE);");
+    if fs::metadata(layout.wal()).is_ok_and(|metadata| metadata.len() > 4 * 1024 * 1024) {
+        let _ = super::connection::install_busy_deadline(
+            connection,
+            Instant::now() + std::time::Duration::from_millis(100),
+        );
+        let _ = connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+    }
+}

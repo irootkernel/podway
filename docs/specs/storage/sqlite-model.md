@@ -138,12 +138,14 @@ graph invariants are verified on open. A mismatch fails closed before serving th
 workspace. Paths, JSON blobs, collections, terminal receipts, and journal retention
 remain bounded by their executable contracts.
 
-## Reserved daemon-free baseline
+## Daemon-free Store beside the shipped daemon Store
 
 [`sqlite-v14.sql`](../../../assets/specifications/sqlite-v14.sql) is the complete
-reserved baseline under ADR-0038 and `V2DFC-003`. It is not an additional step in
-the shipped v1–v13 migration chain. `V2DFC-005` owns its direct Store admission;
-`V2DFC-007` owns CLI cutover. Daemon-era databases are rejected without writes
+baseline under ADR-0038, reserved in `V2DFC-003` and implemented by
+`podway_store::direct_store::DirectStoreV1` in `V2DFC-005`. It is not an additional
+step in the shipped v1–v13 migration chain. The shipped daemon and CLI still use
+the legacy Store until `V2DFC-007`; the direct Store is independently exercised
+in isolated fixtures. Daemon-era databases are rejected without writes
 and require explicitly confirmed reset-all; no automatic conversion is promised.
 
 The baseline preserves all current Procedure v2 snapshot, graph, session,
@@ -165,3 +167,55 @@ journal and pruning commit atomically. Session-scoped retention ends only on
 session reset or worktree reset; it has no cascading foreign key to archived
 session rows. Workspace-scoped retention is at most 100 entries or 30 days.
 Rejections leave no outcome. The outcome response byte bound is 1,048,576.
+
+### Admission and write-free reads
+
+Classification reads the database header and checksum-valid committed WAL page
+one through bounded, no-follow file handles before SQLite admission. A partial
+or uncommitted WAL tail cannot promote the generation. Legacy marker presence,
+generations 1–13, an unknown writer, a different Git identity and a mismatched
+schema fail closed before a read-write SQLite connection is opened. The frozen
+generation-13 text recipe under `tests/fixtures/storage/daemon-era-v2dfc/`
+preserves an actual legacy job, delegation receipt and hot-WAL replay recipe.
+
+Ordinary operations first acquire a native shared maintenance lease, checking
+the runtime directories, lock inode and all maintenance markers again under
+the lease. Read-only SQLite opens use one deferred snapshot and a read-only WAL
+index. When SHM is absent, the Store drains readers under an exclusive native
+lease and uses SQLite's read-only `unix-flock` VFS in exclusive locking mode to
+build a heap WAL index. That cold path changes no database, WAL, SHM or marker
+file. Its exclusive lease prevents managed writers from racing the different
+SQLite lock protocol. A bounded process-local connection gate prevents a
+read-only connection from inheriting a managed writer's writable SHM mapping.
+
+The exclusive intent lock blocks new shared entrants while existing readers
+drain. Maintenance leases retain and revalidate directory and lock identities;
+marker publication is no-clobber and replacement or removal requires the exact
+prior document. Ordinary reads never resume a marker. Engine-owned init,
+reset-all, removal and migration resumption remain `V2DFC-006` work.
+
+### Success transactions and maintenance primitives
+
+A direct mutation validates writer, schema and binding in a read-only snapshot
+before opening its writer connection. It then uses `BEGIN IMMEDIATE`, repeating
+the validation and inode checks before effects. A successful transaction reads
+its injected clock once and commits relational state, canonical success,
+sequence, journal, pruning and any moved-root rebind together. Original-key
+replay returns the stored response before the callback or clock, including its
+original response UUID. Rejections and stale prepared graph snapshots roll back
+without an outcome. The Store validates persisted success headers and sequence
+bounds; command-specific result validation belongs to the direct engine.
+
+Busy waits derive from one absolute invocation deadline and use short bounded
+jitter. Only an I/O error returned by the public mutation's COMMIT is classified
+as an unknown mutation outcome. Earlier errors are ordinary failures. A
+checkpoint attempted after COMMIT cannot change an acknowledged result.
+
+Bootstrap constructs and checkpoints a complete private generation before
+no-clobber publication. Its private transaction failure has no public unknown
+outcome. The predecessor framework checks a declared predecessor's complete
+schema and identity before opening a writer, applies its reviewed migration in
+one exclusive transaction, and records the new writer. The production registry
+is empty; isolated unit tests exercise the framework without adding a released
+predecessor. Full integrity, foreign-key, graph, receipt and outcome checks run
+only through explicit doctor/maintenance verification.

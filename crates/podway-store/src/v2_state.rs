@@ -4054,6 +4054,47 @@ fn replace_graph_session_transaction_internal_v2(
 ) -> Result<(), StoreErrorV1> {
     let previous = load_graph_session_connection_v2(transaction)?
         .ok_or_else(|| invalid_store("no current Procedure v2 graph session exists"))?;
+    replace_graph_session_from_previous_v2(
+        transaction,
+        &previous,
+        expected_workspace_revision,
+        expected_session_revision,
+        next,
+        delegation_accept,
+        false,
+    )
+}
+
+/// Direct persistence reuses the state loaded by its private transaction, and
+/// writes only changed attempt rows. Legacy callers preserve their existing path.
+pub(crate) fn replace_direct_graph_session_transaction_v2(
+    transaction: &Transaction<'_>,
+    previous: &GraphSessionStateV2,
+    expected_workspace_revision: Revision,
+    expected_session_revision: Revision,
+    next: &GraphSessionStateV2,
+    delegation_accept: bool,
+) -> Result<(), StoreErrorV1> {
+    replace_graph_session_from_previous_v2(
+        transaction,
+        previous,
+        expected_workspace_revision,
+        expected_session_revision,
+        next,
+        delegation_accept,
+        true,
+    )
+}
+
+fn replace_graph_session_from_previous_v2(
+    transaction: &Transaction<'_>,
+    previous: &GraphSessionStateV2,
+    expected_workspace_revision: Revision,
+    expected_session_revision: Revision,
+    next: &GraphSessionStateV2,
+    delegation_accept: bool,
+    skip_unchanged_attempts: bool,
+) -> Result<(), StoreErrorV1> {
     if previous.workspace_revision() != expected_workspace_revision {
         return Err(StoreErrorV1::PreconditionConflictV1 {
             expected: Some(expected_workspace_revision),
@@ -4076,7 +4117,7 @@ fn replace_graph_session_transaction_internal_v2(
     )
     .map_err(StoreErrorV1::InvalidStateV1)?;
     validate_successor_v2(
-        &previous,
+        previous,
         next,
         expected_workspace_revision,
         expected_session_revision,
@@ -4103,7 +4144,7 @@ fn replace_graph_session_transaction_internal_v2(
         if !matches!(
             crate::v2_delegation::completion_readiness_connection_v1(
                 transaction,
-                &previous,
+                previous,
                 &workspace_uuid,
             )?,
             crate::v2_delegation::DelegationReadinessV1::Direct
@@ -4149,6 +4190,9 @@ fn replace_graph_session_transaction_internal_v2(
         .zip(previous.attempt_metadata())
         .zip(next.trace().attempts().iter().zip(next.attempt_metadata()))
     {
+        if skip_unchanged_attempts && old_attempt == new_attempt && old_metadata == new_metadata {
+            continue;
+        }
         let changed = transaction
             .execute(
                 "UPDATE v2_attempts SET lifecycle = ?1, validity = ?2, ended_at_ms = ?3, \
@@ -4229,7 +4273,7 @@ fn replace_graph_session_transaction_internal_v2(
         next.workflow_memory(),
         next.goal_state(),
     )?;
-    update_session_row_v2(transaction, &previous, next)?;
+    update_session_row_v2(transaction, previous, next)?;
     let changed = transaction
         .execute(
             "UPDATE v2_workspace_state SET workspace_revision = ?1 \

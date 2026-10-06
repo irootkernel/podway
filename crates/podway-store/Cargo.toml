@@ -8,6 +8,7 @@ autotests = false
 
 [dependencies]
 podway-core = { path = "../podway-core" }
+nix = { workspace = true }
 rusqlite = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

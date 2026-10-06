@@ -21,6 +21,7 @@ use podway_core::{
 use serde_json::Value;
 
 pub mod codec;
+pub mod direct_store;
 pub mod schema;
 pub mod sqlite_store;
 pub mod state_rows;
@@ -2125,7 +2126,7 @@ pub(crate) fn map_rusqlite_error_v1(
         rusqlite::Error::FromSqlConversionFailure(..)
         | rusqlite::Error::IntegralValueOutOfRange(..)
         | rusqlite::Error::InvalidColumnType(..)
-        | rusqlite::Error::Utf8Error(_)
+        | rusqlite::Error::Utf8Error(..)
         | rusqlite::Error::QueryReturnedNoRows
         | rusqlite::Error::InvalidColumnIndex(_)
         | rusqlite::Error::InvalidColumnName(_)
