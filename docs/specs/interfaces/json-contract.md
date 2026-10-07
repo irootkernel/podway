@@ -177,8 +177,8 @@ the object open; automation must ignore unknown open-envelope metadata.
 
 `V2DFC-003` reserved `podway.output/v4`, `podway.error/v2`, and RecoveryRecipe
 v2. The direct Engine adopts the generation in `V2DFC-006`, and the CLI uses it
-in `V2DFC-007`. The direct validators remain explicit APIs while
-`V2DFC-008` removes daemon-era decoding and superseded assets.
+in `V2DFC-007`. The current direct validators enforce this generation.
+`V2DFC-008` removed daemon-era decoding and superseded assets; those are no longer compatibility APIs.
 
 The new result and detail generations remove admission, job, queue, endpoint,
 registry, and runtime-mode metadata. Direct and delegated status, compact status,
@@ -202,7 +202,7 @@ reconciliation field, and recovery argv must agree on that key. Lock contention
 permits only read-only state refresh or workspace diagnosis. Legacy state requires
 explicit reset-all authorization. Reset and removal markers name their respective
 resuming command, while maintenance lock, intent, and predecessor contention keep
-read-only recovery. The reserved Rust validator enforces agreement among keys
+read-only recovery. The current Rust validator enforces agreement among keys
 in both unknown-outcome details and error envelopes.
 Maintenance recipes retain the original key. Removal recipes also include
 `--force --yes` and the validated marker's workspace UUID. Reset-all uses
@@ -213,7 +213,7 @@ recipe never generates a key or authorizes deletion.
 Retained revision, attempt, session, Procedure digest, and stale-goal/evidence
 conflicts keep read-only `session.observe` recovery. Workspace identity, Store
 state/schema, and writer-contract diagnosis keep read-only `workspace.doctor`
-recovery. Their reserved detail schemas exclude legacy reset, maintenance retry,
+recovery. Their current detail schemas exclude legacy reset, maintenance retry,
 and outcome lookup recipes; error/v2 applies the same owning detail constraints.
 
 `podway.version-result/v2` and `podway.contract-manifest/v2` omit

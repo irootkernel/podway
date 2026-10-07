@@ -37,5 +37,5 @@
     }
   },
   "x-podway-max-json-bytes": 8192,
-  "$comment": "Reserved by V2DFC-003; not emitted before the owning daemon-free cutover task."
+  "$comment": "Current direct contract under ADR-0038; originally reserved by V2DFC-003."
 }

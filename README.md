@@ -4,10 +4,10 @@ Podway is a local procedure guard for one task in one Git worktree. It keeps the
 
 Podway does not run your build commands, edit Git state, contact a remote service, or store artifact contents. You do the work; Podway keeps the process explicit.
 
-Podway ships two matching binaries:
-
-- `podway`, the command-line interface;
-- `podwayd`, a user-scoped daemon that serializes task-state changes.
+Podway ships one binary, `podway`. Each command runs to completion in its own
+process. The Direct Engine reads a committed worktree snapshot or atomically
+commits a fenced mutation and its validated success outcome. There is no resident
+process, login-start service, socket, or user-global task registry.
 
 ## When to use Podway
 
@@ -25,16 +25,16 @@ procedures for common work:
 | `small-change-v2` | Short inspect, implement, verify, review, and closeout path without goal tracking |
 
 Podway admits only Procedure v2 through the normal runtime and emits successful
-responses through `podway.output/v3`.
+responses through `podway.output/v4` and failures through `podway.error/v2`.
 
 Podway is not a project manager, CI system, command runner, Git automation layer, artifact store, or multi-user access-control service.
 
 ### For AI agents and harnesses
 
 Scripts and AI agents use the same public contract as humans. The single
-`podway observe --json --wait-for-idle` command returns one authoritative,
-self-contained task observation, so an agent re-derives what happens next from
-the worktree instead of from its conversation history. Sessions survive context
+`podway observe --json` command returns one authoritative,
+self-contained committed task observation, so an agent re-derives what happens
+next from the worktree instead of from its conversation history. Sessions survive context
 loss and transfer between actors mid-task, and mutations accept explicit
 preconditions and idempotency keys so retried or concurrent callers cannot
 corrupt state. See the [Procedure v2 workflow](docs/examples/v2-workflow.md).
@@ -43,25 +43,35 @@ corrupt state. See the [Procedure v2 workflow](docs/examples/v2-workflow.md).
 
 Podway supports native Apple Silicon macOS only. Intel macOS, Rosetta execution, universal binaries, Linux, and Windows are not supported release targets.
 
-The current public package is unsigned and not notarized. Verify the published checksum before installing it. macOS may require you to authorize the downloaded binaries in System Settings before their first run.
+Check the selected release's signing and notarization statements and verify its
+published checksum before installing. Unsigned artifacts are supported by the
+release contract. macOS may require you to authorize the downloaded binary in
+System Settings before its first run.
 
 ## Install a release
 
-Download the latest Apple Silicon archive and its `.sha256` file from [GitHub Releases](https://github.com/irootkernel/podway/releases). Then verify and extract it:
+This checkout documents the daemon-free `v0.2.13` target; source implementation
+is not evidence that a matching stable release has been published. Select an
+archive whose identity matches this direct generation, or use an explicitly
+chosen source build without claiming stable-release qualification.
+
+If an older daemon-based generation is installed, complete the separately
+authorized [legacy cutover](#legacy-state-and-cutover) before installing this CLI
+or resetting its worktrees.
+
+Download the selected Apple Silicon archive and its `.sha256` file from [GitHub Releases](https://github.com/irootkernel/podway/releases). Then verify and extract it:
 
 ```bash
 shasum -a 256 -c podway-<version>-aarch64-apple-darwin.tar.gz.sha256
 tar -xzf podway-<version>-aarch64-apple-darwin.tar.gz
 ```
 
-Install both matching binaries on your `PATH`:
+Install the single CLI on your `PATH`:
 
 ```bash
 mkdir -p "$HOME/.local/bin"
 install -m 755 podway-<version>-aarch64-apple-darwin/bin/podway \
   "$HOME/.local/bin/podway"
-install -m 755 podway-<version>-aarch64-apple-darwin/bin/podwayd \
-  "$HOME/.local/bin/podwayd"
 ```
 
 Add this line to `~/.zprofile` if `~/.local/bin` is not already on your login shell path, then open a new terminal:
@@ -70,71 +80,52 @@ Add this line to `~/.zprofile` if `~/.local/bin` is not already on your login sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Verify the CLI:
+Verify the exact CLI and require Output v4, version-result v2 and manifest v2:
 
 ```bash
-podway version --json
+podway version --json --identity
 ```
 
-## Start the daemon at login
+## Legacy state and cutover
 
-Install `podwayd` as a per-user macOS LaunchAgent:
+The daemon-free contract has no backward compatibility with daemon-era output,
+error codes or Store generations 1–13. An old worktree or old maintenance marker
+returns `LEGACY_RUNTIME_STATE_UNSUPPORTED` without changing its bytes, migrating,
+checkpointing or creating SQLite SHM. Reset is destructive: it makes no backup and
+performs no conversion. Active sessions and retained runtime history are lost.
 
-```bash
-podway daemon install --daemon-path "$HOME/.local/bin/podwayd"
-podway daemon status
-```
+The supported order is:
 
-This creates `~/Library/LaunchAgents/dev.podway.podwayd.plist`, starts the daemon for the current login session, and starts it again after future GUI logins. It does not run before login and does not require `sudo`. The LaunchAgent records the daemon's absolute path, so reinstall it after moving or replacing the binaries.
+1. Finish or explicitly abandon active sessions using their original generation.
+2. Under separate authorization, use the old binary's supported `daemon uninstall`
+   operation to remove its LaunchAgent and establish that no old writer remains.
+   The new CLI's `daemon` routes return `COMMAND_RETIRED` and cannot retire it.
+3. If Aquarium's managed development service is installed, retire it under its
+   own separate authority through the original Aquarium controller before
+   installing the new CLI or resetting any shared worktree. Removing Podway's
+   ordinary LaunchAgent does not stop that distinct writer.
+4. Install the new single binary, then remove the old `~/.podway` account state
+   only within an explicit legacy-runtime cleanup grant. Current Podway neither
+   reads nor creates that state. An installation or workspace-reset request alone
+   does not authorize account cleanup.
+5. After identifying every legacy worktree and accepting its irreversible history
+   loss, reset each exact worktree through the current supported command:
 
-Useful lifecycle commands are:
+   ```bash
+   podway --worktree <legacy-worktree> --json reset --all --yes --idempotency-key <new-key>
+   ```
 
-```bash
-podway daemon status
-podway daemon start
-podway daemon stop
-podway daemon restart
-podway daemon logs --lines 100
-podway daemon logs --follow
-```
+The no-old-writer prerequisite matters: a still-running old daemon could write to
+unlinked files during reset. Preserve the original request and key if reset is
+interrupted; follow its marker recovery recipe rather than generating a new key
+or deleting files manually. Reset preserves configuration unrelated to retired mode, Procedures,
+`.gitignore` and unrelated worktree files, then establishes a fresh UUID and
+current Store. Start a new session from the fresh workspace.
 
-## Reset user runtime data
-
-Runtime reset removes ordinary per-user daemon state while preserving Git
-worktrees, each worktree's `.podway` state, installed binaries, and external
-managed runtimes. It has no force mode and refuses busy or ambiguous targets.
-Inspect `podway help runtime`, then create a fresh read-only plan for exactly one
-mode or for the complete ordinary-mode inventory:
-
-```bash
-podway --mode dev runtime reset plan
-podway runtime reset plan --all-modes
-```
-
-Review every selected, excluded, removed, and preserved resource. Apply only the
-same explicit selector and returned token; confirmation is always required:
-
-```bash
-podway --mode dev runtime reset apply --plan-token <token> --yes
-podway runtime reset apply --all-modes --plan-token <token> --yes
-```
-
-If an apply is interrupted after commit, retry only the original selector and
-exact token until it reports `complete` or `already_applied`; do not create a new
-plan or edit the recovery record. A successful reset does not restart a daemon.
-When continued use is intended, explicitly establish a fresh daemon through the
-same mode's normal lifecycle. Production requires an explicit reinstall or a
-foreground `podwayd --service`; an ordinary named mode uses
-`podwayd --mode <key>`. Then retain that exact selector while re-registering and
-checking each worktree:
-
-```bash
-podway --mode <key> --worktree <path> workspace repair
-podway --mode <key> --worktree <path> status
-```
-
-After an all-mode reset, use each retained worktree's configured mode rather
-than defaulting these commands to production.
+These instructions describe the supported cutover; this source change authorizes
+no installation, service action or deletion. See
+[ADR-0038](docs/architecture-decision-records/0038-remove-the-daemon.md) and
+[upgrade QA](docs/implementation-tips/release-upgrade-qa.md).
 
 ## Optional: configure an AI coding agent
 
@@ -145,11 +136,11 @@ For a small project-wide policy, add this template to the project's `AGENTS.md`:
 ```markdown
 ## Podway
 
-- Podway supports Procedure v2 only. Treat `LEGACY_PROCEDURE_STATE_UNSUPPORTED` as a backup-and-reset boundary; do not edit the database or attempt conversion.
-- When `.podway/config.yaml` exists, read `podway observe --json --wait-for-idle` before task work. Require `podway.observation-result/v3` for a Direct Procedure or `podway.observation-result/v4` for a Procedure with delegation, and re-read it after every mutation.
+- Podway supports Procedure v2 only. Treat `LEGACY_RUNTIME_STATE_UNSUPPORTED` as an explicit destructive-reset boundary, after separately authorized retirement of every old writer; do not edit the database or attempt conversion.
+- When the current workflow authorizes Podway use and `.podway/config.yaml` exists, read `podway observe --json` before task work. Require Output v4 and `podway.observation-result/v5` for every Procedure, and re-read after every mutation.
 - Treat the active Podway graph node and attempt as the current work boundary. Perform the work before recording an item. Side work may run outside Podway, but record only conclusions supported by current evidence on the active attempt.
 - Use JSON fields, stable error codes, explicit preconditions, and idempotency keys for mutations. Never parse human-readable output as an API.
-- You may update items and advance an existing active v2 session when the work supports it. Do not run `podway init`, start or replace a session, cancel or reset state, control the daemon, or reactivate a completed session through `rework` or `goal revise --reactivate` unless the user explicitly requests it.
+- You may update items and advance an existing active v2 session when the work supports it. Do not run `podway init`, start or replace a session, cancel or reset state, remove a workspace, or reactivate a completed session through `rework` or `goal revise --reactivate` unless the user explicitly requests it.
 - Podway records assertions; it does not run the work or prove semantic truth.
 ```
 
@@ -191,8 +182,8 @@ curl -fsSLo "$procedure_skill_dir/agents/openai.yaml" \
 The authoring skill produces and validates declarative source, then hands off preview's exact digest-fenced start suggestion without starting or mutating a session. Consult the agent's documentation for skill reload requirements. The commands above require network access and `curl`, and overwrite existing files with the same names. Replace `main` with one exact release tag or commit SHA when a reproducible, pinned skill version is required.
 
 For supervised delegation, follow the [worked review example](docs/examples/supervised-delegation.md)
-and its canonical YAML. The example is exercised by the real CLI and daemon in
-an isolated test with a synthetic executor. It is not a built-in preset or a live
+and its canonical YAML. The example is exercised by the real direct CLI in
+an isolated worktree test with a synthetic executor. It is not a built-in preset or a live
 Dolgorae adapter; source validation does not establish installed-release support.
 
 ## Build from source
@@ -202,14 +193,10 @@ Source builds require native Apple Silicon macOS and the Rust version pinned in 
 ```bash
 git clone https://github.com/irootkernel/podway.git
 cd podway
-cargo build --release --locked \
-  -p podway-cli --bin podway \
-  -p podway-daemon --bin podwayd
+cargo build --release --locked -p podway-cli --bin podway
 
 mkdir -p "$HOME/.local/bin"
 install -m 755 target/release/podway "$HOME/.local/bin/podway"
-install -m 755 target/release/podwayd "$HOME/.local/bin/podwayd"
-podway daemon install --daemon-path "$HOME/.local/bin/podwayd"
 ```
 
 Contributors should use the complete verification commands documented under [Contributor Documentation](docs/README.md), not treat a successful build as the release-readiness gate.
@@ -229,7 +216,7 @@ podway begin \
   --criterion verified="Fresh verification supports the change." \
   --actor developer
 podway next
-podway observe --json --wait-for-idle
+podway observe --json
 ```
 
 `podway next` describes the active graph node, its required items, allowed actions,
@@ -240,7 +227,7 @@ Procedure v2 action with the current revision fences:
 ```bash
 podway --json status
 podway --json next
-podway --json observe --wait-for-idle
+podway --json observe
 ```
 
 The complete fenced mutation sequence is shown in the
@@ -348,50 +335,62 @@ Add `--json` to receive one versioned JSON object instead of human-readable text
 ```bash
 podway status --json
 podway next --json
-podway observe --json --wait-for-idle
+podway observe --json
 ```
 
-Automation must use JSON fields and stable error codes, never parse human output. Mutations support idempotency keys, revision preconditions, detached admission, job lookup, and durable outcome reconciliation.
+Automation must use JSON fields and stable error codes, never parse human output.
+Pass an explicit stable `--idempotency-key` and preserve resolved revision and
+identity fences for every mutation. Only successful mutations retain outcomes;
+rejections have no state effect or outcome. After response loss, use
+`podway outcome lookup --idempotency-key <original-key> --json`, then replay only
+the identical canonical request when authorized. Replay returns the entire original
+success, including its original request ID. Retention is session-scoped or, for
+workspace outcomes, bounded to 100 entries or 30 days.
+
+`--timeout` defaults to five seconds and bounds the combined maintenance/SQLite
+lock wait. `WORKSPACE_BUSY` or `WORKSPACE_MAINTENANCE` leaves no partial effect.
+`MUTATION_OUTCOME_UNKNOWN` is limited to an I/O failure during COMMIT. Daemon, job,
+mode, detach and wait controls are retired; they fail with `COMMAND_RETIRED`.
 `podway record --stdin` accepts one closed, at-most-1-MiB JSON document to
 record or clear 1..128 uniquely identified active-attempt items atomically. The
 document carries every workspace, session, attempt, item-revision, and
 idempotency fence; see the [Procedure v2 walkthrough](docs/examples/v2-workflow.md).
-Common stale-state, uncertain-outcome, daemon, and workspace failures include a
-closed `details.recovery` recipe containing only a bounded read-only command.
-Automation must validate that recipe and must never treat it as authorization
-for a lifecycle action or mutation.
+Common stale-state, uncertain-outcome and workspace failures include a closed
+`details.recovery` recipe. Validate RecoveryRecipe v2 and its command/argv pair;
+read-only recovery and explicitly authorized destructive recovery are distinct.
+A recipe never grants permission for a lifecycle action or weakens a fence.
 
-Podway v0.2.10 implements an evidence-gated, goal-directed workflow memory:
+Podway implements evidence-gated, goal-directed workflow memory:
 Procedure v2 documents are declarative graphs with recorded decisions, selected
 evidence read-back, explicit rework, goal revision, and goal assessment, still with
 exactly one active attempt. Static authoring and inspection are available in the
-normal CLI. The release admits Procedure v2 through the normal runtime while
-preserving the managed disposable boundary for development builds.
+normal CLI. Procedure v2 runs through the same Direct Engine for every caller;
+development builds use disposable worktrees and exact writer-manifest identity.
 See the [Procedure v2 walkthrough](docs/examples/v2-workflow.md)
 and the [roadmap](docs/roadmap/README.md).
 
 ## Local data and trust
 
-Task state lives under `.podway/runtime/` in the owning worktree. Deleting the worktree deletes that state. By default, Podway keeps only user-global service metadata, a minimal workspace registry, its socket, and bounded logs under `~/.podway/`. An Aquarium-managed development service instead keeps its service state under the runtime root supplied by Aquarium.
+Task state, success outcomes, bounded operational journal and maintenance locks
+live under `.podway/runtime/` in the owning worktree. Deleting the worktree deletes
+that state. Podway neither reads nor creates `~/.podway`, a global workspace
+registry, daemon logs, sockets or service metadata. A different writer manifest
+fails closed unless the release explicitly declares a compatible predecessor;
+`v0.2.13` declares none.
 
 Podway trusts processes running as the same operating-system user. It is not a security boundary against malicious same-user processes. It performs no network I/O and exposes no arbitrary command-execution or Git-mutation API.
 
 ## Upgrade and uninstall
 
-Install both binaries from the same new release, then refresh and verify the LaunchAgent:
+For the daemon-era cutover, follow [legacy state and cutover](#legacy-state-and-cutover)
+before installing or resetting. Later direct-to-direct upgrades require declared
+writer-predecessor compatibility; a version string alone does not permit migration.
 
-```bash
-podway daemon install --daemon-path "$HOME/.local/bin/podwayd"
-podway daemon status
-```
-
-To uninstall:
-
-```bash
-podway daemon uninstall --yes
-```
-
-Then remove both binaries. Uninstalling the service preserves `.podway/` data in existing worktrees and preserves daemon logs unless `--purge-logs` is requested.
+Remove the CLI through the original installation mechanism when no longer needed.
+That does not delete `.podway` in any worktree. Explicitly confirmed
+`podway workspace remove` deletes one selected worktree's complete `.podway` tree
+while preserving its Git worktree. Workspace removal, account cleanup and old
+service retirement are distinct grants; do not combine them implicitly.
 
 ## Contributing and license
 

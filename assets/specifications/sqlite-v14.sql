@@ -1,5 +1,5 @@
--- Complete reserved daemon-free baseline. No daemon-era migration is applied.
--- Runtime admission is owned by V2DFC-005 and V2DFC-007.
+-- Current direct Store baseline under ADR-0038.
+-- Daemon-era generations are rejected, never migrated.
 PRAGMA foreign_keys = ON;
 PRAGMA journal_mode = WAL;
 PRAGMA synchronous = FULL;

@@ -1,6 +1,6 @@
 # Implementation Specifications
 
-- `error-codes.json`: stable public error and exit-code catalog, including reserved typed-guard failures.
+- `error-codes.json`: stable public error and exit-code catalog, including current typed-guard failures.
 - `authoring-diagnostics.json`: stable authoring-time diagnostic catalog with ambiguity-based option replacements.
 - `command-catalog.yaml`: command classification, direct execution behavior, and preconditions.
 - `sqlite-v14.sql`: complete direct-store production baseline; older generations are rejected input fixtures only.

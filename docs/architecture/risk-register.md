@@ -1,35 +1,41 @@
 # Risk Register
 
+The IDs below preserve the established risk inventory. A row marked retired is
+historical: ADR-0038 removed its owning infrastructure, rather than qualifying the
+old runtime behavior for the direct product.
+
 | ID | Risk | Likelihood | Impact | Trigger or signal | Mitigation | Primary owner |
 |---|---|---:|---:|---|---|---|
-| `R-01` | Queue implementation creates duplicate effects after crash | medium | critical | crash test produces two revisions or attempts | durable admission, atomic terminal commit, idempotency, crash matrix | Store/Queue |
-| `R-02` | A stale queued command mutates a later graph node | medium | critical | command succeeds after active attempt changed | require attempt and revision preconditions; never auto-retarget | Domain/Store |
-| `R-03` | Same-item concurrent updates silently overwrite | medium | high | last writer wins without conflict | persistent item revisions and compare-and-set | Domain/Store |
-| `R-04` | Worktree path or symlink escapes state boundary | low | critical | runtime or artifact opens outside root | canonical containment, no runtime symlink, adversarial fixtures | Git/Filesystem |
-| `R-05` | Worktree-local queue cannot recover after daemon restart | medium | high | acknowledged jobs remain idle | minimal registry, startup scan, path repair | Daemon |
-| `R-06` | Worktree move or copy causes split identity | medium | high | same UUID at two roots or moved jobs lost | Git fingerprints, conflict detection, repair, destructive reinit | Git/Daemon |
-| `R-07` | LaunchAgent keep-alive conflicts with explicit stop or upgrades | medium | medium | daemon restarts unexpectedly or old binary persists | bootout/bootstrap lifecycle, install metadata, integration tests | Service |
-| `R-08` | Procedure authoring becomes too complex | medium | high | users bypass Podway or use only confirm items | six simple item types, strong presets, `next` command suggestions | Product/CLI |
-| `R-09` | Product drifts back into evidence/audit scope | medium | high | export/history/revocation features enter critical path | non-goals, ADR-0001/0007/0008, design review | Architecture |
-| `R-10` | Artifact hashing blocks queues on large files | medium | medium | long queue latency | hash outside DB transaction, streaming I/O, report duration, keep artifacts focused | Daemon/Store |
-| `R-11` | Required local artifact changes after attach | high | medium | completion uses stale metadata | rehash at complete with slot revision recheck | Domain/Store |
-| `R-12` | YAML parser permits resource exhaustion or code-like behavior | low | high | large alias expansion or custom tags | strict parser limits, duplicate-key rejection, no tags/includes | Config/Security |
-| `R-13` | JSON/IPC contracts drift between CLI and daemon | medium | high | upgrade incompatibility or golden failure | shared protocol crate, schemas in `make test`, compatibility tests | Protocol/CLI |
-| `R-14` | Full macOS service tests are flaky or unavailable | medium | high | local gate cannot prove service behavior | isolated fixtures and deterministic service abstraction tests | Service/QA |
-| `R-15` | SQLite schema and domain invariants diverge | medium | high | doctor detects impossible state | migration checks, invariant scan, transaction review | Store/Domain |
-| `R-16` | Global registry accidentally accumulates task data | low | medium | registry fields expand | fixed schema, tests, architecture review | Daemon/Security |
-| `R-17` | Logs leak task or item content | medium | medium | request debug output appears in logs | structured allowlist logging and redaction tests | Daemon/Security |
-| `R-18` | Destructive reset is used accidentally | low | high | session lost without intent | TTY prompt, `--yes`, `--force`, dry run, explicit help | CLI |
-| `R-19` | A non-native binary is distributed as Apple Silicon output | medium | high | executable is translated, universal/fat, cross-built, or relabeled | run `make dist` on the native Apple Silicon release host and inspect distributed binaries | Release |
-| `R-20` | Same-user threat is misunderstood as strong authentication | medium | medium | users rely on Podway for audit proof | explicit documentation, no “secure evidence” language, no access key | Product/Security |
-| `R-21` | `next` suggestions are incomplete or unsafe to copy | medium | high | users still omit steps | structured argv suggestions, preset E2E assertions, UX dogfooding | CLI/Product |
-| `R-22` | Reset-all crash leaves workspace unusable | low | high | marker or partial DB remains | marker protocol and crash cases C14-C16 | Store/Daemon |
-| `R-23` | Dependency supply-chain or licensing issue blocks release | low | high | `cargo deny` fails in the local gate | lockfile, limited dependency surface, `make test-prepare` dependency review | Release |
-| `R-24` | Overengineering delays complete product | medium | high | long work on non-goals or generic frameworks | fixed scope, phased gates, reject speculative adapters/history | Project lead |
+| `R-01` | Crash or response loss creates duplicate direct effects | medium | critical | cold retry creates a second revision or attempt | atomic state/success outcome, exact-key replay, DS/DE crash proofs | Store/Engine |
+| `R-02` | Stale prepared input mutates a later graph node | medium | critical | command succeeds after current attempt changes | transaction-time attempt/revision fences; no automatic retargeting | Domain/Engine |
+| `R-03` | Concurrent item edits silently overwrite | medium | high | last writer wins without conflict | persistent item revisions and compare-and-set | Domain/Store |
+| `R-04` | Path or replacement race escapes workspace | low | critical | source, artifact or runtime opens outside owning root | descriptor-safe containment, nofollow opens, native adversarial tests | Git/Engine |
+| `R-05` | Retired: daemon restart leaves acknowledged jobs idle | retired | historical | no current job or restart-recovery path exists | ADR-0038 removes durable admission; current crash recovery belongs to R-01/R-22 | Architecture |
+| `R-06` | Worktree move or copied runtime creates wrong ownership | medium | high | Store binding differs from canonical Git identity | role-tagged canonical path identity, native revalidation, explicit rebind/reset | Git/Engine |
+| `R-07` | Retired: LaunchAgent keep-alive conflicts with stop/upgrade | retired | historical | no current LaunchAgent owner exists | old installation requires separately authorized retirement through its original binary/controller | Operator |
+| `R-08` | Procedure authoring becomes too complex | medium | high | users bypass progression or use only confirmations | bounded data-only items, validated presets, generated next-command recipes | Product/CLI |
+| `R-09` | Product drifts into evidence archive or attestation | medium | high | export/revocation features enter critical path | non-goals and structural-assertion trust model | Architecture |
+| `R-10` | Large artifact preparation delays commands | medium | medium | preparation dominates latency | streaming hash outside state transaction, native race checks, measured cost | Engine/Git |
+| `R-11` | Required local artifact changes after attach | high | medium | completion uses stale metadata | completion rehash with slot/worktree revalidation | Domain/Engine |
+| `R-12` | Malformed YAML/JSON exhausts resources or executes code | low | high | alias expansion, tags, excessive depth or aggregate input | strict parser and typed Direct API bounds, duplicate-key rejection, no includes/hooks | Config/Protocol |
+| `R-13` | Public assets, consumer contract or writer identity drift | medium | high | decoder failure or foreign Store write | closed schema generations, manifest asset closure, writer refusal, verifier tests | Protocol/Store |
+| `R-14` | Retired: service qualification depends on launchd availability | retired | historical | no current service test contract exists | direct native scenarios qualify the actual packaged CLI in scratch worktrees | Release/QA |
+| `R-15` | SQLite and domain invariants diverge | medium | high | doctor finds corrupt graph/outcome/schema | canonical v14 DDL, transaction validation and explicit integrity checks | Store/Domain |
+| `R-16` | Retired: global registry accumulates task content | retired | historical | no current account registry exists | no per-user Podway state; task state stays worktree-local | Architecture |
+| `R-17` | Diagnostics expose task or credential content | medium | medium | item text appears in journal or raw infrastructure output | fixed journal summaries, bounded public error details, no payload log sink | Engine/Security |
+| `R-18` | Destructive reset/removal is accidental | low | high | runtime lost without informed intent | current lifecycle eligibility, confirmation, UUID fences and exact recovery guidance | CLI/Engine |
+| `R-19` | Non-native or debug-hook-enabled executable is distributed | medium | high | relabeled/cross-built binary or live release test hook | native Apple Silicon gate, architecture inspection, exact packaged scenarios and disabled-hook probe | Release |
+| `R-20` | Same-user reliability is mistaken for authentication | medium | medium | users rely on receipts/digests as audit proof | explicit trust limits, no access key or cryptographic authority claim | Product/Security |
+| `R-21` | Next-command recipes are unsafe to copy | medium | high | wrong fences, key or undeclared movement | structured argv with caller placeholders and real-CLI recipe tests | CLI/Product |
+| `R-22` | Interrupted reset-all/removal loses recoverable intent | low | high | missing original response or abandoned markers | native exclusion, exact typed marker retry, D03/DE05/DE06 and real CLI interruption tests | Engine/Store |
+| `R-23` | Supply-chain or licensing defect blocks release | low | high | dependency review or reproducibility checks fail | lockfile, narrow dependencies, `make test-prepare`, truthful signing status | Release |
+| `R-24` | Overengineering delays bounded completion | medium | high | speculative frameworks or unadopted capabilities expand scope | existing crate boundaries, staged roadmap ownership and explicit adoption | Project lead |
 
 ## Risk review cadence
 
-- Review critical and high risks at every integration milestone.
-- Add a conformance test when a risk is triggered by a defect.
-- A new critical risk may block integration until an owner and mitigation are assigned.
-- Closing a risk requires a passing test, local-gate check, or accepted design change, not only an implementation claim.
+Review current critical/high risks at integration milestones. A triggered defect
+requires a regression matched to its actual boundary. Closing a current risk
+requires passing evidence or an accepted design change; existence of a test is
+not a passing claim. Historical retirement does not authorize stopping or
+removing an installed service. Performance, release qualification and external
+consumer adoption remain distinct from development-gate success.

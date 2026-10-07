@@ -2,263 +2,132 @@
 
 ## Cargo workspace
 
-```text
-Cargo.toml
-Cargo.lock
-crates/
-  podway-cli/
-  podway-config/
-  podway-core/
-  podway-daemon/
-  podway-engine/
-  podway-git/
-  podway-presets/
-  podway-protocol/
-  podway-service/
-  podway-store/
-assets/
-  schemas/
-  specifications/
-  presets/
-release/
-tests/
-  fixtures/
-tools/
-```
+The workspace contains eight crates: core, config, protocol, Store, Git, presets,
+Engine and CLI. `podway` is the only shipped product executable.
+`podway-contract-verifier` is a feature-gated repository verification binary,
+not an installed product. The application commits `Cargo.lock` and standard
+Cargo gates use `--locked` with the pinned `rust-toolchain.toml` toolchain.
 
-Each crate owns its Cargo integration-test targets under `crates/<crate>/tests/`.
-Those targets use the mechanically checked `arch_*`, `int_*`, and `e2e_*` prefixes;
-`int_*` targets may exercise a CLI process boundary, while `e2e_*` targets
-exercise complete real-binary scenarios. Architecture targets cannot launch
-product binaries. The executable test-layout contract owns these distinctions.
-The root `tests/fixtures/` directory contains shared contract fixtures rather than test
-targets. The repository commits `Cargo.lock` because Podway is an application.
+Crate-owned tests use mechanically checked `arch_*`, `int_*` and `e2e_*` targets under
+`crates/<crate>/tests/`. Integration modules are registered in aggregate
+`int_suite` targets; real CLI scenarios are registered in `e2e_suite`.
+Architecture targets cannot launch product binaries. Shared fixtures live in
+`tests/fixtures/`, canonical assets in `assets/`, and host-local output in ignored
+`artifacts/`, `target/` and `dist/` locations.
 
 ## Crate responsibilities
 
-### `podway-core`
+| Crate | Responsibility |
+|---|---|
+| `podway-core` | Pure domain values, transitions, satisfaction, graph status, invariants and errors |
+| `podway-config` | Bounded workspace/Procedure parsing, semantics, canonical snapshots and safe source resolution |
+| `podway-protocol` | Closed public JSON envelopes/results/errors, typed direct inputs, schema validation, build identity and offline release verifier |
+| `podway-store` | Generation-14 persistence, coherent snapshots, atomic success outcomes, native maintenance leases, classification, retention and integrity |
+| `podway-git` | Read-only native worktree discovery, canonical-path identity, containment, descriptor and replacement-race checks |
+| `podway-presets` | Embedding and validation of canonical `assets/presets/` YAML and catalog metadata |
+| `podway-engine` | Direct API composition, preparation, request identity, projections, native artifact/source adapters and maintenance protocols |
+| `podway-cli` | Grammar, target selection, Direct requests, local authoring, validated rendering, help and completions |
 
-Owns:
-
-- immutable domain types;
-- command and transition types;
-- item satisfaction rules;
-- graph-node status derivation;
-- invariants;
-- pure state transition functions;
-- domain error codes.
-
-Must not depend on async, SQLite, Git, filesystem, IPC, or service-manager crates.
-
-### `podway-protocol`
-
-Owns:
-
-- IPC v1 framing types;
-- request and response envelopes;
-- JSON schema-aligned public types;
-- protocol compatibility negotiation;
-- bounded deserialization helpers;
-- public error envelope serialization.
-
-### `podway-config`
-
-Owns:
-
-- workspace config parsing;
-- procedure parsing;
-- schema validation;
-- semantic validation;
-- Podway Canonical JSON v1;
-- procedure snapshot digest generation;
-- path-safe local procedure resolution.
-
-### `podway-store`
-
-Owns:
-
-- SQLite connection setup;
-- DDL and migrations;
-- workspace metadata;
-- session repository;
-- durable jobs and idempotency;
-- transaction orchestration;
-- pruning and integrity checks;
-- test fault-injection hooks.
-
-### `podway-git`
-
-Owns:
-
-- worktree discovery;
-- non-bare validation;
-- Git common-directory and worktree-admin identity;
-- path containment;
-- move detection;
-- copied UUID conflict inputs.
-
-No Git mutation APIs are exposed from this crate.
-
-### `podway-service`
-
-Owns:
-
-- platform service trait;
-- macOS LaunchAgent implementation;
-- service install metadata;
-- socket/runtime/log path calculation;
-- testable service and filesystem boundaries for the supported macOS implementation.
-
-### `podway-presets`
-
-Owns:
-
-- embedded built-in YAML;
-- validated parsed preset snapshots;
-- preset listing and explanatory metadata;
-- schema-conformance tests for all presets.
-
-The source YAML under `assets/presets/` is the reviewable source. The crate embeds
-exactly those files at build time.
-
-### `podway-engine`
-
-Owns the host-independent services extracted by `V2DFC-004`:
-
-- deterministic Procedure v2 status, next, observation, evidence, and delegation projections;
-- start, snapshot, and item preparation and canonical request digests;
-- execution boundary values and native identifier, clock, Procedure, and artifact adapters;
-- workspace resolution, Store binding inspection, validated filesystem directories, and marker codecs.
-
-The engine depends on core, protocol, config, Store, Git, and presets. It has no
-service or daemon dependency. The daemon derives scheduler keys from the engine's
-validated durable Store identity and owns the runtime-workspace protocols. Its
-exclusive maintenance lease and Store-first source checks precede issuance of the
-filesystem maintenance token. Moving filesystem primitives does not move those
-host barriers. Direct command execution is implemented by `V2DFC-006` before the
-CLI switches in `V2DFC-007`; the extraction alone changes no emitted output.
-
-### `podway-daemon`
-
-Owns:
-
-- daemon process lifecycle;
-- singleton lock and socket server;
-- request routing;
-- peer-user checks;
-- worktree scheduler registry;
-- durable admission and job execution;
-- read query hosting through engine projections;
-- runtime-workspace maintenance protocols;
-- graceful shutdown;
-- structured logging.
-
-### `podway-cli`
-
-Owns:
-
-- command grammar;
-- static help;
-- worktree path selection;
-- daemon client;
-- automatic concurrency-precondition reads;
-- text rendering;
-- JSON passthrough and validation;
-- shell completion generation.
+The daemon and service crates, IPC framing, client transport and service controller
+are retired under [ADR-0038](../architecture-decision-records/0038-remove-the-daemon.md).
+Their historical design records remain history rather than current ownership.
 
 ## Dependency rules
 
-- `podway-core` has no infrastructure dependencies.
-- `podway-config` and `podway-protocol` may depend on core value types, not daemon or store.
-- `podway-store`, `podway-git`, and `podway-service` may depend on `podway-core` only.
-- `podway-engine` composes core, protocol, config, Store, Git, and presets without service or daemon dependencies.
-- `podway-daemon` composes the engine and retained hosting infrastructure.
-- `podway-cli` depends on protocol and presentation types, not store internals.
-- Cyclic crate dependencies are prohibited.
+The executable [`cargo-adjacency.json`](../../contracts/cargo-adjacency.json)
+owns permitted production edges:
+
+- core depends on no infrastructure crate;
+- config, protocol, Store and Git may depend on core only within this workspace;
+- presets may depend on core and config;
+- Engine composes core, config, protocol, Store, Git and presets;
+- CLI may depend on core, config, protocol, presets and Engine; it must not access
+  Store internals or native Git directly;
+- cycles and reverse infrastructure edges are prohibited.
+
+Test-only dependencies do not grant production access. The Store's persistence
+boundary accepts core types and canonical execution documents, not a protocol or
+Engine dependency.
 
 ## Runtime model
 
-The implementation uses bounded synchronous I/O and operating-system threads; it
-does not use an async runtime. The daemon's blocking Unix-domain socket accept loop
-admits same-user connections through a bounded handler budget. Each admitted
-connection is handled by a dedicated OS thread with absolute read and write deadlines.
+Commands use bounded synchronous I/O in the invoking process. There is no async
+runtime, socket accept loop, workspace worker, scheduler or observability thread.
+Each mutation commits in one SQLite IMMEDIATE transaction, except explicit
+marker-governed filesystem maintenance. Independent CLI processes contend through
+SQLite and native maintenance locks, with no FIFO admission guarantee.
 
-Each active workspace has one worker thread that claims and executes its durable FIFO
-queue. Mutexes and condition variables coordinate scheduler generations, progress,
-retirement, maintenance, and shutdown. A daemon-wide bounded blocking executor limits
-simultaneous workspace operations, while the per-workspace serialization boundary
-permits exactly one mutation execution for that identity. SQLite, Git discovery,
-artifact hashing, and filesystem work run inside those bounded synchronous execution
-paths rather than on an event-loop reactor.
+Ordinary Store access holds a shared maintenance lease. Cold write-free snapshots
+without required sidecars use stronger exclusive exclusion and an immutable/heap
+WAL path. Doctor and maintenance take exclusive exclusion. A bounded process-local
+connection gate prevents shared SHM mappings from weakening read-only connections;
+it does not create a daemon singleton or persistent global state.
 
-Observability uses a separate bounded queue and sink thread. Saturation and sink
-failure are accounted explicitly, and graceful shutdown drains admitted handlers,
-workspace workers, and observability state before removing the owned socket.
+Engine preparation remains outside the state transaction. Git/Store binding,
+prepared graph identity and local artifacts are revalidated inside the execution
+boundary before persistence. Store transactions write changed domain rows and
+retain the complete validated canonical success envelope atomically with the
+outcome. Source-backed replay can recover the original pinned request identity
+before reopening changed or missing Procedure input.
 
 ## Safe Rust and platform code
 
-- Safe Rust is the default.
-- Unavoidable macOS FFI or peer-credential code is isolated in a small module.
-- Every unsafe block requires a safety comment and focused tests.
-- Unsafe code is denied in all other crates when practical.
-- Path and byte handling must not assume UTF-8 internally; public JSON paths use validated display strings plus lossless internal platform paths.
+Production boundaries use safe Rust with unsafe code forbidden by their crate
+roots. Native descriptor and lock operations use the existing reviewed `nix` and
+`rustix` boundaries. Internal paths preserve non-UTF-8 bytes; public paths use the
+validated display and lossless path representations required by their contracts.
+No new platform, unsafe abstraction or service backend is implied by these traits.
 
 ## Error architecture
 
-Internal errors use typed enums with source chains. Public errors contain:
+Internal errors are typed. Engine maps them to `podway.error/v2` with a stable
+code, human message, retryability, structured details and mapped exit status.
+Public consumers use machine fields, not OS/library source text or rendered prose.
+Recovery recipes use `podway.recovery-recipe/v2` and bind the relevant command,
+identities and exact retry intent.
 
-```text
-stable code
-human message
-retryable boolean
-structured details
-mapped exit code
-```
-
-Internal library or OS messages are not exposed as stable API text. Sensitive or path-rich details are included only where needed for local remediation.
+Rejected mutations have no retained outcome. `WORKSPACE_BUSY` bounds lock
+contention; `WORKSPACE_MAINTENANCE` indicates active/recoverable maintenance;
+legacy and foreign writers fail closed. `MUTATION_OUTCOME_UNKNOWN` is reserved
+for COMMIT I/O ambiguity. An internal failure's diagnostic ID is an opaque request
+correlation value; no daemon log stream is available to look it up.
 
 ## IDs, time, and hashing
 
-Infrastructure supplies:
-
-- random UUIDs for workspace, session, attempt, blocker, artifact, and job IDs;
-- UTC epoch-millisecond timestamps;
-- SHA-256 digests;
-- deterministic canonical request digests.
-
-Core transitions receive these as explicit values so tests are deterministic.
+Native adapters supply workspace, session, attempt, blocker and artifact IDs,
+UTC millisecond clocks and SHA-256 digests. Core receives explicit values;
+Store invokes the transaction clock once for a new success and does not invoke
+it on an exact replay. Request digests use the canonical bounded semantic input.
+Build identity binds product, version, profile, source commit, target and contract
+manifest digest. The Store records writer manifest identity separately from the
+Procedure snapshot digest.
 
 ## Serialization
 
-- All public JSON uses UTF-8.
-- Unknown fields are rejected for authoring schemas in v1.
-- Unknown additive fields are tolerated by public response clients.
-- Enums serialize as lowercase snake-case or the exact kebab-case strings defined by schemas.
-- Numbers that represent revisions and byte sizes are JSON integers.
-- Paths shown in JSON are absolute display paths for workspace roots and worktree-relative paths for local artifacts.
+Public JSON is UTF-8 and validated against canonical closed schemas. Unknown,
+missing, mistyped and cross-command fields fail validation. Result generation
+changes are explicit; current success is output v4 and version identity uses
+version-result v2/manifest v2 without IPC IDs. Wire paths and numeric limits follow
+the [JSON contract](../specs/interfaces/json-contract.md).
+
+The protocol lazily compiles only the applicable schema/command or error branch
+against its embedded offline registry. Release verification independently checks
+the full manifest asset/schema closure in source and packaged layouts.
 
 ## Coding standards
 
-- Format with `rustfmt`.
-- Treat linter warnings as errors in the local `make test` gate, with explicit reviewed exceptions.
-- Avoid panics on user-controlled input.
-- Use bounded collections for protocol and config input.
-- Use explicit newtypes for IDs and revisions.
-- Keep domain transitions small and table-driven.
-- Prefer exhaustive matches over default branches for public enums.
-- Keep migrations forward-only and deterministic.
-- Add a conformance test for every fixed bug in state or queue semantics.
+Use repository Make targets for formatting, warnings-as-errors lint, contracts,
+tests and distribution. Avoid panics on user-controlled input; use bounded values,
+explicit IDs/revisions and exhaustive public enum handling. Reuse existing crate
+and domain boundaries. Schema/contract changes update their canonical assets and
+meaningful success, failure and compatibility tests together.
 
 ## Testability requirements
 
-The implementation must support injected:
-
-- clocks;
-- ID generators;
-- file hashing readers;
-- transaction fail points;
-- daemon crash points;
-- service-manager command runners;
-- worktree identity fixtures.
-
-Production behavior remains fixed; injection exists only behind internal traits or test features.
+Internal traits and test observers support deterministic clocks, IDs, artifact
+hashing, worktree replacement and transaction/maintenance boundaries. Native
+crash tests qualify actual process termination and cold recovery. CLI maintenance
+pause and isolation probes exist only in debug builds; the actual release binary
+must ignore every hook. Ordinary development tests and packaged qualification
+verify different executable bytes and must not be described as interchangeable.
+See [Testing and Conformance](../specs/quality/testing-and-conformance.md).

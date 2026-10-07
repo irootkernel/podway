@@ -41,8 +41,25 @@ An `IDEMPOTENCY_KEY_REUSED` error means the retained key is bound to a different
 
 - Use `podway doctor` and `podway workspace show` to diagnose before proposing a mutation.
 - `WORKSPACE_BUSY` and `WORKSPACE_MAINTENANCE` report bounded SQLite or maintenance contention. They do not authorize reset or fence weakening. Inspect any structured recovery recipe before acting.
-- On `LEGACY_RUNTIME_STATE_UNSUPPORTED`, preserve unsupported state. No automatic daemon-era conversion is supported. After explicit authorization for that exact worktree, use `podway reset --all --yes --idempotency-key <new-key>`; it preserves configuration, Procedures, and paths outside runtime state. `reset --all` has no `--force` option.
-- Resume an interrupted reset or removal only with its original canonical request, idempotency key, and applicable workspace UUID. A newly generated key is not recovery.
+- On `LEGACY_RUNTIME_STATE_UNSUPPORTED`, preserve the byte-identical unsupported
+  state. Classification performs no migration, checkpoint or SHM creation. Before
+  any reset, establish separately authorized retirement of every old writer,
+  including an Aquarium-managed service through its original controller. Then,
+  with explicit destructive authorization for the exact worktree, use
+  `podway reset --all --yes --idempotency-key <new-key>`. It creates fresh current
+  state without backup/conversion, discards all old runtime history, and preserves
+  configuration unrelated to retired mode, Procedures and unrelated worktree files.
+  `--force` is unnecessary; the CLI accepts it only with `reset --all`.
+- On `WORKSPACE_CONTRACT_MISMATCH`, compare exact writer/current manifest identities.
+  Do not substitute a matching semver, retry through another binary or invent a
+  predecessor. Only an explicitly declared release-owned predecessor permits
+  migration; v0.2.13 declares none. Development with changed contract bytes uses a
+  disposable worktree rather than a runtime mode.
+- Reset/removal retain descriptor-safe intent and operation markers. A marked
+  workspace returns `WORKSPACE_MAINTENANCE`; ordinary reads never resume it. Resume
+  only the original canonical operation, idempotency key, applicable UUID and exact
+  root/fences from the recipe. A newly generated key is not recovery. Do not remove
+  `maintenance-intent.json`, `reset-all.marker` or `removal.marker` to bypass it.
 - Do not edit runtime databases, maintenance markers, or filesystem identities manually.
 - Do not repair, reset, or remove anything unless an applicable user authorization covers the diagnosed lifecycle action.
 - If state remains unreadable, report the exact error, affected worktree, checks performed, and the smallest supported recovery action. Preserve existing task state until that action is authorized.

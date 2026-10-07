@@ -105,7 +105,7 @@ Recorded incidents concentrate in the same area. Their current status matters:
   `recovering` beyond 180 seconds. Later work reached 47.31 seconds in a trial
   and 7.76 seconds on two worktrees; the 22-worktree fixture was not rerun and
   no latency target exists
-  ([candidate](TODO-podway-startup-recovery-performance.md)).
+  ([retired startup-recovery model](../architecture-decision-records/0038-remove-the-daemon.md)).
 
 [ADR-0013](../architecture-decision-records/0013-native-apple-silicon-macos-only.md)
 limits releases to native Apple Silicon macOS because Podway's "service, release
@@ -1140,5 +1140,5 @@ new contract generation.
 - [Automation client contract](../specs/interfaces/automation-client-contract.md)
 - [Podway Web Operations Console candidate](TODO-podway-web-operations-console.md)
 - [Podway Graph Engineering Evolution candidate](TODO-podway-graph-engineering-evolution.md)
-- [Startup Recovery Performance candidate](TODO-podway-startup-recovery-performance.md)
+- [Current Store open and maintenance model](../specs/storage/sqlite-model.md)
 - [V2DFC roadmap](../roadmap/README.md#v2dfc-daemon-free-core)

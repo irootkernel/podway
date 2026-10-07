@@ -89,7 +89,7 @@
       "exit_code": 2,
       "retryable": false,
       "details_schema": "podway.command-retired-details/v1",
-      "summary": "The daemon-free command or flag has been retired."
+      "summary": "The daemon-era command or flag has been retired."
     },
     {
       "code": "CONFIRMATION_REQUIRED",
@@ -354,7 +354,7 @@
       "details_schema": "podway.mutation-outcome-unknown-details/v3",
       "exit_code": 4,
       "retryable": true,
-      "summary": "The mutation may have been admitted; reconcile by idempotency key."
+      "summary": "An I/O error during COMMIT left the mutation outcome uncertain; reconcile by idempotency key."
     },
     {
       "code": "NODE_DEFINITION_NOT_FOUND",
@@ -444,7 +444,7 @@
       "code": "REQUEST_TOO_LARGE",
       "exit_code": 2,
       "retryable": false,
-      "summary": "IPC request exceeds configured limits."
+      "summary": "The command input exceeds the configured input bound."
     },
     {
       "code": "REQUIRED_ITEMS_MISSING",
@@ -595,7 +595,7 @@
       "code": "WORKSPACE_ID_CONFLICT",
       "exit_code": 5,
       "retryable": false,
-      "summary": "The workspace UUID is active at another root."
+      "summary": "The Store binding conflicts with the selected canonical Git worktree identity."
     },
     {
       "code": "WORKSPACE_INIT_CONFLICT",
@@ -607,7 +607,7 @@
       "code": "WORKSPACE_MAINTENANCE",
       "exit_code": 4,
       "retryable": true,
-      "summary": "Workspace maintenance temporarily blocks mutation admission.",
+      "summary": "A maintenance lease or published marker prevents ordinary Store access.",
       "details_schema": "podway.workspace-maintenance-details/v1"
     },
     {

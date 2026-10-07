@@ -5,7 +5,7 @@
 - Work in one Git worktree and follow its authority for workflow meaning, naming, location, compatibility, and verification. If it has no Procedure location policy, use `.podway/procedures/<procedure-id>.yaml` under the configured default procedure path.
 - Treat the exact manifest-bound schema shipped with the validating CLI as the grammar authority. Use `podway help procedure.<operation>`, the minimal scaffold, built-in sources such as `podway preset show sw-dev-v2`, and the [capability inventory](capabilities.md) together; none of the human-facing views alone is the complete grammar.
 - Preserve an existing repository-owned Procedure unless the request authorizes its revision. Creating a Procedure does not authorize replacing another canonical file.
-- When Podway or valid workspace configuration is missing, report the exact prerequisite and stop. Initialization, repair, installation, and daemon control belong to a separate runtime workflow.
+- When Podway or valid workspace configuration is missing, report the exact prerequisite and stop. Initialization, repair, installation and legacy-runtime retirement belong to a separate runtime workflow.
 
 ## Select features from requirements
 

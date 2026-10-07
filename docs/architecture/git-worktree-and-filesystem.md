@@ -2,32 +2,20 @@
 
 ## Workspace boundary
 
-Every workspace-scoped operation MUST resolve to a valid, non-bare Git worktree. Podway fails closed when discovery or identity validation is uncertain.
-
-Static commands that do not use workspace state are exempt, as listed in the CLI specification.
+Each workspace operation MUST resolve a valid non-bare Git worktree. Discovery,
+containment, Store binding or native replacement uncertainty fails closed.
+Static commands are exempt as listed in the
+[CLI specification](../specs/interfaces/cli-specification.md).
 
 ## Worktree discovery
 
-The resolver accepts:
-
-- the process current directory; or
-- an explicit `--worktree <path>`.
-
-The built-in read-only resolver walks the filesystem metadata to find the containing worktree. It MUST support:
-
-- a main worktree with a `.git` directory;
-- a linked worktree with a `.git` file;
-- invocation from nested directories.
-
-It MUST reject:
-
-- no repository found;
-- bare repositories;
-- malformed `.git` directories or files;
-- inaccessible worktree administrative metadata;
-- ambiguous or unsupported repository layouts.
-
-The resolver MUST NOT depend on invoking the `git` executable for discovery.
+The native read-only resolver accepts the current directory or explicit
+`--worktree <path>`. It supports a main `.git` directory, a linked `.git` file and
+nested invocation without executing `git`. It rejects missing/bare repositories,
+malformed or inaccessible administrative metadata, unsupported layouts and
+ambiguous identities. It exposes no Git mutation API.
+The executable [resolver contract](../../contracts/interfaces/git-resolver-v1.json)
+retains `ARC-005`, `SEC-002` and workspace invariants `INV-W01` through `INV-W05`.
 
 ## Worktree layout
 
@@ -37,189 +25,164 @@ The resolver MUST NOT depend on invoking the `git` executable for discovery.
   .podway/
     config.yaml
     procedures/
-      custom.yaml
     .gitignore
     runtime/
       state.sqlite3
-      state.sqlite3-wal
-      state.sqlite3-shm
-      reset.marker          # only during destructive recovery
-      development-v2.marker # only in the helper-managed disposable development runtime
+      state.sqlite3-wal       # when present
+      state.sqlite3-shm       # when present
+      maintenance.lock
+      maintenance-intent.lock
+      maintenance-intent.json # while a maintenance intent is recoverable
+      reset-all.marker        # during reset-all recovery
+      removal.marker          # during removal recovery
 ```
 
-`.podway/.gitignore` MUST include:
+`.podway/.gitignore` includes `runtime/`. Initialization appends that rule without
+overwriting unrelated ignore entries. Temporary private bootstrap files and
+marker-publication files are internal recoverable maintenance state, not tracked
+Procedure assets. All authoritative runtime state remains in this worktree.
 
-```gitignore
-runtime/
-```
-
-`podway init` appends this entry if needed without overwriting unrelated ignore rules.
-
-The development runtime helper has one narrow, development-only exception to the daemon's normal
-write authority: after the isolated `podway --mode contributor init` succeeds, it atomically publishes
-`development-v2.marker` through the private runtime directory. The marker contains no task state
-and grants no transition authority; the daemon treats it only as disposable-runtime provenance and
-revalidates it before admitting requests through the contributor-only development
-admission path. Release runtimes use the public Procedure v2 admission path and do
-not consult this marker. Normal session reset and workspace
-reset-all retain it so the helper-managed sandbox remains disposable after state replacement. The
-helper's `clean` operation removes the complete managed root, including the marker.
+Legacy `reset.marker`, `workspace-removal.marker`, `development-v2.marker` and
+`.podway/mode-switch.json` are refused without writing. There is no current
+contributor-runtime provenance marker, managed account root, socket or registry.
+Confirmed reset-all removes legacy runtime state and creates a new Store; it
+performs no daemon-era migration or automatic backup.
 
 ## Path containment
 
-Podway canonicalizes paths before use.
+Runtime and local source access must remain contained in the owning worktree.
+`.podway` and `runtime` are validated real directories. Local Procedure sources
+reject symlink traversal, including links whose targets remain in the worktree.
+Bounded source reads detect native root/source replacement. Runtime files and
+lock files use nofollow inspection/opening, regular-file checks and descriptor
+revalidation so renamed ancestors or swapped files cannot grant stale authority.
 
-Requirements:
-
-- `.podway` MUST resolve within the worktree;
-- `.podway/runtime` MUST be a real directory, not a symlink;
-- configuration procedure paths MUST resolve within the worktree;
-- local procedure files MUST NOT traverse symlinks, including links whose targets remain inside the worktree;
-- local procedure admission MUST reject worktree-root or source-path replacement detected during the bounded read;
-- local artifact paths MUST canonicalize inside the worktree;
-- external artifact locations use the explicit `reference` form and are never treated as filesystem paths;
-- `..` components and symlinks MUST NOT permit escape.
-
-Violations fail with `PATH_OUTSIDE_WORKTREE` or `WORKSPACE_PATH_UNSAFE`.
+Local artifact paths resolve within the worktree, are read-only and stream-hashed.
+External `reference` locations remain caller assertions and are never opened as
+local filesystem paths. Canonical paths do not replace descriptor checks across
+an operation. Internal representations preserve non-UTF-8 path bytes.
 
 ## Permissions
 
-On macOS and Unix-like systems:
-
-- `.podway/runtime/` SHOULD be mode `0700`;
-- `state.sqlite3` and its side files SHOULD be mode `0600`;
-- daemon runtime and registry directories MUST be user-private;
-- existing stricter permissions are preserved;
-- Podway does not loosen permissions on the worktree or tracked config.
+Native runtime directories are private (`0700`) and created state/lock files use
+private permissions (`0600`) where supported. Podway does not relax worktree or
+tracked configuration permissions. These controls prevent accidental exposure;
+they do not protect against root or malicious same-user modification.
 
 ## Workspace identity
 
-The database stores:
+Generation-14 Store binding contains the generated workspace UUID, Git common
+and worktree-administration fingerprints, and last validated canonical root.
+The fingerprints retain ADR-0036's role-tagged hashes of lossless canonical path
+bytes. Device/inode/type/birth-time evidence detects replacement during a request;
+it is not persistent identity. Replacing a Git directory object at the same
+canonical paths does not itself change durable workspace identity.
 
-- a generated workspace UUID;
-- a fingerprint of the Git common directory identity;
-- a fingerprint of the specific worktree administrative directory;
-- the most recently validated canonical root.
+Resolver and execution retain native evidence long enough to validate the
+current operation. There is no scheduler context or global UUID catalog. The UUID
+is non-secret identification; it does not authenticate a caller.
 
-The schema-v13 fingerprints are role-tagged hashes of lossless canonical path
-bytes only. The common-directory path is the parent identity, the
-worktree-administration path is the child identity, and the canonical worktree
-root is location evidence. Device, inode, object type, and birth time are used
-only to detect replacement races during one resolution request; they are not
-durable identity. Native resolution keeps directory descriptors open only until
-the request's resolver and pre-Store revalidation phases agree; scheduler
-contexts retain only the descriptor-free durable path evidence.
-
-The workspace UUID is non-secret. It detects copied runtime state and path reuse.
+The Store also records the binary's contract-manifest digest in `writer_contract`.
+A different undeclared writer fails before writable access, including reads and
+old-key replay. The current production predecessor declaration is empty.
+Only an explicitly declared forward predecessor may migrate under exclusive
+exclusion in a separately adopted release/open-development change.
 
 ## Root move
 
-When a linked worktree root moves while its common and administration paths stay
-fixed:
+A linked root may move while its common/admin paths retain identity. Reads report
+`root_rebind_required` and the stored root without writing. A successful mutation
+updates the locator atomically with its state/outcome; explicit `workspace repair`
+uses that same fenced transaction. There is no registry repair or queued work to
+resume. Rejections and replay do not opportunistically rebind the root.
 
-1. the CLI discovers the new canonical root;
-2. the daemon opens the local database at that root;
-3. the Git identity and workspace UUID are compared;
-4. if both match the registered workspace, the daemon updates `last_known_root`;
-5. queued jobs resume.
-
-`podway workspace repair` restores a missing global registry entry from a
-revalidated durable Store identity and reports every change. Moving a main
-worktree or its Git common directory changes durable path identity and is not
-implicitly adopted. It requires explicit destructive reinitialization until a
-separate path-change repair contract is shipped.
+Moving the common/admin paths changes persistent identity and is not silently
+adopted. Use the supported explicit destructive reset policy; Podway does not
+merge or reinterpret state under a new Git identity.
 
 ## Copied runtime state
 
-Copying `.podway/runtime/` to another live worktree can duplicate the workspace UUID.
-
-If the daemon observes the same UUID at two live roots, both mutation paths fail with `WORKSPACE_ID_CONFLICT` until the copy is removed or one workspace is destructively reinitialized:
-
-```bash
-podway reset --all --force --yes
-```
-
-Podway does not merge copied sessions.
+A runtime copied to a different Git worktree has a mismatched Store binding and
+fails closed. No global scan attempts to discover every offline copy or disable
+another root. Removing a copy or explicitly resetting the target is an operator
+choice. Copied task histories are never merged.
 
 ## Worktree deletion
 
-Deleting the worktree deletes:
+Deleting a worktree deletes its local sessions, snapshots, values, blockers,
+artifact metadata, delegation receipts, outcomes and journal. Native resolution
+and precommit revalidation reject absent or replaced roots. There is no daemon
+connection to close, global task reconstruction or registry entry to prune.
+Descriptor-safe `workspace remove` deletes only the selected `.podway` boundary,
+preserves Git and unrelated worktree files, and checks its original UUID.
+Exact interrupted retry follows the persisted removal marker; after complete
+removal, the deleted runtime retains no response or outcome.
 
-- the current session;
-- procedure snapshot;
-- attempts and item values;
-- blockers and artifact metadata;
-- queued and terminal jobs stored in that database;
-- command receipts and operational journal.
+## Maintenance exclusion and recovery
 
-Before each queued mutation, the daemon revalidates the root. If a fresh,
-descriptor-safe observation conclusively reports it absent:
+Ordinary opens hold a shared `maintenance.lock` lease. Exclusive maintenance first
+holds `maintenance-intent.lock` so fresh opens cannot continually overtake it,
+then waits for existing holders within the command deadline. Marker and native
+file identities are checked again after acquisition. Missing files are
+reclassified so an active marker is reported as maintenance rather than accepted
+as an uninitialized Store.
 
-- the scheduler stops;
-- under the registry lock, the daemon removes the entry only when its exact
-  workspace UUID and encoded root generation still match and a repeated
-  observation still reports absence;
-- open clients receive `WORKTREE_GONE` where possible;
-- no task state is reconstructed globally.
+Cold write-free reads lacking required WAL/SHM state take exclusive exclusion and
+use an immutable/heap WAL snapshot. They MUST NOT repair sidecars. Doctor and
+current creation/reset/removal use exclusive exclusion. Any future activated
+predecessor migration also requires exclusive exclusion and separate adoption;
+Engine currently has no migration caller. SQLite IMMEDIATE transactions serialize
+ordinary writers; native locks protect the filesystem generation rather than
+implementing a FIFO scheduler.
 
-A changed generation, reappeared root, permission failure, transient I/O, or
-other inconclusive observation retains the registry entry and fails closed. This
-is the same exact-generation removal contract used during startup recovery.
-
-Database connections SHOULD be closed after a short idle period so deleted files are not held indefinitely.
+Reset-all/removal persist typed intent and phase markers. Only an exact retry with
+the original key, request identity and required fences resumes them. Removal
+retains recoverable intent through final operation-marker deletion and deletes
+intent last. Durable marker writes and directory changes are synced through the
+existing descriptor-safe primitives. Never manually edit these files or a database
+to simulate recovery. The [recovery specification](../specs/storage/recovery-retention-and-maintenance.md)
+owns retention and public retry recipes.
 
 ## Tracked and untracked content
 
-Tracked, reviewable project content:
-
-- `.podway/config.yaml`;
-- `.podway/.gitignore`;
-- `.podway/procedures/*.yaml`.
-
-Untracked disposable runtime content:
-
-- all files under `.podway/runtime/`.
-
-`podway doctor` MUST detect when runtime files are tracked or not ignored and report remediation.
+Tracked project content may include config, `.podway/.gitignore` and custom
+Procedures. Runtime state MUST remain untracked and ignored. Ignore/layout policy
+is established by initialization and native layout checks; Doctor's current
+SQLite/domain checks must not be described as a Git-index audit it does not perform.
 
 ## Workspace configuration
-
-Reference configuration:
 
 ```yaml
 schema: podway.workspace/v1
 procedure_paths:
   - .podway/procedures
 default_preset: sw-dev-v2
-job_queue:
-  max_pending: 256
 ui:
   show_stage_in_prompt: false
 ```
 
-Rules:
+Procedure paths are local and relative; configuration contains no remote includes,
+plugins, executable commands or credential feature. The legacy v1 `job_queue`
+member is accepted and ignored, and new configuration omits it. Config v2 accepts
+only absent or `prod` mode; named modes fail with guidance to remove mode and reset.
+These formats do not select an account namespace.
 
-- paths are worktree-relative;
-- no remote paths, URLs, plugins, commands, or secrets;
-- unknown fields are rejected in v1;
-- a running session uses its stored procedure snapshot even if config later becomes invalid;
-- authoring operations such as `start` and `procedure validate` require valid current config.
+Existing-workspace resolution validates current workspace config before Store
+access. A session retains its immutable Procedure snapshot even if the original
+Procedure source changes; that does not exempt invalid workspace configuration
+from current admission checks.
 
 ## Initialization behavior
 
-`podway init` safely refuses to replace compatible existing runtime state with
-`WORKSPACE_ALREADY_INITIALIZED`; callers use `workspace repair` when the durable
-workspace already exists. Filesystem layout publication remains idempotent so a
-retry cannot replace a valid custom configuration or adopt conflicting state.
+`init` validates Git identity and publishes a safe local layout, custom-config
+preservation and ignore rule before initializing the generation-14 Store under
+exclusive exclusion. Private Store construction is checkpointed/synced and
+published without clobbering authoritative state. Compatible existing state
+returns `WORKSPACE_ALREADY_INITIALIZED`, except exact-key replay of the original
+success. Incompatible content fails closed.
 
-It MUST:
-
-1. validate the worktree;
-2. create `.podway/` and `procedures/` if absent;
-3. create or validate `config.yaml`;
-4. create or update `.gitignore`;
-5. create the runtime directory safely;
-6. ask the daemon to initialize the database and workspace identity;
-7. update the minimal daemon registry.
-
-Incompatible existing content fails with `WORKSPACE_INIT_CONFLICT`. `podway init --repair` may fix missing directories, ignore rules, and registry paths, but MUST NOT overwrite a valid custom config or adopt conflicting state.
+`init --repair` may repair supported missing layout/ignore details; it must not
+overwrite valid custom config or adopt conflicting identity. `workspace repair`
+repairs the current Store's root locator, not a removed global registry.
+Initialization, reset-all and removal tests use owned fixtures, never an active
+user worktree or installed old service.

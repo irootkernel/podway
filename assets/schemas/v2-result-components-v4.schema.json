@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:podway:schema:v2-result-components:v4",
   "title": "Podway Daemon-Free Result Components v4",
-  "$comment": "Reserved by V2DFC-003; clean components shared by direct and delegated results.",
+  "$comment": "Current components shared by direct and delegated results under ADR-0038.",
   "$defs": {
     "workspace": {
       "type": "object",

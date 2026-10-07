@@ -2,300 +2,201 @@
 
 ## Recovery philosophy
 
-Podway manages disposable current-task state. It provides strong crash consistency and predictable daemon restart recovery, but it does not build a forensic recovery, archive, or backup product.
+Podway manages disposable task state in the owning Git worktree. SQLite rollback
+and retained success outcomes recover ordinary command interruption; native
+maintenance markers recover multi-step filesystem operations. There is no
+resident process, global registry, restart scanner, scheduler or durable job.
+Podway does not provide a backup, export, restore or forensic recovery product.
 
-When state is corrupt beyond safe transactional repair, Podway fails closed and offers an explicit destructive reinitialization.
+Unreadable, foreign-writer, newer or legacy state fails closed. A recovery recipe
+is advice, not permission: destructive reset or removal still requires explicit
+authority and confirmation. Podway never discards or converts such state during
+an ordinary read or mutation.
 
 ## Daemon restart
 
-On startup:
+This heading preserves historical roadmap links. Daemon restart and running-job
+requeue belonged to the superseded daemon architecture. Current commands have no
+restart recovery service. [ADR-0038](../../architecture-decision-records/0038-remove-the-daemon.md)
+owns the cutover, and the sections below describe the replacement behavior.
 
-1. acquire singleton lock and socket;
-2. load the minimal workspace registry;
-3. validate each registered root;
-4. open supported databases;
-5. validate the complete retained task state, including one-active-attempt and cursor invariants;
-6. transactionally move all `running` jobs to `queued` and record recovery;
-7. start schedulers for workspaces with queued jobs;
-8. remove registry entries for missing roots.
+## Ordinary command interruption
 
-A worktree with unreadable state is isolated. It does not prevent other worktrees from operating.
+Before COMMIT, a failed or killed mutation has no successful outcome and its
+SQLite writes roll back. After COMMIT, state and the full canonical success are
+retained together even if stdout was lost. Read-only
+`podway outcome lookup --idempotency-key <original-key>` or an exact request retry
+returns the original success without another transition or clock read.
 
-For a registered worktree without a reset marker, startup proceeds directly to
-ordinary activation. Startup binding inspection uses a read-only SQLite
-connection and one read transaction against the authoritative database, including
-its WAL, without copying database bytes. Store activation independently validates
-the complete state before mutation. Its intervening and post-open binding
-rechecks validate schema, workspace identity, and runtime mode without repeating
-the full integrity scan. Startup skips the worker drain only when the recovered
-Store reports zero queued and running jobs; an unavailable count follows the
-normal drain path. A present reset marker still requires reset
-source authority and the disposable inspection needed to validate its predecessor.
-Other workspace resolution retains disposable inspection so rejected copies remain
-untouched and active-Store reads survive missing WAL sidecar paths. Deep doctor
-and maintenance inspections also retain their stronger disposable checks.
-SQLite may create WAL sidecars while opening the read-only connection; the
-inspection does not write database rows or migrate schema.
+Automation retains its original caller-owned key and request fences. Not-found
+is scoped to one observed committed snapshot and the retention boundary; it
+cannot establish that a pruned older success never existed.
+`MUTATION_OUTCOME_UNKNOWN` is limited to a public COMMIT I/O error. Lookup
+reconciles that uncertainty; there is no queued/running/admission status to poll.
 
-## Minimal global registry
+## Maintenance locks and markers
 
-Accepted v0.1.0 target location:
+Runtime coordination is local to `.podway/runtime/`:
 
-```text
-<effective-user-home>/.podway/state/workspaces.json
-```
+- `maintenance.lock`: shared for ordinary opens, exclusive for destructive
+  maintenance, creation, doctor and declared predecessor migration.
+- `maintenance-intent.lock`: exclusive entrants take it before draining shared
+  leases, preventing an endless stream of new readers from starving maintenance.
+- `maintenance-intent.json`: durable operation identity through publication and
+  cleanup, distinct from the native intent lock.
+- `reset-all.marker` and `removal.marker`: the corresponding operation's
+  resumable phase and identity.
 
-Shape:
+Lock holders revalidate directory, lock and database path/inode identity after
+acquisition and before effects; a replaced or unlinked anchor is not authority.
+Marker publication is atomic and no-clobber. Replacement/removal requires the
+exact previous marker document. Marker identities bind the original key,
+canonical request digest, response request ID, writer contract, canonical root
+and Git identities, time, command and applicable workspace UUID.
 
-```json
-{
-  "schema": "podway.registry/v1",
-  "workspaces": [
-    {
-      "workspace_uuid": "...",
-      "last_known_root": "/Users/example/src/project-wt",
-      "last_seen_at": "2026-07-13T03:00:00.000Z"
-    }
-  ]
-}
-```
+An exact supported retry resumes its own published operation. Another request,
+key, digest, writer, root, Git identity or UUID cannot adopt it. Ordinary commands
+and reads return `WORKSPACE_MAINTENANCE` instead of finishing cleanup. Reads never
+remove markers. Native lock contention is bounded by the command deadline;
+SQLite writer contention returns `WORKSPACE_BUSY`. Neither error authorizes
+manual marker deletion or editing a database.
 
-The daemon is the sole writer. The implemented registry uses the user-global
-location above. Updates use a same-directory temporary write, fsync where
-appropriate, and atomic rename.
+A cold hot-WAL/no-SHM read also temporarily drains managed readers under an
+exclusive lease to build a write-free heap WAL index. It is not destructive
+maintenance and publishes no operation marker. See [SQLite Model](sqlite-model.md).
 
-Workspace UUIDs and exact roots are each unique in newly written registry state.
-Bootstrap, refresh, and move reject an exact root owned by another UUID. A legacy
-duplicate-root document remains readable only for isolated diagnosis and explicit
-reset recovery; ordinary activation does not add another owner or silently choose
-one.
+## Initialization and writer migration
 
-The registry contains no task title, procedure, graph node, attempt, item, blocker, artifact, or job payload data.
+Init validates Git and path containment, takes an exclusive lease and publishes
+its durable intent. It creates a complete private generation, records the
+successful init result, checkpoints and syncs it, then publishes without
+clobbering another generation. Recovery recognizes only the matching private or
+published generation and original outcome; it removes intent after verification.
 
-Each runtime mode has a separate registry namespace. A worktree is admitted only
-when config, the Store's schema-v10-or-later mode binding, and that namespace agree. Legacy
-stores without a mode column belong to `prod`; a named daemon does not migrate or
-open them.
-
-## Moved worktrees
-
-If a registered path is missing, the entry is removed after a grace-free
-validation pass. A linked worktree root is rediscovered when a CLI request
-arrives at its new path only when its canonical common and administration paths
-and workspace UUID still match. A main-worktree or common-directory move changes
-durable path identity and fails closed.
-
-Acknowledged queued jobs at a moved but not rediscovered path remain in the worktree database and resume after rediscovery.
-
-## Worktree deletion
-
-Deletion is final by design. Podway does not copy queued jobs elsewhere. Waiting clients may receive `WORKTREE_GONE` or a connection error depending on timing.
-
-## Corrupt state
-
-Symptoms include:
-
-- SQLite open or integrity failure;
-- invalid migration checksum;
-- procedure snapshot digest mismatch;
-- impossible cursor or active-attempt state;
-- malformed canonical JSON;
-- unsupported newer schema.
-
-Behavior:
-
-- reject mutations and normal state reads;
-- return `WORKSPACE_STATE_UNREADABLE` or `WORKSPACE_SCHEMA_UNSUPPORTED`;
-- allow `podway doctor` to report diagnostics;
-- allow explicit `podway reset --all --force --yes`.
-
-Podway does not automatically discard state.
+A writer mismatch is diagnosed without writing. A future release declaring a
+predecessor must migrate it under an exclusive lease with matching durable
+recovery authority. The current production registry is empty: Engine refuses
+other writer digests, and only the Store framework is exercised with isolated
+test declarations. This is not an active public migration route and does not
+authorize daemon-era conversion, feature-work declarations or read-side migration.
 
 ## Destructive reset-all protocol
 
-Because the database may be unreadable, reset-all is a daemon maintenance operation guarded by a filesystem marker.
+`podway --json reset --all --yes --idempotency-key <caller-owned-key>` explicitly
+replaces current runtime state. It requires no `--force`, makes no backup, and
+performs no task-state conversion. A newer unsupported Store is refused.
 
-1. validate the Git worktree and path containment; when persisted Git directory
-   fingerprints are detached, reset still requires an exact stored-root match.
-   Registry membership for the persisted UUID is required when a root entry
-   exists; an absent root generation may be recovered from one unambiguous local
-   Store binding only when that UUID is not registered at another root;
-2. acquire the workspace maintenance lock and bind the exact registry-root UUID
-   generation to Store identity or an existing reset marker;
-3. stop its scheduler and reject new admissions;
-4. close all database handles;
-5. create `.podway/runtime/reset.marker` atomically; newly published v2 markers contain the operation ID, idempotency key, request digest, predecessor and target workspace UUIDs, submitted time, and original response request ID; v1 markers remain readable only so an upgrade can finish an already-published reset;
-6. re-read the registry and reject any new predecessor or target UUID location,
-   including a UUID that was absent from the initial snapshot, before removing
-   `state.sqlite3`, `-wal`, and `-shm` files;
-7. re-read the same UUID fences and create a new database using the target
-   workspace UUID;
-8. insert a terminal workspace-scoped reset job and v3 idempotency receipt into the new database, including the lookup command and full target-workspace response context;
-9. compare the registry-root generation and every predecessor/target UUID location
-   again, then atomically replace every stale exact-root entry with the target
-   UUID; an other-root UUID conflict fails without changing the registry;
-10. activate the target scheduler while retaining the marker as crash-replay authority;
-11. remove the marker only after activation succeeds.
+1. Resolve the exact Git worktree and validate safe contained filesystem state.
+2. Acquire and revalidate exclusive intent/maintenance leases and reject a
+   competing removal or mismatched published operation.
+3. For a current Store, validate any expected workspace UUID before effects or
+   recognize the same already-committed reset. Unsupported legacy state supplies
+   no inferred current-workspace identity for a fenced reset.
+4. Publish durable intent and the reset phase marker with the target UUID and
+   original response identity. Persist them before destructive work.
+5. Clear authorized runtime contents while preserving recovery anchors; retire
+   legacy configuration markers and ensure the supported workspace layout.
+6. Publish the complete new Store and its workspace-scoped reset success, or
+   verify that exact already-published generation and result during recovery.
+7. Remove the phase marker, then the durable intent after success is verified.
 
-On startup, an existing marker causes the daemon to finish the reset before serving the workspace. A lost client response can be retried with the same idempotency key and is answered from the new database. After the terminal job row is pruned, `job.lookup` and exact reset replay reconstruct the same full terminal output from the retained workspace receipt. The operation is idempotent.
-Markers and completed reset receipts written with schema-v12 filesystem-identity
-digests remain replayable after schema v13 migrates the workspace to canonical-path
-identity. This compatibility is limited to an already-admitted marker or an immutable
-successful `workspace.reset_all` terminal receipt; it does not relax digest matching
-for other mutations.
+A crash after phase-marker removal still leaves intent and the new success for
+exact retry. Reset preserves tracked Procedure files, `.podway/.gitignore`,
+configuration unrelated to legacy mode, and Git worktree/index/ref state. All
+current and inactive runtime sessions, attempts and old outcomes are discarded.
+It creates a new workspace UUID rather than adopting unsupported old state.
+
+## Workspace removal
+
+Explicit removal binds the same root, Git identity, writer, key and workspace
+fences under exclusive maintenance authority. A running session requires the
+explicit force policy in addition to removal confirmation. Runtime and
+configuration deletion proceed through the recorded phases; the full response
+is prepared before namespace deletion destroys retention.
+
+Descriptor-relative traversal rejects symlinks, mounts, changed ancestry,
+foreign ownership and unknown residual contents. Durable intent survives the
+operation marker and lock-unlink windows, so ordinary commands still fail closed
+until final cleanup. Matching retry converges through the validated suffix. A
+fully removed workspace has no outcome Store; a later already-absent removal is
+idempotent convergence, not retained original-result lookup. An empty residual
+may be removed only after descriptor validation, never by broad recursive
+cleanup based on path text alone.
+
+## Legacy state and installed writers
+
+Classification detects Store generations 1–13 and retired `reset.marker`,
+`workspace-removal.marker`, `development-v2.marker` and `.podway/mode-switch.json`
+without writes, migration or SHM creation. It returns
+`LEGACY_RUNTIME_STATE_UNSUPPORTED` and an explicitly authorized reset recipe with
+a fresh caller-owned key. Before an actual upgrade/reset, retire the installed
+old daemon and Aquarium writer under their original controllers and separate
+authority: an old open handle can keep writing unlinked files after deletion.
+Follow the complete [upgrade prerequisite](../operations/release-and-packaging.md#upgrade).
+A disposable frozen legacy fixture proves byte-identical refusal and explicit
+reset, not retirement of an installed writer.
+
+## Moved worktrees
+
+Identity is worktree-local and based on canonical Git common/administration paths
+under [ADR-0036](../../architecture-decision-records/0036-use-canonical-git-paths-for-workspace-identity.md).
+A linked-worktree root move can preserve those identities; reads report the new
+root without persisting it, and a successful mutation or workspace repair rebinds
+it transactionally. Moving a main/common Git root, changing UUID or copying
+state with different canonical identities fails closed. No registry rediscovery,
+global UUID-uniqueness check or queued-work drain exists.
+
+## Worktree deletion and corrupt state
+
+Deleting a worktree deletes its task state; Podway stores no copy elsewhere.
+Safe path resolution or inode revalidation refuses a vanished or replaced root.
+Corrupt SQLite, schema objects, writer identity, Procedure snapshots, graph
+invariants, receipts or outcomes fail closed through the canonical workspace
+errors. Doctor may diagnose supported readable state but does not automatically
+repair it. Destructive reset remains a separately authorized owner decision.
 
 ## Retention policy
 
-### Sessions and attempts
+- The current terminal session remains until explicit reset, archive or eligible
+  replacement. Its snapshot, attempts, items, trace, workflow memory and goals
+  remain together.
+- Archive preserves complete immutable inactive state and frees the current
+  slot. Preserving running work atomically cancels/archives it with superseded
+  disposition and successor identity. Archive never evicts older sessions.
+- Inactive sessions remain until confirmed purge or worktree reset, cannot be
+  restored or mutated, and use the bounded archive-slot identity space.
+- Session-scoped success outcomes remain until reset of that session or worktree
+  reset. They survive archive purge and have no cascading archive foreign key.
+- Workspace-scoped outcomes retain at most 100 entries and no entries older than
+  30 days, pruned during successful mutations. Session reset preserves them.
+- The journal keeps at most the newest 10,000 rows with a seven-day age limit,
+  except that the newest 200 rows are always retained. Successful mutations prune
+  it atomically. Normal summaries contain no item values or artifact paths.
 
-- the current completed or cancelled session remains until reset or archive;
-- all attempts and item slots for that session remain until reset, archive, or explicit start-time deletion;
-- the complete Procedure v2 current-task state remains together, including its immutable
-  snapshot, graph placements, trace, workflow memory, and goal history;
-- a normal session reset removes that complete current-task state together while
-  preserving the initialized workspace identity, schema history, and workspace-scoped receipts;
-- archive retains that complete state as one immutable inactive session and frees
-  the single current-session slot;
-- preserving running work during start atomically cancels and archives it with a
-  superseded disposition that records the reason, optional actor, and successor
-  session identity;
-- inactive sessions are retained until explicit purge or workspace reset;
-  archival and terminal eligible replacement never evict and do not fail because
-  of inactive count;
-- confirmed purge deletes exactly one inactive session; inactive sessions cannot
-  be restored or mutated;
-- reset removes session-scoped idempotency records.
-
-### Jobs
-
-Default pruning:
-
-- always retain non-terminal jobs;
-- retain at least the newest 100 terminal jobs;
-- retain terminal jobs for up to 7 days;
-- cap terminal jobs at 1,000 per workspace;
-- prune oldest eligible rows after successful mutations.
-
-### Idempotency records
-
-- ordinary session mutation jobs and receipts remain until a destructive reset or start-resolution barrier commits;
-- the barrier deletes old-session operational payloads after all earlier jobs are terminal;
-- reset and replace receipts are workspace-scoped and survive deletion of the old session;
-- workspace bootstrap and maintenance records retain the newest 100 or 30 days, whichever is smaller after the minimum set;
-- terminal response JSON remains after its job row is pruned;
-- receipt v5 retains the v4 command, projections, bounded response context, and
-  complete canonical public terminal envelope plus an explicit durable Procedure v2
-  execution flavor sealed atomically with terminal state;
-- v5 lookup returns the stored public envelope without reapplying the current catalog
-  or result renderer; predecessor receipt schemas remain strictly decodable;
-- canonical requests, selectors, preconditions, idempotency keys, and submitted
-  values are not copied into the retained response context;
-- v0-v2 succeeded/failed receipt-only lookup fails closed when a complete envelope
-  cannot be reconstructed; v3 remains decodable through its golden-tested legacy
-  projection path for compatibility.
-
-### Operational journal
-
-- maximum 10,000 rows per workspace;
-- maximum age 7 days;
-- always retain the newest 200 rows;
-- no item values or artifact paths in normal entries.
-
-Retention constants are internal v1 defaults. Future configuration must not allow unbounded growth.
+There is no job retention policy, legacy terminal-receipt decoder or separate
+account-runtime retirement record in the current product. Changes to bounded
+retention require adopted contract work, not unbounded configuration.
 
 ## Doctor checks
 
-`podway doctor` reports each check as pass, warning, fail, or skipped.
+`podway doctor` holds an exclusive native lease and verifies supported Store
+binding, schema-object and writer identities, `quick_check`, foreign keys, current
+and archived graph reconstruction, retained outcomes and public status
+projection. `--deep` additionally revalidates current required local artifacts;
+otherwise that check is skipped. Checks are returned in the bounded result object of the
+`workspace.doctor` command inside `podway.output/v4`; this command has no separate
+named result-schema family.
 
-Checks include:
-
-- daemon install, reachability, and version;
-- socket permissions and ownership;
-- Git worktree discovery and non-bare state;
-- `.podway` containment and symlink safety;
-- tracked config validation;
-- runtime ignore rule;
-- runtime file permissions;
-- database schema, migration checksums, and fast integrity;
-- one-session and one-active-attempt invariants;
-- procedure snapshot digest;
-- queue sequence and running-job recovery state;
-- global registry agreement;
-- Git-to-Store workspace binding revalidation in deep mode.
-- active-Store and disposable-snapshot agreement in deep mode, reported as
-  `store_snapshot_diverged` when the two coherent reads do not match.
-- current-session observation projection from that same coherent Store view in
-  deep mode, reported as `session_projection_failed` with a bounded
-  `failure_kind` when public session reads cannot reconstruct the stored state.
-
-Doctor is read-only. It may recommend `init --repair`, `workspace repair`, daemon restart, or destructive reset, but does not perform them automatically.
-
-## Maintenance locks
-
-Workspace maintenance operations such as migration and reset-all obtain an exclusive in-memory scheduler lock plus a database or filesystem marker. Normal admission fails with a retryable maintenance error while the operation is active.
-
-Explicit workspace removal uses the same maintenance key and the closed
-`podway.workspace-removal-marker/v1` contract. The marker binds an operation ID,
-canonical request digest, response request ID, workspace UUID, exact root path and
-Git identities, and creation time. Recovery resumes only after revalidating that
-identity; it removes the marker last and accepts only a descriptor-verified empty
-`.podway` residual as an already-absent replay convergence. Symlinks, mounts,
-non-directories, changed roots, competing markers, and unknown non-empty residuals
-fail closed.
-
-Workspace mode switching uses the same exclusive maintenance key and the adjacent
-`podway.workspace-mode-switch-marker/v2`. The marker binds the plan-token digest,
-workspace UUID, source and target modes, original and expected target config
-digests, canonical root bytes, Git common-directory identity, Git
-worktree-administration identity, and the ordered
-source-close, registry-retirement, runtime-removal, config-update, target-init,
-and target-publication steps. An exact retry resumes only the missing suffix and
-a completed marker returns `already_applied`; a later independently planned switch
-may retire that completed receipt before publishing its own marker. Runtime reset
-deletes the complete current and archived session, attempt, queue, receipt, and job
-history held under `.podway/runtime/`. A session without queued or running work is
-reported by plan but does not make the disposable source busy. The caller must
-retain the exact plan token: expiry applies before marker publication, while an
-existing marker keeps that token as recovery authority until its completed receipt
-is retired. A source daemon restart before marker publication invalidates its
-process-local plan record, so the caller must plan again; a restart after marker
-publication resumes with the retained token. If config publication completed but
-the `config_updated` marker step did not, recovery recognizes the exact target
-digest, records the completed step, and continues; any third config digest fails
-closed. Before marker publication, scheduler retirement, source-registry
-retirement, runtime deletion, config publication, target initialization, and
-target-registry publication, the daemon freshly resolves and compares the same
-request-local Git and maintenance authority. Fixed marker and config files are
-read and atomically published relative to an already validated `.podway`
-descriptor; registry authority is renewed under the registry lock immediately
-before publication. A legacy v1 marker is upgraded to v2 only when the live plan
-record or exact source Store and registry still prove its identity. After runtime
-removal, an incomplete v1 marker without that proof fails closed. A completed v1
-marker is accepted only after exact target config, Store, and registry validation.
-A recorded `target_initialized` step
-requires an existing target Store with the exact workspace UUID, root, and target
-mode; recovery never recreates a missing recorded target, and registry publication
-reopens that Store under the same guard. Runtime reset never deletes
-procedures, `.podway/.gitignore`, config
-content unrelated to mode, or Git worktree, index, and ref state.
-
-## Reserved account-runtime retirement
-
-The [runtime reset contract](../operations/runtime-reset.md#durable-retirement-and-recovery)
-defines a separate offline-capable account record outside worktree state. It
-reserves account-runtime deletion while preserving every Store, job and session;
-it does not alter workspace reset, removal or mode-switch marker semantics.
-Stable singleton anchors, committed admission fencing and exact intent-backed
-retry are mandatory before its runtime admission. No SQLite migration is added.
+Readable binding can support an unhealthy integrity report without reconstructing
+invalid domain state. Unsupported writer/generation or unreadable admission may
+instead return the canonical error envelope. Doctor creates no runtime migration,
+row update, marker completion or automatic reset. It checks no daemon, socket,
+registry, account mode or service installation. Supported repair and destructive
+recovery remain explicit commands under their own authority.
 
 ## No backup or export requirement
 
-The public v1 product intentionally has no:
-
-- session export;
-- session import;
-- global backup command;
-- event replay;
-- post-mortem archive.
-
-Users who need durable task records should record outcomes in their normal project systems. Podway's responsibility ends at the current worktree session.
+No session export/import, global backup, event replay or post-mortem archive is
+required. Users record durable outcomes in their project systems. Immutable
+inactive sessions are local runtime retention, not an evidence archive or a
+restorable execution product.

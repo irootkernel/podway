@@ -2,21 +2,17 @@
 
 ## Authority and availability
 
-This is the accepted target contract for
+This is the implemented host-neutral foundation accepted by
 [ADR-0035](../../architecture-decision-records/0035-host-neutral-supervised-delegation.md)
-and [V2SDG](../../roadmap/README.md#v2sdg-host-neutral-supervised-delegation-foundation).
-Source foundations through `V2SDG-007` implement the native package, acceptance,
-and receipt routes with explicit custom-Procedure admission. `V2SDG-008`
-qualifies native lifecycle, migration, and deterministic host behavior. The
-[roadmap](../../roadmap/README.md#v2sdg-host-neutral-supervised-delegation-foundation)
-owns the current task status and conditional `v0.2.12` release target. Until
-those tasks and a separately authorized release qualification complete, this
-source capability is not an instruction to use delegation with an installed release.
+and retained by [ADR-0038](../../architecture-decision-records/0038-remove-the-daemon.md).
+The single CLI's in-process Engine serves package, structural acceptance, receipt,
+and current projection routes. The [roadmap](../../roadmap/README.md) owns task and
+release status; the source capability does not attest an installed release,
+external adapter, model run, or production rollout.
 
-This specification covers the Podway foundation only. It does not claim a
-working external Dolgorae adapter, managed Primary bridge, live model test, or
-production rollout. The [integration candidate](../../todo/TODO-podway-supervised-delegation-integration.md)
-records the separate remaining work.
+The [integration candidate](../../todo/TODO-podway-supervised-delegation-integration.md)
+records separate external Dolgorae/managed Primary integration work. No adapter or
+neighboring checkout is required for deterministic Podway tests.
 
 ## SDG-001: Responsibilities and scope
 
@@ -27,8 +23,8 @@ supervision. A Primary may be externally hosted or runtime-managed. Supervisor
 is a responsibility, not a separately required agent. No placement creates a
 Primary or requires one new Run per node.
 
-Podway owns formal readiness and mutation admission. The Primary owns semantic
-acceptance. The external runtime owns Roles, configurations, worker execution,
+Podway owns formal readiness and transactional progression validation. The
+Primary owns semantic acceptance. The external runtime owns Roles, configurations, worker execution,
 round accounting, task delivery, and operational recovery. Neither worker
 completion nor receipt acceptance advances the cursor.
 
@@ -38,7 +34,7 @@ console, network access, process execution, and same-user authentication.
 
 ## SDG-002: Explicit opt-in declaration
 
-Add one optional closed `delegation` object to an action placement only. It is
+An action placement may contain one optional closed `delegation` object. It is
 not a node-definition property. Decision placements, including session-goal
 assessment decisions, reject it. A placement with delegation rejects
 `skip.allowed: true`; the foundation has no waiver or direct fallback.
@@ -52,7 +48,8 @@ assessment decisions, reject it. A placement with delegation rejects
 | `after_accept` | Exactly `retain` or `release`; no implicit default |
 
 Every field is required when the object exists. Reject unknown fields, nulls,
-wrong types, executable paths, or a second execution-mode declaration. Compare
+wrong types, executable command/path fields, or a second execution-mode
+declaration. Compare
 opaque values exactly; do not trim, case-fold, normalize Unicode, or infer a
 Role, Profile, provider, or model. The binding reference is data, not a command
 or a Podway configuration lookup.
@@ -60,13 +57,14 @@ or a Podway configuration lookup.
 The declaration participates in canonicalization, snapshots, and the Procedure
 digest. Omission must not materialize an empty object or a default value and
 must leave old canonical bytes and digests unchanged. Procedures without the
-field keep the old validation and projection paths. No built-in preset,
+field keep their canonical bytes and Direct behavior; runtime projections use the
+current common direct generations. No built-in preset,
 tracked Aquarium Procedure, default selection rule, or installed skill is
 converted to delegation by this epic.
 
 A future integration supplies the binding externally. Failure to resolve it
-blocks that integration's explicitly delegated work, not daemon startup,
-workspace admission, Direct sessions, or ordinary recovery. Do not scan for
+blocks that integration's explicitly delegated work, while unrelated Direct
+sessions and ordinary local recovery remain available. Do not scan for
 installed agents, read their homes, or check their availability on ordinary
 Podway commands.
 
@@ -104,10 +102,10 @@ A managed Primary must use its runtime's broker, not masquerade as an external
 engagement. One host-neutral contract can represent both paths without claiming
 they share authentication, wire shapes, or live capabilities.
 
-### Pre-reservation semantic mapping
+### Adapter semantic mapping
 
-Before reserving the public schemas, close the meaning of every required
-execution field through a source-backed external/managed adapter mapping.
+Before enabling a real adapter, close the meaning of every required execution
+field through a source-backed external/managed adapter mapping.
 Include `result_digest`, `rounds_used`, and `worker_disposition` even though they
 are outside the execution object. For each path, record the producing authority,
 permitted response/read/host-binding surface, identity scope, exact
@@ -127,9 +125,9 @@ merely because both are SHA-256 strings.
 Classify each real-path mapping as contract-mapped, derivation-candidate,
 needs-verification, needs-support, or incompatible-mapping. Any unresolved
 external prerequisite keeps that integration path unavailable. It does not
-block a clear Podway-side contract, deterministic testing, daemon readiness,
-or Direct work. Unresolved meaning of a Podway field itself does block its
-schema reservation. Do not use placeholders, weaken required fields, scrape
+block the defined Podway-side contract, deterministic testing, or Direct work.
+An unresolved Podway-field meaning requires contract resolution before adoption.
+Do not use placeholders, weaken required fields, scrape
 private executor Stores, or switch a managed Primary to the external facade to
 hide a gap. Podway still checks only structure and declared equality, not the
 truth of caller-supplied external bytes.
@@ -143,8 +141,8 @@ for a live model, installed adapter, or neighboring checkout in Podway tests.
 
 Provide the read-only `delegation.package` query, surfaced as
 `podway delegation package --json`. It resolves the selected current workspace
-using the same mode, workspace, session, and attempt rules as current reads.
-It succeeds only for a running delegated action and carries no durable job.
+using the same workspace, session, and attempt rules as current direct reads.
+It succeeds only for a running delegated action and writes no outcome or state.
 
 The result `podway.delegation-package-result/v1` contains a closed package, its
 `package_digest`, and the fresh ordinary mutation fences outside that package.
@@ -153,7 +151,7 @@ The closed package uses `podway.delegation-work-package/v1` and contains:
 - workspace UUID, Procedure digest, session ID, placement ID, and attempt ID;
 - the exact delegation declaration;
 - the action title, intent, description, instructions, and item declarations,
-  preserving admitted content and existing absence semantics;
+  preserving validated snapshot content and existing absence semantics;
 - the attempt-bound goal revision and statement/criteria, or null when absent;
 - declared upstream evidence selectors and their frozen resolution, attempt and
   item identities, exact complete-value digests, and typed size metadata.
@@ -169,7 +167,7 @@ The goal projection uses the existing 1,000-character statement and up to 16
 criteria with 300-character statements; those limits are part of the static
 package budget.
 
-Do not hash the current session revision, job timing, observation timestamp,
+Do not hash the current session revision, invocation timing, observation timestamp,
 mutable current output values, or external Run identity into the package.
 Recording the action's output items or replaying a read must not create a new
 work assignment. Retry, rework, changed attempt-bound goals, or a different
@@ -179,9 +177,10 @@ Use the existing canonical JSON rules with the domain-separated digest input
 `podway.delegation-work-package/v1\n` followed by canonical package bytes. UTF-8
 bytes, not display character counts, determine encoded response limits. Reuse
 existing typed field bounds; additionally prove that the complete package result
-and envelope fit the 1 MiB frame. Reject a delegated document whose worst-case
-projection cannot fit during static admission; do not impose that new rejection
-on a non-delegated document or discover a predictable overflow after execution
+and envelope fit the 1 MiB complete-output budget. Reject a delegated document
+whose worst-case projection cannot fit during static Procedure validation; do not
+impose that rejection on a non-delegated document or discover a predictable
+overflow after execution
 has begun. Budget dynamic goal data against its existing maximum, not the
 example goal used in a test.
 
@@ -196,7 +195,7 @@ store or validate the executor's full prompt or its task bytes.
 ## SDG-005: Structural acceptance
 
 Provide `delegation.accept`, surfaced as
-`podway delegation accept --stdin --json`. Input uses the existing stdin framing,
+`podway delegation accept --stdin --json`. Input uses bounded stdin decoding,
 workspace/session revision, exact active attempt, and idempotency conventions,
 plus a closed `podway.delegation-accept-input/v1` body containing:
 
@@ -208,10 +207,16 @@ plus a closed `podway.delegation-accept-input/v1` body containing:
 - `worker_disposition`, exactly `idle` or `released`; and
 - `accepted`, exactly true.
 
-Reuse the existing canonical mutation identity and admission envelopes; do not
-create an alternative idempotency protocol. The complete input is at most
-32 KiB, including ordinary identity fields. Actor/summary content is excluded
-from default status and logs even though an explicit receipt read may expose it.
+Reuse the canonical direct mutation identity and success-only outcome contract;
+do not create a second idempotency protocol or a job/admission receipt. The
+complete input is at most 32 KiB, including ordinary identity fields. Summary and
+external attribution are excluded from default status even though an
+explicit receipt read may expose them. `session_revision` and `rounds_used` require
+unsigned integer JSON literals; `1.0` is rejected. The stdin document owns its
+workspace/session/revision/attempt/key identities; duplicate CLI identity flags
+are rejected. Acceptance is synchronous and records only a committed success.
+Lost stdout requires original-key `outcome lookup` before exact-request replay;
+COMMIT I/O uncertainty alone may emit `MUTATION_OUTCOME_UNKNOWN`.
 
 At execution, in the ordinary worktree transaction, validate normal fences,
 that the active action is delegated, exact declaration and package equality,
@@ -223,12 +228,12 @@ mutable outputs.
 
 The Store computes `accepted_items_digest` from the current state inside the
 acceptance transaction and verifies the receipt field before storing it. The
-caller cannot choose this value. The daemon projects and supplies the expected
+caller cannot choose this value. The Engine projects and supplies the expected
 package digest to the Store. Store one immutable receipt for the attempt,
 including the declared binding, package digest, execution object, result,
 summary, round count, disposition, and accepted item-state digest. The mutation
 advances the session revision once and never changes the cursor or active
-attempt. Success uses `podway.delegation-accept-result/v1` with receipt identity,
+attempt. Success uses `podway.delegation-accept-result/v2` with receipt identity,
 current fences, package/result digests, and acceptance state.
 
 For v1, sort the active attempt's complete item slots by item ID and encode each
@@ -263,8 +268,8 @@ The V2SDG-005 Store increment defines package currency as the immutable receipt
 remaining bound to the live workspace, session, attempt, placement, procedure,
 and declaration; it rechecks that binding and the accepted item-state digest in
 the completion transaction. The public package/accept routes supply the
-daemon-projected package digest at acceptance. Explicit custom-Procedure
-admission requires the complete native route and Store contract.
+Engine-projected package digest at acceptance. Explicit custom-Procedure
+use retains the complete native route and Store contract.
 
 The active delegated projection reports `awaiting_acceptance`, `accepted`, or
 `stale_acceptance`, with a machine-readable reason and safe next action. These
@@ -307,8 +312,9 @@ error precedence, not by bypassing them to reach a delegation error.
 Session revision and acceptance applicability are distinct. Acceptance itself
 increments the session revision without invalidating its own receipt. Compute
 accepted item state and enforce completion inside their state transactions.
-An advisory warning or an admission-time observation cannot replace those
-checks when item edits and completion contend in the worktree FIFO.
+An advisory warning or preflight observation cannot replace those checks when
+item edits and completion contend for the worktree SQLite write lock. There is
+no FIFO scheduling guarantee.
 
 ### Operator sequence and diagnostics
 
@@ -376,7 +382,7 @@ transactions. Required recovery cases are:
 |---|---|
 | Release succeeded, acceptance response absent | Recover executor terminal state; look up the same Podway idempotency key before exact replay |
 | Acceptance committed, response lost | Lookup/redelivery returns the original receipt; do not assign another external task |
-| Acceptance committed, completion response lost | Reconcile the completion job and current cursor before another transition |
+| Acceptance committed, completion response lost | Look up the original completion key and reread the cursor before another transition |
 | Primary process restarted with the same runtime identity | Recover existing tasks/results externally and reread Podway; no new Primary ownership is inferred |
 | Executor outcome is unknown | Leave the delegated action incomplete; expose existing blocker/recovery controls without freezing Direct work elsewhere |
 | Primary is replaced or host changes | Out of scope; no in-place ownership change or attribution rewrite |
@@ -389,36 +395,36 @@ selects the worker itself.
 
 ## SDG-008: Public contract generations
 
-Reserve only through canonical assets and the manifest/catalog workflow. Do not
-register a route as executable before it is implemented. The planned allocation
-is:
+Canonical assets and the manifest/catalog workflow own current identifiers. The
+output envelope is `podway.output/v4`; failures use `podway.error/v2`. Result
+families below are emitted, not reserved placeholders.
 
-| Family | Selection and compatibility |
+| Family | Current selection and compatibility |
 |---|---|
-| New package/input/acceptance families | The `/v1` families named in SDG-004 and SDG-005 |
-| `podway.delegation-receipt/v1` | Closed immutable stored/public receipt value |
-| `next-result/v4`, `observation-result/v4` | Sessions whose immutable Procedure contains delegation |
-| `status-result/v4`, `compact-status-result/v4` | Delegation-aware session projections; legacy sessions retain v3 |
-| `prepared-next-result/v2` | Prepared delegated snapshots only |
-| `procedure-preview-result/v2`, `procedure-graph-result/v2` | Delegated documents only; non-delegated inputs retain v1 |
-| `session-archive-show-result/v2` | Retained delegated snapshots only, including bounded receipt summaries |
-| `job-result/v5`, `job-lookup-result/v5` | Wrappers needed for the new acceptance job; old job families and stored terminal envelopes stay decodable |
-| `detached-admission-result/v2` | `delegation.accept --detach` uses the existing closed admission shape; acceptance completion remains the separate `/v1` result |
+| `podway.delegation-work-package/v1`, `podway.delegation-package-result/v1` | Closed immutable package and read result |
+| `podway.delegation-accept-input/v1` | Closed bounded structural acceptance input |
+| `podway.delegation-accept-result/v2` | Synchronous committed acceptance success |
+| `podway.delegation-receipt/v1`, `podway.delegation-receipt-result/v1` | Immutable receipt value and explicit exact-attempt read |
+| `podway.status-result/v5`, `podway.compact-status-result/v5` | All Direct and delegated session snapshots |
+| `podway.next-result/v5`, `podway.observation-result/v5` | Current running guidance and prepared/running/terminal observation |
+| `podway.prepared-next-result/v3` | Cursor-free prepared guidance |
+| `podway.procedure-preview-result/v2`, `podway.procedure-graph-result/v2` | Delegated documents; non-delegated documents retain v1 |
+| `podway.session-archive-show-result/v3` | All retained session snapshots, with conditional delegated receipt summaries |
+| `podway.delegation-error-details/v2` | Five closed code-bound delegation failure branches |
 
-All result identifiers in this table carry the `podway.` prefix. The Procedure
-identifier stays `podway.procedure/v2`; this is an opt-in placement extension,
-not a second graph model. Add disjoint command/result selections under the
-existing output envelope and preserve every existing closed result field set.
-Old commands/jobs retain their existing result family where their meaning is
-unchanged. A lookup miss retains the existing response family. No dormant field
-is added to every Direct observation.
+The Procedure identifier remains `podway.procedure/v2`: delegation is an opt-in
+placement extension, not a second graph model. Direct and delegated runtime
+projections converge on the current generations; optional delegation fields remain
+truthful to the immutable snapshot and current placement. No field is added to an
+older closed result in place. Detached admission and all job wrapper generations
+are retired and are not supported decoding paths for current execution.
 
 For delegated snapshots, projection must remain truthful at both Direct and
 Delegated placements. Prepared/terminal views expose no invented active worker.
 Bound summary collections by count and encoded bytes, report exact totals and
-truncation, and keep explicit full receipt reads within the frame. Use existing
-status/archive selection and paging infrastructure where applicable; do not
-expand current-evidence paging into arbitrary stale-history retrieval.
+truncation, and keep explicit full receipt reads within their named output budget.
+Use existing status/archive selection and paging infrastructure where applicable;
+do not expand current-evidence paging into arbitrary stale-history retrieval.
 
 Provide the read-only `delegation.receipt` route as
 `podway delegation receipt --session <id> --attempt <id> --json` for one exact
@@ -427,12 +433,12 @@ attempt in the selected worktree's current or retained session. It returns
 session/attempt identity, and derived `accepted`, `stale_acceptance`, or
 `historical` applicability. The complete result and envelope must fit 64 KiB.
 This explicit read may include the bounded summary and non-secret attribution;
-default status and logs still may not. It cannot mutate, reactivate, or import
+default status still may not. It cannot mutate, reactivate, or import
 historical evidence. A Direct attempt returns `DELEGATION_NOT_APPLICABLE`; an
 existing delegated attempt without a receipt returns
 `DELEGATION_RECEIPT_REQUIRED`. Missing workspace and session identities use the
 existing read-error categories. An unknown attempt in the selected session
-returns non-retryable `ATTEMPT_NOT_FOUND`. No opaque cursor, arbitrary
+returns non-retryable exit-1 `ATTEMPT_NOT_FOUND`. No opaque cursor, arbitrary
 history-value query, or provider access is introduced.
 
 New closed public errors are `ATTEMPT_NOT_FOUND`, `DELEGATION_NOT_APPLICABLE`,
@@ -445,36 +451,36 @@ or deliberately retry/rework, not blindly resubmit with new keys. Error details
 name safe expected/actual identities or a reason enum, never full evidence,
 credentials, or arbitrary external output.
 
-If another adopted change consumes a proposed numeric identifier before the
-contract-reservation task starts, rebase that allocation coherently across this
-specification, schemas, catalogs, tests, and dossier before reserving it. This
-is identifier allocation, not permission to change the accepted behavior or to
-reinterpret a published schema.
+A future material field change must allocate a coherent new closed identifier
+across specification, schema, catalog, tests, and manifest. Reusing a retired or
+published identifier with another meaning is not permitted.
 
 ## SDG-009: Persistence and isolation
 
-Schema v12 adds the immutable receipt side table keyed by existing session and
-attempt identities. The current Store is v13, which additionally implements
-ADR-0036 canonical-path workspace identity; the
-[SQLite model](../storage/sqlite-model.md) owns the complete migration history.
-Delegation must not rebuild or rewrite old snapshot, item, trace, goal,
-terminal-envelope, or archived-session values.
-Use one receipt per attempt, referential integrity, immutable receipt bytes,
-and the existing transaction/job completion boundary. No worker/lease/round
-tables or global agent registry belong here.
+Current Store v14 retains the immutable receipt side table keyed by session and
+attempt, canonical-path workspace identity, and a writer-manifest identity.
+The [SQLite model](../storage/sqlite-model.md) owns DDL and generation behavior.
+Receipt persistence must not rewrite unrelated snapshots, items, trace, goals,
+outcomes, or inactive-session values. Keep one receipt per attempt, referential
+integrity, immutable canonical bytes, and one direct transaction for acceptance
+and its validated successful outcome. No worker/lease/round table or global agent
+registry belongs in the Store.
 
-Validate receipt schema, canonical identity, parent declaration, and accepted
-state during reconstruction. Corruption follows existing fail-closed Store
-integrity behavior, not a fabricated missing receipt. No current receipt on a
-non-delegated attempt is legitimate. Existing Direct Stores contain no new
-required records. Session purge/reset/removal respects existing confirmed
-cascade and recovery semantics; no orphan acceptance records survive.
+Reconstruction validates receipt schema, canonical identity, parent declaration,
+and accepted state. Corruption follows fail-closed integrity behavior; it must
+not become a fabricated missing receipt. A current receipt on a non-delegated
+attempt is invalid. Direct attempts need no receipt. Purge/reset/removal retain
+confirmed cascade and marker recovery; no orphan receipt survives deletion.
+Session success outcomes have their separate retained lookup lifetime, including
+after archive purge, as defined by the automation contract.
 
-Migration must preserve existing work and be transactionally recoverable, but
-changing the schema still makes older binaries potentially incompatible.
-Qualify forward migration, interruption, disk/transaction failure, newer-state
-rejection, and restore on isolated copies. Do not disable strict integrity or
-manifest checks to keep a partial implementation running.
+Daemon-era generations 1–13 and markers are refused without conversion or deletion.
+Confirmed reset-all is explicit destructive recovery, not a forward migration of
+old work. Only declared direct writer predecessors may migrate under exclusive
+maintenance; the initial cutover declares none. Qualify strict writer refusal,
+read-only non-mutation, direct transaction/reconstruction, interruption and exact
+marker retry on isolated fixtures. Never weaken manifest or integrity checks to
+keep a partial implementation running.
 
 ## SDG-010: Operational continuity and acceptance
 
@@ -483,23 +489,23 @@ fixture outside production state to model both Primary-host cases. The fixture
 is test machinery, not a bundled executable adapter or a source of evidence
 that can be used to complete real work.
 
-Compatibility gates cover old canonical bytes/digests, all built-in reference
-paths, already-admitted active/prepared/terminal/inactive sessions, item/check
-recording, guards, retry/rework/goals, lost responses, named modes, daemon
-readiness, retention, and reset/removal. Include simultaneous Direct work in
-one isolated worktree while another delegated worktree is missing an acceptance
-or observing executor uncertainty. Direct work must continue normally.
+Compatibility gates cover unchanged canonical bytes/digests, built-in paths,
+current prepared/running/terminal/inactive snapshots, item/check recording,
+guards, retry/rework/goals, lost responses, success-only lookup/replay, identity
+fences, receipt retention, and reset/removal. Include simultaneous Direct work
+in one isolated worktree while another delegated worktree lacks acceptance or
+observes executor uncertainty. Direct work must continue normally.
 
-Any reproducible regression in an established supported path blocks this epic
-and its rollout. No known regression may be reclassified as deferred feedback,
-worked around by changing a default Procedure, hidden by skipping a test, or
-repaired by resetting the owner's workspace. Passing mocks does not replace
-real CLI/daemon/Store and migration tests. Development acceptance requires the
-complete existing `make test` gate and independent review.
+Any reproducible regression in a supported path blocks adoption. Do not defer a
+known regression, change a default Procedure to hide it, skip required tests, or
+reset the owner's worktree. Passing mocks does not replace real direct CLI,
+Store, cold-process reconstruction, contention, failure, and legacy-refusal
+scenarios. Development acceptance requires the complete existing `make test`
+gate and independent review.
 
-Deployment, release selection, full distribution qualification, installation,
-Aquarium generation activation, daemon restart, and user data restoration each
-retain their own explicit authorization. The foundation does not assert
-zero-risk deployment or cross-version binary compatibility. The operational
-procedure is in the
-[implementation guidance](../../implementation-tips/supervised-delegation.md).
+Release selection, distribution qualification, installation, external consumer
+adoption, Aquarium activation, historical service retirement, and user data
+restoration retain their separate authority. The foundation does not assert
+cross-version compatibility or a live external adapter. The
+[operational guidance](../../implementation-tips/supervised-delegation.md) owns
+the host integration sequence.

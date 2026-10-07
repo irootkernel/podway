@@ -5,6 +5,8 @@ Use these guides when changing Podway:
 - [Repository Workflow](repository-workflow.md): prerequisites, code ownership,
   worktrees, and canonical assets.
 - [Testing](testing.md): focused checks and the complete release gate.
+- [Direct CLI Performance Qualification](direct-cli-performance-qualification.md):
+  preserved G7/G8 baselines, matched supported fixtures and actual open/latency gates.
 - [Documentation](documentation.md): document placement, precedence, and links.
 - [Release](release.md): source readiness, packaging, and publication handoff.
 - [Release Upgrade Hands-on QA](release-upgrade-qa.md): legacy refusal, explicit

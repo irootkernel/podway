@@ -765,5 +765,5 @@
       ]
     }
   },
-  "$comment": "Reserved by V2DFC-003; not emitted before V2DFC-007."
+  "$comment": "Current direct CLI envelope under ADR-0038."
 }

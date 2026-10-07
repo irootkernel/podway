@@ -1,8 +1,9 @@
 # Contributor Documentation
 
 This directory is the canonical home for the human-readable knowledge needed to
-understand, change, test, and release Podway. It documents `podway` and `podwayd`
-as one product rather than maintaining separate CLI and daemon trees.
+understand, change, test and release the single `podway` CLI and its in-process
+Direct Engine. Worktree-local authority, fenced success-only transactions and
+write-free snapshot reads are the current product boundaries.
 
 ## Start here
 
@@ -23,6 +24,9 @@ as one product rather than maintaining separate CLI and daemon trees.
 [Examples](examples/) provide walkthroughs and versioned known-answer payloads.
 
 Current adopted work is tracked by the [active roadmap](roadmap/).
+The [V2DFC dossier](todo/TODO-podway-daemon-free-core.md) remains available for the
+final independent Epic audit and actual user acceptance. Documentation promotion
+alone does not authorize deleting it or closing the Epic.
 
 ## Canonical assets
 

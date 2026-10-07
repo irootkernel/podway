@@ -2,271 +2,198 @@
 
 ## Context
 
-Podway separates user interaction from state mutation:
+Podway runs one command in the invoking process. The single `podway` binary
+composes the CLI, Direct Engine and worktree-local Store. It exits after returning
+one result; it has no resident process, socket, service or account state.
+[ADR-0038](../architecture-decision-records/0038-remove-the-daemon.md) owns this
+model and supersedes the daemon writer model.
 
 ```text
 Human, script, or AI agent
           |
-          | podway CLI
-          | local, versioned IPC
           v
-+--------------------------------------------------+
-|                    podwayd                       |
-|                                                  |
-| request validation     read/query service        |
-| worktree resolver      durable job admission     |
-| procedure loader       per-worktree schedulers   |
-| SQLite transaction executor                      |
-+--------------------------------------------------+
-          |                              |
-          | queue and DB A               | queue and DB B
-          v                              v
-  Git worktree A                  Git worktree B
-  .podway/runtime/                .podway/runtime/
-  state.sqlite3                   state.sqlite3
+       podway CLI
+          |
+          v
+       Direct Engine
+        /    |     \
+  Config   Core   Native Git and filesystem boundaries
+          |
+          v
+     Direct SQLite Store
+          |
+          v
+  owning Git worktree/.podway/runtime/
 ```
 
-The daemon is user-scoped. State is workspace-scoped. The daemon has no central task database.
+Independent invocations share only their target worktree's filesystem locks and
+SQLite state. SQLite serializes mutations within a worktree. There is no durable
+admission, FIFO scheduler, detached job or global worktree catalog.
 
 ## Component responsibilities
 
 ### `podway` CLI
 
-The CLI MUST:
+The CLI MUST parse command grammar, select the target worktree, decode bounded
+inputs, construct typed Direct Engine requests and render validated public JSON
+or human text. It supplies the command deadline, caller-owned idempotency key and
+required workspace, session, attempt and item fences. Automatic fence reads remain
+separate observations; transaction-time validation decides whether they are current.
 
-- parse command-line arguments;
-- discover or accept the target worktree;
-- connect to the user-scoped daemon;
-- submit mutation requests with idempotency and concurrency preconditions;
-- wait for terminal job state by default;
-- support detached admission;
-- send read queries to the daemon;
-- render human-readable text or versioned JSON;
-- provide help and shell completion;
-- never open a live workspace database in write mode;
-- never execute procedure-defined work.
-
-Static commands MAY run without a worktree:
-
-- `podway help` and command help;
-- `podway version`;
-- `podway daemon ...`;
-- `podway preset list/show/explain`;
-- `podway procedure validate/show/format/vet/graph/preview/lint/check/convert <file>`;
-- `podway procedure scaffold`.
-
-All other commands require a valid Git worktree and fail closed otherwise.
-
-### `podwayd` daemon
-
-The daemon MUST:
-
-- run as one process per OS user;
-- accept only local Unix-domain socket requests;
-- verify peer user identity when the platform API supports it;
-- resolve and validate the Git worktree for every workspace request;
-- locate and validate the worktree-local database;
-- admit mutation jobs durably;
-- execute one mutation at a time per worktree;
-- allow mutations in independent worktrees to execute concurrently;
-- run all state transitions inside explicit SQLite transactions;
-- serve reads from the latest committed state;
-- recover queued jobs after restart;
-- maintain a minimal path registry for recovery;
-- prune bounded operational data;
-- reject arbitrary command execution, network access, remote includes, and Git mutation.
+The CLI MUST NOT access Store internals, mutate Git or execute Procedure work.
+Static help, version, completion, preset and Procedure authoring commands may run
+without workspace state. Stateful commands resolve a valid non-bare worktree.
+The [CLI specification](../specs/interfaces/cli-specification.md) owns the exact
+command list, input rules and retired-command guidance.
 
 ### Pure domain engine
 
-The pure domain engine MUST be independent of:
+`podway-core` owns immutable domain values, invariants, item satisfaction,
+conditions, graph movement and state transitions. It receives validated state,
+commands, IDs and times as explicit values and returns domain changes or a
+structured domain error. It has no SQLite, native Git, filesystem, process or
+service dependency. Recorded conditions evaluate bounded current values; they
+perform no external lookup or execution.
 
-- async runtimes;
-- SQLite;
-- Git libraries;
-- filesystem APIs;
-- LaunchAgent APIs;
-- IPC framing;
-- clocks and random generators.
+### Direct Engine
 
-It receives validated state and a command, then returns either:
+`podway-engine` composes configuration, core, protocol, Store, Git and presets.
+It owns read projections, Procedure and artifact preparation, canonical request
+identity, typed command execution, public failure rendering and filesystem
+maintenance. `direct_api.rs` is the shared in-process boundary; the CLI does not
+construct an IPC request as an intermediate representation.
 
-```text
-new domain state + domain effects
-```
-
-or a structured domain error. Time, IDs, and external artifact metadata are supplied as explicit command inputs.
+Expensive preparation occurs outside the mutation transaction. Native worktree,
+artifact, Procedure and prepared-state identities are revalidated before commit.
+A validated success envelope is persisted with the domain effect. Engine
+maintenance resumes exact persisted intent through the owning Store lease.
 
 ### Procedure and configuration loader
 
-The loader:
-
-- parses YAML or JSON;
-- validates against versioned schemas;
-- resolves only worktree-local files and embedded presets;
-- applies explicit defaults;
-- canonicalizes deterministically;
-- computes SHA-256;
-- produces immutable procedure snapshots.
-
-It also validates typed condition structure, controller ordering, and guarded
-evidence selection before admission. The pure domain engine evaluates conditional
-item requirement and option availability from the active immutable snapshot and
-current recorded values; no filesystem, process, network, or plugin lookup is
-part of predicate evaluation.
-
-It never loads remote data or executable plugins.
+`podway-config` parses bounded YAML/JSON, rejects invalid structure and semantics,
+resolves safe local Procedure files and computes canonical immutable snapshots.
+`podway-presets` embeds the canonical YAML under `assets/presets/`.
+A running session uses its persisted snapshot. Loading a Procedure never loads
+remote includes, executable plugins or configured commands.
 
 ### Store
 
-The store owns:
+`podway-store` owns generation-14 SQLite initialization, coherent read snapshots,
+private transactions, worktree binding, writer-contract identity, relational
+Procedure state, atomic success outcomes and bounded journal retention.
+SQLite relational state is authoritative; there is no event-sourced rebuild.
 
-- database creation and migration;
-- workspace metadata;
-- procedure snapshots;
-- session state;
-- attempts, item values, blockers, artifact references, and structurally bound
-  external check-result values as ordinary attempt-local item values;
-- durable job admission and claiming;
-- idempotency records;
-- bounded operational journal;
-- transaction and pruning policy.
-
-SQLite relational state is authoritative. There is no event-sourced rebuild path.
+Ordinary opens hold a native shared maintenance lease. A cold read without the
+required WAL/SHM state instead holds exclusive exclusion and uses an immutable
+main file or heap WAL snapshot so reading creates no sidecars. Doctor and
+maintenance use exclusive exclusion. The Store has a bounded process-local
+connection gate to keep a read-only connection from inheriting another connection's
+writable SHM mapping; this creates no persistent or per-user state.
 
 ### Supervised delegation
 
 An explicitly authored action placement may require delegation under
 [ADR-0035](../architecture-decision-records/0035-host-neutral-supervised-delegation.md).
-It retains the ordinary single cursor and active attempt. The config layer
-constructs the immutable work package; the daemon exposes bounded package and
-receipt reads and admits acceptance through the existing worktree queue. The
-Store atomically persists one immutable attempt receipt, its accepted item-state
-digest, and the terminal job result. Explicit completion rechecks ordinary gates
-and receipt currency inside the state transaction.
+It retains the ordinary single cursor and active attempt. Config constructs an
+immutable work package; Engine exposes bounded package and receipt reads and
+accepts a structurally valid receipt through the direct transaction boundary.
+The Store atomically persists the immutable receipt, accepted item-state digest
+and successful mutation outcome. Completion rechecks ordinary gates and receipt
+currency in its own state transaction.
 
-The Primary and worker remain external to Podway. The integration owns task
-dispatch, feedback, executor identity, result acceptance, worker settlement, and
-recovery of uncertain external effects. Podway performs no provider lookup or
-execution, and an `external` or `managed` host label grants no authority. Direct
-Procedures need no adapter or receipt. See the
-[interface contract](../specs/interfaces/supervised-delegation.md) and
-[implementation guidance](../implementation-tips/supervised-delegation.md) for
-the correction, replay, and integration boundaries.
+The external integration owns dispatch, feedback, executor identity, acceptance,
+worker settlement and uncertain external effects. A host label or matching digest
+grants no approval or permission. Direct Procedures require no adapter or receipt.
+See the [interface contract](../specs/interfaces/supervised-delegation.md) and
+[implementation guidance](../implementation-tips/supervised-delegation.md).
 
 ### Git worktree resolver
 
-The resolver:
-
-- discovers the worktree root from nested paths;
-- rejects bare repositories;
-- resolves Git common-directory and worktree-admin identity;
-- enforces path containment;
-- detects copied workspace UUIDs;
-- supports safe root-path updates after a worktree move.
-
-It does not stage, commit, branch, reset, push, or otherwise mutate Git.
-
-### Service manager
-
-The service manager owns the supported native Apple Silicon macOS installation and
-lifecycle through a user LaunchAgent. Its trait boundary keeps platform mechanics
-out of the domain; it is not a commitment to release another service backend.
+`podway-git` discovers main and linked worktrees without invoking `git`, rejects
+bare or uncertain layouts, resolves lossless canonical Git paths and supplies
+native replacement-race evidence. Engine validates that evidence against the
+Store binding. The resolver exposes no Git mutation API.
+The [filesystem model](git-worktree-and-filesystem.md) owns move, copy, path and
+maintenance boundaries.
 
 ## Data ownership
 
 | Data | Owner | Location |
 |---|---|---|
-| Tracked workspace config | User/project | `.podway/config.yaml` |
-| Tracked custom procedures | User/project | `.podway/procedures/` |
-| Active session and attempts | Worktree | `.podway/runtime/state.sqlite3` |
-| Worktree mutation queue | Worktree | same SQLite database |
-| Procedure snapshot | Worktree session | same SQLite database |
-| Artifact bytes | External owner | original path or external system |
-| Minimal worktree registry | Daemon | user application-support directory |
-| Daemon logs | Daemon | user logs directory |
-| Socket and lock | Daemon | user-private runtime directory |
-| LaunchAgent plist | User service manager | `~/Library/LaunchAgents/` |
+| Tracked workspace config and custom Procedures | User/project | `.podway/config.yaml`, `.podway/procedures/` |
+| Current and archived sessions, snapshots and receipts | Worktree | `.podway/runtime/state.sqlite3` |
+| Successful mutation outcomes and operational journal | Worktree | same database |
+| Maintenance locks and recoverable operation markers | Worktree | `.podway/runtime/` |
+| Artifact bytes and external executor effects | External owner | original path or external system |
+
+Podway neither reads nor creates `~/.podway`. Legacy installed services require
+separate retirement by their original owner; the direct binary has no service
+manager or account cleanup path.
 
 ## Trust boundaries
 
-```text
-same OS user boundary
-  + podway CLI
-  + podwayd
-  + worktree files
-  + local scripts and agents
-
-outside Podway trust
-  + other OS users
-  + remote systems
-  + external artifact stores
-  + root or malicious same-user software
-```
-
-Podway uses filesystem permissions and peer UID checks to reject other users. It does not claim to protect against malicious processes running as the same user.
+The CLI, binary, local worktree and caller assertions operate within the same OS
+user's authority. Descriptor-safe paths, filesystem permissions, worktree binding,
+writer identity and fences prevent accidental misrouting and unsupported writes.
+They do not authenticate assertions or defend against malicious same-user code.
+See [Security and Trust](../specs/operations/security-and-trust.md).
 
 ## Mutation path
 
 ```text
-CLI resolves worktree
-  -> sends request with command, preconditions, and idempotency key
-  -> daemon validates peer, protocol, worktree, and request size
-  -> daemon durably inserts a queued job with workspace sequence
-  -> scheduler claims the lowest queued sequence
-  -> transaction loads state and validates preconditions
-  -> pure domain engine computes transition
-  -> store persists state, receipt, journal, and terminal job result atomically
-  -> daemon returns terminal response or detached job ID
+CLI parses bounded input, selects worktree and supplies fences/key/deadline
+  -> Engine classifies Store, resolves identity and prepares outside transaction
+  -> Store qualifies writer/schema/binding without a writable foreign open
+  -> native maintenance lease and SQLite BEGIN IMMEDIATE within deadline
+  -> same-key lookup returns original success or rejects a changed request
+  -> required identities and prepared state are revalidated
+  -> core computes transition; Engine constructs validated output/v4
+  -> Store commits domain state, success outcome, sequence, journal and pruning
+  -> CLI returns the committed response
 ```
+
+A rejection records no outcome. Only COMMIT I/O ambiguity maps to
+`MUTATION_OUTCOME_UNKNOWN`; response loss is reconciled with `outcome lookup` and
+an exact retry. Reset-all and removal are marker-governed maintenance protocols,
+not ordinary single-transaction mutations.
 
 ## Read path
 
-```text
-CLI resolves worktree
-  -> daemon validates request and worktree
-  -> daemon reads latest committed state
-  -> response includes workspace sequence, session revision, and pending jobs
-```
-
-Reads do not enter the write queue. Callers that require a quiescent view use `--wait-for-idle` or `--after-job`.
+A read classifies and qualifies the Store, takes one committed read snapshot and
+projects bounded state without changing bindings, outcomes, journal or sidecars.
+It reports committed sequence/revisions rather than queue activity. A read is not
+a reservation: a later writer may commit before the caller's next request.
+Doctor performs explicit integrity and graph/outcome checks under exclusion;
+ordinary opens do not run those expensive scans.
 
 ## Dependency direction
 
-```text
-podway-core
-  ^-- podway-config <-- podway-presets
-  ^-- podway-protocol
-  ^-- podway-store
-  ^-- podway-git
-  ^-- podway-service
-
-podway-config + podway-protocol + podway-presets
-  + podway-store + podway-git + podway-service
-  -> podway-daemon
-  -> podway-cli
-```
-
-`podway-core` depends on no infrastructure crate. Infrastructure crates may depend on core types, but core MUST NOT depend on them.
+The eight-crate adjacency is owned by
+[`contracts/cargo-adjacency.json`](../../contracts/cargo-adjacency.json).
+Core has no infrastructure dependency; config, protocol, Store and Git depend on
+core; presets depend on core/config; Engine composes those six crates; CLI invokes
+Engine and uses core/config/protocol/presets for presentation and authoring.
+CLI has no production Store or Git edge. Cycles and reverse edges are prohibited.
 
 ## Performance and scale envelope
 
-Podway is optimized for local task state, not bulk workflow data.
+[ADR-0024](../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md)
+and [ADR-0037](../architecture-decision-records/0037-bound-procedure-graphs-at-1024-nodes.md)
+preserve these limits. Text lengths count Unicode scalar values:
 
-Evidence limits are owned by [ADR-0024](../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md), and the Procedure graph limit is owned by [ADR-0037](../architecture-decision-records/0037-bound-procedure-graphs-at-1024-nodes.md). Every text length below counts Unicode scalar values, not bytes.
+- one current session and one active attempt per worktree;
+- at most 1,024 node definitions and graph placements;
+- at most 128 items per definition and attempt;
+- 1 MiB direct input and output budgets, independent of IPC;
+- text: 4,000 scalars by default, 65,536 hard maximum;
+- list: 1,000 entries, 8,192 scalars per entry and 1,000,000 total scalars;
+- check result: 32 KiB canonical JSON per item;
+- recorded text/list content: at most 16,777,216 scalars per attempt.
 
-- at most one session per workspace;
-- at most 1,024 node definitions per procedure;
-- at most 1,024 graph placements per procedure;
-- at most 128 items per node definition and per attempt;
-- at most 256 queued jobs by default per workspace;
-- IPC frame size at most 1 MiB;
-- text item at most 4,000 scalars by default and 65,536 scalars hard maximum;
-- list item at most 1,000 entries hard maximum, 8,192 scalars per entry, and 1,000,000 scalars of total content;
-- one complete external check result at most 32 KiB canonical JSON, yielding a
-  4 MiB derived product across 128 items;
-- at most 16,777,216 scalars of recorded text and list content per attempt;
-- artifact hashing is streaming and does not load the entire file into memory.
-
-Selected evidence is read one bounded page at a time through `evidence.read` rather than embedded whole in a progression response. A page carries at most 256 KiB of encoded data inside a response of at most 320 KiB, and `session.next` and `session.observe` carry evidence identity, digest, and size with bounded previews instead of complete values. Response composition is a closed set of named byte allocations; every windowed collection reports its exact total and whether it was truncated.
-
-Normal status and non-artifact mutations SHOULD complete fast enough for interactive use. Artifact digest time is proportional to file size and is reported separately in diagnostics.
+Evidence readback uses bounded pages: at most 256 KiB encoded page data within a
+320 KiB response. Progression views carry identities, digests, sizes and bounded
+previews. Windowed collections report exact totals and truncation state.
+Artifact hashing streams bytes. Changed-row persistence and lazy schema validation
+bound per-invocation work; historical feasibility measurements do not qualify a
+new candidate. The [performance qualification protocol](../implementation-tips/direct-cli-performance-qualification.md)
+owns fixture matching, measurement and baseline limits.

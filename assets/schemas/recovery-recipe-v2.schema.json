@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:podway:schema:recovery-recipe:v2",
   "title": "Podway Recovery Recipe v2",
-  "$comment": "Reserved by V2DFC-003. Destructive maintenance recipes require explicit authorization.",
+  "$comment": "Current recovery contract under ADR-0038. Destructive maintenance recipes require explicit authorization.",
   "type": "object",
   "additionalProperties": false,
   "required": [

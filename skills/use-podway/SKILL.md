@@ -58,7 +58,13 @@ Enter a worktree only after explicit activation for the current workflow.
    This is an advisory threshold, not authorization or a product retention limit. Do not run either command or block the current workflow. Before an explicitly authorized operation, read [references/lifecycle.md](references/lifecycle.md) and the applicable command help, then re-read the target state required there. After an authorized purge, re-read `archive list` before suggesting another candidate. If the advisory read fails independently of observation, report that the count was unavailable and continue the requested workflow.
 7. If no active session exists, continue the user's work without creating one unless the user explicitly asks to start or manage a Podway session.
 
-`--json` is a global flag on every command. Select the owning worktree with `--worktree <path>` and the total maintenance/SQLite wait budget with `--timeout <duration>`. The timeout does not bound reading command input or a human confirmation. `--mode`, `--dev`, `--socket`, `--detach`, `--wait-for-idle`, and `--after-job` are retired.
+`--json` is a global flag on every command. Select the owning worktree with
+`--worktree <path>`. `--timeout <duration>` defaults to `5s` and bounds the combined
+maintenance/SQLite lock wait; it does not bound input reading, preparation or human
+confirmation. Durations are unsigned integers with `ms`, `s` or `m`, at most `60m`.
+A deadline failure has no partial effect or outcome; distinguish `WORKSPACE_BUSY`
+from `WORKSPACE_MAINTENANCE` using its structured recovery recipe. `--mode`,
+`--dev`, `--socket`, `--detach`, `--wait-for-idle` and `--after-job` are retired.
 
 For initialization, session creation or replacement, archive or purge, reset, cancel, workspace removal, workspace repair, or retired lifecycle guidance, read [references/lifecycle.md](references/lifecycle.md) before acting.
 
@@ -122,5 +128,7 @@ For deciding whether to track a session goal, writing its statement and criteria
 
 - When `details.recovery` is present, validate the closed RecoveryRecipe v2 shape and follow [references/recovery.md](references/recovery.md). Its read-only commands are `session.observe`, `outcome.lookup`, and `workspace.doctor`; destructive recipes require applicable explicit authorization. A recipe never grants authorization or permission to weaken fences.
 - On a stale revision, attempt, identity, or item precondition, do not weaken the fence. Re-read observe, then derive a fresh action.
+- Only validated successes are retained atomically with state; a rejection has no
+  outcome. Exact replay returns the entire original envelope and original request ID.
 - On an uncertain mutation outcome, do not blindly retry or change the idempotency key.
 - On storage, maintenance, or state-recovery problems, read [references/recovery.md](references/recovery.md) before acting.

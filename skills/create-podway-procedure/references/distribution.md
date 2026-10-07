@@ -13,8 +13,8 @@ Read this reference only when a repository ships Procedure source to other workt
 ## Require executable path evidence
 
 - Inventory every accepted clean, failure, conditional, guarded, goal-outcome, branch-specific, and declared manual-rework path. Give each case a stable ID, expected result, and exact runtime proof locator.
-- Treat Procedure authoring as authority to prepare this inventory, not to initialize a workspace, start a session, or control a daemon. Exercise the canonical bytes only under separate runtime authorization, using `$use-podway` when available.
-- When runtime qualification is authorized, exercise the canonical bytes through the public CLI and an isolated daemon/worktree. Static parsing, a graph projection, or a copied upstream preset test does not prove the consumer Procedure's runtime paths.
+- Treat Procedure authoring as authority to prepare this inventory, not to initialize a workspace, start a session or retire an installed legacy runtime. Exercise the canonical bytes only under separate runtime authorization, using `$use-podway` when available.
+- When runtime qualification is authorized, exercise the canonical bytes through the exact public direct CLI in a disposable Git worktree. Static parsing, a graph projection, or a copied upstream preset test does not prove the consumer Procedure's runtime paths.
 - Test failure and stale-evidence behavior needed by the graph, not only successful closeout. Include paging continuation and stale-token rejection only when the Procedure intentionally selects multi-page evidence.
 - Run the consumer repository's complete development gate after focused qualification. Keep raw runtime evidence in ignored local storage and commit only the durable inventory and test implementation required by repository policy.
 

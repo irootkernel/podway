@@ -1,5 +1,18 @@
 # User Runtime Factory Reset
 
+## Historical retired contract
+
+[ADR-0038](../../architecture-decision-records/0038-remove-the-daemon.md)
+retired this daemon-era contract. Every section below records the previous
+generation for historical roadmap references; none defines current commands,
+files, tests or operational requirements. The direct CLI returns
+`COMMAND_RETIRED` for service and account-runtime commands and cannot execute
+these old procedures. Current worktree recovery is specified by the
+[direct recovery contract](../storage/recovery-retention-and-maintenance.md).
+Retiring an existing old installation requires its original binary/controller
+and separate authorization under the
+[legacy cutover](../../../README.md#legacy-state-and-cutover).
+
 ## Authority and availability
 
 [ADR-0032](../../architecture-decision-records/0032-retire-ordinary-user-runtimes.md)

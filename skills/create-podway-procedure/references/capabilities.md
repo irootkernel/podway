@@ -80,8 +80,9 @@ For field selection and a worked example, read [delegation authoring](delegation
 
 ## Bind validation to exact provenance
 
-Run both `podway version --json` and `podway version --json --identity` when the
-binary supports identity output. Record the version, target, build identity, source
+Run both `podway version --json` and `podway version --json --identity`.
+Require Output v4, version-result v2 and contract-manifest v2 for the current
+single CLI. Record the version, target, build identity, source
 commit when present, contract-manifest schema, and contract-manifest digest. Record
 the exact canonical Procedure digest produced by preview.
 

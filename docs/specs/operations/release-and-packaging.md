@@ -176,6 +176,25 @@ digest to avoid self-reference; the handoff supplies that pin. Source/package
 catalog drift is rejected. Preparing this contract does not certify Aquarium or
 Dolgorae adoption or change either external repository.
 
+### Consumer adoption prerequisites
+
+Installation of `v0.2.13` waits for Aquarium and Dolgorae releases that support
+the direct contract generation. Their implementation and qualification belong
+to their own repositories; a prepared Podway handoff alone proves neither.
+
+Aquarium must consume Output v4, Error v2 and observation result v5, recognize
+committed direct mutation success, and replace job/admission settlement with
+read-only `outcome lookup`. It must remove daemon readiness and runtime-mode
+routing and use scratch worktrees for development isolation. Procedure v2's
+single-cursor lifecycle, fences, Goal, evidence and delegation semantics,
+input/output bounds and idempotency requirements remain.
+
+Dolgorae must adopt adapter contract v3 and pin the exact manifest v2 and version
+result v2 identities, routes, schemas, error catalog and Store compatibility.
+Version text alone cannot establish consumer compatibility. Both consumers must
+qualify and release their changes before installation; legacy writer retirement
+still requires the original owners and separate authorization described below.
+
 ## Installation
 
 Install the single qualified `podway` through the archive or original package
@@ -215,8 +234,9 @@ an explicit reset recipe. There is no daemon-era state conversion.
 After backing up any desired historical evidence and confirming the exact target,
 run `podway --worktree <root> --json reset --all --yes --idempotency-key <new-key>`.
 This deliberately discards legacy runtime history and initializes a fresh direct
-workspace while preserving configuration, Procedure files, `.gitignore` and Git/
-unrelated files. A normal start and begin then establishes a new session.
+workspace while preserving configuration unrelated to retired runtime modes,
+Procedure files, `.gitignore` and Git/unrelated files. A normal start and begin
+then establishes a new session.
 [Upgrade QA](../../implementation-tips/release-upgrade-qa.md) proves unchanged
 refusal, explicit reset and the working fresh lifecycle independently on private
 frozen fixtures. It does not retire installed writers or establish the real

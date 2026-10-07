@@ -2,235 +2,120 @@
 
 ## Goals
 
-Observability exists to operate the daemon and diagnose the current task workflow. It must not become a global task-history or analytics system.
-
-Podway provides:
-
-- structured local daemon logs;
-- `podway daemon status`;
-- `podway doctor`;
-- queue and revision indicators in `status`;
-- diagnostic IDs for internal failures;
-- bounded worktree operational journal.
-
-Podway provides no telemetry backend or network export.
-
-## Daemon logs
-
-Default macOS directory:
-
-```text
-<effective-user-home>/.podway/logs/
-```
-
-The directory is derived from the effective OS account and does not use ambient
-home-directory environment variables.
-
-Each record is one JSON object followed by a newline. Every record has the same
-keys:
-
-```json
-{"schema":"podway.daemon-log/v1","ts":1700000000123,"daemon_id":"...","seq":42,"operation":"integrity_check","outcome":"failed","command":null,"workspace_uuid":"...","session_id":null,"request_id":null,"job_id":null,"stage":"store_open","error_kind":"storage_integrity","integrity_check":"internal_codec","reason":"integrity_validation_failed","diagnostic_id":null}
-```
-
-`ts` is UTC Unix milliseconds. `daemon_id` identifies one daemon lifetime and
-`seq` is assigned when an event is emitted. Sequence gaps reveal dropped events;
-records from one lifetime are ordered by `seq`. Correlation keys are always
-present and use `null` when the operation has no corresponding identity.
-Request correlation is attached after typed envelope decoding. Workspace,
-session, and job correlation uses the durable identity available at the owning
-runtime boundary or the validated response projection; events emitted before
-that boundary retain `null` rather than copying workspace paths or arbitrary
-payload fields.
-
-Operation, outcome, stage, error kind, integrity check, and reason are closed
-internal categories. Records cannot carry task titles, item values, artifact
-locations, procedure content, full requests, idempotency keys, filesystem paths,
-or raw error source chains.
-
-Workspace retirement uses `registry_entry_prune` and `workspace_remove` as
-daemon-log operations. Both use only `succeeded`, `rejected`, or `failed` and
-never record a worktree root or removed content. Removal may retain the bounded
-workspace UUID while known and the explicit request ID; an `already_absent`
-convergence is `succeeded`.
-
-## Queueing and configuration
-
-The sink uses bounded primary and priority queues. Saturation does not block request processing; dropped records and saturation episodes are counted and included in the frozen shutdown report.
-
-Podway v0.1.0 has no log levels, filtering, or runtime log configuration.
-
-## Rotation
-
-Default structured-log rotation:
-
-- 1 MiB maximum per file;
-- 10 files total (`podwayd.log` plus `.1` through `.9`);
-- atomic rename and reopen;
-- no compression requirement;
-- oldest file removed first.
-
-A logging failure must not corrupt task state. Sink failures and dropped records are accounted internally; daemon status has no logging-warning field.
-
-The LaunchAgent directs standard output and standard error to `/dev/null`.
-The daemon is the only writer to the separate `podwayd-bootstrap.log` stream.
-Bootstrap records are JSON Lines and use a 1 MiB per-file limit with 5 files
-total (`podwayd-bootstrap.log` plus `.1` through `.4`). They retain the fixed
-`podway.daemon-bootstrap-log/v1` keys, keep `message` as `null`, and use only
-closed stage and error-kind values. Launchd never retains a descriptor to either
-rotated log stream. On first open after an upgrade, the sink discards only exact
-effective-user-owned bootstrap files that already exceed the per-file limit;
-unrelated files, symlinks, and foreign-owned files are not followed or removed.
-
-## Daemon status
-
-The `daemon_version` value uses the build identity's `v`-prefixed version when
-available. Status readers must also accept unprefixed versions from older daemons.
-
-`podway daemon status --json` reports:
-
-```text
-status
-installed
-loaded
-reachable
-daemon_version
-protocol_versions
-contract_manifest_digest
-pid
-process_id
-executable_path
-started_at
-uptime_ms
-configured_socket_path
-effective_socket_path
-registered_worktree_count
-active_scheduler_count
-queued_job_count
-running_job_count
-in_flight_client_count
-maintenance_operation_count
-readiness_state
-readiness_stage
-readiness_elapsed_ms
-worktree_recovery
-```
-
-It contains aggregate counts only, not task titles or item data.
-The process UUID and start time remain stable for one daemon lifetime, while uptime is
-monotonic. A stopped or unreachable installation retains static build identity,
-executable, and configured socket fields but reports every live process field as `null`.
-Contract-handshake failures are returned as `DAEMON_CONTRACT_MISMATCH`, never rewritten
-as an unreachable status result.
-
-The final four fields were introduced by the
-`podway.daemon-status-result/v2` family. Current daemon and CLI projections use
-`podway.daemon-status-result/v3`, whose additional `mode` field identifies the
-selected runtime namespace. Its two service-rollover counters report other
-admitted client handlers and active workspace maintenance, activation, claim,
-or rebind leases. A live v3 daemon reports a concrete bounded count when the
-selected runtime can prove that activity and otherwise reports `null`; consumers
-that require quiescence treat `null` as busy. A local stopped or unreachable
-projection always uses `null`. `readiness_state` distinguishes
-`not_running`, `unreachable`, `starting`, `recovering`, `ready`, and `failed`;
-the stage identifies endpoint, registry, worktree, job, ready, or failed
-processing. Worktree progress contains only bounded total, completed, and failed
-counts. A result is ready only when the endpoint is reachable, live identity and
-the manifest are verified, and the daemon-owned state is ready. The daemon emits
-this projection from its early control plane while registry, worktree, and job
-recovery are still in progress.
-
-Status must remain responsive without cloning or integrity-scanning every
-registered workspace database. Before readiness, its activity counts may be
-`null`. After readiness, the daemon attempts the registry locks without waiting
-and reads queued and running counts from each active Store in a short read
-transaction. If registry, scheduler, maintenance, or Store access is busy, or
-the aggregate cannot be proved, the daemon reports `null` counts. This status
-read does not replace the stronger disposable-state inspection required by
-runtime reset and workspace maintenance.
+Observability explains one invoking command and its current worktree. Podway uses
+validated command envelopes, committed state projections, explicit Doctor checks
+and a bounded local operational journal. It creates no per-user log directory,
+telemetry backend, analytics store or task-history export service.
+[ADR-0038](../../architecture-decision-records/0038-remove-the-daemon.md) retires
+the daemon and bootstrap log sinks with their host.
 
 ## Workspace status observability
 
-`podway status` includes:
+Current status, next and observation results describe one committed snapshot:
+workspace sequence, session revision, current attempt, item revisions, blockers,
+goals, evidence identities and applicable delegation currency. Collections report
+exact totals and truncation where required by their schemas. Compact status omits
+large evidence/history projections and remains independently bounded.
 
-- latest committed workspace sequence;
-- session revision;
-- queued count;
-- running job ID;
-- pending mutation flag;
-- current attempt ID and number;
-- current item revisions;
-- open blocker IDs.
-
-These fields let clients reason about staleness without reading logs.
+There are no queue counts, running job IDs, admitted revisions or pending-mutation
+flags. A read can become stale immediately after its snapshot; it does not reserve
+the next mutation. Clients use explicit fences and current observation/recovery
+recipes rather than interpreting human output as a synchronization mechanism.
+The [JSON contract](../interfaces/json-contract.md) owns exact result fields.
 
 ## Operational journal
 
-The worktree database keeps a bounded journal for events such as:
+The owning database's `operational_journal` table is the only persistent product
+operational journal. A new successful mutation atomically inserts:
 
-```text
-workspace.initialized
-workspace.migrated
-daemon.recovered-jobs
-job.admitted
-job.claimed
-job.succeeded
-job.failed
-job.cancelled
-session.started
-session.transitioned
-session.reset
-retention.pruned
-integrity.failed
-```
+| Field | Current value |
+|---|---|
+| `recorded_at_ms` | the transaction's single UTC millisecond timestamp |
+| `level` | `info` |
+| `event_name` | `mutation_committed` |
+| `workspace_sequence` | the committed success sequence |
+| `summary` | the canonical command name |
+| `details_json` | absent/null for this event |
 
-Entries contain summaries and IDs, not item values. The journal has no public long-term export command, and doctor does not expose its recent entries.
+The event contains no task title, item value, artifact bytes/location, idempotency
+key, environment or raw error chain. Success replay and rejection add no journal
+entry. The journal does not record failed requests or every observed read and is
+not an audit log or source for reconstructing domain state.
+
+Retention occurs inside a successful mutation transaction: keep the newest 200
+entries regardless of age, remove older entries beyond seven days or outside the
+newest 10,000. Idle time causes no pruning process. Workspace removal/reset deletes
+the replaced runtime journal. There is no public long-term export or journal-tail
+command, and Doctor does not expose recent entries.
+
+The Store's tested predecessor framework has a `writer_migrated` event with a
+migration identifier and no task payload. The current compiled predecessor set
+is empty and Engine has no active migration caller; this event is not current
+production migration evidence. See the
+[SQLite model](../storage/sqlite-model.md) and
+[retention contract](../storage/recovery-retention-and-maintenance.md).
 
 ## Diagnostic IDs
 
-The fixed log schema includes `diagnostic_id`; an originating boundary that has
-an opaque diagnostic UUID copies it into the corresponding record. Logs retain
-typed failure categories, not raw internal source-chain text.
+`podway.error/v2` uses closed stable codes, retryability, exit status and bounded
+structured details. Internal failure details can carry an opaque request-derived
+diagnostic ID. There is no associated daemon log lookup or guaranteed retained
+failure record. Raw internal source chains and filesystem-rich OS errors are not
+stable machine fields.
+
+`WORKSPACE_BUSY` and `WORKSPACE_MAINTENANCE` identify bounded wait/recovery states.
+`MUTATION_OUTCOME_UNKNOWN` identifies COMMIT I/O ambiguity; clients reconcile the
+caller-owned key using `outcome lookup` and the exact retry recipe. Missing lookup
+is not proof of failure outside the documented retention/workspace boundary.
 
 ## Doctor output
 
-Doctor emits a structured check list:
+`podway doctor` emits a validated `podway.output/v4` query envelope for
+`workspace.doctor`, with `healthy`, `deep` and structured `checks` in its result.
+It has no separately named Doctor result schema family. It takes exclusive native
+exclusion and checks actual SQLite integrity, foreign keys, complete current and
+archived graph reconstruction, retained outcomes and public status projection.
+The successful current check IDs are:
 
-```json
-{
-  "checks": [
-    {
-      "id": "database.integrity",
-      "status": "pass",
-      "summary": "SQLite quick check passed.",
-      "remediation": null
-    }
-  ],
-  "overall": "pass"
-}
-```
+- `binding_identity`;
+- `schema_object_identity`;
+- `writer_identity`;
+- `quick_check`;
+- `foreign_key_check`;
+- `current_and_archived_graph_reconstruction`;
+- `retained_outcome_records`;
+- `public_status_projection`;
+- `current_required_local_artifacts`.
 
-Statuses are `pass`, `warning`, `fail`, or `skipped`.
+The final check is `skipped` without `--deep`; deep mode rehashes current required
+local artifacts and reports the checked count. A reconstructable binding can still
+support truthful unhealthy results using `storage_integrity` or
+`public_status_projection` failures. Unresolvable/corrupt infrastructure may instead
+produce a public error envelope. Doctor does not repair runtime files, migrate a
+writer, inspect a daemon, or perform a Git-index audit. Ordinary reads do not run
+its expensive integrity scans.
 
 ## Performance diagnostics
 
-Debug logs and status MAY report:
+The product has no decode/queue/scheduler log stream or background metrics sink.
+Explicit qualification records local bounded timing outside task state, using
+exact candidate bytes and owned fixture roots. The
+[direct CLI performance qualification protocol](../../implementation-tips/direct-cli-performance-qualification.md)
+owns warm/cold, grown-history and baseline matching. Historical feasibility
+numbers and test registration do not establish a fresh performance pass.
 
-- IPC decode duration;
-- job queue wait duration;
-- state transaction duration;
-- artifact hash duration and bytes;
-- database open and migration duration;
-- scheduler count and backlog.
+## Daemon status
 
-No global analytics store is created. Measurements are local and bounded.
+This anchor retains historical roadmap links only. `daemon status`, daemon
+readiness, logging queues/rotation and bootstrap streams are retired. Their prior
+accepted decisions remain in the ADR history; invoking the removed surface returns
+`COMMAND_RETIRED` before Store access. No current status result describes an
+installed or reachable daemon.
 
 ## User-facing privacy
 
-The product documentation must state:
-
-- all task state remains in the worktree;
-- a minimal root registry and redacted logs exist outside it;
-- no network telemetry is sent;
-- deleting a worktree deletes task state but not daemon logs that may contain identifiers and error summaries;
-- `podway daemon uninstall --purge-logs --yes` removes logs explicitly.
+All product task state and the operational journal remain under the worktree.
+No account registry, global logs, network telemetry or runtime service is created
+or read. Removing a worktree removes its state; removing `.podway` preserves Git
+and unrelated user files. Old installation files remain the original generation's
+responsibility and must not be silently deleted by a direct command.

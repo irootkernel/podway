@@ -4,7 +4,10 @@ Read this reference only when the user asks to initialize Podway, start or repla
 
 ## Diagnose first
 
-1. Run `podway version --json` when binary identity is relevant. The CLI executes directly; daemon, job, and account-runtime commands are retired.
+1. Run `podway version --json --identity` when binary identity is relevant. Require
+   Output v4, version-result v2 and contract-manifest v2 for the current single CLI.
+   Record its manifest/source/build identity, not just semver. Daemon, job and
+   account-runtime commands are retired.
 2. Inside an initialized target Git worktree, inspect `.podway/config.yaml` and use `podway observe --json` for current session state. Use `podway workspace show` and `podway doctor` when workspace identity or health needs diagnosis.
 3. Use `podway help <route>` before every unfamiliar lifecycle command.
 4. Preserve existing state on a diagnostic failure. Do not repair, reset, or remove anything merely to make the diagnostic pass succeed. Carry an established explicit authorization forward within its exact scope.
@@ -43,6 +46,15 @@ If the user separately authorizes legacy service retirement, use the original
 generation's supported owner and exact target; do not reinterpret that request
 as workspace reset or removal. Never install, stop, replace, or delete a legacy
 service solely to make the new CLI usable.
+
+For an explicitly authorized daemon-era cutover, first finish or abandon old
+sessions, retire the ordinary LaunchAgent through the old binary, and retire any
+Aquarium managed writer through its original controller under that owner's separate
+authority. Establish that all old writers are gone BEFORE installing the new CLI
+or resetting shared legacy worktrees. Only then install the new CLI, clean old
+account state under a separate grant, and explicitly reset each identified legacy
+worktree. No automatic conversion or backup occurs. The current CLI does not own
+legacy account/service cleanup.
 
 ## Remove Podway from a workspace
 

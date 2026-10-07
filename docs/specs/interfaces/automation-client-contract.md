@@ -1,190 +1,113 @@
 # Automation Client Contract
 
-## 1. Status and target release
+## Authority and scope
 
-This document defines Podway's implemented local automation boundary. Current
-work and release ownership are tracked by the active [roadmap](../../roadmap/);
-historical task identifiers remain in the traceability tables as provenance.
+This document defines the implemented local automation boundary accepted by
+[ADR-0038](../../architecture-decision-records/0038-remove-the-daemon.md).
+The [command catalog](../../../assets/specifications/command-catalog.yaml),
+[JSON contract](json-contract.md), and [error catalog](errors-and-exit-codes.md)
+own the exact current command, schema, and failure families. The active
+[roadmap](../../roadmap/README.md) owns work status; historical task and evidence
+IDs below retain provenance and do not attest a newly run gate or an installed
+consumer's compatibility.
 
-The requirement IDs in this document are stable. A requirement becomes satisfied
-only when its roadmap task is completed and its planned executable check is in
-`make test` or the distribution qualification in `make dist`.
+Automation invokes the single `podway` CLI through a controlled PATH, selects an
+explicit Git worktree, consumes JSON, retains keys and resolved fences, and
+reconciles committed success outcomes. Each process calls the typed Engine;
+there is no product daemon, socket, service, queue, runtime mode, or global state.
+A read is one coherent committed snapshot, not a completion barrier. A mutation
+returns after its transaction commits or fails. Caller termination establishes
+no continued execution guarantee.
 
-## 2. Scope
+Podway guards one task's Procedure progression. It does not interpret Dolgorae
+Workflows/Roles, authorize ToolRuns, execute external work, authenticate users,
+provide remote collaboration, archive artifact bytes, or judge recorded claims.
+Optimistic fences and local paths are identity and containment controls, not a
+security boundary against same-user processes.
 
-The contract covers a local client invoking `podway`, connecting to one
-same-user `podwayd`, selecting a worktree, observing Procedure state, submitting
-mutations, and reconciling durable outcomes.
+Stable requirement IDs retain their original responsibility. The explicit
+retirement table records guarantees removed by the direct generation; those IDs
+are never reused for different guarantees. Active portions of mixed requirements
+remain below with their retired clauses identified.
 
-## 3. Non-goals
+## Direct execution requirements
 
-Podway does not interpret Dolgorae Workflows or Roles, authorize ToolRuns, execute
-external work, expose a network API, authenticate multiple users, maintain a
-project-management history, or create multiple daemon namespaces. A client
-disconnect does not automatically cancel an admitted mutation.
+| ID | Normative requirement |
+|---|---|
+| `AUT-DIRECT-001` | Every runtime command MUST execute through the in-process typed Engine. Product execution MUST require no resident process, IPC, global product registry, runtime mode, or service installation. |
+| `AUT-DIRECT-002` | Queries MUST observe one coherent committed snapshot without writes, outcomes, migration, pruning, checkpointing, repair, or maintenance continuation. They MUST NOT promise queue barriers or global quiescence. |
+| `AUT-DIRECT-003` | A normal mutation MUST use one SQLite IMMEDIATE transaction for fences, domain validation, state effects, journal updates, validated output, successful outcome insertion, and applicable pruning. A rejection MUST roll back the complete transaction. |
+| `AUT-DIRECT-004` | Bounded Procedure/artifact preparation MUST run outside the write transaction. Execution MUST revalidate workspace generation, current state, and prepared identities inside the transaction before effects. |
+| `AUT-DIRECT-005` | One absolute invocation deadline MUST bound the combined maintenance/SQLite lock wait; elapsed preflight consumes the remaining wait budget. It is not a hard whole-execution/input/confirmation timer. The default is 5,000 ms and maximum 3,600,000 ms. Maintenance exclusion expiry MUST return `WORKSPACE_MAINTENANCE`; SQLite write-lock expiry MUST return `WORKSPACE_BUSY`; neither may retain a rejection or partial effect. No FIFO ordering is promised. |
+| `AUT-DIRECT-006` | Automation MUST retain its caller-owned key and complete canonical request, including original resolved workspace/session/revision/attempt/item/goal fences. The CLI may fill omitted fences from fresh status; clients SHOULD supply observed fences to pin their intended target. |
+| `AUT-DIRECT-007` | For retained Store successes, after workspace UUID and writer-contract classification, exact canonical request/key replay MUST return the complete original validated success envelope, including original request ID, timestamp, and fences, without repeating effects or refreshing fences. Changed input with that key MUST fail `IDEMPOTENCY_KEY_REUSED`. |
+| `AUT-DIRECT-008` | Only committed successes MUST be retained as outcomes. Domain, validation, lock, and optimistic-fence rejections MUST retain no outcome. `MUTATION_OUTCOME_UNKNOWN` MUST be emitted only when COMMIT I/O leaves the commit result uncertain; response loss or SIGKILL is caller-side uncertainty, never a job state. |
+| `AUT-DIRECT-009` | `outcome lookup --idempotency-key <key>` MUST be read-only and workspace-scoped, returning either `found=false` or the complete immutable retained success. It MUST NOT replay or submit a mutation, expose a non-terminal job, or retain a failed request. A miss proves absence only within retention. |
+| `AUT-DIRECT-010` | Session outcomes MUST remain until session reset or runtime reset, including after archival and archive purge. Workspace removal destroys all retention. Workspace-scoped outcomes MUST be bounded to 100 entries or 30 days, pruned only on successful writes. Clients MUST account for these boundaries when interpreting a miss. |
+| `AUT-DIRECT-011` | Canonically retired command families and flags MUST fail `COMMAND_RETIRED` before workspace resolution, stdin consumption, or Store access. `job.lookup` identifies `outcome.lookup`; a null replacement means none exists. Unknown syntax retains usage behavior. |
+| `AUT-DIRECT-012` | Normal reads, writes, and replay MUST refuse Store generations 1–13 and daemon-era markers without conversion or deletion. Unsupported legacy workspace configuration MUST fail before Store access. Confirmed reset-all is the explicit destructive recovery; reads MUST NOT resume it. |
+| `AUT-DIRECT-013` | The Store MUST bind its writer identity to the manifest digest and refuse unsupported identity before read, mutation, or key replay. Only an explicitly declared direct predecessor may migrate under exclusive maintenance; the initial cutover declares none. Development MUST use matching scratch worktrees. |
+| `AUT-DIRECT-014` | Reset/removal MUST preserve bounded marker recovery, workspace generation fencing, explicit destructive authorization, and original-key exact retry. Reset-all preserves Procedure sources and configuration unrelated to retired legacy mode; it intentionally retires legacy-mode configuration/markers. Removal deletes only `.podway` and preserves Git/user files. A recipe grants no authority. |
+| `AUT-DIRECT-015` | Manifest v2 MUST bind product/version and complete canonical contract/schema/catalog/fixture assets without IPC. Release provenance MUST separately bind the source lockfile bytes. The single CLI's complete output-v4/version-result-v2 identity MUST be validated by the authoritative offline Rust verifier against manifest, native target, source commit, and recomputed build identity. |
+| `AUT-DIRECT-016` | Current JSON MUST use output v4/error v2 and each canonical current closed result/detail discriminator. Success/error envelopes MUST contain no job/admission metadata. Exit classes are 0, 1, 2, 4, 5, and 6; class 3 is retired. |
+| `AUT-DIRECT-017` | Both stdin and typed `item.record_many` input MUST fit 1,048,576 bytes for the complete canonical input, including identities, key, and 1..128 unique operations. Per-item bounds MUST NOT substitute for this aggregate. Oversize MUST fail before preparation, canonicalization, or mutation with `REQUEST_TOO_LARGE`. |
+| `AUT-DIRECT-018` | Successful start MUST atomically commit its validated canonical immutable Procedure snapshot with state and outcome. Running commands MUST use that snapshot instead of rereading Procedure source; exact replay MUST not depend on changed Procedure/artifact sources. Workspace configuration validation still applies on resolution. |
+| `AUT-DIRECT-019` | RecoveryRecipe v2 MUST be closed, bounded, and code/boundary-specific. Ordinary recovery MUST remain read-only; legacy reset and exact reset/removal continuation MUST explicitly require authorization. No recipe may weaken a fence, fabricate a new replay key, or authorize external work. |
+| `AUT-DIRECT-020` | Native qualification MUST bind one packaged release-profile CLI, immutable candidate bytes, independent extraction, exact manifest/catalog/lock/source identity, disabled debug hooks, and bounded process/fixture cleanup. A dirty-source development dry run MUST remain explicitly nonpublishable `development-qualification` with gate `development`; it MUST NOT imply clean distribution or a full/patch release gate. |
 
-## 4. Terminology
+The [CLI specification](cli-specification.md#worktree-selection-and-deadlines)
+owns duration syntax and prompting. Retired syntax is listed in the
+[canonical table](../../../assets/specifications/retired-commands-v1.json).
+Every retry must first classify current workspace/writer identity. After lost
+stdout or uncertain COMMIT I/O, look up the original key, then use exact original
+request replay when appropriate. Pending removal uses its original marker request;
+complete removal destroys the Store, so an absent-removal result is convergence
+rather than replay of the original response. A fresh key or freshly substituted revision is
+a new mutation and requires a new justified decision.
 
-- **PODWAY_HOME**: the internal abstraction for
-  `<effective-user-home>/.podway`; it is not an environment variable.
-- **explicit endpoint**: the absolute Unix socket supplied through `--socket`.
-- **admission**: the durable transaction that assigns a job ID and workspace
-  sequence before a mutation may execute.
-- **contract manifest**: the deterministic set of integration-critical contract
-  assets identified by `podway.contract-manifest/v1` and a SHA-256 digest.
-- **outcome unknown**: the caller cannot prove whether a request was admitted
-  because the transport ended before a trustworthy response arrived.
-- **compact status**: a bounded, closed, quiescent projection for automation.
-
-## 5. Automation client assumptions
-
-Automation invokes `podway` by command name, supplies an explicit worktree and
-socket for daemon-backed operations, uses JSON output, preserves idempotency keys,
-and treats stable IDs and structured fields rather than text as the interface.
-
-## 6. PATH-based CLI invocation (AUT-PATH-001–003)
+## Retained invocation and identity requirements
 
 | ID | Normative requirement |
 |---|---|
 | `AUT-PATH-001` | Automation clients MUST invoke `podway` through a controlled `PATH`; they MUST NOT need a hard-coded CLI executable path. |
-| `AUT-PATH-002` | `podway daemon install` MUST resolve `podwayd` in this order: explicit `--daemon-path`, sibling of the resolved current CLI, then the controlled `PATH`. |
-| `AUT-PATH-003` | Every resolved daemon MUST be canonicalized and verified against the CLI product and contract identity before installation. |
+| `AUT-HOME-004` | Workspace configuration, `runtime/state.sqlite3`, Procedure snapshots, immutable delegation receipts, successful outcomes, and other task state MUST remain in the owning worktree. No product-owned global copy is permitted. The former jobs/global-home clause is retired. |
+| `AUT-CONTRACT-002` | `podway version --json` MUST emit exactly the compact `name` and `v`-prefixed `version`; `podway version --json --identity` MUST emit a validated `podway.output/v4` envelope with closed `podway.version-result/v2`, exposing product, version, target, build identity, source commit when available, and manifest schema and digest. The former IPC-identity clause is retired. |
 
-## 7. Daemon discovery and LaunchAgent execution (AUT-DAEMON-001–003)
-
-| ID | Normative requirement |
-|---|---|
-| `AUT-DAEMON-001` | Service metadata and the LaunchAgent plist MUST record the verified daemon's canonical absolute path. |
-| `AUT-DAEMON-002` | LaunchAgent startup MUST NOT depend on an interactive shell `PATH`. |
-| `AUT-DAEMON-003` | Installation MUST NOT stage or copy `podwayd`; upgrade MUST re-resolve and re-verify the selected release binary. |
-
-### Phase-aware daemon readiness (AUT-DAEMON-004–009)
-
-| ID | Normative requirement |
-|---|---|
-| `AUT-DAEMON-004` | The authenticated control endpoint MUST become available before registered-worktree and recovered-job reconciliation, while normal command admission remains closed until daemon-owned readiness is `ready`. |
-| `AUT-DAEMON-005` | During startup only handshake, `daemon.status`, and coordinated termination may pass the early control plane; other routes MUST return retryable `DAEMON_STARTING` before workspace lookup or durable admission. |
-| `AUT-DAEMON-006` | Status v2 MUST distinguish service state, reachability, contract verification, readiness state and stage, monotonic elapsed time, and bounded worktree recovery progress. |
-| `AUT-DAEMON-007` | `daemon wait-ready` MUST be read-only, use a 120-second default and one-hour maximum, and succeed only for a matching verified v2 `ready` result. |
-| `AUT-DAEMON-008` | Readiness deadline expiry MUST return `DAEMON_READINESS_TIMEOUT` with closed last-observation details and MUST preserve service, endpoint, registry, workspace, and session state. |
-| `AUT-DAEMON-009` | `daemon install` MUST reuse the bounded readiness waiter after idempotent service reconciliation; retry after timeout MUST reconcile the same durable installation. |
-
-## 8. Podway user-global home and layout (AUT-HOME-001–003)
-
-| ID | Normative requirement |
-|---|---|
-| `AUT-HOME-001` | PODWAY_HOME MUST resolve from the effective operating-system account home and MUST NOT require `HOME`, `TMPDIR`, or `XDG_*`. |
-| `AUT-HOME-002` | The user-global layout MUST be `run/{podwayd.sock,podwayd.lock}`, `state/{service.json,workspaces.json}`, and `logs/{podwayd.log,podwayd-bootstrap.log}` below PODWAY_HOME. |
-| `AUT-HOME-003` | The LaunchAgent plist MUST remain under the effective user's `Library/LaunchAgents/dev.podway.podwayd.plist`. |
-
-## 9. Worktree-local state boundary (AUT-HOME-004)
-
-| ID | Normative requirement |
-|---|---|
-| `AUT-HOME-004` | Workspace configuration, `runtime/state.sqlite3`, Procedure snapshots, jobs, receipts, and other task state MUST remain in the owning worktree and MUST NOT be copied into PODWAY_HOME. |
-
-## 10. Explicit socket resolution (AUT-SOCK-001–004)
-
-| ID | Normative requirement |
-|---|---|
-| `AUT-SOCK-001` | Every daemon-backed command MUST accept global `--socket <absolute-unix-socket-path>`; static version and offline Procedure validation MAY omit it. |
-| `AUT-SOCK-002` | `--socket` MUST reject relative paths and MUST NOT expand `~`. |
-| `AUT-SOCK-003` | When supplied, the explicit endpoint MUST be the only endpoint attempted; failure MUST NOT fall back to metadata, a default socket, `$TMPDIR`, or `/tmp`. |
-| `AUT-SOCK-004` | With explicit socket and worktree paths, daemon-backed commands MUST operate without reading `HOME`, `TMPDIR`, or `XDG_*`. |
-
-When no explicit endpoint is supplied, an interactive client may read
-`PODWAY_HOME/state/service.json` and then use
-`PODWAY_HOME/run/podwayd.sock` as the installation default.
-
-## 11. Socket and directory security (AUT-SEC-001–004)
-
-| ID | Normative requirement |
-|---|---|
-| `AUT-SEC-001` | PODWAY_HOME and its `run`, `state`, and `logs` directories MUST use mode `0700`; service files, registry, log, and socket MUST use mode `0600`. |
-| `AUT-SEC-002` | Podway MUST validate socket type, owner, parent permissions, peer effective UID, and platform path-length limits before use. |
-| `AUT-SEC-003` | Podway MUST NOT replace a regular file, directory, or symlink found at a socket path. |
-| `AUT-SEC-004` | Stale-socket recovery MUST fail closed unless ownership, type, singleton state, and path containment prove safe removal. |
-
-## 12. One-daemon-per-user invariant (AUT-SOCK-005)
-
-| ID | Normative requirement |
-|---|---|
-| `AUT-SOCK-005` | Every daemon MUST contend on `PODWAY_HOME/run/podwayd.lock`; a second daemon MUST be rejected even when configured with a different socket. |
-
-## 13. CLI and daemon contract identity (AUT-CONTRACT-001–005)
-
-| ID | Normative requirement |
-|---|---|
-| `AUT-CONTRACT-001` | `podway.contract-manifest/v1` MUST deterministically cover product version, supported IPC IDs, Procedure and IPC schemas, all integration result and error schemas, catalogs, transition matrix, canonicalization rules, and known-answer fixtures. |
-| `AUT-CONTRACT-002` | `podway version --json` MUST emit exactly the compact `name` and `v`-prefixed `version`; `podway version --json --identity` MUST emit a validated `podway.output/v3` envelope with a closed `podway.version-result/v1` result exposing product, version, target, build identity, source commit when available, manifest schema and digest, and supported IPC IDs. |
-| `AUT-CONTRACT-003` | `podway` and `podwayd` from one release MUST emit exactly equal closed identity results and embed the same manifest digest. |
-| `AUT-CONTRACT-004` | Installation and every daemon connection MUST reject a malformed complete identity envelope or a product or manifest mismatch before command execution or durable admission; IPC compatibility alone MUST NOT authorize the connection. |
-| `AUT-CONTRACT-005` | `daemon status --json` MUST expose daemon version, executable path, process-instance identity, configured and effective socket, manifest digest, and, in status v2, explicit readiness fields. |
-
-The client version field is diagnostic and MUST NOT independently authorize or
-reject a connection. Admission is determined by product and manifest identity.
-
-`podway version` emits `podway v<version>` as plain text, using the same
-`v`-prefixed version as `podway version --json`.
-
-The `version` field in both CLI and daemon `version --json --identity` results
-uses the same `v` prefix. Cargo and contract-manifest product versions remain
-unprefixed; release probes compare the identity version with `v` followed by the
-manifest product version. Identity consumers must accept the previous unprefixed
-form when inspecting older binaries.
-
-`podwayd version --json` emits the compact daemon name and `v`-prefixed version.
-`podwayd version --json --identity` emits the full versioned identity envelope used
-by installation and qualification probes. Runtime probes reject bare results and
-validate the outer discriminator, command, and closed result before extracting
-identity fields.
-
-Because the manifest covers product version, peers from different releases have
-different manifest digests even when they support the same IPC ID. Changing only
-the declared client version while retaining a matching product and manifest does
-not create a contract mismatch.
-
-## 14. Workspace and session identity preconditions (AUT-ID-001–007)
+The full identity version is `v`-prefixed, like the compact summary. Cargo and
+manifest product versions remain bare. `version` text is diagnostic; native
+release verification uses the complete closed identity, manifest, source, target,
+and build identity, not a version string alone. Product v0.2.12 is the current
+source version; the roadmap's v0.2.13 target does not constitute a version bump,
+release, installation, or external consumer adoption.
 
 | ID | Normative requirement |
 |---|---|
 | `AUT-ID-001` | The public CLI MUST expose `--if-workspace-uuid` and `--if-session-id` alongside revision, attempt, and item-revision preconditions. |
 | `AUT-ID-002` | Session-bearing reads MUST enforce workspace UUID and, when supplied by the client, session ID. |
-| `AUT-ID-003` | `start` MUST enforce workspace UUID and the normal no-existing-session rule. |
+| `AUT-ID-003` | `start` MUST enforce workspace UUID and the normal no-existing-session rule, subject to the explicitly supported lifecycle and existing-session policies below. |
 | `AUT-ID-004` | Graph-node transitions MUST enforce workspace UUID, session ID, session revision, and attempt ID for automation requests. |
 | `AUT-ID-005` | Item mutations MUST enforce workspace UUID, session ID, attempt ID, and item revision for automation requests. |
 | `AUT-ID-006` | Replacement and reset MUST enforce the currently observed workspace, session, and applicable session revision before mutation. |
 | `AUT-ID-007` | Identity mismatches MUST return stable typed errors with closed details containing expected and actual identities and no mutation. |
 | `AUT-ID-008` | `item.record_many` MUST enforce workspace UUID, session ID, session revision, active attempt, and every selected item revision before atomically changing any selected item. |
 | `AUT-ID-009` | `begin`, terminal disposition, eligible or force replacement, and eligible or force reset MUST enforce the exact observed workspace UUID, session ID, and session revision; begin and disposition MUST NOT accept an attempt fence. |
-| `AUT-ID-010` | Every workspace operation MUST establish selected endpoint, daemon mode, config mode, namespace registry generation, and persisted Store mode agreement before normal Store access; disagreement MUST return non-retryable `WORKSPACE_MODE_MISMATCH`. |
-| `AUT-ID-011` | `workspace.mode.plan` MUST be read-only and issue a bounded token only for an idle source and a live Unix endpoint in the exact target-mode namespace; `workspace.mode.apply` MUST revalidate that token and converge exact replay through its durable ordered marker while deleting only disposable runtime state. The liveness probe MUST NOT create a daemon-to-daemon protocol client. |
 
-`podway record --stdin` consumes only closed
-`podway.item-record-many-input/v1` JSON bounded to 1 MiB and 1..128 unique item
-operations. Each operation contains exactly one typed complete record value or
-`clear: true`. Operations and per-item outcomes are canonicalized by item ID.
-The command uses the normal durable admission, detached execution, idempotent
-replay, and `job lookup` reconciliation contracts. It returns
-`podway.item-record-many-result/v1` and never advances the graph cursor.
+`record --stdin` uses closed `podway.item-record-many-input/v1`; each operation
+contains a typed complete record or `clear: true`. Operations and outcomes are
+canonicalized by item ID. It returns `podway.item-record-many-result/v2` and
+never advances the cursor. Identity and idempotency flags cannot duplicate the
+stdin identities. The typed boundary shares the complete-input bound.
 
-A matching numeric revision is not sufficient evidence that an operation targets
-the same session.
+A matching numeric revision does not identify a session. Goal revision and
+criterion assessment additionally bind the exact positive current goal revision;
+that fence does not replace session revision or attempt identity.
 
-Procedure v2 goal revision and criterion-assessment mutations additionally bind
-the exact positive current goal revision. That fence is distinct from, and does
-not replace, the session revision or active-attempt fence.
-
-## 15. Procedure start integrity (AUT-START-001–004)
+## Retained Procedure and lifecycle requirements
 
 | ID | Normative requirement |
 |---|---|
 | `AUT-START-001` | `start --expect-procedure-digest sha256:<hex>` MUST compare the expected digest with the validated, defaulted, canonical Procedure before creating or replacing a session. |
-| `AUT-START-002` | The canonical Procedure snapshot used by an admitted start MUST be durable before successful admission is reported. |
-| `AUT-START-003` | An admitted start MUST NOT depend on later source-file reads; deletion, replacement, truncation, symlink change, or daemon restart MUST NOT alter the admitted Procedure. |
 | `AUT-START-004` | The canonical Procedure digest and relevant start preconditions MUST participate in idempotency identity and MUST be returned by start and later session observations. |
-
-### Prepared and retained session lifecycle (AUT-LIF-001–013)
 
 | ID | Normative requirement |
 |---|---|
@@ -201,74 +124,51 @@ not replace, the session revision or active-attempt fence.
 | `AUT-LIF-011` | Archival MUST retain the complete disposed terminal session as immutable inactive state, MUST NOT evict inactive sessions automatically, and MUST NOT fail archival or start because of inactive count. |
 | `AUT-LIF-012` | Start MUST atomically archive a disposed terminal current session before creating the new prepared session. Preserving running work MUST atomically cancel it, record a successor-linked `superseded` disposition, archive it, and create the successor; terminal disposition choices MUST likewise disposition, archive, and start atomically. |
 | `AUT-LIF-013` | Inactive sessions MUST support a bounded newest-first list that reports the exact total, truncation, and oldest summary, and full read-only show by session ID including terminal disposition, MUST NOT restore or reactivate, and purge MUST require exact session revision plus destructive confirmation. |
-| `AUT-LIF-014` | Human TTY start MUST offer continue or delete for prepared state; continue, preserve, or delete for running state; and continue, handed-off, or not-required for undisposed terminal state. Enter or EOF MUST continue without creating a session. JSON, quiet, detached, non-TTY, and policy execution MUST never prompt and MUST return `SESSION_START_DECISION_REQUIRED` when no sufficient policy exists. |
-| `AUT-LIF-015` | Automation MUST use `--on-existing preserve|delete`. Preserve applies only to running state and requires a bounded reason; deleting running state additionally requires a bounded progress summary and confirmation. Plain local start dry-run MUST remain Procedure-only, while a policy dry-run MUST report the observed existing-session lifecycle and proposed action without mutation. |
+| `AUT-LIF-014` | Human TTY start MUST offer continue or delete for prepared state; continue, preserve, or delete for running state; and continue, handed-off, or not-required for undisposed terminal state. Enter or EOF MUST continue without creating a session. JSON, quiet, non-TTY, and policy execution MUST never prompt and MUST return `SESSION_START_DECISION_REQUIRED` when no sufficient policy exists. |
+| `AUT-LIF-015` | When an existing-session policy is required, automation MUST use `--on-existing preserve\|delete`. Preserve applies only to running state and requires a bounded reason; deleting running state additionally requires a bounded progress summary and confirmation. Plain local start dry-run MUST remain Procedure-only, while a policy dry-run MUST report the observed existing-session lifecycle and proposed action without mutation. |
 
-## 16. Durable mutation admission (AUT-ADMIT-001–002)
+Session mutations bind their exact applicable fences in the Direct request.
+Archive purge records a workspace-scoped success; original-key lookup is the
+primary response-loss reconciliation. A fresh archive list can confirm absence,
+but cannot identify the caller that deleted it. Stored session outcomes remain
+available under `AUT-DIRECT-010`.
 
-| ID | Normative requirement |
-|---|---|
-| `AUT-ADMIT-001` | Every mutation result or error MUST distinguish `admission.admitted=true` with job ID and workspace sequence from `admission.admitted=false`. |
-| `AUT-ADMIT-002` | A synchronous wait timeout for an admitted job MUST return the admitted job ID; timeout or client termination MUST NOT cancel an admitted mutation. |
-
-## 17. Timeout, disconnect, and unknown outcome (AUT-ADMIT-003)
-
-| ID | Normative requirement |
-|---|---|
-| `AUT-ADMIT-003` | Automation MUST treat response loss after possible admission as `MUTATION_OUTCOME_UNKNOWN`, preserve the original idempotency key in its closed reconciliation details, and perform `job.lookup` before deciding whether to retry with a new key. |
-
-## 18. Job lookup by idempotency key (AUT-RECON-001–004)
+## Retained reconciliation, observation, and evidence requirements
 
 | ID | Normative requirement |
 |---|---|
-| `AUT-RECON-001` | `job lookup --idempotency-key <key>` MUST be a read-only, worktree-scoped query and MUST NOT submit or replay a mutation. |
-| `AUT-RECON-002` | Lookup MUST return `found=false` for no record and MUST return job ID, sequence, command, request digest, and state for admitted non-terminal jobs. |
-| `AUT-RECON-003` | Lookup MUST return the complete immutable original `podway.output/v3` success envelope or `podway.error/v1` terminal envelope, including request correlation, command, completion timestamp, workspace, job, session/result or public error details, from the retained receipt after the terminal job row is pruned. It MUST NOT retain or reveal the full original request. Cancelled jobs retain the closed cancellation summary. |
 | `AUT-RECON-004` | Reusing an idempotency key for a different canonical request MUST continue to fail with the stable reuse error. |
-
-## 19. Quiescent observation (AUT-OBS-001)
-
-| ID | Normative requirement |
-|---|---|
-| `AUT-OBS-001` | A successful `status --wait-for-idle` MUST read after the queue barrier and report `pending_mutations=false`, `queued_count=0`, `running_job_id=null`, and a present latest workspace sequence. |
-
-## 20. Compact status contract (AUT-OBS-002–004)
-
-| ID | Normative requirement |
-|---|---|
-| `AUT-OBS-002` | `status --wait-for-idle --compact` MUST return workspace and queue identity, Procedure identity, session lifecycle and revision, and lifecycle-valid cursor, readiness, item, and blocker projections; every cursor-bearing projection MUST be null or empty for prepared state. |
 | `AUT-OBS-003` | Compact status MUST omit instructions, prompts, task titles, previous-attempt narratives, and item values unless a value is strictly required to form a valid mutation. |
 | `AUT-OBS-004` | Compact status MUST use a closed schema and the complete serialized JSON envelope of a standalone `status --compact` response MUST NOT exceed 262,144 UTF-8 bytes. The compact projection nested inside an observation is budgeted separately by `AUT-OBS-009`. |
 
-### Self-contained observation (AUT-OBS-005–011)
-
-`V2SCL-004` moved `session.observe` onto `observation-result/v3` and reduced its status member to the compact-shaped observation projection described below. `V2SCL-005` derived the component byte budgets and proved the composition.
-
-The active-item allocation holds the widest definition vetting admits, so in practice that window reports a complete total; it still carries a truncation flag because the allocation, not the definition, is what bounds it. The template window does cut, because one node can declare more item mutations than its allocation holds. A cut template window still carries the first template of every command it would otherwise have offered, so an action named by `allowed_actions` always has a template a caller can use.
-
 | ID | Normative requirement |
 |---|---|
-| `AUT-OBS-005` | `observe`, `observe --wait-for-idle`, and `observe --after-job <job-id>` MUST use the same immediate and queue-barrier semantics as the existing read routes and MUST return one coherent Store observation. |
-| `AUT-OBS-006` | A prepared or running observation MUST return closed `podway.observation-result/v4` when the session's immutable Procedure contains a delegated placement, and `podway.observation-result/v3` otherwise. Running contains a bounded value-free compact status projection, current next guidance, active item declarations with type-specific constraints and bounded typed value projections, and applicable mutation templates. Prepared contains the same compact status projection, cursor-free prepared guidance, no active items, and only begin, eligible-reset, and eligible-replacement templates. |
+| `AUT-OBS-006` | Prepared and running observations MUST use closed `podway.observation-result/v5` for both Direct and delegated Procedures. Running contains a bounded value-free compact status projection, current next guidance, active item declarations with type-specific constraints and bounded typed value projections, and applicable mutation templates. Prepared contains that compact projection, cursor-free prepared guidance, no active items, and only begin, eligible-reset, and eligible-replacement templates. |
 | `AUT-OBS-007` | Every mutation template MUST carry exact current workspace, session, and applicable revision/attempt/item/goal fences, mark the idempotency-key requirement, and classify whether an explicit user request is required. Templates MUST NOT invent semantic values or an idempotency key, and fences MUST NOT be represented as authentication or authorization. |
 | `AUT-OBS-008` | A completed or cancelled observation MUST succeed with prepared-aware terminal status, null guidance, no active items, and only a terminal-disposition template when the current terminal revision has no disposition; a disposed terminal state MUST instead offer only eligible reset and replacement templates. Existing `next` terminal behavior remains unchanged. |
-| `AUT-OBS-009` | Observation MUST omit history and compose four bounded allocations within the 1,048,576-byte frame: complete compact status plus running `next-result/v4` guidance for delegated Procedures or `next-result/v3` guidance otherwise, or cursor-free prepared `prepared-next-result/v2` or `/v1` guidance respectively, share 786,432 bytes. The active item window has 131,072 bytes, the mutation template window has 65,536 bytes, and 65,536 bytes remain for serialization and the outer envelope. Status and guidance both retain the complete graph-wide counter set and MUST be measured together rather than truncated. The active item and template windows MUST report their exact total and whether they were truncated. Any complete-member or frame overflow MUST fail closed. |
+| `AUT-OBS-009` | Observation MUST omit history and compose four bounded allocations within a 1,048,576-byte complete JSON envelope: complete compact status plus running `podway.next-result/v5` or cursor-free prepared `podway.prepared-next-result/v3` guidance share 786,432 bytes. Active items have 131,072 bytes, mutation templates have 65,536 bytes, and 65,536 bytes remain for serialization and the outer envelope. Status and guidance retain the complete graph-wide counters and MUST be measured together. Item and template windows MUST report their exact total and truncation; complete-member or envelope overflow MUST fail closed. |
 | `AUT-OBS-010` | Observation guidance MUST emit evidence metadata only, with no preview data and no page token. Active-item choice constraints MUST expose at most eight choices with the exact choice count and a truncation flag, and template argv elements MUST NOT exceed 4,096 Unicode scalars. |
 | `AUT-OBS-011` | Reducing the observation status member from the standard tier to the compact projection removes `purpose`, `item_values`, and the other standard-only fields from observation. Current progression guidance and active-item mutation information MUST remain self-contained in observation; a consumer that needs the removed fields, or trace history, MUST use `session.status`. |
 | `AUT-OBS-012` | A truncated mutation-template window MUST still carry the first template of every command it would otherwise have offered, so no action named by `allowed_actions` is left without a template. |
+
+Both Direct and delegated snapshots use status/compact/observation v5, running
+next v5, and prepared next v3. Delegation data remains conditional and truthful;
+there is no invented worker on a Direct placement or cursor on prepared state.
+The active-item allocation covers the validated maximum; template truncation must
+retain one usable template for every offered command.
 
 ### Bounded evidence scale and paging (AUT-EVR-001–008)
 
 | ID | Normative requirement |
 |---|---|
-| `AUT-EVR-001` | Authoring validation, runtime recording, persistence reconstruction, protocol request slices, and documentation MUST enforce one scale envelope in Unicode scalar values: text 65,536, list 1,000 entries, 8,192 per entry, 1,000,000 total list content, 16,777,216 recorded text and list content per attempt, and 128 items per node definition and attempt. |
-| `AUT-EVR-002` | A wire value bound MUST NOT be narrower than the corresponding domain hard maximum, and the 1,048,576-byte request frame MUST remain an independent transport bound. |
-| `AUT-EVR-003` | `evidence.read` MUST read only an item selected by a currently resolved, declared evidence reference of the current consumer attempt, MUST be fenced by workspace UUID, session ID, and consumer attempt ID, and MUST create no durable job, session revision, or state change. |
+| `AUT-EVR-001` | Authoring validation, runtime recording, persistence reconstruction, typed input and public request slices, and documentation MUST enforce one scale envelope in Unicode scalar values: text 65,536, list 1,000 entries, 8,192 per entry, 1,000,000 total list content, 16,777,216 recorded text and list content per attempt, and 128 items per node definition and attempt. |
+| `AUT-EVR-002` | A public value bound MUST NOT be narrower than its domain hard maximum. The named 1,048,576-byte complete `item.record_many` input bound remains independent of per-item and per-attempt limits and applies to stdin and typed Direct callers. |
+| `AUT-EVR-003` | `evidence.read` MUST read only an item selected by a currently resolved, declared evidence reference of the current consumer attempt, MUST be fenced by workspace UUID, session ID, and consumer attempt ID, and MUST create no session revision, outcome, or state change. |
 | `AUT-EVR-004` | An `evidence.read` page MUST end only at a Unicode scalar boundary for text and at an entry boundary for lists, MUST carry at most 262,144 bytes of encoded page data, and its complete encoded response including one token MUST NOT exceed 327,680 bytes. |
 | `AUT-EVR-005` | The page token MUST be opaque, at most 256 base64url characters, and validated field by field against current authoritative state on every read. It MUST NOT be represented as an authentication or authorization credential. |
-| `AUT-EVR-006` | Malformed, oversized, cross-session, and wrong-binding tokens MUST fail as `REQUEST_INVALID` before state comparison; an unresolved or skipped reference read without a token MUST fail with `EVIDENCE_NOT_AVAILABLE`; a changed bound snapshot MUST fail retryably with `EVIDENCE_PAGE_TOKEN_STALE`; and an offset at or past the logical end MUST fail with `EVIDENCE_PAGE_TOKEN_EXHAUSTED`, which the daemon MUST never issue a token for. |
-| `AUT-EVR-007` | `session.next` MUST enforce five independent placement-local byte ceilings, add their actual charges to the exact complete graph-counter charge, and admit only an aggregate of at most 999,424 bytes so 49,152 bytes remain for serialization and the envelope. It MUST supply complete evidence metadata for every item in an admitted projection and MUST NOT mark its evidence metadata window truncated. Explicit selectors receive previews in declaration order for at most 32 items, and at most 128 item metadata records may appear in one response. |
-| `AUT-EVR-008` | Every bound failure MUST report `field`, `actual`, `maximum`, and `unit` and name the constraint actually violated. `REQUEST_TOO_LARGE` is the only exception, because frame decoding precedes JSON parsing. |
+| `AUT-EVR-006` | Malformed, oversized, cross-session, and wrong-binding tokens MUST fail as `REQUEST_INVALID` before state comparison; an unresolved or skipped reference read without a token MUST fail with `EVIDENCE_NOT_AVAILABLE`; a changed bound snapshot MUST fail retryably with `EVIDENCE_PAGE_TOKEN_STALE`; and an offset at or past the logical end MUST fail with `EVIDENCE_PAGE_TOKEN_EXHAUSTED`, which the Engine MUST never issue a token for. |
+| `AUT-EVR-007` | `session.next` MUST enforce five independent placement-local byte ceilings, add their actual charges to the exact complete graph-counter charge, and accept only an aggregate of at most 999,424 bytes so 49,152 bytes remain for serialization and the envelope. It MUST supply complete evidence metadata for every item in an accepted projection and MUST NOT mark its evidence metadata window truncated. Explicit selectors receive previews in declaration order for at most 32 items, and at most 128 item metadata records may appear in one response. |
+| `AUT-EVR-008` | Every parsed bound failure MUST report `field`, `actual`, `maximum`, and `unit` and name the violated constraint. `REQUEST_TOO_LARGE` is the exception for bounded stdin acceptance or complete typed-input encoding before a parsed field path is available. |
 
 ### Structurally bound external check results (AUT-CHK-001–009)
 
@@ -277,12 +177,12 @@ The active-item allocation holds the widest definition vetting admits, so in pra
 | `AUT-CHK-001` | Procedure v2 MUST admit a closed `check_result` declaration with one operation ID, one lowercase SHA-256 operation digest, and one to three unique accepted outcomes from `pass`, `fail`, and `inconclusive`. |
 | `AUT-CHK-002` | `item.record_many` MUST admit a closed complete check-result value with required operation, input-basis, executor, outcome, summary, and output-digest fields and MUST reject malformed, unknown, or over-bound content before partial mutation. |
 | `AUT-CHK-003` | A check-result item MUST be satisfied only when operation ID and digest equal the declaration and the recorded outcome is accepted; a valid mismatch MAY be stored but MUST remain unsatisfied. |
-| `AUT-CHK-004` | Every complete check-result value MUST fit within 32 KiB canonical encoded JSON; 128 such values derive a 4 MiB per-attempt product without adding an aggregate error or a second storage lifecycle. |
+| `AUT-CHK-004` | Every complete check-result value MUST fit within 32 KiB canonical encoded JSON; 128 such values derive a 4 MiB per-attempt product without adding an aggregate error or a second storage lifecycle. This stored per-attempt product does not permit a 4 MiB atomic request: `AUT-DIRECT-017` still bounds every complete record-many input. |
 | `AUT-CHK-005` | Value-bearing next, observation, and preview projections MUST expose exactly operation ID, outcome, operation digest, input-basis digest, and output digest and MUST omit free-text descriptor, executor, and summary fields. Compact-item projections MUST identify the item as `check_result` and MUST expose no recorded value fields. |
 | `AUT-CHK-006` | Observation MAY expose one `stdin_template` of at most 16 KiB only on the `item.record_many` template for the first unsatisfied check result, prioritizing required declarations; no template may execute the operation or invent caller-supplied result values. |
 | `AUT-CHK-007` | `evidence.read` MUST return a complete check-result value in one terminal page under the existing current-reference and freshness rules. |
 | `AUT-CHK-008` | Podway MUST treat every check-result field as caller supplied and MUST NOT claim factual verification, authenticate the executor, inspect external bytes, compare the input basis with the worktree, execute a command, or store logs. |
-| `AUT-CHK-009` | Observation MUST expose one closed `unsatisfied_reason` (`operation_id_mismatch`, `operation_digest_mismatch`, or `outcome_not_accepted`) only on a stored, unsatisfied check result, naming the first failed declaration comparison in that order; the reason MUST derive from the declaration and the recorded value alone, MUST be absent from compact-item projections, and MUST NOT claim that any operation ran. |
+| `AUT-CHK-009` | Observation MUST expose one closed `unsatisfied_reason` (`operation_id_mismatch`, `operation_digest_mismatch`, or `outcome_not_accepted`) only on a stored, unsatisfied check result, naming the first failed declaration comparison in that order. The reason MUST derive from declaration/value alone, MUST be absent from compact-item projections, and MUST NOT claim that an operation ran. |
 
 ### Typed conditions and option guards (AUT-GRD-001–010)
 
@@ -294,185 +194,128 @@ The active-item allocation holds the widest definition vetting admits, so in pra
 | `AUT-GRD-004` | Option guards MUST read only explicitly selected items from required, dominating, fresh `evidence_from` references and MUST reject optional, unselected, current-decision, cross-attempt, or cross-session sources. |
 | `AUT-GRD-005` | Running next MUST preserve every authored option, publish authoritative `allowed_option_ids`, and, when any guard exists, publish one complete bounded three-valued status for every option. |
 | `AUT-GRD-006` | Observation active items MUST expose authored `required`, derived `required_now`, and bounded predicate status without exposing text or list content. |
-| `AUT-GRD-007` | Decision admission MUST validate identity and revision fences before evidence freshness and evidence freshness before guards; each rejected check MUST write no state. |
+| `AUT-GRD-007` | Decision execution MUST validate identity and revision fences before evidence freshness and evidence freshness before guards; each rejected check MUST write no state. |
 | `AUT-GRD-008` | An unmet or unevaluable selected guard MUST return non-retryable exit-1 `OPTION_GUARD_UNSATISFIED` with closed bounded details, while stale evidence MUST retain retryable `EVIDENCE_REFERENCE_STALE`. |
 | `AUT-GRD-009` | Omitted condition fields MUST preserve existing canonical Procedure bytes, preset digests, stored snapshot reconstruction, and unguarded runtime behavior without a SQLite migration. |
 | `AUT-GRD-010` | Authoring lint MUST replace count-based option and cycle warnings with distinct-label, concrete-criteria, and operationally distinguishable rework-route diagnostics. |
 
-## 21. Command-specific JSON schemas (AUT-JSON-001–004)
+## Retained JSON, error, and release requirements
 
 | ID | Normative requirement |
 |---|---|
-| `AUT-JSON-001` | Version, daemon status, workspace mode plan/apply, Procedure validation, start, begin, terminal disposition, reset, archive/list/show/purge, status, running and prepared next, observation, item mutation, graph-node transition, detached admission, job status/wait, and job lookup MUST each have a closed result schema. |
-| `AUT-JSON-002` | Daemon, socket, identity, revision, attempt, digest, idempotency, and timeout failures MUST each have closed error-detail schemas. |
-| `AUT-JSON-003` | Results and error details MUST carry an unambiguous schema identifier or discriminator. |
+| `AUT-JSON-001` | The retained version identity, Procedure validation, start/begin/disposition/reset/archive/list/show/purge, status/next/observation, item mutation, and graph transition families MUST have their canonical closed result schemas. Other retained generic results keep their expressly documented JSON-object boundary. The former daemon-status, mode-plan/apply, detached-admission, and job clauses are retired. |
+| `AUT-JSON-002` | Identity, revision, attempt, digest, idempotency, direct lock deadline, and adopted recovery failures MUST use their canonical closed detail schemas. The former daemon and socket clauses are retired. Generic detail objects remain only where the outer error schema expressly permits them. |
+| `AUT-JSON-003` | Named result and error-detail families MUST carry an unambiguous schema identifier or discriminator; explicitly retained generic JSON-object families keep their compatibility boundary. |
 | `AUT-JSON-004` | A closed v1 object MUST reject unknown fields; adding fields requires a new schema identifier or discriminator version rather than an undocumented additive-field exception. |
-
-## 22. Error and exit-code requirements (AUT-ERR-001–005)
-
-| ID | Normative requirement |
-|---|---|
-| `AUT-ERR-001` | `WORKSPACE_UUID_MISMATCH`, `WORKSPACE_MODE_MISMATCH`, `SESSION_ID_MISMATCH`, `PROCEDURE_DIGEST_MISMATCH`, `DAEMON_CONTRACT_MISMATCH`, socket errors, and wait timeout MUST have stable catalog entries and exit mappings. |
-| `AUT-ERR-002` | A pre-admission contract, identity, digest, endpoint, or validation failure MUST report `admission.admitted=false`; a mismatch MUST NOT admit a job. |
-| `AUT-ERR-003` | Adopted recoverable errors MUST carry one closed bounded `recovery` recipe containing `action`, canonical read-only `command`, structured `argv`, bounded `reason`, and `requires_explicit_authorization=false`. |
-| `AUT-ERR-004` | Recovery recipes MUST recommend only `session.observe`, `job.lookup`, `job.wait`, `daemon.status`, `daemon.wait-ready`, or `workspace.doctor`; they MUST NOT weaken a fence or recommend retry, restart, repair, reset, reinstall, or another mutation. |
-| `AUT-ERR-005` | Recovery recipes MUST derive only from existing public error details, MUST preserve code, retryability, exit class, and admission facts, and MUST NOT copy item values, requests, environment variables, file contents, credentials, or artifact bytes. |
-
-## 23. Release artifact and installation (AUT-REL-001–004)
-
-| ID | Normative requirement |
-|---|---|
+| `AUT-ERR-005` | Recovery recipes MUST derive only from existing public details and preserve code, retryability, and exit class. They MUST NOT copy item values, full requests, environment variables, file contents, credentials, or artifact bytes. Former admission facts are retired. |
 | `AUT-REL-001` | Podway MUST publish and support only native thin-arm64 `aarch64-apple-darwin` artifacts built and verified on an untranslated arm64 macOS host. |
-| `AUT-REL-002` | The archive MUST contain both binaries, completions, presets, schemas, specs, canonicalization fixtures, the contract manifest, README, and license, with checksum and provenance. |
-| `AUT-REL-003` | One offline manifest-bound Rust verifier MUST validate the source and packaged manifest shape, canonical and member digests, complete unique schema registry, full CLI and daemon envelopes and closed results, and agreement of packaged manifest digest, binary identities, source revision, target, and toolchain identity. |
-| `AUT-REL-004` | v0.1.0 MUST NOT be tagged until every preceding roadmap task is completed and the repository-local `make dist` gate passes. |
 
-## 24. Acceptance matrix
+The [error specification](errors-and-exit-codes.md#structured-recovery-recipes)
+owns RecoveryRecipe v2 commands, authorized destructive cases, and detail IDs.
+The [release specification](../operations/release-and-packaging.md) owns normal
+clean full distribution and separately confirmed patch guards. The nonpublishable
+development chain is independent of those publication claims. No historical
+service retirement or installed runtime mutation is authorized by qualification.
 
-The controlled-PATH harness includes these probes from a directory that is not a
-Podway worktree:
+## Retired requirement IDs and clauses
+
+These guarantees applied to the previous daemon generation. They are historical
+requirements, not current acceptance criteria or aliases for new direct IDs.
+
+| IDs or clauses | Retired guarantee |
+|---|---|
+| `AUT-PATH-002`–`003` | Daemon path discovery and installation verification |
+| `AUT-DAEMON-001`–`009` | LaunchAgent metadata, daemon startup/readiness/control, wait and installation |
+| `AUT-HOME-001`–`003` | Global home resolution, account runtime layout and LaunchAgent path |
+| `AUT-HOME-004` jobs/global-home clauses | Durable jobs and copying constraints for the removed product-global home |
+| `AUT-SOCK-001`–`005`, `AUT-SEC-001`–`004` | Endpoint selection, socket security/recovery and per-user daemon singleton |
+| `AUT-CONTRACT-001`, `003`–`005`; `002` IPC clause | IPC-bearing manifest, CLI/daemon equality, connection/install rejection and daemon status identity |
+| `AUT-ID-010`–`011` | Named-mode ownership agreement and mode plan/apply |
+| `AUT-START-002`–`003` | Durable admitted-start snapshot and post-admission daemon execution guarantee |
+| `AUT-ADMIT-001`–`003` | Job/sequence admission envelopes, continuing execution after timeout/disconnect, transport-unknown classification |
+| `AUT-RECON-001`–`003` | Job lookup, non-terminal state, failed/cancelled terminal receipt retention |
+| `AUT-OBS-001`–`002`, `005` | Queue barriers, quiescence, queue identities, `--wait-for-idle` and `--after-job` |
+| `AUT-LIF-014` detached clause | Detached interactive policy behavior |
+| `AUT-JSON-001` daemon/mode/detached/job clauses; `002` daemon/socket clauses | Closed daemon-generation result and error families |
+| `AUT-ERR-001`–`004`; `005` admission clause | Daemon/mode/socket mapping, admission-false reporting and RecoveryRecipe v1's old read-only command set |
+| `AUT-REL-002`–`003` | Two-binary archive, paired CLI/daemon identity and offline pair verification |
+| `AUT-REL-004` | Historical v0.1.0 tagging prerequisite; not a current version or release instruction |
+
+Retirement does not authorize deletion, installation, stopping, or conversion of
+existing historical services or user runtime state. Unsupported syntax fails
+`COMMAND_RETIRED`; unsupported legacy state requires its explicit supported
+recovery decision.
+
+## Acceptance evidence and traceability
+
+The executable checks are repository-owned; reading this table does not claim
+that a fresh gate ran. Current development uses `make test`; full distribution
+uses `make dist` only under its release authority. The current direct source and
+packaged scenarios are mapped in the
+[requirements traceability](../quality/requirements-traceability.md).
+
+| Evidence ID | Current required scope | Historical provenance and retired portions |
+|---|---|---|
+| `AUT-T-PATH` | Controlled PATH, sanitized environment, arbitrary directory, single CLI identity | `RPATH006`, `DOLGI001`; daemon discovery/plist probes retired |
+| `AUT-T-SOCK` | Retired | `RPATH003`–`RPATH006` socket and singleton probes |
+| `AUT-T-CONTRACT` | Complete source/package manifest/schema/identity validation, source and candidate binding, malformed identity/drift rejection | `CONID003`–`006`, `REL12003`–`004`; peer equality/IPC/restart probes retired |
+| `AUT-T-ID` | Replaced workspace/session, same revision on another session, stale replacement, attempt/item and guarded read fences | `CASID003`–`005` |
+| `AUT-T-START` | Matching/mismatching digest, prepared creation, immutable snapshot, changed source, exact replay/key reuse | `PSTRT001`–`005`, `V2LIF-004`–`005`; admitted daemon execution retired |
+| `AUT-T-LIF` | Prepared/begin/goals, forbidden prepared mutations, disposition currentness, eligible/force reset/replacement, cold-process reconstruction and stale replay fences | `V2LIF-002`–`005` |
+| `AUT-T-RECON` | Commit/response-loss lookup, exact success replay, rejected absence, key reuse, retention and UUID fail-closed | `RECON001`–`005`; job states, cancelled/failure receipts and wait guarantees retired |
+| `AUT-T-OBS` | Coherent write-free reads, closed compact/next/observation budgets and applicable templates | `MCONT004`, `MCONT006`, `DOLGI002`; idle barriers retired |
+| `AUT-T-EVR` | All scale bounds, worst-case encoding, typed and stdin aggregate rejection, reconstruction, paging/token distinctions, graph-counter budgets and complete template coverage | `V2SCL-002`–`005`, `V2GSC-004`; IPC framing retired |
+| `AUT-T-CHK` | Declaration/value bounds and digests, all outcomes, atomic recording, stale retry/rework, projections/templates/read-back, unsatisfied reasons and caller-trust boundary | `V2AST-002`–`006`, ADR-0033; daemon migration/restart retired |
+| `AUT-T-GRD` | Typed predicate pairs, controller/selector/freshness rules, guard status, fence precedence, projections and unchanged canonical bytes | `V2GRD-002`–`006` |
+| `AUT-T-JSON` | Current result/detail discriminators, malformed/unknown field refusal and no retired metadata | `MCONT001`–`006` |
+| `AUT-T-DIST` | Same archived CLI bytes through independent extraction, identity, disabled hooks, lifecycle/fences/contention, output loss, exact reconciliation and bounded process/fixture cleanup | `DOLGI005`, `REL10001`–`004`; foreground daemon modes/sockets retired |
+
+| Active requirements | Origin and direct continuity | Evidence |
+|---|---|---|
+| `AUT-PATH-001`, `AUT-HOME-004`, `AUT-CONTRACT-002` | RPATH/CONID; `V2DFC-007`–`009` | `AUT-T-PATH`, `AUT-T-CONTRACT` |
+| `AUT-ID-001`–`009` | CASID/V2LIF; `V2DFC-006`–`007` | `AUT-T-ID`, `AUT-T-LIF` |
+| `AUT-START-001`, `004`, `AUT-LIF-001`–`015` | PSTRT/V2LIF; `V2DFC-006`–`007` | `AUT-T-START`, `AUT-T-LIF` |
+| `AUT-RECON-004`, `AUT-OBS-003`–`004`, `006`–`012` | RECON/MCONT/V2SCL; `V2DFC-006`–`007` | `AUT-T-RECON`, `AUT-T-OBS`, `AUT-T-EVR` |
+| `AUT-EVR-001`–`008`, `AUT-CHK-001`–`009`, `AUT-GRD-001`–`010` | V2SCL/V2AST/V2GRD, ADR-0033; `V2DFC-006`–`007` | `AUT-T-EVR`, `AUT-T-CHK`, `AUT-T-GRD` |
+| Active `AUT-JSON-001`–`004`, `AUT-ERR-005`, `AUT-REL-001` | MCONT/V2AGT/REL; `V2DFC-007`–`009` | `AUT-T-JSON`, `AUT-T-DIST` |
+| `AUT-DIRECT-001`–`020` | ADR-0038, `V2DFC-001`–`010` | Direct native/Store/protocol and packaged evidence mapped by current traceability |
+
+## Example command sequence
+
+Examples are local invocations; no external adapter capability is implied.
+Variables stand for values retained from validated current responses. Each
+mutation has its own caller-owned key; replay preserves its complete original
+argv/input, not newly observed fences.
 
 ```bash
-env -i PATH="<release-bin>:/usr/bin:/bin" podway version --json
 env -i PATH="<release-bin>:/usr/bin:/bin" podway version --json --identity
 
-env -i PATH="<release-bin>:/usr/bin:/bin" \
-  podway --json \
-  --socket "/Users/test/.podway/run/podwayd.sock" \
-  --worktree "/Users/test/src/project" \
-  --timeout 25s \
-  status --wait-for-idle --compact
+podway --json --worktree "$WORKTREE" --timeout 25s \
+  --if-workspace-uuid "$WORKSPACE_UUID" observe
+
+podway --json --worktree "$WORKTREE" --timeout 25s \
+  --idempotency-key "$START_KEY" --if-workspace-uuid "$WORKSPACE_UUID" \
+  start --procedure ".podway/procedures/task.yaml" \
+  --expect-procedure-digest "$PROCEDURE_DIGEST" --task "Implement the requested task"
+
+podway --json --worktree "$WORKTREE" --timeout 25s \
+  --idempotency-key "$BEGIN_KEY" --if-workspace-uuid "$WORKSPACE_UUID" \
+  --if-session-id "$SESSION_ID" --if-session-revision 0 begin
+
+podway --json --worktree "$WORKTREE" --timeout 25s \
+  --idempotency-key "$ITEM_KEY" --if-workspace-uuid "$WORKSPACE_UUID" \
+  --if-session-id "$SESSION_ID" --if-attempt "$ATTEMPT_ID" \
+  --if-item-revision "$ITEM_REVISION" set "$ITEM_ID" "$VALUE"
+
+podway --json --worktree "$WORKTREE" --timeout 25s \
+  --if-workspace-uuid "$WORKSPACE_UUID" outcome lookup --idempotency-key "$ITEM_KEY"
+
+podway --json --worktree "$WORKTREE" --timeout 25s \
+  --idempotency-key "$COMPLETE_KEY" --if-workspace-uuid "$WORKSPACE_UUID" \
+  --if-session-id "$SESSION_ID" --if-session-revision "$SESSION_REVISION" \
+  --if-attempt "$ATTEMPT_ID" complete
 ```
 
-| Evidence ID | Required scenarios | Roadmap |
-|---|---|---|
-| `AUT-T-PATH` | sanitized environment, arbitrary directory, CLI symlink, sibling/explicit/PATH daemon resolution, absolute plist path | `RPATH006`, `DOLGI001` |
-| `AUT-T-SOCK` | correct, wrong, relative, over-long, regular-file, symlink, insecure-parent, wrong-owner, stale, same/different-socket duplicate daemon | `RPATH003`–`RPATH006` |
-| `AUT-T-CONTRACT` | matching peers, complete source/package schema validation, malformed v0.1.1 and generated identity/manifest/schema/reference drift, same version/different manifest, different version/same IPC, replaced executable, restart after upgrade | `CONID003`–`CONID006`, `REL12003`–`REL12004` |
-| `AUT-T-ID` | replaced workspace/session, same numeric revision on another session, stale replacement, wrong attempt/item, guarded reads | `CASID003`–`CASID005` |
-| `AUT-T-START` | matching/mismatching digest, prepared creation, source deletion/replacement/race, restart, exact replay, key reuse with another digest | `PSTRT001`–`PSTRT005`, `V2LIF-004`–`005` |
-| `AUT-T-LIF` | prepared reconstruction, begin with and without a goal, forbidden prepared mutations, terminal disposition currentness, eligible and force reset/replacement, restart, replay, and stale fences | `V2LIF-002`–`005` |
-| `AUT-T-RECON` | disconnect before/after admission, wait timeout, lookup in every state, domain failure, pruning, missing key, key reuse | `RECON001`–`RECON005` |
-| `AUT-T-OBS` | idle barrier invariants, closed compact schema, maximum envelope size | `MCONT004`, `MCONT006`, `DOLGI002` |
-| `AUT-T-EVR` | every bound at and one above its boundary, worst-case Unicode escaping, an incrementally built 1,000-entry list, framed `item.record_many` acceptance and rejection, total-list and attempt-aggregate overflow, reconstruction, 128 item definitions, multi-page text and list reads, stable token replay, restart, selector diagnostics, every response allocation including exact complete graph-counter accounting, each of the four token failure distinctions separately (`REQUEST_INVALID` before state comparison for malformed, oversized, cross-session, and wrong-binding tokens; `EVIDENCE_NOT_AVAILABLE` for an unresolved or skipped reference read without a token; `EVIDENCE_PAGE_TOKEN_STALE` for a changed bound snapshot; `EVIDENCE_PAGE_TOKEN_EXHAUSTED` for an end-of-value offset), the one-time preset digest rotation and its `DIGEST_CONFIRMATION_REQUIRED` boundary, and the four observation allocations with their shared complete-member admission, window totals, truncation flags, and metadata-only guidance | `V2SCL-002`–`005`, `V2GSC-004` |
-| `AUT-T-CHK` | declaration and value bounds, YAML/JSON equivalence, digest stability, all outcomes, operation mismatch, atomic framed recording, migration and restart, stale retry/rework behavior, five-field projections, stdin-template bounds, one-page read-back, trust-language checks, named unsatisfied-reason ordering, its stored-and-unsatisfied-only closure, and compact-item absence | `V2AST-002`–`006`, ADR-0033 |
-| `AUT-T-GRD` | every operator/type pairing, invalid pairings, Unicode-empty text, integer boundaries, controller order and cycles, optional and stale guard sources, selected-item enforcement, complete options and allowed IDs, check-result outcome guards, mixed three-valued statuses, mutation fence order, response budgets, catalog replacement, and unchanged preset digests | `V2GRD-002`–`006` |
-| `AUT-T-JSON` | every result/detail fixture validates its discriminator and rejects unknown or malformed fields | `MCONT001`–`MCONT006` |
-| `AUT-T-DIST` | `make dist` packages the native release-profile archive once, verifies its identity and layout, then runs packaged lifecycle, conflict, timeout, response-loss, reconciliation, identity, termination, and socket-cleanup checks through isolated foreground dev mode | `DOLGI005`, `REL10001`–`REL10004` |
-
-The distribution qualification is the executable proof for the packaged client
-contract and runs against the same archive selected for handoff.
-
-## Procedure v2 automation boundary
-
-Automation discovers Procedure v2 capability from the manifest-bound command
-route and result-schema registries before dispatch. Registered but unserved v2
-routes fail with `UNSUPPORTED_V2_CAPABILITY`; absent routes retain the ordinary
-unknown-command or usage behavior. Automation never infers support from product
-version text or human-readable output.
-
-Every v2 mutation uses the existing workspace, session, attempt, revision, and
-idempotency fences applicable to its command. A successful mutation result and
-an admitted terminal error carry the same bounded job admission identity used by
-lookup and replay. A retained terminal envelope always names a v2 mutation, and
-job lookup requires its nested command to equal the immutable job command.
-Preview and other authoring reads remain side-effect free.
-
-## 25. Requirements-to-roadmap traceability
-
-| Requirements | Implemented by | Planned evidence |
-|---|---|---|
-| `AUT-PATH-001`–`003`, `AUT-DAEMON-001`–`003` | `RPATH004`, `RPATH006`, `CONID006` | `AUT-T-PATH`, `AUT-T-CONTRACT` |
-| `AUT-DAEMON-004`–`009` | `V2RDY-001`–`003` | `AUT-T-CONTRACT`, `AUT-T-JSON`, repository-local readiness integration tests |
-| `AUT-HOME-001`–`004` | `RPATH001`, `RPATH002`, `RPATH004` | `AUT-T-PATH`, `AUT-T-SOCK` |
-| `AUT-SOCK-001`–`005`, `AUT-SEC-001`–`004` | `RPATH003`–`RPATH006` | `AUT-T-SOCK` |
-| `AUT-CONTRACT-001`–`005` | `CONID001`–`CONID006` | `AUT-T-CONTRACT`, `AUT-T-DIST` |
-| `AUT-ID-001`–`009` | `CASID001`–`CASID005`, `V2LIF-004` | `AUT-T-ID`, `AUT-T-LIF`, `AUT-T-JSON` |
-| `AUT-START-001`–`004` | `PSTRT001`–`PSTRT005` | `AUT-T-START` |
-| `AUT-LIF-001`–`010` | `V2LIF-002`–`005` | `AUT-T-LIF`, `AUT-T-OBS`, `AUT-T-JSON` |
-| `AUT-ADMIT-001`–`003`, `AUT-RECON-001`–`004` | `RECON001`–`RECON005` | `AUT-T-RECON` |
-| `AUT-OBS-001`–`011` | `MCONT004`, `MCONT006`, `DOLGI002`, `V2LIF-004`–`005`, `V2SCL-005` | `AUT-T-OBS`, `AUT-T-LIF`, `AUT-T-EVR` |
-| `AUT-EVR-001`–`008` | `V2SCL-002`–`005` | `AUT-T-EVR`, `AUT-T-JSON` |
-| `AUT-CHK-001`–`008` | `V2AST-002`–`006` | `AUT-T-CHK`, `AUT-T-JSON` |
-| `AUT-CHK-009` | ADR-0033 | `AUT-T-CHK`, `AUT-T-JSON` |
-| `AUT-GRD-001`–`010` | `V2GRD-002`–`006` | `AUT-T-GRD`, `AUT-T-JSON` |
-| `AUT-JSON-001`–`004`, `AUT-ERR-001`–`005` | `CASID004`, `MCONT001`–`MCONT006`, `V2AGT-005` | `AUT-T-JSON` |
-| `AUT-REL-001`–`004` | `DOLGI005`, `REL10001`–`REL10005` | `AUT-T-DIST`, repository-local `make dist` |
-
-## 26. Example Dolgorae command sequences
-
-Dolgorae is the first consumer; these examples do not add Dolgorae workflow or
-authorization semantics to Podway.
-
-```bash
-podway version --json --identity
-
-podway --socket "/Users/example/.podway/run/podwayd.sock" daemon install
-
-podway --json \
-  --socket "/Users/example/.podway/run/podwayd.sock" \
-  --worktree "/Users/example/src/project" \
-  --timeout 25s \
-  --if-workspace-uuid "$WORKSPACE_UUID" \
-  --if-session-id "$SESSION_ID" \
-  status --wait-for-idle --compact
-
-podway --json \
-  --socket "/Users/example/.podway/run/podwayd.sock" \
-  --worktree "/Users/example/src/project" \
-  --timeout 25s \
-  --idempotency-key "$IDEMPOTENCY_KEY" \
-  --if-workspace-uuid "$WORKSPACE_UUID" \
-  start \
-  --procedure ".dolgorae/runtime/podway/request-42/procedure.json" \
-  --expect-procedure-digest "$PROCEDURE_DIGEST" \
-  --task "WI-0042: Implement Podway graph dispatch"
-
-podway --json \
-  --socket "/Users/example/.podway/run/podwayd.sock" \
-  --worktree "/Users/example/src/project" \
-  --timeout 25s \
-  --idempotency-key "$BEGIN_IDEMPOTENCY_KEY" \
-  --if-workspace-uuid "$WORKSPACE_UUID" \
-  --if-session-id "$SESSION_ID" \
-  --if-session-revision 0 \
-  begin \
-  --goal "Complete WI-0042 safely" \
-  --criterion verified="Required checks pass" \
-  --actor "dolgorae"
-
-podway --json \
-  --socket "/Users/example/.podway/run/podwayd.sock" \
-  --worktree "/Users/example/src/project" \
-  --timeout 25s \
-  --idempotency-key "$IDEMPOTENCY_KEY" \
-  --if-workspace-uuid "$WORKSPACE_UUID" \
-  --if-session-id "$SESSION_ID" \
-  --if-session-revision "$SESSION_REVISION" \
-  --if-attempt "$ATTEMPT_ID" \
-  complete
-
-podway --json \
-  --socket "/Users/example/.podway/run/podwayd.sock" \
-  --worktree "/Users/example/src/project" \
-  --timeout 25s \
-  --idempotency-key "$IDEMPOTENCY_KEY" \
-  --if-workspace-uuid "$WORKSPACE_UUID" \
-  --if-session-id "$SESSION_ID" \
-  --if-attempt "$ATTEMPT_ID" \
-  --if-item-revision "$ITEM_REVISION" \
-  set "$ITEM_ID" "$VALUE"
-
-podway --json \
-  --socket "/Users/example/.podway/run/podwayd.sock" \
-  --worktree "/Users/example/src/project" \
-  --timeout 25s \
-  job lookup --idempotency-key "$IDEMPOTENCY_KEY"
-```
-
-## 27. Explicitly deferred features
-
-Configurable or XDG homes, remote protocols, multi-user authorization, multiple
-daemon namespaces, a global Procedure-state copy, executable Procedures,
-disconnect cancellation, Dolgorae Workflow/Role/ToolRun logic, and non-Apple-
-Silicon-macOS releases are outside the v0.1.0 contract.
+Remote protocols, multi-user security, executable Procedures, parallel cursors, fan-out, global task copies,
+Dolgorae Workflow/Role/ToolRun execution, and other release platforms require
+separately adopted authority.

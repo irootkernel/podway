@@ -1,5 +1,18 @@
 # macOS Service Specification
 
+## Historical retired contract
+
+[ADR-0038](../architecture-decision-records/0038-remove-the-daemon.md)
+retired this daemon-era contract. Every section below records the previous
+generation for historical roadmap references; none defines current commands,
+files, tests or operational requirements. The direct CLI returns
+`COMMAND_RETIRED` for service and account-runtime commands and cannot execute
+these old procedures. Current worktree recovery is specified by the
+[direct recovery contract](../specs/storage/recovery-retention-and-maintenance.md).
+Retiring an existing old installation requires its original binary/controller
+and separate authorization under the
+[legacy cutover](../../README.md#legacy-state-and-cutover).
+
 ## Service model
 
 The macOS release runs `podwayd` as a per-user LaunchAgent. It starts when the user logs in, not before login. Root privileges and a system-wide LaunchDaemon are not used.

@@ -3,75 +3,83 @@
 ## Workspace map
 
 ```text
-assets/                 Canonical presets, schemas, and executable specifications
-crates/                 Rust workspace crates
-contracts/              Executable repository contracts and stable evidence
+assets/                 Canonical presets, public schemas and executable specifications
+crates/                 Eight Rust workspace crates
+contracts/              Executable repository and interface contracts
 docs/                   Human-readable contributor documentation
-quality/                Crash-boundary registry
-release/                Product-acceptance mapping
+quality/                Current crash-boundary registry
+release/                Manifest-bound external adapter contract
 skills/                 Optional source-distributed AI agent guidance
-tests/fixtures/          Shared contract fixtures
-tools/                  Verification, E2E, fuzz, and release tools
-artifacts/              Ignored, host-local verification output
+tests/fixtures/         Shared contract data and reference-path inventories
+tools/                  Verification, E2E, fuzzing and release tools
+artifacts/              Ignored host-local verification output
+target/                 Ignored build and local execution output
+dist/                   Ignored distribution or development-qualification output
 ```
 
 ## Crates
 
 | Crate | Responsibility |
 |---|---|
-| `podway-core` | Pure domain types, invariants, transitions, status, and next-action derivation |
-| `podway-config` | Workspace and procedure parsing, validation, canonicalization, and digests |
-| `podway-presets` | Embedded built-in presets and catalog validation |
-| `podway-protocol` | Public envelopes and bounded decoding; residual IPC contracts retire in `V2DFC-008` |
-| `podway-store` | Direct SQLite state, atomic success outcomes, transactions, and maintenance; residual legacy Store code retires in `V2DFC-008` |
-| `podway-git` | Worktree discovery, identity, containment, and layout |
-| `podway-service` | Residual platform/service integration pending deletion in `V2DFC-008`; the CLI does not use it |
-| `podway-engine` | Typed synchronous command execution, read projections, preparation, request identity, native workspace boundaries, and marker codecs |
-| `podway-cli` | Direct Engine requests, command grammar, validated rendering, help, and shell completion |
+| `podway-core` | Pure domain values, invariants, transitions and status |
+| `podway-config` | Workspace/Procedure parsing, validation, canonicalization and digests |
+| `podway-presets` | Canonical embedded presets and catalog validation |
+| `podway-protocol` | Public JSON, bounded direct inputs, identity and offline release verifier |
+| `podway-store` | Direct SQLite state, atomic success outcomes, maintenance leases and retention |
+| `podway-git` | Read-only worktree discovery, identity, containment and layout |
+| `podway-engine` | Typed Direct execution, preparation, projections and native maintenance |
+| `podway-cli` | Direct requests, grammar, validated rendering, authoring, help and completions |
+
+`podway` is the only product binary. The feature-gated `podway-contract-verifier`
+is an internal verification tool. No daemon/service crate or shipped `podwayd`
+remains. Durable dependencies are declared by
+[`cargo-adjacency.json`](../../contracts/cargo-adjacency.json).
 
 ## Dependency direction
 
-`podway-core` has no infrastructure dependencies. Config and protocol may depend
-on core value types. Store, Git, and service code implement infrastructure around
-those contracts. `podway-engine` composes core, protocol, config, Store, Git, and
-presets for host-independent domain services. The CLI invokes the engine
-in-process and has no direct production dependency on Store, Git or service.
-`V2DFC-007` removes the daemon host, leaving nine workspace crates. Residual
-daemon-era infrastructure retires in `V2DFC-008`, and single-binary release
-tooling follows in `V2DFC-009`.
-Cycles, reverse edges, and direct CLI access to Store internals are rejected by
-executable architecture contracts.
+Core has no infrastructure edge. Config, protocol, Store and Git depend on core;
+presets depend on core/config. Engine composes these six crates and owns native
+workspace execution. CLI invokes Engine in-process and has no production Store or
+Git dependency. Executable architecture checks reject cycles, reverse edges and
+unauthorized direct access. Detailed rules are in the
+[Rust codebase reference](rust-codebase.md).
 
 ## Tests
 
-Each crate owns its integration targets under `crates/<crate>/tests/`:
+Each crate owns its test targets:
 
-- `arch_*` checks dependency and repository contracts;
-- `int_*` combines components with deterministic fixtures or test doubles;
-- `e2e_*` launches the real `podway` binary in isolated worktrees.
+- `arch_*` checks dependency and repository contracts without product execution;
+- `int_*` combines components with deterministic fixtures or native boundaries;
+- `e2e_*` launches the real CLI in owned scratch worktrees.
 
-Root `tests/fixtures/` contains shared data, not independent Cargo test targets.
-Fuzz targets live under `fuzz/`; release and crash mappings live under `release/`
-and `quality/`.
+Modules are registered in aggregate suites rather than standalone unregistered
+Cargo targets. Root `tests/fixtures/` contains shared data. Fuzz targets live in
+`fuzz/`; current crash mappings live in `quality/`.
 
 ## Canonical assets
 
-Edit `assets/schemas/`, `assets/specifications/`, and `assets/presets/` directly.
-Rust builds, tests, contract verification, and release packaging consume those
-single canonical trees. Public logical paths remain `schemas/`, `spec/`, and
-`presets/` even though their repository sources are grouped under `assets/`.
-
-The detailed crate and runtime rules are in the
-[Rust codebase reference](rust-codebase.md).
+Edit schemas, specifications and presets only in `assets/schemas/`,
+`assets/specifications/` and `assets/presets/`. Builds, tests and packaging consume
+these canonical trees. Public logical paths remain `schemas/`, `spec/` and
+`presets/`. The generated contract manifest is
+`contracts/contract-manifest-v2.json`; use the documented manifest tool rather
+than hand-editing it. There is no generated documentation mirror.
 
 ## Executable repository contracts
 
-`contracts/` is not a documentation mirror. It contains the versioned canonical
-import, dependency, command-route, manifest, requirement-evidence, and internal
-interface inputs executed by repository verification tools.
+`contracts/` owns crate adjacency, command routes, manifest identity and internal
+interface inputs. `quality/crash-boundaries-v1.json` owns current crash proof
+locators. Historical ADRs and roadmap entries describe retired generations;
+they do not reintroduce removed executables, schemas or runtime contracts.
 
-`artifacts/` contains mutable reports, raw logs, fuzzing output, and other
-machine-specific results. The entire directory is ignored and is not a release
-input. Release readiness is decided only by `make dist` on the current tree.
+Host-local artifacts and temporary qualification state are not canonical source
+or durable passing evidence. `make test` is the development gate. Release gates
+are `make dist` or the separately confirmed `make dist-patch` under the
+[release workflow](../implementation-tips/release.md). A non-distribution native
+dry run is nonpublishable and does not authorize release or installation.
 
-`skills/` contains optional guidance that users may copy from the source repository into an AI agent's skill directory. `use-podway` owns explicitly requested runtime and lifecycle operations; `create-podway-procedure` owns custom Procedure source authoring and distribution-readiness evidence. Runtime qualification of a distributed Procedure remains a separately authorized `use-podway` operation. The skills are independently installable, are not installed by Podway, do not change Podway behavior, and are not included in the release archive.
+`skills/` contains optional independently installable guidance. `use-podway`
+owns explicitly requested runtime/lifecycle operations;
+`create-podway-procedure` owns Procedure source authoring and distribution evidence.
+Podway does not install these skills or include them in its archive. Procedure
+runtime qualification remains a separately authorized operation.

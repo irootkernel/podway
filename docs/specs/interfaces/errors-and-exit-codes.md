@@ -2,493 +2,369 @@
 
 ## Contract
 
-Public failures use stable uppercase error codes. Human messages may improve without a schema change. Automation must branch on `code`, `retryable`, and structured `details`.
+Current public failures use `podway.error/v2`, stable uppercase codes, and the
+canonical [runtime catalog](../../../assets/specifications/error-codes.json).
+Automation branches on `code`, `retryable`, exit class, and structured `details`,
+never on human text. The closed outer envelope binds each code's exit/retryability
+and each named detail family to its exact schema or discriminator. Some retained
+simple errors use the generic JSON-object detail boundary expressly permitted by
+the envelope; do not invent a named schema for them.
 
-The machine-readable runtime catalog is
-[`../../../assets/specifications/error-codes.json`](../../../assets/specifications/error-codes.json).
-Authoring-time findings use the separate, disjoint
-[`../../../assets/specifications/authoring-diagnostics.json`](../../../assets/specifications/authoring-diagnostics.json)
-catalog. A code belongs to exactly one catalog.
+Authoring findings use the separate, disjoint
+[authoring catalog](../../../assets/specifications/authoring-diagnostics.json).
+A code belongs to one catalog. Registration does not prove every defensive code
+is reachable from a coherent public request. The command catalog owns executable
+routes, not historical reserved-capability lists.
 
-The tables below are the implemented machine contract. Automation errors have
-closed detail schemas, canonical assets, and executable contract tests.
-
-The v2 contract baseline registers 26 additive runtime codes and the exhaustive
-authoring diagnostic inventory. Goal-bearing forms of the shared start routes and
-the `goal.define`, `goal.revise`, and `goal.assess_criterion` routes are executable
-through their typed Procedure v2 boundaries. A well-formed registered but unserved
-request returns
-`UNSUPPORTED_V2_CAPABILITY`; a malformed request returns `REQUEST_INVALID`; and
-a route absent from the registry retains ordinary unknown-command or usage
-behavior. Manifest registration alone does not imply executable capability.
-`workspace.remove` is executable and uses the existing
-`WORKSPACE_PATH_UNSAFE`, `WORKSPACE_UUID_MISMATCH`,
-`WORKSPACE_MAINTENANCE`, and `WORKTREE_GONE` families rather than introducing a
-parallel removal-specific error taxonomy.
-
-The account-runtime reset error family is defined in the
-[runtime reset specification](../operations/runtime-reset.md#public-results-errors-and-bounds)
-and `podway.runtime-reset-error-details/v1`. Its seven `RUNTIME_RESET_*` codes
-are catalogued together; read-only plan and process-bound control errors are
-executable together with confirmed single-mode and all-mode apply. Partial
-retirement is a non-success result with exact retry information, never rollback.
+The Engine executes synchronously in the caller. Failures contain no admission,
+job, sequence, endpoint, queue, or runtime-mode metadata. Rejected mutations retain
+no outcome. Only uncertain COMMIT I/O emits `MUTATION_OUTCOME_UNKNOWN`; response
+loss or external process termination is caller-side uncertainty.
 
 ## Exit codes
 
 | Exit code | Class | Meaning |
 |---:|---|---|
-| 0 | success | Operation succeeded, including detached durable admission |
-| 1 | domain | Valid request rejected by procedure or session rules |
-| 2 | usage | Invalid CLI syntax, option combination, request shape, or confirmation |
-| 3 | daemon | Service, IPC, or protocol unavailable/incompatible |
-| 4 | conflict | Concurrency conflict, queue pressure, or wait timeout; usually retryable |
-| 5 | workspace | Git worktree, path, database, migration, or local-state failure |
+| 0 | success | Read, local command, or committed mutation succeeded |
+| 1 | domain | Valid request rejected by Procedure or session rules |
+| 2 | usage | Invalid syntax, shape, bounds, retired command, or confirmation |
+| 4 | conflict | Optimistic conflict, lock deadline, or uncertain COMMIT I/O |
+| 5 | workspace | Git, path, configuration, database, generation, or writer identity failure |
 | 6 | internal | Unexpected implementation failure |
 
-## Daemon and protocol errors
+Exit class 3 and daemon/IPC/socket/job/runtime-reset/workspace-mode error families
+are retired. Retired syntax returns `COMMAND_RETIRED` before workspace resolution,
+stdin consumption, or Store access; ordinary unknown syntax is a usage failure.
+The [retired table](../../../assets/specifications/retired-commands-v1.json) is
+canonical. `job.lookup` names `outcome.lookup`; a null replacement means none.
 
-| Code | Exit | Retryable | Meaning |
-|---|---:|---:|---|
-| `DAEMON_NOT_INSTALLED` | 3 | no | User service is not installed |
-| `DAEMON_UNAVAILABLE` | 3 | yes | Socket cannot be reached |
-| `DAEMON_STARTING` | 3 | yes | The control plane is reachable but normal admission is not open |
-| `DAEMON_READINESS_TIMEOUT` | 3 | yes | Verified readiness was not reached before a bounded deadline |
-| `DAEMON_SHUTTING_DOWN` | 3 | yes | Daemon is draining and not accepting work |
-| `DAEMON_VERSION_INCOMPATIBLE` | 3 | no | CLI and daemon cannot share a supported contract |
-| `DAEMON_CONTRACT_MISMATCH` | 3 | no | CLI and daemon product or manifest identity differs |
-| `PROTOCOL_VERSION_UNSUPPORTED` | 3 | no | Requested IPC protocol is unsupported |
-| `REQUEST_TOO_LARGE` | 2 | no | IPC frame exceeds limits |
-| `REQUEST_INVALID` | 2 | no | Request is malformed or violates schema |
-| `SOCKET_ENDPOINT_INVALID` | 2 | no | An explicit Unix socket path is invalid or cannot be safely resolved |
+## Runtime code inventory
 
-`SOCKET_ENDPOINT_INVALID.details` uses
-`podway.socket-endpoint-error-details/v1`. Its stable `reason` is one of
-`empty`, `relative`, `unnormalized`, `workspace_local`, `path_too_long`, or
-`effective_user_unavailable`. Mutation failures also include
-`admission: {"admitted": false}`.
-
-Service lifecycle failures retain `DAEMON_UNAVAILABLE`, exit code 3,
-retryability, and the existing endpoint details schema. Their human-readable
-message may distinguish launchd failure, launchctl timeout or oversized output,
-lifecycle-lock timeout, permission denial, unavailable service state, and an
-unexpected process transition. Automation must not branch on those messages.
-
-## Worktree and workspace errors
-
-| Code | Exit | Retryable | Meaning |
-|---|---:|---:|---|
-| `NOT_A_GIT_WORKTREE` | 5 | no | No valid worktree contains the path |
-| `BARE_GIT_REPOSITORY` | 5 | no | Bare repositories are unsupported |
-| `WORKTREE_GONE` | 5 | no | Registered worktree no longer exists |
-| `WORKSPACE_NOT_INITIALIZED` | 5 | no | `.podway/runtime` state is absent |
-| `WORKSPACE_ALREADY_INITIALIZED` | 1 | no | Initialization requested where compatible state already exists in a non-idempotent mode |
-| `WORKSPACE_INIT_CONFLICT` | 5 | no | Existing `.podway` content conflicts with safe initialization |
-| `WORKSPACE_ID_CONFLICT` | 5 | no | Workspace UUID-to-root metadata is non-unique or conflicts with live identity evidence |
-| `WORKSPACE_UUID_MISMATCH` | 4 | no | Authoritative workspace UUID differs from the expected UUID |
-| `WORKSPACE_MODE_MISMATCH` | 4 | no | Runtime ownership modes disagree at the endpoint, daemon, config, Store, or registry boundary |
-| `WORKSPACE_MODE_SWITCH_CONFLICT` | 4 | no | The plan is stale or an incomplete switch requires its exact recovery token; plan again only when no partial marker is pending |
-| `WORKSPACE_CONFIG_INVALID` | 5 | no | Workspace config fails schema or semantic validation |
-| `WORKSPACE_STATE_UNREADABLE` | 5 | no | SQLite state is corrupt or inaccessible |
-| `WORKSPACE_SCHEMA_UNSUPPORTED` | 5 | no | Database schema is newer or otherwise unsupported |
-| `WORKSPACE_QUEUE_FULL` | 4 | yes | Pending-job limit reached |
-| `WORKSPACE_MAINTENANCE` | 4 | yes | A destructive reset, replace, migration, or maintenance barrier blocks admission |
-| `WORKSPACE_PATH_UNSAFE` | 5 | no | `.podway` or runtime path violates containment or symlink rules |
-| `PATH_OUTSIDE_WORKTREE` | 5 | no | Procedure or artifact path escapes the worktree |
-| `MIGRATION_FAILED` | 5 | no | Transactional schema migration failed |
-
-## Procedure and preset errors
-
-| Code | Exit | Retryable | Meaning |
-|---|---:|---:|---|
-| `PROCEDURE_NOT_FOUND` | 1 | no | Requested local procedure cannot be resolved |
-| `PROCEDURE_INVALID` | 1 | no | Procedure fails schema or semantic validation |
-| `PROCEDURE_SCHEMA_UNSUPPORTED` | 1 | no | Procedure schema identifier is unsupported |
-| `PRESET_NOT_FOUND` | 1 | no | Built-in preset name does not exist |
-
-## Session and graph errors
-
-| Code | Exit | Retryable | Meaning |
-|---|---:|---:|---|
-| `SESSION_NOT_FOUND` | 1 | no | Workspace has no current session |
-| `SESSION_ID_MISMATCH` | 4 | no | Authoritative session ID differs from the expected ID, including when no current session exists |
-| `SESSION_ALREADY_EXISTS` | 1 | no | Start requested while a session exists |
-| `SESSION_START_DECISION_REQUIRED` | 5 | no | Noninteractive start needs an explicit lifecycle-specific decision |
-| `SESSION_START_STATE_CONFLICT` | 4 | yes | Existing-session state changed after a start policy was selected |
-| `SESSION_NOT_RUNNING` | 1 | no | Command requires a running session, or `begin` requires a prepared session |
-| `SESSION_NOT_TERMINAL` | 1 | no | Terminal disposition requires a completed or cancelled session |
-| `SESSION_RESET_NOT_ELIGIBLE` | 1 | no | Eligible reset or replacement requires prepared state or a current terminal disposition |
-| `SESSION_ARCHIVE_NOT_ELIGIBLE` | 1 | no | Current session is not terminal with a current disposition |
-| `SESSION_ARCHIVE_LIMIT_REACHED` | 1 | no | Historical inactive-session capacity failure; current builds do not emit it |
-| `SESSION_ARCHIVE_NOT_FOUND` | 1 | no | Requested inactive session does not exist |
-| `SESSION_CANCELLED` | 1 | no | Cancelled session cannot perform the operation |
-| `SESSION_REVISION_CONFLICT` | 4 | yes | Observed session revision is stale |
-| `ATTEMPT_NOT_CURRENT` | 4 | yes | Observed attempt is no longer active |
-| `ATTEMPT_NOT_FOUND` | 1 | no | Requested attempt does not exist in the selected session |
-| `STAGE_NOT_SKIPPABLE` | 1 | no | Skip is not permitted |
-| `REQUIRED_ITEMS_MISSING` | 1 | no | Active action node lacks required satisfied items |
-| `BLOCKERS_PRESENT` | 1 | no | Open blockers prevent completion |
-
-## Item and artifact errors
-
-| Code | Exit | Retryable | Meaning |
-|---|---:|---:|---|
-| `ITEM_NOT_FOUND` | 1 | no | Item is absent from the active node definition |
-| `ITEM_TYPE_MISMATCH` | 1 | no | Command is incompatible with item type |
-| `ITEM_CONSTRAINT_FAILED` | 1 | no | Value violates item constraints |
-| `ITEM_REVISION_CONFLICT` | 4 | yes | Same-item value changed since observation |
-| `ITEM_ALREADY_SET` | 4 | yes | First-write precondition expected an unset item |
-| `LIST_VALUE_NOT_FOUND` | 1 | no | Remove target is absent |
-| `LIST_VALUE_DUPLICATE` | 1 | no | Unique list already contains value |
-| `ARTIFACT_NOT_FOUND` | 1 | no | Local artifact path does not exist |
-| `ARTIFACT_UNREADABLE` | 5 | no | Local artifact cannot be opened or hashed |
-| `ARTIFACT_CHANGED` | 1 | yes | Required local artifact no longer matches stored metadata |
-| `ARTIFACT_MEDIA_TYPE_NOT_ALLOWED` | 1 | no | Media type violates item allowlist |
-
-## Blocker errors
-
-| Code | Exit | Retryable | Meaning |
-|---|---:|---:|---|
-| `BLOCKER_NOT_FOUND` | 1 | no | Blocker ID does not exist |
-| `BLOCKER_NOT_CURRENT` | 4 | yes | Blocker belongs to an old attempt |
-| `BLOCKER_LIMIT_REACHED` | 1 | no | Active attempt already has 64 open blockers |
-
-## Job and idempotency errors
-
-| Code | Exit | Retryable | Meaning |
-|---|---:|---:|---|
-| `IDEMPOTENCY_KEY_REUSED` | 2 | no | Same key was bound to a different canonical request |
-| `JOB_NOT_FOUND` | 1 | no | Job ID is absent or pruned |
-| `JOB_NOT_CANCELLABLE` | 1 | no | Job is running or terminal |
-| `JOB_WAIT_TIMEOUT` | 4 | yes | Wait expired; admitted job may continue |
-| `MUTATION_OUTCOME_UNKNOWN` | 4 | yes | Response was lost after mutation transmission may have begun |
-
-## Confirmation and internal errors
-
-| Code | Exit | Retryable | Meaning |
-|---|---:|---:|---|
-| `CONFIRMATION_REQUIRED` | 2 | no | Destructive non-interactive command lacks `--yes` |
-| `INTERNAL_ERROR` | 6 | no | Unexpected implementation failure |
-
-## Registered v2 runtime errors
-
-The additive runtime inventory covers Procedure v2 schema rejection; graph-node
-and definition lookup and type mismatches; option and route rejection; decision
-reason and evidence-reference failures; manual rework eligibility; goal opt-in,
-definition, revision, reactivation, criterion, and final-assessment checks; digest
-confirmation; and unsupported registered capability. Exact codes, exit classes,
-and retryability are frozen by `error-codes.json`. In particular,
-`EVIDENCE_REFERENCE_STALE` and `GOAL_REVISION_STALE` are retryable exit-4
-conflicts, while `DIGEST_CONFIRMATION_REQUIRED` is a non-retryable exit-2 usage
-failure and `UNSUPPORTED_V2_CAPABILITY` is a non-retryable exit-3 compatibility
-failure.
-
-Request decoding precedes these domain checks. A missing or blank reason in the
-current public `session.decide` or `session.rework` request shape is malformed and
-returns `REQUEST_INVALID` before durable admission. `DECISION_REASON_MISSING`
-remains the stable fail-closed result at the decision-transition boundary. A
-semantically vetted Procedure has a complete option-to-route map, and coherent
-session reconstruction rejects a valid evidence consumer whose bound source is
-stale. Consequently, `ROUTE_NOT_ALLOWED` and `EVIDENCE_REFERENCE_STALE` also
-remain registered defensive domain results rather than expected outcomes from a
-coherent current public request.
-
-Registered v2 runtime codes use closed code-bound details inside the retained
-`podway.error/v1` envelope. `EVIDENCE_REFERENCE_STALE` and `GOAL_REVISION_STALE` use
-`podway.recoverable-v2-runtime-error-details/v1`; every other registered code uses
-`podway.v2-runtime-error-details/v1`. `V2SCL-002` adds `EVIDENCE_PAGE_TOKEN_STALE`
-to the recoverable family and the other three bounded-evidence codes to the
-non-recoverable one, extending both closed `kind` unions. The required `kind` exactly equals the
-outer error code; code-specific fields are bounded, unknown fields are rejected,
-and optional `admission` retains the ordinary admission metadata contract. V2
-runtime error messages remain bounded to 512 characters.
-
-Authoring diagnostics never use runtime error codes. The authoring catalog
-separately enumerates every validate, vet, graph-projection, and lint condition from Procedure v2,
-including the mandatory stable codes
-`EVIDENCE_SOURCE_DOES_NOT_DOMINATE_CONSUMER`, `SKIPPABLE_EVIDENCE_SOURCE`,
-`EVIDENCE_SELECTOR_UNKNOWN_ITEM`, `READBACK_BUDGET_EXCEEDED`,
-`NEXT_STATIC_BUDGET_EXCEEDED`, `OBSERVATION_STATIC_MEMBERS_BUDGET_EXCEEDED`,
-`SOURCE_PROJECTION_BUDGET_EXCEEDED`, `GRAPH_PROJECTION_BUDGET_EXCEEDED`,
-`REWORK_TARGET_NOT_DOMINATING`, and
-`NO_REACTIVATION_PATH`.
-
-Canonical-source projection diagnostics distinguish Unicode-character overflow
-from encoded-byte overflow in their human detail while retaining the same stable
-code. Bounded human diagnostic lists state when they are truncated and report the
-shown and total counts; machine output carries the existing structured
-`diagnostics_truncated` and `diagnostics_total` fields.
-
-`INTERNAL_ERROR` is never marked retryable. A client may make an out-of-band retry decision, but the daemon does not prove that an unexpected failure committed no mutation. When the daemon cannot reconstruct a mutation response after durable admission, `podway.internal-error-details/v1` uses the `ADMITTED_RESPONSE_RECONSTRUCTION_FAILED` discriminator, carries a diagnostic ID equal to the current response request ID, and retains the admitted job ID and workspace sequence. This classification avoids emitting an invalid `podway.workspace-recovery-details/v1` object, whose recovery contract permits only pre-admission failures.
-
-## Typed condition failures
-
-ADR-0028 adds `OPTION_GUARD_UNSATISFIED` as a non-retryable exit-1 v2 runtime
-error. Its closed `podway.v2-runtime-error-details/v1` branch identifies the
-selected option and carries bounded predicate statuses. The error is evaluated
-only after identity, revision, and evidence-freshness checks, so a stale required
-source continues to return retryable `EVIDENCE_REFERENCE_STALE` instead.
-
-The authoring catalog replaces `LARGE_OPTION_SET` and `LARGE_CYCLE` with
-`OPTION_LABELS_NOT_DISTINCT` and `OPTION_CRITERIA_WEAK`. Invalid predicate shape,
-type, controller order, source selection, and bounds remain authoring failures
-under stable field-specific diagnostics; runtime errors never substitute for
-invalid Procedure admission.
-
-`OPTION_LABELS_NOT_DISTINCT` compares every pair of option labels after lowercasing,
-collapsing whitespace, trimming, and removing trailing `.`, `!`, and `?`. It reports
-the later option for a duplicate fingerprint. `OPTION_CRITERIA_WEAK` reports missing
-or non-concrete criteria and the later option in each pair of duplicate normalized
-criteria. These pairwise rules emit at most eight findings each. The schema's hard
-maximum of eight options is unchanged; option count alone is not a warning.
-
-`REWORK_TOPOLOGY_CONFUSING` reports a decision that routes rework back to itself or
-whose multiple rework routes cannot be distinguished by distinct normalized labels
-and concrete, distinct normalized criteria. Multiple rework routes to distinct
-phase-owner targets are otherwise valid. Rework-region size alone is not a warning;
-advance cycles remain invalid through graph validation. Existing compatibility
-diagnostics such as `INDISTINGUISHABLE_OPTION_LABELS`,
-`IDENTICAL_EFFECTIVE_ROUTES`, and `WEAK_CRITERIA_GUIDANCE` retain their registered
-meanings and may accompany the replacement diagnostics when both rules apply.
-
-## Bounded evidence scale failures
-
-[ADR-0024](../../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md) adopts four codes. `V2SCL-002` registered them in `error-codes.json`, the closed details schemas, and the protocol catalog. `V2SCL-003` made `ATTEMPT_CONTENT_LIMIT_EXCEEDED` reachable on the item mutation path, and `V2SCL-004` made the three evidence-read codes reachable through the `evidence.read` route.
+The following are the current catalog's codes, exits, and retryability. Detail
+schemas and the behavioral distinctions below take precedence over a short
+human explanation. Historical defensive entries do not establish new guarantees.
 
 | Code | Exit | Retryable | Meaning |
 |---|---:|---|---|
-| `EVIDENCE_NOT_AVAILABLE` | 1 | no | Nothing is readable for the current attempt at the named source and item: the reference is undeclared, unresolved, or skipped; the item is outside its selector; or the item holds no recorded value. The closed details name the reference state. |
+| `ARTIFACT_CHANGED` | 1 | yes | The local artifact no longer matches stored metadata. |
+| `ARTIFACT_MEDIA_TYPE_NOT_ALLOWED` | 1 | no | The artifact media type is not allowed. |
+| `ARTIFACT_NOT_FOUND` | 1 | no | The local artifact does not exist. |
+| `ARTIFACT_UNREADABLE` | 5 | no | The local artifact cannot be opened or hashed. |
 | `ATTEMPT_CONTENT_LIMIT_EXCEEDED` | 1 | no | Recorded text and list content for the attempt would exceed the per-attempt aggregate. |
-| `EVIDENCE_PAGE_TOKEN_EXHAUSTED` | 2 | no | The token offset is at or past the logical end of the value. The daemon never issues such a token. |
-| `EVIDENCE_PAGE_TOKEN_STALE` | 4 | yes | A previously valid token no longer matches the current consumer attempt or the recorded value it was issued against. A token naming another session or another item is not stale but unbound, and is refused as `REQUEST_INVALID`. |
+| `ATTEMPT_NOT_CURRENT` | 4 | yes | The target attempt is no longer active. |
+| `ATTEMPT_NOT_FOUND` | 1 | no | The requested attempt was not found in the session. |
+| `BARE_GIT_REPOSITORY` | 5 | no | Bare repositories are unsupported. |
+| `BLOCKERS_PRESENT` | 1 | no | Open blockers prevent completion. |
+| `BLOCKER_LIMIT_REACHED` | 1 | no | The active attempt already has the maximum number of open blockers. |
+| `BLOCKER_NOT_CURRENT` | 4 | yes | The blocker belongs to an old attempt. |
+| `BLOCKER_NOT_FOUND` | 1 | no | The blocker does not exist. |
+| `COMMAND_RETIRED` | 2 | no | The command or flag belongs to the retired daemon-era surface. |
+| `CONFIRMATION_REQUIRED` | 2 | no | The command requires explicit confirmation. |
+| `CRITERION_CITATION_INVALID` | 1 | no | A criterion citation does not name resolved attempt state. |
+| `CRITERION_MODE_MIXED` | 1 | no | Criterion applicability and assessment modes cannot be mixed in one attempt. |
+| `CRITERION_NOT_FOUND` | 1 | no | The requested goal criterion does not exist. |
+| `CRITERION_RESULT_MISSING` | 1 | no | A required criterion result is missing. |
+| `DECISION_REASON_MISSING` | 1 | no | The decision requires a reason. |
+| `DELEGATION_ALREADY_ACCEPTED` | 1 | no | This attempt already has an immutable delegation receipt. |
+| `DELEGATION_BINDING_MISMATCH` | 1 | no | The supplied execution identity does not match the declaration or package. |
+| `DELEGATION_NOT_APPLICABLE` | 1 | no | The selected attempt is not a delegated action. |
+| `DELEGATION_RECEIPT_REQUIRED` | 1 | no | The delegated attempt has no accepted receipt. |
+| `DELEGATION_RECEIPT_STALE` | 1 | no | The accepted receipt no longer matches the current delegated attempt. |
+| `DIGEST_CONFIRMATION_REQUIRED` | 2 | no | A custom Procedure start requires explicit digest confirmation. |
+| `EVIDENCE_NOT_AVAILABLE` | 1 | no | The declared evidence reference is unresolved or skipped, so the item has no readable page. |
+| `EVIDENCE_PAGE_TOKEN_EXHAUSTED` | 2 | no | The evidence page token offset is at or past the logical end of the value. |
+| `EVIDENCE_PAGE_TOKEN_STALE` | 4 | yes | The evidence page token no longer matches the current consumer, source value, or session identity. |
+| `EVIDENCE_REFERENCE_STALE` | 4 | yes | A resolved evidence reference is stale. |
+| `EVIDENCE_REFERENCE_UNRESOLVED` | 1 | no | A required evidence reference is unresolved. |
+| `FRESH_GOAL_ASSESSMENT_MISSING` | 1 | no | A fresh final goal assessment is required. |
+| `GOAL_ASSESSMENT_OUTCOME_NOT_ALLOWED` | 1 | no | The selected option does not match the determined goal outcome. |
+| `GOAL_REVISION_STALE` | 4 | yes | The expected goal revision is no longer current. |
+| `GOAL_REVISION_TARGET_NOT_ALLOWED` | 1 | no | The goal revision rework target is not allowed by policy. |
+| `GOAL_REVISION_TARGET_NOT_REVISION_SAFE` | 1 | no | The goal revision rework target is not revision-safe. |
+| `GOAL_TRACKING_NOT_ENABLED` | 1 | no | The Procedure does not enable session-goal tracking. |
+| `GRAPH_NODE_NOT_FOUND` | 1 | no | The requested graph node does not exist. |
+| `GRAPH_NODE_TYPE_MISMATCH` | 1 | no | The active graph node has the wrong type for the command. |
+| `IDEMPOTENCY_KEY_REUSED` | 2 | no | The idempotency key is bound to another request. |
+| `INTERNAL_ERROR` | 6 | no | An unexpected internal error occurred. |
+| `ITEM_ALREADY_SET` | 4 | yes | The item was expected to be unset. |
+| `ITEM_CONSTRAINT_FAILED` | 1 | no | The item value violates its constraints. |
+| `ITEM_NOT_FOUND` | 1 | no | The item does not exist in the active node definition. |
+| `ITEM_REVISION_CONFLICT` | 4 | yes | The item changed after it was observed. |
+| `ITEM_TYPE_MISMATCH` | 1 | no | The command is incompatible with the item type. |
+| `LEGACY_RUNTIME_STATE_UNSUPPORTED` | 5 | no | Daemon-era state requires explicitly confirmed reset-all. |
+| `LIST_VALUE_DUPLICATE` | 1 | no | The unique list already contains the value. |
+| `LIST_VALUE_NOT_FOUND` | 1 | no | The list value does not exist. |
+| `MANUAL_REWORK_TARGET_NOT_ALLOWED` | 1 | no | The graph node is not an allowed manual rework target. |
+| `MANUAL_REWORK_TARGET_NOT_ON_TRACE` | 1 | no | The manual rework target has no valid attempt on the current trace. |
+| `MIGRATION_FAILED` | 5 | no | Workspace migration failed. |
+| `MUTATION_OUTCOME_UNKNOWN` | 4 | yes | COMMIT I/O leaves the commit outcome uncertain; reconcile the original key. |
+| `NODE_DEFINITION_NOT_FOUND` | 1 | no | The requested node definition does not exist. |
+| `NOT_A_GIT_WORKTREE` | 5 | no | No valid Git worktree contains the path. |
+| `OPTION_GUARD_UNSATISFIED` | 1 | no | The selected decision option has an unmet or unevaluable guard. |
+| `OPTION_NOT_ALLOWED` | 1 | no | The selected decision option is not allowed. |
+| `PATH_OUTSIDE_WORKTREE` | 5 | no | A requested path escapes the worktree. |
+| `PRESET_NOT_FOUND` | 1 | no | Built-in preset does not exist. |
+| `PROCEDURE_DIGEST_MISMATCH` | 4 | no | The canonical Procedure digest differs from the expected digest. |
+| `PROCEDURE_INVALID` | 1 | no | Procedure is invalid. |
+| `PROCEDURE_NOT_FOUND` | 1 | no | Procedure cannot be resolved. |
+| `PROCEDURE_SCHEMA_UNSUPPORTED` | 1 | no | Procedure schema is unsupported. |
+| `PROCEDURE_V2_SCHEMA_INVALID` | 1 | no | The Procedure v2 document violates its closed schema. |
+| `REACTIVATION_FLAG_REQUIRED` | 1 | no | Reactivating a completed session requires the explicit flag. |
+| `REQUEST_INVALID` | 2 | no | Request is malformed or violates schema. |
+| `REQUEST_TOO_LARGE` | 2 | no | A bounded stdin document or complete typed request exceeds its named input ceiling. |
+| `REQUIRED_ITEMS_MISSING` | 1 | no | Required items are missing. |
+| `ROUTE_NOT_ALLOWED` | 1 | no | The selected transition route is not allowed. |
+| `SESSION_ALREADY_EXISTS` | 1 | no | A task session already exists. |
+| `SESSION_ARCHIVE_LIMIT_REACHED` | 1 | no | Historical capacity result; current archival has no inactive-session count cap and does not emit it. |
+| `SESSION_ARCHIVE_NOT_ELIGIBLE` | 1 | no | The current session is not eligible for archival. |
+| `SESSION_ARCHIVE_NOT_FOUND` | 1 | no | The requested inactive session was not found. |
+| `SESSION_CANCELLED` | 1 | no | The session was cancelled. |
+| `SESSION_GOAL_ALREADY_DEFINED` | 1 | no | The session goal is already defined. |
+| `SESSION_GOAL_MISSING` | 1 | no | The session goal has not been defined. |
+| `SESSION_ID_MISMATCH` | 4 | no | The session ID differs from the expected identity. |
+| `SESSION_NOT_FOUND` | 1 | no | No current task session exists. |
+| `SESSION_NOT_RUNNING` | 1 | no | The command requires a running session, or begin requires a prepared session. |
+| `SESSION_NOT_TERMINAL` | 1 | no | The command requires a completed or cancelled session. |
+| `SESSION_RESET_NOT_ELIGIBLE` | 1 | no | The current session is not eligible for default reset or replacement. |
+| `SESSION_REVISION_CONFLICT` | 4 | yes | The session changed after it was observed. |
+| `SESSION_START_DECISION_REQUIRED` | 5 | no | Starting a successor session requires an explicit decision about the current session. |
+| `SESSION_START_STATE_CONFLICT` | 4 | yes | The existing session state changed after the start policy was selected. |
+| `STAGE_NOT_SKIPPABLE` | 1 | no | The active stage cannot be skipped. |
+| `WORKSPACE_ALREADY_INITIALIZED` | 1 | no | Workspace is already initialized. |
+| `WORKSPACE_BUSY` | 4 | yes | The SQLite write-lock deadline expired without a state effect. |
+| `WORKSPACE_CONFIG_INVALID` | 5 | no | Workspace configuration is invalid. |
+| `WORKSPACE_CONTRACT_MISMATCH` | 5 | no | The Store writer contract is not supported by this binary. |
+| `WORKSPACE_ID_CONFLICT` | 5 | no | Persisted workspace binding conflicts with the resolved canonical Git/worktree identity. |
+| `WORKSPACE_INIT_CONFLICT` | 5 | no | Existing Podway files conflict with safe initialization. |
+| `WORKSPACE_MAINTENANCE` | 4 | yes | Process-independent maintenance exclusion or a published recovery marker blocks access. |
+| `WORKSPACE_NOT_INITIALIZED` | 5 | no | Podway workspace state is absent. |
+| `WORKSPACE_PATH_UNSAFE` | 5 | no | Podway workspace path is unsafe. |
+| `WORKSPACE_SCHEMA_UNSUPPORTED` | 5 | no | Workspace schema is unsupported. |
+| `WORKSPACE_STATE_UNREADABLE` | 5 | no | Workspace state is corrupt or inaccessible. |
+| `WORKSPACE_UUID_MISMATCH` | 4 | no | The workspace UUID differs from the expected identity. |
+| `WORKTREE_GONE` | 5 | no | The bound Git worktree no longer exists. |
 
-`EVIDENCE_PAGE_TOKEN_STALE` uses the state-refresh recovery recipe, matching `EVIDENCE_REFERENCE_STALE`, and `EVIDENCE_PAGE_TOKEN_EXHAUSTED` is a usage failure because the daemon never issues a token past the logical end. Only the per-attempt aggregate maps to `ATTEMPT_CONTENT_LIMIT_EXCEEDED`; every other scale bound is a declaration-time rejection and keeps its own constraint failure. A genuinely stale reference keeps `EVIDENCE_REFERENCE_STALE`; `EVIDENCE_NOT_AVAILABLE` never substitutes for it. An availability failure is decided before any token comparison, so a token supplied against a reference that has since become unreadable answers `EVIDENCE_NOT_AVAILABLE` rather than a token code. A recorded value of zero scalars or zero entries is complete, not exhausted: it answers with one empty terminal page. Malformed, oversized, cross-session, and wrong-binding tokens are decoding failures and return `REQUEST_INVALID` before any state comparison. No evidence-read failure changes state.
+## Current detail families
 
-Bound failures carry structured details containing `field`, `actual`, `maximum`, and `unit`, and name the constraint actually violated: entry count, per-entry length, total list content, or the per-attempt aggregate. A generic message such as `invalid constraints` is not sufficient when the exact exceeded limit is known. `REQUEST_TOO_LARGE` is the intentional exception for pre-parse frame decoding and bounded CLI acceptance stdin reads, where no parsed field path exists.
+All identifiers below carry the `podway.` prefix. Their canonical schemas under
+[`assets/schemas/`](../../../assets/schemas/) own closure and code-specific fields.
+Named details contain no admission or job facts.
 
-## Delegation failures
+| Code or family | Current detail schema | Important facts |
+|---|---|---|
+| `WORKSPACE_BUSY` | `workspace-busy-details/v1` | `boundary: sqlite_write_lock`, `timeout_ms`, refresh |
+| `WORKSPACE_MAINTENANCE` | `workspace-maintenance-details/v1` | Boundary, timeout, boundary-specific recovery |
+| `LEGACY_RUNTIME_STATE_UNSUPPORTED` | `legacy-runtime-state-unsupported-details/v1` | Store generation, marker names, authorized reset |
+| `WORKSPACE_CONTRACT_MISMATCH` | `workspace-contract-mismatch-details/v1` | Expected/actual writer manifest digest, diagnosis |
+| `COMMAND_RETIRED` | `command-retired-details/v1` | `retired`, nullable `replacement`, bounded `guidance` |
+| `WORKSPACE_UUID_MISMATCH` | `workspace-uuid-mismatch-details/v3` | Expected/actual UUID, diagnosis |
+| `SESSION_ID_MISMATCH` | `session-id-mismatch-details/v3` | Expected ID, nullable actual ID, refresh |
+| `PROCEDURE_DIGEST_MISMATCH` | `procedure-digest-mismatch-details/v3` | Expected/actual canonical digest, refresh |
+| `SESSION_REVISION_CONFLICT`, `ITEM_REVISION_CONFLICT` | `revision-conflict-details/v3` | `expected_revision` and/or `current_revision`, refresh |
+| `ATTEMPT_NOT_CURRENT` | `attempt-conflict-details/v3` | Expected/actual attempt, refresh |
+| `EVIDENCE_REFERENCE_STALE`, `GOAL_REVISION_STALE`, `EVIDENCE_PAGE_TOKEN_STALE` | `recoverable-v2-runtime-error-details/v2` | Code-bound `kind`, bounded facts, refresh |
+| Other typed graph/goal/guard/Procedure-v2/evidence errors | `v2-runtime-error-details/v2` | `kind` equals outer code; closed code-specific fields |
+| `BLOCKER_LIMIT_REACHED` | `blocker-limit-details/v2` | `maximum_open_blockers: 64` |
+| `IDEMPOTENCY_KEY_REUSED` | `idempotency-key-reused-details/v2` | Closed schema marker |
+| `MUTATION_OUTCOME_UNKNOWN` | `mutation-outcome-unknown-details/v3` | Original key and matching lookup/recovery key |
+| `WORKSPACE_STATE_UNREADABLE`, `WORKSPACE_SCHEMA_UNSUPPORTED` | `workspace-recovery-details/v2` | Diagnosis |
+| `SESSION_RESET_NOT_ELIGIBLE` | `session-reset-not-eligible-details/v2` | Lifecycle, disposition, required action |
+| `SESSION_START_DECISION_REQUIRED` | `session-start-decision-required-details/v2` | Lifecycle, disposition, allowed actions |
+| `SESSION_START_STATE_CONFLICT` | `session-start-state-conflict-details/v2` | Current lifecycle/disposition, allowed actions |
+| `SESSION_ARCHIVE_NOT_ELIGIBLE` | `session-archive-not-eligible-details/v2` | Lifecycle/disposition, required action |
+| `SESSION_ARCHIVE_LIMIT_REACHED` | `session-archive-limit-details/v2` | Historical maximum; not emitted by current archival |
+| `SESSION_ARCHIVE_NOT_FOUND` | `session-archive-not-found-details/v2` | Exact inactive session ID |
+| Five `DELEGATION_*` codes | `delegation-error-details/v2` | Closed code/reason pairing |
+| `INTERNAL_ERROR` | `internal-error-details/v2` | Diagnostic UUID and optional bounded message |
 
-The explicit delegated route and completion gate use these closed errors. All
-five have exit code 1, are non-retryable for the unchanged request, and carry
-`podway.delegation-error-details/v1`.
+`ITEM_CONSTRAINT_FAILED` may use a generic object; if its details include a parsed
+`field`, the envelope selects the closed named-bound branch. Typed v2 runtime
+messages are bounded to 512 Unicode scalars; the outer message bound is separate.
 
-| Code | Meaning |
-|---|---|
-| `DELEGATION_NOT_APPLICABLE` | The selected attempt is Direct. |
-| `DELEGATION_RECEIPT_REQUIRED` | The delegated attempt has no accepted receipt. |
-| `DELEGATION_RECEIPT_STALE` | The accepted receipt no longer matches the current package or recorded items. |
-| `DELEGATION_BINDING_MISMATCH` | The supplied package or execution identity disagrees with the declaration. |
-| `DELEGATION_ALREADY_ACCEPTED` | The attempt already has an immutable receipt. |
+## Direct workspace and contention failures
 
-`delegation.package` returns `SESSION_NOT_RUNNING` when the session has no
-active attempt. `delegation.accept` requires a current attempt fence; an
-already terminal attempt is rejected before admission. `delegation.receipt` returns the
-non-retryable `ATTEMPT_NOT_FOUND` when the requested attempt never existed in
-the selected session.
+`WORKSPACE_BUSY` reports SQLite write-lock expiry and the invocation's bounded
+`timeout_ms`. `WORKSPACE_MAINTENANCE` distinguishes `maintenance_lock`,
+`intent_marker`, `reset_marker`, `removal_marker`, and `predecessor_migration`.
+One absolute invocation deadline bounds the combined maintenance/SQLite wait;
+it is not a hard timer for stdin, human confirmation, preparation, filesystem
+cleanup, or rendering. Neither contention error retains a rejected outcome.
+Reads never resume published maintenance.
 
-The details `reason` is one of `direct_attempt`, `receipt_missing`,
-`package_changed`, `items_changed`, `binding_mismatch`, `role_mismatch`,
-`duplicate_acceptance`, `disposition_mismatch`, or `round_limit`. Automation
-branches on code and details, never on the human message. A stale receipt
-requires an explicit fresh attempt after an accepted item edit; exact durable
-job replay still returns its original result.
+Normal reads, writes, and replay refuse daemon-era Store generations 1–13 and
+markers without conversion, deletion, or SHM creation. Unsupported newer state
+uses `WORKSPACE_SCHEMA_UNSUPPORTED`; corruption uses `WORKSPACE_STATE_UNREADABLE`.
+An unsupported writer digest uses `WORKSPACE_CONTRACT_MISMATCH` before key replay.
+Unsupported legacy workspace configuration fails validation before Store access.
+Confirmed reset-all is destructive recovery; a recipe does not grant permission.
 
-## Prepared lifecycle failures
+## Identity and conflict recovery
 
-`SESSION_NOT_RUNNING` applies to every cursor, item, blocker, goal, completion,
-cancellation, retry, skip, decision, and rework mutation attempted while the
-session is prepared. For compatibility, it also reports `begin` against a
-non-prepared session; callers should re-read status rather than interpret the
-code name as a lifecycle observation. `SESSION_NOT_TERMINAL` applies when a disposition is
-attempted before completion or cancellation.
+Workspace UUID and writer identity are classified before idempotency replay.
+A matching numeric revision cannot prove session/workspace identity. UUID,
+session, and Procedure-digest mismatches are non-retryable exit-4 conflicts;
+revision/attempt conflicts are retryable exit-4 conflicts. Retryability permits
+safe reassessment, not blind resubmission with new fences.
 
-`SESSION_RESET_NOT_ELIGIBLE` is a non-retryable domain result for default reset
-and the compatible eligible-replacement wire shape. Its closed details identify the observed lifecycle,
-always report `current_terminal_disposition: false`, and identify the required
-next mode as `record_disposition` or `force`. They contain no Git, roadmap, process, external
-reference, item value, or progress-summary data. A caller must reassess ownership
-before choosing a new mutation; the error never recommends force deletion.
-The details use `podway.session-reset-not-eligible-details/v1`.
-
-`SESSION_START_DECISION_REQUIRED` is a non-retryable state conflict for a
-noninteractive `start` that encounters prepared, running, or undisposed terminal
-state without a sufficient `--on-existing` policy. Its closed details report the
-observed lifecycle, whether the terminal disposition is current, the allowed
-actions, and `admission.admitted: false`. The error never prompts and never
-changes state.
-
-`SESSION_START_STATE_CONFLICT` is a retryable fenced-state conflict. It applies
-when an explicit start resolution was valid when selected but lifecycle or
-terminal-disposition state no longer admits that resolution. Its closed details
-report the current lifecycle, disposition state, allowed next actions, and
-whether the failed request had already been durably admitted. Callers must
-re-observe before deriving another start request.
-
-Archive failures use three distinct non-retryable codes. `SESSION_ARCHIVE_NOT_ELIGIBLE`
-reports the current lifecycle, disposition state, and the required lifecycle
-action. `SESSION_ARCHIVE_LIMIT_REACHED` remains in the catalog for historical
-documents and is not emitted by current builds; archival never evicts retained
-history. `SESSION_ARCHIVE_NOT_FOUND` reports the exact inactive
-session ID that was not found; after an uncertain purge response, callers
-reconcile with a fresh `archive list` rather than assuming who performed deletion.
-
-Missing or blank force progress summary, incompatible disposition fields, initial
-goal fields supplied to start instead of begin, and unsupported mode combinations
-are malformed requests and return `REQUEST_INVALID` before durable admission.
-
-## Conflict remediation
-
-On revision conflicts, details include current values:
-
-```json
-{
-  "expected_session_revision": 12,
-  "actual_session_revision": 13,
-  "expected_attempt_id": "...",
-  "actual_attempt_id": "..."
-}
-```
-
-Clients should run the returned `observe --json --wait-for-idle` recipe, reassess
-the active graph node, and derive a new command rather than blindly changing
-only the revision.
-
-## Identity-conflict details
-
-`WORKSPACE_UUID_MISMATCH` uses the closed
-`podway.workspace-uuid-mismatch-details/v2` object with
-`expected_workspace_uuid`, `actual_workspace_uuid`, and `admission`.
-`SESSION_ID_MISMATCH` uses the closed
-`podway.session-id-mismatch-details/v2` object with `expected_session_id`,
-nullable `actual_session_id`, and `admission`. A null actual session means the
-expected session no longer exists as the workspace's current session.
-
-Before durable admission, `admission` is exactly `{ "admitted": false }`. A
-terminal conflict discovered after admission uses `{ "admitted": true,
-"job_id": "<uuid>", "workspace_sequence": <positive integer> }`. The two
-identity errors are non-retryable exit-4 conflicts: callers must observe fresh
-identity before deciding whether a new operation is valid.
-
-`WORKSPACE_MODE_MISMATCH` is a non-retryable exit-4 conflict. Its closed
-`podway.workspace-mode-mismatch-details/v1` object contains the bounded
-`expected_mode`, `actual_mode`, and one of the `endpoint`, `daemon`, `config`,
-`store`, or `registry` boundaries. Mutation errors also contain exactly
-`{ "admitted": false }`; query errors omit `admission`. It deliberately excludes
-raw paths.
-
-`PROCEDURE_DIGEST_MISMATCH` is a non-retryable exit-4 conflict. Its closed
-`podway.procedure-digest-mismatch-details/v2` object contains the expected and actual canonical
-Procedure digests plus `{ "admitted": false }`; the comparison always precedes durable admission.
-
-Every daemon mutation error now carries `details.admission`. Pre-admission
-errors use exactly `{ "admitted": false }`; terminal errors and
-`JOB_WAIT_TIMEOUT` use `{ "admitted": true, "job_id": "<uuid>",
-"workspace_sequence": <positive integer> }`. The normative target is the
-[automation error contract](automation-client-contract.md#22-error-and-exit-code-requirements-aut-err-001005).
-
-`BLOCKER_LIMIT_REACHED` uses the closed
-`podway.blocker-limit-details/v1` object. `maximum_open_blockers` is `64`.
-Its `admission` follows the same pre-admission or terminal form above; terminal
-details also carry the matching top-level `job_id` and `job_sequence` fields.
+Revision details carry `expected_revision` and/or `current_revision` plus refresh.
+A null `actual_session_id` means the expected session is no longer current.
+Use the returned `observe` or `doctor` recipe, reassess ownership and graph state,
+and derive a separately justified new request. Uncertain-response exact replay
+retains original resolved fences and key; substituting a fresh revision changes
+the request and cannot be called replay.
 
 ## Mutation outcome unknown details
 
-When the CLI loses a mutation response after request transmission may have begun,
-it emits `MUTATION_OUTCOME_UNKNOWN` with this closed details object:
+Only uncertain COMMIT I/O emits this closed shape:
 
 ```json
 {
-  "schema": "podway.mutation-outcome-unknown-details/v2",
+  "schema": "podway.mutation-outcome-unknown-details/v3",
   "outcome": "unknown",
   "idempotency_key": "original-key",
   "reconcile": {
-    "command": "job.lookup",
+    "command": "outcome.lookup",
     "idempotency_key": "original-key"
   },
   "recovery": {
     "action": "reconcile_mutation",
-    "command": "job.lookup",
-    "argv": ["podway", "--json", "job", "lookup", "--idempotency-key", "original-key"],
-    "reason": "Reconcile the original idempotency key before considering another mutation.",
+    "command": "outcome.lookup",
+    "argv": ["podway", "--json", "outcome", "lookup", "--idempotency-key", "original-key"],
+    "reason": "Look up the exact successful outcome before any retry.",
     "requires_explicit_authorization": false
   }
 }
 ```
 
-The object deliberately omits `admission`, job ID, and sequence because none is
-known without a trustworthy response. `retryable=true` means the caller can
-recover safely: run `job lookup --idempotency-key <original-key>` first and do
-not submit a new-key mutation until reconciliation proves that is appropriate.
+The validator checks agreement of the key in details, reconciliation, and recovery
+argv. Lost stdout/SIGKILL can leave a caller uncertain without an error response;
+the same original-key lookup and exact-request replay discipline applies.
+A miss proves no retained success only within retention. Failed mutations are
+absent by design. Session outcomes survive archival/purge until session or runtime
+reset; workspace outcomes retain at most 100 entries or 30 days, pruned on writes.
+Complete workspace removal destroys lookup retention; pending removal uses its
+exact marker-backed retry, and already-absent success proves convergence rather
+than original-response replay.
 
 ## Structured recovery recipes
 
-The following errors add one required closed `recovery` object through a new
-details-schema version while preserving the outer `podway.error/v1`, stable
-code, retryability, exit class, and admission facts:
+`podway.recovery-recipe/v2` contains exactly `action`, `command`, `argv`, `reason`,
+and `requires_explicit_authorization`; the recipe has no `schema` field.
+Argv has 2..10 nonempty strings of at most 256 Unicode scalars each; reason has
+at most 256. Recipes omit `--worktree`: retain the original selected worktree in
+the client's controlled invocation context.
 
-| Error family | Details schema | Read-only command |
+| Owning condition | Allowed recipe | Authorization flag |
 |---|---|---|
-| `DAEMON_UNAVAILABLE` | `podway.endpoint-error-details/v2` | `daemon.status` |
-| `DAEMON_STARTING` | `podway.daemon-readiness-error-details/v1` | `daemon.wait-ready` |
-| `DAEMON_READINESS_TIMEOUT` | `podway.daemon-readiness-timeout-details/v1` | `daemon.wait-ready` |
-| `DAEMON_CONTRACT_MISMATCH` | `podway.daemon-contract-mismatch-details/v2` | `daemon.status` |
-| `WORKSPACE_UUID_MISMATCH` | `podway.workspace-uuid-mismatch-details/v2` | `workspace.doctor` |
-| `WORKSPACE_STATE_UNREADABLE`, `WORKSPACE_SCHEMA_UNSUPPORTED` | `podway.workspace-recovery-details/v1` | `workspace.doctor` |
-| `PROCEDURE_DIGEST_MISMATCH` | `podway.procedure-digest-mismatch-details/v2` | `session.observe` |
-| `SESSION_ID_MISMATCH` | `podway.session-id-mismatch-details/v2` | `session.observe` |
-| `SESSION_REVISION_CONFLICT`, `ITEM_REVISION_CONFLICT` | `podway.revision-conflict-details/v2` | `session.observe` |
-| `ATTEMPT_NOT_CURRENT` | `podway.attempt-conflict-details/v2` | `session.observe` |
-| `EVIDENCE_REFERENCE_STALE`, `GOAL_REVISION_STALE`, `EVIDENCE_PAGE_TOKEN_STALE` | `podway.recoverable-v2-runtime-error-details/v1` | `session.observe` |
-| `MUTATION_OUTCOME_UNKNOWN` | `podway.mutation-outcome-unknown-details/v2` | `job.lookup` |
-| `JOB_WAIT_TIMEOUT` | `podway.job-wait-timeout-details/v2` | `job.wait` when the job ID is known, otherwise `session.observe` |
+| Session/revision/attempt/Procedure digest, stale goal/evidence, SQLite contention | `refresh_state` / `session.observe` | false |
+| Workspace UUID, state/schema, writer identity | `diagnose_workspace` / `workspace.doctor` | false |
+| Maintenance lock/intent/predecessor | Owning schema's read-only refresh or diagnosis | false |
+| Uncertain COMMIT I/O | `reconcile_mutation` / `outcome.lookup` with original key | false |
+| Unsupported legacy state | `reset_legacy_state` / `workspace.reset_all` with `<new-idempotency-key>` | true |
+| Published reset marker | `resume_maintenance` / `workspace.reset_all` with original key | true |
+| Published removal marker | `resume_maintenance` / `workspace.remove` with original key and UUID | true |
 
-`podway.recovery-recipe/v1` contains exactly `action`, `command`, `argv`,
-`reason`, and `requires_explicit_authorization`. Commands are limited to
-`session.observe`, `job.lookup`, `job.wait`, `daemon.status`, `daemon.wait-ready`, and
-`workspace.doctor`; argv is limited to 2..8 non-empty strings and reason to 256
-Unicode scalars. Every current recipe is read-only and therefore reports
-`requires_explicit_authorization=false`. The object never authorizes retry,
-restart, repair, reset, reinstall, fence weakening, or another mutation.
+Read-only argv uses `podway --json observe` or `podway --json doctor`; lookup uses
+`podway --json outcome lookup --idempotency-key <original-key>`. Legacy reset uses
+`reset --all --yes --idempotency-key <new-idempotency-key>`; replace the placeholder
+with a fresh caller-owned key only after destructive authorization. Published
+reset recovery retains its original key. Removal includes `--force --yes`,
+`--if-workspace-uuid`, and its original key. Reading a recipe never authorizes
+execution or resumes a marker. No recipe weakens fences, changes a replay key,
+alters a historical service, or executes external work.
 
-`DAEMON_STARTING` is a pre-admission response with the current state, stage,
-elapsed time, bounded worktree progress, and `admission.admitted=false`.
-`DAEMON_READINESS_TIMEOUT` additionally records the lifecycle operation,
-deadline, installed, loaded, socket-present, reachable, and contract-verified
-observations plus `same_command_retry_safe=true`. Timeout preserves the existing
-LaunchAgent, endpoint ownership, registry, workspace databases, and sessions.
+## Prepared lifecycle failures
 
-## Error redaction
+`SESSION_NOT_RUNNING` rejects cursor/item/blocker/goal/completion/cancellation/
+retry/skip/decision/rework in prepared state. It also rejects `begin` against
+non-prepared state: re-read lifecycle rather than infer it from the code name.
+Disposition before completion/cancellation returns `SESSION_NOT_TERMINAL`.
 
-Error details may include local paths needed for remediation. They MUST NOT include:
+Default reset/replacement eligibility uses `SESSION_RESET_NOT_ELIGIBLE` with
+lifecycle, current disposition, and required action (`record_disposition` or
+`force`). These are state facts, not force authority. Noninteractive start without
+sufficient policy returns exit-5 `SESSION_START_DECISION_REQUIRED` without prompt
+or mutation. If an explicitly selected policy becomes invalid, retryable exit-4
+`SESSION_START_STATE_CONFLICT` requires fresh observation.
 
-- item text values unless the error directly validates that submitted value;
-- full canonical requests;
-- environment variables;
-- file contents;
-- secrets or access tokens;
-- artifact bytes.
+Archival never automatically evicts history; current builds do not emit
+`SESSION_ARCHIVE_LIMIT_REACHED`. `SESSION_ARCHIVE_NOT_FOUND` names the missing
+inactive ID. After uncertain purge stdout, original-key lookup identifies the
+success; archive list confirms absence but not which caller performed deletion.
+Missing/blank force progress summary, incompatible disposition fields, start
+with initial goal fields instead of begin, duplicated stdin identities, and
+unsupported options are malformed input, not admitted work.
 
-## Reserved daemon-free errors
+## Typed conditions and authoring diagnostics
 
-`V2DFC-003` reserves these entries without changing shipped error envelopes:
+`OPTION_GUARD_UNSATISFIED` is a non-retryable exit-1 typed runtime error. Its
+closed branch names the option and bounded predicate statuses. Identity/revision
+checks precede evidence freshness, which precedes guards; stale evidence retains
+retryable `EVIDENCE_REFERENCE_STALE`. Missing/blank public decision or rework
+reason is `REQUEST_INVALID` at decoding. `DECISION_REASON_MISSING` remains a
+transition-boundary defensive result.
 
-| Code | Exit | Retryable | Detail schema |
-|---|---:|---:|---|
-| `WORKSPACE_BUSY` | 4 | yes | `podway.workspace-busy-details/v1` |
-| `LEGACY_RUNTIME_STATE_UNSUPPORTED` | 5 | no | `podway.legacy-runtime-state-unsupported-details/v1` |
-| `WORKSPACE_CONTRACT_MISMATCH` | 5 | no | `podway.workspace-contract-mismatch-details/v1` |
-| `COMMAND_RETIRED` | 2 | no | `podway.command-retired-details/v1` |
+Authoring diagnostics never substitute runtime codes for invalid Procedure
+structure. Their inventory includes `EVIDENCE_SOURCE_DOES_NOT_DOMINATE_CONSUMER`,
+`SKIPPABLE_EVIDENCE_SOURCE`, `EVIDENCE_SELECTOR_UNKNOWN_ITEM`,
+`READBACK_BUDGET_EXCEEDED`, `NEXT_STATIC_BUDGET_EXCEEDED`,
+`OBSERVATION_STATIC_MEMBERS_BUDGET_EXCEEDED`, `SOURCE_PROJECTION_BUDGET_EXCEEDED`,
+`GRAPH_PROJECTION_BUDGET_EXCEEDED`, `REWORK_TARGET_NOT_DOMINATING`, and
+`NO_REACTIVATION_PATH`. Canonical-source diagnostics distinguish Unicode and
+encoded-byte overflow. Human lists report truncation and shown/total counts;
+machine output retains `diagnostics_truncated` and `diagnostics_total`.
 
-The reserved error envelope is `podway.error/v2`. It excludes retired daemon,
-IPC, job, runtime-reset and workspace-mode failures and exit class 3. Existing
-error generations remain the shipped contract until `V2DFC-007`.
-`WORKSPACE_MAINTENANCE` keeps exit 4 and retryability, with reserved
-`podway.workspace-maintenance-details/v1` for process-independent exclusion.
-`MUTATION_OUTCOME_UNKNOWN` is reserved for uncertain COMMIT I/O only; its new
-details point to read-only `outcome.lookup`, never job lookup or a new mutation.
+`OPTION_LABELS_NOT_DISTINCT` compares labels after lowercasing, whitespace
+collapse/trim, and removal of trailing `.`, `!`, and `?`, reporting the later
+duplicate. `OPTION_CRITERIA_WEAK` reports missing/non-concrete criteria and later
+duplicate normalized criteria. Each pairwise rule emits at most eight findings.
+The hard maximum of eight options is unchanged; option count is not a warning.
+`REWORK_TOPOLOGY_CONFUSING` identifies self-rework or multiple rework routes that
+lack distinct normalized labels and concrete distinct criteria. Distinct routes
+to phase-owner targets are valid; region size is not a warning, while advance
+cycles remain invalid. Registered compatibility findings
+`INDISTINGUISHABLE_OPTION_LABELS`, `IDENTICAL_EFFECTIVE_ROUTES`, and
+`WEAK_CRITERIA_GUIDANCE` keep their meanings when their rules also apply.
 
-The canonical [retired-command table](../../../assets/specifications/retired-commands-v1.json)
-is reserved for cutover. Every listed command and flag must then fail before
-Store access. A null replacement means no replacement exists. Maintenance
-recipes distinguish read-only diagnosis from destructive reset or exact retry;
-destructive recipes require explicit authorization and preserve the operation's
-idempotency key. Merely reading a recipe never resumes maintenance.
+## Bounded input and evidence failures
+
+Both `record --stdin` and typed `RecordMany` share the 1,048,576-byte complete-input
+ceiling, including fences/key/operations. Delegation acceptance has a separate
+complete 32 KiB stdin ceiling. Item limits remain independent: 65,536 text scalars;
+1,000 list entries, 8,192 per entry, 1,000,000 total list scalars; 16,777,216
+text/list scalars per attempt; 128 items. Only the attempt aggregate maps to
+`ATTEMPT_CONTENT_LIMIT_EXCEEDED`. Parsed bound failures name `field`, `actual`,
+`maximum`, and `unit`. `REQUEST_TOO_LARGE` is the exception for bounded acceptance
+or encoding before a parsed field path is available.
+
+Malformed/oversized/cross-session/wrong-binding tokens fail `REQUEST_INVALID`
+before state comparison. Undeclared/unresolved/skipped references, unselected
+items and absent values use `EVIDENCE_NOT_AVAILABLE`. Availability precedes token
+comparison when a reference becomes unreadable. Changed bound state uses retryable
+`EVIDENCE_PAGE_TOKEN_STALE`; stale references keep `EVIDENCE_REFERENCE_STALE`.
+An offset at/past logical end uses `EVIDENCE_PAGE_TOKEN_EXHAUSTED`; the Engine never
+issues such a continuation token. A zero-length recorded value is complete and
+returns one empty terminal page. No evidence-read error writes state.
+
+## Delegation failure behavior
+
+All five delegation codes are non-retryable exit 1 for unchanged input. Details
+v2 pair NOT_APPLICABLE with `direct_attempt`, RECEIPT_REQUIRED with `receipt_missing`,
+RECEIPT_STALE with `package_changed` or `items_changed`, BINDING_MISMATCH with
+`binding_mismatch`, `role_mismatch`, `disposition_mismatch` or `round_limit`, and
+ALREADY_ACCEPTED with `duplicate_acceptance`.
+Package reads require a running delegated action. Acceptance checks ordinary
+fences first; a stale attempt cannot bypass them to reach a delegation error.
+Receipt reads use `ATTEMPT_NOT_FOUND` for unknown attempts in the selected session.
+Accepted item edits preserve an immutable stale receipt; explicit retry/rework
+creates a fresh attempt. Exact replay returns its original success and does not
+prove current receipt applicability.
+
+## Error redaction and internal failures
+
+Details may contain bounded identities/paths required for remediation. They MUST
+NOT expose full requests, environment variables, file contents, credentials,
+artifact bytes, or unrelated item values. `INTERNAL_ERROR` is non-retryable with
+a diagnostic UUID. Success is validated before commit; an internal failure is
+not a job receipt or evidence of admission/continued work. Caller-side uncertainty
+requires original-key reconciliation rather than assumed fresh-key retry.

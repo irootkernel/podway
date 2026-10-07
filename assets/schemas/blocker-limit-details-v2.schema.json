@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:podway:schema:blocker-limit-details:v2",
   "title": "Podway Open Blocker Limit Details v2",
-  "$comment": "Reserved by V2DFC-003; not emitted before the owning daemon-free cutover task.",
+  "$comment": "Current direct contract under ADR-0038; originally reserved by V2DFC-003.",
   "type": "object",
   "additionalProperties": false,
   "required": [

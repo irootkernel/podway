@@ -16,5 +16,5 @@
       "const": 32
     }
   },
-  "$comment": "Reserved by V2DFC-003; current reachable archive limit failures retain their domain shape."
+  "$comment": "Retained historical 32-session archive-limit detail shape. Current archival has no inactive-session count cap and does not emit this error under ADR-0034."
 }

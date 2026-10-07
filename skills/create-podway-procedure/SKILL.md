@@ -9,12 +9,15 @@ description: Create, revise, review, or harden a custom Podway Procedure v2 from
 
 - Treat the requesting repository as the owner of workflow meaning, canonical Procedure paths, supported Podway versions, tests, and distribution policy. Podway owns the Procedure v2 grammar and runtime semantics.
 - Produce declarative Procedure v2 source only. Do not add command execution, Git mutation, arbitrary expressions, plugins, parallel cursors, or another workflow engine.
-- Do not initialize a workspace, inspect or mutate a session, control a daemon, install Podway, or alter runtime state. Use `$use-podway` only for a separately requested runtime operation.
+- Do not initialize a workspace, inspect or mutate a session, install Podway, or alter runtime state. Use `$use-podway` only for a separately requested runtime operation.
 - Prefer an existing built-in or repository-owned Procedure when it already expresses the required gates. Do not create a custom graph merely to rename phases.
 
 ## Establish authoring readiness
 
-1. Resolve one Git worktree and run `podway version --json` plus `podway version --json --identity` when supported. Record the exact manifest and source provenance, not only semver. If Podway is unavailable, stop and report the missing prerequisite; do not install it.
+1. Resolve one Git worktree and run `podway version --json` plus
+   `podway version --json --identity`. Require current Output v4, version-result v2
+   and contract-manifest v2; record exact binary/build/source/manifest provenance,
+   not only semver. If Podway is unavailable, stop and report the missing prerequisite; do not install it.
 2. Read the repository authorities and `.podway/config.yaml`. Resolve the canonical target from repository policy and configured `procedure_paths`; when neither chooses a different path, use `.podway/procedures/<procedure-id>.yaml`.
 3. If the workspace configuration is absent, invalid, or excludes the intended target, stop before editing and request a separate `$use-podway` initialization or diagnosis. Do not treat `WORKSPACE_CONFIG_INVALID` as permission to repair the workspace.
 4. For a worktree-local Procedure, record the exact Podway binary identity used for validation. Require a minimum immutable stable release only when the Procedure will be distributed or maintained in other worktrees; never promote an unreleased source build to released-support evidence.

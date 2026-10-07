@@ -6,8 +6,9 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ### Changed
 
-- Run Podway commands directly without a daemon, preserving crash-safe retries
-  and returning migration guidance for retired commands and legacy workspaces.
+- Run Podway commands directly without a daemon, preserve crash-safe retries,
+  and return replacement guidance for retired commands and explicit reset
+  guidance for legacy workspaces.
 
 ## v0.2.12 - 2026-09-29
 

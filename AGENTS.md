@@ -75,7 +75,7 @@ caution over speed; apply them proportionally for trivial work.
 - Use `Makefile` targets for standard formatting, linting, contract verification,
   testing, fuzzing, and distribution work.
 - Do not treat scaffolding, compilation, mocked success, or a focused test as proof
-  when acceptance requires a real CLI/daemon, persistence, concurrency, crash, or
+  when acceptance requires a real CLI, persistence, concurrency, crash, or
   release path.
 - For multi-step work, keep a short plan with verification for every step.
 
@@ -176,15 +176,18 @@ Apply these distinctions as well:
 - Use `Makefile` as the entry point for repository-standard checks. Read the nearest
   relevant authority rather than copying detailed feature design into this file.
 
-#### V2DFC Transition
+#### Direct Execution Authority
 
-[ADR-0038](docs/architecture-decision-records/0038-remove-the-daemon.md) accepts
-the daemon-free target. The ordered `V2DFC` tasks own the cutover, as defined by
-the [adopted dossier](docs/todo/TODO-podway-daemon-free-core.md). `V2DFC-007`
-changes the CLI to direct execution, `V2DFC-008` retires legacy infrastructure,
-and `V2DFC-009` changes single-binary release identity and tooling. Broader durable
-documentation promotion remains `V2DFC-010` work. This transition authorizes no
-installed-runtime change, release, installation, or external consumer modification.
+[ADR-0038](docs/architecture-decision-records/0038-remove-the-daemon.md) owns
+the implemented direct model. Current behavior is specified in the
+[transaction contract](docs/specs/storage/transactions-concurrency-and-idempotency.md),
+[SQLite model](docs/specs/storage/sqlite-model.md), and
+[JSON contract](docs/specs/interfaces/json-contract.md); current structure is in
+[System Architecture](docs/architecture/system.md). The
+[adopted dossier](docs/todo/TODO-podway-daemon-free-core.md) remains execution
+authority through the separate final V2DFC audit and owner acceptance. These
+documents authorize no installed-runtime change, release, installation, or
+external consumer modification.
 
 #### Architecture and Ownership
 

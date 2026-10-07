@@ -2,276 +2,201 @@
 
 ## Concurrency model
 
-Podway has three independent ordering concepts:
+Every command runs in its invoking process. `podway-engine` prepares and executes
+commands; `podway-store` arbitrates process concurrency through native maintenance
+leases and SQLite. There is no admission queue, durable job, scheduler, or FIFO
+fairness guarantee. At most one SQLite writer commits in a worktree at a time.
 
-1. **Workspace sequence:** total order of admitted mutation jobs in one worktree.
-2. **Session revision:** total order of successful session state changes.
-3. **Item revision:** conflict boundary for one item in one attempt.
+Three identities have different meanings:
 
-This allows multiple callers to update different active-node items without silent same-item overwrites, while cursor-changing commands remain strict.
+1. The committed workspace sequence orders successful mutation outcomes. It is
+   allocated inside the success transaction, never at submission.
+2. The session revision fences cursor and session changes.
+3. The item revision fences a particular item on a particular attempt.
 
-## Admission transaction
-
-Pseudocode:
-
-```text
-BEGIN IMMEDIATE
-  load workspace_state
-  lookup idempotency_key
-
-  if key exists:
-    if request_digest differs: error IDEMPOTENCY_KEY_REUSED
-    else: return existing job
-
-  reject if queued_count >= max_pending
-  sequence = next_workspace_sequence + 1
-  update workspace_state.next_workspace_sequence
-  insert job(state=queued, sequence, canonical_request)
-  insert idempotency_record(key, digest, job_id)
-COMMIT
-```
-
-The daemon acknowledges admission only after commit.
-
-## Claim transaction
-
-Under the workspace scheduler lock:
-
-```text
-BEGIN IMMEDIATE
-  select lowest sequence queued job
-  if none: COMMIT and sleep
-  update selected job to running with claimed_at
-COMMIT
-```
-
-The scheduler does not claim a later job while a lower executable job is queued.
+A read observes committed state. No acknowledged mutation remains pending.
 
 ## Preparation outside the state transaction
 
-Some commands require read-only work that may be slower than a transaction:
+Procedure parsing, semantic validation and canonicalization, artifact hashing,
+and graph-dependent preparation run without holding the write transaction.
+Preparation is side-effect-free. Start commits the canonical Procedure snapshot
+with the prepared session; the explicit `begin` operation later enters the graph.
+A custom Procedure start requires its canonical digest confirmation.
 
-- hashing an attached local artifact;
-- rehashing required local artifacts before completion;
-- canonicalizing and validating a procedure before start.
-
-For the accepted v0.1.0 start target, canonical Procedure bytes and their digest
-become part of the durable admitted input before acknowledgement. The job never
-depends on re-reading its source file after admission. The normalized Procedure
-snapshot is committed in the same SQLite transaction as the queued job and its
-idempotency binding, so a pre-commit failure rolls back all three rows and a
-post-commit retry observes the exact admitted snapshot.
-
-The worker:
-
-1. reads the command and current identifiers;
-2. performs preparation outside an open SQLite transaction;
-3. begins the state transaction;
-4. revalidates every relevant precondition and item revision;
-5. commits only if the prepared result still applies.
-
-This avoids long database locks without weakening correctness.
+The Engine revalidates the relevant session, attempt, goal and item identities,
+Procedure digest, graph preparation and artifact metadata at the transaction
+boundary. A changed input fails closed rather than applying preparation to a
+new state. Preparation does not reserve a queue position or promise an eventual
+execution. An exact successful start replay can recover its original pinned
+source digest from the stored outcome; it does not require the original file to
+remain available.
 
 ## Successful execution transaction
 
-```text
-BEGIN IMMEDIATE
-  load idempotency record and running job
-  load workspace and session state
-  validate workspace identity
-  validate session, attempt, and item preconditions
-  validate prepared artifact or procedure data
-  invoke pure transition
-  persist all changed rows
-  increment session revision once if changed
-  write terminal public success response
-  update idempotency terminal response
-  mark job succeeded
-  append bounded journal summary
-COMMIT
-```
-
-No response is sent before commit.
-
-## Domain failure transaction
-
-If validation or the pure transition returns a public domain error:
+The ordinary mutation path is:
 
 ```text
-BEGIN IMMEDIATE
-  revalidate running job identity
-  store terminal public error response
-  update idempotency terminal response
-  mark job failed
-  append bounded failure summary
+classify Store without writes
+prepare side-effect-free inputs
+acquire shared maintenance lease and validate current paths/inodes
+validate writer, schema and Git binding in a read-only snapshot
+BEGIN IMMEDIATE within the invocation deadline
+  validate writer, schema, binding and file identities again
+  resolve the canonical request identity
+  lookup idempotency key
+  if success exists:
+    reject a different digest, otherwise return the exact stored success
+  validate command fences and prepared inputs
+  read the injected clock once
+  apply the pure domain transition
+  persist only changed relational state
+  allocate the committed workspace sequence
+  persist canonical success, journal and retention pruning
+  persist any supported moved-root rebind
 COMMIT
+print the validated success envelope
 ```
 
-Session rows are untouched.
+State, `mutation_outcomes`, sequence, journal, pruning and root rebind are one
+atomic `BEGIN IMMEDIATE` transaction. Persisting a successor must be bounded to
+changed rows, while preserving complete domain validation. New-session creation
+and destructive maintenance have the separately guarded publication protocols
+in [Recovery](recovery-retention-and-maintenance.md).
 
-## Unexpected failure
+An existing matching outcome is returned before the transition callback or
+clock runs. It preserves the original `request_id`, timestamps, workspace
+sequence, result and complete `podway.output/v4` envelope. Replaying a committed
+request uses its original fences and key; replacing them changes the canonical
+request. The caller's expected workspace UUID is still checked against the
+actual Store before replay, so a wrong workspace cannot recover another Store's
+success.
 
-If an unexpected failure occurs before a state transaction commits:
+## Rejections and no-ops
 
-- rollback;
-- mark the job failed with `INTERNAL_ERROR` when the database remains usable; or
-- leave/reset it to queued only for explicitly classified transient infrastructure failures.
+A malformed request, stale fence, domain rejection, failed prepared-input check,
+or pre-COMMIT infrastructure failure rolls back. It records no successful
+outcome, allocates no committed sequence and leaves no partial item, session,
+receipt or journal change. No failed job or persistent rejected-request receipt
+exists. A rejected request may be reconsidered later, but had no prior effect.
 
-If the daemon cannot prove the outcome, it closes the workspace scheduler and requires `doctor`. It MUST NOT guess or apply the mutation again outside idempotency rules.
+A semantic no-op succeeds with `changed=false`; item and session revisions remain
+unchanged. It still commits one successful outcome and workspace sequence, so
+replay returns the identical response without another effect.
 
 ## Cursor concurrency
 
-Complete, skip, retry, block, unblock, decide, rework, and cancel validate:
-
-```text
-expected_session_revision
-expected_attempt_id
-```
-
-A queued command may become stale before execution because an earlier job changed the cursor. It then fails with a conflict and does not adapt itself to the new graph node.
-
-This is deliberate. A command intended for one graph node must never mutate another.
+Complete, skip, retry, block, unblock, decide, rework and cancel use the command's
+session-revision and active-attempt fences. A caller cannot adapt a request meant
+for one placement to another placement after contention. Goal-sensitive commands
+also validate the expected goal revision. Refresh observation and choose a new
+request only after reconciling the original key when its outcome is uncertain.
 
 ## Item concurrency
 
-Item commands validate:
+Ordinary item commands validate active attempt and expected item revision.
+Different item updates may succeed across intervening session-revision changes;
+a stale update to the same item fails with `ITEM_REVISION_CONFLICT`.
 
 ```text
-expected_attempt_id
-expected_item_revision
+attempt A active; x=revision0; y=revision0
+set x expecting0 -> x=revision1 and session revision advances
+set y expecting0 -> y=revision1 and session revision advances
+set x expecting0 -> ITEM_REVISION_CONFLICT, no effect
 ```
-
-Example:
-
-```text
-attempt A active
-item x revision 0
-item y revision 0
-
-client 1 sets x expecting 0 -> succeeds, x=1, session revision increments
-client 2 sets y expecting 0 -> succeeds, y=1, session revision increments
-client 3 sets x expecting 0 -> ITEM_REVISION_CONFLICT
-```
-
-The session revision may change between unrelated item updates without causing a conflict. Attempt identity prevents updates after complete, retry, decide, or rework.
 
 ### Atomic multi-item concurrency
 
-The internal `item.record_many` command fences the observed session revision and
-active attempt, while each of its 1 to 128 unique operations fences its own item
-revision. Operations are normalized into item-ID order before evaluation. Every
-target, type, constraint, prepared artifact value, and item revision must validate
-against one current state; otherwise the pure transition returns no successor and
-the Store writes no item row.
+`item.record_many` fences the observed session revision and active attempt, and
+its 1 to 128 unique operations each fence their item revision. The Engine
+normalizes operations into item-ID order. All types, constraints, prepared
+artifacts and revisions must validate against one current state. One invalid
+operation leaves every target unchanged.
 
-When the set changes at least one item, the Store persists the complete successor,
-the item-ID-ordered outcome projection, the terminal job, and the idempotency
-receipt in one existing `BEGIN IMMEDIATE` transaction. A failure after relational
-state writes therefore rolls back both state and terminal metadata. Restart
-requeues a pre-terminal running job, and an exact replay observes the one retained
-receipt. The command reuses existing item, job, and receipt tables and introduces
-no SQLite migration.
+The changed rows, item-ID-ordered result, success outcome and journal commit
+together. Typed in-process calls and JSON stdin both enforce the named aggregate
+input bound of 1,048,576 bytes; avoiding IPC does not bypass that budget. A
+post-state/pre-outcome failure rolls the transaction back. An exact retry returns
+one stored success.
 
-For a delegated Procedure v2 action, acceptance stores the immutable attempt
-receipt only when its facts match the admitted acceptance input, current item
-state, and ordinary action gates. The transaction compares the input's session
-revision and idempotency key with the admitted job before writing the receipt,
-compares its package digest with the trusted expected digest supplied by the
-daemon, and computes the accepted item-state digest from current Store state.
-Completion checks that receipt and its accepted item-state digest inside the
-same Store transaction that advances the cursor and publishes the terminal job.
-A receipt is package-current only while its workspace, session, attempt,
-placement, procedure, and declaration binding still matches the live state.
-V2SDG-007 supplies the public package projection and trusted expected digest
-from the daemon. Its explicit custom-Procedure path admits delegated actions.
-A missing or stale receipt leaves both cursor and terminal result unchanged. Blocker-only
-and session-revision-only changes do not alter the accepted item-state digest;
-actual item edits do, including optional items and edits later reverted.
+## Supervised delegation
 
-## No-op behavior
+Acceptance verifies declaration, current package binding, trusted expected
+package digest, current item-state digest, supplied execution facts and ordinary
+action gates before storing one immutable attempt receipt. Engine supplies the
+package projection and trusted digest; it neither invokes an executor nor judges
+external semantic truth. Completion verifies that receipt inside the same
+transaction that advances the cursor and stores success.
 
-A semantic no-op, such as clearing an already-unset item with current preconditions:
-
-- succeeds;
-- returns `changed=false`;
-- does not increment item or session revision;
-- still produces one terminal job response and idempotency record.
-
-No-op behavior must be identical on retry.
+A receipt is current only for its workspace, session, attempt, placement,
+Procedure and declaration binding. Actual item changes, including optional items
+or edits later reverted, stale the accepted item-state digest. Blocker-only and
+session-revision-only changes do not. Missing or stale receipts leave the cursor
+and outcome unchanged. See [Supervised Delegation](../interfaces/supervised-delegation.md).
 
 ## Artifact completion race
 
-For required local artifacts:
+Read artifact item revisions and metadata, hash local files outside the write
+transaction, then validate the active attempt, item revisions, size and fresh
+digest before completing. A mismatch returns `ARTIFACT_CHANGED` without an
+effect. The filesystem may change afterward; Podway is not a security boundary
+against same-user processes and retains metadata rather than artifact bytes.
 
-1. read item slot revisions and metadata;
-2. hash files outside the transaction;
-3. begin transaction;
-4. verify active attempt and each artifact item revision are unchanged;
-5. compare fresh digest and size;
-6. fail `ARTIFACT_CHANGED` or commit completion.
+## Session reset, archive and replacement
 
-A file may change immediately after completion because Podway is not an adversarial security boundary. The check ensures current procedural freshness at the completion instant as far as local observation permits.
-
-## Job cancellation transaction
-
-Queued cancellation executes under the scheduler lock:
-
-```text
-BEGIN IMMEDIATE
-  load target job
-  require state=queued
-  update state=cancelled, finished_at, cancellation result
-  update idempotency terminal response
-COMMIT
-```
-
-It may bypass normal FIFO because it does not mutate session state. A running job cannot be cancelled.
-
-## Reset and replace barrier transaction
-
-A destructive reset or replace job is admitted as the current queue tail and blocks later mutation admission. When it executes, all earlier jobs are terminal. Its transaction may safely:
-
-1. delete old session domain rows;
-2. delete terminal jobs and idempotency records scoped to the old session;
-3. preserve the workspace-scoped barrier job and receipt;
-4. create a replacement session when requested;
-5. commit the reset or replace result atomically.
-
-If the barrier is cancelled while queued, normal admission resumes.
+Session reset and start replacement are ordinary single-transaction mutations,
+with explicit lifecycle eligibility and required confirmation. They atomically
+remove or archive the old current state and create the prepared successor when
+requested. No queue barrier is needed. Workspace-scoped outcomes survive session
+reset. Session-scoped outcomes are removed by reset of that session or worktree
+reset; they survive archive and archive purge. Archive rows cannot be restored
+or mutated. See [Retention](recovery-retention-and-maintenance.md#retention-policy).
 
 ## Read consistency
 
-A normal read uses one SQLite read transaction and returns a coherent snapshot.
+A normal read uses one deferred SQLite WAL transaction and returns a coherent
+committed snapshot with its committed workspace sequence. It performs no row,
+root-binding, migration, marker or WAL/SHM writes, and never drains queued work.
+Normal reads do not resume interrupted maintenance. Maintenance exclusion can
+require bounded lock waiting; cold hot-WAL/no-SHM reads use an exclusive native
+lease and a heap WAL index to preserve write-free reads. There are no
+`--after-job` or `--wait-for-idle` read modifiers.
 
-It includes queue indicators so the caller knows whether later admitted mutations are pending. `--after-job` and `--wait-for-idle` wait outside the read transaction, then open a fresh read snapshot.
+## Exact-once effect, not exactly-once output
 
-## Exact-once effect, not exactly-once transport
+The guarantee is one logical effect per retained idempotency key and canonical
+request. Printing stdout is outside the SQLite transaction; a process can die
+after commit and before output. Automation must retain a caller-owned
+`--idempotency-key`; a generated key is unavailable after such a crash.
 
-IPC transport may retry and responses may be lost. Podway guarantees **one logical state effect per idempotency key and canonical request**, not exactly one network exchange.
+`podway outcome lookup --idempotency-key <key>` is read-only. It returns the exact
+stored success or `found=false`, never replays a request. Not-found proves no
+retained committed effect in that observed snapshot within the retention
+boundary. It does not prove that a pruned older outcome never existed or prevent
+another caller from subsequently committing. Session reset and worktree reset
+end the applicable retention boundary.
 
-Lookup by idempotency key does not replay a request. Store terminal receipt v5 adds
-the durable Procedure v2 execution flavor to the bounded semantic projections and
-retains the canonical non-recursive terminal-mutation `podway.output/v3` envelope,
-`podway.error/v1` for failures, or the closed cancellation summary. Lookup returns that
-stored envelope after job-row pruning instead of applying the current catalog or result
-renderer. Canonical execution JSON and the full original request are not copied into the
-retained receipt. Pre-admission, admitted, and unknown-outcome states are
-machine-distinguishable.
+`MUTATION_OUTCOME_UNKNOWN` is limited to an I/O error returned by the public
+mutation's COMMIT. Reconcile the exact key through outcome lookup before retry.
+Pre-COMMIT failures have no effect; a checkpoint attempted after COMMIT cannot
+turn an acknowledged success into failure or unknown outcome.
 
 ## Crash outcomes
 
-| Crash point | Durable outcome |
+| Boundary | Durable state and recovery |
 |---|---|
-| Before admission commit | No job exists |
-| After admission commit, before response | Queued job exists; retry returns it |
-| After claim commit, before state transaction | Running job resets to queued on restart |
-| During preparation | Running job resets to queued on restart |
-| During uncommitted state transaction | SQLite rollback; job resets to queued or is safely failed |
-| After state and terminal result commit, before response | Succeeded job and response exist; retry returns them |
-| During failure-result transaction | Session unchanged; job is retried or failed once after restart |
+| Before COMMIT, including preparation or changed-row writes | No success outcome; SQLite rolls back; retry with the same request can execute |
+| After COMMIT, before stdout | State and complete success retained; lookup or exact retry returns original success |
+| Public COMMIT returns an I/O error | Outcome may be unknown; read-only lookup reconciles the caller's exact key |
+| Interrupted init/reset-all/removal | Durable maintenance identity refuses ordinary commands; only its supported matching recovery proceeds |
 
 ## Busy and lock behavior
 
-The daemon is the only normal writer, so persistent `SQLITE_BUSY` indicates an internal bug, unsupported external writer, or maintenance conflict.
-
-The store uses bounded retry within `busy_timeout`. Exhaustion becomes an internal or workspace-state error and does not spin indefinitely.
+`--timeout` supplies one absolute deadline for maintenance and SQLite lock waits;
+the default is five seconds. SQLite contention uses short bounded waits with
+jitter. Write-lock exhaustion returns retryable `WORKSPACE_BUSY`; maintenance
+lease contention or a published marker returns `WORKSPACE_MAINTENANCE`. Deadline
+failure before COMMIT leaves no partial state or outcome. Contention is an
+ordinary consequence of independent processes and does not establish a disk
+fault or an internal daemon defect. There is no automatic replay after an
+ambiguous COMMIT.

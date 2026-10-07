@@ -9,195 +9,153 @@
 - Related candidate:
   [Podway Graph Engineering Evolution](TODO-podway-graph-engineering-evolution.md)
 
-The adopted [daemon-free core dossier](TODO-podway-daemon-free-core.md) removes
-`podwayd` under epic `V2DFC`. This candidate's preferred direction of retaining
-`podwayd` as a central control plane no longer matches adopted work and must be
-revised before promotion; `V2DFC-010` updates it.
+[ADR-0038](../architecture-decision-records/0038-remove-the-daemon.md) and the
+[adopted V2DFC dossier](TODO-podway-daemon-free-core.md) replace the historical
+`podwayd` control-plane premise. This candidate now explores a foreground-only
+console over the same typed Direct Engine. It adopts no command, endpoint,
+listener, browser protocol, inventory persistence or product feature.
 
-This document preserves a possible local Web operations console for later
-evaluation. It is not an adopted design dossier, accepted architecture decision,
-roadmap commitment, or specification of implemented behavior. No command,
-endpoint, daemon lifecycle, schema, or user interface described below exists
-merely because it appears in this candidate.
-
-The graph-engineering direction must reach a stable outcome before this candidate
-is considered for roadmap adoption. The console should be designed against the
-workflow graph that Podway actually adopts rather than make the graph model serve
-a premature presentation layer.
+The graph-engineering direction must reach an implemented or explicitly closed
+outcome before promotion, so presentation does not force a premature graph model.
+A foreground Web process requires its own accepted decision reconciling the
+current no-network invariant. Resident or login-start operation requires a new ADR
+and is outside this candidate's preferred direction.
 
 ## 1. Context
 
-Podway currently concentrates on agent and CLI use. Its user-scoped daemon is the
-sole normal writer, routes commands to registered worktrees, recovers durable
-jobs, and exposes bounded status over a Unix-domain socket. Session authority and
-history remain in each worktree's `.podway/runtime/` Store rather than in one
-global task database.
+Podway's current single CLI executes every command in-process. Each worktree owns
+its Store, success outcomes and journal. The Engine resolves explicit native Git
+identity, derives bounded read projections and serializes fenced mutations through
+SQLite with shared/exclusive maintenance admission. There is no global workspace
+registry, daemon, FIFO admission, job recovery or account runtime.
 
-A human operator may eventually need one place to inspect all known worktrees and
-sessions, review the workflow graph, understand current placements and blockers,
-and perform allowed operations without reconstructing state from several CLI
-invocations. The intended inventory includes prepared, running, terminal, and
-retained inactive sessions even when no worktree-specific foreground process is
-already running.
+A human may later need a convenient view of selected worktrees, their current and
+retained sessions, graph placements, blockers and history. No persistent global
+catalog exists from which a console could infer all known worktrees. Its input
+inventory and lifecycle must therefore be chosen explicitly rather than reviving
+removed state discovery through a new host.
 
-That requirement changes the runtime-topology trade-off. Session-scoped
-foreground processes simplify idle resource use and exact-version ownership, but
-a complete cross-worktree console would still need a central catalog, offline
-state discovery, version-aware routing, and mutation coordination. Adding those
-responsibilities to a Web process risks recreating a second daemon instead of
-removing complexity.
-
-A neighboring local tool provides a useful comparison to revalidate before
-promotion: its CLI core can operate without a daemon, its Web command can start a
-loopback daemon when needed, and login-start service installation is optional.
-That hybrid demonstrates that Web availability and an always-running Web server
-are separable. It does not settle Podway's design because that product uses one
-installation-global database while Podway deliberately distributes authority
-across worktrees. Machine-local process IDs, versions, paths, and runtime
-observations are not durable evidence for this candidate.
+A neighboring tool's historical on-demand Web design is only comparative context.
+It does not establish Podway's need or compatibility: Podway distributes authority
+across worktrees and binds Store writers to exact manifest identity. Revalidate
+comparisons before promotion; host-specific observations are not durable evidence.
 
 ## 2. Goal
 
-Determine whether Podway should provide an on-demand, loopback-only Web operations
-console that lets a human:
+Determine whether an on-demand, loopback-only foreground console would help a
+human:
 
-- discover registered worktrees and their current and retained sessions;
-- inspect each session's procedure identity, workflow graph, current placement,
-  goal, blockers, readiness, queue state, and bounded history;
-- compare live, offline, unavailable, and incompatible states honestly; and
-- perform only currently allowed session operations through the same identity,
-  revision, admission, idempotency, and confirmation contracts as the CLI.
+- inspect an explicitly selected bounded set of worktrees and current/inactive
+  sessions without copying task authority;
+- view graph identity, placements, Goal, blockers, readiness and bounded history;
+- distinguish missing, busy, unreadable, legacy and incompatible Stores honestly;
+- invoke only currently allowed operations through the same Engine, fences,
+  success-only idempotency and explicit destructive confirmation as the CLI.
 
-The current preferred direction is to retain `podwayd` as the central catalog,
-sole-writer, recovery, and command-routing control plane. A separate `podway web`
-process would run only when requested, serve static assets and a loopback HTTP
-gateway, and communicate with `podwayd` through a versioned local protocol.
-Neither preference is binding until the promotion conditions are satisfied and
-an architecture decision is accepted.
+The preferred direction is a `podway web` foreground process active only while
+requested, with explicit worktree input and no login-start policy or resident
+broker. Illustrative command names are not reserved grammar. No preference becomes
+binding before the promotion conditions and an accepted ADR.
 
 ## 3. Non-goals
 
-This candidate does not propose:
-
-- implementing the console before the graph-engineering outcome is stable;
-- embedding an HTTP server or Web assets directly in `podwayd`;
-- allowing the Web gateway or browser to write SQLite directly;
-- weakening the daemon's sole-writer, FIFO, fencing, or idempotency guarantees;
-- making Podway a project manager, remote collaboration service, CI system, or
-  arbitrary workflow executor;
-- remote, multi-user, or non-loopback access;
-- treating a browser session or local bearer value as a security boundary
-  against processes running as the same operating-system user;
-- exposing recorded item contents, artifact paths, credentials, or raw logs by
-  default; or
-- adopting a roadmap epic, release target, public command, endpoint, or schema
-  through this candidate alone.
+- Implementing this candidate or changing the current single-cursor graph.
+- Reintroducing `podwayd`, global workspace discovery, runtime modes, IPC framing,
+  durable jobs, FIFO promises or execution after the caller exits.
+- Giving the browser or Web host a second SQLite implementation or mutation path.
+- Installing a service, automatically launching a background host, or migrating
+  unsupported writer/legacy state to make the UI available.
+- Project management, remote/multi-user access, workflow execution, Git mutation,
+  or a security boundary against same-user processes.
+- Exposing full recorded items, artifact paths, credentials or history by default.
+- Adopting a roadmap, release target, endpoint or schema through this document.
 
 ## 4. Rough Scope
 
-### 4.1 Central control plane
+### 4.1 Explicit bounded worktree inventory
 
-Keep one user-scoped `podwayd` responsible for the minimal worktree catalog,
-Store admission, version and mode agreement, durable-job recovery, mutation
-serialization, and authoritative session operations. Extend its read model only
-as needed to return a bounded cross-worktree inventory and session summaries.
-The global catalog must remain metadata-only and must not become a second task or
-history database.
+Evaluate caller-supplied exact roots or a session-local list selected by the human.
+Validate each through the native workspace boundary; do not scan home directories,
+reuse a removed registry or create a global task ledger. Keep the selected
+inventory session-local; this candidate adopts no global or persistent catalog.
 
-### 4.2 On-demand Web gateway
+### 4.2 Foreground Web host
 
-Consider a `podway web` command that starts one foreground, loopback-only gateway
-and opens or reports the local UI. The gateway would serve static assets, obtain
-bounded projections from `podwayd`, and translate user actions into the same
-typed operations available to CLI automation. Closing the gateway would not stop
-or mutate `podwayd`, a worktree, or a session.
+A possible `podway web` process would serve static assets and a loopback gateway
+only while in use, route operations through the typed Direct Engine and exit on
+explicit shutdown. A CLI/JSON wrapper is an alternative to evaluate; neither may
+implement independent Store transactions or a compatibility shim. Closing the host
+must not cancel a committed mutation or mutate any session. There is no admission
+promise for work not committed before process termination.
 
-The gateway would not silently install, upgrade, restart, or replace the daemon.
-How it behaves when `podwayd` is unavailable or incompatible remains an open
-decision.
+Do not silently install, replace or stop an old generation. Unsupported writer
+identity, legacy Store or configuration remains a structured error. Any reset is a
+separate explicitly confirmed lifecycle action, after every old writer is retired.
 
 ### 4.3 Human review and operations
 
-The first useful console would cover:
+The first useful scope would include a bounded inventory, graph/session detail,
+trace/decision/rework/Goal/blocker/item metadata, retained-session views and clear
+unavailable states. Mutation controls derive from fresh Engine guidance, obtain
+current workspace/session/attempt/item/Goal fences, retain caller-owned keys and
+refresh after each success. Response loss uses outcome lookup and exact replay.
+A displayed control is never authorization or proof of semantic truth.
 
-- an inventory filtered by worktree and lifecycle;
-- a session detail view with the canonical graph projection and active state;
-- bounded trace, decision, rework, goal, blocker, item-status, and job views;
-- explicit offline, missing-worktree, recovery, and compatibility states; and
-- allowed operations derived from current daemon guidance, with fresh fences,
-  idempotency keys, destructive-action confirmation, and post-mutation refresh.
-
-The UI must not infer an allowed operation, semantic truth, or successful result
-from display state. Machine fields from the daemon remain authoritative.
+Use current evidence pagination rather than exposing arbitrarily large values.
+No event stream, polling policy or notification contract exists today; any future
+refresh scheme needs a bounded budget and fail-closed snapshot semantics.
 
 ## 5. Open Decisions
 
-1. Whether `podwayd` remains a login-start LaunchAgent, becomes an on-demand
-   service with bounded idle exit, or supports both as explicit installation
-   policies.
-2. Whether daemon startup is ever initiated by `podway web`, by the CLI, by an
-   agent host, or only through an explicit lifecycle command.
-3. How one daemon and gateway generation handle older and newer worktree Stores,
-   CLI binaries, contract manifests, and graph generations without silently
-   migrating or partially rendering unsupported state.
-4. Which metadata the global catalog needs to enumerate offline and retained
-   sessions without copying worktree-local task state into a global ledger.
-5. How missing, moved, removed, busy, recovering, and unreadable worktrees appear
-   and which of those states permit an operation.
-6. Which graph projection the UI consumes after the graph-engineering work, and
-   how it represents ready frontiers, joins, claims, rework, and stale history if
-   those concepts are adopted.
-7. Whether the gateway uses new daemon inventory and event-stream routes, invokes
-   existing request envelopes, or needs a separately versioned local adapter
-   protocol.
-8. The loopback threat model, including Host and Origin validation, one-time
-   browser session establishment, CSRF resistance, content-security policy,
-   secret handling, and log redaction.
-9. Which read and mutation capabilities ship first, and which destructive or
-   lifecycle operations remain CLI-only.
-10. Pagination, refresh, event coalescing, and resource budgets for many
-    worktrees, sessions, graph nodes, and retained history entries.
-11. Whether daemon lifecycle simplification and the Web console belong to one
-    adopted epic or to separate dependent epics.
+1. What representative human workflows require a console beyond existing CLI/JSON?
+2. How are exact worktrees supplied, scoped and bounded without a global registry?
+3. Does the host invoke the typed Engine directly or wrap exact public CLI/JSON,
+   and how is executable/manifest provenance preserved?
+4. How are legacy, newer, undeclared-writer, copied/moved, busy, missing and invalid
+   configuration states represented without automatic migration or repair?
+5. Which graph projection is appropriate after graph-engineering has settled, and
+   which future work-unit concepts must remain absent until independently adopted?
+6. How does foreground shutdown handle a running command and possible lost output,
+   with no daemon admission or execution-after-exit promise?
+7. How are maintenance markers, outcome retention and exact retry guidance shown
+   without granting destructive authority or replacing original keys?
+8. Which commands stay CLI-only, and how are exact-root destructive confirmation,
+   user intent and all current fences preserved in browser interactions?
+9. What loopback threat model covers Host/Origin checks, CSRF, session establishment,
+   content-security policy, secret exclusions and redaction under same-user trust?
+10. What paging/refresh/resource limits keep many worktrees and histories bounded?
+11. Does a prototype prove value without persistent catalogs, background processes
+    or changes to the current no-network invariant before adoption?
 
 ## 6. Roadmap Promotion Conditions
 
-This candidate may be promoted only when all of the following are true:
+Promote only after:
 
-1. The graph-engineering candidate has reached an implemented or explicitly
-   closed outcome that fixes the graph and runtime concepts the console must
-   present.
-2. Representative human workflows prove a need for cross-worktree active,
-   terminal, offline, and retained-session inspection and identify the minimum
-   safe operation set.
-3. An accepted ADR decides the central daemon, Web gateway, lifecycle, discovery,
-   version, and compatibility boundaries and explicitly reconciles Podway's
-   current no-network product invariant with a loopback HTTP listener.
-4. The metadata-only global catalog boundary and every worktree-local authority
-   field are specified without creating a global task database.
-5. The HTTP and browser-session threat model, permission model, bounded response
-   model, and sensitive-data exclusions are decision-complete.
-6. The behavior for unavailable, incompatible, moved, removed, recovering, and
-   partially readable worktrees is fail-closed and testable.
-7. The daemon lifecycle and upgrade design demonstrates that the console does not
-   worsen idle operation or multi-version development and states whether those
-   changes are independently adoptable.
-8. A bounded prototype or contract exercise proves that the chosen inventory and
-   graph projections remain usable at the repository's declared scale limits.
-9. One decision-complete adopted dossier assigns the selected work to one or more
-   roadmap epics with explicit dependencies, ownership, migration, verification,
-   and release acceptance.
+1. Graph-engineering has an implemented or explicitly closed outcome and real
+   human workflows identify the smallest useful console scope.
+2. An accepted ADR decides foreground process/listener, explicit inventory,
+   Engine/CLI boundary, lifecycle and trust semantics, reconciling no-network
+   authority. A resident/login-start proposal needs a separate new ADR.
+3. Worktree-local state remains sole task authority; no global registry, alternate
+   Store writer, daemon compatibility route or implicit legacy conversion appears.
+4. Closed browser/read/mutation contracts preserve exact manifest identity,
+   fences, success-only outcomes, bounded evidence and destructive confirmation.
+5. Missing, incompatible, maintenance, response-loss and shutdown behavior is
+   decision-complete and independently testable.
+6. A bounded isolated prototype demonstrates useful inventory/projection behavior
+   at declared scale and proves its children/temporary roots are cleaned up.
+7. One adopted dossier assigns ownership, dependencies, compatibility, verification
+   and release acceptance. This candidate alone authorizes none of that work.
 
 ## 7. References
 
-- [ADR-0003: Make the Daemon the Sole Normal Writer](../architecture-decision-records/0003-daemon-single-writer.md)
+- [ADR-0038: Remove the Daemon](../architecture-decision-records/0038-remove-the-daemon.md)
 - [ADR-0004: Store Task State Inside the Worktree](../architecture-decision-records/0004-worktree-local-state.md)
-- [ADR-0031: Keyed Runtime Modes and Managed Development Service](../architecture-decision-records/0031-keyed-runtime-modes-and-managed-development-service.md)
 - [Podway Graph Engineering Evolution](TODO-podway-graph-engineering-evolution.md)
-- [Daemon and Write Queue](../architecture/daemon-and-write-queue.md)
-- [macOS Service Specification](../architecture/macos-service.md)
+- [System Architecture](../architecture/system.md)
 - [CLI Specification](../specs/interfaces/cli-specification.md)
-- [IPC Protocol](../specs/interfaces/json-contract.md#direct-cli-generation)
+- [JSON Contract](../specs/interfaces/json-contract.md)
+- [Transactions, Concurrency, and Idempotency](../specs/storage/transactions-concurrency-and-idempotency.md)
 - [Recovery, Retention, and Maintenance](../specs/storage/recovery-retention-and-maintenance.md)
 - [Observability](../specs/operations/observability.md)
 - [Security and Trust](../specs/operations/security-and-trust.md)

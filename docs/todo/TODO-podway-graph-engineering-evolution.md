@@ -14,10 +14,14 @@
 - Related foundation: [Host-Neutral Supervised Delegation](../specs/interfaces/supervised-delegation.md)
 - Related integration candidate: [Real Executor Integration](TODO-podway-supervised-delegation-integration.md)
 
-The adopted [daemon-free core dossier](TODO-podway-daemon-free-core.md) removes
-`podwayd` under epic `V2DFC`. Daemon-specific assumptions below, such as a
-daemon-supplied recorded instant and daemon-owned claim arbitration, map to
-in-process Store transactions under that dossier; `V2DFC-010` revises them.
+[ADR-0038](../architecture-decision-records/0038-remove-the-daemon.md) and the
+adopted [daemon-free core dossier](TODO-podway-daemon-free-core.md) establish the
+current Direct Engine: request-driven worktree transactions, success-only outcomes,
+no resident process, global registry, FIFO admission or daemon IPC. This candidate
+is rebased on that boundary. Proposed work claims, leases and joins would execute
+through the same Engine, never a new daemon or alternate Store writer. Historical
+daemon observations below are labeled context, not current runtime assumptions.
+A resident/login-start process requires a new ADR and is not a preferred direction.
 
 The September 16 adoption of V2SDG covers a sequential Podway-side delegation
 foundation only. It neither adopts this graph candidate nor satisfies its
@@ -126,22 +130,23 @@ quickly; all external comparisons are snapshots as of the planning baseline.
 Condition 1 in section 21 requires concrete user workflows that Procedure v2
 plus external orchestration cannot adequately represent. This section records
 the current answer to that question so that the rest of the document is read
-against the shipped baseline rather than around it. Nothing below is a proposal;
-it describes released behavior.
+against the current source baseline rather than around it. Nothing below is a
+proposal; direct-generation claims describe implemented checkout behavior, not an
+already published v0.2.13 release.
 
 ### 3.1 Externally parallel work is already recordable
 
 `podway record --stdin` consumes closed `podway.item-record-many-input/v1` JSON
 bounded to 1 MiB and 1 to 128 unique current-attempt item operations, and returns
-`podway.item-record-many-result/v1`. Requirement `AUT-ID-008` in the
+`podway.item-record-many-result/v2`. Requirement `AUT-ID-008` in the
 [Automation Client Contract](../specs/interfaces/automation-client-contract.md)
 requires the route to fence the workspace UUID, session ID, session revision,
 active attempt, and every selected item revision before atomically changing any
 selected item. Per [State Transitions](../specs/domain/state-transitions.md) and
-[Daemon and Write Queue](../architecture/daemon-and-write-queue.md), the pure
-transition applies the complete set or returns no successor, produces one
-durable job effect, advances the session revision exactly once when at least one
-item changes, and never advances the graph cursor.
+[Transactions, Concurrency, and Idempotency](../specs/storage/transactions-concurrency-and-idempotency.md),
+the pure transition applies the complete set or returns no successor, commits one
+success outcome with its effect, advances the session revision exactly once when
+at least one item changes, and never advances the graph cursor.
 
 An external executor can therefore already keep one action attempt open, run
 many independent read-only agents or checks concurrently outside Podway, collect
@@ -151,8 +156,8 @@ That capability shipped with `V2AGT-003` and `V2AGT-004`.
 Concurrent external work is not a new permission. [ADR-0002](../architecture-decision-records/0002-single-active-stage.md)
 already decided that multiple humans or agents may perform external work
 concurrently and update different items while Podway retains one authoritative
-current placement, and the write queue is described as permitting independent
-callers to submit updates safely without creating parallel graph execution.
+current placement. The current Direct Engine serializes fenced transactions from
+independent callers without creating parallel graph execution or a FIFO guarantee.
 
 ### 3.2 The proposed fan group permits a similar concurrency shape
 
@@ -283,22 +288,22 @@ plan in a model's context.
 
 ### 5.3 Persistence and mutation strengths
 
-[ADR-0003](../architecture-decision-records/0003-daemon-single-writer.md) makes
-`podwayd` the sole normal writer of every live worktree database. Mutations are
-durable jobs. One FIFO queue orders admitted mutations within a worktree, while
-independent worktrees can progress concurrently.
+[ADR-0038](../architecture-decision-records/0038-remove-the-daemon.md) supersedes
+the daemon writer. Each command runs in its caller process; one SQLite IMMEDIATE
+transaction commits a mutation, validated success outcome and journal atomically.
+Ordinary opens share a maintenance lease; creation/reset/removal and declared
+predecessor migration take it exclusively. Independent worktrees remain separate.
 
 [Transactions, Concurrency, and Idempotency](../specs/storage/transactions-concurrency-and-idempotency.md)
-distinguishes workspace sequence, session revision, and item revision. It binds
-idempotency keys to canonical request digests, performs state changes and terminal
-receipts atomically, fails closed when an outcome cannot be proven, and guarantees
-one logical state effect per idempotency key and request rather than one network
-exchange.
+distinguishes workspace sequence, session revision and item revision. Exact
+canonical success replay precedes fresh fences; rejection leaves no outcome.
+Response loss is reconciled by outcome lookup within retention, not job admission.
+Preparation occurs outside the lock and is revalidated inside the transaction.
 
-This design is already suitable for concurrent callers. Parallel external work
-does not require multiple SQLite writers. It requires a way to represent several
-external work units while continuing to serialize their claims, renewals, reports,
-and graph transitions through the one daemon writer.
+Concurrent external work does not require a resident state writer. If future work
+units are adopted, their claims, renewals, reports and graph transitions must use
+the same bounded direct transaction path. FIFO order, continued execution after
+client exit and recorded rejection replay are retired guarantees.
 
 ### 5.4 Current assurance boundary
 
@@ -518,32 +523,17 @@ worktree outside Podway.
 
 #### What the product does not have today
 
-Neither concept exists in the current product. `lease` appears in no
-specification. `claim` appears only as the daemon scheduler transactionally
-changing the lowest queued job to `running`, which is internal, immediate, and
-never expires.
+Neither work-unit claim nor finite work lease exists in the current product.
+Process-independent maintenance leases protect filesystem/Store access; they are
+not executor ownership or expiring domain work claims. Every domain transition is
+caused by a request with exact fences; no timer or resident recovery scheduler
+changes domain state when time passes. Successful state and outcome commit together,
+while rejection records nothing.
 
-The consequence is larger than parameter selection. In the shipped model every
-domain state transition is caused by an admitted request carrying an idempotency
-key, and no domain transition is caused by the passage of time. The only job
-transition not caused by a request is restart recovery returning `running` jobs
-to `queued`, described in
-[Daemon and Write Queue](../architecture/daemon-and-write-queue.md); retention
-pruning touches job rows and receipts rather than domain state.
-
-A wall-clock lease expiry would be the first state change in Podway that occurs
-without a client request. That is a new architectural property, not a new
-constant, and it reaches:
-
-- a timer or reaper that must run per workspace inside the daemon;
-- the workspace FIFO, which currently has no notion of an entry that is not a
-  submitted job, and no defined ordering for one;
-- idempotency, which guarantees one logical state effect per key and request and
-  has no representation for an effect with no request;
-- restart recovery, which currently reconstructs state from durable rows alone;
-  and
-- the fail-closed principle, since an expiry decision is an assertion about
-  elapsed time rather than a proven outcome.
+An autonomous wall-clock expiry would introduce unrequested state changes,
+background execution and a new idempotency model. It would require new authority
+rather than being a parameter choice. Evaluate request-driven lazy expiry first;
+do not restore a daemon, FIFO queue or restart-job recovery to support it.
 
 #### Lazy expiry as the preferred alternative to evaluate first
 
@@ -554,8 +544,8 @@ event. Everything below is a preferred working direction, not an accepted
 design.
 
 What this preserves is narrower than first supposed. It removes the timer, it
-introduces no state change without a request, and it adds no new kind of queue
-entry. It does not remove time from the system. It relocates time from a
+introduces no state change without a request, and needs no resident timer or
+queue entry. It does not remove time from the system. It relocates time from a
 background thread into the mutation path, where it becomes an input to a
 transition layer that
 [Transactions, Concurrency, and Idempotency](../specs/storage/transactions-concurrency-and-idempotency.md)
@@ -564,17 +554,16 @@ treats as pure. That addition should be stated rather than denied.
 The preferred evaluation rules follow the existing artifact completion race,
 which already handles an external fact that is only true at an instant:
 
-- **Evaluate at execution.** The deadline is read only inside the state
-  transaction, never at admission. Admission remains a queue operation that
-  allocates a sequence and inserts rows.
-- **Daemon-supplied recorded instant.** The daemon reads the instant once inside
-  that transaction and records it in the durable row and the terminal receipt.
-  The instant is not part of the canonical request, so a transport retry can
-  neither refresh it into a different request digest nor bind evaluation to a
-  stale caller timestamp.
+- **Evaluate in the transaction.** Read the deadline only in the direct state
+  transaction, after lock admission and exact-success replay, not during preparation.
+- **Engine-supplied recorded instant.** The Engine reads the clock once inside
+  that transaction and stores the instant with the state and success outcome.
+  The instant is not part of the canonical request; an exact replay neither
+  refreshes the clock nor re-evaluates expiry against a stale caller timestamp.
+  Rejected requests have no retained result and need current fences on a new request.
 - **Stored-outcome replay.** Replay returns the recorded outcome rather than
   re-evaluating the deadline, consistent with lookup by idempotency key
-  returning a stored terminal envelope instead of replaying a request.
+  returning the complete original success envelope instead of recomputing a request.
 - **Fail closed on divergence.** A claim whose target lease is still live at
   execution fails with a conflict rather than adapting, on the model of the
   stale-cursor rule and `ARTIFACT_CHANGED`. It does not take the unit merely
@@ -662,8 +651,9 @@ other mechanism proposed in this candidate.
 
 Two related but distinct principles must not be conflated:
 
-1. **State writer:** `podwayd` remains the sole normal writer of Podway's SQLite
-   authority. Every claim, renewal, result, and join is serialized through it.
+1. **State writer:** every command uses the Direct Engine and the owning Store's
+   serialized SQLite transaction. Future claims, renewals, reports and joins use
+   that same path; no resident process owns state or promises FIFO order.
 2. **Workspace writer:** at most one cooperating external work unit may hold a
    declared right to mutate the owning worktree at a time.
 
@@ -789,7 +779,7 @@ the parent attempt and expands one map instance per entry.
 The following rules are promising but not adopted:
 
 - worst-case fixed work units plus mapped instances must fit one bounded group
-  budget, tentatively aligned with the existing 64-placement bound;
+  budget, a separate candidate bound to decide against the current 1,024-node Procedure limit;
 - a mapped source's declared maximum must allow that budget to be proven before
   session admission;
 - a downstream dependency on a map template acts as an all-instance barrier;
@@ -809,8 +799,8 @@ plans are easier for humans and LLMs to reason about. That should be an authorin
 heuristic, not a runtime contract.
 
 The graph's ready frontier and the executor's available capacity should determine
-actual concurrency. Podway still needs hard collection, queue, lease, frame, and
-work-unit bounds, but it should not encode "three agents" as product semantics.
+actual concurrency. Any successor still needs hard collection, lease, input,
+output and work-unit bounds, but it should not encode "three agents" as product semantics.
 
 The authoring skill should encourage a small number of genuinely independent
 lanes, often two or three for ordinary software work, while rejecting fake
@@ -865,8 +855,8 @@ order of concurrent reports. Ordering mutations cannot supply this, because
 ordering records what happened rather than constraining what may happen.
 
 A two-step join that first closes group admission and then aggregates does not
-provide repeatability. Closing is itself a mutation contending in the same queue
-as an incoming report, so the construct relocates the race from
+provide repeatability. Closing is itself a mutation contending for the same
+SQLite write transaction as an incoming report, so the construct relocates the race from
 report-against-join to report-against-close. It is bookkeeping within the
 declared non-deterministic family below, not a separate deterministic family.
 
@@ -988,7 +978,7 @@ canonical Procedure and immutable snapshot
      assertion or basis-bound work receipt
                     |
                     v
-       sole daemon writer records result
+       Direct Engine transaction records result
                     |
      deterministic join / rework / failure
 ```
@@ -996,8 +986,8 @@ canonical Procedure and immutable snapshot
 Executor neutrality prevents Podway from competing with fast-moving runtimes.
 Receipt typing gives formal gates something stronger than self-report without
 pretending to prove semantic truth. Effect-aware fan groups introduce useful
-parallelism while one daemon remains the authoritative writer and write work
-remains explicitly ordered.
+parallelism while the Direct Engine remains the sole mutation boundary and
+external workspace-write work remains explicitly ordered.
 
 The central conceptual distinction is:
 
@@ -1006,7 +996,7 @@ The central conceptual distinction is:
 - **execution frontier:** a bounded set of subordinate work units inside the
   active fan group may be claimable; and
 - **mutation order:** all authoritative state changes remain totally ordered by
-  the daemon for the worktree.
+  the Store transaction for the worktree, with no FIFO guarantee.
 
 This distinction avoids treating "single writer" as "only one worker may do
 anything" while still preventing multiple authoritative writes.
@@ -1172,9 +1162,9 @@ Each candidate feature needs its own verdict before a version decision is made:
 |---|---|---|
 | Assurance kind on recorded evidence | Item contracts, recording route, observation results | Decided by `V2AST`: additive through a new `check_result` item type, with the Procedure schema remaining `podway.procedure/v2` |
 | Mechanical result record | Existing `item.record_many` route, SQLite v6 item discriminator | Decided by `V2AST`: additive, with no separate result family and no second result table or lifecycle |
-| Work claim, lease, and report routes | New routes, new result families, daemon behavior | Additive at the protocol level; no v2 document changes |
+| Work claim, lease, and report routes | New routes, new result families, Direct Engine transitions | Additive at the protocol level; no v2 document changes |
 | Fan placement and effects | Procedure schema topology, vetting, cursor semantics | Breaking; changes what a placement is |
-| Dynamic map expansion | Procedure schema, vetting, resource budgets, storage | Breaking; changes admission-time boundedness proofs |
+| Dynamic map expansion | Procedure schema, vetting, resource budgets, storage | Breaking; changes preparation-time boundedness proofs |
 | Join and group outcome | Cursor semantics, transitions, terminal derivation | Breaking; changes when and how the cursor moves |
 | `failed` session lifecycle | Session status set, observation, receipts, consumers | Breaking; extends a closed enumeration |
 
@@ -1248,7 +1238,7 @@ has adopted it.
 | Integration | Versioned CLI/JSON with thin adapters | Keeps one generic public surface and avoids provider coupling |
 | Assurance | Not a direction of this candidate; decided by [ADR-0025](../architecture-decision-records/0025-structurally-bound-external-check-results.md) | Listed only as a pointer, because a Candidate holds no preferred direction over implemented authority |
 | Trust | Structural and freshness assurance only | Matches the same-user trust model and avoids false security claims |
-| Lease expiry | Lazy evaluation inside the state transaction that next touches the unit, with a daemon-recorded instant, rather than a timer | Keeps the property that no domain state changes without a request, fixes one explicit evaluation point instead of two, and makes replay stable through the stored outcome |
+| Lease expiry | Lazy evaluation inside the state transaction that next touches the unit, with an Engine-recorded instant, rather than a timer | Keeps the property that no domain state changes without a request, fixes one explicit evaluation point instead of two, and makes replay stable through the stored outcome |
 | Snapshot | Executor-owned immutable snapshot descriptor | Keeps snapshot bytes and execution infrastructure outside Podway |
 | Parallel topology | Composite fan group under one outer cursor | Limits concurrency semantics and preserves the task narrative |
 | Entry and exit | One start and one end for root and fan group | Keeps diagrams and lifecycle convergence reviewable |
@@ -1316,12 +1306,12 @@ scoped per shape:
 6. Whether lease expiry can be evaluated lazily inside the state transaction that
    next touches the work unit, as section 8.3 proposes, thereby preserving the
    property that no domain state changes without a request. The open parts are
-   divergence between admission and execution, replay stability, whether a
-   read-only observation may report an expiry it does not commit, retention of
+   divergence between preparation and transaction-time validation, success replay
+   stability, whether a read-only observation may report an expiry it does not commit, retention of
    expired lease rows, and backward system-clock movement. Only if lazy
    evaluation cannot hold: lease durations, renewal limits, starvation
-   prevention, timer ownership, expiry recovery, and daemon restart
-   reconciliation.
+   prevention, timer authority and process-independent recovery. Any resident timer
+   would require a separate accepted ADR and must not be assumed by this candidate.
 7. Snapshot descriptor schema, resolver ownership, creation protocol, cleanup,
    portability, and treatment of dirty or untracked files.
 8. Whether every write must publish a new basis, and how a no-op write is
@@ -1397,13 +1387,13 @@ must not be counted twice.
 - **Configuration:** successor schema parsing, semantic validation,
   canonicalization, digests, graph vetting, resource budgets, and deterministic
   projections.
-- **Protocol:** closed observation, claim, lease, report, join, failure, job result,
-  and error contracts.
+- **Protocol:** closed observation, claim, lease, report, join, success outcome
+  and error contracts; no IPC framing or durable-job families.
 - **Storage:** successor snapshots and sessions, fan work units, dependencies,
   leases, bases, receipts, optional closure, joins, and migration integrity.
-- **Daemon:** ready-frontier derivation, claim arbitration, writer exclusion,
-  lease recovery, report admission, join execution, queue scheduling, and
-  observability.
+- **Engine:** ready-frontier derivation, claim arbitration, writer exclusion,
+  request-driven lease recovery, fenced report/join transitions, success replay
+  and bounded journal diagnostics, through the existing direct Store boundary.
 - **CLI:** human and JSON work inspection, mutation commands, help, completion,
   rendering, and response-loss recovery.
 - **Authoring experience:** scaffold, validate, vet, lint, preview, Mermaid and
@@ -1474,7 +1464,7 @@ make Podway:
 
 ### 19.4 Performance and usability risks
 
-- Claim polling and lease renewal may create queue pressure or noisy state.
+- Claim polling and lease renewal may create write contention or noisy state.
 - Too many independent workers may duplicate large context and cost more than one
   persistent agent.
 - A writer can starve behind a continuous stream of allowed or incompatible reads.
@@ -1641,17 +1631,17 @@ prototypes or model-level experiments should answer questions such as:
 - Can a generic fake executor consume only versioned CLI/JSON and complete a
   receipt-bound sequential work unit without Podway knowing the executor type?
 - Can concurrent processes race to claim one unit without duplicate ownership?
-- Does lease expiry and reclaim remain deterministic across daemon restart and
-  response loss?
+- Does lease expiry and reclaim remain deterministic across fresh command
+  processes, clock movement and response loss?
 - Can the lazy expiry described in section 8.3 satisfy every claim, renewal, and
   join requirement without introducing a timer or any unrequested state change,
-  and do replay, read-only observation, and arbitrary queue delay between
-  admission and execution all remain correct under it?
+  and do full-success replay, write-free observation, and arbitrary lock delay
+  between preparation and transaction-time validation remain correct under it?
 - Can a model checker or property test prove that no two write leases coexist?
 - Can it also prove the symmetric read/write whitelist rule under every claim and
   expiry ordering?
 - Can map instance identities remain stable across equivalent YAML and JSON,
-  daemon restart, and idempotent admission?
+  process termination, and exact-success idempotency?
 - What is the smallest snapshot descriptor that two independent executors can
   resolve without Podway storing bytes?
 - Can dirty-worktree snapshots be made immutable by an executor without requiring
@@ -1667,7 +1657,8 @@ prototypes or model-level experiments should answer questions such as:
   Podway-certified truth?
 
 Experiments must use isolated fixtures or temporary worktrees. They must not
-modify a user's active Podway runtime, installed daemon, Git state, or LaunchAgent.
+modify a user's active Podway workspace, installed legacy runtime, Git state or
+LaunchAgent. No experiment authorizes old service control or a resident process.
 
 ## 21. Roadmap promotion conditions
 
@@ -1740,7 +1731,7 @@ Current authority and implementation context:
 - [ADR-0025: Structurally Bound External Check Results](../architecture-decision-records/0025-structurally-bound-external-check-results.md)
 - [ADR-0001: Focus on One Current Task Session](../architecture-decision-records/0001-current-task-session-focus.md)
 - [ADR-0002: Keep One Active Stage](../architecture-decision-records/0002-single-active-stage.md)
-- [ADR-0003: Use the Daemon as the Sole Normal Writer](../architecture-decision-records/0003-daemon-single-writer.md)
+- [Historical ADR-0003, superseded by ADR-0038](../architecture-decision-records/0003-daemon-single-writer.md)
 - [ADR-0006: Use a Same-User Local Trust Boundary](../architecture-decision-records/0006-same-user-local-trust.md)
 - [ADR-0007: Keep Typed Stage Items Instead of a General Evidence Ledger](../architecture-decision-records/0007-stage-items-not-evidence-ledger.md)
 - [ADR-0009: Store Artifact Metadata, Not Artifact Bytes](../architecture-decision-records/0009-artifact-metadata-only.md)
@@ -1759,7 +1750,7 @@ Current authority and implementation context:
 - [Transactions, Concurrency, and Idempotency](../specs/storage/transactions-concurrency-and-idempotency.md)
 - [SQLite Model](../specs/storage/sqlite-model.md)
 - [System Architecture](../architecture/system.md)
-- [Daemon and Write Queue](../architecture/daemon-and-write-queue.md)
+- [ADR-0038: Remove the Daemon](../architecture-decision-records/0038-remove-the-daemon.md)
 
 Canonical assets relevant to any future promotion:
 

@@ -1,96 +1,129 @@
 # Requirements Traceability
 
-The first table retains the daemon-era verification baseline. `V2DFC-007`
-switches the CLI to the direct Engine and removes the host. The direct proof
-surfaces below describe current execution; residual library and release identity
-contracts retire in `V2DFC-008` and `V2DFC-009` before final documentation
-promotion in `V2DFC-010`.
+Accepted ADRs, canonical assets, and normative specifications own requirements.
+Current source and registered tests establish implementation and proof locations.
+The daemon-free current model follows ADR-0038: eight crates, one synchronous
+CLI, direct Engine and Store execution, worktree-local state, and no daemon, IPC,
+service, global product state, queues, jobs, or runtime modes.
 
-| Requirement | Authority | Primary evidence |
+A proof locator is not a passing result. The active roadmap owns task status;
+`make test` is the combined development gate, and the adopted dossier owns its
+additional native qualification criteria.
+
+## Retained domain and compatibility requirements
+
+| Requirement | Authority | Current executable proof |
 | --- | --- | --- |
-| Procedure v2 is the only admitted procedure model | ADR-0019; Procedure schema | Config, CLI, preset, and daemon admission tests |
-| Successful commands use `podway.output/v3` | ADR-0019; output schema | Protocol schema, codec, CLI, daemon, and release-contract tests |
-| One active graph attempt and declared movement | Domain model; transition matrix | Core v2 model/property and daemon runtime tests |
-| Required items, blockers, evidence, and goals gate advancement | Lifecycle spec | V2 runtime, goal, decision, and rework tests |
-| Mutations are atomic, ordered, and idempotent | Transaction spec | Store transaction, concurrency, crash, and reconciliation tests |
-| Prepared is a persistent cursor-free session state and begin atomically creates the first running attempt | ADR-0021; lifecycle and transition specs | `V2LIF-003` core/store and `V2LIF-004` daemon/CLI tests |
-| Default deletion uses only prepared state or current terminal disposition; force deletion requires confirmation and progress summary | ADR-0021; lifecycle and automation specs | `V2LIF-004` reset/replacement and `V2LIF-005` E2E tests |
-| Schema v5 preserves v4 sessions while adding prepared state and terminal disposition | SQLite model; sqlite-v5 DDL | `V2LIF-003` migration, reconstruction, restart, and downgrade tests |
-| Workspace UUID and root ownership remain unique while confirmed reset converges proven legacy duplicate-root metadata | Recovery, retention, and maintenance; SQLite model | `V2REC-001` registry and reset-recovery integration tests |
-| Missing registry generations are pruned only after conclusive exact-root absence, while confirmed selected-worktree removal preserves Git and converges across interruption | ADR-0030; recovery, CLI, IPC, and observability specifications | `V2RET-003` registry pruning tests; `V2RET-004` removal tests; `D03` crash-boundary proof |
-| One bounded runtime mode key selects a complete daemon namespace; omitted mode means `prod` and `--dev` is the exact `dev` alias | ADR-0031; CLI, security, and service architecture specifications | `V2DVC-002`–`003` config, selector, path, metadata, status, completion, and compatibility tests |
-| One worktree has one effective runtime mode, with config, endpoint, daemon, registry, and schema-v10-or-later Store agreement before Store access | ADR-0031; SQLite, recovery, IPC, CLI, and automation specifications | `V2DVC-004` Store-binding, mismatch, registry, mode-plan/apply, stale-token, crash-replay, and real-daemon tests |
-| Aquarium publication remains pending-only while the producer-owned service activates one exact idle generation with proven rollback or bounded recovery debt | ADR-0031; Aquarium development service specification | `V2DVC-005` producer, bundle, controller, daemon-activity, stale-token, busy-deferral, activation, and rollback tests |
-| Contributor and release qualification use distinct purpose-bound managed-runtime/v3 identities with exact binaries, private roots, and bounded cleanup | ADR-0031; release and contributor-runtime guidance | `V2DVC-006` managed-runtime admission, contributor self-test, packaged release-qa scenarios, release-profile identity, lifecycle, and cleanup tests |
-| Named runtime compatibility, coexistence, switching, recovery, Aquarium rollover, and parallel qualification remain one development-gated conformance surface | Testing and conformance specification; contract manifest | `V2DVC-007` documentation, contract, quality, Rust, Python, real-binary E2E, Aquarium, and contributor-runtime development-gate checks |
-| Confirmed user runtime reset retires only the frozen ordinary runtime selection, survives every durable checkpoint, preserves worktree Stores, and permits explicit public-command re-registration after a fresh daemon start | ADR-0032; runtime reset, recovery, and testing specifications | `V2FRT-002`–`006` planner, service, race, compatibility, real CLI/daemon E2E, `D04` crash proof, and complete development-gate checks |
-| One Unicode-scalar scale envelope binds authoring, runtime, persistence, protocol, and documentation | ADR-0024; Procedure and item specification | `V2SCL-003` domain, config, schema-equality, and protocol slice tests |
-| One Procedure declares at most 1,024 node definitions and 1,024 graph placements, with bounded iterative analysis and complete current-generation counter projections | ADR-0037; Procedure schema; Procedure and item specification | `V2GSC-002` full-chain and multiword graph analysis; `V2GSC-004` 1,024-accept/1,025-reject, schema-equality, budget, preview, and observation tests |
-| Declared current evidence is readable one bounded page at a time without raising the 1 MiB frame | ADR-0024; IPC protocol | `V2SCL-002` reserved-contract and `V2SCL-004` store, daemon, CLI, and token tests |
-| Every windowed response collection reports an exact total and its truncation state | ADR-0024; IPC response budgets | `V2SCL-005` budget, observation-composition, and maximum-size tests |
-| External check results are structurally bound attempt-local items without becoming verification, execution, or a second evidence ledger | ADR-0025; Procedure and item specification | `V2AST-003`–`006` domain, contract, migration, runtime, observation, CLI, and trust-language tests |
-| A stored but unsatisfied check result names its first failed declaration comparison as one closed observation reason without claiming verification, and the atomic record result stays record-kind agnostic | ADR-0033; Procedure and item, automation, and JSON contract specifications | ADR-0033 core reason-order, daemon observation and compact-absence, protocol schema-closure, and CLI rendering tests |
-| Inactive-session archival does not fail closed on count; archive list reports exact total, a newest-first window, truncation, and the oldest summary | ADR-0034; lifecycle, automation, SQLite, JSON, and CLI specifications | Store 33rd-archive success, v10-to-v11 migration, 257-archive list-v2 window, and list v2 protocol/CLI tests |
-| Typed conditions derive required items and guarded options from bounded current state without adding an expression engine or weakening freshness | ADR-0028; Procedure, transition, automation, and IPC specifications | `V2GRD-002`–`006` schema, domain, authoring, runtime, budget, CLI, and compatibility tests |
-| Exactly four distinct v2 presets ship with pinned identity, exact graphs, and bounded path inventories | Built-in preset spec | Preset embedding, digest, CLI, production tests, and executable reference-path fixture |
-| Public assets and documentation agree | Contract manifest; docs precedence | Contract, quality, documentation, and architecture checks |
-| Delegation leaves the established Direct contract usable at each intermediate commit | ADR-0035; supervised-delegation SDG-010; testing and conformance baseline | `V2SDG-001` direct digest fixture, populated current/inactive Store reopen, shipped preset and result-family known answers; subsequent task gates |
-| Delegation declarations and result generations remain closed and versioned; explicit custom-Procedure admission and native routes are implemented in source, while real host mappings remain unavailable | ADR-0035; supervised-delegation SDG-002–009; adapter mapping review | `V2SDG-002` schema and manifest verification, protocol known answers and malformed-input checks, old result codec checks; `V2SDG-007` route, admission, delegation-error, and Direct compatibility tests |
-| Delegated action declarations and immutable work-package identity preserve Direct canonical bytes and reject unsupported placements or oversized projections | ADR-0035; supervised-delegation SDG-002, SDG-004 | `V2SDG-003` YAML/JSON equivalence, declaration bounds, Direct digest fixtures, package digest and frozen-evidence tests, static admission budget checks |
+| Procedure v2 is the only admitted model | ADR-0019; Procedure schema | Config parsing/validation; Engine `int_v2run001_start`, `int_v2dfc006_domain_ports`; CLI retirement and admission tests |
+| One active attempt and declared movement; required items, blockers, conditions and goals gate advancement | Domain/lifecycle/transition specs; ADR-0028 | Core model/property tests; Engine `int_v2dfc006_runtime_ports`, `_guard_ports`, `_goal_ports`, `_decision_ports` |
+| Prepared is persistent and cursor-free; Begin creates the first attempt atomically | ADR-0021; lifecycle spec | Engine `int_v2run001_start`, `int_v2dfc006_domain_ports`; real CLI start/enter controls |
+| Default deletion respects prepared/terminal disposition; force requires confirmation and progress summary | ADR-0021; lifecycle and automation specs | Engine domain/maintenance ports; CLI `e2e_v2dfc007_native_conformance` destructive lifecycle |
+| Workspace UUID and lossless canonical Git identity remain bound; replacement witnesses are revalidated | Git resolver contract `ARC-005`, `SEC-002`, `INV-W01`–`INV-W05`; filesystem spec | Git `int_phase3_resolver`, `int_phase3_layout`, `int_phase4_init_layout`; Engine identity/workspace tests; native object-replacement test |
+| Confirmed selected-worktree removal preserves Git and unrelated files and converges across interruption | ADR-0030 as superseded by ADR-0038; recovery and filesystem specs | Engine maintenance/exclusion; `D03`, `DE06`; CLI reset/removal recovery and destructive lifecycle |
+| One Unicode-scalar scale envelope binds authoring, runtime, persistence and output | ADR-0024; item spec | Core/config scale tests; Engine `int_v2dfc006_readback_ports`, `_scale`; protocol result budget tests |
+| At most 1,024 nodes and graph placements; iterative bounded analysis and complete current counters | ADR-0037; Procedure schema | Core multiword/full-chain tests; config 1,024 acceptance and 1,025 rejection; Engine maximum-scale ports |
+| Current evidence is read one bounded page at a time without raising the aggregate bound | ADR-0024; JSON/automation specs | Engine readback ports; CLI runtime evidence-continuation test; protocol encoded-budget tests |
+| Windowed collections report exact total and truncation state | ADR-0024; JSON response budgets | Engine view/readback/scale tests; Store archive controls; protocol maximum-size tests |
+| Check results are structural attempt-local items, without verification or a second evidence ledger | ADR-0025; item and trust specs | Core satisfaction tests; protocol closed results; Engine item/runtime ports; CLI typed recipes |
+| Unsatisfied stored check result has one closed first-failure reason; atomic record result remains kind-agnostic | ADR-0033; item/JSON specs | Core reason-order; Engine view/runtime ports; protocol closure; CLI rendering |
+| Archive has no inactive-session count cap; listing is newest-first with exact total, window, truncation, oldest summary | ADR-0034; lifecycle/SQLite/JSON specs | Store archive/reconstruction tests; Engine readback/domain ports; CLI archive list and bare terminal archive |
+| Typed conditions and guarded options remain bounded and freshness-sensitive | ADR-0028; Procedure/transition specs | Core/config guard tests; Engine guard/decision ports; protocol budgets; shipped reference paths |
+| Exactly four distinct v2 presets ship with pinned identity and exact reference-path inventory | Built-in preset spec; canonical preset assets | Preset embedding/digest tests; Engine `int_v2dog003_embedded_presets`, `int_v2dfc006_reference_ports`; executable fixture verifier |
+| Public assets, documentation, package identity and executable contracts agree | Manifest/v2; docs precedence | `make architecture-static`, documentation/quality checks, protocol identity and offline verifier tests |
+
+### Historical requirements
+
+The earlier traceability baseline included schema-v5/v10/v11 migrations, daemon
+admission, FIFO queues, durable jobs, registry pruning, IPC frames, named runtime
+coexistence (`V2DVC`), Aquarium service generation activation, managed-runtime/v3,
+and account-runtime reset (`V2FRT`). ADR-0038 and the ordered daemon-free cutover
+retire these as current product guarantees. Their accepted ADRs and archived task
+records retain their historical meaning; current direct requirements do not
+reuse those identifiers with new semantics. Legacy runtime state must remain
+untouched unless its original generation's supported owner is separately
+authorized to retire it.
+
+## Direct execution requirements
+
+The stable identifiers below are defined in the
+[automation contract](../interfaces/automation-client-contract.md#direct-execution-requirements).
+They connect normative behavior to current production boundaries and proof.
+
+| Requirement | Production owner | Executable proof |
+| --- | --- | --- |
+| AUT-DIRECT-001: in-process execution; no resident/global product state | CLI dispatch; Engine typed API; eight-crate adjacency | CLI architecture tests, current contract inventory and native qualification |
+| AUT-DIRECT-002: coherent write-free snapshots | Store direct connection and snapshot lease | Store direct Store/maintenance tests; Engine readback/CLI qualification; missing-SHM/WAL controls |
+| AUT-DIRECT-003: one IMMEDIATE atomic mutation with validated success outcome | Store direct transaction; Engine mutation boundary | Store `int_v2dfc006_execution_boundary`; Engine direct execution; crash lookup/retry |
+| AUT-DIRECT-004: prepare outside transaction, revalidate inside | Engine preparation and native descriptor adapters | Engine direct execution artifact rehash negatives; `int_v2dfc006_races` |
+| AUT-DIRECT-005: one bounded deadline across maintenance and SQLite contention | Store lease/deadline/busy handler; Engine request deadline | Engine crash deadline case; Store maintenance; CLI actual SQLite lock-contention cases |
+| AUT-DIRECT-006: caller key and complete original resolved fences | Engine request identity; CLI grammar and stdin decoding | Protocol typed/stdin bounds; Engine errors/identity; CLI retained-command fences and stdin replay |
+| AUT-DIRECT-007: exact success replay after UUID/writer classification | Store qualification and outcome lookup before mutation callback | Store direct Store/legacy tests; CLI concurrent incompatible writer and old replay test |
+| AUT-DIRECT-008: success-only retention; only COMMIT I/O yields unknown | Store commit classification; Engine error envelope | Store execution boundary; Engine errors/crashes; CLI post-COMMIT-before-stdout SIGKILL |
+| AUT-DIRECT-009: read-only outcome.lookup | Store snapshot/outcome projection; Engine direct query | Store outcome lookup tests; Engine direct execution; CLI exact outcome reconciliation |
+| AUT-DIRECT-010: session/workspace outcome retention | Store retention and reset boundaries | Store direct Store/relational/persistence; Engine domain and readback ports |
+| AUT-DIRECT-011: early COMMAND_RETIRED syntax classification | CLI parser and retired command table | `e2e_v2dfc007_retirement::retired_surface_returns_valid_guidance_without_reading_open_stdin_or_worktree` |
+| AUT-DIRECT-012: legacy Store/config/marker refusal | Config resolver; Engine workspace classification; Store identity | Store legacy suite; Engine workspace/errors; CLI legacy hot-WAL, marker and explicit reset cases |
+| AUT-DIRECT-013: writer-contract identity and declared predecessor policy | Store compiled identity/empty predecessor registry | Store direct Store/legacy/predecessor framework tests; CLI incompatible writer test; no active Engine migration route |
+| AUT-DIRECT-014: authorized reset/removal and exact recovery | Engine workspace maintenance; Store exclusive lease and durable markers | Engine maintenance/exclusion; D03/DE06; CLI marker SIGKILL and published recipe recovery |
+| AUT-DIRECT-015: manifest/v2 and single-CLI identity; authoritative offline verifier | Protocol build identity and release verifier | Protocol `int_build_identity_git_refs`, `int_release_contract_verifier`; CLI version identity; release evidence/archive verification |
+| AUT-DIRECT-016: output/v4, error/v2 and closed result families; no exit 3 | Protocol direct envelopes/result contract; Engine error; CLI renderer | Protocol `int_v2dfc006_direct_envelopes`, `int_v2dfc008_current_contract`, `int_v2_result_contract`; Engine errors and actual CLI envelopes |
+| AUT-DIRECT-017: stdin and typed 1 MiB aggregate record bound | CLI stdin; Protocol record decoder; Engine typed boundary | Protocol `int_v2agt004_record_many`; Engine direct execution; CLI record stdin atomic/replay case |
+| AUT-DIRECT-018: immutable Procedure snapshot committed with Start; source-independent replay | Config preparation; Engine Start; Store snapshot and outcome | Engine Start/domain/reference ports; CLI source/conflict and start/enter/replay cases |
+| AUT-DIRECT-019: closed recovery/v2; read-only or explicitly authorized recovery | Protocol recovery validator; Engine generated recipes | Protocol envelope negatives; Engine errors/maintenance; CLI generated recipes and real recovery |
+| AUT-DIRECT-020: one native binary package; truthful disabled-hook development qualification | Release evidence/archive/qualifier and CLI release build | Python packaging self-tests; exact packaged scenario registry; `e2e_v2_native_qualification::release_binary_ignores_every_debug_maintenance_hook` |
+
+The current predecessor registry is empty, and Engine has no predecessor migration
+caller. Future declared migration support requires adopted activation and its own
+compatibility qualification; framework coverage cannot establish it today.
 
 ## Direct Engine ownership and proof
 
-ADR-0038 and the adopted daemon-free dossier own this intermediate execution
-boundary. These proofs execute the typed API against native Git worktrees and
-generation-14 Stores; they do not establish the later CLI, packaging, or
-installation milestones. Every test module is registered in the Engine's
-`int_suite`.
+The typed API executes against native Git worktrees and generation-14 Stores.
+Engine tests below are registered in `int_suite`. Actual CLI tests separately
+prove grammar, stdin, envelopes, deadlines and recovery. Neither layer alone
+establishes packaged-byte identity, distribution readiness, or installation.
 
 | Retained requirement | Production implementation | Executable proof |
-|---|---|---|
-| Typed commands emit validated output/v4, error/v2, and recovery/v2 | [Direct dispatch](../../../crates/podway-engine/src/direct_api.rs), [error rendering](../../../crates/podway-engine/src/direct_error.rs), and [envelope validation](../../../crates/podway-protocol/src/direct_envelope.rs) | `int_v2dfc006_direct_execution`, `int_v2dfc006_errors`, and protocol `int_v2dfc006_direct_envelopes` |
-| Required items, blockers, conditions, goals, declared decisions, and manual rework gate one current cursor | Direct cursor, item, and Procedure transaction boundaries | `int_v2dfc006_runtime_ports`, `int_v2dfc006_guard_ports`, `int_v2dfc006_goal_ports`, and `int_v2dfc006_decision_ports` |
-| All four canonical presets retain their declared paths and freshness | Preset preparation, direct Start/Begin, and transaction-time transitions | [Reference-path ports](../../../crates/podway-engine/tests/int_v2dfc006_reference_ports.rs) and the [executable path inventory](../../../tests/fixtures/v2/presets/reference-paths.json) |
-| Bounded evidence and goal history remain complete, immutable, pageable, and cold-stable | Direct read projections over a coherent Store snapshot | [Readback ports](../../../crates/podway-engine/tests/int_v2dfc006_readback_ports.rs), including escaped maximum-size assessments and stale page-token rejection |
-| Delegated packages, acceptance, item currency, Direct compatibility, and archived receipts preserve their bindings | [Direct delegation acceptance](../../../crates/podway-engine/src/direct_delegation.rs) | [Four actual authored-Start routes](../../../crates/podway-engine/tests/int_v2dfc006_delegation_ports.rs); no job lookup/wait dependency |
-| Reset/replacement, archive/purge, session identity, and unhealthy Doctor diagnostics remain truthful | Direct session lifecycle and workspace boundaries | `int_v2dfc006_domain_ports`, `int_v2dfc006_identity_ports`, and `int_v2dfc006_maintenance_ports` |
-| Effect-once recovery spans all five native transaction/publication boundaries | Direct Store transactions and explicit reset-marker recovery | [Release-profile SIGKILL tests](../../../crates/podway-engine/tests/int_v2dfc006_crashes.rs), registered as `DE01`–`DE05` in the crash registry; 200 live random kills separately qualify recovery |
-| Stale prepared state and changed local artifacts never commit | Outside-transaction preparation followed by native and Store revalidation | [Preparation-race qualification](../../../crates/podway-engine/tests/int_v2dfc006_races.rs) and exact artifact rehash regressions in `int_v2dfc006_direct_execution` |
-| Eight native writers and coherent observers preserve outcome-log serial equivalence | Direct Engine mutation API and bounded IMMEDIATE transactions | [Release-profile scale qualification](../../../crates/podway-engine/tests/int_v2dfc006_scale.rs), including grown-L and 1,024-placement fixtures |
-| Maintenance excludes ordinary callers and reconciles acknowledged old-generation commits | Native exclusive lease, intent/operation markers, and descriptor-safe removal; recovery intent is deleted last | [Maintenance regressions](../../../crates/podway-engine/tests/int_v2dfc006_maintenance.rs), including the final-marker SIGKILL and original-response recovery registered as `DE06`, and [explicit 100-cycle qualification](../../../crates/podway-engine/tests/int_v2dfc006_exclusion.rs) |
+| --- | --- | --- |
+| Validated output/v4, error/v2, recovery/v2 | [Direct API](../../../crates/podway-engine/src/direct_api.rs), [error rendering](../../../crates/podway-engine/src/direct_error.rs), [envelope validator](../../../crates/podway-protocol/src/direct_envelope.rs) | Engine `int_v2dfc006_direct_execution`, `_errors`; protocol direct envelopes |
+| Single-cursor items, blockers, conditions, goals, decisions and manual rework | Direct cursor/item/Procedure transaction boundaries | Engine runtime/guard/goal/decision ports |
+| All four presets retain declared paths and freshness | Preset preparation, Start/Begin and transaction transitions | [Reference ports](../../../crates/podway-engine/tests/int_v2dfc006_reference_ports.rs); [exact inventory](../../../tests/fixtures/v2/presets/reference-paths.json) |
+| Bounded immutable pageable evidence and goal history | Coherent Store snapshot projections | [Readback ports](../../../crates/podway-engine/tests/int_v2dfc006_readback_ports.rs), maximum escaped content and stale tokens |
+| Delegation packages, receipts, item currency and archived bindings | [Direct delegation](../../../crates/podway-engine/src/direct_delegation.rs) | [Authored Start routes](../../../crates/podway-engine/tests/int_v2dfc006_delegation_ports.rs); no job lookup/wait |
+| Lifecycle identity, reset/replacement, archive/purge and truthful Doctor | Direct session and workspace boundaries | Engine domain/identity/maintenance ports; Doctor is a generic query result, not a named schema family |
+| Effect-once recovery across transaction/publication boundaries | Direct Store transactions and marker recovery | [Engine crash qualification](../../../crates/podway-engine/tests/int_v2dfc006_crashes.rs), DE01–DE05; Store DS01–DS05; separate 200 random kills |
+| Stale prepared state and changed local artifacts never commit | Outside-transaction preparation and in-transaction/native revalidation | [Preparation races](../../../crates/podway-engine/tests/int_v2dfc006_races.rs); artifact rehash regressions |
+| Native writers and observers preserve serial equivalence | Bounded IMMEDIATE mutation API | [Scale qualification](../../../crates/podway-engine/tests/int_v2dfc006_scale.rs), grown L and 1,024 placements |
+| Maintenance excludes callers and reconciles acknowledged old commits | Exclusive lease, intent/operation markers, descriptor-safe removal | [Maintenance](../../../crates/podway-engine/tests/int_v2dfc006_maintenance.rs), DE06; [100-cycle exclusion](../../../crates/podway-engine/tests/int_v2dfc006_exclusion.rs) |
 
-The long scale, SIGKILL, deadline, and maintenance qualification cases are
-explicitly selected ignored tests. Their existence is not a passing gate;
-completion requires their recorded execution as well as `make test` for the
-combined candidate.
+The ignored native scale, SIGKILL, deadline, races, exclusion, and WAL cases
+require explicit selected execution. G7/G8 use the
+[direct CLI performance method](../../implementation-tips/direct-cli-performance-qualification.md).
+Their existence or an older log is not qualification for the current candidate.
 
 ## Supervised delegation ownership and proof
 
 The [supervised-delegation specification](../interfaces/supervised-delegation.md)
-owns SDG-001 through SDG-010. The rows below connect its requirements to current
-production boundaries and executable proof; they do not establish live adapter
-support. Test modules are registered in their crate's aggregate `int_suite`,
-except the named CLI `e2e_suite` case.
+owns SDG-001 through SDG-010. The following proof does not establish live adapter
+support. Tests are registered in the owning crate's `int_suite`, except the named
+CLI `e2e_suite` case.
 
 | Requirement and durable owner | Production implementation | Executable proof |
-|---|---|---|
-| SDG-001 responsibilities; [system architecture](../../architecture/system.md#supervised-delegation) | [Core placement values](../../../crates/podway-core/src/procedure_v2/delegation.rs) and the existing single-cursor state model | [Native host fixture](../../../tools/qualify_supervised_delegation.py): identical external/managed semantics; [Direct route control](../../../crates/podway-engine/tests/int_v2dfc006_delegation_ports.rs) |
-| SDG-002 declaration; [declaration contract](../interfaces/supervised-delegation.md#sdg-002-explicit-opt-in-declaration) | [Closed v2 wire parser](../../../crates/podway-config/src/procedure_v2_wire.rs) and canonical Procedure schema | [Authoring and package tests](../../../crates/podway-config/tests/int_v2sdg003_package.rs); [closed-contract negatives](../../../crates/podway-protocol/tests/int_v2_result_contract.rs) |
-| SDG-003 execution identity; [adapter field/digest mapping](../../implementation-tips/delegation-adapter-contract-review.md) and [trust model](../operations/security-and-trust.md) | [Protocol result validation](../../../crates/podway-protocol/src/result_contract.rs) and [receipt validation](../../../crates/podway-store/src/v2_delegation.rs) | Protocol mapping known answers; [receipt codec negatives](../../../crates/podway-store/tests/int_v2sdg004_receipt.rs); native Role/provenance/round/disposition matrix |
-| SDG-004 package and evidence | [Canonical package builder](../../../crates/podway-config/src/procedure_v2_delegation_package.rs) and [engine projections](../../../crates/podway-engine/src/v2_read_service.rs) | Package domain separation, attempt/goal/frozen-evidence binding and size limits in `int_v2sdg003_package`; native recorded-source route tests |
-| SDG-005 atomic structural acceptance; [transaction contract](../storage/transactions-concurrency-and-idempotency.md) | [Direct acceptance](../../../crates/podway-engine/src/direct_delegation.rs), Store receipt validation and state transaction | `int_v2sdg004_receipt` atomic commit/rollback/replay; [acceptance and completion tests](../../../crates/podway-store/tests/int_v2sdg005_semantics.rs); `int_v2dfc006_delegation_ports` |
-| SDG-006 currency and correction cost; [operator guidance](../../implementation-tips/supervised-delegation.md#finish-recording-before-acceptance) | Store accepted item-state digest and transaction-time completion; engine projections | `int_v2sdg005_semantics` no-op/rollback/edit/revert/blocker matrix; [truthful views](../../../crates/podway-engine/tests/int_v2run002_views.rs); native correction matrix |
-| SDG-007 lifecycle and recovery; [recovery guidance](../../implementation-tips/supervised-delegation.md#recover-without-repeating-external-effects-automatically) | Atomic success outcomes, exact-key replay, retry/rework/goals and immutable historical receipts | Store response-loss, cancellation, retry/rework, goal and purge tests; native crash/restart/lost-response fixture with durable external effect counts |
-| SDG-008 closed result generations; [JSON contract](../interfaces/json-contract.md), [CLI](../interfaces/cli-specification.md#delegation-commands), [IPC](../interfaces/json-contract.md#direct-cli-generation), [errors](../interfaces/errors-and-exit-codes.md#delegation-failures) | Direct protocol envelopes, Engine route admission and CLI rendering | `int_v2dfc006_direct_envelopes`; native route tests; [archive projection tests](../../../crates/podway-engine/tests/int_v2dfc006_readback_ports.rs) |
-| SDG-009 persistence and isolation; [SQLite model](../storage/sqlite-model.md) | [Canonical v14 DDL](../../../assets/specifications/sqlite-v14.sql), [Direct transaction](../../../crates/podway-store/src/direct_store/transaction.rs), receipt foreign keys and reconstruction | Direct Store generation-14 reopen, corruption, rollback, replay and cascade tests; native legacy refusal and explicit reset fixture |
-| SDG-010 continuity and acceptance; [conformance inventory](testing-and-conformance.md) | Direct single-cursor path, atomic per-worktree writes and isolated scratch worktrees | Frozen [Direct control](../../../tests/fixtures/v2/compatibility/supervised-delegation-direct-control.yaml), full `make test`, native mixed-worktree progress and explicit cleanup; independent epic acceptance |
+| --- | --- | --- |
+| SDG-001 responsibilities; [system](../../architecture/system.md#supervised-delegation) | [Core delegation values](../../../crates/podway-core/src/procedure_v2/delegation.rs); single-cursor model | [Native fixture](../../../tools/qualify_supervised_delegation.py) identical host-label semantics; Direct delegation routes |
+| SDG-002 opt-in declaration | [Closed parser](../../../crates/podway-config/src/procedure_v2_wire.rs); canonical schema | [Package tests](../../../crates/podway-config/tests/int_v2sdg003_package.rs); protocol closed-contract negatives |
+| SDG-003 execution identity; [adapter mapping](../../implementation-tips/delegation-adapter-contract-review.md), [trust](../operations/security-and-trust.md) | [Result validation](../../../crates/podway-protocol/src/result_contract.rs); [receipt validation](../../../crates/podway-store/src/v2_delegation.rs) | Protocol known answers; [receipt negatives](../../../crates/podway-store/tests/int_v2sdg004_receipt.rs); native provenance/Role/round/disposition matrix |
+| SDG-004 package and evidence | [Package builder](../../../crates/podway-config/src/procedure_v2_delegation_package.rs); [read projections](../../../crates/podway-engine/src/v2_read_service.rs) | Package domain separation, attempt/goal/frozen-evidence identity and limits; native recorded-source routes |
+| SDG-005 atomic structural acceptance; [transaction spec](../storage/transactions-concurrency-and-idempotency.md) | Direct acceptance and Store receipt/state transaction | Store receipt atomic rollback; [semantics](../../../crates/podway-store/tests/int_v2sdg005_semantics.rs); direct delegation ports |
+| SDG-006 currency/correction; [guidance](../../implementation-tips/supervised-delegation.md#finish-recording-before-acceptance) | Accepted item-state digest; completion validation and views | Store no-op/rollback/edit/revert/blocker matrix; Engine `int_v2run002_views`; native correction matrix |
+| SDG-007 lifecycle/recovery; [guidance](../../implementation-tips/supervised-delegation.md#recover-without-repeating-external-effects-automatically) | Original success outcomes; retry/rework/goals; historical receipts | Store lifecycle/receipt tests; native lost-response lookup/retry and controlled external effect counts |
+| SDG-008 closed current results; [JSON](../interfaces/json-contract.md#direct-cli-generation), [CLI](../interfaces/cli-specification.md#delegation-commands), [errors](../interfaces/errors-and-exit-codes.md#delegation-failure-behavior) | Direct envelopes; route admission; CLI rendering | Protocol direct envelopes; native route tests; Engine archived readback |
+| SDG-009 persistence/isolation; [SQLite](../storage/sqlite-model.md) | [v14 DDL](../../../assets/specifications/sqlite-v14.sql); [direct transaction](../../../crates/podway-store/src/direct_store/transaction.rs); receipt constraints | Direct Store reopen/corruption/rollback/replay tests; native legacy refusal and explicit reset |
+| SDG-010 continuity/acceptance; [conformance](testing-and-conformance.md) | Direct single-cursor and atomic worktree-local writes | [Frozen Direct control](../../../tests/fixtures/v2/compatibility/supervised-delegation-direct-control.yaml); preset reference ports; native fixture cleanup; combined development gate and independent acceptance |
 
-The native case is
-`podway-cli::e2e_suite::e2e_v2sdg008_qualification::supervised_delegation_preserves_documented_example_hosts_and_recovery`.
-It uses the real single CLI binary with deterministic external fixtures. It does
-not prove a live executor, actual model work, arbitrary external writer
-settlement, or release upgrade readiness. The conformance inventory distinguishes
-its admission-time crash case from deterministic transaction-interior failpoints.
-
-The active roadmap owns completion state. Test success proves only the scope of the
-named check; `make test` is the development gate for the combined revision.
+The actual CLI native case is
+`e2e_v2sdg008_qualification::supervised_delegation_preserves_documented_example_hosts_and_recovery`.
+It uses one CLI binary and deterministic external fixtures. It proves neither a
+live executor/model nor arbitrary external effect settlement, and it does not
+qualify a legacy-to-current release upgrade. Its native lost-response coverage
+and deterministic transaction-interior failpoints establish separate boundaries.

@@ -71,7 +71,10 @@ must not use the release-program identifier as a synthetic epic or task prefix.
   its proper durable authority: accepted ADRs, canonical machine assets,
   specifications, architecture, implementation tips, examples, and roadmap
   evidence as applicable.
-- Before marking the epic complete, replace every roadmap and documentation link
+- Preserve the V2DFC dossier and current roadmap link through the final independent
+  Epic audit and actual Master acceptance. Task010 promotion does not close it.
+- After that closeout authorization and before marking the epic complete, replace
+  every roadmap and documentation link
   to the dossier with the appropriate durable authority, remove the dossier from
   this index, and delete its `TODO-*.md` file. No completed behavior, rationale,
   operational tip, compatibility boundary, or verification claim may exist only
@@ -89,7 +92,6 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 ## Related candidates
 
 - [Real executor integration](TODO-podway-supervised-delegation-integration.md): live external/managed Primary adapters and qualification excluded from V2SDG.
-- [Graph engineering](TODO-podway-graph-engineering-evolution.md): separately motivated work-unit and parallel graph research. The adopted `V2DFC` dossier supersedes its daemon assumptions.
+- [Graph engineering](TODO-podway-graph-engineering-evolution.md): separately motivated work-unit and parallel graph research. Rebased on the current Direct Engine; successor work units/leases/fan groups remain unadopted.
 - [Continuation generations](TODO-podway-versioned-continuation-generations.md): separately motivated topology replacement and plan lineage.
-- [Startup recovery performance](TODO-podway-startup-recovery-performance.md): profile and bound large-Store cold recovery without weakening validation. Obsoleted by `V2DFC` and retired when that epic completes.
-- [Web operations console](TODO-podway-web-operations-console.md): human operations after its graph/runtime prerequisites are settled. The adopted `V2DFC` dossier supersedes its preferred `podwayd` control plane.
+- [Web operations console](TODO-podway-web-operations-console.md): human operations after its graph/runtime prerequisites are settled. Foreground-only exploration over the same Direct Engine and explicit worktree inventory; no resident/login/global control plane is adopted.
