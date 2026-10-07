@@ -56,9 +56,10 @@ impl DirectStoreV1 {
             classification => classification.require_current()?,
         }
         let database = super::classification::open_read_nofollow(&self.layout.database())?;
-        let mut readonly = self.open_readonly_connection(
+        let (mut readonly, immutable) = self.open_readonly_connection(
             deadline,
-            !super::classification::path_exists(&self.layout.shm())?,
+            !super::classification::path_exists(&self.layout.wal())?
+                || !super::classification::path_exists(&self.layout.shm())?,
         )?;
         let snapshot = readonly.transaction_with_behavior(TransactionBehavior::Deferred)?;
         let actual: String = snapshot.query_row(
@@ -67,7 +68,7 @@ impl DirectStoreV1 {
             |row| row.get(0),
         )?;
         if actual == self.manifest.as_str() {
-            self.validate_connection(&snapshot)?;
+            self.validate_connection_with_mode(&snapshot, immutable)?;
             super::connection::ensure_deadline(deadline)?;
             lease.revalidate(&self.layout)?;
             if !super::maintenance::same_file(&database, &self.layout.database())? {
@@ -82,7 +83,7 @@ impl DirectStoreV1 {
                 expected: self.manifest.clone(),
                 actual: actual.clone(),
             })?;
-        self.validate_predecessor(&snapshot, predecessor)?;
+        self.validate_predecessor(&snapshot, predecessor, immutable)?;
         drop(snapshot);
         drop(readonly);
         lease.revalidate(&self.layout)?;
@@ -91,7 +92,7 @@ impl DirectStoreV1 {
         }
         let mut connection = self.open_connection(false, deadline)?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        self.validate_predecessor(&transaction, predecessor)?;
+        self.validate_predecessor(&transaction, predecessor, false)?;
         lease.revalidate(&self.layout)?;
         if !super::maintenance::same_file(&database, &self.layout.database())? {
             return Err(DirectStoreErrorV1::Maintenance);
@@ -125,6 +126,7 @@ impl DirectStoreV1 {
         &self,
         connection: &rusqlite::Connection,
         predecessor: &DeclaredPredecessor<'_>,
+        immutable: bool,
     ) -> DirectStoreResultV1<()> {
         if predecessor.generation < 14
             || predecessor.generation > super::DIRECT_SCHEMA_GENERATION_V1
@@ -137,7 +139,7 @@ impl DirectStoreV1 {
             "SELECT contract_manifest_digest,generation_id,recorded_at_ms FROM writer_contract WHERE singleton=1",[],
             |row|Ok((row.get(0)?,row.get(1)?,row.get(2)?)))?;
         if generation != predecessor.generation
-            || mode != "wal"
+            || mode != if immutable { "delete" } else { "wal" }
             || manifest != predecessor.manifest
             || id.is_empty()
             || id.len() > 64
@@ -184,6 +186,12 @@ mod tests {
     #[test]
     fn empty_production_registry_and_declared_schema_migration_are_atomic() {
         assert_eq!(writer_predecessor_manifests_v1().count(), 0);
+        for absent_wal in [false, true] {
+            check_declared_schema_migration(absent_wal);
+        }
+    }
+
+    fn check_declared_schema_migration(absent_wal: bool) {
         let root = tempfile::TempDir::new().unwrap();
         let layout = super::super::DirectWorkspaceLayoutV1::new(
             ValidatedWorkspaceRootV1::from_path(root.path()).unwrap(),
@@ -215,15 +223,23 @@ mod tests {
             .execute_batch("CREATE TABLE predecessor_only(value TEXT);")
             .unwrap();
         drop(connection);
+        if absent_wal {
+            let checkpoint = rusqlite::Connection::open(layout.database()).unwrap();
+            checkpoint
+                .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+                .unwrap();
+            drop(checkpoint);
+            assert!(!layout.wal().exists());
+        }
         let new = DirectStoreV1::new(layout.clone(), digest('e'), digest('a'), digest('b'));
         let before_main = std::fs::read(layout.database()).unwrap();
-        let before_wal = std::fs::read(layout.wal()).unwrap();
+        let before_wal = std::fs::read(layout.wal()).ok();
         assert!(matches!(
             new.migrate_declared_writer(deadline(), || panic!("unknown predecessor has no clock")),
             Err(DirectStoreErrorV1::WriterMismatch { .. })
         ));
         assert_eq!(std::fs::read(layout.database()).unwrap(), before_main);
-        assert_eq!(std::fs::read(layout.wal()).unwrap(), before_wal);
+        assert_eq!(std::fs::read(layout.wal()).ok(), before_wal);
         let ddl = format!(
             "{}\nCREATE TABLE predecessor_only(value TEXT);",
             super::super::DIRECT_STORE_DDL_V1

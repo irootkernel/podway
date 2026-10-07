@@ -17,9 +17,9 @@ use super::{
 
 const LOCK_RETRY_SLEEP: Duration = Duration::from_micros(500);
 
-/// Ordinary opens start shared. A missing WAL index needs a write-free heap
-/// snapshot under stronger exclusion, because unix-flock and unix POSIX locks
-/// are distinct VFS protocols. All direct writers obey this native lease.
+/// Ordinary opens start shared. Missing WAL or SHM requires stronger exclusion:
+/// a stable immutable main file or a write-free heap WAL snapshot. All direct
+/// writers obey this native lease; unix-flock and POSIX locks are distinct.
 pub(super) enum DirectOpenLease {
     Shared(SharedMaintenanceLeaseV1),
     Cold(ExclusiveMaintenanceLeaseV1),
@@ -33,7 +33,9 @@ impl DirectOpenLease {
     ) -> DirectStoreResultV1<Self> {
         let shared =
             SharedMaintenanceLeaseV1::acquire_with_missing_observer(layout, deadline, missing)?;
-        if super::classification::path_exists(&layout.shm())? {
+        if super::classification::path_exists(&layout.wal())?
+            && super::classification::path_exists(&layout.shm())?
+        {
             return Ok(Self::Shared(shared));
         }
         drop(shared);

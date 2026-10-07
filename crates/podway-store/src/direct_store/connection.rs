@@ -1,6 +1,7 @@
 use std::{
     cell::Cell,
     fs::File,
+    io::Read,
     os::unix::ffi::OsStrExt,
     sync::{Arc, Mutex, MutexGuard, OnceLock, TryLockError},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -183,12 +184,13 @@ impl DirectStoreV1 {
         super::classification::classify_unmarked_store_v1(&self.layout)?.require_current()?;
         let _gate = connection_gate(deadline)?;
         let database = super::classification::open_read_nofollow(&self.layout.database())?;
-        let mut connection = self.open_readonly_connection(
+        let (mut connection, immutable) = self.open_readonly_connection(
             deadline,
-            !super::classification::path_exists(&self.layout.shm())?,
+            !super::classification::path_exists(&self.layout.wal())?
+                || !super::classification::path_exists(&self.layout.shm())?,
         )?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
-        let binding = self.validate_connection(&transaction)?;
+        let binding = self.validate_connection_with_mode(&transaction, immutable)?;
         let snapshot = DirectReadSnapshotV1 {
             connection: &transaction,
             binding,
@@ -333,17 +335,18 @@ impl DirectStoreV1 {
     ) -> DirectStoreResultV1<T> {
         loop {
             ensure_deadline(deadline)?;
-            let mut connection = match self.open_readonly_connection(deadline, heap_snapshot) {
-                Ok(connection) => connection,
-                Err(error) if readonly_recovery(&error) => {
-                    recovery_wait(deadline)?;
-                    continue;
-                }
-                Err(error) => return Err(error),
-            };
+            let (mut connection, immutable) =
+                match self.open_readonly_connection(deadline, heap_snapshot) {
+                    Ok(connection) => connection,
+                    Err(error) if readonly_recovery(&error) => {
+                        recovery_wait(deadline)?;
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
             let transaction =
                 connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
-            match self.validate_connection(&transaction) {
+            match self.validate_connection_with_mode(&transaction, immutable) {
                 Ok(binding) => return read(&transaction, binding),
                 Err(error) if readonly_recovery(&error) => {
                     drop(transaction);
@@ -360,24 +363,42 @@ impl DirectStoreV1 {
         readonly: bool,
         deadline: Instant,
     ) -> DirectStoreResultV1<Connection> {
-        self.open_sqlite_connection(readonly, false, deadline)
+        self.open_sqlite_connection(readonly, false, false, deadline)
     }
 
-    /// Heap WAL snapshots require an already held exclusive native lease. The
-    /// read-only unix-flock VFS then supplies SQLite's exclusive locking mode
-    /// without attempting a write lock on an O_RDONLY POSIX descriptor.
+    /// Cold snapshots require an already held exclusive native lease. Without
+    /// WAL, immutable mode avoids creating it. With WAL, unix-flock supplies
+    /// exclusive locking without a write lock on an O_RDONLY POSIX descriptor.
     pub(super) fn open_readonly_connection(
         &self,
         deadline: Instant,
         heap_snapshot: bool,
-    ) -> DirectStoreResultV1<Connection> {
-        self.open_sqlite_connection(true, heap_snapshot, deadline)
+    ) -> DirectStoreResultV1<(Connection, bool)> {
+        // The exclusive native lease makes an absent-WAL main file immutable
+        // for this snapshot. Never use immutable mode while a WAL is present:
+        // SQLite would omit its committed frames.
+        let immutable = heap_snapshot && !super::classification::path_exists(&self.layout.wal())?;
+        if immutable {
+            let mut header = [0; 20];
+            super::classification::open_read_nofollow(&self.layout.database())?
+                .read_exact(&mut header)?;
+            // Immutable SQLite reports journal_mode=delete. Qualify the actual
+            // persistent WAL format before accepting that connection-local mode.
+            if &header[..16] != b"SQLite format 3\0" || header[18..20] != [2, 2] {
+                return Err(DirectStoreErrorV1::SchemaMismatch);
+            }
+        }
+        Ok((
+            self.open_sqlite_connection(true, heap_snapshot, immutable, deadline)?,
+            immutable,
+        ))
     }
 
     fn open_sqlite_connection(
         &self,
         readonly: bool,
         heap_snapshot: bool,
+        immutable: bool,
         deadline: Instant,
     ) -> DirectStoreResultV1<Connection> {
         ensure_deadline(deadline)?;
@@ -390,11 +411,13 @@ impl DirectStoreV1 {
                 OpenFlags::SQLITE_OPEN_READ_WRITE
             };
         let mut uri = file_uri(&self.layout.database(), readonly);
-        if heap_snapshot {
+        if immutable {
+            uri.push_str("&immutable=1");
+        } else if heap_snapshot {
             uri.push_str("&vfs=unix-flock");
         }
         let connection = Connection::open_with_flags(uri, flags)?;
-        if heap_snapshot {
+        if heap_snapshot && !immutable {
             connection.execute_batch("PRAGMA locking_mode=EXCLUSIVE;")?;
         }
         configure_connection(&connection, readonly, deadline)?;
@@ -404,6 +427,14 @@ impl DirectStoreV1 {
     pub(super) fn validate_connection(
         &self,
         connection: &Connection,
+    ) -> DirectStoreResultV1<WorkspaceBindingV1> {
+        self.validate_connection_with_mode(connection, false)
+    }
+
+    pub(super) fn validate_connection_with_mode(
+        &self,
+        connection: &Connection,
+        immutable: bool,
     ) -> DirectStoreResultV1<WorkspaceBindingV1> {
         let generation: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         if generation != DIRECT_SCHEMA_GENERATION_V1 {
@@ -417,7 +448,7 @@ impl DirectStoreV1 {
             });
         }
         let mode: String = connection.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
-        if mode != "wal" {
+        if mode != if immutable { "delete" } else { "wal" } {
             return Err(DirectStoreErrorV1::SchemaMismatch);
         }
         let writer: (String, String, i64) = connection.query_row(
@@ -471,12 +502,13 @@ impl DirectStoreV1 {
         let _connection_gate = connection_gate(deadline)?;
         super::classify_direct_store_v1(&self.layout)?.require_current()?;
         let database = super::classification::open_read_nofollow(&self.layout.database())?;
-        let mut connection = self.open_readonly_connection(
+        let (mut connection, immutable) = self.open_readonly_connection(
             deadline,
-            !super::classification::path_exists(&self.layout.shm())?,
+            !super::classification::path_exists(&self.layout.wal())?
+                || !super::classification::path_exists(&self.layout.shm())?,
         )?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
-        let binding = self.validate_connection(&transaction)?;
+        let binding = self.validate_connection_with_mode(&transaction, immutable)?;
         let check: String = transaction.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
         if check != "ok" {
             return Err(DirectStoreErrorV1::Unreadable);

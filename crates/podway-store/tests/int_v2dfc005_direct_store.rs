@@ -364,6 +364,134 @@ fn images(directory: &Path) -> Vec<FileImage> {
 }
 
 #[test]
+fn absent_wal_reads_and_foreign_writer_refusals_are_write_free() {
+    for foreign_writer in [false, true] {
+        for stale_shm in [false, true] {
+            let (_root, store) = fixture();
+            let connection = Connection::open(store.layout().database()).unwrap();
+            if foreign_writer {
+                connection
+                    .execute(
+                        "UPDATE writer_contract SET contract_manifest_digest=?1 WHERE singleton=1",
+                        [format!("sha256:{}", "f".repeat(64))],
+                    )
+                    .unwrap();
+            }
+            connection
+                .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+                .unwrap();
+            drop(connection);
+            assert!(!store.layout().wal().exists());
+            assert!(!store.layout().shm().exists());
+            if stale_shm {
+                fs::write(store.layout().shm(), vec![0; 32768]).unwrap();
+            }
+            let before = images(&store.layout().runtime_directory());
+            let read = store.read(deadline(), |snapshot| {
+                assert!(
+                    !foreign_writer,
+                    "foreign writer must be refused before the callback"
+                );
+                assert_eq!(
+                    snapshot.outcome(request("init").key())?.unwrap().sequence(),
+                    1
+                );
+                Ok(())
+            });
+            if foreign_writer {
+                assert!(matches!(
+                    read,
+                    Err(DirectStoreErrorV1::WriterMismatch { .. })
+                ));
+            } else {
+                read.unwrap();
+            }
+            assert!(
+                images(&store.layout().runtime_directory()) == before,
+                "read changed absent-WAL files: foreign_writer={foreign_writer}, stale_shm={stale_shm}"
+            );
+            let diagnosis = store.verify_integrity(deadline());
+            if foreign_writer {
+                assert!(matches!(
+                    diagnosis,
+                    Err(DirectStoreErrorV1::WriterMismatch { .. })
+                ));
+            } else {
+                diagnosis.unwrap();
+            }
+            assert!(
+                images(&store.layout().runtime_directory()) == before,
+                "diagnosis changed absent-WAL files: foreign_writer={foreign_writer}, stale_shm={stale_shm}"
+            );
+            let migration = store.migrate_declared_writer(deadline(), || {
+                panic!("current or unknown writer must not read a migration clock")
+            });
+            if foreign_writer {
+                assert!(matches!(
+                    migration,
+                    Err(DirectStoreErrorV1::WriterMismatch { .. })
+                ));
+            } else {
+                assert!(!migration.unwrap());
+            }
+            let lease =
+                ExclusiveMaintenanceLeaseV1::acquire(store.layout(), deadline(), false).unwrap();
+            let exclusive = store.read_under_exclusive_lease(&lease, deadline(), |snapshot| {
+                assert!(!foreign_writer, "foreign writer reached exclusive callback");
+                assert_eq!(snapshot.view(UnixMillis::new(20))?.sequence(), 1);
+                Ok(())
+            });
+            if foreign_writer {
+                assert!(matches!(
+                    exclusive,
+                    Err(DirectStoreErrorV1::WriterMismatch { .. })
+                ));
+            } else {
+                exclusive.unwrap();
+            }
+            drop(lease);
+            assert!(
+                images(&store.layout().runtime_directory()) == before,
+                "exclusive prevalidation changed absent-WAL files: foreign_writer={foreign_writer}, stale_shm={stale_shm}"
+            );
+            if foreign_writer {
+                let refused = store.mutate(
+                    &request("refused"),
+                    deadline(),
+                    || panic!("foreign writer refusal must not read the mutation clock"),
+                    |_| panic!("foreign writer refusal must not enter the mutation callback"),
+                );
+                assert!(matches!(
+                    refused,
+                    Err(DirectStoreErrorV1::WriterMismatch { .. })
+                ));
+                assert!(
+                    images(&store.layout().runtime_directory()) == before,
+                    "mutation prevalidation changed absent-WAL files: stale_shm={stale_shm}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn absent_wal_read_refuses_non_wal_main_format_without_writes() {
+    let (_root, store) = fixture();
+    let connection = Connection::open(store.layout().database()).unwrap();
+    connection
+        .execute_batch("PRAGMA journal_mode=DELETE;")
+        .unwrap();
+    drop(connection);
+    assert!(!store.layout().wal().exists());
+    let before = images(&store.layout().runtime_directory());
+    assert!(matches!(
+        store.read::<()>(deadline(), |_| panic!("non-WAL format reached callback")),
+        Err(DirectStoreErrorV1::SchemaMismatch)
+    ));
+    assert!(images(&store.layout().runtime_directory()) == before);
+}
+
+#[test]
 fn complete_generation_fourteen_bootstrap_and_cold_read_are_write_free() {
     let (_root, store) = fixture();
     assert_eq!(
