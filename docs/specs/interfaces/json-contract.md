@@ -6,8 +6,8 @@ The V2DFC-007 CLI emits `podway.output/v4` for retained commands and
 `podway.error/v2` for failures. Their canonical closed schemas are
 [`output-v4.schema.json`](../../../assets/schemas/output-v4.schema.json) and
 [`error-v2.schema.json`](../../../assets/schemas/error-v2.schema.json).
-`version --json --identity` retains output v3, version-result v1, and manifest
-v1 until the V2DFC-009 identity-tooling cutover.
+`version --json --identity` also emits output v4, with version-result v2 and
+manifest v2 identity.
 
 Direct and delegated Procedures share status, compact status, running next,
 and observation v5, with prepared next v3. The success envelope has no job or
@@ -32,9 +32,9 @@ The following describes the previous generation superseded by the direct CLI.
 These families were retired by V2DFC-008. They describe historical contracts
 and do not define the current CLI output.
 
-The previous daemon-based commands emit `podway.output/v3`. The closed schema is
-[`output-v3.schema.json`](../../../assets/schemas/output-v3.schema.json). Failures
-emit `podway.error/v1`; IPC requests remain `podway.ipc/v1`. These identifiers
+The previous daemon-based commands used `podway.output/v3`; its schema and
+version-only identity bridge are retired. Failures used `podway.error/v1` and
+IPC requests used `podway.ipc/v1`. These identifiers
 version different contracts and do not imply Procedure support.
 
 The success envelope contains `schema`, `request_id`, `command`, `generated_at`,
@@ -217,9 +217,10 @@ recovery. Their reserved detail schemas exclude legacy reset, maintenance retry,
 and outcome lookup recipes; error/v2 applies the same owning detail constraints.
 
 `podway.version-result/v2` and `podway.contract-manifest/v2` omit
-`supported_ipc_ids`. The currently generated manifest and version result remain
-v1 until their owning V2DFC-009 cutover work. `version --json --identity` therefore
-retains output v3 during V2DFC-007; other retained CLI commands emit output v4.
+`supported_ipc_ids`. The generated manifest is
+`contracts/contract-manifest-v2.json`, and `version --json --identity` emits
+version-result v2 inside output v4. The single-binary release verifier validates
+the complete version envelope and manifest through the canonical schema registry.
 Store v14 DDL is enrolled in the current
 manifest with asset kind `store_schema` so its bytes affect writer identity.
 

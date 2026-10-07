@@ -77,9 +77,17 @@ fn aut_t_path_invokes_cli_symlink_from_sanitized_arbitrary_directory() {
     assert!(output.stderr.is_empty());
     let envelope: Value =
         serde_json::from_slice(&output.stdout).expect("version identity must be JSON");
-    // Release identity remains generation 1 until the V2DFC-009 tooling cutover.
-    assert_eq!(envelope["schema"], "podway.output/v3");
+    assert_eq!(envelope["schema"], "podway.output/v4");
     assert_eq!(envelope["command"], "version");
+    assert_eq!(envelope["result"]["schema"], "podway.version-result/v2");
+    assert_eq!(
+        envelope["result"]["contract_manifest_schema"],
+        "podway.contract-manifest/v2"
+    );
+    assert!(envelope["result"].get("supported_ipc_ids").is_none());
+    assert_eq!(envelope["result"].as_object().unwrap().len(), 8);
+    podway_protocol::OutputEnvelopeV4::from_value(envelope.clone())
+        .expect("version identity satisfies the complete direct output contract");
     assert_eq!(
         envelope["result"]["version"],
         format!("v{}", env!("CARGO_PKG_VERSION"))

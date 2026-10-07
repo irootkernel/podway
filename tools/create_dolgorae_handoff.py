@@ -8,13 +8,13 @@ import io
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 import tarfile
 import tempfile
 from typing import Any
 
 import contract_manifest
+import qualify_distribution
 import release_archive
 import release_evidence
 import repository_assets
@@ -38,17 +38,7 @@ def fail(message: str) -> None:
 
 
 def run_git(*arguments: str) -> str:
-    completed = subprocess.run(
-        ["git", *arguments],
-        cwd=ROOT,
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    if completed.returncode != 0:
-        fail(f"Git {' '.join(arguments)} failed: {completed.stderr.strip()}")
-    return completed.stdout.strip()
+    return release_archive.run(["git", *arguments], label="handoff Git identity probe").decode().strip()
 
 
 def read_object(path: Path, label: str) -> dict[str, Any]:
@@ -233,7 +223,7 @@ def adapter_contract() -> dict[str, Any]:
             {"expected": "all-pinned-bytes-validate-closed", "id": "DOLV3-002", "check": "schema-pins"},
             {"expected": "retained-direct-and-local-routes-dispatch", "id": "DOLV3-003", "check": "route-surface"},
             {
-                "expected": "retained-results-use-output-v4-and-errors-use-error-v2-with-disclosed-identity-exception",
+                "expected": "all-results-use-output-v4-and-errors-use-error-v2",
                 "id": "DOLV3-004",
                 "check": "envelope-dispatch",
             },
@@ -270,11 +260,10 @@ def adapter_contract() -> dict[str, Any]:
             "store_schema": "spec/sqlite-v14.sql",
             "retired_command_table": "spec/retired-commands-v1.json",
             "consumer_adoption": "requires-separate-Aquarium-and-Dolgorae-work",
-            "version_identity_exception": {
-                "activation_task": "V2DFC-009",
-                "output_schema": "podway.output/v3",
-                "result_schema": "podway.version-result/v1",
-                "manifest_schema": "podway.contract-manifest/v1",
+            "version_identity": {
+                "output_schema": "podway.output/v4",
+                "result_schema": "podway.version-result/v2",
+                "manifest_schema": "podway.contract-manifest/v2",
             },
         },
         "current_surface_counts": {
@@ -341,7 +330,12 @@ def packaged_adapter_contract(archive: Path) -> tuple[dict[str, Any], str]:
     )
     try:
         with tarfile.open(archive, mode="r:gz") as opened:
-            members = [member for member in opened.getmembers() if member.name == member_name]
+            members = []
+            for index, member in enumerate(opened):
+                if index >= 10000:
+                    fail("release archive exceeds its member budget")
+                if member.name == member_name:
+                    members.append(member)
             if len(members) != 1 or not members[0].isreg():
                 fail("release archive does not contain one regular v3 adapter contract")
             extracted = opened.extractfile(members[0])
@@ -359,8 +353,6 @@ def packaged_adapter_contract(archive: Path) -> tuple[dict[str, Any], str]:
 
 def create(output_directory: Path, gate: str) -> dict[str, Any]:
     release_archive.require_native_host()
-    if run_git("status", "--porcelain=v1", "--untracked-files=normal"):
-        fail("Dolgorae handoff requires a clean Git worktree")
     commit = run_git("rev-parse", "HEAD")
     source_tree = run_git("rev-parse", "HEAD^{tree}")
     archive = output_directory / f"{ARCHIVE_ROOT}.tar.gz"
@@ -369,7 +361,9 @@ def create(output_directory: Path, gate: str) -> dict[str, Any]:
     require_regular_file(archive, "release archive")
     require_regular_file(checksum, "release archive checksum")
     require_regular_file(provenance_path, "release provenance")
+    provenance_digest = release_archive.sha256_file(provenance_path)
     provenance = read_object(provenance_path, "release provenance")
+    release_archive.require_source_binding(provenance, gate)
     expected_schema = (
         release_evidence.PATCH_PROVENANCE_SCHEMA
         if gate == "patch"
@@ -384,7 +378,7 @@ def create(output_directory: Path, gate: str) -> dict[str, Any]:
             target=TARGET,
             commit=commit,
             tree=source_tree,
-            conformance_result=(release_evidence.PASSED if gate == "full" else None),
+            conformance_result=(None if gate == "patch" else release_evidence.PASSED),
         )
     except release_evidence.EvidenceError as error:
         fail(str(error))
@@ -393,18 +387,35 @@ def create(output_directory: Path, gate: str) -> dict[str, Any]:
         fail("release archive checksum does not match")
     if provenance.get("archive") != {"name": archive.name, "sha256": archive_digest}:
         fail("release provenance archive identity does not match")
+    with tempfile.TemporaryDirectory(prefix="podway-handoff-", dir=release_archive.scratch_parent()) as name:
+        extracted = qualify_distribution.safe_extract(archive, Path(name))
+        cli = release_archive.require_native_binary(extracted / "bin/podway", "podway")
+        receipt = release_archive.verify_release_contract(extracted / "share/podway", cli, commit)
+        release_archive.verify_source_payloads(extracted, cli)
+        for field in ("build_identity", "contract_manifest_digest", "contract_manifest_schema", "source_commit", "target", "version"):
+            if receipt.get(field) != provenance.get(field):
+                fail(f"packaged identity and provenance differ for {field}")
+        if release_archive.sha256_file(cli) != provenance["binaries"]["podway"]:
+            fail("packaged binary differs from provenance")
+        release_archive.verify_artifact_class({"podway": cli}, provenance["artifact_class"])
     adapter, adapter_catalog_sha256 = packaged_adapter_contract(archive)
     handoff = handoff_from_provenance(
         provenance,
         provenance_path.name,
-        release_archive.sha256_file(provenance_path),
+        provenance_digest,
         source_tree,
         adapter,
         adapter_catalog_sha256,
     )
+    release_archive.require_source_binding(provenance, gate)
+    if release_archive.sha256_file(provenance_path) != provenance_digest or release_archive.sha256_file(archive) != archive_digest:
+        fail("provenance or archive changed during handoff construction")
+    if checksum.read_text(encoding="utf-8") != f"{archive_digest}  {archive.name}\n":
+        fail("archive checksum changed during handoff construction")
     output = output_directory / f"{ARCHIVE_ROOT}.dolgorae-handoff.json"
     write_json(output, handoff)
-    return {"handoff": str(output.resolve()), "mode": "create", "ok": True}
+    return {"handoff": str(output.resolve()), "artifact_class": provenance["artifact_class"],
+        "publishable": gate != "development", "mode": "create", "ok": True}
 
 
 def self_test() -> dict[str, Any]:
@@ -471,11 +482,11 @@ def self_test() -> dict[str, Any]:
     provenance = {
         "archive": {"name": "podway.tar.gz", "sha256": "a" * 64},
         "artifact_class": "distribution",
-        "binaries": {"podway": "b" * 64, "podwayd": "c" * 64},
+        "binaries": {"podway": "b" * 64},
         "build_identity": f"sha256:{'d' * 64}",
         "cargo_lock_sha256": "e" * 64,
         "contract_manifest_digest": f"sha256:{'f' * 64}",
-        "contract_manifest_schema": "podway.contract-manifest/v1",
+        "contract_manifest_schema": "podway.contract-manifest/v2",
         "packaged_conformance": {
             "result": release_evidence.PASSED,
             "scenarios": release_evidence.PACKAGED_CONFORMANCE_SCENARIOS,
@@ -488,6 +499,7 @@ def self_test() -> dict[str, Any]:
         "source_commit": "1" * 40,
         "source_dirty": False,
         "source_tree": "3" * 40,
+        "source_snapshot_sha256": "7" * 64,
         "target": TARGET,
         "toolchain": "rustc 1.97.1 (test)",
         "version": VERSION,
@@ -549,7 +561,7 @@ def self_test() -> dict[str, Any]:
     else:
         fail("handoff accepted pending packaged-conformance evidence")
     sentinels += 1
-    with tempfile.TemporaryDirectory(prefix="podway-handoff-self-test-") as temporary_name:
+    with tempfile.TemporaryDirectory(prefix="podway-handoff-self-test-", dir=release_archive.scratch_parent()) as temporary_name:
         temporary = Path(temporary_name)
         victim = temporary / "victim.json"
         victim.write_text("do not replace\n", encoding="utf-8")
@@ -638,7 +650,7 @@ def main() -> int:
     prepare_parser.add_argument("--output", type=Path, default=ADAPTER_CONTRACT_PATH)
     create_parser = subparsers.add_parser("create")
     create_parser.add_argument("--output-dir", type=Path, default=ROOT / "dist")
-    create_parser.add_argument("--gate", choices=("full", "patch"), default="full")
+    create_parser.add_argument("--gate", choices=("full", "patch", "development"), default="full")
     arguments = parser.parse_args()
     try:
         if arguments.mode == "self-test":
@@ -656,6 +668,9 @@ def main() -> int:
         UnicodeError,
         release_archive.ReleaseError,
         repository_assets.AssetError,
+        qualify_distribution.QualificationError,
+        release_evidence.EvidenceError,
+        tarfile.TarError,
     ) as error:
         print(
             json.dumps({"error": str(error), "mode": arguments.mode, "ok": False}, sort_keys=True, separators=(",", ":")),

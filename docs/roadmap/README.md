@@ -489,15 +489,17 @@ Dependencies: completed `V2RDY` epic.
 
 Status: Completed.
 
-Canonical Outcomes: [ADR-0031](../architecture-decision-records/0031-keyed-runtime-modes-and-managed-development-service.md), [CLI specification](../specs/interfaces/cli-specification.md), [IPC protocol](../specs/interfaces/json-contract.md#direct-cli-generation), [SQLite model](../specs/storage/sqlite-model.md), [recovery specification](../specs/storage/recovery-retention-and-maintenance.md), [Aquarium development service](../specs/operations/aquarium-development-service.md), [release and packaging](../specs/operations/release-and-packaging.md), [testing and conformance](../specs/quality/testing-and-conformance.md), and [requirements traceability](../specs/quality/requirements-traceability.md).
+Canonical Outcomes: [ADR-0031](../architecture-decision-records/0031-keyed-runtime-modes-and-managed-development-service.md), [CLI specification](../specs/interfaces/cli-specification.md), [IPC protocol](../specs/interfaces/json-contract.md#direct-cli-generation), [SQLite model](../specs/storage/sqlite-model.md), [recovery specification](../specs/storage/recovery-retention-and-maintenance.md), [historical Aquarium service decision](../architecture-decision-records/0031-keyed-runtime-modes-and-managed-development-service.md), [release and packaging](../specs/operations/release-and-packaging.md), [testing and conformance](../specs/quality/testing-and-conformance.md), and [requirements traceability](../specs/quality/requirements-traceability.md).
 
 Dependencies: completed `V2RET` epic.
 
-This epic generalizes the production/development distinction into one bounded
+This epic generalized the production/development distinction into one bounded
 runtime mode key while preserving exactly one effective mode and one normal
-writer for each worktree. It delivers Podway's unchanged external Aquarium v2
-managed-service interface on top of that model. The canonical outcomes above own
-the completed architecture, contracts, operations, and conformance surface.
+writer for each worktree. It delivered the external Aquarium v2 managed-service
+interface on that model.
+That historical surface is retired by `V2DFC-009`;
+[ADR-0038](../architecture-decision-records/0038-remove-the-daemon.md) owns the
+current direct target. Completed entries below preserve the original work history.
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
@@ -505,7 +507,7 @@ the completed architecture, contracts, operations, and conformance surface.
 | `V2DVC-002` | Reserve v0.2.8 runtime-mode contracts | Completed | Reconcile the v0.2.8 cycle and reserve bounded workspace mode, managed-runtime, status, error, protocol, storage, and compatibility contracts without premature runtime admission. | [CLI specification](../specs/interfaces/cli-specification.md), [SQLite model](../specs/storage/sqlite-model.md), [changelog](../../CHANGELOG.md) |
 | `V2DVC-003` | Add keyed daemon namespaces | Completed | Implement runtime-mode values, complete mode-keyed paths, managed metadata validation, CLI and daemon selectors, and the `--dev` compatibility aliases. | [ADR-0031](../architecture-decision-records/0031-keyed-runtime-modes-and-managed-development-service.md), [macOS service architecture](../architecture/macos-service.md) |
 | `V2DVC-004` | Bind and switch workspace modes | Completed | Enforce config, endpoint, daemon, registry, and Store mode agreement before Store access, then add token-bound runtime-reset switching with crash recovery. | [recovery specification](../specs/storage/recovery-retention-and-maintenance.md), [IPC protocol](../specs/interfaces/json-contract.md#direct-cli-generation) |
-| `V2DVC-005` | Add the persistent Aquarium development service | Completed | Build the immutable managed-service bundle and producer controller, keep publication pending-only, and activate exact idle generations with proven rollback or bounded recovery debt. | [Aquarium development service](../specs/operations/aquarium-development-service.md), [macOS service architecture](../architecture/macos-service.md) |
+| `V2DVC-005` | Add the persistent Aquarium development service | Completed | Build the immutable managed-service bundle and producer controller, keep publication pending-only, and activate exact idle generations with proven rollback or bounded recovery debt. | [historical Aquarium service decision](../architecture-decision-records/0031-keyed-runtime-modes-and-managed-development-service.md), [macOS service architecture](../architecture/macos-service.md) |
 | `V2DVC-006` | Generalize isolated qualification runtimes | Completed | Move contributor and packaged release qualification to private named runtime identities while preserving exact snapshots, sandbox admission, cleanup, and production and Aquarium isolation. | [current contributor isolation](../implementation-tips/testing.md#isolated-direct-cli-checks), [release workflow](../implementation-tips/release.md) |
 | `V2DVC-007` | Close named-runtime conformance | Completed | Prove compatibility, coexistence, switching, recovery, Aquarium rollover, and parallel qualification; promote durable documentation; retire the dossier; and pass the development gate. | [testing and conformance](../specs/quality/testing-and-conformance.md), [requirements traceability](../specs/quality/requirements-traceability.md) |
 
@@ -724,7 +726,7 @@ installation, or removal of an installed daemon.
 | `V2DFC-006` | Execute every retained command through the direct engine | Completed | Run every retained read, mutation, and maintenance command in-process with revalidated preparation and validated new-generation envelopes. | [Task scope](../todo/TODO-podway-daemon-free-core.md#v2dfc-006-execute-every-retained-command-through-the-direct-engine), [transactions](../specs/storage/transactions-concurrency-and-idempotency.md) |
 | `V2DFC-007` | Switch the CLI to the direct engine and delete the daemon host | Completed | Route the CLI through the engine, emit the new contract, return retired-command guidance, and delete the daemon crate and binary. | [Task scope](../todo/TODO-podway-daemon-free-core.md#v2dfc-007-switch-the-cli-to-the-direct-engine-and-delete-the-daemon-host) |
 | `V2DFC-008` | Retire residual daemon-era infrastructure and contracts | Completed | Delete the service crate, IPC protocol, legacy Store and migrations, runtime modes, and daemon-only schemas and errors, and retarget fuzzing. | [Task scope](../todo/TODO-podway-daemon-free-core.md#v2dfc-008-retire-residual-daemon-era-infrastructure-and-contracts) |
-| `V2DFC-009` | Rebuild release and development tooling around one binary | Planned | Package and qualify one binary, regenerate identity and handoff contracts, retire the Aquarium development service, and rewrite release QA. | [Task scope](../todo/TODO-podway-daemon-free-core.md#v2dfc-009-rebuild-release-and-development-tooling-around-one-binary) |
+| `V2DFC-009` | Rebuild release and development tooling around one binary | Completed | Package and qualify one binary, regenerate identity and handoff contracts, retire the Aquarium development service, and rewrite release QA. | [Task scope](../todo/TODO-podway-daemon-free-core.md#v2dfc-009-rebuild-release-and-development-tooling-around-one-binary) |
 | `V2DFC-010` | Promote durable documentation | Planned | Promote lasting decisions and verification baselines to specifications, architecture, README, skills, and AGENTS.md, and update related candidates before the final Epic audit. | [Task scope](../todo/TODO-podway-daemon-free-core.md#v2dfc-010-promote-durable-documentation) |
 
 Tasks execute in numeric order with one active task across this epic. At most

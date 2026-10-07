@@ -167,7 +167,7 @@ fn selector(path: &std::path::Path) -> WorktreeSelectorV1 {
         WORKTREE_SELECTOR_VERSION_V1,
         None,
         LosslessPathV1::from_raw_bytes(
-            path.as_os_str().as_bytes().to_vec(),
+            path.as_os_str().as_bytes(),
             DiagnosticPathDisplayV1::new(path.to_string_lossy()).unwrap(),
         )
         .unwrap(),

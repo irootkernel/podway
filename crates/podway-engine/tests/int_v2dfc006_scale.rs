@@ -826,10 +826,9 @@ pub(super) fn grown_l_engine(nodes: usize) -> (Engine, (u64, u64, usize)) {
 }
 
 fn qualify(nodes: usize) {
-    assert!(
-        !cfg!(debug_assertions),
-        "G1/G2 qualification requires the release profile"
-    );
+    if cfg!(debug_assertions) {
+        panic!("G1/G2 qualification requires the release profile");
+    }
     // Cargo may rebuild this test target while the fixture grows. Every child
     // executes the same immutable test-binary copy captured before that growth.
     let executable_directory = tempfile::Builder::new()
@@ -850,7 +849,7 @@ fn qualify(nodes: usize) {
         .map(|value| value.parse::<u64>().unwrap());
     let count = diagnostic.unwrap_or(1000);
     assert!(
-        count > 0 && count <= 1000 && count % 50 == 0,
+        count > 0 && count <= 1000 && count.is_multiple_of(50),
         "diagnostic count must be a positive multiple of 50 <=1000"
     );
     let retained = std::env::var_os(EVIDENCE_ENV).map(PathBuf::from);

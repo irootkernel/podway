@@ -13,7 +13,6 @@ pub struct BuildIdentityV1 {
     source_commit: Option<&'static str>,
     contract_manifest_schema: &'static str,
     contract_manifest_digest: &'static str,
-    supported_ipc_ids: &'static [&'static str],
 }
 
 impl BuildIdentityV1 {
@@ -48,15 +47,11 @@ impl BuildIdentityV1 {
     pub const fn contract_manifest_digest(&self) -> &'static str {
         self.contract_manifest_digest
     }
-
-    pub const fn supported_ipc_ids(&self) -> &'static [&'static str] {
-        self.supported_ipc_ids
-    }
 }
 
 pub const fn build_identity_v1() -> BuildIdentityV1 {
     BuildIdentityV1 {
-        schema: "podway.version-result/v1",
+        schema: "podway.version-result/v2",
         product: PRODUCT_V1,
         version: PRODUCT_VERSION_V1,
         target: BUILD_TARGET_V1,
@@ -64,7 +59,6 @@ pub const fn build_identity_v1() -> BuildIdentityV1 {
         source_commit: SOURCE_COMMIT_V1,
         contract_manifest_schema: CONTRACT_MANIFEST_SCHEMA_V1,
         contract_manifest_digest: CONTRACT_MANIFEST_DIGEST_V1,
-        supported_ipc_ids: CONTRACT_SUPPORTED_IPC_IDS_V1,
     }
 }
 
@@ -75,14 +69,20 @@ mod tests {
     #[test]
     fn contract_identity_is_complete_and_canonical() {
         let identity = build_identity_v1();
-        assert_eq!(identity.schema(), "podway.version-result/v1");
+        assert_eq!(identity.schema(), "podway.version-result/v2");
         assert_eq!(identity.product(), "podway");
         assert_eq!(
             identity.version(),
             format!("v{}", env!("CARGO_PKG_VERSION"))
         );
         assert!(!identity.target().is_empty());
-        assert_eq!(identity.supported_ipc_ids(), ["podway.ipc/v1"]);
+        let value = serde_json::to_value(&identity).unwrap();
+        assert_eq!(value.as_object().unwrap().len(), 8);
+        assert!(value.get("supported_ipc_ids").is_none());
+        assert!(crate::validate_daemon_free_document_v1(
+            identity.schema(),
+            &value
+        ));
         for digest in [
             identity.build_identity(),
             identity.contract_manifest_digest(),
@@ -93,7 +93,27 @@ mod tests {
         }
         assert_eq!(
             identity.contract_manifest_schema(),
-            "podway.contract-manifest/v1"
+            "podway.contract-manifest/v2"
+        );
+    }
+
+    #[test]
+    fn build_identity_binds_the_complete_canonical_preimage() {
+        use sha2::{Digest, Sha256};
+
+        let identity = build_identity_v1();
+        let preimage = serde_json::json!({
+            "contract_manifest_digest": identity.contract_manifest_digest(),
+            "product": identity.product(),
+            "profile": BUILD_PROFILE_V1,
+            "source_commit": identity.source_commit(),
+            "target": identity.target(),
+            "version": identity.version().strip_prefix('v').unwrap(),
+        });
+        let canonical = podway_core::canonicalize_json_v1(&preimage).unwrap();
+        assert_eq!(
+            identity.build_identity(),
+            format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))
         );
     }
 }

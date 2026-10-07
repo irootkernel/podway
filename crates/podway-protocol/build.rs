@@ -11,7 +11,7 @@ mod build_support;
 
 use build_support::{canonical_json_bytes, git_rerun_paths};
 
-const MANIFEST_SCHEMA: &str = "podway.contract-manifest/v1";
+const MANIFEST_SCHEMA: &str = "podway.contract-manifest/v2";
 
 fn fail(message: impl AsRef<str>) -> ! {
     panic!("contract identity build failed: {}", message.as_ref());
@@ -90,7 +90,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=PODWAY_SOURCE_COMMIT");
     let crate_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let workspace = crate_dir.join("../..");
-    let manifest_path = workspace.join("contracts/contract-manifest-v1.json");
+    let manifest_path = workspace.join("contracts/contract-manifest-v2.json");
     println!("cargo:rerun-if-changed={}", manifest_path.display());
     emit_git_rerun_paths(&workspace);
 
@@ -118,20 +118,8 @@ fn main() {
 
     let product = string_field(&manifest, "product");
     let version = string_field(&manifest, "product_version");
-    let supported_ipc_ids = manifest
-        .get("supported_ipc_ids")
-        .and_then(Value::as_array)
-        .unwrap_or_else(|| fail("supported_ipc_ids must be an array"))
-        .iter()
-        .map(|value| {
-            value
-                .as_str()
-                .map(ToOwned::to_owned)
-                .unwrap_or_else(|| fail("supported_ipc_ids entries must be strings"))
-        })
-        .collect::<Vec<_>>();
-    if supported_ipc_ids.is_empty() {
-        fail("supported_ipc_ids must not be empty");
+    if manifest.get("supported_ipc_ids").is_some() {
+        fail("manifest v2 must not contain supported_ipc_ids");
     }
     let target = env::var("TARGET").unwrap_or_else(|error| fail(error.to_string()));
     let profile = env::var("PROFILE").unwrap_or_else(|error| fail(error.to_string()));
@@ -152,11 +140,6 @@ fn main() {
             })
         )
     );
-    let ipc_ids = supported_ipc_ids
-        .iter()
-        .map(|value| rust_string(value))
-        .collect::<Vec<_>>()
-        .join(",");
     let source = source_commit
         .as_deref()
         .map(|value| format!("Some({})", rust_string(value)))
@@ -169,13 +152,15 @@ fn main() {
          pub const SOURCE_COMMIT_V1: Option<&str> = {source};\n\
          pub const CONTRACT_MANIFEST_SCHEMA_V1: &str = {};\n\
          pub const CONTRACT_MANIFEST_DIGEST_V1: &str = {};\n\
-         pub const CONTRACT_SUPPORTED_IPC_IDS_V1: &[&str] = &[{ipc_ids}];\n",
+         #[cfg(test)]\n\
+         const BUILD_PROFILE_V1: &str = {};\n",
         rust_string(product),
         rust_string(&format!("v{version}")),
         rust_string(&target),
         rust_string(&build_identity),
         rust_string(MANIFEST_SCHEMA),
         rust_string(&digest),
+        rust_string(&profile),
     );
     let output_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));
     generate_embedded_schemas(&workspace, &output_dir);

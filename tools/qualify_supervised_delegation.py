@@ -102,8 +102,9 @@ class Fixture:
     def call(self, worktree: Path, args: list[str], *, payload: dict | None = None,
              error: str | None = None) -> dict:
         assert worktree.is_relative_to(self.root) and worktree.is_dir()
+        workspace = [] if args[0] in {"help", "version", "completions", "procedure", "preset"} else ["--worktree", str(worktree)]
         completed = bounded_process(
-            [str(self.cli), "--json", *args], cwd=worktree,
+            [str(self.cli), "--json", *workspace, *args], cwd=worktree,
             payload=None if payload is None else json.dumps(payload).encode(),
         )
         assert not completed.stderr, (args, completed.stderr)
@@ -246,8 +247,9 @@ class Fixture:
 
     def lost(self, worktree: Path, args: list[str], payload: dict | None = None) -> dict:
         # Discard the consumer response and recover only through the durable outcome.
+        assert worktree.is_relative_to(self.root) and worktree.is_dir()
         completed = bounded_process(
-            [str(self.cli), "--json", *args], cwd=worktree,
+            [str(self.cli), "--json", "--worktree", str(worktree), *args], cwd=worktree,
             payload=None if payload is None else json.dumps(payload).encode(),
         )
         assert completed.returncode == 0 and not completed.stderr, completed
@@ -549,11 +551,10 @@ def main() -> None:
         assert identity_output.returncode == 0 and not identity_output.stderr
         identity_envelope = json.loads(identity_output.stdout)
         identity = identity_envelope["result"]
-        # V2DFC-009 owns release identity generation 2; only that endpoint retains output 3 meanwhile.
-        assert (identity_envelope["schema"], identity["schema"]) in {
-            ("podway.output/v3", "podway.version-result/v1"),
-            ("podway.output/v4", "podway.version-result/v2"),
-        }
+        assert identity_envelope["schema"] == "podway.output/v4", identity_envelope
+        assert identity["schema"] == "podway.version-result/v2", identity
+        assert identity["contract_manifest_schema"] == "podway.contract-manifest/v2", identity
+        assert "supported_ipc_ids" not in identity, identity
         if args.scenario in ("all", "example"):
             example = documented_example(f)
             checks["example"] = True

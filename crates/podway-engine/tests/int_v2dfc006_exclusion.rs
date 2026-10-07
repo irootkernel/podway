@@ -226,10 +226,10 @@ impl OwnedChild {
                     output.flush().unwrap();
                     retained += line.len() + 1;
                 }
-                if let Some((_, json)) = line.split_once(PREFIX) {
-                    if tx.send(serde_json::from_str(json).unwrap()).is_err() {
-                        break;
-                    }
+                if let Some((_, json)) = line.split_once(PREFIX)
+                    && tx.send(serde_json::from_str(json).unwrap()).is_err()
+                {
+                    break;
                 }
             }
         });
@@ -434,7 +434,7 @@ fn maintenance_exclusion_child() {
                 request(&root, DirectCommandV1::WorkspaceShow, "unused"),
                 &Clock,
                 &NativeDirectIdSourceV1,
-                &observe,
+                observe,
             )
             .unwrap(),
         );
@@ -455,7 +455,7 @@ fn maintenance_exclusion_child() {
                         ),
                         &Clock,
                         &NativeDirectIdSourceV1,
-                        &observe,
+                        observe,
                     )
                     .unwrap(),
                 )

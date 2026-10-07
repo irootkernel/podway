@@ -7,10 +7,10 @@ Use these guides when changing Podway:
 - [Testing](testing.md): focused checks and the complete release gate.
 - [Documentation](documentation.md): document placement, precedence, and links.
 - [Release](release.md): source readiness, packaging, and publication handoff.
-- [Release Upgrade Hands-on QA](release-upgrade-qa.md): previous-release state
-  handoff and candidate deletion-boundary verification.
-- [Post-admission Response Reconstruction QA](release-admission-qa.md): isolated
-  production error routing after real Store commits.
+- [Release Upgrade Hands-on QA](release-upgrade-qa.md): legacy refusal, explicit
+  reset and fresh candidate lifecycle/deletion verification.
+- [Direct Mutation Outcome QA](release-admission-qa.md): validated success outcomes,
+  rejection without outcomes, reconciliation and cold durability.
 
 ## Core implementation rules
 

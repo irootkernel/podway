@@ -40,9 +40,6 @@ REQUIRED_MAKE_TARGETS = (
     "preset-create",
     "preset-import",
     "preset-tool-test",
-    "aquarium-dev-describe",
-    "aquarium-dev-build",
-    "aquarium-dev-test",
     "dist",
     "dist-patch",
     "contract-manifest",
@@ -53,7 +50,6 @@ REQUIRED_TEST_SEQUENCE = (
     "$(MAKE) contract-verifier-test",
     "$(MAKE) test-e2e",
     "$(MAKE) preset-tool-test PRESET_VALIDATOR_READY=1",
-    "$(MAKE) aquarium-dev-test",
 )
 REQUIRED_PREPARE_COMMANDS = (
     "python3 tools/verify_docs.py",
@@ -969,7 +965,6 @@ def validate_makefile_contract(root: Path) -> int:
         ("preset-create", "tools/manage_presets.py create"),
         ("preset-import", "tools/manage_presets.py import"),
         ("test-fuzzing", "python3 tools/run_fuzzing.py"),
-        ("aquarium-dev-test", "python3 -m unittest tests.test_aquarium_dev"),
     ):
         recipe = re.search(rf"^{target}\s*:[^\n]*\n((?:\t.*\n)+)", text, flags=re.MULTILINE)
         if recipe is None or command not in recipe.group(1):
@@ -1024,7 +1019,7 @@ def validate_release_contract_verifier(root: Path) -> int:
         "def verify_release_contract(",
         '"--features",\n            "release-contract-verifier"',
         '"--contract-root"',
-        "contract_receipt = verify_release_contract(ROOT, podway, podwayd, source_commit)",
+        "contract_receipt = verify_release_contract(ROOT, podway, source_commit)",
     )
     required_qualification = (
         "release_archive.verify_release_contract(",

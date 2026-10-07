@@ -1193,7 +1193,7 @@ fn item_commands_replay_success_after_attachment_changes_or_disappears() {
     assert!(matches!(
         execute_item_v1(&resolver, input("attach", changed, LOOKUP_RESPONSE), &clock),
         Err(DirectExecutionErrorV1::Store(
-            DirectStoreErrorV1::IdempotencyKeyReused { .. }
+            DirectStoreErrorV1::IdempotencyKeyReused
         ))
     ));
     let fresh = C::Attach(ItemAttachV1 {

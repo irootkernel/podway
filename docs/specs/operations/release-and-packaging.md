@@ -2,358 +2,296 @@
 
 ## Release scope
 
-The `v0.2.0` release is a macOS product. It includes:
-
-- `podway`;
-- `podwayd`;
-- LaunchAgent support;
-- four embedded Procedure v2 presets: `analysis-v2`, `bug-fix-v2`,
-  `small-change-v2`, and `sw-dev-v2`;
-- JSON schemas and user documentation;
-- zsh, bash, and fish completion;
-- MIT License;
-- checksums and a cumulative changelog.
-
-Linux, Windows, Intel macOS, translated, universal, fat, and cross-built artifacts
-are not Podway release or support targets.
+Podway releases one native macOS executable, `podway`, with the embedded
+`analysis-v2`, `bug-fix-v2`, `small-change-v2` and `sw-dev-v2` presets, reviewable
+schemas/specifications, documentation, shell completion, MIT License, checksums
+and cumulative changelog. There is no daemon or LaunchAgent in the archive.
+Linux, Windows, Intel macOS, translated, universal, fat and cross-built artifacts
+are not release or support targets.
 
 ## Versioning
 
-Podway uses semantic versioning for product releases.
+Product releases use semantic versioning. Product and contract versions are
+independent. Current public identities are `podway.output/v4`, `podway.error/v2`,
+`podway.version-result/v2`, `podway.contract-manifest/v2`, workspace configuration
+v1/v2, Procedure v2, and direct SQLite generation 14. The manifest has no
+`supported_ipc_ids`. Breaking public changes require an explicit versioned
+contract and adopted compatibility plan; there is no inferred migration promise.
 
-The Aquarium development bundle is not a release archive. Its producer accepts
-only a clean local `main`, gives the immutable generation a
-`v<next>-dev.<sha12>` identity, and publishes it only through Aquarium's pending
-generation flow. Building or committing that bundle does not activate its
-LaunchAgent or change Aquarium's current selector.
-
-Independent versioned contracts:
-
-```text
-product binary version: 0.2.0
-IPC: podway.ipc/v1
-output: podway.output/v3
-error: podway.error/v1
-workspace config: podway.workspace/v1 and podway.workspace/v2
-procedure: podway.procedure/v2
-SQLite schema: integer migration version, currently schema-v13
-```
-
-A product minor release may add backward-compatible fields or commands. Breaking public contract changes require a new contract version and migration plan.
+The Aquarium managed development producer/controller and their bundle/service
+schemas are retired by V2DFC-009. No replacement Aquarium publication or activation
+contract is adopted. Development qualification below is a nonpublishable Podway
+verification artifact, not a managed development service generation.
 
 ## Target architectures
 
-The local release gate builds and tests the sole supported release target:
-
-- Apple Silicon (`aarch64-apple-darwin`) with `arch`, host architecture, and thin Mach-O architecture all `arm64`.
-
-Native validation must run on an arm64 host against thin arm64 Mach-O binaries. Translated execution, universal or fat binaries, cross-built output, and relabeled artifacts do not satisfy this requirement.
+The sole supported target is `aarch64-apple-darwin`. Validation runs on native
+Apple Silicon with host architecture and thin Mach-O architecture both `arm64`.
+The release builder rejects translated execution, non-thin-arm64 binaries,
+cross-built output and relabeled artifacts, and requires the Rust toolchain pinned
+by `rust-toolchain.toml`.
 
 ## Release archive contents
 
-Reference archive:
-
 ```text
 podway-<version>-<target>/
-  bin/
-    podway
-    podwayd
-  share/
-    completions/
-      podway.zsh
-      podway.bash
-      podway.fish
-    podway/
-      presets/
-      schemas/
-      spec/
-      docs/examples/json/
-      tests/fixtures/contract/
-      tests/fixtures/v2/
-      contracts/contract-manifest-v1.json
+  bin/podway
+  share/completions/podway.zsh
+  share/completions/podway.bash
+  share/completions/podway.fish
+  share/podway/presets/
+  share/podway/schemas/
+  share/podway/spec/
+  share/podway/docs/examples/json/
+  share/podway/tests/fixtures/contract/
+  share/podway/tests/fixtures/v2/
+  share/podway/contracts/contract-manifest-v2.json
   LICENSE
   README.md
   CHANGELOG.md
 ```
-Each Apple Silicon archive contains both executables, `podway` and `podwayd`; they are not separate architecture artifacts.
 
-Presets are embedded in the binary for runtime availability. Source copies are shipped for inspection and customization.
-
-The specs, fixtures, and contract manifest are packaged with the schemas so a
-consumer can inspect and pin the same contract identity as the binaries.
+Presets remain embedded for runtime availability; source copies permit inspection
+and customization. The packaged specs, fixtures and manifest let consumers pin the
+same contract identity as the executable. Canonical source assets and manifest
+membership, not a parallel documentation copy, determine the exact packaged set.
 
 ### Local archive construction
 
-From a clean native Apple Silicon working tree, `make dist` always runs the
-native-host and clean-worktree preflight before the development gate, release helper
-sentinels, and bounded fuzzing. Packaging repeats the preflight after the gate. It
-then builds both release binaries and writes the
-deterministic archive, its SHA-256 file, a provenance JSON document, and a Dolgorae
-compatibility handoff under `dist/`. The archive
-builder rejects a translated or non-arm64 host, non-thin-arm64 Mach-O binaries,
-version mismatches, incomplete archive contents, a Rust toolchain other than 1.97.1,
-and any dirty tracked or untracked source state.
-The first preflight verifies the native host and clean worktree before formatting
-or compilation. It does not inspect, acquire, remove, or replace any production
-runtime path, lock, or socket.
-The builder first snapshots both executable inputs through non-symlink file
-descriptors. Binary validation, isolation classification, packaged content, recorded
-digests, and provenance all use those immutable snapshot bytes. Probe failure,
-timeout, or ambiguity rejects both artifact classes.
+Agent-operated full/reduced release selection is owned by
+[AGENTS.md](../../../AGENTS.md#release-gate-selection). A full gate runs `make dist`
+from the exact clean release commit on native Apple Silicon. It performs native
+and clean-source preflight before the development gate, release sentinels and
+bounded fuzzing; repeats preflight at packaging; builds the single release CLI;
+and writes deterministic archive, checksum, provenance and Dolgorae handoff under
+`dist/`. Full qualification and final bundle verification are required.
 
-Distribution packaging requires the current version's changelog section to use
-its publication date and rejects any remaining `Unreleased` section. Disposable
-test-fixture packaging may use either the open or completed current section so
-development scenarios do not impersonate a publishable artifact.
+The builder snapshots the non-symlink executable through a file descriptor.
+Identity validation, hook probes, archive bytes and recorded binary digest all use
+that immutable snapshot. A failed probe, timeout, ambiguous identity, unexpected
+layout, missing member or stale manifest blocks packaging. Release-profile test
+hooks must be disabled for every artifact class. Distribution rejects dirty tracked
+or nonignored untracked source and rejects `--allow-dirty`. Its changelog must use
+the current release's publication date with no remaining `Unreleased` section.
 
-Before packaging, the internal Rust release-contract verifier reconstructs the
-source manifest and its exact offline schema registry, validates both complete
-identity envelopes and their closed version results, and requires the two result
-objects to be equal. Qualification invokes that same verifier against the
-extracted archive's `share/podway` contract root. Python release tooling only
-orchestrates the verifier and consumes its receipt; it does not maintain a
-parallel partial schema or identity interpretation. Manifest self/member drift,
-missing or extra schemas, duplicate paths or `$id` values, unregistered `$ref`
-targets, and external network or filesystem references are release-blocking.
+The Rust `podway-contract-verifier` reconstructs the source/package manifest and
+its exact offline schema registry, validates the complete Output v4 and closed
+version-result v2, and recomputes release-profile build identity. Its interface is:
 
-The provenance document records the product, shared binary build identity, source
-commit and Git tree, clean-tree state, Rust toolchain identifier, Cargo.lock digest,
-contract manifest identity, target architecture, both binary digests, archive
-digest, successful development and fuzzing gate result, artifact class, and
-signing/notarization status. Release
-packaging rejects debug-only isolation capability. After packaging, `make dist`
-extracts the release-profile archive and qualifies its binaries through the isolated
-foreground `release-qa` daemon mode. The test-only
-`--allow-dirty` switch is invalid for `artifact_class=distribution`; distribution
-construction always requires a clean tree.
+```bash
+podway-contract-verifier --contract-root <source-or-packaged-root> --podway <release-profile-podway> --expected-target aarch64-apple-darwin --expected-source-commit <sha>
+```
 
-Packaging initially writes the exact required conformance scenario list with a
-`pending` result. Qualification is an automatic, unprivileged step of `make dist`;
-there is no separate qualification target or receipt. It creates an owner-private
-`podway.managed-runtime/v3` root directly under `/private/tmp`, declares purpose
-`release-qualification` and mode `release-qa`, binds the extracted binary digests,
-snapshots those binaries into that root, starts the snapshot
-`podwayd --mode release-qa`, and runs packaged fenced
-lifecycle, conflict, admitted-timeout, response-loss, reconciliation, and identity
-scenarios through the snapshot `podway --mode release-qa`. Success requires orderly
-termination, absence of every temporary daemon socket and process, and removal of
-the exact owned root. Failure preserves and reports that root for bounded recovery.
-The managed lock, registry,
-logs, and sandbox are disjoint from production, selectors and canonical Git roots
-outside the sandbox fail before Store access, and release-purpose metadata never
-enables debug development admission. Only after every extracted-archive
-check and scenario succeeds does qualification atomically replace the provenance
-result with `passed`; failure preserves the pending document byte-for-byte. This
-verifies Podway's executable and IPC interfaces; it does not retest macOS launchd
-itself.
+The `podway.contract-verification/v2` receipt identifies the single binary,
+product/version/target/source, manifest schema/digest, build identity and asset/
+schema counts. Python tooling orchestrates this verifier; it does not implement a
+second partial identity or schema validator. Manifest self/member drift, duplicate
+paths/IDs, missing/extra schemas, unregistered references, and external filesystem
+or network references block qualification.
 
-After packaged conformance passes, the deterministic
-`podway-0.2.0-aarch64-apple-darwin.dolgorae-handoff.json` document publishes the
-archive and binary digests, build and contract identities, provenance digest,
-source commit and Git tree, Rust toolchain, and Cargo.lock digest. Dolgorae pins
-this closed identity set rather than inferring compatibility from a version string.
-For the v2 contract surface, the handoff discriminator is
-`podway.dolgorae-compatibility-handoff/v2`. It additionally embeds the exact
-manifest-bound
-[`podway.dolgorae-adapter-contract/v3`](../../../release/dolgorae-adapter-contract-v3.json)
-self-contained direct route, schema, error, diagnostic, reactivation, and
-writer-predecessor surface together with adapter acceptance requirements.
-During the development cutover, it explicitly records the version-identity
-exception until `V2DFC-009`; this prepared contract does not authorize a release
-or certify Aquarium or Dolgorae adoption.
-The catalog deliberately omits the final manifest digest to avoid a
-self-reference; the enclosing handoff supplies that release-specific pin through
-its existing `contract.digest` field.
-Handoff creation rejects pending, incomplete, unknown, or malformed evidence and
-repeats the exact release-gate, signing/notarization, and packaged-conformance
-results. It also rejects source/package adapter-catalog drift. A final offline
-verifier then independently re-extracts the archive and compares checksum, archive
-layout, binaries, manifest-bound identities, adapter contract, provenance, handoff,
-source commit/tree, and Cargo.lock in both directions. `make dist` succeeds only
-after that final verification and after proving no qualification socket or daemon
-process remains.
+### Non-distribution development qualification
 
-## Installation
+The closed artifact classes are `distribution` and `development-qualification`.
+The latter enables the V2DFC-009 precommit native dry run without asserting a clean
+committed distribution. It must finish before delegated acceptance and the normal
+completion commit. Freeze the exact development source, capture
+`tools/release_archive.py source-snapshot`, and pass `make test`,
+`make release-prepare` and `make test-fuzzing` before building and packaging that
+unchanged release-profile CLI.
 
-The binary installation mechanism may be a release archive or package manager. Regardless of mechanism:
+Use `package --artifact-class development-qualification --gate development
+--allow-dirty --development-source-snapshot-sha256 <hash>`, then the `qualify`,
+`create` handoff and `verify` bundle commands with `--gate development`, as listed
+in the [release workflow](../../implementation-tips/release.md#non-distribution-development-qualification).
+This is explicitly nonpublishable. It permits an open current changelog section
+or one newer `Unreleased` section followed immediately by the published current
+version. It records truthful `source_dirty` and keeps separate HEAD/tree and source
+snapshot identities. The snapshot covers sorted tracked and nonignored untracked source
+paths, regular-file modes and bytes, including tracked deletions; ignored runtime
+and private artifacts are excluded. Every stage checks the snapshot against the
+current source. A changed candidate invalidates the corresponding gate evidence.
+No distribution clean-source, patch-baseline, native-target or disabled-hook rule
+is waived.
 
-1. `podway` and `podwayd` product and contract-manifest identities must match;
-2. the user runs `podway daemon install` or the package post-install equivalent;
-3. service install records the absolute daemon path;
-4. `podway daemon status` verifies health;
-5. worktrees are initialized independently with `podway init`.
+### Packaged qualification and cleanup
 
-No installer scans for or modifies existing worktrees.
+Qualification invokes the same Rust verifier against the extracted
+`share/podway` root, then runs the exact scenario registry in
+`tools/release_evidence.py` against the extracted digest-pinned CLI. The real CLI
+E2E harness creates standalone scratch Git worktrees, applies actual direct
+commands, and proves lifecycle/Goal rework, fences with no effects/outcome,
+response loss and full replay, stdin recording, delegation, evidence continuations,
+legacy refusal/reset, retired-route guidance and disabled debug hooks.
 
-## Code signing and notarization
+One helper-owned private root contains the immutable CLI snapshot and every
+fixture. Prefer mounted writable `/Volumes/RootKernel/tmp`, otherwise the system
+temporary directory. Explicit fixture-root and `TMPDIR` bindings, bounded deadlines
+and process-group cleanup prevent scenarios from falling back to active worktrees.
+No managed account runtime, socket, daemon process or service control is involved.
+Success requires reaped children, released fixture locks, and an empty owned
+worktree directory. Failure/interruption reports exact recoverable owned paths;
+reconcile only those paths before retrying. Installed legacy account runtime and
+LaunchAgent state remain untouched.
 
-Public macOS artifacts SHOULD be:
+Packaging first records the closed required scenario list as `pending`.
+Qualification changes it atomically to `passed` only after every scenario and
+cleanup passes. Failure leaves pending provenance byte-for-byte unchanged.
+Handoff creation rejects pending, malformed or incomplete evidence. Final offline
+bundle verification independently re-extracts the archive and compares its layout,
+checksum, single binary, manifest-bound assets, adapter catalog, source identities,
+lockfile, provenance and handoff in both directions.
 
-- signed with an appropriate Developer ID;
-- submitted for notarization;
-- stapled where packaging permits;
-- verified on the local release host.
+### Reduced patch qualification
 
-Unsigned builds are valid release artifacts. Release notes clearly identify the
-signing and notarization status of distributed files. Signing status does not
-change release readiness.
+A reduced gate requires Master's explicit choice, a separately confirmed successful
+`make test` on the same clean code candidate, an exact patch-version increment,
+and the recorded tested baseline. Run
+`make dist-patch PRIOR_MAKE_TEST_PASSED=yes PATCH_BASE_COMMIT=<sha>` only from the
+clean version-bumped release commit. After the baseline, only canonical version and
+release metadata may change. The predecessor declaration and manifest path must
+match the patch verifier's closed policy. Any compiled predecessor registry or
+migration implementation must already be in that tested baseline; the reduced
+gate cannot add or alter them. Other changes, missing confirmation or a
+failed guard stop the release; switching to full requires a new instruction.
+
+Patch qualification does not run fuzzing or packaged runtime scenarios. Its closed
+provenance/handoff omit those fields and never represent them as `skipped` or
+`passed`. Its own sentinels and final bundle verification remain required.
 
 ## Checksums and provenance
 
-Every downloadable archive has a published SHA-256 checksum. Published release
-metadata SHOULD record:
+Every downloadable archive has a SHA-256 checksum. Full/development evidence uses
+`podway.release-provenance/v3` and `podway.dolgorae-compatibility-handoff/v4`;
+patch evidence uses provenance v4 and handoff v5. These closed contracts bind
+artifact class, single binary digest, archive digest, build and manifest identities,
+source commit/tree/snapshot and dirty state, target, toolchain, Cargo.lock, signing/
+notarization status and the exact gate evidence. Development evidence uses
+`make test + make release-prepare + make test-fuzzing: passed` and is nonpublishable.
 
-- source commit;
-- Rust toolchain identifier;
-- dependency lockfile digest;
-- target architecture;
-- binary checksums;
-- signing/notarization result;
-- the successful `make test` and bounded fuzzing result for the source revision.
+The handoff embeds the manifest-bound
+[`podway.dolgorae-adapter-contract/v3`](../../../release/dolgorae-adapter-contract-v3.json)
+with direct routes, schemas, errors, diagnostics, reactivation and writer-predecessor
+rules plus downstream acceptance requirements. The catalog omits the final manifest
+digest to avoid self-reference; the handoff supplies that pin. Source/package
+catalog drift is rejected. Preparing this contract does not certify Aquarium or
+Dolgorae adoption or change either external repository.
+
+## Installation
+
+Install the single qualified `podway` through the archive or original package
+manager. Verify its version/manifest/build identity, then initialize each desired
+worktree with `podway init`. No daemon or service installation, automatic worktree
+scan or account-state initialization is required. An existing legacy installed
+service is retired only under separate explicit authorization through its original
+supported owner; installing this CLI does not authorize stopping it.
+
+## Code signing and notarization
+
+Public macOS artifacts SHOULD be Developer ID signed, notarized, stapled where
+supported, and verified on the release host. Unsigned artifacts are valid when
+release notes accurately describe signing/notarization status. Signing status does
+not replace release readiness. Any signing or artifact-byte change after
+qualification requires qualification of the final changed bytes.
 
 ## Upgrade
 
-Upgrade procedure:
+Before installing the current CLI or resetting legacy worktrees, finish or
+abandon active sessions and retire every legacy writer. Under separate explicit
+authorization, uninstall the old daemon with the old generation's
+`podway daemon uninstall` and retire any Aquarium managed development service
+through its original controller. Confirm that those writers have stopped; a
+running old daemon can write to unlinked files during reset. If retirement is
+unresolved, stop the real upgrade at read-only inspection. Installing the new
+CLI or receiving a reset recipe never grants service-control authority.
 
-1. install both new binaries;
-2. refresh or reinstall the LaunchAgent so it points to the new `podwayd` path;
-3. restart daemon;
-4. verify protocol health;
-5. migrate worktree databases lazily on first access.
+After retirement, install the current single CLI, retire the legacy `~/.podway`
+account state under the original owner's authorization, and inspect worktrees
+explicitly. The `v0.2.13` cutover treats SQLite generations 1–13 and old
+maintenance markers as unsupported legacy input. Classification refuses without
+opening for writes, migration,
+checkpointing or SHM creation and reports `LEGACY_RUNTIME_STATE_UNSUPPORTED` with
+an explicit reset recipe. There is no daemon-era state conversion.
 
-New worktree databases begin in schema-0/uninitialized state; on first access, the daemon
-transactionally initializes them to canonical schema-v13. Empty predecessors and
-supported Procedure v2 predecessors through schema-v9 migrate forward lazily to
-schema-v13 on first access in `prod`; named modes reject pre-v10 stores without mutation.
-Schema-v10 through schema-v12 preserve their stored runtime-mode ownership while
-migrating in every matching mode. Nonempty Procedure v1 state is rejected without mutation.
+After backing up any desired historical evidence and confirming the exact target,
+run `podway --worktree <root> --json reset --all --yes --idempotency-key <new-key>`.
+This deliberately discards legacy runtime history and initializes a fresh direct
+workspace while preserving configuration, Procedure files, `.gitignore` and Git/
+unrelated files. A normal start and begin then establishes a new session.
+[Upgrade QA](../../implementation-tips/release-upgrade-qa.md) proves unchanged
+refusal, explicit reset and the working fresh lifecycle independently on private
+frozen fixtures. It does not retire installed writers or establish the real
+upgrade's retirement prerequisite.
 
-The daemon handles one workspace migration failure without disabling other workspaces.
+A direct Store records its writer contract-manifest digest. A different digest
+fails with `WORKSPACE_CONTRACT_MISMATCH` unless the build explicitly declares that
+forward-migratable predecessor. Predecessors are added only in a release commit or
+the following open-development commit. `v0.2.13` declares none; direct predecessor
+migration begins with a later release. Development builds with changed assets use
+scratch worktrees rather than runtime modes.
 
 ## Downgrade
 
-Database downgrade is unsupported. An older daemon encountering a newer schema fails closed. Users may upgrade again or destructively reset the worktree runtime state.
+Database downgrade is unsupported. A newer schema or undeclared writer digest
+fails closed without changing the Store. Upgrade to a compatible writer or choose
+an explicitly confirmed destructive worktree reset; a version string alone never
+permits reopening incompatible state.
 
 ## Uninstall
 
-Uninstalling the service or binaries does not delete `.podway/` in any worktree.
-
-Recommended steps:
-
-```bash
-podway daemon uninstall --yes
-# Remove binaries through the original installation mechanism.
-```
-
-Users may delete `.podway/runtime/` or the whole worktree when task state is no longer needed.
+Remove the binary through its original installation mechanism. This does not
+delete any worktree's `.podway`. Use the supported, explicitly confirmed
+`workspace remove` operation if that complete workspace content is no longer
+wanted. Account service removal, if any legacy generation remains installed,
+requires separate authorization and its original generation's owner.
 
 ## Release readiness
 
-The repository-root `make test` command is the required development gate. It runs
-static preparation, four-worker unit/architecture/integration tests by default,
-and serial real-binary end-to-end scenarios. The preparation target includes
-product-code lint, dependency/license review, architecture guardrails,
-product-acceptance mapping, crash-boundary mapping, and contract validation.
+`make test` is the required development gate. Full release readiness requires
+successful `make dist` on the exact clean release commit, including release
+sentinels, bounded fuzzing, release build, packaged direct qualification, disabled
+hook proof, handoff and final verification. A confirmed patch gate establishes
+readiness only through its own reduced contract. A development-qualification dry
+run establishes the adopted development proof and never stable-release readiness.
 
-A revision is release-ready only when V2REL-006 has enabled production Procedure
-v2 admission in normal release builds and `make dist` then exits successfully from
-that exact clean, unpublished commit. The gate adds all-target lint, release
-sentinels, bounded fuzzing, release builds, archive qualification, and the handoff.
-It MUST prove both that public v2 admission works without a development unlock and
-that the development-only unlock is absent. The gate validates formatting without
-rewriting the tree.
+No hosted CI, independent signature, approval quorum, holdout archive or attestation
+bundle is required. Publication, installation and runtime activation are separately
+authorized operations. Changed executable/contract/source or artifact bytes
+invalidate the affected exact-candidate qualification.
 
-No hosted CI run, independent signature, approval quorum, holdout run,
-qualification archive, or attestation bundle is required. Signing, notarization,
-and publication remain distribution operations after `make dist` succeeds.
+### Qualification and publication sequence
 
-### V2 admission and GA boundary
+After separate explicit publication authorization, retain the qualified source and
+all four artifact bytes (archive, checksum, provenance and handoff) unchanged:
 
-Normal builds MUST refuse `podway.procedure/v2` session admission until V2REL-006.
-V2REL-006 owns the production admission change after every preceding PV2GA task is
-complete, and it may qualify only after that change closes the remaining admission
-criterion and every v2 acceptance category. Intermediate work may ship read-only
-authoring surfaces, but no release artifact may admit or persist a partial v2
-session contract.
+1. reverify the qualified clean commit/tree, artifact names and SHA-256 identities;
+2. record selected previous-release tag, asset IDs and digests and keep them intact;
+3. create and push the annotated version tag for the exact qualified commit;
+4. confirm repository release immutability before creating the release;
+5. create a draft tied to that tag and upload exactly the four qualified files;
+6. compare host-reported digests, download each draft asset by immutable asset ID,
+   and independently verify the complete bundle;
+7. publish only after those checks, then require `immutable=true`;
+8. download every published asset by ID, verify again, and recheck previous assets;
+9. record authorization, publisher/UTC time, URL/release/tag IDs, source/tree,
+   asset IDs/digests, binary/manifest/lockfile/build/provenance/handoff identities,
+   signing/notarization and verification results in the release's publication report.
 
-Development dogfooding may admit v2 only when all of these conditions hold: the
-binary was compiled with the explicit development-only feature, existing
-development mode is active, the workspace is marked disposable, and separate
-socket and state directories are in use. The unlock MUST reject an installed
-daemon, LaunchAgent, or normally registered workspace. Development v2 state is
-discardable and receives no migration-preservation promise.
-
-V0.2.0 reaches full-feature GA only after the complete integrated development,
-compatibility, payload, persistence, native runtime, recovery, and distribution
-gates pass. Release qualification MUST prove that the development admission
-unlock is absent and that normal public v2 admission is enabled in the same
-qualified artifact bytes. Enabling admission after qualification would create an
-unqualified artifact and is forbidden.
-
-### V0.2.0 qualification and publication sequence
-
-V2REL-006 performs the final executable, machine-contract, and artifact mutation.
-It enables production public v2 admission, commits that implementation and its
-direct tests and contracts, and runs `make dist` from the exact clean unpublished
-commit. The four qualified outputs are the archive, detached checksum, provenance
-document, and Dolgorae handoff named in the changelog. Any executable-source or
-machine-contract change, rebuild, or artifact-byte change after that successful
-gate invalidates qualification and requires a new clean V2REL-006 candidate and
-complete `make dist` run. The post-publication report and roadmap/archive update are
-the sole permitted later documentation-only changes.
-
-V2REL-007 requires separate explicit release authorization. Before and during
-publication it MUST NOT change executable source or machine contracts, rebuild the
-candidate, or rewrite, resign, renotarize, or otherwise mutate the qualified
-artifacts.
-Publication follows this exact order:
-
-1. record the explicit authorization and reverify the clean qualified commit, tree,
-   four artifact names, and SHA-256 identities from V2REL-006;
-2. recheck that the existing v0.1.2 tag, release, asset IDs, and digests are unchanged;
-3. create and push an annotated `v0.2.0` tag for the exact qualified commit;
-4. confirm repository release immutability is enabled before creating the release;
-5. create a draft v0.2.0 release tied to that annotated tag and upload exactly the
-   four qualified artifact bytes;
-6. while the release remains a draft, compare every host-reported asset digest,
-   download every asset by immutable asset ID, and independently verify the bundle;
-7. publish only after every draft check succeeds, then require the published release
-   to report `immutable=true`;
-8. download every published asset again by asset ID, repeat independent bundle
-   verification, and recheck the v0.1.2 identities; and
-9. record the immutable publication report described below before declaring GA.
-
-The publication report at `docs/roadmap/archive/v0.2.0-release-report.md` MUST record
-the authorization reference, publisher and UTC time; release URL and ID; annotated
-tag object, source commit, and source tree; all
-four asset names, immutable asset IDs, and SHA-256 digests; archive binary, Cargo.lock,
-contract-manifest, provenance, and handoff identities; exact qualification and
-publication commands and results; packaged-conformance scenarios; signing and
-notarization status; `immutable=true`; the v0.1.2 preservation check; every remaining
-limitation; and that completion is based on assets downloaded from the published
-release by asset ID. After successful publication and downloaded-byte verification,
-V2REL-007 records that report and updates roadmap/archive bookkeeping in its own
-documentation-only commit. The annotated tag and published artifacts continue to
-bind the exact V2REL-006 qualified commit; closeout documentation does not create a
-new release candidate.
-
-If release immutability is unavailable or any identity is missing, mutable,
-ambiguous, or mismatched, V2REL-007 fails closed before publication. A mutable
-release is not an automatic fallback. Proceeding would require a separate explicit
-release-time decision that records the unavailable control, identifies the mutable
-release, and directs consumers to trust the pinned asset IDs plus the archive,
-provenance, handoff, and checksum identities. Without that decision, leave the
-release as a draft or remove the draft without changing qualified local bytes, and
-do not claim GA.
+Do not rebuild, rewrite, resign or mutate qualified artifacts during publication.
+If immutability is unavailable, a mutable release is not an automatic fallback:
+a separate explicit release-time decision must identify the missing control and
+pinned asset identities. Otherwise leave/remove the draft and do not claim a
+published stable release. The historical v0.2.0 sequence and its release-specific
+owners remain recorded in the
+[v0.2.0 release report](../../roadmap/archive/v0.2.0-release-report.md).
 
 ## Support policy
 
-Podway releases only for currently supported macOS major versions on native Apple
-Silicon. The native release gate verifies the emitted deployment load command but
-does not promise a separately pinned minimum macOS version. Supporting another
-architecture or operating system requires a superseding architecture decision and
-native release gate.
+Podway supports currently supported macOS major versions on native Apple Silicon.
+The native gate checks the deployment load command without promising a separately
+pinned minimum macOS version. Another architecture/OS requires a superseding ADR
+and native release gate.
 
 ## License
 
-The source repository and release archives include the MIT License. Third-party dependencies retain their own licenses and must be reviewed for compatibility.
+Source and release archives include the MIT License. Third-party dependencies keep
+their own licenses and require compatibility review.

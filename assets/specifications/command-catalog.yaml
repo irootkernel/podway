@@ -17,7 +17,7 @@ commands:
   session_mutation: false
   destructive_confirmation: false
   result_schemas:
-  - podway.version-result/v1
+  - podway.version-result/v2
 - name: completions
   availability: executable
   cli:

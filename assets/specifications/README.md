@@ -7,10 +7,9 @@
 - `state-transition-matrix.csv`: compact transition reference.
 - `canonicalization-v1.json`: machine-readable canonical JSON and Procedure normalization rules.
 
-The Aquarium producer and service controller are executable repository tools,
-not duplicate machine specifications. Their closed external documents are
-registered under `assets/schemas/`, and their durable behavior is specified in
-`docs/specs/operations/aquarium-development-service.md`.
+The Aquarium managed development producer/controller and their external schemas
+are retired by V2DFC-009. Current release and non-distribution qualification rules
+are owned by [release and packaging](../../docs/specs/operations/release-and-packaging.md).
 
 `command-catalog.yaml` records every closed result discriminator in `result_schemas`;
 multiple entries represent command-selected variants. Runtime errors in

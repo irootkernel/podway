@@ -1,176 +1,139 @@
 # Release Upgrade Hands-on QA
 
-This repository-specific scenario verifies that one stable Podway release can
-hand durable state to the next stable release candidate and that the candidate
-still honors the supported deletion boundaries. Run it once during every full
-Aquarium release-QA pass. It is not a `make dist` stage, does not replace the
-packaged conformance suite, and does not publish a tracked receipt.
+Run this repository-specific cluster during every full Aquarium release-QA pass.
+For the `v0.2.12` to `v0.2.13` cutover, upgrade means unchanged legacy refusal,
+then an explicitly confirmed destructive reset and a working fresh direct
+workspace. There is no daemon handoff, transparent migration, or named runtime
+mode. This independent QA is not a `make dist` stage or release-provenance receipt.
 
 ## Inputs and result
 
-The scenario requires:
+Require the exact clean candidate and intended stable version, the selected
+previous stable release, its verified Apple Silicon archive/checksum/provenance,
+native Apple Silicon macOS, and verified frozen historical Store fixtures.
+Select the latest non-draft, non-prerelease release reachable from the candidate
+or an exact baseline explicitly confirmed by Master. Compare its declared SQLite
+generation and writer contract with the candidate authority before execution.
+A confirmed first release has no upgrade baseline and is not applicable.
 
-- the exact clean candidate commit and intended stable version selected by
-  release QA;
-- the previous release established by the pass: the latest non-draft,
-  non-prerelease GitHub Release whose tag is reachable from that candidate, or an
-  exact tag explicitly confirmed by the user;
-- that release's Apple Silicon archive, checksum, and provenance;
-- the canonical SQLite schema version declared under
-  [Upgrade](../specs/operations/release-and-packaging.md#upgrade) at the selected
-  previous tag and candidate commit; and
-- native Apple Silicon macOS.
+Generations 1–13 are legacy regardless of their old runtime mode. `v0.2.13`
+declares no writer predecessor. A later direct-to-direct upgrade may migrate only
+a digest explicitly declared by the release or following open-development
+commit; a version difference alone does not authorize conversion. Follow
+[Upgrade](../specs/operations/release-and-packaging.md#upgrade) for that contract.
 
-A confirmed first release has no upgrade baseline, so this scenario is not
-applicable. Missing or ambiguous release assets, failed release discovery,
-unsupported hosts, and an inability to build or run an exact isolated candidate
-make the QA pass `INCOMPLETE`. A selected previous schema below v10 is also
-`INCOMPLETE`: those Stores have no named-mode identity and migrate only in
-production. When both versions are v10 or later, a schema-version difference
-remains in scope and the candidate must migrate the Store forward in mode `dev`.
-A reproducible mismatch against an expected behavior below is a finding.
+Missing or ambiguous assets, unsupported hosts, absent authentic historical
+fixtures, or an inability to run the isolated exact candidate makes the pass
+`INCOMPLETE`. A reproducible expected-behavior mismatch is a finding.
 
 ## Safety boundary
 
-Use the caller-assigned scenario fixture below its existing physical release-QA
-evidence root. For Aquarium release QA, use the worker's assigned fixture; do not
-create another top-level evidence root. Resolve the fixture with `pwd -P`, prove
-that it is a private directory contained by the physical evidence root, and use
-only that resolved path. Keep every download, extraction, build output, Git
-fixture, runtime namespace, command transcript, and result below the scenario
-fixture. Record the source repository's status before the scenario and prove it
-has the same `HEAD` and `git status --porcelain` afterward, with no new or removed
-entry in its common Git directory's `worktrees` registry.
+Use only the caller-assigned private fixture below the physical release-QA
+evidence root, resolved with `pwd -P`. Keep extraction, builds, standalone Git
+repositories, frozen-input staging, commands and results there. Never use
+`git worktree add` against the source repository. Record source HEAD, porcelain
+status, and common-Git worktree entries and prove they are unchanged afterward.
 
-Before dispatch, the release-QA coordinator may download only the selected
-previous release's archive, checksum, and provenance into the assigned scenario
-fixture. It must verify that the three files are regular non-symlink files, that
-the checksum names and matches the archive, and that provenance names the
-selected version, Apple Silicon target, archive digest, and matching `podway` and
-`podwayd` identities. The dispatched worker receives only those verified local
-files and retains Aquarium's no-network and no-credential constraints. It safely
-extracts the archive without accepting absolute paths, parent traversal, links,
-devices, or unexpected top-level members. Run the extracted binaries directly;
-never install them.
+Before dispatch, the coordinator may download only the selected previous
+release's archive, checksum and provenance into this fixture, without new
+authentication. Verify regular non-symlink files, archive name/digest, selected
+version/target, and the previous generation's own binary identities. Extract
+without absolute paths, traversal, links, devices or unexpected members. Inspect
+these previous assets; do not launch an old installed or extracted daemon, invoke
+old service commands, or create an old account runtime.
 
-Prefer a candidate archive only when its provenance binds it to the exact
-candidate commit. Otherwise build only `podway` and `podwayd` from the exact
-candidate with the pinned toolchain, `--locked`, release profile, offline Cargo
-networking, and `CARGO_TARGET_DIR` below the scenario fixture. Confirm both
-candidate binaries report the expected source commit, target, and one shared
-build identity through `podway version --json --identity` and `podway --mode dev
-daemon status --json` once the daemon is ready.
+Use a candidate archive only if its provenance binds the exact candidate commit.
+Otherwise build only the current `podway` with the pinned toolchain, `--locked`,
+release profile, offline Cargo networking and a private `CARGO_TARGET_DIR`.
+Validate its full Output v4/version-result v2 identity and manifest v2 against
+that candidate. Invoke this exact CLI directly with explicit `--worktree` paths;
+no `--mode`, `--dev`, socket, `PODWAY_DEV_HOME`, LaunchAgent or `launchctl` is used.
+The worker retains the no-network/no-credential boundary after dispatch.
 
-Do not use `prod`, `release-qa`, an installed service, `podway daemon install`,
-`uninstall`, `start`, or `stop`, or `launchctl`. Run both generations as
-foreground processes in mode `dev`. Pass both
-`--mode dev` and
-`PODWAY_DEV_HOME=<scenario-fixture>/runtime` explicitly on every daemon and
-daemon-backed CLI invocation; do not rely on ambient defaults or an exported
-environment. Omitting the mode selector selects `prod`, where `PODWAY_DEV_HOME`
-has no effect. Omitting `PODWAY_DEV_HOME` in mode `dev` instead selects the
-user-global `~/.podway/modes/dev` namespace outside the evidence root. Before
-spawning any process, have the controlled runner fail closed unless its argument
-list contains `--mode dev` and its environment map contains the exact nonempty
-fixture runtime path. Also require the UTF-8 byte length of
-`<scenario-fixture>/runtime/run/podwayd.sock` to be less than 104 bytes. After the
-daemon becomes ready and before the first workspace mutation, require `podway
---mode dev daemon status --json` to report `configured_socket_path`,
-`effective_socket_path`, and `socket_path` below that runtime root. A failed
-preflight, an overlong socket path, or any reported path mismatch is
-`INCOMPLETE`. Put all fixture Git worktrees below
-`<scenario-fixture>/worktrees`. Create them as standalone repositories with `git
-init`; never use `git worktree add` against the source repository. This raw
-development endpoint is disposable and distinct from the installed production
-namespace, Aquarium's persistent development runtime, and the purpose-bound
-`make dist` release-qualification runtime.
+## Historical input preparation
 
-After acquiring the previous assets, run the behavioral scenarios offline. Do
-not read or mutate user-global Podway state, installed LaunchAgents, Aquarium
-state, credentials, or Git worktrees outside the evidence root. Never edit a
-Podway database, registry, socket, or runtime file to manufacture an outcome.
+Use the reviewed frozen recipes and producer provenance in
+[`tests/fixtures/storage/daemon-era-v2dfc`](../../tests/fixtures/storage/daemon-era-v2dfc/README.md).
+They are rejected historical evidence, not current canonical DDL or a migration
+source. The existing `podway-store` test-support fixture writer materializes each
+generation's actual main file plus committed WAL without SHM from the frozen
+ordered SQL. Its checkpointed and WAL-only header cases cover generations 1–13.
+The separately frozen `generation-13-populated.sql` preserves a genuine legacy
+current session, completed job and delegation receipt from the original producer.
+Do not claim populated semantic coverage for the other generations.
 
-## Previous-generation setup and one-way handoff
+Have the coordinator supply verified private fixture copies from those reviewed
+recipes, including checkpointed and WAL-only layouts, the populated generation-13
+case, and the frozen old marker cases. Record original producer commits and recipe
+hashes. Fixture materialization is an explicitly bounded historical test-input
+step before candidate execution; it is not a production conversion route or
+permission to edit the candidate's Store. Do not invent old state by patching a
+live database or run an old daemon to fill a missing prerequisite.
 
-1. Start the previous `podwayd --mode dev` against the disposable runtime and
-   wait until the previous CLI reports that exact daemon ready.
-2. Create the active-state worktree, initialize it with the previous CLI, and
-   start and begin `small-change-v2`. Record `scope-summary` at the `inspect`
-   placement. Capture the standard `status --json` projection and `observe
-   --json`, including workspace UUID, session UUID and revision, Procedure ID,
-   version and digest, current placement, attempt identity, item revision and
-   value, and allowed actions.
-3. Create the retained-state worktree. Complete the entire `small-change-v2` path
-   with valid values, using nonempty English text for textual items. Select
-   `ready`, record the closeout, attach a current `handed-off` disposition, and
-   archive the terminal session. Capture `archive list` and `archive show
-   --session-id <id> --verbose` in JSON.
-4. With the previous CLI and the explicit disposable `PODWAY_DEV_HOME`
-   assignment, run `podway --mode dev terminate`, then prove that the previous
-   daemon exited and released its socket. Start the candidate daemon against the
-   same runtime root, wait for readiness, and repeat the required socket-path
-   checks. Do not start the previous generation again after this handoff.
+Place copies only in disposable standalone Git worktrees. Include configuration,
+a supported local Procedure, `.gitignore`, tracked files and unrelated untracked
+sentinels. Before invoking the candidate, record the full `.podway` tree's names,
+bytes, modes and file identities, plus main/WAL hashes and absence of SHM.
 
-## Scenario 1: active state survives the handoff
+## Scenario 1: legacy refusal leaves old state unchanged
 
-Query the active-state worktree with the candidate CLI. Every captured durable
-field must retain the same value, except fields whose public contract explicitly
-permits a new observation time or daemon identity. When the schema versions
-differ at v10 or later, this open must migrate the previous Store forward without
-losing those fields. The candidate must accept a normal `complete` transition and
-advance the same session to `implement`.
+Against each legacy worktree, run actual read and mutation commands with explicit
+keys/fences as applicable. Include observation, outcome lookup and a normal
+session mutation. Require validated Error v2
+`LEGACY_RUNTIME_STATE_UNSUPPORTED`, its explicit reset-required recovery recipe,
+and no outcome or state effect. Candidate classification must not initialize,
+migrate, checkpoint, open a legacy Store for writes, or create SHM.
 
-Failure to open or migrate the previous Store, silent initialization of
-replacement state, identity drift, lost or changed evidence, a different cursor,
-or inability to continue the admitted Procedure is a finding.
+Compare every original file and marker with the pre-invocation snapshot; require
+identical bytes, names, modes and identities and no new files. Preserve the genuine
+populated generation-13 state and evidence unchanged during refusal. A successful
+open, silent replacement, changed old data, or new SQLite sidecar is a finding.
 
-## Scenario 2: retained state survives the handoff
+## Scenario 2: explicit reset establishes fresh current state
 
-Query the retained-state worktree with the candidate CLI. Both archive commands
-must return the same archive slot, session identity, terminal revision, Procedure
-identity, disposition, and verbose trace and decision-history identities and
-evidence digests. Terminal archive projection does not expose prior attempt item
-values as current `item_values`; compare their retained evidence identities
-instead. The inactive session must remain immutable and must not become current
-merely because a newer binary opened the workspace.
+After retaining the refusal proof, authorize destructive reset only for the exact
+assigned fixture. Run the current CLI with an explicit stable key:
 
-## Scenario 3: candidate deletion boundaries remain exact
+```bash
+podway --worktree <owned-legacy-worktree> --json reset --all --yes --idempotency-key <new-key>
+```
 
-Exercise these operations through the candidate CLI, using identities and
-revision fences obtained from fresh JSON reads:
+Require a validated success with a fresh workspace UUID, current schema generation
+and writer manifest digest, and no legacy current or archived session, job or
+receipt. Old runtime history is deliberately discarded; report that loss rather
+than claiming migration or archive preservation. Configuration, local Procedure
+files, `.gitignore`, Git metadata and unrelated tracked/untracked files survive.
+Replay the same reset key and original preconditions; require its original full
+response and no second identity change. Reconcile through current read APIs.
 
-1. Run confirmed `archive purge` for the inactive session from scenario 2. The
-   selected archive must disappear, while workspace initialization, Git state,
-   and any unrelated current session remain unchanged.
-2. Run confirmed `reset --all` against the active-state worktree from scenario 1.
-   Current and inactive runtime history, attempts, jobs, receipts, and Store data
-   must be removed and reinitialized under the new workspace UUID reported by
-   the reset result. Workspace configuration, supported Procedure files,
-   `.gitignore`, Git metadata, tracked files, and untracked non-Podway files must
-   survive.
-3. After confirming `status` reports no current session, run confirmed `workspace
-   remove` using that new exact workspace UUID. Its complete `.podway` tree must
-   disappear, while the Git worktree, `.git` relationship, HEAD, tracked files
-   outside `.podway`, and unrelated untracked files remain unchanged. The command
-   deliberately deletes tracked `.podway` content; that deletion is expected.
+## Scenario 3: the fresh candidate lifecycle and deletion boundaries work
 
-An over-broad deletion, a retained object that the command promises to delete,
-loss of preserved Git or workspace content, or a result that cannot be
-reconciled through the public read API is a finding.
+In the reset worktree, start and begin canonical `small-change-v2`, record its
+required evidence with nonempty English text, and traverse its declared successful
+path and Goal closeout using current JSON-derived revision/attempt/item fences.
+Validate every Output v4/Error v2 response. Require the expected current identity,
+normal progress, durable evidence and exact replay across separate CLI processes.
+Archive a terminal session with a current disposition and verify bounded immutable
+archive list/show evidence. Confirm purge removes only the selected inactive
+session without altering Git or another current session.
+
+Then run confirmed reset-all with a new key, verify preserved user/config files
+and a fresh UUID, and use that exact UUID and canonical-root confirmation for
+`workspace remove`. The whole `.podway` tree must disappear while the Git worktree,
+HEAD and unrelated files survive. Reinitialize through the supported CLI and
+require a new working current workspace. Do not manually delete runtime files to
+stand in for these public operations.
 
 ## Cleanup and evidence
 
-With the candidate CLI and the explicit disposable `PODWAY_DEV_HOME` assignment,
-run `podway --mode dev terminate` and prove that neither generation has a live
-process or socket. Remove the exact runtime, extracted previous archive,
-candidate build directory, and disposable worktrees. Retain only bounded text or
-JSON transcripts and the scenario result below the same assigned scenario
-fixture; never retain copied credentials, databases, sockets, or executables.
+Bound and reap every candidate/fixture child and prove no owned process or lock
+remains. Remove exact extracted/build/staging/worktree paths, retain only bounded
+text/JSON evidence, and verify the source repository and worktree registry stayed
+unchanged. Never control installed or Aquarium legacy services as cleanup.
 
-The scenario passes only when all three behavioral scenarios and cleanup pass and
-the source repository retains the recorded `HEAD` and porcelain status with no
-change to its common Git directory's `worktrees` entries. Report the selected
-previous release, candidate commit, commands, controlled environment, expected
-and observed outcomes, evidence paths, findings, and gaps through Aquarium's
-normal release-QA result. Do not create a Podway-specific evidence schema or add
-the result to release provenance.
+Report selected previous release, candidate/manifest identities, fixture producer
+and recipe hashes, controlled commands, complete envelopes, immutable refusal
+comparisons, destructive-reset result, fresh lifecycle and deletion observations,
+cleanup, findings and gaps through Aquarium's normal result. This cluster passes
+only when all applicable scenarios and cleanup pass. A confirmation rerun is
+allowed only when this cluster belongs to the frozen full-pass matrix.

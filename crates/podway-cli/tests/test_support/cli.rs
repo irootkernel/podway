@@ -7,7 +7,7 @@ use std::{
         fs::MetadataExt,
         process::{CommandExt, ExitStatusExt},
     },
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
     sync::mpsc,
     thread,
@@ -16,6 +16,36 @@ use std::{
 
 use podway_protocol::OutputEnvelopeV4;
 use serde_json::Value;
+
+pub(super) fn podway_binary() -> PathBuf {
+    let Some(path) = std::env::var_os("PODWAY_TEST_CLI_BINARY") else {
+        return PathBuf::from(env!("CARGO_BIN_EXE_podway"));
+    };
+    let path = PathBuf::from(path);
+    assert!(
+        path.is_absolute(),
+        "the packaged CLI must be an absolute path"
+    );
+    assert!(fs::symlink_metadata(&path).unwrap().is_file());
+    assert_eq!(path.canonicalize().unwrap(), path);
+    let fixture_root = PathBuf::from(
+        std::env::var_os("PODWAY_TEST_FIXTURE_ROOT")
+            .expect("packaged fixtures require an owned root"),
+    );
+    assert!(fixture_root.is_absolute());
+    assert_eq!(fixture_root.canonicalize().unwrap(), fixture_root);
+    assert_eq!(std::env::temp_dir().canonicalize().unwrap(), fixture_root);
+    path
+}
+
+pub(super) fn assert_packaged_fixture(path: &Path) {
+    if std::env::var_os("PODWAY_TEST_CLI_BINARY").is_some() {
+        let _ = podway_binary();
+        let root = PathBuf::from(std::env::var_os("PODWAY_TEST_FIXTURE_ROOT").unwrap());
+        let path = path.canonicalize().unwrap();
+        assert!(path.starts_with(&root) && path != root);
+    }
+}
 
 pub(super) struct Fixture(pub(super) PathBuf);
 pub(super) type PodwaySnapshot = Vec<(PathBuf, Option<Vec<u8>>, u64, u64)>;
@@ -44,6 +74,7 @@ impl Fixture {
     pub(super) fn new() -> Self {
         let root = std::env::temp_dir().join(format!("podway-direct-cli-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&root).unwrap();
+        assert_packaged_fixture(&root);
         assert!(
             Command::new("git")
                 .args(["init", "--quiet"])
@@ -62,7 +93,19 @@ impl Fixture {
     }
 
     pub(super) fn raw_output(&self, arguments: &[&str]) -> Output {
-        let child = Command::new(env!("CARGO_BIN_EXE_podway"))
+        assert_packaged_fixture(&self.0);
+        let mut command = Command::new(podway_binary());
+        let route = arguments
+            .iter()
+            .copied()
+            .find(|argument| !matches!(*argument, "--json" | "--quiet" | "--no-color"));
+        if !matches!(
+            route,
+            Some("help" | "--help" | "-h" | "version" | "completions" | "procedure" | "preset")
+        ) {
+            command.arg("--worktree").arg(&self.0);
+        }
+        let child = command
             .args(arguments)
             .current_dir(&self.0)
             .env_remove("HOME")
@@ -141,7 +184,10 @@ impl Fixture {
     }
 
     pub(super) fn output_with_stdin(&self, arguments: &[&str], input: &[u8]) -> Output {
-        let child = Command::new(env!("CARGO_BIN_EXE_podway"))
+        assert_packaged_fixture(&self.0);
+        let child = Command::new(podway_binary())
+            .arg("--worktree")
+            .arg(&self.0)
             .arg("--json")
             .args(arguments)
             .current_dir(&self.0)
@@ -164,11 +210,13 @@ impl Fixture {
     }
 
     pub(super) fn continue_in_pty(&self) -> String {
+        assert_packaged_fixture(&self.0);
         let child = Command::new("/usr/bin/script")
+            .args(["-q", "/dev/null"])
+            .arg(podway_binary())
+            .arg("--worktree")
+            .arg(&self.0)
             .args([
-                "-q",
-                "/dev/null",
-                env!("CARGO_BIN_EXE_podway"),
                 "start",
                 "--preset",
                 "small-change-v2",
@@ -205,7 +253,10 @@ impl Fixture {
         arguments: &[&str],
         stage: &str,
     ) -> GuardedChild {
-        let child = Command::new(env!("CARGO_BIN_EXE_podway"))
+        assert_packaged_fixture(&self.0);
+        let child = Command::new(podway_binary())
+            .arg("--worktree")
+            .arg(&self.0)
             .arg("--json")
             .args(arguments)
             .current_dir(&self.0)

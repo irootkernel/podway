@@ -64,5 +64,5 @@
       "pattern": "^sha256:[a-f0-9]{64}$"
     }
   },
-  "$comment": "Reserved by V2DFC-003; not emitted before the owning daemon-free cutover task."
+  "$comment": "Active direct CLI identity contract; emitted and verified by the single-binary tooling."
 }

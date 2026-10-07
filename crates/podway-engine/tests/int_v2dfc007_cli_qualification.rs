@@ -81,7 +81,7 @@ fn qualified_reader_and_output_validator() {
                 WORKTREE_SELECTOR_VERSION_V1,
                 None,
                 LosslessPathV1::from_raw_bytes(
-                    worktree.as_os_str().as_encoded_bytes().to_vec(),
+                    worktree.as_os_str().as_encoded_bytes(),
                     DiagnosticPathDisplayV1::new(worktree.to_str().unwrap()).unwrap(),
                 )
                 .unwrap(),

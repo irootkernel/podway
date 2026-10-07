@@ -504,10 +504,7 @@ fn complete_generation_fourteen_bootstrap_and_cold_read_are_write_free() {
             assert_eq!(snapshot.binding().schema_version(), 14);
             assert!(snapshot.current_graph()?.is_none());
             assert_eq!(
-                snapshot
-                    .outcome(&request("init").key())?
-                    .unwrap()
-                    .sequence(),
+                snapshot.outcome(request("init").key())?.unwrap().sequence(),
                 1
             );
             assert_eq!(snapshot.view(UnixMillis::new(11))?.sequence(), 1);
@@ -695,7 +692,7 @@ fn persisted_outcomes_fail_closed_on_invalid_headers_or_future_sequences() {
             }
             "uuid" => {
                 let mut value: serde_json::Value = serde_json::from_str(
-                    &success(
+                    success(
                         &request("init"),
                         json!({"initialized":true}),
                         UnixMillis::new(10),

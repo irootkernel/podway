@@ -17,7 +17,6 @@ fn main() {
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut contract_root = None;
     let mut podway = None;
-    let mut podwayd = None;
     let mut expected_target = None;
     let mut expected_source_commit = None;
     let mut arguments = env::args_os().skip(1);
@@ -25,7 +24,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let destination = match argument.to_str() {
             Some("--contract-root") => &mut contract_root,
             Some("--podway") => &mut podway,
-            Some("--podwayd") => &mut podwayd,
             Some("--expected-target") => &mut expected_target,
             Some("--expected-source-commit") => &mut expected_source_commit,
             _ => return Err("unknown or non-UTF-8 contract verifier argument".into()),
@@ -42,7 +40,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config = ReleaseContractVerifierConfigV1::new(
         PathBuf::from(contract_root.ok_or("--contract-root is required")?),
         PathBuf::from(podway.ok_or("--podway is required")?),
-        PathBuf::from(podwayd.ok_or("--podwayd is required")?),
         expected_target
             .ok_or("--expected-target is required")?
             .into_string()

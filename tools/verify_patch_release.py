@@ -14,6 +14,8 @@ import tempfile
 import tomllib
 from typing import Any
 
+import release_evidence
+
 
 ROOT = Path(__file__).resolve().parents[1]
 ALWAYS_ALLOWED = {"CHANGELOG.md", "README.md"}
@@ -21,7 +23,7 @@ VERSION_BOUND = {
     "Cargo.toml",
     "Cargo.lock",
     "fuzz/Cargo.lock",
-    "contracts/contract-manifest-v1.json",
+    "contracts/contract-manifest-v2.json",
     "tools/release_archive.py",
 }
 PRODUCT_PACKAGES = {
@@ -32,7 +34,6 @@ PRODUCT_PACKAGES = {
     "podway-git",
     "podway-presets",
     "podway-protocol",
-    "podway-service",
     "podway-store",
 }
 VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
@@ -214,7 +215,7 @@ def validate_version_bound_file(path: str, base: bytes, current: bytes, old: str
         ):
             fail(f"{path} changes more than Podway package versions")
         return
-    if path == "contracts/contract-manifest-v1.json":
+    if path == "contracts/contract-manifest-v2.json":
         before = json.loads(base)
         after = json.loads(current)
         if before.get("product_version") != old or after.get("product_version") != new:
@@ -269,7 +270,7 @@ def check(base: str, confirmed: str, root: Path = ROOT) -> dict[str, Any]:
             fail(f"{path} changes Git object type or mode")
         if baseline_entry is None and path not in ALWAYS_ALLOWED:
             fail(f"tested baseline does not contain {path}")
-    required = {"Cargo.toml", "contracts/contract-manifest-v1.json", "tools/release_archive.py"}
+    required = {"Cargo.toml", "contracts/contract-manifest-v2.json", "tools/release_archive.py"}
     missing = sorted(required - paths)
     if missing:
         fail(f"patch release omits required version-bound changes: {missing}")
@@ -316,7 +317,7 @@ def write_fixture_version(root: Path, version: str) -> None:
     (root / "crates/podway-core/Cargo.toml").write_text(
         f'[package]\nname = "podway-core"\nversion = "{version}"\n', encoding="utf-8"
     )
-    (root / "contracts/contract-manifest-v1.json").write_text(
+    (root / "contracts/contract-manifest-v2.json").write_text(
         json.dumps({"digest": f"sha256:{version}", "product_version": version}) + "\n",
         encoding="utf-8",
     )
@@ -415,7 +416,7 @@ def self_test() -> dict[str, Any]:
             current_version,
             lock_path.relative_to(ROOT).as_posix(),
         )
-    with tempfile.TemporaryDirectory(prefix="podway-patch-release-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="podway-patch-release-", dir=release_evidence.scratch_parent()) as temporary:
         fixture_root = Path(temporary)
         valid = fixture_root / "valid"
         valid.mkdir()

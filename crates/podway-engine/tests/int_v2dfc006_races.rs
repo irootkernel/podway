@@ -322,10 +322,10 @@ impl Competitor {
             for line in BufReader::new(stdout).lines() {
                 let line = line.unwrap();
                 assert!(line.len() <= 16384);
-                if let Some((_, document)) = line.split_once(CHILD_PREFIX) {
-                    if send.send(serde_json::from_str(document).unwrap()).is_err() {
-                        break;
-                    }
+                if let Some((_, document)) = line.split_once(CHILD_PREFIX)
+                    && send.send(serde_json::from_str(document).unwrap()).is_err()
+                {
+                    break;
                 }
             }
         });
@@ -374,7 +374,7 @@ fn preparation_race_child() {
     let root = std::path::PathBuf::from(root);
     assert!(root.join(".git").is_dir());
     let path = LosslessPathV1::from_raw_bytes(
-        root.as_os_str().as_bytes().to_vec(),
+        root.as_os_str().as_bytes(),
         DiagnosticPathDisplayV1::new(root.to_string_lossy()).unwrap(),
     )
     .unwrap();

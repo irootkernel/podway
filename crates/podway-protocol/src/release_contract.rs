@@ -10,23 +10,22 @@ use std::{
 use jsonschema::{Retrieve, Uri, Validator};
 use podway_core::canonicalize_json_v1;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::OutputEnvelopeV3;
+use crate::OutputEnvelopeV4;
 
-const MANIFEST_SCHEMA_V1: &str = "podway.contract-manifest/v1";
-const VERSION_RESULT_SCHEMA_V1: &str = "podway.version-result/v1";
-const OUTPUT_SCHEMA_PATH: &str = "schemas/output-v3.schema.json";
-const VERSION_SCHEMA_PATH: &str = "schemas/version-result-v1.schema.json";
-const MANIFEST_SCHEMA_PATH: &str = "schemas/contract-manifest-v1.schema.json";
+const MANIFEST_SCHEMA_V2: &str = "podway.contract-manifest/v2";
+const VERSION_RESULT_SCHEMA_V2: &str = "podway.version-result/v2";
+const OUTPUT_SCHEMA_PATH: &str = "schemas/output-v4.schema.json";
+const VERSION_SCHEMA_PATH: &str = "schemas/version-result-v2.schema.json";
+const MANIFEST_SCHEMA_PATH: &str = "schemas/contract-manifest-v2.schema.json";
 const MAX_IDENTITY_OUTPUT_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct ReleaseContractVerifierConfigV1 {
     contract_root: PathBuf,
     podway: PathBuf,
-    podwayd: PathBuf,
     expected_target: String,
     expected_source_commit: String,
 }
@@ -35,14 +34,12 @@ impl ReleaseContractVerifierConfigV1 {
     pub fn new(
         contract_root: impl Into<PathBuf>,
         podway: impl Into<PathBuf>,
-        podwayd: impl Into<PathBuf>,
         expected_target: impl Into<String>,
         expected_source_commit: impl Into<String>,
     ) -> Self {
         Self {
             contract_root: contract_root.into(),
             podway: podway.into(),
-            podwayd: podwayd.into(),
             expected_target: expected_target.into(),
             expected_source_commit: expected_source_commit.into(),
         }
@@ -59,10 +56,9 @@ pub struct VerificationReceiptV1 {
     contract_manifest_schema: String,
     contract_manifest_digest: String,
     build_identity: String,
-    supported_ipc_ids: Vec<String>,
     schema_count: usize,
     asset_count: usize,
-    binary_results_equal: bool,
+    binary: &'static str,
 }
 
 impl VerificationReceiptV1 {
@@ -114,11 +110,10 @@ impl Error for ReleaseContractErrorV1 {}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ContractManifestV1 {
+struct ContractManifestV2 {
     schema_version: String,
     product: String,
     product_version: String,
-    supported_ipc_ids: Vec<String>,
     assets: Vec<ManifestAssetV1>,
     digest: String,
 }
@@ -139,7 +134,7 @@ enum ContractRootLayoutV1 {
 
 struct ContractSetV1 {
     manifest_value: Value,
-    manifest: ContractManifestV1,
+    manifest: ContractManifestV2,
     schemas: BTreeMap<String, Value>,
     retriever: ManifestSchemaRetrieverV1,
 }
@@ -159,6 +154,7 @@ impl Retrieve for ManifestSchemaRetrieverV1 {
     }
 }
 
+/// Verify the complete offline contract set and one release-profile Podway binary.
 pub fn verify_release_contract_v1(
     config: &ReleaseContractVerifierConfigV1,
 ) -> Result<VerificationReceiptV1, ReleaseContractErrorV1> {
@@ -174,20 +170,9 @@ pub fn verify_release_contract_v1(
         &config.expected_target,
         &config.expected_source_commit,
     )?;
-    let daemon = contracts.probe_identity(
-        &config.podwayd,
-        "podwayd",
-        &config.expected_target,
-        &config.expected_source_commit,
-    )?;
-    if cli != daemon {
-        return Err(ReleaseContractErrorV1::new(
-            "podway and podwayd identity results differ",
-        ));
-    }
-    let build_identity = required_string(&cli, "build_identity", "shared identity")?;
+    let build_identity = required_string(&cli, "build_identity", "podway identity")?;
     Ok(VerificationReceiptV1 {
-        schema: "podway.contract-verification/v1",
+        schema: "podway.contract-verification/v2",
         product: contracts.manifest.product.clone(),
         version: contracts.manifest.product_version.clone(),
         target: config.expected_target.clone(),
@@ -195,10 +180,9 @@ pub fn verify_release_contract_v1(
         contract_manifest_schema: contracts.manifest.schema_version.clone(),
         contract_manifest_digest: contracts.manifest.digest.clone(),
         build_identity,
-        supported_ipc_ids: contracts.manifest.supported_ipc_ids.clone(),
         schema_count: contracts.schemas.len(),
         asset_count: contracts.manifest.assets.len(),
-        binary_results_equal: true,
+        binary: "podway",
     })
 }
 
@@ -223,7 +207,7 @@ impl ContractSetV1 {
         };
         let manifest_path = checked_member_path(
             &root,
-            Path::new("contracts/contract-manifest-v1.json"),
+            Path::new("contracts/contract-manifest-v2.json"),
             "contract manifest",
         )?;
         let manifest_bytes = fs::read(&manifest_path).map_err(|error| {
@@ -232,7 +216,7 @@ impl ContractSetV1 {
         let manifest_value: Value = serde_json::from_slice(&manifest_bytes).map_err(|error| {
             ReleaseContractErrorV1::new(format!("contract manifest is not valid JSON: {error}"))
         })?;
-        let manifest: ContractManifestV1 =
+        let manifest: ContractManifestV2 =
             serde_json::from_value(manifest_value.clone()).map_err(|error| {
                 ReleaseContractErrorV1::new(format!("contract manifest shape is invalid: {error}"))
             })?;
@@ -451,18 +435,18 @@ impl ContractSetV1 {
             &document,
             &format!("{role} identity envelope"),
         )?;
-        let output: OutputEnvelopeV3 =
+        let output: OutputEnvelopeV4 =
             serde_json::from_value(document.clone()).map_err(|error| {
                 ReleaseContractErrorV1::new(format!(
                     "{role} identity envelope fails the version contract: {error}"
                 ))
             })?;
-        if output.command().as_str() != "version" {
+        if output.as_value()["command"].as_str() != Some("version") {
             return Err(ReleaseContractErrorV1::new(format!(
                 "{role} identity envelope has the wrong command"
             )));
         }
-        let result = Value::Object(output.result().clone());
+        let result = output.as_value()["result"].clone();
         self.validate_schema(
             VERSION_SCHEMA_PATH,
             &result,
@@ -470,7 +454,7 @@ impl ContractSetV1 {
         )?;
         let expected_version = format!("v{}", self.manifest.product_version);
         let expected = [
-            ("schema", VERSION_RESULT_SCHEMA_V1),
+            ("schema", VERSION_RESULT_SCHEMA_V2),
             ("product", self.manifest.product.as_str()),
             ("version", expected_version.as_str()),
             ("target", expected_target),
@@ -488,11 +472,23 @@ impl ContractSetV1 {
                 )));
             }
         }
-        let supported_ipc_ids = serde_json::to_value(&self.manifest.supported_ipc_ids)
-            .expect("manifest IPC identifiers always serialize");
-        if result.get("supported_ipc_ids") != Some(&supported_ipc_ids) {
+        let preimage = json!({
+            "contract_manifest_digest": self.manifest.digest,
+            "product": self.manifest.product,
+            "profile": "release",
+            "source_commit": expected_source_commit,
+            "target": expected_target,
+            "version": self.manifest.product_version,
+        });
+        let canonical = canonicalize_json_v1(&preimage).map_err(|error| {
+            ReleaseContractErrorV1::new(format!("build identity cannot canonicalize: {error}"))
+        })?;
+        let expected_build_identity = sha256_identity(canonical.as_bytes());
+        if result.get("build_identity").and_then(Value::as_str)
+            != Some(expected_build_identity.as_str())
+        {
             return Err(ReleaseContractErrorV1::new(format!(
-                "{role} supported IPC identity does not match the contract manifest"
+                "{role} build identity does not match the release preimage"
             )));
         }
         Ok(result)
@@ -519,20 +515,12 @@ fn is_versioned_schema_path(path: &str) -> bool {
 }
 
 fn validate_manifest_identity(
-    manifest: &ContractManifestV1,
+    manifest: &ContractManifestV2,
     value: &Value,
 ) -> Result<(), ReleaseContractErrorV1> {
-    if manifest.schema_version != MANIFEST_SCHEMA_V1
+    if manifest.schema_version != MANIFEST_SCHEMA_V2
         || manifest.product != "podway"
         || manifest.product_version.is_empty()
-        || manifest.supported_ipc_ids.is_empty()
-        || manifest.supported_ipc_ids.iter().any(String::is_empty)
-        || manifest
-            .supported_ipc_ids
-            .iter()
-            .collect::<BTreeSet<_>>()
-            .len()
-            != manifest.supported_ipc_ids.len()
         || manifest.assets.is_empty()
         || !is_sha256_identity(&manifest.digest)
     {

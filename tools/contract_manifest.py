@@ -18,10 +18,9 @@ import repository_assets
 
 
 ROOT = Path(__file__).resolve().parent.parent
-MANIFEST_PATH = Path("contracts/contract-manifest-v1.json")
-MANIFEST_SCHEMA = "podway.contract-manifest/v1"
+MANIFEST_PATH = Path("contracts/contract-manifest-v2.json")
+MANIFEST_SCHEMA = "podway.contract-manifest/v2"
 PRODUCT = "podway"
-SUPPORTED_IPC_IDS = ["podway.ipc/v1"]
 STATIC_ASSETS = {
     "contracts/command-routes.json": "catalog",
     "presets/analysis-v2.yaml": "preset",
@@ -213,7 +212,6 @@ def build_manifest(root: Path = ROOT) -> dict[str, Any]:
         "schema_version": MANIFEST_SCHEMA,
         "product": PRODUCT,
         "product_version": product_version(root),
-        "supported_ipc_ids": SUPPORTED_IPC_IDS,
         "assets": assets,
     }
     manifest["digest"] = sha256_bytes(canonical_bytes(manifest))
@@ -222,14 +220,12 @@ def build_manifest(root: Path = ROOT) -> dict[str, Any]:
 
 def validate_shape(value: Any) -> dict[str, Any]:
     expected_keys = {
-        "schema_version", "product", "product_version", "supported_ipc_ids", "assets", "digest"
+        "schema_version", "product", "product_version", "assets", "digest"
     }
     if not isinstance(value, dict) or set(value) != expected_keys:
         fail("contract manifest has unexpected or missing top-level fields")
     if value["schema_version"] != MANIFEST_SCHEMA or value["product"] != PRODUCT:
         fail("contract manifest identity is invalid")
-    if value["supported_ipc_ids"] != SUPPORTED_IPC_IDS:
-        fail("contract manifest supported IPC IDs drift")
     assets = value["assets"]
     if not isinstance(assets, list) or not assets:
         fail("contract manifest must contain assets")
@@ -316,6 +312,15 @@ def self_test(root: Path = ROOT) -> list[str]:
         write(fixture)
         check(fixture)
         completed.append("deterministic_generation")
+
+        retired_field = build_manifest(fixture)
+        retired_field["supported_ipc_ids"] = ["podway.ipc/v1"]
+        try:
+            validate_shape(retired_field)
+        except ManifestError:
+            completed.append("retired_ipc_field_rejected")
+        else:
+            fail("retired IPC field sentinel did not fail")
 
         nested_schema = fixture / "assets/schemas/nested/example-v2.schema.json"
         nested_schema.parent.mkdir(parents=True, exist_ok=True)

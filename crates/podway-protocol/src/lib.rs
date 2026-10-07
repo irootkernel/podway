@@ -29,8 +29,7 @@ pub use result_contract::{
     DAEMON_FREE_DOCUMENT_SCHEMAS_V1, EXISTING_ROUTE_RESULT_SCHEMAS_V2, MAX_DIRECT_INPUT_BYTES_V1,
     MAX_DIRECT_OUTPUT_BYTES_V1, MAX_V2_OUTPUT_WARNINGS, MAX_V2_WARNING_CODE_CHARS,
     MAX_V2_WARNING_MESSAGE_CHARS, MAX_V2_WARNING_PATH_CHARS, NEW_ROUTE_RESULT_SCHEMAS_V1,
-    OUTPUT_SCHEMA_V3, OutputEnvelopeInputV3, OutputEnvelopeV3,
-    PROCEDURE_DIAGNOSTICS_RESULT_SCHEMA_V1, ResultSchemaContractV2, SUPPORTED_OUTPUT_SCHEMAS_V3,
+    PROCEDURE_DIAGNOSTICS_RESULT_SCHEMA_V1, ResultSchemaContractV2,
     decode_result_schema_contract_v2, ensure_procedure_independent_result_schema_v1,
     result_schema_top_level_fields_v2, validate_command_result_v2,
     validate_daemon_free_document_v1, validate_delegation_document_v1,
@@ -142,10 +141,6 @@ impl RequestIdV1 {
     pub fn into_inner(self) -> String {
         self.0
     }
-
-    fn validate(&self) -> Result<(), ProtocolError> {
-        validate_uuid(&self.0, "request_id")
-    }
 }
 
 impl fmt::Display for RequestIdV1 {
@@ -196,10 +191,6 @@ impl CommandNameV1 {
 
     pub fn into_inner(self) -> String {
         self.0
-    }
-
-    fn validate(&self) -> Result<(), ProtocolError> {
-        validate_non_empty_byte_bounded(&self.0, MAX_COMMAND_BYTES_V1, "command")
     }
 }
 
@@ -336,10 +327,6 @@ impl Rfc3339MillisV1 {
 
     pub fn into_inner(self) -> String {
         self.0
-    }
-
-    fn validate(&self) -> Result<(), ProtocolError> {
-        validate_rfc3339_millis(&self.0)
     }
 }
 

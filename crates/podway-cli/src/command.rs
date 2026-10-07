@@ -43,10 +43,9 @@ use podway_core::{
 use podway_presets::{PresetError, catalog_v2};
 use podway_protocol::{
     CommandNameV1, ItemRecordManyInputV1, MAX_DIRECT_INPUT_BYTES_V1,
-    MAX_SLICE_ITEM_TEXT_SCALARS_V1, OutputEnvelopeInputV3, OutputEnvelopeV3, RequestIdV1,
-    Rfc3339MillisV1, build_identity_v1, decode_item_record_many_input_v1,
-    ensure_procedure_independent_result_schema_v1, validate_command_result_v2,
-    validate_procedure_independent_result_v1,
+    MAX_SLICE_ITEM_TEXT_SCALARS_V1, RequestIdV1, Rfc3339MillisV1, build_identity_v1,
+    decode_item_record_many_input_v1, ensure_procedure_independent_result_schema_v1,
+    validate_command_result_v2, validate_procedure_independent_result_v1,
 };
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
@@ -4660,34 +4659,20 @@ fn render_result_with_clock_and_writers(
                     .expect("UUID-v4 request identifiers satisfy the public protocol");
                 let command = CommandNameV1::new(command.clone())
                     .expect("local command names satisfy the public protocol");
-                let output = if command.as_str() == "version" {
-                    serde_json::to_value(
-                        OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
-                            request_id,
-                            command,
-                            generated_at,
-                            result: result.clone(),
-                            warnings: Vec::new(),
-                        })
-                        .expect("version identity retains its generated contract until V2DFC-009"),
-                    )
-                    .expect("version output serializes")
-                } else {
-                    let Ok(output) = podway_protocol::OutputEnvelopeV4::new(
-                        podway_protocol::OutputEnvelopeInputV4 {
-                            request_id,
-                            command,
-                            generated_at,
-                            workspace: None,
-                            session: None,
-                            result: result.clone(),
-                            warnings: Vec::new(),
-                        },
-                    ) else {
-                        return LOCAL_CLIENT_EXIT;
-                    };
-                    output.into_value()
+                let Ok(output) = podway_protocol::OutputEnvelopeV4::new(
+                    podway_protocol::OutputEnvelopeInputV4 {
+                        request_id,
+                        command,
+                        generated_at,
+                        workspace: None,
+                        session: None,
+                        result: result.clone(),
+                        warnings: Vec::new(),
+                    },
+                ) else {
+                    return LOCAL_CLIENT_EXIT;
                 };
+                let output = output.into_value();
                 if serde_json::to_writer(&mut *stdout, &output).is_err()
                     || writeln!(stdout).is_err()
                 {

@@ -1,7 +1,7 @@
 use podway_protocol::{
     CommandNameV1, ErrorCodeV1, ErrorEnvelopeInputV2, ErrorEnvelopeV2, ExitCodeV1,
-    OutputEnvelopeInputV4, OutputEnvelopeV3, OutputEnvelopeV4, RecoveryRecipeV2, RequestIdV1,
-    Rfc3339MillisV1, WorkspaceOutputV1,
+    OutputEnvelopeInputV4, OutputEnvelopeV4, RecoveryRecipeV2, RequestIdV1, Rfc3339MillisV1,
+    WorkspaceOutputV1,
 };
 use serde_json::{Value, json};
 
@@ -51,7 +51,6 @@ fn direct_constructors_and_decoders_validate_the_complete_envelope() {
         serde_json::from_value::<ErrorEnvelopeV2>(error.clone()).unwrap(),
         failure
     );
-    assert!(serde_json::from_value::<OutputEnvelopeV3>(success.clone()).is_err());
     for (field, invalid) in [
         ("schema", json!("podway.output/v3")),
         ("command", json!("daemon.status")),

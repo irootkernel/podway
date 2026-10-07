@@ -16,8 +16,7 @@ export PRESET_ID PRESET_NAME PRESET_DESCRIPTION PRESET_FILE PRESET_DIR PRESET_VA
 
 .PHONY: test test-prepare release-prepare dist-preflight patch-release-preflight release-version-check test-rust test-unit test-int test-fuzzing test-e2e test-e2e-exact contract-verifier-test \
 	toolchain format format-check vet lint lint-all architecture architecture-static preset-validator \
-	preset-create preset-import preset-tool-test contract-manifest dist dist-patch \
-	aquarium-dev-describe aquarium-dev-build aquarium-dev-test
+	preset-create preset-import preset-tool-test contract-manifest dist dist-patch
 
 toolchain:
 	@$(RUST_TOOLCHAIN_ENV) cargo --version
@@ -29,7 +28,6 @@ test:
 	$(MAKE) contract-verifier-test
 	$(MAKE) test-e2e
 	$(MAKE) preset-tool-test PRESET_VALIDATOR_READY=1
-	$(MAKE) aquarium-dev-test
 
 test-prepare: toolchain
 	$(MAKE) format-check
@@ -112,15 +110,6 @@ preset-import: preset-validator
 preset-tool-test: preset-validator
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_preset_tooling.py --podway "$$PRESET_VALIDATOR"
 
-aquarium-dev-describe:
-	@$(RUST_TOOLCHAIN_ENV) python3 tools/aquarium_dev_producer.py describe
-
-aquarium-dev-build:
-	@$(RUST_TOOLCHAIN_ENV) python3 tools/aquarium_dev_producer.py build
-
-aquarium-dev-test:
-	$(RUST_TOOLCHAIN_ENV) python3 -m unittest tests.test_aquarium_dev
-
 test-rust:
 	$(RUST_GATE_ENV) cargo test --workspace --lib --bins \
 		--test 'arch_*' --test 'int_*' --locked -- \
@@ -156,8 +145,7 @@ test-e2e-exact:
 
 release-version-check:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/release_archive.py verify-version \
-		--podway target/release/podway \
-		--podwayd target/release/podwayd
+		--podway target/release/podway
 
 dist:
 	$(MAKE) dist-preflight
@@ -165,11 +153,10 @@ dist:
 	$(MAKE) release-prepare
 	$(MAKE) test-fuzzing
 	$(RUST_GATE_ENV) cargo build --release --locked \
-		-p podway-cli --bin podway -p podway-daemon --bin podwayd
+		-p podway-cli --bin podway
 	$(RUST_TOOLCHAIN_ENV) python3 tools/release_archive.py package \
 		--artifact-class distribution \
 		--podway target/release/podway \
-		--podwayd target/release/podwayd \
 		--output-dir $(DIST_DIR)
 	$(RUST_TOOLCHAIN_ENV) python3 tools/qualify_distribution.py qualify \
 		--output-dir $(DIST_DIR)
@@ -184,7 +171,7 @@ dist-patch:
 	$(MAKE) test-unit
 	$(MAKE) test-int
 	$(RUST_GATE_ENV) cargo build --release --locked \
-		-p podway-cli --bin podway -p podway-daemon --bin podwayd
+		-p podway-cli --bin podway
 	$(MAKE) release-version-check
 	$(RUST_TOOLCHAIN_ENV) python3 tools/release_archive.py package \
 		--artifact-class distribution \
@@ -192,7 +179,6 @@ dist-patch:
 		--patch-base-commit "$(PATCH_BASE_COMMIT)" \
 		--prior-make-test-passed "$(PRIOR_MAKE_TEST_PASSED)" \
 		--podway target/release/podway \
-		--podwayd target/release/podwayd \
 		--output-dir $(DIST_DIR)
 	$(RUST_TOOLCHAIN_ENV) python3 tools/create_dolgorae_handoff.py create \
 		--gate patch \

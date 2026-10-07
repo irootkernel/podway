@@ -6,13 +6,9 @@ use std::{
 };
 
 use jsonschema::{Retrieve, Uri, Validator};
-use serde::{Deserialize, Deserializer, Serialize, de};
 use serde_json::{Map, Value};
 
-use crate::{
-    CommandNameV1, ProtocolError, RequestIdV1, Rfc3339MillisV1, validate_json_document_depth,
-    validate_json_map_depth,
-};
+use crate::{ProtocolError, validate_json_document_depth, validate_json_map_depth};
 
 mod embedded_schemas {
     include!(concat!(env!("OUT_DIR"), "/embedded_json_schemas.rs"));
@@ -1508,9 +1504,7 @@ pub const MAX_V2_WARNING_CODE_CHARS: usize = 64;
 pub const MAX_V2_WARNING_PATH_CHARS: usize = 256;
 pub const MAX_V2_WARNING_MESSAGE_CHARS: usize = 512;
 
-pub const OUTPUT_SCHEMA_V3: &str = "podway.output/v3";
-pub const SUPPORTED_OUTPUT_SCHEMAS_V3: &[&str] = &[OUTPUT_SCHEMA_V3];
-const PROCEDURE_INDEPENDENT_OUTPUT_COMMANDS_V3: &[&str] = &[
+const PROCEDURE_INDEPENDENT_OUTPUT_COMMANDS_V1: &[&str] = &[
     "help",
     "version",
     "completions",
@@ -1554,7 +1548,7 @@ pub fn validate_command_result_v2(
 ) -> Result<(), ProtocolError> {
     if decode_result_schema_contract_v2(result)
         .is_some_and(|contract| contract.commands.contains(&command))
-        || (PROCEDURE_INDEPENDENT_OUTPUT_COMMANDS_V3.contains(&command)
+        || (PROCEDURE_INDEPENDENT_OUTPUT_COMMANDS_V1.contains(&command)
             && validate_procedure_independent_result_v1(command, result).is_ok())
     {
         Ok(())
@@ -1564,101 +1558,6 @@ pub fn validate_command_result_v2(
         })
     }
 }
-/// The version identity retains output v3 until the Task009 identity cutover.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct OutputEnvelopeInputV3 {
-    pub request_id: RequestIdV1,
-    pub command: CommandNameV1,
-    pub generated_at: Rfc3339MillisV1,
-    pub result: Map<String, Value>,
-    pub warnings: Vec<Map<String, Value>>,
-}
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct OutputEnvelopeV3 {
-    schema: String,
-    request_id: RequestIdV1,
-    command: CommandNameV1,
-    generated_at: Rfc3339MillisV1,
-    result: Map<String, Value>,
-    warnings: Vec<Map<String, Value>>,
-}
-impl OutputEnvelopeV3 {
-    pub fn new(input: OutputEnvelopeInputV3) -> Result<Self, ProtocolError> {
-        let output = Self {
-            schema: OUTPUT_SCHEMA_V3.to_owned(),
-            request_id: input.request_id,
-            command: input.command,
-            generated_at: input.generated_at,
-            result: input.result,
-            warnings: input.warnings,
-        };
-        output.validate()?;
-        Ok(output)
-    }
-    pub fn validate(&self) -> Result<(), ProtocolError> {
-        if self.schema != OUTPUT_SCHEMA_V3 {
-            return Err(ProtocolError::UnsupportedProtocol {
-                received: self.schema.clone(),
-                supported: SUPPORTED_OUTPUT_SCHEMAS_V3,
-            });
-        }
-        self.request_id.validate()?;
-        self.command.validate()?;
-        self.generated_at.validate()?;
-        if self.command.as_str() != "version"
-            || validate_procedure_independent_result_v1("version", &self.result).is_err()
-        {
-            return Err(ProtocolError::InvalidCommandResult {
-                command: self.command.as_str().to_owned(),
-            });
-        }
-        if !validate_v2_output_warnings(&self.warnings) {
-            return Err(ProtocolError::InvalidOutputWarnings);
-        }
-        let value =
-            serde_json::to_value(self).map_err(|_| ProtocolError::InvalidCommandResult {
-                command: "version".to_owned(),
-            })?;
-        validate_json_document_depth(&value)?;
-        if !validate_selected_direct_schema_v1(OUTPUT_SCHEMA_V3, "", &value) {
-            return Err(ProtocolError::InvalidCommandResult {
-                command: "version".to_owned(),
-            });
-        }
-        Ok(())
-    }
-    pub fn command(&self) -> &CommandNameV1 {
-        &self.command
-    }
-    pub fn result(&self) -> &Map<String, Value> {
-        &self.result
-    }
-}
-impl<'de> Deserialize<'de> for OutputEnvelopeV3 {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Raw {
-            schema: String,
-            request_id: RequestIdV1,
-            command: CommandNameV1,
-            generated_at: Rfc3339MillisV1,
-            result: Map<String, Value>,
-            warnings: Vec<Map<String, Value>>,
-        }
-        let raw = Raw::deserialize(deserializer)?;
-        let output = Self {
-            schema: raw.schema,
-            request_id: raw.request_id,
-            command: raw.command,
-            generated_at: raw.generated_at,
-            result: raw.result,
-            warnings: raw.warnings,
-        };
-        output.validate().map_err(de::Error::custom)?;
-        Ok(output)
-    }
-}
 pub fn ensure_procedure_independent_result_schema_v1(
     command: &str,
     result: &mut Map<String, Value>,
@@ -1666,7 +1565,7 @@ pub fn ensure_procedure_independent_result_schema_v1(
     if command == "version" {
         result
             .entry("schema".to_owned())
-            .or_insert_with(|| Value::String("podway.version-result/v1".to_owned()));
+            .or_insert_with(|| Value::String("podway.version-result/v2".to_owned()));
     }
 }
 pub fn validate_procedure_independent_result_v1(
@@ -1674,13 +1573,9 @@ pub fn validate_procedure_independent_result_v1(
     result: &Map<String, Value>,
 ) -> Result<(), ProtocolError> {
     let valid = if command == "version" {
-        result.get("schema").and_then(Value::as_str) == Some("podway.version-result/v1") && {
-            let mut value = result.clone();
-            value.remove("schema");
-            validate_version_result(Value::Object(value))
-        }
+        validate_daemon_free_document_v1("podway.version-result/v2", &Value::Object(result.clone()))
     } else {
-        PROCEDURE_INDEPENDENT_OUTPUT_COMMANDS_V3.contains(&command)
+        PROCEDURE_INDEPENDENT_OUTPUT_COMMANDS_V1.contains(&command)
             && !result.contains_key("schema")
     };
     if valid {
@@ -1691,17 +1586,6 @@ pub fn validate_procedure_independent_result_v1(
         })
     }
 }
-fn validate_version_result(mut value: Value) -> bool {
-    let Some(result) = value.as_object_mut() else {
-        return false;
-    };
-    result.insert(
-        "schema".to_owned(),
-        Value::String("podway.version-result/v1".to_owned()),
-    );
-    validate_selected_direct_schema_v1("podway.version-result/v1", "", &value)
-}
-
 /// Preserved input and output budgets, independent of IPC framing.
 pub const MAX_DIRECT_INPUT_BYTES_V1: usize = 1_048_576;
 pub const MAX_DIRECT_OUTPUT_BYTES_V1: usize = 1_048_576;
@@ -1720,21 +1604,7 @@ fn direct_document_contracts_v1() -> impl Iterator<Item = &'static ResultSchemaC
         .chain(EXISTING_ROUTE_RESULT_SCHEMAS_V2)
         .chain(NEW_ROUTE_RESULT_SCHEMAS_V1)
         .chain(DELEGATION_DOCUMENT_SCHEMAS_V1)
-        .chain(LEGACY_IDENTITY_SCHEMAS_V1)
 }
-const LEGACY_IDENTITY_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
-    result_schema_v2(
-        "podway.output/v3",
-        "schemas/output-v3.schema.json",
-        &["version"],
-    ),
-    result_schema_v2(
-        "podway.version-result/v1",
-        "schemas/version-result-v1.schema.json",
-        &["version"],
-    ),
-];
-
 fn direct_schema_source_v1(contract: &ResultSchemaContractV2) -> Result<Value, String> {
     let filename = contract
         .schema_path

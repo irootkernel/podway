@@ -8,26 +8,44 @@ import json
 import os
 from pathlib import Path
 import re
+import selectors
+import signal
+import subprocess
 import sys
 import tempfile
+import time
 from typing import Any
 
 
 PRODUCT = "podway"
-PROVENANCE_SCHEMA = "podway.release-provenance/v1"
-PATCH_PROVENANCE_SCHEMA = "podway.release-provenance/v2"
-HANDOFF_SCHEMA = "podway.dolgorae-compatibility-handoff/v2"
-PATCH_HANDOFF_SCHEMA = "podway.dolgorae-compatibility-handoff/v3"
+PROVENANCE_SCHEMA = "podway.release-provenance/v3"
+PATCH_PROVENANCE_SCHEMA = "podway.release-provenance/v4"
+HANDOFF_SCHEMA = "podway.dolgorae-compatibility-handoff/v4"
+PATCH_HANDOFF_SCHEMA = "podway.dolgorae-compatibility-handoff/v5"
 RELEASE_GATE = "make test + fuzzing: passed"
 PATCH_RELEASE_GATE = "make dist-patch: passed"
+DEVELOPMENT_GATE = "make test + make release-prepare + make test-fuzzing: passed"
 PASSED = "passed"
 PENDING = "pending"
 PACKAGED_CONFORMANCE_SCENARIOS = [
-    "aut_t_id_custom_procedure_survives_restart_and_completes_the_fenced_lifecycle",
-    "aut_t_id_and_recon_reject_conflicts_and_recover_an_admitted_timeout",
-    "aut_t_recon_response_loss_is_reconciled_by_lookup_and_exact_replay",
-    "aut_t_v2_public_admission_survives_restart_and_completes_rework_and_goal_closeout",
+    "e2e_v2dfc007_native_conformance::compact_status_keeps_only_bounded_metadata_and_current_identity",
+    "e2e_v2dfc007_native_conformance::procedure_workspace_and_session_conflicts_leave_no_mutation_or_outcome",
+    "e2e_v2dfc007_native_conformance::public_goal_flow_preserves_rework_and_stale_attempt_history_across_processes",
+    "e2e_v2dfc007_native_conformance::destructive_lifecycle_preserves_user_files_and_config_and_reinitializes_identity",
+    "e2e_v2dfc007_direct_cli::a_sqlite_writer_bounds_contention_without_recording_a_failed_outcome",
+    "e2e_v2dfc007_direct_cli::sigkill_after_commit_before_stdout_preserves_the_original_outcome_and_exact_replay",
+    "e2e_v2dfc007_direct_cli::record_stdin_preserves_identity_applies_one_atomic_batch_and_replays_without_preflight",
+    "e2e_v2dfc007_direct_cli::delegation_stdin_acceptance_receipt_and_completion_preserve_the_real_attempt",
+    "e2e_v2dfc007_direct_cli::every_legacy_generation_refuses_without_new_files_then_explicitly_resets",
+    "e2e_v2dfc007_runtime_cli::generated_item_recipes_preserve_all_types_clearing_and_attachment_evidence",
+    "e2e_v2dfc007_runtime_cli::generated_cursor_and_goal_recipes_require_only_declared_placeholder_values",
+    "e2e_v2dfc007_runtime_cli::evidence_continuations_preserve_unicode_pages_and_rework_invalidates_old_tokens",
+    "e2e_v2dfc007_runtime_cli::bare_terminal_archive_uses_no_active_attempt_and_replays_after_current_session_removal",
+    "e2e_v2dfc007_retirement::retired_surface_returns_valid_guidance_without_reading_open_stdin_or_worktree",
+    "e2e_v2sdg008_qualification::supervised_delegation_preserves_documented_example_hosts_and_recovery",
+    "e2e_v2_native_qualification::release_binary_ignores_every_debug_maintenance_hook",
 ]
+
 RELEASE_STATUS = {"notarization": "not-attempted", "signing": "unsigned"}
 SHA256 = re.compile(r"[0-9a-f]{64}")
 IDENTITY_SHA256 = re.compile(r"sha256:[0-9a-f]{64}")
@@ -50,11 +68,13 @@ PROVENANCE_KEYS = {
     "source_commit",
     "source_dirty",
     "source_tree",
+    "source_snapshot_sha256",
     "target",
     "toolchain",
     "version",
 }
 HANDOFF_KEYS = {
+    "artifact_class",
     "adapter",
     "adapter_catalog",
     "artifact",
@@ -109,16 +129,91 @@ def read_object(path: Path, label: str) -> dict[str, Any]:
     return value
 
 
-def atomic_write_json(path: Path, value: dict[str, Any]) -> None:
+def scratch_parent() -> Path:
+    volume = Path("/Volumes/RootKernel")
+    if os.path.ismount(volume) and os.access(volume, os.W_OK):
+        parent = volume / "tmp"
+        if parent.is_symlink():
+            fail("scratch parent must not be a symlink")
+        parent.mkdir(exist_ok=True)
+        return parent
+    return Path(tempfile.gettempdir())
+
+
+def require_process_group_gone(group: int) -> None:
+    deadline = time.monotonic() + 3
+    while True:
+        completed = subprocess.run(["ps", "-axo", "pid=,pgid=,stat="],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, timeout=5, text=True)
+        if completed.returncode != 0:
+            fail(f"cannot prove cleanup of owned process group {group}")
+        remaining = []
+        for line in completed.stdout.splitlines():
+            fields = line.split()
+            if len(fields) == 3 and fields[1] == str(group) and not fields[2].startswith("Z"):
+                remaining.append(fields[0])
+        if not remaining:
+            return
+        if time.monotonic() >= deadline:
+            fail(f"owned process group {group} still has live children: {remaining}")
+        time.sleep(0.01)
+
+
+def run_bounded(arguments: list[str], *, cwd: Path, environment: dict[str, str] | None = None,
+    timeout_seconds: float = 300, label: str) -> subprocess.CompletedProcess[bytes]:
+    process = subprocess.Popen(arguments, cwd=cwd, env=environment,
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+    deadline = time.monotonic() + timeout_seconds
+    buffers = {"stdout": bytearray(), "stderr": bytearray()}
+    selector = selectors.DefaultSelector()
+    try:
+        for name, stream in (("stdout", process.stdout), ("stderr", process.stderr)):
+            assert stream is not None
+            os.set_blocking(stream.fileno(), False)
+            selector.register(stream, selectors.EVENT_READ, name)
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                fail(f"{label} timed out after {timeout_seconds:g}s")
+            for key, _events in selector.select(min(remaining, 0.2)):
+                data = os.read(key.fileobj.fileno(), 65536)
+                if not data:
+                    selector.unregister(key.fileobj)
+                    continue
+                buffers[key.data].extend(data)
+                if len(buffers[key.data]) > 8 * 1024 * 1024:
+                    fail(f"{label} exceeded its output budget")
+        try:
+            process.wait(timeout=max(0.001, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            fail(f"{label} timed out after {timeout_seconds:g}s")
+    finally:
+        selector.close()
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            fail(f"{label} cannot reap owned child {process.pid}")
+        for stream in (process.stdout, process.stderr):
+            if stream is not None:
+                stream.close()
+        require_process_group_gone(process.pid)
+    return subprocess.CompletedProcess(arguments, process.returncode, bytes(buffers["stdout"]), bytes(buffers["stderr"]))
+
+
+def atomic_write_bytes(path: Path, value: bytes) -> None:
     if path.parent.is_symlink() or not path.parent.is_dir():
-        fail(f"JSON output directory must be a regular directory: {path.parent}")
+        fail(f"output directory must be a regular directory: {path.parent}")
     descriptor, temporary_name = tempfile.mkstemp(
         dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
     )
     temporary = Path(temporary_name)
     try:
         with os.fdopen(descriptor, "wb") as opened:
-            opened.write(canonical_bytes(value))
+            opened.write(value)
             opened.flush()
             os.fsync(opened.fileno())
         temporary.chmod(0o644)
@@ -131,6 +226,10 @@ def atomic_write_json(path: Path, value: dict[str, Any]) -> None:
     except BaseException:
         temporary.unlink(missing_ok=True)
         raise
+
+
+def atomic_write_json(path: Path, value: dict[str, Any]) -> None:
+    atomic_write_bytes(path, canonical_bytes(value))
 
 
 def _exact_keys(value: dict[str, Any], expected: set[str], label: str) -> None:
@@ -208,14 +307,17 @@ def validate_provenance(
         fail("patch provenance cannot claim packaged conformance")
     if not patch and conformance_result is None:
         fail("full provenance requires packaged conformance")
+    development = value.get("artifact_class") == "development-qualification"
+    if development and patch:
+        fail("development qualification cannot use the patch gate")
     expected = {
-        "artifact_class": "distribution",
+        "artifact_class": "development-qualification" if development else "distribution",
         "product": PRODUCT,
-        "release_gate": PATCH_RELEASE_GATE if patch else RELEASE_GATE,
+        "release_gate": DEVELOPMENT_GATE if development else (PATCH_RELEASE_GATE if patch else RELEASE_GATE),
         "release_gate_result": PASSED,
         "schema": PATCH_PROVENANCE_SCHEMA if patch else PROVENANCE_SCHEMA,
         "source_commit": commit,
-        "source_dirty": False,
+        "source_dirty": value.get("source_dirty") if development else False,
         "source_tree": tree,
         "target": target,
         "version": version,
@@ -227,8 +329,9 @@ def validate_provenance(
     }
     if mismatches:
         fail(f"provenance identity mismatch: {mismatches}")
-    if value["source_dirty"] is not False:
-        fail("provenance source_dirty must be the boolean false")
+    if not isinstance(value["source_dirty"], bool) or (not development and value["source_dirty"]):
+        fail("provenance source_dirty must be a boolean, and false for distribution")
+    _digest(value["source_snapshot_sha256"], "provenance source snapshot digest")
     if GIT_OBJECT.fullmatch(commit) is None or GIT_OBJECT.fullmatch(tree) is None:
         fail("qualified Git commit and tree must be lowercase object identities")
     archive = value["archive"]
@@ -240,13 +343,13 @@ def validate_provenance(
     binaries = value["binaries"]
     if not isinstance(binaries, dict):
         fail("provenance binaries must be an object")
-    _exact_keys(binaries, {"podway", "podwayd"}, "provenance binaries")
-    for role in ("podway", "podwayd"):
+    _exact_keys(binaries, {"podway"}, "provenance binaries")
+    for role in ("podway",):
         _digest(binaries[role], f"provenance {role} digest")
     _digest(value["build_identity"], "provenance build identity", prefixed=True)
     _digest(value["cargo_lock_sha256"], "provenance Cargo.lock digest")
     _digest(value["contract_manifest_digest"], "provenance manifest digest", prefixed=True)
-    if value["contract_manifest_schema"] != "podway.contract-manifest/v1":
+    if value["contract_manifest_schema"] != "podway.contract-manifest/v2":
         fail("provenance contract manifest schema is invalid")
     _string(value["toolchain"], "provenance toolchain")
     validate_release_status(value["release_status"])
@@ -266,6 +369,7 @@ def handoff_from_provenance(
 ) -> dict[str, Any]:
     patch = provenance.get("schema") == PATCH_PROVENANCE_SCHEMA
     handoff = {
+        "artifact_class": provenance["artifact_class"],
         "adapter": adapter,
         "adapter_catalog": {
             "path": "release/dolgorae-adapter-contract-v3.json",
@@ -288,6 +392,7 @@ def handoff_from_provenance(
             "clean": not provenance["source_dirty"],
             "commit": provenance["source_commit"],
             "tree": provenance["source_tree"],
+            "snapshot_sha256": provenance["source_snapshot_sha256"],
         },
         "target": provenance["target"],
         "toolchain": {
@@ -337,9 +442,9 @@ def mark_packaged_conformance_passed(path: Path, provenance: dict[str, Any]) -> 
 def self_test() -> dict[str, Any]:
     if len(PACKAGED_CONFORMANCE_SCENARIOS) != len(set(PACKAGED_CONFORMANCE_SCENARIOS)):
         fail("packaged conformance scenarios must be unique")
-    if any(not name.startswith("aut_t_") for name in PACKAGED_CONFORMANCE_SCENARIOS):
+    if any("::" not in name for name in PACKAGED_CONFORMANCE_SCENARIOS):
         fail("packaged conformance scenarios must be acceptance tests")
-    with tempfile.TemporaryDirectory(prefix="podway-evidence-self-test-") as name:
+    with tempfile.TemporaryDirectory(prefix="podway-evidence-self-test-", dir=scratch_parent()) as name:
         root = Path(name)
         target = root / "evidence.json"
         target.write_text("original\n", encoding="utf-8")

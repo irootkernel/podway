@@ -15,13 +15,11 @@ parser bounds and ignored. Workspace v2 accepts only the optional legacy `prod`
 mode. Both legacy members are omitted from canonical serialization.
 `procedure-v2.schema.json` defines the closed, bounded authoring shape.
 
-`output-v3.schema.json` is retained exclusively for the unchanged `version`
-command identity through V2DFC-009. `version-result-v1.schema.json`,
-`version-summary-v1.schema.json`, `contract-manifest-v1.schema.json`,
-`managed-runtime-v3.schema.json` and the Aquarium development-service schemas
-remain under that separate release-identity transition. Their retention does not
-restore daemon command routes. Reserved version v2 and manifest v2 schemas remain
-unemitted until their owning task.
+`version-result-v2.schema.json` and `contract-manifest-v2.schema.json` own the
+current single-binary version and manifest identity. Version emits Output v4.
+The manifest has no IPC IDs. Output v3/version v1/manifest v1, managed-runtime and
+Aquarium development-service schemas are retired by V2DFC-009; no managed service
+replacement is adopted.
 
 Delegation documents, receipts, current projections and authoring views retain
 their semantic and byte bounds. `x-podway-max-utf8-bytes` records byte caps that

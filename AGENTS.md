@@ -179,13 +179,12 @@ Apply these distinctions as well:
 #### V2DFC Transition
 
 [ADR-0038](docs/architecture-decision-records/0038-remove-the-daemon.md) accepts
-the daemon-free target. The daemon writer invariants, current crate ownership,
-and global-state rules below describe shipped behavior until `V2DFC-007`.
-Only the ordered `V2DFC` tasks may change them, as defined by the
-[adopted dossier](docs/todo/TODO-podway-daemon-free-core.md); earlier tasks keep
-the shipped daemon path working. Treat reserved contracts as unemitted until
-their owning cutover task. This transition authorizes no installed-runtime
-change, release, installation, or external consumer modification.
+the daemon-free target. The ordered `V2DFC` tasks own the cutover, as defined by
+the [adopted dossier](docs/todo/TODO-podway-daemon-free-core.md). `V2DFC-007`
+changes the CLI to direct execution, `V2DFC-008` retires legacy infrastructure,
+and `V2DFC-009` changes single-binary release identity and tooling. Broader durable
+documentation promotion remains `V2DFC-010` work. This transition authorizes no
+installed-runtime change, release, installation, or external consumer modification.
 
 #### Architecture and Ownership
 
@@ -193,19 +192,18 @@ change, release, installation, or external consumer modification.
   status derivation, and domain errors. Keep infrastructure out of it.
 - `podway-config` owns workspace and Procedure parsing, semantic validation,
   canonicalization, digests, and path-safe local Procedure resolution.
-- `podway-protocol` owns IPC framing, public envelopes, compatibility, bounded
-  decoding, and public error serialization.
-- `podway-store`, `podway-git`, and `podway-service` own SQLite persistence, read-only
-  Git/worktree discovery, and macOS service integration respectively.
+- `podway-protocol` owns public envelopes, compatibility, bounded direct decoding,
+  public error serialization, and the internal `podway-contract-verifier` binary
+  for single-binary release identity and offline packaged contract verification.
+- `podway-store` owns direct SQLite persistence, atomic success outcomes, maintenance
+  admission and writer-contract classification; `podway-git` owns read-only native
+  Git/worktree discovery.
 - `podway-presets` embeds and validates the reviewable YAML in `assets/presets/`.
-- `podway-engine` owns host-independent projections, preparation, request digests,
-  native execution boundaries, workspace resolution, filesystem primitives, and
-  marker codecs. It must not depend on service or daemon hosting.
-- `podway-daemon` composes the engine and hosting infrastructure and owns admission,
-  claimed execution, runtime-workspace maintenance protocols, the socket server,
-  registry, scheduler, durable jobs, workers, and observability.
-- `podway-cli` owns command grammar, daemon communication, rendering, help, and shell
-  completion. It must not reach into store internals.
+- `podway-engine` composes the typed Direct API, pure preparation/projections,
+  native workspace and artifact access, and descriptor-safe maintenance protocols.
+  It must not depend on removed daemon or service hosting.
+- `podway-cli` owns command grammar, Direct Engine invocation, rendering, help and
+  shell completion. It must not reach into Store internals.
 - Preserve the dependency direction documented in
   `docs/architecture/repository-structure.md`; do not create cycles or reverse
   infrastructure dependencies.
@@ -221,19 +219,19 @@ change, release, installation, or external consumer modification.
   explicitly adopted work.
 - Podway enforces formal progression conditions; it does not execute the work or
   judge the semantic truth of recorded results.
-- Preserve the daemon as the sole normal writer and exactly one executing mutation
-  per worktree. Keep mutations atomic, ordered, idempotent, and fail-closed on stale
-  revisions, attempts, identities, or unsupported state.
-- Keep authoritative task state under the owning worktree's `.podway/runtime/`.
-  Global state is limited to the documented per-user endpoint, registry metadata,
-  socket, and bounded logs.
+- Serialize direct mutations per worktree through the Engine and Store. Keep them
+  atomic, ordered, idempotent, and fail-closed on stale revisions, attempts,
+  identities, writer contracts or unsupported state. Record only validated success
+  outcomes in the same transaction as their state changes; rejections have none.
+- Keep authoritative task state and maintenance locks under the owning worktree's
+  `.podway/runtime/`. Podway neither reads nor creates user-global account state.
 - Podway must not mutate Git, make network requests, execute configured commands,
   store artifact bytes, or act as a security boundary against same-user processes.
-- Treat public JSON, IPC, schemas, error codes, command routes, canonicalization,
+- Treat public JSON, schemas, error codes, command routes, canonicalization,
   SQLite layout, and packaged manifest identity as compatibility-sensitive contracts.
   Preserve stable machine fields and error semantics; automation must never depend
   on human-readable output.
-- Keep input, frames, queues, collections, paths, timeouts, logs, and concurrency
+- Keep input, output, collections, paths, timeouts, journal, and concurrency
   bounded. Avoid panics on user-controlled input and preserve non-UTF-8-safe internal
   path handling.
 - Use the Rust toolchain pinned by `rust-toolchain.toml`. Podway's supported release
@@ -282,36 +280,28 @@ trivial changes with no meaningful decision context.
 ##### Podway Release Upgrade Hands-on QA
 
 - Every full `$aquarium:release-qa` pass for an intended stable Podway release
-  must read and execute
-  [the repository upgrade scenario](docs/implementation-tips/release-upgrade-qa.md)
-  as one independent required scenario cluster. This repository-specific rule is
-  the explicit exception to Aquarium's generic rule that the previous release is
-  inspected but not executed.
-- The release-QA invocation authorizes its coordinator to download only the
-  selected previous stable GitHub Release's Apple Silicon archive, checksum, and
-  provenance into the assigned worker fixture before dispatch. This
-  repository-specific rule is the explicit exception to Aquarium's generic
-  metadata-only discovery and offline-scenario rules. The coordinator must verify
-  those assets without new authentication. The dispatched worker retains
-  Aquarium's no-network and no-credential constraints and runs only from those
-  verified local files.
-- Compare the canonical SQLite schema version declared at the selected previous
-  tag and candidate commit before execution. A previous schema below v10 is
-  `INCOMPLETE`, because those Stores have no named-mode identity and migrate only
-  in production. A v10-or-later version difference remains in scope and must
-  exercise forward migration in the disposable named mode.
-- Run the previous release and exact candidate directly inside the scenario's
-  assigned fixture. Pass both `--mode dev` and its disposable `PODWAY_DEV_HOME`
-  explicitly on every daemon and daemon-backed CLI invocation. Before spawning
-  any process, fail closed unless the controlled environment contains the exact
-  nonempty fixture path; omitting it selects the user-global
-  `~/.podway/modes/dev` namespace. Verify the reported socket paths before the
-  first workspace mutation. Do not install either generation or touch the
-  production LaunchAgent, user-global Podway state, Aquarium's development
-  runtime, or any worktree outside the evidence root.
-- Treat a missing prerequisite or safe-execution gap as `INCOMPLETE` and a
-  reproducible expected-behavior mismatch as a finding. A confirmation pass may
-  rerun this scenario only when it is present in the frozen full-pass matrix.
+  must read and execute [the repository upgrade scenario](docs/implementation-tips/release-upgrade-qa.md)
+  as an independent required cluster. The v0.2.12-to-v0.2.13 case proves unchanged
+  legacy refusal, explicit destructive reset, and a working fresh direct workspace.
+  It does not launch the previous daemon or promise transparent migration.
+- The coordinator may download only the selected previous stable release's Apple
+  Silicon archive, checksum and provenance into the assigned fixture and verify
+  them without new authentication. This is the repository-specific exception to
+  Aquarium's metadata-only discovery/offline rule. Workers use only those verified
+  local inputs and retain no-network/no-credential constraints.
+- Compare the previous and candidate canonical SQLite/writer identities. Every
+  generation 1–13 is unsupported legacy input, including pre-v10; use the reviewed
+  frozen historical fixtures and require byte-identical refusal with no SHM. Missing
+  authentic fixture evidence is `INCOMPLETE`, not permission to run an old daemon.
+  The cutover declares no predecessor; later direct migrations require an explicit
+  release-owned predecessor declaration.
+- Run only the exact candidate CLI in standalone Git fixtures below the assigned
+  evidence root, with explicit worktree paths and bounded child cleanup. Do not
+  install it, use named modes or account namespaces, launch/control old installed
+  services, or touch Aquarium's persistent development runtime.
+- Treat missing prerequisites or safe-execution gaps as `INCOMPLETE` and reproducible
+  expected-behavior mismatches as findings. A confirmation pass reruns this cluster
+  only when it belongs to the frozen full-pass matrix.
 
 ##### Release Gate Selection
 
@@ -334,19 +324,20 @@ trivial changes with no meaningful decision context.
 - A successful reduced gate establishes patch release readiness through its own
   provenance and handoff contract. Do not claim that omitted fuzzing or packaged
   runtime qualification ran, and do not add a `skipped` result to patch evidence.
-- Full-gate packaged qualification must use the repository-owned isolated
-  `release-qualification` runtime described in the
+- Full-gate packaged qualification uses the single extracted CLI and helper-owned
+  scratch Git worktrees described in the
   [release workflow](docs/implementation-tips/release.md#runtime-isolation-and-cleanup).
-  Leave any installed production LaunchAgent untouched; never stop, repoint, or
-  reuse its account root, lock, socket, registry, logs, or worktree for
-  qualification.
-- Treat isolated runtime cleanup as part of the full gate. Success requires no
-  qualification daemon process or socket to remain. After failure or interruption,
-  reconcile only the exact helper-owned temporary state before retrying; never
-  broadly delete `/private/tmp`. Report a cleanup blocker with its exact process or
-  recoverable path. The contributor daemon helper is retired by V2DFC-007;
-  preserve existing legacy runtime state until its exact retirement is
-  separately authorized through the original generation's supported owner.
+  Do not stop, repoint or reuse an installed legacy account runtime or LaunchAgent.
+- Cleanup is part of qualification: all bounded child processes must be reaped,
+  fixture locks released and exact owned worktrees removed. After failure or
+  interruption, reconcile only reported helper-owned paths before retrying; never
+  broadly delete a temporary directory. Report unresolved process/path blockers.
+- The adopted V2DFC-009 native development dry run runs before task acceptance and
+  the normal completion commit. It uses `development-qualification`, captures the
+  exact source snapshot before final `make test`, `make release-prepare` and
+  `make test-fuzzing`, and truthfully records dirty source. Package, qualify,
+  handoff and bundle verification all use `--gate development` with disabled hooks.
+  This class is nonpublishable and does not relax clean full/patch release guards.
 
 - Run an exact focused test first when practical. Cargo integration tests are
   aggregated through each crate's `int_suite`; follow the documented exact-test

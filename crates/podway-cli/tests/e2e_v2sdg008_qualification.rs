@@ -11,7 +11,7 @@ fn supervised_delegation_preserves_documented_example_hosts_and_recovery() {
     let output = Command::new("python3")
         .arg(qualifier)
         .arg("--podway")
-        .arg(env!("CARGO_BIN_EXE_podway"))
+        .arg(super::cli_fixture::podway_binary())
         .output()
         .expect("native qualifier launches");
     assert!(

@@ -5,9 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
-import subprocess
 import sys
 import tarfile
 import tempfile
@@ -34,17 +32,7 @@ def fail(message: str) -> None:
 
 
 def git_identity(revision: str) -> str:
-    completed = subprocess.run(
-        ["git", "rev-parse", revision],
-        cwd=ROOT,
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    if completed.returncode != 0:
-        fail(f"cannot resolve Git identity {revision}: {completed.stderr.strip()}")
-    return completed.stdout.strip()
+    return release_archive.run(["git", "rev-parse", revision], label="bundle Git identity probe").decode().strip()
 
 
 def paths(output_directory: Path) -> tuple[Path, Path, Path, Path]:
@@ -75,35 +63,8 @@ def verify_release_status(provenance: dict[str, Any]) -> None:
         fail("provenance release status does not match release policy")
 
 
-def is_managed_release_daemon_process(command: str, uid: int) -> bool:
-    prefix = f"/private/tmp/podway-release-qa-{uid}-"
-    return (
-        command.startswith(prefix)
-        and "/snapshots/" in command
-        and command.endswith("/podwayd --mode release-qa")
-    )
-
-
-def managed_release_daemon_processes(uid: int) -> list[str]:
-    completed = subprocess.run(
-        ["ps", "-Ao", "command="],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    if completed.returncode != 0:
-        fail("cannot inspect processes for leftover release qualification daemons")
-    return [
-        command
-        for line in completed.stdout.splitlines()
-        if is_managed_release_daemon_process((command := line.strip()), uid)
-    ]
-
-
 def verify(output_directory: Path, gate: str) -> dict[str, Any]:
     release_archive.require_native_host()
-    release_archive.require_clean_tree(False)
     commit = git_identity("HEAD")
     tree = git_identity("HEAD^{tree}")
     archive, checksum, provenance_path, handoff_path = paths(output_directory)
@@ -115,6 +76,8 @@ def verify(output_directory: Path, gate: str) -> dict[str, Any]:
     ):
         require_regular(path, label)
     archive_digest = verify_detached_checksum(archive, checksum)
+    provenance_digest = release_archive.sha256_file(provenance_path)
+    handoff_digest = release_archive.sha256_file(handoff_path)
     try:
         provenance = release_evidence.read_object(provenance_path, "release provenance")
         expected_schema = (
@@ -124,13 +87,14 @@ def verify(output_directory: Path, gate: str) -> dict[str, Any]:
         )
         if provenance.get("schema") != expected_schema:
             fail(f"release provenance does not match requested {gate} gate")
+        release_archive.require_source_binding(provenance, gate)
         release_evidence.validate_provenance(
             provenance,
             version=VERSION,
             target=TARGET,
             commit=commit,
             tree=tree,
-            conformance_result=(release_evidence.PASSED if gate == "full" else None),
+            conformance_result=(None if gate == "patch" else release_evidence.PASSED),
         )
     except release_evidence.EvidenceError as error:
         fail(str(error))
@@ -149,21 +113,21 @@ def verify(output_directory: Path, gate: str) -> dict[str, Any]:
             handoff,
             provenance,
             provenance_path.name,
-            release_archive.sha256_file(provenance_path),
+            provenance_digest,
             adapter,
             adapter_catalog_sha256,
         )
     except release_evidence.EvidenceError as error:
         fail(str(error))
 
-    with tempfile.TemporaryDirectory(prefix="pw-final-", dir="/tmp") as temporary_name:
+    with tempfile.TemporaryDirectory(prefix="pw-final-", dir=release_archive.scratch_parent()) as temporary_name:
         extraction = Path(temporary_name)
         extracted = qualify_distribution.safe_extract(archive, extraction)
         cli = release_archive.require_native_binary(extracted / "bin/podway", "podway")
-        daemon = release_archive.require_native_binary(extracted / "bin/podwayd", "podwayd")
         receipt = release_archive.verify_release_contract(
-            extracted / "share/podway", cli, daemon, commit
+            extracted / "share/podway", cli, commit
         )
+        release_archive.verify_source_payloads(extracted, cli)
         packaged_adapter = extracted / "share/podway" / ADAPTER_CONTRACT_RELATIVE
         require_regular(packaged_adapter, "packaged Dolgorae v2 adapter contract")
         if packaged_adapter.read_bytes() != adapter_path.read_bytes():
@@ -178,7 +142,7 @@ def verify(output_directory: Path, gate: str) -> dict[str, Any]:
         ):
             if receipt.get(field) != provenance[field]:
                 fail(f"extracted contract receipt disagrees with provenance for {field}")
-        for role, binary in (("podway", cli), ("podwayd", daemon)):
+        for role, binary in (("podway", cli),):
             if release_archive.sha256_file(binary) != provenance["binaries"][role]:
                 fail(f"extracted {role} digest disagrees with provenance")
             if (
@@ -186,21 +150,11 @@ def verify(output_directory: Path, gate: str) -> dict[str, Any]:
                 is not release_archive.TestIsolationCapability.DISABLED
             ):
                 fail(f"extracted {role} exposes or ambiguously handles test isolation")
-        if (
-            release_archive.development_v2_admission_capability(daemon)
-            is not release_archive.TestIsolationCapability.DISABLED
-        ):
-            fail(
-                "extracted podwayd exposes or ambiguously handles the "
-                "development-v2 admission unlock"
-            )
-        sockets = list(extraction.glob("**/podwayd.sock"))
-        if sockets:
-            fail(f"final verification left daemon sockets behind: {sockets}")
-    if gate == "full":
-        processes = managed_release_daemon_processes(os.geteuid())
-        if processes:
-            fail(f"managed release qualification daemons remain running: {processes}")
+    release_archive.require_source_binding(provenance, gate)
+    if verify_detached_checksum(archive, checksum) != archive_digest:
+        fail("archive changed during final verification")
+    if release_archive.sha256_file(provenance_path) != provenance_digest or release_archive.sha256_file(handoff_path) != handoff_digest:
+        fail("provenance or handoff changed during final verification")
     result = {
         "archive": {"name": archive.name, "sha256": archive_digest},
         "binaries": provenance["binaries"],
@@ -208,12 +162,15 @@ def verify(output_directory: Path, gate: str) -> dict[str, Any]:
         "contract_manifest_digest": provenance["contract_manifest_digest"],
         "mode": "verify",
         "ok": True,
-        "provenance_sha256": release_archive.sha256_file(provenance_path),
-        "handoff_sha256": release_archive.sha256_file(handoff_path),
+        "provenance_sha256": provenance_digest,
+        "handoff_sha256": handoff_digest,
         "source": {"commit": commit, "tree": tree},
-        "tag_candidate": f"v{VERSION}",
+        "artifact_class": provenance["artifact_class"],
+        "publishable": gate != "development",
     }
-    if gate == "full":
+    if gate != "development":
+        result["tag_candidate"] = f"v{VERSION}"
+    if gate != "patch":
         result["packaged_conformance"] = provenance["packaged_conformance"]
     return result
 
@@ -222,11 +179,11 @@ def fixture_provenance() -> dict[str, Any]:
     return {
         "archive": {"name": "podway.tar.gz", "sha256": "a" * 64},
         "artifact_class": "distribution",
-        "binaries": {"podway": "b" * 64, "podwayd": "c" * 64},
+        "binaries": {"podway": "b" * 64},
         "build_identity": f"sha256:{'d' * 64}",
         "cargo_lock_sha256": "e" * 64,
         "contract_manifest_digest": f"sha256:{'f' * 64}",
-        "contract_manifest_schema": "podway.contract-manifest/v1",
+        "contract_manifest_schema": "podway.contract-manifest/v2",
         "packaged_conformance": {
             "result": release_evidence.PASSED,
             "scenarios": release_evidence.PACKAGED_CONFORMANCE_SCENARIOS,
@@ -239,6 +196,7 @@ def fixture_provenance() -> dict[str, Any]:
         "source_commit": "1" * 40,
         "source_dirty": False,
         "source_tree": "2" * 40,
+        "source_snapshot_sha256": "7" * 64,
         "target": TARGET,
         "toolchain": "rustc 1.97.1 (fixture)",
         "version": VERSION,
@@ -275,6 +233,19 @@ def self_test() -> dict[str, Any]:
         tree="2" * 40,
         conformance_result=release_evidence.PASSED,
     )
+    development = fixture_provenance()
+    development["artifact_class"] = "development-qualification"
+    development["source_dirty"] = True
+    development["release_gate"] = release_evidence.DEVELOPMENT_GATE
+    release_evidence.validate_provenance(development, version=VERSION, target=TARGET,
+        commit="1" * 40, tree="2" * 40, conformance_result=release_evidence.PASSED)
+    for field, bad in (("release_gate", release_evidence.RELEASE_GATE), ("artifact_class", "test-fixture"),
+                       ("source_dirty", 1), ("source_snapshot_sha256", "not-a-digest")):
+        changed = json.loads(json.dumps(development))
+        changed[field] = bad
+        expect_rejection(lambda changed=changed: release_evidence.validate_provenance(changed,
+            version=VERSION, target=TARGET, commit="1" * 40, tree="2" * 40,
+            conformance_result=release_evidence.PASSED), f"development {field} drift")
     observed_artifact_classes = []
     original_release_status = release_archive.release_status
     release_archive.release_status = lambda artifact_class: (
@@ -303,7 +274,7 @@ def self_test() -> dict[str, Any]:
         adapter,
         adapter_catalog_sha256,
     )
-    sentinels = 1
+    sentinels = 6
     patch_provenance = fixture_patch_provenance()
     release_evidence.validate_provenance(
         patch_provenance,
@@ -386,23 +357,13 @@ def self_test() -> dict[str, Any]:
         "patch provenance with a packaged-conformance claim",
     )
     sentinels += 1
-    uid = os.geteuid()
-    managed = (
-        f"/private/tmp/podway-release-qa-{uid}-fixture/"
-        "snapshots/digest/podwayd --mode release-qa"
-    )
-    production = "/Users/example/.local/bin/podwayd --service"
-    if not is_managed_release_daemon_process(managed, uid) or is_managed_release_daemon_process(
-        production, uid
-    ):
-        fail("managed release daemon process classifier self-test failed")
-    sentinels += 1
     for field, bad in (
         ("product", "another-product"),
         ("release_gate_result", "pending"),
         ("source_tree", "4" * 40),
         ("cargo_lock_sha256", "not-a-digest"),
         ("source_dirty", 0),
+        ("source_snapshot_sha256", "not-a-digest"),
     ):
         changed = json.loads(json.dumps(provenance))
         changed[field] = bad
@@ -450,6 +411,8 @@ def self_test() -> dict[str, Any]:
         (lambda value: value["provenance"].update({"sha256": "8" * 64}), "provenance drift"),
         (lambda value: value["packaged_conformance"].update({"result": "pending"}), "pending handoff"),
         (lambda value: value["adapter"].update({"sentinel": False}), "adapter drift"),
+        (lambda value: value["source"].update({"snapshot_sha256": "0" * 64}), "source snapshot drift"),
+        (lambda value: value.update({"artifact_class": "development-qualification"}), "artifact class drift"),
         (
             lambda value: value["adapter_catalog"].update({"sha256": f"sha256:{'5' * 64}"}),
             "adapter catalog drift",
@@ -469,7 +432,7 @@ def self_test() -> dict[str, Any]:
             label,
         )
         sentinels += 1
-    with tempfile.TemporaryDirectory(prefix="podway-bundle-self-test-") as name:
+    with tempfile.TemporaryDirectory(prefix="podway-bundle-self-test-", dir=release_archive.scratch_parent()) as name:
         root = Path(name)
         archive = root / "archive.tar.gz"
         checksum = root / "archive.tar.gz.sha256"
@@ -494,7 +457,7 @@ def main() -> int:
     subparsers.add_parser("self-test")
     verify_parser = subparsers.add_parser("verify")
     verify_parser.add_argument("--output-dir", type=Path, default=ROOT / "dist")
-    verify_parser.add_argument("--gate", choices=("full", "patch"), default="full")
+    verify_parser.add_argument("--gate", choices=("full", "patch", "development"), default="full")
     arguments = parser.parse_args()
     try:
         result = (

@@ -2155,31 +2155,6 @@ fn v2grd002_reserves_guard_response_budgets() {
     );
 }
 
-#[test]
-fn v2dvc005_aquarium_service_plan_schema_closes_action_semantics() {
-    let token = format!("sha256:{}", "0".repeat(64));
-    let mut plan = json!({
-        "schema":"aquarium-dev-service-plan/v1","project_id":"podway",
-        "target_git_sha":"0".repeat(40),"action":"activate",
-        "active_git_sha":"1".repeat(40),"busy":false,"plan_token":token
-    });
-    assert_valid("schemas/aquarium-dev-service-plan-v1.schema.json", &plan);
-
-    plan["plan_token"] = Value::Null;
-    assert_invalid("schemas/aquarium-dev-service-plan-v1.schema.json", &plan);
-
-    plan["action"] = json!("defer");
-    plan["busy"] = json!(true);
-    assert_valid("schemas/aquarium-dev-service-plan-v1.schema.json", &plan);
-
-    plan["busy"] = json!(false);
-    assert_invalid("schemas/aquarium-dev-service-plan-v1.schema.json", &plan);
-
-    plan["busy"] = json!(true);
-    plan["plan_token"] = json!(format!("sha256:{}", "0".repeat(64)));
-    assert_invalid("schemas/aquarium-dev-service-plan-v1.schema.json", &plan);
-}
-
 fn current_runtime_error_fields(code: &str) -> Map<String, Value> {
     let fields = match code {
         "PROCEDURE_V2_SCHEMA_INVALID" => json!({"diagnostic_codes":["AUTHORING_SCHEMA_INVALID"]}),
@@ -2922,43 +2897,16 @@ fn current_warnings_and_workspace_removal_preserve_closed_scalar_boundaries() {
 }
 
 #[test]
-fn retained_managed_runtime_v3_known_answer_remains_schema_valid_until_release_cutover() {
-    let managed = json!({
-        "schema":"podway.managed-runtime/v3","metadata_version":3,
-        "purpose":"contributor","euid":501,"canonical_root":"/tmp/podway-managed",
-        "mode":"contributor",
-        "paths":{
-            "lock":"/tmp/podway-managed/run/podwayd.lock",
-            "socket":"/tmp/podway-managed/run/podwayd.sock",
-            "service_state":"/tmp/podway-managed/state/service.json",
-            "registry":"/tmp/podway-managed/state/workspaces.json",
-            "recovery":"/tmp/podway-managed/state/recovery.json",
-            "log":"/tmp/podway-managed/logs/podwayd.log",
-            "bootstrap_log":"/tmp/podway-managed/logs/podwayd-bootstrap.log"
-        },
-        "sandbox_root":"/tmp/podway-sandbox",
-        "executables":{
-            "cli":{"path":"/tmp/podway-managed/bin/podway","sha256":DIGEST},
-            "daemon":{"path":"/tmp/podway-managed/bin/podwayd","sha256":DIGEST},
-            "controller":null
-        },
-        "generation":null
-    });
-    assert_valid("schemas/managed-runtime-v3.schema.json", &managed);
-}
-
-#[test]
-fn retained_version_output_v3_preserves_its_exact_closed_identity_boundary() {
+fn version_output_v4_preserves_its_exact_closed_identity_boundary() {
     let output = json!({
-        "schema":"podway.output/v3", "request_id":UUID, "command":"version",
+        "schema":"podway.output/v4", "request_id":UUID, "command":"version",
         "generated_at":"2026-08-04T00:00:00.000Z", "warnings":[],
-        "result":{"schema":"podway.version-result/v1","product":"podway","version":"0.2.0",
+        "result":{"schema":"podway.version-result/v2","product":"podway","version":"v0.2.12",
             "target":"aarch64-apple-darwin","build_identity":DIGEST,"source_commit":null,
-            "contract_manifest_schema":"podway.contract-manifest/v1","contract_manifest_digest":DIGEST,
-            "supported_ipc_ids":["podway.ipc/v1"]}
+            "contract_manifest_schema":"podway.contract-manifest/v2","contract_manifest_digest":DIGEST}
     });
-    assert_valid("schemas/output-v3.schema.json", &output);
-    let typed: podway_protocol::OutputEnvelopeV3 = serde_json::from_value(output.clone()).unwrap();
+    assert_valid("schemas/output-v4.schema.json", &output);
+    let typed: podway_protocol::OutputEnvelopeV4 = serde_json::from_value(output.clone()).unwrap();
     assert_eq!(serde_json::to_value(typed).unwrap(), output);
     let mut invalid = Vec::new();
     for field in output.as_object().unwrap().keys() {
@@ -2977,9 +2925,28 @@ fn retained_version_output_v3_preserves_its_exact_closed_identity_boundary() {
         candidate[field] = value;
         invalid.push(candidate);
     }
+    for field in output["result"].as_object().unwrap().keys() {
+        let mut value = output.clone();
+        value["result"].as_object_mut().unwrap().remove(field);
+        invalid.push(value);
+    }
+    for (field, value) in [
+        ("schema", json!("podway.version-result/v1")),
+        (
+            "contract_manifest_schema",
+            json!("podway.contract-manifest/v1"),
+        ),
+        ("supported_ipc_ids", json!(["podway.ipc/v1"])),
+        ("build_identity", json!("sha256:invalid")),
+        ("unknown", json!(true)),
+    ] {
+        let mut candidate = output.clone();
+        candidate["result"][field] = value;
+        invalid.push(candidate);
+    }
     for value in invalid {
-        assert_invalid("schemas/output-v3.schema.json", &value);
-        assert!(serde_json::from_value::<podway_protocol::OutputEnvelopeV3>(value).is_err());
+        assert_invalid("schemas/output-v4.schema.json", &value);
+        assert!(serde_json::from_value::<podway_protocol::OutputEnvelopeV4>(value).is_err());
     }
 }
 

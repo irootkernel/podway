@@ -17,6 +17,7 @@ impl Fixture {
     fn new() -> Self {
         let root = std::env::temp_dir().join(format!("podway-retirement-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&root).unwrap();
+        super::cli_fixture::assert_packaged_fixture(&root);
         fs::write(root.join("sentinel"), b"unchanged").unwrap();
         Self(root)
     }
@@ -63,7 +64,7 @@ fn retired_surface_returns_valid_guidance_without_reading_open_stdin_or_worktree
         vec!["status", "--dev=false"],
         vec!["--socket"],
     ] {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_podway"));
+        let mut command = Command::new(super::cli_fixture::podway_binary());
         if !arguments.contains(&"--json") {
             command.arg("--json");
         }

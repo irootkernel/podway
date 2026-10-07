@@ -862,6 +862,21 @@ fn commit_error(error: rusqlite::Error) -> DirectStoreErrorV1 {
     }
 }
 
+fn checkpoint_after_success(connection: &Connection, layout: &super::DirectWorkspaceLayoutV1) {
+    // A committed success must not become an error because best-effort bounded
+    // checkpointing meets another active snapshot or writer. Passive work never
+    // waits; an oversized WAL gets at most 100 ms to truncate on close.
+    let _ = connection.busy_timeout(std::time::Duration::ZERO);
+    let _ = connection.execute_batch("PRAGMA wal_checkpoint(PASSIVE);");
+    if fs::metadata(layout.wal()).is_ok_and(|metadata| metadata.len() > 4 * 1024 * 1024) {
+        let _ = super::connection::install_busy_deadline(
+            connection,
+            Instant::now() + std::time::Duration::from_millis(100),
+        );
+        let _ = connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1118,20 +1133,5 @@ mod tests {
             })
             .unwrap();
         direct.verify_integrity(deadline()).unwrap();
-    }
-}
-
-fn checkpoint_after_success(connection: &Connection, layout: &super::DirectWorkspaceLayoutV1) {
-    // A committed success must not become an error because best-effort bounded
-    // checkpointing meets another active snapshot or writer. Passive work never
-    // waits; an oversized WAL gets at most 100 ms to truncate on close.
-    let _ = connection.busy_timeout(std::time::Duration::ZERO);
-    let _ = connection.execute_batch("PRAGMA wal_checkpoint(PASSIVE);");
-    if fs::metadata(layout.wal()).is_ok_and(|metadata| metadata.len() > 4 * 1024 * 1024) {
-        let _ = super::connection::install_busy_deadline(
-            connection,
-            Instant::now() + std::time::Duration::from_millis(100),
-        );
-        let _ = connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
     }
 }

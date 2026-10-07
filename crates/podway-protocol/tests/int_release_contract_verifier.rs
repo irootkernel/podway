@@ -32,7 +32,7 @@ impl ContractFixture {
         fs::create_dir(&root).expect("contract fixture directory");
         let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let manifest: Value = serde_json::from_slice(
-            &fs::read(source_root.join("contracts/contract-manifest-v1.json"))
+            &fs::read(source_root.join("contracts/contract-manifest-v2.json"))
                 .expect("source contract manifest"),
         )
         .expect("source manifest JSON");
@@ -44,11 +44,11 @@ impl ContractFixture {
                 .expect("fixture asset parent");
             fs::copy(source, destination).expect("copy fixture contract asset");
         }
-        let manifest_path = root.join("contracts/contract-manifest-v1.json");
+        let manifest_path = root.join("contracts/contract-manifest-v2.json");
         fs::create_dir_all(manifest_path.parent().expect("manifest parent"))
             .expect("fixture manifest parent");
         fs::copy(
-            source_root.join("contracts/contract-manifest-v1.json"),
+            source_root.join("contracts/contract-manifest-v2.json"),
             manifest_path,
         )
         .expect("copy fixture manifest");
@@ -61,7 +61,7 @@ impl ContractFixture {
 
     fn manifest(&self) -> Value {
         serde_json::from_slice(
-            &fs::read(self.root.join("contracts/contract-manifest-v1.json"))
+            &fs::read(self.root.join("contracts/contract-manifest-v2.json"))
                 .expect("fixture manifest"),
         )
         .expect("fixture manifest JSON")
@@ -70,7 +70,7 @@ impl ContractFixture {
     fn write_manifest(&self, mut manifest: Value) {
         refresh_manifest_digest(&mut manifest);
         fs::write(
-            self.root.join("contracts/contract-manifest-v1.json"),
+            self.root.join("contracts/contract-manifest-v2.json"),
             serde_json::to_vec(&manifest).expect("serialize fixture manifest"),
         )
         .expect("write fixture manifest");
@@ -93,48 +93,44 @@ impl ContractFixture {
     fn valid_envelope(&self) -> Value {
         let manifest = self.manifest();
         json!({
-            "schema": "podway.output/v3",
+            "schema": "podway.output/v4",
             "request_id": "123e4567-e89b-42d3-a456-426614174000",
             "command": "version",
             "generated_at": "2026-08-03T00:00:00.000Z",
             "result": {
-                "schema": "podway.version-result/v1",
+                "schema": "podway.version-result/v2",
                 "product": "podway",
                 "version": format!("v{}", manifest["product_version"].as_str().unwrap()),
                 "target": TARGET,
-                "build_identity": format!("sha256:{}", "a".repeat(64)),
+                "build_identity": release_build_identity(&manifest),
                 "source_commit": SOURCE_COMMIT,
                 "contract_manifest_schema": manifest["schema_version"],
                 "contract_manifest_digest": manifest["digest"],
-                "supported_ipc_ids": manifest["supported_ipc_ids"],
             },
             "warnings": [],
         })
     }
 
-    fn verify_documents(
+    fn verify_document(
         &self,
-        cli: &Value,
-        daemon: &Value,
+        document: &Value,
         expected_source_commit: &str,
-    ) -> Result<(), String> {
-        let cli_path = self.write_probe("podway", cli);
-        let daemon_path = self.write_probe("podwayd", daemon);
+    ) -> Result<Value, String> {
+        let cli_path = self.write_probe("podway", document);
         let config = ReleaseContractVerifierConfigV1::new(
             &self.root,
             cli_path,
-            daemon_path,
             TARGET,
             expected_source_commit,
         );
         verify_release_contract_v1(&config)
-            .map(|_| ())
+            .map(|receipt| serde_json::to_value(receipt).expect("receipt serializes"))
             .map_err(|error| error.to_string())
     }
 
-    fn verify_valid(&self) -> Result<(), String> {
+    fn verify_valid(&self) -> Result<Value, String> {
         let envelope = self.valid_envelope();
-        self.verify_documents(&envelope, &envelope, SOURCE_COMMIT)
+        self.verify_document(&envelope, SOURCE_COMMIT)
     }
 
     fn write_probe(&self, name: &str, document: &Value) -> PathBuf {
@@ -171,6 +167,19 @@ fn sha256_identity(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
+fn release_build_identity(manifest: &Value) -> String {
+    let preimage = json!({
+        "contract_manifest_digest": manifest["digest"],
+        "product": manifest["product"],
+        "profile": "release",
+        "source_commit": SOURCE_COMMIT,
+        "target": TARGET,
+        "version": manifest["product_version"],
+    });
+    let canonical = canonicalize_json_v1(&preimage).expect("canonical release preimage");
+    sha256_identity(canonical.as_bytes())
+}
+
 fn refresh_manifest_digest(manifest: &mut Value) {
     manifest
         .as_object_mut()
@@ -184,9 +193,21 @@ fn refresh_manifest_digest(manifest: &mut Value) {
 fn source_and_packaged_roots_share_one_authoritative_verifier() {
     for layout in [Layout::Source, Layout::Packaged] {
         let fixture = ContractFixture::new(layout);
-        fixture
+        let receipt = fixture
             .verify_valid()
             .unwrap_or_else(|error| panic!("valid contract root failed: {error}"));
+        assert_eq!(receipt["schema"], "podway.contract-verification/v2");
+        assert_eq!(receipt["binary"], "podway");
+        assert_eq!(
+            receipt["contract_manifest_schema"],
+            "podway.contract-manifest/v2"
+        );
+        assert_eq!(
+            receipt["build_identity"],
+            release_build_identity(&fixture.manifest())
+        );
+        assert!(receipt.get("supported_ipc_ids").is_none());
+        assert!(receipt.get("binary_results_equal").is_none());
     }
 
     let packaged_path_reference = ContractFixture::new(Layout::Packaged);
@@ -198,7 +219,7 @@ fn source_and_packaged_roots_share_one_authoritative_verifier() {
     let mut schema: Value = serde_json::from_slice(&fs::read(&schema_path).unwrap()).unwrap();
     schema["$defs"] = json!({
         "manifest_registered_path": {
-            "$ref": "podway:///schemas/version-result-v1.schema.json"
+            "$ref": "podway:///schemas/version-result-v2.schema.json"
         }
     });
     fs::write(&schema_path, serde_json::to_vec(&schema).unwrap()).unwrap();
@@ -244,7 +265,6 @@ fn complete_identity_validation_rejects_generated_drift() {
         "source_commit",
         "contract_manifest_schema",
         "contract_manifest_digest",
-        "supported_ipc_ids",
     ];
     for field in required_fields {
         let mut missing = valid.clone();
@@ -255,16 +275,22 @@ fn complete_identity_validation_rejects_generated_drift() {
         mutations.push((format!("missing {field}"), missing));
     }
     let mut wrong_result_schema = valid.clone();
-    wrong_result_schema["result"]["schema"] = json!("podway.version-result/v2");
+    wrong_result_schema["result"]["schema"] = json!("podway.version-result/v1");
     mutations.push(("wrong result discriminator".to_owned(), wrong_result_schema));
     let mut unprefixed_version = valid.clone();
     unprefixed_version["result"]["version"] = fixture.manifest()["product_version"].clone();
     mutations.push(("unprefixed version".to_owned(), unprefixed_version));
+    let mut retired_ipc = valid.clone();
+    retired_ipc["result"]["supported_ipc_ids"] = json!(["podway.ipc/v1"]);
+    mutations.push(("retired IPC field".to_owned(), retired_ipc));
+    let mut legacy_manifest = valid.clone();
+    legacy_manifest["result"]["contract_manifest_schema"] = json!("podway.contract-manifest/v1");
+    mutations.push(("legacy manifest generation".to_owned(), legacy_manifest));
     let mut unknown_result = valid.clone();
     unknown_result["result"]["unknown"] = json!(true);
     mutations.push(("unknown result field".to_owned(), unknown_result));
     let mut wrong_outer = valid.clone();
-    wrong_outer["schema"] = json!("podway.output/v2");
+    wrong_outer["schema"] = json!("podway.output/v3");
     mutations.push(("wrong outer discriminator".to_owned(), wrong_outer));
     let mut wrong_command = valid.clone();
     wrong_command["command"] = json!("daemon.status");
@@ -274,26 +300,57 @@ fn complete_identity_validation_rejects_generated_drift() {
         json!(format!("sha256:{}", "b".repeat(64)));
     mutations.push(("manifest identity drift".to_owned(), manifest_drift));
 
+    for field in ["product", "target", "source_commit"] {
+        let mut drift = valid.clone();
+        drift["result"][field] = json!("unexpected");
+        mutations.push((format!("identity {field} drift"), drift));
+    }
+    let mut missing_commit = valid.clone();
+    missing_commit["result"]["source_commit"] = Value::Null;
+    mutations.push(("null release source commit".to_owned(), missing_commit));
+    let mut workspace_state = valid.clone();
+    workspace_state["workspace"] = json!({"uuid":"123e4567-e89b-42d3-a456-426614174000","root":"/tmp/worktree","revision_before":1,"revision_after":1});
+    mutations.push((
+        "worktree state in version identity".to_owned(),
+        workspace_state,
+    ));
     for (label, mutation) in mutations {
         assert!(
-            fixture
-                .verify_documents(&valid, &mutation, SOURCE_COMMIT)
-                .is_err(),
+            fixture.verify_document(&mutation, SOURCE_COMMIT).is_err(),
             "verifier accepted {label}"
         );
     }
 
-    let mut daemon_drift = valid.clone();
-    daemon_drift["result"]["build_identity"] = json!(format!("sha256:{}", "b".repeat(64)));
+    let mut build_drift = valid.clone();
+    build_drift["result"]["build_identity"] = json!(format!("sha256:{}", "b".repeat(64)));
     assert!(
         fixture
-            .verify_documents(&valid, &daemon_drift, SOURCE_COMMIT)
+            .verify_document(&build_drift, SOURCE_COMMIT)
             .is_err(),
-        "verifier accepted CLI/daemon identity drift"
+        "verifier accepted build preimage identity drift"
+    );
+    let manifest = fixture.manifest();
+    let debug_preimage = json!({
+        "contract_manifest_digest": manifest["digest"],
+        "product": manifest["product"],
+        "profile": "debug",
+        "source_commit": SOURCE_COMMIT,
+        "target": TARGET,
+        "version": manifest["product_version"],
+    });
+    let mut debug_identity = valid.clone();
+    debug_identity["result"]["build_identity"] = json!(sha256_identity(
+        canonicalize_json_v1(&debug_preimage).unwrap().as_bytes()
+    ));
+    assert!(
+        fixture
+            .verify_document(&debug_identity, SOURCE_COMMIT)
+            .is_err(),
+        "verifier accepted a debug-profile identity as a release binary"
     );
     assert!(
         fixture
-            .verify_documents(&valid, &valid, "fedcba9876543210fedcba9876543210fedcba98")
+            .verify_document(&valid, "fedcba9876543210fedcba9876543210fedcba98")
             .is_err(),
         "verifier accepted source-commit drift"
     );
@@ -301,11 +358,17 @@ fn complete_identity_validation_rejects_generated_drift() {
 
 #[test]
 fn manifest_and_schema_registry_fail_closed_for_every_authority_drift() {
+    let retired_ipc = ContractFixture::new(Layout::Source);
+    let mut manifest = retired_ipc.manifest();
+    manifest["supported_ipc_ids"] = json!(["podway.ipc/v1"]);
+    retired_ipc.write_manifest(manifest);
+    assert!(retired_ipc.verify_valid().is_err());
+
     let self_digest = ContractFixture::new(Layout::Source);
     let mut manifest = self_digest.manifest();
     manifest["digest"] = json!(format!("sha256:{}", "0".repeat(64)));
     fs::write(
-        self_digest.root.join("contracts/contract-manifest-v1.json"),
+        self_digest.root.join("contracts/contract-manifest-v2.json"),
         serde_json::to_vec(&manifest).unwrap(),
     )
     .unwrap();
@@ -315,7 +378,7 @@ fn manifest_and_schema_registry_fail_closed_for_every_authority_drift() {
     let member = physical_path(
         &member_digest.root,
         member_digest.layout,
-        "schemas/version-result-v1.schema.json",
+        "schemas/version-result-v2.schema.json",
     );
     let mut bytes = fs::read(&member).unwrap();
     bytes.push(b' ');
@@ -326,7 +389,7 @@ fn manifest_and_schema_registry_fail_closed_for_every_authority_drift() {
     fs::remove_file(physical_path(
         &missing.root,
         missing.layout,
-        "schemas/version-result-v1.schema.json",
+        "schemas/version-result-v2.schema.json",
     ))
     .unwrap();
     assert!(missing.verify_valid().is_err());
@@ -354,7 +417,7 @@ fn manifest_and_schema_registry_fail_closed_for_every_authority_drift() {
         "schemas/version-summary-v1.schema.json",
     );
     let mut schema: Value = serde_json::from_slice(&fs::read(&schema_path).unwrap()).unwrap();
-    schema["$id"] = json!("urn:podway:schema:version-result:v1");
+    schema["$id"] = json!("urn:podway:schema:version-result:v2");
     fs::write(&schema_path, serde_json::to_vec(&schema).unwrap()).unwrap();
     duplicate_id.refresh_asset("schemas/version-summary-v1.schema.json");
     assert!(duplicate_id.verify_valid().is_err());
@@ -368,12 +431,12 @@ fn manifest_and_schema_registry_fail_closed_for_every_authority_drift() {
         let schema_path = physical_path(
             &external.root,
             external.layout,
-            "schemas/output-v3.schema.json",
+            "schemas/output-v4.schema.json",
         );
         let mut schema: Value = serde_json::from_slice(&fs::read(&schema_path).unwrap()).unwrap();
         schema["$ref"] = json!(reference);
         fs::write(&schema_path, serde_json::to_vec(&schema).unwrap()).unwrap();
-        external.refresh_asset("schemas/output-v3.schema.json");
+        external.refresh_asset("schemas/output-v4.schema.json");
         assert!(
             external.verify_valid().is_err(),
             "verifier accepted external or unknown reference {reference}"
@@ -384,7 +447,7 @@ fn manifest_and_schema_registry_fail_closed_for_every_authority_drift() {
     let schema_path = physical_path(
         &symlinked.root,
         symlinked.layout,
-        "schemas/version-result-v1.schema.json",
+        "schemas/version-result-v2.schema.json",
     );
     let target = symlinked.root.join("outside-schema.json");
     fs::copy(&schema_path, &target).unwrap();

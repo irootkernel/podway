@@ -16,7 +16,7 @@
       "check": "route-surface"
     },
     {
-      "expected": "retained-results-use-output-v4-and-errors-use-error-v2-with-disclosed-identity-exception",
+      "expected": "all-results-use-output-v4-and-errors-use-error-v2",
       "id": "DOLV3-004",
       "check": "envelope-dispatch"
     },
@@ -1047,31 +1047,6 @@
     ],
     "schema_pins": [
       {
-        "id": "urn:podway:schema:aquarium-dev-artifact-manifest:v2",
-        "path": "schemas/aquarium-dev-artifact-manifest-v2.schema.json",
-        "sha256": "sha256:df24ed66c7d6fa875d8ad5431161cfd3d64ef7d012a49a52399756353b051b6a"
-      },
-      {
-        "id": "urn:podway:schema:aquarium-dev-producer-description:v2",
-        "path": "schemas/aquarium-dev-producer-description-v2.schema.json",
-        "sha256": "sha256:27509e85a759cb33b5e814ce8c1b8575af7b49d08f01ab0c9b04196db70b1dc8"
-      },
-      {
-        "id": "urn:podway:schema:aquarium-dev-service-plan:v1",
-        "path": "schemas/aquarium-dev-service-plan-v1.schema.json",
-        "sha256": "sha256:cf039fc019943909fdad782e2164026f647aac6f5dec7077547a0248fdca73cf"
-      },
-      {
-        "id": "urn:podway:schema:aquarium-dev-service-result:v1",
-        "path": "schemas/aquarium-dev-service-result-v1.schema.json",
-        "sha256": "sha256:75a4341eba3383bc5681a7b1ce5a6b11ce0c9b79fa9a3deabfea6c752d2a4c81"
-      },
-      {
-        "id": "urn:podway:schema:aquarium-dev-service-status:v1",
-        "path": "schemas/aquarium-dev-service-status-v1.schema.json",
-        "sha256": "sha256:a0d18dc4e58d3883a513a281499cfda0dfd719cc291fa9d190a82ba205d52fc8"
-      },
-      {
         "id": "urn:podway:schema:attempt-conflict-details:v3",
         "path": "schemas/attempt-conflict-details-v3.schema.json",
         "sha256": "sha256:c4be071b8884ef8359f0300b2dc45fdcb4a0bfc0f935c56279d0e1ba5a5d7be1"
@@ -1097,14 +1072,9 @@
         "sha256": "sha256:7cb8e9a8f19fb475b109168c4be934844ffa31d54d1c63b7fe4aa9300c868073"
       },
       {
-        "id": "urn:podway:schema:contract-manifest:v1",
-        "path": "schemas/contract-manifest-v1.schema.json",
-        "sha256": "sha256:7600d2fb60cd79a4bea61541440dd1bca5a5a64df489f4fe90612b82d448a672"
-      },
-      {
         "id": "urn:podway:schema:contract-manifest:v2",
         "path": "schemas/contract-manifest-v2.schema.json",
-        "sha256": "sha256:329f2f725c3b8d5fe9b8fd24966b4bcb721aa633652a66dab58415edda10dd2f"
+        "sha256": "sha256:3b630a103e189e79b3f7e0ab0b08ee744abec8139931d83168d413bb29b1e54b"
       },
       {
         "id": "urn:podway:schema:criterion-assessment-result:v2",
@@ -1212,11 +1182,6 @@
         "sha256": "sha256:8830d161e8e9af76b6d60bf83b7c4db09bcba73468f9428f2afc02614e297e58"
       },
       {
-        "id": "urn:podway:schema:managed-runtime:v3",
-        "path": "schemas/managed-runtime-v3.schema.json",
-        "sha256": "sha256:2864e11ad5ad455594a3e9c2cae60d07c08bf75e8c5084dc8e279937a9856884"
-      },
-      {
         "id": "urn:podway:schema:mutation-outcome-unknown-details:v3",
         "path": "schemas/mutation-outcome-unknown-details-v3.schema.json",
         "sha256": "sha256:1b13d1140326d9bb9355634c19940edd98e480c72041d3799e3812a83141095b"
@@ -1235,11 +1200,6 @@
         "id": "urn:podway:schema:outcome-lookup-result:v1",
         "path": "schemas/outcome-lookup-result-v1.schema.json",
         "sha256": "sha256:f7d62989e112563db4e8516790b236c45e0f903df2c9827aaf704a3a67769d97"
-      },
-      {
-        "id": "urn:podway:schema:output:v3",
-        "path": "schemas/output-v3.schema.json",
-        "sha256": "sha256:c05681102c5d3469bf43a8ddc4da78e1a84cb9c3264134d7cc0a2ef483419999"
       },
       {
         "id": "urn:podway:schema:output:v4",
@@ -1432,14 +1392,9 @@
         "sha256": "sha256:6f6a32d8c941681769da42dda97e9a3f5f9465b26a28f6beb3707cddc7d81fdf"
       },
       {
-        "id": "urn:podway:schema:version-result:v1",
-        "path": "schemas/version-result-v1.schema.json",
-        "sha256": "sha256:fe92513aa0cb4f75bd02e220b9feb5bf19795105cf364518f4119689e02baf7c"
-      },
-      {
         "id": "urn:podway:schema:version-result:v2",
         "path": "schemas/version-result-v2.schema.json",
-        "sha256": "sha256:af6e49d202b41d68e2d12aaf0cf3e6c9d56c7ba13bcf9865c5b9a1ac3a9aff09"
+        "sha256": "sha256:a868b436b09473b315f02a1c0d52c2aa959c32dd0785f15687bcbbfd317b858e"
       },
       {
         "id": "urn:podway:schema:version-summary:v1",
@@ -1522,18 +1477,17 @@
     "store_schema": "spec/sqlite-v14.sql",
     "retired_command_table": "spec/retired-commands-v1.json",
     "consumer_adoption": "requires-separate-Aquarium-and-Dolgorae-work",
-    "version_identity_exception": {
-      "activation_task": "V2DFC-009",
-      "output_schema": "podway.output/v3",
-      "result_schema": "podway.version-result/v1",
-      "manifest_schema": "podway.contract-manifest/v1"
+    "version_identity": {
+      "output_schema": "podway.output/v4",
+      "result_schema": "podway.version-result/v2",
+      "manifest_schema": "podway.contract-manifest/v2"
     }
   },
   "current_surface_counts": {
     "authoring_diagnostics": 59,
     "routes": 57,
     "runtime_errors": 97,
-    "schemas": 93
+    "schemas": 84
   },
   "migration_boundary": {
     "adapter_database_access": "forbidden",

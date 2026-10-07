@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::cli_fixture::{Fixture, GuardedChild};
+use super::cli_fixture::{Fixture, GuardedChild, podway_binary};
 use podway_protocol::{ErrorEnvelopeV2, OutputEnvelopeV4};
 use serde_json::{Value, json};
 
@@ -1049,7 +1049,9 @@ fn sigkill_after_commit_before_stdout_preserves_the_original_outcome_and_exact_r
     }
     assert!(prefilled > 0);
     fcntl(&write_end, FcntlArg::F_SETFL(original_flags)).unwrap();
-    let child = Command::new(env!("CARGO_BIN_EXE_podway"))
+    let child = Command::new(podway_binary())
+        .arg("--worktree")
+        .arg(&fixture.0)
         .arg("--json")
         .args(arguments)
         .current_dir(&fixture.0)
@@ -1174,7 +1176,9 @@ fn published_maintenance_recipes_resume_the_real_cli_with_original_identity() {
             ]
         };
         fixture.kill_at_maintenance_boundary(&arguments, "marker-published");
-        let observed = Command::new(env!("CARGO_BIN_EXE_podway"))
+        let observed = Command::new(podway_binary())
+            .arg("--worktree")
+            .arg(&fixture.0)
             .args(["--json", "status"])
             .current_dir(&fixture.0)
             .env_remove("HOME")
@@ -1214,6 +1218,67 @@ fn published_maintenance_recipes_resume_the_real_cli_with_original_identity() {
 }
 
 #[test]
+fn a_sqlite_writer_bounds_contention_without_recording_a_failed_outcome() {
+    let fixture = Fixture::new();
+    let initialized = fixture.run(&["init", "--idempotency-key", "init"]);
+    fixture.run(&[
+        "start",
+        "--preset",
+        "small-change-v2",
+        "--task",
+        "retain this session",
+        "--idempotency-key",
+        "start",
+    ]);
+    fixture.run(&["begin", "--idempotency-key", "begin"]);
+    let before = fixture.run(&["status"]);
+    let writer =
+        rusqlite::Connection::open(fixture.0.join(".podway/runtime/state.sqlite3")).unwrap();
+    writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let started = Instant::now();
+    let output = fixture.output(&[
+        "--timeout",
+        "20ms",
+        "set",
+        "scope-summary",
+        "must not commit",
+        "--idempotency-key",
+        "contended-sqlite",
+    ]);
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert_eq!(output.status.code(), Some(4), "{output:?}");
+    let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(error.as_value()["code"], "WORKSPACE_BUSY");
+    assert_eq!(error.as_value()["command"], "item.set");
+    assert_eq!(error.as_value()["retryable"], true);
+    writer.execute_batch("ROLLBACK").unwrap();
+    assert_eq!(fixture.run(&["status"])["result"], before["result"]);
+    assert_eq!(
+        fixture.run(&["outcome", "lookup", "--idempotency-key", "contended-sqlite",])["result"]["found"],
+        false
+    );
+    let arguments = [
+        "set",
+        "scope-summary",
+        "after contention",
+        "--if-workspace-uuid",
+        initialized["workspace"]["uuid"].as_str().unwrap(),
+        "--if-session-id",
+        before["result"]["session"]["id"].as_str().unwrap(),
+        "--if-attempt",
+        before["result"]["current"]["attempt"]["attempt_id"]
+            .as_str()
+            .unwrap(),
+        "--if-item-revision",
+        "0",
+        "--idempotency-key",
+        "contended-sqlite",
+    ];
+    let accepted = fixture.run(&arguments);
+    assert_eq!(fixture.run(&arguments), accepted);
+}
+
+#[test]
 fn a_competing_process_honors_the_deadline_and_attributes_preflight_failure_to_the_mutation() {
     let fixture = Fixture::new();
     fixture.run(&["init", "--idempotency-key", "init"]);
@@ -1240,7 +1305,9 @@ fn a_competing_process_honors_the_deadline_and_attributes_preflight_failure_to_t
         "lease-acquired",
     );
     let started = std::time::Instant::now();
-    let output = Command::new(env!("CARGO_BIN_EXE_podway"))
+    let output = Command::new(podway_binary())
+        .arg("--worktree")
+        .arg(&fixture.0)
         .args([
             "--json",
             "--timeout",
@@ -1482,7 +1549,9 @@ fn retained_commands_commit_replay_lookup_and_reject_stale_fences_in_the_real_bi
         fixture.run(&["outcome", "lookup", "--idempotency-key", "never-recorded"])["result"]["found"],
         false
     );
-    let output = Command::new(env!("CARGO_BIN_EXE_podway"))
+    let output = Command::new(podway_binary())
+        .arg("--worktree")
+        .arg(&fixture.0)
         .args([
             "--json",
             "set",
