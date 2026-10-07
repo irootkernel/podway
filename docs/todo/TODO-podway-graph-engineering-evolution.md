@@ -15,7 +15,7 @@
 - Related integration candidate: [Real Executor Integration](TODO-podway-supervised-delegation-integration.md)
 
 [ADR-0038](../architecture-decision-records/0038-remove-the-daemon.md) and the
-adopted [daemon-free core dossier](TODO-podway-daemon-free-core.md) establish the
+[System Architecture](../architecture/system.md) establish the
 current Direct Engine: request-driven worktree transactions, success-only outcomes,
 no resident process, global registry, FIFO admission or daemon IPC. This candidate
 is rebased on that boundary. Proposed work claims, leases and joins would execute

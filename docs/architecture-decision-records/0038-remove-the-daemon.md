@@ -5,7 +5,7 @@
 - Date: 2026-10-05
 - Acceptance owner: `V2DFC-002`, following the `V2DFC-001` feasibility gate
 - Delivery owner: [V2DFC](../roadmap/README.md#v2dfc-daemon-free-core)
-- Implementation plan: [adopted V2DFC dossier](../todo/TODO-podway-daemon-free-core.md)
+- Implementation guidance: [System Architecture](../architecture/system.md)
 - Supersedes: [ADR-0003](0003-daemon-single-writer.md), [ADR-0012](0012-explicit-daemon-endpoint-and-canonical-per-user-podway-home.md), [ADR-0020](0020-managed-dev-runtime-isolation.md), [ADR-0022](0022-bounded-correlated-daemon-logs.md), [ADR-0023](0023-daemon-owned-bootstrap-log.md), [ADR-0029](0029-serve-phase-aware-daemon-readiness.md), [ADR-0031](0031-keyed-runtime-modes-and-managed-development-service.md), [ADR-0032](0032-retire-ordinary-user-runtimes.md)
 - Supersedes in part: [ADR-0004](0004-worktree-local-state.md), [ADR-0005](0005-rust-and-macos-first.md), [ADR-0006](0006-same-user-local-trust.md), [ADR-0024](0024-bounded-evidence-scale-and-paged-read-back.md), [ADR-0027](0027-state-aware-session-start.md), [ADR-0030](0030-retire-workspaces-and-prune-stale-registry-entries.md), [ADR-0035](0035-host-neutral-supervised-delegation.md), [ADR-0036](0036-use-canonical-git-paths-for-workspace-identity.md)
 - Preserves: [ADR-0010](0010-generic-cli-json-integration.md), [ADR-0013](0013-native-apple-silicon-macos-only.md), [ADR-0021](0021-separate-session-preparation-from-execution.md), [ADR-0037](0037-bound-procedure-graphs-at-1024-nodes.md)
@@ -40,18 +40,20 @@ lease expiry evaluated inside the next state transaction over a timer.
 On October 5, 2026 the owner decided to remove the daemon in `v0.2.13`, to
 publish a new public contract generation without backward compatibility, to
 delete daemon-era runtime state by reset without migration, and to make removed
-commands fail with guidance. The evidence and the review of the earlier
-proposal are recorded in the adopted dossier.
+commands fail with guidance. The adopted V2DFC implementation dossier recorded
+the earlier proposal and review.
+Its lasting feasibility evidence is retained in the
+[performance qualification guide](../implementation-tips/direct-cli-performance-qualification.md).
 
 ## Feasibility evidence and limits
 
 The `V2DFC-001` release-profile prototype measured G1 through G10 on native
 Apple Silicon on October 5, 2026. After the completion-review corrections, G1,
 G2, G4, G5, and G9 were measured again; all gate verdicts were pass. The
-[adopted dossier](../todo/TODO-podway-daemon-free-core.md#gate-results) retains
-the fixture recipes, sample sizes, percentiles, and matching protocol. Lasting
-requirements and baselines are promoted by `V2DFC-010` before the Epic audit;
-the separately accepted final Epic closeout retires the dossier.
+[performance qualification guide](../implementation-tips/direct-cli-performance-qualification.md) retains
+the fixture recipes, sample sizes, percentiles, and matching protocol.
+`V2DFC-010` promoted the lasting requirements and baselines before the Epic audit;
+the final Epic closeout retires the implementation dossier.
 
 - G1 acknowledged 8,000 mutations and replayed each key, with no lost,
   duplicated, or stale-fence effects and no observer invariant violation.

@@ -24,9 +24,10 @@ write-free snapshot reads are the current product boundaries.
 [Examples](examples/) provide walkthroughs and versioned known-answer payloads.
 
 Current adopted work is tracked by the [active roadmap](roadmap/).
-The [V2DFC dossier](todo/TODO-podway-daemon-free-core.md) remains available for the
-final independent Epic audit and actual user acceptance. Documentation promotion
-alone does not authorize deleting it or closing the Epic.
+The implemented direct model is specified by [ADR-0038](architecture-decision-records/0038-remove-the-daemon.md)
+and the [direct execution requirements](specs/quality/requirements-traceability.md#direct-execution-requirements).
+Historical feasibility baselines and the current matching protocol remain in the
+[performance qualification guide](implementation-tips/direct-cli-performance-qualification.md).
 
 ## Canonical assets
 

@@ -184,8 +184,8 @@ the implemented direct model. Current behavior is specified in the
 [SQLite model](docs/specs/storage/sqlite-model.md), and
 [JSON contract](docs/specs/interfaces/json-contract.md); current structure is in
 [System Architecture](docs/architecture/system.md). The
-[adopted dossier](docs/todo/TODO-podway-daemon-free-core.md) remains execution
-authority through the separate final V2DFC audit and owner acceptance. These
+[requirements traceability](docs/specs/quality/requirements-traceability.md) maps
+the implemented direct model to its production and verification owners. These
 documents authorize no installed-runtime change, release, installation, or
 external consumer modification.
 

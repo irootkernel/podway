@@ -692,7 +692,7 @@ release, installation, or replacement of an active daemon.
 
 ## V2DFC — Daemon-Free Core
 
-Status: In Progress.
+Status: Completed.
 
 Conditional release target: `v0.2.13`. Inclusion requires completion of
 `V2DFC-001` through `V2DFC-010`, the required development acceptance, and a
@@ -706,7 +706,7 @@ Dolgorae dependency.
 
 Authority: [ADR-0038](../architecture-decision-records/0038-remove-the-daemon.md),
 accepted by `V2DFC-002` after the feasibility gate.
-Implementation owner: [adopted V2DFC dossier](../todo/TODO-podway-daemon-free-core.md).
+Implemented requirements: [direct execution traceability](../specs/quality/requirements-traceability.md#direct-execution-requirements).
 
 Goal: remove `podwayd` so that every command runs to completion in the invoking
 process and commits each mutation in one SQLite transaction on the owning
@@ -720,16 +720,16 @@ installation, or removal of an installed daemon.
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `V2DFC-001` | Prove the direct-write model against pre-registered thresholds | Completed | Measure contention, crash, maintenance, preparation-race, latency, open-cost, WAL, and legacy-classification checks with a test-only prototype; any failure blocks the epic. | [Task scope](../todo/TODO-podway-daemon-free-core.md#v2dfc-001-prove-the-direct-write-model-against-pre-registered-thresholds), [gate](../todo/TODO-podway-daemon-free-core.md#71-feasibility-gate) |
-| `V2DFC-002` | Accept the daemon-free architecture authority | Completed | Accept ADR-0038 with the gate evidence, link supersessions in both directions, and add AGENTS.md transition wording without changing contracts or code. | [Task scope](../todo/TODO-podway-daemon-free-core.md#v2dfc-002-accept-the-daemon-free-architecture-authority), [ADR-0038](../architecture-decision-records/0038-remove-the-daemon.md) |
-| `V2DFC-003` | Reserve the daemon-free contract generation | Completed | Reserve the new schemas, error codes, outcome lookup route, retired-command table, generation-14 Store DDL, and verifier counts without changing runtime output. | [Task scope](../todo/TODO-podway-daemon-free-core.md#v2dfc-003-reserve-the-daemon-free-contract-generation), [JSON contract](../specs/interfaces/json-contract.md) |
-| `V2DFC-004` | Extract host-independent domain services into podway-engine | Completed | Move read projections, preparation, request digests, workspace resolution, and marker codecs into a new engine crate without behavior change. | [Task scope](../todo/TODO-podway-daemon-free-core.md#v2dfc-004-extract-host-independent-domain-services-into-podway-engine) |
-| `V2DFC-005` | Build the direct Store and maintenance primitives beside the legacy Store | Completed | Add the generation-14 Store with write-free classification and reads, the maintenance lock and markers, writer identity, and single-transaction success outcomes. | [Task scope](../todo/TODO-podway-daemon-free-core.md#v2dfc-005-build-the-direct-store-and-maintenance-primitives-beside-the-legacy-store), [recovery](../specs/storage/recovery-retention-and-maintenance.md) |
-| `V2DFC-006` | Execute every retained command through the direct engine | Completed | Run every retained read, mutation, and maintenance command in-process with revalidated preparation and validated new-generation envelopes. | [Task scope](../todo/TODO-podway-daemon-free-core.md#v2dfc-006-execute-every-retained-command-through-the-direct-engine), [transactions](../specs/storage/transactions-concurrency-and-idempotency.md) |
-| `V2DFC-007` | Switch the CLI to the direct engine and delete the daemon host | Completed | Route the CLI through the engine, emit the new contract, return retired-command guidance, and delete the daemon crate and binary. | [Task scope](../todo/TODO-podway-daemon-free-core.md#v2dfc-007-switch-the-cli-to-the-direct-engine-and-delete-the-daemon-host) |
-| `V2DFC-008` | Retire residual daemon-era infrastructure and contracts | Completed | Delete the service crate, IPC protocol, legacy Store and migrations, runtime modes, and daemon-only schemas and errors, and retarget fuzzing. | [Task scope](../todo/TODO-podway-daemon-free-core.md#v2dfc-008-retire-residual-daemon-era-infrastructure-and-contracts) |
-| `V2DFC-009` | Rebuild release and development tooling around one binary | Completed | Package and qualify one binary, regenerate identity and handoff contracts, retire the Aquarium development service, and rewrite release QA. | [Task scope](../todo/TODO-podway-daemon-free-core.md#v2dfc-009-rebuild-release-and-development-tooling-around-one-binary) |
-| `V2DFC-010` | Promote durable documentation | Completed | Promote lasting decisions and verification baselines to specifications, architecture, README, skills, and AGENTS.md, and update related candidates before the final Epic audit. | [Task scope](../todo/TODO-podway-daemon-free-core.md#v2dfc-010-promote-durable-documentation) |
+| `V2DFC-001` | Prove the direct-write model against pre-registered thresholds | Completed | Measure contention, crash, maintenance, preparation-race, latency, open-cost, WAL, and legacy-classification checks with a test-only prototype; any failure blocks the epic. | [feasibility gate and historical baselines](../implementation-tips/direct-cli-performance-qualification.md) |
+| `V2DFC-002` | Accept the daemon-free architecture authority | Completed | Accept ADR-0038 with the gate evidence, link supersessions in both directions, and add AGENTS.md transition wording without changing contracts or code. | [ADR-0038](../architecture-decision-records/0038-remove-the-daemon.md) |
+| `V2DFC-003` | Reserve the daemon-free contract generation | Completed | Reserve the new schemas, error codes, outcome lookup route, retired-command table, generation-14 Store DDL, and verifier counts without changing runtime output. | [JSON contract](../specs/interfaces/json-contract.md), [SQLite model](../specs/storage/sqlite-model.md) |
+| `V2DFC-004` | Extract host-independent domain services into podway-engine | Completed | Move read projections, preparation, request digests, workspace resolution, and marker codecs into a new engine crate without behavior change. | [repository structure](../architecture/repository-structure.md), [Rust codebase](../architecture/rust-codebase.md) |
+| `V2DFC-005` | Build the direct Store and maintenance primitives beside the legacy Store | Completed | Add the generation-14 Store with write-free classification and reads, the maintenance lock and markers, writer identity, and single-transaction success outcomes. | [SQLite model](../specs/storage/sqlite-model.md), [recovery](../specs/storage/recovery-retention-and-maintenance.md) |
+| `V2DFC-006` | Execute every retained command through the direct engine | Completed | Run every retained read, mutation, and maintenance command in-process with revalidated preparation and validated new-generation envelopes. | [transactions](../specs/storage/transactions-concurrency-and-idempotency.md), [JSON contract](../specs/interfaces/json-contract.md) |
+| `V2DFC-007` | Switch the CLI to the direct engine and delete the daemon host | Completed | Route the CLI through the engine, emit the new contract, return retired-command guidance, and delete the daemon crate and binary. | [CLI](../specs/interfaces/cli-specification.md), [performance qualification](../implementation-tips/direct-cli-performance-qualification.md) |
+| `V2DFC-008` | Retire residual daemon-era infrastructure and contracts | Completed | Delete the service crate, IPC protocol, legacy Store and migrations, runtime modes, and daemon-only schemas and errors, and retarget fuzzing. | [repository structure](../architecture/repository-structure.md), [testing and conformance](../specs/quality/testing-and-conformance.md) |
+| `V2DFC-009` | Rebuild release and development tooling around one binary | Completed | Package and qualify one binary, regenerate identity and handoff contracts, retire the Aquarium development service, and rewrite release QA. | [release workflow](../implementation-tips/release.md), [upgrade QA](../implementation-tips/release-upgrade-qa.md) |
+| `V2DFC-010` | Promote durable documentation | Completed | Promote lasting decisions and verification baselines to specifications, architecture, README, skills, and AGENTS.md, and update related candidates before the final Epic audit. | [documentation authorities](../README.md), [requirements traceability](../specs/quality/requirements-traceability.md) |
 
 Tasks execute in numeric order with one active task across this epic. At most
 the first incomplete task may be In Progress, In Review, or Blocked; every later
@@ -741,9 +741,7 @@ cut from the main branch between `V2DFC-007` and `V2DFC-009`. Development
 acceptance does not authorize a release, installation, or removal of an
 installed daemon.
 
-After all member Tasks complete, the Epic remains In Progress through the full
-Epic audit and independent completion review. Final owner acceptance authorizes
-a separate Epic-owned closeout commit that replaces the dossier links with
-durable authorities, removes its TODO index entry, deletes the last-consumer
-dossier, and marks the Epic Completed. Member-Task completion does not imply
-that final acceptance or authorize release or installation.
+Epic completion includes the full Epic audit, independent completion review,
+and separately accepted Epic-owned closeout. The last-consumer implementation
+dossier is retired and its links point to durable authorities. Development
+completion does not authorize release or installation.

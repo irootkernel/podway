@@ -71,10 +71,8 @@ must not use the release-program identifier as a synthetic epic or task prefix.
   its proper durable authority: accepted ADRs, canonical machine assets,
   specifications, architecture, implementation tips, examples, and roadmap
   evidence as applicable.
-- Preserve the V2DFC dossier and current roadmap link through the final independent
-  Epic audit and actual Master acceptance. Task010 promotion does not close it.
-- After that closeout authorization and before marking the epic complete, replace
-  every roadmap and documentation link
+- After the owner accepts the exact closeout candidate and before marking the
+  epic complete, replace every roadmap and documentation link
   to the dossier with the appropriate durable authority, remove the dossier from
   this index, and delete its `TODO-*.md` file. No completed behavior, rationale,
   operational tip, compatibility boundary, or verification claim may exist only
@@ -87,7 +85,7 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 
 ## Current adopted dossiers
 
-- [Daemon-free core](TODO-podway-daemon-free-core.md): `V2DFC` removal of `podwayd`, in-process Store transactions, and a new contract generation for the conditional `v0.2.13` target. Task order and state live only in the active roadmap; adoption activates no runtime, release, or installation.
+None.
 
 ## Related candidates
 

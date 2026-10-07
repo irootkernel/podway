@@ -10,7 +10,7 @@
   [Podway Graph Engineering Evolution](TODO-podway-graph-engineering-evolution.md)
 
 [ADR-0038](../architecture-decision-records/0038-remove-the-daemon.md) and the
-[adopted V2DFC dossier](TODO-podway-daemon-free-core.md) replace the historical
+[System Architecture](../architecture/system.md) replace the historical
 `podwayd` control-plane premise. This candidate now explores a foreground-only
 console over the same typed Direct Engine. It adopts no command, endpoint,
 listener, browser protocol, inventory persistence or product feature.
