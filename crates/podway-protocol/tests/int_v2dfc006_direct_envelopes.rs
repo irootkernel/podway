@@ -102,7 +102,7 @@ fn direct_recovery_preserves_destructive_authority_and_original_lookup_key() {
         candidate["argv"] = argv;
         assert!(RecoveryRecipeV2::from_value(candidate).is_err());
     }
-    let reset = json!({"action":"reset_legacy_state","command":"workspace.reset_all","argv":["podway","--json","reset","--all","--yes"],"reason":"Reset legacy state explicitly.","requires_explicit_authorization":true});
+    let reset = json!({"action":"reset_legacy_state","command":"workspace.reset_all","argv":["podway","--json","reset","--all","--yes","--idempotency-key","<new-idempotency-key>"],"reason":"Reset legacy state explicitly.","requires_explicit_authorization":true});
     assert!(RecoveryRecipeV2::from_value(reset.clone()).is_ok());
     let mut candidate = reset;
     candidate["requires_explicit_authorization"] = json!(false);

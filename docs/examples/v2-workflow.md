@@ -444,18 +444,12 @@ podway --json reset \
 A prepared session is already eligible. Running work is not: force reset requires
 `--progress-summary <text> --yes` and a fresh identity/revision fence.
 
-## Optional contributor isolation
+## Contributor isolation
 
-Contributors who need a disposable daemon and sandbox can run the same commands
-through the development helper. Start `python3 tools/dev_runtime.py daemon` in one
-terminal, run `python3 tools/dev_runtime.py init` in another, and replace each
-`podway --json` invocation above with
-`python3 tools/dev_runtime.py run -- --json`. When finished, stop the foreground
-daemon and remove only that managed runtime:
-
-```bash
-python3 tools/dev_runtime.py clean --yes
-```
+Use the [isolated direct CLI checks](../implementation-tips/testing.md#isolated-direct-cli-checks)
+for disposable verification of this workflow. The former contributor daemon
+helper is retired. Do not use an active user worktree or legacy installed
+service as a disposable test target.
 
 The [CLI specification](../specs/interfaces/cli-specification.md) owns command
 behavior. Public schemas under [`assets/schemas/`](../../assets/schemas/) own JSON

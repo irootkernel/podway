@@ -821,9 +821,11 @@
           "--json",
           "reset",
           "--all",
-          "--yes"
+          "--yes",
+          "--idempotency-key",
+          "<new-idempotency-key>"
         ],
-        "reason": "Refresh committed state before retrying.",
+        "reason": "Replace <new-idempotency-key> with a fresh caller-owned key, then explicitly reset unsupported daemon-era runtime state.",
         "requires_explicit_authorization": true
       }
     },
@@ -1453,9 +1455,11 @@
           "--json",
           "reset",
           "--all",
-          "--yes"
+          "--yes",
+          "--idempotency-key",
+          "<new-idempotency-key>"
         ],
-        "reason": "Refresh committed state before retrying.",
+        "reason": "Replace <new-idempotency-key> with a fresh caller-owned key, then explicitly reset unsupported daemon-era runtime state.",
         "requires_explicit_authorization": true
       }
     },
@@ -1538,9 +1542,11 @@
               "--json",
               "reset",
               "--all",
-              "--yes"
+              "--yes",
+              "--idempotency-key",
+              "<new-idempotency-key>"
             ],
-            "reason": "Refresh committed state before retrying.",
+            "reason": "Replace <new-idempotency-key> with a fresh caller-owned key, then explicitly reset unsupported daemon-era runtime state.",
             "requires_explicit_authorization": true
           }
         }
@@ -1708,7 +1714,10 @@
             "--json",
             "workspace",
             "remove",
+            "--force",
             "--yes",
+            "--if-workspace-uuid",
+            "00000000-0000-4000-8000-000000000001",
             "--idempotency-key",
             "example-key"
           ],

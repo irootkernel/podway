@@ -6,6 +6,8 @@ mod int_v2dfc006_direct_execution;
 mod int_v2dfc006_errors;
 #[path = "int_v2dfc006_workspace.rs"]
 mod int_v2dfc006_workspace;
+#[path = "int_v2dfc007_cli_qualification.rs"]
+mod int_v2dfc007_cli_qualification;
 
 #[path = "int_v2dog003_embedded_presets.rs"]
 mod int_v2dog003_embedded_presets;

@@ -155,10 +155,13 @@ this closed identity set rather than inferring compatibility from a version stri
 For the v2 contract surface, the handoff discriminator is
 `podway.dolgorae-compatibility-handoff/v2`. It additionally embeds the exact
 manifest-bound
-[`podway.dolgorae-adapter-contract/v2`](../../../release/dolgorae-adapter-contract-v2.json)
-self-contained v2-only route, schema, error, diagnostic, reactivation, and
-storage-migration surface together with adapter acceptance requirements. The
-catalog deliberately omits the final manifest digest to avoid a
+[`podway.dolgorae-adapter-contract/v3`](../../../release/dolgorae-adapter-contract-v3.json)
+self-contained direct route, schema, error, diagnostic, reactivation, and
+writer-predecessor surface together with adapter acceptance requirements.
+During the development cutover, it explicitly records the version-identity
+exception until `V2DFC-009`; this prepared contract does not authorize a release
+or certify Aquarium or Dolgorae adoption.
+The catalog deliberately omits the final manifest digest to avoid a
 self-reference; the enclosing handoff supplies that release-specific pin through
 its existing `contract.digest` field.
 Handoff creation rejects pending, incomplete, unknown, or malformed evidence and

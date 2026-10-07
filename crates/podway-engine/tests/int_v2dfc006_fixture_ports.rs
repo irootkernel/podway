@@ -276,7 +276,7 @@ fn v2drw006_failure_fixture_is_valid_and_vetted() {
 }
 
 pub(crate) const ACTION_READBACK_PROCEDURE: &str =
-    include_str!("../../podway-daemon/tests/fixtures/action-readback-procedure.yaml");
+    include_str!("../../../tests/fixtures/v2/procedures/action-readback-procedure.yaml");
 
 #[test]
 fn v2run003_action_readback_fixture_is_valid_and_vetted() {
@@ -301,7 +301,7 @@ fn v2run003_action_readback_fixture_is_valid_and_vetted() {
 }
 
 pub(crate) const RETRY_PROCEDURE: &str =
-    include_str!("../../podway-daemon/tests/fixtures/retry-procedure.yaml");
+    include_str!("../../../tests/fixtures/v2/procedures/retry-procedure.yaml");
 
 #[test]
 fn v2run004_retry_fixture_is_valid_and_vetted() {
@@ -325,7 +325,7 @@ fn v2run004_retry_fixture_is_valid_and_vetted() {
 }
 
 pub(crate) const SKIP_PROCEDURE: &str =
-    include_str!("../../podway-daemon/tests/fixtures/skip-procedure.yaml");
+    include_str!("../../../tests/fixtures/v2/procedures/skip-procedure.yaml");
 
 #[test]
 fn v2run005_skip_fixture_is_valid_and_vetted() {
@@ -348,7 +348,7 @@ fn v2run005_skip_fixture_is_valid_and_vetted() {
 }
 
 pub(crate) const STATE_PROCEDURE: &str =
-    include_str!("../../podway-daemon/tests/fixtures/state-derivation-procedure.yaml");
+    include_str!("../../../tests/fixtures/v2/procedures/state-derivation-procedure.yaml");
 
 #[test]
 fn v2run006_state_fixture_is_valid_and_vetted() {

@@ -1,6 +1,6 @@
 //! Test-only compatibility fixtures for Store integration consumers.
 
-pub mod v2dfc001;
+pub mod legacy_fixture;
 
 use std::path::Path;
 

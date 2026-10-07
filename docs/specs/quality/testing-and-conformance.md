@@ -164,9 +164,19 @@ mistyped, mismatched, or cross-command fields. Successful responses use
 ## Crash and concurrency coverage
 
 The canonical [crash registry](../../../quality/crash-boundaries-v1.json) binds
-each current boundary to an executable test and implementation locator. Restart
-must converge to no admission, one queued retry, one terminal result, or an exact
-idempotent replay; no domain effect may occur twice.
+each current boundary to an executable test and implementation locator. Direct
+Store and Engine boundaries use the `DS` and `DE` entries. Cold lookup and an
+exact-key retry must converge to no committed effect followed by one apply, or
+the original recorded success without a second effect. Direct workspace removal
+uses `D03` and `DE06` for interrupted maintenance and final marker deletion.
+
+The CLI cutover retires daemon preparation/verification ownership (`C05`, `C06`)
+and global registry publication (`D02`) with the host. Residual legacy Store and
+service entries remain bound to their executable library tests until
+`V2DFC-008` removes that infrastructure. They do not specify the direct CLI's
+execution or waiting guarantees.
+
+### Legacy verification pending retirement
 
 Concurrency tests cover FIFO worktree ordering, parallel independent worktrees,
 bounded queues, stale identity fences, same-key replay and conflict, item races,

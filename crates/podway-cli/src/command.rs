@@ -1,22 +1,19 @@
 //! Public command-line surface for the Podway command contract.
 
 mod completion;
-mod runtime_reset;
+mod direct;
+mod retirement;
 
 use std::{
     env,
     ffi::{OsStr, OsString},
-    fs::{self, File},
-    io::{self, IsTerminal, Read, Seek, SeekFrom, Write},
+    fs::{self},
+    io::{self, IsTerminal, Read, Write},
     os::{
         fd::OwnedFd,
-        unix::{
-            ffi::OsStrExt,
-            fs::{FileTypeExt, MetadataExt},
-        },
+        unix::{ffi::OsStrExt, fs::MetadataExt},
     },
     path::{Component, Path, PathBuf},
-    thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -25,11 +22,7 @@ use nix::{
     errno::Errno,
     fcntl::{OFlag, open, openat, renameat},
     sys::stat::{Mode, fchmod, mode_t},
-    unistd::{UnlinkatFlags, fsync, geteuid, unlinkat},
-};
-use podway_cli::client::{
-    DEFAULT_DAEMON_CONNECT_TIMEOUT_V1, DEFAULT_DAEMON_WRITE_TIMEOUT_V1, DaemonClientErrorV1,
-    DaemonClientTimeoutsV1, DaemonClientV1,
+    unistd::{UnlinkatFlags, fsync, unlinkat},
 };
 use podway_config::{
     AuthoringContext, AuthoringStage, ConfigError, FormatFailure, FormatRequest,
@@ -44,45 +37,24 @@ use podway_core::{
     ActorAttributionV2, AttemptId, CriterionAssessmentReasonV2, CriterionId, GoalCriterionV2,
     GoalDefinitionV2, GoalRevisionNumberV2, GoalRevisionReasonV2, GoalStatementV2, GraphNodeId,
     GraphPlacementV2, ItemConditionV2, ItemId, ItemPredicateOperatorV2, OptionGuardV2, OptionId,
-    PROCEDURE_SCHEMA_V2, PredicateScalarV2, ReasonV2, Revision, RuntimeModeV1, SessionId,
-    Sha256Digest, UnixMillis, WorkspaceId,
+    PROCEDURE_SCHEMA_V2, PredicateScalarV2, ReasonV2, Revision, SessionId, Sha256Digest,
+    WorkspaceId,
 };
 use podway_presets::{PresetError, catalog_v2};
 use podway_protocol::{
-    ClientInfoV1, CommandNameV1, ErrorEnvelopeV1, IdempotencyKeyV1, ItemRecordManyInputV1,
-    JobStateV1, MAX_FRAME_PAYLOAD_BYTES_V1, MAX_SLICE_ITEM_TEXT_SCALARS_V1,
-    MAX_WAIT_TIMEOUT_MILLIS_V1, OperationV1, OutputEnvelopeInputV3, OutputEnvelopeV3,
-    PreconditionsV1, RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, RequestOptionsV1,
-    ResponseEnvelopeV2, Rfc3339MillisV1, WorkspaceContextV1, WorktreeSelectorWireV1,
-    build_identity_v1, decode_item_record_many_input_v1, ensure_error_details_schema_v1,
-    ensure_procedure_independent_result_schema_v1, validate_command_result_v2,
-    validate_procedure_independent_result_v1,
-};
-use podway_service::{
-    DaemonContractVerifierV1, InstallSpecV1, LaunchctlRunnerV1, LocalPlatformPathV1, LogQueryV1,
-    MacosServiceCommandRunnerV1, ManagedRuntimeExecutableRoleV3, ManagedRuntimeV3,
-    RuntimeResetReasonV1, SERVICE_METADATA_MAX_BYTES_V1, ServiceClockV1, ServiceErrorV1,
-    ServiceFilesystemV1, ServiceLabelV1, ServiceLogStreamV1, ServiceManagerContractV1,
-    ServiceManagerV1, ServiceOutcomeV1, ServicePathErrorV1, ServiceRuntimePathsV1, ServiceStatusV1,
-    StdServiceFilesystemV1, SystemLaunchctlRunnerV1, UninstallOptionsV1,
-    install_socket_path_from_metadata_v1, installed_socket_path_from_metadata_v1,
+    CommandNameV1, ItemRecordManyInputV1, MAX_FRAME_PAYLOAD_BYTES_V1,
+    MAX_SLICE_ITEM_TEXT_SCALARS_V1, MAX_WAIT_TIMEOUT_MILLIS_V1, OutputEnvelopeInputV3,
+    OutputEnvelopeV3, RequestIdV1, Rfc3339MillisV1, build_identity_v1,
+    decode_item_record_many_input_v1, ensure_procedure_independent_result_schema_v1,
+    validate_command_result_v2, validate_procedure_independent_result_v1,
 };
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 use completion::Shell;
 
-const DEFAULT_WAIT_TIMEOUT_MS: u64 = 30_000;
 const LOCAL_USAGE_EXIT: i32 = 2;
-const LOCAL_DAEMON_EXIT: i32 = 3;
 const LOCAL_CLIENT_EXIT: i32 = 6;
-const MAX_SERVICE_LOG_READ_BYTES: u64 = 10 * 1024 * 1024;
-const DEFAULT_DAEMON_READINESS_TIMEOUT_MS: u64 = 120_000;
-const DAEMON_READINESS_POLL_INTERVAL: Duration = Duration::from_millis(100);
-const DAEMON_READINESS_MIN_OBSERVATION_BUDGET: Duration = Duration::from_millis(100);
-const DAEMON_VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
-const DAEMON_VERSION_PROBE_OUTPUT_LIMIT: usize = 4 * 1024;
-const DAEMON_VERSION_PROBE_POST_KILL_DRAIN: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Parser)]
 #[command(
@@ -94,14 +66,6 @@ const DAEMON_VERSION_PROBE_POST_KILL_DRAIN: Duration = Duration::from_millis(100
     arg_required_else_help = false
 )]
 struct Cli {
-    /// Use mode `dev`; exact compatibility alias for `--mode dev`.
-    #[arg(long, global = true, action = ArgAction::SetTrue, conflicts_with = "mode")]
-    dev: bool,
-
-    /// Select one bounded daemon runtime mode.
-    #[arg(long, global = true, value_name = "KEY", conflicts_with = "dev")]
-    mode: Option<String>,
-
     /// Emit exactly one versioned JSON object to stdout.
     #[arg(long, global = true, action = ArgAction::SetTrue)]
     json: bool,
@@ -110,13 +74,9 @@ struct Cli {
     #[arg(long, global = true, value_name = "PATH")]
     worktree: Option<PathBuf>,
 
-    /// Bound daemon connection or daemon-side waiting.
+    /// Bound the complete direct operation, including lock acquisition.
     #[arg(long, global = true, value_name = "DURATION", value_parser = parse_timeout_millis)]
     timeout: Option<u64>,
-
-    /// Connect to an explicit daemon Unix socket.
-    #[arg(long, global = true, value_name = "ABSOLUTE_PATH")]
-    socket: Option<PathBuf>,
 
     /// Disable text color. Podway v1 currently emits uncolored text.
     #[arg(long, global = true, action = ArgAction::SetTrue)]
@@ -129,10 +89,6 @@ struct Cli {
     /// Reuse this idempotency key instead of generating a UUID-v4 key.
     #[arg(long, global = true, value_name = "KEY")]
     idempotency_key: Option<String>,
-
-    /// Return after durable mutation admission.
-    #[arg(long, global = true, action = ArgAction::SetTrue)]
-    detach: bool,
 
     /// Require an exact workspace identifier.
     #[arg(long, global = true, value_name = "UUID")]
@@ -166,20 +122,6 @@ struct Cli {
     command: Command,
 }
 
-impl Cli {
-    fn runtime_mode(&self) -> Result<RuntimeModeV1, LocalFailure> {
-        if self.dev {
-            return Ok(RuntimeModeV1::development());
-        }
-        self.mode
-            .as_deref()
-            .map(RuntimeModeV1::new)
-            .transpose()
-            .map(|mode| mode.unwrap_or_default())
-            .map_err(|_| LocalFailure::request_invalid("runtime mode is invalid"))
-    }
-}
-
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Show offline help and examples.
@@ -208,18 +150,6 @@ enum Command {
         #[command(subcommand)]
         command: PresetCommand,
     },
-    /// Per-user LaunchAgent lifecycle commands executed directly through the service manager.
-    Daemon {
-        #[command(subcommand)]
-        command: DaemonCommand,
-    },
-    /// Inspect ordinary account runtimes without opening a worktree.
-    Runtime {
-        #[command(subcommand)]
-        command: RuntimeCommand,
-    },
-    /// Orderly stop the isolated foreground dev daemon.
-    Terminate,
     Init {
         #[arg(long, action = ArgAction::SetTrue)]
         repair: bool,
@@ -319,9 +249,10 @@ enum Command {
     },
     /// Atomically record or clear a bounded set of typed item values from JSON stdin.
     Record(RecordArgs),
-    Job {
+    /// Look up the durable outcome of a direct mutation.
+    Outcome {
         #[command(subcommand)]
-        command: JobCommand,
+        command: OutcomeCommand,
     },
     /// Internal best-effort candidates for generated shell completion scripts.
     #[command(name = "__complete", hide = true)]
@@ -329,6 +260,11 @@ enum Command {
         #[arg(default_value = "items")]
         kind: String,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum OutcomeCommand {
+    Lookup,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -442,10 +378,6 @@ struct EvidenceReadArgs {
 struct ReadArgs {
     #[arg(long, action = ArgAction::SetTrue)]
     verbose: bool,
-    #[arg(long, action = ArgAction::SetTrue, conflicts_with = "after_job")]
-    wait_for_idle: bool,
-    #[arg(long, value_name = "JOB_ID", conflicts_with = "wait_for_idle")]
-    after_job: Option<String>,
 }
 
 #[derive(Debug, Args, Default)]
@@ -455,7 +387,6 @@ struct StatusArgs {
     #[arg(
         long,
         action = ArgAction::SetTrue,
-        requires = "wait_for_idle",
         conflicts_with = "verbose"
     )]
     compact: bool,
@@ -663,78 +594,12 @@ enum PresetCommand {
 }
 
 #[derive(Debug, Subcommand)]
-enum RuntimeCommand {
-    /// Preview ordinary runtime retirement.
-    Reset {
-        #[command(subcommand)]
-        command: RuntimeResetCommand,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-enum RuntimeResetCommand {
-    /// Read target resources and obtain a bounded confirmation token.
-    Plan {
-        #[arg(long, action = ArgAction::SetTrue)]
-        all_modes: bool,
-    },
-    /// Apply one confirmed ordinary runtime retirement plan.
-    Apply {
-        #[arg(long, action = ArgAction::SetTrue)]
-        all_modes: bool,
-        #[arg(long, value_name = "TOKEN")]
-        plan_token: String,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-enum DaemonCommand {
-    Install {
-        #[arg(long, value_name = "PATH")]
-        daemon_path: Option<PathBuf>,
-    },
-    Uninstall {
-        #[arg(long, action = ArgAction::SetTrue)]
-        purge_logs: bool,
-    },
-    Start,
-    Stop,
-    Restart,
-    Status,
-    WaitReady,
-    Logs {
-        #[arg(long, action = ArgAction::SetTrue)]
-        follow: bool,
-        #[arg(long, value_name = "N")]
-        lines: Option<u16>,
-    },
-}
-
-#[derive(Debug, Subcommand)]
 enum WorkspaceCommand {
     Show,
     Repair,
-    Mode {
-        #[command(subcommand)]
-        command: WorkspaceModeCommand,
-    },
     Remove {
         #[arg(long, required = true, action = ArgAction::SetTrue)]
         force: bool,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-enum WorkspaceModeCommand {
-    Plan {
-        #[arg(long, value_name = "KEY")]
-        to: String,
-    },
-    Apply {
-        #[arg(long, value_name = "KEY")]
-        to: String,
-        #[arg(long, value_name = "TOKEN")]
-        plan_token: String,
     },
 }
 
@@ -754,27 +619,6 @@ enum ArchiveCommand {
         session_id: String,
         #[arg(skip)]
         expected_session_revision: Option<u64>,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-enum JobCommand {
-    List {
-        #[arg(long, value_parser = ["queued", "running", "succeeded", "failed", "cancelled"])]
-        state: Option<String>,
-    },
-    Status {
-        #[arg(value_name = "JOB_ID")]
-        job_id: String,
-    },
-    Lookup,
-    Wait {
-        #[arg(value_name = "JOB_ID")]
-        job_id: String,
-    },
-    Cancel {
-        #[arg(value_name = "JOB_ID")]
-        job_id: String,
     },
 }
 
@@ -802,7 +646,7 @@ struct DelegationAcceptArgs {
 }
 
 impl Command {
-    const fn daemon_wire_name(&self) -> Option<&'static str> {
+    const fn direct_route(&self) -> Option<&'static str> {
         match self {
             Self::Init { .. } => Some("workspace.init"),
             Self::Doctor { .. } => Some("workspace.doctor"),
@@ -815,18 +659,6 @@ impl Command {
             Self::Workspace {
                 command: WorkspaceCommand::Remove { .. },
             } => Some("workspace.remove"),
-            Self::Workspace {
-                command:
-                    WorkspaceCommand::Mode {
-                        command: WorkspaceModeCommand::Plan { .. },
-                    },
-            } => Some("workspace.mode.plan"),
-            Self::Workspace {
-                command:
-                    WorkspaceCommand::Mode {
-                        command: WorkspaceModeCommand::Apply { .. },
-                    },
-            } => Some("workspace.mode.apply"),
             Self::Start(args)
                 if args.on_existing.is_some()
                     || args.auto_archive_terminal
@@ -887,29 +719,12 @@ impl Command {
             Self::Attach(_) => Some("item.attach"),
             Self::Clear { .. } => Some("item.clear"),
             Self::Record(_) => Some("item.record_many"),
-            Self::Job {
-                command: JobCommand::List { .. },
-            } => Some("job.list"),
-            Self::Job {
-                command: JobCommand::Lookup,
-            } => Some("job.lookup"),
-            Self::Job {
-                command: JobCommand::Status { .. },
-            } => Some("job.status"),
-            Self::Job {
-                command: JobCommand::Wait { .. },
-            } => Some("job.wait"),
-            Self::Job {
-                command: JobCommand::Cancel { .. },
-            } => Some("job.cancel"),
+            Self::Outcome { .. } => Some("outcome.lookup"),
             Self::Help { .. }
             | Self::Version { .. }
             | Self::Completions { .. }
             | Self::Procedure { .. }
-            | Self::Preset { .. }
-            | Self::Daemon { .. }
-            | Self::Runtime { .. }
-            | Self::Terminate => None,
+            | Self::Preset { .. } => None,
         }
     }
 
@@ -954,23 +769,9 @@ impl Command {
             Self::Preset {
                 command: PresetCommand::Explain { .. },
             } => "preset.explain",
-            Self::Daemon { command } => daemon_command_name(command),
-            Self::Runtime {
-                command:
-                    RuntimeCommand::Reset {
-                        command: RuntimeResetCommand::Plan { .. },
-                    },
-            } => "runtime.reset.plan",
-            Self::Runtime {
-                command:
-                    RuntimeCommand::Reset {
-                        command: RuntimeResetCommand::Apply { .. },
-                    },
-            } => "runtime.reset.apply",
-            Self::Terminate => "daemon.terminate",
             Self::CompleteDynamic { .. } => "__complete",
             command => command
-                .daemon_wire_name()
+                .direct_route()
                 .expect("non-local commands have a canonical wire route"),
         }
     }
@@ -1000,6 +801,12 @@ impl Command {
             | Self::Record(_) => true,
             Self::Delegation {
                 command: DelegationCommand::Accept(_),
+            }
+            | Self::Workspace {
+                command: WorkspaceCommand::Repair | WorkspaceCommand::Remove { .. },
+            }
+            | Self::Archive {
+                command: Some(ArchiveCommand::Purge { .. }),
             } => true,
             Self::Start(args) => !args.dry_run,
             Self::Reset(args) => !args.dry_run,
@@ -1065,6 +872,7 @@ impl Command {
                 | Self::Observe(_)
                 | Self::Evidence { .. }
                 | Self::Delegation { .. }
+                | Self::Outcome { .. }
                 | Self::Complete
                 | Self::Decide(_)
                 | Self::Rework(_)
@@ -1079,9 +887,6 @@ impl Command {
                 | Self::Reset(_)
                 | Self::Workspace {
                     command: WorkspaceCommand::Remove { .. },
-                }
-                | Self::Workspace {
-                    command: WorkspaceCommand::Mode { .. },
                 }
                 | Self::Check { .. }
                 | Self::Uncheck { .. }
@@ -1165,24 +970,6 @@ struct WorkspaceTarget {
     display: String,
 }
 
-impl WorkspaceTarget {
-    fn selector(
-        &self,
-        expected_uuid: Option<WorkspaceId>,
-    ) -> Result<WorktreeSelectorWireV1, LocalFailure> {
-        WorktreeSelectorWireV1::new(&self.path_bytes, self.display.clone(), expected_uuid)
-            .map_err(|_| LocalFailure::request_invalid("workspace selector is invalid"))
-    }
-
-    fn context(
-        &self,
-        expected_uuid: Option<WorkspaceId>,
-    ) -> Result<WorkspaceContextV1, LocalFailure> {
-        WorkspaceContextV1::new(self.display.clone(), expected_uuid)
-            .map_err(|_| LocalFailure::request_invalid("worktree path is invalid"))
-    }
-}
-
 #[derive(Clone, Debug)]
 struct StatusFacts {
     session_id: SessionId,
@@ -1200,11 +987,27 @@ struct StatusPreflight {
 }
 
 impl StatusPreflight {
-    fn from_output_v2(output: &OutputEnvelopeV3) -> Result<Self, LocalFailure> {
-        let result = output.result();
+    fn from_direct(output: &podway_protocol::OutputEnvelopeV4) -> Result<Self, LocalFailure> {
+        let value = output.as_value();
+        let result = value["result"]
+            .as_object()
+            .ok_or_else(|| LocalFailure::response_invalid("status result is invalid"))?;
+        let workspace_id = value["workspace"]["uuid"]
+            .as_str()
+            .and_then(|id| WorkspaceId::new(id.to_owned()).ok())
+            .ok_or_else(|| {
+                LocalFailure::response_invalid("status response omitted workspace identity")
+            })?;
+        Self::from_parts(result, workspace_id)
+    }
+
+    fn from_parts(
+        result: &Map<String, Value>,
+        transport_workspace_id: WorkspaceId,
+    ) -> Result<Self, LocalFailure> {
         if !matches!(
             result.get("schema").and_then(Value::as_str),
-            Some("podway.status-result/v2" | "podway.status-result/v3" | "podway.status-result/v4")
+            Some("podway.status-result/v5")
         ) {
             return Err(LocalFailure::response_invalid(
                 "status preflight did not return the standard Procedure v2 status result",
@@ -1257,12 +1060,6 @@ impl StatusPreflight {
             .get("goal_revision")
             .and_then(Value::as_u64)
             .map(GoalRevisionNumberV2::new);
-        let transport_workspace_id = output
-            .workspace()
-            .map(|workspace| workspace.uuid().clone())
-            .ok_or_else(|| {
-                LocalFailure::response_invalid("status response omitted workspace identity")
-            })?;
         Ok(Self {
             transport_workspace_id,
             facts: StatusFacts {
@@ -1274,189 +1071,6 @@ impl StatusPreflight {
                 lifecycle,
             },
         })
-    }
-}
-
-impl StatusFacts {
-    fn preconditions(
-        &self,
-        command: &Command,
-        explicit: &ExplicitPreconditions,
-    ) -> Result<PreconditionsV1, LocalFailure> {
-        let session_id = explicit
-            .session_id
-            .clone()
-            .unwrap_or_else(|| self.session_id.clone());
-        let attempt_id = explicit
-            .attempt_id
-            .clone()
-            .or_else(|| self.attempt_id.clone());
-        if command.is_item_mutation() {
-            let item_id = item_id(command).ok_or_else(|| {
-                LocalFailure::request_invalid("item command omitted an item identifier")
-            })?;
-            let item_revision = explicit
-                .item_revision
-                .or_else(|| {
-                    self.item_revisions
-                        .iter()
-                        .find_map(|(id, revision)| (id == item_id).then_some(*revision))
-                })
-                .unwrap_or(Revision::ZERO);
-            return PreconditionsV1::new(
-                Some(session_id),
-                None,
-                Some(attempt_id.ok_or_else(|| {
-                    LocalFailure::response_invalid("status response omitted the active attempt")
-                })?),
-                Some(item_revision),
-                None,
-                None,
-            )
-            .map_err(|_| LocalFailure::response_invalid("item preconditions are invalid"));
-        }
-
-        let session_revision = explicit.session_revision.unwrap_or(self.session_revision);
-        if matches!(command, Command::Decide(_)) {
-            return self.v2_preconditions(
-                session_id,
-                session_revision,
-                attempt_id,
-                true,
-                explicit.goal_revision.or(self.goal_revision),
-            );
-        }
-        if matches!(command, Command::Rework(_)) {
-            return self.v2_preconditions(session_id, session_revision, attempt_id, false, None);
-        }
-        if matches!(
-            command,
-            Command::Goal {
-                command: GoalCommand::Define(_)
-            }
-        ) {
-            return self.v2_preconditions(session_id, session_revision, None, false, None);
-        }
-        if matches!(
-            command,
-            Command::Goal {
-                command: GoalCommand::Revise(_)
-            }
-        ) {
-            return self.v2_preconditions(
-                session_id,
-                session_revision,
-                attempt_id,
-                false,
-                Some(
-                    explicit
-                        .goal_revision
-                        .or(self.goal_revision)
-                        .ok_or_else(|| {
-                            LocalFailure::response_invalid(
-                                "status response omitted the goal revision",
-                            )
-                        })?,
-                ),
-            );
-        }
-        if matches!(
-            command,
-            Command::Goal {
-                command: GoalCommand::AssessCriterion(_)
-            }
-        ) {
-            return self.v2_preconditions(
-                session_id,
-                session_revision,
-                attempt_id,
-                true,
-                Some(
-                    explicit
-                        .goal_revision
-                        .or(self.goal_revision)
-                        .ok_or_else(|| {
-                            LocalFailure::response_invalid(
-                                "status response omitted the goal revision",
-                            )
-                        })?,
-                ),
-            );
-        }
-        if matches!(
-            command,
-            Command::Begin(_) | Command::Disposition { .. } | Command::Archive { command: None }
-        ) {
-            return self.v2_preconditions(session_id, session_revision, None, false, None);
-        }
-        if matches!(command, Command::Start(args) if args.on_existing.is_some() || args.auto_archive_terminal || args.terminal_disposition.is_some())
-        {
-            return PreconditionsV1::new(
-                Some(session_id),
-                Some(session_revision),
-                None,
-                None,
-                None,
-                None,
-            )
-            .map_err(|_| {
-                LocalFailure::response_invalid("start-replace preconditions are invalid")
-            });
-        }
-        if matches!(command, Command::Reset(_)) {
-            return PreconditionsV1::new(
-                Some(session_id),
-                Some(session_revision),
-                None,
-                None,
-                None,
-                None,
-            )
-            .map_err(|_| LocalFailure::response_invalid("reset preconditions are invalid"));
-        }
-        PreconditionsV1::new(
-            Some(session_id),
-            Some(session_revision),
-            Some(attempt_id.ok_or_else(|| {
-                LocalFailure::response_invalid("status response omitted the active attempt")
-            })?),
-            None,
-            None,
-            None,
-        )
-        .map_err(|_| LocalFailure::response_invalid("session preconditions are invalid"))
-    }
-
-    fn v2_preconditions(
-        &self,
-        session_id: SessionId,
-        session_revision: Revision,
-        attempt_id: Option<AttemptId>,
-        require_attempt: bool,
-        goal_revision: Option<GoalRevisionNumberV2>,
-    ) -> Result<PreconditionsV1, LocalFailure> {
-        let attempt_id = if require_attempt {
-            Some(attempt_id.ok_or_else(|| {
-                LocalFailure::response_invalid("status response omitted the active attempt")
-            })?)
-        } else {
-            attempt_id
-        };
-        let mut preconditions = PreconditionsV1::new(
-            Some(session_id),
-            Some(session_revision),
-            attempt_id,
-            None,
-            None,
-            None,
-        )
-        .map_err(|_| LocalFailure::response_invalid("Procedure v2 preconditions are invalid"))?;
-        if let Some(goal_revision) = goal_revision {
-            preconditions = preconditions
-                .with_goal_revision(goal_revision)
-                .map_err(|_| LocalFailure::response_invalid("goal revision is invalid"))?;
-        }
-        Ok(preconditions)
     }
 }
 
@@ -1506,15 +1120,6 @@ impl ExplicitPreconditions {
         })
     }
 
-    const fn any(&self) -> bool {
-        self.workspace_id.is_some()
-            || self.session_id.is_some()
-            || self.session_revision.is_some()
-            || self.attempt_id.is_some()
-            || self.item_revision.is_some()
-            || self.goal_revision.is_some()
-    }
-
     const fn any_transition(&self) -> bool {
         self.session_revision.is_some()
             || self.attempt_id.is_some()
@@ -1537,20 +1142,9 @@ struct LocalFailure {
 impl LocalFailure {
     fn catalog(code: &'static str, message: impl Into<String>, command: impl Into<String>) -> Self {
         let (exit_code, retryable) = match code {
-            "REQUEST_INVALID"
-            | "REQUEST_TOO_LARGE"
-            | "SOCKET_ENDPOINT_INVALID"
-            | "CONFIRMATION_REQUIRED" => (LOCAL_USAGE_EXIT, false),
-            "DAEMON_NOT_INSTALLED" | "DAEMON_VERSION_INCOMPATIBLE" | "DAEMON_CONTRACT_MISMATCH" => {
-                (LOCAL_DAEMON_EXIT, false)
+            "REQUEST_INVALID" | "REQUEST_TOO_LARGE" | "CONFIRMATION_REQUIRED" => {
+                (LOCAL_USAGE_EXIT, false)
             }
-            "DAEMON_UNAVAILABLE" | "DAEMON_READINESS_TIMEOUT" => (LOCAL_DAEMON_EXIT, true),
-            // A registered v2 route this build does not serve. No local command produces it now
-            // that `procedure format --write` is implemented; the entry stays because this match is
-            // the CLI's copy of the frozen exit classes in `assets/specifications/error-codes.json`,
-            // not a list of the failures it happens to raise today.
-            "UNSUPPORTED_V2_CAPABILITY" => (LOCAL_DAEMON_EXIT, false),
-            "MUTATION_OUTCOME_UNKNOWN" => (4, true),
             "PRESET_NOT_FOUND"
             | "PROCEDURE_NOT_FOUND"
             | "PROCEDURE_INVALID"
@@ -1559,11 +1153,6 @@ impl LocalFailure {
             "ITEM_CONSTRAINT_FAILED" => (1, false),
             "DIGEST_CONFIRMATION_REQUIRED" => (LOCAL_USAGE_EXIT, false),
             "PROCEDURE_DIGEST_MISMATCH" => (4, false),
-            "RUNTIME_RESET_LIMIT_EXCEEDED" => (LOCAL_USAGE_EXIT, false),
-            "RUNTIME_RESET_UNSUPPORTED" => (LOCAL_DAEMON_EXIT, false),
-            "RUNTIME_RESET_BUSY" | "RUNTIME_RESET_PLAN_STALE" => (4, false),
-            "RUNTIME_RESET_UNSAFE" => (5, false),
-            "RUNTIME_RESET_IN_PROGRESS" | "RUNTIME_RESET_INCOMPLETE" => (4, true),
             "PATH_OUTSIDE_WORKTREE" => (5, false),
             "SESSION_START_DECISION_REQUIRED" => (5, false),
             "INTERNAL_ERROR" => (LOCAL_CLIENT_EXIT, false),
@@ -1592,14 +1181,6 @@ impl LocalFailure {
         )
     }
 
-    fn daemon_unavailable(command: &str) -> Self {
-        Self::catalog(
-            "DAEMON_UNAVAILABLE",
-            "the local daemon is unavailable",
-            command,
-        )
-    }
-
     fn response_invalid(message: impl Into<String>) -> Self {
         Self::catalog("INTERNAL_ERROR", message, "cli")
     }
@@ -1621,7 +1202,7 @@ impl LocalFailure {
         failure.details = Map::from_iter([
             (
                 "schema".to_owned(),
-                Value::String("podway.session-start-decision-required-details/v1".to_owned()),
+                Value::String("podway.session-start-decision-required-details/v2".to_owned()),
             ),
             ("lifecycle".to_owned(), Value::String(lifecycle.to_owned())),
             (
@@ -1637,27 +1218,7 @@ impl LocalFailure {
                         .collect(),
                 ),
             ),
-            ("admission".to_owned(), json!({"admitted": false})),
         ]);
-        failure
-    }
-
-    fn mutation_outcome_unknown(idempotency_key: &IdempotencyKeyV1) -> Self {
-        let mut failure = Self::catalog(
-            "MUTATION_OUTCOME_UNKNOWN",
-            "mutation outcome is unknown; reconcile by idempotency key",
-            "cli",
-        );
-        failure.details = serde_json::from_value(json!({
-            "schema": "podway.mutation-outcome-unknown-details/v2",
-            "outcome": "unknown",
-            "idempotency_key": idempotency_key.as_str(),
-            "reconcile": {
-                "command": "job.lookup",
-                "idempotency_key": idempotency_key.as_str(),
-            },
-        }))
-        .expect("static mutation outcome details must be an object");
         failure
     }
 
@@ -1686,7 +1247,7 @@ impl LocalFailure {
         failure.details = Map::from_iter([
             (
                 "schema".to_owned(),
-                Value::String("podway.procedure-digest-mismatch-details/v2".to_owned()),
+                Value::String("podway.procedure-digest-mismatch-details/v3".to_owned()),
             ),
             (
                 "expected_procedure_digest".to_owned(),
@@ -1696,7 +1257,6 @@ impl LocalFailure {
                 "actual_procedure_digest".to_owned(),
                 Value::String(actual.as_str().to_owned()),
             ),
-            ("admission".to_owned(), json!({"admitted": false})),
         ]);
         failure
     }
@@ -1710,7 +1270,7 @@ impl LocalFailure {
         failure.details = Map::from_iter([
             (
                 "schema".to_owned(),
-                Value::String("podway.v2-runtime-error-details/v1".to_owned()),
+                Value::String("podway.v2-runtime-error-details/v2".to_owned()),
             ),
             (
                 "kind".to_owned(),
@@ -1720,7 +1280,6 @@ impl LocalFailure {
                 "procedure_digest".to_owned(),
                 Value::String(actual.as_str().to_owned()),
             ),
-            ("admission".to_owned(), json!({"admitted": false})),
         ]);
         failure
     }
@@ -1729,32 +1288,12 @@ impl LocalFailure {
         self.command = command.to_owned();
         self
     }
-
-    fn with_not_admitted_if(mut self, mutation: bool) -> Self {
-        if mutation && self.code != "MUTATION_OUTCOME_UNKNOWN" {
-            self.details
-                .insert("admission".to_owned(), json!({"admitted": false}));
-        }
-        self
-    }
-
-    fn with_correlation(mut self, command: &str, request_id: &str) -> Self {
-        self.command = command.to_owned();
-        self.request_id = Some(request_id.to_owned());
-        self
-    }
-
-    fn with_details(mut self, details: Map<String, Value>) -> Self {
-        self.details = details;
-        self
-    }
 }
 
 enum RunResult {
-    Response(Box<ResponseEnvelopeV2>),
-    StartResponse {
-        response: Box<ResponseEnvelopeV2>,
-        procedure_check_path: String,
+    Direct {
+        response: Box<podway_engine::direct_api::DirectResponseV1>,
+        procedure_check_path: Option<String>,
     },
     VersionSummary {
         name: &'static str,
@@ -1777,22 +1316,22 @@ enum RunResult {
         text: String,
         exit_code: i32,
     },
-    LogFollow {
-        path: PathBuf,
-        initial: String,
-    },
 }
 
-fn daemon_response_result(command: &Command, response: ResponseEnvelopeV2) -> RunResult {
-    match command {
+fn direct_response_result(
+    command: &Command,
+    response: podway_engine::direct_api::DirectResponseV1,
+) -> RunResult {
+    let procedure_check_path = match command {
         Command::Start(StartArgs {
             procedure: Some(procedure),
             ..
-        }) => RunResult::StartResponse {
-            response: Box::new(response),
-            procedure_check_path: procedure.clone(),
-        },
-        _ => RunResult::Response(Box::new(response)),
+        }) => Some(procedure.clone()),
+        _ => None,
+    };
+    RunResult::Direct {
+        response: Box::new(response),
+        procedure_check_path,
     }
 }
 
@@ -1846,18 +1385,6 @@ fn parse_failure_command_context_from_matches(
                 ("list", "preset.list"),
                 ("show", "preset.show"),
                 ("explain", "preset.explain"),
-            ],
-        )?,
-        "daemon" => nested_parse_failure_context(
-            matches,
-            &[
-                ("install", "daemon.install"),
-                ("uninstall", "daemon.uninstall"),
-                ("start", "daemon.start"),
-                ("stop", "daemon.stop"),
-                ("restart", "daemon.restart"),
-                ("status", "daemon.status"),
-                ("logs", "daemon.logs"),
             ],
         )?,
         "init" => ParseFailureCommandContext::new("workspace.init", true),
@@ -1920,7 +1447,7 @@ fn parse_failure_command_context_from_matches(
             None => ParseFailureCommandContext::new("session.archive", true),
             Some(("list", _)) => ParseFailureCommandContext::new("session.archive_list", false),
             Some(("show", _)) => ParseFailureCommandContext::new("session.archive_show", false),
-            Some(("purge", _)) => ParseFailureCommandContext::new("session.archive_purge", false),
+            Some(("purge", _)) => ParseFailureCommandContext::new("session.archive_purge", true),
             _ => return None,
         },
         "reset" => ParseFailureCommandContext::new(
@@ -1939,16 +1466,7 @@ fn parse_failure_command_context_from_matches(
         "attach" => ParseFailureCommandContext::new("item.attach", true),
         "clear" => ParseFailureCommandContext::new("item.clear", true),
         "record" => ParseFailureCommandContext::new("item.record_many", true),
-        "job" => nested_parse_failure_context(
-            matches,
-            &[
-                ("list", "job.list"),
-                ("lookup", "job.lookup"),
-                ("status", "job.status"),
-                ("wait", "job.wait"),
-                ("cancel", "job.cancel"),
-            ],
-        )?,
+        "outcome" => nested_parse_failure_context(matches, &[("lookup", "outcome.lookup")])?,
         "__complete" => ParseFailureCommandContext::new("__complete", false),
         _ => return None,
     };
@@ -1984,33 +1502,82 @@ pub fn run() -> i32 {
 
     let mut arguments: Vec<OsString> = env::args_os().collect();
     normalize_top_level_help_alias(&mut arguments);
-    let json_requested = arguments
-        .iter()
-        .any(|argument| argument.as_os_str() == OsStr::new("--json"));
+    let mut grammar = Cli::command();
+    grammar.build();
+    let classification = match retirement::classify(&arguments, &grammar) {
+        Ok(classification) => classification,
+        Err(_) => {
+            return render_local_failure(
+                LocalFailure::internal("the embedded retirement table is invalid"),
+                false,
+            );
+        }
+    };
+    let json_requested = classification.json_requested;
+    if let Some(retired) = classification.retired {
+        return render_retirement(retired, json_requested);
+    }
     match Cli::try_parse_from(&arguments) {
         Ok(cli) => {
             let route = cli.command.canonical_route();
-            let mutation = cli.command.is_mutation();
             let json_output = cli.json;
             let quiet = cli.quiet;
             match execute(cli) {
                 Ok(result) => render_result(&result, json_output, quiet),
-                Err(failure) => render_local_failure(
-                    failure.with_command(route).with_not_admitted_if(mutation),
-                    json_output,
-                ),
+                Err(failure) => render_local_failure(failure.with_command(route), json_output),
             }
         }
         Err(_) => {
             let failure = LocalFailure::request_invalid("invalid command syntax");
             let failure = match parse_failure_command_context(&arguments) {
-                Some(context) => failure
-                    .with_command(context.route)
-                    .with_not_admitted_if(context.mutation),
+                Some(context) => failure.with_command(context.route),
                 None => failure,
             };
             render_local_failure(failure, json_requested)
         }
+    }
+}
+
+fn render_retirement(retired: retirement::RetiredSurface, json_output: bool) -> i32 {
+    let guidance = match &retired.replacement {
+        Some(replacement) => format!("This command is retired. Use {replacement} instead."),
+        None => "This command or flag is retired. No replacement exists.".to_owned(),
+    };
+    if !json_output {
+        return if writeln!(io::stderr().lock(), "error: COMMAND_RETIRED: {guidance}").is_ok() {
+            LOCAL_USAGE_EXIT
+        } else {
+            LOCAL_CLIENT_EXIT
+        };
+    }
+    let generated_at = match local_generated_at(&SystemLocalEnvelopeClock) {
+        Ok(timestamp) => timestamp,
+        Err(failure) => return render_clock_failure_to(failure, &mut io::stderr().lock()),
+    };
+    let value = json!({
+        "schema": "podway.error/v2",
+        "request_id": Uuid::new_v4().to_string(),
+        "command": retired.command,
+        "generated_at": generated_at.as_str(),
+        "code": "COMMAND_RETIRED",
+        "message": guidance,
+        "retryable": false,
+        "exit_code": LOCAL_USAGE_EXIT,
+        "details": {
+            "schema": "podway.command-retired-details/v1",
+            "retired": retired.name,
+            "replacement": retired.replacement,
+            "guidance": guidance,
+        },
+    });
+    let Ok(error) = podway_protocol::ErrorEnvelopeV2::from_value(value) else {
+        return LOCAL_CLIENT_EXIT;
+    };
+    let mut stdout = io::stdout().lock();
+    if serde_json::to_writer(&mut stdout, &error).is_err() || writeln!(stdout).is_err() {
+        LOCAL_CLIENT_EXIT
+    } else {
+        LOCAL_USAGE_EXIT
     }
 }
 
@@ -2035,347 +1602,8 @@ fn normalize_top_level_help_alias(arguments: &mut [OsString]) {
     }
 }
 
-fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
-    let runtime_mode = cli.runtime_mode()?;
-    if let Command::CompleteDynamic { kind } = &cli.command {
-        let kind = kind.clone();
-        return dynamic_completion(cli.worktree.take(), cli.socket.take(), runtime_mode, &kind);
-    }
-    if let Some(local) = execute_local(&cli)? {
-        return Ok(local);
-    }
-    let mut wire_name = cli
-        .command
-        .daemon_wire_name()
-        .ok_or_else(|| LocalFailure::request_invalid("unsupported command"))?;
-    prepare_stdin_payload(&mut cli.command)?;
-    apply_record_input(&mut cli)?;
-    validate_daemon_flags(&cli).map_err(|failure| failure.with_command(wire_name))?;
-    validate_command_shape(&cli.command).map_err(|failure| failure.with_command(wire_name))?;
-    if cli.if_workspace_uuid.is_none()
-        && matches!(
-            &cli.command,
-            Command::Start(StartArgs {
-                dry_run: true,
-                on_existing: None,
-                ..
-            })
-        )
-    {
-        return execute_start_dry_run(&cli);
-    }
-    let mut target = workspace_target(cli.worktree.take())?;
-    if matches!(
-        cli.command,
-        Command::Workspace {
-            command: WorkspaceCommand::Remove { .. }
-        }
-    ) {
-        target = workspace_removal_target(target)?;
-    }
-    confirm_if_required(&cli, wire_name, &target)?;
-    let wait_timeout_ms = cli.timeout.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS);
-    let explicit = ExplicitPreconditions::parse(&cli)?;
-    apply_archive_purge_revision(&mut cli.command, &explicit)?;
-    let client = daemon_client(wait_timeout_ms, cli.socket.as_deref(), &runtime_mode)
-        .map_err(|failure| failure.with_command(wire_name))?;
-
-    let replaying_plain_start = cli.idempotency_key.is_some()
-        && matches!(
-            &cli.command,
-            Command::Start(StartArgs {
-                on_existing: None,
-                auto_archive_terminal: false,
-                terminal_disposition: None,
-                ..
-            })
-        );
-    if matches!(&cli.command, Command::Start(_)) {
-        let status_request = build_request(
-            "session.status",
-            &target,
-            identity_probe_spec(wait_timeout_ms, &explicit)?,
-        )?;
-        match request_daemon(&client, &status_request)
-            .map_err(|failure| failure.with_command(wire_name))?
-        {
-            ResponseEnvelopeV2::OutputV2(status) => {
-                let preflight = StatusPreflight::from_output_v2(&status)
-                    .map_err(|failure| failure.with_command(wire_name))?;
-                if replaying_plain_start
-                    && start_idempotency_key_exists(
-                        &client,
-                        &target,
-                        wait_timeout_ms,
-                        &preflight.transport_workspace_id,
-                        cli.idempotency_key
-                            .as_deref()
-                            .expect("plain start replay has an idempotency key"),
-                    )?
-                {
-                    let (operation, payload) =
-                        daemon_payload(&mut cli.command, cli.idempotency_key.as_deref())?;
-                    let request = build_request(
-                        wire_name,
-                        &target,
-                        RequestSpec {
-                            operation,
-                            expected_uuid: Some(
-                                explicit
-                                    .workspace_id
-                                    .clone()
-                                    .unwrap_or(preflight.transport_workspace_id),
-                            ),
-                            idempotency_key: requires_idempotency_key(operation)
-                                .then(|| mutation_key(cli.idempotency_key))
-                                .transpose()?,
-                            preconditions: direct_preconditions(&cli.command, &explicit)?,
-                            detach: cli.detach,
-                            wait_timeout_ms,
-                            payload,
-                        },
-                    )?;
-                    return request_daemon(&client, &request)
-                        .map(|response| daemon_response_result(&cli.command, response));
-                }
-                let terminal_disposed = if matches!(
-                    preflight.facts.lifecycle.as_str(),
-                    "completed" | "cancelled"
-                ) {
-                    Some(start_terminal_disposition_is_current(
-                        &client,
-                        &target,
-                        wait_timeout_ms,
-                        &preflight,
-                    )?)
-                } else {
-                    None
-                };
-                match resolve_existing_start(&mut cli, &preflight, terminal_disposed)? {
-                    ExistingStartResolution::Continue => {
-                        eprintln!(
-                            "No new session was created. Continuing existing {} session {} at revision {}.",
-                            preflight.facts.lifecycle,
-                            preflight.facts.session_id,
-                            preflight.facts.session_revision.get(),
-                        );
-                        let continued_command = if matches!(
-                            preflight.facts.lifecycle.as_str(),
-                            "completed" | "cancelled"
-                        ) {
-                            "session.observe"
-                        } else {
-                            "session.next"
-                        };
-                        let request = build_request(
-                            continued_command,
-                            &target,
-                            RequestSpec {
-                                operation: OperationV1::Query,
-                                expected_uuid: Some(preflight.transport_workspace_id.clone()),
-                                idempotency_key: None,
-                                preconditions: PreconditionsV1::new(
-                                    Some(preflight.facts.session_id.clone()),
-                                    None,
-                                    None,
-                                    None,
-                                    None,
-                                    None,
-                                )
-                                .map_err(|_| {
-                                    LocalFailure::request_invalid(
-                                        "continued-session guidance fence is invalid",
-                                    )
-                                })?,
-                                detach: false,
-                                wait_timeout_ms,
-                                payload: Map::from_iter([(
-                                    "wait_for_idle".to_owned(),
-                                    Value::Bool(true),
-                                )]),
-                            },
-                        )?;
-                        return request_daemon(&client, &request)
-                            .map(|response| RunResult::Response(Box::new(response)));
-                    }
-                    ExistingStartResolution::Replace => {
-                        wire_name = "session.start_replace";
-                        let (operation, payload) =
-                            daemon_payload(&mut cli.command, cli.idempotency_key.as_deref())?;
-                        let preconditions = preflight
-                            .facts
-                            .preconditions(&cli.command, &explicit)
-                            .map_err(|failure| failure.with_command(wire_name))?;
-                        let request = build_request(
-                            wire_name,
-                            &target,
-                            RequestSpec {
-                                operation,
-                                expected_uuid: Some(
-                                    explicit
-                                        .workspace_id
-                                        .clone()
-                                        .unwrap_or(preflight.transport_workspace_id),
-                                ),
-                                idempotency_key: requires_idempotency_key(operation)
-                                    .then(|| mutation_key(cli.idempotency_key))
-                                    .transpose()?,
-                                preconditions,
-                                detach: cli.detach,
-                                wait_timeout_ms,
-                                payload,
-                            },
-                        )?;
-                        return request_daemon(&client, &request)
-                            .map(|response| daemon_response_result(&cli.command, response));
-                    }
-                }
-            }
-            ResponseEnvelopeV2::Error(error) if error.code().as_str() == "SESSION_NOT_FOUND" => {
-                let Command::Start(args) = &mut cli.command else {
-                    unreachable!("start was checked above")
-                };
-                args.on_existing = None;
-                wire_name = "session.start";
-            }
-            ResponseEnvelopeV2::Error(error) => {
-                return re_correlate_preflight_error(&error, wire_name);
-            }
-        }
-    }
-
-    let destructive_workspace_id =
-        if matches!(&cli.command, Command::Reset(ResetArgs { all: true, .. })) {
-            explicit.workspace_id.clone()
-        } else if matches!(
-            &cli.command,
-            Command::Workspace {
-                command: WorkspaceCommand::Remove { .. }
-            }
-        ) {
-            let status_request = build_request(
-                "session.status",
-                &target,
-                identity_probe_spec(wait_timeout_ms, &explicit)?,
-            )?;
-            match request_daemon(&client, &status_request)
-                .map_err(|failure| failure.with_command(wire_name))?
-            {
-                ResponseEnvelopeV2::OutputV2(status) => Some(
-                    explicit.workspace_id.clone().unwrap_or(
-                        StatusPreflight::from_output_v2(&status)
-                            .map_err(|failure| {
-                                failure.with_correlation(wire_name, status.request_id().as_str())
-                            })?
-                            .transport_workspace_id,
-                    ),
-                ),
-                ResponseEnvelopeV2::Error(error)
-                    if workspace_removal_probe_can_recover(&error)
-                        || matches!(
-                            error.code().as_str(),
-                            "WORKSPACE_NOT_INITIALIZED" | "WORKSPACE_MAINTENANCE"
-                        ) =>
-                {
-                    explicit.workspace_id.clone()
-                }
-                ResponseEnvelopeV2::Error(error)
-                    if matches!(
-                        &cli.command,
-                        Command::Workspace {
-                            command: WorkspaceCommand::Remove { .. }
-                        }
-                    ) && matches!(
-                        error.code().as_str(),
-                        "SESSION_NOT_FOUND" | "WORKSPACE_CONFIG_INVALID"
-                    ) =>
-                {
-                    explicit.workspace_id.clone()
-                }
-                ResponseEnvelopeV2::Error(error) => {
-                    return re_correlate_preflight_error(&error, wire_name);
-                }
-            }
-        } else {
-            None
-        };
-
-    if cli.command.needs_preflight()
-        && !fully_fenced_start_replace(&cli.command, &explicit)
-        && !fully_fenced_v2_start_replace(&cli.command, &explicit)
-        && !fully_fenced_v2_mutation(&cli.command, &explicit)
-        && !fully_fenced_archive_purge(&cli.command, &explicit)
-        && !matches!(cli.command, Command::Record(_))
-    {
-        let status_request = build_request(
-            "session.status",
-            &target,
-            identity_probe_spec(wait_timeout_ms, &explicit)?,
-        )?;
-        let status_response = request_daemon(&client, &status_request)
-            .map_err(|failure| failure.with_command(wire_name))?;
-        let preflight = match status_response {
-            ResponseEnvelopeV2::OutputV2(status) => StatusPreflight::from_output_v2(&status),
-            ResponseEnvelopeV2::Error(error) => {
-                return re_correlate_preflight_error(&error, wire_name);
-            }
-        }
-        .map_err(|failure| failure.with_command(wire_name))?;
-        let (operation, payload) =
-            daemon_payload(&mut cli.command, cli.idempotency_key.as_deref())?;
-        let preconditions = preflight
-            .facts
-            .preconditions(&cli.command, &explicit)
-            .map_err(|failure| failure.with_command(wire_name))?;
-        let expected_workspace_id = explicit
-            .workspace_id
-            .clone()
-            .unwrap_or(preflight.transport_workspace_id);
-        let request = build_request(
-            wire_name,
-            &target,
-            RequestSpec {
-                operation,
-                expected_uuid: Some(expected_workspace_id),
-                idempotency_key: requires_idempotency_key(operation)
-                    .then(|| mutation_key(cli.idempotency_key))
-                    .transpose()?,
-                preconditions,
-                detach: cli.detach,
-                wait_timeout_ms,
-                payload,
-            },
-        )?;
-        return request_daemon(&client, &request)
-            .map(|response| daemon_response_result(&cli.command, response));
-    }
-
-    let (operation, mut payload) =
-        daemon_payload(&mut cli.command, cli.idempotency_key.as_deref())?;
-    if matches!(&cli.command, Command::Reset(ResetArgs { all: true, .. }))
-        && let Some(workspace_id) = &destructive_workspace_id
-    {
-        payload.insert(
-            "expected_workspace_uuid".to_owned(),
-            Value::String(workspace_id.as_str().to_owned()),
-        );
-    }
-    let request = build_request(
-        wire_name,
-        &target,
-        RequestSpec {
-            operation,
-            expected_uuid: destructive_workspace_id.or_else(|| explicit.workspace_id.clone()),
-            idempotency_key: requires_idempotency_key(operation)
-                .then(|| mutation_key(cli.idempotency_key))
-                .transpose()?,
-            preconditions: direct_preconditions(&cli.command, &explicit)?,
-            detach: cli.detach,
-            wait_timeout_ms,
-            payload,
-        },
-    )?;
-    request_daemon(&client, &request).map(|response| daemon_response_result(&cli.command, response))
+fn execute(cli: Cli) -> Result<RunResult, LocalFailure> {
+    direct::execute(cli)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2384,94 +1612,13 @@ enum ExistingStartResolution {
     Replace,
 }
 
-fn start_terminal_disposition_is_current(
-    client: &DaemonClientV1,
-    target: &WorkspaceTarget,
-    wait_timeout_ms: u64,
-    preflight: &StatusPreflight,
-) -> Result<bool, LocalFailure> {
-    let request = build_request(
-        "session.reset",
-        target,
-        RequestSpec {
-            operation: OperationV1::Query,
-            expected_uuid: Some(preflight.transport_workspace_id.clone()),
-            idempotency_key: None,
-            preconditions: PreconditionsV1::new(
-                Some(preflight.facts.session_id.clone()),
-                Some(preflight.facts.session_revision),
-                None,
-                None,
-                None,
-                None,
-            )
-            .map_err(|_| LocalFailure::request_invalid("start preflight fence is invalid"))?,
-            detach: false,
-            wait_timeout_ms,
-            payload: Map::from_iter([("dry_run".to_owned(), Value::Bool(true))]),
-        },
-    )?;
-    match request_daemon(client, &request)? {
-        ResponseEnvelopeV2::OutputV2(output) => output
-            .result()
-            .get("current_terminal_disposition")
-            .and_then(Value::as_bool)
-            .ok_or_else(|| {
-                LocalFailure::response_invalid("terminal start preflight omitted disposition state")
-            }),
-        ResponseEnvelopeV2::Error(error) => Err(LocalFailure::response_invalid(format!(
-            "terminal start preflight failed with {}",
-            error.code().as_str(),
-        ))),
-    }
-}
-
-fn start_idempotency_key_exists(
-    client: &DaemonClientV1,
-    target: &WorkspaceTarget,
-    wait_timeout_ms: u64,
-    workspace_id: &WorkspaceId,
-    idempotency_key: &str,
-) -> Result<bool, LocalFailure> {
-    let request = build_request(
-        "job.lookup",
-        target,
-        RequestSpec {
-            operation: OperationV1::Query,
-            expected_uuid: Some(workspace_id.clone()),
-            idempotency_key: None,
-            preconditions: PreconditionsV1::default(),
-            detach: false,
-            wait_timeout_ms,
-            payload: Map::from_iter([(
-                "idempotency_key".to_owned(),
-                Value::String(idempotency_key.to_owned()),
-            )]),
-        },
-    )?;
-    match request_daemon(client, &request)? {
-        ResponseEnvelopeV2::OutputV2(output) => output
-            .result()
-            .get("found")
-            .and_then(Value::as_bool)
-            .ok_or_else(|| LocalFailure::response_invalid("job lookup omitted found state")),
-        ResponseEnvelopeV2::Error(error) => Err(LocalFailure::response_invalid(format!(
-            "start replay lookup failed with {}",
-            error.code().as_str(),
-        ))),
-    }
-}
-
 fn resolve_existing_start(
     cli: &mut Cli,
     preflight: &StatusPreflight,
     terminal_disposed: Option<bool>,
 ) -> Result<ExistingStartResolution, LocalFailure> {
-    let interactive = !cli.json
-        && !cli.quiet
-        && !cli.detach
-        && io::stdin().is_terminal()
-        && io::stdout().is_terminal();
+    let interactive =
+        !cli.json && !cli.quiet && io::stdin().is_terminal() && io::stdout().is_terminal();
     let yes = cli.yes;
     let Command::Start(args) = &mut cli.command else {
         unreachable!("existing start resolution requires start")
@@ -2704,65 +1851,6 @@ fn prompt_start_text(label: &str) -> Result<Option<String>, LocalFailure> {
     Ok(Some(input.trim_end_matches(['\r', '\n']).to_owned()))
 }
 
-fn requires_idempotency_key(operation: OperationV1) -> bool {
-    matches!(operation, OperationV1::Mutate | OperationV1::Bootstrap)
-}
-
-fn fully_fenced_start_replace(command: &Command, explicit: &ExplicitPreconditions) -> bool {
-    matches!(command, Command::Start(args) if args.on_existing.is_some() || args.auto_archive_terminal || args.terminal_disposition.is_some())
-        && explicit.workspace_id.is_some()
-        && explicit.session_id.is_some()
-        && explicit.session_revision.is_some()
-}
-
-fn fully_fenced_v2_start_replace(command: &Command, explicit: &ExplicitPreconditions) -> bool {
-    fully_fenced_start_replace(command, explicit)
-}
-
-fn fully_fenced_v2_mutation(command: &Command, explicit: &ExplicitPreconditions) -> bool {
-    if explicit.workspace_id.is_none()
-        || explicit.session_id.is_none()
-        || explicit.session_revision.is_none()
-    {
-        return false;
-    }
-    match command {
-        Command::Begin(_) | Command::Disposition { .. } => true,
-        Command::Archive { command: None } => true,
-        Command::Decide(_) => explicit.attempt_id.is_some(),
-        Command::Goal {
-            command: GoalCommand::AssessCriterion(_),
-        } => explicit.attempt_id.is_some() && explicit.goal_revision.is_some(),
-        Command::Rework(_) => explicit.attempt_id.is_some(),
-        Command::Retry { .. } => explicit.attempt_id.is_some(),
-        Command::Skip { .. } => explicit.attempt_id.is_some(),
-        Command::Block { .. } | Command::Unblock { .. } | Command::Cancel { .. } => {
-            explicit.attempt_id.is_some()
-        }
-        Command::Reset(ResetArgs {
-            all: false,
-            dry_run: false,
-            ..
-        }) => true,
-        Command::Goal {
-            command: GoalCommand::Define(_),
-        } => true,
-        Command::Goal {
-            command: GoalCommand::Revise(_),
-        } => explicit.goal_revision.is_some(),
-        _ => false,
-    }
-}
-
-fn fully_fenced_archive_purge(command: &Command, explicit: &ExplicitPreconditions) -> bool {
-    matches!(
-        command,
-        Command::Archive {
-            command: Some(ArchiveCommand::Purge { .. })
-        }
-    ) && explicit.session_revision.is_some()
-}
-
 fn apply_archive_purge_revision(
     command: &mut Command,
     explicit: &ExplicitPreconditions,
@@ -2788,142 +1876,6 @@ fn apply_archive_purge_revision(
     Ok(())
 }
 
-fn workspace_removal_probe_can_recover(error: &podway_protocol::ErrorEnvelopeV1) -> bool {
-    matches!(
-        error.code().as_str(),
-        "WORKSPACE_STATE_UNREADABLE"
-            | "WORKSPACE_SCHEMA_UNSUPPORTED"
-            | "LEGACY_PROCEDURE_STATE_UNSUPPORTED"
-    )
-}
-
-fn identity_probe_spec(
-    wait_timeout_ms: u64,
-    explicit: &ExplicitPreconditions,
-) -> Result<RequestSpec, LocalFailure> {
-    Ok(RequestSpec {
-        operation: OperationV1::Query,
-        expected_uuid: explicit.workspace_id.clone(),
-        idempotency_key: None,
-        preconditions: PreconditionsV1::new(
-            explicit.session_id.clone(),
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .map_err(|_| LocalFailure::request_invalid("session identity precondition is invalid"))?,
-        detach: false,
-        wait_timeout_ms,
-        payload: Map::new(),
-    })
-}
-
-fn direct_preconditions(
-    command: &Command,
-    explicit: &ExplicitPreconditions,
-) -> Result<PreconditionsV1, LocalFailure> {
-    match command {
-        Command::Start(_) if matches!(command, Command::Start(args) if args.on_existing.is_some() || args.auto_archive_terminal || args.terminal_disposition.is_some()) => {
-            PreconditionsV1::new(
-                explicit.session_id.clone(),
-                explicit.session_revision,
-                None,
-                None,
-                None,
-                None,
-            )
-            .map_err(|_| LocalFailure::request_invalid("start-replace preconditions are invalid"))
-        }
-        Command::Status(_)
-        | Command::Next(_)
-        | Command::Observe(_)
-        | Command::Evidence { .. }
-        | Command::Delegation {
-            command: DelegationCommand::Package,
-        } => PreconditionsV1::new(explicit.session_id.clone(), None, None, None, None, None)
-            .map_err(|_| LocalFailure::request_invalid("session identity precondition is invalid")),
-        Command::Decide(_) => v2_session_preconditions(explicit, true, false),
-        Command::Begin(_) | Command::Disposition { .. } => {
-            v2_session_preconditions(explicit, false, false)
-        }
-        Command::Archive { command: None } => v2_session_preconditions(explicit, false, false),
-        Command::Rework(_) => v2_session_preconditions(explicit, false, false),
-        Command::Retry { .. } => v2_session_preconditions(explicit, true, false),
-        Command::Skip { .. } => v2_session_preconditions(explicit, true, false),
-        Command::Block { .. } | Command::Unblock { .. } | Command::Cancel { .. } => {
-            v2_session_preconditions(explicit, true, false)
-        }
-        Command::Record(_) => v2_session_preconditions(explicit, true, false),
-        Command::Delegation {
-            command: DelegationCommand::Accept(_),
-        } => v2_session_preconditions(explicit, true, false),
-        Command::Reset(ResetArgs {
-            all: false,
-            dry_run: false,
-            ..
-        }) => v2_session_preconditions(explicit, false, false),
-        Command::Goal {
-            command: GoalCommand::Define(_),
-        } => v2_session_preconditions(explicit, false, false),
-        Command::Goal {
-            command: GoalCommand::Revise(_),
-        } => v2_session_preconditions(explicit, false, true),
-        Command::Goal {
-            command: GoalCommand::AssessCriterion(_),
-        } => v2_session_preconditions(explicit, true, true),
-        Command::Job {
-            command: JobCommand::Cancel { .. },
-        } => PreconditionsV1::new(None, None, None, None, None, Some(JobStateV1::Queued)).map_err(
-            |_| LocalFailure::request_invalid("job cancellation preconditions are invalid"),
-        ),
-        _ => Ok(PreconditionsV1::default()),
-    }
-}
-
-fn v2_session_preconditions(
-    explicit: &ExplicitPreconditions,
-    require_attempt: bool,
-    require_goal_revision: bool,
-) -> Result<PreconditionsV1, LocalFailure> {
-    let session_id = explicit
-        .session_id
-        .clone()
-        .ok_or_else(|| LocalFailure::request_invalid("--if-session-id is required"))?;
-    let session_revision = explicit
-        .session_revision
-        .ok_or_else(|| LocalFailure::request_invalid("--if-session-revision is required"))?;
-    let attempt_id = if require_attempt {
-        Some(
-            explicit
-                .attempt_id
-                .clone()
-                .ok_or_else(|| LocalFailure::request_invalid("--if-attempt is required"))?,
-        )
-    } else {
-        explicit.attempt_id.clone()
-    };
-    let mut preconditions = PreconditionsV1::new(
-        Some(session_id),
-        Some(session_revision),
-        attempt_id,
-        None,
-        None,
-        None,
-    )
-    .map_err(|_| LocalFailure::request_invalid("Procedure v2 preconditions are invalid"))?;
-    if require_goal_revision || explicit.goal_revision.is_some() {
-        let goal_revision = explicit
-            .goal_revision
-            .ok_or_else(|| LocalFailure::request_invalid("--if-goal-revision is required"))?;
-        preconditions = preconditions
-            .with_goal_revision(goal_revision)
-            .map_err(|_| LocalFailure::request_invalid("goal revision is invalid"))?;
-    }
-    Ok(preconditions)
-}
-
 fn execute_start_dry_run(cli: &Cli) -> Result<RunResult, LocalFailure> {
     let Command::Start(args) = &cli.command else {
         return Err(LocalFailure::request_invalid(
@@ -2939,10 +1891,10 @@ fn execute_start_dry_run(cli: &Cli) -> Result<RunResult, LocalFailure> {
             .map_err(|error| preset_failure(error).with_command("session.start"))?;
         let command = cli
             .command
-            .daemon_wire_name()
+            .direct_route()
             .ok_or_else(|| LocalFailure::request_invalid("invalid start command"))?;
         let result = json!({
-            "schema": "podway.session-start-result/v3",
+            "schema": "podway.session-start-result/v4",
             "procedure_schema": PROCEDURE_SCHEMA_V2,
             "procedure_digest": admitted.digest().as_str(),
             "dry_run": true,
@@ -3018,10 +1970,10 @@ fn execute_start_dry_run_v2(
     }
     let command = cli
         .command
-        .daemon_wire_name()
+        .direct_route()
         .ok_or_else(|| LocalFailure::request_invalid("invalid start command"))?;
     let result = json!({
-        "schema": "podway.session-start-result/v3",
+        "schema": "podway.session-start-result/v4",
         "procedure_schema": PROCEDURE_SCHEMA_V2,
         "procedure_digest": validated.digest().as_str(),
         "dry_run": true,
@@ -3226,11 +2178,8 @@ fn procedure_open_failure(error: Errno) -> LocalFailure {
 }
 
 fn execute_local(cli: &Cli) -> Result<Option<RunResult>, LocalFailure> {
-    let runtime_mode = cli.runtime_mode()?;
     let local_flags = cli.worktree.is_some()
         || cli.timeout.is_some()
-        || cli.socket.is_some()
-        || cli.detach
         || cli.idempotency_key.is_some()
         || cli.if_workspace_uuid.is_some()
         || cli.if_session_id.is_some()
@@ -3239,48 +2188,8 @@ fn execute_local(cli: &Cli) -> Result<Option<RunResult>, LocalFailure> {
         || cli.if_item_revision.is_some()
         || cli.yes;
     match &cli.command {
-        Command::Runtime {
-            command:
-                RuntimeCommand::Reset {
-                    command: RuntimeResetCommand::Plan { all_modes },
-                },
-        } => {
-            reject_local_flags(
-                local_flags || cli.if_goal_revision.is_some(),
-                "runtime reset plan accepts no daemon request or confirmation flags",
-            )?;
-            Ok(Some(runtime_reset::execute_plan(cli, *all_modes)?))
-        }
-        Command::Runtime {
-            command:
-                RuntimeCommand::Reset {
-                    command:
-                        RuntimeResetCommand::Apply {
-                            all_modes,
-                            plan_token,
-                        },
-                },
-        } => {
-            let forbidden = cli.worktree.is_some()
-                || cli.timeout.is_some()
-                || cli.socket.is_some()
-                || cli.detach
-                || cli.idempotency_key.is_some()
-                || cli.if_workspace_uuid.is_some()
-                || cli.if_session_id.is_some()
-                || cli.if_session_revision.is_some()
-                || cli.if_attempt.is_some()
-                || cli.if_item_revision.is_some();
-            reject_local_flags(
-                forbidden || cli.if_goal_revision.is_some(),
-                "runtime reset apply accepts only --yes and its reset arguments",
-            )?;
-            Ok(Some(runtime_reset::execute_apply(
-                cli, *all_modes, plan_token,
-            )?))
-        }
         Command::Help { topic } => {
-            reject_local_flags(local_flags, "help accepts no daemon-only flags")?;
+            reject_local_flags(local_flags, "help accepts no worktree request flags")?;
             let text = help_text(topic.as_deref())?;
             Ok(Some(local_result(
                 "help",
@@ -3289,7 +2198,7 @@ fn execute_local(cli: &Cli) -> Result<Option<RunResult>, LocalFailure> {
             )))
         }
         Command::Version { identity } => {
-            reject_local_flags(local_flags, "version accepts no daemon-only flags")?;
+            reject_local_flags(local_flags, "version accepts no worktree request flags")?;
             if !identity {
                 return Ok(Some(RunResult::VersionSummary {
                     name: "podway",
@@ -3311,7 +2220,7 @@ fn execute_local(cli: &Cli) -> Result<Option<RunResult>, LocalFailure> {
             )))
         }
         Command::Completions { shell } => {
-            reject_local_flags(local_flags, "completions accepts no daemon-only flags")?;
+            reject_local_flags(local_flags, "completions accepts no worktree request flags")?;
             Ok(Some(local_result(
                 "completions",
                 json!({ "shell": format!("{shell:?}").to_lowercase(), "script": shell.script() }),
@@ -3319,1754 +2228,20 @@ fn execute_local(cli: &Cli) -> Result<Option<RunResult>, LocalFailure> {
             )))
         }
         Command::Preset { command } => {
-            reject_local_flags(local_flags, "preset commands accept no daemon-only flags")?;
+            reject_local_flags(
+                local_flags,
+                "preset commands accept no worktree request flags",
+            )?;
             Ok(Some(execute_preset(command)?))
         }
         Command::Procedure { command } => {
             reject_local_flags(
                 local_flags,
-                "procedure commands accept no daemon-only flags",
+                "procedure commands accept no worktree request flags",
             )?;
             Ok(Some(execute_procedure(command)?))
         }
-        Command::Daemon { command } => {
-            if !runtime_mode.is_production()
-                && !matches!(command, DaemonCommand::Status | DaemonCommand::WaitReady)
-            {
-                return Err(LocalFailure::request_invalid(
-                    "named runtime modes cannot be combined with daemon service lifecycle commands",
-                ));
-            }
-            if cli.worktree.is_some()
-                || (cli.timeout.is_some() && !matches!(command, DaemonCommand::WaitReady))
-                || cli.detach
-                || cli.idempotency_key.is_some()
-                || ExplicitPreconditions::parse(cli)?.any()
-            {
-                return Err(LocalFailure::request_invalid(
-                    "daemon lifecycle commands accept no daemon request flags",
-                ));
-            }
-            if matches!(command, DaemonCommand::WaitReady) && cli.timeout == Some(0) {
-                return Err(LocalFailure::request_invalid(
-                    "daemon wait-ready timeout must be at least 1ms",
-                ));
-            }
-            if cli.socket.is_some() && !matches!(command, DaemonCommand::Install { .. }) {
-                return Err(LocalFailure::request_invalid(
-                    "--socket applies only to daemon install or daemon-backed workflow commands",
-                ));
-            }
-            if !matches!(command, DaemonCommand::Uninstall { .. }) && cli.yes {
-                return Err(LocalFailure::request_invalid(
-                    "--yes applies only to daemon uninstall",
-                ));
-            }
-            if matches!(command, DaemonCommand::Uninstall { .. }) {
-                confirm_daemon_uninstall(cli)?;
-            }
-            if matches!(command, DaemonCommand::Logs { follow: true, .. }) && cli.json {
-                return Err(LocalFailure::request_invalid(
-                    "--follow cannot be combined with --json",
-                ));
-            }
-            if !runtime_mode.is_production() {
-                return Ok(Some(execute_named_runtime_status(
-                    command,
-                    &runtime_mode,
-                    cli.timeout,
-                )?));
-            }
-            Ok(Some(execute_service_lifecycle(
-                command,
-                cli.socket.as_deref(),
-                cli.timeout,
-            )?))
-        }
-        Command::Terminate => {
-            if runtime_mode.as_str() != "dev" {
-                return Err(LocalFailure::request_invalid(
-                    "terminate requires --dev or --mode dev",
-                ));
-            }
-            if cli.worktree.is_some()
-                || cli.socket.is_some()
-                || cli.detach
-                || cli.idempotency_key.is_some()
-                || ExplicitPreconditions::parse(cli)?.any()
-                || cli.yes
-            {
-                return Err(LocalFailure::request_invalid(
-                    "dev terminate accepts only --timeout, --json, --quiet, and --no-color",
-                ));
-            }
-            Ok(Some(execute_dev_terminate(
-                cli.timeout.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS),
-                &runtime_mode,
-            )?))
-        }
         _ => Ok(None),
-    }
-}
-
-fn execute_dev_terminate(
-    wait_timeout_ms: u64,
-    mode: &RuntimeModeV1,
-) -> Result<RunResult, LocalFailure> {
-    let paths = effective_runtime_paths(mode, "daemon.terminate")?;
-    let socket_path = paths.socket_path().as_path();
-    if !socket_path.exists() {
-        return Ok(dev_terminate_result());
-    }
-    let client = daemon_client(wait_timeout_ms, None, mode)?;
-    let request = build_daemon_terminate_request()?;
-    let response = match client.daemon_terminate(&request) {
-        Ok(response) => response,
-        Err(DaemonClientErrorV1::Connection { source, .. })
-            if matches!(
-                source.kind(),
-                io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
-            ) =>
-        {
-            remove_stale_dev_socket(socket_path)?;
-            return Ok(dev_terminate_result());
-        }
-        Err(error) => {
-            return Err(map_client_error_for_request(error, &request)
-                .with_correlation("daemon.terminate", request.request_id().as_str()));
-        }
-    };
-    if matches!(response, ResponseEnvelopeV2::Error(_)) {
-        return Ok(RunResult::Response(Box::new(response)));
-    }
-    let deadline = Instant::now() + Duration::from_millis(wait_timeout_ms);
-    while socket_path.exists() {
-        if Instant::now() >= deadline {
-            return Err(LocalFailure::daemon_unavailable("daemon.terminate"));
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
-    Ok(dev_terminate_result())
-}
-
-fn execute_named_runtime_status(
-    command: &DaemonCommand,
-    mode: &RuntimeModeV1,
-    timeout_ms: Option<u64>,
-) -> Result<RunResult, LocalFailure> {
-    let route = if matches!(command, DaemonCommand::WaitReady) {
-        "daemon.wait-ready"
-    } else {
-        "daemon.status"
-    };
-    let paths = effective_runtime_paths(mode, route)?;
-    execute_named_runtime_status_with_paths(command, mode, timeout_ms, &paths)
-}
-
-fn execute_named_runtime_status_with_paths(
-    command: &DaemonCommand,
-    mode: &RuntimeModeV1,
-    timeout_ms: Option<u64>,
-    paths: &ServiceRuntimePathsV1,
-) -> Result<RunResult, LocalFailure> {
-    let route = if matches!(command, DaemonCommand::WaitReady) {
-        "daemon.wait-ready"
-    } else {
-        "daemon.status"
-    };
-    let started = Instant::now();
-    let timeout = Duration::from_millis(timeout_ms.unwrap_or(DEFAULT_DAEMON_READINESS_TIMEOUT_MS));
-    let deadline = matches!(command, DaemonCommand::WaitReady).then(|| started + timeout);
-    let mut last_observation = named_runtime_unreachable_projection(mode, paths);
-    loop {
-        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-            return Err(daemon_readiness_timeout(
-                route,
-                "wait_ready",
-                started.elapsed(),
-                timeout,
-                &last_observation,
-                paths,
-            ));
-        }
-        let request = build_daemon_status_request()?;
-        let client = DaemonClientV1::new(paths.clone());
-        let response = match deadline {
-            Some(deadline) => client.daemon_status_until(&request, deadline),
-            None => client.daemon_status(&request),
-        };
-        match response {
-            Ok(ResponseEnvelopeV2::OutputV2(output)) => {
-                let live = validated_live_daemon_status(&output, None, paths, None)?;
-                let ready = live.get("readiness_state").and_then(Value::as_str) == Some("ready");
-                last_observation = live.clone();
-                if !matches!(command, DaemonCommand::WaitReady) || ready {
-                    if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-                        return Err(daemon_readiness_timeout(
-                            route,
-                            "wait_ready",
-                            started.elapsed(),
-                            timeout,
-                            &last_observation,
-                            paths,
-                        ));
-                    }
-                    return Ok(local_result(
-                        route,
-                        Value::Object(live),
-                        if ready {
-                            "daemon ready".to_owned()
-                        } else {
-                            "daemon startup incomplete".to_owned()
-                        },
-                    ));
-                }
-            }
-            Ok(ResponseEnvelopeV2::Error(error)) => {
-                if !matches!(command, DaemonCommand::WaitReady) {
-                    return Ok(RunResult::Response(Box::new(ResponseEnvelopeV2::Error(
-                        error,
-                    ))));
-                }
-            }
-            Err(error) => {
-                if !matches!(command, DaemonCommand::WaitReady) {
-                    return Ok(named_runtime_unreachable_result(route, mode, paths));
-                }
-                if !named_readiness_retryable_error(&error) {
-                    return Err(map_client_error(error).with_command(route));
-                }
-            }
-        }
-        if let Some(deadline) = deadline {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(daemon_readiness_timeout(
-                    route,
-                    "wait_ready",
-                    started.elapsed(),
-                    timeout,
-                    &last_observation,
-                    paths,
-                ));
-            }
-            thread::sleep(DAEMON_READINESS_POLL_INTERVAL.min(remaining));
-        }
-    }
-}
-
-fn named_readiness_retryable_error(error: &DaemonClientErrorV1) -> bool {
-    match error {
-        DaemonClientErrorV1::Connection { .. }
-        | DaemonClientErrorV1::SocketConfiguration { .. }
-        | DaemonClientErrorV1::Timeout { .. } => true,
-        DaemonClientErrorV1::RequestPossiblyTransmitted { source } => {
-            named_readiness_retryable_error(source)
-        }
-        _ => false,
-    }
-}
-
-fn named_runtime_unreachable_result(
-    route: &str,
-    mode: &RuntimeModeV1,
-    paths: &ServiceRuntimePathsV1,
-) -> RunResult {
-    local_result(
-        route,
-        Value::Object(named_runtime_unreachable_projection(mode, paths)),
-        "daemon not running".to_owned(),
-    )
-}
-
-fn named_runtime_unreachable_projection(
-    mode: &RuntimeModeV1,
-    paths: &ServiceRuntimePathsV1,
-) -> Map<String, Value> {
-    json!({
-            "schema": "podway.daemon-status-result/v3",
-            "mode": mode.as_str(),
-            "status": "not_installed",
-            "installed": false,
-            "loaded": false,
-            "reachable": false,
-            "product": Value::Null,
-            "daemon_version": Value::Null,
-            "target": Value::Null,
-            "build_identity": Value::Null,
-            "source_commit": Value::Null,
-            "contract_manifest_schema": Value::Null,
-            "contract_manifest_digest": Value::Null,
-            "protocol_versions": [],
-            "pid": Value::Null,
-            "process_id": Value::Null,
-            "executable_path": Value::Null,
-            "started_at": Value::Null,
-            "uptime_ms": Value::Null,
-            "socket_path": paths.socket_path().as_path().display().to_string(),
-            "configured_socket_path": paths.socket_path().as_path().display().to_string(),
-            "effective_socket_path": Value::Null,
-            "registered_worktree_count": Value::Null,
-            "active_scheduler_count": Value::Null,
-            "queued_job_count": Value::Null,
-            "running_job_count": Value::Null,
-            "in_flight_client_count": Value::Null,
-            "maintenance_operation_count": Value::Null,
-            "readiness_state": "not_running",
-            "readiness_stage": Value::Null,
-            "readiness_elapsed_ms": Value::Null,
-            "worktree_recovery": Value::Null,
-    })
-    .as_object()
-    .expect("named daemon status is an object")
-    .clone()
-}
-
-fn remove_stale_dev_socket(socket_path: &Path) -> Result<(), LocalFailure> {
-    let metadata = match fs::symlink_metadata(socket_path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(_) => return Err(LocalFailure::daemon_unavailable("daemon.terminate")),
-    };
-    if !metadata.file_type().is_socket() || metadata.uid() != geteuid().as_raw() {
-        return Err(LocalFailure::request_invalid(
-            "dev socket cleanup refused an unexpected filesystem entry",
-        ));
-    }
-    fs::remove_file(socket_path).map_err(|_| LocalFailure::daemon_unavailable("daemon.terminate"))
-}
-
-fn dev_terminate_result() -> RunResult {
-    local_result(
-        "daemon.terminate",
-        json!({
-            "mode": "dev",
-            "termination": "completed",
-            "socket_cleanup": "removed",
-        }),
-        "dev daemon terminated".to_owned(),
-    )
-}
-
-fn execute_service_lifecycle(
-    command: &DaemonCommand,
-    socket_path: Option<&Path>,
-    readiness_timeout_ms: Option<u64>,
-) -> Result<RunResult, LocalFailure> {
-    let command_name = daemon_command_name(command);
-    let mut paths = if socket_path.is_some() {
-        effective_service_paths(command_name)?
-    } else if matches!(command, DaemonCommand::Install { .. }) {
-        service_install_runtime_paths(command_name)?
-    } else {
-        service_runtime_paths(command_name)?
-    };
-    if let Some(socket_path) = socket_path {
-        paths = paths
-            .with_socket_path(socket_path)
-            .map_err(|error| socket_path_failure(error).with_command(command_name))?;
-    }
-    let clock = system_service_clock(SystemTime::now(), command_name)?;
-    let runner = MacosServiceCommandRunnerV1::new_with_contract_verifier(
-        StdServiceFilesystemV1,
-        system_launchctl_runner(),
-        clock,
-        geteuid().as_raw(),
-        CliDaemonContractVerifierV1,
-    )
-    .map_err(|_| LocalFailure::daemon_unavailable(command_name))?;
-    let manager = ServiceManagerV1::new(runner, clock, paths.clone());
-    execute_service_lifecycle_with_manager(command, &manager, &paths, readiness_timeout_ms)
-}
-
-fn execute_service_lifecycle_with_manager(
-    command: &DaemonCommand,
-    manager: &impl ServiceManagerContractV1,
-    paths: &ServiceRuntimePathsV1,
-    readiness_timeout_ms: Option<u64>,
-) -> Result<RunResult, LocalFailure> {
-    let command_name = daemon_command_name(command);
-    let result = match command {
-        DaemonCommand::Install { daemon_path } => {
-            let binary = resolve_daemon_executable(daemon_path.as_deref(), command_name)?;
-            let identity = build_identity_v1();
-            let spec = InstallSpecV1::new(
-                binary,
-                ServiceLabelV1::podwayd(),
-                paths.clone(),
-                identity.product(),
-                identity.contract_manifest_digest(),
-            );
-            let outcome = manager
-                .install(spec)
-                .map_err(|error| map_service_error(error, command_name))?;
-            if matches!(
-                outcome,
-                ServiceOutcomeV1::ChangedV1(_) | ServiceOutcomeV1::AlreadyInDesiredStateV1(_)
-            ) {
-                wait_for_service_readiness(
-                    manager,
-                    paths,
-                    command_name,
-                    "install",
-                    Duration::from_millis(DEFAULT_DAEMON_READINESS_TIMEOUT_MS),
-                )?;
-            }
-            service_outcome_result(command_name, outcome)
-        }
-        DaemonCommand::Uninstall { purge_logs } => service_outcome_result(
-            command_name,
-            manager
-                .uninstall_with_options(UninstallOptionsV1::new(*purge_logs))
-                .map_err(|error| map_service_error(error, command_name))?,
-        ),
-        DaemonCommand::Start => service_outcome_result(
-            command_name,
-            manager
-                .start()
-                .map_err(|error| map_service_error(error, command_name))?,
-        ),
-        DaemonCommand::Stop => service_outcome_result(
-            command_name,
-            manager
-                .stop()
-                .map_err(|error| map_service_error(error, command_name))?,
-        ),
-        DaemonCommand::Restart => service_outcome_result(
-            command_name,
-            manager
-                .restart()
-                .map_err(|error| map_service_error(error, command_name))?,
-        ),
-        DaemonCommand::Status => service_status_result(
-            command_name,
-            manager
-                .status()
-                .map_err(|error| map_service_error(error, command_name))?,
-            paths,
-        )?,
-        DaemonCommand::WaitReady => {
-            let status = wait_for_service_readiness(
-                manager,
-                paths,
-                command_name,
-                "wait_ready",
-                Duration::from_millis(
-                    readiness_timeout_ms.unwrap_or(DEFAULT_DAEMON_READINESS_TIMEOUT_MS),
-                ),
-            )?;
-            local_result(
-                command_name,
-                Value::Object(status),
-                "daemon ready".to_owned(),
-            )
-        }
-        DaemonCommand::Logs { follow, lines } => {
-            let query = LogQueryV1::new(ServiceLogStreamV1::DaemonV1)
-                .with_follow(*follow)
-                .with_lines(*lines);
-            let location = manager
-                .logs(query)
-                .map_err(|error| map_service_error(error, command_name))?;
-            service_logs_result(command_name, location, *follow, *lines)?
-        }
-    };
-    Ok(result)
-}
-
-fn socket_path_failure(error: ServicePathErrorV1) -> LocalFailure {
-    let (reason, message) = match error {
-        ServicePathErrorV1::Empty { .. } => ("empty", "socket path must not be empty"),
-        ServicePathErrorV1::Relative { .. } => ("relative", "socket path must be absolute"),
-        ServicePathErrorV1::Unnormalized { .. } => (
-            "unnormalized",
-            "socket path must be normalized and contain valid path characters",
-        ),
-        ServicePathErrorV1::WorkspaceLocal { .. } => (
-            "workspace_local",
-            "socket path must not point into workspace-local Podway state",
-        ),
-        ServicePathErrorV1::SocketPathTooLong { .. } => (
-            "path_too_long",
-            "socket path exceeds the macOS Unix socket path limit",
-        ),
-        ServicePathErrorV1::EffectiveUserLookup { .. }
-        | ServicePathErrorV1::EffectiveUserNotFound { .. }
-        | ServicePathErrorV1::RootUser
-        | ServicePathErrorV1::DevHomeConflictsProduction { .. } => (
-            "effective_user_unavailable",
-            "socket path could not be validated",
-        ),
-    };
-    let mut failure = LocalFailure::catalog("SOCKET_ENDPOINT_INVALID", message, "cli");
-    failure
-        .details
-        .insert("reason".to_owned(), Value::String(reason.to_owned()));
-    failure
-}
-
-fn service_runtime_paths(command: &str) -> Result<ServiceRuntimePathsV1, LocalFailure> {
-    let paths = effective_service_paths(command)?;
-    resolve_installed_service_endpoint(paths, command, false)
-}
-
-fn service_install_runtime_paths(command: &str) -> Result<ServiceRuntimePathsV1, LocalFailure> {
-    let paths = effective_service_paths(command)?;
-    resolve_installed_service_endpoint(paths, command, true)
-}
-
-fn effective_service_paths(command: &str) -> Result<ServiceRuntimePathsV1, LocalFailure> {
-    #[cfg(debug_assertions)]
-    if let Some(account_root) = env::var_os("PODWAY_TEST_ACCOUNT_ROOT") {
-        return ServiceRuntimePathsV1::for_account_home(account_root, geteuid().as_raw())
-            .map_err(|_| LocalFailure::daemon_unavailable(command));
-    }
-    ServiceRuntimePathsV1::for_effective_user()
-        .map_err(|_| LocalFailure::daemon_unavailable(command))
-}
-
-fn effective_runtime_paths(
-    mode: &RuntimeModeV1,
-    command: &str,
-) -> Result<ServiceRuntimePathsV1, LocalFailure> {
-    if mode.is_production() {
-        return effective_service_paths(command);
-    }
-    let runtime_root = env::var_os("PODWAY_DEV_HOME").map(PathBuf::from);
-    if let Some(runtime_root) = runtime_root.as_deref() {
-        let executable = env::current_exe()
-            .and_then(|path| path.canonicalize())
-            .map_err(|_| LocalFailure::daemon_unavailable(command))?;
-        if let Some(runtime) = ManagedRuntimeV3::discover(
-            runtime_root,
-            mode,
-            &executable,
-            ManagedRuntimeExecutableRoleV3::Cli,
-        )
-        .map_err(|_| LocalFailure::daemon_unavailable(command))?
-        {
-            return Ok(runtime.paths().clone());
-        }
-        if mode.as_str() != "dev" {
-            return Err(LocalFailure::daemon_unavailable(command));
-        }
-    }
-    #[cfg(debug_assertions)]
-    if let Some(account_root) = env::var_os("PODWAY_TEST_ACCOUNT_ROOT") {
-        let account_root = PathBuf::from(account_root);
-        if let Some(runtime_root) = runtime_root {
-            return ServiceRuntimePathsV1::for_dev_home(
-                account_root,
-                runtime_root,
-                geteuid().as_raw(),
-            )
-            .map_err(|_| LocalFailure::daemon_unavailable(command));
-        }
-        return ServiceRuntimePathsV1::for_account_home_mode(
-            account_root,
-            mode.clone(),
-            geteuid().as_raw(),
-        )
-        .map_err(|_| LocalFailure::daemon_unavailable(command));
-    }
-    if let Some(runtime_root) = runtime_root {
-        return ServiceRuntimePathsV1::for_effective_user_dev(Some(&runtime_root))
-            .map_err(|_| LocalFailure::daemon_unavailable(command));
-    }
-    ServiceRuntimePathsV1::for_effective_user_mode(mode.clone())
-        .map_err(|_| LocalFailure::daemon_unavailable(command))
-}
-
-fn system_launchctl_runner() -> SystemLaunchctlRunnerV1 {
-    #[cfg(debug_assertions)]
-    if let Some(executable) = env::var_os("PODWAY_TEST_LAUNCHCTL") {
-        return SystemLaunchctlRunnerV1::new(executable);
-    }
-    SystemLaunchctlRunnerV1::default()
-}
-
-fn resolve_installed_service_endpoint(
-    paths: ServiceRuntimePathsV1,
-    command: &str,
-    allow_prepared: bool,
-) -> Result<ServiceRuntimePathsV1, LocalFailure> {
-    let metadata_path = paths.metadata_index_path().as_path();
-    let metadata = match fs::symlink_metadata(metadata_path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(paths),
-        Err(_) => return Err(LocalFailure::daemon_unavailable(command)),
-    };
-    let parent = metadata_path
-        .parent()
-        .ok_or_else(|| LocalFailure::daemon_unavailable(command))?;
-    let parent_metadata =
-        fs::symlink_metadata(parent).map_err(|_| LocalFailure::daemon_unavailable(command))?;
-    if parent_metadata.file_type().is_symlink()
-        || !parent_metadata.is_dir()
-        || parent_metadata.uid() != geteuid().as_raw()
-        || parent_metadata.mode() & 0o777 != 0o700
-        || metadata.file_type().is_symlink()
-        || !metadata.file_type().is_file()
-        || metadata.uid() != geteuid().as_raw()
-        || metadata.mode() & 0o777 != 0o600
-        || metadata.len() > SERVICE_METADATA_MAX_BYTES_V1 as u64
-    {
-        return Err(LocalFailure::daemon_unavailable(command));
-    }
-    let bytes = StdServiceFilesystemV1
-        .read_file_bounded(metadata_path, SERVICE_METADATA_MAX_BYTES_V1)
-        .map_err(|_| LocalFailure::daemon_unavailable(command))?;
-    let socket_path = if allow_prepared {
-        install_socket_path_from_metadata_v1(&bytes)
-    } else {
-        installed_socket_path_from_metadata_v1(&bytes)
-    }
-    .map_err(|_| LocalFailure::daemon_unavailable(command))?;
-    paths
-        .with_socket_path(socket_path)
-        .map_err(|_| LocalFailure::daemon_unavailable(command))
-}
-
-fn resolve_daemon_executable(
-    daemon_path: Option<&Path>,
-    command: &str,
-) -> Result<LocalPlatformPathV1, LocalFailure> {
-    if let Some(path) = daemon_path {
-        return canonical_daemon_executable(path, command);
-    }
-    let current_exe = env::current_exe().map_err(|_| LocalFailure::daemon_unavailable(command))?;
-    let search_path = env::var_os("PATH");
-    resolve_implicit_daemon_executable_from(&current_exe, search_path.as_deref(), command)
-}
-
-fn resolve_implicit_daemon_executable_from(
-    current_exe: &Path,
-    search_path: Option<&OsStr>,
-    command: &str,
-) -> Result<LocalPlatformPathV1, LocalFailure> {
-    let resolved_current_exe =
-        fs::canonicalize(current_exe).map_err(|_| LocalFailure::daemon_unavailable(command))?;
-    let sibling = resolved_current_exe.with_file_name("podwayd");
-    if is_executable_file(&sibling) {
-        return canonical_daemon_executable(&sibling, command);
-    }
-
-    let path = search_path.ok_or_else(|| LocalFailure::daemon_unavailable(command))?;
-    for directory in env::split_paths(path).filter(|directory| directory.is_absolute()) {
-        let candidate = directory.join("podwayd");
-        if is_executable_file(&candidate) {
-            return canonical_daemon_executable(&candidate, command);
-        }
-    }
-    Err(LocalFailure::daemon_unavailable(command))
-}
-
-fn is_executable_file(path: &Path) -> bool {
-    fs::metadata(path).is_ok_and(|metadata| metadata.is_file() && metadata.mode() & 0o111 != 0)
-}
-
-fn canonical_daemon_executable(
-    path: &Path,
-    command: &str,
-) -> Result<LocalPlatformPathV1, LocalFailure> {
-    if !path.is_absolute() {
-        return Err(LocalFailure::request_invalid(
-            "daemon executable path must be absolute and normalized",
-        )
-        .with_command(command));
-    }
-    let canonical =
-        fs::canonicalize(path).map_err(|_| LocalFailure::daemon_unavailable(command))?;
-    if !is_executable_file(&canonical) {
-        return Err(LocalFailure::daemon_unavailable(command));
-    }
-    LocalPlatformPathV1::new(canonical).map_err(|_| {
-        LocalFailure::request_invalid("daemon executable path must be absolute and normalized")
-            .with_command(command)
-    })
-}
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct DaemonStaticIdentityV1 {
-    product: String,
-    version: String,
-    target: String,
-    build_identity: String,
-    source_commit: Option<String>,
-    contract_manifest_schema: String,
-    contract_manifest_digest: String,
-    protocol_versions: Vec<String>,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct CliDaemonContractVerifierV1;
-
-impl DaemonContractVerifierV1 for CliDaemonContractVerifierV1 {
-    fn verify(
-        &self,
-        binary: &Path,
-        expected_product: &str,
-        expected_manifest_digest: &str,
-    ) -> Result<(), ServiceErrorV1> {
-        let observed = probe_daemon_identity(binary).ok();
-        let actual_product = observed.as_ref().map(|identity| identity.product.clone());
-        let actual_manifest_digest = observed
-            .as_ref()
-            .map(|identity| identity.contract_manifest_digest.clone());
-        if actual_product.as_deref() == Some(expected_product)
-            && actual_manifest_digest.as_deref() == Some(expected_manifest_digest)
-        {
-            return Ok(());
-        }
-        Err(ServiceErrorV1::ContractMismatchV1 {
-            expected_product: expected_product.to_owned(),
-            actual_product,
-            expected_manifest_digest: expected_manifest_digest.to_owned(),
-            actual_manifest_digest,
-        })
-    }
-}
-
-fn probe_daemon_identity(binary: &Path) -> Result<DaemonStaticIdentityV1, ServiceErrorV1> {
-    let runner = SystemLaunchctlRunnerV1::new(binary).with_bounds(
-        DAEMON_VERSION_PROBE_TIMEOUT,
-        DAEMON_VERSION_PROBE_OUTPUT_LIMIT,
-        DAEMON_VERSION_PROBE_POST_KILL_DRAIN,
-    );
-    probe_daemon_identity_with_runner(&runner)
-}
-
-fn probe_daemon_identity_with_timeout(
-    binary: &Path,
-    timeout: Duration,
-) -> Result<DaemonStaticIdentityV1, ServiceErrorV1> {
-    let runner = SystemLaunchctlRunnerV1::new(binary).with_bounds(
-        DAEMON_VERSION_PROBE_TIMEOUT,
-        DAEMON_VERSION_PROBE_OUTPUT_LIMIT,
-        DAEMON_VERSION_PROBE_POST_KILL_DRAIN,
-    );
-    probe_daemon_identity_with_runner_and_timeout(&runner, Some(timeout))
-}
-
-fn probe_daemon_identity_with_runner(
-    runner: &impl LaunchctlRunnerV1,
-) -> Result<DaemonStaticIdentityV1, ServiceErrorV1> {
-    probe_daemon_identity_with_runner_and_timeout(runner, None)
-}
-
-fn probe_daemon_identity_with_runner_and_timeout(
-    runner: &impl LaunchctlRunnerV1,
-    timeout: Option<Duration>,
-) -> Result<DaemonStaticIdentityV1, ServiceErrorV1> {
-    let arguments = [
-        "version".to_owned(),
-        "--json".to_owned(),
-        "--identity".to_owned(),
-    ];
-    let output = match timeout {
-        Some(timeout) => runner.run_with_timeout(&arguments, timeout)?,
-        None => runner.run(&arguments)?,
-    };
-    if output.exit_status != 0 || !output.stderr.is_empty() || output.stdout.contains('\u{fffd}') {
-        return Err(ServiceErrorV1::IoV1 {
-            operation: None,
-            message: "daemon identity probe returned malformed output".to_owned(),
-        });
-    }
-    let response = serde_json::from_str::<ResponseEnvelopeV2>(&output.stdout).map_err(|_| {
-        ServiceErrorV1::IoV1 {
-            operation: None,
-            message: "daemon identity probe returned malformed output".to_owned(),
-        }
-    })?;
-    let ResponseEnvelopeV2::OutputV2(envelope) = response else {
-        return Err(ServiceErrorV1::IoV1 {
-            operation: None,
-            message: "daemon identity probe returned malformed output".to_owned(),
-        });
-    };
-    if envelope.command().as_str() != "version" {
-        return Err(ServiceErrorV1::IoV1 {
-            operation: None,
-            message: "daemon identity probe returned malformed output".to_owned(),
-        });
-    }
-    let object = envelope.result();
-    let required_string = |field: &str| {
-        object
-            .get(field)
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned)
-            .ok_or_else(|| ServiceErrorV1::IoV1 {
-                operation: None,
-                message: "daemon identity probe returned malformed output".to_owned(),
-            })
-    };
-    let source_commit = match object.get("source_commit") {
-        Some(Value::Null) | None => None,
-        Some(Value::String(value)) if !value.is_empty() => Some(value.clone()),
-        _ => {
-            return Err(ServiceErrorV1::IoV1 {
-                operation: None,
-                message: "daemon identity probe returned malformed output".to_owned(),
-            });
-        }
-    };
-    let protocol_versions = object
-        .get("supported_ipc_ids")
-        .and_then(Value::as_array)
-        .filter(|values| !values.is_empty())
-        .and_then(|values| {
-            values
-                .iter()
-                .map(Value::as_str)
-                .map(|value| value.map(str::to_owned))
-                .collect::<Option<Vec<_>>>()
-        })
-        .ok_or_else(|| ServiceErrorV1::IoV1 {
-            operation: None,
-            message: "daemon identity probe returned malformed output".to_owned(),
-        })?;
-    Ok(DaemonStaticIdentityV1 {
-        product: required_string("product")?,
-        version: required_string("version")?,
-        target: required_string("target")?,
-        build_identity: required_string("build_identity")?,
-        source_commit,
-        contract_manifest_schema: required_string("contract_manifest_schema")?,
-        contract_manifest_digest: required_string("contract_manifest_digest")?,
-        protocol_versions,
-    })
-}
-
-fn wait_for_service_readiness(
-    manager: &impl ServiceManagerContractV1,
-    paths: &ServiceRuntimePathsV1,
-    command: &str,
-    operation: &'static str,
-    timeout: Duration,
-) -> Result<Map<String, Value>, LocalFailure> {
-    let mut runtime = SystemReadinessWaitRuntime::new();
-    wait_for_verified_service_with_runtime(
-        manager,
-        paths,
-        command,
-        operation,
-        timeout,
-        &mut runtime,
-    )
-}
-
-#[cfg(test)]
-fn wait_for_verified_service(
-    paths: &ServiceRuntimePathsV1,
-    expected_binary: &Path,
-    command: &str,
-    timeout: Duration,
-) -> Result<(), LocalFailure> {
-    let deadline = Instant::now() + timeout;
-    let client = DaemonClientV1::new(paths.clone());
-    let mut last_identity_failure = None;
-    while Instant::now() < deadline {
-        let request = build_daemon_status_request()?;
-        match client.daemon_status(&request) {
-            Ok(ResponseEnvelopeV2::OutputV2(output)) => {
-                match validated_live_daemon_status(&output, None, paths, Some(expected_binary)) {
-                    Ok(status)
-                        if status.get("readiness_state").and_then(Value::as_str)
-                            == Some("ready") =>
-                    {
-                        return Ok(());
-                    }
-                    Ok(_) => {}
-                    Err(failure) => last_identity_failure = Some(failure),
-                }
-            }
-            Ok(ResponseEnvelopeV2::Error(error))
-                if error.code().as_str() == "DAEMON_CONTRACT_MISMATCH" =>
-            {
-                last_identity_failure = Some(
-                    LocalFailure::catalog("DAEMON_CONTRACT_MISMATCH", error.message(), command)
-                        .with_details(error.details().clone()),
-                );
-            }
-            Ok(ResponseEnvelopeV2::Error(_)) => {
-                last_identity_failure = Some(LocalFailure::response_invalid(
-                    "daemon readiness returned an unexpected error",
-                ));
-            }
-            Err(
-                DaemonClientErrorV1::Connection { .. }
-                | DaemonClientErrorV1::SocketConfiguration { .. }
-                | DaemonClientErrorV1::Timeout { .. }
-                | DaemonClientErrorV1::Framing { .. }
-                | DaemonClientErrorV1::MissingResponse
-                | DaemonClientErrorV1::ResponseDecoding { .. }
-                | DaemonClientErrorV1::RequestPossiblyTransmitted { .. },
-            ) => {}
-            Err(error) => return Err(map_client_error(error).with_command(command)),
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
-    Err(last_identity_failure.unwrap_or_else(|| LocalFailure::daemon_unavailable(command)))
-}
-
-trait ReadinessWaitRuntime {
-    fn elapsed(&self) -> Duration;
-    fn wait(&mut self, duration: Duration);
-}
-
-struct SystemReadinessWaitRuntime {
-    started_at: Instant,
-}
-
-impl SystemReadinessWaitRuntime {
-    fn new() -> Self {
-        Self {
-            started_at: Instant::now(),
-        }
-    }
-}
-
-impl ReadinessWaitRuntime for SystemReadinessWaitRuntime {
-    fn elapsed(&self) -> Duration {
-        self.started_at.elapsed()
-    }
-
-    fn wait(&mut self, duration: Duration) {
-        thread::sleep(duration);
-    }
-}
-
-fn wait_for_verified_service_with_runtime(
-    manager: &impl ServiceManagerContractV1,
-    paths: &ServiceRuntimePathsV1,
-    command: &str,
-    operation: &'static str,
-    timeout: Duration,
-    runtime: &mut impl ReadinessWaitRuntime,
-) -> Result<Map<String, Value>, LocalFailure> {
-    wait_for_readiness_observations_with_runtime(
-        |remaining| observe_service_readiness(manager, paths, command, remaining),
-        paths,
-        command,
-        operation,
-        timeout,
-        runtime,
-    )
-}
-
-fn observe_service_readiness(
-    manager: &impl ServiceManagerContractV1,
-    paths: &ServiceRuntimePathsV1,
-    command: &str,
-    remaining: Duration,
-) -> Result<ReadinessObservation, LocalFailure> {
-    if remaining < DAEMON_READINESS_MIN_OBSERVATION_BUDGET {
-        return readiness_unverified_observation(paths, command);
-    }
-    let deadline = Instant::now() + remaining;
-    let service_status = match manager.status_for_readiness(remaining) {
-        Ok(status) => status,
-        Err(error) if service_error_is_timeout(&error) => {
-            return readiness_unverified_observation(paths, command);
-        }
-        Err(error) => return Err(map_service_error(error, command)),
-    };
-    let (run_result, verified_v2_ready) =
-        service_status_projection("daemon.status", service_status, paths, Some(deadline))?;
-    match run_result {
-        RunResult::Local { result, .. } => Ok(ReadinessObservation {
-            result,
-            verified_v2_ready,
-        }),
-        RunResult::Response(response) => match *response {
-            ResponseEnvelopeV2::Error(error)
-                if error.code().as_str() == "DAEMON_CONTRACT_MISMATCH" =>
-            {
-                Err(
-                    LocalFailure::catalog("DAEMON_CONTRACT_MISMATCH", error.message(), command)
-                        .with_details(error.details().clone()),
-                )
-            }
-            _ => Err(LocalFailure::response_invalid(
-                "daemon readiness returned an unexpected response",
-            )
-            .with_command(command)),
-        },
-        _ => Err(LocalFailure::response_invalid(
-            "daemon readiness returned an invalid local result",
-        )
-        .with_command(command)),
-    }
-}
-
-fn service_error_is_timeout(error: &ServiceErrorV1) -> bool {
-    match error {
-        ServiceErrorV1::LaunchctlTimeoutV1 { .. } => true,
-        ServiceErrorV1::OperationFailureV1 { source, .. } => service_error_is_timeout(source),
-        _ => false,
-    }
-}
-
-fn readiness_unverified_observation(
-    paths: &ServiceRuntimePathsV1,
-    command: &str,
-) -> Result<ReadinessObservation, LocalFailure> {
-    let publication_present = paths
-        .metadata_index_path()
-        .as_path()
-        .try_exists()
-        .unwrap_or(false)
-        && paths
-            .launch_agent_path()
-            .as_path()
-            .try_exists()
-            .unwrap_or(false);
-    let status = if publication_present {
-        ServiceStatusV1::StoppedV1(podway_service::ServiceStoppedV1::new(
-            UnixMillis::new(0),
-            None,
-        ))
-    } else {
-        ServiceStatusV1::NotInstalledV1(podway_service::ServiceNotInstalledV1::new(
-            UnixMillis::new(0),
-        ))
-    };
-    let (run_result, _) = service_status_projection(command, status, paths, Some(Instant::now()))?;
-    match run_result {
-        RunResult::Local { result, .. } => Ok(ReadinessObservation {
-            result,
-            verified_v2_ready: false,
-        }),
-        _ => Err(LocalFailure::response_invalid(
-            "daemon readiness fallback returned an invalid local result",
-        )
-        .with_command(command)),
-    }
-}
-
-struct ReadinessObservation {
-    result: Map<String, Value>,
-    verified_v2_ready: bool,
-}
-
-fn wait_for_readiness_observations_with_runtime(
-    mut observe: impl FnMut(Duration) -> Result<ReadinessObservation, LocalFailure>,
-    paths: &ServiceRuntimePathsV1,
-    command: &str,
-    operation: &'static str,
-    timeout: Duration,
-    runtime: &mut impl ReadinessWaitRuntime,
-) -> Result<Map<String, Value>, LocalFailure> {
-    loop {
-        let elapsed = runtime.elapsed();
-        let remaining = timeout
-            .saturating_sub(elapsed)
-            .max(Duration::from_millis(1));
-        let observed = observe(remaining)?;
-        let elapsed = runtime.elapsed();
-        if elapsed >= timeout {
-            return Err(daemon_readiness_timeout(
-                command,
-                operation,
-                elapsed,
-                timeout,
-                &observed.result,
-                paths,
-            ));
-        }
-        if observed.verified_v2_ready {
-            return Ok(observed.result);
-        }
-        runtime.wait(DAEMON_READINESS_POLL_INTERVAL.min(timeout - elapsed));
-    }
-}
-
-fn daemon_readiness_timeout(
-    command: &str,
-    operation: &'static str,
-    elapsed: Duration,
-    timeout: Duration,
-    observed: &Map<String, Value>,
-    paths: &ServiceRuntimePathsV1,
-) -> LocalFailure {
-    let mut failure = LocalFailure::catalog(
-        "DAEMON_READINESS_TIMEOUT",
-        "verified daemon readiness was not reached before the deadline",
-        command,
-    );
-    let elapsed_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
-    let deadline_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX);
-    failure.details = Map::from_iter([
-        ("operation".to_owned(), Value::String(operation.to_owned())),
-        (
-            "readiness_state".to_owned(),
-            observed["readiness_state"].clone(),
-        ),
-        (
-            "readiness_stage".to_owned(),
-            observed["readiness_stage"].clone(),
-        ),
-        ("elapsed_ms".to_owned(), json!(elapsed_ms)),
-        ("deadline_ms".to_owned(), json!(deadline_ms)),
-        ("installed".to_owned(), observed["installed"].clone()),
-        ("loaded".to_owned(), observed["loaded"].clone()),
-        (
-            "socket_present".to_owned(),
-            json!(paths.socket_path().as_path().try_exists().unwrap_or(false)),
-        ),
-        ("reachable".to_owned(), observed["reachable"].clone()),
-        (
-            "contract_verified".to_owned(),
-            observed["reachable"].clone(),
-        ),
-        ("same_command_retry_safe".to_owned(), Value::Bool(true)),
-        (
-            "worktree_recovery".to_owned(),
-            observed["worktree_recovery"].clone(),
-        ),
-    ]);
-    failure
-}
-
-fn service_outcome_result(command: &str, outcome: ServiceOutcomeV1) -> RunResult {
-    let outcome = outcome.kind().as_str();
-    local_result(
-        command,
-        json!({ "outcome": outcome }),
-        outcome.replace('_', " "),
-    )
-}
-
-fn service_status_result(
-    command: &str,
-    status: ServiceStatusV1,
-    paths: &ServiceRuntimePathsV1,
-) -> Result<RunResult, LocalFailure> {
-    service_status_projection(command, status, paths, None).map(|(result, _)| result)
-}
-
-fn service_status_projection(
-    command: &str,
-    status: ServiceStatusV1,
-    paths: &ServiceRuntimePathsV1,
-    readiness_deadline: Option<Instant>,
-) -> Result<(RunResult, bool), LocalFailure> {
-    let (status, installed, loaded, metadata) = match status {
-        ServiceStatusV1::NotInstalledV1(_) => ("not_installed", false, false, None),
-        ServiceStatusV1::RunningV1(running) => {
-            let _launchctl_pid = running.process_id();
-            ("running", true, true, running.metadata().cloned())
-        }
-        ServiceStatusV1::StoppedV1(stopped) => {
-            ("stopped", true, false, stopped.metadata().cloned())
-        }
-    };
-    let socket_present = paths.socket_path().as_path().try_exists().unwrap_or(false);
-    let mut readiness_probe_blocked = readiness_deadline.is_some() && !socket_present;
-    let static_identity = if readiness_probe_blocked {
-        None
-    } else {
-        let identity = metadata
-            .as_ref()
-            .map(|metadata| match readiness_deadline {
-                Some(deadline) => probe_daemon_identity_with_timeout(
-                    metadata.daemon_binary(),
-                    deadline
-                        .saturating_duration_since(Instant::now())
-                        .max(Duration::from_millis(1)),
-                ),
-                None => probe_daemon_identity(metadata.daemon_binary()),
-            })
-            .transpose();
-        match identity {
-            Err(ServiceErrorV1::LaunchctlTimeoutV1 { .. }) if readiness_deadline.is_some() => {
-                readiness_probe_blocked = true;
-                None
-            }
-            Err(error) => return Err(map_service_error(error, command)),
-            Ok(identity) => identity,
-        }
-    };
-    if let Some(actual) = static_identity.as_ref() {
-        let expected = build_identity_v1();
-        if actual.product != expected.product()
-            || actual.contract_manifest_digest != expected.contract_manifest_digest()
-        {
-            return Err(map_service_error(
-                ServiceErrorV1::ContractMismatchV1 {
-                    expected_product: expected.product().to_owned(),
-                    actual_product: Some(actual.product.clone()),
-                    expected_manifest_digest: expected.contract_manifest_digest().to_owned(),
-                    actual_manifest_digest: Some(actual.contract_manifest_digest.clone()),
-                },
-                command,
-            ));
-        }
-    }
-    let configured_socket_path =
-        installed.then(|| paths.socket_path().as_path().display().to_string());
-    let executable_path = metadata
-        .as_ref()
-        .map(|metadata| metadata.daemon_binary().display().to_string());
-    let readiness_state = if status == "running" {
-        "unreachable"
-    } else {
-        "not_running"
-    };
-    let mut result = json!({
-        "schema": "podway.daemon-status-result/v3",
-        "mode": paths.mode().as_str(),
-        "status": status,
-        "installed": installed,
-        "loaded": loaded,
-        "reachable": false,
-        "product": static_identity.as_ref().map(|identity| identity.product.as_str()),
-        "daemon_version": static_identity.as_ref().map(|identity| identity.version.as_str()),
-        "target": static_identity.as_ref().map(|identity| identity.target.as_str()),
-        "build_identity": static_identity.as_ref().map(|identity| identity.build_identity.as_str()),
-        "source_commit": static_identity.as_ref().and_then(|identity| identity.source_commit.as_deref()),
-        "contract_manifest_schema": static_identity.as_ref().map(|identity| identity.contract_manifest_schema.as_str()),
-        "contract_manifest_digest": static_identity.as_ref().map(|identity| identity.contract_manifest_digest.as_str()),
-        "protocol_versions": static_identity.as_ref().map(|identity| identity.protocol_versions.as_slice()).unwrap_or(&[]),
-        "pid": Value::Null,
-        "process_id": Value::Null,
-        "executable_path": executable_path,
-        "started_at": Value::Null,
-        "uptime_ms": Value::Null,
-        "socket_path": configured_socket_path,
-        "configured_socket_path": configured_socket_path,
-        "effective_socket_path": Value::Null,
-        "registered_worktree_count": Value::Null,
-        "active_scheduler_count": Value::Null,
-        "queued_job_count": Value::Null,
-        "running_job_count": Value::Null,
-        "in_flight_client_count": Value::Null,
-        "maintenance_operation_count": Value::Null,
-        "readiness_state": readiness_state,
-        "readiness_stage": Value::Null,
-        "readiness_elapsed_ms": Value::Null,
-        "worktree_recovery": Value::Null,
-    })
-    .as_object()
-    .expect("daemon service status is an object")
-    .clone();
-    let mut verified_ready = false;
-    if readiness_probe_blocked
-        || readiness_deadline.is_some_and(|deadline| Instant::now() >= deadline)
-    {
-        return Ok((
-            local_result(
-                command,
-                Value::Object(result),
-                "daemon unreachable".to_owned(),
-            ),
-            false,
-        ));
-    }
-    if loaded {
-        let request = build_daemon_status_request()?;
-        let client = match readiness_deadline {
-            Some(deadline) => {
-                let timeout = deadline
-                    .saturating_duration_since(Instant::now())
-                    .max(Duration::from_millis(1));
-                let timeouts = DaemonClientTimeoutsV1::new(timeout, timeout, timeout)
-                    .map_err(|_| LocalFailure::daemon_unavailable(command))?;
-                DaemonClientV1::with_timeouts(paths.clone(), timeouts)
-            }
-            None => DaemonClientV1::new(paths.clone()),
-        };
-        let response = match readiness_deadline {
-            Some(deadline) => client.daemon_status_until(&request, deadline),
-            None => client.daemon_status(&request),
-        };
-        match response {
-            Ok(ResponseEnvelopeV2::Error(error)) => {
-                return Ok((
-                    RunResult::Response(Box::new(ResponseEnvelopeV2::Error(error))),
-                    false,
-                ));
-            }
-            Ok(ResponseEnvelopeV2::OutputV2(output)) => {
-                let is_readiness_status = matches!(
-                    output.result().get("schema").and_then(Value::as_str),
-                    Some("podway.daemon-status-result/v2" | "podway.daemon-status-result/v3")
-                );
-                let live = validated_live_daemon_status(
-                    &output,
-                    static_identity.as_ref(),
-                    paths,
-                    metadata.as_ref().map(|metadata| metadata.daemon_binary()),
-                )?;
-                for (key, value) in live {
-                    result.insert(key, value);
-                }
-                result.insert("reachable".to_owned(), Value::Bool(true));
-                verified_ready = is_readiness_status
-                    && result.get("readiness_state").and_then(Value::as_str) == Some("ready");
-            }
-            Err(
-                DaemonClientErrorV1::Connection { .. }
-                | DaemonClientErrorV1::SocketConfiguration { .. }
-                | DaemonClientErrorV1::Timeout { .. }
-                | DaemonClientErrorV1::Framing { .. }
-                | DaemonClientErrorV1::MissingResponse
-                | DaemonClientErrorV1::ResponseDecoding { .. }
-                | DaemonClientErrorV1::RequestPossiblyTransmitted { .. },
-            ) => {}
-            Err(error) => return Err(map_client_error(error).with_command(command)),
-        }
-    }
-    let readiness = result
-        .get("readiness_state")
-        .and_then(Value::as_str)
-        .unwrap_or("unreachable");
-    let text = match readiness {
-        "ready" => "daemon ready".to_owned(),
-        "starting" | "recovering" => format!("daemon startup incomplete: {readiness}"),
-        "failed" => "daemon startup failed".to_owned(),
-        "unreachable" if loaded => "daemon startup incomplete: unreachable".to_owned(),
-        _ => status.replace('_', " "),
-    };
-    Ok((
-        local_result(command, Value::Object(result), text),
-        verified_ready,
-    ))
-}
-
-fn validated_live_daemon_status(
-    output: &podway_protocol::OutputEnvelopeV3,
-    installed: Option<&DaemonStaticIdentityV1>,
-    paths: &ServiceRuntimePathsV1,
-    expected_executable: Option<&Path>,
-) -> Result<Map<String, Value>, LocalFailure> {
-    if output.command().as_str() != "daemon.status" {
-        return Err(LocalFailure::response_invalid(
-            "daemon status response command is invalid",
-        ));
-    }
-    let result = output.result();
-    const LIVE_FIELDS_V1: [&str; 16] = [
-        "schema",
-        "product",
-        "daemon_version",
-        "target",
-        "build_identity",
-        "source_commit",
-        "contract_manifest_schema",
-        "contract_manifest_digest",
-        "protocol_versions",
-        "pid",
-        "process_id",
-        "executable_path",
-        "started_at",
-        "uptime_ms",
-        "configured_socket_path",
-        "effective_socket_path",
-    ];
-    const READINESS_FIELDS_V2: [&str; 4] = [
-        "readiness_state",
-        "readiness_stage",
-        "readiness_elapsed_ms",
-        "worktree_recovery",
-    ];
-    let schema = result.get("schema").and_then(Value::as_str);
-    let fields_valid = LIVE_FIELDS_V1
-        .iter()
-        .all(|field| result.contains_key(*field));
-    if !fields_valid
-        || !match schema {
-            Some("podway.daemon-status-result/v1") => result.len() == LIVE_FIELDS_V1.len(),
-            Some("podway.daemon-status-result/v2") => {
-                result.len() == LIVE_FIELDS_V1.len() + READINESS_FIELDS_V2.len()
-                    && READINESS_FIELDS_V2
-                        .iter()
-                        .all(|field| result.contains_key(*field))
-            }
-            Some("podway.daemon-status-result/v3") => true,
-            _ => false,
-        }
-    {
-        return Err(LocalFailure::response_invalid(
-            "daemon status response schema is invalid",
-        ));
-    }
-    let string = |field: &str| {
-        result
-            .get(field)
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| LocalFailure::response_invalid("daemon status response is invalid"))
-    };
-    let product = string("product")?;
-    if schema == Some("podway.daemon-status-result/v3")
-        && result.get("mode").and_then(Value::as_str) != Some(paths.mode().as_str())
-    {
-        return Err(LocalFailure::response_invalid(
-            "daemon status mode does not match the selected runtime",
-        ));
-    }
-    let manifest = string("contract_manifest_digest")?;
-    let local = build_identity_v1();
-    let (expected_product, expected_manifest) = installed
-        .map(|identity| {
-            (
-                identity.product.as_str(),
-                identity.contract_manifest_digest.as_str(),
-            )
-        })
-        .unwrap_or((local.product(), local.contract_manifest_digest()));
-    if product != expected_product || manifest != expected_manifest {
-        return Err(map_service_error(
-            ServiceErrorV1::ContractMismatchV1 {
-                expected_product: expected_product.to_owned(),
-                actual_product: Some(product.to_owned()),
-                expected_manifest_digest: expected_manifest.to_owned(),
-                actual_manifest_digest: Some(manifest.to_owned()),
-            },
-            "daemon.status",
-        ));
-    }
-    for field in [
-        "daemon_version",
-        "target",
-        "build_identity",
-        "contract_manifest_schema",
-        "executable_path",
-        "started_at",
-        "configured_socket_path",
-        "effective_socket_path",
-    ] {
-        string(field)?;
-    }
-    let process_id = string("process_id")?;
-    let executable_path = string("executable_path")?;
-    let started_at = string("started_at")?;
-    let configured_socket_path = string("configured_socket_path")?;
-    let effective_socket_path = string("effective_socket_path")?;
-    let source_commit_valid = result["source_commit"].is_null()
-        || result["source_commit"]
-            .as_str()
-            .is_some_and(|value| !value.is_empty());
-    let protocols_valid = result
-        .get("protocol_versions")
-        .and_then(Value::as_array)
-        .is_some_and(|values| {
-            values.len() == local.supported_ipc_ids().len()
-                && values
-                    .iter()
-                    .zip(local.supported_ipc_ids())
-                    .all(|(actual, expected)| actual.as_str() == Some(*expected))
-        });
-    let expected_socket = paths.socket_path().as_path();
-    let installed_identity_matches = installed.is_none_or(|identity| {
-        result["daemon_version"].as_str() == Some(identity.version.as_str())
-            && result["target"].as_str() == Some(identity.target.as_str())
-            && result["build_identity"].as_str() == Some(identity.build_identity.as_str())
-            && result["source_commit"].as_str() == identity.source_commit.as_deref()
-            && result["contract_manifest_schema"].as_str()
-                == Some(identity.contract_manifest_schema.as_str())
-            && result["protocol_versions"] == serde_json::json!(identity.protocol_versions)
-    });
-    if Uuid::parse_str(process_id).is_err()
-        || !source_commit_valid
-        || string("contract_manifest_schema")? != local.contract_manifest_schema()
-        || result
-            .get("pid")
-            .and_then(Value::as_u64)
-            .is_none_or(|pid| pid == 0 || pid > u64::from(u32::MAX))
-        || result.get("uptime_ms").and_then(Value::as_u64).is_none()
-        || !protocols_valid
-        || !Path::new(executable_path).is_absolute()
-        || expected_executable.is_some_and(|expected| Path::new(executable_path) != expected)
-        || !installed_identity_matches
-        || Rfc3339MillisV1::new(started_at).is_err()
-        || Path::new(configured_socket_path) != expected_socket
-        || Path::new(effective_socket_path) != expected_socket
-    {
-        return Err(LocalFailure::response_invalid(
-            "daemon status response is invalid",
-        ));
-    }
-    let mut result = result.clone();
-    if schema == Some("podway.daemon-status-result/v1") {
-        result.insert(
-            "schema".to_owned(),
-            Value::String("podway.daemon-status-result/v2".to_owned()),
-        );
-        result.insert(
-            "readiness_state".to_owned(),
-            Value::String("ready".to_owned()),
-        );
-        result.insert(
-            "readiness_stage".to_owned(),
-            Value::String("ready".to_owned()),
-        );
-        result.insert(
-            "readiness_elapsed_ms".to_owned(),
-            result["uptime_ms"].clone(),
-        );
-        result.insert(
-            "worktree_recovery".to_owned(),
-            json!({"total":0,"completed":0,"failed":0}),
-        );
-    } else if !valid_live_readiness(&result) {
-        return Err(LocalFailure::response_invalid(
-            "daemon readiness response is invalid",
-        ));
-    }
-    Ok(result)
-}
-
-fn valid_live_readiness(result: &Map<String, Value>) -> bool {
-    let state = result.get("readiness_state").and_then(Value::as_str);
-    let stage = result.get("readiness_stage").and_then(Value::as_str);
-    let progress = result.get("worktree_recovery").and_then(Value::as_object);
-    let Some(progress) = progress else {
-        return false;
-    };
-    let total = progress.get("total").and_then(Value::as_u64);
-    let completed = progress.get("completed").and_then(Value::as_u64);
-    let failed = progress.get("failed").and_then(Value::as_u64);
-    matches!(state, Some("starting" | "recovering" | "ready" | "failed"))
-        && matches!(
-            stage,
-            Some("endpoint" | "registry" | "workspaces" | "jobs" | "ready" | "failed")
-        )
-        && (state != Some("ready") || stage == Some("ready"))
-        && result
-            .get("readiness_elapsed_ms")
-            .and_then(Value::as_u64)
-            .is_some()
-        && progress.len() == 3
-        && matches!((total, completed, failed), (Some(total), Some(completed), Some(failed)) if total <= 10_000 && completed <= total && failed <= completed)
-}
-
-fn service_logs_result(
-    command: &str,
-    location: podway_service::LogLocationV1,
-    follow: bool,
-    lines: Option<u16>,
-) -> Result<RunResult, LocalFailure> {
-    let path = location.path().as_path().to_path_buf();
-    let content = read_recent_log(&path, lines)?;
-    if follow {
-        Ok(RunResult::LogFollow {
-            path,
-            initial: content,
-        })
-    } else {
-        let path = path.display().to_string();
-        Ok(local_result(
-            command,
-            json!({ "path": path, "content": content }),
-            format!("{path}\n{content}"),
-        ))
-    }
-}
-
-fn read_recent_log(path: &Path, lines: Option<u16>) -> Result<String, LocalFailure> {
-    let mut file = File::open(path).map_err(|_| LocalFailure::daemon_unavailable("daemon.logs"))?;
-    let mut content = String::new();
-    Read::by_ref(&mut file)
-        .take(MAX_SERVICE_LOG_READ_BYTES + 1)
-        .read_to_string(&mut content)
-        .map_err(|_| LocalFailure::daemon_unavailable("daemon.logs"))?;
-    if content.len() as u64 > MAX_SERVICE_LOG_READ_BYTES {
-        return Err(LocalFailure::daemon_unavailable("daemon.logs"));
-    }
-    Ok(match lines {
-        Some(lines) => content
-            .lines()
-            .rev()
-            .take(usize::from(lines))
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect::<Vec<_>>()
-            .join("\n"),
-        None => content,
-    })
-}
-
-fn stream_log_follow(
-    path: &Path,
-    initial: &str,
-    stdout: &mut dyn Write,
-) -> Result<(), LocalFailure> {
-    if !initial.is_empty() {
-        stdout
-            .write_all(initial.as_bytes())
-            .and_then(|_| stdout.write_all(b"\n"))
-            .and_then(|_| stdout.flush())
-            .map_err(|_| render_write_failure())?;
-    }
-    let mut file = File::open(path).map_err(|_| LocalFailure::daemon_unavailable("daemon.logs"))?;
-    let mut offset = file
-        .seek(SeekFrom::End(0))
-        .map_err(|_| LocalFailure::daemon_unavailable("daemon.logs"))?;
-    loop {
-        thread::sleep(Duration::from_millis(250));
-        stream_log_follow_update(path, &mut file, &mut offset, stdout)?;
-    }
-}
-
-fn stream_log_follow_update(
-    path: &Path,
-    file: &mut File,
-    offset: &mut u64,
-    stdout: &mut dyn Write,
-) -> Result<(), LocalFailure> {
-    let active_metadata = match fs::metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(_) => return Err(LocalFailure::daemon_unavailable("daemon.logs")),
-    };
-    let file_metadata = file
-        .metadata()
-        .map_err(|_| LocalFailure::daemon_unavailable("daemon.logs"))?;
-    if active_metadata.dev() != file_metadata.dev() || active_metadata.ino() != file_metadata.ino()
-    {
-        *file = File::open(path).map_err(|_| LocalFailure::daemon_unavailable("daemon.logs"))?;
-        *offset = 0;
-    }
-
-    let length = file
-        .metadata()
-        .map_err(|_| LocalFailure::daemon_unavailable("daemon.logs"))?
-        .len();
-    if length < *offset {
-        *offset = file
-            .seek(SeekFrom::Start(0))
-            .map_err(|_| LocalFailure::daemon_unavailable("daemon.logs"))?;
-    }
-
-    let mut buffer = [0_u8; 8192];
-    while *offset < length {
-        let read = file
-            .read(&mut buffer)
-            .map_err(|_| LocalFailure::daemon_unavailable("daemon.logs"))?;
-        if read == 0 {
-            break;
-        }
-        stdout
-            .write_all(&buffer[..read])
-            .and_then(|_| stdout.flush())
-            .map_err(|_| render_write_failure())?;
-        *offset += read as u64;
-    }
-    Ok(())
-}
-
-fn map_service_error(error: ServiceErrorV1, command: &str) -> LocalFailure {
-    match error {
-        ServiceErrorV1::RuntimeResetV1(error) => {
-            let message = match (error.code(), error.reason) {
-                ("RUNTIME_RESET_IN_PROGRESS", RuntimeResetReasonV1::OperationInProgress) => {
-                    "runtime reset is in progress and fences the service lifecycle"
-                }
-                ("RUNTIME_RESET_UNSAFE", RuntimeResetReasonV1::UnsafePath) => {
-                    "runtime reset found an unsafe service lifecycle path"
-                }
-                ("RUNTIME_RESET_UNSAFE", _) => {
-                    "runtime reset could not safely inspect the service lifecycle"
-                }
-                _ => "runtime reset could not complete the service lifecycle request",
-            };
-            let mut failure = LocalFailure::catalog(error.code(), message, command);
-            failure.details = serde_json::json!({
-                "schema": "podway.runtime-reset-error-details/v1",
-                "mode": error.mode,
-                "reason": error.reason,
-                "result": null,
-                "retry": null,
-            })
-            .as_object()
-            .expect("reset error details are an object")
-            .clone();
-            failure
-        }
-        ServiceErrorV1::ContractMismatchV1 {
-            expected_product,
-            actual_product,
-            expected_manifest_digest,
-            actual_manifest_digest,
-        } => match (actual_product, actual_manifest_digest) {
-            (Some(actual_product), Some(actual_manifest_digest)) => LocalFailure::catalog(
-                "DAEMON_CONTRACT_MISMATCH",
-                "CLI and daemon contract identities differ.",
-                command,
-            )
-            .with_details(
-                json!({
-                    "expected": {
-                        "product": expected_product,
-                        "contract_manifest_digest": expected_manifest_digest,
-                    },
-                    "actual": {
-                        "product": actual_product,
-                        "contract_manifest_digest": actual_manifest_digest,
-                    },
-                    "admission": { "admitted": false },
-                })
-                .as_object()
-                .expect("contract mismatch details are an object")
-                .clone(),
-            ),
-            _ => LocalFailure::catalog(
-                "DAEMON_VERSION_INCOMPATIBLE",
-                "daemon identity probe returned malformed output",
-                command,
-            ),
-        },
-        ServiceErrorV1::InvalidExecutableV1 { message } => {
-            LocalFailure::catalog("DAEMON_VERSION_INCOMPATIBLE", message, command)
-        }
-        ServiceErrorV1::InvalidMetadataV1 { .. }
-        | ServiceErrorV1::PathSafetyV1(_)
-        | ServiceErrorV1::LogUnavailableV1 { .. } => LocalFailure::catalog(
-            "DAEMON_NOT_INSTALLED",
-            "the daemon service is not installed",
-            command,
-        ),
-        ServiceErrorV1::OperationFailureV1 { source, .. } => map_service_error(*source, command),
-        ServiceErrorV1::IoV1 { .. } => LocalFailure::catalog(
-            "DAEMON_UNAVAILABLE",
-            "the daemon service state is unavailable",
-            command,
-        ),
-        ServiceErrorV1::LaunchctlFailureV1 { .. } => LocalFailure::catalog(
-            "DAEMON_UNAVAILABLE",
-            "launchd could not complete the daemon service transition",
-            command,
-        ),
-        ServiceErrorV1::PermissionDeniedV1 { .. } => LocalFailure::catalog(
-            "DAEMON_UNAVAILABLE",
-            "the daemon service operation was denied",
-            command,
-        ),
-        ServiceErrorV1::StaleOrUnexpectedProcessV1 { .. } => LocalFailure::catalog(
-            "DAEMON_UNAVAILABLE",
-            "the daemon service process changed unexpectedly",
-            command,
-        ),
-        ServiceErrorV1::TimeoutV1 { .. } => LocalFailure::catalog(
-            "DAEMON_UNAVAILABLE",
-            "the daemon service lifecycle operation timed out",
-            command,
-        ),
-        ServiceErrorV1::OutputLimitExceededV1 { .. } => LocalFailure::catalog(
-            "DAEMON_UNAVAILABLE",
-            "launchctl returned too much output",
-            command,
-        ),
-        ServiceErrorV1::LaunchctlTimeoutV1 { .. } => LocalFailure::catalog(
-            "DAEMON_UNAVAILABLE",
-            "launchctl timed out during the daemon service transition",
-            command,
-        ),
     }
 }
 
@@ -5103,8 +2278,18 @@ fn local_result_v2(
     text: String,
     exit_code: i32,
 ) -> RunResult {
-    validate_command_result_v2(command, &result)
-        .expect("local v2 results must satisfy their closed contract");
+    if result.get("schema").and_then(Value::as_str) == Some("podway.session-start-result/v4") {
+        assert!(
+            podway_protocol::validate_daemon_free_document_v1(
+                "podway.session-start-result/v4",
+                &Value::Object(result.clone())
+            ),
+            "start preview must satisfy its current contract"
+        );
+    } else {
+        validate_command_result_v2(command, &result)
+            .expect("local v2 results must satisfy their closed contract");
+    }
     assert!(
         exit_code == 0 || exit_code == 1,
         "a v2 success envelope exits clean or domain, never usage or higher",
@@ -6587,43 +3772,30 @@ fn render_authoring_diagnostics(
     text
 }
 
-fn daemon_command_name(command: &DaemonCommand) -> &'static str {
-    match command {
-        DaemonCommand::Install { .. } => "daemon.install",
-        DaemonCommand::Uninstall { .. } => "daemon.uninstall",
-        DaemonCommand::Start => "daemon.start",
-        DaemonCommand::Stop => "daemon.stop",
-        DaemonCommand::Restart => "daemon.restart",
-        DaemonCommand::Status => "daemon.status",
-        DaemonCommand::WaitReady => "daemon.wait-ready",
-        DaemonCommand::Logs { .. } => "daemon.logs",
-    }
-}
-
-fn validate_daemon_flags(cli: &Cli) -> Result<(), LocalFailure> {
+fn validate_direct_flags(cli: &Cli) -> Result<(), LocalFailure> {
     let command = &cli.command;
     let wire = command
-        .daemon_wire_name()
+        .direct_route()
         .ok_or_else(|| LocalFailure::request_invalid("unsupported command"))?;
     let lookup = matches!(
         command,
-        Command::Job {
-            command: JobCommand::Lookup
+        Command::Outcome {
+            command: OutcomeCommand::Lookup
         }
     );
     if lookup && cli.idempotency_key.is_none() {
         return Err(LocalFailure::request_invalid(
-            "job lookup requires --idempotency-key",
+            "outcome lookup requires --idempotency-key",
         ));
     }
-    if !command.is_mutation() && (cli.detach || (cli.idempotency_key.is_some() && !lookup)) {
+    if !command.is_mutation() && cli.idempotency_key.is_some() && !lookup {
         return Err(LocalFailure::request_invalid(
-            "--detach and --idempotency-key apply only to mutations",
+            "--idempotency-key applies only to mutations or outcome lookup",
         ));
     }
-    if command.is_dry_run() && (cli.detach || cli.idempotency_key.is_some()) {
+    if command.is_dry_run() && cli.idempotency_key.is_some() {
         return Err(LocalFailure::request_invalid(
-            "dry-run commands cannot detach or use an idempotency key",
+            "dry-run commands cannot use an idempotency key",
         ));
     }
     let explicit = ExplicitPreconditions::parse(cli)?;
@@ -6721,11 +3893,6 @@ fn validate_daemon_flags(cli: &Cli) -> Result<(), LocalFailure> {
         ));
     }
     if let (true, Command::Reset(args)) = (wire == "workspace.reset_all", command) {
-        if !args.force {
-            return Err(LocalFailure::request_invalid(
-                "reset --all requires --force",
-            ));
-        }
         if args.dry_run {
             return Err(LocalFailure::request_invalid(
                 "reset --all does not support --dry-run",
@@ -7014,9 +4181,9 @@ fn confirm_if_required(
             .and_then(|()| stdout.flush())
             .map_err(|_| LocalFailure::response_invalid("cannot write confirmation prompt"))?;
         let mut answer = String::new();
-        io::stdin()
-            .read_line(&mut answer)
-            .map_err(|_| LocalFailure::daemon_unavailable(command))?;
+        io::stdin().read_line(&mut answer).map_err(|_| {
+            LocalFailure::internal("cannot read confirmation input").with_command(command)
+        })?;
         return if answer.trim_end_matches(['\r', '\n']) == exact_path {
             Ok(())
         } else {
@@ -7030,9 +4197,9 @@ fn confirm_if_required(
         .flush()
         .map_err(|_| LocalFailure::response_invalid("cannot write confirmation prompt"))?;
     let mut answer = String::new();
-    io::stdin()
-        .read_line(&mut answer)
-        .map_err(|_| LocalFailure::daemon_unavailable(command))?;
+    io::stdin().read_line(&mut answer).map_err(|_| {
+        LocalFailure::internal("cannot read confirmation input").with_command(command)
+    })?;
     if matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
         Ok(())
     } else {
@@ -7047,491 +4214,6 @@ fn workspace_removal_confirmation_path(target: &WorkspaceTarget) -> Result<&str,
         )
     })
 }
-fn confirm_daemon_uninstall(cli: &Cli) -> Result<(), LocalFailure> {
-    if cli.yes {
-        return Ok(());
-    }
-    if cli.json || !io::stdin().is_terminal() {
-        return Err(LocalFailure::confirmation_required("daemon.uninstall"));
-    }
-    let mut stdout = io::stdout().lock();
-    write!(stdout, "Remove the daemon service? [y/N] ")
-        .map_err(|_| LocalFailure::response_invalid("cannot write confirmation prompt"))?;
-    stdout
-        .flush()
-        .map_err(|_| LocalFailure::response_invalid("cannot write confirmation prompt"))?;
-    let mut answer = String::new();
-    io::stdin()
-        .read_line(&mut answer)
-        .map_err(|_| LocalFailure::daemon_unavailable("daemon.uninstall"))?;
-    if matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
-        Ok(())
-    } else {
-        Err(LocalFailure::confirmation_required("daemon.uninstall"))
-    }
-}
-
-fn daemon_payload(
-    command: &mut Command,
-    lookup_idempotency_key: Option<&str>,
-) -> Result<(OperationV1, Map<String, Value>), LocalFailure> {
-    let mut payload = Map::new();
-    let operation = match command {
-        Command::Workspace {
-            command: WorkspaceCommand::Repair,
-        }
-        | Command::Workspace {
-            command:
-                WorkspaceCommand::Mode {
-                    command: WorkspaceModeCommand::Apply { .. },
-                },
-        }
-        | Command::Workspace {
-            command: WorkspaceCommand::Remove { .. },
-        }
-        | Command::Job {
-            command: JobCommand::Cancel { .. },
-        }
-        | Command::Archive {
-            command: Some(ArchiveCommand::Purge { .. }),
-        } => OperationV1::Control,
-        Command::Init { .. } | Command::Reset(ResetArgs { all: true, .. }) => {
-            OperationV1::Bootstrap
-        }
-        _ if command.is_dry_run() => OperationV1::Query,
-        _ if command.is_mutation() => OperationV1::Mutate,
-        _ => OperationV1::Query,
-    };
-
-    match command {
-        Command::Init { repair } => {
-            if *repair {
-                payload.insert("repair".to_owned(), Value::Bool(true));
-            }
-        }
-        Command::Workspace {
-            command: WorkspaceCommand::Repair,
-        }
-        | Command::Workspace {
-            command: WorkspaceCommand::Show,
-        } => {}
-        Command::Workspace {
-            command:
-                WorkspaceCommand::Mode {
-                    command: WorkspaceModeCommand::Plan { to },
-                },
-        } => {
-            RuntimeModeV1::new(to.clone())
-                .map_err(|_| LocalFailure::request_invalid("target runtime mode is invalid"))?;
-            payload.insert("to".to_owned(), Value::String(to.clone()));
-        }
-        Command::Workspace {
-            command:
-                WorkspaceCommand::Mode {
-                    command: WorkspaceModeCommand::Apply { to, plan_token },
-                },
-        } => {
-            RuntimeModeV1::new(to.clone())
-                .map_err(|_| LocalFailure::request_invalid("target runtime mode is invalid"))?;
-            if plan_token.is_empty() || plan_token.len() > 4_096 {
-                return Err(LocalFailure::request_invalid("plan token is invalid"));
-            }
-            payload.insert("to".to_owned(), Value::String(to.clone()));
-            payload.insert("plan_token".to_owned(), Value::String(plan_token.clone()));
-        }
-        Command::Workspace {
-            command: WorkspaceCommand::Remove { force },
-        } => {
-            payload.insert("force".to_owned(), Value::Bool(*force));
-            payload.insert("confirmed".to_owned(), Value::Bool(true));
-        }
-        Command::Doctor { deep } => {
-            payload.insert("deep".to_owned(), Value::Bool(*deep));
-        }
-        Command::Start(args) => {
-            payload.insert("task_title".to_owned(), Value::String(args.task.clone()));
-            if let Some(preset) = &args.preset {
-                payload.insert("preset".to_owned(), Value::String(preset.clone()));
-            }
-            if let Some(procedure) = &args.procedure {
-                payload.insert("procedure".to_owned(), Value::String(procedure.clone()));
-            }
-            if let Some(digest) = &args.expect_procedure_digest {
-                payload.insert(
-                    "expected_procedure_digest".to_owned(),
-                    Value::String(digest.clone()),
-                );
-            }
-            if args.dry_run {
-                payload.insert("dry_run".to_owned(), Value::Bool(true));
-            }
-            if args.auto_archive_terminal {
-                payload.insert("replace_eligible".to_owned(), Value::Bool(true));
-            } else if let Some(disposition) = &args.terminal_disposition {
-                let (disposition, actor) = match disposition {
-                    StartTerminalDisposition::HandedOff {
-                        summary,
-                        reference,
-                        actor,
-                    } => (
-                        json!({
-                            "kind": "handed_off",
-                            "summary": summary,
-                            "reference": reference,
-                        }),
-                        actor,
-                    ),
-                    StartTerminalDisposition::NotRequired { reason, actor } => (
-                        json!({
-                            "kind": "not_required",
-                            "reason": reason,
-                        }),
-                        actor,
-                    ),
-                };
-                payload.insert(
-                    "resolution".to_owned(),
-                    json!({
-                        "mode": "dispose_and_archive",
-                        "disposition": disposition,
-                        "actor": actor,
-                    }),
-                );
-            } else if let Some(policy) = args.on_existing {
-                let resolution = match policy {
-                    ExistingSessionPolicy::Preserve => json!({
-                        "mode": "supersede",
-                        "reason": args.supersede_reason,
-                        "actor": args.actor,
-                    }),
-                    ExistingSessionPolicy::Delete => json!({
-                        "mode": "delete",
-                        "confirmed": args.delete_confirmed,
-                        "progress_summary": args.progress_summary,
-                    }),
-                };
-                payload.insert("resolution".to_owned(), resolution);
-            }
-        }
-        Command::Begin(args) => {
-            if let Some(goal) = &args.goal {
-                payload.insert("goal".to_owned(), Value::String(goal.clone()));
-                payload.insert(
-                    "criteria".to_owned(),
-                    Value::Array(criteria_json(&args.criterion)),
-                );
-                insert_actor(&mut payload, args.actor.as_deref());
-            }
-        }
-        Command::Status(args) => {
-            read_payload(&mut payload, &args.read);
-            if args.compact {
-                payload.insert("compact".to_owned(), Value::Bool(true));
-            }
-            if let Some(history_before) = args.history_before {
-                payload.insert("history_before".to_owned(), json!(history_before));
-            }
-        }
-        Command::Next(args) => read_payload(&mut payload, args),
-        Command::Observe(args) => read_payload(&mut payload, args),
-        Command::Evidence {
-            command: EvidenceCommand::Read(args),
-        } => {
-            payload.insert("source".to_owned(), Value::String(args.source.clone()));
-            payload.insert("item_id".to_owned(), Value::String(args.item.clone()));
-            if let Some(token) = &args.page_token {
-                payload.insert("page_token".to_owned(), Value::String(token.clone()));
-            }
-        }
-        Command::Delegation {
-            command: DelegationCommand::Package,
-        } => {}
-        Command::Delegation {
-            command: DelegationCommand::Receipt { session, attempt },
-        } => {
-            payload.insert("session_id".to_owned(), Value::String(session.clone()));
-            payload.insert("attempt_id".to_owned(), Value::String(attempt.clone()));
-        }
-        Command::Delegation {
-            command: DelegationCommand::Accept(args),
-        } => {
-            payload.insert(
-                "input".to_owned(),
-                args.input
-                    .clone()
-                    .expect("delegation acceptance stdin was prepared"),
-            );
-        }
-        Command::Complete => {}
-        Command::Decide(args) => {
-            payload.insert("option_id".to_owned(), Value::String(args.option.clone()));
-            payload.insert("reason".to_owned(), Value::String(args.reason.clone()));
-            insert_actor(&mut payload, args.actor.as_deref());
-        }
-        Command::Rework(args) => {
-            payload.insert(
-                "target_graph_node_id".to_owned(),
-                Value::String(args.to.clone()),
-            );
-            payload.insert("reason".to_owned(), Value::String(args.reason.clone()));
-            insert_actor(&mut payload, args.actor.as_deref());
-        }
-        Command::Goal {
-            command: GoalCommand::Define(args),
-        } => {
-            insert_goal_definition(
-                &mut payload,
-                &args.goal,
-                &args.criterion,
-                args.actor.as_deref(),
-            );
-        }
-        Command::Goal {
-            command: GoalCommand::Revise(args),
-        } => {
-            insert_goal_definition(
-                &mut payload,
-                &args.goal,
-                &args.criterion,
-                args.actor.as_deref(),
-            );
-            payload.insert(
-                "target_graph_node_id".to_owned(),
-                Value::String(args.rework_to.clone()),
-            );
-            payload.insert("reason".to_owned(), Value::String(args.reason.clone()));
-            if args.reactivate {
-                payload.insert("reactivate".to_owned(), Value::Bool(true));
-            }
-        }
-        Command::Goal {
-            command: GoalCommand::AssessCriterion(args),
-        } => {
-            payload.insert(
-                "criterion_id".to_owned(),
-                Value::String(args.criterion_id.clone()),
-            );
-            payload.insert("status".to_owned(), Value::String(args.status.clone()));
-            payload.insert("reason".to_owned(), Value::String(args.reason.clone()));
-            if !args.evidence.is_empty() {
-                payload.insert("evidence".to_owned(), json!(args.evidence));
-            }
-            if !args.item.is_empty() {
-                payload.insert("items".to_owned(), json!(args.item));
-            }
-            insert_actor(&mut payload, args.actor.as_deref());
-        }
-        Command::Skip { reason } => {
-            if let Some(reason) = reason {
-                payload.insert("reason".to_owned(), Value::String(reason.clone()));
-            }
-        }
-        Command::Retry { reason } | Command::Block { reason } | Command::Cancel { reason } => {
-            payload.insert("reason".to_owned(), Value::String(reason.clone()));
-        }
-        Command::Unblock { blocker_id, all } => {
-            if let Some(blocker_id) = blocker_id {
-                payload.insert("blocker_id".to_owned(), Value::String(blocker_id.clone()));
-            }
-            payload.insert("all".to_owned(), Value::Bool(*all));
-        }
-        Command::Disposition { command } => match command {
-            DispositionCommand::HandedOff {
-                summary,
-                reference,
-                actor,
-            } => {
-                payload.insert("kind".to_owned(), Value::String("handed_off".to_owned()));
-                payload.insert("summary".to_owned(), Value::String(summary.clone()));
-                payload.insert("reference".to_owned(), Value::String(reference.clone()));
-                insert_actor(&mut payload, actor.as_deref());
-            }
-            DispositionCommand::NotRequired { reason, actor } => {
-                payload.insert("kind".to_owned(), Value::String("not_required".to_owned()));
-                payload.insert("reason".to_owned(), Value::String(reason.clone()));
-                insert_actor(&mut payload, actor.as_deref());
-            }
-        },
-        Command::Reset(args) => {
-            if args.all {
-                payload.insert("confirmed".to_owned(), Value::Bool(true));
-            } else if args.dry_run {
-                payload.insert("dry_run".to_owned(), Value::Bool(true));
-            } else if let Some(summary) = &args.progress_summary {
-                payload.insert("confirmed".to_owned(), Value::Bool(true));
-                payload.insert(
-                    "progress_summary".to_owned(),
-                    Value::String(summary.clone()),
-                );
-            }
-        }
-        Command::Archive { command } => match command {
-            None | Some(ArchiveCommand::List) => {}
-            Some(ArchiveCommand::Show {
-                session_id,
-                verbose,
-                history_before,
-            }) => {
-                payload.insert("session_id".to_owned(), Value::String(session_id.clone()));
-                if *verbose {
-                    payload.insert("verbose".to_owned(), Value::Bool(true));
-                }
-                if let Some(history_before) = history_before {
-                    payload.insert("history_before".to_owned(), json!(history_before));
-                }
-            }
-            Some(ArchiveCommand::Purge {
-                session_id,
-                expected_session_revision,
-            }) => {
-                payload.insert("session_id".to_owned(), Value::String(session_id.clone()));
-                payload.insert(
-                    "expected_session_revision".to_owned(),
-                    json!(expected_session_revision.expect(
-                        "archive purge revision was validated before payload construction"
-                    )),
-                );
-                payload.insert("confirmed".to_owned(), Value::Bool(true));
-            }
-        },
-        Command::Check { item_id } | Command::Uncheck { item_id } | Command::Clear { item_id } => {
-            payload.insert("item_id".to_owned(), Value::String(item_id.clone()));
-        }
-        Command::Set(args) => {
-            let value = args
-                .value
-                .clone()
-                .ok_or_else(|| LocalFailure::request_invalid("set requires a value or --stdin"))?;
-            payload.insert("item_id".to_owned(), Value::String(args.item_id.clone()));
-            payload.insert("value".to_owned(), Value::String(value));
-        }
-        Command::Add { item_id, value } => {
-            payload.insert("item_id".to_owned(), Value::String(item_id.clone()));
-            payload.insert("value".to_owned(), Value::String(value.clone()));
-        }
-        Command::Remove {
-            item_id,
-            value,
-            ignore_missing,
-        } => {
-            payload.insert("item_id".to_owned(), Value::String(item_id.clone()));
-            payload.insert("value".to_owned(), Value::String(value.clone()));
-            payload.insert("ignore_missing".to_owned(), Value::Bool(*ignore_missing));
-        }
-        Command::Attach(args) => {
-            payload.insert("item_id".to_owned(), Value::String(args.item_id.clone()));
-            if let Some(path) = &args.path {
-                payload.insert("path".to_owned(), Value::String(path.clone()));
-            }
-            if let Some(reference) = &args.reference {
-                payload.insert("reference".to_owned(), Value::String(reference.clone()));
-                payload.insert(
-                    "digest".to_owned(),
-                    Value::String(args.digest.clone().expect("validated reference digest")),
-                );
-                payload.insert(
-                    "size_bytes".to_owned(),
-                    Value::from(args.size.expect("validated reference size")),
-                );
-            }
-            if let Some(media_type) = &args.media_type {
-                payload.insert("media_type".to_owned(), Value::String(media_type.clone()));
-            }
-        }
-        Command::Record(args) => {
-            let input = args
-                .input
-                .as_ref()
-                .ok_or_else(|| LocalFailure::request_invalid("record requires --stdin"))?;
-            payload.insert(
-                "operations".to_owned(),
-                serde_json::to_value(&input.operations).map_err(|_| {
-                    LocalFailure::request_invalid("cannot encode record operations")
-                })?,
-            );
-        }
-        Command::Job { command } => match command {
-            JobCommand::List { state } => {
-                if let Some(state) = state {
-                    payload.insert("state".to_owned(), Value::String(state.clone()));
-                }
-            }
-            JobCommand::Lookup => {
-                let key = IdempotencyKeyV1::new(
-                    lookup_idempotency_key
-                        .ok_or_else(|| {
-                            LocalFailure::request_invalid("job lookup requires --idempotency-key")
-                        })?
-                        .to_owned(),
-                )
-                .map_err(|_| LocalFailure::request_invalid("invalid idempotency key"))?;
-                payload.insert(
-                    "idempotency_key".to_owned(),
-                    Value::String(key.as_str().to_owned()),
-                );
-            }
-            JobCommand::Status { job_id }
-            | JobCommand::Wait { job_id }
-            | JobCommand::Cancel { job_id } => {
-                payload.insert("job_id".to_owned(), Value::String(job_id.clone()));
-            }
-        },
-        Command::CompleteDynamic { .. }
-        | Command::Help { .. }
-        | Command::Version { .. }
-        | Command::Completions { .. }
-        | Command::Procedure { .. }
-        | Command::Preset { .. }
-        | Command::Daemon { .. }
-        | Command::Runtime { .. }
-        | Command::Terminate => {
-            return Err(LocalFailure::request_invalid("unsupported daemon command"));
-        }
-    }
-    Ok((operation, payload))
-}
-
-fn criteria_json(criteria: &[String]) -> Vec<Value> {
-    criteria
-        .iter()
-        .map(|criterion| {
-            let (criterion_id, statement) = criterion
-                .split_once('=')
-                .expect("criterion shape is validated before payload construction");
-            json!({ "criterion_id": criterion_id, "statement": statement })
-        })
-        .collect()
-}
-
-fn insert_actor(payload: &mut Map<String, Value>, actor: Option<&str>) {
-    if let Some(actor) = actor {
-        payload.insert("actor".to_owned(), Value::String(actor.to_owned()));
-    }
-}
-
-fn insert_goal_definition(
-    payload: &mut Map<String, Value>,
-    goal: &str,
-    criteria: &[String],
-    actor: Option<&str>,
-) {
-    payload.insert("goal".to_owned(), Value::String(goal.to_owned()));
-    payload.insert("criteria".to_owned(), Value::Array(criteria_json(criteria)));
-    insert_actor(payload, actor);
-}
-
-fn read_payload(payload: &mut Map<String, Value>, args: &ReadArgs) {
-    if args.verbose {
-        payload.insert("verbose".to_owned(), Value::Bool(true));
-    }
-    if args.wait_for_idle {
-        payload.insert("wait_for_idle".to_owned(), Value::Bool(true));
-    }
-    if let Some(after_job) = &args.after_job {
-        payload.insert("after_job_id".to_owned(), Value::String(after_job.clone()));
-    }
-}
-
 fn prepare_stdin_payload(command: &mut Command) -> Result<(), LocalFailure> {
     match command {
         Command::Set(args) if args.stdin => {
@@ -7569,7 +4251,7 @@ fn prepare_stdin_payload(command: &mut Command) -> Result<(), LocalFailure> {
                                 (
                                     "schema".to_owned(),
                                     Value::String(
-                                        "podway.v2-runtime-error-details/v1".to_owned(),
+                                        "podway.v2-runtime-error-details/v2".to_owned(),
                                     ),
                                 ),
                                 (
@@ -7580,8 +4262,7 @@ fn prepare_stdin_payload(command: &mut Command) -> Result<(), LocalFailure> {
                                 ("actual".to_owned(), json!(actual)),
                                 ("maximum".to_owned(), json!(maximum)),
                                 ("unit".to_owned(), Value::String(unit.to_owned())),
-                                ("admission".to_owned(), json!({"admitted": false})),
-                            ]);
+                                                ]);
                             failure
                         }
                         error => LocalFailure::request_invalid(error.to_string()),
@@ -7734,7 +4415,7 @@ fn workspace_target(worktree: Option<PathBuf>) -> Result<WorkspaceTarget, LocalF
         path
     } else {
         env::current_dir()
-            .map_err(|_| LocalFailure::daemon_unavailable("cli"))?
+            .map_err(|_| LocalFailure::internal("current directory cannot be resolved"))?
             .join(path)
     };
     let canonical = match fs::canonicalize(&absolute) {
@@ -7788,237 +4469,6 @@ fn workspace_removal_target(target: WorkspaceTarget) -> Result<WorkspaceTarget, 
     ))
 }
 
-fn daemon_client(
-    wait_timeout_ms: u64,
-    socket_path: Option<&Path>,
-    mode: &RuntimeModeV1,
-) -> Result<DaemonClientV1, LocalFailure> {
-    if !mode.is_production() && socket_path.is_some() {
-        return Err(LocalFailure::request_invalid(
-            "--mode and --socket are mutually exclusive",
-        ));
-    }
-    let paths = effective_runtime_paths(mode, "cli")?;
-    let paths = if socket_path.is_some() || !mode.is_production() {
-        paths
-    } else {
-        resolve_installed_service_endpoint(paths, "cli", false)?
-    };
-    let read_timeout = Duration::from_millis(wait_timeout_ms.saturating_add(1_000))
-        .max(DEFAULT_DAEMON_CONNECT_TIMEOUT_V1);
-    let timeouts = DaemonClientTimeoutsV1::new(
-        DEFAULT_DAEMON_CONNECT_TIMEOUT_V1,
-        read_timeout,
-        DEFAULT_DAEMON_WRITE_TIMEOUT_V1,
-    )
-    .map_err(|_| LocalFailure::daemon_unavailable("cli"))?;
-    let paths = match socket_path {
-        Some(socket_path) => paths
-            .with_socket_path(socket_path)
-            .map_err(socket_path_failure)?,
-        None => paths,
-    };
-    Ok(DaemonClientV1::with_timeouts(paths, timeouts))
-}
-
-struct RequestSpec {
-    operation: OperationV1,
-    expected_uuid: Option<WorkspaceId>,
-    idempotency_key: Option<IdempotencyKeyV1>,
-    preconditions: PreconditionsV1,
-    detach: bool,
-    wait_timeout_ms: u64,
-    payload: Map<String, Value>,
-}
-
-impl RequestSpec {
-    fn query(
-        wait_timeout_ms: u64,
-        payload: Map<String, Value>,
-        expected_uuid: Option<WorkspaceId>,
-    ) -> Self {
-        Self {
-            operation: OperationV1::Query,
-            expected_uuid,
-            idempotency_key: None,
-            preconditions: PreconditionsV1::default(),
-            detach: false,
-            wait_timeout_ms,
-            payload,
-        }
-    }
-}
-
-fn build_request(
-    command: &str,
-    target: &WorkspaceTarget,
-    spec: RequestSpec,
-) -> Result<RequestEnvelopeV1, LocalFailure> {
-    let RequestSpec {
-        operation,
-        expected_uuid,
-        idempotency_key,
-        preconditions,
-        detach,
-        wait_timeout_ms,
-        mut payload,
-    } = spec;
-    let selector = target.selector(expected_uuid.clone())?;
-    payload.insert(
-        "selector".to_owned(),
-        serde_json::to_value(selector)
-            .map_err(|_| LocalFailure::request_invalid("cannot encode worktree selector"))?,
-    );
-    let request_id = RequestIdV1::new(Uuid::new_v4().to_string())
-        .map_err(|_| LocalFailure::daemon_unavailable(command))?;
-    let client = ClientInfoV1::new("podway", env!("CARGO_PKG_VERSION"), std::process::id())
-        .map_err(|_| LocalFailure::daemon_unavailable(command))?;
-    let command_name = CommandNameV1::new(command.to_owned())
-        .map_err(|_| LocalFailure::request_invalid("invalid command"))?;
-    let workspace = target.context(expected_uuid)?;
-    let options = RequestOptionsV1::new(detach, wait_timeout_ms)
-        .map_err(|_| LocalFailure::request_invalid("invalid timeout"))?;
-    RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
-        request_id,
-        client,
-        operation,
-        command: command_name,
-        workspace: Some(workspace),
-        idempotency_key,
-        preconditions,
-        options,
-        payload,
-    })
-    .map_err(|_| LocalFailure::request_invalid("invalid request"))
-}
-
-fn build_daemon_status_request() -> Result<RequestEnvelopeV1, LocalFailure> {
-    RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
-        request_id: RequestIdV1::new(Uuid::new_v4().to_string())
-            .map_err(|_| LocalFailure::daemon_unavailable("daemon.status"))?,
-        client: ClientInfoV1::new("podway", env!("CARGO_PKG_VERSION"), std::process::id())
-            .map_err(|_| LocalFailure::daemon_unavailable("daemon.status"))?,
-        operation: OperationV1::Control,
-        command: CommandNameV1::new("daemon.status")
-            .map_err(|_| LocalFailure::request_invalid("invalid daemon status command"))?,
-        workspace: None,
-        idempotency_key: None,
-        preconditions: PreconditionsV1::default(),
-        options: RequestOptionsV1::new(false, 0)
-            .map_err(|_| LocalFailure::request_invalid("invalid daemon status options"))?,
-        payload: Map::new(),
-    })
-    .map_err(|_| LocalFailure::request_invalid("invalid daemon status request"))
-}
-
-fn build_daemon_terminate_request() -> Result<RequestEnvelopeV1, LocalFailure> {
-    RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
-        request_id: RequestIdV1::new(Uuid::new_v4().to_string())
-            .map_err(|_| LocalFailure::daemon_unavailable("daemon.terminate"))?,
-        client: ClientInfoV1::new("podway", env!("CARGO_PKG_VERSION"), std::process::id())
-            .map_err(|_| LocalFailure::daemon_unavailable("daemon.terminate"))?,
-        operation: OperationV1::Control,
-        command: CommandNameV1::new("daemon.terminate")
-            .map_err(|_| LocalFailure::request_invalid("invalid daemon terminate command"))?,
-        workspace: None,
-        idempotency_key: None,
-        preconditions: PreconditionsV1::default(),
-        options: RequestOptionsV1::new(false, 0)
-            .map_err(|_| LocalFailure::request_invalid("invalid daemon terminate options"))?,
-        payload: Map::new(),
-    })
-    .map_err(|_| LocalFailure::request_invalid("invalid daemon terminate request"))
-}
-
-fn mutation_key(value: Option<String>) -> Result<IdempotencyKeyV1, LocalFailure> {
-    IdempotencyKeyV1::new(value.unwrap_or_else(|| Uuid::new_v4().to_string()))
-        .map_err(|_| LocalFailure::request_invalid("invalid idempotency key"))
-}
-
-fn request_daemon(
-    client: &DaemonClientV1,
-    request: &RequestEnvelopeV1,
-) -> Result<ResponseEnvelopeV2, LocalFailure> {
-    client.request_v2(request).map_err(|error| {
-        map_client_error_for_request(error, request)
-            .with_correlation(request.command().as_str(), request.request_id().as_str())
-    })
-}
-
-fn map_client_error_for_request(
-    error: DaemonClientErrorV1,
-    request: &RequestEnvelopeV1,
-) -> LocalFailure {
-    let is_mutation = matches!(
-        request.operation(),
-        OperationV1::Mutate | OperationV1::Bootstrap
-    );
-    if is_mutation && error.request_may_have_been_transmitted() {
-        return request.idempotency_key().map_or_else(
-            || LocalFailure::response_invalid("mutation response was lost without a request key"),
-            LocalFailure::mutation_outcome_unknown,
-        );
-    }
-    let mut failure = map_client_error(error);
-    if is_mutation {
-        failure.details.insert(
-            "admission".to_owned(),
-            json!({
-                "admitted": false,
-            }),
-        );
-    }
-    failure
-}
-
-fn re_correlate_preflight_error(
-    error: &podway_protocol::ErrorEnvelopeV1,
-    command: &str,
-) -> Result<RunResult, LocalFailure> {
-    let mut envelope = serde_json::to_value(error)
-        .map_err(|_| LocalFailure::response_invalid("status preflight error cannot be read"))?;
-    {
-        let envelope = envelope
-            .as_object_mut()
-            .ok_or_else(|| LocalFailure::response_invalid("status preflight error is invalid"))?;
-        envelope.insert("command".to_owned(), Value::String(command.to_owned()));
-        let details = envelope
-            .get_mut("details")
-            .and_then(Value::as_object_mut)
-            .ok_or_else(|| LocalFailure::response_invalid("status preflight error is invalid"))?;
-        details.remove("job_id");
-        details.remove("job_sequence");
-        details.insert("admission".to_owned(), json!({"admitted": false}));
-    }
-    let error = serde_json::from_value(envelope)
-        .map_err(|_| LocalFailure::response_invalid("status preflight error is invalid"))?;
-    Ok(RunResult::Response(Box::new(ResponseEnvelopeV2::Error(
-        error,
-    ))))
-}
-
-fn map_client_error(error: DaemonClientErrorV1) -> LocalFailure {
-    match error {
-        DaemonClientErrorV1::RequestPossiblyTransmitted { source } => map_client_error(*source),
-        DaemonClientErrorV1::RequestAdmission { .. }
-        | DaemonClientErrorV1::RequestEncoding { .. } => {
-            LocalFailure::request_invalid("the request cannot be admitted")
-        }
-        DaemonClientErrorV1::ResponseDecoding { .. }
-        | DaemonClientErrorV1::Framing { .. }
-        | DaemonClientErrorV1::MissingResponse
-        | DaemonClientErrorV1::ResponseMismatch { .. } => {
-            LocalFailure::response_invalid("the daemon returned an invalid response")
-        }
-        DaemonClientErrorV1::InvalidTimeout { .. }
-        | DaemonClientErrorV1::Connection { .. }
-        | DaemonClientErrorV1::EndpointSecurity { .. }
-        | DaemonClientErrorV1::PeerIdentity { .. }
-        | DaemonClientErrorV1::SocketConfiguration { .. }
-        | DaemonClientErrorV1::Timeout { .. } => LocalFailure::daemon_unavailable("cli"),
-    }
-}
-
 fn parse_timeout_millis(value: &str) -> Result<u64, String> {
     let (number, multiplier) = if let Some(number) = value.strip_suffix("ms") {
         (number, 1_u64)
@@ -8059,31 +4509,6 @@ trait LocalEnvelopeClock {
     fn now(&self) -> SystemTime;
 }
 
-#[derive(Clone, Copy, Debug)]
-struct SystemServiceClock(UnixMillis);
-
-fn system_service_clock(
-    now: SystemTime,
-    command: &str,
-) -> Result<SystemServiceClock, LocalFailure> {
-    let milliseconds = now
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| {
-            LocalFailure::response_invalid("system clock is before the Unix epoch")
-                .with_command(command)
-        })?
-        .as_millis();
-    let milliseconds = u64::try_from(milliseconds).map_err(|_| {
-        LocalFailure::response_invalid("system clock is out of range").with_command(command)
-    })?;
-    Ok(SystemServiceClock(UnixMillis::new(milliseconds)))
-}
-
-impl ServiceClockV1 for SystemServiceClock {
-    fn now(&self) -> UnixMillis {
-        self.0
-    }
-}
 #[derive(Clone, Copy, Debug, Default)]
 struct SystemLocalEnvelopeClock;
 
@@ -8167,27 +4592,42 @@ fn render_result_with_clock_and_writers(
     stderr: &mut dyn Write,
 ) -> i32 {
     match result {
-        RunResult::Response(response) => render_response_v2_with_clock_and_writers(
-            response,
-            None,
-            json_output,
-            quiet,
-            clock,
-            stdout,
-            stderr,
-        ),
-        RunResult::StartResponse {
+        RunResult::Direct {
             response,
             procedure_check_path,
-        } => render_response_v2_with_clock_and_writers(
-            response,
-            Some(procedure_check_path),
-            json_output,
-            quiet,
-            clock,
-            stdout,
-            stderr,
-        ),
+        } => {
+            let value = match &**response {
+                podway_engine::direct_api::DirectResponseV1::Success(output) => output.as_value(),
+                podway_engine::direct_api::DirectResponseV1::Failure(error) => error.as_value(),
+            };
+            if json_output {
+                if serde_json::to_writer(&mut *stdout, value).is_err() || writeln!(stdout).is_err()
+                {
+                    return LOCAL_CLIENT_EXIT;
+                }
+            } else {
+                let rendered = match &**response {
+                    podway_engine::direct_api::DirectResponseV1::Success(output) if !quiet => {
+                        render_human_output_direct(output, stdout)
+                    }
+                    podway_engine::direct_api::DirectResponseV1::Failure(error) => {
+                        render_human_error_direct(error, procedure_check_path.as_deref(), stderr)
+                    }
+                    _ => Ok(()),
+                };
+                if rendered.is_err() {
+                    return LOCAL_CLIENT_EXIT;
+                }
+            }
+            match &**response {
+                podway_engine::direct_api::DirectResponseV1::Success(_) => 0,
+                podway_engine::direct_api::DirectResponseV1::Failure(error) => {
+                    error.as_value()["exit_code"]
+                        .as_i64()
+                        .unwrap_or(i64::from(LOCAL_CLIENT_EXIT)) as i32
+                }
+            }
+        }
         RunResult::VersionSummary {
             name,
             version,
@@ -8219,17 +4659,37 @@ fn render_result_with_clock_and_writers(
                     .expect("UUID-v4 request identifiers satisfy the public protocol");
                 let command = CommandNameV1::new(command.clone())
                     .expect("local command names satisfy the public protocol");
-                let output = OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
-                    request_id,
-                    command,
-                    generated_at,
-                    workspace: None,
-                    job: None,
-                    session: None,
-                    result: result.clone(),
-                    warnings: Vec::new(),
-                })
-                .expect("local results satisfy the public v3 output protocol");
+                let output = if command.as_str() == "version" {
+                    serde_json::to_value(
+                        OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
+                            request_id,
+                            command,
+                            generated_at,
+                            workspace: None,
+                            job: None,
+                            session: None,
+                            result: result.clone(),
+                            warnings: Vec::new(),
+                        })
+                        .expect("version identity retains its generated contract until V2DFC-009"),
+                    )
+                    .expect("version output serializes")
+                } else {
+                    let Ok(output) = podway_protocol::OutputEnvelopeV4::new(
+                        podway_protocol::OutputEnvelopeInputV4 {
+                            request_id,
+                            command,
+                            generated_at,
+                            workspace: None,
+                            session: None,
+                            result: result.clone(),
+                            warnings: Vec::new(),
+                        },
+                    ) else {
+                        return LOCAL_CLIENT_EXIT;
+                    };
+                    output.into_value()
+                };
                 if serde_json::to_writer(&mut *stdout, &output).is_err()
                     || writeln!(stdout).is_err()
                 {
@@ -8255,17 +4715,19 @@ fn render_result_with_clock_and_writers(
                     .expect("UUID-v4 request identifiers satisfy the public protocol");
                 let command = CommandNameV1::new(command.clone())
                     .expect("local command names satisfy the public protocol");
-                let output = OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
-                    request_id,
-                    command,
-                    generated_at,
-                    workspace: None,
-                    job: None,
-                    session: None,
-                    result: result.clone(),
-                    warnings: Vec::new(),
-                })
-                .expect("local v2 results satisfy the public output protocol");
+                let Ok(output) = podway_protocol::OutputEnvelopeV4::new(
+                    podway_protocol::OutputEnvelopeInputV4 {
+                        request_id,
+                        command,
+                        generated_at,
+                        workspace: None,
+                        session: None,
+                        result: result.clone(),
+                        warnings: Vec::new(),
+                    },
+                ) else {
+                    return LOCAL_CLIENT_EXIT;
+                };
                 if serde_json::to_writer(&mut *stdout, &output).is_err()
                     || writeln!(stdout).is_err()
                 {
@@ -8278,23 +4740,6 @@ fn render_result_with_clock_and_writers(
             }
             *exit_code
         }
-        RunResult::LogFollow { path, initial } => {
-            if json_output {
-                return render_local_failure_with_clock_and_writers(
-                    LocalFailure::request_invalid("--follow cannot be combined with --json"),
-                    true,
-                    clock,
-                    stdout,
-                    stderr,
-                );
-            }
-            match stream_log_follow(path, initial, stdout) {
-                Ok(()) => 0,
-                Err(failure) => render_local_failure_with_clock_and_writers(
-                    failure, false, clock, stdout, stderr,
-                ),
-            }
-        }
     }
 }
 
@@ -8306,61 +4751,33 @@ fn render_clock_failure_to(failure: LocalFailure, stderr: &mut dyn Write) -> i32
     }
 }
 
-fn render_response_v2_with_clock_and_writers(
-    response: &ResponseEnvelopeV2,
-    procedure_check_path: Option<&str>,
-    json_output: bool,
-    quiet: bool,
-    clock: &impl LocalEnvelopeClock,
-    stdout: &mut dyn Write,
-    stderr: &mut dyn Write,
-) -> i32 {
-    if json_output {
-        if serde_json::to_writer(&mut *stdout, response).is_err() || writeln!(stdout).is_err() {
-            return LOCAL_CLIENT_EXIT;
-        }
-    } else {
-        let rendered = match response {
-            ResponseEnvelopeV2::OutputV2(output) if !quiet => {
-                render_human_output_v2(output, stdout)
-            }
-            ResponseEnvelopeV2::Error(error) => {
-                render_human_error_v2(error, procedure_check_path, stderr)
-            }
-            ResponseEnvelopeV2::OutputV2(_) => Ok(()),
-        };
-        if let Err(failure) = rendered {
-            return render_local_failure_with_clock_and_writers(
-                failure, false, clock, stdout, stderr,
-            );
-        }
-    }
-    match response {
-        ResponseEnvelopeV2::OutputV2(_) => 0,
-        ResponseEnvelopeV2::Error(error) => i32::from(error.exit_code().get()),
-    }
-}
-
-fn render_human_error_v2(
-    error: &ErrorEnvelopeV1,
+fn render_human_error_direct(
+    error: &podway_protocol::ErrorEnvelopeV2,
     procedure_check_path: Option<&str>,
     stderr: &mut dyn Write,
 ) -> Result<(), LocalFailure> {
+    let error = error.as_value();
     write_text_line(
         stderr,
-        format_args!("error: {}: {}", error.code().as_str(), error.message()),
+        format_args!(
+            "error: {}: {}",
+            error["code"].as_str().unwrap_or_default(),
+            error["message"].as_str().unwrap_or_default()
+        ),
     )?;
-    if error.code().as_str().starts_with("DELEGATION_")
-        && let Some(reason) = error.details().get("reason").and_then(Value::as_str)
+    if error["code"]
+        .as_str()
+        .unwrap_or_default()
+        .starts_with("DELEGATION_")
+        && let Some(reason) = error["details"].get("reason").and_then(Value::as_str)
     {
         write_text_line(stderr, format_args!("reason: {reason}"))?;
     }
-    if error.code().as_str() != "PROCEDURE_V2_SCHEMA_INVALID" {
+    if error["code"].as_str().unwrap_or_default() != "PROCEDURE_V2_SCHEMA_INVALID" {
         return Ok(());
     }
 
-    if let Some(codes) = error
-        .details()
+    if let Some(codes) = error["details"]
         .get("diagnostic_codes")
         .and_then(Value::as_array)
     {
@@ -8389,51 +4806,36 @@ fn render_human_error_v2(
     Ok(())
 }
 
-fn render_human_output_v2(
-    output: &OutputEnvelopeV3,
+fn render_human_output_direct(
+    output: &podway_protocol::OutputEnvelopeV4,
     stdout: &mut dyn Write,
 ) -> Result<(), LocalFailure> {
-    if let Some(workspace) = output.workspace() {
+    let value = output.as_value();
+    if let Some(workspace) = value.get("workspace") {
         write_text_line(
             stdout,
             format_args!(
                 "workspace: {} {} sequence={}",
-                workspace.uuid().as_str(),
-                workspace.root(),
-                workspace.latest_workspace_sequence()
+                workspace["uuid"].as_str().unwrap_or_default(),
+                workspace["root"].as_str().unwrap_or_default(),
+                workspace["latest_workspace_sequence"]
             ),
         )?;
     }
-    if let Some(session) = output.session() {
+    if let Some(session) = value.get("session") {
         write_text_line(
             stdout,
             format_args!(
-                "session: {} {} {:?} revision={}",
-                session.id().as_str(),
-                session.title(),
-                session.lifecycle(),
-                session.revision_after().get()
+                "session: {} {} {} revision={}",
+                session["id"].as_str().unwrap_or_default(),
+                session["title"].as_str().unwrap_or_default(),
+                session["lifecycle"].as_str().unwrap_or_default(),
+                session["revision_after"]
             ),
         )?;
     }
-    if let Some(job) = output.job() {
-        write_text_line(
-            stdout,
-            format_args!(
-                "job: {} {:?} sequence={} submitted_at={} claimed_at={} finished_at={}",
-                job.id().as_str(),
-                job.state(),
-                job.sequence(),
-                job.submitted_at().as_str(),
-                job.claimed_at().map(Rfc3339MillisV1::as_str).unwrap_or("-"),
-                job.finished_at()
-                    .map(Rfc3339MillisV1::as_str)
-                    .unwrap_or("-")
-            ),
-        )?;
-    }
-    let result_value = Value::Object(output.result().clone());
-    if contains_check_result_projection_v1(&result_value) {
+    let result = &value["result"];
+    if contains_check_result_projection_v1(result) {
         write_text_line(
             stdout,
             format_args!(
@@ -8441,34 +4843,27 @@ fn render_human_output_v2(
             ),
         )?;
     }
-    for line in unsatisfied_check_result_lines_v1(&result_value) {
+    for line in unsatisfied_check_result_lines_v1(result) {
         write_text_line(stdout, format_args!("{line}"))?;
     }
-    if output.result().get("schema").and_then(Value::as_str)
-        == Some("podway.workspace-removal-result/v1")
-    {
+    if result["schema"].as_str() == Some("podway.workspace-removal-result/v2") {
         write_text_line(
             stdout,
             format_args!(
                 "Podway workspace state was removed from {}. The Git worktree was preserved; tracked .podway paths may now appear deleted.",
-                output
-                    .result()
-                    .get("worktree_root")
-                    .and_then(Value::as_str)
+                result["worktree_root"]
+                    .as_str()
                     .unwrap_or("the selected worktree")
             ),
         )?;
-        write_text_line(
-            stdout,
-            format_args!(
-                "Daemon logs remain outside the worktree. Remove them explicitly with podway daemon uninstall --purge-logs --yes."
-            ),
-        )?;
     }
-    let result = serde_json::to_string_pretty(output.result())
+    let rendered = serde_json::to_string_pretty(result)
         .map_err(|_| LocalFailure::response_invalid("cannot render Procedure v2 result"))?;
-    write_text_line(stdout, format_args!("result: {result}"))?;
-    render_warnings(stdout, output.warnings())
+    write_text_line(stdout, format_args!("result: {rendered}"))?;
+    for warning in value["warnings"].as_array().into_iter().flatten() {
+        write_text_line(stdout, format_args!("warning: {warning}"))?;
+    }
+    Ok(())
 }
 
 fn contains_check_result_projection_v1(value: &Value) -> bool {
@@ -8589,7 +4984,6 @@ fn render_local_failure_with_clock_and_writers(
     stderr: &mut dyn Write,
 ) -> i32 {
     if json_output {
-        ensure_error_details_schema_v1(failure.code, &mut failure.details);
         let generated_at = match local_generated_at(clock) {
             Ok(timestamp) => timestamp,
             Err(clock_failure) => return render_clock_failure_to(clock_failure, stderr),
@@ -8597,15 +4991,15 @@ fn render_local_failure_with_clock_and_writers(
         let request_id = failure
             .request_id
             .unwrap_or_else(|| Uuid::new_v4().to_string());
-        let output = json!({ "schema": "podway.error/v1", "request_id": request_id, "command": failure.command, "generated_at": generated_at.as_str(), "code": failure.code, "message": failure.message, "retryable": failure.retryable, "exit_code": failure.exit_code, "details": failure.details });
-        let output = match serde_json::from_value::<ResponseEnvelopeV2>(output) {
+        let output = json!({ "schema": "podway.error/v2", "request_id": request_id, "command": failure.command, "generated_at": generated_at.as_str(), "code": failure.code, "message": failure.message, "retryable": failure.retryable, "exit_code": failure.exit_code, "details": failure.details });
+        let output = match podway_protocol::ErrorEnvelopeV2::from_value(output) {
             Ok(output) => output,
             Err(_) => {
                 failure = LocalFailure::response_invalid(
                     "the local client could not construct a valid error response",
                 );
                 let fallback = json!({
-                    "schema": "podway.error/v1",
+                    "schema": "podway.error/v2",
                     "request_id": Uuid::new_v4().to_string(),
                     "command": "cli",
                     "generated_at": generated_at.as_str(),
@@ -8615,7 +5009,7 @@ fn render_local_failure_with_clock_and_writers(
                     "exit_code": failure.exit_code,
                     "details": {}
                 });
-                serde_json::from_value::<ResponseEnvelopeV2>(fallback)
+                podway_protocol::ErrorEnvelopeV2::from_value(fallback)
                     .expect("the static local fallback error is protocol-valid")
             }
         };
@@ -8640,58 +5034,6 @@ fn write_text_line(
     writer.write_all(b"\n").map_err(|_| render_write_failure())
 }
 
-fn render_warnings(
-    stdout: &mut dyn Write,
-    warnings: &[Map<String, Value>],
-) -> Result<(), LocalFailure> {
-    for warning in warnings {
-        let warning = serde_json::to_string(warning).expect("JSON warning serializes");
-        write_text_line(stdout, format_args!("warning: {warning}"))?;
-    }
-    Ok(())
-}
-
-fn dynamic_completion(
-    worktree: Option<PathBuf>,
-    socket_path: Option<PathBuf>,
-    mode: RuntimeModeV1,
-    kind: &str,
-) -> Result<RunResult, LocalFailure> {
-    let target = match workspace_target(worktree) {
-        Ok(target) => target,
-        Err(_) => {
-            return Ok(empty_dynamic_completion());
-        }
-    };
-    let client = match daemon_client(200, socket_path.as_deref(), &mode) {
-        Ok(client) => client,
-        Err(_) => {
-            return Ok(empty_dynamic_completion());
-        }
-    };
-    let command = match kind {
-        "items" | "blockers" | "options" | "rework-targets" | "goal-criteria"
-        | "evidence-sources" | "item-values" => "session.status",
-        "jobs" => "job.list",
-        _ => return Ok(empty_dynamic_completion()),
-    };
-    let request = match build_request(command, &target, RequestSpec::query(200, Map::new(), None)) {
-        Ok(request) => request,
-        Err(_) => {
-            return Ok(empty_dynamic_completion());
-        }
-    };
-    let candidates = match request_daemon(&client, &request) {
-        Ok(ResponseEnvelopeV2::OutputV2(output)) => dynamic_candidates_v2(output.result(), kind),
-        Ok(ResponseEnvelopeV2::Error(_)) | Err(_) => Vec::new(),
-    };
-    Ok(local_result(
-        "__complete",
-        json!({ "candidates": candidates }),
-        candidates.join("\n"),
-    ))
-}
-
 fn empty_dynamic_completion() -> RunResult {
     local_result("__complete", json!({ "candidates": [] }), String::new())
 }
@@ -8699,7 +5041,7 @@ fn empty_dynamic_completion() -> RunResult {
 fn dynamic_candidates_v2(result: &Map<String, Value>, kind: &str) -> Vec<String> {
     if !matches!(
         result.get("schema").and_then(Value::as_str),
-        Some("podway.status-result/v2" | "podway.status-result/v3" | "podway.status-result/v4")
+        Some("podway.status-result/v5")
     ) {
         return Vec::new();
     }
@@ -8785,12 +5127,17 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             .collect::<Vec<_>>()
             .join(", ");
         return Ok(format!(
-            "Podway coordinates durable worktree-local procedures.\n\nTrust boundary:\n  Podway trusts same-user processes connecting through its local socket.\n  It provides no authentication or workspace access key.\n  It does not protect against malicious same-user processes.\n  It records caller assertions and does not judge their semantic truth.\n\nDaemon endpoint:\n  Daemon-backed commands accept --mode <key>; --dev is the exact alias for mode dev.\n  Omitting a mode selects the production per-user endpoint.\n  Production commands may instead accept --socket <absolute-path>.\n\nUsage:\n  podway help [<route>]\n  podway -h\n  podway --help\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'add retry backoff'\n  podway begin\n  podway status --json\n  podway observe --json\n\nProcedure v2 routes:\n  procedure format|vet|lint|check|graph|preview|scaffold\n  session.begin, session.terminal_disposition, session.decide, session.rework\n  goal.define, goal.revise, goal.assess_criterion\n  evidence read\n  delegation package|accept|receipt\n\nRuntime planning:\n  podway --mode <key> runtime reset plan\n  podway help runtime\n\nShipped presets: {preset_ids}. Start prepares a session; begin creates its first active attempt. Contributors may use the managed disposable runtime documented by help workflow for isolated development."
+            "Podway coordinates durable worktree-local procedures.\n\nTrust boundary:\n  Podway trusts same-user processes reading and writing local workspace state.\n  It provides no authentication or workspace access key.\n  It does not protect against malicious same-user processes.\n  It records caller assertions and does not judge their semantic truth.\n\nDirect execution:\n  Worktree commands execute in this process.\n  Use --worktree <path> to select a Git worktree and --timeout <duration> to bound the operation.\n  Automation mutations require an explicit --idempotency-key; recover lost output with outcome lookup.\n\nUsage:\n  podway help [<route>]\n  podway -h\n  podway --help\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'add retry backoff' --idempotency-key start-example\n  podway begin --idempotency-key begin-example\n  podway status --json\n  podway observe --json\n\nProcedure v2 routes:\n  procedure format|vet|lint|check|graph|preview|scaffold\n  session.begin, session.terminal_disposition, session.decide, session.rework\n  goal.define, goal.revise, goal.assess_criterion\n  evidence read\n  delegation package|accept|receipt\n\nShipped presets: {preset_ids}. Start prepares a session; begin creates its first active attempt. Contributors use disposable Git worktrees for isolated development; see help workflow."
         ));
+    }
+    if let Some(guidance) = retirement::help_guidance(topic)
+        .map_err(|_| LocalFailure::internal("the embedded retirement table is invalid"))?
+    {
+        return Ok(guidance);
     }
     let text = match topic {
         "workflow" => {
-            "Procedure v2 workflow:\n  podway init\n  podway --json preset show bug-fix-v2\n  podway --json start --preset bug-fix-v2 --task 'inspect the workflow'\n  podway --json begin --goal 'Verify the requested behavior.' --criterion verified='Relevant checks pass.' --actor developer\n  podway --json observe --wait-for-idle\n\nAdd --dry-run to start for read-only Procedure inspection without creating a session. A successful start creates a prepared session; begin atomically creates the first attempt and optional goal. Follow the allowed item, option, evidence, and rework identifiers returned by observe. Contributors can use python3 tools/dev_runtime.py for an isolated disposable daemon and sandbox. See docs/examples/v2-workflow.md for the complete executable sequence. Podway records caller assertions; it does not establish their semantic truth."
+            "Procedure v2 workflow:\n  podway init --idempotency-key init-example\n  podway --json preset show bug-fix-v2\n  podway --json start --preset bug-fix-v2 --task 'inspect the workflow' --idempotency-key start-example\n  podway --json begin --goal 'Verify the requested behavior.' --criterion verified='Relevant checks pass.' --actor developer --idempotency-key begin-example\n  podway --json observe\n\nAdd --dry-run to start for read-only Procedure inspection without creating a session. A successful start creates a prepared session; begin atomically creates the first attempt and optional goal. Follow the allowed item, option, evidence, and rework identifiers returned by observe. Contributors use a disposable Git worktree with its own .podway state. See docs/examples/v2-workflow.md for the complete executable sequence. Podway records caller assertions; it does not establish their semantic truth."
         }
         "rework" => "Rework:\n  podway rework --to implement --reason 'review found a gap'",
         "automation" => {
@@ -8798,12 +5145,6 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
         }
         "procedures" => {
             "Procedures:\n  podway procedure scaffold > .podway/procedures/custom.yaml\n  podway procedure format .podway/procedures/custom.yaml --write\n  podway procedure check .podway/procedures/custom.yaml --warnings-as-errors\n  podway procedure preview .podway/procedures/custom.yaml\n  podway start --procedure .podway/procedures/custom.yaml --expect-procedure-digest sha256:<hex> --task 'perform work'\n\nOther Procedure v2 authoring routes are procedure validate, vet, lint, and graph."
-        }
-        "runtime" | "runtime.reset.plan" | "runtime.reset.apply" => {
-            "Usage:\n  podway --mode <key> runtime reset plan\n  podway runtime reset plan --all-modes\n  podway --mode <key> runtime reset apply --plan-token <token> --yes\n  podway runtime reset apply --all-modes --plan-token <token> --yes\n\nAn explicit selector is required. Planning is read-only and preserves every worktree. Apply revalidates the exact frozen selection. Managed runtimes are excluded."
-        }
-        "daemon" => {
-            "Daemon lifecycle grammar:\n  podway [--mode <key> | --dev] daemon status\n  podway [--mode <key> | --dev] daemon wait-ready [--timeout 120s]\n  podway daemon install --daemon-path /absolute/podwayd\n  podway daemon logs --lines 100"
         }
         "artifacts" => {
             "Artifacts:\n  podway attach verification-reference report.md --media-type text/markdown\n  podway attach verification-reference --reference build:42 --digest sha256:<hex> --size 42 --media-type text/plain"
@@ -8849,27 +5190,6 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
         "preset.explain" => {
             "Usage:\n  podway preset explain <name>\n\nExample:\n  podway preset explain sw-dev-v2"
         }
-        "daemon.install" => {
-            "Usage:\n  podway daemon install [--daemon-path <path>] [--socket <absolute-path>]\n\nExample:\n  podway daemon install --daemon-path /absolute/podwayd --socket /absolute/podwayd.sock"
-        }
-        "daemon.uninstall" => {
-            "Usage:\n  podway daemon uninstall [--purge-logs] [--yes]\n\nExample:\n  podway daemon uninstall --yes"
-        }
-        "daemon.start" => "Usage:\n  podway daemon start\n\nExample:\n  podway daemon start",
-        "daemon.stop" => "Usage:\n  podway daemon stop\n\nExample:\n  podway daemon stop",
-        "daemon.restart" => "Usage:\n  podway daemon restart\n\nExample:\n  podway daemon restart",
-        "daemon.status" => {
-            "Usage:\n  podway [--mode <key> | --dev] daemon status\n\nExamples:\n  podway daemon status\n  podway --mode demo daemon status"
-        }
-        "daemon.wait-ready" => {
-            "Usage:\n  podway [--mode <key> | --dev] daemon wait-ready [--timeout DURATION]\n\nExample:\n  podway --mode demo --json daemon wait-ready --timeout 120s"
-        }
-        "daemon.terminate" => {
-            "Usage:\n  podway (--mode dev | --dev) terminate\n\nExample:\n  podway --dev terminate"
-        }
-        "daemon.logs" => {
-            "Usage:\n  podway daemon logs [--follow] [--lines <n>]\n\nExample:\n  podway daemon logs --lines 100"
-        }
         "workspace.init" => {
             "Usage:\n  podway init [--repair]\n\nExamples:\n  podway init\n  podway init --repair"
         }
@@ -8880,14 +5200,8 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
         "workspace.repair" => {
             "Usage:\n  podway workspace repair\n\nExample:\n  podway workspace repair"
         }
-        "workspace.mode.plan" => {
-            "Usage:\n  podway [--mode <source>] [--worktree <path>] workspace mode plan --to <key> [--json]\n\nProduces a read-only, expiring mode-switch plan token when the source is idle and the exact target-mode Unix endpoint is live. Retain the token for apply and crash recovery. If the source daemon restarts before marker publication, run plan again."
-        }
-        "workspace.mode.apply" => {
-            "Usage:\n  podway [--mode <source>] [--worktree <path>] workspace mode apply --to <key> --plan-token <token> [--json]\n\nApplies the exact token-bound mode transfer. This deletes all current and archived session, attempt, queue, receipt, and job history under .podway/runtime while preserving procedures, other workspace content, and Git state."
-        }
         "workspace.remove" => {
-            "Usage:\n  podway [--worktree <path>] workspace remove --force [--if-workspace-uuid <uuid>] [--yes]\n\nInteractive use prints the resolved absolute worktree root and requires that exact path as confirmation. JSON and non-interactive use require --yes and --if-workspace-uuid. Success removes all .podway content, including tracked files, while preserving the Git worktree. Daemon logs remain outside the worktree; remove them explicitly with podway daemon uninstall --purge-logs --yes."
+            "Usage:\n  podway [--worktree <path>] workspace remove --force [--if-workspace-uuid <uuid>] [--yes]\n\nInteractive use prints the resolved absolute worktree root and requires that exact path as confirmation. JSON and non-interactive use require --yes and --if-workspace-uuid. Success removes all .podway content, including tracked files, while preserving the Git worktree. The direct CLI owns no global daemon logs."
         }
         "session.start" => {
             "Usage:\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> [--on-existing <preserve|delete>] [--supersede-reason <text>] [--actor <text>] [--progress-summary <text>] [--dry-run]\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'implement feature'\n  podway start --preset sw-dev-v2 --task 'start successor' --on-existing preserve --supersede-reason 'The successor has priority.'\n  podway start --preset sw-dev-v2 --task 'replace running work' --on-existing delete --progress-summary 'The current progress was reviewed.' --yes\n  podway start --preset bug-fix-v2 --task 'preview deletion' --dry-run --on-existing delete\n\nHuman TTY mode interviews when a nonterminal session already exists; Enter continues it and creates nothing. Noninteractive callers must choose preserve or delete. Disposed terminal sessions archive automatically. A successful start creates a prepared session at revision 0 without a cursor, attempt, or goal."
@@ -8914,22 +5228,22 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "The session.start_replace wire route remains available for compatible automation, but the CLI has no replace command or replace flags. Use `podway start --on-existing preserve|delete`; see `podway help session.start`."
         }
         "session.status" => {
-            "Usage:\n  podway status [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--verbose [--history-before <trace-sequence>]] [--wait-for-idle [--compact] | --after-job <uuid>]\n\nExamples:\n  podway status --verbose\n  podway status --verbose --history-before 42\n  podway status --wait-for-idle --compact"
+            "Usage:\n  podway status [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--verbose [--history-before <trace-sequence>]] [--compact]\n\nExamples:\n  podway status --verbose\n  podway status --verbose --history-before 42\n  podway status --compact"
         }
         "session.next" => {
-            "Usage:\n  podway next [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--wait-for-idle | --after-job <uuid>]\n\nExample:\n  podway next"
+            "Usage:\n  podway next [--if-workspace-uuid <uuid>] [--if-session-id <uuid>]\n\nExample:\n  podway next"
         }
         "session.observe" => {
-            "Usage:\n  podway observe [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--wait-for-idle | --after-job <uuid>]\n\nReturns one bounded, self-contained status and guidance observation with typed active-item descriptors and fenced mutation templates.\n\nExample:\n  podway --json observe --wait-for-idle"
+            "Usage:\n  podway observe [--if-workspace-uuid <uuid>] [--if-session-id <uuid>]\n\nReturns one bounded, self-contained status and guidance observation with typed active-item descriptors and fenced mutation templates.\n\nExample:\n  podway --json observe"
         }
         "evidence.read" => {
-            "Usage:\n  podway evidence read --source <graph-node-id> --item <item-id> [--page-token <token>] [--if-workspace-uuid <uuid>] [--if-session-id <uuid>]\n\nReturns one bounded page of an item selected by a currently resolved, declared evidence reference of the current attempt. It creates no durable job and no session revision. Text offsets count Unicode scalars, list offsets count entries, and other item types return one terminal page. The page token is opaque and is not an authorization credential.\n\nExample:\n  podway --json evidence read --source implement --item notes"
+            "Usage:\n  podway evidence read --source <graph-node-id> --item <item-id> [--page-token <token>] [--if-workspace-uuid <uuid>] [--if-session-id <uuid>]\n\nReturns one bounded page of an item selected by a currently resolved, declared evidence reference of the current attempt. It changes no session revision. Text offsets count Unicode scalars, list offsets count entries, and other item types return one terminal page. The page token is opaque and is not an authorization credential.\n\nExample:\n  podway --json evidence read --source implement --item notes"
         }
         "delegation.package" => {
             "Usage:\n  podway delegation package [--json] [--if-workspace-uuid <uuid>] [--if-session-id <uuid>]\n\nReads the immutable assignment for the current delegated action. Read complete upstream evidence through evidence read before assigning external work. The package digest is stable across action item edits and reads."
         }
         "delegation.accept" => {
-            "Usage:\n  podway delegation accept --stdin [--json] [--detach]\n\nThe closed JSON input supplies workspace UUID, session ID and revision, attempt ID, idempotency key, package digest, execution identity, result digest, rounds, summary, and worker disposition. Record final action evidence and settle the worker before acceptance. Acceptance does not complete the action; run complete while the receipt is current. After an accepted item edit, retry or rework to a fresh attempt. Recover a lost response through job lookup with the same key before any replay."
+            "Usage:\n  podway delegation accept --stdin [--json]\n\nThe closed JSON input supplies workspace UUID, session ID and revision, attempt ID, idempotency key, package digest, execution identity, result digest, rounds, summary, and worker disposition. Record final action evidence and settle the worker before acceptance. Acceptance does not complete the action; run complete while the receipt is current. After an accepted item edit, retry or rework to a fresh attempt. Recover a lost response through outcome lookup with the same key before any replay."
         }
         "delegation.receipt" => {
             "Usage:\n  podway delegation receipt --session <uuid> --attempt <uuid> [--json] [--if-workspace-uuid <uuid>]\n\nReads one exact immutable receipt from the current or retained session. Historical replay preserves the original result; reread current status before completion. Editing an accepted item makes acceptance stale and requires a deliberate fresh attempt."
@@ -8971,7 +5285,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Usage:\n  podway reset [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>] [--dry-run]\n  podway reset --progress-summary <text> [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-session-revision <n>] [--yes]\n\nExamples:\n  podway reset --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 0\n  podway reset --progress-summary 'Preserved the current diff and verification notes.' --if-workspace-uuid <uuid> --if-session-id <uuid> --if-session-revision 7 --yes\n\nDefault reset deletes only a prepared session or a terminal session with a current disposition. A dry run reports eligibility without mutation. Force reset requires a bounded progress summary and explicit confirmation; JSON or non-terminal callers must pass --yes, while an interactive caller may confirm the prompt."
         }
         "workspace.reset_all" => {
-            "Usage:\n  podway reset --all --force --yes [--if-workspace-uuid <uuid>]\n\nExample:\n  podway reset --all --force --yes"
+            "Usage:\n  podway reset --all --yes --idempotency-key <key> [--if-workspace-uuid <uuid>]\n\nExample:\n  podway reset --all --yes --idempotency-key reset-worktree"
         }
         "item.check" => {
             "Usage:\n  podway check <item-id> [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-attempt <uuid>] [--if-item-revision <n>]\n\nExample:\n  podway check baseline-established"
@@ -8995,20 +5309,10 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Usage:\n  podway clear <item-id> [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-attempt <uuid>] [--if-item-revision <n>]\n\nExample:\n  podway clear constraints"
         }
         "item.record_many" => {
-            "Usage:\n  podway record --stdin [--worktree <path>] [--json] [--detach]\n\nThe closed JSON stdin document supplies workspace_uuid, session_id, session_revision, attempt_id, idempotency_key, and 1..128 unique typed operations. A check_result is caller supplied and structurally bound; Podway does not execute, verify, or attest the named external operation.\n\nExample:\n  podway record --stdin < record.json"
+            "Usage:\n  podway record --stdin [--worktree <path>] [--json]\n\nThe closed JSON stdin document supplies workspace_uuid, session_id, session_revision, attempt_id, idempotency_key, and 1..128 unique typed operations. A check_result is caller supplied and structurally bound; Podway does not execute, verify, or attest the named external operation.\n\nExample:\n  podway record --stdin < record.json"
         }
-        "job.list" => {
-            "Usage:\n  podway job list [--state <queued|running|succeeded|failed|cancelled>]\n\nExample:\n  podway job list --state queued"
-        }
-        "job.lookup" => {
-            "Usage:\n  podway job lookup --idempotency-key <key>\n\nExample:\n  podway job lookup --idempotency-key mutation-123"
-        }
-        "job.status" => {
-            "Usage:\n  podway job status <job-id>\n\nExample:\n  podway job status <uuid>"
-        }
-        "job.wait" => "Usage:\n  podway job wait <job-id>\n\nExample:\n  podway job wait <uuid>",
-        "job.cancel" => {
-            "Usage:\n  podway job cancel <job-id>\n\nExample:\n  podway job cancel <uuid>"
+        "outcome.lookup" => {
+            "Usage:\n  podway outcome lookup --idempotency-key <key> [--if-workspace-uuid <uuid>] [--json]\n\nRead the original committed success response without replaying or admitting a mutation."
         }
         _ => return Err(LocalFailure::request_invalid("unknown help topic")),
     };
@@ -9019,39 +5323,36 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
 mod tests {
     use std::{
         ffi::OsString,
-        fs::{self, File},
-        io::{self, Seek, SeekFrom, Write},
-        os::unix::{ffi::OsStringExt, fs::PermissionsExt},
+        io::{self, Write},
+        os::unix::ffi::OsStringExt,
         path::PathBuf,
-        sync::atomic::{AtomicU64, Ordering},
-        time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+        time::{Duration, SystemTime, UNIX_EPOCH},
     };
 
     use super::{
-        Cli, Command, CommandNameV1, DaemonCommand, LocalEnvelopeClock, LocalFailure, OperationV1,
-        OutputEnvelopeInputV3, OutputEnvelopeV3, ParseFailureCommandContext, RequestIdV1,
-        ResponseEnvelopeV2, Rfc3339MillisV1, RunResult, StatusPreflight, WorkspaceTarget,
-        build_identity_v1, contains_check_result_projection_v1, daemon_payload,
-        daemon_response_result, dynamic_candidates_v2, local_generated_at, local_result,
-        map_service_error, parse_failure_command_context, parse_timeout_millis,
-        probe_daemon_identity, probe_daemon_identity_with_runner,
+        Cli, Command, CommandNameV1, LocalEnvelopeClock, LocalFailure, ParseFailureCommandContext,
+        RequestIdV1, Rfc3339MillisV1, RunResult, StatusPreflight, WorkspaceTarget,
+        contains_check_result_projection_v1, direct_response_result, dynamic_candidates_v2,
+        local_generated_at, local_result, parse_failure_command_context, parse_timeout_millis,
         procedure_validate_v2_diagnostics, render_authoring_diagnostics,
         render_local_failure_with_clock_and_writers, render_result_with_clock_and_writers,
-        resolve_daemon_executable, resolve_implicit_daemon_executable_from,
-        resolve_installed_service_endpoint, service_outcome_result, service_status_projection,
-        service_status_result, stream_log_follow_update, system_service_clock,
-        unsatisfied_check_result_lines_v1, validate_command_shape, validate_daemon_flags,
+        unsatisfied_check_result_lines_v1, validate_command_shape, validate_direct_flags,
         workspace_removal_confirmation_path,
     };
-    use clap::{Parser, error::ErrorKind};
-    use podway_protocol::ErrorEnvelopeV1;
+    use clap::Parser;
+    use podway_engine::direct_api::{DirectCommandV1, DirectResponseV1};
+    use podway_protocol::{ErrorEnvelopeV2, OutputEnvelopeInputV4, OutputEnvelopeV4};
+
+    fn error_result(command: &Command, error: ErrorEnvelopeV2) -> RunResult {
+        direct_response_result(command, DirectResponseV1::Failure(error))
+    }
+
     use serde_json::{Value, json};
-    static VERSION_PROBE_SCRIPT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
     #[test]
     fn delegated_human_errors_render_the_reason_without_changing_other_errors() {
-        let mut error: ErrorEnvelopeV1 = serde_json::from_value(json!({
-            "schema": "podway.error/v1",
+        let mut error: ErrorEnvelopeV2 = serde_json::from_value(json!({
+            "schema": "podway.error/v2",
             "request_id": "00000000-0000-4000-8000-000000000002",
             "command": "delegation.package",
             "generated_at": "1970-01-01T00:00:00.012Z",
@@ -9060,14 +5361,13 @@ mod tests {
             "retryable": false,
             "exit_code": 1,
             "details": {
-                "schema": "podway.delegation-error-details/v1",
+                "schema": "podway.delegation-error-details/v2",
                 "reason": "binding_mismatch"
             }
         }))
         .unwrap();
-        error.validate().unwrap();
         let mut stderr = Vec::new();
-        super::render_human_error_v2(&error, None, &mut stderr).unwrap();
+        super::render_human_error_direct(&error, None, &mut stderr).unwrap();
         assert!(
             String::from_utf8(stderr)
                 .unwrap()
@@ -9075,7 +5375,7 @@ mod tests {
         );
 
         error = serde_json::from_value(json!({
-            "schema": "podway.error/v1",
+            "schema": "podway.error/v2",
             "request_id": "00000000-0000-4000-8000-000000000002",
             "command": "delegation.package",
             "generated_at": "1970-01-01T00:00:00.012Z",
@@ -9086,9 +5386,8 @@ mod tests {
             "details": {}
         }))
         .unwrap();
-        error.validate().unwrap();
         let mut stderr = Vec::new();
-        super::render_human_error_v2(&error, None, &mut stderr).unwrap();
+        super::render_human_error_direct(&error, None, &mut stderr).unwrap();
         assert!(!String::from_utf8(stderr).unwrap().contains("reason:"));
     }
 
@@ -9098,11 +5397,11 @@ mod tests {
         use podway_protocol::WorkspaceOutputV1;
 
         let mut result: Value = serde_json::from_str(include_str!(
-            "../../../tests/fixtures/v2/protocol/result-families.json"
+            "../../../docs/examples/json/daemon-free-contract-reservation-v1.json"
         ))
         .unwrap();
-        result = result["fixtures"]["podway.status-result/v3"].take();
-        result["schema"] = json!("podway.status-result/v4");
+        result = result["fixtures"]["podway.status-result/v5"].take();
+        result["schema"] = json!("podway.status-result/v5");
         result["delegation"] = json!({
             "state":"inactive",
             "reason":"no_active_attempt",
@@ -9111,7 +5410,7 @@ mod tests {
         result["receipt_summaries"] = json!([]);
         result["receipt_summaries_total"] = json!(0);
         result["receipt_summaries_truncated"] = json!(false);
-        let output = OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
+        let output = OutputEnvelopeV4::new(OutputEnvelopeInputV4 {
             request_id: RequestIdV1::new("00000000-0000-4000-8000-000000000002").unwrap(),
             command: CommandNameV1::new("session.status").unwrap(),
             generated_at: Rfc3339MillisV1::new("1970-01-01T00:00:00.012Z").unwrap(),
@@ -9123,19 +5422,18 @@ mod tests {
                 )
                 .unwrap(),
             ),
-            job: None,
             session: None,
             result: result.as_object().unwrap().clone(),
             warnings: Vec::new(),
         })
         .unwrap();
-        let preflight = StatusPreflight::from_output_v2(&output).unwrap();
+        let preflight = StatusPreflight::from_direct(&output).unwrap();
         assert_eq!(
             preflight.facts.session_id,
             SessionId::new("00000000-0000-4000-8000-000000000001").unwrap()
         );
         let candidates = json!({
-            "schema":"podway.status-result/v4",
+            "schema":"podway.status-result/v5",
             "items":[{"item_id":"review"}]
         });
         assert_eq!(
@@ -9147,7 +5445,7 @@ mod tests {
     #[test]
     fn v2ret004_workspace_remove_requires_automation_fences_and_builds_control_payload() {
         let workspace_uuid = "00000000-0000-4000-8000-000000040004";
-        let mut command = Cli::try_parse_from([
+        let command = Cli::try_parse_from([
             "podway",
             "--json",
             "--yes",
@@ -9158,18 +5456,22 @@ mod tests {
             "--force",
         ])
         .unwrap();
-        assert!(validate_daemon_flags(&command).is_ok());
-        assert_eq!(command.command.daemon_wire_name(), Some("workspace.remove"));
+        assert!(validate_direct_flags(&command).is_ok());
+        assert_eq!(command.command.direct_route(), Some("workspace.remove"));
         assert!(command.command.is_destructive());
-        let (operation, payload) = daemon_payload(&mut command.command, None).unwrap();
-        assert_eq!(operation, podway_protocol::OperationV1::Control);
-        assert_eq!(
-            payload,
-            json!({"force": true, "confirmed": true})
-                .as_object()
-                .unwrap()
-                .clone()
-        );
+        let fences = super::ExplicitPreconditions::parse(&command).unwrap();
+        assert_eq!(fences.workspace_id.unwrap().as_str(), workspace_uuid);
+        assert!(matches!(
+            super::direct::typed_command(
+                &command,
+                &super::ExplicitPreconditions::parse(&command).unwrap()
+            )
+            .unwrap(),
+            DirectCommandV1::WorkspaceRemove {
+                confirmed: true,
+                force: true
+            }
+        ));
 
         for arguments in [
             vec![
@@ -9191,7 +5493,7 @@ mod tests {
             ],
         ] {
             let command = Cli::try_parse_from(arguments).unwrap();
-            assert!(validate_daemon_flags(&command).is_err());
+            assert!(validate_direct_flags(&command).is_err());
         }
         assert!(
             super::help_text(Some("workspace.remove"))
@@ -9213,8 +5515,8 @@ mod tests {
 
     #[test]
     fn v2ast005_human_rendering_detects_structurally_bound_check_results() {
-        use podway_core::{JobId, WorkspaceId};
-        use podway_protocol::{JobOutputV1, JobStateV1, WorkspaceOutputV1};
+        use podway_core::WorkspaceId;
+        use podway_protocol::WorkspaceOutputV1;
 
         assert!(contains_check_result_projection_v1(&json!({
             "operation_id": "make-test",
@@ -9232,14 +5534,14 @@ mod tests {
         })));
 
         let families: Value = serde_json::from_str(include_str!(
-            "../../../tests/fixtures/v2/protocol/result-families.json"
+            "../../../docs/examples/json/daemon-free-contract-reservation-v1.json"
         ))
         .unwrap();
         // A running observation: the prepared fixture supplies the closed status shape, the
         // running next fixture supplies metadata-only guidance, and one stored but unsatisfied
         // check result carries the named reason.
-        let guidance = families["fixtures"]["podway.next-result/v3"].clone();
-        let mut status = families["fixtures"]["podway.observation-result/v3"]["status"].clone();
+        let guidance = families["fixtures"]["podway.next-result/v5"].clone();
+        let mut status = families["fixtures"]["podway.observation-result/v5"]["status"].clone();
         status["session"] = json!({
             "id": "00000000-0000-4000-8000-000000000001",
             "lifecycle": "running",
@@ -9288,7 +5590,7 @@ mod tests {
             "value_truncated": false
         });
         let result = json!({
-            "schema": "podway.observation-result/v3",
+            "schema": "podway.observation-result/v5",
             "status": status,
             "guidance": guidance,
             "active_items": [rendered_item.clone()],
@@ -9298,7 +5600,7 @@ mod tests {
             "mutation_templates_total": 0,
             "mutation_templates_truncated": false
         });
-        let output = OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
+        let output = OutputEnvelopeV4::new(OutputEnvelopeInputV4 {
             request_id: RequestIdV1::new("00000000-0000-4000-8000-000000000002").unwrap(),
             command: CommandNameV1::new("session.observe").unwrap(),
             generated_at: Rfc3339MillisV1::new("1970-01-01T00:00:00.012Z").unwrap(),
@@ -9310,23 +5612,15 @@ mod tests {
                 )
                 .unwrap(),
             ),
-            job: Some(
-                JobOutputV1::new(
-                    JobId::new("00000000-0000-4000-8000-000000000003").unwrap(),
-                    1,
-                    JobStateV1::Succeeded,
-                    Rfc3339MillisV1::new("1970-01-01T00:00:00.009Z").unwrap(),
-                    Some(Rfc3339MillisV1::new("1970-01-01T00:00:00.010Z").unwrap()),
-                    Some(Rfc3339MillisV1::new("1970-01-01T00:00:00.011Z").unwrap()),
-                )
-                .unwrap(),
-            ),
             session: None,
             result: result.as_object().unwrap().clone(),
             warnings: Vec::new(),
         })
         .unwrap();
-        let result = RunResult::Response(Box::new(ResponseEnvelopeV2::OutputV2(output)));
+        let result = RunResult::Direct {
+            response: Box::new(DirectResponseV1::Success(output)),
+            procedure_check_path: None,
+        };
         let clock = FixedClock(UNIX_EPOCH + Duration::from_millis(12));
         let note = "note: check_result is a caller-supplied, structurally bound external check result; Podway does not verify or attest it";
         let reason_line = "unsatisfied check_result verification: operation_digest_mismatch; declared operation_digest sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; recorded sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
@@ -9402,316 +5696,6 @@ mod tests {
         );
     }
 
-    struct VersionProbeScript {
-        directory: PathBuf,
-        path: PathBuf,
-    }
-
-    impl VersionProbeScript {
-        fn new(body: &str) -> Self {
-            let sequence = VERSION_PROBE_SCRIPT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-            let directory = std::env::temp_dir().join(format!(
-                "podway-cli-version-probe-{}-{sequence}",
-                std::process::id()
-            ));
-            fs::create_dir_all(&directory).expect("create version probe fixture directory");
-            let path = directory.join("podwayd");
-            fs::write(&path, format!("#!/bin/sh\n{body}"))
-                .expect("write version probe fixture script");
-            let mut permissions = fs::metadata(&path)
-                .expect("read version probe fixture permissions")
-                .permissions();
-            permissions.set_mode(0o700);
-            fs::set_permissions(&path, permissions)
-                .expect("make version probe fixture script executable");
-            Self { directory, path }
-        }
-    }
-
-    impl Drop for VersionProbeScript {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.directory);
-        }
-    }
-
-    #[test]
-    fn installed_endpoint_resolution_uses_only_private_durable_metadata() {
-        use podway_service::ServiceRuntimePathsV1;
-
-        let fixture = VersionProbeScript::new("exit 0");
-        let state = fixture.directory.join("state");
-        fs::create_dir(&state).expect("metadata parent must be created");
-        fs::set_permissions(&state, fs::Permissions::from_mode(0o700))
-            .expect("metadata parent must be private");
-        let paths = ServiceRuntimePathsV1::from_directories(
-            fixture.directory.join("launch-agents"),
-            &state,
-            fixture.directory.join("logs"),
-            fixture.directory.join("run"),
-        )
-        .expect("metadata fixture paths must be valid");
-        let installed_socket = fixture.directory.join("installed.sock");
-        let metadata = serde_json::to_vec(&json!({
-            "version": 1,
-            "label": "dev.podway.podwayd",
-            "daemon_binary": fixture.path.display().to_string(),
-            "daemon_identity": "0".repeat(64),
-            "socket_path": installed_socket.display().to_string(),
-            "artifact_role": "production_daemon",
-            "installed_at": 1,
-            "updated_at": 1,
-            "publication_state": "receipt_durable",
-            "generation": "1".repeat(64),
-        }))
-        .expect("metadata fixture must serialize");
-        let metadata_path = paths.metadata_index_path().as_path();
-        fs::write(metadata_path, &metadata).expect("metadata fixture must be written");
-        fs::set_permissions(metadata_path, fs::Permissions::from_mode(0o600))
-            .expect("metadata fixture must be private");
-
-        let resolved = resolve_installed_service_endpoint(paths.clone(), "cli", false)
-            .expect("private durable metadata must select its endpoint");
-        assert_eq!(resolved.socket_path().as_path(), installed_socket);
-
-        let mut prepared: serde_json::Value =
-            serde_json::from_slice(&metadata).expect("metadata fixture must parse");
-        prepared["publication_state"] = json!("prepared");
-        fs::write(
-            metadata_path,
-            serde_json::to_vec(&prepared).expect("prepared metadata must serialize"),
-        )
-        .expect("prepared metadata fixture must be written");
-        let install_recovery = resolve_installed_service_endpoint(paths.clone(), "cli", true)
-            .expect("daemon install must recover the prepared endpoint");
-        assert_eq!(install_recovery.socket_path().as_path(), installed_socket);
-        assert!(
-            resolve_installed_service_endpoint(paths.clone(), "cli", false).is_err(),
-            "normal clients must reject a non-durable endpoint"
-        );
-
-        fs::set_permissions(metadata_path, fs::Permissions::from_mode(0o644))
-            .expect("insecure metadata mode fixture must be installed");
-        assert!(resolve_installed_service_endpoint(paths, "cli", true).is_err());
-    }
-
-    #[test]
-    fn daemon_identity_probes_are_bounded_and_fail_closed() {
-        use podway_core::UnixMillis;
-        use podway_service::{
-            ServiceErrorV1, ServiceInstallMetadataV1, ServiceRunningV1, ServiceRuntimePathsV1,
-            ServiceStatusV1, ServiceStoppedV1, SystemLaunchctlRunnerV1,
-        };
-
-        let expected = build_identity_v1();
-        let root = std::env::temp_dir().join(format!(
-            "podway-cli-status-{}-{}",
-            std::process::id(),
-            VERSION_PROBE_SCRIPT_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-        ));
-        let runtime = root.join("runtime");
-        fs::create_dir_all(&runtime).expect("status fixture runtime");
-        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))
-            .expect("status fixture runtime must be private");
-        let paths = ServiceRuntimePathsV1::from_directories(
-            root.join("LaunchAgents"),
-            root.join("ApplicationSupport"),
-            root.join("Logs"),
-            &runtime,
-        )
-        .expect("service status fixture paths");
-        let valid_envelope = json!({
-            "schema": "podway.output/v3",
-            "request_id": "123e4567-e89b-42d3-a456-426614174000",
-            "command": "version",
-            "generated_at": "2026-08-03T00:00:00.000Z",
-            "result": expected,
-            "warnings": [],
-        });
-        let success = VersionProbeScript::new(&format!(
-            "printf '%s\\n' '{}'",
-            serde_json::to_string(&valid_envelope).expect("valid identity fixture serializes")
-        ));
-        let observed = probe_daemon_identity(&success.path).expect("valid probe output");
-        assert_eq!(observed.product, expected.product());
-        assert_eq!(observed.version, expected.version());
-        assert_eq!(
-            observed.contract_manifest_digest,
-            expected.contract_manifest_digest()
-        );
-
-        let mut malformed = Vec::new();
-        malformed.push(("bare result", valid_envelope["result"].clone()));
-        let mut wrong_result_schema = valid_envelope.clone();
-        wrong_result_schema["result"]["schema"] = json!("podway.status-result/v1");
-        malformed.push(("wrong result schema", wrong_result_schema));
-        let mut unknown_result_field = valid_envelope.clone();
-        unknown_result_field["result"]["unknown"] = json!(true);
-        malformed.push(("unknown result field", unknown_result_field));
-        let mut missing_result_field = valid_envelope.clone();
-        missing_result_field["result"]
-            .as_object_mut()
-            .expect("identity result object")
-            .remove("target");
-        malformed.push(("missing result field", missing_result_field));
-        let mut wrong_outer_schema = valid_envelope.clone();
-        wrong_outer_schema["schema"] = json!("podway.error/v1");
-        malformed.push(("wrong outer schema", wrong_outer_schema));
-        let mut wrong_command = valid_envelope.clone();
-        wrong_command["command"] = json!("daemon.status");
-        malformed.push(("wrong command", wrong_command));
-        for (name, value) in malformed {
-            let fixture = VersionProbeScript::new(&format!(
-                "printf '%s\\n' '{}'",
-                serde_json::to_string(&value).expect("malformed fixture serializes")
-            ));
-            assert!(
-                probe_daemon_identity(&fixture.path).is_err(),
-                "probe must reject {name}"
-            );
-        }
-        let installed = ServiceInstallMetadataV1::new(
-            &success.path,
-            paths.socket_path().as_path(),
-            UnixMillis::new(1),
-            UnixMillis::new(1),
-        )
-        .expect("installed daemon fixture metadata");
-        let stopped = service_status_result(
-            "daemon.status",
-            ServiceStatusV1::StoppedV1(ServiceStoppedV1::new(UnixMillis::new(1), Some(installed))),
-            &paths,
-        )
-        .expect("stopped installed daemon status");
-        match stopped {
-            super::RunResult::Local { result, .. } => {
-                assert_eq!(result["schema"], "podway.daemon-status-result/v3");
-                assert_eq!(result["mode"], "prod");
-                assert_eq!(result["status"], "stopped");
-                assert_eq!(result["readiness_state"], "not_running");
-                assert!(result["readiness_stage"].is_null());
-                assert_eq!(result["product"], expected.product());
-                assert_eq!(
-                    result["contract_manifest_digest"],
-                    expected.contract_manifest_digest()
-                );
-                assert_eq!(
-                    result["configured_socket_path"],
-                    paths.socket_path().as_path().display().to_string()
-                );
-                assert!(result["process_id"].is_null());
-                assert!(result["pid"].is_null());
-                assert!(result["started_at"].is_null());
-                assert!(result["effective_socket_path"].is_null());
-            }
-            _ => panic!("stopped daemon status must remain a local result"),
-        }
-        fs::remove_dir_all(root).expect("remove status fixture root");
-
-        for body in [
-            "printf '{}\\n'; exit 7",
-            "kill -TERM $$",
-            "i=0; while [ \"$i\" -lt 5000 ]; do printf x; i=$((i + 1)); done",
-            "i=0; while [ \"$i\" -lt 5000 ]; do printf x >&2; i=$((i + 1)); done",
-            "printf '{}\\n'; printf unexpected >&2",
-            "printf '{}\\n{}\\n'",
-            "printf '\\377\\n'",
-            "(sleep 10) & printf '{}\\n'",
-        ] {
-            let fixture = VersionProbeScript::new(body);
-            assert!(
-                probe_daemon_identity(&fixture.path).is_err(),
-                "probe must reject script: {body}"
-            );
-            let metadata = ServiceInstallMetadataV1::new(
-                &fixture.path,
-                "/tmp/podwayd.sock",
-                UnixMillis::new(1),
-                UnixMillis::new(1),
-            )
-            .expect("version probe fixture metadata");
-            assert_eq!(
-                service_status_result(
-                    "daemon.status",
-                    ServiceStatusV1::RunningV1(ServiceRunningV1::new(
-                        UnixMillis::new(1),
-                        Some(42),
-                        Some(metadata),
-                    )),
-                    &paths,
-                )
-                .err()
-                .expect("invalid probe must fail daemon status")
-                .code,
-                "DAEMON_UNAVAILABLE"
-            );
-        }
-
-        let stalled = VersionProbeScript::new("sleep 10");
-        let stalled_runner = SystemLaunchctlRunnerV1::new(&stalled.path).with_bounds(
-            Duration::from_millis(100),
-            4 * 1024,
-            Duration::from_millis(100),
-        );
-        assert!(matches!(
-            probe_daemon_identity_with_runner(&stalled_runner),
-            Err(ServiceErrorV1::LaunchctlTimeoutV1 { timeout_ms: 100 })
-        ));
-    }
-
-    #[test]
-    fn readiness_skips_static_identity_until_the_socket_exists() {
-        use podway_core::UnixMillis;
-        use podway_service::{
-            ServiceInstallMetadataV1, ServiceRunningV1, ServiceRuntimePathsV1, ServiceStatusV1,
-        };
-
-        let root = std::env::temp_dir().join(format!(
-            "pwrns-{}-{}",
-            std::process::id(),
-            VERSION_PROBE_SCRIPT_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-        ));
-        let runtime = root.join("runtime");
-        fs::create_dir_all(&runtime).expect("readiness fixture runtime");
-        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))
-            .expect("readiness fixture runtime must be private");
-        let paths = ServiceRuntimePathsV1::from_directories(
-            root.join("LaunchAgents"),
-            root.join("ApplicationSupport"),
-            root.join("Logs"),
-            &runtime,
-        )
-        .expect("readiness fixture paths");
-        let stalled = VersionProbeScript::new("sleep 10");
-        let metadata = ServiceInstallMetadataV1::new(
-            &stalled.path,
-            paths.socket_path().as_path(),
-            UnixMillis::new(1),
-            UnixMillis::new(1),
-        )
-        .expect("readiness fixture metadata");
-
-        let started = Instant::now();
-        let (result, verified) = service_status_projection(
-            "daemon.status",
-            ServiceStatusV1::RunningV1(ServiceRunningV1::new(
-                UnixMillis::new(1),
-                Some(42),
-                Some(metadata),
-            )),
-            &paths,
-            Some(started + Duration::from_millis(20)),
-        )
-        .expect("missing readiness socket must remain a bounded observation");
-
-        assert!(!verified);
-        assert!(started.elapsed() < Duration::from_millis(500));
-        match result {
-            RunResult::Local { result, .. } => assert_eq!(result["reachable"], false),
-            _ => panic!("missing readiness socket must remain a local observation"),
-        }
-        fs::remove_dir_all(root).expect("remove readiness fixture root");
-    }
-
     #[test]
     fn v2sdg007_delegation_routes_require_closed_arguments() {
         assert!(Cli::try_parse_from(["podway", "delegation", "package"]).is_ok());
@@ -9743,16 +5727,6 @@ mod tests {
 
     #[test]
     fn parser_accepts_canonical_session_start_and_attachment_forms() {
-        let terminate = Cli::try_parse_from(["podway", "--dev", "terminate"]).unwrap();
-        assert!(terminate.dev);
-        assert_eq!(terminate.runtime_mode().unwrap().as_str(), "dev");
-        assert!(matches!(terminate.command, Command::Terminate));
-        let named = Cli::try_parse_from(["podway", "--mode", "demo", "status"]).unwrap();
-        assert_eq!(named.runtime_mode().unwrap().as_str(), "demo");
-        assert!(Cli::try_parse_from(["podway", "--dev", "--mode", "demo", "status"]).is_err());
-        assert!(
-            Cli::try_parse_from(["podway", "--mode", "demo", "--mode", "qa", "status"]).is_err()
-        );
         assert!(matches!(
             Cli::try_parse_from(["podway", "start", "--preset", "sw-dev-v2", "--task", "task"])
                 .unwrap()
@@ -9784,53 +5758,6 @@ mod tests {
     }
 
     #[test]
-    fn v2dvc004_parser_and_payload_admit_exact_workspace_mode_grammar() {
-        let mut plan = Cli::try_parse_from([
-            "podway",
-            "--mode",
-            "prod",
-            "--json",
-            "workspace",
-            "mode",
-            "plan",
-            "--to",
-            "dev",
-        ])
-        .unwrap();
-        assert_eq!(plan.command.daemon_wire_name(), Some("workspace.mode.plan"));
-        let (operation, payload) = daemon_payload(&mut plan.command, None).unwrap();
-        assert_eq!(operation, OperationV1::Query);
-        assert_eq!(payload["to"], "dev");
-
-        let mut apply = Cli::try_parse_from([
-            "podway",
-            "--mode",
-            "prod",
-            "--json",
-            "workspace",
-            "mode",
-            "apply",
-            "--to",
-            "dev",
-            "--plan-token",
-            "exact-token",
-        ])
-        .unwrap();
-        assert_eq!(
-            apply.command.daemon_wire_name(),
-            Some("workspace.mode.apply")
-        );
-        let (operation, payload) = daemon_payload(&mut apply.command, None).unwrap();
-        assert_eq!(operation, OperationV1::Control);
-        assert_eq!(payload["to"], "dev");
-        assert_eq!(payload["plan_token"], "exact-token");
-
-        assert!(
-            Cli::try_parse_from(["podway", "workspace", "mode", "apply", "--to", "dev"]).is_err()
-        );
-    }
-
-    #[test]
     fn v2lif004_parser_owns_prepared_lifecycle_mutation_forms() {
         assert!(
             Cli::try_parse_from([
@@ -9846,7 +5773,7 @@ mod tests {
             .is_err()
         );
 
-        let mut begin = Cli::try_parse_from([
+        let begin = Cli::try_parse_from([
             "podway",
             "begin",
             "--goal",
@@ -9857,12 +5784,25 @@ mod tests {
             "agent",
         ])
         .unwrap();
-        assert_eq!(begin.command.daemon_wire_name(), Some("session.begin"));
-        let (_, begin_payload) = daemon_payload(&mut begin.command, None).unwrap();
-        assert_eq!(begin_payload["goal"], "Ship safely.");
-        assert_eq!(begin_payload["criteria"][0]["criterion_id"], "tests");
+        assert_eq!(begin.command.direct_route(), Some("session.begin"));
+        let fences = super::ExplicitPreconditions {
+            session_id: Some(
+                podway_core::SessionId::new("00000000-0000-4000-8000-000000000001").unwrap(),
+            ),
+            session_revision: Some(podway_core::Revision::new(0)),
+            ..Default::default()
+        };
+        let DirectCommandV1::Procedure(
+            podway_protocol::ProcedureV2MutationCommandV1::SessionBegin(input),
+        ) = super::direct::typed_command(&begin, &fences).unwrap()
+        else {
+            panic!("begin must use its typed request")
+        };
+        let goal = input.initial_goal.unwrap();
+        assert_eq!(goal.goal, "Ship safely.");
+        assert_eq!(goal.criteria[0].criterion_id.as_str(), "tests");
 
-        let mut handed_off = Cli::try_parse_from([
+        let handed_off = Cli::try_parse_from([
             "podway",
             "disposition",
             "handed-off",
@@ -9873,13 +5813,18 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(
-            handed_off.command.daemon_wire_name(),
+            handed_off.command.direct_route(),
             Some("session.terminal_disposition")
         );
-        let (_, handed_off_payload) = daemon_payload(&mut handed_off.command, None).unwrap();
-        assert_eq!(handed_off_payload["kind"], "handed_off");
-        assert_eq!(handed_off_payload["summary"], "Handoff complete.");
-        assert_eq!(handed_off_payload["reference"], "local:handoff");
+        let DirectCommandV1::Procedure(
+            podway_protocol::ProcedureV2MutationCommandV1::SessionTerminalDisposition(input),
+        ) = super::direct::typed_command(&handed_off, &fences).unwrap()
+        else {
+            panic!("disposition must use its typed request")
+        };
+        assert!(
+            matches!(input.disposition, podway_protocol::TerminalDispositionInputV1::HandedOff { summary, reference } if summary == "Handoff complete." && reference == "local:handoff")
+        );
         assert!(
             Cli::try_parse_from([
                 "podway",
@@ -9900,7 +5845,7 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(
-            not_required.command.daemon_wire_name(),
+            not_required.command.direct_route(),
             Some("session.terminal_disposition")
         );
 
@@ -9918,7 +5863,7 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(
-            preserve.command.daemon_wire_name(),
+            preserve.command.direct_route(),
             Some("session.start_replace")
         );
         assert!(
@@ -9976,7 +5921,7 @@ mod tests {
             ],
         ] {
             let cli = Cli::try_parse_from(arguments).unwrap();
-            assert!(validate_daemon_flags(&cli).is_err());
+            assert!(validate_direct_flags(&cli).is_err());
         }
 
         let reset_all_with_summary = Cli::try_parse_from([
@@ -9989,7 +5934,7 @@ mod tests {
             "must not be discarded",
         ])
         .unwrap();
-        assert!(validate_daemon_flags(&reset_all_with_summary).is_err());
+        assert!(validate_direct_flags(&reset_all_with_summary).is_err());
 
         let preserve_without_reason = Cli::try_parse_from([
             "podway",
@@ -10002,7 +5947,7 @@ mod tests {
             "preserve",
         ])
         .unwrap();
-        assert!(validate_daemon_flags(&preserve_without_reason).is_err());
+        assert!(validate_direct_flags(&preserve_without_reason).is_err());
 
         let force_reset_dry_run = Cli::try_parse_from([
             "podway",
@@ -10012,7 +5957,7 @@ mod tests {
             "--dry-run",
         ])
         .unwrap();
-        assert!(validate_daemon_flags(&force_reset_dry_run).is_err());
+        assert!(validate_direct_flags(&force_reset_dry_run).is_err());
 
         let preserve_with_summary = Cli::try_parse_from([
             "podway",
@@ -10029,23 +5974,25 @@ mod tests {
             "must not be discarded",
         ])
         .unwrap();
-        assert!(validate_daemon_flags(&preserve_with_summary).is_err());
+        assert!(validate_direct_flags(&preserve_with_summary).is_err());
 
         let reset_dry_run_with_confirmation =
             Cli::try_parse_from(["podway", "--yes", "reset", "--dry-run"]).unwrap();
-        assert!(validate_daemon_flags(&reset_dry_run_with_confirmation).is_err());
+        assert!(validate_direct_flags(&reset_dry_run_with_confirmation).is_err());
 
-        let mut reset_all_after_interactive_confirmation =
+        let reset_all_after_interactive_confirmation =
             Cli::try_parse_from(["podway", "reset", "--all", "--force"]).unwrap();
-        assert!(validate_daemon_flags(&reset_all_after_interactive_confirmation).is_ok());
+        assert!(validate_direct_flags(&reset_all_after_interactive_confirmation).is_ok());
         assert!(
             reset_all_after_interactive_confirmation
                 .command
                 .is_destructive()
         );
-        let (_, reset_all_payload) =
-            daemon_payload(&mut reset_all_after_interactive_confirmation.command, None).unwrap();
-        assert_eq!(reset_all_payload["confirmed"], true);
+        assert!(matches!(
+            super::direct::typed_command(&reset_all_after_interactive_confirmation, &fences)
+                .unwrap(),
+            DirectCommandV1::WorkspaceResetAll { confirmed: true }
+        ));
 
         for arguments in [
             vec![
@@ -10121,17 +6068,10 @@ mod tests {
             Some(ParseFailureCommandContext::new("session.status", false))
         );
         assert_eq!(
-            context(&["podway", "job", "lookup", "--unknown"]),
-            Some(ParseFailureCommandContext::new("job.lookup", false))
+            context(&["podway", "outcome", "lookup", "--unknown"]),
+            Some(ParseFailureCommandContext::new("outcome.lookup", false))
         );
         assert_eq!(context(&["podway", "unknown-command"]), None);
-    }
-
-    #[test]
-    fn daemon_status_help_flag_is_rejected_without_dispatch() {
-        let error = Cli::try_parse_from(["podway", "daemon", "status", "--help"])
-            .expect_err("the disabled help flag must stop in clap");
-        assert_eq!(error.kind(), ErrorKind::UnknownArgument);
     }
 
     #[test]
@@ -10145,80 +6085,6 @@ mod tests {
         assert!(parse_timeout_millis("1h").is_err());
     }
 
-    #[test]
-    fn daemon_wait_ready_has_closed_read_only_grammar() {
-        let cli = Cli::try_parse_from([
-            "podway",
-            "--json",
-            "daemon",
-            "wait-ready",
-            "--timeout",
-            "120s",
-        ])
-        .expect("documented wait-ready grammar");
-        assert_eq!(cli.timeout, Some(120_000));
-        assert!(matches!(
-            cli.command,
-            Command::Daemon {
-                command: DaemonCommand::WaitReady
-            }
-        ));
-        assert!(Cli::try_parse_from(["podway", "daemon", "wait-ready", "--repair"]).is_err());
-    }
-    #[test]
-    fn service_clock_failures_are_explicit_and_command_scoped() {
-        let before_epoch = UNIX_EPOCH
-            .checked_sub(Duration::from_millis(1))
-            .expect("Unix epoch must support a preceding instant");
-        let failure = system_service_clock(before_epoch, "daemon.start")
-            .expect_err("pre-epoch service clock must fail");
-        assert_eq!(failure.code, "INTERNAL_ERROR");
-        assert_eq!(failure.command, "daemon.start");
-        assert!(failure.message.contains("before the Unix epoch"));
-    }
-
-    #[test]
-    fn log_follow_reopens_the_active_path_after_rotation() {
-        let directory = std::env::temp_dir().join(format!(
-            "podway-cli-log-follow-{}-{}",
-            std::process::id(),
-            VERSION_PROBE_SCRIPT_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::create_dir_all(&directory).expect("create log fixture directory");
-        let path = directory.join("podwayd.log");
-        let rotated = directory.join("podwayd.log.1");
-        fs::write(&path, b"initial\n").expect("write initial log");
-        let mut file = File::open(&path).expect("open active log");
-        let mut offset = file.seek(SeekFrom::End(0)).expect("seek active log");
-        let mut output = Vec::new();
-
-        let mut append = fs::OpenOptions::new()
-            .append(true)
-            .open(&path)
-            .expect("open active log for append");
-        append.write_all(b"append-one\n").expect("append first log");
-        stream_log_follow_update(&path, &mut file, &mut offset, &mut output)
-            .expect("read appended log");
-
-        fs::rename(&path, &rotated).expect("rotate active log");
-        fs::write(&path, b"new-active\n").expect("recreate active log");
-        stream_log_follow_update(&path, &mut file, &mut offset, &mut output)
-            .expect("read recreated active log");
-
-        let mut append = fs::OpenOptions::new()
-            .append(true)
-            .open(&path)
-            .expect("open recreated log for append");
-        append
-            .write_all(b"append-two\n")
-            .expect("append second log");
-        stream_log_follow_update(&path, &mut file, &mut offset, &mut output)
-            .expect("read append after rotation");
-
-        assert_eq!(output, b"append-one\nnew-active\nappend-two\n");
-        drop(file);
-        fs::remove_dir_all(directory).expect("remove log fixture directory");
-    }
     struct FixedClock(SystemTime);
 
     impl LocalEnvelopeClock for FixedClock {
@@ -10251,8 +6117,8 @@ mod tests {
 
     #[test]
     fn procedure_start_human_error_names_diagnostics_and_the_authoring_check() {
-        let response: ResponseEnvelopeV2 = serde_json::from_value(json!({
-            "schema": "podway.error/v1",
+        let response: ErrorEnvelopeV2 = serde_json::from_value(json!({
+            "schema": "podway.error/v2",
             "request_id": "00000000-0000-4000-8000-000000000001",
             "command": "session.start",
             "generated_at": "2026-09-22T00:00:00.000Z",
@@ -10261,14 +6127,13 @@ mod tests {
             "retryable": false,
             "exit_code": 1,
             "details": {
-                "schema": "podway.v2-runtime-error-details/v1",
+                "schema": "podway.v2-runtime-error-details/v2",
                 "kind": "PROCEDURE_V2_SCHEMA_INVALID",
                 "diagnostic_codes": [
                     "GRAPH_NODE_COUNT_OUT_OF_RANGE",
                     "OBSERVATION_STATIC_MEMBERS_BUDGET_EXCEEDED"
                 ],
-                "admission": {"admitted": false}
-            }
+                            }
         }))
         .expect("fixture is a valid Procedure admission error");
         let expected_json = serde_json::to_value(&response).expect("serialize fixture");
@@ -10281,7 +6146,7 @@ mod tests {
             "review",
         ])
         .unwrap();
-        let result = daemon_response_result(&cli.command, response);
+        let result = error_result(&cli.command, response);
         let clock = FixedClock(UNIX_EPOCH + Duration::from_millis(12));
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -10329,23 +6194,21 @@ mod tests {
 
     #[test]
     fn procedure_start_human_error_preserves_leading_dash_paths_and_custom_scope() {
-        fn response(code: &str) -> ResponseEnvelopeV2 {
+        fn response(code: &str) -> ErrorEnvelopeV2 {
             let details = if code == "PROCEDURE_V2_SCHEMA_INVALID" {
                 json!({
-                    "schema": "podway.v2-runtime-error-details/v1",
-                    "kind": code,
-                    "diagnostic_codes": ["GRAPH_NODE_COUNT_OUT_OF_RANGE"],
-                    "admission": {"admitted": false}
-                })
+                "schema": "podway.v2-runtime-error-details/v2",
+                "kind": code,
+                "diagnostic_codes": ["GRAPH_NODE_COUNT_OUT_OF_RANGE"],
+                                })
             } else {
                 json!({
-                    "schema": "podway.v2-runtime-error-details/v1",
-                    "kind": code,
-                    "admission": {"admitted": false}
-                })
+                "schema": "podway.v2-runtime-error-details/v2",
+                "kind": code,
+                                })
             };
             serde_json::from_value(json!({
-                "schema": "podway.error/v1",
+                "schema": "podway.error/v2",
                 "request_id": "00000000-0000-4000-8000-000000000001",
                 "command": "session.start",
                 "generated_at": "2026-09-22T00:00:00.000Z",
@@ -10366,8 +6229,7 @@ mod tests {
             "review",
         ])
         .unwrap();
-        let result =
-            daemon_response_result(&custom.command, response("PROCEDURE_V2_SCHEMA_INVALID"));
+        let result = error_result(&custom.command, response("PROCEDURE_V2_SCHEMA_INVALID"));
         let clock = FixedClock(UNIX_EPOCH + Duration::from_millis(12));
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -10400,8 +6262,7 @@ mod tests {
             "review",
         ])
         .unwrap();
-        let result =
-            daemon_response_result(&preset.command, response("PROCEDURE_V2_SCHEMA_INVALID"));
+        let result = error_result(&preset.command, response("PROCEDURE_V2_SCHEMA_INVALID"));
         let mut stderr = Vec::new();
         assert_eq!(
             render_result_with_clock_and_writers(
@@ -10418,7 +6279,7 @@ mod tests {
         assert!(rendered.contains("diagnostics: GRAPH_NODE_COUNT_OUT_OF_RANGE\n"));
         assert!(!rendered.contains("procedure check"));
 
-        let result = daemon_response_result(&custom.command, response("GOAL_TRACKING_NOT_ENABLED"));
+        let result = error_result(&custom.command, response("GOAL_TRACKING_NOT_ENABLED"));
         let mut stderr = Vec::new();
         assert_eq!(
             render_result_with_clock_and_writers(
@@ -10486,6 +6347,47 @@ mod tests {
     }
 
     #[test]
+    fn oversized_output_is_an_integrity_failure_without_partial_stdout() {
+        let clock = FixedClock(UNIX_EPOCH + Duration::from_millis(12));
+        for (length, exit) in [
+            (65_537, 0),
+            (podway_protocol::MAX_DIRECT_OUTPUT_BYTES_V1, 6),
+        ] {
+            let result = local_result(
+                "procedure.show",
+                json!({"canonical_json": "x".repeat(length)}),
+                String::new(),
+            );
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            assert_eq!(
+                render_result_with_clock_and_writers(
+                    &result,
+                    true,
+                    false,
+                    &clock,
+                    &mut stdout,
+                    &mut stderr,
+                ),
+                exit,
+            );
+            assert!(stderr.is_empty());
+            if exit == 0 {
+                let output: OutputEnvelopeV4 = serde_json::from_slice(&stdout).unwrap();
+                assert_eq!(
+                    output.as_value()["result"]["canonical_json"]
+                        .as_str()
+                        .unwrap()
+                        .len(),
+                    length
+                );
+            } else {
+                assert!(stdout.is_empty());
+            }
+        }
+    }
+
+    #[test]
     fn broken_writers_return_the_client_exit_code_for_text_and_json() {
         let clock = FixedClock(UNIX_EPOCH + Duration::from_millis(12));
         let result = local_result("help", json!({ "text": "help" }), "help".to_owned());
@@ -10533,704 +6435,5 @@ mod tests {
                 );
             }
         }
-    }
-    #[test]
-    fn daemon_service_results_and_errors_use_local_contracts() {
-        use podway_core::UnixMillis;
-        use podway_service::{
-            ServiceChangedV1, ServiceErrorV1, ServiceNotInstalledV1, ServiceOperationV1,
-            ServiceOutcomeV1, ServiceRunningV1, ServiceRuntimePathsV1, ServiceStatusV1,
-        };
-        let root = std::env::temp_dir().join(format!(
-            "podway-cli-local-status-{}-{}",
-            std::process::id(),
-            VERSION_PROBE_SCRIPT_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-        ));
-        let runtime = root.join("runtime");
-        fs::create_dir_all(&runtime).expect("local status fixture runtime");
-        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))
-            .expect("local status fixture runtime must be private");
-        let paths = ServiceRuntimePathsV1::from_directories(
-            root.join("LaunchAgents"),
-            root.join("ApplicationSupport"),
-            root.join("Logs"),
-            &runtime,
-        )
-        .expect("service status fixture paths");
-
-        let changed = service_outcome_result(
-            "daemon.start",
-            ServiceOutcomeV1::ChangedV1(ServiceChangedV1::new(UnixMillis::new(1), None)),
-        );
-        let status = service_status_result(
-            "daemon.status",
-            ServiceStatusV1::RunningV1(ServiceRunningV1::new(UnixMillis::new(1), Some(42), None)),
-            &paths,
-        )
-        .expect("status without daemon metadata must remain available");
-
-        match changed {
-            super::RunResult::Local {
-                command, result, ..
-            } => {
-                assert_eq!(command, "daemon.start");
-                assert_eq!(result["outcome"], "changed");
-            }
-            _ => panic!("service outcomes must remain local results"),
-        }
-        match status {
-            super::RunResult::Local {
-                command, result, ..
-            } => {
-                assert_eq!(command, "daemon.status");
-                assert_eq!(result["status"], "running");
-                assert!(result["process_id"].is_null());
-                assert!(result["pid"].is_null());
-                assert_eq!(result["reachable"], false);
-            }
-            _ => panic!("service status must remain local results"),
-        }
-
-        let not_installed = map_service_error(
-            ServiceErrorV1::LogUnavailableV1 {
-                message: "missing".to_owned(),
-            },
-            "daemon.logs",
-        );
-        assert_eq!(not_installed.code, "DAEMON_NOT_INSTALLED");
-        let unavailable = map_service_error(
-            ServiceErrorV1::IoV1 {
-                operation: None,
-                message: "launchctl missing".to_owned(),
-            },
-            "daemon.start",
-        );
-        assert_eq!(unavailable.code, "DAEMON_UNAVAILABLE");
-        assert_eq!(
-            unavailable.message,
-            "the daemon service state is unavailable"
-        );
-        let launchctl = map_service_error(
-            ServiceErrorV1::LaunchctlFailureV1 {
-                operation: ServiceOperationV1::Install,
-                exit_status: Some(5),
-                message: "secret host diagnostic /Users/example".to_owned(),
-            },
-            "daemon.install",
-        );
-        assert_eq!(launchctl.code, "DAEMON_UNAVAILABLE");
-        assert_eq!(
-            launchctl.message,
-            "launchd could not complete the daemon service transition"
-        );
-        assert!(!launchctl.message.contains("secret host diagnostic"));
-        let timed_out = map_service_error(
-            ServiceErrorV1::TimeoutV1 {
-                operation: ServiceOperationV1::Install,
-                timeout_ms: 10_000,
-            },
-            "daemon.install",
-        );
-        assert_eq!(
-            timed_out.message,
-            "the daemon service lifecycle operation timed out"
-        );
-        let mismatch = map_service_error(
-            ServiceErrorV1::ContractMismatchV1 {
-                expected_product: "podway".to_owned(),
-                actual_product: Some("other".to_owned()),
-                expected_manifest_digest: "sha256:expected".to_owned(),
-                actual_manifest_digest: Some("sha256:actual".to_owned()),
-            },
-            "daemon.install",
-        );
-        assert_eq!(mismatch.code, "DAEMON_CONTRACT_MISMATCH");
-        assert_eq!(mismatch.exit_code, 3);
-        assert!(!mismatch.retryable);
-        assert_eq!(mismatch.details["expected"]["product"], "podway");
-        assert_eq!(mismatch.details["actual"]["product"], "other");
-        assert_eq!(mismatch.details["admission"]["admitted"], false);
-
-        let malformed_identity = map_service_error(
-            ServiceErrorV1::ContractMismatchV1 {
-                expected_product: "podway".to_owned(),
-                actual_product: None,
-                expected_manifest_digest: format!("sha256:{}", "a".repeat(64)),
-                actual_manifest_digest: None,
-            },
-            "daemon.install",
-        );
-        assert_eq!(malformed_identity.code, "DAEMON_VERSION_INCOMPATIBLE");
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        assert_eq!(
-            render_local_failure_with_clock_and_writers(
-                malformed_identity,
-                true,
-                &FixedClock(UNIX_EPOCH + Duration::from_millis(12)),
-                &mut stdout,
-                &mut stderr,
-            ),
-            3
-        );
-        serde_json::from_slice::<podway_protocol::ResponseEnvelopeV2>(&stdout)
-            .expect("local malformed-identity output must remain protocol-valid");
-        assert!(stderr.is_empty());
-
-        let stopped = service_status_result(
-            "daemon.status",
-            ServiceStatusV1::NotInstalledV1(ServiceNotInstalledV1::new(UnixMillis::new(1))),
-            &paths,
-        )
-        .expect("not-installed status must remain available");
-        match stopped {
-            super::RunResult::Local { result, .. } => {
-                assert_eq!(result["status"], "not_installed");
-            }
-            _ => panic!("service status must remain local results"),
-        }
-        fs::remove_dir_all(root).expect("remove local status fixture root");
-    }
-    #[test]
-    fn daemon_install_path_resolution_rejects_non_platform_paths() {
-        let fixture = VersionProbeScript::new("exit 0");
-        let binary = resolve_daemon_executable(Some(&fixture.path), "daemon.install")
-            .expect("existing absolute daemon path must be accepted");
-        assert_eq!(
-            binary.as_path(),
-            std::fs::canonicalize(&fixture.path).expect("fixture path must canonicalize")
-        );
-
-        let failure =
-            resolve_daemon_executable(Some(std::path::Path::new("podwayd")), "daemon.install")
-                .expect_err("relative daemon path must be rejected");
-        assert_eq!(failure.code, "REQUEST_INVALID");
-        assert_eq!(failure.command, "daemon.install");
-
-        let path_fixture = VersionProbeScript::new("exit 0");
-        let from_path = resolve_implicit_daemon_executable_from(
-            std::path::Path::new("/bin/sh"),
-            Some(path_fixture.directory.as_os_str()),
-            "daemon.install",
-        )
-        .expect("controlled PATH daemon must be selected after a missing sibling");
-        assert_eq!(
-            from_path.as_path(),
-            std::fs::canonicalize(&path_fixture.path).expect("PATH fixture canonical path")
-        );
-
-        let cli = fixture.directory.join("podway");
-        std::fs::write(&cli, "#!/bin/sh\nexit 0\n").expect("CLI fixture must be written");
-        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o700))
-            .expect("CLI fixture must be executable");
-        let sibling = resolve_implicit_daemon_executable_from(
-            &cli,
-            Some(path_fixture.directory.as_os_str()),
-            "daemon.install",
-        )
-        .expect("resolved CLI sibling must precede PATH");
-        assert_eq!(
-            sibling.as_path(),
-            std::fs::canonicalize(&fixture.path).expect("sibling fixture canonical path")
-        );
-
-        let symlink_directory = path_fixture.directory.join("cli-link");
-        std::fs::create_dir(&symlink_directory).expect("CLI symlink directory must be created");
-        let cli_symlink = symlink_directory.join("podway");
-        std::os::unix::fs::symlink(&cli, &cli_symlink).expect("CLI symlink must be created");
-        let symlink_sibling = resolve_implicit_daemon_executable_from(
-            &cli_symlink,
-            Some(path_fixture.directory.as_os_str()),
-            "daemon.install",
-        )
-        .expect("resolved CLI symlink sibling must precede PATH");
-        assert_eq!(
-            symlink_sibling.as_path(),
-            std::fs::canonicalize(&fixture.path).expect("symlink sibling canonical path")
-        );
-    }
-}
-
-#[cfg(test)]
-mod phase6_health_tests {
-    use std::{
-        fs,
-        io::{Read, Write},
-        net::Shutdown,
-        os::unix::fs::PermissionsExt,
-        os::unix::net::UnixListener,
-        path::Path,
-        time::{Duration, Instant},
-    };
-
-    use podway_core::{RuntimeModeV1, UnixMillis};
-    use podway_protocol::{
-        ResponseEnvelopeV2, build_identity_v1, decode_request_payload_v1, decode_single_frame_v1,
-        encode_frame_v1, ensure_error_details_schema_v1,
-    };
-    use podway_service::{ServiceRunningV1, ServiceRuntimePathsV1, ServiceStatusV1};
-
-    use serde_json::json;
-
-    use super::{
-        ReadinessObservation, ReadinessWaitRuntime, service_status_result,
-        wait_for_readiness_observations_with_runtime, wait_for_verified_service,
-    };
-
-    struct SimulatedReadinessRuntime {
-        elapsed: Duration,
-    }
-
-    impl ReadinessWaitRuntime for SimulatedReadinessRuntime {
-        fn elapsed(&self) -> Duration {
-            self.elapsed
-        }
-
-        fn wait(&mut self, duration: Duration) {
-            self.elapsed += duration;
-        }
-    }
-
-    #[test]
-    fn readiness_timeout_crosses_thirty_seconds_without_sleep_or_mutation() {
-        let runtime_root = std::env::temp_dir().join(format!(
-            "podway-cli-readiness-timeout-{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&runtime_root);
-        fs::create_dir_all(&runtime_root).expect("timeout fixture runtime");
-        fs::set_permissions(&runtime_root, fs::Permissions::from_mode(0o700))
-            .expect("timeout fixture runtime must be private");
-        let sentinel = runtime_root.join("sentinel");
-        fs::write(&sentinel, b"preserved").expect("timeout fixture sentinel");
-        let paths = ServiceRuntimePathsV1::from_directories(
-            runtime_root.join("LaunchAgents"),
-            runtime_root.join("ApplicationSupport"),
-            runtime_root.join("Logs"),
-            &runtime_root,
-        )
-        .expect("timeout fixture service paths");
-        let observation = json!({
-            "schema":"podway.daemon-status-result/v2",
-            "status":"not_installed","installed":false,"loaded":false,"reachable":false,
-            "product":null,"daemon_version":null,"target":null,"build_identity":null,
-            "source_commit":null,"contract_manifest_schema":null,"contract_manifest_digest":null,
-            "protocol_versions":[],"pid":null,"process_id":null,"executable_path":null,
-            "started_at":null,"uptime_ms":null,"socket_path":null,"configured_socket_path":null,
-            "effective_socket_path":null,"registered_worktree_count":null,
-            "active_scheduler_count":null,"queued_job_count":null,"running_job_count":null,
-            "readiness_state":"not_running","readiness_stage":null,
-            "readiness_elapsed_ms":null,"worktree_recovery":null
-        })
-        .as_object()
-        .expect("observation object")
-        .clone();
-        let mut runtime = SimulatedReadinessRuntime {
-            elapsed: Duration::ZERO,
-        };
-        let failure = wait_for_readiness_observations_with_runtime(
-            |_| {
-                Ok::<ReadinessObservation, super::LocalFailure>(ReadinessObservation {
-                    result: observation.clone(),
-                    verified_v2_ready: false,
-                })
-            },
-            &paths,
-            "daemon.wait-ready",
-            "wait_ready",
-            Duration::from_secs(31),
-            &mut runtime,
-        )
-        .expect_err("non-running daemon must time out");
-
-        assert_eq!(failure.code, "DAEMON_READINESS_TIMEOUT");
-        assert!(failure.retryable);
-        assert_eq!(failure.details["operation"], "wait_ready");
-        assert_eq!(failure.details["elapsed_ms"], 31_000);
-        assert_eq!(failure.details["deadline_ms"], 31_000);
-        assert!(failure.details["worktree_recovery"].is_null());
-        let mut details = failure.details.clone();
-        ensure_error_details_schema_v1(failure.code, &mut details);
-        serde_json::from_value::<ResponseEnvelopeV2>(json!({
-            "schema":"podway.error/v1",
-            "request_id":"123e4567-e89b-42d3-a456-426614174000",
-            "command":"daemon.wait-ready",
-            "generated_at":"2026-08-25T00:00:00.000Z",
-            "code":failure.code,
-            "message":failure.message,
-            "retryable":failure.retryable,
-            "exit_code":failure.exit_code,
-            "details":details
-        }))
-        .expect("timeout must serialize through the public error contract");
-        assert_eq!(fs::read(&sentinel).expect("sentinel remains"), b"preserved");
-        fs::remove_dir_all(runtime_root).expect("remove timeout fixture");
-    }
-
-    #[test]
-    fn readiness_arriving_after_the_deadline_is_a_timeout() {
-        let runtime_root =
-            std::env::temp_dir().join(format!("podway-cli-late-readiness-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&runtime_root);
-        fs::create_dir_all(&runtime_root).expect("late readiness fixture runtime");
-        fs::set_permissions(&runtime_root, fs::Permissions::from_mode(0o700))
-            .expect("late readiness fixture runtime must be private");
-        let paths = ServiceRuntimePathsV1::from_directories(
-            runtime_root.join("LaunchAgents"),
-            runtime_root.join("ApplicationSupport"),
-            runtime_root.join("Logs"),
-            &runtime_root,
-        )
-        .expect("late readiness fixture paths");
-        let result = json!({
-            "readiness_state":"ready","readiness_stage":"ready",
-            "installed":true,"loaded":true,"reachable":true,
-            "worktree_recovery":{"total":0,"completed":0,"failed":0}
-        })
-        .as_object()
-        .unwrap()
-        .clone();
-        let mut runtime = SimulatedReadinessRuntime {
-            elapsed: Duration::from_millis(5),
-        };
-        let failure = wait_for_readiness_observations_with_runtime(
-            |_| {
-                Ok::<ReadinessObservation, super::LocalFailure>(ReadinessObservation {
-                    result: result.clone(),
-                    verified_v2_ready: true,
-                })
-            },
-            &paths,
-            "daemon.wait-ready",
-            "wait_ready",
-            Duration::from_millis(5),
-            &mut runtime,
-        )
-        .expect_err("readiness after the deadline must not count as success");
-        assert_eq!(failure.code, "DAEMON_READINESS_TIMEOUT");
-        fs::remove_dir_all(runtime_root).expect("remove late readiness fixture");
-    }
-
-    #[test]
-    fn legacy_ready_observation_does_not_satisfy_the_v2_waiter() {
-        let runtime_root = std::env::temp_dir().join(format!(
-            "podway-cli-legacy-readiness-{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&runtime_root);
-        fs::create_dir_all(&runtime_root).expect("legacy fixture runtime");
-        fs::set_permissions(&runtime_root, fs::Permissions::from_mode(0o700))
-            .expect("legacy fixture runtime must be private");
-        let paths = ServiceRuntimePathsV1::from_directories(
-            runtime_root.join("LaunchAgents"),
-            runtime_root.join("ApplicationSupport"),
-            runtime_root.join("Logs"),
-            &runtime_root,
-        )
-        .expect("legacy fixture service paths");
-        let result = json!({
-            "readiness_state":"ready","readiness_stage":"ready",
-            "installed":true,"loaded":true,"reachable":true,
-            "worktree_recovery":{"total":0,"completed":0,"failed":0}
-        })
-        .as_object()
-        .expect("legacy observation object")
-        .clone();
-        let mut runtime = SimulatedReadinessRuntime {
-            elapsed: Duration::from_millis(1),
-        };
-        let failure = wait_for_readiness_observations_with_runtime(
-            |_| {
-                Ok::<ReadinessObservation, super::LocalFailure>(ReadinessObservation {
-                    result: result.clone(),
-                    verified_v2_ready: false,
-                })
-            },
-            &paths,
-            "daemon.wait-ready",
-            "wait_ready",
-            Duration::from_millis(1),
-            &mut runtime,
-        )
-        .expect_err("a synthesized legacy ready result must not satisfy the v2 waiter");
-        assert_eq!(failure.code, "DAEMON_READINESS_TIMEOUT");
-        fs::remove_dir_all(runtime_root).expect("remove legacy fixture");
-    }
-
-    #[test]
-    fn raw_socket_listener_is_not_verified_daemon_health() {
-        let runtime =
-            std::env::temp_dir().join(format!("podway-cli-health-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&runtime);
-        fs::create_dir_all(&runtime).expect("health fixture runtime");
-        fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700))
-            .expect("health fixture runtime must be private");
-        let paths = ServiceRuntimePathsV1::from_directories(
-            runtime.join("LaunchAgents"),
-            runtime.join("ApplicationSupport"),
-            runtime.join("Logs"),
-            &runtime,
-        )
-        .expect("health fixture service paths");
-        let listener =
-            UnixListener::bind(paths.socket_path().as_path()).expect("health fixture socket");
-        fs::set_permissions(
-            paths.socket_path().as_path(),
-            std::fs::Permissions::from_mode(0o600),
-        )
-        .expect("health fixture socket must be private");
-
-        let responder = std::thread::spawn(move || {
-            for _ in 0..2 {
-                let (stream, _) = listener.accept().expect("health probe connection");
-                drop(stream);
-            }
-        });
-        assert!(
-            wait_for_verified_service(
-                &paths,
-                Path::new("/Applications/Podway/podwayd"),
-                "daemon.install",
-                Duration::from_millis(50),
-            )
-            .is_err(),
-            "a listener that does not complete the identity handshake is not healthy"
-        );
-        let result = service_status_result(
-            "daemon.status",
-            ServiceStatusV1::RunningV1(ServiceRunningV1::new(UnixMillis::new(1), Some(42), None)),
-            &paths,
-        )
-        .expect("status without daemon metadata must remain available");
-        match result {
-            super::RunResult::Local { result, text, .. } => {
-                assert_eq!(result["reachable"], false);
-                assert_eq!(result["loaded"], true);
-                assert_eq!(text, "daemon startup incomplete: unreachable");
-            }
-            _ => panic!("service status must remain local"),
-        }
-
-        responder.join().expect("health fixture responder");
-        fs::remove_dir_all(runtime).expect("remove health fixture");
-    }
-
-    #[test]
-    fn readiness_caps_a_stalled_daemon_exchange_to_the_deadline() {
-        let runtime = std::env::temp_dir().join(format!("pwrd-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&runtime);
-        fs::create_dir_all(&runtime).expect("readiness probe fixture runtime");
-        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))
-            .expect("readiness probe fixture runtime must be private");
-        let paths = ServiceRuntimePathsV1::from_directories(
-            runtime.join("LaunchAgents"),
-            runtime.join("ApplicationSupport"),
-            runtime.join("Logs"),
-            &runtime,
-        )
-        .expect("readiness probe fixture paths");
-        let listener =
-            UnixListener::bind(paths.socket_path().as_path()).expect("readiness probe socket");
-        fs::set_permissions(
-            paths.socket_path().as_path(),
-            fs::Permissions::from_mode(0o600),
-        )
-        .expect("readiness probe socket must be private");
-        let responder = std::thread::spawn(move || {
-            let (_stream, _) = listener.accept().expect("readiness probe connection");
-            std::thread::sleep(Duration::from_secs(1));
-        });
-
-        let started = Instant::now();
-        let (result, verified) = super::service_status_projection(
-            "daemon.status",
-            ServiceStatusV1::RunningV1(ServiceRunningV1::new(UnixMillis::new(1), Some(42), None)),
-            &paths,
-            Some(started + Duration::from_millis(20)),
-        )
-        .expect("stalled daemon exchange must remain a bounded observation");
-
-        assert!(!verified);
-        assert!(started.elapsed() < Duration::from_millis(500));
-        match result {
-            super::RunResult::Local { result, .. } => assert_eq!(result["reachable"], false),
-            _ => panic!("stalled daemon exchange must remain a local observation"),
-        }
-        responder.join().expect("readiness probe responder");
-        fs::remove_dir_all(runtime).expect("remove readiness probe fixture");
-    }
-
-    #[test]
-    fn named_wait_ready_caps_a_stalled_status_exchange_to_the_deadline() {
-        let runtime = std::env::temp_dir().join(format!("pwnr-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&runtime);
-        fs::create_dir_all(&runtime).expect("named readiness fixture runtime");
-        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))
-            .expect("named readiness fixture runtime must be private");
-        let paths = ServiceRuntimePathsV1::from_directories(
-            runtime.join("LaunchAgents"),
-            runtime.join("ApplicationSupport"),
-            runtime.join("Logs"),
-            &runtime,
-        )
-        .expect("named readiness fixture paths");
-        let listener = UnixListener::bind(paths.socket_path().as_path())
-            .expect("named readiness fixture socket");
-        fs::set_permissions(
-            paths.socket_path().as_path(),
-            fs::Permissions::from_mode(0o600),
-        )
-        .expect("named readiness fixture socket must be private");
-        let responder = std::thread::spawn(move || {
-            let (_stream, _) = listener.accept().expect("named readiness probe connection");
-            std::thread::sleep(Duration::from_millis(500));
-        });
-
-        let started = Instant::now();
-        let failure = match super::execute_named_runtime_status_with_paths(
-            &super::DaemonCommand::WaitReady,
-            &RuntimeModeV1::development(),
-            Some(20),
-            &paths,
-        ) {
-            Err(failure) => failure,
-            Ok(_) => panic!("stalled status exchange must expire with a typed timeout"),
-        };
-        assert!(started.elapsed() < Duration::from_millis(100));
-        assert_eq!(failure.code, "DAEMON_READINESS_TIMEOUT");
-        assert_eq!(failure.details["operation"], "wait_ready");
-        assert_eq!(failure.details["deadline_ms"], 20);
-        responder.join().expect("named readiness fixture responder");
-        fs::remove_dir_all(runtime).expect("remove named readiness fixture");
-    }
-
-    #[test]
-    fn named_wait_ready_caps_poll_sleep_when_endpoint_is_absent() {
-        let runtime = std::env::temp_dir().join(format!("pwnp-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&runtime);
-        fs::create_dir_all(&runtime).expect("named readiness fixture runtime");
-        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))
-            .expect("named readiness fixture runtime must be private");
-        let paths = ServiceRuntimePathsV1::from_directories(
-            runtime.join("LaunchAgents"),
-            runtime.join("ApplicationSupport"),
-            runtime.join("Logs"),
-            &runtime,
-        )
-        .expect("named readiness fixture paths");
-
-        let started = Instant::now();
-        let failure = match super::execute_named_runtime_status_with_paths(
-            &super::DaemonCommand::WaitReady,
-            &RuntimeModeV1::development(),
-            Some(20),
-            &paths,
-        ) {
-            Err(failure) => failure,
-            Ok(_) => panic!("absent endpoint must expire with a typed timeout"),
-        };
-        assert!(started.elapsed() < Duration::from_millis(100));
-        assert_eq!(failure.code, "DAEMON_READINESS_TIMEOUT");
-        assert_eq!(failure.details["reachable"], false);
-        fs::remove_dir_all(runtime).expect("remove named readiness fixture");
-    }
-
-    #[test]
-    fn readiness_waits_through_stale_identity_for_a_new_daemon_process() {
-        let runtime = std::env::temp_dir().join(format!(
-            "podway-cli-upgrade-readiness-{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&runtime);
-        fs::create_dir_all(&runtime).expect("upgrade fixture directory must be created");
-        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))
-            .expect("upgrade fixture directory must be private");
-        let paths = ServiceRuntimePathsV1::from_directories(
-            runtime.join("LaunchAgents"),
-            runtime.join("ApplicationSupport"),
-            runtime.join("Logs"),
-            &runtime,
-        )
-        .expect("upgrade fixture paths");
-        let listener =
-            UnixListener::bind(paths.socket_path().as_path()).expect("upgrade fixture socket");
-        fs::set_permissions(
-            paths.socket_path().as_path(),
-            fs::Permissions::from_mode(0o600),
-        )
-        .expect("upgrade fixture socket must be private");
-
-        let expected_binary = runtime.join("installed/podwayd");
-        let responder_paths = paths.clone();
-        let responder_binary = expected_binary.clone();
-        let stale_process_id = "123e4567-e89b-42d3-a456-426614174001";
-        let current_process_id = "123e4567-e89b-42d3-a456-426614174002";
-        let responder = std::thread::spawn(move || {
-            let identity = build_identity_v1();
-            for (product, process_id) in [
-                ("stale-podway", stale_process_id),
-                (identity.product(), current_process_id),
-            ] {
-                let (mut connection, _) = listener.accept().expect("readiness connection");
-                let mut wire = Vec::new();
-                connection
-                    .read_to_end(&mut wire)
-                    .expect("readiness request must be readable");
-                let request = decode_request_payload_v1(
-                    decode_single_frame_v1(&wire).expect("readiness request frame"),
-                )
-                .expect("readiness request payload");
-                let response = serde_json::json!({
-                    "schema": "podway.output/v3",
-                    "request_id": request.request_id().as_str(),
-                    "command": request.command().as_str(),
-                    "generated_at": "2026-07-25T00:00:00.000Z",
-                    "result": {
-                        "schema": "podway.daemon-status-result/v1",
-                        "product": product,
-                        "daemon_version": identity.version(),
-                        "target": identity.target(),
-                        "build_identity": identity.build_identity(),
-                        "source_commit": identity.source_commit(),
-                        "contract_manifest_schema": identity.contract_manifest_schema(),
-                        "contract_manifest_digest": identity.contract_manifest_digest(),
-                        "protocol_versions": identity.supported_ipc_ids(),
-                        "pid": 4242,
-                        "process_id": process_id,
-                        "executable_path": responder_binary,
-                        "started_at": "2026-07-25T00:00:00.000Z",
-                        "uptime_ms": 1,
-                        "configured_socket_path": responder_paths.socket_path().as_path(),
-                        "effective_socket_path": responder_paths.socket_path().as_path(),
-                    },
-                    "warnings": [],
-                });
-                let frame = encode_frame_v1(
-                    &serde_json::to_vec(&response).expect("readiness response must serialize"),
-                )
-                .expect("readiness response frame");
-                connection
-                    .write_all(&frame)
-                    .expect("readiness response must be written");
-                connection
-                    .shutdown(Shutdown::Write)
-                    .expect("readiness response must finish");
-            }
-            (stale_process_id, current_process_id)
-        });
-
-        wait_for_verified_service(
-            &paths,
-            expected_binary.as_path(),
-            "daemon.install",
-            Duration::from_secs(2),
-        )
-        .expect("readiness must recover after the stale daemon is replaced");
-        let (observed_stale, observed_current) = responder.join().expect("readiness responder");
-        assert_ne!(
-            observed_stale, observed_current,
-            "the accepted daemon must have a new process UUID"
-        );
-        fs::remove_dir_all(runtime).expect("upgrade fixture must be removed");
     }
 }

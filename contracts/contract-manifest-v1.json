@@ -3,12 +3,12 @@
     {
       "kind": "catalog",
       "path": "contracts/command-routes.json",
-      "sha256": "sha256:2b94c33cbbb05dbd2ae36758d1c379cf950a1cffd7bf57702b43d2801344cc9b"
+      "sha256": "sha256:44d1b51cd0b915f93b4c5a0f0a9e6cee2c5b790ac6f8837b7c2526b2165b0866"
     },
     {
       "kind": "known_answer_fixture",
       "path": "docs/examples/json/daemon-free-contract-reservation-v1.json",
-      "sha256": "sha256:8ae82b55a4be8f3e50341f76c845ca9db5100d8a45ae51a3d11c803bbbfcb7b5"
+      "sha256": "sha256:37d6d994163dc7c3bf40512a6c7d7c1c09f3e09f111c92c4164e297a48ed1bca"
     },
     {
       "kind": "known_answer_fixture",
@@ -42,8 +42,8 @@
     },
     {
       "kind": "catalog",
-      "path": "release/dolgorae-adapter-contract-v2.json",
-      "sha256": "sha256:11c2c0b0722990d0d07cf901dc975258c296d116e1cec0e1b75a6d7651e9a1bc"
+      "path": "release/dolgorae-adapter-contract-v3.json",
+      "sha256": "sha256:662c63cf85559b6ca530628cd7dea9b9b12cff279ad76c464cbcad8c9b5c0b9d"
     },
     {
       "kind": "schema",
@@ -543,7 +543,7 @@
     {
       "kind": "schema",
       "path": "schemas/recovery-recipe-v2.schema.json",
-      "sha256": "sha256:cab445a7872597fa38efbf56d55d6c05da7b4347d6d49b1d61ab99056dcc833d"
+      "sha256": "sha256:bdd12a46d6ec03c4e469181352c4afbb5777c0f40cc9727af624c72fc9451b44"
     },
     {
       "kind": "schema",
@@ -968,7 +968,7 @@
     {
       "kind": "catalog",
       "path": "spec/command-catalog.yaml",
-      "sha256": "sha256:dfaaf223fd6504bf4baf7140c942c8e2767f2e2f91690801e1a40e8435c1b9d8"
+      "sha256": "sha256:aade3de244ae9a28d63d1c837dcab76b18c0594a5a1db85b6c47430d9cde5ca8"
     },
     {
       "kind": "catalog",
@@ -978,7 +978,7 @@
     {
       "kind": "catalog",
       "path": "spec/retired-commands-v1.json",
-      "sha256": "sha256:e76cc14fe49d4849fc6def2ff1269ccecd16d070150cfc57c9fe4e311cc8876e"
+      "sha256": "sha256:2720cf1186989c30aad1c6c737a569cf28b1ced3fc343031cdabbb730e9af6d6"
     },
     {
       "kind": "store_schema",
@@ -988,7 +988,7 @@
     {
       "kind": "transition_matrix",
       "path": "spec/state-transition-matrix.csv",
-      "sha256": "sha256:cf32ca8ad099e5877455cc853bbd4629d67c1b8bf82fe7a1bec172b721b10d0b"
+      "sha256": "sha256:76912716ef6faccbc207b3e13d2796629a9f9f22981b767433801e2ee09b0aed"
     },
     {
       "kind": "known_answer_fixture",
@@ -1068,12 +1068,22 @@
     {
       "kind": "known_answer_fixture",
       "path": "tests/fixtures/v2/payload/truncation-and-overflow-recipe.json",
-      "sha256": "sha256:a7d617e036e1131fe1b6e971673e37bdb429bce12ac0589b21578f0a6c9a9104"
+      "sha256": "sha256:3639fba9a5c6eab5abeca5c85ecc988e14c2553da57be9ec3915758158209cfb"
     },
     {
       "kind": "known_answer_fixture",
       "path": "tests/fixtures/v2/presets/reference-paths.json",
       "sha256": "sha256:90f206caea4757104b630da6bac78da6aab9fede2dea92ff6422a45a2e209545"
+    },
+    {
+      "kind": "known_answer_fixture",
+      "path": "tests/fixtures/v2/procedures/action-readback-procedure.yaml",
+      "sha256": "sha256:a5c286013e0927622f4eb5e1766ed5eb0f1cb7d5e1fd9b2dffc659c6e5b4c684"
+    },
+    {
+      "kind": "known_answer_fixture",
+      "path": "tests/fixtures/v2/procedures/delegated-native-routes.yaml",
+      "sha256": "sha256:48ea43dff971ecff66f8bc65bd948aae0c8d62c55a967c08b77ddfb9c0cf72ce"
     },
     {
       "kind": "known_answer_fixture",
@@ -1092,8 +1102,33 @@
     },
     {
       "kind": "known_answer_fixture",
+      "path": "tests/fixtures/v2/procedures/goal-outcomes.yaml",
+      "sha256": "sha256:a9ae4e6015c5fe7db4b1a857b32a3df27500a1fad53e9ea70f3cbb06150f33f2"
+    },
+    {
+      "kind": "known_answer_fixture",
       "path": "tests/fixtures/v2/procedures/malformed-inputs.json",
       "sha256": "sha256:43a8934e9d937a002330ca41747369e1ffb992d23d150eadd499c646b8aeb711"
+    },
+    {
+      "kind": "known_answer_fixture",
+      "path": "tests/fixtures/v2/procedures/public-native-goal.yaml",
+      "sha256": "sha256:e718b0b07c361a0d7ebcf8d7db7fc79d5a45f4c3d46097e2d3610707b3dea647"
+    },
+    {
+      "kind": "known_answer_fixture",
+      "path": "tests/fixtures/v2/procedures/retry-procedure.yaml",
+      "sha256": "sha256:c37bfb33d38780d19477991c85cb175665ba6a65f84f8f22aff06b032e6be5bf"
+    },
+    {
+      "kind": "known_answer_fixture",
+      "path": "tests/fixtures/v2/procedures/skip-procedure.yaml",
+      "sha256": "sha256:5a50eed02f3757891f65c79b5b5e42751ef2e6788cd9fffcff571884e6b77f42"
+    },
+    {
+      "kind": "known_answer_fixture",
+      "path": "tests/fixtures/v2/procedures/state-derivation-procedure.yaml",
+      "sha256": "sha256:d4338e7f4a3808505e872662e095e94fc18f1f004fa3e8a3b0752a024865d6a4"
     },
     {
       "kind": "known_answer_fixture",
@@ -1101,7 +1136,7 @@
       "sha256": "sha256:7de5f4f024eb795ae7fb73594d4847b833016bea6be9f2737c567b524ae5466e"
     }
   ],
-  "digest": "sha256:f28239aab9ca6b3b5b3da5ff95869b186b22df9b12c1dcb83aa6be1ca0cd1a83",
+  "digest": "sha256:349c6d3c626c87a152bb2a3b50dda0656811b347bb214b22d8aa84bc8ea1130a",
   "product": "podway",
   "product_version": "0.2.12",
   "schema_version": "podway.contract-manifest/v1",

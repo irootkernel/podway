@@ -1,0 +1,104 @@
+schema: podway.procedure/v2
+id: packaged-public-v2
+version: "1"
+name: Packaged Public v2
+purpose: Prove public admission, durable rework, and goal closeout in release bytes.
+goal_tracking: true
+node_definitions:
+  work:
+    type: action
+    title: Record work
+    intent: Record evidence for the packaged qualification.
+    items:
+      - id: result
+        type: text
+        prompt: Record the qualification result.
+        required: true
+        min_length: 1
+        max_length: 200
+  review:
+    type: decision
+    title: Review work
+    objective: Decide whether the recorded work needs another attempt.
+    prompt: Is the work ready for goal assessment?
+    options:
+      - id: accept
+        label: Accept
+        criteria: The recorded work supports goal assessment.
+      - id: revise
+        label: Revise
+        criteria: The recorded work needs another attempt.
+    reason:
+      required: true
+      prompt: Explain the review decision.
+  assess:
+    type: decision
+    title: Assess goal
+    objective: Record the outcome supported by the current criterion assessment.
+    prompt: What is the current goal outcome?
+    options:
+      - id: achieved
+        label: Achieved
+        criteria: The criterion assessment supports the goal.
+      - id: not-achieved
+        label: Not achieved
+        criteria: The criterion assessment does not support the goal.
+      - id: superseded
+        label: Superseded
+        criteria: The goal no longer describes the desired outcome.
+    reason:
+      required: true
+      prompt: Explain the goal outcome.
+    assessment:
+      target: session_goal
+      outcomes:
+        achieved: achieved
+        not-achieved: not_achieved
+        superseded: superseded
+  finish:
+    type: action
+    title: Record closeout
+    intent: Record the packaged qualification closeout.
+    items:
+      - id: closeout
+        type: text
+        prompt: Record the closeout.
+        required: true
+        min_length: 1
+        max_length: 200
+graph:
+  entry: work
+  nodes:
+    - id: work
+      use: work
+      next: review
+    - id: review
+      use: review
+      evidence_from:
+        - node: work
+          required: true
+      routes:
+        accept:
+          to: assess
+          effect: advance
+        revise:
+          to: work
+          effect: rework
+    - id: assess
+      use: assess
+      evidence_from:
+        - node: work
+          required: true
+      routes:
+        achieved:
+          to: finish
+          effect: advance
+        not-achieved:
+          to: finish
+          effect: advance
+        superseded:
+          to: finish
+          effect: advance
+    - id: finish
+      use: finish
+      terminal: true

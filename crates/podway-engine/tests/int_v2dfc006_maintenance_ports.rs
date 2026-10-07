@@ -319,7 +319,7 @@ fn reset_all_recovers_when_full_store_openability_fails_internal_codec() {
 }
 #[test]
 fn v2cut_legacy_schema_v3_rejects_then_confirmed_reset_all_replaces_and_cold_reopens() {
-    use podway_store::test_support::v2dfc001::{LegacyHeaderV1, write_legacy_store_v1};
+    use podway_store::test_support::legacy_fixture::{LegacyHeaderV1, write_legacy_store_v1};
     let mut engine = engine();
     let runtime = engine.store.layout().runtime_directory();
     let backup = engine.temporary.path().join("initial-runtime");
@@ -327,7 +327,7 @@ fn v2cut_legacy_schema_v3_rejects_then_confirmed_reset_all_replaces_and_cold_reo
     std::fs::create_dir(&runtime).unwrap();
     let staging = engine.temporary.path().join("legacy-staging");
     std::fs::create_dir(&staging).unwrap();
-    write_legacy_store_v1(&staging, &runtime, 3, LegacyHeaderV1::WalOnly, None).unwrap();
+    write_legacy_store_v1(&staging, &runtime, 3, LegacyHeaderV1::WalOnly).unwrap();
     let before = files(&runtime);
     let DirectResponseV1::Failure(error) =
         engine.execute(engine.request(D::WorkspaceShow, "legacy-show"), &Clock)

@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parent.parent
 ADJACENCY_PATH = Path("contracts/cargo-adjacency.json")
 ROUTES_PATH = Path("contracts/command-routes.json")
 ADJACENCY_VERSION = "podway.cargo-adjacency/v1"
-ROUTES_VERSION = "podway.command-routes/v1"
+ROUTES_VERSION = "podway.command-routes/v2"
 MAKEFILE_PATH = Path("Makefile")
 REQUIRED_MAKE_TARGETS = (
     "test",
@@ -40,7 +40,6 @@ REQUIRED_MAKE_TARGETS = (
     "preset-create",
     "preset-import",
     "preset-tool-test",
-    "dev-runtime-test",
     "aquarium-dev-describe",
     "aquarium-dev-build",
     "aquarium-dev-test",
@@ -54,7 +53,6 @@ REQUIRED_TEST_SEQUENCE = (
     "$(MAKE) contract-verifier-test",
     "$(MAKE) test-e2e",
     "$(MAKE) preset-tool-test PRESET_VALIDATOR_READY=1",
-    "$(MAKE) dev-runtime-test",
     "$(MAKE) aquarium-dev-test",
 )
 REQUIRED_PREPARE_COMMANDS = (
@@ -113,7 +111,6 @@ FORBIDDEN_PATCH_RELEASE_COMMANDS = (
     "$(MAKE) release-prepare",
     "$(MAKE) test-fuzzing",
     "$(MAKE) test-e2e",
-    "$(MAKE) dev-runtime-test",
     "tools/qualify_distribution.py qualify",
 )
 CRATE_ORDER = (
@@ -125,7 +122,6 @@ CRATE_ORDER = (
     "podway-service",
     "podway-presets",
     "podway-engine",
-    "podway-daemon",
     "podway-cli",
 )
 EXPECTED_ADJACENCY = {
@@ -144,22 +140,12 @@ EXPECTED_ADJACENCY = {
         "podway-git",
         "podway-presets",
     },
-    "podway-daemon": {
-        "podway-engine",
-        "podway-core",
-        "podway-protocol",
-        "podway-config",
-        "podway-store",
-        "podway-git",
-        "podway-service",
-        "podway-presets",
-    },
     "podway-cli": {
         "podway-core",
         "podway-protocol",
         "podway-config",
         "podway-presets",
-        "podway-service",
+        "podway-engine",
     },
 }
 LOCAL_COMMANDS = {
@@ -179,79 +165,92 @@ LOCAL_COMMANDS = {
     "preset.show",
     "preset.explain",
 }
-SERVICE_COMMANDS = {
-    "runtime.reset.plan",
-    "runtime.reset.apply",
-    "daemon.install",
-    "daemon.uninstall",
-    "daemon.start",
-    "daemon.stop",
-    "daemon.restart",
-    "daemon.status",
-    "daemon.wait-ready",
-    "daemon.logs",
-}
 PROHIBITED_CAPABILITIES = {"command_runner", "git_mutation", "network"}
 DEPENDENCY_TABLES = {"dependencies", "dev-dependencies", "build-dependencies"}
-V2_ROUTE_DELTA = {
-    "outcome.lookup",
-    "runtime.reset.plan", "runtime.reset.apply", "daemon.runtime_reset",
-    "procedure.format", "procedure.vet", "procedure.lint", "procedure.check",
-    "procedure.graph", "procedure.preview", "procedure.scaffold",
-    "session.decide", "session.rework", "goal.define", "goal.revise",
-    "goal.assess_criterion", "session.begin", "session.terminal_disposition",
-    "evidence.read",
-    "delegation.package", "delegation.accept", "delegation.receipt",
-    "daemon.wait-ready",
-    "workspace.remove",
-    "workspace.mode.plan",
-    "workspace.mode.apply",
-}
-# V2_ROUTE_DELTA members whose owning task has landed. The delta itself never shrinks: a route
-# stays registered forever, and this set records only which of them the build now serves.
-V2_EXECUTABLE_ROUTES = frozenset(
+RETIRED_COMMANDS = frozenset(
     {
+        "daemon.install",
+        "daemon.logs",
+        "daemon.restart",
         "daemon.runtime_reset",
-        "runtime.reset.plan",
-        "runtime.reset.apply",
-        "procedure.format",
-        "procedure.vet",
-        "procedure.lint",
-        "procedure.check",
-        "procedure.graph",
-        "procedure.preview",
-        "procedure.scaffold",
-        "session.decide",
-        "session.rework",
-        "goal.define",
-        "goal.revise",
-        "goal.assess_criterion",
-        "session.begin",
-        "session.terminal_disposition",
-        "evidence.read",
-        "delegation.package",
-        "delegation.accept",
-        "delegation.receipt",
+        "daemon.start",
+        "daemon.status",
+        "daemon.stop",
+        "daemon.terminate",
+        "daemon.uninstall",
         "daemon.wait-ready",
-        "workspace.remove",
-        "workspace.mode.plan",
+        "job.cancel",
+        "job.list",
+        "job.lookup",
+        "job.status",
+        "job.wait",
+        "runtime.reset.apply",
+        "runtime.reset.plan",
         "workspace.mode.apply",
+        "workspace.mode.plan",
     }
 )
-PROCEDURE_INDEPENDENT_EXECUTABLE_ROUTES = {
-    "help", "version", "completions", "procedure.validate", "procedure.show",
-    "preset.list", "preset.show", "preset.explain", "daemon.install", "daemon.uninstall",
-    "daemon.start", "daemon.stop", "daemon.restart", "daemon.status", "daemon.wait-ready", "daemon.terminate",
-    "daemon.logs", "workspace.init", "workspace.doctor", "workspace.show", "workspace.repair",
-    "session.start", "session.start_replace", "session.status", "session.next",
-    "session.observe",
-    "session.complete", "session.skip", "session.retry", "session.block",
-    "session.unblock", "session.cancel", "session.reset", "session.archive",
-    "session.archive_list", "session.archive_show", "session.archive_purge",
-    "workspace.reset_all", "item.check", "item.uncheck", "item.set", "item.add",
-    "item.remove", "item.attach", "item.clear", "item.record_many", "job.list", "job.lookup", "job.status",
-    "job.wait", "job.cancel",
-}
+APPROVED_COMMANDS = frozenset(
+    {
+        "completions",
+        "delegation.accept",
+        "delegation.package",
+        "delegation.receipt",
+        "evidence.read",
+        "goal.assess_criterion",
+        "goal.define",
+        "goal.revise",
+        "help",
+        "item.add",
+        "item.attach",
+        "item.check",
+        "item.clear",
+        "item.record_many",
+        "item.remove",
+        "item.set",
+        "item.uncheck",
+        "outcome.lookup",
+        "preset.explain",
+        "preset.list",
+        "preset.show",
+        "procedure.check",
+        "procedure.format",
+        "procedure.graph",
+        "procedure.lint",
+        "procedure.preview",
+        "procedure.scaffold",
+        "procedure.show",
+        "procedure.validate",
+        "procedure.vet",
+        "session.archive",
+        "session.archive_list",
+        "session.archive_purge",
+        "session.archive_show",
+        "session.begin",
+        "session.block",
+        "session.cancel",
+        "session.complete",
+        "session.decide",
+        "session.next",
+        "session.observe",
+        "session.reset",
+        "session.retry",
+        "session.rework",
+        "session.skip",
+        "session.start",
+        "session.start_replace",
+        "session.status",
+        "session.terminal_disposition",
+        "session.unblock",
+        "version",
+        "workspace.doctor",
+        "workspace.init",
+        "workspace.remove",
+        "workspace.repair",
+        "workspace.reset_all",
+        "workspace.show",
+    }
+)
 PROCEDURE_INDEPENDENT_RUNTIME_ERROR_CODES = (
     "RUNTIME_RESET_BUSY", "RUNTIME_RESET_UNSAFE", "RUNTIME_RESET_UNSUPPORTED",
     "RUNTIME_RESET_PLAN_STALE", "RUNTIME_RESET_LIMIT_EXCEEDED",
@@ -372,9 +371,9 @@ FORBIDDEN_PROCEDURE_V1_SYMBOLS = (
 PROCEDURE_V1_LITERAL = "podway.procedure/" + "v1"
 PROCEDURE_V1_LITERAL_ALLOWLIST = {
     Path("assets/specifications/sqlite-v1.sql"),
-    Path("crates/podway-daemon/tests/int_v2_only_reset_recovery.rs"),
     Path("crates/podway-store/tests/int_v2_only_schema.rs"),
     Path("docs/architecture-decision-records/0019-procedure-v2-only-product.md"),
+    Path("tests/fixtures/storage/daemon-era-v2dfc/generation-1-to-13-ddl.json"),
 }
 V2_ONLY_TEXT_SUFFIXES = {".csv", ".json", ".md", ".py", ".rs", ".sql", ".toml", ".yaml", ".yml"}
 V2_ONLY_SCAN_ROOTS = ("assets", "contracts", "crates", "docs", "fuzz", "quality", "release", "tests", "tools")
@@ -470,8 +469,8 @@ def catalog_route_availability(root: Path) -> dict[str, str]:
     if not path.is_file():
         fail("command catalog is missing")
     text = path.read_text(encoding="utf-8")
-    if not re.search(r"^schema: podway\.command-catalog/v1$", text, flags=re.MULTILINE):
-        fail("command catalog does not declare podway.command-catalog/v1")
+    if not re.search(r"^schema: podway\.command-catalog/v2$", text, flags=re.MULTILINE):
+        fail("command catalog does not declare podway.command-catalog/v2")
     names = re.findall(r"^- name: ([a-z][a-z0-9._-]*)$", text, flags=re.MULTILINE)
     entries = re.findall(
         r"^- name: ([a-z][a-z0-9._-]*)\n  availability: ([a-z_]+)$",
@@ -495,22 +494,20 @@ def catalog_commands(root: Path) -> set[str]:
 
 
 def expected_route_availability(command: str) -> str:
-    """The single derivation both availability surfaces must agree with."""
-    if command in V2_EXECUTABLE_ROUTES:
-        return "executable"
-    if command in V2_ROUTE_DELTA:
-        return "reserved_contract"
+    """All retained daemon-free routes are executable; retired routes are absent."""
+    if command not in APPROVED_COMMANDS:
+        fail(f"command is outside the daemon-free route inventory: {command}")
     return "executable"
 
 
-def validate_v2_catalog_delta(root: Path) -> int:
+def validate_catalog_inventory(root: Path) -> int:
     availability = catalog_route_availability(root)
     commands = set(availability)
-    if commands != PROCEDURE_INDEPENDENT_EXECUTABLE_ROUTES | V2_ROUTE_DELTA:
-        fail("command catalog must contain the v2-only executable route set")
+    if commands != APPROVED_COMMANDS:
+        fail("command catalog must contain the daemon-free executable route set")
     expected_availability = {command: expected_route_availability(command) for command in commands}
     if availability != expected_availability:
-        fail("command catalog availability must match the v2-only route set exactly")
+        fail("command catalog availability must match the daemon-free route set exactly")
 
     runtime = read_json(root, Path("assets/specifications/error-codes.json"), "error catalog")
     if set(runtime) != {"schema", "exit_codes", "errors"}:
@@ -666,7 +663,7 @@ def validate_contract_identifiers(root: Path) -> int:
     error_catalog = read_json(root, Path("assets/specifications/error-codes.json"), "error catalog")
     if error_catalog.get("schema") != "podway.error-catalog/v1":
         fail("error catalog does not declare podway.error-catalog/v1")
-    validate_v2_catalog_delta(root)
+    validate_catalog_inventory(root)
     catalog_commands(root)
     preset_files = sorted(
         path
@@ -797,17 +794,17 @@ def validate_routes(root: Path) -> int:
     if set(contract) != {"contract_version", "owner", "prohibited_capabilities", "routes"}:
         fail("command route contract has unexpected or missing top-level fields")
     if contract["contract_version"] != ROUTES_VERSION or contract["owner"] != "architecture":
-        fail("command route contract has an invalid v1 identity or owner")
+        fail("command route contract has an invalid v2 identity or owner")
     prohibited = contract["prohibited_capabilities"]
     if not isinstance(prohibited, list) or set(prohibited) != PROHIBITED_CAPABILITIES or len(prohibited) != len(PROHIBITED_CAPABILITIES):
         fail("command route contract must prohibit command_runner, git_mutation, and network")
     routes = contract["routes"]
-    if not isinstance(routes, list) or len(routes) != 76:
+    if not isinstance(routes, list) or len(routes) != len(APPROVED_COMMANDS):
         fail("command route contract routes must be a list")
 
     expected_commands = catalog_commands(root) | {"completions"}
     commands: set[str] = set()
-    task_commands = expected_commands - LOCAL_COMMANDS - SERVICE_COMMANDS
+    task_commands = expected_commands - LOCAL_COMMANDS
     for route in routes:
         if not isinstance(route, dict) or set(route) != {
             "command", "availability", "owner", "path", "execution", "capabilities",
@@ -830,23 +827,11 @@ def validate_routes(root: Path) -> int:
         expected_availability = expected_route_availability(command)
         if availability != expected_availability:
             fail(f"route availability is invalid for {command}")
-        if command == "outcome.lookup":
-            expected_owner, expected_path, expected_execution = (
-                "podway-engine", ["podway-cli", "podway-engine"], "direct"
-            )
-        elif command in LOCAL_COMMANDS:
+        if command in LOCAL_COMMANDS:
             expected_owner, expected_path, expected_execution = "podway-cli", ["podway-cli"], "local"
-        elif command in SERVICE_COMMANDS:
-            expected_owner, expected_path, expected_execution = (
-                "podway-service",
-                ["podway-cli", "podway-service"],
-                "service_lifecycle",
-            )
         elif command in task_commands:
             expected_owner, expected_path, expected_execution = (
-                "podway-daemon",
-                ["podway-cli", "podway-protocol", "podway-daemon"],
-                "daemon",
+                "podway-engine", ["podway-cli", "podway-engine"], "direct"
             )
         else:
             fail(f"route has no approved ownership class: {command}")
@@ -858,21 +843,16 @@ def validate_routes(root: Path) -> int:
     return len(commands)
 def validate_daemon_free_reservations(root: Path) -> int:
     retired = read_json(root, Path("assets/specifications/retired-commands-v1.json"), "retired command table")
-    routes = read_json(root, ROUTES_PATH, "command routes")["routes"]
-    expected_commands = {
-        route["command"] for route in routes
-        if route["command"].startswith(("daemon.", "runtime.reset.", "job.", "workspace.mode."))
-    }
     expected = {
         "schema": "podway.retired-command-table/v1",
-        "availability": "reserved_contract",
+        "availability": "executable",
         "commands": [{"command": command, "replacement": "outcome.lookup" if command == "job.lookup" else None}
-                     for command in sorted(expected_commands)],
+                     for command in sorted(RETIRED_COMMANDS)],
         "flags": [{"flag": flag, "replacement": None} for flag in
                   ["--mode", "--dev", "--socket", "--detach", "--wait-for-idle", "--after-job"]],
     }
     if retired != expected:
-        fail("retired command table must match the exact reserved cutover surface")
+        fail("retired command table must match the exact active cutover guidance surface")
     answers = read_json(root, Path("docs/examples/json/daemon-free-contract-reservation-v1.json"), "daemon-free known answers")
     replacements = {entry["command"]: entry["replacement"] for entry in retired["commands"]}
     replacements.update({entry["flag"]: entry["replacement"] for entry in retired["flags"]})
@@ -996,7 +976,6 @@ def validate_makefile_contract(root: Path) -> int:
         ("preset-create", "tools/manage_presets.py create"),
         ("preset-import", "tools/manage_presets.py import"),
         ("test-fuzzing", "python3 tools/run_fuzzing.py"),
-        ("dev-runtime-test", "python3 tools/dev_runtime.py self-test"),
         ("aquarium-dev-test", "python3 -m unittest tests.test_aquarium_dev"),
     ):
         recipe = re.search(rf"^{target}\s*:[^\n]*\n((?:\t.*\n)+)", text, flags=re.MULTILINE)
@@ -1155,19 +1134,19 @@ def run_sentinels(root: Path) -> list[str]:
             route["availability"] = original
         completed.append("route_availability_mismatch")
 
-        direct_fixture = temporary / "reserved-direct-route"
+        direct_fixture = temporary / "direct-route"
         direct_fixture.mkdir()
         shutil.copytree(root / "assets", direct_fixture / "assets")
         copy_contracts(root, direct_fixture)
         direct_contract = read_json(direct_fixture, ROUTES_PATH, "command routes")
         direct_route = next(route for route in direct_contract["routes"] if route["command"] == "outcome.lookup")
-        for field, value in (("availability", "executable"), ("execution", "daemon")):
+        for field, value in (("availability", "reserved_contract"), ("execution", "daemon")):
             original = direct_route[field]
             direct_route[field] = value
             (direct_fixture / ROUTES_PATH).write_text(json.dumps(direct_contract) + "\n", encoding="utf-8")
-            require_known_failure("reserved direct route drift", lambda: validate_routes(direct_fixture))
+            require_known_failure("direct route drift", lambda: validate_routes(direct_fixture))
             direct_route[field] = original
-        completed.append("reserved_direct_route_drift")
+        completed.append("direct_route_drift")
 
         reservation_fixture = temporary / "daemon-free-reservations"
         reservation_fixture.mkdir()
@@ -1208,7 +1187,7 @@ def run_sentinels(root: Path) -> list[str]:
             + "- name: procedure.future\n  cli:\n  - procedure\n  - future\n",
             encoding="utf-8",
         )
-        require_known_failure("silent route growth", lambda: validate_v2_catalog_delta(route_growth_fixture))
+        require_known_failure("silent route growth", lambda: validate_catalog_inventory(route_growth_fixture))
         completed.append("silent_route_growth")
 
         catalog_availability_fixture = temporary / "catalog-availability"
@@ -1227,7 +1206,7 @@ def run_sentinels(root: Path) -> list[str]:
         )
         require_known_failure(
             "catalog availability mismatch",
-            lambda: validate_v2_catalog_delta(catalog_availability_fixture),
+            lambda: validate_catalog_inventory(catalog_availability_fixture),
         )
         completed.append("catalog_availability_mismatch")
 
@@ -1241,7 +1220,7 @@ def run_sentinels(root: Path) -> list[str]:
             "summary": "Unapproved growth.",
         })
         error_path.write_text(json.dumps(error_catalog) + "\n", encoding="utf-8")
-        require_known_failure("silent error growth", lambda: validate_v2_catalog_delta(error_growth_fixture))
+        require_known_failure("silent error growth", lambda: validate_catalog_inventory(error_growth_fixture))
         completed.append("silent_error_growth")
 
         diagnostic_overlap_fixture = temporary / "diagnostic-overlap"
@@ -1253,7 +1232,7 @@ def run_sentinels(root: Path) -> list[str]:
         diagnostic_path.write_text(json.dumps(diagnostic_catalog) + "\n", encoding="utf-8")
         require_known_failure(
             "runtime authoring overlap",
-            lambda: validate_v2_catalog_delta(diagnostic_overlap_fixture),
+            lambda: validate_catalog_inventory(diagnostic_overlap_fixture),
         )
         completed.append("runtime_authoring_overlap")
 
@@ -1284,7 +1263,7 @@ def production_checks(root: Path) -> dict[str, int]:
         "canonical_assets": repository_assets.validate_layout(root),
         "contract_identifiers": validate_contract_identifiers(root),
         "v2_only_surface": validate_v2_only_surface(root),
-        "v2_catalog_delta": validate_v2_catalog_delta(root),
+        "catalog_inventory": validate_catalog_inventory(root),
         "cargo_adjacency": validate_adjacency(root),
         "command_routes": validate_routes(root),
         "daemon_free_reservations": validate_daemon_free_reservations(root),

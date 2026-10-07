@@ -28,7 +28,7 @@ STATIC_ASSETS = {
     "presets/bug-fix-v2.yaml": "preset",
     "presets/small-change-v2.yaml": "preset",
     "presets/sw-dev-v2.yaml": "preset",
-    "release/dolgorae-adapter-contract-v2.json": "catalog",
+    "release/dolgorae-adapter-contract-v3.json": "catalog",
     "spec/authoring-diagnostics.json": "catalog",
     "spec/command-catalog.yaml": "catalog",
     "spec/error-codes.json": "catalog",

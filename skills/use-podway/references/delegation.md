@@ -5,7 +5,7 @@ supplements the normal observe, fencing, and recovery loop in `SKILL.md`.
 
 ## Establish availability
 
-Require a compatible exact CLI/daemon manifest and a qualified integration for
+Require a compatible exact CLI/manifest and a qualified integration for
 the declared binding. Source support, a Role name, and successful Procedure
 validation do not establish a working executor. If the integration is absent,
 report that prerequisite; do not fabricate an acceptance, run a fixture against
@@ -19,7 +19,7 @@ or permission to switch those paths.
 
 ## Read, supervise, record, accept, complete
 
-1. Observe the current session and require `podway.observation-result/v4` for a
+1. Observe the current session and require `podway.observation-result/v5` for a
    delegated Procedure. Confirm the active action, attempt, declaration, and
    `status.delegation.state`. A Direct placement in that Procedure still follows
    the ordinary item and completion rules.
@@ -48,13 +48,13 @@ or permission to switch those paths.
    The document supplies all mutation identities. Do not also pass identity,
    revision, or idempotency flags. Keep the complete input within 32 KiB and
    encode revision and round counts as unsigned integer JSON literals.
-6. Require `podway.delegation-accept-result/v1`, then observe again. Acceptance
+6. Require `podway.delegation-accept-result/v2`, then observe again. Acceptance
    creates one immutable receipt per attempt and does not move the cursor.
    Only complete when the current receipt and ordinary readiness conditions
    permit it, using fresh observed fences and a new completion idempotency key.
    Follow the current command help and observation mutation template.
 
-Preserve the workflow's explicit worktree and runtime selector on every command.
+Preserve the workflow's explicit owning worktree on every command.
 The command examples above omit those already-established global options.
 
 ## Acceptance field sources
@@ -94,7 +94,7 @@ not satisfy a fresh attempt.
 | `accepted` | Complete only with current ordinary readiness and fresh fences. |
 | `stale_acceptance` / `DELEGATION_RECEIPT_STALE` | Choose retry or an allowed rework, then revalidate work for the fresh attempt. |
 | `DELEGATION_ALREADY_ACCEPTED` | Inspect the immutable receipt; a different key cannot replace it. |
-| Lost acceptance response | Follow [recovery](recovery.md), retaining the original key and exact request; use job lookup before replay. |
+| Lost acceptance response | Follow [recovery](recovery.md), retaining the original key and exact canonical request; use outcome lookup before replay. |
 
 Any actual item edit after acceptance, including a cosmetic or optional edit,
 makes the receipt stale. Reverting text does not restore its revision. Reads,

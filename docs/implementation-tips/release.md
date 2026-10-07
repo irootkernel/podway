@@ -60,16 +60,11 @@ process and socket have been reconciled. Inspect and clean only the identified o
 state; never use broad `/private/tmp` deletion and never edit production databases,
 registry data, sockets, service metadata, or LaunchAgent files to simulate cleanup.
 
-The persistent contributor runtime is separate from the per-run qualification
-root. Stop its foreground daemon and then run:
-
-```bash
-python3 tools/dev_runtime.py clean --yes
-```
-
-The helper validates ownership, layout, the isolated lock, and endpoint idleness
-before rename-to-trash deletion. A failed cleanup is a blocker: preserve and
-report the exact recoverable path instead of deleting around the guard.
+The contributor daemon helper is retired by V2DFC-007. Preserve any existing
+legacy contributor runtime. Retire it only under separate authorization using
+its original generation's supported owner and exact target; do not use direct
+workspace reset or removal as account-runtime cleanup. Current development
+checks use [disposable direct CLI fixtures](testing.md#isolated-direct-cli-checks).
 
 Aquarium's full release-QA pass separately runs the repository-owned
 [release upgrade hands-on scenario](release-upgrade-qa.md). That scenario

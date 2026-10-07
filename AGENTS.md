@@ -344,8 +344,9 @@ trivial changes with no meaningful decision context.
   qualification daemon process or socket to remain. After failure or interruption,
   reconcile only the exact helper-owned temporary state before retrying; never
   broadly delete `/private/tmp`. Report a cleanup blocker with its exact process or
-  recoverable path. For a persistent contributor runtime, stop its foreground
-  daemon and use `python3 tools/dev_runtime.py clean --yes`.
+  recoverable path. The contributor daemon helper is retired by V2DFC-007;
+  preserve existing legacy runtime state until its exact retirement is
+  separately authorized through the original generation's supported owner.
 
 - Run an exact focused test first when practical. Cargo integration tests are
   aggregated through each crate's `int_suite`; follow the documented exact-test

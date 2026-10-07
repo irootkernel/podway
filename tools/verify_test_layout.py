@@ -13,21 +13,8 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
 PREFIXES = ("arch_", "int_", "e2e_")
-PRODUCT_BINARY_MARKERS = (
-    "CARGO_BIN_EXE_podway",
-    "CARGO_BIN_EXE_podwayd",
-    "PODWAYD_TEST_BINARY",
-)
+PRODUCT_BINARY_MARKERS = ("CARGO_BIN_EXE_podway",)
 PATH_ATTRIBUTE_RE = re.compile(r'#\s*\[\s*path\s*=\s*"([^"]+)"\s*\]')
-DAEMON_LIFECYCLE_VERBS = ("install", "uninstall", "start", "stop", "restart")
-DAEMON_ISOLATION_MARKERS = ("PODWAY_TEST_ACCOUNT_ROOT", "PODWAY_TEST_LAUNCHCTL")
-RUST_STRING_LITERAL_RE = re.compile(r'"((?:[^"\\]|\\.)*)"')
-ARGV_SEPARATOR_RE = re.compile(r"[\s,]*")
-REQUEST_OPTIONS_CALL_RE = re.compile(
-    r"RequestOptionsV1::new\s*\((?:[^()]|\([^()]*\))*\)",
-    re.DOTALL,
-)
-POSITIVE_INTEGER_LITERAL_RE = re.compile(r"\b[1-9][0-9_]*\b")
 
 
 class LayoutError(Exception):
@@ -96,95 +83,6 @@ def source_layer(path: Path) -> str | None:
     return layers[0]
 
 
-def spawns_daemon_lifecycle(source: str) -> bool:
-    """Report whether a test source builds a daemon lifecycle argument vector.
-
-    Shape: the literal ``"daemon"`` immediately followed by one of ``install``, ``uninstall``,
-    ``start``, ``stop``, or ``restart`` as the next Rust string literal, with nothing but
-    whitespace and commas between them. That covers every way rustfmt lays an argument vector out
-    (``&["daemon", "install"]``, ``vec!["--json", "daemon", "uninstall", "--yes"]``, and the
-    one-literal-per-line form) while rejecting prose and code that merely mentions both words,
-    such as ``"daemon" => arguments.get(index + 1) == Some(&"install")``.
-
-    Limits: it is textual, so it cannot see an argument vector assembled from variables, from a
-    constant defined in another file, or from a formatted string, and it reads commented-out code
-    as live. It is deliberately conservative in that direction: a miss leaves the pre-existing
-    review burden in place, whereas a false positive only asks a suite to declare isolation it can
-    always declare safely.
-    """
-    previous = None
-    for literal in RUST_STRING_LITERAL_RE.finditer(source):
-        if (
-            previous is not None
-            and previous.group(1) == "daemon"
-            and literal.group(1) in DAEMON_LIFECYCLE_VERBS
-            and ARGV_SEPARATOR_RE.fullmatch(source[previous.end() : literal.start()])
-        ):
-            return True
-        previous = literal
-    return False
-
-
-def validate_daemon_isolation(sources: dict[Path, str]) -> int:
-    """Require both debug overrides in every suite that spawns a daemon lifecycle route.
-
-    A test that runs ``podway daemon install|uninstall|start|stop|restart`` operates on real
-    account state unless it overrides both axes. ``HOME`` does not detach it: account resolution
-    reads the operating-system account database (ADR-0012), so ``PODWAY_TEST_ACCOUNT_ROOT`` is what
-    redirects the published launch agent and metadata index, and ``PODWAY_TEST_LAUNCHCTL`` is what
-    keeps the fixed ``dev.podway.podwayd`` label out of the developer's live ``launchd`` domain.
-    Either override alone still reaches live state, so both are required.
-
-    Only sources that also name a product binary marker are scanned, so a suite that never spawns
-    the product is left alone. The markers are declared once per file rather than per spawn: this
-    is a static gate that makes an unisolated lifecycle suite impossible to add unnoticed, not a
-    proof that every individual spawn in a scanned file carries them.
-    """
-    scanned = {
-        path: source
-        for path, source in sources.items()
-        if any(marker in source for marker in PRODUCT_BINARY_MARKERS)
-        and spawns_daemon_lifecycle(source)
-    }
-    unguarded = sorted(
-        path.relative_to(ROOT).as_posix()
-        for path, source in scanned.items()
-        if not all(marker in source for marker in DAEMON_ISOLATION_MARKERS)
-    )
-    if unguarded:
-        raise LayoutError(
-            "test sources spawning a daemon lifecycle route must set both "
-            f"{list(DAEMON_ISOLATION_MARKERS)}: {unguarded}"
-        )
-    return len(scanned)
-
-
-def validate_daemon_wait_timeouts(sources: dict[Path, str]) -> None:
-    offenders = sorted(
-        path.relative_to(ROOT).as_posix()
-        for path, source in sources.items()
-        if path.is_relative_to(ROOT / "crates/podway-daemon/tests")
-        and any(
-            POSITIVE_INTEGER_LITERAL_RE.search(call.group(0))
-            for call in REQUEST_OPTIONS_CALL_RE.finditer(source)
-        )
-    )
-    if offenders:
-        raise LayoutError(
-            "daemon integration tests must not inline positive wait timeouts; "
-            "use the shared TEST_WAIT_TIMEOUT_MILLIS: "
-            f"{offenders}"
-        )
-
-
-def test_source_texts() -> dict[Path, str]:
-    sources: dict[Path, str] = {}
-    for tests in sorted(ROOT.glob("crates/*/tests")):
-        for path in sorted(tests.glob("*.rs")):
-            sources[path.resolve()] = path.read_text(encoding="utf-8")
-    return sources
-
-
 def expected_test_sources() -> dict[Path, str]:
     expected: dict[Path, str] = {}
     for tests in sorted(ROOT.glob("crates/*/tests")):
@@ -237,13 +135,9 @@ def verify() -> dict[str, dict[str, int]]:
         source_counts[layer] += 1
     if any(count == 0 for count in target_counts.values()):
         raise LayoutError(f"every test layer must contain at least one target: {target_counts}")
-    test_sources = test_source_texts()
-    lifecycle_sources = validate_daemon_isolation(test_sources)
-    validate_daemon_wait_timeouts(test_sources)
     return {
         "targets": target_counts,
         "sources": source_counts,
-        "daemon_lifecycle_sources": lifecycle_sources,
     }
 
 
@@ -263,22 +157,6 @@ def self_test() -> None:
         except LayoutError:
             continue
         raise LayoutError(f"self-test sentinel unexpectedly passed: {name}")
-    timeout_source = ROOT / "crates/podway-daemon/tests/int_timeout.rs"
-    hardcoded_timeouts = (
-        "let options = RequestOptionsV1::new(false, 5_000);",
-        "let options = RequestOptionsV1::new(\n    false,\n    5000,\n);",
-        "let options = RequestOptionsV1::new(false, 25_000);",
-        (
-            "let options = RequestOptionsV1::new(detach, "
-            "if detach { 0 } else { 5_000 });"
-        ),
-    )
-    for source in hardcoded_timeouts:
-        try:
-            validate_daemon_wait_timeouts({timeout_source: source})
-        except LayoutError:
-            continue
-        raise LayoutError("self-test hardcoded daemon wait timeout unexpectedly passed")
     expected = {Path("int_a.rs"): "int", Path("int_b.rs"): "int"}
     invalid_registrations = (
         {Path("int_a.rs"): [("int", "int_suite")]},
@@ -297,28 +175,6 @@ def self_test() -> None:
         except LayoutError:
             continue
         raise LayoutError("self-test source-registration sentinel unexpectedly passed")
-    assert spawns_daemon_lifecycle('&["daemon", "install"]')
-    assert spawns_daemon_lifecycle('vec![\n    "daemon",\n    "uninstall",\n    "--yes",\n]')
-    assert not spawns_daemon_lifecycle('"daemon" => arguments.get(index + 1) == Some(&"install")')
-    assert not spawns_daemon_lifecycle('&["daemon", "status"]')
-    isolated = (
-        'env!("CARGO_BIN_EXE_podway") &["daemon", "install"]'
-        ' PODWAY_TEST_ACCOUNT_ROOT PODWAY_TEST_LAUNCHCTL'
-    )
-    assert validate_daemon_isolation({ROOT / "int_isolated.rs": isolated}) == 1
-    unscanned = 'env!("CARGO_BIN_EXE_podway") &["daemon", "status"]'
-    assert validate_daemon_isolation({ROOT / "int_unscanned.rs": unscanned}) == 0
-    unguarded_sources = (
-        'env!("CARGO_BIN_EXE_podway") vec!["--json", "daemon", "install"]',
-        'env!("CARGO_BIN_EXE_podway") &["daemon", "uninstall"] PODWAY_TEST_ACCOUNT_ROOT',
-        'env!("CARGO_BIN_EXE_podway") &["daemon", "restart"] PODWAY_TEST_LAUNCHCTL',
-    )
-    for source in unguarded_sources:
-        try:
-            validate_daemon_isolation({ROOT / "int_unguarded.rs": source})
-        except LayoutError:
-            continue
-        raise LayoutError("self-test daemon-isolation sentinel unexpectedly passed")
 
 
 def receipt(mode: str, ok: bool, **details: Any) -> None:
@@ -337,7 +193,7 @@ def main() -> int:
             receipt(selected, True, **verify())
         else:
             self_test()
-            receipt(selected, True, sentinels=13)
+            receipt(selected, True, sentinels=6)
         return 0
     except (LayoutError, json.JSONDecodeError, KeyError, OSError, TypeError) as error:
         receipt(selected, False, error=str(error))

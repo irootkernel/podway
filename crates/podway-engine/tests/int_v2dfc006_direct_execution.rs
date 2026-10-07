@@ -514,7 +514,11 @@ fn marked_reads_return_the_original_maintenance_key_without_resuming_or_writing(
         assert_eq!(value["details"]["boundary"], boundary);
         assert_eq!(value["details"]["recovery"]["command"], command);
         assert_eq!(
-            value["details"]["recovery"]["argv"][6],
+            value["details"]["recovery"]["argv"]
+                .as_array()
+                .unwrap()
+                .last()
+                .unwrap(),
             "original-maintenance-key"
         );
         assert_eq!(

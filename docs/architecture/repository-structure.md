@@ -22,23 +22,23 @@ artifacts/              Ignored, host-local verification output
 | `podway-core` | Pure domain types, invariants, transitions, status, and next-action derivation |
 | `podway-config` | Workspace and procedure parsing, validation, canonicalization, and digests |
 | `podway-presets` | Embedded built-in presets and catalog validation |
-| `podway-protocol` | IPC framing, public envelopes, compatibility, and bounded decoding |
-| `podway-store` | SQLite schema, repositories, durable jobs, transactions, and recovery |
+| `podway-protocol` | Public envelopes and bounded decoding; residual IPC contracts retire in `V2DFC-008` |
+| `podway-store` | Direct SQLite state, atomic success outcomes, transactions, and maintenance; residual legacy Store code retires in `V2DFC-008` |
 | `podway-git` | Worktree discovery, identity, containment, and layout |
-| `podway-service` | Platform paths, service-manager contract, and macOS LaunchAgent integration |
-| `podway-engine` | Host-independent read projections, preparation, request identity, native workspace boundaries, and marker codecs |
-| `podway-daemon` | Socket server, registry, scheduler, admission, claimed execution, dispatch, workers, and observability |
-| `podway-cli` | Command grammar, daemon client, rendering, help, and shell completion |
+| `podway-service` | Residual platform/service integration pending deletion in `V2DFC-008`; the CLI does not use it |
+| `podway-engine` | Typed synchronous command execution, read projections, preparation, request identity, native workspace boundaries, and marker codecs |
+| `podway-cli` | Direct Engine requests, command grammar, validated rendering, help, and shell completion |
 
 ## Dependency direction
 
 `podway-core` has no infrastructure dependencies. Config and protocol may depend
 on core value types. Store, Git, and service code implement infrastructure around
 those contracts. `podway-engine` composes core, protocol, config, Store, Git, and
-presets for host-independent domain services. The daemon uses the engine while
-retaining admission, claimed execution, runtime-workspace maintenance protocols,
-and hosting. During `V2DFC-004`, the CLI communicates through the protocol and
-has no engine dependency; its direct-engine cutover belongs to `V2DFC-007`.
+presets for host-independent domain services. The CLI invokes the engine
+in-process and has no direct production dependency on Store, Git or service.
+`V2DFC-007` removes the daemon host, leaving nine workspace crates. Residual
+daemon-era infrastructure retires in `V2DFC-008`, and single-binary release
+tooling follows in `V2DFC-009`.
 Cycles, reverse edges, and direct CLI access to Store internals are rejected by
 executable architecture contracts.
 
@@ -48,7 +48,7 @@ Each crate owns its integration targets under `crates/<crate>/tests/`:
 
 - `arch_*` checks dependency and repository contracts;
 - `int_*` combines components with deterministic fixtures or test doubles;
-- `e2e_*` may launch the real `podway` and `podwayd` binaries.
+- `e2e_*` launches the real `podway` binary in isolated worktrees.
 
 Root `tests/fixtures/` contains shared data, not independent Cargo test targets.
 Fuzz targets live under `fuzz/`; release and crash mappings live under `release/`

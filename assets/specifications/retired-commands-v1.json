@@ -1,6 +1,6 @@
 {
   "schema": "podway.retired-command-table/v1",
-  "availability": "reserved_contract",
+  "availability": "executable",
   "commands": [
     {
       "command": "daemon.install",

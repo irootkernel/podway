@@ -344,7 +344,10 @@ mutation is always committed, so no pending state exists to wait for.
   (`reset.marker`, the workspace removal marker, `mode-switch.json`, and
   `development-v2.marker`). It fails closed without writing, using
   `LEGACY_RUNTIME_STATE_UNSUPPORTED`, which replaces
-  `LEGACY_PROCEDURE_STATE_UNSUPPORTED`. The recipe is `podway reset --all --yes`.
+  `LEGACY_PROCEDURE_STATE_UNSUPPORTED`. The recipe is
+  `podway --json reset --all --yes --idempotency-key <new-idempotency-key>`;
+  the placeholder requires a fresh caller-owned key under section 4.5. Reset-all
+  does not require `--force` in the direct contract.
 - `reset --all` on a legacy worktree deletes the runtime directory contents and
   creates a fresh Store. It makes no backup and performs no conversion.
 
@@ -657,6 +660,8 @@ Purpose: make shipped behavior daemon-free in one commit.
 - The CLI depends on `podway-engine` and drops `podway-service` and the IPC
   client. Command routes become local or direct, the new contract generation is
   emitted, and `podway outcome lookup` is added.
+  Release identity remains version-result v1 in output v3 until V2DFC-009,
+  which owns the version-result v2 and manifest v2 tooling cutover.
 - Retired commands and flags return `COMMAND_RETIRED` (section 4.11). This
   replaces the CLI rule that removed commands fail argument parsing. Help text
   and shell completion change with it.

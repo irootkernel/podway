@@ -275,7 +275,10 @@ fn error_recovery_is_bound_to_the_required_operation() {
         "--json",
         "workspace",
         "remove",
+        "--force",
         "--yes",
+        "--if-workspace-uuid",
+        "00000000-0000-4000-8000-000000000001",
         "--idempotency-key",
         "example-key"
     ]);
@@ -283,6 +286,17 @@ fn error_recovery_is_bound_to_the_required_operation() {
         "podway.workspace-maintenance-details/v1",
         &removal
     ));
+    for omitted in [4..5, 6..8] {
+        let mut unfenced = removal.clone();
+        unfenced["recovery"]["argv"]
+            .as_array_mut()
+            .unwrap()
+            .drain(omitted);
+        assert!(!validate_daemon_free_document_v1(
+            "podway.workspace-maintenance-details/v1",
+            &unfenced
+        ));
+    }
     let mut reset = answers["fixtures"]["podway.workspace-maintenance-details/v1"].clone();
     reset["recovery"] = recipe("recovery-refresh");
     assert!(!validate_daemon_free_document_v1(

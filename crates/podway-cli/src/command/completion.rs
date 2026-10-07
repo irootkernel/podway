@@ -41,24 +41,12 @@ const JSON: Flag = Flag {
     long: "json",
     takes_value: false,
 };
-const DEV: Flag = Flag {
-    long: "dev",
-    takes_value: false,
-};
-const MODE: Flag = Flag {
-    long: "mode",
-    takes_value: true,
-};
 const WORKTREE: Flag = Flag {
     long: "worktree",
     takes_value: true,
 };
 const TIMEOUT: Flag = Flag {
     long: "timeout",
-    takes_value: true,
-};
-const SOCKET: Flag = Flag {
-    long: "socket",
     takes_value: true,
 };
 const NO_COLOR: Flag = Flag {
@@ -76,10 +64,6 @@ const IDENTITY: Flag = Flag {
 const IDEMPOTENCY_KEY: Flag = Flag {
     long: "idempotency-key",
     takes_value: true,
-};
-const DETACH: Flag = Flag {
-    long: "detach",
-    takes_value: false,
 };
 const IF_WORKSPACE_UUID: Flag = Flag {
     long: "if-workspace-uuid",
@@ -145,26 +129,6 @@ const TEMPLATE: Flag = Flag {
     long: "template",
     takes_value: true,
 };
-const DAEMON_PATH: Flag = Flag {
-    long: "daemon-path",
-    takes_value: true,
-};
-const ALL_MODES: Flag = Flag {
-    long: "all-modes",
-    takes_value: false,
-};
-const PURGE_LOGS: Flag = Flag {
-    long: "purge-logs",
-    takes_value: false,
-};
-const FOLLOW: Flag = Flag {
-    long: "follow",
-    takes_value: false,
-};
-const LINES: Flag = Flag {
-    long: "lines",
-    takes_value: true,
-};
 const REPAIR: Flag = Flag {
     long: "repair",
     takes_value: false,
@@ -209,17 +173,9 @@ const HISTORY_BEFORE: Flag = Flag {
     long: "history-before",
     takes_value: true,
 };
-const WAIT_FOR_IDLE: Flag = Flag {
-    long: "wait-for-idle",
-    takes_value: false,
-};
 const COMPACT: Flag = Flag {
     long: "compact",
     takes_value: false,
-};
-const AFTER_JOB: Flag = Flag {
-    long: "after-job",
-    takes_value: true,
 };
 const SOURCE: Flag = Flag {
     long: "source",
@@ -235,10 +191,6 @@ const REASON: Flag = Flag {
 };
 const TO: Flag = Flag {
     long: "to",
-    takes_value: true,
-};
-const PLAN_TOKEN: Flag = Flag {
-    long: "plan-token",
     takes_value: true,
 };
 const ALL: Flag = Flag {
@@ -281,10 +233,6 @@ const MEDIA_TYPE: Flag = Flag {
     long: "media-type",
     takes_value: true,
 };
-const STATE: Flag = Flag {
-    long: "state",
-    takes_value: true,
-};
 const GOAL: Flag = Flag {
     long: "goal",
     takes_value: true,
@@ -323,31 +271,14 @@ const ITEM: Flag = Flag {
 };
 
 const DISPLAY_FLAGS: &[&Flag] = &[&JSON, &NO_COLOR, &QUIET];
-const DAEMON_READ_FLAGS: &[&Flag] = &[&JSON, &DEV, &WORKTREE, &TIMEOUT, &SOCKET, &NO_COLOR, &QUIET];
-const WORKSPACE_MODE_PLAN_FLAGS: &[&Flag] = &[
-    &JSON, &DEV, &WORKTREE, &TIMEOUT, &SOCKET, &NO_COLOR, &QUIET, &TO,
-];
-const WORKSPACE_MODE_APPLY_FLAGS: &[&Flag] = &[
-    &JSON,
-    &DEV,
-    &WORKTREE,
-    &TIMEOUT,
-    &SOCKET,
-    &NO_COLOR,
-    &QUIET,
-    &TO,
-    &PLAN_TOKEN,
-];
+const DIRECT_READ_FLAGS: &[&Flag] = &[&JSON, &WORKTREE, &TIMEOUT, &NO_COLOR, &QUIET];
 const SESSION_MUTATION_FLAGS: &[&Flag] = &[
     &JSON,
-    &DEV,
     &WORKTREE,
     &TIMEOUT,
-    &SOCKET,
     &NO_COLOR,
     &QUIET,
     &IDEMPOTENCY_KEY,
-    &DETACH,
     &IF_WORKSPACE_UUID,
     &IF_SESSION_ID,
     &IF_SESSION_REVISION,
@@ -355,32 +286,24 @@ const SESSION_MUTATION_FLAGS: &[&Flag] = &[
 ];
 const ITEM_MUTATION_FLAGS: &[&Flag] = &[
     &JSON,
-    &DEV,
     &WORKTREE,
     &TIMEOUT,
-    &SOCKET,
     &NO_COLOR,
     &QUIET,
     &IDEMPOTENCY_KEY,
-    &DETACH,
     &IF_WORKSPACE_UUID,
     &IF_SESSION_ID,
     &IF_ATTEMPT,
     &IF_ITEM_REVISION,
 ];
-const RECORD_FLAGS: &[&Flag] = &[
-    &JSON, &DEV, &WORKTREE, &TIMEOUT, &SOCKET, &NO_COLOR, &QUIET, &DETACH, &STDIN,
-];
+const RECORD_FLAGS: &[&Flag] = &[&JSON, &WORKTREE, &TIMEOUT, &NO_COLOR, &QUIET, &STDIN];
 const START_FLAGS: &[&Flag] = &[
     &JSON,
-    &DEV,
     &WORKTREE,
     &TIMEOUT,
-    &SOCKET,
     &NO_COLOR,
     &QUIET,
     &IDEMPOTENCY_KEY,
-    &DETACH,
     &IF_WORKSPACE_UUID,
     &IF_SESSION_ID,
     &IF_SESSION_REVISION,
@@ -397,14 +320,11 @@ const START_FLAGS: &[&Flag] = &[
 ];
 const RESET_FLAGS: &[&Flag] = &[
     &JSON,
-    &DEV,
     &WORKTREE,
     &TIMEOUT,
-    &SOCKET,
     &NO_COLOR,
     &QUIET,
     &IDEMPOTENCY_KEY,
-    &DETACH,
     &IF_WORKSPACE_UUID,
     &IF_SESSION_ID,
     &IF_SESSION_REVISION,
@@ -509,92 +429,14 @@ const ROUTES: &[Route] = &[
         dynamic: None,
     },
     Route {
-        words: "runtime reset plan",
-        flags: &[&JSON, &NO_COLOR, &QUIET, &DEV, &MODE, &ALL_MODES],
-        values: "",
-        dynamic: None,
-    },
-    Route {
-        words: "runtime reset apply",
-        flags: &[
-            &JSON,
-            &NO_COLOR,
-            &QUIET,
-            &YES,
-            &DEV,
-            &MODE,
-            &ALL_MODES,
-            &PLAN_TOKEN,
-        ],
-        values: "",
-        dynamic: None,
-    },
-    Route {
-        words: "daemon install",
-        flags: &[&JSON, &NO_COLOR, &QUIET, &SOCKET, &DAEMON_PATH],
-        values: "",
-        dynamic: None,
-    },
-    Route {
-        words: "daemon uninstall",
-        flags: &[&JSON, &NO_COLOR, &QUIET, &YES, &PURGE_LOGS],
-        values: "",
-        dynamic: None,
-    },
-    Route {
-        words: "daemon start",
-        flags: DISPLAY_FLAGS,
-        values: "",
-        dynamic: None,
-    },
-    Route {
-        words: "daemon stop",
-        flags: DISPLAY_FLAGS,
-        values: "",
-        dynamic: None,
-    },
-    Route {
-        words: "daemon restart",
-        flags: DISPLAY_FLAGS,
-        values: "",
-        dynamic: None,
-    },
-    Route {
-        words: "daemon status",
-        flags: DISPLAY_FLAGS,
-        values: "",
-        dynamic: None,
-    },
-    Route {
-        words: "daemon wait-ready",
-        flags: &[&JSON, &TIMEOUT, &NO_COLOR, &QUIET],
-        values: "",
-        dynamic: None,
-    },
-    Route {
-        words: "terminate",
-        flags: &[&JSON, &DEV, &TIMEOUT, &NO_COLOR, &QUIET],
-        values: "",
-        dynamic: None,
-    },
-    Route {
-        words: "daemon logs",
-        flags: &[&JSON, &NO_COLOR, &QUIET, &FOLLOW, &LINES],
-        values: "",
-        dynamic: None,
-    },
-    Route {
         words: "init",
         flags: &[
             &JSON,
-            &DEV,
             &WORKTREE,
             &TIMEOUT,
-            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IDEMPOTENCY_KEY,
-            &DETACH,
             &REPAIR,
         ],
         values: "",
@@ -602,33 +444,26 @@ const ROUTES: &[Route] = &[
     },
     Route {
         words: "doctor",
-        flags: &[
-            &JSON, &DEV, &WORKTREE, &TIMEOUT, &SOCKET, &NO_COLOR, &QUIET, &DEEP,
-        ],
+        flags: &[&JSON, &WORKTREE, &TIMEOUT, &NO_COLOR, &QUIET, &DEEP],
         values: "",
         dynamic: None,
     },
     Route {
         words: "workspace show",
-        flags: DAEMON_READ_FLAGS,
+        flags: DIRECT_READ_FLAGS,
         values: "",
         dynamic: None,
     },
     Route {
         words: "workspace repair",
-        flags: DAEMON_READ_FLAGS,
-        values: "",
-        dynamic: None,
-    },
-    Route {
-        words: "workspace mode plan",
-        flags: WORKSPACE_MODE_PLAN_FLAGS,
-        values: "",
-        dynamic: None,
-    },
-    Route {
-        words: "workspace mode apply",
-        flags: WORKSPACE_MODE_APPLY_FLAGS,
+        flags: &[
+            &JSON,
+            &WORKTREE,
+            &TIMEOUT,
+            &NO_COLOR,
+            &QUIET,
+            &IDEMPOTENCY_KEY,
+        ],
         values: "",
         dynamic: None,
     },
@@ -636,12 +471,11 @@ const ROUTES: &[Route] = &[
         words: "workspace remove",
         flags: &[
             &JSON,
-            &DEV,
             &WORKTREE,
             &TIMEOUT,
-            &SOCKET,
             &NO_COLOR,
             &QUIET,
+            &IDEMPOTENCY_KEY,
             &IF_WORKSPACE_UUID,
             &FORCE,
             &YES,
@@ -659,14 +493,11 @@ const ROUTES: &[Route] = &[
         words: "begin",
         flags: &[
             &JSON,
-            &DEV,
             &WORKTREE,
             &TIMEOUT,
-            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IDEMPOTENCY_KEY,
-            &DETACH,
             &IF_WORKSPACE_UUID,
             &IF_SESSION_ID,
             &IF_SESSION_REVISION,
@@ -681,19 +512,15 @@ const ROUTES: &[Route] = &[
         words: "status",
         flags: &[
             &JSON,
-            &DEV,
             &WORKTREE,
             &TIMEOUT,
-            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IF_WORKSPACE_UUID,
             &IF_SESSION_ID,
             &VERBOSE,
             &HISTORY_BEFORE,
-            &WAIT_FOR_IDLE,
             &COMPACT,
-            &AFTER_JOB,
         ],
         values: "",
         dynamic: None,
@@ -702,16 +529,12 @@ const ROUTES: &[Route] = &[
         words: "next",
         flags: &[
             &JSON,
-            &DEV,
             &WORKTREE,
             &TIMEOUT,
-            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IF_WORKSPACE_UUID,
             &IF_SESSION_ID,
-            &WAIT_FOR_IDLE,
-            &AFTER_JOB,
         ],
         values: "",
         dynamic: None,
@@ -720,16 +543,12 @@ const ROUTES: &[Route] = &[
         words: "observe",
         flags: &[
             &JSON,
-            &DEV,
             &WORKTREE,
             &TIMEOUT,
-            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IF_WORKSPACE_UUID,
             &IF_SESSION_ID,
-            &WAIT_FOR_IDLE,
-            &AFTER_JOB,
         ],
         values: "",
         dynamic: None,
@@ -738,10 +557,8 @@ const ROUTES: &[Route] = &[
         words: "evidence read",
         flags: &[
             &JSON,
-            &DEV,
             &WORKTREE,
             &TIMEOUT,
-            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IF_WORKSPACE_UUID,
@@ -757,10 +574,8 @@ const ROUTES: &[Route] = &[
         words: "delegation package",
         flags: &[
             &JSON,
-            &DEV,
             &WORKTREE,
             &TIMEOUT,
-            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IF_WORKSPACE_UUID,
@@ -771,9 +586,7 @@ const ROUTES: &[Route] = &[
     },
     Route {
         words: "delegation accept",
-        flags: &[
-            &JSON, &DEV, &WORKTREE, &TIMEOUT, &SOCKET, &NO_COLOR, &QUIET, &DETACH, &STDIN,
-        ],
+        flags: &[&JSON, &WORKTREE, &TIMEOUT, &NO_COLOR, &QUIET, &STDIN],
         values: "",
         dynamic: None,
     },
@@ -781,10 +594,8 @@ const ROUTES: &[Route] = &[
         words: "delegation receipt",
         flags: &[
             &JSON,
-            &DEV,
             &WORKTREE,
             &TIMEOUT,
-            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IF_WORKSPACE_UUID,
@@ -804,14 +615,11 @@ const ROUTES: &[Route] = &[
         words: "decide",
         flags: &[
             &JSON,
-            &DEV,
             &WORKTREE,
             &TIMEOUT,
-            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IDEMPOTENCY_KEY,
-            &DETACH,
             &IF_WORKSPACE_UUID,
             &IF_SESSION_ID,
             &IF_SESSION_REVISION,
@@ -828,14 +636,11 @@ const ROUTES: &[Route] = &[
         words: "rework",
         flags: &[
             &JSON,
-            &DEV,
             &WORKTREE,
             &TIMEOUT,
-            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IDEMPOTENCY_KEY,
-            &DETACH,
             &IF_WORKSPACE_UUID,
             &IF_SESSION_ID,
             &IF_SESSION_REVISION,
@@ -851,14 +656,11 @@ const ROUTES: &[Route] = &[
         words: "goal define",
         flags: &[
             &JSON,
-            &DEV,
             &WORKTREE,
             &TIMEOUT,
-            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IDEMPOTENCY_KEY,
-            &DETACH,
             &IF_WORKSPACE_UUID,
             &IF_SESSION_ID,
             &IF_SESSION_REVISION,
@@ -873,14 +675,11 @@ const ROUTES: &[Route] = &[
         words: "goal revise",
         flags: &[
             &JSON,
-            &DEV,
             &WORKTREE,
             &TIMEOUT,
-            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IDEMPOTENCY_KEY,
-            &DETACH,
             &IF_WORKSPACE_UUID,
             &IF_SESSION_ID,
             &IF_SESSION_REVISION,
@@ -900,14 +699,11 @@ const ROUTES: &[Route] = &[
         words: "goal assess-criterion",
         flags: &[
             &JSON,
-            &DEV,
             &WORKTREE,
             &TIMEOUT,
-            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IDEMPOTENCY_KEY,
-            &DETACH,
             &IF_WORKSPACE_UUID,
             &IF_SESSION_ID,
             &IF_SESSION_REVISION,
@@ -926,14 +722,11 @@ const ROUTES: &[Route] = &[
         words: "skip",
         flags: &[
             &JSON,
-            &DEV,
             &WORKTREE,
             &TIMEOUT,
-            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IDEMPOTENCY_KEY,
-            &DETACH,
             &IF_WORKSPACE_UUID,
             &IF_SESSION_ID,
             &IF_SESSION_REVISION,
@@ -947,14 +740,11 @@ const ROUTES: &[Route] = &[
         words: "retry",
         flags: &[
             &JSON,
-            &DEV,
             &WORKTREE,
             &TIMEOUT,
-            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IDEMPOTENCY_KEY,
-            &DETACH,
             &IF_WORKSPACE_UUID,
             &IF_SESSION_ID,
             &IF_SESSION_REVISION,
@@ -968,14 +758,11 @@ const ROUTES: &[Route] = &[
         words: "block",
         flags: &[
             &JSON,
-            &DEV,
             &WORKTREE,
             &TIMEOUT,
-            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IDEMPOTENCY_KEY,
-            &DETACH,
             &IF_WORKSPACE_UUID,
             &IF_SESSION_ID,
             &IF_SESSION_REVISION,
@@ -989,14 +776,11 @@ const ROUTES: &[Route] = &[
         words: "unblock",
         flags: &[
             &JSON,
-            &DEV,
             &WORKTREE,
             &TIMEOUT,
-            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IDEMPOTENCY_KEY,
-            &DETACH,
             &IF_WORKSPACE_UUID,
             &IF_SESSION_ID,
             &IF_SESSION_REVISION,
@@ -1010,14 +794,11 @@ const ROUTES: &[Route] = &[
         words: "cancel",
         flags: &[
             &JSON,
-            &DEV,
             &WORKTREE,
             &TIMEOUT,
-            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IDEMPOTENCY_KEY,
-            &DETACH,
             &IF_WORKSPACE_UUID,
             &IF_SESSION_ID,
             &IF_SESSION_REVISION,
@@ -1031,14 +812,11 @@ const ROUTES: &[Route] = &[
         words: "disposition handed-off",
         flags: &[
             &JSON,
-            &DEV,
             &WORKTREE,
             &TIMEOUT,
-            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IDEMPOTENCY_KEY,
-            &DETACH,
             &IF_WORKSPACE_UUID,
             &IF_SESSION_ID,
             &IF_SESSION_REVISION,
@@ -1053,14 +831,11 @@ const ROUTES: &[Route] = &[
         words: "disposition not-required",
         flags: &[
             &JSON,
-            &DEV,
             &WORKTREE,
             &TIMEOUT,
-            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IDEMPOTENCY_KEY,
-            &DETACH,
             &IF_WORKSPACE_UUID,
             &IF_SESSION_ID,
             &IF_SESSION_REVISION,
@@ -1074,14 +849,11 @@ const ROUTES: &[Route] = &[
         words: "archive",
         flags: &[
             &JSON,
-            &DEV,
             &WORKTREE,
             &TIMEOUT,
-            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IDEMPOTENCY_KEY,
-            &DETACH,
             &IF_WORKSPACE_UUID,
             &IF_SESSION_ID,
             &IF_SESSION_REVISION,
@@ -1093,10 +865,8 @@ const ROUTES: &[Route] = &[
         words: "archive list",
         flags: &[
             &JSON,
-            &DEV,
             &WORKTREE,
             &TIMEOUT,
-            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IF_WORKSPACE_UUID,
@@ -1108,10 +878,8 @@ const ROUTES: &[Route] = &[
         words: "archive show",
         flags: &[
             &JSON,
-            &DEV,
             &WORKTREE,
             &TIMEOUT,
-            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IF_WORKSPACE_UUID,
@@ -1126,10 +894,8 @@ const ROUTES: &[Route] = &[
         words: "archive purge",
         flags: &[
             &JSON,
-            &DEV,
             &WORKTREE,
             &TIMEOUT,
-            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IF_WORKSPACE_UUID,
@@ -1162,14 +928,11 @@ const ROUTES: &[Route] = &[
         words: "set",
         flags: &[
             &JSON,
-            &DEV,
             &WORKTREE,
             &TIMEOUT,
-            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IDEMPOTENCY_KEY,
-            &DETACH,
             &IF_WORKSPACE_UUID,
             &IF_SESSION_ID,
             &IF_ATTEMPT,
@@ -1189,14 +952,11 @@ const ROUTES: &[Route] = &[
         words: "remove",
         flags: &[
             &JSON,
-            &DEV,
             &WORKTREE,
             &TIMEOUT,
-            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IDEMPOTENCY_KEY,
-            &DETACH,
             &IF_WORKSPACE_UUID,
             &IF_SESSION_ID,
             &IF_ATTEMPT,
@@ -1210,14 +970,11 @@ const ROUTES: &[Route] = &[
         words: "attach",
         flags: &[
             &JSON,
-            &DEV,
             &WORKTREE,
             &TIMEOUT,
-            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IDEMPOTENCY_KEY,
-            &DETACH,
             &IF_WORKSPACE_UUID,
             &IF_SESSION_ID,
             &IF_ATTEMPT,
@@ -1243,45 +1000,17 @@ const ROUTES: &[Route] = &[
         dynamic: None,
     },
     Route {
-        words: "job list",
-        flags: &[
-            &JSON, &DEV, &WORKTREE, &TIMEOUT, &SOCKET, &NO_COLOR, &QUIET, &STATE,
-        ],
-        values: "queued running succeeded failed cancelled",
-        dynamic: None,
-    },
-    Route {
-        words: "job lookup",
+        words: "outcome lookup",
         flags: &[
             &JSON,
-            &DEV,
             &WORKTREE,
             &TIMEOUT,
-            &SOCKET,
             &NO_COLOR,
             &QUIET,
             &IDEMPOTENCY_KEY,
         ],
         values: "",
         dynamic: None,
-    },
-    Route {
-        words: "job status",
-        flags: DAEMON_READ_FLAGS,
-        values: "",
-        dynamic: Some("jobs"),
-    },
-    Route {
-        words: "job wait",
-        flags: DAEMON_READ_FLAGS,
-        values: "",
-        dynamic: Some("jobs"),
-    },
-    Route {
-        words: "job cancel",
-        flags: DAEMON_READ_FLAGS,
-        values: "",
-        dynamic: Some("jobs"),
     },
 ];
 
@@ -1350,13 +1079,7 @@ fn static_candidates(route: &Route) -> Vec<String> {
 }
 
 fn route_flags(route: &Route) -> Vec<&'static Flag> {
-    let mut flags = route.flags.to_vec();
-    if (route.flags.contains(&&DEV) || matches!(route.words, "daemon status" | "daemon wait-ready"))
-        && !flags.contains(&&MODE)
-    {
-        flags.push(&MODE);
-    }
-    flags
+    route.flags.to_vec()
 }
 
 fn route_values(route: &Route) -> Vec<String> {
@@ -1371,7 +1094,7 @@ fn route_values(route: &Route) -> Vec<String> {
 
 fn bash_script() -> String {
     let mut script = String::from("# podway bash completion (generated from ROUTES)\n");
-    script.push_str("_podway_dynamic() {\n  local kind=$1 worktree=\"\" socket=\"\" runtime_mode=\"\" dev=0 index word\n  for ((index = 1; index < COMP_CWORD; ++index)); do\n    word=${COMP_WORDS[index]}\n    case \"$word\" in\n      --dev) dev=1 ;;\n      --mode) ((++index)); runtime_mode=${COMP_WORDS[index]} ;;\n      --mode=*) runtime_mode=${word#--mode=} ;;\n      --worktree) ((++index)); worktree=${COMP_WORDS[index]} ;;\n      --worktree=*) worktree=${word#--worktree=} ;;\n      --socket) ((++index)); socket=${COMP_WORDS[index]} ;;\n      --socket=*) socket=${word#--socket=} ;;\n    esac\n  done\n  local -a endpoint=() workspace=() mode=()\n  if [[ -n \"$runtime_mode\" ]]; then mode=(--mode \"$runtime_mode\"); elif [[ $dev -eq 1 ]]; then mode=(--dev); fi\n  [[ -n \"$socket\" ]] && endpoint=(--socket \"$socket\")\n  [[ -n \"$worktree\" ]] && workspace=(--worktree \"$worktree\")\n  command podway \"${mode[@]}\" \"${endpoint[@]}\" \"${workspace[@]}\" __complete \"$kind\" 2>/dev/null\n}\n");
+    script.push_str("_podway_dynamic() {\n  local kind=$1 worktree=\"\" index word\n  for ((index = 1; index < COMP_CWORD; ++index)); do\n    word=${COMP_WORDS[index]}\n    case \"$word\" in\n      --worktree) ((++index)); worktree=${COMP_WORDS[index]} ;;\n      --worktree=*) worktree=${word#--worktree=} ;;\n    esac\n  done\n  local -a workspace=()\n  [[ -n \"$worktree\" ]] && workspace=(--worktree \"$worktree\")\n  command podway \"${workspace[@]}\" __complete \"$kind\" 2>/dev/null\n}\n");
     script.push_str("_podway_route() {\n  local word root=\"\" index expecting_worktree=0\n");
     script.push_str("  for ((index = 1; index < COMP_CWORD; ++index)); do\n");
     script.push_str("    word=${COMP_WORDS[index]}\n");
@@ -1460,7 +1183,7 @@ fn write_bash_dynamic(script: &mut String, dynamic: Option<&str>) {
 
 fn zsh_script() -> String {
     let mut script = String::from("#compdef podway\n# Generated from ROUTES.\n");
-    script.push_str("_podway_dynamic() {\n  local kind=$1 worktree=\"\" socket=\"\" runtime_mode=\"\" dev=0 index word\n  for ((index = 2; index < CURRENT; ++index)); do\n    word=$words[index]\n    case \"$word\" in\n      --dev) dev=1 ;;\n      --mode) ((++index)); runtime_mode=$words[index] ;;\n      --mode=*) runtime_mode=${word#--mode=} ;;\n      --worktree) ((++index)); worktree=$words[index] ;;\n      --worktree=*) worktree=${word#--worktree=} ;;\n      --socket) ((++index)); socket=$words[index] ;;\n      --socket=*) socket=${word#--socket=} ;;\n    esac\n  done\n  local -a endpoint=() workspace=() mode=()\n  if [[ -n \"$runtime_mode\" ]]; then mode=(--mode \"$runtime_mode\"); elif [[ $dev -eq 1 ]]; then mode=(--dev); fi\n  [[ -n \"$socket\" ]] && endpoint=(--socket \"$socket\")\n  [[ -n \"$worktree\" ]] && workspace=(--worktree \"$worktree\")\n  command podway \"${mode[@]}\" \"${endpoint[@]}\" \"${workspace[@]}\" __complete \"$kind\" 2>/dev/null\n}\n");
+    script.push_str("_podway_dynamic() {\n  local kind=$1 worktree=\"\" index word\n  for ((index = 2; index < CURRENT; ++index)); do\n    word=$words[index]\n    case \"$word\" in\n      --worktree) ((++index)); worktree=$words[index] ;;\n      --worktree=*) worktree=${word#--worktree=} ;;\n    esac\n  done\n  local -a workspace=()\n  [[ -n \"$worktree\" ]] && workspace=(--worktree \"$worktree\")\n  command podway \"${workspace[@]}\" __complete \"$kind\" 2>/dev/null\n}\n");
     script.push_str("_podway_route() {\n  local word root=\"\" index expecting_worktree=0\n");
     script.push_str("  for ((index = 2; index < CURRENT; ++index)); do\n");
     script.push_str("    word=$words[index]\n");
@@ -1547,7 +1270,7 @@ fn write_zsh_dynamic(script: &mut String, dynamic: Option<&str>) {
 
 fn fish_script() -> String {
     let mut script = String::from("# podway fish completion (generated from ROUTES)\n");
-    script.push_str("function __podway_dynamic\n  set -l worktree\n  set -l socket\n  set -l mode\n  set -l expecting_worktree 0\n  set -l expecting_socket 0\n  set -l expecting_mode 0\n  for word in (commandline -opc)\n    if test $expecting_worktree -eq 1\n      set worktree \"$word\"\n      set expecting_worktree 0\n      continue\n    end\n    if test $expecting_socket -eq 1\n      set socket \"$word\"\n      set expecting_socket 0\n      continue\n    end\n    if test $expecting_mode -eq 1\n      set mode --mode \"$word\"\n      set expecting_mode 0\n      continue\n    end\n    switch \"$word\"\n      case --dev\n        set mode --dev\n      case --mode\n        set expecting_mode 1\n      case '--mode=*'\n        set mode --mode (string replace -- '--mode=' '' \"$word\")\n      case --worktree\n        set expecting_worktree 1\n      case '--worktree=*'\n        set worktree (string replace -- '--worktree=' '' \"$word\")\n      case --socket\n        set expecting_socket 1\n      case '--socket=*'\n        set socket (string replace -- '--socket=' '' \"$word\")\n    end\n  end\n  set -l endpoint\n  set -l workspace\n  if test -n \"$socket\"; set endpoint --socket \"$socket\"; end\n  if test -n \"$worktree\"; set workspace --worktree \"$worktree\"; end\n  command podway $mode $endpoint $workspace __complete $argv 2>/dev/null\nend\n");
+    script.push_str("function __podway_dynamic\n  set -l worktree\n  set -l expecting_worktree 0\n  for word in (commandline -opc)\n    if test $expecting_worktree -eq 1\n      set worktree \"$word\"\n      set expecting_worktree 0\n      continue\n    end\n    switch \"$word\"\n      case --worktree\n        set expecting_worktree 1\n      case '--worktree=*'\n        set worktree (string replace -- '--worktree=' '' \"$word\")\n    end\n  end\n  set -l workspace\n  if test -n \"$worktree\"; set workspace --worktree \"$worktree\"; end\n  command podway $workspace __complete $argv 2>/dev/null\nend\n");
     script.push_str("function __podway_route\n  set -l root\n  set -l expecting_worktree 0\n");
     script.push_str("  for word in (commandline -opc)\n    if test \"$word\" = podway\n      continue\n    end\n    if test $expecting_worktree -eq 1\n      set expecting_worktree 0\n      continue\n    end\n    switch \"$word\"\n      case --worktree\n        set expecting_worktree 1\n        continue\n      case '--worktree=*'\n        continue\n    end\n");
     script.push_str("    if test -z \"$root\"\n      switch \"$word\"\n");
@@ -1656,42 +1379,41 @@ mod tests {
     }
 
     #[test]
-    fn daemon_wait_ready_is_present_in_every_completion_script() {
-        assert!(children("daemon").contains(&"wait-ready"));
+    fn retired_execution_routes_and_flags_are_absent_from_every_completion_script() {
+        assert!(children("daemon").is_empty());
+        assert!(children("runtime").is_empty());
+        assert!(children("job").is_empty());
         for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
             let script = shell.script();
-            assert!(
-                script.contains("wait-ready"),
-                "missing wait-ready in {shell:?}"
-            );
-            assert!(
-                script.contains("daemon wait-ready"),
-                "missing route in {shell:?}"
-            );
+            for retired in [
+                "--mode",
+                "--dev",
+                "--socket",
+                "--detach",
+                "--wait-for-idle",
+                "--after-job",
+                "daemon status",
+                "workspace mode",
+                "job lookup",
+            ] {
+                assert!(!script.contains(retired), "retired {retired} in {shell:?}");
+            }
             assert!(
                 script.contains("timeout"),
-                "missing timeout flag in {shell:?}"
+                "missing retained timeout in {shell:?}"
             );
-        }
-    }
-
-    #[test]
-    fn named_runtime_mode_is_present_and_forwarded_in_every_completion_script() {
-        for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
-            let script = shell.script();
-            assert!(script.contains("--mode"), "missing mode flag in {shell:?}");
             assert!(
-                script.contains("daemon status"),
-                "missing named status route in {shell:?}"
+                script.contains("outcome lookup"),
+                "missing direct lookup in {shell:?}"
             );
         }
     }
 
     #[test]
-    fn workspace_mode_routes_are_present_in_every_completion_script() {
-        assert!(children("workspace").contains(&"mode"));
-        assert_eq!(children("workspace mode"), vec!["plan", "apply"]);
-        assert!(parents().contains(&"workspace mode"));
+    fn retained_nested_routes_preserve_every_completion_graph_parent() {
+        assert!(!children("workspace").contains(&"mode"));
+        assert_eq!(children("outcome"), vec!["lookup"]);
+        assert!(parents().contains(&"outcome"));
         for route in ROUTES {
             for (index, byte) in route.words.bytes().enumerate() {
                 if byte == b' ' {
@@ -1704,16 +1426,8 @@ mod tests {
         for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
             let script = shell.script();
             assert!(
-                script.contains("workspace mode plan"),
-                "missing workspace mode plan route in {shell:?}"
-            );
-            assert!(
-                script.contains("workspace mode apply"),
-                "missing workspace mode apply route in {shell:?}"
-            );
-            assert!(
-                script.contains("plan-token"),
-                "missing plan-token flag in {shell:?}"
+                script.contains("outcome lookup"),
+                "missing nested direct lookup in {shell:?}"
             );
             let accumulation = match shell {
                 Shell::Bash | Shell::Zsh => "root=\"$root $word\"; continue",

@@ -37,12 +37,13 @@ resurrect the obsolete 32-session inactive-retention cap.
 
 ## Use established isolated runtimes
 
-Read [development runtime guidance](dev-runtime.md) and use its supported helper
-and exact named-runtime metadata. For release QA also read
-[release upgrade QA](release-upgrade-qa.md). Resolve the controlled home/root,
-mode, binary snapshot, workspace boundary, socket, and manifest before a
-mutating command. Abort a fixture when those identities cannot be established.
-Never let a missing environment variable fall back to the user's ordinary home.
+Use the [isolated direct CLI checks](testing.md#isolated-direct-cli-checks).
+Resolve the exact binary, manifest, disposable Git worktree, and workspace UUID
+before a mutating command. Abort a fixture when those identities cannot be
+established. The former named-runtime helper is retired; tests must never
+select the user's active worktree or installed service as a fallback. Release
+QA separately follows [release upgrade QA](release-upgrade-qa.md) under its
+own authorization and selected contract generation.
 
 Do not run a real Dolgorae, Codex, or other provider during this epic. A controlled
 fixture may submit bounded Podway requests and emulate result provenance; it

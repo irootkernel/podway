@@ -14,6 +14,7 @@ import tarfile
 import tempfile
 from typing import Any
 
+import contract_manifest
 import release_archive
 import release_evidence
 import repository_assets
@@ -24,8 +25,8 @@ VERSION = release_archive.PRODUCT_VERSION
 TARGET = release_archive.TARGET
 ARCHIVE_ROOT = release_archive.ARCHIVE_ROOT
 SCHEMA = release_evidence.HANDOFF_SCHEMA
-ADAPTER_CONTRACT_SCHEMA = "podway.dolgorae-adapter-contract/v2"
-ADAPTER_CONTRACT_PATH = ROOT / "release/dolgorae-adapter-contract-v2.json"
+ADAPTER_CONTRACT_SCHEMA = "podway.dolgorae-adapter-contract/v3"
+ADAPTER_CONTRACT_PATH = ROOT / "release/dolgorae-adapter-contract-v3.json"
 
 
 class HandoffError(RuntimeError):
@@ -113,7 +114,7 @@ def handoff_from_provenance(
     if provenance.get("source_tree") != source_tree:
         fail("release provenance source tree does not match the qualified Git tree")
     if adapter is None:
-        adapter = read_object(ADAPTER_CONTRACT_PATH, "Dolgorae v2 adapter contract")
+        adapter = read_object(ADAPTER_CONTRACT_PATH, "Dolgorae v3 adapter contract")
     validate_adapter_contract(adapter)
     if adapter_catalog_sha256 is None:
         adapter_catalog_sha256 = f"sha256:{release_archive.sha256_file(ADAPTER_CONTRACT_PATH)}"
@@ -150,18 +151,14 @@ def logical_result_family_paths(value: Any, label: str) -> list[str]:
 
 
 def adapter_contract() -> dict[str, Any]:
-    manifest_path = ROOT / "contracts/contract-manifest-v1.json"
-    manifest = read_object(manifest_path, "contract manifest")
-    if (
-        manifest.get("schema_version") != "podway.contract-manifest/v1"
-        or manifest.get("product") != "podway"
-        or manifest.get("product_version") != VERSION
-    ):
-        fail("contract manifest identity is invalid")
-
-    assets = manifest.get("assets")
-    if not isinstance(assets, list):
-        fail("contract manifest assets must be a list")
+    if contract_manifest.product_version(ROOT) != VERSION:
+        fail("contract manifest product version is invalid")
+    # Generate from canonical assets, independently of the derived manifest.
+    # This avoids a manifest/adapter generation cycle when source schemas change.
+    assets = [
+        {"path": path, "kind": kind}
+        for path, kind in contract_manifest.expected_asset_kinds(ROOT).items()
+    ]
     route_catalog = read_object(ROOT / "contracts/command-routes.json", "command route catalog")
     routes = route_catalog.get("routes")
     if not isinstance(routes, list) or not routes:
@@ -173,13 +170,21 @@ def adapter_contract() -> dict[str, Any]:
         or len(route_inventory) != len(set(route_inventory))
     ):
         fail("command route catalog contains invalid or duplicate commands")
-    if len(route_inventory) != 76:
-        fail("command route catalog does not contain the v2-only route inventory")
+    if len(route_inventory) != 57 or any(
+        route.get("availability") != "executable"
+        or route.get("execution") not in {"local", "direct"}
+        for route in routes
+    ):
+        fail("command route catalog does not contain the daemon-free route inventory")
 
     error_catalog = read_object(ROOT / "assets/specifications/error-codes.json", "error catalog")
     runtime_error_codes = catalog_codes(error_catalog, "errors", "error catalog")
-    if len(runtime_error_codes) != 121:
-        fail("error catalog does not contain the v2-only runtime inventory")
+    direct_errors = read_object(ROOT / "assets/schemas/error-v2.schema.json", "direct error envelope")
+    emitted_codes = direct_errors["properties"]["code"]["enum"]
+    if not isinstance(emitted_codes, list) or not set(emitted_codes) <= set(runtime_error_codes):
+        fail("error catalog does not cover the direct error envelope")
+    runtime_errors = [entry for entry in error_catalog["errors"] if entry["code"] in emitted_codes]
+    runtime_error_codes = [entry["code"] for entry in runtime_errors]
 
     diagnostic_catalog = read_object(
         ROOT / "assets/specifications/authoring-diagnostics.json", "authoring diagnostic catalog"
@@ -202,8 +207,7 @@ def adapter_contract() -> dict[str, Any]:
     schema_pins: list[dict[str, str]] = []
     for asset in sorted(schema_assets, key=lambda item: item["path"]):
         path = asset["path"]
-        digest = asset.get("sha256")
-        if not isinstance(path, str) or not isinstance(digest, str):
+        if not isinstance(path, str):
             fail("contract manifest contains an invalid schema asset")
         source = require_regular_file(
             ROOT / repository_assets.logical_source(path), f"schema asset {path}"
@@ -212,8 +216,7 @@ def adapter_contract() -> dict[str, Any]:
         schema_id = schema.get("$id")
         if not isinstance(schema_id, str) or not schema_id:
             fail(f"schema asset has no $id: {path}")
-        if f"sha256:{release_archive.sha256_file(source)}" != digest:
-            fail(f"contract manifest schema digest is stale for {path}")
+        digest = f"sha256:{release_archive.sha256_file(source)}"
         schema_pins.append({"id": schema_id, "path": path, "sha256": digest})
     if len(schema_pins) != len(current_schema_paths) or len(
         {pin["id"] for pin in schema_pins}
@@ -224,50 +227,55 @@ def adapter_contract() -> dict[str, Any]:
         "adapter_acceptance": [
             {
                 "expected": "manifest-and-adapter-catalog-pins-match-before-dispatch",
-                "id": "DOLV2-001",
+                "id": "DOLV3-001",
                 "check": "manifest-identity",
             },
-            {"expected": "all-pinned-bytes-validate-closed", "id": "DOLV2-002", "check": "schema-pins"},
-            {"expected": "v2-only-routes-dispatch", "id": "DOLV2-003", "check": "route-surface"},
+            {"expected": "all-pinned-bytes-validate-closed", "id": "DOLV3-002", "check": "schema-pins"},
+            {"expected": "retained-direct-and-local-routes-dispatch", "id": "DOLV3-003", "check": "route-surface"},
             {
-                "expected": "all-listed-results-use-output-v3-and-errors-use-error-v1",
-                "id": "DOLV2-004",
+                "expected": "retained-results-use-output-v4-and-errors-use-error-v2-with-disclosed-identity-exception",
+                "id": "DOLV3-004",
                 "check": "envelope-dispatch",
             },
-            {"expected": "adapter-never-writes-worktree-state", "id": "DOLV2-005", "check": "migration-boundary"},
-            {"expected": "completed-to-running-notice-refreshes-status", "id": "DOLV2-006", "check": "reactivation"},
+            {"expected": "adapter-never-writes-worktree-state", "id": "DOLV3-005", "check": "migration-boundary"},
+            {"expected": "completed-to-running-notice-refreshes-status", "id": "DOLV3-006", "check": "reactivation"},
             {
-                "expected": "identity-revision-attempt-idempotency-detached-replay-and-job-invariants-retained",
-                "id": "DOLV2-007",
+                "expected": "identity-revision-attempt-idempotency-outcome-lookup-and-exact-replay-retained-without-jobs",
+                "id": "DOLV3-007",
                 "check": "automation-invariants",
             },
             {
                 "expected": "unsupported-peer-fails-explicitly-without-version-text-inference",
-                "id": "DOLV2-008",
+                "id": "DOLV3-008",
                 "check": "unsupported-peer",
             },
             {
                 "expected": "packaged-catalog-bytes-match-the-manifest-bound-source",
-                "id": "DOLV2-009",
+                "id": "DOLV3-009",
                 "check": "packaged-byte-verification",
             },
         ],
         "contract_surface": {
             "authoring_diagnostics": diagnostic_catalog["diagnostics"],
             "routes": route_inventory,
-            "runtime_errors": error_catalog["errors"],
+            "runtime_errors": runtime_errors,
             "schema_pins": schema_pins,
         },
-        "daemon_free_reservations": {
-            "activation_task": "V2DFC-007",
-            "availability": "reserved_contract",
+        "execution_contract": {
+            "availability": "executable",
+            "model": "in-process-direct",
             "output_schema": "podway.output/v4",
             "error_schema": "podway.error/v2",
             "recovery_recipe_schema": "podway.recovery-recipe/v2",
-            "routes": [route for route in routes if route["availability"] == "reserved_contract"],
             "store_schema": "spec/sqlite-v14.sql",
             "retired_command_table": "spec/retired-commands-v1.json",
             "consumer_adoption": "requires-separate-Aquarium-and-Dolgorae-work",
+            "version_identity_exception": {
+                "activation_task": "V2DFC-009",
+                "output_schema": "podway.output/v3",
+                "result_schema": "podway.version-result/v1",
+                "manifest_schema": "podway.contract-manifest/v1",
+            },
         },
         "current_surface_counts": {
             "authoring_diagnostics": 59,
@@ -278,8 +286,8 @@ def adapter_contract() -> dict[str, Any]:
         "migration_boundary": {
             "adapter_database_access": "forbidden",
             "development_state_migration_promise": False,
-            "released_workspace_upgrade": "transactional-empty-or-v2-only-predecessor-to-v13-with-named-mode-v10-floor",
-            "released_workspace_upgrade_owner": "podway-daemon",
+            "released_workspace_upgrade": "declared-generation-14-writer-predecessors-only",
+            "released_workspace_upgrade_owner": "podway-engine",
             "legacy_procedure_state": "rejected-without-conversion-or-deletion",
             "v2_downgrade": "forbidden",
         },
@@ -293,29 +301,29 @@ def adapter_contract() -> dict[str, Any]:
                     "command": "session.rework",
                     "input_flag": None,
                     "result_pointer": "/result/reactivated",
-                    "result_schema": "podway.rework-result/v1",
+                    "result_schema": "podway.rework-result/v2",
                     "trigger_value": True,
                 },
                 {
                     "command": "goal.revise",
                     "input_flag": "--reactivate",
                     "result_pointer": "/result/reactivated",
-                    "result_schema": "podway.goal-revision-result/v1",
+                    "result_schema": "podway.goal-revision-result/v2",
                     "trigger_value": True,
                 },
             ],
         },
-        "release_activation_owner": "V2REL-006",
+        "release_activation_owner": "V2DFC-009",
         "schema": ADAPTER_CONTRACT_SCHEMA,
         "status": "prepared-not-released",
-        "version": 2,
+        "version": 3,
     }
 
 
 def validate_adapter_contract(value: dict[str, Any]) -> None:
     expected = adapter_contract()
     if canonical_bytes(value) != canonical_bytes(expected):
-        fail("Dolgorae v2 adapter contract is stale or does not match repository contracts")
+        fail("Dolgorae v3 adapter contract is stale or does not match repository contracts")
 
 
 def prepare_adapter_contract(output: Path) -> dict[str, Any]:
@@ -325,7 +333,7 @@ def prepare_adapter_contract(output: Path) -> dict[str, Any]:
 
 
 def packaged_adapter_contract(archive: Path) -> tuple[dict[str, Any], str]:
-    source = require_regular_file(ADAPTER_CONTRACT_PATH, "Dolgorae v2 adapter contract")
+    source = require_regular_file(ADAPTER_CONTRACT_PATH, "Dolgorae v3 adapter contract")
     source_bytes = source.read_bytes()
     member_name = (
         f"{ARCHIVE_ROOT}/share/podway/release/"
@@ -335,16 +343,16 @@ def packaged_adapter_contract(archive: Path) -> tuple[dict[str, Any], str]:
         with tarfile.open(archive, mode="r:gz") as opened:
             members = [member for member in opened.getmembers() if member.name == member_name]
             if len(members) != 1 or not members[0].isreg():
-                fail("release archive does not contain one regular v2 adapter contract")
+                fail("release archive does not contain one regular v3 adapter contract")
             extracted = opened.extractfile(members[0])
             if extracted is None:
-                fail("release archive v2 adapter contract is unreadable")
+                fail("release archive v3 adapter contract is unreadable")
             packaged_bytes = extracted.read(len(source_bytes) + 1)
     except (OSError, tarfile.TarError) as error:
-        fail(f"cannot read release archive v2 adapter contract: {error}")
+        fail(f"cannot read release archive v3 adapter contract: {error}")
     if packaged_bytes != source_bytes:
-        fail("release archive v2 adapter contract differs from the source contract")
-    adapter = read_object(source, "Dolgorae v2 adapter contract")
+        fail("release archive v3 adapter contract differs from the source contract")
+    adapter = read_object(source, "Dolgorae v3 adapter contract")
     validate_adapter_contract(adapter)
     return adapter, f"sha256:{release_archive.sha256_file(source)}"
 
@@ -400,7 +408,7 @@ def create(output_directory: Path, gate: str) -> dict[str, Any]:
 
 
 def self_test() -> dict[str, Any]:
-    adapter = read_object(ADAPTER_CONTRACT_PATH, "Dolgorae v2 adapter contract")
+    adapter = read_object(ADAPTER_CONTRACT_PATH, "Dolgorae v3 adapter contract")
     validate_adapter_contract(adapter)
     sentinels = 1
     try:
@@ -523,7 +531,7 @@ def self_test() -> dict[str, Any]:
     except release_evidence.EvidenceError:
         pass
     else:
-        fail("handoff accepted an incomplete v2 adapter route inventory")
+        fail("handoff accepted an incomplete v3 adapter route inventory")
     sentinels += 1
     pending = json.loads(json.dumps(provenance))
     pending["packaged_conformance"]["result"] = release_evidence.PENDING

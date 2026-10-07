@@ -4,6 +4,11 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ## v0.2.13 - Unreleased
 
+### Changed
+
+- Run Podway commands directly without a daemon, preserving crash-safe retries
+  and returning migration guidance for retired commands and legacy workspaces.
+
 ## v0.2.12 - 2026-09-29
 
 ### Added

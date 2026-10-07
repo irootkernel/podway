@@ -1,4 +1,4 @@
-schema: podway.command-catalog/v1
+schema: podway.command-catalog/v2
 commands:
 - name: help
   availability: executable
@@ -6,7 +6,6 @@ commands:
   - help
   operation: static
   workspace_required: false
-  durable_job: false
   session_mutation: false
   destructive_confirmation: false
 - name: version
@@ -15,7 +14,6 @@ commands:
   - version
   operation: static
   workspace_required: false
-  durable_job: false
   session_mutation: false
   destructive_confirmation: false
   result_schemas:
@@ -26,7 +24,6 @@ commands:
   - completions
   operation: static
   workspace_required: false
-  durable_job: false
   session_mutation: false
   destructive_confirmation: false
 - name: procedure.validate
@@ -36,7 +33,6 @@ commands:
   - validate
   operation: static
   workspace_required: false
-  durable_job: false
   session_mutation: false
   destructive_confirmation: false
   result_schemas:
@@ -49,7 +45,6 @@ commands:
   - show
   operation: static
   workspace_required: false
-  durable_job: false
   session_mutation: false
   destructive_confirmation: false
 - name: preset.list
@@ -59,7 +54,6 @@ commands:
   - list
   operation: static
   workspace_required: false
-  durable_job: false
   session_mutation: false
   destructive_confirmation: false
 - name: preset.show
@@ -69,7 +63,6 @@ commands:
   - show
   operation: static
   workspace_required: false
-  durable_job: false
   session_mutation: false
   destructive_confirmation: false
 - name: preset.explain
@@ -79,103 +72,6 @@ commands:
   - explain
   operation: static
   workspace_required: false
-  durable_job: false
-  session_mutation: false
-  destructive_confirmation: false
-- name: daemon.install
-  availability: executable
-  cli:
-  - daemon
-  - install
-  operation: control
-  workspace_required: false
-  durable_job: false
-  session_mutation: false
-  destructive_confirmation: false
-- name: daemon.uninstall
-  availability: executable
-  cli:
-  - daemon
-  - uninstall
-  operation: control
-  workspace_required: false
-  durable_job: false
-  session_mutation: false
-  destructive_confirmation: true
-- name: daemon.start
-  availability: executable
-  cli:
-  - daemon
-  - start
-  operation: control
-  workspace_required: false
-  durable_job: false
-  session_mutation: false
-  destructive_confirmation: false
-- name: daemon.stop
-  availability: executable
-  cli:
-  - daemon
-  - stop
-  operation: control
-  workspace_required: false
-  durable_job: false
-  session_mutation: false
-  destructive_confirmation: false
-- name: daemon.restart
-  availability: executable
-  cli:
-  - daemon
-  - restart
-  operation: control
-  workspace_required: false
-  durable_job: false
-  session_mutation: false
-  destructive_confirmation: false
-- name: daemon.status
-  availability: executable
-  cli:
-  - daemon
-  - status
-  operation: control
-  workspace_required: false
-  durable_job: false
-  session_mutation: false
-  destructive_confirmation: false
-  result_schemas:
-  - podway.daemon-status-result/v1
-  - podway.daemon-status-result/v2
-  - podway.daemon-status-result/v3
-- name: daemon.wait-ready
-  availability: executable
-  cli:
-  - daemon
-  - wait-ready
-  operation: control
-  workspace_required: false
-  durable_job: false
-  session_mutation: false
-  destructive_confirmation: false
-  result_schemas:
-  - podway.daemon-status-result/v2
-  - podway.daemon-status-result/v3
-- name: daemon.terminate
-  availability: executable
-  cli:
-  - terminate
-  operation: control
-  workspace_required: false
-  durable_job: false
-  session_mutation: false
-  destructive_confirmation: false
-- name: daemon.logs
-  availability: executable
-  cli:
-  - daemon
-  - logs
-  operation: control
-  workspace_required: false
-  durable_job: false
   session_mutation: false
   destructive_confirmation: false
 - name: workspace.init
@@ -184,20 +80,17 @@ commands:
   - init
   operation: bootstrap
   workspace_required: true
-  durable_job: true
   session_mutation: false
   destructive_confirmation: false
   idempotency_scope: workspace
   result_schemas:
-  - podway.workspace-init-result/v1
-  - podway.detached-admission-result/v1
+  - podway.workspace-init-result/v2
 - name: workspace.doctor
   availability: executable
   cli:
   - doctor
   operation: query
   workspace_required: true
-  durable_job: false
   session_mutation: false
   destructive_confirmation: false
 - name: workspace.show
@@ -207,7 +100,6 @@ commands:
   - show
   operation: query
   workspace_required: true
-  durable_job: false
   session_mutation: false
   destructive_confirmation: false
 - name: workspace.repair
@@ -217,9 +109,9 @@ commands:
   - repair
   operation: control
   workspace_required: true
-  durable_job: false
   session_mutation: false
   destructive_confirmation: false
+  idempotency_scope: workspace
 - name: workspace.remove
   availability: executable
   cli:
@@ -227,59 +119,29 @@ commands:
   - remove
   operation: control
   workspace_required: true
-  durable_job: false
   session_mutation: false
   destructive_confirmation: true
   preconditions:
   - workspace_uuid_optional
   maintenance_barrier: true
   result_schemas:
-  - podway.workspace-removal-result/v1
-- name: workspace.mode.plan
-  availability: executable
-  cli:
-  - workspace
-  - mode
-  - plan
-  operation: query
-  workspace_required: true
-  durable_job: false
-  session_mutation: false
-  destructive_confirmation: false
-  result_schemas:
-  - podway.workspace-mode-plan-result/v1
-- name: workspace.mode.apply
-  availability: executable
-  cli:
-  - workspace
-  - mode
-  - apply
-  operation: control
-  workspace_required: true
-  durable_job: false
-  session_mutation: false
-  destructive_confirmation: true
-  maintenance_barrier: true
-  result_schemas:
-  - podway.workspace-mode-apply-result/v1
+  - podway.workspace-removal-result/v2
+  idempotency_scope: workspace
 - name: session.start
   availability: executable
   cli:
   - start
   operation: mutate
   workspace_required: true
-  durable_job: true
   session_mutation: true
   destructive_confirmation: false
   preconditions:
   - workspace_uuid
   - procedure_digest_file_source_only
-  idempotency_scope: workspace
+  idempotency_scope: session
   maintenance_barrier: false
   result_schemas:
-  - podway.session-start-result/v2
-  - podway.session-start-result/v3
-  - podway.detached-admission-result/v2
+  - podway.session-start-result/v4
 - name: session.start_replace
   availability: executable
   cli:
@@ -287,7 +149,6 @@ commands:
   - --on-existing
   operation: mutate
   workspace_required: true
-  durable_job: true
   session_mutation: true
   destructive_confirmation: true
   maintenance_barrier: true
@@ -296,18 +157,15 @@ commands:
   - session_id
   - session_revision
   - procedure_digest_file_source_only
-  idempotency_scope: workspace
+  idempotency_scope: session
   result_schemas:
-  - podway.session-start-result/v2
-  - podway.session-start-result/v3
-  - podway.detached-admission-result/v2
+  - podway.session-start-result/v4
 - name: session.begin
   availability: executable
   cli:
   - begin
   operation: mutate
   workspace_required: true
-  durable_job: true
   session_mutation: true
   destructive_confirmation: false
   preconditions:
@@ -316,59 +174,45 @@ commands:
   - session_revision
   idempotency_scope: session
   result_schemas:
-  - podway.session-begin-result/v1
-  - podway.detached-admission-result/v2
+  - podway.session-begin-result/v2
 - name: session.status
   availability: executable
   cli:
   - status
   operation: query
   workspace_required: true
-  durable_job: false
   session_mutation: false
   destructive_confirmation: false
   preconditions:
   - session_id_optional
   result_schemas:
-  - podway.status-result/v2
-  - podway.compact-status-result/v2
-  - podway.status-result/v3
-  - podway.compact-status-result/v3
-  - podway.status-result/v4
-  - podway.compact-status-result/v4
+  - podway.status-result/v5
+  - podway.compact-status-result/v5
 - name: session.next
   availability: executable
   cli:
   - next
   operation: query
   workspace_required: true
-  durable_job: false
   session_mutation: false
   destructive_confirmation: false
   preconditions:
   - session_id_optional
   result_schemas:
-  - podway.next-result/v2
-  - podway.next-result/v3
-  - podway.prepared-next-result/v1
-  - podway.next-result/v4
-  - podway.prepared-next-result/v2
+  - podway.next-result/v5
+  - podway.prepared-next-result/v3
 - name: session.observe
   availability: executable
   cli:
   - observe
   operation: query
   workspace_required: true
-  durable_job: false
   session_mutation: false
   destructive_confirmation: false
   preconditions:
   - session_id_optional
   result_schemas:
-  - podway.observation-result/v1
-  - podway.observation-result/v2
-  - podway.observation-result/v3
-  - podway.observation-result/v4
+  - podway.observation-result/v5
 - name: evidence.read
   availability: executable
   cli:
@@ -376,7 +220,6 @@ commands:
   - read
   operation: query
   workspace_required: true
-  durable_job: false
   session_mutation: false
   destructive_confirmation: false
   preconditions:
@@ -390,7 +233,6 @@ commands:
   - package
   operation: query
   workspace_required: true
-  durable_job: false
   session_mutation: false
   destructive_confirmation: false
   preconditions:
@@ -404,7 +246,6 @@ commands:
   - receipt
   operation: query
   workspace_required: true
-  durable_job: false
   session_mutation: false
   destructive_confirmation: false
   result_schemas:
@@ -416,7 +257,6 @@ commands:
   - accept
   operation: mutate
   workspace_required: true
-  durable_job: true
   session_mutation: true
   destructive_confirmation: false
   preconditions:
@@ -426,15 +266,13 @@ commands:
   - attempt_id
   idempotency_scope: session
   result_schemas:
-  - podway.delegation-accept-result/v1
-  - podway.detached-admission-result/v2
+  - podway.delegation-accept-result/v2
 - name: session.complete
   availability: executable
   cli:
   - complete
   operation: mutate
   workspace_required: true
-  durable_job: true
   session_mutation: true
   destructive_confirmation: false
   preconditions:
@@ -444,15 +282,13 @@ commands:
   - attempt_id
   idempotency_scope: session
   result_schemas:
-  - podway.stage-transition-result/v2
-  - podway.detached-admission-result/v2
+  - podway.stage-transition-result/v3
 - name: session.skip
   availability: executable
   cli:
   - skip
   operation: mutate
   workspace_required: true
-  durable_job: true
   session_mutation: true
   destructive_confirmation: false
   preconditions:
@@ -462,15 +298,13 @@ commands:
   - attempt_id
   idempotency_scope: session
   result_schemas:
-  - podway.stage-transition-result/v2
-  - podway.detached-admission-result/v2
+  - podway.stage-transition-result/v3
 - name: session.retry
   availability: executable
   cli:
   - retry
   operation: mutate
   workspace_required: true
-  durable_job: true
   session_mutation: true
   destructive_confirmation: false
   preconditions:
@@ -480,15 +314,13 @@ commands:
   - attempt_id
   idempotency_scope: session
   result_schemas:
-  - podway.stage-transition-result/v2
-  - podway.detached-admission-result/v2
+  - podway.stage-transition-result/v3
 - name: session.block
   availability: executable
   cli:
   - block
   operation: mutate
   workspace_required: true
-  durable_job: true
   session_mutation: true
   destructive_confirmation: false
   preconditions:
@@ -498,15 +330,13 @@ commands:
   - attempt_id
   idempotency_scope: session
   result_schemas:
-  - podway.stage-transition-result/v2
-  - podway.detached-admission-result/v2
+  - podway.stage-transition-result/v3
 - name: session.unblock
   availability: executable
   cli:
   - unblock
   operation: mutate
   workspace_required: true
-  durable_job: true
   session_mutation: true
   destructive_confirmation: false
   preconditions:
@@ -516,15 +346,13 @@ commands:
   - attempt_id
   idempotency_scope: session
   result_schemas:
-  - podway.stage-transition-result/v2
-  - podway.detached-admission-result/v2
+  - podway.stage-transition-result/v3
 - name: session.cancel
   availability: executable
   cli:
   - cancel
   operation: mutate
   workspace_required: true
-  durable_job: true
   session_mutation: true
   destructive_confirmation: false
   preconditions:
@@ -534,15 +362,13 @@ commands:
   - attempt_id
   idempotency_scope: session
   result_schemas:
-  - podway.stage-transition-result/v2
-  - podway.detached-admission-result/v2
+  - podway.stage-transition-result/v3
 - name: session.reset
   availability: executable
   cli:
   - reset
   operation: mutate
   workspace_required: true
-  durable_job: true
   session_mutation: true
   destructive_confirmation: true
   preconditions:
@@ -552,16 +378,14 @@ commands:
   idempotency_scope: workspace
   maintenance_barrier: true
   result_schemas:
-  - podway.stage-transition-result/v2
-  - podway.session-reset-result/v1
-  - podway.detached-admission-result/v2
+  - podway.session-reset-result/v2
+  - podway.stage-transition-result/v3
 - name: session.terminal_disposition
   availability: executable
   cli:
   - disposition
   operation: mutate
   workspace_required: true
-  durable_job: true
   session_mutation: true
   destructive_confirmation: false
   preconditions:
@@ -570,26 +394,23 @@ commands:
   - session_revision
   idempotency_scope: session
   result_schemas:
-  - podway.terminal-disposition-result/v1
-  - podway.detached-admission-result/v2
+  - podway.terminal-disposition-result/v2
 - name: session.archive
   availability: executable
   cli:
   - archive
   operation: mutate
   workspace_required: true
-  durable_job: true
   session_mutation: true
   destructive_confirmation: false
   preconditions:
   - workspace_uuid
   - session_id
   - session_revision
-  idempotency_scope: workspace
+  idempotency_scope: session
   maintenance_barrier: true
   result_schemas:
-  - podway.session-archive-result/v1
-  - podway.detached-admission-result/v2
+  - podway.session-archive-result/v2
 - name: session.archive_list
   availability: executable
   cli:
@@ -597,11 +418,9 @@ commands:
   - list
   operation: query
   workspace_required: true
-  durable_job: false
   session_mutation: false
   destructive_confirmation: false
   result_schemas:
-  - podway.session-archive-list-result/v1
   - podway.session-archive-list-result/v2
 - name: session.archive_show
   availability: executable
@@ -610,12 +429,10 @@ commands:
   - show
   operation: query
   workspace_required: true
-  durable_job: false
   session_mutation: false
   destructive_confirmation: false
   result_schemas:
-  - podway.session-archive-show-result/v1
-  - podway.session-archive-show-result/v2
+  - podway.session-archive-show-result/v3
 - name: session.archive_purge
   availability: executable
   cli:
@@ -623,7 +440,6 @@ commands:
   - purge
   operation: control
   workspace_required: true
-  durable_job: false
   session_mutation: false
   destructive_confirmation: true
   preconditions:
@@ -632,6 +448,7 @@ commands:
   - session_revision
   result_schemas:
   - podway.session-archive-purge-result/v1
+  idempotency_scope: session
 - name: workspace.reset_all
   availability: executable
   cli:
@@ -639,7 +456,6 @@ commands:
   - --all
   operation: bootstrap
   workspace_required: true
-  durable_job: true
   session_mutation: false
   destructive_confirmation: true
   maintenance_barrier: true
@@ -652,7 +468,6 @@ commands:
   - check
   operation: mutate
   workspace_required: true
-  durable_job: true
   session_mutation: true
   destructive_confirmation: false
   preconditions:
@@ -662,15 +477,13 @@ commands:
   - item_revision
   idempotency_scope: session
   result_schemas:
-  - podway.item-mutation-result/v2
-  - podway.detached-admission-result/v2
+  - podway.item-mutation-result/v3
 - name: item.uncheck
   availability: executable
   cli:
   - uncheck
   operation: mutate
   workspace_required: true
-  durable_job: true
   session_mutation: true
   destructive_confirmation: false
   preconditions:
@@ -680,15 +493,13 @@ commands:
   - item_revision
   idempotency_scope: session
   result_schemas:
-  - podway.item-mutation-result/v2
-  - podway.detached-admission-result/v2
+  - podway.item-mutation-result/v3
 - name: item.set
   availability: executable
   cli:
   - set
   operation: mutate
   workspace_required: true
-  durable_job: true
   session_mutation: true
   destructive_confirmation: false
   preconditions:
@@ -698,15 +509,13 @@ commands:
   - item_revision
   idempotency_scope: session
   result_schemas:
-  - podway.item-mutation-result/v2
-  - podway.detached-admission-result/v2
+  - podway.item-mutation-result/v3
 - name: item.add
   availability: executable
   cli:
   - add
   operation: mutate
   workspace_required: true
-  durable_job: true
   session_mutation: true
   destructive_confirmation: false
   preconditions:
@@ -716,15 +525,13 @@ commands:
   - item_revision
   idempotency_scope: session
   result_schemas:
-  - podway.item-mutation-result/v2
-  - podway.detached-admission-result/v2
+  - podway.item-mutation-result/v3
 - name: item.remove
   availability: executable
   cli:
   - remove
   operation: mutate
   workspace_required: true
-  durable_job: true
   session_mutation: true
   destructive_confirmation: false
   preconditions:
@@ -734,15 +541,13 @@ commands:
   - item_revision
   idempotency_scope: session
   result_schemas:
-  - podway.item-mutation-result/v2
-  - podway.detached-admission-result/v2
+  - podway.item-mutation-result/v3
 - name: item.attach
   availability: executable
   cli:
   - attach
   operation: mutate
   workspace_required: true
-  durable_job: true
   session_mutation: true
   destructive_confirmation: false
   preconditions:
@@ -752,15 +557,13 @@ commands:
   - item_revision
   idempotency_scope: session
   result_schemas:
-  - podway.item-mutation-result/v2
-  - podway.detached-admission-result/v2
+  - podway.item-mutation-result/v3
 - name: item.clear
   availability: executable
   cli:
   - clear
   operation: mutate
   workspace_required: true
-  durable_job: true
   session_mutation: true
   destructive_confirmation: false
   preconditions:
@@ -770,8 +573,7 @@ commands:
   - item_revision
   idempotency_scope: session
   result_schemas:
-  - podway.item-mutation-result/v2
-  - podway.detached-admission-result/v2
+  - podway.item-mutation-result/v3
 - name: item.record_many
   availability: executable
   cli:
@@ -779,7 +581,6 @@ commands:
   - --stdin
   operation: mutate
   workspace_required: true
-  durable_job: true
   session_mutation: true
   destructive_confirmation: false
   preconditions:
@@ -790,69 +591,7 @@ commands:
   - item_revisions
   idempotency_scope: session
   result_schemas:
-  - podway.item-record-many-result/v1
-  - podway.detached-admission-result/v2
-- name: job.list
-  availability: executable
-  cli:
-  - job
-  - list
-  operation: query
-  workspace_required: true
-  durable_job: false
-  session_mutation: false
-  destructive_confirmation: false
-- name: job.lookup
-  availability: executable
-  cli:
-  - job
-  - lookup
-  operation: query
-  workspace_required: true
-  durable_job: false
-  session_mutation: false
-  destructive_confirmation: false
-  result_schemas:
-  - podway.job-lookup-result/v4
-  - podway.job-lookup-result/v5
-- name: job.status
-  availability: executable
-  cli:
-  - job
-  - status
-  operation: query
-  workspace_required: true
-  durable_job: false
-  session_mutation: false
-  destructive_confirmation: false
-  result_schemas:
-  - podway.job-result/v4
-  - podway.job-result/v5
-- name: job.wait
-  availability: executable
-  cli:
-  - job
-  - wait
-  operation: query
-  workspace_required: true
-  durable_job: false
-  session_mutation: false
-  destructive_confirmation: false
-  result_schemas:
-  - podway.job-result/v4
-  - podway.job-result/v5
-- name: job.cancel
-  availability: executable
-  cli:
-  - job
-  - cancel
-  operation: control
-  workspace_required: true
-  durable_job: false
-  session_mutation: false
-  destructive_confirmation: false
-  preconditions:
-  - job_state
+  - podway.item-record-many-result/v2
 - name: procedure.format
   availability: executable
   cli:
@@ -860,7 +599,6 @@ commands:
   - format
   operation: static
   workspace_required: false
-  durable_job: false
   session_mutation: false
   destructive_confirmation: false
   result_schemas:
@@ -873,7 +611,6 @@ commands:
   - vet
   operation: static
   workspace_required: false
-  durable_job: false
   session_mutation: false
   destructive_confirmation: false
   result_schemas:
@@ -885,7 +622,6 @@ commands:
   - lint
   operation: static
   workspace_required: false
-  durable_job: false
   session_mutation: false
   destructive_confirmation: false
   result_schemas:
@@ -897,7 +633,6 @@ commands:
   - check
   operation: static
   workspace_required: false
-  durable_job: false
   session_mutation: false
   destructive_confirmation: false
   result_schemas:
@@ -909,13 +644,12 @@ commands:
   - graph
   operation: static
   workspace_required: false
-  durable_job: false
   session_mutation: false
   destructive_confirmation: false
   result_schemas:
+  - podway.procedure-diagnostics-result/v1
   - podway.procedure-graph-result/v1
   - podway.procedure-graph-result/v2
-  - podway.procedure-diagnostics-result/v1
 - name: procedure.preview
   availability: executable
   cli:
@@ -923,7 +657,6 @@ commands:
   - preview
   operation: static
   workspace_required: false
-  durable_job: false
   session_mutation: false
   destructive_confirmation: false
   result_schemas:
@@ -936,7 +669,6 @@ commands:
   - scaffold
   operation: static
   workspace_required: false
-  durable_job: false
   session_mutation: false
   destructive_confirmation: false
   result_schemas:
@@ -948,7 +680,6 @@ commands:
   - decide
   operation: mutate
   workspace_required: true
-  durable_job: true
   session_mutation: true
   destructive_confirmation: false
   preconditions:
@@ -959,15 +690,13 @@ commands:
   - goal_revision_when_goal_defined
   idempotency_scope: session
   result_schemas:
-  - podway.decision-result/v1
-  - podway.detached-admission-result/v2
+  - podway.decision-result/v2
 - name: session.rework
   availability: executable
   cli:
   - rework
   operation: mutate
   workspace_required: true
-  durable_job: true
   session_mutation: true
   destructive_confirmation: false
   preconditions:
@@ -977,8 +706,7 @@ commands:
   - attempt_id_when_running
   idempotency_scope: session
   result_schemas:
-  - podway.rework-result/v1
-  - podway.detached-admission-result/v2
+  - podway.rework-result/v2
 - name: goal.define
   availability: executable
   cli:
@@ -986,7 +714,6 @@ commands:
   - define
   operation: mutate
   workspace_required: true
-  durable_job: true
   session_mutation: true
   destructive_confirmation: false
   preconditions:
@@ -995,8 +722,7 @@ commands:
   - session_revision
   idempotency_scope: session
   result_schemas:
-  - podway.goal-definition-result/v1
-  - podway.detached-admission-result/v2
+  - podway.goal-definition-result/v2
 - name: goal.revise
   availability: executable
   cli:
@@ -1004,7 +730,6 @@ commands:
   - revise
   operation: mutate
   workspace_required: true
-  durable_job: true
   session_mutation: true
   destructive_confirmation: false
   preconditions:
@@ -1015,8 +740,7 @@ commands:
   - goal_revision
   idempotency_scope: session
   result_schemas:
-  - podway.goal-revision-result/v1
-  - podway.detached-admission-result/v2
+  - podway.goal-revision-result/v2
 - name: goal.assess_criterion
   availability: executable
   cli:
@@ -1024,7 +748,6 @@ commands:
   - assess-criterion
   operation: mutate
   workspace_required: true
-  durable_job: true
   session_mutation: true
   destructive_confirmation: false
   preconditions:
@@ -1035,52 +758,14 @@ commands:
   - goal_revision
   idempotency_scope: session
   result_schemas:
-  - podway.criterion-assessment-result/v1
-  - podway.detached-admission-result/v2
-- name: runtime.reset.plan
-  availability: executable
-  cli:
-  - runtime
-  - reset
-  - plan
-  operation: query
-  workspace_required: false
-  durable_job: false
-  session_mutation: false
-  destructive_confirmation: false
-  result_schemas:
-  - podway.runtime-reset-plan-result/v1
-- name: runtime.reset.apply
-  availability: executable
-  cli:
-  - runtime
-  - reset
-  - apply
-  operation: control
-  workspace_required: false
-  durable_job: false
-  session_mutation: false
-  destructive_confirmation: true
-  result_schemas:
-  - podway.runtime-reset-result/v1
-- name: daemon.runtime_reset
-  availability: executable
-  cli: []
-  operation: control
-  workspace_required: false
-  durable_job: false
-  session_mutation: false
-  destructive_confirmation: false
-  result_schemas:
-  - podway.runtime-reset-control-result/v1
+  - podway.criterion-assessment-result/v2
 - name: outcome.lookup
-  availability: reserved_contract
+  availability: executable
   cli:
   - outcome
   - lookup
   operation: query
   workspace_required: true
-  durable_job: false
   session_mutation: false
   destructive_confirmation: false
   result_schemas:

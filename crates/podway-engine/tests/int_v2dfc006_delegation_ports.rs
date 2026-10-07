@@ -19,34 +19,8 @@ use podway_protocol::{
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
-const PROCEDURE: &str = r#"schema: podway.procedure/v2
-id: delegated-native-routes
-version: "1"
-name: Delegated native routes
-purpose: Complete a delegated attempt through native dispatch.
-node_definitions:
-  work:
-    type: action
-    title: Work
-    intent: Record final evidence before acceptance.
-    items:
-      - id: done
-        type: confirm
-        prompt: Confirm the final result.
-        required: true
-graph:
-  entry: work
-  nodes:
-    - id: work
-      use: work
-      terminal: true
-      delegation:
-        binding_ref: local-specialist
-        role_ref: reviewer
-        role_snapshot_digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-        max_rounds: 3
-        after_accept: retain
-"#;
+const PROCEDURE: &str =
+    include_str!("../../../tests/fixtures/v2/procedures/delegated-native-routes.yaml");
 
 const DIRECT_PROCEDURE: &str = r#"schema: podway.procedure/v2
 id: direct-native-routes

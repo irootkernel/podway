@@ -3,14 +3,11 @@
   "version": 1,
   "coverage": {
     "required": [
-      "C05",
-      "C06",
       "C08",
       "C11",
       "C12",
       "C13",
       "D01",
-      "D02",
       "D03",
       "D04",
       "S01",
@@ -29,14 +26,11 @@
       "DE06"
     ],
     "covered": [
-      "C05",
-      "C06",
       "C08",
       "C11",
       "C12",
       "C13",
       "D01",
-      "D02",
       "D03",
       "D04",
       "S01",
@@ -57,28 +51,6 @@
     "percent": 100
   },
   "windows": [
-    {
-      "id": "C05",
-      "proof": {
-        "failpoint": "prepare boundary",
-        "test": "crates/podway-daemon/tests/int_v2gol005_failures.rs::v2gol005_queued_assessment_executes_after_cold_reopen_and_replays_exactly",
-        "termination": "restart observed",
-        "recovery": "claimed job survives",
-        "invariant": "preparation is daemon-owned",
-        "source_locator": "crates/podway-daemon/src/execution.rs::DaemonExecutionEngineV1::execute_claimed"
-      }
-    },
-    {
-      "id": "C06",
-      "proof": {
-        "failpoint": "artifact verification boundary",
-        "test": "crates/podway-daemon/tests/int_v2gol005_failures.rs::v2gol005_queued_assessment_executes_after_cold_reopen_and_replays_exactly",
-        "termination": "restart observed",
-        "recovery": "claimed job survives",
-        "invariant": "verification is daemon-owned",
-        "source_locator": "crates/podway-engine/src/native_execution.rs::NativeArtifactVerifierV1::hash_verified_local_artifact"
-      }
-    },
     {
       "id": "C08",
       "proof": {
@@ -135,25 +107,14 @@
       }
     },
     {
-      "id": "D02",
-      "proof": {
-        "failpoint": "registry rename",
-        "test": "crates/podway-daemon/tests/int_phase4_registry.rs::abort_process_failpoints_recover_exact_documents_without_accepting_temporaries",
-        "termination": "child abort observed",
-        "recovery": "valid predecessor or successor",
-        "invariant": "no partial registry",
-        "source_locator": "crates/podway-daemon/src/registry.rs::persist_registry_v1"
-      }
-    },
-    {
       "id": "D03",
       "proof": {
-        "failpoint": "workspace removal marker, registry, and directory boundaries",
-        "test": "crates/podway-daemon/tests/int_v2ret005_retirement_conformance.rs::every_removal_crash_boundary_converges_on_cold_replay",
-        "termination": "child abort observed at each injected boundary",
-        "recovery": "cold replay removes the exact registry generation and .podway directory",
-        "invariant": "the Git worktree survives and explicit removal converges exactly once",
-        "source_locator": "crates/podway-daemon/src/runtime_workspace.rs::WorkspaceRemovalMaintenanceV1::complete"
+        "failpoint": "IntentPublished, MarkerPublished, RuntimeCleared, PhaseAdvanced and BeforeFinalRemoval",
+        "test": "crates/podway-engine/tests/int_v2dfc006_maintenance.rs::exact_removal_retry_resumes_markers_then_absence_destroys_retention",
+        "termination": "Child exits with status77 at each actual injected maintenance boundary",
+        "recovery": "Cold exact-key retry resumes the original removal intent and returns the original response; final absence has no retained outcome",
+        "invariant": "The original workspace identity and response are preserved during recovery, and the Git worktree survives removal",
+        "source_locator": "crates/podway-engine/src/direct_maintenance.rs::remove_inner"
       }
     },
     {

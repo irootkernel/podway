@@ -37,8 +37,13 @@ pub struct DirectErrorContextV1 {
 
 #[derive(Clone, Debug)]
 pub enum DirectMaintenanceRecoveryV1 {
-    Reset { key: IdempotencyKeyV1 },
-    Removal { key: IdempotencyKeyV1 },
+    Reset {
+        key: IdempotencyKeyV1,
+    },
+    Removal {
+        key: IdempotencyKeyV1,
+        workspace: podway_core::WorkspaceId,
+    },
 }
 
 struct Presentation {
@@ -494,11 +499,11 @@ fn store(error: &DirectStoreErrorV1, context: &DirectErrorContextV1) -> Presenta
                     "argv":["podway","--json","reset","--all","--yes","--idempotency-key",key.as_str()],
                     "reason":"Resume the published reset with its original idempotency key.","requires_explicit_authorization":true}),
                 ),
-                Some(DirectMaintenanceRecoveryV1::Removal { key }) => (
+                Some(DirectMaintenanceRecoveryV1::Removal { key, workspace }) => (
                     "removal_marker",
                     json!({
                     "action":"resume_maintenance","command":"workspace.remove",
-                    "argv":["podway","--json","workspace","remove","--yes","--idempotency-key",key.as_str()],
+                    "argv":["podway","--json","workspace","remove","--force","--yes","--if-workspace-uuid",workspace.as_str(),"--idempotency-key",key.as_str()],
                     "reason":"Resume the published removal with its original idempotency key.","requires_explicit_authorization":true}),
                 ),
                 None => ("maintenance_lock", diagnose()),
@@ -519,7 +524,7 @@ fn store(error: &DirectStoreErrorV1, context: &DirectErrorContextV1) -> Presenta
             details: json!({
             "schema":"podway.legacy-runtime-state-unsupported-details/v1", "store_schema_version":generation,
             "markers":marker.iter().collect::<Vec<_>>(), "recovery":{"action":"reset_legacy_state","command":"workspace.reset_all",
-                "argv":["podway","--json","reset","--all","--yes"], "reason":"Explicitly reset unsupported daemon-era runtime state.","requires_explicit_authorization":true}}),
+                "argv":["podway","--json","reset","--all","--yes","--idempotency-key","<new-idempotency-key>"], "reason":"Replace <new-idempotency-key> with a fresh caller-owned key, then explicitly reset unsupported daemon-era runtime state.","requires_explicit_authorization":true}}),
         },
         E::UnsupportedGeneration { .. } => recovery("WORKSPACE_SCHEMA_UNSUPPORTED"),
         E::Unreadable | E::SchemaMismatch | E::Storage(_) | E::Sqlite(_) => {

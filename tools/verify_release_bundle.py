@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 VERSION = release_archive.PRODUCT_VERSION
 TARGET = release_archive.TARGET
 ARCHIVE_ROOT = release_archive.ARCHIVE_ROOT
-ADAPTER_CONTRACT_RELATIVE = Path("release/dolgorae-adapter-contract-v2.json")
+ADAPTER_CONTRACT_RELATIVE = Path("release/dolgorae-adapter-contract-v3.json")
 
 
 class VerificationError(RuntimeError):
@@ -286,7 +286,7 @@ def self_test() -> dict[str, Any]:
         release_archive.release_status = original_release_status
     if observed_artifact_classes != ["distribution"]:
         fail("final verifier did not use the provenance artifact class")
-    adapter = {"schema": "podway.dolgorae-adapter-contract/v2", "sentinel": True}
+    adapter = {"schema": "podway.dolgorae-adapter-contract/v3", "sentinel": True}
     adapter_catalog_sha256 = f"sha256:{'4' * 64}"
     handoff = release_evidence.handoff_from_provenance(
         provenance,

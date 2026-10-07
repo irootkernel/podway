@@ -1,6 +1,38 @@
 # JSON Contract
 
-All successful public commands emit `podway.output/v3`. The closed schema is
+## Direct CLI generation
+
+The V2DFC-007 CLI emits `podway.output/v4` for retained commands and
+`podway.error/v2` for failures. Their canonical closed schemas are
+[`output-v4.schema.json`](../../../assets/schemas/output-v4.schema.json) and
+[`error-v2.schema.json`](../../../assets/schemas/error-v2.schema.json).
+`version --json --identity` retains output v3, version-result v1, and manifest
+v1 until the V2DFC-009 identity-tooling cutover.
+
+Direct and delegated Procedures share status, compact status, running next,
+and observation v5, with prepared next v3. The success envelope has no job or
+admission fields. Retired commands and flags return `COMMAND_RETIRED` before
+workspace resolution or effects. The
+[command catalog](../../../assets/specifications/command-catalog.yaml) owns
+each retained command's result families; the
+[transition matrix](../../../assets/specifications/state-transition-matrix.csv)
+owns mutation transitions and their result identifiers.
+
+`outcome.lookup` is a read-only direct Engine command. It returns
+`podway.outcome-lookup-result/v1` with retained committed success or a null
+outcome. Input and output budgets are independently 1,048,576 bytes. Recovery
+uses the original idempotency key and canonical request, including its resolved
+fences; a lookup miss does not disprove an effect outside outcome retention.
+RecoveryRecipe v2 describes read-only diagnosis or explicitly authorized
+marker-backed maintenance. It never grants deletion authority.
+
+## Previous daemon generation
+
+The following describes the previous generation superseded by the direct CLI.
+These families remain registered during residual-infrastructure retirement;
+they do not define the V2DFC-007 CLI's runtime output.
+
+The previous daemon-based commands emit `podway.output/v3`. The closed schema is
 [`output-v3.schema.json`](../../../assets/schemas/output-v3.schema.json). Failures
 emit `podway.error/v1`; IPC requests remain `podway.ipc/v1`. These identifiers
 version different contracts and do not imply Procedure support.
@@ -141,13 +173,12 @@ Contract assets are canonical under `assets/schemas/`; the generated manifest un
 schema identifier. Additive envelope fields are allowed only where the schema leaves
 the object open; automation must ignore unknown open-envelope metadata.
 
-## Reserved daemon-free generation
+## Direct generation compatibility
 
-`V2DFC-003` reserves `podway.output/v4`, `podway.error/v2`, and
-`podway.recovery-recipe/v2`. They are not emitted by the daemon-based runtime.
-The direct engine adopts the generation in `V2DFC-006`; CLI cutover occurs in
-`V2DFC-007`. Reserved validators are explicit APIs, separate from the shipped
-output decoder and its supported-generation constants.
+`V2DFC-003` reserved `podway.output/v4`, `podway.error/v2`, and RecoveryRecipe
+v2. The direct Engine adopts the generation in `V2DFC-006`, and the CLI uses it
+in `V2DFC-007`. The direct validators remain explicit APIs while
+`V2DFC-008` removes daemon-era decoding and superseded assets.
 
 The new result and detail generations remove admission, job, queue, endpoint,
 registry, and runtime-mode metadata. Direct and delegated status, compact status,
@@ -159,10 +190,10 @@ positions, not by searching application content. Existing unnamed generic
 results and diagnostic details retain their JSON-object compatibility boundary,
 subject to the preserved byte and nesting-depth bounds.
 
-`podway.outcome-lookup-result/v1` is reserved for `outcome.lookup`. A successful
+`podway.outcome-lookup-result/v1` is emitted by `outcome.lookup`. A successful
 lookup carries a committed mutation response; not-found carries a null outcome.
-The reserved route uses the `direct` execution class and `podway-engine` owner.
-Registration does not enable the current CLI route. Input and output budgets
+The executable route uses the `direct` execution class and `podway-engine` owner.
+Input and output budgets
 remain 1,048,576 bytes independently of IPC framing.
 
 Recovery recipes are constrained by the owning error. `MUTATION_OUTCOME_UNKNOWN`
@@ -173,6 +204,12 @@ explicit reset-all authorization. Reset and removal markers name their respectiv
 resuming command, while maintenance lock, intent, and predecessor contention keep
 read-only recovery. The reserved Rust validator enforces agreement among keys
 in both unknown-outcome details and error envelopes.
+Maintenance recipes retain the original key. Removal recipes also include
+`--force --yes` and the validated marker's workspace UUID. Reset-all uses
+`--all --yes`; `--force` is not required by the direct reset contract. A legacy
+reset recipe includes the explicit `<new-idempotency-key>` placeholder, which
+the caller must replace with its own fresh key before execution. Producing the
+recipe never generates a key or authorizes deletion.
 Retained revision, attempt, session, Procedure digest, and stale-goal/evidence
 conflicts keep read-only `session.observe` recovery. Workspace identity, Store
 state/schema, and writer-contract diagnosis keep read-only `workspace.doctor`
@@ -181,5 +218,7 @@ and outcome lookup recipes; error/v2 applies the same owning detail constraints.
 
 `podway.version-result/v2` and `podway.contract-manifest/v2` omit
 `supported_ipc_ids`. The currently generated manifest and version result remain
-v1 until their owning cutover work. Store v14 DDL is enrolled in the current
+v1 until their owning V2DFC-009 cutover work. `version --json --identity` therefore
+retains output v3 during V2DFC-007; other retained CLI commands emit output v4.
+Store v14 DDL is enrolled in the current
 manifest with asset kind `store_schema` so its bytes affect writer identity.

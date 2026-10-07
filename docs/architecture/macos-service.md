@@ -67,19 +67,14 @@ absolute arguments, permissions, atomic publication, and command-runner behavior
 remain covered by static and mocked adapter tests rather than by recreating a macOS
 GUI login domain during distribution packaging.
 
-### Managed contributor development runtime
+### Retired contributor development runtime
 
-Contributors who need a disposable daemon that can coexist with an installed
-production service should use `tools/dev_runtime.py` rather than a raw named-mode
-daemon. The helper derives a short private root under `/private/tmp`,
-snapshots matching debug binaries, and writes purpose `contributor` managed-runtime
-v3 metadata. `podwayd --mode contributor` validates that metadata and derives an
-isolated lock from its private runtime root. Raw contributor mode without managed metadata never
-satisfies the development-v2 admission gate. Only the
-feature-built, helper-managed daemon plus its exact disposable sandbox marker can
-produce a development admission token; current v2 runtime routes remain closed
-until their owning runtime tasks land. See the [contributor development
-runtime](../implementation-tips/dev-runtime.md) guide.
+V2DFC-007 retires the contributor daemon helper. Direct CLI development uses
+[disposable worktree fixtures](../implementation-tips/testing.md#isolated-direct-cli-checks)
+and does not create a named account runtime. Preserve existing legacy services
+and contributor state; their retirement requires separate authorization and
+the original generation's supported owner. V2DFC-008 owns deletion of the
+remaining service infrastructure described in this document.
 
 ## LaunchAgent configuration
 

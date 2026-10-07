@@ -1,5 +1,14 @@
 # Frozen daemon-era classification recipes
 
+`generation-1-to-13-ddl.json` freezes each exact cumulative migration input from
+`assets/specifications/sqlite-v1.sql` through `sqlite-v13.sql` at
+`e7f9bd268a765ae093799d516b89f2022a67ff6b`, with its original path and SHA-256.
+Apply its ordered inputs only through the selected generation. The real CLI
+classification tests retain both a checkpointed main header and a generation
+found only in the committed WAL, across all thirteen generations. This rejected
+input recipe survives deletion of the canonical daemon-era migrations and the
+feasibility prototype; it does not define the current Store schema.
+
 `generation-13-populated.sql` is a self-contained text dump of a generation-13
 Store created by the unchanged legacy Rust producer at
 `6e771f265391309733d9aef796056bcabac7f047`, before daemon/job retirement. The

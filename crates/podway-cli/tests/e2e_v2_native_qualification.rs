@@ -1,3 +1,5 @@
+//! Release-profile maintenance hooks must remain disabled in the real CLI.
+
 use std::{
     fs,
     os::unix::fs::PermissionsExt,
@@ -5,119 +7,82 @@ use std::{
     process::{Command, Stdio},
 };
 
-use serde_json::Value;
+use podway_protocol::OutputEnvelopeV4;
+use sha2::{Digest, Sha256};
 
-const REQUIRED_CHECKS: [&str; 13] = [
-    "custom_preview_confirmation",
-    "format_equivalence_restart",
-    "preset_without_digest",
-    "next_suggestions",
-    "detached_replay",
-    "concurrent_stale_fence",
-    "sigkill_recovery",
-    "response_loss_reconciliation",
-    "completed_manual_reactivation",
-    "completed_goal_reactivation",
-    "cancelled_rejection",
-    "endpoint_isolation",
-    "release_public_admission",
-];
-
-fn required_path(variable: &str, executable: bool) -> PathBuf {
-    let path = std::env::var_os(variable)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| panic!("{variable} must be exported by tools/run_e2e.py"));
-    assert!(path.is_absolute(), "{variable} must be absolute: {path:?}");
-    let metadata = fs::metadata(&path)
-        .unwrap_or_else(|error| panic!("{variable} must identify a regular file: {error}"));
-    assert!(
-        metadata.is_file(),
-        "{variable} must identify a regular file"
-    );
-    if executable {
-        assert_ne!(
-            metadata.permissions().mode() & 0o111,
-            0,
-            "{variable} must identify an executable file"
-        );
-    }
-    path
-}
+use super::cli_fixture::{Fixture, GuardedChild, bounded_output};
 
 #[test]
-#[ignore = "run with tools/run_e2e.py so isolated v2 qualification binaries are supplied"]
-fn v2rel003_native_runtime_qualification_emits_complete_compact_evidence() {
-    let qualifier = required_path("PODWAY_V2REL003_QUALIFIER", false);
-    let podway = required_path("PODWAY_V2REL003_CLI", true);
-    let public_daemon = required_path("PODWAYD_TEST_BINARY", true);
-    let debug_daemon = required_path("PODWAY_V2REL003_DAEMON_DEBUG", true);
-    let release_daemon = required_path("PODWAY_V2REL003_DAEMON_RELEASE", true);
-
-    let output = Command::new("python3")
-        .arg(qualifier)
-        .arg("qualify-v2rel003")
-        .arg("--podway")
-        .arg(podway)
-        .arg("--podwayd-public")
-        .arg(public_daemon)
-        .arg("--podwayd-debug")
-        .arg(debug_daemon)
-        .arg("--podwayd-release")
-        .arg(release_daemon)
-        .stdin(Stdio::null())
-        .output()
-        .expect("V2REL-003 native qualifier must launch");
-    assert!(
-        output.status.success(),
-        "native qualifier failed: stdout={} stderr={}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        output.stderr.is_empty(),
-        "successful native qualification must not emit stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = std::str::from_utf8(&output.stdout).expect("qualification evidence must be UTF-8");
-    let compact = stdout.trim_end_matches(['\r', '\n']);
-    assert!(
-        !compact.is_empty(),
-        "qualification evidence must not be empty"
-    );
-    assert!(
-        !compact.contains(['\r', '\n']),
-        "qualification evidence must be exactly one compact JSON line"
-    );
-    let evidence: Value =
-        serde_json::from_str(compact).expect("qualification evidence must be valid JSON");
-    assert_eq!(
-        evidence["schema"],
-        "podway.v2rel003-native-qualification/v1"
-    );
-    assert_eq!(evidence["ok"], true);
-    let checks = evidence["checks"]
-        .as_object()
-        .expect("qualification evidence must contain a checks object");
-    assert!(
-        !checks.is_empty(),
-        "qualification evidence must report checks"
-    );
-    assert_eq!(
-        checks.len(),
-        REQUIRED_CHECKS.len(),
-        "qualification evidence must report exactly the registered checks"
-    );
-    for name in REQUIRED_CHECKS {
-        assert_eq!(
-            checks.get(name),
-            Some(&Value::Bool(true)),
-            "{name} must pass"
-        );
+#[ignore = "run with tools/run_e2e.py to supply the actual release CLI"]
+fn release_binary_ignores_every_debug_maintenance_hook() {
+    let supplied = PathBuf::from(std::env::var_os("PODWAY_RELEASE_TEST_BINARY").unwrap());
+    assert!(supplied.is_absolute());
+    assert!(fs::symlink_metadata(&supplied).unwrap().is_file());
+    let original = Sha256::digest(fs::read(&supplied).unwrap());
+    let fixture = Fixture::new();
+    let binary = fixture.0.join("podway-release");
+    fs::copy(&supplied, &binary).unwrap();
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o500)).unwrap();
+    assert_eq!(Sha256::digest(fs::read(&binary).unwrap()), original);
+    for stage in [
+        "lease-acquired",
+        "intent-published",
+        "marker-published",
+        "runtime-cleared",
+        "phase-advanced",
+        "before-final-removal",
+        "after-first-removal-marker",
+        "after-last-removal-marker",
+        "directories-removed",
+    ] {
+        let invoke = |arguments: &[&str]| {
+            let child = Command::new(&binary)
+                .arg("--json")
+                .args(arguments)
+                .current_dir(&fixture.0)
+                .env_remove("HOME")
+                .env_remove("XDG_CONFIG_HOME")
+                .env(
+                    "PODWAY_TEST_DIRECT_MAINTENANCE_TOKEN",
+                    "podway-direct-maintenance-test-v1",
+                )
+                .env("PODWAY_TEST_DIRECT_MAINTENANCE_PAUSE", stage)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let output = bounded_output(GuardedChild::new(child), arguments);
+            assert_eq!(output.status.code(), Some(0), "{stage}: {output:?}");
+            assert!(output.stderr.is_empty(), "{stage}: {output:?}");
+            serde_json::from_slice::<OutputEnvelopeV4>(&output.stdout)
+                .unwrap()
+                .into_value()
+        };
+        let initialized = invoke(&["init", "--idempotency-key", &format!("init-{stage}")]);
+        let reset = invoke(&[
+            "reset",
+            "--all",
+            "--yes",
+            "--idempotency-key",
+            &format!("reset-{stage}"),
+        ]);
+        assert_eq!(reset["result"]["reset"], true);
+        assert_ne!(initialized["workspace"]["uuid"], reset["workspace"]["uuid"]);
+        let removed = invoke(&[
+            "workspace",
+            "remove",
+            "--force",
+            "--yes",
+            "--if-workspace-uuid",
+            reset["workspace"]["uuid"].as_str().unwrap(),
+            "--idempotency-key",
+            &format!("remove-{stage}"),
+        ]);
+        assert_eq!(removed["command"], "workspace.remove");
+        assert!(!fixture.0.join(".podway").exists());
+        assert!(fixture.0.join(".git").is_dir());
     }
-    assert_eq!(
-        serde_json::to_string(&evidence).expect("qualification evidence must re-encode"),
-        compact,
-        "qualification evidence must use the canonical compact representation"
-    );
+    assert_eq!(Sha256::digest(fs::read(&binary).unwrap()), original);
+    assert_eq!(Sha256::digest(fs::read(&supplied).unwrap()), original);
 }

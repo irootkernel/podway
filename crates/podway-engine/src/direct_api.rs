@@ -1,14 +1,19 @@
 //! Typed in-process request boundary shared by CLI and programmatic callers.
 
-use std::time::Instant;
+use std::{sync::Arc, time::Instant};
 
 use podway_core::{Revision, SessionId, WorkspaceId};
-use podway_git::{GitResolverContractV1, WorktreeSelectorV1};
+use podway_git::GitResolverContractV1;
+pub use podway_git::{
+    DiagnosticPathDisplayV1, LosslessPathV1, NativeGitResolverV1, WORKTREE_SELECTOR_VERSION_V1,
+    WorktreeSelectorV1,
+};
 use podway_protocol::{
     CommandNameV1, DelegationAcceptV1, ErrorEnvelopeV2, ItemRecordManyV1, OutputEnvelopeV4,
     ProcedureV2MutationCommandV1, ProtocolError, RequestIdV1, Rfc3339MillisV1,
 };
-use podway_store::{IdempotencyKeyV1, direct_store::DirectStoreErrorV1};
+pub use podway_store::IdempotencyKeyV1;
+use podway_store::direct_store::DirectStoreErrorV1;
 
 use crate::{
     direct_delegation::{DirectDelegationRequestV1, accept_delegation_v1},
@@ -161,7 +166,7 @@ pub fn execute_direct_v1<R: GitResolverContractV1>(
     clock: &impl ExecutionClockV1,
     ids: &impl DirectIdSourceV1,
 ) -> Result<DirectResponseV1, ProtocolError> {
-    execute_direct_inner_v1(resolver, request, clock, ids, None)
+    execute_direct_inner_v1(resolver, request, clock, ids, None, None)
 }
 
 /// Observe original typed failures and any failed recovery observation without changing dispatch.
@@ -173,7 +178,30 @@ pub fn execute_direct_with_error_observer_v1<R: GitResolverContractV1>(
     ids: &impl DirectIdSourceV1,
     observer: impl Fn(&DirectExecutionErrorV1),
 ) -> Result<DirectResponseV1, ProtocolError> {
-    execute_direct_inner_v1(resolver, request, clock, ids, Some(&observer))
+    execute_direct_inner_v1(resolver, request, clock, ids, Some(&observer), None)
+}
+
+type MaintenanceObserver =
+    Arc<dyn Fn(crate::direct_maintenance::DirectMaintenanceBoundaryV1) + Send + Sync>;
+
+/// Isolated debug-binary qualification observes the same maintenance boundaries as Engine tests.
+#[cfg(debug_assertions)]
+#[doc(hidden)]
+pub fn execute_direct_with_maintenance_observer_v1<R: GitResolverContractV1>(
+    resolver: &DirectWorkspaceResolverV1<R>,
+    request: DirectRequestV1,
+    clock: &impl ExecutionClockV1,
+    ids: &impl DirectIdSourceV1,
+    observer: impl Fn(crate::direct_maintenance::DirectMaintenanceBoundaryV1) + Send + Sync + 'static,
+) -> Result<DirectResponseV1, ProtocolError> {
+    execute_direct_inner_v1(
+        resolver,
+        request,
+        clock,
+        ids,
+        None,
+        Some(Arc::new(observer)),
+    )
 }
 
 fn execute_direct_inner_v1<R: GitResolverContractV1>(
@@ -182,6 +210,7 @@ fn execute_direct_inner_v1<R: GitResolverContractV1>(
     clock: &impl ExecutionClockV1,
     ids: &impl DirectIdSourceV1,
     observer: Option<&dyn Fn(&DirectExecutionErrorV1)>,
+    maintenance_observer: Option<MaintenanceObserver>,
 ) -> Result<DirectResponseV1, ProtocolError> {
     let mut context = DirectErrorContextV1 {
         request_id: request.request_id.clone(),
@@ -193,7 +222,7 @@ fn execute_direct_inner_v1<R: GitResolverContractV1>(
         maintenance: None,
     };
     let selector = request.selector.clone();
-    let result = dispatch(resolver, request, clock, ids);
+    let result = dispatch(resolver, request, clock, ids, maintenance_observer);
     match result {
         Ok(output) => Ok(DirectResponseV1::Success(output)),
         Err(mut error) => {
@@ -269,7 +298,16 @@ fn observe_maintenance<R: GitResolverContractV1>(
     resolver.revalidate_candidate(&worktree)?;
     Ok(match value["command"].as_str() {
         Some("workspace.reset_all") => Some(DirectMaintenanceRecoveryV1::Reset { key }),
-        Some("workspace.remove") => Some(DirectMaintenanceRecoveryV1::Removal { key }),
+        Some("workspace.remove") => Some(DirectMaintenanceRecoveryV1::Removal {
+            key,
+            workspace: WorkspaceId::new(
+                value["workspace_uuid"]
+                    .as_str()
+                    .ok_or(DirectStoreErrorV1::Unreadable)?
+                    .to_owned(),
+            )
+            .map_err(|_| DirectStoreErrorV1::Unreadable)?,
+        }),
         // Init and predecessor intents use the canonical diagnostic recipe. They
         // are never resumed by observing them or by another command.
         _ => None,
@@ -281,6 +319,7 @@ fn dispatch<R: GitResolverContractV1>(
     request: DirectRequestV1,
     clock: &impl ExecutionClockV1,
     ids: &impl DirectIdSourceV1,
+    maintenance_observer: Option<MaintenanceObserver>,
 ) -> Result<OutputEnvelopeV4, DirectExecutionErrorV1> {
     let key = || {
         request.idempotency_key.clone().ok_or_else(|| {
@@ -431,9 +470,8 @@ fn dispatch<R: GitResolverContractV1>(
             },
             clock,
         ),
-        DirectCommandV1::WorkspaceResetAll { confirmed } => reset_all_v1(
-            resolver,
-            DirectMaintenanceRequestV1 {
+        DirectCommandV1::WorkspaceResetAll { confirmed } => {
+            let input = DirectMaintenanceRequestV1 {
                 key: key()?,
                 request_id: request.request_id,
                 selector: request.selector,
@@ -441,14 +479,25 @@ fn dispatch<R: GitResolverContractV1>(
                 confirmed,
                 force: false,
                 deadline: request.deadline,
-            },
-            clock,
-            ids,
-        )
-        .map_err(DirectExecutionErrorV1::Maintenance),
-        DirectCommandV1::WorkspaceRemove { confirmed, force } => remove_workspace_v1(
-            resolver,
-            DirectMaintenanceRequestV1 {
+            };
+            match maintenance_observer {
+                Some(observer) => {
+                    let lease_observer = observer.clone();
+                    crate::direct_maintenance::reset_all_with_lease_observers_v1(
+                        resolver,
+                        input,
+                        clock,
+                        ids,
+                        move |boundary| observer(boundary),
+                        move |boundary, _, _| lease_observer(boundary),
+                    )
+                }
+                None => reset_all_v1(resolver, input, clock, ids),
+            }
+            .map_err(DirectExecutionErrorV1::Maintenance)
+        }
+        DirectCommandV1::WorkspaceRemove { confirmed, force } => {
+            let input = DirectMaintenanceRequestV1 {
                 key: key()?,
                 request_id: request.request_id,
                 selector: request.selector,
@@ -456,9 +505,21 @@ fn dispatch<R: GitResolverContractV1>(
                 confirmed,
                 force,
                 deadline: request.deadline,
-            },
-            clock,
-        )
-        .map_err(DirectExecutionErrorV1::Maintenance),
+            };
+            match maintenance_observer {
+                Some(observer) => {
+                    let lease_observer = observer.clone();
+                    crate::direct_maintenance::remove_workspace_with_lease_observers_v1(
+                        resolver,
+                        input,
+                        clock,
+                        move |boundary| observer(boundary),
+                        move |boundary, _, _| lease_observer(boundary),
+                    )
+                }
+                None => remove_workspace_v1(resolver, input, clock),
+            }
+            .map_err(DirectExecutionErrorV1::Maintenance)
+        }
     }
 }

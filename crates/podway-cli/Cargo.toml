@@ -13,7 +13,7 @@ podway-core = { path = "../podway-core" }
 podway-protocol = { path = "../podway-protocol" }
 podway-config = { path = "../podway-config" }
 podway-presets = { path = "../podway-presets" }
-podway-service = { path = "../podway-service" }
+podway-engine = { path = "../podway-engine" }
 clap = { workspace = true }
 nix = { workspace = true }
 serde = { workspace = true }
@@ -21,6 +21,7 @@ serde_json = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+rusqlite = { workspace = true }
 sha2 = { workspace = true }
 
 [[bin]]
@@ -30,10 +31,6 @@ path = "src/main.rs"
 [[test]]
 name = "arch_phase0_contract"
 path = "tests/arch_phase0_contract.rs"
-
-[[test]]
-name = "int_suite"
-path = "tests/int_suite.rs"
 
 [[test]]
 name = "e2e_suite"

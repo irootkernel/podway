@@ -1210,7 +1210,7 @@ fn sigkill_at_each_transaction_boundary_preserves_effect_once_recovery() {
 
 #[test]
 fn every_legacy_generation_and_marker_is_classified_without_changing_files() {
-    use podway_store::test_support::v2dfc001::{LegacyHeaderV1, write_legacy_store_v1};
+    use podway_store::test_support::legacy_fixture::{LegacyHeaderV1, write_legacy_store_v1};
     for generation in 1..=13 {
         for header in [LegacyHeaderV1::Checkpointed, LegacyHeaderV1::WalOnly] {
             let root = TempDir::new().unwrap();
@@ -1221,7 +1221,6 @@ fn every_legacy_generation_and_marker_is_classified_without_changing_files() {
                 &store.layout().runtime_directory(),
                 generation,
                 header,
-                None,
             )
             .unwrap();
             let before = images(&store.layout().runtime_directory());

@@ -152,7 +152,7 @@ def validator_result(podway: Path, staged: Path) -> dict[str, Any]:
         envelope = json.loads(completed.stdout.decode("utf-8"), object_pairs_hook=object_no_duplicates)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         fail(f"podway validator did not return valid JSON: {error}")
-    if not isinstance(envelope, dict) or envelope.get("schema") != "podway.output/v3" or envelope.get("command") != "procedure.validate":
+    if not isinstance(envelope, dict) or envelope.get("schema") != "podway.output/v4" or envelope.get("command") != "procedure.validate":
         fail("podway validator returned an unexpected envelope")
     result = envelope.get("result")
     if not isinstance(result, dict):

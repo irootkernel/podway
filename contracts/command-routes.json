@@ -1,5 +1,5 @@
 {
-  "contract_version": "podway.command-routes/v1",
+  "contract_version": "podway.command-routes/v2",
   "owner": "architecture",
   "prohibited_capabilities": [
     "command_runner",
@@ -72,419 +72,291 @@
       "capabilities": []
     },
     {
-      "command": "daemon.install",
-      "availability": "executable",
-      "owner": "podway-service",
-      "path": ["podway-cli", "podway-service"],
-      "execution": "service_lifecycle",
-      "capabilities": []
-    },
-    {
-      "command": "daemon.uninstall",
-      "availability": "executable",
-      "owner": "podway-service",
-      "path": ["podway-cli", "podway-service"],
-      "execution": "service_lifecycle",
-      "capabilities": []
-    },
-    {
-      "command": "daemon.start",
-      "availability": "executable",
-      "owner": "podway-service",
-      "path": ["podway-cli", "podway-service"],
-      "execution": "service_lifecycle",
-      "capabilities": []
-    },
-    {
-      "command": "daemon.stop",
-      "availability": "executable",
-      "owner": "podway-service",
-      "path": ["podway-cli", "podway-service"],
-      "execution": "service_lifecycle",
-      "capabilities": []
-    },
-    {
-      "command": "daemon.restart",
-      "availability": "executable",
-      "owner": "podway-service",
-      "path": ["podway-cli", "podway-service"],
-      "execution": "service_lifecycle",
-      "capabilities": []
-    },
-    {
-      "command": "daemon.status",
-      "availability": "executable",
-      "owner": "podway-service",
-      "path": ["podway-cli", "podway-service"],
-      "execution": "service_lifecycle",
-      "capabilities": []
-    },
-    {
-      "command": "daemon.wait-ready",
-      "availability": "executable",
-      "owner": "podway-service",
-      "path": ["podway-cli", "podway-service"],
-      "execution": "service_lifecycle",
-      "capabilities": []
-    },
-    {
-      "command": "daemon.terminate",
-      "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
-      "capabilities": []
-    },
-    {
-      "command": "daemon.logs",
-      "availability": "executable",
-      "owner": "podway-service",
-      "path": ["podway-cli", "podway-service"],
-      "execution": "service_lifecycle",
-      "capabilities": []
-    },
-    {
       "command": "workspace.init",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "workspace.doctor",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "workspace.show",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "workspace.repair",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "workspace.remove",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
-      "capabilities": []
-    },
-    {
-      "command": "workspace.mode.plan",
-      "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
-      "capabilities": []
-    },
-    {
-      "command": "workspace.mode.apply",
-      "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "session.start",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "session.start_replace",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "session.begin",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "session.status",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "session.next",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "session.observe",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "evidence.read",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "delegation.package",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "delegation.accept",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "delegation.receipt",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "session.complete",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "session.skip",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "session.retry",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "session.block",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "session.unblock",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "session.cancel",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "session.reset",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "session.archive",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "session.archive_list",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "session.archive_show",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "session.archive_purge",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "session.terminal_disposition",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "workspace.reset_all",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "item.check",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "item.uncheck",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "item.set",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "item.add",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "item.remove",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "item.attach",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "item.clear",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "item.record_many",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
-      "capabilities": []
-    },
-    {
-      "command": "job.list",
-      "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
-      "capabilities": []
-    },
-    {
-      "command": "job.lookup",
-      "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
-      "capabilities": []
-    },
-    {
-      "command": "job.status",
-      "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
-      "capabilities": []
-    },
-    {
-      "command": "job.wait",
-      "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
-      "capabilities": []
-    },
-    {
-      "command": "job.cancel",
-      "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
@@ -546,70 +418,46 @@
     {
       "command": "session.decide",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "session.rework",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "goal.define",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "goal.revise",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "goal.assess_criterion",
       "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
-      "capabilities": []
-    },
-    {
-      "command": "runtime.reset.plan",
-      "availability": "executable",
-      "owner": "podway-service",
-      "path": ["podway-cli", "podway-service"],
-      "execution": "service_lifecycle",
-      "capabilities": []
-    },
-    {
-      "command": "runtime.reset.apply",
-      "availability": "executable",
-      "owner": "podway-service",
-      "path": ["podway-cli", "podway-service"],
-      "execution": "service_lifecycle",
-      "capabilities": []
-    },
-    {
-      "command": "daemon.runtime_reset",
-      "availability": "executable",
-      "owner": "podway-daemon",
-      "path": ["podway-cli", "podway-protocol", "podway-daemon"],
-      "execution": "daemon",
+      "owner": "podway-engine",
+      "path": ["podway-cli", "podway-engine"],
+      "execution": "direct",
       "capabilities": []
     },
     {
       "command": "outcome.lookup",
-      "availability": "reserved_contract",
+      "availability": "executable",
       "owner": "podway-engine",
       "path": ["podway-cli", "podway-engine"],
       "execution": "direct",

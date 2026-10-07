@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""V2SDG-008 native qualification; the external executor is deterministic, not live."""
+"""Single-binary delegation qualification with a deterministic external executor."""
 
 from __future__ import annotations
 
@@ -7,16 +7,32 @@ import argparse
 from copy import deepcopy
 import hashlib
 import json
+import os
 from pathlib import Path
+import shutil
 import signal
-import sqlite3
 import subprocess
 import sys
 import tempfile
-import time
 import uuid
 
-import dev_runtime as runtime
+
+def bounded_process(argv: list[str], *, cwd: Path | None = None,
+                    payload: bytes | None = None, timeout: int = 30) -> subprocess.CompletedProcess:
+    child = subprocess.Popen(argv, cwd=cwd, env={"PATH": "/usr/bin:/bin"},
+                             stdin=subprocess.PIPE if payload is not None else subprocess.DEVNULL,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+    try:
+        stdout, stderr = child.communicate(payload, timeout=timeout)
+        assert len(stdout) <= 1024 * 1024 + 2 and len(stderr) <= 65536, "bounded child output"
+        return subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)
+    finally:
+        if child.poll() is None:
+            os.killpg(child.pid, signal.SIGKILL)
+        child.wait(timeout=5)
+        for stream in (child.stdin, child.stdout, child.stderr):
+            if stream is not None:
+                stream.close()
 
 
 def digest(value: object) -> str:
@@ -80,61 +96,25 @@ def fixture_process(ledger: Path) -> None:
 
 
 class Fixture:
-    def __init__(self, cli: Path, daemon: Path, root: Path):
-        self.cli, self.daemon, self.root = cli, daemon, root
-        self.account = root / "account"
-        self.home = root / "dev"
-        self.socket = self.home / "run/podwayd.sock"
-        self.process = None
-
-    def environment(self, home: Path | None = None) -> dict[str, str]:
-        chosen = self.home if home is None else home
-        assert chosen.is_absolute() and chosen.is_relative_to(self.root)
-        env = runtime.isolation_environment(self.account, chosen)
-        assert env["PODWAY_DEV_HOME"] == str(chosen)
-        return env
-
-    def start(self) -> None:
-        self.environment()
-        self.process = runtime.start_isolated_daemon(
-            self.daemon, self.account, self.home, cli=self.cli, mode="dev",
-        )
-        status = self.call(self.account, ["daemon", "status"])["result"]
-        assert status["mode"] == "dev", status
-        assert status["effective_socket_path"] == str(self.socket), status
-
-    def stop(self, crash: bool = False) -> None:
-        if self.process is not None:
-            if crash:
-                self.process.send_signal(signal.SIGKILL)
-                self.process.wait(timeout=10)
-            else:
-                runtime.stop_process(self.process)
-                assert self.process.returncode == 0, self.process.returncode
-                assert not self.socket.exists(), "daemon left its socket"
-            assert self.process.poll() is not None
-            if self.process.stderr:
-                self.process.stderr.close()
-            self.process = None
+    def __init__(self, cli: Path, root: Path):
+        self.cli, self.root = cli, root
 
     def call(self, worktree: Path, args: list[str], *, payload: dict | None = None,
-             error: str | None = None, home: Path | None = None) -> dict:
-        local = args[:1] == ["procedure"]
-        selector = [] if local or args[:1] == ["daemon"] else ["--worktree", str(worktree)]
-        mode = [] if local else ["--mode", "dev"]
-        completed = subprocess.run(
-            [str(self.cli), *mode, "--json", *selector, *args],
-            env=self.environment(home), cwd=worktree,
-            input=None if payload is None else json.dumps(payload).encode(),
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30, check=False,
+             error: str | None = None) -> dict:
+        assert worktree.is_relative_to(self.root) and worktree.is_dir()
+        completed = bounded_process(
+            [str(self.cli), "--json", *args], cwd=worktree,
+            payload=None if payload is None else json.dumps(payload).encode(),
         )
-        envelope = runtime.decode_cli_json(completed, label=" ".join(args), expected_code=None)
+        assert not completed.stderr, (args, completed.stderr)
+        envelope = json.loads(completed.stdout)
         if error:
-            assert envelope.get("code") == error, (args, envelope, completed.stderr, error)
-            assert completed.returncode != 0
+            assert envelope.get("schema") == "podway.error/v2", envelope
+            assert envelope.get("code") == error, (args, envelope, error)
+            assert completed.returncode == envelope["exit_code"] != 0
         else:
-            assert completed.returncode == 0, (args, envelope, completed.stderr)
-            assert envelope["schema"] == "podway.output/v3", envelope
+            assert completed.returncode == 0, (args, envelope)
+            assert envelope["schema"] == "podway.output/v4", envelope
         return envelope
 
     def workspace(self, name: str, disposition: str | None = "retain", *, goal: bool = False,
@@ -142,8 +122,8 @@ class Fixture:
         worktree = self.root / name
         worktree.mkdir(mode=0o700)
         subprocess.run(["git", "init", "--quiet", str(worktree)], check=True,
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        self.call(worktree, ["init"])
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+        self.call(worktree, ["init", "--idempotency-key", "init"])
         document = procedure(disposition)
         if goal:
             document["goal_tracking"] = True
@@ -206,7 +186,7 @@ class Fixture:
         return worktree
 
     def observe(self, worktree: Path) -> dict:
-        return self.call(worktree, ["observe", "--wait-for-idle"])
+        return self.call(worktree, ["observe"])
 
     def fences(self, observation: dict, *, attempt: bool = True, item: str | None = None) -> list[str]:
         status = observation["result"]["status"]
@@ -227,12 +207,11 @@ class Fixture:
                                    "--idempotency-key", str(uuid.uuid4())], error=error)
 
     def external(self, worktree: Path, operation: str, **fields: object) -> dict:
-        completed = subprocess.run(
+        completed = bounded_process(
             [sys.executable, str(Path(__file__).resolve()), "--fixture-ledger", str(worktree / "external.json")],
-            input=json.dumps({"operation": operation, **fields}).encode(),
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10, check=True,
-            env={"PATH": "/usr/bin:/bin"},
+            payload=json.dumps({"operation": operation, **fields}).encode(), timeout=10,
         )
+        assert completed.returncode == 0 and not completed.stderr, completed
         return json.loads(completed.stdout)
 
     def acceptance(self, worktree: Path, host: str = "external", disposition: str = "idle",
@@ -266,30 +245,20 @@ class Fixture:
         return observed
 
     def lost(self, worktree: Path, args: list[str], payload: dict | None = None) -> dict:
-        proxy_home = self.root / ("proxy-" + uuid.uuid4().hex[:6])
-        (proxy_home / "run").mkdir(parents=True, mode=0o700)
-        proxy = proxy_home / "run/podwayd.sock"
-        command = "delegation.accept" if payload is not None else "session.complete"
-        relay, outcome = runtime.response_loss_relay(proxy, self.socket, discard_command=command)
-        failure = None
-        try:
-            self.call(worktree, args, payload=payload, home=proxy_home, error="MUTATION_OUTCOME_UNKNOWN")
-        except (AssertionError, runtime.DevRuntimeError) as error:
-            failure = error
-        finally:
-            relay.join(timeout=15)
-            assert not relay.is_alive(), "response-loss relay survived"
-            proxy.unlink(missing_ok=True)
-        assert "error" not in outcome, outcome
-        response = json.loads(outcome["response"][4:])
-        assert failure is None, (str(failure), response)
-        return response
+        # Discard the consumer response and recover only through the durable outcome.
+        completed = bounded_process(
+            [str(self.cli), "--json", *args], cwd=worktree,
+            payload=None if payload is None else json.dumps(payload).encode(),
+        )
+        assert completed.returncode == 0 and not completed.stderr, completed
+        key = payload["idempotency_key"] if payload is not None else args[args.index("--idempotency-key") + 1]
+        lookup = self.call(worktree, ["outcome", "lookup", "--idempotency-key", key])["result"]
+        assert lookup["found"] is True, lookup
+        return lookup["outcome"]["response"]
 
 
 def same_replay(original: dict, replay: dict) -> None:
-    assert {k: v for k, v in original.items() if k != "request_id"} == {
-        k: v for k, v in replay.items() if k != "request_id"
-    }, (original, replay)
+    assert original == replay, (original, replay)
 
 
 def decision_evidence(f: Fixture) -> None:
@@ -363,8 +332,8 @@ def host_matrix(f: Fixture, host: str) -> None:
     f.state(worktree, "stale_acceptance")
     f.mutate(worktree, ["complete"], error="DELEGATION_RECEIPT_STALE")
     same_replay(accepted, f.accept(worktree, payload))
-    lookup = f.call(worktree, ["job", "lookup", "--idempotency-key", payload["idempotency_key"]])["result"]
-    assert lookup["job"]["terminal_response"] == accepted
+    lookup = f.call(worktree, ["outcome", "lookup", "--idempotency-key", payload["idempotency_key"]])["result"]
+    assert lookup["outcome"]["response"] == accepted
     f.state(worktree, "stale_acceptance")
     changed = deepcopy(payload)
     changed["summary"] = "Changed input cannot repair acceptance"
@@ -414,8 +383,8 @@ def documented_example(f: Fixture) -> dict:
     worktree = f.root / "documented-example"
     worktree.mkdir(mode=0o700)
     subprocess.run(["git", "init", "--quiet", str(worktree)], check=True,
-                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    f.call(worktree, ["init"])
+                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+    f.call(worktree, ["init", "--idempotency-key", "init"])
     relative = ".podway/procedures/supervised-review-v2.yaml"
     target = worktree / relative
     target.parent.mkdir(exist_ok=True)
@@ -508,9 +477,7 @@ def recovery(f: Fixture) -> None:
     f.mutate(direct, ["set", "result", "Final output"], item="result")
     f.mutate(direct, ["complete"])
     assert f.observe(direct)["result"]["status"]["session"]["lifecycle"] == "completed"
-    # Crash before receipt submission, then reconcile the same external outcome.
-    f.stop(crash=True)
-    f.start()
+    # A fresh Primary process reconciles the same external outcome before submission.
     f.state(worktree, "awaiting_acceptance")
     reconciled = f.external(worktree, "reconcile")
     assert reconciled["effects"] == state["effects"]
@@ -518,10 +485,8 @@ def recovery(f: Fixture) -> None:
     state = reconciled
     original = f.lost(worktree, ["delegation", "accept", "--stdin"], payload)
     assert original["command"] == "delegation.accept" and "result" in original, original
-    f.stop(crash=True)
-    f.start()
-    lookup = f.call(worktree, ["job", "lookup", "--idempotency-key", payload["idempotency_key"]])["result"]
-    assert lookup["job"]["terminal_response"] == original
+    lookup = f.call(worktree, ["outcome", "lookup", "--idempotency-key", payload["idempotency_key"]])["result"]
+    assert lookup["outcome"]["response"] == original
     f.mutate(worktree, ["set", "note", "Correction after lost response"], item="note")
     same_replay(original, f.accept(worktree, payload))
     f.state(worktree, "stale_acceptance")
@@ -541,128 +506,18 @@ def recovery(f: Fixture) -> None:
     current, external = f.acceptance(ready)
     f.accept(ready, current)
     args = ["complete", *f.fences(f.observe(ready)), "--idempotency-key", "complete-loss"]
-    f.stop(crash=True)
-    f.start()
     f.state(ready, "accepted")
     completed = f.lost(ready, args)
-    f.stop(crash=True)
-    f.start()
-    lookup = f.call(ready, ["job", "lookup", "--idempotency-key", "complete-loss"])["result"]
-    assert lookup["job"]["terminal_response"] == completed
+    lookup = f.call(ready, ["outcome", "lookup", "--idempotency-key", "complete-loss"])["result"]
+    assert lookup["outcome"]["response"] == completed
     same_replay(completed, f.call(ready, args))
     assert f.observe(ready)["result"]["status"]["session"]["lifecycle"] == "completed"
     assert f.external(ready, "inspect") == external
 
-    admitted = f.workspace("admitted-crash")
-    receipt_input, external = f.acceptance(admitted)
-    unchanged = f.observe(admitted)["result"]["status"]["session"]
-    admission = f.call(admitted, ["delegation", "accept", "--stdin", "--detach"],
-                       payload=receipt_input)["result"]["admission"]
-    # Kill after durable admission: execution may be pending or already committed.
-    f.stop(crash=True)
-    f.start()
-    f.call(admitted, ["job", "wait", admission["job_id"]])
-    recovered = f.state(admitted, "accepted")["result"]["status"]["session"]
-    assert recovered["revision"] == unchanged["revision"] + 1
-    lookup = f.call(admitted, ["job", "lookup", "--idempotency-key", receipt_input["idempotency_key"]])["result"]
-    assert lookup["job"]["state"] == "succeeded"
-    assert lookup["job"]["id"] == admission["job_id"]
-    same_replay(lookup["job"]["terminal_response"], f.accept(admitted, receipt_input))
-    assert f.external(admitted, "inspect") == external
-    f.mutate(admitted, ["complete"])
-
-
-def graph_rows(connection: sqlite3.Connection) -> dict:
-    tables = [row[0] for row in connection.execute(
-        "SELECT name FROM sqlite_schema WHERE type='table' AND name GLOB 'v2_*' "
-        "AND name != 'v2_delegation_receipts' ORDER BY name"
-    )]
-    return {table: sorted(connection.execute(f'SELECT * FROM "{table}"').fetchall(), key=repr)
-            for table in tables}
-
 
 def terminate_qualification(signum: int, _frame: object) -> None:
-    # Unwind the owning fixture's finally block when a runner terminates this helper.
+    # Unwind bounded child cleanup and the owning temporary directory.
     raise SystemExit(128 + signum)
-
-
-def migration(f: Fixture) -> None:
-    worktree = f.workspace("migration", None)
-    direct = f.workspace("migration-control", None)
-    before = f.observe(worktree)["result"]["status"]
-    f.stop()
-    database = worktree / ".podway/runtime/state.sqlite3"
-    assert database.is_file(), database
-    with sqlite3.connect(database) as connection:
-        snapshot = graph_rows(connection)
-        connection.executescript("""
-            DROP TRIGGER v2_delegation_receipts_immutable;
-            DROP TABLE v2_delegation_receipts;
-            DELETE FROM schema_migrations WHERE version IN (12, 13);
-            PRAGMA user_version = 11;
-        """)
-        backup = f.root / "v11-backup.sqlite3"
-        with sqlite3.connect(backup) as target:
-            connection.backup(target)
-    # Hold the writer boundary so native startup cannot finish the pending upgrade.
-    # Interior transaction rollback is checked separately by the injected SQL failure.
-    with sqlite3.connect(database) as lock:
-        lock.execute("BEGIN IMMEDIATE")
-        f.process = subprocess.Popen(
-            [str(f.daemon), "--mode", "dev"], cwd=f.account, env=f.environment(),
-            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-        )
-        identity = runtime.daemon_contract_identity(f.cli, f.account, f.home)
-        deadline = time.monotonic() + 10
-        recovering = False
-        while time.monotonic() < deadline:
-            if runtime.endpoint_is_live(f.socket):
-                recovering = runtime.probe_daemon_readiness(f.socket, identity, expected_mode="dev") == "recovering"
-                if recovering:
-                    break
-            time.sleep(0.01)
-        assert recovering, "daemon did not expose recovery while the migration writer was held"
-        f.stop(crash=True)
-        lock.rollback()
-        assert lock.execute("PRAGMA user_version").fetchone()[0] == 11
-        assert graph_rows(lock) == snapshot
-    with sqlite3.connect(database) as connection:
-        # Fail the migration transaction after v12 DDL, before recording v13.
-        connection.executescript("""
-            CREATE TRIGGER qualification_migration_failure BEFORE INSERT ON schema_migrations
-            WHEN NEW.version = 13 BEGIN SELECT RAISE(ABORT, 'qualification migration failure'); END;
-        """)
-    f.start()
-    f.call(worktree, ["status"], error="WORKSPACE_STATE_UNREADABLE")
-    f.mutate(direct, ["retry", "--reason", "Progress while another Store cannot migrate"])
-    f.mutate(direct, ["set", "result", "Unaffected Direct work"], item="result")
-    f.mutate(direct, ["complete"])
-    f.stop()
-    with sqlite3.connect(database) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 11
-        assert connection.execute("SELECT count(*) FROM sqlite_schema WHERE name='v2_delegation_receipts'").fetchone()[0] == 0
-        assert graph_rows(connection) == snapshot
-        connection.execute("DROP TRIGGER qualification_migration_failure")
-    f.start()
-    after = f.observe(worktree)["result"]["status"]
-    assert after["session"] == before["session"] and after["current"] == before["current"]
-    f.stop()
-    with sqlite3.connect(database) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 13
-        assert graph_rows(connection) == snapshot
-        connection.execute("PRAGMA user_version = 14")
-    f.start()
-    f.call(worktree, ["status"], error="WORKSPACE_SCHEMA_UNSUPPORTED")
-    f.stop()
-    with sqlite3.connect(database) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 14
-    # Restore only this stopped, helper-owned fixture from the populated v11 backup.
-    with sqlite3.connect(backup) as source, sqlite3.connect(database) as target:
-        source.backup(target)
-    f.start()
-    assert f.observe(worktree)["result"]["status"]["session"] == before["session"]
-    f.mutate(worktree, ["complete"])
-    assert f.observe(worktree)["result"]["status"]["session"]["lifecycle"] == "completed"
 
 
 def main() -> None:
@@ -670,51 +525,51 @@ def main() -> None:
         raise RuntimeError("qualification requires Python assertions to be enabled")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--podway", type=Path)
-    parser.add_argument("--podwayd", type=Path)
     parser.add_argument("--fixture-ledger", type=Path)
-    parser.add_argument("--scenario", choices=("all", "example", "hosts", "recovery", "migration"), default="all")
+    parser.add_argument("--scenario", choices=("all", "example", "hosts", "recovery"), default="all")
     args = parser.parse_args()
     if args.fixture_ledger:
         fixture_process(args.fixture_ledger)
         return
     signal.signal(signal.SIGTERM, terminate_qualification)
-    assert args.podway and args.podwayd, "both native binaries are required"
-    cli = runtime.require_qualification_binary(str(args.podway.resolve()), label="podway")
-    daemon = runtime.require_qualification_binary(str(args.podwayd.resolve()), label="podwayd")
-    for binary in (cli, daemon):
-        assert runtime.release_archive.test_isolation_capability(binary) is \
-            runtime.release_archive.TestIsolationCapability.ENABLED, "test isolation is required before launch"
-    binaries = {name: runtime.release_archive.sha256_file(path)
-                for name, path in (("podway", cli), ("podwayd", daemon))}
+    assert args.podway, "the native CLI is required"
+    supplied = args.podway.absolute()
+    assert supplied.is_absolute() and not supplied.is_symlink() and supplied.is_file()
+    original_digest = hashlib.sha256(supplied.read_bytes()).hexdigest()
     checks = {}
     example = None
-    with tempfile.TemporaryDirectory(prefix="pw-sdg-", dir="/private/tmp") as directory:
-        f = Fixture(cli, daemon, Path(directory))
-        try:
-            f.start()
-            identity = runtime.daemon_contract_identity(cli, f.account, f.home)
-            if args.scenario in ("all", "example"):
-                example = documented_example(f)
-                checks["example"] = True
-            if args.scenario in ("all", "hosts"):
-                for host in ("external", "managed"):
-                    host_matrix(f, host)
-                    checks[host] = True
-                decision_evidence(f)
-                checks["decision_evidence"] = True
-            if args.scenario in ("all", "recovery"):
-                recovery(f)
-                checks["recovery"] = True
-            if args.scenario in ("all", "migration"):
-                migration(f)
-                checks["migration"] = True
-        finally:
-            f.stop()
-        assert not f.socket.exists()
-    assert binaries == {name: runtime.release_archive.sha256_file(path)
-                        for name, path in (("podway", cli), ("podwayd", daemon))}
-    print(json.dumps({"schema": "podway.v2sdg008-qualification/v1", "checks": checks,
-                      "binaries": binaries, "contract_identity": identity, "example": example,
+    with tempfile.TemporaryDirectory(prefix="pw-sdg-", dir=tempfile.gettempdir()) as directory:
+        root = Path(directory)
+        cli = root / "podway"
+        shutil.copy2(supplied, cli)
+        cli.chmod(0o500)
+        assert hashlib.sha256(cli.read_bytes()).hexdigest() == original_digest
+        f = Fixture(cli, root)
+        identity_output = bounded_process([str(cli), "version", "--json", "--identity"], cwd=root)
+        assert identity_output.returncode == 0 and not identity_output.stderr
+        identity_envelope = json.loads(identity_output.stdout)
+        identity = identity_envelope["result"]
+        # V2DFC-009 owns release identity generation 2; only that endpoint retains output 3 meanwhile.
+        assert (identity_envelope["schema"], identity["schema"]) in {
+            ("podway.output/v3", "podway.version-result/v1"),
+            ("podway.output/v4", "podway.version-result/v2"),
+        }
+        if args.scenario in ("all", "example"):
+            example = documented_example(f)
+            checks["example"] = True
+        if args.scenario in ("all", "hosts"):
+            for host in ("external", "managed"):
+                host_matrix(f, host)
+                checks[host] = True
+            decision_evidence(f)
+            checks["decision_evidence"] = True
+        if args.scenario in ("all", "recovery"):
+            recovery(f)
+            checks["recovery"] = True
+        assert hashlib.sha256(cli.read_bytes()).hexdigest() == original_digest
+    assert hashlib.sha256(supplied.read_bytes()).hexdigest() == original_digest
+    print(json.dumps({"schema": "podway.direct-delegation-qualification/v2", "checks": checks,
+                      "binaries": {"podway": original_digest}, "contract_identity": identity, "example": example,
                       "runtime_cleanup": True, "live_adapter": "not_performed",
                       "live_model": "not_performed"}, sort_keys=True, separators=(",", ":")))
 

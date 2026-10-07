@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build Podway binaries and run all or one exact binary-backed end-to-end test."""
+"""Build the single Podway CLI in both profiles and run binary-backed E2E tests."""
 
 from __future__ import annotations
 
@@ -49,80 +49,17 @@ def main() -> int:
         help="run one exact binary-backed E2E test after building the product binaries",
     )
     arguments = parser.parse_args()
-    run(
-        [
-            "cargo",
-            "build",
-            "--locked",
-            "-p",
-            "podway-cli",
-            "--bin",
-            "podway",
-            "-p",
-            "podway-daemon",
-            "--bin",
-            "podwayd",
-        ]
-    )
+    run(["cargo", "build", "--locked", "-p", "podway-cli", "--bin", "podway"])
+    run(["cargo", "build", "--locked", "--release", "-p", "podway-cli", "--bin", "podway"])
     target = cargo_target_directory()
     podway = (target / "debug" / "podway").resolve()
-    podwayd = (target / "debug" / "podwayd").resolve()
-    if not podway.is_file() or not podwayd.is_file():
-        raise SystemExit("cargo build did not produce both Podway binaries")
-    # macOS validates a newly built executable on its first launch and serializes that
-    # validation machine-wide, so a busy machine can stall a first exec beyond the
-    # bounded daemon-install windows. One launch per binary absorbs that cost before
-    # any test pays it inside a bounded window.
-    run([str(podway), "version"])
-    run([str(podwayd), "version"])
-
-    v2rel003_debug_target = target / "e2e-v2rel003-development"
-    run(
-        [
-            "cargo",
-            "build",
-            "--locked",
-            "-p",
-            "podway-daemon",
-            "--bin",
-            "podwayd",
-            "--features",
-            "development-v2-admission",
-            "--target-dir",
-            str(v2rel003_debug_target),
-        ]
-    )
-    v2rel003_debug_daemon = (v2rel003_debug_target / "debug" / "podwayd").resolve()
-
-    v2rel003_release_target = target / "e2e-v2rel003-release"
-    run(
-        [
-            "cargo",
-            "build",
-            "--locked",
-            "--release",
-            "-p",
-            "podway-daemon",
-            "--bin",
-            "podwayd",
-            "--features",
-            "development-v2-admission",
-            "--target-dir",
-            str(v2rel003_release_target),
-        ]
-    )
-    v2rel003_release_daemon = (v2rel003_release_target / "release" / "podwayd").resolve()
-    for binary in (v2rel003_debug_daemon, v2rel003_release_daemon):
+    release_podway = (target / "release" / "podway").resolve()
+    for binary in (podway, release_podway):
         if not binary.is_file():
-            raise SystemExit(f"cargo build did not produce expected Podway daemon: {binary}")
+            raise SystemExit(f"cargo build did not produce expected Podway CLI: {binary}")
         run([str(binary), "version"])
-
     environment = os.environ.copy()
-    environment["PODWAYD_TEST_BINARY"] = str(podwayd)
-    environment["PODWAY_V2REL003_CLI"] = str(podway)
-    environment["PODWAY_V2REL003_DAEMON_DEBUG"] = str(v2rel003_debug_daemon)
-    environment["PODWAY_V2REL003_DAEMON_RELEASE"] = str(v2rel003_release_daemon)
-    environment["PODWAY_V2REL003_QUALIFIER"] = str((ROOT / "tools" / "dev_runtime.py").resolve())
+    environment["PODWAY_RELEASE_TEST_BINARY"] = str(release_podway)
     if arguments.exact_test is None:
         test_command = [
             "cargo",
@@ -157,9 +94,7 @@ def main() -> int:
             {
                 "binaries": {
                     "podway": str(podway),
-                    "podwayd": str(podwayd),
-                    "podwayd_v2rel003_debug": str(v2rel003_debug_daemon),
-                    "podwayd_v2rel003_release": str(v2rel003_release_daemon),
+                    "podway_release": str(release_podway),
                 },
                 "mode": "e2e",
                 "ok": True,

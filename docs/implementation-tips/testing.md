@@ -8,8 +8,7 @@ make test-rust      # unit, architecture, and integration tests
 make test-unit      # focused library and binary tests
 make test-int       # focused component integration tests
 make test-fuzzing   # bounded deterministic protocol fuzzing
-make test-e2e       # real user journeys through debug product binaries
-make dev-runtime-test # isolated contributor runtime self-test
+make test-e2e       # real user journeys through the debug CLI
 make test           # required development gate
 make dist           # complete gate, qualification, handoff, and final verification
 ```
@@ -49,18 +48,22 @@ cargo test -p <package> --test int_suite <source>::<function> -- --exact
 CLI E2E sources use `e2e_suite`. The test-layout verifier rejects sources omitted
 from or duplicated across aggregate suites.
 
+## Isolated direct CLI checks
+
+The E2E runner builds the CLI once and uses disposable Git worktrees. Native
+tests verify direct mutations, outcome lookup, contention, legacy refusal,
+maintenance recovery, delegation, and goal flows. These fixtures never select
+the user's active worktree or installed service as a test target.
+
+The former contributor daemon helper and `dev-runtime-test` target are retired.
+Use registered direct CLI cases through `make test-e2e-exact` or the complete
+`make test-e2e` suite. A fixture's synthetic delegation provenance proves local
+protocol behavior, not a live executor integration.
+
 ## Optional diagnostics
 
-- `python3 tools/dev_runtime.py self-test` exercises the implemented `sw-dev-v2`
-  workflow in isolated disposable state; the broader development gate also
-  verifies every shipped v2 preset identity and the contributor-only admission
-  override independently of public release admission.
 - The pinned fuzz targets cover canonical JSON, selectors, response decoding,
-  and Procedure v2 parsing.
-
-For an isolated contributor daemon and disposable sandbox that does not hold the
-production singleton lock, use the
-[contributor development runtime](dev-runtime.md).
+  and Procedure v2 parsing; V2DFC-008 owns the remaining decoder retargeting.
 
 Optional diagnostics provide investigation support; they do not replace
 `make test` as the development gate or `make dist` as the release gate. See the normative [testing and conformance
