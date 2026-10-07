@@ -10,7 +10,7 @@ use std::{
 
 use nix::fcntl::OFlag;
 
-use super::classification::{classify_direct_store_v1, maintenance_marked};
+use super::classification::{classify_direct_store_with_missing_observer_v1, maintenance_marked};
 use super::{
     DirectStoreClassificationV1, DirectStoreErrorV1, DirectStoreResultV1, DirectWorkspaceLayoutV1,
 };
@@ -29,14 +29,24 @@ impl DirectOpenLease {
     pub(super) fn acquire(
         layout: &DirectWorkspaceLayoutV1,
         deadline: Instant,
+        missing: &mut dyn FnMut(),
     ) -> DirectStoreResultV1<Self> {
-        let shared = SharedMaintenanceLeaseV1::acquire(layout, deadline)?;
+        let shared =
+            SharedMaintenanceLeaseV1::acquire_with_missing_observer(layout, deadline, missing)?;
         if super::classification::path_exists(&layout.shm())? {
             return Ok(Self::Shared(shared));
         }
         drop(shared);
-        let exclusive = ExclusiveMaintenanceLeaseV1::acquire(layout, deadline, false)?;
-        classify_direct_store_v1(layout)?.require_current()?;
+        let exclusive = match ExclusiveMaintenanceLeaseV1::acquire(layout, deadline, false) {
+            Ok(lease) => lease,
+            Err(DirectStoreErrorV1::NotInitialized) => {
+                classify_direct_store_with_missing_observer_v1(layout, missing)?
+                    .require_current()?;
+                return Err(DirectStoreErrorV1::Maintenance);
+            }
+            Err(error) => return Err(error),
+        };
+        classify_direct_store_with_missing_observer_v1(layout, missing)?.require_current()?;
         Ok(Self::Cold(exclusive))
     }
 
@@ -71,7 +81,15 @@ impl SharedMaintenanceLeaseV1 {
         layout: &DirectWorkspaceLayoutV1,
         deadline: Instant,
     ) -> DirectStoreResultV1<Self> {
-        classify_direct_store_v1(layout)?.require_current()?;
+        Self::acquire_with_missing_observer(layout, deadline, &mut || {})
+    }
+
+    fn acquire_with_missing_observer(
+        layout: &DirectWorkspaceLayoutV1,
+        deadline: Instant,
+        missing: &mut dyn FnMut(),
+    ) -> DirectStoreResultV1<Self> {
+        classify_direct_store_with_missing_observer_v1(layout, missing)?.require_current()?;
         loop {
             check_deadline(deadline)?;
             if maintenance_marked(layout)? {
@@ -80,7 +98,7 @@ impl SharedMaintenanceLeaseV1 {
             let podway = match open_directory(&layout.podway_directory()) {
                 Ok(file) => file,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                    retry_missing(layout, deadline)?;
+                    retry_missing(layout, deadline, missing)?;
                     continue;
                 }
                 Err(error) => return Err(error.into()),
@@ -88,7 +106,7 @@ impl SharedMaintenanceLeaseV1 {
             let directory = match open_directory(&layout.runtime_directory()) {
                 Ok(file) => file,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                    retry_missing(layout, deadline)?;
+                    retry_missing(layout, deadline, missing)?;
                     continue;
                 }
                 Err(error) => return Err(error.into()),
@@ -96,7 +114,7 @@ impl SharedMaintenanceLeaseV1 {
             let intent = match open_lock(&layout.intent_lock(), false) {
                 Ok(file) => file,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                    retry_missing(layout, deadline)?;
+                    retry_missing(layout, deadline, missing)?;
                     continue;
                 }
                 Err(error) => return Err(error.into()),
@@ -112,7 +130,7 @@ impl SharedMaintenanceLeaseV1 {
             let lock = match open_lock(&layout.maintenance_lock(), false) {
                 Ok(file) => file,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                    retry_missing(layout, deadline)?;
+                    retry_missing(layout, deadline, missing)?;
                     continue;
                 }
                 Err(error) => return Err(error.into()),
@@ -130,7 +148,7 @@ impl SharedMaintenanceLeaseV1 {
                 continue;
             }
             // Classification before waiting is not authority for the replacement generation.
-            classify_direct_store_v1(layout)?.require_current()?;
+            classify_direct_store_with_missing_observer_v1(layout, missing)?.require_current()?;
             check_deadline(deadline)?;
             drop(intent);
             return Ok(Self {
@@ -308,10 +326,14 @@ pub(super) fn same_file(file: &File, path: &Path) -> io::Result<bool> {
     }
 }
 
-fn retry_missing(layout: &DirectWorkspaceLayoutV1, deadline: Instant) -> DirectStoreResultV1<()> {
+fn retry_missing(
+    layout: &DirectWorkspaceLayoutV1,
+    deadline: Instant,
+    missing: &mut dyn FnMut(),
+) -> DirectStoreResultV1<()> {
     // A reset may already have completed and removed its marker. Reclassify the actual
     // replacement rather than returning a stale missing-lock result from the old generation.
-    match classify_direct_store_v1(layout)? {
+    match classify_direct_store_with_missing_observer_v1(layout, missing)? {
         DirectStoreClassificationV1::Current => wait(deadline),
         classification => classification.require_current(),
     }

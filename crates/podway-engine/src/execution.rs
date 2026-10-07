@@ -35,6 +35,7 @@ use sha2::{Digest as _, Sha256};
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ExecutionBoundaryErrorV1 {
     Domain(DomainError),
+    LocalArtifact(LocalArtifactFailureV1),
     ProcedureV2Unsupported,
     WorkspaceIdentityMismatch {
         expected: WorkspaceId,
@@ -43,6 +44,15 @@ pub enum ExecutionBoundaryErrorV1 {
     Transient {
         operation: &'static str,
     },
+}
+
+/// Filesystem failure categories preserved by the direct artifact boundary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LocalArtifactFailureV1 {
+    NotFound,
+    Unreadable,
+    PathOutsideWorktree,
+    PathUnsafe,
 }
 
 impl ExecutionBoundaryErrorV1 {
@@ -246,6 +256,99 @@ pub fn workspace_procedure_snapshot_from_bytes_v2(
     snapshot_id: ProcedureSnapshotId,
     created_at: UnixMillis,
 ) -> Result<ProcedureSnapshotV2, ProcedureV2SourceAdmissionErrorV1> {
+    prepare_workspace_procedure_source_v2(procedure, source)?.into_snapshot(snapshot_id, created_at)
+}
+
+#[derive(Clone, Debug)]
+pub struct PreparedProcedureSourceV2 {
+    canonical_json: CanonicalProcedureJsonV1,
+    digest: Sha256Digest,
+    source: ProcedureSourceLabelV1,
+    source_bytes_digest: Option<Sha256Digest>,
+    goal_tracking: bool,
+    entry_graph_node_id: podway_core::GraphNodeId,
+}
+
+impl PreparedProcedureSourceV2 {
+    pub fn goal_tracking(&self) -> bool {
+        self.goal_tracking
+    }
+    pub fn entry_graph_node_id(&self) -> &podway_core::GraphNodeId {
+        &self.entry_graph_node_id
+    }
+    pub fn digest(&self) -> &Sha256Digest {
+        &self.digest
+    }
+    pub fn source_bytes_digest(&self) -> Option<&Sha256Digest> {
+        self.source_bytes_digest.as_ref()
+    }
+    pub fn into_snapshot(
+        self,
+        snapshot_id: ProcedureSnapshotId,
+        created_at: UnixMillis,
+    ) -> Result<ProcedureSnapshotV2, ProcedureV2SourceAdmissionErrorV1> {
+        ProcedureSnapshotV2::new(
+            snapshot_id,
+            self.canonical_json,
+            self.digest,
+            self.source,
+            created_at,
+        )
+        .map_err(|_| {
+            ProcedureV2SourceAdmissionErrorV1::Rejected(ExecutionBoundaryErrorV1::domain(
+                DomainError::InvalidState {
+                    reason: "Procedure v2 snapshot admission failed",
+                },
+            ))
+        })
+    }
+}
+
+pub fn prepare_preset_procedure_source_v2(
+    preset: &str,
+) -> Result<Option<PreparedProcedureSourceV2>, ProcedureV2SourceAdmissionErrorV1> {
+    let Some(preset) = catalog_v2().lookup(preset) else {
+        return Ok(None);
+    };
+    let admitted = preset.validate().map_err(|_| {
+        ProcedureV2SourceAdmissionErrorV1::Rejected(ExecutionBoundaryErrorV1::domain(
+            DomainError::InvalidState {
+                reason: "embedded Procedure v2 preset admission failed",
+            },
+        ))
+    })?;
+    let label = preset.metadata.source_label().map_err(|_| {
+        ProcedureV2SourceAdmissionErrorV1::Rejected(ExecutionBoundaryErrorV1::domain(
+            DomainError::InvalidState {
+                reason: "embedded preset label is invalid",
+            },
+        ))
+    })?;
+    Ok(Some(PreparedProcedureSourceV2 {
+        canonical_json: CanonicalProcedureJsonV1::new(admitted.canonical_json().as_str()).map_err(
+            |error| {
+                ProcedureV2SourceAdmissionErrorV1::Rejected(ExecutionBoundaryErrorV1::domain(error))
+            },
+        )?,
+        digest: admitted.digest().clone(),
+        source: ProcedureSourceLabelV1::new(label.display_label()).map_err(|error| {
+            ProcedureV2SourceAdmissionErrorV1::Rejected(ExecutionBoundaryErrorV1::domain(error))
+        })?,
+        source_bytes_digest: None,
+        goal_tracking: admitted
+            .parsed()
+            .goal_tracking()
+            .is_some_and(|opt_in| opt_in.is_enabled()),
+        entry_graph_node_id: admitted.parsed().graph().entry().clone(),
+    }))
+}
+
+pub fn prepare_workspace_procedure_source_v2(
+    procedure: &str,
+    source: &[u8],
+) -> Result<PreparedProcedureSourceV2, ProcedureV2SourceAdmissionErrorV1> {
+    let source_bytes_digest = Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(source)))
+        .expect("SHA-256 produces a canonical digest");
     let source_label = ProcedureSourceLabel::workspace_path(procedure).map_err(|_| {
         ProcedureV2SourceAdmissionErrorV1::Rejected(ExecutionBoundaryErrorV1::domain(
             DomainError::InvalidState {
@@ -296,19 +399,16 @@ pub fn workspace_procedure_snapshot_from_bytes_v2(
     let source = ProcedureSourceLabelV1::new(source_label.display_label()).map_err(|error| {
         ProcedureV2SourceAdmissionErrorV1::Rejected(ExecutionBoundaryErrorV1::domain(error))
     })?;
-    ProcedureSnapshotV2::new(
-        snapshot_id,
+    Ok(PreparedProcedureSourceV2 {
         canonical_json,
-        validated.digest().clone(),
+        digest: validated.digest().clone(),
         source,
-        created_at,
-    )
-    .map_err(|_| {
-        ProcedureV2SourceAdmissionErrorV1::Rejected(ExecutionBoundaryErrorV1::domain(
-            DomainError::InvalidState {
-                reason: "workspace Procedure v2 snapshot admission failed",
-            },
-        ))
+        source_bytes_digest: Some(source_bytes_digest),
+        goal_tracking: validated
+            .parsed()
+            .goal_tracking()
+            .is_some_and(|opt_in| opt_in.is_enabled()),
+        entry_graph_node_id: validated.parsed().graph().entry().clone(),
     })
 }
 

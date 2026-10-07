@@ -9,7 +9,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use podway_core::Sha256Digest;
+use podway_core::{Sha256Digest, WorkspaceId};
 
 use crate::{GraphMutationErrorV2, StoreErrorV1, ValidatedWorkspaceRootV1};
 
@@ -25,7 +25,9 @@ pub use connection::{
     DirectPreparedGraphV1, DirectReadSnapshotV1, DirectStoreV1, DirectWorkspaceViewV1,
 };
 pub use maintenance::{ExclusiveMaintenanceLeaseV1, SharedMaintenanceLeaseV1};
-pub use markers::{DirectMaintenanceMarkerKindV1, DirectMaintenanceMarkerV1};
+pub use markers::{
+    DirectMaintenanceMarkerKindV1, DirectMaintenanceMarkerV1, observe_direct_maintenance_marker_v1,
+};
 pub use predecessor::writer_predecessor_manifests_v1;
 pub use transaction::{
     DirectMutationRequestV1, DirectMutationResultV1, DirectOutcomeScopeV1, DirectRecordedOutcomeV1,
@@ -61,6 +63,10 @@ pub enum DirectStoreErrorV1 {
     },
     SchemaMismatch,
     BindingMismatch,
+    ExpectedWorkspaceUuidMismatch {
+        expected: WorkspaceId,
+        actual: WorkspaceId,
+    },
     IdempotencyKeyReused,
     PreparedStateChanged {
         expected_sequence: u64,

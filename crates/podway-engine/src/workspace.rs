@@ -45,6 +45,7 @@ use podway_store::{
     DurableWorktreeIdentityV1 as StoreWorktreeIdentityV1, IdempotencyKeyV1, JobIdV1,
     SqliteStoreOptionsV1, SqliteStoreV1, StoreErrorV1, StoreValueErrorV1, ValidatedWorkspaceRootV1,
     WorkspaceBindingV1,
+    direct_store::{DirectStoreErrorV1, DirectStoreV1, DirectWorkspaceLayoutV1},
 };
 
 const STATE_DATABASE_FILE_NAME_V1: &str = "state.sqlite3";
@@ -1027,6 +1028,188 @@ impl ValidatedPodwayRemovalDirectoryV1 {
         }
         #[cfg(not(unix))]
         {
+            Err(WorkspaceRemovalFilesystemErrorV1::UnsupportedPlatform)
+        }
+    }
+
+    /// Direct maintenance retains its native exclusion files and typed markers.
+    /// Only the top-level runtime entries are retained; matching nested names are removed.
+    pub fn clear_direct_contents(
+        &self,
+        whole_podway: bool,
+    ) -> Result<(), WorkspaceRemovalFilesystemErrorV1> {
+        #[cfg(unix)]
+        {
+            let runtime = self
+                .open_child_directory(&self.podway, "runtime")?
+                .ok_or(WorkspaceRemovalFilesystemErrorV1::UnsafePath)?;
+            let identity = RemovalObjectIdentityV1::from_metadata(
+                &runtime
+                    .metadata()
+                    .map_err(|source| removal_path_error("inspect runtime directory", source))?,
+            );
+            let relative = [RemovalPathComponentV1 {
+                name: OsString::from("runtime"),
+                identity,
+            }];
+            let retained = remove_directory_contents_retaining_v1(
+                &self.root,
+                if whole_podway { &self.podway } else { &runtime },
+                self.podway_identity,
+                self.current_uid,
+                self.podway_identity.device,
+                if whole_podway { &[] } else { &relative },
+                &mut RemovalTraversalBudgetV1::new(),
+                &[
+                    "maintenance.lock",
+                    "maintenance-intent.lock",
+                    "maintenance-intent.json",
+                    "reset-all.marker",
+                    "removal.marker",
+                ],
+            )?;
+            if !retained {
+                return Err(WorkspaceRemovalFilesystemErrorV1::MarkerMissing);
+            }
+            Ok(())
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = whole_podway;
+            Err(WorkspaceRemovalFilesystemErrorV1::UnsupportedPlatform)
+        }
+    }
+
+    /// A legacy configuration marker is removed only by an explicit reset-all.
+    pub fn remove_direct_legacy_configuration_marker(
+        &self,
+    ) -> Result<(), WorkspaceRemovalFilesystemErrorV1> {
+        #[cfg(unix)]
+        {
+            validate_removal_ancestry_v1(
+                &self.root,
+                &self.podway,
+                self.podway_identity,
+                self.current_uid,
+                self.podway_identity.device,
+                &[],
+            )?;
+            match unlinkat(&self.podway, "mode-switch.json", UnlinkatFlags::NoRemoveDir) {
+                Ok(()) | Err(Errno::ENOENT) => {}
+                Err(source) => {
+                    return Err(removal_path_error(
+                        "remove legacy configuration marker",
+                        source.into(),
+                    ));
+                }
+            }
+            self.podway
+                .sync_all()
+                .map_err(|source| removal_path_error("sync .podway directory", source))
+        }
+        #[cfg(not(unix))]
+        {
+            Err(WorkspaceRemovalFilesystemErrorV1::UnsupportedPlatform)
+        }
+    }
+
+    /// Keep the recovery intent until the operation marker is durably removed.
+    /// A concurrently repopulated directory is retained and fails closed.
+    pub fn finish_direct_removal(
+        &self,
+        before_last_marker: impl FnOnce() -> Result<(), WorkspaceRemovalFilesystemErrorV1>,
+        after_first_marker: impl FnOnce(),
+        after_last_marker: impl FnOnce(),
+    ) -> Result<(), WorkspaceRemovalFilesystemErrorV1> {
+        #[cfg(unix)]
+        {
+            let runtime = self
+                .open_child_directory(&self.podway, "runtime")?
+                .ok_or(WorkspaceRemovalFilesystemErrorV1::MarkerMissing)?;
+            let identity = RemovalObjectIdentityV1::from_metadata(
+                &runtime
+                    .metadata()
+                    .map_err(|source| removal_path_error("inspect runtime directory", source))?,
+            );
+            let relative = [RemovalPathComponentV1 {
+                name: OsString::from("runtime"),
+                identity,
+            }];
+            let allowed = [
+                "maintenance.lock",
+                "maintenance-intent.lock",
+                "maintenance-intent.json",
+                "removal.marker",
+            ];
+            for name in removal_directory_entries(&runtime, &mut RemovalTraversalBudgetV1::new())? {
+                if !allowed
+                    .iter()
+                    .any(|allowed| name.as_bytes() == allowed.as_bytes())
+                {
+                    return Err(WorkspaceRemovalFilesystemErrorV1::NotEmptyResidual);
+                }
+            }
+            before_last_marker()?;
+            for name in [
+                "maintenance-intent.lock",
+                "maintenance.lock",
+                "removal.marker",
+            ] {
+                validate_removal_ancestry_v1(
+                    &self.root,
+                    &runtime,
+                    self.podway_identity,
+                    self.current_uid,
+                    self.podway_identity.device,
+                    &relative,
+                )?;
+                unlinkat(&runtime, name, UnlinkatFlags::NoRemoveDir).map_err(|source| {
+                    removal_path_error("remove retained direct maintenance file", source.into())
+                })?;
+            }
+            runtime
+                .sync_all()
+                .map_err(|source| removal_path_error("sync runtime directory", source))?;
+            after_first_marker();
+            validate_removal_ancestry_v1(
+                &self.root,
+                &runtime,
+                self.podway_identity,
+                self.current_uid,
+                self.podway_identity.device,
+                &relative,
+            )?;
+            unlinkat(
+                &runtime,
+                "maintenance-intent.json",
+                UnlinkatFlags::NoRemoveDir,
+            )
+            .map_err(|source| {
+                removal_path_error("remove direct maintenance intent", source.into())
+            })?;
+            runtime
+                .sync_all()
+                .map_err(|source| removal_path_error("sync runtime directory", source))?;
+            after_last_marker();
+            validate_removal_ancestry_v1(
+                &self.root,
+                &runtime,
+                self.podway_identity,
+                self.current_uid,
+                self.podway_identity.device,
+                &relative,
+            )?;
+            unlinkat(&self.podway, "runtime", UnlinkatFlags::RemoveDir).map_err(|source| {
+                removal_path_error("remove direct runtime directory", source.into())
+            })?;
+            self.podway
+                .sync_all()
+                .map_err(|source| removal_path_error("sync .podway directory", source))?;
+            self.remove_podway_directory()
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (before_last_marker, after_first_marker, after_last_marker);
             Err(WorkspaceRemovalFilesystemErrorV1::UnsupportedPlatform)
         }
     }
@@ -2074,6 +2257,30 @@ fn remove_directory_contents_v1(
     relative: &[RemovalPathComponentV1],
     budget: &mut RemovalTraversalBudgetV1,
 ) -> Result<bool, WorkspaceRemovalFilesystemErrorV1> {
+    remove_directory_contents_retaining_v1(
+        root,
+        directory,
+        podway_identity,
+        current_uid,
+        expected_device,
+        relative,
+        budget,
+        &[WORKSPACE_REMOVAL_MARKER_FILE_NAME_V1],
+    )
+}
+
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+fn remove_directory_contents_retaining_v1(
+    root: &File,
+    directory: &File,
+    podway_identity: RemovalObjectIdentityV1,
+    current_uid: u32,
+    expected_device: u64,
+    relative: &[RemovalPathComponentV1],
+    budget: &mut RemovalTraversalBudgetV1,
+    retained_runtime_files: &[&str],
+) -> Result<bool, WorkspaceRemovalFilesystemErrorV1> {
     if relative.len() > MAX_WORKSPACE_REMOVAL_DEPTH_V1 {
         return Err(WorkspaceRemovalFilesystemErrorV1::UnsafePath);
     }
@@ -2089,7 +2296,9 @@ fn remove_directory_contents_v1(
     for name in removal_directory_entries(directory, budget)? {
         let is_marker = relative.len() == 1
             && relative[0].name.as_bytes() == b"runtime"
-            && name.as_bytes() == WORKSPACE_REMOVAL_MARKER_FILE_NAME_V1.as_bytes();
+            && retained_runtime_files
+                .iter()
+                .any(|retained| name.as_bytes() == retained.as_bytes());
         if is_marker {
             retained_marker = true;
             continue;
@@ -2129,7 +2338,7 @@ fn remove_directory_contents_v1(
                 name: name.clone(),
                 identity: child_identity,
             });
-            let child_retained = remove_directory_contents_v1(
+            let child_retained = remove_directory_contents_retaining_v1(
                 root,
                 &child,
                 podway_identity,
@@ -2137,6 +2346,7 @@ fn remove_directory_contents_v1(
                 expected_device,
                 &child_relative,
                 budget,
+                retained_runtime_files,
             )?;
             if child_retained {
                 retained_marker = true;
@@ -2780,6 +2990,305 @@ impl ResolvedWorkspaceV1 {
 
     pub fn move_metadata(&self) -> &WorktreeMoveMetadataV1 {
         &self.move_metadata
+    }
+}
+
+type DirectStoreBoundaryObserverV1 =
+    std::sync::Arc<dyn Fn(podway_store::direct_store::DirectTransactionBoundaryV1) + Send + Sync>;
+
+/// Direct resolution never invokes the daemon-era migration or binding inspector.
+pub struct DirectWorkspaceResolverV1<R> {
+    git_resolver: R,
+    manifest: podway_core::Sha256Digest,
+    store_boundary_observer: Option<DirectStoreBoundaryObserverV1>,
+}
+
+#[derive(Debug)]
+pub enum DirectWorkspaceResolutionErrorV1 {
+    Resolution(WorkspaceResolutionErrorV1),
+    Store(DirectStoreErrorV1),
+}
+
+impl fmt::Display for DirectWorkspaceResolutionErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Resolution(error) => error.fmt(formatter),
+            Self::Store(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl Error for DirectWorkspaceResolutionErrorV1 {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Resolution(error) => Some(error),
+            Self::Store(error) => Some(error),
+        }
+    }
+}
+
+impl From<WorkspaceResolutionErrorV1> for DirectWorkspaceResolutionErrorV1 {
+    fn from(error: WorkspaceResolutionErrorV1) -> Self {
+        Self::Resolution(error)
+    }
+}
+
+impl From<DirectStoreErrorV1> for DirectWorkspaceResolutionErrorV1 {
+    fn from(error: DirectStoreErrorV1) -> Self {
+        Self::Store(error)
+    }
+}
+
+impl<R: GitResolverContractV1> DirectWorkspaceResolverV1<R> {
+    pub fn new(git_resolver: R, manifest: podway_core::Sha256Digest) -> Self {
+        Self {
+            git_resolver,
+            manifest,
+            store_boundary_observer: None,
+        }
+    }
+
+    /// Explicit instrumentation of actual Store boundaries; no product flags.
+    #[doc(hidden)]
+    pub fn with_store_boundary_observer_v1(
+        mut self,
+        observer: impl Fn(podway_store::direct_store::DirectTransactionBoundaryV1)
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        self.store_boundary_observer = Some(std::sync::Arc::new(observer));
+        self
+    }
+
+    fn observed_store(&self, store: DirectStoreV1) -> DirectStoreV1 {
+        match &self.store_boundary_observer {
+            Some(observer) => {
+                let observer = std::sync::Arc::clone(observer);
+                store.with_boundary_observer(move |boundary| observer(boundary))
+            }
+            None => store,
+        }
+    }
+
+    fn resolve_preliminary(
+        &self,
+        selector: &WorktreeSelectorV1,
+    ) -> Result<ValidatedWorktreeV1, WorkspaceResolutionErrorV1> {
+        let candidate = preliminary_selector(selector)?;
+        let mut retries = 7;
+        loop {
+            let source = match self.git_resolver.resolve(candidate.clone()) {
+                Ok(worktree) => return Ok(worktree),
+                Err(source) => source,
+            };
+            let transient = matches!(
+                source,
+                GitResolveErrorV1::Invariant {
+                    problem: podway_git::GitInvariantViolationV1::MetadataChangedDuringResolution,
+                } | GitResolveErrorV1::Representation {
+                    problem: podway_git::GitRepresentationProblemV1::UnsupportedRepositoryLayout,
+                }
+            );
+            if !transient || retries == 0 {
+                return Err(WorkspaceResolutionErrorV1::Git {
+                    observation: WorkspaceGitObservationV1::Preliminary,
+                    source,
+                });
+            }
+            // Removal and init can replace containment between stat and open.
+            // Restart discovery; only a complete stable snapshot is authority.
+            retries -= 1;
+            std::thread::sleep(std::time::Duration::from_micros(500));
+        }
+    }
+
+    /// Resolve Git authority without inspecting SQLite or inventing a durable UUID.
+    pub fn resolve_candidate(
+        &self,
+        selector: WorktreeSelectorV1,
+    ) -> Result<(ValidatedWorktreeV1, DirectStoreV1), DirectWorkspaceResolutionErrorV1> {
+        let worktree = self.resolve_preliminary(&selector)?;
+        require_candidate_identity(&worktree)?;
+        let layout = DirectWorkspaceLayoutV1::new(store_root_from_worktree(&worktree)?)?;
+        let store = DirectStoreV1::new(
+            layout,
+            self.manifest.clone(),
+            worktree.identity().common_directory_fingerprint().clone(),
+            worktree
+                .identity()
+                .worktree_administration_fingerprint()
+                .clone(),
+        );
+        Ok((worktree, self.observed_store(store)))
+    }
+
+    pub fn manifest(&self) -> &podway_core::Sha256Digest {
+        &self.manifest
+    }
+
+    /// Revalidate a Git-only maintenance candidate after native lock acquisition.
+    pub fn revalidate_candidate(
+        &self,
+        worktree: &ValidatedWorktreeV1,
+    ) -> Result<(), WorkspaceResolutionErrorV1> {
+        let selector = WorktreeSelectorV1::new(
+            podway_git::WORKTREE_SELECTOR_VERSION_V1,
+            None,
+            worktree.roots().worktree_root().clone(),
+        )
+        .map_err(|source| WorkspaceResolutionErrorV1::Selector { source })?;
+        let actual = self.git_resolver.resolve(selector).map_err(|source| {
+            WorkspaceResolutionErrorV1::Git {
+                observation: WorkspaceGitObservationV1::CandidateRevalidation,
+                source,
+            }
+        })?;
+        require_candidate_identity(&actual)?;
+        if worktree.identity().common_directory_fingerprint()
+            != actual.identity().common_directory_fingerprint()
+            || worktree.identity().worktree_administration_fingerprint()
+                != actual.identity().worktree_administration_fingerprint()
+        {
+            return Err(WorkspaceResolutionErrorV1::RuntimeDatabasePathChangedDuringResolution);
+        }
+        require_same_transient_objects(
+            worktree,
+            &actual,
+            WorkspaceGitObservationV1::CandidateRevalidation,
+        )?;
+        require_stable_database_path(&database_path_from_worktree(worktree)?, &actual)?;
+        Ok(())
+    }
+
+    pub fn resolve_existing(
+        &self,
+        selector: WorktreeSelectorV1,
+        expected_workspace_id: Option<&WorkspaceId>,
+        deadline: std::time::Instant,
+    ) -> Result<(ResolvedWorkspaceV1, DirectStoreV1), DirectWorkspaceResolutionErrorV1> {
+        let (resolved, store, _) =
+            self.resolve_existing_with_binding(selector, expected_workspace_id, deadline)?;
+        Ok((resolved, store))
+    }
+
+    pub fn resolve_existing_with_binding(
+        &self,
+        selector: WorktreeSelectorV1,
+        expected_workspace_id: Option<&WorkspaceId>,
+        deadline: std::time::Instant,
+    ) -> Result<
+        (ResolvedWorkspaceV1, DirectStoreV1, WorkspaceBindingV1),
+        DirectWorkspaceResolutionErrorV1,
+    > {
+        let preliminary = self.resolve_preliminary(&selector).map_err(|mut error| {
+            // Preliminary discovery must not trust a supplied UUID. On failure,
+            // retain the native deletion classification for a previously bound
+            // selector without treating that selector as Store authority.
+            if selector.durable_identity().is_some()
+                && matches!(
+                    self.git_resolver.resolve(selector.clone()),
+                    Err(GitResolveErrorV1::WorktreeDeleted)
+                )
+            {
+                error = WorkspaceResolutionErrorV1::Git {
+                    observation: WorkspaceGitObservationV1::Preliminary,
+                    source: GitResolveErrorV1::WorktreeDeleted,
+                };
+            }
+            error
+        })?;
+        require_candidate_identity(&preliminary)?;
+        let database_path = database_path_from_worktree(&preliminary)?;
+        let layout = DirectWorkspaceLayoutV1::new(store_root_from_worktree(&preliminary)?)?;
+        let store = DirectStoreV1::new(
+            layout,
+            self.manifest.clone(),
+            preliminary
+                .identity()
+                .common_directory_fingerprint()
+                .clone(),
+            preliminary
+                .identity()
+                .worktree_administration_fingerprint()
+                .clone(),
+        );
+        let store = self.observed_store(store);
+        let binding = store.read(deadline, |snapshot| Ok(snapshot.binding().clone()))?;
+        for expected in expected_workspace_id.into_iter().chain(
+            selector
+                .durable_identity()
+                .map(|identity| identity.workspace_id()),
+        ) {
+            if expected != binding.identity().workspace_uuid() {
+                return Err(WorkspaceResolutionErrorV1::ExpectedWorkspaceUuidMismatch {
+                    expected: expected.clone(),
+                    actual: binding.identity().workspace_uuid().clone(),
+                }
+                .into());
+            }
+        }
+        let revalidated = self.revalidate_worktree(&preliminary, &binding, &selector)?;
+        let path = require_stable_database_path(&database_path, &revalidated)?;
+        Ok((ResolvedWorkspaceV1::new(revalidated, path)?, store, binding))
+    }
+
+    /// The caller supplies its transaction's validated binding. No nested Store open occurs.
+    pub fn revalidate(
+        &self,
+        resolved: &ResolvedWorkspaceV1,
+        binding: &WorkspaceBindingV1,
+    ) -> Result<(), WorkspaceResolutionErrorV1> {
+        if resolved.store_identity() != binding.identity() {
+            return Err(
+                WorkspaceResolutionErrorV1::RevalidatedStoreIdentityMismatch {
+                    expected: Box::new(resolved.store_identity().clone()),
+                    actual: Box::new(binding.identity().clone()),
+                },
+            );
+        }
+        let worktree = resolved.worktree();
+        let selector = WorktreeSelectorV1::new(
+            podway_git::WORKTREE_SELECTOR_VERSION_V1,
+            Some(worktree.identity().clone()),
+            worktree.roots().worktree_root().clone(),
+        )
+        .map_err(|source| WorkspaceResolutionErrorV1::Selector { source })?;
+        let revalidated = self.revalidate_worktree(worktree, binding, &selector)?;
+        require_stable_database_path(resolved.database_path(), &revalidated)?;
+        Ok(())
+    }
+
+    fn revalidate_worktree(
+        &self,
+        preliminary: &ValidatedWorktreeV1,
+        binding: &WorkspaceBindingV1,
+        selector: &WorktreeSelectorV1,
+    ) -> Result<ValidatedWorktreeV1, WorkspaceResolutionErrorV1> {
+        require_matching_git_fingerprints(preliminary, binding)?;
+        let selector = WorktreeSelectorV1::new(
+            selector.version(),
+            Some(bound_git_identity(preliminary, binding)?),
+            selector.path().clone(),
+        )
+        .map_err(|source| WorkspaceResolutionErrorV1::Selector { source })?;
+        let revalidated = self.git_resolver.resolve(selector).map_err(|source| {
+            WorkspaceResolutionErrorV1::Git {
+                observation: WorkspaceGitObservationV1::BoundRevalidation,
+                source,
+            }
+        })?;
+        require_revalidated_identity(
+            &revalidated,
+            WorkspaceIdentityStateV1::Bound,
+            binding.identity(),
+        )?;
+        require_same_transient_objects(
+            preliminary,
+            &revalidated,
+            WorkspaceGitObservationV1::BoundRevalidation,
+        )?;
+        Ok(revalidated)
     }
 }
 

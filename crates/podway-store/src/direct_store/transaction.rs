@@ -128,6 +128,8 @@ impl DirectMutationResultV1 {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DirectTransactionBoundaryV1 {
+    /// Missing files, final absence of maintenance markers and pinned parent validation.
+    UnmarkedMissingReadClassified,
     BeforeBegin,
     AfterBegin,
     AfterStateBeforeOutcome,
@@ -145,11 +147,82 @@ pub struct DirectTransactionV1<'transaction, 'connection, Clock> {
     state_written: bool,
     clock: Option<Clock>,
     now: Option<UnixMillis>,
+    created_session_scope: Option<SessionId>,
 }
 
 impl<Clock: FnOnce() -> UnixMillis> DirectTransactionV1<'_, '_, Clock> {
     pub fn binding(&self) -> &WorkspaceBindingV1 {
         &self.binding
+    }
+
+    pub fn delegation_receipts(
+        &self,
+    ) -> DirectStoreResultV1<v2_delegation::DelegationReceiptSnapshotV1> {
+        let Some(graph) = self.current_graph()? else {
+            return Ok(v2_delegation::DelegationReceiptSnapshotV1::empty());
+        };
+        Ok(v2_delegation::receipt_snapshot_connection_v1(
+            self.transaction,
+            graph,
+            self.binding.identity().workspace_uuid(),
+        )?)
+    }
+
+    pub fn terminal_dispositions(&self) -> DirectStoreResultV1<Vec<TerminalDispositionV2>> {
+        let Some(graph) = self.current_graph()? else {
+            return Ok(Vec::new());
+        };
+        Ok(v2_state::load_terminal_dispositions_connection_v2(
+            self.transaction,
+            graph,
+        )?)
+    }
+
+    pub fn archive_summary(
+        &self,
+        session: &SessionId,
+    ) -> DirectStoreResultV1<Option<SessionArchiveSummaryV2>> {
+        Ok(v2_state::archived_session_summary_connection_v2(
+            self.transaction,
+            session,
+        )?)
+    }
+
+    /// A fresh prepared session has no identity until the Engine creates it after fences.
+    pub fn scope_created_session_outcome(
+        &mut self,
+        session: &SessionId,
+    ) -> DirectStoreResultV1<()> {
+        self.require_clock()?;
+        if !self.state_written
+            || self.created_session_scope.is_some()
+            || !self.current_graph()?.is_some_and(|graph| {
+                graph.trace().session_id() == session
+                    && graph.trace().lifecycle() == podway_core::SessionLifecycle::Prepared
+                    && graph.trace().revision() == Revision::ZERO
+            })
+        {
+            return Err(DirectStoreErrorV1::InvalidInput {
+                reason: "session outcome scope requires a freshly created prepared session",
+            });
+        }
+        self.created_session_scope = Some(session.clone());
+        Ok(())
+    }
+
+    /// The sequence this success will commit, reserved by the IMMEDIATE writer.
+    /// It is independent of graph revisions and does not read the command clock.
+    pub fn next_workspace_sequence(&self) -> DirectStoreResultV1<u64> {
+        let sequence: i64 = self.transaction.query_row(
+            "SELECT next_workspace_sequence FROM workspace_state WHERE singleton=1",
+            [],
+            |row| row.get(0),
+        )?;
+        sequence
+            .checked_add(1)
+            .filter(|_| sequence >= 0)
+            .and_then(|sequence| u64::try_from(sequence).ok())
+            .ok_or(DirectStoreErrorV1::Unreadable)
     }
 
     /// The engine calls this only after fences and prepared inputs are revalidated.
@@ -239,6 +312,7 @@ impl<Clock: FnOnce() -> UnixMillis> DirectTransactionV1<'_, '_, Clock> {
         self.state_written = true;
         v2_state::create_graph_session_transaction_v2(self.transaction, state)?;
         self.previous.take();
+        let _ = self.previous.set(Some(Arc::new(state.clone())));
         Ok(())
     }
 
@@ -381,7 +455,37 @@ impl DirectStoreV1 {
             &mut DirectTransactionV1<'_, '_, Clock>,
         ) -> DirectStoreResultV1<CanonicalExecutionJsonV1>,
     {
-        let lease = DirectOpenLease::acquire(&self.layout, deadline)?;
+        self.mutate_resolving_identity(
+            &request.key,
+            deadline,
+            clock,
+            |_| Ok(request.clone()),
+            execute,
+        )
+    }
+
+    /// Source-backed identities may recover their original pinned digest from the
+    /// authoritative outcome lookup. Identity resolution is pure and precedes replay.
+    pub fn mutate_resolving_identity<Clock, Identity, Execute>(
+        &self,
+        key: &IdempotencyKeyV1,
+        deadline: Instant,
+        clock: Clock,
+        identity: Identity,
+        execute: Execute,
+    ) -> DirectStoreResultV1<DirectMutationResultV1>
+    where
+        Clock: FnOnce() -> UnixMillis,
+        Identity: FnOnce(
+            Option<&DirectRecordedOutcomeV1>,
+        ) -> DirectStoreResultV1<DirectMutationRequestV1>,
+        Execute: FnOnce(
+            &mut DirectTransactionV1<'_, '_, Clock>,
+        ) -> DirectStoreResultV1<CanonicalExecutionJsonV1>,
+    {
+        let lease = DirectOpenLease::acquire(&self.layout, deadline, &mut || {
+            self.boundary(DirectTransactionBoundaryV1::UnmarkedMissingReadClassified)
+        })?;
         let _connection_gate = super::connection::connection_gate(deadline)?;
         let database = super::classification::open_read_nofollow(&self.layout.database())?;
         // A foreign or corrupt Store is rejected before a read-write SQLite open
@@ -396,7 +500,14 @@ impl DirectStoreV1 {
         self.boundary(DirectTransactionBoundaryV1::AfterBegin);
         let binding = self.validate_connection(&transaction)?;
         self.revalidate_files(&lease, &database)?;
-        if let Some(outcome) = read_outcome(&transaction, &request.key)? {
+        let outcome = read_outcome(&transaction, key)?;
+        let mut request = identity(outcome.as_ref())?;
+        if request.key() != key {
+            return Err(DirectStoreErrorV1::InvalidInput {
+                reason: "resolved request changed the outcome key",
+            });
+        }
+        if let Some(outcome) = outcome {
             if outcome.digest != request.digest {
                 return Err(DirectStoreErrorV1::IdempotencyKeyReused);
             }
@@ -413,12 +524,16 @@ impl DirectStoreV1 {
             state_written: false,
             clock: Some(clock),
             now: None,
+            created_session_scope: None,
         };
         let response = execute(&mut context)?;
         let now = context.require_clock()?;
-        validate_success(request, &response)?;
+        if let Some(session) = context.created_session_scope.take() {
+            request.scope = DirectOutcomeScopeV1::Session(session);
+        }
+        validate_success(&request, &response)?;
         self.boundary(DirectTransactionBoundaryV1::AfterStateBeforeOutcome);
-        let outcome = persist_success(&transaction, &self.layout, request, response, now)?;
+        let outcome = persist_success(&transaction, &self.layout, &request, response, now)?;
         drop(context);
         self.revalidate_files(&lease, &database)?;
         ensure_deadline(deadline)?;
@@ -501,6 +616,7 @@ impl DirectStoreV1 {
             state_written: false,
             clock: None::<Clock>,
             now: Some(now),
+            created_session_scope: None,
         };
         let response = execute(&mut context)?;
         validate_success(request, &response)?;

@@ -1999,7 +1999,8 @@ pub enum LegacyHeaderV1 {
 /// Writes a legacy Store with a hot WAL and no shared-memory file into `runtime_directory`.
 ///
 /// The Store is the cumulative public DDL through `generation`, or a copy of `base` when given.
-/// Both files are copied while the building connection is still open, so the WAL stays hot.
+/// Main and WAL images are materialized and verified while the building connection is idle
+/// and still open, so closing the producer cannot checkpoint away the hot WAL.
 pub fn write_legacy_store_v1(
     staging_directory: &Path,
     runtime_directory: &Path,
@@ -2050,8 +2051,15 @@ pub fn write_legacy_store_v1(
         .map_err(sqlite)?;
     fs::create_dir_all(runtime_directory).map_err(storage)?;
     let target = runtime_directory.join(STATE_DATABASE_FILE_NAME_V1);
-    fs::copy(&staging, &target).map_err(storage)?;
-    fs::copy(sidecar(&staging, "-wal"), sidecar(&target, "-wal")).map_err(storage)?;
+    let source_main = fs::read(&staging).map_err(storage)?;
+    let source_wal = fs::read(sidecar(&staging, "-wal")).map_err(storage)?;
+    fs::write(&target, &source_main).map_err(storage)?;
+    fs::write(sidecar(&target, "-wal"), &source_wal).map_err(storage)?;
+    if fs::read(&target).map_err(storage)? != source_main
+        || fs::read(sidecar(&target, "-wal")).map_err(storage)? != source_wal
+    {
+        return Err(storage("legacy fixture images do not match their source"));
+    }
     drop(connection);
     Ok(())
 }

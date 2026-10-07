@@ -1047,6 +1047,11 @@
     },
     {
       "kind": "known_answer_fixture",
+      "path": "tests/fixtures/v2/payload/maximum-direct-assessment-recipe.json",
+      "sha256": "sha256:4450cd3d0de42c3b6e341c4299211501d1470ab7292de9916b026f456d44cd9d"
+    },
+    {
+      "kind": "known_answer_fixture",
       "path": "tests/fixtures/v2/payload/maximum-next-recipe.json",
       "sha256": "sha256:9e1a42e5b37406f5af0d328ebd9db77e8e260a5aafff7cbc1bdb71045bf81a7a"
     },
@@ -1063,12 +1068,12 @@
     {
       "kind": "known_answer_fixture",
       "path": "tests/fixtures/v2/payload/truncation-and-overflow-recipe.json",
-      "sha256": "sha256:745dfa80441b718fe0e48741fc6319ec8550e669e605a4d9123c08e6148db869"
+      "sha256": "sha256:a7d617e036e1131fe1b6e971673e37bdb429bce12ac0589b21578f0a6c9a9104"
     },
     {
       "kind": "known_answer_fixture",
       "path": "tests/fixtures/v2/presets/reference-paths.json",
-      "sha256": "sha256:eee3f656856cd688a0745d24518289385a4d6cfb1e9bbacaa489d38eef7253e7"
+      "sha256": "sha256:90f206caea4757104b630da6bac78da6aab9fede2dea92ff6422a45a2e209545"
     },
     {
       "kind": "known_answer_fixture",
@@ -1096,7 +1101,7 @@
       "sha256": "sha256:7de5f4f024eb795ae7fb73594d4847b833016bea6be9f2737c567b524ae5466e"
     }
   ],
-  "digest": "sha256:9d2a563f51c820035de27f7bf29adeea618221e61f85ac7aedd3799a5c605359",
+  "digest": "sha256:f28239aab9ca6b3b5b3da5ff95869b186b22df9b12c1dcb83aa6be1ca0cd1a83",
   "product": "podway",
   "product_version": "0.2.12",
   "schema_version": "podway.contract-manifest/v1",

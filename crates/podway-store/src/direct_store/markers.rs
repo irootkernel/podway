@@ -197,3 +197,33 @@ impl ExclusiveMaintenanceLeaseV1 {
         Ok(())
     }
 }
+
+/// Observe a published marker without creating locks, opening SQLite or resuming work.
+/// This is recovery guidance only; mutation authority still requires an exclusive lease.
+pub fn observe_direct_maintenance_marker_v1(
+    layout: &DirectWorkspaceLayoutV1,
+) -> DirectStoreResultV1<Option<DirectMaintenanceMarkerV1>> {
+    let directories = super::classification::ClassificationDirectories::open(layout)?;
+    let result = (|| {
+        for kind in [
+            DirectMaintenanceMarkerKindV1::Removal,
+            DirectMaintenanceMarkerKindV1::Reset,
+            DirectMaintenanceMarkerKindV1::Intent,
+        ] {
+            let file = match super::classification::open_read_nofollow(&kind.path(layout)) {
+                Ok(file) => file,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error.into()),
+            };
+            let mut bytes = Vec::new();
+            file.take(1_048_577).read_to_end(&mut bytes)?;
+            let text = String::from_utf8(bytes).map_err(|_| DirectStoreErrorV1::Unreadable)?;
+            let document =
+                CanonicalExecutionJsonV1::new(text).map_err(|_| DirectStoreErrorV1::Unreadable)?;
+            return Ok(Some(DirectMaintenanceMarkerV1::new(kind, document)?));
+        }
+        Ok(None)
+    })();
+    directories.revalidate(layout)?;
+    result
+}

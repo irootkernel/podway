@@ -3704,7 +3704,7 @@ fn decision_value(record: &podway_core::DecisionRecordV2) -> Result<Value, Graph
     Ok(value)
 }
 
-fn decision_readback_projection(
+pub(crate) fn decision_readback_projection(
     state: &GraphSessionStateV2,
     decision: &podway_core::DecisionRecordV2,
 ) -> Result<Value, GraphViewErrorV2> {

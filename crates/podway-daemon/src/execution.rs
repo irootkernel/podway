@@ -5681,6 +5681,9 @@ impl From<ExecutionBoundaryErrorV1> for BoundaryDispositionV1 {
     fn from(error: ExecutionBoundaryErrorV1) -> Self {
         match error {
             ExecutionBoundaryErrorV1::Domain(error) => Self::Domain(error),
+            ExecutionBoundaryErrorV1::LocalArtifact(_) => Self::Domain(DomainError::InvalidState {
+                reason: "direct artifact failure cannot be produced by the hosted artifact verifier",
+            }),
             ExecutionBoundaryErrorV1::ProcedureV2Unsupported => {
                 Self::Domain(DomainError::InvalidState {
                     reason: "Procedure v2 capability escaped start admission resolution",

@@ -3411,7 +3411,8 @@ fn map_preview_procedure_error(
     capability: &'static str,
 ) -> DispatchFailureV1 {
     match error {
-        crate::execution::ExecutionBoundaryErrorV1::Domain(_) => {
+        crate::execution::ExecutionBoundaryErrorV1::Domain(_)
+        | crate::execution::ExecutionBoundaryErrorV1::LocalArtifact(_) => {
             DispatchFailureV1::new(DispatchFailureKindV1::ProcedureInvalid)
         }
         crate::execution::ExecutionBoundaryErrorV1::ProcedureV2Unsupported => {
@@ -6378,7 +6379,8 @@ fn map_procedure_v2_start_preparation_error(
         ProcedureV2StartPreparationErrorV1::Source(
             ProcedureV2SourceAdmissionErrorV1::Rejected(error),
         ) => match error {
-            crate::execution::ExecutionBoundaryErrorV1::Domain(_) => {
+            crate::execution::ExecutionBoundaryErrorV1::Domain(_)
+            | crate::execution::ExecutionBoundaryErrorV1::LocalArtifact(_) => {
                 DispatchFailureV1::new(DispatchFailureKindV1::ProcedureInvalid)
             }
             crate::execution::ExecutionBoundaryErrorV1::Transient { .. } => {

@@ -1,5 +1,9 @@
 # Requirements Traceability
 
+The first table describes the currently shipped daemon-backed CLI. The direct
+Engine introduced by `V2DFC-006` has the separate proof surface below; `V2DFC-007`
+owns switching the shipped CLI and removing the legacy host.
+
 | Requirement | Authority | Primary evidence |
 | --- | --- | --- |
 | Procedure v2 is the only admitted procedure model | ADR-0019; Procedure schema | Config, CLI, preset, and daemon admission tests |
@@ -31,6 +35,32 @@
 | Delegation leaves the established Direct contract usable at each intermediate commit | ADR-0035; supervised-delegation SDG-010; testing and conformance baseline | `V2SDG-001` direct digest fixture, populated current/inactive Store reopen, shipped preset and result-family known answers; subsequent task gates |
 | Delegation declarations and result generations remain closed and versioned; explicit custom-Procedure admission and native routes are implemented in source, while real host mappings remain unavailable | ADR-0035; supervised-delegation SDG-002–009; adapter mapping review | `V2SDG-002` schema and manifest verification, protocol known answers and malformed-input checks, old result codec checks; `V2SDG-007` route, admission, delegation-error, and Direct compatibility tests |
 | Delegated action declarations and immutable work-package identity preserve Direct canonical bytes and reject unsupported placements or oversized projections | ADR-0035; supervised-delegation SDG-002, SDG-004 | `V2SDG-003` YAML/JSON equivalence, declaration bounds, Direct digest fixtures, package digest and frozen-evidence tests, static admission budget checks |
+
+## Direct Engine ownership and proof
+
+ADR-0038 and the adopted daemon-free dossier own this intermediate execution
+boundary. These proofs execute the typed API against native Git worktrees and
+generation-14 Stores; they do not establish the later CLI, packaging, or
+installation milestones. Every test module is registered in the Engine's
+`int_suite`.
+
+| Retained requirement | Production implementation | Executable proof |
+|---|---|---|
+| Typed commands emit validated output/v4, error/v2, and recovery/v2 | [Direct dispatch](../../../crates/podway-engine/src/direct_api.rs), [error rendering](../../../crates/podway-engine/src/direct_error.rs), and [envelope validation](../../../crates/podway-protocol/src/direct_envelope.rs) | `int_v2dfc006_direct_execution`, `int_v2dfc006_errors`, and protocol `int_v2dfc006_direct_envelopes` |
+| Required items, blockers, conditions, goals, declared decisions, and manual rework gate one current cursor | Direct cursor, item, and Procedure transaction boundaries | `int_v2dfc006_runtime_ports`, `int_v2dfc006_guard_ports`, `int_v2dfc006_goal_ports`, and `int_v2dfc006_decision_ports` |
+| All four canonical presets retain their declared paths and freshness | Preset preparation, direct Start/Begin, and transaction-time transitions | [Reference-path ports](../../../crates/podway-engine/tests/int_v2dfc006_reference_ports.rs) and the [executable path inventory](../../../tests/fixtures/v2/presets/reference-paths.json) |
+| Bounded evidence and goal history remain complete, immutable, pageable, and cold-stable | Direct read projections over a coherent Store snapshot | [Readback ports](../../../crates/podway-engine/tests/int_v2dfc006_readback_ports.rs), including escaped maximum-size assessments and stale page-token rejection |
+| Delegated packages, acceptance, item currency, Direct compatibility, and archived receipts preserve their bindings | [Direct delegation acceptance](../../../crates/podway-engine/src/direct_delegation.rs) | [Four actual authored-Start routes](../../../crates/podway-engine/tests/int_v2dfc006_delegation_ports.rs); no job lookup/wait dependency |
+| Reset/replacement, archive/purge, session identity, and unhealthy Doctor diagnostics remain truthful | Direct session lifecycle and workspace boundaries | `int_v2dfc006_domain_ports`, `int_v2dfc006_identity_ports`, and `int_v2dfc006_maintenance_ports` |
+| Effect-once recovery spans all five native transaction/publication boundaries | Direct Store transactions and explicit reset-marker recovery | [Release-profile SIGKILL tests](../../../crates/podway-engine/tests/int_v2dfc006_crashes.rs), registered as `DE01`–`DE05` in the crash registry; 200 live random kills separately qualify recovery |
+| Stale prepared state and changed local artifacts never commit | Outside-transaction preparation followed by native and Store revalidation | [Preparation-race qualification](../../../crates/podway-engine/tests/int_v2dfc006_races.rs) and exact artifact rehash regressions in `int_v2dfc006_direct_execution` |
+| Eight native writers and coherent observers preserve outcome-log serial equivalence | Direct Engine mutation API and bounded IMMEDIATE transactions | [Release-profile scale qualification](../../../crates/podway-engine/tests/int_v2dfc006_scale.rs), including grown-L and 1,024-placement fixtures |
+| Maintenance excludes ordinary callers and reconciles acknowledged old-generation commits | Native exclusive lease, intent/operation markers, and descriptor-safe removal; recovery intent is deleted last | [Maintenance regressions](../../../crates/podway-engine/tests/int_v2dfc006_maintenance.rs), including the final-marker SIGKILL and original-response recovery registered as `DE06`, and [explicit 100-cycle qualification](../../../crates/podway-engine/tests/int_v2dfc006_exclusion.rs) |
+
+The long scale, SIGKILL, deadline, and maintenance qualification cases are
+explicitly selected ignored tests. Their existence is not a passing gate;
+completion requires their recorded execution as well as `make test` for the
+combined candidate.
 
 ## Supervised delegation ownership and proof
 

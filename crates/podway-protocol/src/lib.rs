@@ -10,6 +10,7 @@ use podway_core::{
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
 mod codec;
+mod direct_envelope;
 mod evidence_page;
 mod framing;
 mod identity;
@@ -21,6 +22,11 @@ mod slice;
 pub use codec::{
     PayloadCodecErrorV1, ResponseEnvelopeV2, decode_request_payload_v1, decode_response_payload_v2,
     encode_request_payload_v1, encode_response_payload_v2,
+};
+pub use direct_envelope::{
+    DirectSessionOutputV1, ERROR_SCHEMA_V2, ErrorEnvelopeInputV2, ErrorEnvelopeV2,
+    OUTPUT_SCHEMA_V4, OutputEnvelopeInputV4, OutputEnvelopeV4, RECOVERY_RECIPE_SCHEMA_V2,
+    RecoveryRecipeV2,
 };
 pub use evidence_page::{
     EVIDENCE_PAGE_TOKEN_VERSION_V1, EvidencePageTokenV1, MAX_EVIDENCE_PAGE_TOKEN_CHARS_V1,

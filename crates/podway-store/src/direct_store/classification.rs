@@ -56,19 +56,40 @@ impl DirectStoreClassificationV1 {
 pub fn classify_direct_store_v1(
     layout: &DirectWorkspaceLayoutV1,
 ) -> DirectStoreResultV1<DirectStoreClassificationV1> {
-    let directories = ClassificationDirectories::open(layout)?;
-    let result = classify_marked_store_v1(layout);
-    directories.revalidate(layout)?;
-    result
+    classify_direct_store_with_missing_observer_v1(layout, &mut || {})
 }
 
-fn classify_marked_store_v1(
+pub(super) fn classify_direct_store_with_missing_observer_v1(
     layout: &DirectWorkspaceLayoutV1,
+    missing: &mut dyn FnMut(),
 ) -> DirectStoreResultV1<DirectStoreClassificationV1> {
-    if maintenance_marked(layout)? {
-        return Ok(DirectStoreClassificationV1::Maintenance);
+    classify_at_inspection(layout, missing, || {})
+}
+
+fn classify_at_inspection(
+    layout: &DirectWorkspaceLayoutV1,
+    missing: &mut dyn FnMut(),
+    before_inspection: impl FnOnce(),
+) -> DirectStoreResultV1<DirectStoreClassificationV1> {
+    let directories = ClassificationDirectories::open(layout)?;
+    let mut result = if maintenance_marked(layout)? {
+        Ok(DirectStoreClassificationV1::Maintenance)
+    } else {
+        before_inspection();
+        classify_unmarked_store_v1(layout)
+    };
+    if matches!(
+        result,
+        Ok(DirectStoreClassificationV1::Missing | DirectStoreClassificationV1::Unrecognized)
+    ) && maintenance_marked(layout)?
+    {
+        result = Ok(DirectStoreClassificationV1::Maintenance);
     }
-    classify_unmarked_store_v1(layout)
+    directories.revalidate(layout)?;
+    if matches!(result, Ok(DirectStoreClassificationV1::Missing)) {
+        missing();
+    }
+    result
 }
 
 pub(super) fn classify_unmarked_store_v1(
@@ -220,13 +241,13 @@ fn committed_wal_generation(path: &Path) -> DirectStoreResultV1<Option<u32>> {
 
 /// Parent components are also no-follow inputs. A raced directory replacement is
 /// retried by the caller rather than allowing a path lookup to authorize a new inode.
-struct ClassificationDirectories {
+pub(super) struct ClassificationDirectories {
     podway: Option<File>,
     runtime: Option<File>,
 }
 
 impl ClassificationDirectories {
-    fn open(layout: &DirectWorkspaceLayoutV1) -> DirectStoreResultV1<Self> {
+    pub(super) fn open(layout: &DirectWorkspaceLayoutV1) -> DirectStoreResultV1<Self> {
         let podway = optional_directory(&layout.podway_directory())?;
         let runtime = if podway.is_some() {
             optional_directory(&layout.runtime_directory())?
@@ -236,7 +257,7 @@ impl ClassificationDirectories {
         Ok(Self { podway, runtime })
     }
 
-    fn revalidate(&self, layout: &DirectWorkspaceLayoutV1) -> DirectStoreResultV1<()> {
+    pub(super) fn revalidate(&self, layout: &DirectWorkspaceLayoutV1) -> DirectStoreResultV1<()> {
         for (held, path) in [
             (&self.podway, layout.podway_directory()),
             (&self.runtime, layout.runtime_directory()),
@@ -281,6 +302,83 @@ fn wal_checksum(big_endian: bool, seed: (u32, u32), bytes: &[u8]) -> (u32, u32) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn publication_during_missing_inspection_is_maintenance_and_unmarked_failures_stay_closed() {
+        use super::super::{
+            DirectMaintenanceMarkerKindV1, DirectMaintenanceMarkerV1, ExclusiveMaintenanceLeaseV1,
+        };
+        use crate::CanonicalExecutionJsonV1;
+        use podway_core::canonicalize_json_v1;
+        use serde_json::json;
+        let root = tempfile::TempDir::new().unwrap();
+        let layout = DirectWorkspaceLayoutV1::new(
+            crate::ValidatedWorkspaceRootV1::from_path(root.path()).unwrap(),
+        )
+        .unwrap();
+        let lease = ExclusiveMaintenanceLeaseV1::acquire(
+            &layout,
+            std::time::Instant::now() + std::time::Duration::from_secs(10),
+            true,
+        )
+        .unwrap();
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let value = json!({"schema":"podway.workspace-maintenance-intent-marker/v1","command":"workspace.init",
+            "operation_id":"00000000-0000-4000-8000-000000000003","response_request_id":"00000000-0000-4000-8000-000000000002",
+            "workspace_uuid":null,"idempotency_key":"publish-race","request_digest":digest,"contract_manifest_digest":digest,
+            "created_at":"1970-01-01T00:00:00.010Z","root_identity":{"root_path_bytes_base64url":"L3RtcA",
+                "common_dir_identity":digest,"worktree_admin_identity":digest}});
+        let marker = DirectMaintenanceMarkerV1::new(
+            DirectMaintenanceMarkerKindV1::Intent,
+            CanonicalExecutionJsonV1::new(canonicalize_json_v1(&value).unwrap()).unwrap(),
+        )
+        .unwrap();
+        let mut observed = 0;
+        let result = classify_at_inspection(&layout, &mut || observed += 1, || {
+            lease.write_marker(&layout, &marker, None).unwrap()
+        })
+        .unwrap();
+        assert_eq!(result, DirectStoreClassificationV1::Maintenance);
+        assert_eq!(observed, 0);
+        lease.remove_marker(&layout, &marker).unwrap();
+        let result =
+            classify_direct_store_with_missing_observer_v1(&layout, &mut || observed += 1).unwrap();
+        assert_eq!(result, DirectStoreClassificationV1::Missing);
+        assert_eq!(observed, 1);
+        fs::write(layout.database(), b"corrupt unmarked main").unwrap();
+        assert_eq!(
+            classify_direct_store_with_missing_observer_v1(&layout, &mut || observed += 1).unwrap(),
+            DirectStoreClassificationV1::Unrecognized
+        );
+        assert_eq!(
+            fs::read(layout.database()).unwrap(),
+            b"corrupt unmarked main"
+        );
+        assert!(!layout.wal().exists());
+        assert!(!layout.shm().exists());
+        assert_eq!(
+            classify_at_inspection(&layout, &mut || observed += 1, || lease
+                .write_marker(&layout, &marker, None)
+                .unwrap())
+            .unwrap(),
+            DirectStoreClassificationV1::Maintenance
+        );
+        assert_eq!(observed, 1);
+        lease.remove_marker(&layout, &marker).unwrap();
+        drop(lease);
+        let other = tempfile::TempDir::new().unwrap();
+        fs::create_dir(other.path().join(".podway")).unwrap();
+        std::os::unix::fs::symlink(root.path(), other.path().join(".podway/runtime")).unwrap();
+        let unsafe_layout = DirectWorkspaceLayoutV1::new(
+            crate::ValidatedWorkspaceRootV1::from_path(other.path()).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            classify_direct_store_with_missing_observer_v1(&unsafe_layout, &mut || observed += 1)
+                .is_err()
+        );
+        assert_eq!(observed, 1);
+    }
 
     fn wal(big_endian: bool, frames: &[(u32, u32, Option<u32>)]) -> Vec<u8> {
         let mut bytes = vec![0; WAL_HEADER_BYTES];

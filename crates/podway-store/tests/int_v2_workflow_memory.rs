@@ -1593,14 +1593,72 @@ fn same_millisecond_blocks_are_canonically_ordered_by_frozen_id_and_reopen() {
     let temporary = TempDir::new().unwrap();
     let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
     store
-        .create_graph_session_v2(&identity(), second.clone())
+        .create_graph_session_v2(&identity(), initial.clone())
+        .unwrap();
+    store
+        .replace_graph_session_v2(
+            &identity(),
+            initial.workspace_revision(),
+            initial.trace().revision(),
+            first.clone(),
+        )
+        .unwrap();
+    store
+        .replace_graph_session_v2(
+            &identity(),
+            first.workspace_revision(),
+            first.trace().revision(),
+            second.clone(),
+        )
+        .unwrap();
+    drop(store);
+    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
+    assert_eq!(
+        store.read_graph_session_v2(&identity()).unwrap(),
+        Some(second.clone())
+    );
+    let resolved = second
+        .unblock_active_attempt_v2(
+            second.trace().revision(),
+            &attempt_id(1),
+            Some(&lower),
+            false,
+            UnixMillis::new(21),
+        )
+        .unwrap()
+        .into_state();
+    store
+        .replace_graph_session_v2(
+            &identity(),
+            second.workspace_revision(),
+            second.trace().revision(),
+            resolved.clone(),
+        )
+        .unwrap();
+    let all_resolved = resolved
+        .unblock_active_attempt_v2(
+            resolved.trace().revision(),
+            &attempt_id(1),
+            None,
+            true,
+            UnixMillis::new(22),
+        )
+        .unwrap()
+        .into_state();
+    store
+        .replace_graph_session_v2(
+            &identity(),
+            resolved.workspace_revision(),
+            resolved.trace().revision(),
+            all_resolved.clone(),
+        )
         .unwrap();
     drop(store);
     assert_eq!(
         open(&temporary, SqliteStoreOptionsV1::new(8).unwrap())
             .read_graph_session_v2(&identity())
             .unwrap(),
-        Some(second)
+        Some(all_resolved)
     );
 }
 

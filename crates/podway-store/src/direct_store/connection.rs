@@ -6,7 +6,9 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use podway_core::{SessionId, Sha256Digest, TerminalDispositionV2, UnixMillis, WorkspaceId};
+use podway_core::{
+    AttemptId, SessionId, Sha256Digest, TerminalDispositionV2, UnixMillis, WorkspaceId,
+};
 use rusqlite::{Connection, OpenFlags, TransactionBehavior, config::DbConfig};
 
 use crate::{
@@ -151,7 +153,9 @@ impl DirectStoreV1 {
         deadline: Instant,
         read: impl FnOnce(&DirectReadSnapshotV1<'_>) -> DirectStoreResultV1<T>,
     ) -> DirectStoreResultV1<T> {
-        let lease = DirectOpenLease::acquire(&self.layout, deadline)?;
+        let lease = DirectOpenLease::acquire(&self.layout, deadline, &mut || {
+            self.boundary(DirectTransactionBoundaryV1::UnmarkedMissingReadClassified)
+        })?;
         let _connection_gate = connection_gate(deadline)?;
         let database = super::classification::open_read_nofollow(&self.layout.database())?;
         self.qualified_read(deadline, lease.heap_snapshot(), |transaction, binding| {
@@ -165,6 +169,157 @@ impl DirectStoreV1 {
             ensure_deadline(deadline)?;
             Ok(result)
         })
+    }
+
+    /// Qualified coherent read while the engine owns an exact maintenance intent.
+    /// This never acquires a nested lock or resumes/removes a marker.
+    pub fn read_under_exclusive_lease<T>(
+        &self,
+        lease: &super::ExclusiveMaintenanceLeaseV1,
+        deadline: Instant,
+        read: impl FnOnce(&DirectReadSnapshotV1<'_>) -> DirectStoreResultV1<T>,
+    ) -> DirectStoreResultV1<T> {
+        lease.revalidate(&self.layout)?;
+        super::classification::classify_unmarked_store_v1(&self.layout)?.require_current()?;
+        let _gate = connection_gate(deadline)?;
+        let database = super::classification::open_read_nofollow(&self.layout.database())?;
+        let mut connection = self.open_readonly_connection(
+            deadline,
+            !super::classification::path_exists(&self.layout.shm())?,
+        )?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
+        let binding = self.validate_connection(&transaction)?;
+        let snapshot = DirectReadSnapshotV1 {
+            connection: &transaction,
+            binding,
+        };
+        let result = read(&snapshot)?;
+        lease.revalidate(&self.layout)?;
+        if !super::maintenance::same_file(&database, &self.layout.database())? {
+            return Err(DirectStoreErrorV1::Maintenance);
+        }
+        ensure_deadline(deadline)?;
+        Ok(result)
+    }
+
+    /// Resume only a committed private bootstrap generation owned by the exact
+    /// engine intent. Fixed sidecars must be absent or hard links to that private
+    /// generation; an unrelated publication is never replaced or removed.
+    pub fn recover_bootstrap_publication(
+        &self,
+        lease: &super::ExclusiveMaintenanceLeaseV1,
+        workspace: &WorkspaceId,
+        generation: &str,
+        request: &super::DirectMutationRequestV1,
+        deadline: Instant,
+    ) -> DirectStoreResultV1<Option<DirectRecordedOutcomeV1>> {
+        use std::fs;
+        lease.revalidate(&self.layout)?;
+        if super::classification::path_exists(&self.layout.database())? {
+            return Err(DirectStoreErrorV1::Maintenance);
+        }
+        let _gate = connection_gate(deadline)?;
+        let mut owned = None;
+        for (index, entry) in fs::read_dir(self.layout.runtime_directory())?.enumerate() {
+            if index >= 1024 {
+                return Err(DirectStoreErrorV1::Unreadable);
+            }
+            ensure_deadline(deadline)?;
+            let entry = entry?;
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            if !name.starts_with(".direct-store-")
+                || name.ends_with("-wal")
+                || name.ends_with("-shm")
+            {
+                continue;
+            }
+            let path = entry.path();
+            let file = super::classification::open_read_nofollow(&path)?;
+            let connection = match Connection::open_with_flags(
+                file_uri(&path, true),
+                OpenFlags::SQLITE_OPEN_URI
+                    | OpenFlags::SQLITE_OPEN_READ_ONLY
+                    | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+            ) {
+                Ok(connection) => connection,
+                Err(_) => continue,
+            };
+            configure_connection(&connection, true, deadline)?;
+            let Ok(binding) = self.validate_connection(&connection) else {
+                continue;
+            };
+            let found_generation: String = connection.query_row(
+                "SELECT generation_id FROM writer_contract WHERE singleton=1",
+                [],
+                |row| row.get(0),
+            )?;
+            if found_generation != generation
+                || binding.identity().workspace_uuid() != workspace
+                || binding.last_validated_root() != self.layout.root()
+            {
+                continue;
+            }
+            let Some(outcome) = super::transaction::read_outcome(&connection, request.key())?
+            else {
+                continue;
+            };
+            if outcome.digest() != request.digest() || outcome.command() != request.command() {
+                return Err(DirectStoreErrorV1::IdempotencyKeyReused);
+            }
+            if owned.is_some() {
+                return Err(DirectStoreErrorV1::Maintenance);
+            }
+            drop(connection);
+            // A committed WAL can be published with its exact main/index files;
+            // no recovery writes or conversion are necessary.
+            let mut sidecars = Vec::new();
+            for suffix in ["-wal", "-shm"] {
+                let source = super::sidecar(&path, suffix);
+                let source_file = super::classification::open_read_nofollow(&source)?;
+                let target = super::sidecar(&self.layout.database(), suffix);
+                if super::classification::path_exists(&target)?
+                    && !super::maintenance::same_file(&source_file, &target)?
+                {
+                    return Err(DirectStoreErrorV1::Maintenance);
+                }
+                sidecars.push((source, source_file, target));
+            }
+            owned = Some((path, file, sidecars, outcome));
+        }
+        let Some((path, file, sidecars, outcome)) = owned else {
+            return Ok(None);
+        };
+        lease.revalidate(&self.layout)?;
+        if !super::maintenance::same_file(&file, &path)? {
+            return Err(DirectStoreErrorV1::Maintenance);
+        }
+        for (source, source_file, target) in &sidecars {
+            if !super::maintenance::same_file(source_file, source)? {
+                return Err(DirectStoreErrorV1::Maintenance);
+            }
+            if !super::classification::path_exists(target)? {
+                fs::hard_link(source, target)?;
+            }
+            if !super::maintenance::same_file(source_file, target)? {
+                return Err(DirectStoreErrorV1::Maintenance);
+            }
+            source_file.sync_all()?;
+        }
+        file.sync_all()?;
+        fs::hard_link(&path, self.layout.database())?;
+        super::maintenance::open_directory(&self.layout.runtime_directory())?.sync_all()?;
+        // Remove only the exact private inodes after durable main publication.
+        if super::maintenance::same_file(&file, &path)? {
+            fs::remove_file(path)?;
+        }
+        for (source, source_file, _) in sidecars {
+            if super::maintenance::same_file(&source_file, &source)? {
+                fs::remove_file(source)?;
+            }
+        }
+        super::maintenance::open_directory(&self.layout.runtime_directory())?.sync_all()?;
+        Ok(Some(outcome))
     }
 
     /// A writer may be rebuilding the shared WAL index while a write-free
@@ -302,6 +457,17 @@ impl DirectStoreV1 {
     /// Expensive integrity checks are explicit maintenance/doctor work, not cheap admission.
     pub fn verify_integrity(&self, deadline: Instant) -> DirectStoreResultV1<()> {
         let lease = super::ExclusiveMaintenanceLeaseV1::acquire(&self.layout, deadline, false)?;
+        self.verify_integrity_under_exclusive_lease(&lease, deadline, |_| Ok(()))
+    }
+
+    /// Diagnose and project the exact same committed snapshot under exclusion.
+    pub fn verify_integrity_under_exclusive_lease<T>(
+        &self,
+        lease: &super::ExclusiveMaintenanceLeaseV1,
+        deadline: Instant,
+        read: impl FnOnce(&DirectReadSnapshotV1<'_>) -> DirectStoreResultV1<T>,
+    ) -> DirectStoreResultV1<T> {
+        lease.revalidate(&self.layout)?;
         let _connection_gate = connection_gate(deadline)?;
         super::classify_direct_store_v1(&self.layout)?.require_current()?;
         let database = super::classification::open_read_nofollow(&self.layout.database())?;
@@ -310,7 +476,7 @@ impl DirectStoreV1 {
             !super::classification::path_exists(&self.layout.shm())?,
         )?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
-        self.validate_connection(&transaction)?;
+        let binding = self.validate_connection(&transaction)?;
         let check: String = transaction.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
         if check != "ok" {
             return Err(DirectStoreErrorV1::Unreadable);
@@ -346,11 +512,17 @@ impl DirectStoreV1 {
             super::transaction::read_outcome(&transaction, &key)?
                 .ok_or(DirectStoreErrorV1::Unreadable)?;
         }
+        let snapshot = DirectReadSnapshotV1 {
+            connection: &transaction,
+            binding,
+        };
+        let result = read(&snapshot)?;
         lease.revalidate(&self.layout)?;
         if !super::maintenance::same_file(&database, &self.layout.database())? {
             return Err(DirectStoreErrorV1::Maintenance);
         }
-        ensure_deadline(deadline)
+        ensure_deadline(deadline)?;
+        Ok(result)
     }
 }
 
@@ -378,6 +550,15 @@ impl DirectReadSnapshotV1<'_> {
         &self.binding
     }
 
+    pub fn committed_sequence(&self) -> DirectStoreResultV1<u64> {
+        let sequence: i64 = self.connection.query_row(
+            "SELECT next_workspace_sequence FROM workspace_state WHERE singleton=1",
+            [],
+            |row| row.get(0),
+        )?;
+        u64::try_from(sequence).map_err(|_| DirectStoreErrorV1::Unreadable)
+    }
+
     pub fn current_graph(&self) -> DirectStoreResultV1<Option<GraphSessionStateV2>> {
         Ok(v2_state::load_graph_session_connection_v2(self.connection)?)
     }
@@ -401,6 +582,36 @@ impl DirectReadSnapshotV1<'_> {
         .transpose()
     }
 
+    /// Bounded, read-only qualification inventory from this exact WAL snapshot.
+    #[doc(hidden)]
+    pub fn retained_outcome_keys_for_qualification_v1(
+        &self,
+        maximum: usize,
+    ) -> DirectStoreResultV1<Vec<IdempotencyKeyV1>> {
+        if maximum == 0 || maximum > 10_000 {
+            return Err(DirectStoreErrorV1::InvalidInput {
+                reason: "qualification outcome inventory bound is invalid",
+            });
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT idempotency_key FROM mutation_outcomes ORDER BY workspace_sequence LIMIT ?1",
+        )?;
+        let rows = statement.query_map(
+            [i64::try_from(maximum + 1).expect("bounded qualification inventory")],
+            |row| row.get::<_, String>(0),
+        )?;
+        let mut keys = Vec::new();
+        for row in rows {
+            if keys.len() == maximum {
+                return Err(DirectStoreErrorV1::InvalidInput {
+                    reason: "qualification outcome inventory exceeds its bound",
+                });
+            }
+            keys.push(IdempotencyKeyV1::new(row?).map_err(|_| DirectStoreErrorV1::Unreadable)?);
+        }
+        Ok(keys)
+    }
+
     pub fn archived_graph(
         &self,
         session: &SessionId,
@@ -409,6 +620,54 @@ impl DirectReadSnapshotV1<'_> {
             self.connection,
             session,
         )?)
+    }
+
+    pub fn archive_summary(
+        &self,
+        session: &SessionId,
+    ) -> DirectStoreResultV1<Option<crate::SessionArchiveSummaryV2>> {
+        Ok(v2_state::archived_session_summary_connection_v2(
+            self.connection,
+            session,
+        )?)
+    }
+
+    pub fn delegation_receipt(
+        &self,
+        session: &SessionId,
+        attempt: &AttemptId,
+    ) -> DirectStoreResultV1<Option<crate::DelegationReceiptV1>> {
+        Ok(v2_delegation::read_receipt_connection_v1(
+            self.connection,
+            self.binding.identity().workspace_uuid(),
+            session,
+            attempt,
+        )?)
+    }
+
+    pub fn archived_view(
+        &self,
+        session: &SessionId,
+        observed_at: UnixMillis,
+    ) -> DirectStoreResultV1<Option<DirectWorkspaceViewV1>> {
+        let Some(graph) = self.archived_graph(session)? else {
+            return Ok(None);
+        };
+        let receipts = v2_delegation::receipt_snapshot_connection_v1(
+            self.connection,
+            &graph,
+            self.binding.identity().workspace_uuid(),
+        )?;
+        let dispositions =
+            v2_state::load_terminal_dispositions_connection_v2(self.connection, &graph)?;
+        Ok(Some(DirectWorkspaceViewV1 {
+            binding: self.binding.clone(),
+            graph: Some(graph),
+            receipts,
+            dispositions,
+            sequence: self.committed_sequence()?,
+            observed_at,
+        }))
     }
 
     pub fn archives(&self, window: usize) -> DirectStoreResultV1<SessionArchiveListPageV2> {
@@ -434,12 +693,7 @@ impl DirectReadSnapshotV1<'_> {
                 Vec::new(),
             ),
         };
-        let sequence: i64 = self.connection.query_row(
-            "SELECT next_workspace_sequence FROM workspace_state WHERE singleton = 1",
-            [],
-            |row| row.get(0),
-        )?;
-        let sequence = u64::try_from(sequence).map_err(|_| DirectStoreErrorV1::Unreadable)?;
+        let sequence = self.committed_sequence()?;
         Ok(DirectWorkspaceViewV1 {
             binding: self.binding.clone(),
             graph,

@@ -1222,7 +1222,9 @@ fn cold_read_with_an_uninitialized_existing_shm_is_write_free() {
     fs::write(direct.layout().shm(), vec![0; size as usize]).unwrap();
     let before = images(&direct.layout().runtime_directory());
     direct
-        .read(Instant::now() + Duration::from_millis(200), |snapshot| {
+        // This checks write-free recovery, not open latency. Other parallel tests
+        // can own the process-wide connection gate; use the fixture's normal bound.
+        .read(deadline(), |snapshot| {
             assert_eq!(
                 snapshot
                     .outcome(request("killed-state").key())?

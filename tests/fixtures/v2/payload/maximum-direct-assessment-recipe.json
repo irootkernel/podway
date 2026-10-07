@@ -1,0 +1,17 @@
+{
+  "schema": "podway.v2-fixture-recipe/v1",
+  "fixture_class": "maximum-size",
+  "evidence_level": "production-serialization",
+  "implementation_status": "automated",
+  "outer_schema": "assets/schemas/output-v4.schema.json",
+  "result_schema": "assets/schemas/next-result-v5.schema.json",
+  "maximum_bytes": 1048576,
+  "operation": "Record sixteen criterion assessments with 2000 escaped control-character reasons, a 256-character actor, and four ordered citations each; read the enriched next result and ordinary histories through the actual direct Engine.",
+  "expected": "The complete assessment survives bounded output/v4 serialization and decoding; ordinary decision and stale-assessment histories remain at most 65536 bytes.",
+  "production_proof": {
+    "kind": "cargo-test",
+    "path": "crates/podway-engine/tests/int_v2dfc006_readback_ports.rs",
+    "function": "v2gol004_max_escaped_assessment_stays_out_of_history_but_survives_next_readback",
+    "command": "cargo test -p podway-engine --locked --test int_suite int_v2dfc006_readback_ports::goals::v2gol004_max_escaped_assessment_stays_out_of_history_but_survives_next_readback -- --exact"
+  }
+}

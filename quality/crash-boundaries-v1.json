@@ -20,7 +20,13 @@
       "DS02",
       "DS03",
       "DS04",
-      "DS05"
+      "DS05",
+      "DE01",
+      "DE02",
+      "DE03",
+      "DE04",
+      "DE05",
+      "DE06"
     ],
     "covered": [
       "C05",
@@ -40,7 +46,13 @@
       "DS02",
       "DS03",
       "DS04",
-      "DS05"
+      "DS05",
+      "DE01",
+      "DE02",
+      "DE03",
+      "DE04",
+      "DE05",
+      "DE06"
     ],
     "percent": 100
   },
@@ -241,6 +253,72 @@
         "recovery": "ordinary read leaves private bytes unchanged; explicit bootstrap retry publishes one complete Store",
         "invariant": "private bootstrap COMMIT never exposes partial authoritative state; reset/removal protocols are covered separately",
         "source_locator": "crates/podway-store/src/direct_store/transaction.rs::DirectStoreV1::bootstrap"
+      }
+    },
+    {
+      "id": "DE01",
+      "proof": {
+        "failpoint": "BeforeBegin",
+        "test": "crates/podway-engine/tests/int_v2dfc006_crashes.rs::sigkill_at_all_five_engine_boundaries_preserves_effect_once_recovery",
+        "termination": "20 actual child SIGKILLs at this native boundary in the release profile",
+        "recovery": "Cold lookup and same-key retry observe one recorded effect or no effect followed by exactly one apply.",
+        "invariant": "Direct Engine state and the validated original output/v4 are atomic and success-only.",
+        "source_locator": "crates/podway-engine/src/direct_items.rs::execute_item_v1"
+      }
+    },
+    {
+      "id": "DE02",
+      "proof": {
+        "failpoint": "AfterBegin",
+        "test": "crates/podway-engine/tests/int_v2dfc006_crashes.rs::sigkill_at_all_five_engine_boundaries_preserves_effect_once_recovery",
+        "termination": "20 actual child SIGKILLs at this native boundary in the release profile",
+        "recovery": "Cold lookup and same-key retry observe one recorded effect or no effect followed by exactly one apply.",
+        "invariant": "Direct Engine state and the validated original output/v4 are atomic and success-only.",
+        "source_locator": "crates/podway-engine/src/direct_items.rs::execute_item_v1"
+      }
+    },
+    {
+      "id": "DE03",
+      "proof": {
+        "failpoint": "AfterStateBeforeOutcome",
+        "test": "crates/podway-engine/tests/int_v2dfc006_crashes.rs::sigkill_at_all_five_engine_boundaries_preserves_effect_once_recovery",
+        "termination": "20 actual child SIGKILLs at this native boundary in the release profile",
+        "recovery": "Cold lookup and same-key retry observe one recorded effect or no effect followed by exactly one apply.",
+        "invariant": "Direct Engine state and the validated original output/v4 are atomic and success-only.",
+        "source_locator": "crates/podway-engine/src/direct_items.rs::execute_item_v1"
+      }
+    },
+    {
+      "id": "DE04",
+      "proof": {
+        "failpoint": "AfterCommitBeforeOutput",
+        "test": "crates/podway-engine/tests/int_v2dfc006_crashes.rs::sigkill_at_all_five_engine_boundaries_preserves_effect_once_recovery",
+        "termination": "20 actual child SIGKILLs at this native boundary in the release profile",
+        "recovery": "Cold lookup and same-key retry observe one recorded effect or no effect followed by exactly one apply.",
+        "invariant": "Direct Engine state and the validated original output/v4 are atomic and success-only.",
+        "source_locator": "crates/podway-engine/src/direct_items.rs::execute_item_v1"
+      }
+    },
+    {
+      "id": "DE05",
+      "proof": {
+        "failpoint": "BeforeMaintenancePublication",
+        "test": "crates/podway-engine/tests/int_v2dfc006_crashes.rs::sigkill_at_all_five_engine_boundaries_preserves_effect_once_recovery",
+        "termination": "20 actual child SIGKILLs at this native boundary in the release profile",
+        "recovery": "Exact reset key resumes its published marker, publishes one complete Store, and replays the original success.",
+        "invariant": "Marked reads reject without resuming; explicit reset recovery preserves effect-once publication.",
+        "source_locator": "crates/podway-engine/src/direct_maintenance.rs::reset_inner"
+      }
+    },
+    {
+      "id": "DE06",
+      "proof": {
+        "failpoint": "AfterFirstRemovalMarker",
+        "test": "crates/podway-engine/tests/int_v2dfc006_maintenance.rs::sigkill_between_final_removal_markers_preserves_exact_retry_and_original_response",
+        "termination": "Actual child SIGKILL after durable operation-marker deletion and before recovery-intent deletion",
+        "recovery": "Exact retry preserves the original response identifier and timestamp; another key or writer manifest cannot resume.",
+        "invariant": "Recovery intent survives until the removal marker is durably absent; marked reads never resume maintenance.",
+        "source_locator": "crates/podway-engine/src/workspace.rs::ValidatedPodwayRemovalDirectoryV1::finish_direct_removal"
       }
     }
   ]

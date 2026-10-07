@@ -20,6 +20,8 @@ mod int_v2dfc005_maintenance;
 mod int_v2dfc005_relational;
 #[path = "int_v2dfc005_scale.rs"]
 mod int_v2dfc005_scale;
+#[path = "int_v2dfc006_execution_boundary.rs"]
+mod int_v2dfc006_execution_boundary;
 #[path = "int_v2sdg004_receipt.rs"]
 mod int_v2sdg004_receipt;
 #[path = "int_v2sdg005_semantics.rs"]

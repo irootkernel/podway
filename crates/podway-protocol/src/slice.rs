@@ -3956,7 +3956,15 @@ pub fn canonical_procedure_v2_mutation_identity_v1(
     request: &ProcedureV2MutationRequestV1,
     resolved_workspace_id: &WorkspaceId,
 ) -> Result<String, SliceErrorV1> {
-    let (preconditions, payload) = match request.command() {
+    canonical_procedure_v2_command_identity_v1(request.command(), resolved_workspace_id)
+}
+
+/// The same semantic identity is available to an in-process typed caller without IPC metadata.
+pub fn canonical_procedure_v2_command_identity_v1(
+    command: &ProcedureV2MutationCommandV1,
+    resolved_workspace_id: &WorkspaceId,
+) -> Result<String, SliceErrorV1> {
+    let (preconditions, payload) = match command {
         ProcedureV2MutationCommandV1::SessionBegin(command) => (
             session_identity_preconditions_json(&command.preconditions),
             json!({ "initial_goal": &command.initial_goal }),
@@ -4044,7 +4052,7 @@ pub fn canonical_procedure_v2_mutation_identity_v1(
     };
     canonicalize_json_v1(&json!({
         "protocol_major": 1,
-        "command": request.command().command_name(),
+        "command": command.command_name(),
         "workspace_id": resolved_workspace_id,
         "preconditions": preconditions,
         "payload": payload,
@@ -4070,8 +4078,28 @@ pub fn canonical_mutation_identity_v1(
         });
     }
 
+    canonical_direct_slice_mutation_identity_v1(command, resolved_workspace_id)
+}
+
+/// Direct writes include archive purging and local repair, which previously bypassed jobs.
+/// Retired jobs and queries never acquire a mutation identity through this boundary.
+pub fn canonical_direct_slice_mutation_identity_v1(
+    command: &SliceCommandV1,
+    resolved_workspace_id: &WorkspaceId,
+) -> Result<String, SliceErrorV1> {
+    if !is_direct_slice_mutation_v1(command) {
+        return Err(SliceErrorV1::NotAMutation {
+            command: command.command_name(),
+        });
+    }
+
     let (preconditions, payload) = match command {
         SliceCommandV1::WorkspaceInit(init) => (json!({}), json!({"repair": init.repair})),
+        SliceCommandV1::WorkspaceRepair(_) => (json!({}), json!({})),
+        SliceCommandV1::SessionArchivePurge(purge) => (
+            json!({"session_id":purge.session_id,"session_revision":purge.expected_session_revision}),
+            json!({"confirmed":purge.confirmed}),
+        ),
         SliceCommandV1::SessionStart(start) => (json!({}), start_payload_json_v1(start)),
         SliceCommandV1::SessionStartReplace(start) => {
             (session_identity_preconditions_json(&start.preconditions), {
@@ -4162,13 +4190,11 @@ pub fn canonical_mutation_identity_v1(
         ),
         SliceCommandV1::WorkspaceDoctor(_)
         | SliceCommandV1::WorkspaceShow(_)
-        | SliceCommandV1::WorkspaceRepair(_)
         | SliceCommandV1::SessionStatus(_)
         | SliceCommandV1::SessionNext(_)
         | SliceCommandV1::SessionObserve(_)
         | SliceCommandV1::SessionArchiveList(_)
         | SliceCommandV1::SessionArchiveShow(_)
-        | SliceCommandV1::SessionArchivePurge(_)
         | SliceCommandV1::EvidenceRead(_)
         | SliceCommandV1::DelegationPackage(_)
         | SliceCommandV1::DelegationReceipt(_)
@@ -4193,6 +4219,49 @@ pub fn canonical_mutation_identity_v1(
     })
 }
 
+pub const fn is_direct_slice_mutation_v1(command: &SliceCommandV1) -> bool {
+    match command {
+        SliceCommandV1::SessionStart(input) => !input.dry_run,
+        SliceCommandV1::SessionStartReplace(input) => !input.start.dry_run,
+        SliceCommandV1::SessionReset(input) => !input.dry_run,
+        SliceCommandV1::WorkspaceInit(_)
+        | SliceCommandV1::WorkspaceRepair(_)
+        | SliceCommandV1::WorkspaceResetAll(_)
+        | SliceCommandV1::SessionArchive(_)
+        | SliceCommandV1::SessionArchivePurge(_)
+        | SliceCommandV1::SessionComplete(_)
+        | SliceCommandV1::SessionSkip(_)
+        | SliceCommandV1::SessionRetry(_)
+        | SliceCommandV1::SessionBlock(_)
+        | SliceCommandV1::SessionUnblock(_)
+        | SliceCommandV1::SessionCancel(_)
+        | SliceCommandV1::DelegationAccept(_)
+        | SliceCommandV1::ItemCheck(_)
+        | SliceCommandV1::ItemUncheck(_)
+        | SliceCommandV1::ItemSet(_)
+        | SliceCommandV1::ItemAdd(_)
+        | SliceCommandV1::ItemRemove(_)
+        | SliceCommandV1::ItemAttach(_)
+        | SliceCommandV1::ItemClear(_)
+        | SliceCommandV1::ItemRecordMany(_) => true,
+        SliceCommandV1::WorkspaceDoctor(_)
+        | SliceCommandV1::WorkspaceShow(_)
+        | SliceCommandV1::SessionStatus(_)
+        | SliceCommandV1::SessionNext(_)
+        | SliceCommandV1::SessionObserve(_)
+        | SliceCommandV1::EvidenceRead(_)
+        | SliceCommandV1::DelegationPackage(_)
+        | SliceCommandV1::DelegationReceipt(_)
+        | SliceCommandV1::SessionArchiveList(_)
+        | SliceCommandV1::SessionArchiveShow(_)
+        | SliceCommandV1::JobList(_)
+        | SliceCommandV1::JobLookup(_)
+        | SliceCommandV1::JobStatus(_)
+        | SliceCommandV1::JobWait(_)
+        | SliceCommandV1::JobCancel(_) => false,
+    }
+}
+
 /// Canonical semantic identity for a Procedure-backed start after daemon resolution.
 ///
 /// The resolved digest is kept separate from the wire request because it is an admission fact,
@@ -4204,7 +4273,20 @@ pub fn canonical_start_mutation_identity_v1(
     resolved_workspace_id: &WorkspaceId,
     resolved_procedure_digest: &Sha256Digest,
 ) -> Result<String, SliceErrorV1> {
-    let expected_procedure_digest = match request.command() {
+    canonical_mutation_identity_v1(request, resolved_workspace_id)?;
+    canonical_direct_start_identity_v1(
+        request.command(),
+        resolved_workspace_id,
+        resolved_procedure_digest,
+    )
+}
+
+pub fn canonical_direct_start_identity_v1(
+    command: &SliceCommandV1,
+    resolved_workspace_id: &WorkspaceId,
+    resolved_procedure_digest: &Sha256Digest,
+) -> Result<String, SliceErrorV1> {
+    let expected_procedure_digest = match command {
         SliceCommandV1::SessionStart(start) => start.expected_procedure_digest.as_ref(),
         SliceCommandV1::SessionStartReplace(start) => {
             start.start.expected_procedure_digest.as_ref()
@@ -4215,7 +4297,7 @@ pub fn canonical_start_mutation_identity_v1(
             });
         }
     };
-    let canonical = canonical_mutation_identity_v1(request, resolved_workspace_id)?;
+    let canonical = canonical_direct_slice_mutation_identity_v1(command, resolved_workspace_id)?;
     let mut identity: Value =
         serde_json::from_str(&canonical).map_err(|error| SliceErrorV1::Canonicalization {
             message: error.to_string(),

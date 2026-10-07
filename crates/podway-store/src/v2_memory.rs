@@ -4169,7 +4169,14 @@ pub(crate) fn replace_workflow_memory_v2(
                 return Err(corrupt(StoreRecordKindV1::Item));
             }
         }
-        for (old, new) in old_attempt.blockers().iter().zip(new_attempt.blockers()) {
+        // Timestamp ties and clock regressions can insert a new blocker before
+        // existing entries in canonical order. Persistence follows identity.
+        for old in old_attempt.blockers() {
+            let new = new_attempt
+                .blockers()
+                .iter()
+                .find(|new| new.blocker_id() == old.blocker_id())
+                .ok_or_else(|| corrupt(StoreRecordKindV1::Blocker))?;
             if old == new {
                 continue;
             }
@@ -4207,11 +4214,12 @@ pub(crate) fn replace_workflow_memory_v2(
                 return Err(corrupt(StoreRecordKindV1::Blocker));
             }
         }
-        for blocker in new_attempt
-            .blockers()
-            .iter()
-            .skip(old_attempt.blockers().len())
-        {
+        for blocker in new_attempt.blockers().iter().filter(|new| {
+            !old_attempt
+                .blockers()
+                .iter()
+                .any(|old| old.blocker_id() == new.blocker_id())
+        }) {
             insert_blocker_v2(transaction, blocker)?;
         }
     }

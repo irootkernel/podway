@@ -135,7 +135,7 @@ fn rust_tokens(source: &str) -> Vec<RustTokenV1> {
                     }
                 }
             }
-            b'"' | b'b' if bytes.get(cursor + 1) == Some(&b'"') => {
+            b'"' | b'b' if bytes[cursor] == b'"' || bytes.get(cursor + 1) == Some(&b'"') => {
                 let quote = if bytes[cursor] == b'b' {
                     cursor += 1;
                     cursor
@@ -565,9 +565,22 @@ fn assert_no_forbidden_source_apis(source_root: &Path) {
                     let macro_name = path
                         .last()
                         .expect("parsed macro path must contain a macro name");
+                    // This one reviewed data input supplies public error summaries,
+                    // not Rust source or a generated capability implementation.
+                    let canonical_error_catalog = path.as_slice() == ["include_str"]
+                        && relative_source == Path::new("direct_error.rs")
+                        && matches!(tokens.get(next + 2), Some(RustTokenV1::StringLiteral(input))
+                            if input == "../../../assets/specifications/error-codes.json")
+                        && matches!(tokens.get(next + 3), Some(RustTokenV1::Punct(')')));
+                    // Its reviewed local definition only constructs typed UUID-v4 IDs;
+                    // that definition is itself traversed by this source audit.
+                    let native_identity_method = path.as_slice() == ["native_id"]
+                        && relative_source == Path::new("direct_execution.rs");
                     assert!(
                         (path.len() == 1 && ALLOWED_MACROS.contains(&macro_name.as_str()))
-                            || path.as_slice() == ["serde_json", "json"],
+                            || path.as_slice() == ["serde_json", "json"]
+                            || canonical_error_catalog
+                            || native_identity_method,
                         "PAC-063 rejects macro-composed capability {} in {}",
                         path.join("::"),
                         source_path.display()
@@ -611,6 +624,12 @@ fn assert_network_proof_sentinels() {
     }
 
     let ordinary_identifier = rust_tokens("network_listener_name = \"std::net::TcpListener\";");
+    assert!(
+        matches!(ordinary_identifier.as_slice(),
+            [RustTokenV1::Ident(_), RustTokenV1::Punct('='), RustTokenV1::StringLiteral(value), RustTokenV1::Punct(';')]
+                if value == "std::net::TcpListener"),
+        "PAC-063 lexer must distinguish ordinary string data from a capability path"
+    );
     assert!(
         path_at(&ordinary_identifier, 0).is_some(),
         "PAC-063 lexer must retain ordinary identifiers"
@@ -880,6 +899,18 @@ fn pac063_daemon_exposes_only_a_private_unix_endpoint_and_no_network_surface() {
     assert_frozen_source_inventory(
         &engine_source_root,
         &[
+            "direct_api.rs",
+            "direct_delegation.rs",
+            "direct_error.rs",
+            "direct_execution.rs",
+            "direct_items.rs",
+            "direct_maintenance.rs",
+            "direct_mutation.rs",
+            "direct_procedure.rs",
+            "direct_read_service.rs",
+            "direct_sessions.rs",
+            "direct_start.rs",
+            "direct_workspace.rs",
             "execution.rs",
             "lib.rs",
             "native_execution.rs",

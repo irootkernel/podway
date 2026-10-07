@@ -21,3 +21,5 @@ mod int_v2agt004_record_many;
 mod int_v2agt005_recovery;
 #[path = "int_v2dfc003_contract_reservation.rs"]
 mod int_v2dfc003_contract_reservation;
+#[path = "int_v2dfc006_direct_envelopes.rs"]
+mod int_v2dfc006_direct_envelopes;

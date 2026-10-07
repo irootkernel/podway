@@ -13,8 +13,8 @@ use podway_core::{
 };
 use podway_git::{
     Base64UrlPathBytesV1, DiagnosticPathDisplayV1, GitInvariantViolationV1, GitReadOperationV1,
-    GitRepresentationProblemV1, GitResolverErrorV1, LosslessPathV1, NativeGitResolverV1,
-    WORKTREE_SELECTOR_VERSION_V1, WorktreeSelectorV1,
+    GitRepresentationProblemV1, GitResolverContractV1, GitResolverErrorV1, LosslessPathV1,
+    NativeGitResolverV1, ValidatedWorktreeV1, WORKTREE_SELECTOR_VERSION_V1, WorktreeSelectorV1,
 };
 use podway_protocol::WorktreeSelectorWireV1;
 use podway_store::WorkspaceBindingV1;
@@ -212,6 +212,255 @@ where
 pub struct NativeArtifactVerifierV1<I> {
     resolver: WorkspaceResolverV1<NativeGitResolverV1, I>,
     git_resolver: NativeGitResolverV1,
+}
+
+/// Transaction-safe Procedure reads and artifact verification from a qualified direct workspace.
+/// The owning snapshot or transaction supplies the binding; this adapter never opens SQLite.
+#[derive(Clone, Debug)]
+pub struct NativeDirectWorkspaceV1 {
+    resolved: ResolvedWorkspaceV1,
+}
+
+impl NativeDirectWorkspaceV1 {
+    pub fn new(resolved: ResolvedWorkspaceV1) -> Self {
+        Self { resolved }
+    }
+
+    fn revalidate_worktree(
+        &self,
+        binding: &WorkspaceBindingV1,
+    ) -> Result<ValidatedWorktreeV1, ExecutionBoundaryErrorV1> {
+        if binding.schema_version() != podway_store::direct_store::DIRECT_SCHEMA_GENERATION_V1
+            || binding.identity() != self.resolved.store_identity()
+        {
+            return Err(domain_invalid_state_v1(
+                "direct native binding does not match the qualified Store",
+            ));
+        }
+        let prior = self.resolved.worktree();
+        let selector = WorktreeSelectorV1::new(
+            WORKTREE_SELECTOR_VERSION_V1,
+            Some(prior.identity().clone()),
+            prior.roots().worktree_root().clone(),
+        )
+        .map_err(|_| domain_invalid_state_v1("direct native selector is invalid"))?;
+        let current = NativeGitResolverV1::new()
+            .resolve(selector)
+            .map_err(git_resolution_boundary_error_v1)?;
+        if current.identity() != prior.identity() || !prior.same_transient_object_evidence(&current)
+        {
+            return Err(domain_invalid_state_v1(
+                "direct native worktree changed during execution",
+            ));
+        }
+        Ok(current)
+    }
+
+    fn hash(
+        &self,
+        binding: &WorkspaceBindingV1,
+        path: &str,
+        media_type: &str,
+        revalidation: bool,
+    ) -> Result<ArtifactValueV1, ExecutionBoundaryErrorV1> {
+        let worktree = self.revalidate_worktree(binding)?;
+        let candidate =
+            artifact_path_from_root_v1(self.resolved.workspace_root(), path).map_err(|_| {
+                ExecutionBoundaryErrorV1::LocalArtifact(
+                    crate::execution::LocalArtifactFailureV1::PathOutsideWorktree,
+                )
+            })?;
+        let hashed = NativeGitResolverV1::new()
+            .hash_local_artifact(&worktree, &candidate)
+            .map_err(|error| {
+                if revalidation {
+                    artifact_revalidation_boundary_error_v1(error)
+                } else {
+                    direct_artifact_boundary_error_v1(error, &candidate)
+                }
+            })?;
+        if hashed.canonical_path() != &candidate {
+            return Err(domain_invalid_state_v1(
+                "artifact resolver returned another canonical path",
+            ));
+        }
+        ArtifactValueV1::local_path(
+            path,
+            hashed.digest().clone(),
+            hashed.byte_length(),
+            media_type,
+        )
+        .map_err(ExecutionBoundaryErrorV1::domain)
+    }
+}
+
+fn direct_artifact_boundary_error_v1(
+    error: GitResolverErrorV1,
+    candidate: &LosslessPathV1,
+) -> ExecutionBoundaryErrorV1 {
+    use crate::execution::LocalArtifactFailureV1 as E;
+    let failure = match error {
+        GitResolverErrorV1::PathEscape { .. } | GitResolverErrorV1::SymlinkEscape { .. } => {
+            E::PathOutsideWorktree
+        }
+        GitResolverErrorV1::Io {
+            operation: GitReadOperationV1::OpenLocalArtifact,
+        }
+        | GitResolverErrorV1::Representation {
+            problem: GitRepresentationProblemV1::NonRegularArtifact,
+        } => {
+            // This observation only refines a failed descriptor-safe open. It is never
+            // used to authorize a hash or to bypass Git's no-follow validation.
+            use std::os::unix::ffi::OsStringExt;
+            let path = candidate
+                .decode_path_bytes()
+                .ok()
+                .map(|bytes| std::path::PathBuf::from(std::ffi::OsString::from_vec(bytes)));
+            if path.is_some_and(|path| {
+                std::fs::symlink_metadata(path)
+                    .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+            }) {
+                E::NotFound
+            } else {
+                E::Unreadable
+            }
+        }
+        GitResolverErrorV1::Representation { .. } | GitResolverErrorV1::Selector { .. } => {
+            E::PathUnsafe
+        }
+        _ => E::Unreadable,
+    };
+    ExecutionBoundaryErrorV1::LocalArtifact(failure)
+}
+
+impl ArtifactVerifierV1 for NativeDirectWorkspaceV1 {
+    fn hash_local_artifact(
+        &self,
+        workspace: &WorkspaceBindingV1,
+        path: &str,
+        requested_media_type: Option<&str>,
+    ) -> Result<ArtifactValueV1, ExecutionBoundaryErrorV1> {
+        self.hash(
+            workspace,
+            path,
+            requested_media_type.unwrap_or_else(|| embedded_media_type_v1(path)),
+            false,
+        )
+    }
+
+    fn revalidate_local_artifact(
+        &self,
+        workspace: &WorkspaceBindingV1,
+        item_id: &ItemId,
+        artifact: &ArtifactValueV1,
+    ) -> Result<LocalArtifactVerificationV2, ExecutionBoundaryErrorV1> {
+        if artifact.location_kind() != ArtifactLocationKindV1::LocalPath {
+            return Err(domain_invalid_state_v1(
+                "local artifact revalidation requires a local-path artifact",
+            ));
+        }
+        let current = self.hash(workspace, artifact.location(), artifact.media_type(), true)?;
+        if current.location() != artifact.location()
+            || current.digest() != artifact.digest()
+            || current.size_bytes() != artifact.size_bytes()
+        {
+            return Err(ExecutionBoundaryErrorV1::domain(
+                DomainError::ArtifactChanged,
+            ));
+        }
+        Ok(LocalArtifactVerificationV2 {
+            item_id: item_id.clone(),
+            location: current.location().into(),
+            digest: current.digest().clone(),
+            size_bytes: current.size_bytes(),
+        })
+    }
+}
+
+impl ProcedureProviderV1 for NativeDirectWorkspaceV1 {
+    fn load_workspace_procedure_snapshot_v2(
+        &self,
+        workspace: &WorkspaceBindingV1,
+        procedure: &str,
+        snapshot_id: ProcedureSnapshotId,
+        created_at: UnixMillis,
+    ) -> Result<
+        podway_store::ProcedureSnapshotV2,
+        crate::execution::ProcedureV2SourceAdmissionErrorV1,
+    > {
+        self.prepare_workspace_procedure_source_v2(workspace, procedure)?
+            .into_snapshot(snapshot_id, created_at)
+    }
+
+    fn load_preset_snapshot_v2(
+        &self,
+        preset: &str,
+        snapshot_id: ProcedureSnapshotId,
+        created_at: UnixMillis,
+    ) -> Result<
+        Option<(podway_store::ProcedureSnapshotV2, podway_core::Sha256Digest)>,
+        crate::execution::ProcedureV2SourceAdmissionErrorV1,
+    > {
+        EmbeddedPresetProcedureProviderV1.load_preset_snapshot_v2(preset, snapshot_id, created_at)
+    }
+}
+
+impl NativeDirectWorkspaceV1 {
+    fn procedure_bytes(
+        &self,
+        workspace: &WorkspaceBindingV1,
+        procedure: &str,
+    ) -> Result<Vec<u8>, crate::execution::ProcedureV2SourceAdmissionErrorV1> {
+        use crate::execution::ProcedureV2SourceAdmissionErrorV1;
+        let worktree = self
+            .revalidate_worktree(workspace)
+            .map_err(ProcedureV2SourceAdmissionErrorV1::Rejected)?;
+        let candidate = artifact_path_from_root_v1(self.resolved.workspace_root(), procedure)
+            .map_err(ProcedureV2SourceAdmissionErrorV1::Rejected)?;
+        let source = NativeGitResolverV1::new()
+            .read_bounded_local_file(&worktree, &candidate, MAX_PROCEDURE_DOCUMENT_BYTES)
+            .map_err(git_resolution_boundary_error_v1)
+            .map_err(ProcedureV2SourceAdmissionErrorV1::Rejected)?;
+        if source.canonical_path() != &candidate {
+            return Err(ProcedureV2SourceAdmissionErrorV1::Rejected(
+                domain_invalid_state_v1("Procedure resolver returned another canonical path"),
+            ));
+        }
+        Ok(source.bytes().to_vec())
+    }
+
+    pub fn prepare_workspace_procedure_source_v2(
+        &self,
+        workspace: &WorkspaceBindingV1,
+        procedure: &str,
+    ) -> Result<
+        crate::execution::PreparedProcedureSourceV2,
+        crate::execution::ProcedureV2SourceAdmissionErrorV1,
+    > {
+        crate::execution::prepare_workspace_procedure_source_v2(
+            procedure,
+            &self.procedure_bytes(workspace, procedure)?,
+        )
+    }
+
+    pub fn revalidate_procedure_source_v2(
+        &self,
+        workspace: &WorkspaceBindingV1,
+        procedure: &str,
+        prepared: &crate::execution::PreparedProcedureSourceV2,
+    ) -> Result<podway_core::Sha256Digest, crate::execution::ProcedureV2SourceAdmissionErrorV1>
+    {
+        use sha2::{Digest as _, Sha256};
+        let bytes = self.procedure_bytes(workspace, procedure)?;
+        let raw_digest =
+            podway_core::Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(&bytes)))
+                .expect("SHA-256 produces a canonical digest");
+        if prepared.source_bytes_digest() == Some(&raw_digest) {
+            return Ok(prepared.digest().clone());
+        }
+        crate::execution::prepare_workspace_procedure_source_v2(procedure, &bytes)
+            .map(|source| source.digest().clone())
+    }
 }
 
 /// Descriptor-anchored production Procedure provider over a freshly revalidated Store/Git root.

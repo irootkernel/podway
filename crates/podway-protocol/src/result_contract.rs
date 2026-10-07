@@ -143,7 +143,7 @@ pub fn validate_delegation_document_v1(schema: &str, value: &Value) -> bool {
         "podway.delegation-receipt/v1" => MAX_DELEGATION_RECEIPT_BYTES_V1,
         _ => return false,
     };
-    if !validate_embedded_schema_v2(schema, value)
+    if !validate_selected_direct_schema_v1(schema, "", value)
         || serde_json::to_vec(value).map_or(true, |encoded| encoded.len() > max_bytes)
     {
         return false;
@@ -3601,13 +3601,170 @@ pub const DAEMON_FREE_DOCUMENT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
 pub const MAX_DIRECT_INPUT_BYTES_V1: usize = 1_048_576;
 pub const MAX_DIRECT_OUTPUT_BYTES_V1: usize = 1_048_576;
 
-static DAEMON_FREE_VALIDATORS_V1: OnceLock<Result<HashMap<&'static str, Validator>, String>> =
+type DirectValidatorCellV1 = OnceLock<Result<Validator, String>>;
+type DirectValidatorRegistryV1 = HashMap<(String, String), DirectValidatorCellV1>;
+
+static DAEMON_FREE_VALIDATORS_V1: OnceLock<Result<DirectValidatorRegistryV1, String>> =
     OnceLock::new();
+static DIRECT_SCHEMA_RESOURCES_V1: OnceLock<Result<EmbeddedSchemaRetrieverV2, String>> =
+    OnceLock::new();
+
+fn direct_document_contracts_v1() -> impl Iterator<Item = &'static ResultSchemaContractV2> {
+    DAEMON_FREE_DOCUMENT_SCHEMAS_V1
+        .iter()
+        .chain(NEW_ROUTE_RESULT_SCHEMAS_V1.iter().filter(|contract| {
+            matches!(
+                contract.schema,
+                "podway.evidence-read-result/v1"
+                    | "podway.delegation-package-result/v1"
+                    | "podway.delegation-receipt-result/v1"
+            )
+        }))
+        .chain(DELEGATION_DOCUMENT_SCHEMAS_V1.iter().filter(|contract| {
+            matches!(
+                contract.schema,
+                "podway.delegation-work-package/v1"
+                    | "podway.delegation-accept-input/v1"
+                    | "podway.delegation-receipt/v1"
+            )
+        }))
+}
+
+fn direct_schema_source_v1(contract: &ResultSchemaContractV2) -> Result<Value, String> {
+    let filename = contract
+        .schema_path
+        .strip_prefix("schemas/")
+        .ok_or_else(|| "invalid daemon-free schema path".to_owned())?;
+    let source = embedded_schemas::EMBEDDED_JSON_SCHEMAS_V1
+        .iter()
+        .find(|(_, name, _)| *name == filename)
+        .ok_or_else(|| format!("missing daemon-free schema {filename}"))?
+        .2;
+    serde_json::from_str(source).map_err(|error| error.to_string())
+}
+
+fn direct_command_matches_v1(branch: &Value, command: &str) -> bool {
+    let constraint = &branch["properties"]["command"];
+    constraint["const"].as_str() == Some(command)
+        || constraint["enum"]
+            .as_array()
+            .is_some_and(|values| values.iter().any(|value| value.as_str() == Some(command)))
+}
+
+fn direct_validator_registry_v1() -> Result<DirectValidatorRegistryV1, String> {
+    let mut registry = HashMap::new();
+    for contract in direct_document_contracts_v1() {
+        registry.insert((contract.schema.to_owned(), String::new()), OnceLock::new());
+        // The finite keys come from the canonical schemas, never from a caller.
+        // Each invocation compiles only the applicable command or error family.
+        if contract.schema == "podway.output/v4" {
+            let source = direct_schema_source_v1(contract)?;
+            let definitions = source["$defs"]
+                .as_object()
+                .ok_or_else(|| "missing output definitions".to_owned())?;
+            for branch in definitions.values() {
+                let constraint = &branch["properties"]["command"];
+                if let Some(command) = constraint["const"].as_str() {
+                    registry.insert(
+                        (contract.schema.to_owned(), command.to_owned()),
+                        OnceLock::new(),
+                    );
+                }
+                if let Some(commands) = constraint["enum"].as_array() {
+                    for command in commands {
+                        let command = command
+                            .as_str()
+                            .ok_or_else(|| "invalid output command".to_owned())?;
+                        registry.insert(
+                            (contract.schema.to_owned(), command.to_owned()),
+                            OnceLock::new(),
+                        );
+                    }
+                }
+            }
+        } else if contract.schema == "podway.error/v2" {
+            let source = direct_schema_source_v1(contract)?;
+            let codes = source["properties"]["code"]["enum"]
+                .as_array()
+                .ok_or_else(|| "missing direct error catalog".to_owned())?;
+            for code in codes {
+                let code = code
+                    .as_str()
+                    .ok_or_else(|| "invalid error code".to_owned())?;
+                registry.insert(
+                    (contract.schema.to_owned(), code.to_owned()),
+                    OnceLock::new(),
+                );
+            }
+        }
+    }
+    Ok(registry)
+}
+
+fn build_direct_validator_v1(schema_id: &str, discriminator: &str) -> Result<Validator, String> {
+    let contract = direct_document_contracts_v1()
+        .find(|contract| contract.schema == schema_id)
+        .ok_or_else(|| "unknown direct schema".to_owned())?;
+    let filename = contract
+        .schema_path
+        .strip_prefix("schemas/")
+        .ok_or_else(|| "invalid daemon-free schema path".to_owned())?;
+    let mut schema = direct_schema_source_v1(contract)?;
+    if schema_id == "podway.output/v4" && !discriminator.is_empty() {
+        let branches = schema["oneOf"]
+            .as_array()
+            .ok_or_else(|| "missing output branches".to_owned())?
+            .iter()
+            .filter(|branch| {
+                branch["$ref"]
+                    .as_str()
+                    .and_then(|reference| reference.strip_prefix('#'))
+                    .and_then(|pointer| schema.pointer(pointer))
+                    .is_some_and(|branch| direct_command_matches_v1(branch, discriminator))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if branches.is_empty() {
+            return Err("unknown direct output command".to_owned());
+        }
+        // Removed alternatives have a disjoint canonical command constraint.
+        // Keep every matching alternative, including status and reset variants.
+        schema["oneOf"] = Value::Array(branches);
+    } else if schema_id == "podway.error/v2" && !discriminator.is_empty() {
+        let rules = schema["allOf"]
+            .as_array()
+            .ok_or_else(|| "missing error rules".to_owned())?
+            .iter()
+            .filter(|rule| {
+                rule["if"]["properties"]["code"]["const"].as_str() == Some(discriminator)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if rules.is_empty() {
+            return Err("unknown direct error rule".to_owned());
+        }
+        schema["allOf"] = Value::Array(rules);
+    }
+    schema
+        .as_object_mut()
+        .ok_or_else(|| "invalid direct schema object".to_owned())?
+        .remove("$id");
+    let retriever = DIRECT_SCHEMA_RESOURCES_V1
+        .get_or_init(embedded_schema_resources_v2)
+        .as_ref()
+        .map_err(Clone::clone)?;
+    jsonschema::draft202012::options()
+        .with_base_uri(format!("{EMBEDDED_SCHEMA_BASE_V2}{filename}"))
+        .with_retriever(retriever.clone())
+        .should_validate_formats(true)
+        .build(&schema)
+        .map_err(|error| format!("direct schema {filename} does not compile: {error}"))
+}
 
 fn build_daemon_free_validators_v1() -> Result<HashMap<&'static str, Validator>, String> {
     let retriever = embedded_schema_resources_v2()?;
     let mut validators = HashMap::new();
-    for contract in DAEMON_FREE_DOCUMENT_SCHEMAS_V1 {
+    for contract in direct_document_contracts_v1() {
         let filename = contract
             .schema_path
             .strip_prefix("schemas/")
@@ -3635,15 +3792,34 @@ fn build_daemon_free_validators_v1() -> Result<HashMap<&'static str, Validator>,
 
 /// Validate a reserved document explicitly, without changing runtime decoding.
 pub fn validate_daemon_free_document_v1(schema: &str, value: &Value) -> bool {
+    let discriminator = match schema {
+        "podway.output/v4" => value["command"].as_str(),
+        "podway.error/v2" => value["code"].as_str(),
+        _ => Some(""),
+    };
+    let Some(discriminator) = discriminator.filter(|value| value.len() <= 128) else {
+        return false;
+    };
     validate_json_document_depth(value).is_ok()
         && serde_json::to_vec(value).is_ok_and(|bytes| bytes.len() <= MAX_DIRECT_OUTPUT_BYTES_V1)
-        && DAEMON_FREE_VALIDATORS_V1
-            .get_or_init(build_daemon_free_validators_v1)
-            .as_ref()
-            .ok()
-            .and_then(|validators| validators.get(schema))
-            .is_some_and(|validator| validator.is_valid(value))
+        && validate_selected_direct_schema_v1(schema, discriminator, value)
         && daemon_free_recovery_identity_v1(schema, value)
+}
+
+// Shared delegation callers retain their own budgets and correlations. Select
+// only their canonical schema instead of initializing the legacy result family.
+fn validate_selected_direct_schema_v1(schema: &str, discriminator: &str, value: &Value) -> bool {
+    DAEMON_FREE_VALIDATORS_V1
+        .get_or_init(direct_validator_registry_v1)
+        .as_ref()
+        .ok()
+        .and_then(|validators| validators.get(&(schema.to_owned(), discriminator.to_owned())))
+        .and_then(|cell| {
+            cell.get_or_init(|| build_direct_validator_v1(schema, discriminator))
+                .as_ref()
+                .ok()
+        })
+        .is_some_and(|validator| validator.is_valid(value))
 }
 
 fn daemon_free_recovery_identity_v1(schema: &str, value: &Value) -> bool {
@@ -3661,8 +3837,201 @@ fn daemon_free_recovery_identity_v1(schema: &str, value: &Value) -> bool {
 
 #[cfg(test)]
 mod daemon_free_tests {
+    const DELEGATION_COLD_SCHEMA: &str = "PODWAY_DELEGATION_COLD_SCHEMA";
+    const DELEGATION_SCHEMAS: &[&str] = &[
+        "podway.delegation-work-package/v1",
+        "podway.delegation-accept-input/v1",
+        "podway.delegation-receipt/v1",
+    ];
+
+    fn delegation_fixtures() -> serde_json::Value {
+        serde_json::from_str(include_str!("../../../tests/fixtures/v2/compatibility/supervised-delegation-contract-reservation.json")).unwrap()
+    }
+
+    #[test]
+    fn delegation_cold_child() {
+        let Ok(schema) = std::env::var(DELEGATION_COLD_SCHEMA) else {
+            return;
+        };
+        assert!(DELEGATION_SCHEMAS.contains(&schema.as_str()));
+        assert!(super::RESULT_VALIDATORS_V2.get().is_none());
+        assert!(super::DAEMON_FREE_VALIDATORS_V1.get().is_none());
+        let value = delegation_fixtures()["fixtures"][&schema].clone();
+        assert!(super::validate_delegation_document_v1(&schema, &value));
+        let registry = super::DAEMON_FREE_VALIDATORS_V1
+            .get()
+            .unwrap()
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            registry
+                .values()
+                .filter(|cell| cell.get().is_some())
+                .count(),
+            1
+        );
+        assert!(
+            registry[&(schema.clone(), String::new())]
+                .get()
+                .unwrap()
+                .is_ok()
+        );
+        assert!(
+            super::RESULT_VALIDATORS_V2.get().is_none(),
+            "delegation eagerly initialized legacy result validators"
+        );
+        let mut invalid = value.clone();
+        invalid["schema"] = serde_json::json!("unknown");
+        assert!(!super::validate_delegation_document_v1(&schema, &invalid));
+        assert!(super::validate_delegation_document_v1(&schema, &value));
+        assert_eq!(
+            registry
+                .values()
+                .filter(|cell| cell.get().is_some())
+                .count(),
+            1
+        );
+        assert!(super::RESULT_VALIDATORS_V2.get().is_none());
+    }
+
+    #[test]
+    fn delegation_validation_compiles_only_its_selected_schema_in_a_cold_process() {
+        use std::{
+            process::Command,
+            time::{Duration, Instant},
+        };
+        for schema in DELEGATION_SCHEMAS {
+            let mut child = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "result_contract::daemon_free_tests::delegation_cold_child",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(DELEGATION_COLD_SCHEMA, schema)
+                .spawn()
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    assert!(status.success(), "cold schema validation failed: {schema}");
+                    break;
+                }
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("cold schema validation deadline expired: {schema}");
+                }
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }
+    }
+
+    #[test]
+    fn selected_delegation_validators_match_full_canonical_validation() {
+        let full = super::build_result_validators_v2().unwrap();
+        let fixtures = delegation_fixtures();
+        for schema in DELEGATION_SCHEMAS {
+            let value = fixtures["fixtures"][schema].clone();
+            assert!(full[schema].is_valid(&value));
+            let compare = |candidate: &serde_json::Value| {
+                assert_eq!(
+                    super::validate_selected_direct_schema_v1(schema, "", candidate),
+                    full[schema].is_valid(candidate),
+                    "{schema}: {candidate}"
+                );
+            };
+            compare(&value);
+            for field in value.as_object().unwrap().keys() {
+                let mut candidate = value.clone();
+                candidate.as_object_mut().unwrap().remove(field);
+                compare(&candidate);
+                let mut candidate = value.clone();
+                candidate[field] = serde_json::Value::Null;
+                compare(&candidate);
+            }
+            let mut unknown = value.clone();
+            unknown["credential"] = serde_json::json!("unexpected");
+            compare(&unknown);
+            if let Some(execution) = value["execution"].as_object() {
+                for field in execution.keys() {
+                    let mut candidate = value.clone();
+                    candidate["execution"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove(field);
+                    compare(&candidate);
+                }
+            }
+            let mut invalid = value.clone();
+            invalid["session_id"] = serde_json::json!("not-a-uuid");
+            compare(&invalid);
+        }
+    }
+
     #[test]
     fn all_reserved_schemas_compile() {
         super::build_daemon_free_validators_v1().expect("reserved schema compilation");
+    }
+
+    #[test]
+    fn selected_direct_validators_match_full_canonical_validation() {
+        let validators = super::build_daemon_free_validators_v1().unwrap();
+        let answers: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../docs/examples/json/daemon-free-contract-reservation-v1.json"
+        ))
+        .unwrap();
+        let mut cases = answers["fixtures"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(schema, value)| (schema.clone(), value.clone()))
+            .collect::<Vec<_>>();
+        cases.extend(answers["cases"].as_array().unwrap().iter().map(|case| {
+            (
+                case["schema"].as_str().unwrap().to_owned(),
+                case["value"].clone(),
+            )
+        }));
+        for (schema, value) in cases {
+            if !matches!(schema.as_str(), "podway.output/v4" | "podway.error/v2") {
+                continue;
+            }
+            let validator = &validators[schema.as_str()];
+            let compare = |candidate: &serde_json::Value| {
+                assert_eq!(
+                    super::validate_daemon_free_document_v1(&schema, candidate),
+                    validator.is_valid(candidate)
+                        && super::daemon_free_recovery_identity_v1(&schema, candidate),
+                    "{schema}: {candidate}"
+                );
+            };
+            compare(&value);
+            for field in value.as_object().unwrap().keys() {
+                let mut candidate = value.clone();
+                candidate.as_object_mut().unwrap().remove(field);
+                compare(&candidate);
+                let mut candidate = value.clone();
+                candidate[field] = serde_json::Value::Null;
+                compare(&candidate);
+            }
+            for command in [
+                "session.status",
+                "session.reset",
+                "procedure.validate",
+                "workspace.doctor",
+                "daemon.status",
+                "unknown",
+            ] {
+                let mut candidate = value.clone();
+                candidate["command"] = serde_json::json!(command);
+                compare(&candidate);
+            }
+            for field in ["admission", "queue", "job"] {
+                let mut candidate = value.clone();
+                candidate[field] = serde_json::json!({});
+                compare(&candidate);
+            }
+        }
     }
 }
