@@ -21,6 +21,7 @@ use podway_store::{
         DirectMutationRequestV1, DirectOutcomeScopeV1,
         DirectStoreClassificationV1 as Classification, DirectStoreErrorV1,
         DirectTransactionBoundaryV1, ExclusiveMaintenanceLeaseV1, classify_direct_store_v1,
+        observe_direct_maintenance_marker_v1,
     },
 };
 use sha2::{Digest as _, Sha256};
@@ -529,7 +530,26 @@ fn remove_inner<R: GitResolverContractV1>(
             notify(&observer, DirectMaintenanceBoundaryV1::DirectoriesRemoved);
             return removal_result(&request.request_id, clock.now(), &initial, None, true, true);
         }
-        Classification::Current | Classification::Maintenance => {}
+        Classification::Maintenance => {
+            // Final removal can retain only intent after unlinking both locks.
+            // Refuse a mismatched recovery request before recreating them;
+            // the exclusive lease still revalidates every marker before effects.
+            if let Some(marker) = observe_direct_maintenance_marker_v1(store.layout())? {
+                let digest = identity("workspace.remove", &request, &initial)?;
+                let value = validate_marker(
+                    &marker,
+                    "workspace.remove",
+                    &request,
+                    &initial,
+                    resolver.manifest(),
+                    &digest,
+                )?;
+                if let Some(uuid) = workspace_from_marker(&value)? {
+                    guard_workspace(&request, &uuid)?;
+                }
+            }
+        }
+        Classification::Current => {}
     }
     let acquisition_started = lease_observer.as_ref().map(|_| Instant::now());
     let lease = ExclusiveMaintenanceLeaseV1::acquire(store.layout(), request.deadline, true)?;
@@ -561,6 +581,9 @@ fn remove_inner<R: GitResolverContractV1>(
             &digest,
         )?;
         let uuid = workspace_from_marker(&value)?;
+        if let Some(uuid) = uuid.as_ref() {
+            guard_workspace(&request, uuid)?;
+        }
         let now = time_from_marker(&value)?;
         let response = RequestIdV1::new(
             value["response_request_id"]

@@ -402,6 +402,38 @@ fn maintenance_crash_child() {
     panic!("actual maintenance boundary was not reached");
 }
 fn crash(root: &std::path::Path, uuid: &WorkspaceId, action: &str, phase: &str) {
+    if phase == "first-marker" {
+        use std::os::unix::process::ExitStatusExt;
+        let ready = root.join("removal-paused");
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "int_v2dfc006_maintenance::maintenance_crash_child",
+                "--nocapture",
+            ])
+            .env("PODWAY_MAINTENANCE_FIXTURE", root)
+            .env("PODWAY_MAINTENANCE_UUID", uuid.as_str())
+            .env("PODWAY_MAINTENANCE_ACTION", action)
+            .env("PODWAY_MAINTENANCE_PHASE", phase)
+            .env("PODWAY_MAINTENANCE_READY", &ready)
+            .spawn()
+            .unwrap();
+        let limit = deadline();
+        while !ready.exists() {
+            if let Some(status) = child.try_wait().unwrap() {
+                panic!("removal exited before the marker barrier: {status}");
+            }
+            if Instant::now() >= limit {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("removal did not reach the bounded marker barrier");
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        child.kill().unwrap();
+        assert_eq!(child.wait().unwrap().signal(), Some(9));
+        return;
+    }
     let status = Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
@@ -503,6 +535,78 @@ fn exact_removal_retry_resumes_markers_then_absence_destroys_retention() {
         assert_eq!(absent.as_value()["result"]["already_absent"], true);
     }
 }
+#[test]
+fn interrupted_removal_refuses_changed_explicit_and_selector_workspace_fences() {
+    use podway_git::DurableWorktreeIdentityV1;
+    use podway_store::direct_store::DirectStoreErrorV1;
+    for phase in [
+        "intent",
+        "marker",
+        "cleared",
+        "phase",
+        "final",
+        "first-marker",
+    ] {
+        for selector_fence in [false, true] {
+            let root = fixture();
+            let original = initialize(root.path());
+            let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+            let (resolved, _) = resolver.resolve_candidate(selector(root.path())).unwrap();
+            let identity = resolved.identity().clone();
+            crash(root.path(), &original, "remove", phase);
+            let before = files(&root.path().join(".podway"));
+            if phase == "first-marker" {
+                assert_eq!(
+                    before.keys().map(String::as_str).collect::<Vec<_>>(),
+                    vec!["runtime/maintenance-intent.json"]
+                );
+            }
+            let wrong = WorkspaceId::new(OTHER).unwrap();
+            let mut retry = request(root.path(), "remove", Some(original.clone()));
+            if selector_fence {
+                retry.selector = WorktreeSelectorV1::new(
+                    WORKTREE_SELECTOR_VERSION_V1,
+                    Some(
+                        DurableWorktreeIdentityV1::new_with_root_directory_fingerprint(
+                            wrong.clone(),
+                            identity.common_directory_fingerprint().clone(),
+                            identity.worktree_administration_fingerprint().clone(),
+                            identity.root_directory_fingerprint().unwrap().clone(),
+                            identity.last_validated_root().clone(),
+                        ),
+                    ),
+                    selector(root.path()).path().clone(),
+                )
+                .unwrap();
+            } else {
+                retry.expected_workspace_id = Some(wrong.clone());
+            }
+            let rejected = remove_workspace_v1(&resolver, retry, &NoEffects);
+            assert!(
+                matches!(rejected, Err(Error::Workspace(
+                podway_engine::direct_workspace::DirectWorkspaceErrorV1::Store(
+                    DirectStoreErrorV1::ExpectedWorkspaceUuidMismatch {expected, actual}
+                )
+            )) if expected == wrong && actual == original),
+                "{phase}/{selector_fence}"
+            );
+            assert_eq!(files(&root.path().join(".podway")), before);
+            let resumed = remove_workspace_v1(
+                &resolver,
+                request(root.path(), "remove", Some(original.clone())),
+                &NoEffects,
+            )
+            .unwrap();
+            assert_eq!(
+                resumed.as_value()["result"]["workspace_uuid"],
+                original.as_str()
+            );
+            assert!(!root.path().join(".podway").exists());
+            assert!(root.path().join(".git").is_dir());
+        }
+    }
+}
+
 #[test]
 fn sigkill_between_final_removal_markers_preserves_exact_retry_and_original_response() {
     use std::os::unix::process::ExitStatusExt;

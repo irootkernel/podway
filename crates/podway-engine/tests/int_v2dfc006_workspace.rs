@@ -326,6 +326,202 @@ fn init_show_doctor_and_repair_validate_and_replay_without_runtime_or_read_write
     ));
 }
 #[test]
+fn existing_plain_init_refuses_new_keys_but_preserves_original_replay_and_repair() {
+    use podway_engine::workspace::{DirectWorkspaceResolutionErrorV1, WorkspaceResolutionErrorV1};
+    let root = fixture();
+    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let original = initialize_workspace_v1(
+        &resolver,
+        mutation(root.path(), "init"),
+        false,
+        &Clock(AtomicUsize::new(0)),
+        &NativeDirectIdSourceV1,
+    )
+    .unwrap();
+    let before = files(&root.path().join(".podway"));
+    let rejected = initialize_workspace_v1(
+        &resolver,
+        mutation(root.path(), "second-init"),
+        false,
+        &NoEffects,
+        &NoEffects,
+    );
+    assert!(matches!(
+        rejected,
+        Err(DirectWorkspaceErrorV1::Resolution(
+            DirectWorkspaceResolutionErrorV1::Resolution(
+                WorkspaceResolutionErrorV1::BootstrapBindingAlreadyPresent
+            )
+        ))
+    ));
+    assert_eq!(files(&root.path().join(".podway")), before);
+    let (_, store) = resolver
+        .resolve_existing(selector(root.path()), None, deadline())
+        .unwrap();
+    store
+        .read(deadline(), |snapshot| {
+            assert!(
+                snapshot
+                    .outcome(&IdempotencyKeyV1::new("second-init").unwrap())?
+                    .is_none()
+            );
+            assert_eq!(snapshot.committed_sequence()?, 1);
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        initialize_workspace_v1(
+            &resolver,
+            mutation(root.path(), "init"),
+            false,
+            &NoEffects,
+            &NoEffects,
+        )
+        .unwrap(),
+        original
+    );
+    let repair = initialize_workspace_v1(
+        &resolver,
+        mutation(root.path(), "repair-init"),
+        true,
+        &Clock(AtomicUsize::new(0)),
+        &NoEffects,
+    )
+    .unwrap();
+    assert_eq!(
+        repair.as_value()["workspace"]["uuid"],
+        original.as_value()["workspace"]["uuid"]
+    );
+    assert_eq!(
+        repair.as_value()["workspace"]["latest_workspace_sequence"],
+        2
+    );
+    assert_eq!(
+        initialize_workspace_v1(
+            &resolver,
+            mutation(root.path(), "repair-init"),
+            true,
+            &NoEffects,
+            &NoEffects,
+        )
+        .unwrap(),
+        repair
+    );
+}
+
+#[test]
+fn plain_init_refuses_an_outcome_pruned_before_its_authoritative_lookup() {
+    use podway_engine::workspace::{DirectWorkspaceResolutionErrorV1, WorkspaceResolutionErrorV1};
+    use podway_store::direct_store::DirectTransactionBoundaryV1;
+    use std::sync::{Arc, Mutex};
+    const CHILD_ROOT: &str = "PODWAY_V2DFC006_RETENTION_RACE_CHILD_ROOT";
+    const TEST: &str = "int_v2dfc006_workspace::plain_init_refuses_an_outcome_pruned_before_its_authoritative_lookup";
+    if let Some(root) = std::env::var_os(CHILD_ROOT) {
+        let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+        repair_workspace_v1(
+            &resolver,
+            mutation(std::path::Path::new(&root), "prune-original-outcome"),
+            &Clock(AtomicUsize::new(0)),
+        )
+        .unwrap();
+        return;
+    }
+    // Both an exact original init and a conflicting repair key can disappear
+    // after the preliminary lookup. Neither may become a new plain init.
+    for conflicting in [false, true] {
+        let root = fixture();
+        let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+        initialize_workspace_v1(
+            &resolver,
+            mutation(root.path(), "init"),
+            false,
+            &Clock(AtomicUsize::new(0)),
+            &NativeDirectIdSourceV1,
+        )
+        .unwrap();
+        let key = if conflicting {
+            repair_workspace_v1(
+                &resolver,
+                mutation(root.path(), "original-repair"),
+                &Clock(AtomicUsize::new(0)),
+            )
+            .unwrap();
+            "original-repair"
+        } else {
+            "init"
+        };
+        for index in 0..99 {
+            repair_workspace_v1(
+                &resolver,
+                mutation(root.path(), &format!("retained-repair-{index}")),
+                &Clock(AtomicUsize::new(0)),
+            )
+            .unwrap();
+        }
+        let (_, store) = resolver
+            .resolve_existing(selector(root.path()), None, deadline())
+            .unwrap();
+        store
+            .read(deadline(), |snapshot| {
+                assert!(
+                    snapshot
+                        .outcome(&IdempotencyKeyV1::new(key).unwrap())?
+                        .is_some()
+                );
+                Ok(())
+            })
+            .unwrap();
+        let root_path = root.path().to_path_buf();
+        let after_pruning = Arc::new(Mutex::new(None));
+        let captured = after_pruning.clone();
+        let racing = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest())
+            .with_store_boundary_observer_v1(move |boundary| {
+                if boundary == DirectTransactionBoundaryV1::BeforeBegin {
+                    let child = Command::new(std::env::current_exe().unwrap())
+                        .args(["--exact", TEST, "--nocapture"])
+                        .env(CHILD_ROOT, &root_path)
+                        .output()
+                        .unwrap();
+                    assert!(child.status.success(), "{child:?}");
+                    let mut preserved = files(&root_path.join(".podway"));
+                    // BEGIN/rollback may change only SQLite's volatile index.
+                    preserved.remove("runtime/state.sqlite3-shm");
+                    *captured.lock().unwrap() = Some(preserved);
+                }
+            });
+        let rejected = initialize_workspace_v1(
+            &racing,
+            mutation(root.path(), key),
+            false,
+            &NoEffects,
+            &NoEffects,
+        );
+        assert!(matches!(
+            rejected,
+            Err(DirectWorkspaceErrorV1::Resolution(
+                DirectWorkspaceResolutionErrorV1::Resolution(
+                    WorkspaceResolutionErrorV1::BootstrapBindingAlreadyPresent
+                )
+            ))
+        ));
+        let mut after = files(&root.path().join(".podway"));
+        after.remove("runtime/state.sqlite3-shm");
+        assert_eq!(Some(after), *after_pruning.lock().unwrap());
+        store
+            .read(deadline(), |snapshot| {
+                assert!(
+                    snapshot
+                        .outcome(&IdempotencyKeyV1::new(key).unwrap())?
+                        .is_none()
+                );
+                assert_eq!(snapshot.committed_sequence()?, 101 + u64::from(conflicting));
+                Ok(())
+            })
+            .unwrap();
+    }
+}
+
+#[test]
 fn moved_root_is_reported_without_write_and_rebound_only_by_repair_commit() {
     let parent = fixture();
     let old = parent.path().join("old");
