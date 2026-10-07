@@ -2,7 +2,7 @@ use serde::{Deserialize, Deserializer, Serialize, de};
 use serde_json::{Map, Value};
 
 use crate::{
-    CommandNameV1, ErrorEnvelopeInputV1, ProtocolError, RequestIdV1, Rfc3339MillisV1,
+    CommandNameV1, ErrorCodeV1, ExitCodeV1, ProtocolError, RequestIdV1, Rfc3339MillisV1,
     WorkspaceOutputV1, validate_daemon_free_document_v1,
 };
 
@@ -88,8 +88,19 @@ impl<'de> Deserialize<'de> for OutputEnvelopeV4 {
     }
 }
 
-/// The scalar error fields are unchanged; validation uses the direct catalog.
-pub type ErrorEnvelopeInputV2 = ErrorEnvelopeInputV1;
+/// Scalar fields for a direct error; validation uses the direct catalog.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ErrorEnvelopeInputV2 {
+    pub request_id: RequestIdV1,
+    pub command: CommandNameV1,
+    pub generated_at: Rfc3339MillisV1,
+    pub code: ErrorCodeV1,
+    pub message: String,
+    pub retryable: bool,
+    pub exit_code: ExitCodeV1,
+    pub workspace: Option<Map<String, Value>>,
+    pub details: Map<String, Value>,
+}
 
 /// A direct error, without daemon admission, jobs or exit class three.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

@@ -46,7 +46,7 @@ def repository_file(relative: Any, label: str) -> Path:
 def validate_v2_contract_semantics() -> int:
     session_start = load_object(
         repository_file(
-            "assets/schemas/session-start-result-v2.schema.json",
+            "assets/schemas/session-start-result-v4.schema.json",
             "v2 session-start schema",
         )
     )
@@ -62,12 +62,12 @@ def validate_v2_contract_semantics() -> int:
 
     compact_status = load_object(
         repository_file(
-            "assets/schemas/compact-status-result-v2.schema.json",
+            "assets/schemas/compact-status-result-v5.schema.json",
             "v2 compact-status schema",
         )
     )
     status = load_object(
-        repository_file("assets/schemas/status-result-v2.schema.json", "v2 status schema")
+        repository_file("assets/schemas/status-result-v5.schema.json", "v2 status schema")
     )
     for label, schema in (("compact status", compact_status), ("status", status)):
         if "blockers" in schema.get("required", []) or "blockers" in schema.get(
@@ -81,7 +81,7 @@ def validate_v2_contract_semantics() -> int:
 
     components = load_object(
         repository_file(
-            "assets/schemas/v2-result-components-v1.schema.json",
+            "assets/schemas/v2-result-components-v4.schema.json",
             "v2 result components schema",
         )
     )

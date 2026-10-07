@@ -1,9 +1,8 @@
 use podway_protocol::{
-    ClientInfoV1, CommandNameV1, ITEM_RECORD_MANY_INPUT_SCHEMA_V1, IdempotencyKeyV1,
-    ItemRecordManyDispositionV1, ItemRecordValueV1, MAX_FRAME_PAYLOAD_BYTES_V1, OperationV1,
-    PreconditionsV1, RequestEnvelopeInputV1, RequestEnvelopeV1, RequestIdV1, RequestOptionsV1,
-    SliceCommandV1, SliceErrorV1, SliceRequestV1, WorkspaceContextV1,
-    canonical_mutation_identity_v1, decode_item_record_many_input_v1,
+    ITEM_RECORD_MANY_INPUT_SCHEMA_V1, ItemRecordManyDispositionV1, ItemRecordManyV1,
+    ItemRecordValueV1, MAX_DIRECT_INPUT_BYTES_V1, SessionMutationPreconditionsWireV1,
+    SliceCommandV1, SliceErrorV1, canonical_direct_slice_mutation_identity_v1,
+    decode_item_record_many_input_v1,
 };
 use serde_json::{Value, json};
 
@@ -179,7 +178,7 @@ fn v2agt004_stdin_rejects_duplicates_invalid_dispositions_unknown_fields_and_ove
     ] {
         assert!(decode_item_record_many_input_v1(&input(operations)).is_err());
     }
-    assert!(decode_item_record_many_input_v1(&vec![b' '; MAX_FRAME_PAYLOAD_BYTES_V1 + 1]).is_err());
+    assert!(decode_item_record_many_input_v1(&vec![b' '; MAX_DIRECT_INPUT_BYTES_V1 + 1]).is_err());
 }
 
 #[test]
@@ -217,7 +216,7 @@ fn v2agt004_stdin_accepts_exactly_128_operations_and_rejects_129() {
 }
 
 #[test]
-fn v2ast006_maximal_check_results_require_frame_sized_split_batches() {
+fn v2ast006_maximal_check_results_require_bounded_split_batches() {
     let operations = |start: usize, count: usize| {
         Value::Array(
             (start..start + count)
@@ -238,16 +237,16 @@ fn v2ast006_maximal_check_results_require_frame_sized_split_batches() {
         .unwrap()
         .len();
     assert!(maximal_record_bytes <= podway_core::MAX_CHECK_RESULT_VALUE_BYTES_V2);
-    assert!(maximal_record_bytes * 64 < MAX_FRAME_PAYLOAD_BYTES_V1);
-    assert!(maximal_record_bytes * 128 > MAX_FRAME_PAYLOAD_BYTES_V1);
+    assert!(maximal_record_bytes * 64 < MAX_DIRECT_INPUT_BYTES_V1);
+    assert!(maximal_record_bytes * 128 > MAX_DIRECT_INPUT_BYTES_V1);
 
     let complete_attempt = input(operations(0, 128));
-    assert!(complete_attempt.len() > MAX_FRAME_PAYLOAD_BYTES_V1);
+    assert!(complete_attempt.len() > MAX_DIRECT_INPUT_BYTES_V1);
     assert!(decode_item_record_many_input_v1(&complete_attempt).is_err());
 
     for half in [operations(0, 64), operations(64, 64)] {
         let batch = input(half);
-        assert!(batch.len() <= MAX_FRAME_PAYLOAD_BYTES_V1);
+        assert!(batch.len() <= MAX_DIRECT_INPUT_BYTES_V1);
         assert_eq!(
             decode_item_record_many_input_v1(&batch)
                 .unwrap()
@@ -339,57 +338,17 @@ fn v2agt007_stdin_schema_and_decoder_share_public_string_bounds() {
 }
 
 #[test]
-fn v2agt004_route_is_durable_and_semantically_item_order_independent() {
-    let selector = json!({
-        "version": 1,
-        "path_bytes_base64url": "L3RtcC93b3JrdHJlZQ",
-        "display": "/tmp/worktree",
-        "expected_uuid": "00000000-0000-4000-8000-000000000001"
-    });
+fn v2agt004_direct_identity_is_semantically_item_order_independent() {
     let request = |operations: Value| {
-        let envelope = RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
-            request_id: RequestIdV1::new("00000000-0000-4000-8000-000000000010").unwrap(),
-            client: ClientInfoV1::new("test", "1", 1).unwrap(),
-            operation: OperationV1::Mutate,
-            command: CommandNameV1::new("item.record_many").unwrap(),
-            workspace: Some(
-                WorkspaceContextV1::new(
-                    "/tmp/worktree",
-                    Some(
-                        podway_core::WorkspaceId::new("00000000-0000-4000-8000-000000000001")
-                            .unwrap(),
-                    ),
-                )
-                .unwrap(),
-            ),
-            idempotency_key: Some(IdempotencyKeyV1::new("batch-key").unwrap()),
-            preconditions: PreconditionsV1::new(
-                Some(
-                    "00000000-0000-4000-8000-000000000002"
-                        .to_owned()
-                        .try_into()
-                        .unwrap(),
-                ),
-                Some(podway_core::Revision::new(7)),
-                Some(
-                    "00000000-0000-4000-8000-000000000003"
-                        .to_owned()
-                        .try_into()
-                        .unwrap(),
-                ),
-                None,
-                None,
-                None,
-            )
-            .unwrap(),
-            options: RequestOptionsV1::new(false, 1000).unwrap(),
-            payload: json!({"selector":selector,"operations":operations})
-                .as_object()
-                .unwrap()
-                .clone(),
+        let input = decode_item_record_many_input_v1(&input(operations)).unwrap();
+        SliceCommandV1::ItemRecordMany(ItemRecordManyV1 {
+            preconditions: SessionMutationPreconditionsWireV1 {
+                expected_session_id: input.session_id,
+                expected_session_revision: input.session_revision,
+                expected_attempt_id: input.attempt_id,
+            },
+            operations: input.operations,
         })
-        .unwrap();
-        SliceRequestV1::from_envelope(&envelope).unwrap()
     };
     let left = request(json!([
         {"item_id":"b","expected_item_revision":0,"clear":true},
@@ -399,13 +358,18 @@ fn v2agt004_route_is_durable_and_semantically_item_order_independent() {
         {"item_id":"a","expected_item_revision":0,"record":{"type":"integer","value":1}},
         {"item_id":"b","expected_item_revision":0,"clear":true}
     ]));
-    assert_eq!(left.command().operation(), OperationV1::Mutate);
-    assert!(left.command().is_durable_job());
-    assert!(matches!(left.command(), SliceCommandV1::ItemRecordMany(_)));
+    assert!(left.is_mutation());
     let workspace = podway_core::WorkspaceId::new("00000000-0000-4000-8000-000000000001").unwrap();
     assert_eq!(
-        canonical_mutation_identity_v1(&left, &workspace).unwrap(),
-        canonical_mutation_identity_v1(&right, &workspace).unwrap()
+        canonical_direct_slice_mutation_identity_v1(&left, &workspace).unwrap(),
+        canonical_direct_slice_mutation_identity_v1(&right, &workspace).unwrap()
+    );
+    let changed = request(
+        json!([{ "item_id":"a", "expected_item_revision":1, "record":{"type":"integer","value":1}}]),
+    );
+    assert_ne!(
+        canonical_direct_slice_mutation_identity_v1(&left, &workspace).unwrap(),
+        canonical_direct_slice_mutation_identity_v1(&changed, &workspace).unwrap()
     );
 }
 
@@ -426,7 +390,7 @@ fn v2scl003_record_many_schema_and_decoder_share_the_scale_envelope() {
     // operation and cannot be cut — the replay-integrity check requires the counts to match — so a
     // narrower result ceiling would let an admitted batch commit and then answer contract-invalid.
     let result: Value = serde_json::from_slice(include_bytes!(
-        "../../../assets/schemas/item-record-many-result-v1.schema.json"
+        "../../../assets/schemas/item-record-many-result-v2.schema.json"
     ))
     .unwrap();
     assert_eq!(
@@ -524,5 +488,200 @@ fn v2scl003_record_many_schema_and_decoder_share_the_scale_envelope() {
             actual: 65_537,
             unit: "scalars",
         })
+    );
+}
+
+#[test]
+fn direct_start_identity_preserves_the_exact_preimage_and_both_digest_fences() {
+    use podway_core::{Sha256Digest, WorkspaceId};
+    use podway_protocol::{
+        SessionStartSourceV1, SessionStartV1, canonical_direct_start_identity_v1,
+    };
+    let workspace = WorkspaceId::new("00000000-0000-4000-8000-000000000001").unwrap();
+    let digest = Sha256Digest::new(format!("sha256:{}", "a".repeat(64))).unwrap();
+    let changed_digest = Sha256Digest::new(format!("sha256:{}", "b".repeat(64))).unwrap();
+    let start = SessionStartV1 {
+        source: SessionStartSourceV1::Procedure {
+            procedure: "workflow.yaml".to_owned(),
+        },
+        expected_procedure_digest: None,
+        task_title: "Implement protocol".to_owned(),
+        dry_run: false,
+    };
+    let command = SliceCommandV1::SessionStart(start.clone());
+    let base = canonical_direct_slice_mutation_identity_v1(&command, &workspace).unwrap();
+    assert_eq!(
+        base,
+        "{\"command\":\"session.start\",\"payload\":{\"source\":{\"procedure\":\"workflow.yaml\"},\"task_title\":\"Implement protocol\"},\"preconditions\":{},\"protocol_major\":1,\"workspace_id\":\"00000000-0000-4000-8000-000000000001\"}"
+    );
+    let identity = canonical_direct_start_identity_v1(&command, &workspace, &digest).unwrap();
+    let value: Value = serde_json::from_str(&identity).unwrap();
+    assert_eq!(value["preconditions"]["procedure_digest"], digest.as_str());
+    assert_eq!(
+        value["preconditions"]["expected_procedure_digest"],
+        Value::Null
+    );
+    assert_ne!(
+        identity,
+        canonical_direct_start_identity_v1(&command, &workspace, &changed_digest).unwrap()
+    );
+    let mut guarded = start;
+    guarded.expected_procedure_digest = Some(digest.clone());
+    let guarded = SliceCommandV1::SessionStart(guarded);
+    let guard_identity = canonical_direct_start_identity_v1(&guarded, &workspace, &digest).unwrap();
+    assert_ne!(identity, guard_identity);
+    assert_eq!(
+        serde_json::from_str::<Value>(&guard_identity).unwrap()["preconditions"]["expected_procedure_digest"],
+        digest.as_str()
+    );
+}
+
+#[test]
+fn direct_action_identities_bind_session_fences_and_item_semantics() {
+    use podway_core::{AttemptId, ItemId, Revision, SessionId, WorkspaceId};
+    use podway_protocol::{ItemMutationPreconditionsWireV1, ItemSetV1, SessionCompleteV1};
+    let workspace = WorkspaceId::new("00000000-0000-4000-8000-000000000001").unwrap();
+    let session = SessionId::new("00000000-0000-4000-8000-000000000002").unwrap();
+    let attempt = AttemptId::new("00000000-0000-4000-8000-000000000003").unwrap();
+    let complete = SessionCompleteV1 {
+        preconditions: SessionMutationPreconditionsWireV1 {
+            expected_session_id: session.clone(),
+            expected_session_revision: Revision::new(3),
+            expected_attempt_id: attempt.clone(),
+        },
+    };
+    let identity = canonical_direct_slice_mutation_identity_v1(
+        &SliceCommandV1::SessionComplete(complete.clone()),
+        &workspace,
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&identity).unwrap(),
+        json!({"command":"session.complete","workspace_id":workspace.as_str(),"protocol_major":1,"preconditions":{"session_id":session.as_str(),"session_revision":3,"attempt_id":attempt.as_str()},"payload":{}})
+    );
+    let mut changed = complete;
+    changed.preconditions.expected_session_id =
+        SessionId::new("00000000-0000-4000-8000-000000000004").unwrap();
+    assert_ne!(
+        identity,
+        canonical_direct_slice_mutation_identity_v1(
+            &SliceCommandV1::SessionComplete(changed),
+            &workspace
+        )
+        .unwrap()
+    );
+    let item = ItemSetV1 {
+        item_id: ItemId::new("note").unwrap(),
+        value: "verified".to_owned(),
+        preconditions: ItemMutationPreconditionsWireV1 {
+            expected_session_id: session,
+            expected_attempt_id: attempt,
+            expected_item_revision: Revision::new(2),
+        },
+    };
+    let identity = canonical_direct_slice_mutation_identity_v1(
+        &SliceCommandV1::ItemSet(item.clone()),
+        &workspace,
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&identity).unwrap()["payload"],
+        json!({"item_id":"note","value":"verified"})
+    );
+    let mut changed_revision = item.clone();
+    changed_revision.preconditions.expected_item_revision = Revision::new(3);
+    assert_ne!(
+        identity,
+        canonical_direct_slice_mutation_identity_v1(
+            &SliceCommandV1::ItemSet(changed_revision),
+            &workspace
+        )
+        .unwrap()
+    );
+    let mut changed = item;
+    changed.value = "changed".to_owned();
+    assert_ne!(
+        identity,
+        canonical_direct_slice_mutation_identity_v1(&SliceCommandV1::ItemSet(changed), &workspace)
+            .unwrap()
+    );
+}
+
+#[test]
+fn direct_goal_and_decision_identities_bind_optional_and_required_goal_revisions() {
+    use podway_core::{
+        AttemptId, CriterionId, GraphNodeId, OptionId, Revision, SessionId, WorkspaceId,
+    };
+    use podway_protocol::{
+        GoalCriterionWireV2, GoalReviseV2, GoalRevisionPreconditionsWireV2,
+        ProcedureV2MutationCommandV1, SessionDecideV2, canonical_procedure_v2_command_identity_v1,
+    };
+    let workspace = WorkspaceId::new("00000000-0000-4000-8000-000000000001").unwrap();
+    let session = SessionId::new("00000000-0000-4000-8000-000000000002").unwrap();
+    let attempt = AttemptId::new("00000000-0000-4000-8000-000000000003").unwrap();
+    let decide = SessionDecideV2 {
+        option_id: OptionId::new("accept").unwrap(),
+        reason: "Choose the route.".to_owned(),
+        actor: None,
+        preconditions: SessionMutationPreconditionsWireV1 {
+            expected_session_id: session.clone(),
+            expected_session_revision: Revision::new(7),
+            expected_attempt_id: attempt,
+        },
+        expected_goal_revision: None,
+    };
+    let general = canonical_procedure_v2_command_identity_v1(
+        &ProcedureV2MutationCommandV1::SessionDecide(decide.clone()),
+        &workspace,
+    )
+    .unwrap();
+    assert!(
+        serde_json::from_str::<Value>(&general).unwrap()["preconditions"]
+            .get("goal_revision")
+            .is_none()
+    );
+    let mut assessed = decide;
+    assessed.expected_goal_revision = Some(1);
+    let assessed = canonical_procedure_v2_command_identity_v1(
+        &ProcedureV2MutationCommandV1::SessionDecide(assessed),
+        &workspace,
+    )
+    .unwrap();
+    assert_ne!(general, assessed);
+    assert_eq!(
+        serde_json::from_str::<Value>(&assessed).unwrap()["preconditions"]["goal_revision"],
+        1
+    );
+    let revise = GoalReviseV2 {
+        goal: "Ship safely.".to_owned(),
+        criteria: vec![GoalCriterionWireV2 {
+            criterion_id: CriterionId::new("verified").unwrap(),
+            statement: "The gate passes.".to_owned(),
+        }],
+        target_graph_node_id: GraphNodeId::new("implement").unwrap(),
+        reason: "Clarified.".to_owned(),
+        actor: None,
+        reactivate: false,
+        preconditions: GoalRevisionPreconditionsWireV2 {
+            expected_session_id: session,
+            expected_session_revision: Revision::new(7),
+            expected_attempt_id: None,
+            expected_goal_revision: 1,
+        },
+    };
+    let first = canonical_procedure_v2_command_identity_v1(
+        &ProcedureV2MutationCommandV1::GoalRevise(revise.clone()),
+        &workspace,
+    )
+    .unwrap();
+    let mut changed = revise;
+    changed.preconditions.expected_goal_revision = 2;
+    assert_ne!(
+        first,
+        canonical_procedure_v2_command_identity_v1(
+            &ProcedureV2MutationCommandV1::GoalRevise(changed),
+            &workspace
+        )
+        .unwrap()
     );
 }

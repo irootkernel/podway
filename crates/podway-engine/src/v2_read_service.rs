@@ -72,7 +72,7 @@ const BLOCKER_WINDOW_BYTES_MAX: usize = 49_152;
 const HISTORY_WINDOW_BYTES_MAX: usize = 65_536;
 const OBSERVATION_ITEM_VALUE_CHARS_MAX: usize = 128;
 const OBSERVATION_ITEM_VALUE_BYTES_MAX: usize = 1_024;
-// The reserved result schemas bound these values independently of the frame cap.
+// Result schemas bound these values independently of the aggregate direct output cap.
 const MAX_DELEGATION_PACKAGE_RESULT_BYTES_V1: usize = 1_000_000;
 const MAX_DELEGATION_RECEIPT_RESULT_BYTES_V1: usize = 65_536;
 
@@ -86,7 +86,6 @@ pub enum GraphStatusTierV2 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum GraphViewErrorV2 {
     MissingGraphSession,
-    PendingMutationsForCompact,
     TerminalSessionHasNoNext,
     NoActiveAttempt,
     DelegationNotApplicable,
@@ -101,9 +100,6 @@ impl fmt::Display for GraphViewErrorV2 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MissingGraphSession => formatter.write_str("no Procedure v2 session exists"),
-            Self::PendingMutationsForCompact => {
-                formatter.write_str("compact status requires an idle workspace queue")
-            }
             Self::TerminalSessionHasNoNext => {
                 formatter.write_str("a terminal Procedure v2 session has no next action")
             }
@@ -457,11 +453,6 @@ pub fn project_graph_status_v2(
     history_before: Option<TraceSequenceV2>,
 ) -> Result<Map<String, Value>, GraphViewErrorV2> {
     let state = graph_state(view)?;
-    if tier == GraphStatusTierV2::Compact
-        && (view.queued_job_count() != 0 || view.running_job_id().is_some())
-    {
-        return Err(GraphViewErrorV2::PendingMutationsForCompact);
-    }
     if tier != GraphStatusTierV2::Verbose && history_before.is_some() {
         return Err(GraphViewErrorV2::InconsistentState(
             "a history cursor is valid only for verbose status",
@@ -473,12 +464,8 @@ pub fn project_graph_status_v2(
 
     let mut result = Map::new();
     let schema = match tier {
-        GraphStatusTierV2::Compact if delegated => "podway.compact-status-result/v4",
-        GraphStatusTierV2::Compact => "podway.compact-status-result/v3",
-        GraphStatusTierV2::Standard | GraphStatusTierV2::Verbose if delegated => {
-            "podway.status-result/v4"
-        }
-        GraphStatusTierV2::Standard | GraphStatusTierV2::Verbose => "podway.status-result/v3",
+        GraphStatusTierV2::Compact => "podway.compact-status-result/v5",
+        GraphStatusTierV2::Standard | GraphStatusTierV2::Verbose => "podway.status-result/v5",
     };
     result.insert("schema".to_owned(), json!(schema));
     if tier != GraphStatusTierV2::Compact {
@@ -523,7 +510,6 @@ pub fn project_graph_status_v2(
                 .unwrap_or_default(),
         ),
     );
-    result.insert("queue".to_owned(), queue(view));
     if delegated {
         result.insert(
             "delegation".to_owned(),
@@ -611,7 +597,7 @@ pub fn project_graph_archive_show_result_v2(
 ) -> Result<Value, GraphViewErrorV2> {
     let delegated = delegated_placement_count(&rehydrate_snapshot(graph_state(view)?)?) != 0;
     let mut result = json!({
-        "schema": if delegated { "podway.session-archive-show-result/v2" } else { "podway.session-archive-show-result/v1" },
+        "schema": "podway.session-archive-show-result/v3",
         "activity": "inactive",
         "archive": archive,
         "terminal_disposition": terminal_disposition,
@@ -865,7 +851,7 @@ pub fn project_evidence_read_v1(
     );
 
     // ADR-0024 and AUT-EVR-004 bound the complete response, not only its page data. That bound sits
-    // far below the 1 MiB frame, so the frame cannot prove it and it is measured here. What is
+    // far below the 1 MiB output cap, so the aggregate cap cannot prove it and it is measured here. What is
     // measured is the result member; the outer envelope adds a request id, command, workspace, and
     // warnings, which the 64 KiB between the page bound and this one covers many times over, and a
     // test asserts the encoded envelope on a maximal page. A page is built to fit, so exceeding
@@ -999,14 +985,7 @@ pub fn project_graph_next_v2(
         .ok_or(GraphViewErrorV2::TerminalSessionHasNoNext)?;
     let delegated = delegated_placement_count(&procedure) != 0;
     let mut result = Map::new();
-    result.insert(
-        "schema".to_owned(),
-        json!(if delegated {
-            "podway.next-result/v4"
-        } else {
-            "podway.next-result/v3"
-        }),
-    );
+    result.insert("schema".to_owned(), json!("podway.next-result/v5"));
     if delegated {
         result.insert(
             "delegation".to_owned(),
@@ -1037,7 +1016,6 @@ pub fn project_graph_next_v2(
         json!(state.trace().attempts().len()),
     );
     result.insert("counters".to_owned(), counters(state));
-    result.insert("queue".to_owned(), queue(view));
     result.insert("revision".to_owned(), json!(state.trace().revision().get()));
     result.insert("readiness".to_owned(), current.readiness_value());
     result.insert(
@@ -1163,7 +1141,7 @@ pub fn project_graph_observation_v1(
     // ADR-0024 reduces the observation status member to a value-free compact projection: guidance
     // and the active-item window already carry what a mutation needs, and a caller that wants the
     // standard or verbose status projection calls `session.status`.
-    let mut status = observation_status_v1(view, state, current.as_ref())?;
+    let mut status = observation_status_v1(state, current.as_ref())?;
     if delegated {
         status.insert(
             "delegation".to_owned(),
@@ -1188,14 +1166,7 @@ pub fn project_graph_observation_v1(
     )?;
 
     let mut result = Map::new();
-    result.insert(
-        "schema".to_owned(),
-        json!(if delegated {
-            "podway.observation-result/v4"
-        } else {
-            "podway.observation-result/v3"
-        }),
-    );
+    result.insert("schema".to_owned(), json!("podway.observation-result/v5"));
     result.insert("status".to_owned(), status);
     result.insert("guidance".to_owned(), guidance);
     let active_items = current
@@ -1367,12 +1338,8 @@ fn serialized_bytes_v1(value: &Value) -> usize {
 
 /// The observation-scoped compact status projection.
 ///
-/// It is compact-status shaped but deliberately not `compact-status-result/v3`: that family forces
-/// an idle queue, and `observe` without `--wait-for-idle` must still answer. It also carries the
-/// item window's exact total and truncation state, which the released compact family cannot gain
-/// without becoming a new version.
+/// It is embedded structured status and carries the item window's exact total and truncation state.
 fn observation_status_v1(
-    view: &GraphWorkspaceViewV2,
     state: &GraphSessionStateV2,
     current: Option<&CurrentProjection<'_>>,
 ) -> Result<Map<String, Value>, GraphViewErrorV2> {
@@ -1405,7 +1372,6 @@ fn observation_status_v1(
     status.insert("items_total".to_owned(), json!(items.len()));
     status.insert("items_truncated".to_owned(), json!(false));
     status.insert("items".to_owned(), Value::Array(items));
-    status.insert("queue".to_owned(), queue(view));
     Ok(status)
 }
 
@@ -1433,12 +1399,12 @@ fn strip_evidence_previews_v1(next: &mut Map<String, Value>) {
 }
 
 fn project_prepared_next_v1(
-    view: &GraphWorkspaceViewV2,
+    _view: &GraphWorkspaceViewV2,
     state: &GraphSessionStateV2,
 ) -> Result<Map<String, Value>, GraphViewErrorV2> {
     let delegated_placement_count = delegated_placement_count(&rehydrate_snapshot(state)?);
     let mut result = json!({
-        "schema": "podway.prepared-next-result/v1",
+        "schema": "podway.prepared-next-result/v3",
         "procedure_schema": "podway.procedure/v2",
         "procedure_digest": state.snapshot().digest().as_str(),
         "session_id": state.trace().session_id(),
@@ -1447,7 +1413,6 @@ fn project_prepared_next_v1(
         "goal_tracking": state.snapshot().goal_tracking(),
         "goal_defined": false,
         "trace_length": 0,
-        "queue": queue(view),
         "allowed_actions": ["session.begin", "session.reset", "session.start_replace"],
         "suggestions": [
             {"command":"session.begin","argv":["podway","begin"]},
@@ -1459,7 +1424,6 @@ fn project_prepared_next_v1(
     .expect("prepared next is an object")
     .clone();
     if delegated_placement_count != 0 {
-        result.insert("schema".to_owned(), json!("podway.prepared-next-result/v2"));
         result.insert(
             "delegated_placement_count".to_owned(),
             json!(delegated_placement_count),
@@ -2815,15 +2779,6 @@ fn encode_graph_counters_v2<'a>(counters: impl IntoIterator<Item = (&'a str, u64
             })
             .collect(),
     )
-}
-
-fn queue(view: &GraphWorkspaceViewV2) -> Value {
-    json!({
-        "pending_mutations": view.queued_job_count() != 0 || view.running_job_id().is_some(),
-        "queued_count": view.queued_job_count(),
-        "running_job_id": view.running_job_id().map(|job| job.as_str()),
-        "latest_workspace_sequence": view.latest_workspace_sequence(),
-    })
 }
 
 fn add_static_disposition(

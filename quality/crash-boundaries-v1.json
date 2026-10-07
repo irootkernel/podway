@@ -3,16 +3,7 @@
   "version": 1,
   "coverage": {
     "required": [
-      "C08",
-      "C11",
-      "C12",
-      "C13",
-      "D01",
       "D03",
-      "D04",
-      "S01",
-      "S02",
-      "S03",
       "DS01",
       "DS02",
       "DS03",
@@ -26,16 +17,7 @@
       "DE06"
     ],
     "covered": [
-      "C08",
-      "C11",
-      "C12",
-      "C13",
-      "D01",
       "D03",
-      "D04",
-      "S01",
-      "S02",
-      "S03",
       "DS01",
       "DS02",
       "DS03",
@@ -52,61 +34,6 @@
   },
   "windows": [
     {
-      "id": "C08",
-      "proof": {
-        "failpoint": "TerminalAfterRelationalStateUpdatesBeforeJobTerminalUpdate",
-        "test": "crates/podway-store/tests/int_v2_graph_start_terminal.rs::graph_complete_failpoint_rolls_back_state_and_terminal_receipt",
-        "termination": "injected failure observed",
-        "recovery": "transaction rolls back",
-        "invariant": "graph state and terminal receipt remain atomic",
-        "source_locator": "crates/podway-store/src/sqlite_store.rs::SqliteStoreV1::commit_graph_mutation_terminal_v2"
-      }
-    },
-    {
-      "id": "C11",
-      "proof": {
-        "failpoint": "TerminalFailureBeforeCommit",
-        "test": "crates/podway-store/tests/int_v2_graph_start_terminal.rs::v2drw006_graph_mutation_failure_precommit_abort_requeues_and_retry_freezes_one_receipt",
-        "termination": "child abort observed",
-        "recovery": "restart requeues and one retry commits",
-        "invariant": "one graph failure receipt",
-        "source_locator": "crates/podway-store/src/sqlite_store.rs::SqliteStoreV1::commit_graph_mutation_terminal_v2"
-      }
-    },
-    {
-      "id": "C12",
-      "proof": {
-        "failpoint": "TerminalAfterRelationalStateUpdatesBeforeJobTerminalUpdate",
-        "test": "crates/podway-store/tests/int_v2sdg004_receipt.rs::v2sdg004_precommit_failure_rolls_back_receipt_state_and_terminal",
-        "termination": "injected failure observed",
-        "recovery": "transaction rolls back receipt, graph revision, and terminal job",
-        "invariant": "delegation receipt and job outcome commit atomically",
-        "source_locator": "crates/podway-store/src/sqlite_store.rs::commit_graph_mutation_terminal_with_receipt_v1"
-      }
-    },
-    {
-      "id": "C13",
-      "proof": {
-        "failpoint": "TerminalAfterCommitBeforeResponse",
-        "test": "crates/podway-store/tests/int_v2sdg004_receipt.rs::v2sdg004_postcommit_response_loss_replays_one_receipt",
-        "termination": "injected response loss observed",
-        "recovery": "cold reopen reads one durable receipt and terminal idempotency result",
-        "invariant": "committed delegation acceptance replays without another receipt",
-        "source_locator": "crates/podway-store/src/sqlite_store.rs::commit_graph_mutation_terminal_with_receipt_v1"
-      }
-    },
-    {
-      "id": "D01",
-      "proof": {
-        "failpoint": "reset marker publish",
-        "test": "crates/podway-engine/src/workspace.rs::d01_reset_marker_publication_interrupted_before_link_publishes_no_marker",
-        "termination": "in-process failure observed",
-        "recovery": "retry converges to one durable marker",
-        "invariant": "reset marker publication is atomic",
-        "source_locator": "crates/podway-engine/src/workspace.rs::ValidatedRuntimeDirectoryV1::publish_reset_marker"
-      }
-    },
-    {
       "id": "D03",
       "proof": {
         "failpoint": "IntentPublished, MarkerPublished, RuntimeCleared, PhaseAdvanced and BeforeFinalRemoval",
@@ -115,50 +42,6 @@
         "recovery": "Cold exact-key retry resumes the original removal intent and returns the original response; final absence has no retained outcome",
         "invariant": "The original workspace identity and response are preserved during recovery, and the Git worktree survives removal",
         "source_locator": "crates/podway-engine/src/direct_maintenance.rs::remove_inner"
-      }
-    },
-    {
-      "id": "D04",
-      "proof": {
-        "failpoint": "runtime reset durable checkpoints and live stop effect",
-        "test": "crates/podway-service/tests/int_runtime_reset_plan.rs::every_runtime_reset_durable_boundary_converges_after_process_abort_and_cold_replay",
-        "termination": "child abort observed at each injected boundary",
-        "recovery": "cold exact-token replay converges to one complete or already-applied result",
-        "invariant": "exact stopped postconditions recover, selected runtime data retires once, and the stable lock anchor survives",
-        "source_locator": "crates/podway-service/src/runtime_reset_v1/apply.rs::RuntimeResetApplyV1::resume"
-      }
-    },
-    {
-      "id": "S01",
-      "proof": {
-        "failpoint": "service publication",
-        "test": "crates/podway-service/tests/int_phase8_crash_boundaries.rs::atomic_service_publication_crash_child_leaves_no_partial_state",
-        "termination": "child exits at injected boundary",
-        "recovery": "retry publishes complete state",
-        "invariant": "only old or complete new state is consumed",
-        "source_locator": "crates/podway-service/src/lib.rs::StdServiceFilesystemV1::write_atomically"
-      }
-    },
-    {
-      "id": "S02",
-      "proof": {
-        "failpoint": "bootstrap side effect",
-        "test": "crates/podway-service/tests/int_phase8_crash_boundaries.rs::bootstrap_side_effect_crash_child_reconciles_to_one_installed_state",
-        "termination": "child exits at injected boundary",
-        "recovery": "retry publishes metadata",
-        "invariant": "one durable bootstrap marker",
-        "source_locator": "crates/podway-service/src/lib.rs::MacosServiceCommandRunnerV1::install_or_update"
-      }
-    },
-    {
-      "id": "S03",
-      "proof": {
-        "failpoint": "service removal",
-        "test": "crates/podway-service/tests/int_phase8_crash_boundaries.rs::service_removal_crash_child_preserves_complete_prior_state",
-        "termination": "child exits at injected boundary",
-        "recovery": "retry removes remaining service files",
-        "invariant": "worktree and logs survive non-purge uninstall",
-        "source_locator": "crates/podway-service/src/lib.rs::MacosServiceCommandRunnerV1::uninstall"
       }
     },
     {

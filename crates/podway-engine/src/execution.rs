@@ -1,4 +1,4 @@
-//! Host-independent Procedure preparation, execution boundaries, and request identities.
+//! Host-independent Procedure preparation and direct execution boundaries.
 
 use std::{error::Error, fmt};
 
@@ -9,41 +9,31 @@ use podway_config::{
 };
 use podway_core::{
     ActorAttributionV2, ArtifactLocationKindV1, ArtifactValueV1, AttemptId, AttemptLifecycle,
-    AttemptNumberV2, AttemptValidityV2, AuthoringDiagnostic, AuthoringSeverity, BlockerId,
+    AttemptNumberV2, AttemptValidityV2, AuthoringDiagnostic, AuthoringSeverity,
     CanonicalProcedureJsonV1, DomainError, GoalCriterionV2, GoalDefinitionV2, GoalStatementV2,
-    GraphPlacementV2, ItemId, JobId, ProcedureSnapshotId, ProcedureSourceLabelV1, Revision,
+    GraphPlacementV2, ItemId, ProcedureSnapshotId, ProcedureSourceLabelV1, Revision,
     SessionAttemptV2, SessionId, SessionLifecycle, SessionTraceV2, Sha256Digest, TraceSequenceV2,
-    UnixMillis, WorkspaceId,
+    UnixMillis,
 };
 use podway_presets::{EmbeddedPresetV2, catalog_v2};
 use podway_protocol::{
-    GoalCriterionWireV2, ItemRecordManyDispositionV1, ItemRecordValueV1,
-    ProcedureV2MutationRequestV1, ProcedureV2StartRequestV1, SliceCommandV1, SliceRequestV1,
-    WorktreeSelectorWireV1, canonical_procedure_v2_mutation_identity_v1,
-    canonical_procedure_v2_start_identity_v1, canonical_reset_all_identity_v1,
+    GoalCriterionWireV2, ItemRecordManyDispositionV1, ItemRecordValueV1, SliceCommandV1,
 };
 use podway_store::{
-    ActiveItemMutationRequestV2, ActiveItemMutationV2, AttemptMetadataV2,
-    DurableWorktreeIdentityV1, GraphMutationErrorV2, GraphNodeCounterV2, GraphSessionStateV2,
-    ProcedureSnapshotV2, StoreErrorV1, StoreValueErrorV1, WorkflowMemoryStateV2,
-    WorkspaceBindingV1,
+    ActiveItemMutationRequestV2, ActiveItemMutationV2, AttemptMetadataV2, GraphMutationErrorV2,
+    GraphNodeCounterV2, GraphSessionStateV2, ProcedureSnapshotV2, StoreValueErrorV1,
+    WorkflowMemoryStateV2, WorkspaceBindingV1,
 };
 use sha2::{Digest as _, Sha256};
 
-/// A boundary outcome that can either become a durable domain failure or leave the claim for
-/// recovery. A transient outcome never causes the engine to commit a terminal result.
+/// A preparation rejection at a domain or native boundary. Failed direct mutations retain no
+/// success outcome; callers may retry a transient boundary after refreshing their observation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ExecutionBoundaryErrorV1 {
     Domain(DomainError),
     LocalArtifact(LocalArtifactFailureV1),
     ProcedureV2Unsupported,
-    WorkspaceIdentityMismatch {
-        expected: WorkspaceId,
-        actual: WorkspaceId,
-    },
-    Transient {
-        operation: &'static str,
-    },
+    Transient { operation: &'static str },
 }
 
 /// Filesystem failure categories preserved by the direct artifact boundary.
@@ -67,26 +57,6 @@ impl ExecutionBoundaryErrorV1 {
     pub const fn procedure_v2_unsupported() -> Self {
         Self::ProcedureV2Unsupported
     }
-
-    pub fn workspace_identity_mismatch(expected: WorkspaceId, actual: WorkspaceId) -> Self {
-        Self::WorkspaceIdentityMismatch { expected, actual }
-    }
-}
-
-/// The host-supplied source of generated domain IDs.
-pub trait ExecutionIdSourceV1: Send + Sync {
-    fn next_job_id(&self) -> JobId;
-    /// Generates a fresh workspace UUID for destructive reset replacement. Existing ID sources
-    /// remain compatible by deriving the UUID from their next UUID-shaped job ID.
-    fn next_workspace_id(&self) -> WorkspaceId {
-        let generated = self.next_job_id();
-        WorkspaceId::new(generated.as_str())
-            .expect("execution job ID must satisfy the workspace UUID contract")
-    }
-    fn next_session_id(&self) -> SessionId;
-    fn next_attempt_id(&self) -> AttemptId;
-    fn next_blocker_id(&self) -> BlockerId;
-    fn next_procedure_snapshot_id(&self) -> ProcedureSnapshotId;
 }
 
 /// The host-supplied clock used for domain preparation and execution.
@@ -496,7 +466,7 @@ pub fn prepare_preset_procedure_v2_start(
 }
 
 /// Reconstructs a fresh Procedure v2 graph session exclusively from immutable admitted data.
-/// Claimed execution uses this path so restart never reopens or reparses the caller's source file.
+/// Pure preparation uses only the admitted immutable snapshot.
 pub fn graph_session_state_from_procedure_v2_snapshot(
     snapshot: ProcedureSnapshotV2,
     task_title: &str,
@@ -616,27 +586,6 @@ fn rehydrate_procedure_v2_execution_v1(
         ));
     }
     Ok(validated.parsed().clone())
-}
-
-pub fn fresh_successor_attempt_id_v1<Ids: ExecutionIdSourceV1>(
-    state: &GraphSessionStateV2,
-    ids: &Ids,
-) -> Result<Option<AttemptId>, ExecutionErrorV1> {
-    let Some(active) = state.trace().active_attempt() else {
-        return Ok(None);
-    };
-    let procedure = rehydrate_procedure_v2_execution_v1(state)?;
-    Ok(match procedure.graph().placement(active.graph_node_id()) {
-        Some(GraphPlacementV2::Action(action)) if !action.outcome().is_terminal() => {
-            Some(ids.next_attempt_id())
-        }
-        Some(GraphPlacementV2::Action(_) | GraphPlacementV2::Decision(_)) => None,
-        None => {
-            return Err(invalid_execution_v1(
-                "Procedure v2 active graph placement is absent",
-            ));
-        }
-    })
 }
 
 pub fn required_local_artifacts_v2(
@@ -889,32 +838,6 @@ fn procedure_document_format(
     }
 }
 
-/// Revalidates workspace evidence into the durable identity and lossless workspace root accepted
-/// by the Store. Selector evidence is admission intent/audit data only; a manager-selected binding
-/// is the sole execution authority. Display paths are diagnostic-only and must never be used as a
-/// lookup key.
-pub trait WorkspaceRevalidatorV1: Send + Sync {
-    fn revalidate(
-        &self,
-        selector: &WorktreeSelectorWireV1,
-    ) -> Result<WorkspaceBindingV1, ExecutionBoundaryErrorV1>;
-
-    /// Revalidates the manager-selected binding immediately before a Store claim. Implementations
-    /// must verify the complete durable identity and root evidence, not merely its workspace UUID.
-    ///
-    /// The default deliberately fails closed for adapters that have not implemented this execution
-    /// authority boundary.
-    fn revalidate_binding(
-        &self,
-        binding: &WorkspaceBindingV1,
-    ) -> Result<WorkspaceBindingV1, ExecutionBoundaryErrorV1> {
-        let _ = binding;
-        Err(ExecutionBoundaryErrorV1::transient(
-            "revalidate manager workspace binding",
-        ))
-    }
-}
-
 /// Streams a local artifact through a verified worktree boundary. The same operation is used when
 /// attaching a path and again at completion, preventing a stored digest from standing in for a
 /// current filesystem check.
@@ -934,143 +857,23 @@ pub trait ArtifactVerifierV1: Send + Sync {
     ) -> Result<LocalArtifactVerificationV2, ExecutionBoundaryErrorV1>;
 }
 
-/// Errors surfaced by admission or worker execution. Domain failures are represented by a durable
-/// [`podway_store::TerminalReceiptV1`], not by this error type.
+/// Failures surfaced by pure preparation and direct execution boundaries.
 #[derive(Debug)]
 pub enum ExecutionErrorV1 {
-    BoundaryDomain(DomainError),
-    UnsupportedV2Capability {
-        capability: &'static str,
-        required_result_schema: &'static str,
-    },
-    BoundaryTransient {
-        operation: &'static str,
-    },
-    SessionIdentityMismatch {
-        expected: SessionId,
-        actual: Option<SessionId>,
-    },
-    WorkspaceIdentityMismatch {
-        expected: WorkspaceId,
-        actual: WorkspaceId,
-    },
-    ProcedureDigestMismatch {
-        expected: Sha256Digest,
-        actual: Sha256Digest,
-    },
-    InvalidPersistedExecution {
-        reason: &'static str,
-    },
-    InvalidStoreValue(StoreValueErrorV1),
-    Store(StoreErrorV1),
+    InvalidPersistedExecution { reason: &'static str },
 }
 
 impl fmt::Display for ExecutionErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::BoundaryDomain(error) => {
-                write!(formatter, "execution boundary rejected request: {error}")
-            }
-            Self::UnsupportedV2Capability { capability, .. } => {
-                write!(formatter, "v2 capability is not enabled: {capability}")
-            }
-            Self::BoundaryTransient { operation } => {
-                write!(
-                    formatter,
-                    "execution boundary is transiently unavailable: {operation}"
-                )
-            }
-            Self::SessionIdentityMismatch { .. } => {
-                formatter.write_str("execution target session identity does not match")
-            }
-            Self::WorkspaceIdentityMismatch { .. } => {
-                formatter.write_str("execution target workspace identity does not match")
-            }
-            Self::ProcedureDigestMismatch { .. } => {
-                formatter.write_str("canonical Procedure digest does not match the expectation")
-            }
             Self::InvalidPersistedExecution { reason } => {
                 write!(formatter, "invalid persisted execution document: {reason}")
             }
-            Self::InvalidStoreValue(error) => {
-                write!(formatter, "invalid Store execution value: {error}")
-            }
-            Self::Store(error) => write!(formatter, "Store execution failure: {error}"),
         }
     }
 }
 
-impl Error for ExecutionErrorV1 {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::BoundaryDomain(error) => Some(error),
-            Self::UnsupportedV2Capability { .. }
-            | Self::BoundaryTransient { .. }
-            | Self::SessionIdentityMismatch { .. }
-            | Self::WorkspaceIdentityMismatch { .. }
-            | Self::ProcedureDigestMismatch { .. }
-            | Self::InvalidPersistedExecution { .. } => None,
-            Self::InvalidStoreValue(error) => Some(error),
-            Self::Store(error) => Some(error),
-        }
-    }
-}
-
-impl From<StoreErrorV1> for ExecutionErrorV1 {
-    fn from(error: StoreErrorV1) -> Self {
-        Self::Store(error)
-    }
-}
-pub fn request_digest_v1(
-    request: &SliceRequestV1,
-    workspace_id: &WorkspaceId,
-    resolved_procedure_digest: Option<&Sha256Digest>,
-) -> Result<Sha256Digest, ExecutionErrorV1> {
-    let canonical = match resolved_procedure_digest {
-        Some(digest) => {
-            podway_protocol::canonical_start_mutation_identity_v1(request, workspace_id, digest)
-        }
-        None => podway_protocol::canonical_mutation_identity_v1(request, workspace_id),
-    }
-    .map_err(|_| ExecutionErrorV1::InvalidPersistedExecution {
-        reason: "request identity cannot be canonicalized",
-    })?;
-    Sha256Digest::new(format!("sha256:{}", sha256_hex_v1(canonical.as_bytes()))).map_err(|_| {
-        ExecutionErrorV1::InvalidPersistedExecution {
-            reason: "request identity digest is invalid",
-        }
-    })
-}
-
-pub fn procedure_v2_typed_mutation_request_digest_v1(
-    request: &ProcedureV2MutationRequestV1,
-    workspace_id: &WorkspaceId,
-) -> Result<Sha256Digest, ExecutionErrorV1> {
-    let canonical =
-        canonical_procedure_v2_mutation_identity_v1(request, workspace_id).map_err(|_| {
-            ExecutionErrorV1::InvalidPersistedExecution {
-                reason: "Procedure v2 mutation identity cannot be canonicalized",
-            }
-        })?;
-    Sha256Digest::new(format!("sha256:{}", sha256_hex_v1(canonical.as_bytes()))).map_err(|_| {
-        ExecutionErrorV1::InvalidPersistedExecution {
-            reason: "Procedure v2 mutation identity digest is invalid",
-        }
-    })
-}
-
-pub fn procedure_v2_typed_start_request_digest_v1(
-    request: &ProcedureV2StartRequestV1,
-    workspace_id: &WorkspaceId,
-    procedure_digest: &Sha256Digest,
-) -> Result<Sha256Digest, ExecutionErrorV1> {
-    let canonical =
-        canonical_procedure_v2_start_identity_v1(request, workspace_id, procedure_digest).map_err(
-            |_| invalid_execution_v1("Procedure v2 start identity cannot be canonicalized"),
-        )?;
-    Sha256Digest::new(format!("sha256:{}", sha256_hex_v1(canonical.as_bytes())))
-        .map_err(|_| invalid_execution_v1("Procedure v2 start identity digest is invalid"))
-}
+impl Error for ExecutionErrorV1 {}
 
 pub fn goal_definition_from_wire_v2(
     criteria: &[GoalCriterionWireV2],
@@ -1084,38 +887,8 @@ pub fn goal_definition_from_wire_v2(
             .collect::<Result<Vec<_>, _>>()?,
     )
 }
-pub fn reset_all_request_digest_v1(
-    request: &SliceRequestV1,
-    previous_workspace: &DurableWorktreeIdentityV1,
-) -> Result<Sha256Digest, ExecutionErrorV1> {
-    let canonical = canonical_reset_all_identity_v1(
-        request,
-        previous_workspace.common_dir_identity(),
-        previous_workspace.worktree_admin_identity(),
-    )
-    .map_err(|_| ExecutionErrorV1::InvalidPersistedExecution {
-        reason: "reset request identity cannot be canonicalized",
-    })?;
-    Sha256Digest::new(format!("sha256:{}", sha256_hex_v1(canonical.as_bytes()))).map_err(|_| {
-        ExecutionErrorV1::InvalidPersistedExecution {
-            reason: "reset request identity digest is invalid",
-        }
-    })
-}
-
 pub fn invalid_execution_v1(reason: &'static str) -> ExecutionErrorV1 {
     ExecutionErrorV1::InvalidPersistedExecution { reason }
-}
-
-/// Derives the Store request digest with the workspace's audited SHA-256 implementation.
-fn sha256_hex_v1(input: &[u8]) -> String {
-    let digest = Sha256::digest(input);
-    let mut rendered = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        use fmt::Write as _;
-        write!(&mut rendered, "{byte:02x}").expect("writing to a String cannot fail");
-    }
-    rendered
 }
 
 #[cfg(test)]
@@ -1163,18 +936,6 @@ mod tests {
                 "AUTHORING_SCHEMA_INVALID".to_owned(),
                 "UNREACHABLE_GRAPH_NODE".to_owned(),
             ],
-        );
-    }
-
-    #[test]
-    fn sha256_matches_the_standard_empty_and_short_vectors() {
-        assert_eq!(
-            sha256_hex_v1(b""),
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        );
-        assert_eq!(
-            sha256_hex_v1(b"abc"),
-            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
     }
 

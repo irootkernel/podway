@@ -3,7 +3,7 @@
 //! [ADR-0024](../../../../docs/architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md)
 //! defines the token as a fixed-order binary payload in unpadded base64url. It is not an
 //! authentication or authorization credential: it carries no secret, it is not signed, and the
-//! daemon re-validates every field against current authoritative state on each read. Its only job
+//! Engine re-validates every field against current authoritative state on each read. Its only job
 //! is to name exactly which snapshot a continuation belongs to, so a caller can never resume into a
 //! different value, a different attempt, or a different session without being told.
 
@@ -23,7 +23,7 @@ const BASE64URL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvw
 
 /// The decoded contents of one page token.
 ///
-/// Every field is a fence. The daemon compares each one against current state before serving a
+/// Every field is a fence. The Engine compares each one against current state before serving a
 /// page, so a token that survives decoding still proves nothing on its own.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EvidencePageTokenV1 {

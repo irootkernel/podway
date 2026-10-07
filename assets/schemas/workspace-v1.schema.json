@@ -32,19 +32,8 @@
       "default": "sw-dev-v2"
     },
     "job_queue": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "max_pending": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 4096,
-          "default": 256
-        }
-      },
-      "default": {
-        "max_pending": 256
-      }
+      "$ref": "#/$defs/ignoredLegacyValue",
+      "$comment": "Accepted only for legacy input compatibility; ignored and omitted from canonical serialization. Global parser byte, depth, node and canonical-number checks still apply."
     },
     "ui": {
       "type": "object",
@@ -58,6 +47,31 @@
       "default": {
         "show_stage_in_prompt": false
       }
+    }
+  },
+  "$defs": {
+    "ignoredLegacyValue": {
+      "oneOf": [
+        {
+          "type": [
+            "string",
+            "boolean",
+            "number"
+          ]
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ignoredLegacyValue"
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/ignoredLegacyValue"
+          }
+        }
+      ]
     }
   }
 }

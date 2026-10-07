@@ -16,9 +16,5 @@ sha2 = { workspace = true }
 tempfile = { workspace = true }
 
 [[test]]
-name = "arch_phase0_contract"
-path = "tests/arch_phase0_contract.rs"
-
-[[test]]
 name = "int_suite"
 path = "tests/int_suite.rs"

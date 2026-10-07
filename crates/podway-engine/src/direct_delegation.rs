@@ -89,7 +89,7 @@ pub fn accept_delegation_v1<R: GitResolverContractV1>(
         }
         let receipts = transaction.delegation_receipts()?;
         let view = GraphWorkspaceViewV2::new(transaction.binding().identity().clone(), Some(prior.clone()),
-            0, None, transaction.next_workspace_sequence()? - 1, prior.created_at())
+            transaction.next_workspace_sequence()? - 1, prior.created_at())
             .with_delegation_receipts(receipts.clone());
         let package = delegation_work_package_from_view_v1(&view).map_err(|error| {
             execution_error = Some(match error {

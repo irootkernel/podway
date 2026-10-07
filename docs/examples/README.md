@@ -5,8 +5,8 @@
   goal, and stable JSON-field walkthrough.
 - [Supervised delegation](supervised-delegation.md): a custom review Procedure,
   acceptance and correction walkthrough, and isolated native test command.
-- [`json/daemon-status-result.json`](json/daemon-status-result.json): daemon status result payload.
-- [`json/registry.json`](json/registry.json): minimal global registry.
+- [Current direct known answers](../../tests/fixtures/v2/protocol/current-contracts.json):
+  closed direct outputs, errors, recovery recipes, and bounded results.
 
-These JSON files are manifest-covered known answers. Request and response
-examples are decoder-verified; schemas and specifications remain normative.
+The JSON fixture is manifest-covered and decoder-verified; schemas and
+specifications remain normative.

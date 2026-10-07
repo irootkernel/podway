@@ -356,7 +356,7 @@ fn reset_inner<R: GitResolverContractV1>(
     };
     if phase(&marker)? == "prepared" {
         podway_git::WorkspaceLayoutInitializerV1::new()
-            .initialize_with_config(&worktree, crate::direct_workspace::DEFAULT_DIRECT_CONFIG)
+            .initialize_with_config(&worktree, podway_config::DEFAULT_WORKSPACE_CONFIG_YAML_V1)
             .map_err(DirectWorkspaceErrorV1::Layout)?;
     }
     let (worktree, _) = resolver.resolve_candidate(request.selector.clone())?;

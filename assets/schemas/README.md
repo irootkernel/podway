@@ -2,122 +2,34 @@
 
 These JSON Schema Draft 2020-12 files define Podway's versioned structural contracts.
 
-- `workspace-v1.schema.json`: `.podway/config.yaml` after YAML parsing.
-- `workspace-v2.schema.json`: admitted mode-aware `.podway/config.yaml` shape; omission remains production-compatible.
-- `procedure-v2.schema.json`: closed and bounded Procedure v2 YAML/JSON authoring shape, including optional typed conditions and option guards.
-- `registry-v1.schema.json`: minimal daemon path registry.
-- `ipc-request-v1.schema.json`: framed daemon request payload.
-- `output-v3.schema.json`: unified success envelope with closed command-to-result selection.
-- `error-v1.schema.json`: error envelope.
-- `endpoint-error-details-v1.schema.json`: daemon endpoint and availability failures.
-- `endpoint-error-details-v2.schema.json`: daemon-unavailable details with a bounded read-only recovery recipe.
-- `socket-endpoint-error-details-v1.schema.json`: invalid explicit Unix socket paths.
-- `daemon-contract-mismatch-details-v1.schema.json`: CLI/daemon contract identity mismatch.
-- `daemon-contract-mismatch-details-v2.schema.json`: contract mismatch details with daemon-health recovery.
-- `revision-conflict-details-v1.schema.json`: session and item revision conflicts.
-- `revision-conflict-details-v2.schema.json`: revision conflicts with bounded state-refresh recovery.
-- `attempt-conflict-details-v1.schema.json`: stale current-attempt conflicts.
-- `attempt-conflict-details-v2.schema.json`: stale attempt conflicts with bounded state-refresh recovery.
-- `blocker-limit-details-v1.schema.json`: active-attempt open-blocker limit failures.
-- `idempotency-key-reused-details-v1.schema.json`: rejected idempotency-key reuse.
-- `job-wait-timeout-details-v1.schema.json`: query and admitted mutation wait timeouts.
-- `job-wait-timeout-details-v2.schema.json`: wait timeouts with bounded job-wait recovery.
-- `workspace-recovery-details-v1.schema.json`: unreadable or unsupported workspace-state recovery.
-- `internal-error-details-v1.schema.json`: open generic internal failures and the closed post-admission response-reconstruction variant.
-- `recovery-recipe-v1.schema.json`: shared closed read-only remediation command contract.
-- `daemon-status-result-v1.schema.json`: merged local-service and live-daemon status result.
-- `daemon-status-result-v3.schema.json`: live mode-aware daemon status result.
-- `managed-runtime-v3.schema.json`: closed managed runtime identity, topology, executable, and generation metadata.
-- `aquarium-dev-producer-description-v2.schema.json`: fixed Podway managed-service producer description.
-- `aquarium-dev-artifact-manifest-v2.schema.json`: exact committed-generation bundle identity emitted by the producer.
-- `aquarium-dev-service-status-v1.schema.json`: closed Aquarium controller status projection.
-- `aquarium-dev-service-plan-v1.schema.json`: read-only exact-generation activation plan and token.
-- `aquarium-dev-service-result-v1.schema.json`: successful controller apply result.
-- `workspace-mode-plan-result-v1.schema.json`: read-only token issuance and bounded mode-switch readiness result.
-- `workspace-mode-apply-result-v1.schema.json`: convergent mode-switch application result.
-- `workspace-mode-switch-marker-v1.schema.json`: retained decoder contract for legacy mode-switch recovery.
-- `workspace-mode-switch-marker-v2.schema.json`: durable bounded recovery marker binding an exact mode transition to canonical root and Git administration identity.
-- `workspace-mode-mismatch-details-v1.schema.json`: closed pre-Store runtime ownership mismatch details.
-- `version-summary-v1.schema.json`: compact public product name and version.
-- `version-result-v1.schema.json`: detailed static build and contract identity.
-- `workspace-init-result-v1.schema.json`: terminal workspace initialization outcome.
-- `workspace-removal-result-v1.schema.json`: explicit selected-worktree retirement outcome.
-- `workspace-removal-marker-v1.schema.json`: durable exact-identity workspace-removal recovery marker.
-- `detached-admission-result-v1.schema.json`: detached workspace initialization admission.
-- `job-result-v3.schema.json`: job status/wait wrapper and terminal response.
-- `job-lookup-result-v3.schema.json`: idempotency-key reconciliation result.
-- `job-result-v4.schema.json`: lifecycle-aware job status/wait wrapper and terminal response.
-- `job-lookup-result-v4.schema.json`: lifecycle-aware idempotency-key reconciliation result.
-- `job-result-v5.schema.json`, `job-lookup-result-v5.schema.json`: delegation acceptance terminal wrappers; v3/v4 remain closed.
-- `procedure-validation-result-v2.schema.json`: metadata-only Procedure v2 validation success.
-- `detached-admission-result-v2.schema.json`: Procedure v2 durable mutation admission.
-- `session-start-result-v2.schema.json`: Procedure v2 dry-run and live start outcomes.
-- `session-start-result-v3.schema.json`: prepared-session dry-run and live start outcomes.
-- `session-begin-result-v1.schema.json`: atomic prepared-to-running transition outcome.
-- `terminal-disposition-result-v1.schema.json`: caller-asserted terminal handoff disposition.
-- `session-reset-result-v1.schema.json`: eligible and force reset preview and deletion outcome.
-- `compact-status-result-v2.schema.json`: bounded value-free Procedure v2 status.
-- `status-result-v2.schema.json`: standard status and verbose status with six independently bounded history windows, including decisions and rework.
-- `compact-status-result-v3.schema.json`: prepared-aware bounded value-free status.
-- `status-result-v3.schema.json`: prepared-aware standard and verbose status.
-- `session-archive-result-v1.schema.json`: terminal-session archival mutation result.
-- `session-archive-list-result-v1.schema.json`: historical complete inactive-session list with a 32-session cap.
-- `session-archive-list-result-v2.schema.json`: exact inactive-session total, newest-first window, truncation, and oldest summary.
-- `session-archive-show-result-v1.schema.json`: one inactive session with its full read-only status projection.
-- `session-archive-purge-result-v1.schema.json`: confirmed inactive-session deletion result.
-- `next-result-v2.schema.json`: bounded action, decision, and goal-aware machine guidance.
-- `prepared-next-result-v1.schema.json`: cursor-free prepared-session guidance.
-- `stage-transition-result-v2.schema.json`: Procedure v2 action and administrative transitions.
-- `item-mutation-result-v2.schema.json`: Procedure v2 item mutation outcome.
-- `item-record-many-input-v1.schema.json`: closed JSON stdin contract for bounded atomic item recording, including structurally bound external check results.
-- `item-record-many-result-v1.schema.json`: item-ID-ordered atomic recording outcome; every entry reports the same change and revision facts, and only artifact records carry a value digest.
-- `authoring-diagnostic-v1.schema.json`: standalone bounded authoring diagnostic.
-- `procedure-source-result-v1.schema.json`: format and scaffold source output.
-- `procedure-diagnostics-result-v1.schema.json`: shared bounded diagnostics for every Procedure v2 authoring command.
-- `procedure-graph-result-v1.schema.json`: deterministic graph projection output.
-- `procedure-preview-result-v1.schema.json`: closed read-only preview report with checks, diagnostics, graph, authored item conditions and option guards, Mermaid, digest, and an admissible start suggestion.
-- `decision-result-v1.schema.json`: immutable routed decision outcome.
-- `rework-result-v1.schema.json`: manual rework outcome.
-- `goal-definition-result-v1.schema.json`: initial session goal record.
-- `goal-revision-result-v1.schema.json`: revised session goal and rework outcome.
-- `criterion-assessment-result-v1.schema.json`: one criterion assessment outcome.
-- `v2-result-components-v1.schema.json`: shared closed and bounded Procedure v2 result components, including complete and projected external check results and three-valued predicate statuses.
-- `v2-result-components-v2.schema.json`: shared prepared lifecycle, disposition, reset, and guidance components.
-- `v2-result-components-v3.schema.json`: shared bounded evidence metadata, page-token, observation status, item constraint, and mutation template components.
-- `observation-result-v2.schema.json`: prepared-aware coherent status, guidance, item, and mutation-template observation.
-- `next-result-v3.schema.json`: bounded progression guidance with evidence metadata, previews, continuation tokens, authoritative allowed option IDs, and guarded-option status.
-- `observation-result-v3.schema.json`: prepared-aware observation composing a compact status projection, guidance, byte-budgeted item, condition, and template windows, and a closed `unsatisfied_reason` on each stored but unsatisfied check result.
-- `evidence-read-result-v1.schema.json`: one bounded snapshot-fenced page of a selected evidence item.
-- `session-reset-not-eligible-details-v1.schema.json`: closed smart-reset eligibility failure details.
-- `session-start-decision-required-details-v1.schema.json`: closed state-aware start decision conflict details.
-- `session-start-state-conflict-details-v1.schema.json`: retryable start-policy race details.
-- `session-archive-not-eligible-details-v1.schema.json`: closed archive eligibility failure details.
-- `session-archive-limit-details-v1.schema.json`: historical inactive-session capacity failure details; current builds do not emit this error.
-- `session-archive-not-found-details-v1.schema.json`: closed missing inactive-session failure details.
-- `v2-runtime-error-details-v1.schema.json`: closed code-bound details for registered Procedure v2 runtime errors.
-- `recoverable-v2-runtime-error-details-v1.schema.json`: stale evidence and goal-revision details with state-refresh recovery.
-- `contract-manifest-v1.schema.json`: deterministic integration contract inventory.
-- `delegation-components-v1.schema.json`: shared bounded declaration, execution identity, package, evidence, and receipt definitions.
-- `delegation-work-package-v1.schema.json`, `delegation-accept-input-v1.schema.json`, `delegation-receipt-v1.schema.json`: immutable package, closed acceptance input, and receipt documents.
-- `delegation-package-result-v1.schema.json`, `delegation-accept-result-v1.schema.json`, `delegation-receipt-result-v1.schema.json`: executable read and mutation results.
-- `delegation-projection-v1.schema.json`, `delegation-error-details-v1.schema.json`: readiness and closed error details.
-- `status-result-v4.schema.json`, `compact-status-result-v4.schema.json`, `next-result-v4.schema.json`, `observation-result-v4.schema.json`, `prepared-next-result-v2.schema.json`, `procedure-preview-result-v2.schema.json`, `procedure-graph-result-v2.schema.json`, `session-archive-show-result-v2.schema.json`: bounded delegation projections selected for delegated Procedures or authoring views; older result generations keep their original field sets.
+The current daemon-free public envelopes are `output-v4.schema.json` and
+`error-v2.schema.json`. Current result and detail families are selected by the
+protocol registries and the command-to-result branches in those envelopes.
+`v2-result-components-v4.schema.json` owns their shared bounded components.
+IPC requests, daemon status, durable jobs, admission metadata, runtime modes and
+legacy result generations were retired by V2DFC-008.
 
-Source implementation through V2SDG-007 admits these delegation commands and
-explicitly supplied custom Procedures with delegated actions. Native lifecycle
-and migration qualification and its limits are documented in the
-[conformance inventory](../../docs/specs/quality/testing-and-conformance.md).
-The [roadmap](../../docs/roadmap/README.md#v2sdg-host-neutral-supervised-delegation-foundation)
-owns completion status; these schemas do not claim that an installed stable
-release or live external adapter supports delegation.
-`x-podway-max-utf8-bytes` records the production byte cap for selected text
-fields; JSON Schema `maxLength` alone counts Unicode characters. Callers must
-apply both checks before using these documents.
-The acceptance input's `session_revision` and `rounds_used` must use unsigned
-integer JSON literals. JSON Schema treats a zero-fraction number such as `1.0`
-as an integer, but Podway rejects that representation.
+`workspace-v1.schema.json` and `workspace-v2.schema.json` describe configuration
+input after YAML parsing. A legacy `job_queue` value is accepted within global
+parser bounds and ignored. Workspace v2 accepts only the optional legacy `prod`
+mode. Both legacy members are omitted from canonical serialization.
+`procedure-v2.schema.json` defines the closed, bounded authoring shape.
+
+`output-v3.schema.json` is retained exclusively for the unchanged `version`
+command identity through V2DFC-009. `version-result-v1.schema.json`,
+`version-summary-v1.schema.json`, `contract-manifest-v1.schema.json`,
+`managed-runtime-v3.schema.json` and the Aquarium development-service schemas
+remain under that separate release-identity transition. Their retention does not
+restore daemon command routes. Reserved version v2 and manifest v2 schemas remain
+unemitted until their owning task.
+
+Delegation documents, receipts, current projections and authoring views retain
+their semantic and byte bounds. `x-podway-max-utf8-bytes` records byte caps that
+JSON Schema `maxLength`, which counts Unicode characters, cannot enforce alone.
+Unsigned integer inputs must use integer JSON literals; the parser rejects
+zero-fraction forms such as `1.0` even where JSON Schema accepts them.
 
 JSON Schema does not express every semantic rule, including duplicate identifiers,
-min/max relationships, graph liveness, path containment, or
-procedure canonicalization. The [procedure specification](../../docs/specs/domain/procedure-and-item-specification.md)
+min/max relationships, graph liveness, path containment and canonicalization.
+The [procedure specification](../../docs/specs/domain/procedure-and-item-specification.md)
 defines those additional checks.

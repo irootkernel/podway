@@ -306,7 +306,11 @@
           "$ref": "urn:podway:schema:procedure:v2#/$defs/evidence_reference"
         },
         "resolution": {
-          "enum": ["resolved", "skipped", "unresolved"]
+          "enum": [
+            "resolved",
+            "skipped",
+            "unresolved"
+          ]
         },
         "source_attempt_id": {
           "type": "string",
@@ -331,15 +335,33 @@
       "allOf": [
         {
           "if": {
-            "properties": { "resolution": { "const": "unresolved" } },
-            "required": ["resolution"]
+            "properties": {
+              "resolution": {
+                "const": "unresolved"
+              }
+            },
+            "required": [
+              "resolution"
+            ]
           },
           "then": {
             "not": {
               "anyOf": [
-                { "required": ["source_attempt_id"] },
-                { "required": ["source_attempt_number"] },
-                { "required": ["source_items_digest"] }
+                {
+                  "required": [
+                    "source_attempt_id"
+                  ]
+                },
+                {
+                  "required": [
+                    "source_attempt_number"
+                  ]
+                },
+                {
+                  "required": [
+                    "source_items_digest"
+                  ]
+                }
               ]
             }
           },
@@ -354,15 +376,26 @@
         {
           "if": {
             "properties": {
-              "resolution": { "enum": ["skipped", "unresolved"] }
+              "resolution": {
+                "enum": [
+                  "skipped",
+                  "unresolved"
+                ]
+              }
             },
-            "required": ["resolution"]
+            "required": [
+              "resolution"
+            ]
           },
           "then": {
             "properties": {
               "items": {
                 "items": {
-                  "properties": { "state": { "const": "missing" } }
+                  "properties": {
+                    "state": {
+                      "const": "missing"
+                    }
+                  }
                 }
               }
             }
@@ -680,53 +713,104 @@
       "oneOf": [
         {
           "properties": {
-            "state": { "const": "not_applicable" },
-            "reason": { "const": "direct_placement" },
-            "safe_next_action": { "const": "continue_direct" },
-            "receipt": { "type": "null" }
+            "state": {
+              "const": "not_applicable"
+            },
+            "reason": {
+              "const": "direct_placement"
+            },
+            "safe_next_action": {
+              "const": "continue_direct"
+            },
+            "receipt": {
+              "type": "null"
+            }
           }
         },
         {
           "properties": {
-            "state": { "const": "awaiting_acceptance" },
-            "reason": { "const": "items_incomplete" },
-            "safe_next_action": { "const": "record_items" },
-            "receipt": { "type": "null" }
+            "state": {
+              "const": "awaiting_acceptance"
+            },
+            "reason": {
+              "const": "items_incomplete"
+            },
+            "safe_next_action": {
+              "const": "record_items"
+            },
+            "receipt": {
+              "type": "null"
+            }
           }
         },
         {
           "properties": {
-            "state": { "const": "awaiting_acceptance" },
-            "reason": { "const": "blockers_open" },
-            "safe_next_action": { "const": "clear_blockers" },
-            "receipt": { "type": "null" }
+            "state": {
+              "const": "awaiting_acceptance"
+            },
+            "reason": {
+              "const": "blockers_open"
+            },
+            "safe_next_action": {
+              "const": "clear_blockers"
+            },
+            "receipt": {
+              "type": "null"
+            }
           }
         },
         {
           "properties": {
-            "state": { "const": "awaiting_acceptance" },
-            "reason": { "const": "receipt_required" },
-            "safe_next_action": { "const": "accept" },
-            "receipt": { "type": "null" }
+            "state": {
+              "const": "awaiting_acceptance"
+            },
+            "reason": {
+              "const": "receipt_required"
+            },
+            "safe_next_action": {
+              "const": "accept"
+            },
+            "receipt": {
+              "type": "null"
+            }
           }
         },
         {
-          "required": ["receipt"],
+          "required": [
+            "receipt"
+          ],
           "properties": {
-            "state": { "const": "accepted" },
-            "reason": { "const": "current_receipt" },
-            "safe_next_action": { "const": "complete" },
+            "state": {
+              "const": "accepted"
+            },
+            "reason": {
+              "const": "current_receipt"
+            },
+            "safe_next_action": {
+              "const": "complete"
+            },
             "receipt": {
               "$ref": "urn:podway:schema:delegation-components:v1#/$defs/receiptSummary"
             }
           }
         },
         {
-          "required": ["receipt"],
+          "required": [
+            "receipt"
+          ],
           "properties": {
-            "state": { "const": "stale_acceptance" },
-            "reason": { "enum": ["package_changed", "items_changed"] },
-            "safe_next_action": { "const": "retry_or_rework" },
+            "state": {
+              "const": "stale_acceptance"
+            },
+            "reason": {
+              "enum": [
+                "package_changed",
+                "items_changed"
+              ]
+            },
+            "safe_next_action": {
+              "const": "retry_or_rework"
+            },
             "receipt": {
               "$ref": "urn:podway:schema:delegation-components:v1#/$defs/receiptSummary"
             }
@@ -734,18 +818,34 @@
         },
         {
           "properties": {
-            "state": { "const": "inactive" },
-            "reason": { "const": "historical_attempt" },
-            "safe_next_action": { "const": "inspect_history" },
-            "receipt": { "type": "null" }
+            "state": {
+              "const": "inactive"
+            },
+            "reason": {
+              "const": "historical_attempt"
+            },
+            "safe_next_action": {
+              "const": "inspect_history"
+            },
+            "receipt": {
+              "type": "null"
+            }
           }
         },
         {
           "properties": {
-            "state": { "const": "inactive" },
-            "reason": { "const": "no_active_attempt" },
-            "safe_next_action": { "const": "begin_or_inspect" },
-            "receipt": { "type": "null" }
+            "state": {
+              "const": "inactive"
+            },
+            "reason": {
+              "const": "no_active_attempt"
+            },
+            "safe_next_action": {
+              "const": "begin_or_inspect"
+            },
+            "receipt": {
+              "type": "null"
+            }
           }
         }
       ]

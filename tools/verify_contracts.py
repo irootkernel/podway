@@ -119,7 +119,6 @@ CRATE_ORDER = (
     "podway-config",
     "podway-store",
     "podway-git",
-    "podway-service",
     "podway-presets",
     "podway-engine",
     "podway-cli",
@@ -130,7 +129,6 @@ EXPECTED_ADJACENCY = {
     "podway-config": {"podway-core"},
     "podway-store": {"podway-core"},
     "podway-git": {"podway-core"},
-    "podway-service": {"podway-core"},
     "podway-presets": {"podway-core", "podway-config"},
     "podway-engine": {
         "podway-core",
@@ -252,54 +250,96 @@ APPROVED_COMMANDS = frozenset(
     }
 )
 PROCEDURE_INDEPENDENT_RUNTIME_ERROR_CODES = (
-    "RUNTIME_RESET_BUSY", "RUNTIME_RESET_UNSAFE", "RUNTIME_RESET_UNSUPPORTED",
-    "RUNTIME_RESET_PLAN_STALE", "RUNTIME_RESET_LIMIT_EXCEEDED",
-    "RUNTIME_RESET_IN_PROGRESS", "RUNTIME_RESET_INCOMPLETE",
-    "DAEMON_NOT_INSTALLED", "DAEMON_UNAVAILABLE", "DAEMON_STARTING",
-    "DAEMON_READINESS_TIMEOUT", "DAEMON_SHUTTING_DOWN",
-    "DAEMON_VERSION_INCOMPATIBLE", "DAEMON_CONTRACT_MISMATCH",
-    "PROTOCOL_VERSION_UNSUPPORTED", "REQUEST_TOO_LARGE", "REQUEST_INVALID",
-    "SOCKET_ENDPOINT_INVALID", "NOT_A_GIT_WORKTREE", "BARE_GIT_REPOSITORY",
-    "WORKTREE_GONE", "WORKSPACE_NOT_INITIALIZED", "WORKSPACE_ALREADY_INITIALIZED",
-    "WORKSPACE_INIT_CONFLICT", "WORKSPACE_ID_CONFLICT", "WORKSPACE_UUID_MISMATCH",
-    "WORKSPACE_MODE_MISMATCH",
-    "WORKSPACE_MODE_SWITCH_CONFLICT",
-    "WORKSPACE_CONFIG_INVALID", "WORKSPACE_STATE_UNREADABLE", "WORKSPACE_SCHEMA_UNSUPPORTED",
-    "WORKSPACE_QUEUE_FULL", "WORKSPACE_MAINTENANCE", "WORKSPACE_PATH_UNSAFE",
-    "PATH_OUTSIDE_WORKTREE", "MIGRATION_FAILED", "PROCEDURE_NOT_FOUND", "PROCEDURE_INVALID",
-    "PROCEDURE_SCHEMA_UNSUPPORTED", "PROCEDURE_DIGEST_MISMATCH", "PRESET_NOT_FOUND",
-    "SESSION_NOT_FOUND", "SESSION_ID_MISMATCH", "SESSION_ALREADY_EXISTS",
-    "SESSION_NOT_RUNNING", "SESSION_NOT_TERMINAL", "SESSION_RESET_NOT_ELIGIBLE",
-    "SESSION_START_DECISION_REQUIRED",
-    "SESSION_START_STATE_CONFLICT", "SESSION_ARCHIVE_NOT_ELIGIBLE",
-    "SESSION_ARCHIVE_LIMIT_REACHED", "SESSION_ARCHIVE_NOT_FOUND",
-    "SESSION_CANCELLED", "SESSION_REVISION_CONFLICT",
-    "ATTEMPT_NOT_CURRENT", "ATTEMPT_NOT_FOUND", "STAGE_NOT_SKIPPABLE",
-    "REQUIRED_ITEMS_MISSING", "BLOCKERS_PRESENT", "BLOCKER_LIMIT_REACHED", "ITEM_NOT_FOUND",
-    "ITEM_TYPE_MISMATCH", "ITEM_CONSTRAINT_FAILED", "ITEM_REVISION_CONFLICT",
-    "ITEM_ALREADY_SET", "LIST_VALUE_NOT_FOUND", "LIST_VALUE_DUPLICATE", "ARTIFACT_NOT_FOUND",
-    "ARTIFACT_UNREADABLE", "ARTIFACT_CHANGED", "ARTIFACT_MEDIA_TYPE_NOT_ALLOWED",
-    "BLOCKER_NOT_FOUND", "BLOCKER_NOT_CURRENT", "IDEMPOTENCY_KEY_REUSED", "JOB_NOT_FOUND",
-    "JOB_NOT_CANCELLABLE", "JOB_WAIT_TIMEOUT", "MUTATION_OUTCOME_UNKNOWN",
-    "CONFIRMATION_REQUIRED", "INTERNAL_ERROR",
+    'ARTIFACT_CHANGED',
+    'ARTIFACT_MEDIA_TYPE_NOT_ALLOWED',
+    'ARTIFACT_NOT_FOUND',
+    'ARTIFACT_UNREADABLE',
+    'ATTEMPT_NOT_CURRENT',
+    'ATTEMPT_NOT_FOUND',
+    'BARE_GIT_REPOSITORY',
+    'BLOCKERS_PRESENT',
+    'BLOCKER_LIMIT_REACHED',
+    'BLOCKER_NOT_CURRENT',
+    'BLOCKER_NOT_FOUND',
+    'CONFIRMATION_REQUIRED',
+    'IDEMPOTENCY_KEY_REUSED',
+    'INTERNAL_ERROR',
+    'ITEM_ALREADY_SET',
+    'ITEM_CONSTRAINT_FAILED',
+    'ITEM_NOT_FOUND',
+    'ITEM_REVISION_CONFLICT',
+    'ITEM_TYPE_MISMATCH',
+    'LIST_VALUE_DUPLICATE',
+    'LIST_VALUE_NOT_FOUND',
+    'MIGRATION_FAILED',
+    'MUTATION_OUTCOME_UNKNOWN',
+    'NOT_A_GIT_WORKTREE',
+    'PATH_OUTSIDE_WORKTREE',
+    'PRESET_NOT_FOUND',
+    'PROCEDURE_DIGEST_MISMATCH',
+    'PROCEDURE_INVALID',
+    'PROCEDURE_NOT_FOUND',
+    'PROCEDURE_SCHEMA_UNSUPPORTED',
+    'REQUEST_INVALID',
+    'REQUEST_TOO_LARGE',
+    'REQUIRED_ITEMS_MISSING',
+    'SESSION_ALREADY_EXISTS',
+    'SESSION_ARCHIVE_LIMIT_REACHED',
+    'SESSION_ARCHIVE_NOT_ELIGIBLE',
+    'SESSION_ARCHIVE_NOT_FOUND',
+    'SESSION_CANCELLED',
+    'SESSION_ID_MISMATCH',
+    'SESSION_NOT_FOUND',
+    'SESSION_NOT_RUNNING',
+    'SESSION_NOT_TERMINAL',
+    'SESSION_RESET_NOT_ELIGIBLE',
+    'SESSION_REVISION_CONFLICT',
+    'SESSION_START_DECISION_REQUIRED',
+    'SESSION_START_STATE_CONFLICT',
+    'STAGE_NOT_SKIPPABLE',
+    'WORKSPACE_ALREADY_INITIALIZED',
+    'WORKSPACE_CONFIG_INVALID',
+    'WORKSPACE_ID_CONFLICT',
+    'WORKSPACE_INIT_CONFLICT',
+    'WORKSPACE_MAINTENANCE',
+    'WORKSPACE_NOT_INITIALIZED',
+    'WORKSPACE_PATH_UNSAFE',
+    'WORKSPACE_SCHEMA_UNSUPPORTED',
+    'WORKSPACE_STATE_UNREADABLE',
+    'WORKSPACE_UUID_MISMATCH',
+    'WORKTREE_GONE',
 )
 V2_RUNTIME_ERROR_CODES = {
-    "PROCEDURE_V2_SCHEMA_INVALID", "GRAPH_NODE_NOT_FOUND", "NODE_DEFINITION_NOT_FOUND",
-    "GRAPH_NODE_TYPE_MISMATCH", "OPTION_NOT_ALLOWED", "OPTION_GUARD_UNSATISFIED",
-    "ROUTE_NOT_ALLOWED",
-    "DECISION_REASON_MISSING", "EVIDENCE_REFERENCE_UNRESOLVED",
-    "EVIDENCE_REFERENCE_STALE", "MANUAL_REWORK_TARGET_NOT_ALLOWED",
-    "MANUAL_REWORK_TARGET_NOT_ON_TRACE", "GOAL_TRACKING_NOT_ENABLED",
-    "SESSION_GOAL_MISSING", "SESSION_GOAL_ALREADY_DEFINED", "GOAL_REVISION_STALE",
-    "GOAL_REVISION_TARGET_NOT_ALLOWED", "GOAL_REVISION_TARGET_NOT_REVISION_SAFE",
-    "REACTIVATION_FLAG_REQUIRED", "CRITERION_MODE_MIXED", "CRITERION_CITATION_INVALID",
-    "CRITERION_RESULT_MISSING", "CRITERION_NOT_FOUND", "FRESH_GOAL_ASSESSMENT_MISSING",
-    "GOAL_ASSESSMENT_OUTCOME_NOT_ALLOWED", "DIGEST_CONFIRMATION_REQUIRED",
-    "UNSUPPORTED_V2_CAPABILITY",
-    "EVIDENCE_NOT_AVAILABLE",
-    "ATTEMPT_CONTENT_LIMIT_EXCEEDED",
-    "EVIDENCE_PAGE_TOKEN_EXHAUSTED",
-    "EVIDENCE_PAGE_TOKEN_STALE",
+    'ATTEMPT_CONTENT_LIMIT_EXCEEDED',
+    'CRITERION_CITATION_INVALID',
+    'CRITERION_MODE_MIXED',
+    'CRITERION_NOT_FOUND',
+    'CRITERION_RESULT_MISSING',
+    'DECISION_REASON_MISSING',
+    'DIGEST_CONFIRMATION_REQUIRED',
+    'EVIDENCE_NOT_AVAILABLE',
+    'EVIDENCE_PAGE_TOKEN_EXHAUSTED',
+    'EVIDENCE_PAGE_TOKEN_STALE',
+    'EVIDENCE_REFERENCE_STALE',
+    'EVIDENCE_REFERENCE_UNRESOLVED',
+    'FRESH_GOAL_ASSESSMENT_MISSING',
+    'GOAL_ASSESSMENT_OUTCOME_NOT_ALLOWED',
+    'GOAL_REVISION_STALE',
+    'GOAL_REVISION_TARGET_NOT_ALLOWED',
+    'GOAL_REVISION_TARGET_NOT_REVISION_SAFE',
+    'GOAL_TRACKING_NOT_ENABLED',
+    'GRAPH_NODE_NOT_FOUND',
+    'GRAPH_NODE_TYPE_MISMATCH',
+    'MANUAL_REWORK_TARGET_NOT_ALLOWED',
+    'MANUAL_REWORK_TARGET_NOT_ON_TRACE',
+    'NODE_DEFINITION_NOT_FOUND',
+    'OPTION_GUARD_UNSATISFIED',
+    'OPTION_NOT_ALLOWED',
+    'PROCEDURE_V2_SCHEMA_INVALID',
+    'REACTIVATION_FLAG_REQUIRED',
+    'ROUTE_NOT_ALLOWED',
+    'SESSION_GOAL_ALREADY_DEFINED',
+    'SESSION_GOAL_MISSING',
 }
 V2_AUTHORING_DIAGNOSTIC_CODES = {
     "AUTHORING_SCHEMA_INVALID", "SOURCE_CONSTRUCT_UNSUPPORTED", "FORMAT_NOT_CANONICAL",
@@ -370,8 +410,6 @@ FORBIDDEN_PROCEDURE_V1_SYMBOLS = (
 )
 PROCEDURE_V1_LITERAL = "podway.procedure/" + "v1"
 PROCEDURE_V1_LITERAL_ALLOWLIST = {
-    Path("assets/specifications/sqlite-v1.sql"),
-    Path("crates/podway-store/tests/int_v2_only_schema.rs"),
     Path("docs/architecture-decision-records/0019-procedure-v2-only-product.md"),
     Path("tests/fixtures/storage/daemon-era-v2dfc/generation-1-to-13-ddl.json"),
 }
@@ -520,87 +558,42 @@ def validate_catalog_inventory(root: Path) -> int:
         "DELEGATION_BINDING_MISMATCH",
         "DELEGATION_ALREADY_ACCEPTED",
     }
-    if not isinstance(entries, list) or len(entries) != 121:
-        fail("runtime error catalog must contain the v2-only error set")
+    if not isinstance(entries, list) or len(entries) != 97:
+        fail("runtime error catalog must contain the exact 97 direct errors")
     runtime_codes = [entry.get("code") for entry in entries if isinstance(entry, dict)]
     if len(runtime_codes) != len(entries) or len(set(runtime_codes)) != len(runtime_codes):
         fail("runtime error catalog codes must be unique strings")
     expected_codes = set(PROCEDURE_INDEPENDENT_RUNTIME_ERROR_CODES) | V2_RUNTIME_ERROR_CODES | delegation_errors | {
-        "LEGACY_PROCEDURE_STATE_UNSUPPORTED",
         "WORKSPACE_BUSY", "LEGACY_RUNTIME_STATE_UNSUPPORTED",
         "WORKSPACE_CONTRACT_MISMATCH", "COMMAND_RETIRED",
     }
     if set(runtime_codes) != expected_codes:
         fail("runtime error catalog omits a required v2-only code")
-    if any(
-        entry.get("details_schema") != "podway.delegation-error-details/v1"
-        for entry in entries
-        if entry.get("code") in delegation_errors
-    ):
-        fail("every delegation error must bind the closed delegation details schema")
+    expected_exit_codes = {"0": "success", "1": "domain", "2": "usage", "4": "conflict", "5": "workspace", "6": "internal"}
+    if runtime["exit_codes"] != expected_exit_codes:
+        fail("error catalog must retire daemon exit class 3")
+    error_schema = read_json(root, Path("assets/schemas/error-v2.schema.json"), "direct error schema")
+    if set(error_schema["properties"]["code"]["enum"]) != expected_codes:
+        fail("direct error schema disagrees with the exact canonical inventory")
+    code_rules = [rule for rule in error_schema["allOf"]
+                  if "const" in rule.get("if", {}).get("properties", {}).get("code", {})]
+    rules = {rule["if"]["properties"]["code"]["const"]: rule["then"]["properties"]
+             for rule in code_rules}
+    if set(rules) != expected_codes or len(code_rules) != len(expected_codes):
+        fail("each direct error must have one closed metadata rule")
     for entry in entries:
         if not isinstance(entry.get("summary"), str) or not entry["summary"]:
             fail("runtime error entries require a summary")
-        if not isinstance(entry.get("exit_code"), int) or str(entry["exit_code"]) not in runtime["exit_codes"]:
-            fail("runtime error entry has an invalid exit code")
-        if not isinstance(entry.get("retryable"), bool):
-            fail("runtime error entry has an invalid retryability value")
-    v2_details_schemas = {
-        entry.get("code"): entry.get("details_schema")
-        for entry in entries
-        if entry.get("code") in V2_RUNTIME_ERROR_CODES
-    }
-    expected_v2_details_schemas = dict.fromkeys(
-        V2_RUNTIME_ERROR_CODES, "podway.v2-runtime-error-details/v1"
-    )
-    for code in ("EVIDENCE_REFERENCE_STALE", "GOAL_REVISION_STALE", "EVIDENCE_PAGE_TOKEN_STALE"):
-        expected_v2_details_schemas[code] = "podway.recoverable-v2-runtime-error-details/v1"
-    if v2_details_schemas != expected_v2_details_schemas:
-        fail("every v2 runtime error must bind the closed v2 details schema")
-    recovery_details_schemas = {
-        "DAEMON_UNAVAILABLE": "podway.endpoint-error-details/v2",
-        "DAEMON_STARTING": "podway.daemon-readiness-error-details/v1",
-        "DAEMON_READINESS_TIMEOUT": "podway.daemon-readiness-timeout-details/v1",
-        "DAEMON_CONTRACT_MISMATCH": "podway.daemon-contract-mismatch-details/v2",
-        "WORKSPACE_UUID_MISMATCH": "podway.workspace-uuid-mismatch-details/v2",
-        "WORKSPACE_MODE_MISMATCH": "podway.workspace-mode-mismatch-details/v1",
-        "WORKSPACE_STATE_UNREADABLE": "podway.workspace-recovery-details/v1",
-        "WORKSPACE_SCHEMA_UNSUPPORTED": "podway.workspace-recovery-details/v1",
-        "PROCEDURE_DIGEST_MISMATCH": "podway.procedure-digest-mismatch-details/v2",
-        "SESSION_ID_MISMATCH": "podway.session-id-mismatch-details/v2",
-        "SESSION_REVISION_CONFLICT": "podway.revision-conflict-details/v2",
-        "ATTEMPT_NOT_CURRENT": "podway.attempt-conflict-details/v2",
-        "ITEM_REVISION_CONFLICT": "podway.revision-conflict-details/v2",
-        "JOB_WAIT_TIMEOUT": "podway.job-wait-timeout-details/v2",
-        "MUTATION_OUTCOME_UNKNOWN": "podway.mutation-outcome-unknown-details/v2",
-        "EVIDENCE_REFERENCE_STALE": "podway.recoverable-v2-runtime-error-details/v1",
-        "GOAL_REVISION_STALE": "podway.recoverable-v2-runtime-error-details/v1",
-        "EVIDENCE_PAGE_TOKEN_STALE": "podway.recoverable-v2-runtime-error-details/v1",
-        "SESSION_RESET_NOT_ELIGIBLE": "podway.session-reset-not-eligible-details/v1",
-        "SESSION_START_DECISION_REQUIRED": "podway.session-start-decision-required-details/v1",
-        "SESSION_START_STATE_CONFLICT": "podway.session-start-state-conflict-details/v1",
-        "SESSION_ARCHIVE_NOT_ELIGIBLE": "podway.session-archive-not-eligible-details/v1",
-        "SESSION_ARCHIVE_LIMIT_REACHED": "podway.session-archive-limit-details/v1",
-        "SESSION_ARCHIVE_NOT_FOUND": "podway.session-archive-not-found-details/v1",
-    }
-    actual_recovery_schemas = {
-        entry["code"]: entry.get("details_schema")
-        for entry in entries
-        if entry.get("code") in recovery_details_schemas
-    }
-    if actual_recovery_schemas != recovery_details_schemas:
-        fail("structured recovery errors must bind their exact closed details schemas")
-    reserved_errors = {
-        "WORKSPACE_BUSY": (4, True, "podway.workspace-busy-details/v1"),
-        "LEGACY_RUNTIME_STATE_UNSUPPORTED": (5, False, "podway.legacy-runtime-state-unsupported-details/v1"),
-        "WORKSPACE_CONTRACT_MISMATCH": (5, False, "podway.workspace-contract-mismatch-details/v1"),
-        "COMMAND_RETIRED": (2, False, "podway.command-retired-details/v1"),
-    }
-    for entry in entries:
-        if entry["code"] in reserved_errors and (
-            entry["exit_code"], entry["retryable"], entry.get("details_schema")
-        ) != reserved_errors[entry["code"]]:
-            fail("daemon-free reserved errors must preserve their exact catalog identity")
+        rule = rules[entry["code"]]
+        if (entry.get("exit_code"), entry.get("retryable")) != (rule["exit_code"]["const"], rule["retryable"]["const"]):
+            fail("direct error catalog metadata disagrees with its schema")
+        reference = rule["details"].get("$ref", "")
+        if "#" not in reference:
+            match = re.fullmatch(r"urn:podway:schema:(.+):v([1-9][0-9]*)", reference)
+            if match is None or entry.get("details_schema") != f"podway.{match[1]}/v{match[2]}":
+                fail("direct error catalog details disagree with their closed schema")
+        elif reference != "urn:podway:schema:v2-result-components:v4#/$defs/genericObject" or "details_schema" in entry:
+            fail("generic direct error details must not declare a closed detail family")
 
     authoring = read_json(
         root, Path("assets/specifications/authoring-diagnostics.json"),
@@ -841,7 +834,7 @@ def validate_routes(root: Path) -> int:
     if commands != expected_commands:
         fail(f"command routes do not exactly cover catalog commands; missing={sorted(expected_commands - commands)}")
     return len(commands)
-def validate_daemon_free_reservations(root: Path) -> int:
+def validate_direct_contracts(root: Path) -> int:
     retired = read_json(root, Path("assets/specifications/retired-commands-v1.json"), "retired command table")
     expected = {
         "schema": "podway.retired-command-table/v1",
@@ -853,7 +846,7 @@ def validate_daemon_free_reservations(root: Path) -> int:
     }
     if retired != expected:
         fail("retired command table must match the exact active cutover guidance surface")
-    answers = read_json(root, Path("docs/examples/json/daemon-free-contract-reservation-v1.json"), "daemon-free known answers")
+    answers = read_json(root, Path("tests/fixtures/v2/protocol/current-contracts.json"), "direct known answers")
     replacements = {entry["command"]: entry["replacement"] for entry in retired["commands"]}
     replacements.update({entry["flag"]: entry["replacement"] for entry in retired["flags"]})
     examples = list(answers["fixtures"].values()) + [case["value"] for case in answers["cases"]]
@@ -1148,34 +1141,34 @@ def run_sentinels(root: Path) -> list[str]:
             direct_route[field] = original
         completed.append("direct_route_drift")
 
-        reservation_fixture = temporary / "daemon-free-reservations"
+        reservation_fixture = temporary / "direct-contracts"
         reservation_fixture.mkdir()
         shutil.copytree(root / "assets", reservation_fixture / "assets")
         copy_contracts(root, reservation_fixture)
-        examples = reservation_fixture / "docs/examples/json"
+        examples = reservation_fixture / "tests/fixtures/v2/protocol"
         examples.mkdir(parents=True)
-        known_answers = root / "docs/examples/json/daemon-free-contract-reservation-v1.json"
+        known_answers = root / "tests/fixtures/v2/protocol/current-contracts.json"
         answer_path = examples / known_answers.name
         shutil.copy2(known_answers, answer_path)
         answer = json.loads(answer_path.read_text(encoding="utf-8"))
         answer["fixtures"]["podway.command-retired-details/v1"]["replacement"] = None
         answer_path.write_text(json.dumps(answer) + "\n", encoding="utf-8")
-        require_known_failure("retired known-answer replacement drift", lambda: validate_daemon_free_reservations(reservation_fixture))
+        require_known_failure("retired known-answer replacement drift", lambda: validate_direct_contracts(reservation_fixture))
         shutil.copy2(known_answers, answer_path)
         retired_path = reservation_fixture / "assets/specifications/retired-commands-v1.json"
         retired = json.loads(retired_path.read_text(encoding="utf-8"))
         retired["flags"].pop()
         retired_path.write_text(json.dumps(retired) + "\n", encoding="utf-8")
-        require_known_failure("missing retired flag", lambda: validate_daemon_free_reservations(reservation_fixture))
+        require_known_failure("missing retired flag", lambda: validate_direct_contracts(reservation_fixture))
         shutil.copy2(root / "assets/specifications/retired-commands-v1.json", retired_path)
         ddl_path = reservation_fixture / "assets/specifications/sqlite-v14.sql"
         ddl_path.write_text(ddl_path.read_text(encoding="utf-8") + "\nCREATE TABLE jobs (job_id TEXT);\n", encoding="utf-8")
-        require_known_failure("daemon table in direct baseline", lambda: validate_daemon_free_reservations(reservation_fixture))
+        require_known_failure("daemon table in direct baseline", lambda: validate_direct_contracts(reservation_fixture))
         shutil.copy2(root / "assets/specifications/sqlite-v14.sql", ddl_path)
         ddl = ddl_path.read_text(encoding="utf-8")
         ddl_path.write_text(ddl.replace('REFERENCES "v2_task_sessions"', 'REFERENCES "v2_task_sessions_missing"', 1), encoding="utf-8")
-        require_known_failure("missing direct session foreign-key parent", lambda: validate_daemon_free_reservations(reservation_fixture))
-        completed.append("daemon_free_reservation_drift")
+        require_known_failure("missing direct session foreign-key parent", lambda: validate_direct_contracts(reservation_fixture))
+        completed.append("direct_contract_drift")
 
         route_growth_fixture = temporary / "route-growth"
         route_growth_fixture.mkdir()
@@ -1266,7 +1259,7 @@ def production_checks(root: Path) -> dict[str, int]:
         "catalog_inventory": validate_catalog_inventory(root),
         "cargo_adjacency": validate_adjacency(root),
         "command_routes": validate_routes(root),
-        "daemon_free_reservations": validate_daemon_free_reservations(root),
+        "direct_contracts": validate_direct_contracts(root),
         "makefile_contract": validate_makefile_contract(root),
         "release_contract_verifier": validate_release_contract_verifier(root),
         "contract_manifest_assets": contract_manifest.check(root),

@@ -454,28 +454,12 @@ fn state(error: &StoreErrorV1, context: &DirectErrorContextV1) -> Presentation {
             actual: Some(actual),
         } => revision("SESSION_REVISION_CONFLICT", expected, actual),
         StoreErrorV1::TerminalDispositionAlreadyRecordedV1 { .. } => simple("REQUEST_INVALID"),
-        StoreErrorV1::NewerStateV1 { .. } => recovery("WORKSPACE_SCHEMA_UNSUPPORTED"),
-        StoreErrorV1::StorageUnavailableV1 { .. }
-        | StoreErrorV1::CorruptStateV1 { .. }
-        | StoreErrorV1::StorageIntegrityV1 { .. } => recovery("WORKSPACE_STATE_UNREADABLE"),
-        StoreErrorV1::IdempotencyDigestConflictV1 { .. } => Presentation {
-            code: "IDEMPOTENCY_KEY_REUSED",
-            details: json!({"schema":"podway.idempotency-key-reused-details/v2"}),
-        },
-        // Daemon admission/claim/mode failures cannot be produced by a direct Store.
-        StoreErrorV1::AdmissionCommittedV1 { .. }
-        | StoreErrorV1::AdmissionOutcomeUnknownV1 { .. }
-        | StoreErrorV1::AlreadyClaimedV1 { .. }
-        | StoreErrorV1::CancellationLostV1 { .. }
-        | StoreErrorV1::ClaimStaleV1 { .. }
-        | StoreErrorV1::InternalInvariantViolationV1 { .. }
+        StoreErrorV1::StorageUnavailableV1 { .. } | StoreErrorV1::CorruptStateV1 { .. } => {
+            recovery("WORKSPACE_STATE_UNREADABLE")
+        }
+        StoreErrorV1::InternalInvariantViolationV1 { .. }
         | StoreErrorV1::InvalidStateV1(_)
-        | StoreErrorV1::PrimaryOperationAndCleanupFailureV1 { .. }
-        | StoreErrorV1::JobNotFoundV1 { .. }
-        | StoreErrorV1::LegacyProcedureStateUnsupportedV1
-        | StoreErrorV1::RuntimeModeMismatchV1 { .. }
         | StoreErrorV1::PreconditionConflictV1 { .. }
-        | StoreErrorV1::ProcedureV2PreconditionFailedV1 { .. }
         | StoreErrorV1::SessionIdentityConflictV1 {
             expected: None,
             actual: None,
@@ -588,9 +572,9 @@ fn view(error: &GraphViewErrorV2) -> Presentation {
         }
         GraphViewErrorV2::AttemptNotFound => simple("ATTEMPT_NOT_FOUND"),
         GraphViewErrorV2::TimestampOutOfRange => simple("INTERNAL_ERROR"),
-        GraphViewErrorV2::PendingMutationsForCompact
-        | GraphViewErrorV2::InvalidSnapshot
-        | GraphViewErrorV2::InconsistentState(_) => recovery("WORKSPACE_STATE_UNREADABLE"),
+        GraphViewErrorV2::InvalidSnapshot | GraphViewErrorV2::InconsistentState(_) => {
+            recovery("WORKSPACE_STATE_UNREADABLE")
+        }
     }
 }
 
@@ -649,29 +633,16 @@ fn boundary(error: &ExecutionBoundaryErrorV1, context: &DirectErrorContextV1) ->
             }
             crate::execution::LocalArtifactFailureV1::PathUnsafe => "WORKSPACE_PATH_UNSAFE",
         }),
-        ExecutionBoundaryErrorV1::WorkspaceIdentityMismatch { expected, actual } => {
-            workspace(expected, actual)
-        }
         ExecutionBoundaryErrorV1::ProcedureV2Unsupported => simple("PROCEDURE_SCHEMA_UNSUPPORTED"),
         ExecutionBoundaryErrorV1::Transient { .. } => recovery("WORKSPACE_STATE_UNREADABLE"),
     }
 }
 
-fn preparation(error: &ExecutionErrorV1, context: &DirectErrorContextV1) -> Presentation {
+fn preparation(error: &ExecutionErrorV1, _context: &DirectErrorContextV1) -> Presentation {
     match error {
-        ExecutionErrorV1::BoundaryDomain(error) => domain(error, context),
-        ExecutionErrorV1::UnsupportedV2Capability { .. } => simple("PROCEDURE_SCHEMA_UNSUPPORTED"),
-        ExecutionErrorV1::BoundaryTransient { .. } => recovery("WORKSPACE_STATE_UNREADABLE"),
-        ExecutionErrorV1::SessionIdentityMismatch { expected, actual } => session(expected, actual),
-        ExecutionErrorV1::WorkspaceIdentityMismatch { expected, actual } => {
-            workspace(expected, actual)
-        }
-        ExecutionErrorV1::ProcedureDigestMismatch { expected, actual } => digest(expected, actual),
         ExecutionErrorV1::InvalidPersistedExecution { .. } => {
             recovery("WORKSPACE_STATE_UNREADABLE")
         }
-        ExecutionErrorV1::InvalidStoreValue(_) => simple("INTERNAL_ERROR"),
-        ExecutionErrorV1::Store(error) => state(error, context),
     }
 }
 
@@ -710,8 +681,7 @@ fn git(source: &podway_git::GitResolveErrorV1) -> Presentation {
         podway_git::GitResolveErrorV1::NonGitRepository => simple("NOT_A_GIT_WORKTREE"),
         podway_git::GitResolveErrorV1::BareRepository => simple("BARE_GIT_REPOSITORY"),
         podway_git::GitResolveErrorV1::WorktreeDeleted => simple("WORKTREE_GONE"),
-        podway_git::GitResolveErrorV1::CopiedWorkspaceUuid { .. }
-        | podway_git::GitResolveErrorV1::IdentityMismatch { .. }
+        podway_git::GitResolveErrorV1::IdentityMismatch { .. }
         | podway_git::GitResolveErrorV1::MoveConflict { .. } => simple("WORKSPACE_ID_CONFLICT"),
         podway_git::GitResolveErrorV1::Selector { .. } => simple("REQUEST_INVALID"),
         podway_git::GitResolveErrorV1::PathEscape { .. }
@@ -739,10 +709,10 @@ fn maintenance(
         E::Filesystem(F::UnsafePath | F::UnsupportedPlatform | F::NotEmptyResidual) => {
             simple("WORKSPACE_PATH_UNSAFE")
         }
-        E::Filesystem(F::MarkerAlreadyExists | F::MarkerChanged | F::MarkerMissing) => {
+        E::Filesystem(F::MarkerChanged | F::MarkerMissing) => {
             store(&DirectStoreErrorV1::Maintenance, context)
         }
-        E::Filesystem(F::Path { .. } | F::MarkerInvalid) => recovery("WORKSPACE_STATE_UNREADABLE"),
+        E::Filesystem(F::Path { .. }) => recovery("WORKSPACE_STATE_UNREADABLE"),
         E::Workspace(W::Resolution(DirectWorkspaceResolutionErrorV1::Resolution(error))) => {
             resolution(error, context)
         }
@@ -758,17 +728,18 @@ fn maintenance(
     }
 }
 
-fn resolution(error: &WorkspaceResolutionErrorV1, context: &DirectErrorContextV1) -> Presentation {
+fn resolution(error: &WorkspaceResolutionErrorV1, _context: &DirectErrorContextV1) -> Presentation {
     use WorkspaceResolutionErrorV1 as E;
     match error {
         E::ExpectedWorkspaceUuidMismatch { expected, actual } => workspace(expected, actual),
         E::ExistingBindingMissing => simple("WORKSPACE_NOT_INITIALIZED"),
         E::BootstrapBindingAlreadyPresent => simple("WORKSPACE_ALREADY_INITIALIZED"),
         E::Git { source, .. } => git(source),
-        E::Selector { .. } | E::ManagedDevScopeViolation => simple("REQUEST_INVALID"),
-        E::BindingInspection {
-            source: crate::workspace::WorkspaceBindingInspectionErrorV1::Store(error),
-        } => state(error, context),
+        E::Selector { .. } => simple("REQUEST_INVALID"),
+        E::WorkspaceConfigInvalid => Presentation {
+            code: "WORKSPACE_CONFIG_INVALID",
+            details: json!({"guidance":"Remove any non-prod mode from .podway/config.yaml, then run podway reset --all with explicit authorization."}),
+        },
         E::GitStoreFingerprintMismatch { .. }
         | E::PreliminaryIdentityWasNotCandidate { .. }
         | E::RevalidatedIdentityStateMismatch { .. }

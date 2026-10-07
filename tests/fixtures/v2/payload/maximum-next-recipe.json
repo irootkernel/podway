@@ -4,7 +4,7 @@
   "evidence_level": "production-serialization",
   "implementation_status": "automated",
   "production_proof_required": false,
-  "frame_bytes": 1048576,
+  "output_bytes": 1048576,
   "components": {
     "NEXT_SERIALIZATION_RESERVE": 49152,
     "NEXT_STATIC_BUDGET": 262144,
@@ -19,13 +19,13 @@
   "production_proof": {
     "kind": "cargo-test",
     "path": "crates/podway-engine/tests/int_v2rel002_maximum_next.rs",
-    "function": "v2rel002_admitted_boundary_rich_next_uses_the_production_projector_and_frame",
-    "command": "cargo test -p podway-engine --test int_suite int_v2rel002_maximum_next::v2rel002_admitted_boundary_rich_next_uses_the_production_projector_and_frame --locked -- --exact"
+    "function": "v2rel002_admitted_boundary_rich_next_uses_the_production_projector_and_direct_envelope",
+    "command": "cargo test -p podway-engine --test int_suite int_v2rel002_maximum_next::v2rel002_admitted_boundary_rich_next_uses_the_production_projector_and_direct_envelope --locked -- --exact"
   },
   "construction": [
-    "materialize every applicable next-result-v3 field exactly once while the schema and payload matrix exhaustively assign every conditional field",
+    "materialize every applicable next-result-v5 field exactly once while the schema and payload matrix exhaustively assign every conditional field",
     "admit and vet a boundary-rich Procedure v2, construct a consistent GraphSessionStateV2, and project the complete next result through project_graph_next_v2",
-    "serialize the projected next result directly in one podway.output/v3 envelope",
+    "serialize the projected next result directly in one podway.output/v4 envelope",
     "place procedure-static content immediately below NEXT_STATIC_BUDGET",
     "keep read-back at or below READBACK_BUDGET",
     "include 16 criteria and their runtime suggestion argv",
@@ -33,7 +33,7 @@
     "use escape-heavy control characters for the six-byte accounting factor"
   ],
   "verified_assertions": [
-    "direct production result-schema serialization is at most frame_bytes",
+    "direct production result-schema serialization is at most output_bytes",
     "each charged component is greater than or equal to its encoded bytes"
   ]
 }

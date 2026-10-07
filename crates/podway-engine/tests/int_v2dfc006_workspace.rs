@@ -827,3 +827,181 @@ fn deep_doctor_detects_changed_required_artifact_without_writing_or_reading_cloc
     assert_eq!(files(&root.path().join(".podway")), before);
     doctor_workspace_v1(&resolver, read(root.path()), false, &clock).unwrap();
 }
+
+#[test]
+fn direct_config_admission_rejects_nonprod_and_invalid_bytes_before_store_or_effects() {
+    use podway_engine::direct_api::{
+        DirectCommandV1, DirectRequestV1, DirectResponseV1, execute_direct_v1,
+    };
+    use podway_protocol::Rfc3339MillisV1;
+    let root = fixture();
+    let base = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    initialize_workspace_v1(
+        &base,
+        mutation(root.path(), "config-init"),
+        false,
+        &Clock(AtomicUsize::new(0)),
+        &NativeDirectIdSourceV1,
+    )
+    .unwrap();
+    let opens = std::sync::Arc::new(AtomicUsize::new(0));
+    let observed = opens.clone();
+    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest())
+        .with_store_boundary_observer_v1(move |_| {
+            observed.fetch_add(1, Ordering::SeqCst);
+        });
+    let config = root.path().join(".podway/config.yaml");
+    for bytes in [
+        b"schema: podway.workspace/v2\nmode: dev\n".to_vec(),
+        b"schema: podway.workspace/v2\nmode: release-qualification\n".to_vec(),
+        b"schema: invalid\n".to_vec(),
+        vec![0xff],
+        vec![b'x'; podway_config::MAX_WORKSPACE_CONFIG_BYTES_V1 + 1],
+    ] {
+        std::fs::write(&config, bytes).unwrap();
+        let before = files(&root.path().join(".podway"));
+        for (index, command) in [
+            DirectCommandV1::WorkspaceShow,
+            DirectCommandV1::WorkspaceRepair,
+            DirectCommandV1::WorkspaceInit { repair: false },
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let response = execute_direct_v1(
+                &resolver,
+                DirectRequestV1 {
+                    request_id: RequestIdV1::new(RESPONSE).unwrap(),
+                    selector: selector(root.path()),
+                    expected_workspace_id: None,
+                    command,
+                    idempotency_key: Some(
+                        IdempotencyKeyV1::new(format!("invalid-config-{index}")).unwrap(),
+                    ),
+                    deadline: deadline(),
+                    observed_at: Rfc3339MillisV1::new("2026-10-07T00:00:00.000Z").unwrap(),
+                    timeout_ms: 5000,
+                },
+                &NoEffects,
+                &NoEffects,
+            )
+            .unwrap();
+            let DirectResponseV1::Failure(error) = response else {
+                panic!("invalid config admitted")
+            };
+            let value = error.as_value();
+            assert_eq!(value["code"], "WORKSPACE_CONFIG_INVALID");
+            assert_eq!(value["exit_code"], 5);
+            assert!(
+                value["details"]["guidance"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Remove")
+            );
+            assert_eq!(files(&root.path().join(".podway")), before);
+            assert_eq!(
+                opens.load(Ordering::SeqCst),
+                0,
+                "invalid config opened Store before rejection"
+            );
+        }
+    }
+    let outside = tempfile::tempdir().unwrap();
+    let outside_config = outside.path().join("config.yaml");
+    std::fs::write(&outside_config, b"schema: podway.workspace/v1\n").unwrap();
+    std::fs::remove_file(&config).unwrap();
+    std::os::unix::fs::symlink(&outside_config, &config).unwrap();
+    assert!(matches!(
+        resolver.resolve_existing(selector(root.path()), None, deadline()),
+        Err(
+            podway_engine::workspace::DirectWorkspaceResolutionErrorV1::Resolution(
+                podway_engine::workspace::WorkspaceResolutionErrorV1::WorkspaceConfigInvalid
+            )
+        )
+    ));
+    assert_eq!(opens.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        std::fs::read(&outside_config).unwrap(),
+        b"schema: podway.workspace/v1\n"
+    );
+    std::fs::remove_file(&config).unwrap();
+    for bytes in [
+        b"schema: podway.workspace/v1\njob_queue: {max_pending: 1}\n".as_slice(),
+        b"schema: podway.workspace/v2\n",
+        b"schema: podway.workspace/v2\nmode: prod\n",
+    ] {
+        std::fs::write(&config, bytes).unwrap();
+        show_workspace_v1(
+            &base,
+            DirectWorkspaceReadRequestV1 {
+                selector: selector(root.path()),
+                expected_workspace_id: None,
+                request_id: RequestIdV1::new(RESPONSE).unwrap(),
+                deadline: deadline(),
+            },
+            &Clock(AtomicUsize::new(0)),
+        )
+        .unwrap();
+    }
+    std::fs::write(&config, b"schema: podway.workspace/v2\nmode: dev\n").unwrap();
+    let request = podway_engine::direct_maintenance::DirectMaintenanceRequestV1 {
+        selector: selector(root.path()),
+        expected_workspace_id: None,
+        request_id: RequestIdV1::new(RESPONSE).unwrap(),
+        key: IdempotencyKeyV1::new("invalid-config-reset").unwrap(),
+        confirmed: true,
+        force: false,
+        deadline: deadline(),
+    };
+    podway_engine::direct_maintenance::reset_all_v1(
+        &base,
+        request,
+        &Clock(AtomicUsize::new(0)),
+        &NativeDirectIdSourceV1,
+    )
+    .unwrap();
+    let request = podway_engine::direct_maintenance::DirectMaintenanceRequestV1 {
+        selector: selector(root.path()),
+        expected_workspace_id: None,
+        request_id: RequestIdV1::new(RESPONSE).unwrap(),
+        key: IdempotencyKeyV1::new("invalid-config-remove").unwrap(),
+        confirmed: true,
+        force: true,
+        deadline: deadline(),
+    };
+    podway_engine::direct_maintenance::remove_workspace_v1(
+        &base,
+        request,
+        &Clock(AtomicUsize::new(0)),
+    )
+    .unwrap();
+    assert!(!root.path().join(".podway").exists());
+}
+
+#[test]
+fn bootstrap_rejects_existing_nonprod_config_without_creating_runtime_or_store() {
+    let root = fixture();
+    std::fs::create_dir(root.path().join(".podway")).unwrap();
+    let config = root.path().join(".podway/config.yaml");
+    std::fs::write(&config, b"schema: podway.workspace/v2\nmode: dev\n").unwrap();
+    let before = files(&root.path().join(".podway"));
+    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let error = initialize_workspace_v1(
+        &resolver,
+        mutation(root.path(), "invalid-bootstrap"),
+        false,
+        &NoEffects,
+        &NoEffects,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        DirectWorkspaceErrorV1::Resolution(
+            podway_engine::workspace::DirectWorkspaceResolutionErrorV1::Resolution(
+                podway_engine::workspace::WorkspaceResolutionErrorV1::WorkspaceConfigInvalid
+            )
+        )
+    ));
+    assert_eq!(files(&root.path().join(".podway")), before);
+    assert!(!root.path().join(".podway/runtime").exists());
+}

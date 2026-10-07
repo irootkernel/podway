@@ -1,28 +1,16 @@
 #![forbid(unsafe_code)]
-
-//! Public IPC, JSON wire contracts, and runtime-neutral framing for Podway v1.
-
-use std::fmt;
-
-use podway_core::{
-    AttemptId, GoalRevisionNumberV2, JobId, MAX_OPEN_BLOCKERS_PER_ATTEMPT_V2, Revision, SessionId,
-    Sha256Digest, WorkspaceId,
-};
+//! Public JSON contracts and in-process command values for Podway.
+use podway_core::WorkspaceId;
 use serde::{Deserialize, Deserializer, Serialize, de};
-mod codec;
+use serde_json::{Map, Value};
+use std::fmt;
 mod direct_envelope;
 mod evidence_page;
-mod framing;
 mod identity;
 #[cfg(feature = "release-contract-verifier")]
 mod release_contract;
 mod result_contract;
 mod slice;
-
-pub use codec::{
-    PayloadCodecErrorV1, ResponseEnvelopeV2, decode_request_payload_v1, decode_response_payload_v2,
-    encode_request_payload_v1, encode_response_payload_v2,
-};
 pub use direct_envelope::{
     DirectSessionOutputV1, ERROR_SCHEMA_V2, ErrorEnvelopeInputV2, ErrorEnvelopeV2,
     OUTPUT_SCHEMA_V4, OutputEnvelopeInputV4, OutputEnvelopeV4, RECOVERY_RECIPE_SCHEMA_V2,
@@ -31,51 +19,29 @@ pub use direct_envelope::{
 pub use evidence_page::{
     EVIDENCE_PAGE_TOKEN_VERSION_V1, EvidencePageTokenV1, MAX_EVIDENCE_PAGE_TOKEN_CHARS_V1,
 };
-pub use framing::{
-    FrameErrorV1, FrameIoPhaseV1, decode_single_frame_v1, encode_frame_v1, read_frame_v1,
-    read_single_frame_v1, require_frame_end_v1, write_frame_v1,
-};
 pub use identity::{BuildIdentityV1, build_identity_v1};
 #[cfg(feature = "release-contract-verifier")]
 pub use release_contract::{
     ReleaseContractErrorV1, ReleaseContractVerifierConfigV1, VerificationReceiptV1,
     verify_release_contract_v1,
 };
-use result_contract::is_v2_mutation_contract_command;
-pub use result_contract::validate_runtime_reset_control_request_v1;
 pub use result_contract::{
     DAEMON_FREE_DOCUMENT_SCHEMAS_V1, EXISTING_ROUTE_RESULT_SCHEMAS_V2, MAX_DIRECT_INPUT_BYTES_V1,
-    MAX_DIRECT_OUTPUT_BYTES_V1, MAX_V2_OUTPUT_WARNINGS, MAX_V2_TERMINAL_ERROR_BYTES,
-    MAX_V2_WARNING_CODE_CHARS, MAX_V2_WARNING_MESSAGE_CHARS, MAX_V2_WARNING_PATH_CHARS,
-    NEW_ROUTE_RESULT_SCHEMAS_V1, OUTPUT_SCHEMA_V3, OutputEnvelopeInputV3, OutputEnvelopeV3,
+    MAX_DIRECT_OUTPUT_BYTES_V1, MAX_V2_OUTPUT_WARNINGS, MAX_V2_WARNING_CODE_CHARS,
+    MAX_V2_WARNING_MESSAGE_CHARS, MAX_V2_WARNING_PATH_CHARS, NEW_ROUTE_RESULT_SCHEMAS_V1,
+    OUTPUT_SCHEMA_V3, OutputEnvelopeInputV3, OutputEnvelopeV3,
     PROCEDURE_DIAGNOSTICS_RESULT_SCHEMA_V1, ResultSchemaContractV2, SUPPORTED_OUTPUT_SCHEMAS_V3,
-    V2_MUTATION_COMMANDS, decode_result_schema_contract_v2,
-    ensure_procedure_independent_result_schema_v1, result_schema_top_level_fields_v2,
-    validate_command_result_v2, validate_daemon_free_document_v1, validate_delegation_document_v1,
+    decode_result_schema_contract_v2, ensure_procedure_independent_result_schema_v1,
+    result_schema_top_level_fields_v2, validate_command_result_v2,
+    validate_daemon_free_document_v1, validate_delegation_document_v1,
     validate_procedure_independent_result_v1, validate_v2_output_warnings,
 };
 pub use slice::*;
-
-use serde_json::{Map, Value, json};
-
-pub const IPC_PROTOCOL_V1: &str = "podway.ipc/v1";
-pub const ERROR_SCHEMA_V1: &str = "podway.error/v1";
-pub const SUPPORTED_PROTOCOLS_V1: &[&str] = &[IPC_PROTOCOL_V1];
-pub const SUPPORTED_ERROR_SCHEMAS_V1: &[&str] = &[ERROR_SCHEMA_V1];
-
-pub const FRAME_LENGTH_PREFIX_BYTES_V1: usize = 4;
-pub const MIN_FRAME_PAYLOAD_BYTES_V1: usize = 1;
-pub const MAX_FRAME_PAYLOAD_BYTES_V1: usize = 1_048_576;
-pub const MAX_COMPACT_STATUS_ENVELOPE_BYTES_V1: usize = 262_144;
 pub const MAX_COMMAND_BYTES_V1: usize = 128;
 pub const MAX_IDEMPOTENCY_KEY_BYTES_V1: usize = 256;
-pub const MAX_CLIENT_TEXT_SCALARS_V1: usize = 64;
 pub const MAX_WORKSPACE_ROOT_SCALARS_V1: usize = 4096;
-pub const MAX_WAIT_TIMEOUT_MILLIS_V1: u64 = 3_600_000;
 pub const MAX_JSON_DEPTH_V1: usize = 64;
 pub const SESSION_ARCHIVE_LIST_WINDOW_V2: usize = 256;
-
-/// A typed protocol-contract validation failure.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ProtocolError {
     UnsupportedProtocol {
@@ -93,268 +59,71 @@ pub enum ProtocolError {
         maximum: usize,
         actual: usize,
     },
-    InvalidSha256Digest {
-        field: &'static str,
-    },
     InvalidTimestamp,
-    TerminalJobMissingFinishedAt,
-    NonterminalJobHasFinishedAt,
     InvalidErrorCode,
-    ErrorCodeMetadataMismatch {
-        code: String,
-        expected_exit_code: u8,
-        expected_retryable: bool,
-        actual_exit_code: u8,
-        actual_retryable: bool,
-    },
-    /// An `evidence.read` page token is malformed, oversized, or not exactly one canonical payload.
-    ///
-    /// This is a decoding failure, refused before any comparison against current state, so a token
-    /// a caller invented can never reveal whether a session, attempt, or item exists.
     InvalidEvidencePageToken,
-    InvalidIdentityConflictDetails,
-    InvalidProcedureDigestMismatchDetails,
-    InvalidMutationOutcomeUnknownDetails,
     InvalidErrorDetails {
         code: String,
     },
-    InvalidAdmissionMetadata,
     InvalidCommandResult {
         command: String,
     },
     InvalidOutputWarnings,
-    InvalidCompactStatusEnvelope,
-    CompactStatusEnvelopeTooLarge {
-        length: usize,
-        maximum: usize,
-    },
     InvalidExitCode {
         value: u8,
-    },
-    InvalidJobSequence,
-    InvalidGoalRevision,
-    MissingWorkspace,
-    MissingIdempotencyKey,
-    UnexpectedIdempotencyKey,
-    WaitTimeoutTooLarge {
-        value: u64,
-        maximum: u64,
-    },
-    ZeroLengthFrame,
-    FrameTooLarge {
-        length: usize,
-        maximum: usize,
     },
     JsonDepthExceeded {
         maximum: usize,
     },
 }
-
 impl fmt::Display for ProtocolError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnsupportedProtocol {
                 received,
                 supported,
             } => write!(
-                formatter,
-                "unsupported protocol {received:?}; supported protocols: {}",
+                f,
+                "unsupported contract {received:?}; supported contracts: {}",
                 supported.join(", ")
             ),
-            Self::InvalidEvidencePageToken => write!(
-                formatter,
-                "the evidence page token is not exactly one canonical bounded payload"
-            ),
-            Self::InvalidUuid { field } => write!(formatter, "{field} must be a canonical UUID"),
-            Self::EmptyValue { field } => write!(formatter, "{field} must not be empty"),
+            Self::InvalidUuid { field } => write!(f, "{field} must be a canonical UUID"),
+            Self::EmptyValue { field } => write!(f, "{field} must not be empty"),
             Self::ValueTooLong {
                 field,
                 maximum,
                 actual,
             } => write!(
-                formatter,
+                f,
                 "{field} exceeds its maximum of {maximum} (received {actual})"
             ),
-            Self::InvalidSha256Digest { field } => {
-                write!(formatter, "{field} must be a canonical sha256 digest")
-            }
-            Self::InvalidTimestamp => write!(
-                formatter,
-                "timestamp must be RFC 3339 UTC with milliseconds"
-            ),
-            Self::TerminalJobMissingFinishedAt => {
-                write!(formatter, "terminal job state requires finished_at")
-            }
-            Self::NonterminalJobHasFinishedAt => {
-                write!(formatter, "queued or running job state forbids finished_at")
+            Self::InvalidTimestamp => {
+                f.write_str("timestamp must be RFC 3339 UTC with milliseconds")
             }
             Self::InvalidErrorCode => {
-                write!(formatter, "error code is not defined in the v1 catalog")
+                f.write_str("error code is not defined in the direct catalog")
             }
-            Self::ErrorCodeMetadataMismatch {
-                code,
-                expected_exit_code,
-                expected_retryable,
-                actual_exit_code,
-                actual_retryable,
-            } => write!(
-                formatter,
-                "error code {code} requires exit code {expected_exit_code} and retryable={expected_retryable}; received exit code {actual_exit_code} and retryable={actual_retryable}"
-            ),
-            Self::InvalidIdentityConflictDetails => {
-                write!(
-                    formatter,
-                    "identity conflict details violate their closed v1 schema"
-                )
+            Self::InvalidEvidencePageToken => {
+                f.write_str("the evidence page token is not exactly one canonical bounded payload")
             }
-            Self::InvalidProcedureDigestMismatchDetails => formatter
-                .write_str("Procedure digest mismatch details violate their closed v1 schema"),
-            Self::InvalidMutationOutcomeUnknownDetails => formatter
-                .write_str("mutation outcome unknown details violate their closed v1 schema"),
             Self::InvalidErrorDetails { code } => {
-                write!(
-                    formatter,
-                    "error details for {code} violate their closed v1 schema"
-                )
-            }
-            Self::InvalidAdmissionMetadata => {
-                formatter.write_str("admission metadata violates its closed v1 schema")
+                write!(f, "error {code} details violate their closed schema")
             }
             Self::InvalidCommandResult { command } => {
-                write!(
-                    formatter,
-                    "result for {command} violates its closed v1 contract"
-                )
+                write!(f, "{command} result violates its closed schema")
             }
             Self::InvalidOutputWarnings => {
-                formatter.write_str("output warnings violate their closed v2 contract")
+                f.write_str("output warnings violate their closed bounds")
             }
-            Self::InvalidCompactStatusEnvelope => formatter
-                .write_str("compact status requires matching workspace and idle queue identity"),
-            Self::CompactStatusEnvelopeTooLarge { length, maximum } => write!(
-                formatter,
-                "compact status envelope length {length} exceeds the maximum of {maximum} bytes"
-            ),
-            Self::InvalidExitCode { value } => {
-                write!(
-                    formatter,
-                    "exit code {value} is outside the supported range 1..=6"
-                )
-            }
-            Self::InvalidJobSequence => write!(formatter, "job sequence must be at least one"),
-            Self::InvalidGoalRevision => write!(formatter, "goal revision must be at least one"),
-            Self::MissingWorkspace => {
-                write!(formatter, "this operation requires a workspace context")
-            }
-            Self::MissingIdempotencyKey => {
-                write!(formatter, "this operation requires an idempotency key")
-            }
-            Self::UnexpectedIdempotencyKey => {
-                write!(
-                    formatter,
-                    "query operations must not include an idempotency key"
-                )
-            }
-            Self::WaitTimeoutTooLarge { value, maximum } => write!(
-                formatter,
-                "wait timeout {value} exceeds the maximum of {maximum} milliseconds"
-            ),
-            Self::ZeroLengthFrame => write!(formatter, "zero-length frames are invalid"),
-            Self::FrameTooLarge { length, maximum } => {
-                write!(
-                    formatter,
-                    "frame length {length} exceeds the maximum of {maximum}"
-                )
-            }
+            Self::InvalidExitCode { value } => write!(f, "unsupported exit code {value}"),
             Self::JsonDepthExceeded { maximum } => {
-                write!(
-                    formatter,
-                    "JSON nesting exceeds the maximum depth of {maximum}"
-                )
+                write!(f, "JSON exceeds maximum depth {maximum}")
             }
         }
     }
 }
-
 impl std::error::Error for ProtocolError {}
-
-/// The one protocol version currently supported by this build.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ProtocolVersionV1 {
-    V1,
-}
-
-impl ProtocolVersionV1 {
-    pub const fn identifier(self) -> &'static str {
-        match self {
-            Self::V1 => IPC_PROTOCOL_V1,
-        }
-    }
-}
-
-/// A pure protocol-negotiation result. It performs no I/O and does not inspect commands.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ProtocolCompatibilityV1 {
-    Compatible {
-        version: ProtocolVersionV1,
-    },
-    Unsupported {
-        received: String,
-        supported: &'static [&'static str],
-    },
-}
-
-pub fn negotiate_protocol(protocol: &str) -> ProtocolCompatibilityV1 {
-    if protocol == IPC_PROTOCOL_V1 {
-        ProtocolCompatibilityV1::Compatible {
-            version: ProtocolVersionV1::V1,
-        }
-    } else {
-        ProtocolCompatibilityV1::Unsupported {
-            received: protocol.to_owned(),
-            supported: SUPPORTED_PROTOCOLS_V1,
-        }
-    }
-}
-
-pub fn require_compatible_protocol(protocol: &str) -> Result<ProtocolVersionV1, ProtocolError> {
-    match negotiate_protocol(protocol) {
-        ProtocolCompatibilityV1::Compatible { version } => Ok(version),
-        ProtocolCompatibilityV1::Unsupported {
-            received,
-            supported,
-        } => Err(ProtocolError::UnsupportedProtocol {
-            received,
-            supported,
-        }),
-    }
-}
-
-/// Validates a declared frame payload length before a transport allocates a payload buffer.
-pub fn validate_frame_payload_length(length: usize) -> Result<(), ProtocolError> {
-    if length < MIN_FRAME_PAYLOAD_BYTES_V1 {
-        return Err(ProtocolError::ZeroLengthFrame);
-    }
-    if length > MAX_FRAME_PAYLOAD_BYTES_V1 {
-        return Err(ProtocolError::FrameTooLarge {
-            length,
-            maximum: MAX_FRAME_PAYLOAD_BYTES_V1,
-        });
-    }
-    Ok(())
-}
-
-/// The IPC operation category that determines workspace and idempotency requirements.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum OperationV1 {
-    Query,
-    Mutate,
-    Control,
-    Bootstrap,
-}
-
-/// A canonical UUID used for an IPC request identifier.
+/// A canonical UUID used for an public request identifier.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]
 pub struct RequestIdV1(String);
@@ -409,96 +178,6 @@ impl<'de> Deserialize<'de> for RequestIdV1 {
     }
 }
 
-/// Client metadata supplied with every IPC request.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ClientInfoV1 {
-    name: String,
-    version: String,
-    pid: u32,
-    product: String,
-    contract_manifest_digest: String,
-}
-
-impl ClientInfoV1 {
-    pub fn new(
-        name: impl Into<String>,
-        version: impl Into<String>,
-        pid: u32,
-    ) -> Result<Self, ProtocolError> {
-        let identity = build_identity_v1();
-        Self::new_with_contract_identity(
-            name,
-            version,
-            pid,
-            identity.product(),
-            identity.contract_manifest_digest(),
-        )
-    }
-
-    pub fn new_with_contract_identity(
-        name: impl Into<String>,
-        version: impl Into<String>,
-        pid: u32,
-        product: impl Into<String>,
-        contract_manifest_digest: impl Into<String>,
-    ) -> Result<Self, ProtocolError> {
-        let client = Self {
-            name: name.into(),
-            version: version.into(),
-            pid,
-            product: product.into(),
-            contract_manifest_digest: contract_manifest_digest.into(),
-        };
-        client.validate()?;
-        Ok(client)
-    }
-
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    pub fn version(&self) -> &str {
-        &self.version
-    }
-
-    pub const fn pid(&self) -> u32 {
-        self.pid
-    }
-
-    pub fn product(&self) -> &str {
-        &self.product
-    }
-
-    pub fn contract_manifest_digest(&self) -> &str {
-        &self.contract_manifest_digest
-    }
-
-    fn validate(&self) -> Result<(), ProtocolError> {
-        validate_non_empty_scalar_bounded(&self.name, MAX_CLIENT_TEXT_SCALARS_V1, "client.name")?;
-        validate_non_empty_scalar_bounded(
-            &self.version,
-            MAX_CLIENT_TEXT_SCALARS_V1,
-            "client.version",
-        )?;
-        if self.pid == 0 {
-            return Err(ProtocolError::EmptyValue {
-                field: "client.pid",
-            });
-        }
-        validate_non_empty_scalar_bounded(
-            &self.product,
-            MAX_CLIENT_TEXT_SCALARS_V1,
-            "client.product",
-        )?;
-        validate_sha256_digest_v1(
-            &self.contract_manifest_digest,
-            "client.contract_manifest_digest",
-        )?;
-        Ok(())
-    }
-}
-
 /// A bounded canonical command identifier.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]
@@ -548,69 +227,7 @@ impl<'de> Deserialize<'de> for CommandNameV1 {
     }
 }
 
-/// A root and optional known identity supplied by the CLI. The daemon must independently verify it.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct WorkspaceContextV1 {
-    root: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    expected_uuid: Option<WorkspaceId>,
-}
-
-impl WorkspaceContextV1 {
-    pub fn new(
-        root: impl Into<String>,
-        expected_uuid: Option<WorkspaceId>,
-    ) -> Result<Self, ProtocolError> {
-        let context = Self {
-            root: root.into(),
-            expected_uuid,
-        };
-        context.validate()?;
-        Ok(context)
-    }
-
-    pub fn root(&self) -> &str {
-        &self.root
-    }
-
-    pub fn expected_uuid(&self) -> Option<&WorkspaceId> {
-        self.expected_uuid.as_ref()
-    }
-
-    fn validate(&self) -> Result<(), ProtocolError> {
-        validate_non_empty_scalar_bounded(
-            &self.root,
-            MAX_WORKSPACE_ROOT_SCALARS_V1,
-            "workspace.root",
-        )
-    }
-}
-
-impl<'de> Deserialize<'de> for WorkspaceContextV1 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct RawWorkspaceContextV1 {
-            root: String,
-            #[serde(default)]
-            expected_uuid: OptionalField<WorkspaceId>,
-        }
-
-        let raw = RawWorkspaceContextV1::deserialize(deserializer)?;
-        let context = Self {
-            root: raw.root,
-            expected_uuid: raw.expected_uuid.0,
-        };
-        context.validate().map_err(de::Error::custom)?;
-        Ok(context)
-    }
-}
-
-/// A request idempotency key bounded to the v1 transport contract.
+/// A request idempotency key bounded to the direct input contract.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]
 pub struct IdempotencyKeyV1(String);
@@ -628,10 +245,6 @@ impl IdempotencyKeyV1 {
 
     pub fn into_inner(self) -> String {
         self.0
-    }
-
-    fn validate(&self) -> Result<(), ProtocolError> {
-        validate_non_empty_byte_bounded(&self.0, MAX_IDEMPOTENCY_KEY_BYTES_V1, "idempotency_key")
     }
 }
 
@@ -657,374 +270,6 @@ impl<'de> Deserialize<'de> for IdempotencyKeyV1 {
         let value = String::deserialize(deserializer)?;
         Self::new(value).map_err(de::Error::custom)
     }
-}
-
-/// Optimistic-concurrency conditions carried by an IPC request.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct PreconditionsV1 {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    session_id: Option<SessionId>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    session_revision: Option<Revision>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    attempt_id: Option<AttemptId>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    item_revision: Option<Revision>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    goal_revision: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    blocker_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    job_state: Option<JobStateV1>,
-}
-
-impl PreconditionsV1 {
-    pub fn new(
-        session_id: Option<SessionId>,
-        session_revision: Option<Revision>,
-        attempt_id: Option<AttemptId>,
-        item_revision: Option<Revision>,
-        blocker_id: Option<String>,
-        job_state: Option<JobStateV1>,
-    ) -> Result<Self, ProtocolError> {
-        let preconditions = Self {
-            session_id,
-            session_revision,
-            attempt_id,
-            item_revision,
-            goal_revision: None,
-            blocker_id,
-            job_state,
-        };
-        preconditions.validate()?;
-        Ok(preconditions)
-    }
-
-    pub fn session_id(&self) -> Option<&SessionId> {
-        self.session_id.as_ref()
-    }
-
-    pub fn session_revision(&self) -> Option<Revision> {
-        self.session_revision
-    }
-
-    pub fn attempt_id(&self) -> Option<&AttemptId> {
-        self.attempt_id.as_ref()
-    }
-
-    pub fn item_revision(&self) -> Option<Revision> {
-        self.item_revision
-    }
-
-    /// Returns the caller-observed current Procedure v2 goal revision, when required.
-    pub fn goal_revision(&self) -> Option<GoalRevisionNumberV2> {
-        self.goal_revision.map(GoalRevisionNumberV2::new)
-    }
-
-    /// Adds the Procedure v2 goal-revision fence without changing the released v1 constructor.
-    pub fn with_goal_revision(
-        mut self,
-        goal_revision: GoalRevisionNumberV2,
-    ) -> Result<Self, ProtocolError> {
-        self.goal_revision = Some(goal_revision.get());
-        self.validate()?;
-        Ok(self)
-    }
-
-    pub fn blocker_id(&self) -> Option<&str> {
-        self.blocker_id.as_deref()
-    }
-
-    pub fn job_state(&self) -> Option<JobStateV1> {
-        self.job_state
-    }
-
-    fn validate(&self) -> Result<(), ProtocolError> {
-        if self.goal_revision == Some(0) {
-            return Err(ProtocolError::InvalidGoalRevision);
-        }
-        if let Some(blocker_id) = &self.blocker_id {
-            validate_uuid(blocker_id, "preconditions.blocker_id")?;
-        }
-        Ok(())
-    }
-}
-
-impl<'de> Deserialize<'de> for PreconditionsV1 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct RawPreconditionsV1 {
-            #[serde(default)]
-            session_id: OptionalField<SessionId>,
-            #[serde(default)]
-            session_revision: OptionalField<Revision>,
-            #[serde(default)]
-            attempt_id: OptionalField<AttemptId>,
-            #[serde(default)]
-            item_revision: OptionalField<Revision>,
-            #[serde(default)]
-            goal_revision: OptionalField<u64>,
-            #[serde(default)]
-            blocker_id: OptionalField<String>,
-            #[serde(default)]
-            job_state: OptionalField<JobStateV1>,
-        }
-
-        let raw = RawPreconditionsV1::deserialize(deserializer)?;
-        let preconditions = Self {
-            session_id: raw.session_id.0,
-            session_revision: raw.session_revision.0,
-            attempt_id: raw.attempt_id.0,
-            item_revision: raw.item_revision.0,
-            goal_revision: raw.goal_revision.0,
-            blocker_id: raw.blocker_id.0,
-            job_state: raw.job_state.0,
-        };
-        preconditions.validate().map_err(de::Error::custom)?;
-        Ok(preconditions)
-    }
-}
-
-/// Mutation-waiting preferences.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RequestOptionsV1 {
-    detach: bool,
-    wait_timeout_ms: u64,
-}
-
-impl RequestOptionsV1 {
-    pub fn new(detach: bool, wait_timeout_ms: u64) -> Result<Self, ProtocolError> {
-        let options = Self {
-            detach,
-            wait_timeout_ms,
-        };
-        options.validate()?;
-        Ok(options)
-    }
-
-    pub const fn detach(&self) -> bool {
-        self.detach
-    }
-
-    pub const fn wait_timeout_ms(&self) -> u64 {
-        self.wait_timeout_ms
-    }
-
-    fn validate(&self) -> Result<(), ProtocolError> {
-        if self.wait_timeout_ms > MAX_WAIT_TIMEOUT_MILLIS_V1 {
-            return Err(ProtocolError::WaitTimeoutTooLarge {
-                value: self.wait_timeout_ms,
-                maximum: MAX_WAIT_TIMEOUT_MILLIS_V1,
-            });
-        }
-        Ok(())
-    }
-}
-
-/// Validated fields used to construct one v1 request envelope.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RequestEnvelopeInputV1 {
-    pub request_id: RequestIdV1,
-    pub client: ClientInfoV1,
-    pub operation: OperationV1,
-    pub command: CommandNameV1,
-    pub workspace: Option<WorkspaceContextV1>,
-    pub idempotency_key: Option<IdempotencyKeyV1>,
-    pub preconditions: PreconditionsV1,
-    pub options: RequestOptionsV1,
-    pub payload: Map<String, Value>,
-}
-
-/// The bounded, validated request frame payload defined by `podway.ipc/v1`.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct RequestEnvelopeV1 {
-    protocol: String,
-    request_id: RequestIdV1,
-    client: ClientInfoV1,
-    operation: OperationV1,
-    command: CommandNameV1,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    workspace: Option<WorkspaceContextV1>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    idempotency_key: Option<IdempotencyKeyV1>,
-    #[serde(skip_serializing_if = "PreconditionsV1::is_empty")]
-    preconditions: PreconditionsV1,
-    options: RequestOptionsV1,
-    payload: Map<String, Value>,
-}
-
-impl RequestEnvelopeV1 {
-    pub fn new(input: RequestEnvelopeInputV1) -> Result<Self, ProtocolError> {
-        let RequestEnvelopeInputV1 {
-            request_id,
-            client,
-            operation,
-            command,
-            workspace,
-            idempotency_key,
-            preconditions,
-            options,
-            payload,
-        } = input;
-        let request = Self {
-            protocol: IPC_PROTOCOL_V1.to_owned(),
-            request_id,
-            client,
-            operation,
-            command,
-            workspace,
-            idempotency_key,
-            preconditions,
-            options,
-            payload,
-        };
-        request.validate()?;
-        Ok(request)
-    }
-
-    pub fn protocol(&self) -> &str {
-        &self.protocol
-    }
-
-    pub fn request_id(&self) -> &RequestIdV1 {
-        &self.request_id
-    }
-
-    pub fn client(&self) -> &ClientInfoV1 {
-        &self.client
-    }
-
-    pub const fn operation(&self) -> OperationV1 {
-        self.operation
-    }
-
-    pub fn command(&self) -> &CommandNameV1 {
-        &self.command
-    }
-
-    pub fn workspace(&self) -> Option<&WorkspaceContextV1> {
-        self.workspace.as_ref()
-    }
-
-    pub fn idempotency_key(&self) -> Option<&IdempotencyKeyV1> {
-        self.idempotency_key.as_ref()
-    }
-
-    pub fn preconditions(&self) -> &PreconditionsV1 {
-        &self.preconditions
-    }
-
-    pub const fn options(&self) -> RequestOptionsV1 {
-        self.options
-    }
-
-    pub fn payload(&self) -> &Map<String, Value> {
-        &self.payload
-    }
-
-    pub fn validate(&self) -> Result<(), ProtocolError> {
-        require_compatible_protocol(&self.protocol)?;
-        self.request_id.validate()?;
-        self.client.validate()?;
-        self.command.validate()?;
-        if let Some(workspace) = &self.workspace {
-            workspace.validate()?;
-        }
-        if let Some(idempotency_key) = &self.idempotency_key {
-            idempotency_key.validate()?;
-        }
-        self.preconditions.validate()?;
-        self.options.validate()?;
-        validate_json_map_depth(&self.payload, 1)?;
-
-        match self.operation {
-            OperationV1::Mutate | OperationV1::Bootstrap => {
-                if self.workspace.is_none() {
-                    return Err(ProtocolError::MissingWorkspace);
-                }
-                if self.idempotency_key.is_none() {
-                    return Err(ProtocolError::MissingIdempotencyKey);
-                }
-            }
-            OperationV1::Query if self.idempotency_key.is_some() => {
-                return Err(ProtocolError::UnexpectedIdempotencyKey);
-            }
-            OperationV1::Query | OperationV1::Control => {}
-        }
-
-        Ok(())
-    }
-}
-
-impl<'de> Deserialize<'de> for RequestEnvelopeV1 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct RawRequestEnvelopeV1 {
-            protocol: String,
-            request_id: RequestIdV1,
-            client: ClientInfoV1,
-            operation: OperationV1,
-            command: CommandNameV1,
-            #[serde(default)]
-            workspace: OptionalField<WorkspaceContextV1>,
-            #[serde(default)]
-            idempotency_key: OptionalField<IdempotencyKeyV1>,
-            #[serde(default)]
-            preconditions: OptionalField<PreconditionsV1>,
-            options: RequestOptionsV1,
-            payload: Map<String, Value>,
-        }
-
-        let raw = RawRequestEnvelopeV1::deserialize(deserializer)?;
-        require_compatible_protocol(&raw.protocol).map_err(de::Error::custom)?;
-        let request = Self {
-            protocol: raw.protocol,
-            request_id: raw.request_id,
-            client: raw.client,
-            operation: raw.operation,
-            command: raw.command,
-            workspace: raw.workspace.0,
-            idempotency_key: raw.idempotency_key.0,
-            preconditions: raw.preconditions.0.unwrap_or_default(),
-            options: raw.options,
-            payload: raw.payload,
-        };
-        request.validate().map_err(de::Error::custom)?;
-        Ok(request)
-    }
-}
-
-impl PreconditionsV1 {
-    fn is_empty(&self) -> bool {
-        self.session_id.is_none()
-            && self.session_revision.is_none()
-            && self.attempt_id.is_none()
-            && self.item_revision.is_none()
-            && self.goal_revision.is_none()
-            && self.blocker_id.is_none()
-            && self.job_state.is_none()
-    }
-}
-
-/// A v1 job state serialized in public output and request preconditions.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum JobStateV1 {
-    Queued,
-    Running,
-    Succeeded,
-    Failed,
-    Cancelled,
 }
 
 /// A timestamp represented as RFC 3339 UTC with mandatory millisecond precision.
@@ -1172,232 +417,6 @@ impl<'de> Deserialize<'de> for WorkspaceOutputV1 {
         Ok(output)
     }
 }
-
-fn deserialize_required_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
-where
-    D: Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    Option::<T>::deserialize(deserializer)
-}
-struct OptionalField<T>(Option<T>);
-
-impl<T> Default for OptionalField<T> {
-    fn default() -> Self {
-        Self(None)
-    }
-}
-
-impl<'de, T> Deserialize<'de> for OptionalField<T>
-where
-    T: Deserialize<'de>,
-{
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        Ok(Self(Some(T::deserialize(deserializer)?)))
-    }
-}
-
-/// A durable-job summary embedded in public success output.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct JobOutputV1 {
-    id: JobId,
-    sequence: u64,
-    state: JobStateV1,
-    submitted_at: Rfc3339MillisV1,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    claimed_at: Option<Rfc3339MillisV1>,
-    finished_at: Option<Rfc3339MillisV1>,
-}
-
-impl JobOutputV1 {
-    pub fn new(
-        id: JobId,
-        sequence: u64,
-        state: JobStateV1,
-        submitted_at: Rfc3339MillisV1,
-        claimed_at: Option<Rfc3339MillisV1>,
-        finished_at: Option<Rfc3339MillisV1>,
-    ) -> Result<Self, ProtocolError> {
-        let output = Self {
-            id,
-            sequence,
-            state,
-            submitted_at,
-            claimed_at,
-            finished_at,
-        };
-        output.validate()?;
-        Ok(output)
-    }
-
-    pub fn id(&self) -> &JobId {
-        &self.id
-    }
-
-    pub const fn sequence(&self) -> u64 {
-        self.sequence
-    }
-
-    pub const fn state(&self) -> JobStateV1 {
-        self.state
-    }
-
-    pub fn submitted_at(&self) -> &Rfc3339MillisV1 {
-        &self.submitted_at
-    }
-
-    pub fn claimed_at(&self) -> Option<&Rfc3339MillisV1> {
-        self.claimed_at.as_ref()
-    }
-
-    pub fn finished_at(&self) -> Option<&Rfc3339MillisV1> {
-        self.finished_at.as_ref()
-    }
-    fn validate(&self) -> Result<(), ProtocolError> {
-        if self.sequence == 0 {
-            return Err(ProtocolError::InvalidJobSequence);
-        }
-        self.submitted_at.validate()?;
-        if let Some(claimed_at) = &self.claimed_at {
-            claimed_at.validate()?;
-        }
-        if let Some(finished_at) = &self.finished_at {
-            finished_at.validate()?;
-        }
-        match self.state {
-            JobStateV1::Queued | JobStateV1::Running if self.finished_at.is_some() => {
-                Err(ProtocolError::NonterminalJobHasFinishedAt)
-            }
-            JobStateV1::Succeeded | JobStateV1::Failed | JobStateV1::Cancelled
-                if self.finished_at.is_none() =>
-            {
-                Err(ProtocolError::TerminalJobMissingFinishedAt)
-            }
-            _ => Ok(()),
-        }
-    }
-}
-impl<'de> Deserialize<'de> for JobOutputV1 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct RawJobOutputV1 {
-            id: JobId,
-            sequence: u64,
-            state: JobStateV1,
-            submitted_at: Rfc3339MillisV1,
-            claimed_at: Option<Rfc3339MillisV1>,
-            #[serde(deserialize_with = "deserialize_required_option")]
-            finished_at: Option<Rfc3339MillisV1>,
-        }
-
-        let raw = RawJobOutputV1::deserialize(deserializer)?;
-        let output = Self {
-            id: raw.id,
-            sequence: raw.sequence,
-            state: raw.state,
-            submitted_at: raw.submitted_at,
-            claimed_at: raw.claimed_at,
-            finished_at: raw.finished_at,
-        };
-        output.validate().map_err(de::Error::custom)?;
-        Ok(output)
-    }
-}
-
-/// A public session lifecycle serialization distinct from the internal domain state enum.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SessionLifecycleV1 {
-    Running,
-    Completed,
-    Cancelled,
-}
-
-/// A session summary embedded in public success output.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct SessionOutputV1 {
-    id: SessionId,
-    title: String,
-    lifecycle: SessionLifecycleV1,
-    revision_before: Revision,
-    revision_after: Revision,
-}
-
-impl SessionOutputV1 {
-    pub fn new(
-        id: SessionId,
-        title: impl Into<String>,
-        lifecycle: SessionLifecycleV1,
-        revision_before: Revision,
-        revision_after: Revision,
-    ) -> Result<Self, ProtocolError> {
-        let output = Self {
-            id,
-            title: title.into(),
-            lifecycle,
-            revision_before,
-            revision_after,
-        };
-        output.validate()?;
-        Ok(output)
-    }
-
-    pub fn id(&self) -> &SessionId {
-        &self.id
-    }
-
-    pub fn title(&self) -> &str {
-        &self.title
-    }
-
-    pub const fn lifecycle(&self) -> SessionLifecycleV1 {
-        self.lifecycle
-    }
-
-    pub const fn revision_before(&self) -> Revision {
-        self.revision_before
-    }
-
-    pub const fn revision_after(&self) -> Revision {
-        self.revision_after
-    }
-    fn validate(&self) -> Result<(), ProtocolError> {
-        validate_non_empty_scalar_bounded(&self.title, 500, "session.title")
-    }
-}
-impl<'de> Deserialize<'de> for SessionOutputV1 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct RawSessionOutputV1 {
-            id: SessionId,
-            title: String,
-            lifecycle: SessionLifecycleV1,
-            revision_before: Revision,
-            revision_after: Revision,
-        }
-
-        let raw = RawSessionOutputV1::deserialize(deserializer)?;
-        let output = Self {
-            id: raw.id,
-            title: raw.title,
-            lifecycle: raw.lifecycle,
-            revision_before: raw.revision_before,
-            revision_after: raw.revision_after,
-        };
-        output.validate().map_err(de::Error::custom)?;
-        Ok(output)
-    }
-}
-
 #[derive(Clone, Copy)]
 struct ErrorCodeCatalogEntryV1 {
     code: &'static str,
@@ -1407,342 +426,12 @@ struct ErrorCodeCatalogEntryV1 {
 
 const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
     ErrorCodeCatalogEntryV1 {
-        code: "RUNTIME_RESET_BUSY",
-        exit_code: 4,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "RUNTIME_RESET_UNSAFE",
-        exit_code: 5,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "RUNTIME_RESET_UNSUPPORTED",
-        exit_code: 3,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "RUNTIME_RESET_PLAN_STALE",
-        exit_code: 4,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "RUNTIME_RESET_LIMIT_EXCEEDED",
-        exit_code: 2,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "RUNTIME_RESET_IN_PROGRESS",
-        exit_code: 4,
+        code: "ARTIFACT_CHANGED",
+        exit_code: 1,
         retryable: true,
     },
     ErrorCodeCatalogEntryV1 {
-        code: "RUNTIME_RESET_INCOMPLETE",
-        exit_code: 4,
-        retryable: true,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "DAEMON_NOT_INSTALLED",
-        exit_code: 3,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "DAEMON_UNAVAILABLE",
-        exit_code: 3,
-        retryable: true,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "DAEMON_STARTING",
-        exit_code: 3,
-        retryable: true,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "DAEMON_READINESS_TIMEOUT",
-        exit_code: 3,
-        retryable: true,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "DAEMON_SHUTTING_DOWN",
-        exit_code: 3,
-        retryable: true,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "DAEMON_VERSION_INCOMPATIBLE",
-        exit_code: 3,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "DAEMON_CONTRACT_MISMATCH",
-        exit_code: 3,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "PROTOCOL_VERSION_UNSUPPORTED",
-        exit_code: 3,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "REQUEST_TOO_LARGE",
-        exit_code: 2,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "REQUEST_INVALID",
-        exit_code: 2,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "SOCKET_ENDPOINT_INVALID",
-        exit_code: 2,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "NOT_A_GIT_WORKTREE",
-        exit_code: 5,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "BARE_GIT_REPOSITORY",
-        exit_code: 5,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "WORKTREE_GONE",
-        exit_code: 5,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "WORKSPACE_NOT_INITIALIZED",
-        exit_code: 5,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "WORKSPACE_ALREADY_INITIALIZED",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "WORKSPACE_INIT_CONFLICT",
-        exit_code: 5,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "WORKSPACE_ID_CONFLICT",
-        exit_code: 5,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "WORKSPACE_UUID_MISMATCH",
-        exit_code: 4,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "WORKSPACE_MODE_MISMATCH",
-        exit_code: 4,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "WORKSPACE_MODE_SWITCH_CONFLICT",
-        exit_code: 4,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "WORKSPACE_CONFIG_INVALID",
-        exit_code: 5,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "WORKSPACE_STATE_UNREADABLE",
-        exit_code: 5,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "WORKSPACE_SCHEMA_UNSUPPORTED",
-        exit_code: 5,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "LEGACY_PROCEDURE_STATE_UNSUPPORTED",
-        exit_code: 5,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "WORKSPACE_QUEUE_FULL",
-        exit_code: 4,
-        retryable: true,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "WORKSPACE_MAINTENANCE",
-        exit_code: 4,
-        retryable: true,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "WORKSPACE_PATH_UNSAFE",
-        exit_code: 5,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "PATH_OUTSIDE_WORKTREE",
-        exit_code: 5,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "MIGRATION_FAILED",
-        exit_code: 5,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "PROCEDURE_NOT_FOUND",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "PROCEDURE_INVALID",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "PROCEDURE_SCHEMA_UNSUPPORTED",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "PROCEDURE_DIGEST_MISMATCH",
-        exit_code: 4,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "PRESET_NOT_FOUND",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "SESSION_NOT_FOUND",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "SESSION_ID_MISMATCH",
-        exit_code: 4,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "SESSION_ALREADY_EXISTS",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "SESSION_START_DECISION_REQUIRED",
-        exit_code: 5,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "SESSION_NOT_RUNNING",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "SESSION_NOT_TERMINAL",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "SESSION_RESET_NOT_ELIGIBLE",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "SESSION_ARCHIVE_NOT_ELIGIBLE",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "SESSION_ARCHIVE_LIMIT_REACHED",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "SESSION_ARCHIVE_NOT_FOUND",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "SESSION_START_STATE_CONFLICT",
-        exit_code: 4,
-        retryable: true,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "SESSION_CANCELLED",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "SESSION_REVISION_CONFLICT",
-        exit_code: 4,
-        retryable: true,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "ATTEMPT_NOT_CURRENT",
-        exit_code: 4,
-        retryable: true,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "ATTEMPT_NOT_FOUND",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "STAGE_NOT_SKIPPABLE",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "REQUIRED_ITEMS_MISSING",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "BLOCKERS_PRESENT",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "BLOCKER_LIMIT_REACHED",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "ITEM_NOT_FOUND",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "ITEM_TYPE_MISMATCH",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "ITEM_CONSTRAINT_FAILED",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "ITEM_REVISION_CONFLICT",
-        exit_code: 4,
-        retryable: true,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "ITEM_ALREADY_SET",
-        exit_code: 4,
-        retryable: true,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "LIST_VALUE_NOT_FOUND",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "LIST_VALUE_DUPLICATE",
+        code: "ARTIFACT_MEDIA_TYPE_NOT_ALLOWED",
         exit_code: 1,
         retryable: false,
     },
@@ -1757,17 +446,32 @@ const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
         retryable: false,
     },
     ErrorCodeCatalogEntryV1 {
-        code: "ARTIFACT_CHANGED",
-        exit_code: 1,
-        retryable: true,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "ARTIFACT_MEDIA_TYPE_NOT_ALLOWED",
+        code: "ATTEMPT_CONTENT_LIMIT_EXCEEDED",
         exit_code: 1,
         retryable: false,
     },
     ErrorCodeCatalogEntryV1 {
-        code: "BLOCKER_NOT_FOUND",
+        code: "ATTEMPT_NOT_CURRENT",
+        exit_code: 4,
+        retryable: true,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "ATTEMPT_NOT_FOUND",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "BARE_GIT_REPOSITORY",
+        exit_code: 5,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "BLOCKERS_PRESENT",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "BLOCKER_LIMIT_REACHED",
         exit_code: 1,
         retryable: false,
     },
@@ -1777,29 +481,14 @@ const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
         retryable: true,
     },
     ErrorCodeCatalogEntryV1 {
-        code: "IDEMPOTENCY_KEY_REUSED",
+        code: "BLOCKER_NOT_FOUND",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "COMMAND_RETIRED",
         exit_code: 2,
         retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "JOB_NOT_FOUND",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "JOB_NOT_CANCELLABLE",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "JOB_WAIT_TIMEOUT",
-        exit_code: 4,
-        retryable: true,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "MUTATION_OUTCOME_UNKNOWN",
-        exit_code: 4,
-        retryable: true,
     },
     ErrorCodeCatalogEntryV1 {
         code: "CONFIRMATION_REQUIRED",
@@ -1807,42 +496,22 @@ const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
         retryable: false,
     },
     ErrorCodeCatalogEntryV1 {
-        code: "INTERNAL_ERROR",
-        exit_code: 6,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "PROCEDURE_V2_SCHEMA_INVALID",
+        code: "CRITERION_CITATION_INVALID",
         exit_code: 1,
         retryable: false,
     },
     ErrorCodeCatalogEntryV1 {
-        code: "GRAPH_NODE_NOT_FOUND",
+        code: "CRITERION_MODE_MIXED",
         exit_code: 1,
         retryable: false,
     },
     ErrorCodeCatalogEntryV1 {
-        code: "NODE_DEFINITION_NOT_FOUND",
+        code: "CRITERION_NOT_FOUND",
         exit_code: 1,
         retryable: false,
     },
     ErrorCodeCatalogEntryV1 {
-        code: "GRAPH_NODE_TYPE_MISMATCH",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "OPTION_NOT_ALLOWED",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "OPTION_GUARD_UNSATISFIED",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "ROUTE_NOT_ALLOWED",
+        code: "CRITERION_RESULT_MISSING",
         exit_code: 1,
         retryable: false,
     },
@@ -1852,9 +521,49 @@ const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
         retryable: false,
     },
     ErrorCodeCatalogEntryV1 {
-        code: "EVIDENCE_REFERENCE_UNRESOLVED",
+        code: "DELEGATION_ALREADY_ACCEPTED",
         exit_code: 1,
         retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "DELEGATION_BINDING_MISMATCH",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "DELEGATION_NOT_APPLICABLE",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "DELEGATION_RECEIPT_REQUIRED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "DELEGATION_RECEIPT_STALE",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "DIGEST_CONFIRMATION_REQUIRED",
+        exit_code: 2,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "EVIDENCE_NOT_AVAILABLE",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "EVIDENCE_PAGE_TOKEN_EXHAUSTED",
+        exit_code: 2,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "EVIDENCE_PAGE_TOKEN_STALE",
+        exit_code: 4,
+        retryable: true,
     },
     ErrorCodeCatalogEntryV1 {
         code: "EVIDENCE_REFERENCE_STALE",
@@ -1862,27 +571,17 @@ const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
         retryable: true,
     },
     ErrorCodeCatalogEntryV1 {
-        code: "MANUAL_REWORK_TARGET_NOT_ALLOWED",
+        code: "EVIDENCE_REFERENCE_UNRESOLVED",
         exit_code: 1,
         retryable: false,
     },
     ErrorCodeCatalogEntryV1 {
-        code: "MANUAL_REWORK_TARGET_NOT_ON_TRACE",
+        code: "FRESH_GOAL_ASSESSMENT_MISSING",
         exit_code: 1,
         retryable: false,
     },
     ErrorCodeCatalogEntryV1 {
-        code: "GOAL_TRACKING_NOT_ENABLED",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "SESSION_GOAL_MISSING",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "SESSION_GOAL_ALREADY_DEFINED",
+        code: "GOAL_ASSESSMENT_OUTCOME_NOT_ALLOWED",
         exit_code: 1,
         retryable: false,
     },
@@ -1902,94 +601,254 @@ const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
         retryable: false,
     },
     ErrorCodeCatalogEntryV1 {
+        code: "GOAL_TRACKING_NOT_ENABLED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "GRAPH_NODE_NOT_FOUND",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "GRAPH_NODE_TYPE_MISMATCH",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "IDEMPOTENCY_KEY_REUSED",
+        exit_code: 2,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "INTERNAL_ERROR",
+        exit_code: 6,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "ITEM_ALREADY_SET",
+        exit_code: 4,
+        retryable: true,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "ITEM_CONSTRAINT_FAILED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "ITEM_NOT_FOUND",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "ITEM_REVISION_CONFLICT",
+        exit_code: 4,
+        retryable: true,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "ITEM_TYPE_MISMATCH",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "LEGACY_RUNTIME_STATE_UNSUPPORTED",
+        exit_code: 5,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "LIST_VALUE_DUPLICATE",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "LIST_VALUE_NOT_FOUND",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "MANUAL_REWORK_TARGET_NOT_ALLOWED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "MANUAL_REWORK_TARGET_NOT_ON_TRACE",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "MIGRATION_FAILED",
+        exit_code: 5,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "MUTATION_OUTCOME_UNKNOWN",
+        exit_code: 4,
+        retryable: true,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "NODE_DEFINITION_NOT_FOUND",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "NOT_A_GIT_WORKTREE",
+        exit_code: 5,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "OPTION_GUARD_UNSATISFIED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "OPTION_NOT_ALLOWED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "PATH_OUTSIDE_WORKTREE",
+        exit_code: 5,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "PRESET_NOT_FOUND",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "PROCEDURE_DIGEST_MISMATCH",
+        exit_code: 4,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "PROCEDURE_INVALID",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "PROCEDURE_NOT_FOUND",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "PROCEDURE_SCHEMA_UNSUPPORTED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "PROCEDURE_V2_SCHEMA_INVALID",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
         code: "REACTIVATION_FLAG_REQUIRED",
         exit_code: 1,
         retryable: false,
     },
     ErrorCodeCatalogEntryV1 {
-        code: "CRITERION_MODE_MIXED",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "CRITERION_CITATION_INVALID",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "CRITERION_RESULT_MISSING",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "CRITERION_NOT_FOUND",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "FRESH_GOAL_ASSESSMENT_MISSING",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "GOAL_ASSESSMENT_OUTCOME_NOT_ALLOWED",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "DIGEST_CONFIRMATION_REQUIRED",
+        code: "REQUEST_INVALID",
         exit_code: 2,
         retryable: false,
     },
     ErrorCodeCatalogEntryV1 {
-        code: "DELEGATION_NOT_APPLICABLE",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "DELEGATION_RECEIPT_REQUIRED",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "DELEGATION_RECEIPT_STALE",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "DELEGATION_BINDING_MISMATCH",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "DELEGATION_ALREADY_ACCEPTED",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "UNSUPPORTED_V2_CAPABILITY",
-        exit_code: 3,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "EVIDENCE_NOT_AVAILABLE",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "ATTEMPT_CONTENT_LIMIT_EXCEEDED",
-        exit_code: 1,
-        retryable: false,
-    },
-    ErrorCodeCatalogEntryV1 {
-        code: "EVIDENCE_PAGE_TOKEN_EXHAUSTED",
+        code: "REQUEST_TOO_LARGE",
         exit_code: 2,
         retryable: false,
     },
     ErrorCodeCatalogEntryV1 {
-        code: "EVIDENCE_PAGE_TOKEN_STALE",
+        code: "REQUIRED_ITEMS_MISSING",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "ROUTE_NOT_ALLOWED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "SESSION_ALREADY_EXISTS",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "SESSION_ARCHIVE_LIMIT_REACHED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "SESSION_ARCHIVE_NOT_ELIGIBLE",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "SESSION_ARCHIVE_NOT_FOUND",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "SESSION_CANCELLED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "SESSION_GOAL_ALREADY_DEFINED",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "SESSION_GOAL_MISSING",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "SESSION_ID_MISMATCH",
+        exit_code: 4,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "SESSION_NOT_FOUND",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "SESSION_NOT_RUNNING",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "SESSION_NOT_TERMINAL",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "SESSION_RESET_NOT_ELIGIBLE",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "SESSION_REVISION_CONFLICT",
         exit_code: 4,
         retryable: true,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "SESSION_START_DECISION_REQUIRED",
+        exit_code: 5,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "SESSION_START_STATE_CONFLICT",
+        exit_code: 4,
+        retryable: true,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "STAGE_NOT_SKIPPABLE",
+        exit_code: 1,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "WORKSPACE_ALREADY_INITIALIZED",
+        exit_code: 1,
+        retryable: false,
     },
     ErrorCodeCatalogEntryV1 {
         code: "WORKSPACE_BUSY",
@@ -1997,7 +856,7 @@ const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
         retryable: true,
     },
     ErrorCodeCatalogEntryV1 {
-        code: "LEGACY_RUNTIME_STATE_UNSUPPORTED",
+        code: "WORKSPACE_CONFIG_INVALID",
         exit_code: 5,
         retryable: false,
     },
@@ -2007,12 +866,51 @@ const ERROR_CODE_CATALOG_V1: &[ErrorCodeCatalogEntryV1] = &[
         retryable: false,
     },
     ErrorCodeCatalogEntryV1 {
-        code: "COMMAND_RETIRED",
-        exit_code: 2,
+        code: "WORKSPACE_ID_CONFLICT",
+        exit_code: 5,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "WORKSPACE_INIT_CONFLICT",
+        exit_code: 5,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "WORKSPACE_MAINTENANCE",
+        exit_code: 4,
+        retryable: true,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "WORKSPACE_NOT_INITIALIZED",
+        exit_code: 5,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "WORKSPACE_PATH_UNSAFE",
+        exit_code: 5,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "WORKSPACE_SCHEMA_UNSUPPORTED",
+        exit_code: 5,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "WORKSPACE_STATE_UNREADABLE",
+        exit_code: 5,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "WORKSPACE_UUID_MISMATCH",
+        exit_code: 4,
+        retryable: false,
+    },
+    ErrorCodeCatalogEntryV1 {
+        code: "WORKTREE_GONE",
+        exit_code: 5,
         retryable: false,
     },
 ];
-/// Returns the complete frozen public error catalog in wire order.
 pub fn error_code_catalog_v1() -> impl ExactSizeIterator<Item = (&'static str, u8, bool)> {
     ERROR_CODE_CATALOG_V1
         .iter()
@@ -2040,10 +938,6 @@ impl ErrorCodeV1 {
     pub fn as_str(&self) -> &str {
         &self.0
     }
-
-    fn validate(&self) -> Result<(), ProtocolError> {
-        validate_error_code(&self.0)
-    }
 }
 
 impl<'de> Deserialize<'de> for ErrorCodeV1 {
@@ -2063,7 +957,7 @@ pub struct ExitCodeV1(u8);
 
 impl ExitCodeV1 {
     pub fn new(value: u8) -> Result<Self, ProtocolError> {
-        if !(1..=6).contains(&value) {
+        if !matches!(value, 1 | 2 | 4 | 5 | 6) {
             return Err(ProtocolError::InvalidExitCode { value });
         }
         Ok(Self(value))
@@ -2071,9 +965,6 @@ impl ExitCodeV1 {
 
     pub const fn get(self) -> u8 {
         self.0
-    }
-    fn validate(self) -> Result<(), ProtocolError> {
-        Self::new(self.0).map(|_| ())
     }
 }
 impl<'de> Deserialize<'de> for ExitCodeV1 {
@@ -2083,1672 +974,6 @@ impl<'de> Deserialize<'de> for ExitCodeV1 {
     {
         let value = u8::deserialize(deserializer)?;
         Self::new(value).map_err(de::Error::custom)
-    }
-}
-
-/// Validated fields used to construct one v1 error envelope.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ErrorEnvelopeInputV1 {
-    pub request_id: RequestIdV1,
-    pub command: CommandNameV1,
-    pub generated_at: Rfc3339MillisV1,
-    pub code: ErrorCodeV1,
-    pub message: String,
-    pub retryable: bool,
-    pub exit_code: ExitCodeV1,
-    pub workspace: Option<Map<String, Value>>,
-    pub details: Map<String, Value>,
-}
-
-/// A validated `podway.error/v1` response envelope.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct ErrorEnvelopeV1 {
-    schema: String,
-    request_id: RequestIdV1,
-    command: CommandNameV1,
-    generated_at: Rfc3339MillisV1,
-    code: ErrorCodeV1,
-    message: String,
-    retryable: bool,
-    exit_code: ExitCodeV1,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    workspace: Option<Map<String, Value>>,
-    details: Map<String, Value>,
-}
-
-impl ErrorEnvelopeV1 {
-    pub fn new(input: ErrorEnvelopeInputV1) -> Result<Self, ProtocolError> {
-        let ErrorEnvelopeInputV1 {
-            request_id,
-            command,
-            generated_at,
-            code,
-            message,
-            retryable,
-            exit_code,
-            workspace,
-            mut details,
-        } = input;
-        ensure_error_details_schema_v1(code.as_str(), &mut details);
-        let output = Self {
-            schema: ERROR_SCHEMA_V1.to_owned(),
-            request_id,
-            command,
-            generated_at,
-            code,
-            message,
-            retryable,
-            exit_code,
-            workspace,
-            details,
-        };
-        output.validate()?;
-        Ok(output)
-    }
-
-    pub fn validate(&self) -> Result<(), ProtocolError> {
-        if self.schema != ERROR_SCHEMA_V1 {
-            return Err(ProtocolError::UnsupportedProtocol {
-                received: self.schema.clone(),
-                supported: SUPPORTED_ERROR_SCHEMAS_V1,
-            });
-        }
-        self.request_id.validate()?;
-        self.command.validate()?;
-        self.generated_at.validate()?;
-        self.code.validate()?;
-        self.exit_code.validate()?;
-        let catalog_entry = error_code_catalog_entry_v1(self.code.as_str())
-            .ok_or(ProtocolError::InvalidErrorCode)?;
-        if self.exit_code.get() != catalog_entry.exit_code
-            || self.retryable != catalog_entry.retryable
-        {
-            return Err(ProtocolError::ErrorCodeMetadataMismatch {
-                code: self.code.as_str().to_owned(),
-                expected_exit_code: catalog_entry.exit_code,
-                expected_retryable: catalog_entry.retryable,
-                actual_exit_code: self.exit_code.get(),
-                actual_retryable: self.retryable,
-            });
-        }
-        let message_limit = if is_v2_runtime_error_code_v1(self.code.as_str()) {
-            MAX_V2_RUNTIME_ERROR_MESSAGE_CHARS_V1
-        } else {
-            usize::MAX
-        };
-        validate_non_empty_scalar_bounded(&self.message, message_limit, "message")?;
-        validate_json_map_depth(&self.details, 1)?;
-        if let Some(admission) = self.details.get("admission") {
-            validate_admission_metadata_v1(admission, true)?;
-        }
-        validate_identity_conflict_details_v1(self.code.as_str(), &self.details)?;
-        validate_procedure_digest_mismatch_details_v1(self.code.as_str(), &self.details)?;
-        validate_mutation_outcome_unknown_details_v1(self.code.as_str(), &self.details)?;
-        validate_closed_error_details_v1(self.code.as_str(), &self.details)?;
-        if matches!(
-            self.code.as_str(),
-            "RUNTIME_RESET_BUSY"
-                | "RUNTIME_RESET_UNSAFE"
-                | "RUNTIME_RESET_UNSUPPORTED"
-                | "RUNTIME_RESET_PLAN_STALE"
-                | "RUNTIME_RESET_LIMIT_EXCEEDED"
-                | "RUNTIME_RESET_IN_PROGRESS"
-                | "RUNTIME_RESET_INCOMPLETE"
-        ) && self.workspace.is_some()
-        {
-            return Err(ProtocolError::InvalidErrorDetails {
-                code: self.code.as_str().to_owned(),
-            });
-        }
-        if self.code.as_str() == "INTERNAL_ERROR"
-            && self.details.contains_key("kind")
-            && self.details.get("diagnostic_id").and_then(Value::as_str)
-                != Some(self.request_id.as_str())
-        {
-            return Err(ProtocolError::InvalidErrorDetails {
-                code: self.code.as_str().to_owned(),
-            });
-        }
-        validate_recovery_details_v1(self.code.as_str(), &self.details)?;
-        if is_v2_runtime_error_code_v1(self.code.as_str())
-            && is_v2_mutation_contract_command(self.command.as_str())
-            && !self.details.contains_key("admission")
-        {
-            return Err(ProtocolError::InvalidErrorDetails {
-                code: self.code.as_str().to_owned(),
-            });
-        }
-        if let Some(workspace) = &self.workspace {
-            validate_json_map_depth(workspace, 1)?;
-        }
-        Ok(())
-    }
-
-    pub fn request_id(&self) -> &RequestIdV1 {
-        &self.request_id
-    }
-
-    pub fn command(&self) -> &CommandNameV1 {
-        &self.command
-    }
-
-    pub fn code(&self) -> &ErrorCodeV1 {
-        &self.code
-    }
-
-    pub fn message(&self) -> &str {
-        &self.message
-    }
-
-    pub const fn retryable(&self) -> bool {
-        self.retryable
-    }
-
-    pub const fn exit_code(&self) -> ExitCodeV1 {
-        self.exit_code
-    }
-
-    pub fn details(&self) -> &Map<String, Value> {
-        &self.details
-    }
-}
-
-fn validate_admission_metadata_v1(
-    admission: &Value,
-    allow_not_admitted: bool,
-) -> Result<Option<(JobId, u64)>, ProtocolError> {
-    let admission = admission
-        .as_object()
-        .ok_or(ProtocolError::InvalidAdmissionMetadata)?;
-    match admission.get("admitted").and_then(Value::as_bool) {
-        Some(false) if allow_not_admitted && admission.len() == 1 => Ok(None),
-        Some(true) if admission.len() == 3 => {
-            let job_id = admission
-                .get("job_id")
-                .and_then(Value::as_str)
-                .ok_or(ProtocolError::InvalidAdmissionMetadata)?;
-            let job_id = JobId::new(job_id).map_err(|_| ProtocolError::InvalidAdmissionMetadata)?;
-            let sequence = admission
-                .get("workspace_sequence")
-                .and_then(Value::as_u64)
-                .filter(|sequence| *sequence > 0)
-                .ok_or(ProtocolError::InvalidAdmissionMetadata)?;
-            Ok(Some((job_id, sequence)))
-        }
-        _ => Err(ProtocolError::InvalidAdmissionMetadata),
-    }
-}
-
-fn validate_identity_conflict_details_v1(
-    code: &str,
-    details: &Map<String, Value>,
-) -> Result<(), ProtocolError> {
-    let (schema, expected_key, actual_key, session) = match code {
-        "WORKSPACE_UUID_MISMATCH" => (
-            "podway.workspace-uuid-mismatch-details/v2",
-            "expected_workspace_uuid",
-            "actual_workspace_uuid",
-            false,
-        ),
-        "SESSION_ID_MISMATCH" => (
-            "podway.session-id-mismatch-details/v2",
-            "expected_session_id",
-            "actual_session_id",
-            true,
-        ),
-        _ => return Ok(()),
-    };
-    if details.len() != 5
-        || details.get("schema").and_then(Value::as_str) != Some(schema)
-        || !details.contains_key(expected_key)
-        || !details.contains_key(actual_key)
-        || !details.contains_key("admission")
-    {
-        return Err(ProtocolError::InvalidIdentityConflictDetails);
-    }
-    let expected = details
-        .get(expected_key)
-        .and_then(Value::as_str)
-        .ok_or(ProtocolError::InvalidIdentityConflictDetails)?;
-    if session {
-        SessionId::new(expected).map_err(|_| ProtocolError::InvalidIdentityConflictDetails)?;
-        if let Some(actual) = details.get(actual_key).and_then(Value::as_str) {
-            SessionId::new(actual).map_err(|_| ProtocolError::InvalidIdentityConflictDetails)?;
-        } else if details.get(actual_key) != Some(&Value::Null) {
-            return Err(ProtocolError::InvalidIdentityConflictDetails);
-        }
-    } else {
-        WorkspaceId::new(expected).map_err(|_| ProtocolError::InvalidIdentityConflictDetails)?;
-        let actual = details
-            .get(actual_key)
-            .and_then(Value::as_str)
-            .ok_or(ProtocolError::InvalidIdentityConflictDetails)?;
-        WorkspaceId::new(actual).map_err(|_| ProtocolError::InvalidIdentityConflictDetails)?;
-    }
-    let admission = details
-        .get("admission")
-        .and_then(Value::as_object)
-        .ok_or(ProtocolError::InvalidIdentityConflictDetails)?;
-    match admission.get("admitted").and_then(Value::as_bool) {
-        Some(false) if admission.len() == 1 => Ok(()),
-        Some(true) if admission.len() == 3 => {
-            let job_id = admission
-                .get("job_id")
-                .and_then(Value::as_str)
-                .ok_or(ProtocolError::InvalidIdentityConflictDetails)?;
-            JobId::new(job_id).map_err(|_| ProtocolError::InvalidIdentityConflictDetails)?;
-            let sequence = admission
-                .get("workspace_sequence")
-                .and_then(Value::as_u64)
-                .ok_or(ProtocolError::InvalidIdentityConflictDetails)?;
-            if sequence == 0 {
-                return Err(ProtocolError::InvalidIdentityConflictDetails);
-            }
-            Ok(())
-        }
-        _ => Err(ProtocolError::InvalidIdentityConflictDetails),
-    }
-}
-
-fn validate_procedure_digest_mismatch_details_v1(
-    code: &str,
-    details: &Map<String, Value>,
-) -> Result<(), ProtocolError> {
-    if code != "PROCEDURE_DIGEST_MISMATCH" {
-        return Ok(());
-    }
-    if details.len() != 5
-        || details.get("schema").and_then(Value::as_str)
-            != Some("podway.procedure-digest-mismatch-details/v2")
-        || details
-            .get("admission")
-            .and_then(Value::as_object)
-            .is_none_or(|admission| {
-                admission.len() != 1
-                    || admission.get("admitted").and_then(Value::as_bool) != Some(false)
-            })
-    {
-        return Err(ProtocolError::InvalidProcedureDigestMismatchDetails);
-    }
-    for field in ["expected_procedure_digest", "actual_procedure_digest"] {
-        let value = details
-            .get(field)
-            .and_then(Value::as_str)
-            .ok_or(ProtocolError::InvalidProcedureDigestMismatchDetails)?;
-        Sha256Digest::new(value)
-            .map_err(|_| ProtocolError::InvalidProcedureDigestMismatchDetails)?;
-    }
-    Ok(())
-}
-
-fn validate_mutation_outcome_unknown_details_v1(
-    code: &str,
-    details: &Map<String, Value>,
-) -> Result<(), ProtocolError> {
-    if code != "MUTATION_OUTCOME_UNKNOWN" {
-        return Ok(());
-    }
-    if details.len() != 5
-        || details.get("schema").and_then(Value::as_str)
-            != Some("podway.mutation-outcome-unknown-details/v2")
-        || details.get("outcome").and_then(Value::as_str) != Some("unknown")
-    {
-        return Err(ProtocolError::InvalidMutationOutcomeUnknownDetails);
-    }
-    let idempotency_key = details
-        .get("idempotency_key")
-        .and_then(Value::as_str)
-        .ok_or(ProtocolError::InvalidMutationOutcomeUnknownDetails)?;
-    IdempotencyKeyV1::new(idempotency_key)
-        .map_err(|_| ProtocolError::InvalidMutationOutcomeUnknownDetails)?;
-    let reconcile = details
-        .get("reconcile")
-        .and_then(Value::as_object)
-        .ok_or(ProtocolError::InvalidMutationOutcomeUnknownDetails)?;
-    if reconcile.len() != 2
-        || reconcile.get("command").and_then(Value::as_str) != Some("job.lookup")
-        || reconcile.get("idempotency_key").and_then(Value::as_str) != Some(idempotency_key)
-    {
-        return Err(ProtocolError::InvalidMutationOutcomeUnknownDetails);
-    }
-    Ok(())
-}
-
-fn validate_closed_error_details_v1(
-    code: &str,
-    details: &Map<String, Value>,
-) -> Result<(), ProtocolError> {
-    let valid = match code {
-        "RUNTIME_RESET_BUSY"
-        | "RUNTIME_RESET_UNSAFE"
-        | "RUNTIME_RESET_UNSUPPORTED"
-        | "RUNTIME_RESET_PLAN_STALE"
-        | "RUNTIME_RESET_LIMIT_EXCEEDED"
-        | "RUNTIME_RESET_IN_PROGRESS"
-        | "RUNTIME_RESET_INCOMPLETE" => {
-            result_contract::validate_embedded_schema_v2(
-                "podway.runtime-reset-error-details/v1",
-                &Value::Object(details.clone()),
-            ) && serde_json::to_vec(details).is_ok_and(|bytes| {
-                bytes.len() <= result_contract::MAX_RUNTIME_RESET_DOCUMENT_BYTES_V1
-            }) && if code == "RUNTIME_RESET_INCOMPLETE" {
-                details
-                    .get("result")
-                    .and_then(|result| result.get("status"))
-                    == Some(&Value::String("incomplete".to_owned()))
-                    && details.get("retry").is_some_and(Value::is_object)
-                    && details
-                        .get("result")
-                        .and_then(Value::as_object)
-                        .is_some_and(result_contract::reset_resources_within_bound_v1)
-            } else {
-                details.get("result") == Some(&Value::Null)
-                    && details.get("retry") == Some(&Value::Null)
-            }
-        }
-        "DAEMON_NOT_INSTALLED"
-        | "DAEMON_UNAVAILABLE"
-        | "DAEMON_SHUTTING_DOWN"
-        | "DAEMON_VERSION_INCOMPATIBLE" => validate_endpoint_details_v1(code, details),
-        "DAEMON_CONTRACT_MISMATCH" => validate_daemon_contract_mismatch_details_v1(details),
-        "DAEMON_STARTING" => validate_daemon_readiness_error_details_v1(details),
-        "DAEMON_READINESS_TIMEOUT" => validate_daemon_readiness_timeout_details_v1(details),
-        "SOCKET_ENDPOINT_INVALID" => validate_socket_endpoint_details_v1(details),
-        "WORKSPACE_MODE_MISMATCH" => validate_workspace_mode_mismatch_details_v1(details),
-        "SESSION_REVISION_CONFLICT" | "ITEM_REVISION_CONFLICT" => {
-            validate_revision_conflict_details_v1(details)
-        }
-        "ATTEMPT_NOT_CURRENT" => validate_attempt_conflict_details_v1(details),
-        "SESSION_START_DECISION_REQUIRED" => {
-            validate_session_start_decision_required_details_v1(details)
-        }
-        "SESSION_RESET_NOT_ELIGIBLE" => validate_session_reset_not_eligible_details_v1(details),
-        "SESSION_ARCHIVE_NOT_ELIGIBLE" => validate_session_archive_not_eligible_details_v1(details),
-        "SESSION_ARCHIVE_LIMIT_REACHED" => validate_session_archive_limit_details_v1(details),
-        "SESSION_ARCHIVE_NOT_FOUND" => validate_session_archive_not_found_details_v1(details),
-        "SESSION_START_STATE_CONFLICT" => validate_session_start_state_conflict_details_v1(details),
-        "IDEMPOTENCY_KEY_REUSED" => {
-            validate_schema_and_not_admitted_v1(details, "podway.idempotency-key-reused-details/v1")
-        }
-        "JOB_WAIT_TIMEOUT" => validate_wait_timeout_details_v1(details),
-        "BLOCKER_LIMIT_REACHED" => validate_blocker_limit_details_v1(details),
-        "WORKSPACE_STATE_UNREADABLE" | "WORKSPACE_SCHEMA_UNSUPPORTED" => {
-            validate_workspace_recovery_details_v1(details)
-        }
-        "INTERNAL_ERROR" => validate_internal_error_details_v1(details),
-        "DELEGATION_NOT_APPLICABLE"
-        | "DELEGATION_RECEIPT_REQUIRED"
-        | "DELEGATION_RECEIPT_STALE"
-        | "DELEGATION_BINDING_MISMATCH"
-        | "DELEGATION_ALREADY_ACCEPTED" => {
-            let reason = details.get("reason").and_then(Value::as_str);
-            let reason_matches = match code {
-                "DELEGATION_NOT_APPLICABLE" => reason == Some("direct_attempt"),
-                "DELEGATION_RECEIPT_REQUIRED" => reason == Some("receipt_missing"),
-                "DELEGATION_RECEIPT_STALE" => {
-                    matches!(reason, Some("package_changed" | "items_changed"))
-                }
-                "DELEGATION_BINDING_MISMATCH" => matches!(
-                    reason,
-                    Some(
-                        "binding_mismatch"
-                            | "role_mismatch"
-                            | "disposition_mismatch"
-                            | "round_limit"
-                    )
-                ),
-                _ => reason == Some("duplicate_acceptance"),
-            };
-            result_contract::validate_embedded_schema_v2(
-                "podway.delegation-error-details/v1",
-                &Value::Object(details.clone()),
-            ) && reason_matches
-                && serde_json::to_vec(details).is_ok_and(|bytes| {
-                    bytes.len() <= result_contract::MAX_DELEGATION_ERROR_DETAILS_BYTES_V1
-                })
-        }
-        "ITEM_CONSTRAINT_FAILED" if details.contains_key("field") => {
-            validate_v2_runtime_error_details_v1(code, details)
-        }
-        code if is_v2_runtime_error_code_v1(code) => {
-            validate_v2_runtime_error_details_v1(code, details)
-        }
-        _ => true,
-    };
-    if valid {
-        Ok(())
-    } else {
-        Err(ProtocolError::InvalidErrorDetails {
-            code: code.to_owned(),
-        })
-    }
-}
-
-fn validate_worktree_recovery_v1(value: &Value) -> bool {
-    if value.is_null() {
-        return true;
-    }
-    let Some(progress) = value.as_object() else {
-        return false;
-    };
-    if progress.len() != 3 {
-        return false;
-    }
-    let Some(total) = progress.get("total").and_then(Value::as_u64) else {
-        return false;
-    };
-    let Some(completed) = progress.get("completed").and_then(Value::as_u64) else {
-        return false;
-    };
-    let Some(failed) = progress.get("failed").and_then(Value::as_u64) else {
-        return false;
-    };
-    total <= 10_000 && completed <= total && failed <= completed
-}
-
-fn validate_daemon_readiness_error_details_v1(details: &Map<String, Value>) -> bool {
-    details.len() == 7
-        && details.get("schema").and_then(Value::as_str)
-            == Some("podway.daemon-readiness-error-details/v1")
-        && matches!(
-            details.get("readiness_state").and_then(Value::as_str),
-            Some("starting" | "recovering")
-        )
-        && matches!(
-            details.get("readiness_stage").and_then(Value::as_str),
-            Some("endpoint" | "registry" | "workspaces" | "jobs")
-        )
-        && details.get("elapsed_ms").and_then(Value::as_u64).is_some()
-        && details
-            .get("worktree_recovery")
-            .is_some_and(validate_worktree_recovery_v1)
-        && validate_not_admitted_value_v1(details.get("admission"))
-}
-
-fn validate_daemon_readiness_timeout_details_v1(details: &Map<String, Value>) -> bool {
-    details.len() == 14
-        && details.get("schema").and_then(Value::as_str)
-            == Some("podway.daemon-readiness-timeout-details/v1")
-        && matches!(
-            details.get("operation").and_then(Value::as_str),
-            Some("install" | "start" | "wait_ready")
-        )
-        && matches!(
-            details.get("readiness_state").and_then(Value::as_str),
-            Some("not_running" | "unreachable" | "starting" | "recovering" | "ready" | "failed")
-        )
-        && details.get("readiness_stage").is_some_and(|value| {
-            value.is_null()
-                || matches!(
-                    value.as_str(),
-                    Some("endpoint" | "registry" | "workspaces" | "jobs" | "ready" | "failed")
-                )
-        })
-        && details.get("elapsed_ms").and_then(Value::as_u64).is_some()
-        && details
-            .get("deadline_ms")
-            .and_then(Value::as_u64)
-            .is_some_and(|value| (1..=3_600_000).contains(&value))
-        && [
-            "installed",
-            "loaded",
-            "socket_present",
-            "reachable",
-            "contract_verified",
-        ]
-        .iter()
-        .all(|field| details.get(*field).and_then(Value::as_bool).is_some())
-        && details
-            .get("same_command_retry_safe")
-            .and_then(Value::as_bool)
-            == Some(true)
-        && details
-            .get("worktree_recovery")
-            .is_some_and(|value| value.is_null() || validate_worktree_recovery_v1(value))
-}
-
-fn validate_session_start_decision_required_details_v1(details: &Map<String, Value>) -> bool {
-    if details.len() != 5
-        || details.get("schema").and_then(Value::as_str)
-            != Some("podway.session-start-decision-required-details/v1")
-        || details
-            .get("admission")
-            .is_none_or(|value| validate_admission_metadata_v1(value, true).is_err())
-    {
-        return false;
-    }
-    let lifecycle = details.get("lifecycle").and_then(Value::as_str);
-    let disposition = details
-        .get("current_terminal_disposition")
-        .and_then(Value::as_bool);
-    let actions = details
-        .get("allowed_actions")
-        .filter(|value| validate_string_set_v1(value, 3, validate_session_start_action_v1));
-    matches!(
-        (lifecycle, disposition, actions),
-        (
-            Some("prepared" | "running" | "completed" | "cancelled"),
-            Some(_),
-            Some(_)
-        )
-    )
-}
-
-fn validate_session_start_action_v1(value: &Value) -> bool {
-    matches!(
-        value.as_str(),
-        Some("continue" | "preserve" | "delete" | "record_disposition")
-    )
-}
-
-fn validate_session_archive_not_eligible_details_v1(details: &Map<String, Value>) -> bool {
-    if details.len() != 5
-        || details.get("schema").and_then(Value::as_str)
-            != Some("podway.session-archive-not-eligible-details/v1")
-        || details
-            .get("admission")
-            .is_none_or(|value| validate_admission_metadata_v1(value, true).is_err())
-        || details
-            .get("current_terminal_disposition")
-            .and_then(Value::as_bool)
-            != Some(false)
-    {
-        return false;
-    }
-    matches!(
-        (
-            details.get("lifecycle").and_then(Value::as_str),
-            details.get("required_action").and_then(Value::as_str),
-        ),
-        (Some("prepared" | "running"), Some("complete_or_cancel"))
-            | (Some("completed" | "cancelled"), Some("record_disposition"))
-    )
-}
-
-fn validate_session_archive_limit_details_v1(details: &Map<String, Value>) -> bool {
-    details.len() == 3
-        && details.get("schema").and_then(Value::as_str)
-            == Some("podway.session-archive-limit-details/v1")
-        && details.get("maximum").and_then(Value::as_u64) == Some(32)
-        && details
-            .get("admission")
-            .is_some_and(|value| validate_admission_metadata_v1(value, true).is_ok())
-}
-
-fn validate_session_archive_not_found_details_v1(details: &Map<String, Value>) -> bool {
-    details.len() == 3
-        && details.get("schema").and_then(Value::as_str)
-            == Some("podway.session-archive-not-found-details/v1")
-        && details
-            .get("session_id")
-            .and_then(Value::as_str)
-            .is_some_and(|value| SessionId::new(value).is_ok())
-        && details
-            .get("admission")
-            .is_some_and(|value| validate_admission_metadata_v1(value, true).is_ok())
-}
-
-fn validate_session_start_state_conflict_details_v1(details: &Map<String, Value>) -> bool {
-    if details.len() != 5
-        || details.get("schema").and_then(Value::as_str)
-            != Some("podway.session-start-state-conflict-details/v1")
-        || details
-            .get("admission")
-            .is_none_or(|value| validate_admission_metadata_v1(value, true).is_err())
-    {
-        return false;
-    }
-    let lifecycle = details.get("lifecycle").and_then(Value::as_str);
-    let disposition = details
-        .get("current_terminal_disposition")
-        .and_then(Value::as_bool);
-    let expected_actions: &[&str] = match (lifecycle, disposition) {
-        (Some("prepared"), Some(_)) => &["continue", "delete"],
-        (Some("running"), Some(_)) => &["continue", "preserve", "delete"],
-        (Some("completed" | "cancelled"), Some(false)) => &["continue", "record_disposition"],
-        (Some("completed" | "cancelled"), Some(true)) => &["start"],
-        _ => return false,
-    };
-    details
-        .get("allowed_actions")
-        .and_then(Value::as_array)
-        .is_some_and(|actions| {
-            actions.len() == expected_actions.len()
-                && actions
-                    .iter()
-                    .zip(expected_actions)
-                    .all(|(actual, expected)| actual.as_str() == Some(*expected))
-        })
-}
-
-fn validate_session_reset_not_eligible_details_v1(details: &Map<String, Value>) -> bool {
-    if details.len() != 5
-        || details.get("schema").and_then(Value::as_str)
-            != Some("podway.session-reset-not-eligible-details/v1")
-        || details
-            .get("current_terminal_disposition")
-            .and_then(Value::as_bool)
-            != Some(false)
-        || details
-            .get("admission")
-            .is_none_or(|value| validate_admission_metadata_v1(value, true).is_err())
-    {
-        return false;
-    }
-    matches!(
-        (
-            details.get("lifecycle").and_then(Value::as_str),
-            details.get("required_action").and_then(Value::as_str),
-        ),
-        (Some("running"), Some("force"))
-            | (Some("completed" | "cancelled"), Some("record_disposition"))
-    )
-}
-
-const V2_RUNTIME_ERROR_DETAILS_SCHEMA_V1: &str = "podway.v2-runtime-error-details/v1";
-/// Maximum scalar count for messages produced with Procedure v2 runtime errors.
-pub const MAX_V2_RUNTIME_ERROR_MESSAGE_CHARS_V1: usize = 512;
-/// Registered Procedure v2 runtime codes that use the shared closed details family.
-pub const V2_RUNTIME_ERROR_CODES_V1: &[&str] = &[
-    "PROCEDURE_V2_SCHEMA_INVALID",
-    "GRAPH_NODE_NOT_FOUND",
-    "NODE_DEFINITION_NOT_FOUND",
-    "GRAPH_NODE_TYPE_MISMATCH",
-    "OPTION_NOT_ALLOWED",
-    "OPTION_GUARD_UNSATISFIED",
-    "ROUTE_NOT_ALLOWED",
-    "DECISION_REASON_MISSING",
-    "EVIDENCE_REFERENCE_UNRESOLVED",
-    "EVIDENCE_REFERENCE_STALE",
-    "MANUAL_REWORK_TARGET_NOT_ALLOWED",
-    "MANUAL_REWORK_TARGET_NOT_ON_TRACE",
-    "GOAL_TRACKING_NOT_ENABLED",
-    "SESSION_GOAL_MISSING",
-    "SESSION_GOAL_ALREADY_DEFINED",
-    "GOAL_REVISION_STALE",
-    "GOAL_REVISION_TARGET_NOT_ALLOWED",
-    "GOAL_REVISION_TARGET_NOT_REVISION_SAFE",
-    "REACTIVATION_FLAG_REQUIRED",
-    "CRITERION_MODE_MIXED",
-    "CRITERION_CITATION_INVALID",
-    "CRITERION_RESULT_MISSING",
-    "CRITERION_NOT_FOUND",
-    "FRESH_GOAL_ASSESSMENT_MISSING",
-    "GOAL_ASSESSMENT_OUTCOME_NOT_ALLOWED",
-    "DIGEST_CONFIRMATION_REQUIRED",
-    "UNSUPPORTED_V2_CAPABILITY",
-    "EVIDENCE_NOT_AVAILABLE",
-    "ATTEMPT_CONTENT_LIMIT_EXCEEDED",
-    "EVIDENCE_PAGE_TOKEN_EXHAUSTED",
-    "EVIDENCE_PAGE_TOKEN_STALE",
-];
-
-fn is_v2_runtime_error_code_v1(code: &str) -> bool {
-    V2_RUNTIME_ERROR_CODES_V1.contains(&code)
-}
-
-fn validate_v2_runtime_error_details_v1(code: &str, details: &Map<String, Value>) -> bool {
-    type FieldValidatorV1 = (&'static str, fn(&Value) -> bool);
-
-    let fields: &[FieldValidatorV1] = match code {
-        "PROCEDURE_V2_SCHEMA_INVALID" => &[("diagnostic_codes", validate_diagnostic_codes_v1)],
-        "GRAPH_NODE_NOT_FOUND" => &[("graph_node_id", validate_v2_identifier_value_v1)],
-        "NODE_DEFINITION_NOT_FOUND" => &[("node_definition_id", validate_v2_identifier_value_v1)],
-        "GRAPH_NODE_TYPE_MISMATCH" => &[
-            ("graph_node_id", validate_v2_identifier_value_v1),
-            ("expected_node_type", validate_node_type_v1),
-            ("actual_node_type", validate_node_type_v1),
-        ],
-        "OPTION_NOT_ALLOWED" => &[
-            ("graph_node_id", validate_v2_identifier_value_v1),
-            ("option_id", validate_v2_identifier_value_v1),
-            ("allowed_option_ids", validate_identifier_set_8_v1),
-        ],
-        "OPTION_GUARD_UNSATISFIED" => &[
-            ("graph_node_id", validate_v2_identifier_value_v1),
-            ("option_id", validate_v2_identifier_value_v1),
-            ("state", validate_unsatisfied_condition_state_v1),
-            ("predicates", validate_evidence_predicate_statuses_v1),
-        ],
-        "ROUTE_NOT_ALLOWED" => &[
-            ("graph_node_id", validate_v2_identifier_value_v1),
-            ("option_id", validate_v2_identifier_value_v1),
-        ],
-        "DECISION_REASON_MISSING" => &[("graph_node_id", validate_v2_identifier_value_v1)],
-        "EVIDENCE_REFERENCE_UNRESOLVED" => &[
-            ("graph_node_id", validate_v2_identifier_value_v1),
-            ("source_graph_node_ids", validate_identifier_set_8_v1),
-        ],
-        "EVIDENCE_REFERENCE_STALE" => &[
-            ("graph_node_id", validate_v2_identifier_value_v1),
-            ("source_graph_node_id", validate_v2_identifier_value_v1),
-            ("expected_source_attempt_id", validate_attempt_id_value_v1),
-            ("current_source_attempt_id", validate_nullable_attempt_id_v1),
-        ],
-        "MANUAL_REWORK_TARGET_NOT_ALLOWED"
-        | "MANUAL_REWORK_TARGET_NOT_ON_TRACE"
-        | "GOAL_REVISION_TARGET_NOT_ALLOWED"
-        | "GOAL_REVISION_TARGET_NOT_REVISION_SAFE" => {
-            &[("target_graph_node_id", validate_v2_identifier_value_v1)]
-        }
-        "GOAL_TRACKING_NOT_ENABLED" | "SESSION_GOAL_MISSING" | "REACTIVATION_FLAG_REQUIRED" => &[],
-        "SESSION_GOAL_ALREADY_DEFINED" | "FRESH_GOAL_ASSESSMENT_MISSING" => {
-            &[("goal_revision", validate_positive_revision_v1)]
-        }
-        "GOAL_REVISION_STALE" => &[
-            ("expected_goal_revision", validate_positive_revision_v1),
-            ("actual_goal_revision", validate_positive_revision_v1),
-        ],
-        "CRITERION_MODE_MIXED" => &[
-            ("criterion_id", validate_v2_identifier_value_v1),
-            ("expected_mode", validate_criterion_mode_v1),
-            ("actual_status", validate_criterion_status_v1),
-        ],
-        "CRITERION_CITATION_INVALID" => &[
-            ("criterion_id", validate_v2_identifier_value_v1),
-            ("citation", validate_citation_v1),
-        ],
-        "CRITERION_RESULT_MISSING" => &[("missing_criterion_ids", validate_identifier_set_16_v1)],
-        "CRITERION_NOT_FOUND" => &[("criterion_id", validate_v2_identifier_value_v1)],
-        "GOAL_ASSESSMENT_OUTCOME_NOT_ALLOWED" => &[
-            ("option_id", validate_v2_identifier_value_v1),
-            ("determined_outcome", validate_goal_outcome_v1),
-            ("allowed_option_ids", validate_identifier_set_8_v1),
-        ],
-        "DIGEST_CONFIRMATION_REQUIRED" => &[("procedure_digest", validate_digest_value_v1)],
-        "UNSUPPORTED_V2_CAPABILITY" => &[("capability", validate_bounded_text_128_v1)],
-        "EVIDENCE_NOT_AVAILABLE" => &[
-            ("graph_node_id", validate_v2_identifier_value_v1),
-            ("source_graph_node_id", validate_v2_identifier_value_v1),
-            ("item_id", validate_v2_identifier_value_v1),
-            ("reference_state", validate_unavailable_reference_state_v1),
-        ],
-        "ATTEMPT_CONTENT_LIMIT_EXCEEDED" | "ITEM_CONSTRAINT_FAILED" => &[
-            ("field", validate_bound_field_path_v1),
-            ("actual", validate_bound_magnitude_v1),
-            ("maximum", validate_bound_magnitude_v1),
-            (
-                "unit",
-                if code == "ATTEMPT_CONTENT_LIMIT_EXCEEDED" {
-                    validate_scalar_bound_unit_v1
-                } else {
-                    validate_bound_unit_v1
-                },
-            ),
-        ],
-        "EVIDENCE_PAGE_TOKEN_EXHAUSTED" => &[
-            ("source_graph_node_id", validate_v2_identifier_value_v1),
-            ("item_id", validate_v2_identifier_value_v1),
-            ("offset", validate_bound_magnitude_v1),
-            ("total_size", validate_bound_magnitude_v1),
-            ("unit", validate_bound_unit_v1),
-        ],
-        "EVIDENCE_PAGE_TOKEN_STALE" => &[
-            ("graph_node_id", validate_v2_identifier_value_v1),
-            ("source_graph_node_id", validate_v2_identifier_value_v1),
-            ("item_id", validate_v2_identifier_value_v1),
-            ("expected_value_digest", validate_digest_value_v1),
-            ("current_value_digest", validate_nullable_digest_value_v1),
-        ],
-        _ => return false,
-    };
-    let recoverable = matches!(
-        code,
-        "EVIDENCE_REFERENCE_STALE" | "GOAL_REVISION_STALE" | "EVIDENCE_PAGE_TOKEN_STALE"
-    );
-    let expected_schema = if recoverable {
-        "podway.recoverable-v2-runtime-error-details/v1"
-    } else {
-        V2_RUNTIME_ERROR_DETAILS_SCHEMA_V1
-    };
-    if details.get("schema").and_then(Value::as_str) != Some(expected_schema)
-        || details.get("kind").and_then(Value::as_str) != Some(code)
-        || details.keys().any(|key| {
-            key != "schema"
-                && key != "kind"
-                && key != "admission"
-                && !(recoverable && key == "recovery")
-                && !fields.iter().any(|(field, _)| key == field)
-                && !(code == "UNSUPPORTED_V2_CAPABILITY"
-                    && matches!(
-                        key.as_str(),
-                        "required_result_schema" | "contract_manifest_digest"
-                    ))
-        })
-        || !fields
-            .iter()
-            .all(|(field, validate)| details.get(*field).is_some_and(validate))
-        || details
-            .get("admission")
-            .is_some_and(|admission| validate_admission_metadata_v1(admission, true).is_err())
-    {
-        return false;
-    }
-    if code == "UNSUPPORTED_V2_CAPABILITY" {
-        return details
-            .get("required_result_schema")
-            .is_none_or(validate_bounded_text_128_v1)
-            && details
-                .get("contract_manifest_digest")
-                .is_none_or(validate_digest_value_v1);
-    }
-    if code == "OPTION_GUARD_UNSATISFIED" {
-        let state = details.get("state").and_then(Value::as_str);
-        let predicates = details
-            .get("predicates")
-            .and_then(Value::as_array)
-            .expect("validated option guard predicates");
-        return match state {
-            Some("unmet") => predicates
-                .iter()
-                .any(|predicate| predicate.get("state").and_then(Value::as_str) == Some("unmet")),
-            Some("unevaluable") => {
-                predicates.iter().all(|predicate| {
-                    predicate.get("state").and_then(Value::as_str) != Some("unmet")
-                }) && predicates.iter().any(|predicate| {
-                    predicate.get("state").and_then(Value::as_str) == Some("unevaluable")
-                })
-            }
-            _ => false,
-        };
-    }
-    true
-}
-
-fn validate_unavailable_reference_state_v1(value: &Value) -> bool {
-    matches!(value.as_str(), Some("unresolved") | Some("skipped"))
-}
-
-fn validate_bound_field_path_v1(value: &Value) -> bool {
-    value
-        .as_str()
-        .is_some_and(|value| !value.is_empty() && value.chars().count() <= 256)
-}
-
-fn validate_bound_magnitude_v1(value: &Value) -> bool {
-    value.as_u64().is_some()
-}
-
-fn validate_scalar_bound_unit_v1(value: &Value) -> bool {
-    value.as_str() == Some("scalars")
-}
-
-fn validate_bound_unit_v1(value: &Value) -> bool {
-    matches!(
-        value.as_str(),
-        Some("bytes") | Some("scalars") | Some("entries") | Some("items") | Some("operations")
-    )
-}
-
-fn validate_nullable_digest_value_v1(value: &Value) -> bool {
-    value.is_null() || validate_digest_value_v1(value)
-}
-
-fn validate_v2_identifier_value_v1(value: &Value) -> bool {
-    value.as_str().is_some_and(|value| {
-        let mut segments = value.split('-');
-        let Some(first) = segments.next() else {
-            return false;
-        };
-        value.chars().count() <= 64
-            && !first.is_empty()
-            && first.starts_with(|character: char| character.is_ascii_lowercase())
-            && first
-                .chars()
-                .all(|character| character.is_ascii_lowercase() || character.is_ascii_digit())
-            && segments.all(|segment| {
-                !segment.is_empty()
-                    && segment.chars().all(|character| {
-                        character.is_ascii_lowercase() || character.is_ascii_digit()
-                    })
-            })
-    })
-}
-
-fn validate_string_set_v1(value: &Value, maximum: usize, validate: fn(&Value) -> bool) -> bool {
-    value.as_array().is_some_and(|values| {
-        !values.is_empty()
-            && values.len() <= maximum
-            && values.iter().all(validate)
-            && values
-                .iter()
-                .enumerate()
-                .all(|(index, item)| values[..index].iter().all(|prior| prior != item))
-    })
-}
-
-fn validate_identifier_set_8_v1(value: &Value) -> bool {
-    validate_string_set_v1(value, 8, validate_v2_identifier_value_v1)
-}
-
-fn validate_identifier_set_16_v1(value: &Value) -> bool {
-    validate_string_set_v1(value, 16, validate_v2_identifier_value_v1)
-}
-
-fn validate_diagnostic_codes_v1(value: &Value) -> bool {
-    validate_string_set_v1(value, 256, |value| {
-        value.as_str().is_some_and(|code| {
-            !code.is_empty()
-                && code.chars().count() <= 64
-                && code.starts_with(|character: char| character.is_ascii_uppercase())
-                && code.chars().all(|character| {
-                    character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
-                })
-        })
-    })
-}
-
-fn validate_attempt_id_value_v1(value: &Value) -> bool {
-    value
-        .as_str()
-        .is_some_and(|value| AttemptId::new(value).is_ok())
-}
-
-fn validate_nullable_attempt_id_v1(value: &Value) -> bool {
-    value.is_null() || validate_attempt_id_value_v1(value)
-}
-
-fn validate_positive_revision_v1(value: &Value) -> bool {
-    value.as_u64().is_some_and(|value| value > 0)
-}
-
-fn validate_node_type_v1(value: &Value) -> bool {
-    matches!(value.as_str(), Some("action" | "decision"))
-}
-
-fn validate_unsatisfied_condition_state_v1(value: &Value) -> bool {
-    matches!(value.as_str(), Some("unmet" | "unevaluable"))
-}
-
-fn validate_evidence_predicate_statuses_v1(value: &Value) -> bool {
-    value.as_array().is_some_and(|predicates| {
-        !predicates.is_empty()
-            && predicates.len() <= 4
-            && predicates.iter().all(validate_evidence_predicate_status_v1)
-    })
-}
-
-fn validate_evidence_predicate_status_v1(value: &Value) -> bool {
-    let Some(predicate) = value.as_object() else {
-        return false;
-    };
-    if predicate.keys().any(|key| {
-        !matches!(
-            key.as_str(),
-            "source" | "operator" | "expected" | "actual" | "actual_count" | "state"
-        )
-    }) {
-        return false;
-    }
-    let Some(source) = predicate.get("source").and_then(Value::as_object) else {
-        return false;
-    };
-    if source
-        .keys()
-        .any(|key| !matches!(key.as_str(), "kind" | "graph_node_id" | "item_id" | "field"))
-        || source.get("kind").and_then(Value::as_str) != Some("evidence")
-        || !source
-            .get("graph_node_id")
-            .is_some_and(validate_v2_identifier_value_v1)
-        || !source
-            .get("item_id")
-            .is_some_and(validate_v2_identifier_value_v1)
-        || source
-            .get("field")
-            .is_some_and(|field| field.as_str() != Some("outcome"))
-    {
-        return false;
-    }
-    let Some(operator) = predicate.get("operator").and_then(Value::as_str) else {
-        return false;
-    };
-    let Some(state) = predicate.get("state").and_then(Value::as_str) else {
-        return false;
-    };
-    if !matches!(state, "met" | "unmet" | "unevaluable")
-        || !matches!(
-            operator,
-            "equals" | "not_equals" | "empty" | "non_empty" | "at_least" | "at_most"
-        )
-    {
-        return false;
-    }
-    let scalar = |value: &Value| {
-        value.is_boolean()
-            || value.as_i64().is_some()
-            || value
-                .as_str()
-                .is_some_and(|value| !value.is_empty() && value.chars().count() <= 120)
-    };
-    let expected_valid = match operator {
-        "equals" | "not_equals" => predicate.get("expected").is_some_and(scalar),
-        "at_least" | "at_most" => predicate
-            .get("expected")
-            .is_some_and(|value| value.as_i64().is_some()),
-        "empty" | "non_empty" => !predicate.contains_key("expected"),
-        _ => false,
-    };
-    let actual_valid = if state == "unevaluable" {
-        !predicate.contains_key("actual") && !predicate.contains_key("actual_count")
-    } else if matches!(operator, "empty" | "non_empty") {
-        !predicate.contains_key("actual")
-            && predicate
-                .get("actual_count")
-                .is_some_and(|value| value.as_u64().is_some_and(|value| value <= 65_536))
-    } else {
-        !predicate.contains_key("actual_count") && predicate.get("actual").is_some_and(scalar)
-    };
-    expected_valid && actual_valid
-}
-
-fn validate_criterion_mode_v1(value: &Value) -> bool {
-    matches!(value.as_str(), Some("assessment" | "applicability"))
-}
-
-fn validate_criterion_status_v1(value: &Value) -> bool {
-    matches!(
-        value.as_str(),
-        Some("satisfied" | "unsatisfied" | "not_applicable")
-    )
-}
-
-fn validate_goal_outcome_v1(value: &Value) -> bool {
-    matches!(
-        value.as_str(),
-        Some("achieved" | "not_achieved" | "superseded")
-    )
-}
-
-fn validate_digest_value_v1(value: &Value) -> bool {
-    value
-        .as_str()
-        .is_some_and(|value| Sha256Digest::new(value).is_ok())
-}
-
-fn validate_bounded_text_128_v1(value: &Value) -> bool {
-    value
-        .as_str()
-        .is_some_and(|value| !value.is_empty() && value.chars().count() <= 128)
-}
-
-fn validate_citation_v1(value: &Value) -> bool {
-    let Some(citation) = value.as_object() else {
-        return false;
-    };
-    if citation
-        .keys()
-        .any(|key| !matches!(key.as_str(), "reference_graph_node_id" | "local_item_id"))
-        || citation
-            .values()
-            .any(|value| !validate_v2_identifier_value_v1(value))
-    {
-        return false;
-    }
-    matches!(
-        (
-            citation.contains_key("reference_graph_node_id"),
-            citation.contains_key("local_item_id"),
-        ),
-        (true, false) | (false, true)
-    )
-}
-
-fn validate_endpoint_details_v1(code: &str, details: &Map<String, Value>) -> bool {
-    if code == "DAEMON_UNAVAILABLE" {
-        return details.get("schema").and_then(Value::as_str)
-            == Some("podway.endpoint-error-details/v2")
-            && (details.len() == 2
-                || (details.len() == 3
-                    && details
-                        .get("admission")
-                        .is_some_and(|value| validate_not_admitted_value_v1(Some(value)))));
-    }
-    details.get("schema").and_then(Value::as_str) == Some("podway.endpoint-error-details/v1")
-        && (details.len() == 1
-            || validate_schema_and_not_admitted_v1(details, "podway.endpoint-error-details/v1"))
-}
-
-fn validate_socket_endpoint_details_v1(details: &Map<String, Value>) -> bool {
-    const REASONS: &[&str] = &[
-        "empty",
-        "relative",
-        "unnormalized",
-        "workspace_local",
-        "path_too_long",
-        "effective_user_unavailable",
-    ];
-    details.get("schema").and_then(Value::as_str) == Some("podway.socket-endpoint-error-details/v1")
-        && details
-            .get("reason")
-            .and_then(Value::as_str)
-            .is_some_and(|reason| REASONS.contains(&reason))
-        && match details.get("admission") {
-            None => details.len() == 2,
-            Some(admission) => {
-                details.len() == 3
-                    && validate_admission_metadata_v1(admission, true).ok() == Some(None)
-            }
-        }
-}
-
-fn validate_schema_and_not_admitted_v1(details: &Map<String, Value>, schema: &str) -> bool {
-    details.len() == 2
-        && details.get("schema").and_then(Value::as_str) == Some(schema)
-        && details
-            .get("admission")
-            .is_some_and(|value| validate_admission_metadata_v1(value, true).ok() == Some(None))
-}
-
-fn validate_daemon_contract_mismatch_details_v1(details: &Map<String, Value>) -> bool {
-    if details.len() != 5
-        || details.get("schema").and_then(Value::as_str)
-            != Some("podway.daemon-contract-mismatch-details/v2")
-        || !validate_not_admitted_value_v1(details.get("admission"))
-    {
-        return false;
-    }
-    ["expected", "actual"].into_iter().all(|field| {
-        details
-            .get(field)
-            .and_then(Value::as_object)
-            .is_some_and(|identity| {
-                identity.len() == 2
-                    && identity
-                        .get("product")
-                        .and_then(Value::as_str)
-                        .is_some_and(|value| !value.is_empty() && value.chars().count() <= 128)
-                    && identity
-                        .get("contract_manifest_digest")
-                        .and_then(Value::as_str)
-                        .is_some_and(|value| Sha256Digest::new(value).is_ok())
-            })
-    })
-}
-
-fn validate_revision_conflict_details_v1(details: &Map<String, Value>) -> bool {
-    const ALLOWED: &[&str] = &[
-        "expected_revision",
-        "current_revision",
-        "job_id",
-        "job_sequence",
-        "admission",
-        "schema",
-        "recovery",
-    ];
-    if details.keys().any(|key| !ALLOWED.contains(&key.as_str())) {
-        return false;
-    }
-    if details.get("schema").and_then(Value::as_str) != Some("podway.revision-conflict-details/v2")
-    {
-        return false;
-    }
-    if !details.contains_key("expected_revision") && !details.contains_key("current_revision") {
-        return false;
-    }
-    for field in ["expected_revision", "current_revision"] {
-        if details
-            .get(field)
-            .is_some_and(|value| value.as_u64().is_none())
-        {
-            return false;
-        }
-    }
-    validate_optional_job_admission_v1(details)
-}
-
-fn validate_attempt_conflict_details_v1(details: &Map<String, Value>) -> bool {
-    const ALLOWED: &[&str] = &[
-        "expected_attempt_id",
-        "actual_attempt_id",
-        "job_id",
-        "job_sequence",
-        "admission",
-        "schema",
-        "recovery",
-    ];
-    if details.keys().any(|key| !ALLOWED.contains(&key.as_str())) {
-        return false;
-    }
-    if details.get("schema").and_then(Value::as_str) != Some("podway.attempt-conflict-details/v2") {
-        return false;
-    }
-    let Some(expected) = details.get("expected_attempt_id").and_then(Value::as_str) else {
-        return false;
-    };
-    if AttemptId::new(expected).is_err()
-        || details
-            .get("actual_attempt_id")
-            .and_then(Value::as_str)
-            .is_some_and(|actual| AttemptId::new(actual).is_err())
-        || details.contains_key("actual_attempt_id")
-            && details
-                .get("actual_attempt_id")
-                .and_then(Value::as_str)
-                .is_none()
-    {
-        return false;
-    }
-    validate_optional_job_admission_v1(details)
-}
-
-fn validate_wait_timeout_details_v1(details: &Map<String, Value>) -> bool {
-    details.get("schema").and_then(Value::as_str) == Some("podway.job-wait-timeout-details/v2")
-        && (details.len() == 2
-            || (details.len() == 3
-                && details
-                    .get("admission")
-                    .is_some_and(|value| validate_not_admitted_value_v1(Some(value))))
-            || (details.len() == 5
-                && validate_job_fields_v1(details)
-                && details.get("admission").is_some_and(|admission| {
-                    validate_admission_metadata_v1(admission, false)
-                        .ok()
-                        .flatten()
-                        .is_some_and(|(job_id, sequence)| {
-                            details.get("job_id").and_then(Value::as_str) == Some(job_id.as_str())
-                                && details.get("job_sequence").and_then(Value::as_u64)
-                                    == Some(sequence)
-                        })
-                })))
-}
-
-fn validate_workspace_recovery_details_v1(details: &Map<String, Value>) -> bool {
-    details.get("schema").and_then(Value::as_str) == Some("podway.workspace-recovery-details/v1")
-        && match details.get("admission") {
-            None => details.len() == 2,
-            Some(value) => details.len() == 3 && validate_not_admitted_value_v1(Some(value)),
-        }
-}
-
-fn validate_internal_error_details_v1(details: &Map<String, Value>) -> bool {
-    if !details.contains_key("kind") {
-        return true;
-    }
-    details.len() == 6
-        && details.get("schema").and_then(Value::as_str) == Some("podway.internal-error-details/v1")
-        && details.get("kind").and_then(Value::as_str)
-            == Some("ADMITTED_RESPONSE_RECONSTRUCTION_FAILED")
-        && details
-            .get("diagnostic_id")
-            .and_then(Value::as_str)
-            .is_some_and(|value| RequestIdV1::new(value).is_ok())
-        && validate_job_fields_v1(details)
-        && details.get("admission").is_some_and(|admission| {
-            validate_admission_metadata_v1(admission, false)
-                .ok()
-                .flatten()
-                .is_some_and(|(job_id, sequence)| {
-                    details.get("job_id").and_then(Value::as_str) == Some(job_id.as_str())
-                        && details.get("job_sequence").and_then(Value::as_u64) == Some(sequence)
-                })
-        })
-}
-
-fn validate_workspace_mode_mismatch_details_v1(details: &Map<String, Value>) -> bool {
-    fn valid_mode(value: Option<&Value>) -> bool {
-        value.and_then(Value::as_str).is_some_and(|value| {
-            let bytes = value.as_bytes();
-            (1..=64).contains(&bytes.len())
-                && bytes[0].is_ascii_lowercase()
-                && bytes[bytes.len() - 1] != b'-'
-                && !bytes.windows(2).any(|pair| pair == b"--")
-                && bytes
-                    .iter()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
-        })
-    }
-    (details.len() == 4
-        || (details.len() == 5 && validate_not_admitted_value_v1(details.get("admission"))))
-        && details.get("schema").and_then(Value::as_str)
-            == Some("podway.workspace-mode-mismatch-details/v1")
-        && details
-            .get("boundary")
-            .and_then(Value::as_str)
-            .is_some_and(|value| {
-                matches!(
-                    value,
-                    "endpoint" | "daemon" | "config" | "store" | "registry"
-                )
-            })
-        && valid_mode(details.get("expected_mode"))
-        && valid_mode(details.get("actual_mode"))
-}
-
-fn validate_blocker_limit_details_v1(details: &Map<String, Value>) -> bool {
-    let maximum = details.get("maximum_open_blockers").and_then(Value::as_u64);
-    if details.get("schema").and_then(Value::as_str) != Some("podway.blocker-limit-details/v1")
-        || (maximum != Some(64) && maximum != u64::try_from(MAX_OPEN_BLOCKERS_PER_ATTEMPT_V2).ok())
-    {
-        return false;
-    }
-    match details.get("admission") {
-        None => details.len() == 2,
-        Some(admission) => match validate_admission_metadata_v1(admission, true) {
-            Ok(None) => details.len() == 3,
-            Ok(Some((job_id, sequence))) => {
-                details.len() == 5
-                    && validate_job_fields_v1(details)
-                    && details.get("job_id").and_then(Value::as_str) == Some(job_id.as_str())
-                    && details.get("job_sequence").and_then(Value::as_u64) == Some(sequence)
-            }
-            Err(_) => false,
-        },
-    }
-}
-
-fn validate_optional_job_admission_v1(details: &Map<String, Value>) -> bool {
-    match details.get("admission") {
-        None => !details.contains_key("job_id") && !details.contains_key("job_sequence"),
-        Some(admission) => match validate_admission_metadata_v1(admission, true) {
-            Ok(None) => !details.contains_key("job_id") && !details.contains_key("job_sequence"),
-            Ok(Some((job_id, sequence))) => {
-                validate_job_fields_v1(details)
-                    && details.get("job_id").and_then(Value::as_str) == Some(job_id.as_str())
-                    && details.get("job_sequence").and_then(Value::as_u64) == Some(sequence)
-            }
-            Err(_) => false,
-        },
-    }
-}
-
-fn validate_job_fields_v1(details: &Map<String, Value>) -> bool {
-    details
-        .get("job_id")
-        .and_then(Value::as_str)
-        .is_some_and(|value| JobId::new(value).is_ok())
-        && details
-            .get("job_sequence")
-            .and_then(Value::as_u64)
-            .is_some_and(|value| value > 0)
-}
-
-fn validate_not_admitted_value_v1(value: Option<&Value>) -> bool {
-    value.is_some_and(|value| validate_admission_metadata_v1(value, true).ok() == Some(None))
-}
-
-const RECOVERY_ERROR_CODES_V1: &[&str] = &[
-    "DAEMON_UNAVAILABLE",
-    "DAEMON_STARTING",
-    "DAEMON_READINESS_TIMEOUT",
-    "DAEMON_CONTRACT_MISMATCH",
-    "WORKSPACE_UUID_MISMATCH",
-    "WORKSPACE_STATE_UNREADABLE",
-    "WORKSPACE_SCHEMA_UNSUPPORTED",
-    "PROCEDURE_DIGEST_MISMATCH",
-    "SESSION_ID_MISMATCH",
-    "SESSION_REVISION_CONFLICT",
-    "ATTEMPT_NOT_CURRENT",
-    "ITEM_REVISION_CONFLICT",
-    "JOB_WAIT_TIMEOUT",
-    "MUTATION_OUTCOME_UNKNOWN",
-    "EVIDENCE_REFERENCE_STALE",
-    "GOAL_REVISION_STALE",
-    "EVIDENCE_PAGE_TOKEN_STALE",
-];
-
-fn recovery_recipe_v1(code: &str, details: &Map<String, Value>) -> Option<Value> {
-    let (action, command, argv, reason) = match code {
-        "DAEMON_STARTING" | "DAEMON_READINESS_TIMEOUT" => (
-            "wait_for_daemon",
-            "daemon.wait-ready",
-            json!(["podway", "--json", "daemon", "wait-ready"]),
-            "Wait for verified daemon readiness without changing service state.",
-        ),
-        "DAEMON_UNAVAILABLE" | "DAEMON_CONTRACT_MISMATCH" => (
-            "inspect_daemon",
-            "daemon.status",
-            json!(["podway", "--json", "daemon", "status"]),
-            "Inspect daemon and contract health before deciding on a lifecycle action.",
-        ),
-        "WORKSPACE_UUID_MISMATCH"
-        | "WORKSPACE_STATE_UNREADABLE"
-        | "WORKSPACE_SCHEMA_UNSUPPORTED" => (
-            "diagnose_workspace",
-            "workspace.doctor",
-            json!(["podway", "--json", "doctor"]),
-            "Inspect bounded workspace diagnostics before deciding on a recovery action.",
-        ),
-        "SESSION_ID_MISMATCH"
-        | "PROCEDURE_DIGEST_MISMATCH"
-        | "SESSION_REVISION_CONFLICT"
-        | "ATTEMPT_NOT_CURRENT"
-        | "ITEM_REVISION_CONFLICT"
-        | "EVIDENCE_REFERENCE_STALE"
-        | "EVIDENCE_PAGE_TOKEN_STALE"
-        | "GOAL_REVISION_STALE" => (
-            "refresh_state",
-            "session.observe",
-            json!(["podway", "--json", "observe", "--wait-for-idle"]),
-            "Re-read bounded current state before deriving another request.",
-        ),
-        "MUTATION_OUTCOME_UNKNOWN" => {
-            let key = details.get("idempotency_key")?.as_str()?;
-            (
-                "reconcile_mutation",
-                "job.lookup",
-                json!([
-                    "podway",
-                    "--json",
-                    "job",
-                    "lookup",
-                    "--idempotency-key",
-                    key
-                ]),
-                "Reconcile the original idempotency key before considering another mutation.",
-            )
-        }
-        "JOB_WAIT_TIMEOUT" => match details.get("job_id").and_then(Value::as_str) {
-            Some(job_id) => (
-                "wait_for_job",
-                "job.wait",
-                json!(["podway", "--json", "job", "wait", job_id]),
-                "Wait for the admitted job instead of resubmitting its mutation.",
-            ),
-            None => (
-                "refresh_state",
-                "session.observe",
-                json!(["podway", "--json", "observe", "--wait-for-idle"]),
-                "Re-read bounded current state before deriving another request.",
-            ),
-        },
-        _ => return None,
-    };
-    Some(json!({
-        "action": action,
-        "command": command,
-        "argv": argv,
-        "reason": reason,
-        "requires_explicit_authorization": false,
-    }))
-}
-
-fn validate_recovery_details_v1(
-    code: &str,
-    details: &Map<String, Value>,
-) -> Result<(), ProtocolError> {
-    let expected = recovery_recipe_v1(code, details);
-    if !RECOVERY_ERROR_CODES_V1.contains(&code) {
-        return if details.contains_key("recovery") {
-            Err(ProtocolError::InvalidErrorDetails {
-                code: code.to_owned(),
-            })
-        } else {
-            Ok(())
-        };
-    }
-    let Some(expected) = expected else {
-        return Err(ProtocolError::InvalidErrorDetails {
-            code: code.to_owned(),
-        });
-    };
-    let recovery = details.get("recovery").and_then(Value::as_object);
-    let valid = recovery.is_some_and(|recovery| {
-        recovery.len() == 5
-            && details.get("recovery") == Some(&expected)
-            && recovery
-                .get("action")
-                .and_then(Value::as_str)
-                .is_some_and(|value| !value.is_empty() && value.chars().count() <= 64)
-            && recovery
-                .get("command")
-                .and_then(Value::as_str)
-                .is_some_and(|value| {
-                    matches!(
-                        value,
-                        "session.observe"
-                            | "job.lookup"
-                            | "job.wait"
-                            | "daemon.status"
-                            | "daemon.wait-ready"
-                            | "workspace.doctor"
-                    )
-                })
-            && recovery
-                .get("argv")
-                .and_then(Value::as_array)
-                .is_some_and(|argv| {
-                    (2..=8).contains(&argv.len())
-                        && argv.iter().all(|value| {
-                            value.as_str().is_some_and(|value| {
-                                !value.is_empty() && value.chars().count() <= 256
-                            })
-                        })
-                })
-            && recovery
-                .get("reason")
-                .and_then(Value::as_str)
-                .is_some_and(|value| !value.is_empty() && value.chars().count() <= 256)
-            && recovery
-                .get("requires_explicit_authorization")
-                .and_then(Value::as_bool)
-                == Some(false)
-    });
-    if valid {
-        Ok(())
-    } else {
-        Err(ProtocolError::InvalidErrorDetails {
-            code: code.to_owned(),
-        })
-    }
-}
-
-/// Adds a stable schema identifier to each closed public error-detail family.
-pub fn ensure_error_details_schema_v1(code: &str, details: &mut Map<String, Value>) {
-    if code == "ITEM_CONSTRAINT_FAILED" && details.contains_key("field") {
-        details
-            .entry("schema".to_owned())
-            .or_insert_with(|| Value::String(V2_RUNTIME_ERROR_DETAILS_SCHEMA_V1.to_owned()));
-        details
-            .entry("kind".to_owned())
-            .or_insert_with(|| Value::String(code.to_owned()));
-        return;
-    }
-    if is_v2_runtime_error_code_v1(code) {
-        let schema = if RECOVERY_ERROR_CODES_V1.contains(&code) {
-            "podway.recoverable-v2-runtime-error-details/v1"
-        } else {
-            V2_RUNTIME_ERROR_DETAILS_SCHEMA_V1
-        };
-        details
-            .entry("schema".to_owned())
-            .or_insert_with(|| Value::String(schema.to_owned()));
-        details
-            .entry("kind".to_owned())
-            .or_insert_with(|| Value::String(code.to_owned()));
-        if let Some(recovery) = recovery_recipe_v1(code, details) {
-            details.insert("recovery".to_owned(), recovery);
-        }
-        return;
-    }
-    let schema = match code {
-        "RUNTIME_RESET_BUSY"
-        | "RUNTIME_RESET_UNSAFE"
-        | "RUNTIME_RESET_UNSUPPORTED"
-        | "RUNTIME_RESET_PLAN_STALE"
-        | "RUNTIME_RESET_LIMIT_EXCEEDED"
-        | "RUNTIME_RESET_IN_PROGRESS"
-        | "RUNTIME_RESET_INCOMPLETE" => "podway.runtime-reset-error-details/v1",
-        "DAEMON_STARTING" => "podway.daemon-readiness-error-details/v1",
-        "DAEMON_READINESS_TIMEOUT" => "podway.daemon-readiness-timeout-details/v1",
-        "DAEMON_UNAVAILABLE" => "podway.endpoint-error-details/v2",
-        "DAEMON_NOT_INSTALLED" | "DAEMON_SHUTTING_DOWN" | "DAEMON_VERSION_INCOMPATIBLE" => {
-            "podway.endpoint-error-details/v1"
-        }
-        "DAEMON_CONTRACT_MISMATCH" => "podway.daemon-contract-mismatch-details/v2",
-        "SOCKET_ENDPOINT_INVALID" => "podway.socket-endpoint-error-details/v1",
-        "SESSION_REVISION_CONFLICT" | "ITEM_REVISION_CONFLICT" => {
-            "podway.revision-conflict-details/v2"
-        }
-        "ATTEMPT_NOT_CURRENT" => "podway.attempt-conflict-details/v2",
-        "SESSION_START_DECISION_REQUIRED" => "podway.session-start-decision-required-details/v1",
-        "SESSION_START_STATE_CONFLICT" => "podway.session-start-state-conflict-details/v1",
-        "SESSION_RESET_NOT_ELIGIBLE" => "podway.session-reset-not-eligible-details/v1",
-        "SESSION_ARCHIVE_NOT_ELIGIBLE" => "podway.session-archive-not-eligible-details/v1",
-        "SESSION_ARCHIVE_LIMIT_REACHED" => "podway.session-archive-limit-details/v1",
-        "SESSION_ARCHIVE_NOT_FOUND" => "podway.session-archive-not-found-details/v1",
-        "IDEMPOTENCY_KEY_REUSED" => "podway.idempotency-key-reused-details/v1",
-        "JOB_WAIT_TIMEOUT" => "podway.job-wait-timeout-details/v2",
-        "BLOCKER_LIMIT_REACHED" => "podway.blocker-limit-details/v1",
-        "WORKSPACE_UUID_MISMATCH" => "podway.workspace-uuid-mismatch-details/v2",
-        "WORKSPACE_MODE_MISMATCH" => "podway.workspace-mode-mismatch-details/v1",
-        "WORKSPACE_STATE_UNREADABLE" | "WORKSPACE_SCHEMA_UNSUPPORTED" => {
-            "podway.workspace-recovery-details/v1"
-        }
-        "SESSION_ID_MISMATCH" => "podway.session-id-mismatch-details/v2",
-        "PROCEDURE_DIGEST_MISMATCH" => "podway.procedure-digest-mismatch-details/v2",
-        "MUTATION_OUTCOME_UNKNOWN" => "podway.mutation-outcome-unknown-details/v2",
-        "DELEGATION_NOT_APPLICABLE"
-        | "DELEGATION_RECEIPT_REQUIRED"
-        | "DELEGATION_RECEIPT_STALE"
-        | "DELEGATION_BINDING_MISMATCH"
-        | "DELEGATION_ALREADY_ACCEPTED" => "podway.delegation-error-details/v1",
-        _ => return,
-    };
-    details
-        .entry("schema".to_owned())
-        .or_insert_with(|| Value::String(schema.to_owned()));
-    if let Some(recovery) = recovery_recipe_v1(code, details) {
-        details.insert("recovery".to_owned(), recovery);
-    }
-}
-
-impl<'de> Deserialize<'de> for ErrorEnvelopeV1 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct RawErrorEnvelopeV1 {
-            schema: String,
-            request_id: RequestIdV1,
-            command: CommandNameV1,
-            generated_at: Rfc3339MillisV1,
-            code: ErrorCodeV1,
-            message: String,
-            retryable: bool,
-            exit_code: ExitCodeV1,
-            #[serde(default)]
-            workspace: OptionalField<Map<String, Value>>,
-            details: Map<String, Value>,
-        }
-
-        let value = Value::deserialize(deserializer)?;
-        validate_json_document_depth(&value).map_err(de::Error::custom)?;
-        let raw = RawErrorEnvelopeV1::deserialize(value).map_err(de::Error::custom)?;
-        let output = Self {
-            schema: raw.schema,
-            request_id: raw.request_id,
-            command: raw.command,
-            generated_at: raw.generated_at,
-            code: raw.code,
-            message: raw.message,
-            retryable: raw.retryable,
-            exit_code: raw.exit_code,
-            workspace: raw.workspace.0,
-            details: raw.details,
-        };
-        output.validate().map_err(de::Error::custom)?;
-        Ok(output)
     }
 }
 
@@ -3803,20 +1028,6 @@ fn validate_non_empty_scalar_bounded(
             maximum,
             actual: length,
         });
-    }
-    Ok(())
-}
-
-fn validate_sha256_digest_v1(value: &str, field: &'static str) -> Result<(), ProtocolError> {
-    let Some(hex) = value.strip_prefix("sha256:") else {
-        return Err(ProtocolError::InvalidSha256Digest { field });
-    };
-    if hex.len() != 64
-        || !hex
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        return Err(ProtocolError::InvalidSha256Digest { field });
     }
     Ok(())
 }

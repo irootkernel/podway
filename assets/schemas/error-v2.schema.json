@@ -1204,7 +1204,24 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/genericObject"
+            "$ref": "urn:podway:schema:v2-result-components:v4#/$defs/genericObject",
+            "allOf": [
+              {
+                "if": {
+                  "required": [
+                    "field"
+                  ]
+                },
+                "then": {
+                  "$ref": "urn:podway:schema:v2-runtime-error-details:v2",
+                  "properties": {
+                    "kind": {
+                      "const": "ITEM_CONSTRAINT_FAILED"
+                    }
+                  }
+                }
+              }
+            ]
           }
         }
       }
@@ -1579,7 +1596,12 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:v2-runtime-error-details:v2"
+            "$ref": "urn:podway:schema:v2-runtime-error-details:v2",
+            "properties": {
+              "kind": {
+                "const": "PROCEDURE_V2_SCHEMA_INVALID"
+              }
+            }
           }
         }
       }
@@ -1604,7 +1626,12 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:v2-runtime-error-details:v2"
+            "$ref": "urn:podway:schema:v2-runtime-error-details:v2",
+            "properties": {
+              "kind": {
+                "const": "GRAPH_NODE_NOT_FOUND"
+              }
+            }
           }
         }
       }
@@ -1629,7 +1656,12 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:v2-runtime-error-details:v2"
+            "$ref": "urn:podway:schema:v2-runtime-error-details:v2",
+            "properties": {
+              "kind": {
+                "const": "NODE_DEFINITION_NOT_FOUND"
+              }
+            }
           }
         }
       }
@@ -1654,7 +1686,12 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:v2-runtime-error-details:v2"
+            "$ref": "urn:podway:schema:v2-runtime-error-details:v2",
+            "properties": {
+              "kind": {
+                "const": "GRAPH_NODE_TYPE_MISMATCH"
+              }
+            }
           }
         }
       }
@@ -1679,7 +1716,12 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:v2-runtime-error-details:v2"
+            "$ref": "urn:podway:schema:v2-runtime-error-details:v2",
+            "properties": {
+              "kind": {
+                "const": "OPTION_NOT_ALLOWED"
+              }
+            }
           }
         }
       }
@@ -1704,7 +1746,12 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:v2-runtime-error-details:v2"
+            "$ref": "urn:podway:schema:v2-runtime-error-details:v2",
+            "properties": {
+              "kind": {
+                "const": "OPTION_GUARD_UNSATISFIED"
+              }
+            }
           }
         }
       }
@@ -1729,7 +1776,12 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:v2-runtime-error-details:v2"
+            "$ref": "urn:podway:schema:v2-runtime-error-details:v2",
+            "properties": {
+              "kind": {
+                "const": "ROUTE_NOT_ALLOWED"
+              }
+            }
           }
         }
       }
@@ -1754,7 +1806,12 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:v2-runtime-error-details:v2"
+            "$ref": "urn:podway:schema:v2-runtime-error-details:v2",
+            "properties": {
+              "kind": {
+                "const": "DECISION_REASON_MISSING"
+              }
+            }
           }
         }
       }
@@ -1779,7 +1836,12 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:v2-runtime-error-details:v2"
+            "$ref": "urn:podway:schema:v2-runtime-error-details:v2",
+            "properties": {
+              "kind": {
+                "const": "EVIDENCE_REFERENCE_UNRESOLVED"
+              }
+            }
           }
         }
       }
@@ -1804,7 +1866,12 @@
             "const": true
           },
           "details": {
-            "$ref": "urn:podway:schema:recoverable-v2-runtime-error-details:v2"
+            "$ref": "urn:podway:schema:recoverable-v2-runtime-error-details:v2",
+            "properties": {
+              "kind": {
+                "const": "EVIDENCE_REFERENCE_STALE"
+              }
+            }
           }
         }
       }
@@ -1829,7 +1896,12 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:v2-runtime-error-details:v2"
+            "$ref": "urn:podway:schema:v2-runtime-error-details:v2",
+            "properties": {
+              "kind": {
+                "const": "MANUAL_REWORK_TARGET_NOT_ALLOWED"
+              }
+            }
           }
         }
       }
@@ -1854,7 +1926,12 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:v2-runtime-error-details:v2"
+            "$ref": "urn:podway:schema:v2-runtime-error-details:v2",
+            "properties": {
+              "kind": {
+                "const": "MANUAL_REWORK_TARGET_NOT_ON_TRACE"
+              }
+            }
           }
         }
       }
@@ -1879,7 +1956,12 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:v2-runtime-error-details:v2"
+            "$ref": "urn:podway:schema:v2-runtime-error-details:v2",
+            "properties": {
+              "kind": {
+                "const": "GOAL_TRACKING_NOT_ENABLED"
+              }
+            }
           }
         }
       }
@@ -1904,7 +1986,12 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:v2-runtime-error-details:v2"
+            "$ref": "urn:podway:schema:v2-runtime-error-details:v2",
+            "properties": {
+              "kind": {
+                "const": "SESSION_GOAL_MISSING"
+              }
+            }
           }
         }
       }
@@ -1929,7 +2016,12 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:v2-runtime-error-details:v2"
+            "$ref": "urn:podway:schema:v2-runtime-error-details:v2",
+            "properties": {
+              "kind": {
+                "const": "SESSION_GOAL_ALREADY_DEFINED"
+              }
+            }
           }
         }
       }
@@ -1954,7 +2046,12 @@
             "const": true
           },
           "details": {
-            "$ref": "urn:podway:schema:recoverable-v2-runtime-error-details:v2"
+            "$ref": "urn:podway:schema:recoverable-v2-runtime-error-details:v2",
+            "properties": {
+              "kind": {
+                "const": "GOAL_REVISION_STALE"
+              }
+            }
           }
         }
       }
@@ -1979,7 +2076,12 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:v2-runtime-error-details:v2"
+            "$ref": "urn:podway:schema:v2-runtime-error-details:v2",
+            "properties": {
+              "kind": {
+                "const": "GOAL_REVISION_TARGET_NOT_ALLOWED"
+              }
+            }
           }
         }
       }
@@ -2004,7 +2106,12 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:v2-runtime-error-details:v2"
+            "$ref": "urn:podway:schema:v2-runtime-error-details:v2",
+            "properties": {
+              "kind": {
+                "const": "GOAL_REVISION_TARGET_NOT_REVISION_SAFE"
+              }
+            }
           }
         }
       }
@@ -2029,7 +2136,12 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:v2-runtime-error-details:v2"
+            "$ref": "urn:podway:schema:v2-runtime-error-details:v2",
+            "properties": {
+              "kind": {
+                "const": "REACTIVATION_FLAG_REQUIRED"
+              }
+            }
           }
         }
       }
@@ -2054,7 +2166,12 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:v2-runtime-error-details:v2"
+            "$ref": "urn:podway:schema:v2-runtime-error-details:v2",
+            "properties": {
+              "kind": {
+                "const": "CRITERION_MODE_MIXED"
+              }
+            }
           }
         }
       }
@@ -2079,7 +2196,12 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:v2-runtime-error-details:v2"
+            "$ref": "urn:podway:schema:v2-runtime-error-details:v2",
+            "properties": {
+              "kind": {
+                "const": "CRITERION_CITATION_INVALID"
+              }
+            }
           }
         }
       }
@@ -2104,7 +2226,12 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:v2-runtime-error-details:v2"
+            "$ref": "urn:podway:schema:v2-runtime-error-details:v2",
+            "properties": {
+              "kind": {
+                "const": "CRITERION_RESULT_MISSING"
+              }
+            }
           }
         }
       }
@@ -2129,7 +2256,12 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:v2-runtime-error-details:v2"
+            "$ref": "urn:podway:schema:v2-runtime-error-details:v2",
+            "properties": {
+              "kind": {
+                "const": "CRITERION_NOT_FOUND"
+              }
+            }
           }
         }
       }
@@ -2154,7 +2286,12 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:v2-runtime-error-details:v2"
+            "$ref": "urn:podway:schema:v2-runtime-error-details:v2",
+            "properties": {
+              "kind": {
+                "const": "FRESH_GOAL_ASSESSMENT_MISSING"
+              }
+            }
           }
         }
       }
@@ -2179,7 +2316,12 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:v2-runtime-error-details:v2"
+            "$ref": "urn:podway:schema:v2-runtime-error-details:v2",
+            "properties": {
+              "kind": {
+                "const": "GOAL_ASSESSMENT_OUTCOME_NOT_ALLOWED"
+              }
+            }
           }
         }
       }
@@ -2204,7 +2346,12 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:v2-runtime-error-details:v2"
+            "$ref": "urn:podway:schema:v2-runtime-error-details:v2",
+            "properties": {
+              "kind": {
+                "const": "DIGEST_CONFIRMATION_REQUIRED"
+              }
+            }
           }
         }
       }
@@ -2229,7 +2376,14 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:delegation-error-details:v2"
+            "$ref": "urn:podway:schema:delegation-error-details:v2",
+            "properties": {
+              "reason": {
+                "enum": [
+                  "direct_attempt"
+                ]
+              }
+            }
           }
         }
       }
@@ -2254,7 +2408,14 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:delegation-error-details:v2"
+            "$ref": "urn:podway:schema:delegation-error-details:v2",
+            "properties": {
+              "reason": {
+                "enum": [
+                  "receipt_missing"
+                ]
+              }
+            }
           }
         }
       }
@@ -2279,7 +2440,15 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:delegation-error-details:v2"
+            "$ref": "urn:podway:schema:delegation-error-details:v2",
+            "properties": {
+              "reason": {
+                "enum": [
+                  "package_changed",
+                  "items_changed"
+                ]
+              }
+            }
           }
         }
       }
@@ -2304,7 +2473,17 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:delegation-error-details:v2"
+            "$ref": "urn:podway:schema:delegation-error-details:v2",
+            "properties": {
+              "reason": {
+                "enum": [
+                  "binding_mismatch",
+                  "role_mismatch",
+                  "disposition_mismatch",
+                  "round_limit"
+                ]
+              }
+            }
           }
         }
       }
@@ -2329,7 +2508,14 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:delegation-error-details:v2"
+            "$ref": "urn:podway:schema:delegation-error-details:v2",
+            "properties": {
+              "reason": {
+                "enum": [
+                  "duplicate_acceptance"
+                ]
+              }
+            }
           }
         }
       }
@@ -2354,7 +2540,12 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:v2-runtime-error-details:v2"
+            "$ref": "urn:podway:schema:v2-runtime-error-details:v2",
+            "properties": {
+              "kind": {
+                "const": "EVIDENCE_NOT_AVAILABLE"
+              }
+            }
           }
         }
       }
@@ -2379,7 +2570,12 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:v2-runtime-error-details:v2"
+            "$ref": "urn:podway:schema:v2-runtime-error-details:v2",
+            "properties": {
+              "kind": {
+                "const": "ATTEMPT_CONTENT_LIMIT_EXCEEDED"
+              }
+            }
           }
         }
       }
@@ -2404,7 +2600,12 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:v2-runtime-error-details:v2"
+            "$ref": "urn:podway:schema:v2-runtime-error-details:v2",
+            "properties": {
+              "kind": {
+                "const": "EVIDENCE_PAGE_TOKEN_EXHAUSTED"
+              }
+            }
           }
         }
       }
@@ -2429,7 +2630,12 @@
             "const": true
           },
           "details": {
-            "$ref": "urn:podway:schema:recoverable-v2-runtime-error-details:v2"
+            "$ref": "urn:podway:schema:recoverable-v2-runtime-error-details:v2",
+            "properties": {
+              "kind": {
+                "const": "EVIDENCE_PAGE_TOKEN_STALE"
+              }
+            }
           }
         }
       }

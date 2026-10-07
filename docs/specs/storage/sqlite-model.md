@@ -1,8 +1,12 @@
 # SQLite Model
 
-The implemented canonical DDL history is `sqlite-v1.sql` through `sqlite-v13.sql`
-under `assets/specifications/`. New databases apply that history in one
-transaction and finish at schema version 13. The v5 contract is
+The current canonical DDL is [`sqlite-v14.sql`](../../../assets/specifications/sqlite-v14.sql).
+New databases use that complete baseline. Production does not migrate generations
+1 through 13; their [frozen rejected-input fixture](../../../tests/fixtures/storage/daemon-era-v2dfc/generation-1-to-13-ddl.json) remains test-only.
+
+## Previous daemon generations
+
+The following history describes the retired generations. The v5 contract is
 normative under ADR-0021; `V2LIF-002` reserved its exact canonical DDL and
 `V2LIF-003` admitted it in runtime. ADR-0025 owns schema v6 for external check
 results; `V2AST-002` reserved its canonical DDL and named migration, and

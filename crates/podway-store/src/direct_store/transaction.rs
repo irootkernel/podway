@@ -897,6 +897,228 @@ mod tests {
             DirectStoreErrorV1::Sqlite(_)
         ));
     }
+    #[test]
+    fn sqlite_full_rolls_back_rich_direct_state_and_retry_commits_one_outcome() {
+        use super::super::DirectWorkspaceLayoutV1;
+        use crate::{ActiveItemMutationV2, ProcedureSnapshotV2, ValidatedWorkspaceRootV1};
+        use podway_core::{
+            AttemptId, CanonicalProcedureJsonV1, ItemId, ProcedureSnapshotId,
+            ProcedureSourceLabelV1, canonicalize_json_v1,
+        };
+        use serde_json::json;
+        use sha2::{Digest, Sha256};
+        let temporary = tempfile::TempDir::new().unwrap();
+        let digest = |nibble: char| {
+            Sha256Digest::new(format!("sha256:{}", nibble.to_string().repeat(64))).unwrap()
+        };
+        let deadline = || Instant::now() + std::time::Duration::from_secs(10);
+        let direct = DirectStoreV1::new(
+            DirectWorkspaceLayoutV1::new(
+                ValidatedWorkspaceRootV1::from_path(temporary.path()).unwrap(),
+            )
+            .unwrap(),
+            digest('c'),
+            digest('a'),
+            digest('b'),
+        );
+        let request = |key: &str| {
+            DirectMutationRequestV1::new(
+                IdempotencyKeyV1::new(key).unwrap(),
+                digest('d'),
+                "item.set",
+                "00000000-0000-4000-8000-000000000002",
+                DirectOutcomeScopeV1::Workspace,
+            )
+            .unwrap()
+        };
+        let response = |request: &DirectMutationRequestV1, now: UnixMillis| {
+            CanonicalExecutionJsonV1::new(
+            canonicalize_json_v1(&json!({"schema":"podway.output/v4", "request_id":request.response_id(),
+                "command":request.command(), "generated_at":format!("1970-01-01T00:00:00.{:03}Z",now.get()),
+                "result":{"changed":true},"warnings":[]})).unwrap(),
+        ).unwrap()
+        };
+        let bootstrap = request("init");
+        let lease =
+            ExclusiveMaintenanceLeaseV1::acquire(direct.layout(), deadline(), true).unwrap();
+        direct
+            .bootstrap(
+                &lease,
+                WorkspaceId::new("00000000-0000-4000-8000-000000000001").unwrap(),
+                "current",
+                &bootstrap,
+                deadline(),
+                || UnixMillis::new(1),
+                |context| Ok(response(&bootstrap, context.now())),
+            )
+            .unwrap();
+        drop(lease);
+        let canonical=canonicalize_json_v1(&json!({"schema":"podway.procedure/v2","id":"pager-full","version":"1",
+            "name":"Pager full","purpose":"Preserve atomic state after real SQLite exhaustion.",
+            "node_definitions":{"work":{"type":"action","title":"Work","intent":"Record output.",
+                "items":[{"id":"note","type":"text","prompt":"Note","required":false,"max_length":65536}]}},
+            "graph":{"entry":"work","nodes":[{"id":"work","use":"work","terminal":true}]}})).unwrap();
+        let snapshot = ProcedureSnapshotV2::new(
+            ProcedureSnapshotId::new("00000000-0000-4000-8000-000000000003").unwrap(),
+            CanonicalProcedureJsonV1::new(canonical.clone()).unwrap(),
+            Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes())))
+                .unwrap(),
+            ProcedureSourceLabelV1::file("pager-full.yaml").unwrap(),
+            UnixMillis::new(10),
+        )
+        .unwrap();
+        let current = GraphSessionStateV2::prepared(
+            Revision::new(1),
+            "Pager full",
+            snapshot,
+            SessionId::new("00000000-0000-4000-8000-000000000004").unwrap(),
+            UnixMillis::new(10),
+        )
+        .unwrap()
+        .begin_v2(
+            Revision::ZERO,
+            AttemptId::new("00000000-0000-4000-8000-000000000005").unwrap(),
+            None,
+            UnixMillis::new(20),
+        )
+        .unwrap()
+        .into_state();
+        let seed = request("seed");
+        direct
+            .mutate(
+                &seed,
+                deadline(),
+                || UnixMillis::new(21),
+                |context| {
+                    context.now();
+                    context.create_graph(&current)?;
+                    Ok(response(&seed, context.now()))
+                },
+            )
+            .unwrap();
+        let next = current
+            .mutate_active_item_v2(
+                current.trace().active_attempt().unwrap().attempt_id(),
+                &ItemId::new("note").unwrap(),
+                Revision::ZERO,
+                ActiveItemMutationV2::Set {
+                    value: "x".repeat(16384),
+                },
+                UnixMillis::new(30),
+            )
+            .unwrap()
+            .into_state();
+        let mutation = request("set-pager-full");
+        let sequence = direct
+            .read(deadline(), |snapshot| snapshot.committed_sequence())
+            .unwrap();
+        {
+            // Constrain only this owned unit fixture connection. No public fault knob or legacy
+            // Store options survive retirement; these are the real direct persistence primitives.
+            let lease = DirectOpenLease::acquire(direct.layout(), deadline(), &mut || {}).unwrap();
+            let gate = super::super::connection::connection_gate(deadline()).unwrap();
+            let mut connection = direct.open_connection(false, deadline()).unwrap();
+            connection
+                .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")
+                .unwrap();
+            let count: i64 = connection
+                .query_row("PRAGMA page_count", [], |row| row.get(0))
+                .unwrap();
+            let free: i64 = connection
+                .query_row("PRAGMA freelist_count", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(free, 0);
+            let cap: i64 = connection
+                .query_row(&format!("PRAGMA max_page_count={count}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(cap, count);
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .unwrap();
+            let binding = direct.validate_connection(&transaction).unwrap();
+            let mut context = DirectTransactionV1 {
+                transaction: &transaction,
+                binding,
+                root: direct.layout.root().clone(),
+                previous: OnceCell::new(),
+                state_written: false,
+                clock: Some(|| UnixMillis::new(30)),
+                now: None,
+                created_session_scope: None,
+            };
+            context.now();
+            let failure = context
+                .replace_graph(
+                    current.workspace_revision(),
+                    current.trace().revision(),
+                    &next,
+                )
+                .unwrap_err();
+            assert!(matches!(
+                failure,
+                DirectStoreErrorV1::State(crate::StoreErrorV1::StorageUnavailableV1 {
+                    reason: crate::StoreUnavailableReasonV1::StorageIo,
+                })
+            ));
+            // SQLITE_FULL aborts the actual SQLite transaction rather than merely returning a
+            // synthetic Store failure. No outcome is written after the failed state transition.
+            assert!(transaction.is_autocommit());
+            drop(context);
+            drop(transaction);
+            drop(connection);
+            drop(gate);
+            drop(lease);
+        }
+        direct
+            .read(deadline(), |snapshot| {
+                assert_eq!(snapshot.current_graph()?, Some(current.clone()));
+                assert_eq!(snapshot.committed_sequence()?, sequence);
+                assert!(snapshot.outcome(mutation.key())?.is_none());
+                Ok(())
+            })
+            .unwrap();
+        let committed = direct
+            .mutate(
+                &mutation,
+                deadline(),
+                || UnixMillis::new(31),
+                |context| {
+                    context.now();
+                    context.replace_graph(
+                        current.workspace_revision(),
+                        current.trace().revision(),
+                        &next,
+                    )?;
+                    Ok(response(&mutation, context.now()))
+                },
+            )
+            .unwrap();
+        assert!(!committed.replayed());
+        let replayed = direct
+            .mutate(
+                &mutation,
+                deadline(),
+                || panic!("replay clock"),
+                |_| panic!("replay transition"),
+            )
+            .unwrap();
+        assert!(replayed.replayed());
+        assert_eq!(replayed.outcome(), committed.outcome());
+        direct
+            .read(deadline(), |snapshot| {
+                assert_eq!(snapshot.current_graph()?, Some(next));
+                assert_eq!(snapshot.committed_sequence()?, sequence + 1);
+                assert_eq!(
+                    snapshot.outcome(mutation.key())?.as_ref(),
+                    Some(committed.outcome())
+                );
+                Ok(())
+            })
+            .unwrap();
+        direct.verify_integrity(deadline()).unwrap();
+    }
 }
 
 fn checkpoint_after_success(connection: &Connection, layout: &super::DirectWorkspaceLayoutV1) {

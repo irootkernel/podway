@@ -1,7 +1,7 @@
 //! Procedure v2 graph, cursor, counter, and attempt persistence.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
 use podway_core::{
     ActorAttributionV2, AdvanceTerminalV2, AttemptId, AttemptLifecycle, AttemptNumberV2, BlockerId,
@@ -29,7 +29,7 @@ use crate::v2_memory::{
     validate_workflow_memory_successor_v2, validate_workflow_memory_v2,
 };
 use crate::{
-    DurableWorktreeIdentityV1, EpochMillisV1, JobIdV1, RusqliteErrorContextV1, StoreErrorV1,
+    DurableWorktreeIdentityV1, EpochMillisV1, RusqliteErrorContextV1, StoreErrorV1,
     StoreInvariantV1, StoreRecordKindV1, StoreValueErrorV1, map_rusqlite_error_v1,
 };
 
@@ -1120,8 +1120,6 @@ pub struct GraphWorkspaceViewV2 {
     graph_state: Option<GraphSessionStateV2>,
     delegation_receipts: crate::v2_delegation::DelegationReceiptSnapshotV1,
     current_terminal_disposition: bool,
-    queued_job_count: u32,
-    running_job_id: Option<JobIdV1>,
     latest_workspace_sequence: u64,
     observed_at: EpochMillisV1,
 }
@@ -1130,8 +1128,6 @@ impl GraphWorkspaceViewV2 {
     pub fn new(
         identity: DurableWorktreeIdentityV1,
         graph_state: Option<GraphSessionStateV2>,
-        queued_job_count: u32,
-        running_job_id: Option<JobIdV1>,
         latest_workspace_sequence: u64,
         observed_at: EpochMillisV1,
     ) -> Self {
@@ -1140,8 +1136,6 @@ impl GraphWorkspaceViewV2 {
             graph_state,
             delegation_receipts: crate::v2_delegation::DelegationReceiptSnapshotV1::empty(),
             current_terminal_disposition: false,
-            queued_job_count,
-            running_job_id,
             latest_workspace_sequence,
             observed_at,
         }
@@ -1174,14 +1168,6 @@ impl GraphWorkspaceViewV2 {
 
     pub const fn current_terminal_disposition(&self) -> bool {
         self.current_terminal_disposition
-    }
-
-    pub const fn queued_job_count(&self) -> u32 {
-        self.queued_job_count
-    }
-
-    pub fn running_job_id(&self) -> Option<&JobIdV1> {
-        self.running_job_id.as_ref()
     }
 
     pub const fn latest_workspace_sequence(&self) -> u64 {
@@ -3394,73 +3380,6 @@ fn validate_attempt_metadata(
     }
 }
 
-/// Additive Store boundary for Procedure v2 graph/action state.
-pub trait StoreGraphStateContractV2: Send + Sync {
-    fn create_graph_session_v2(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-        state: GraphSessionStateV2,
-    ) -> Result<(), StoreErrorV1>;
-
-    fn replace_graph_session_v2(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-        expected_workspace_revision: Revision,
-        expected_session_revision: Revision,
-        state: GraphSessionStateV2,
-    ) -> Result<(), StoreErrorV1>;
-
-    /// Clears the relational Procedure v2 current-task state under exact revision fences.
-    ///
-    /// This is the Store-owned teardown primitive, not the complete session-reset command. The
-    /// daemon composes the transaction helper with its queue barrier, shared payload cleanup, and
-    /// durable workspace-scoped receipt.
-    fn clear_graph_session_v2(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-        expected_workspace_revision: Revision,
-        expected_session_revision: Revision,
-    ) -> Result<(), StoreErrorV1>;
-
-    fn read_graph_session_v2(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-    ) -> Result<Option<GraphSessionStateV2>, StoreErrorV1>;
-}
-
-/// Additive read-only Store boundary for one coherent Procedure v2 workspace observation.
-pub trait StoreGraphReadContractV2: Send + Sync {
-    fn read_graph_workspace_view_v2(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-    ) -> Result<GraphWorkspaceViewV2, StoreErrorV1>;
-
-    fn read_delegation_readiness_v1(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-    ) -> Result<crate::v2_delegation::DelegationReadinessV1, StoreErrorV1>;
-
-    fn read_delegation_receipt_v1(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-        session_id: &SessionId,
-        attempt_id: &AttemptId,
-    ) -> Result<Option<crate::v2_delegation::DelegationReceiptV1>, StoreErrorV1>;
-}
-
-pub trait StoreTerminalDispositionContractV2: Send + Sync {
-    fn record_terminal_disposition_v2(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-        disposition: TerminalDispositionV2,
-    ) -> Result<(), StoreErrorV1>;
-
-    fn read_terminal_dispositions_v2(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-    ) -> Result<Vec<TerminalDispositionV2>, StoreErrorV1>;
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SessionArchiveSummaryV2 {
     session_id: SessionId,
@@ -3520,438 +3439,6 @@ impl SessionArchiveListPageV2 {
 
     pub fn oldest(&self) -> Option<&SessionArchiveSummaryV2> {
         self.oldest.as_ref()
-    }
-}
-
-pub trait StoreSessionArchiveContractV2: Send + Sync {
-    fn archive_current_session_v2(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-        expected_workspace_revision: Revision,
-        expected_session_revision: Revision,
-        now: EpochMillisV1,
-    ) -> Result<SessionArchiveSummaryV2, StoreErrorV1>;
-
-    fn list_archived_sessions_v2(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-        window: usize,
-    ) -> Result<SessionArchiveListPageV2, StoreErrorV1>;
-
-    fn archived_session_summary_v2(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-        session_id: &SessionId,
-    ) -> Result<Option<SessionArchiveSummaryV2>, StoreErrorV1>;
-
-    fn read_archived_session_v2(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-        session_id: &SessionId,
-    ) -> Result<Option<GraphSessionStateV2>, StoreErrorV1>;
-
-    fn read_archived_delegation_receipts_v1(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-        session_id: &SessionId,
-    ) -> Result<Option<crate::v2_delegation::DelegationReceiptSnapshotV1>, StoreErrorV1>;
-
-    fn read_archived_terminal_dispositions_v2(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-        session_id: &SessionId,
-    ) -> Result<Option<Vec<TerminalDispositionV2>>, StoreErrorV1>;
-
-    fn purge_archived_session_v2(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-        session_id: &SessionId,
-        expected_session_revision: Revision,
-    ) -> Result<SessionArchiveSummaryV2, StoreErrorV1>;
-}
-
-/// Exact current-task fence for a Procedure v2 start terminal transaction.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum GraphStartCurrentTaskV2 {
-    Absent,
-    /// Retained for executing durable jobs admitted by pre-v0.2.4 binaries.
-    Exact {
-        session_id: SessionId,
-        session_revision: Revision,
-    },
-    Eligible {
-        session_id: SessionId,
-        session_revision: Revision,
-    },
-    Force {
-        session_id: SessionId,
-        session_revision: Revision,
-        progress_summary: String,
-    },
-    Delete {
-        session_id: SessionId,
-        session_revision: Revision,
-        progress_summary: Option<String>,
-    },
-    Supersede {
-        session_id: SessionId,
-        session_revision: Revision,
-        reason: String,
-        actor: Option<ActorAttributionV2>,
-    },
-    DisposeAndArchive {
-        session_id: SessionId,
-        session_revision: Revision,
-        disposition_kind: TerminalDispositionKindV2,
-        summary: Option<String>,
-        stable_reference: Option<String>,
-        reason: Option<String>,
-        actor: Option<ActorAttributionV2>,
-    },
-}
-
-/// Additive durable-job boundary that publishes a fresh Procedure v2 graph session and its
-/// immutable terminal receipt in one SQLite transaction.
-pub trait StoreGraphMutationContractV2: Send + Sync {
-    fn commit_graph_start_terminal_v2(
-        &self,
-        claim: crate::ClaimTokenV1,
-        expected_current: GraphStartCurrentTaskV2,
-        state: GraphSessionStateV2,
-        now: crate::EpochMillisV1,
-    ) -> Result<crate::TerminalReceiptV1, StoreErrorV1>;
-
-    #[allow(clippy::too_many_arguments)]
-    fn commit_graph_mutation_terminal_v2(
-        &self,
-        claim: crate::ClaimTokenV1,
-        expected_workspace_revision: Revision,
-        expected_session_revision: Revision,
-        next_state: Option<GraphSessionStateV2>,
-        result: crate::TerminalResultV1,
-        operation: crate::PersistedGraphTerminalOperationV2,
-        now: crate::EpochMillisV1,
-    ) -> Result<crate::TerminalReceiptV1, StoreErrorV1>;
-
-    #[allow(clippy::too_many_arguments)]
-    fn commit_graph_delegation_accept_terminal_v1(
-        &self,
-        claim: crate::ClaimTokenV1,
-        expected_workspace_revision: Revision,
-        expected_session_revision: Revision,
-        next_state: GraphSessionStateV2,
-        expected_package_digest: Sha256Digest,
-        receipt: crate::DelegationReceiptV1,
-        now: crate::EpochMillisV1,
-    ) -> Result<crate::TerminalReceiptV1, StoreErrorV1>;
-
-    fn commit_graph_reset_terminal_v2(
-        &self,
-        claim: crate::ClaimTokenV1,
-        expected_workspace_revision: Revision,
-        expected_session_revision: Revision,
-        session_id: SessionId,
-        now: crate::EpochMillisV1,
-    ) -> Result<crate::TerminalReceiptV1, StoreErrorV1>;
-
-    fn commit_graph_archive_terminal_v2(
-        &self,
-        claim: crate::ClaimTokenV1,
-        expected_workspace_revision: Revision,
-        expected_session_revision: Revision,
-        session_id: SessionId,
-        now: crate::EpochMillisV1,
-    ) -> Result<crate::TerminalReceiptV1, StoreErrorV1>;
-
-    #[allow(clippy::too_many_arguments)]
-    fn commit_graph_smart_reset_terminal_v2(
-        &self,
-        claim: crate::ClaimTokenV1,
-        expected_workspace_revision: Revision,
-        expected_session_revision: Revision,
-        session_id: SessionId,
-        mode: crate::PersistedGraphResetModeV2,
-        progress_summary: Option<String>,
-        now: crate::EpochMillisV1,
-    ) -> Result<crate::TerminalReceiptV1, StoreErrorV1>;
-}
-
-impl<Store> StoreGraphMutationContractV2 for Arc<Store>
-where
-    Store: StoreGraphMutationContractV2 + ?Sized,
-{
-    fn commit_graph_start_terminal_v2(
-        &self,
-        claim: crate::ClaimTokenV1,
-        expected_current: GraphStartCurrentTaskV2,
-        state: GraphSessionStateV2,
-        now: crate::EpochMillisV1,
-    ) -> Result<crate::TerminalReceiptV1, StoreErrorV1> {
-        (**self).commit_graph_start_terminal_v2(claim, expected_current, state, now)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn commit_graph_mutation_terminal_v2(
-        &self,
-        claim: crate::ClaimTokenV1,
-        expected_workspace_revision: Revision,
-        expected_session_revision: Revision,
-        next_state: Option<GraphSessionStateV2>,
-        result: crate::TerminalResultV1,
-        operation: crate::PersistedGraphTerminalOperationV2,
-        now: crate::EpochMillisV1,
-    ) -> Result<crate::TerminalReceiptV1, StoreErrorV1> {
-        (**self).commit_graph_mutation_terminal_v2(
-            claim,
-            expected_workspace_revision,
-            expected_session_revision,
-            next_state,
-            result,
-            operation,
-            now,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn commit_graph_delegation_accept_terminal_v1(
-        &self,
-        claim: crate::ClaimTokenV1,
-        expected_workspace_revision: Revision,
-        expected_session_revision: Revision,
-        next_state: GraphSessionStateV2,
-        expected_package_digest: Sha256Digest,
-        receipt: crate::DelegationReceiptV1,
-        now: crate::EpochMillisV1,
-    ) -> Result<crate::TerminalReceiptV1, StoreErrorV1> {
-        (**self).commit_graph_delegation_accept_terminal_v1(
-            claim,
-            expected_workspace_revision,
-            expected_session_revision,
-            next_state,
-            expected_package_digest,
-            receipt,
-            now,
-        )
-    }
-
-    fn commit_graph_reset_terminal_v2(
-        &self,
-        claim: crate::ClaimTokenV1,
-        expected_workspace_revision: Revision,
-        expected_session_revision: Revision,
-        session_id: SessionId,
-        now: crate::EpochMillisV1,
-    ) -> Result<crate::TerminalReceiptV1, StoreErrorV1> {
-        (**self).commit_graph_reset_terminal_v2(
-            claim,
-            expected_workspace_revision,
-            expected_session_revision,
-            session_id,
-            now,
-        )
-    }
-
-    fn commit_graph_archive_terminal_v2(
-        &self,
-        claim: crate::ClaimTokenV1,
-        expected_workspace_revision: Revision,
-        expected_session_revision: Revision,
-        session_id: SessionId,
-        now: crate::EpochMillisV1,
-    ) -> Result<crate::TerminalReceiptV1, StoreErrorV1> {
-        (**self).commit_graph_archive_terminal_v2(
-            claim,
-            expected_workspace_revision,
-            expected_session_revision,
-            session_id,
-            now,
-        )
-    }
-
-    fn commit_graph_smart_reset_terminal_v2(
-        &self,
-        claim: crate::ClaimTokenV1,
-        expected_workspace_revision: Revision,
-        expected_session_revision: Revision,
-        session_id: SessionId,
-        mode: crate::PersistedGraphResetModeV2,
-        progress_summary: Option<String>,
-        now: crate::EpochMillisV1,
-    ) -> Result<crate::TerminalReceiptV1, StoreErrorV1> {
-        (**self).commit_graph_smart_reset_terminal_v2(
-            claim,
-            expected_workspace_revision,
-            expected_session_revision,
-            session_id,
-            mode,
-            progress_summary,
-            now,
-        )
-    }
-}
-
-impl<Store> StoreGraphReadContractV2 for Arc<Store>
-where
-    Store: StoreGraphReadContractV2 + ?Sized,
-{
-    fn read_graph_workspace_view_v2(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-    ) -> Result<GraphWorkspaceViewV2, StoreErrorV1> {
-        (**self).read_graph_workspace_view_v2(identity)
-    }
-
-    fn read_delegation_readiness_v1(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-    ) -> Result<crate::v2_delegation::DelegationReadinessV1, StoreErrorV1> {
-        (**self).read_delegation_readiness_v1(identity)
-    }
-
-    fn read_delegation_receipt_v1(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-        session_id: &SessionId,
-        attempt_id: &AttemptId,
-    ) -> Result<Option<crate::v2_delegation::DelegationReceiptV1>, StoreErrorV1> {
-        (**self).read_delegation_receipt_v1(identity, session_id, attempt_id)
-    }
-}
-
-impl<Store> StoreTerminalDispositionContractV2 for Arc<Store>
-where
-    Store: StoreTerminalDispositionContractV2 + ?Sized,
-{
-    fn record_terminal_disposition_v2(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-        disposition: TerminalDispositionV2,
-    ) -> Result<(), StoreErrorV1> {
-        (**self).record_terminal_disposition_v2(identity, disposition)
-    }
-
-    fn read_terminal_dispositions_v2(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-    ) -> Result<Vec<TerminalDispositionV2>, StoreErrorV1> {
-        (**self).read_terminal_dispositions_v2(identity)
-    }
-}
-
-impl<Store> StoreSessionArchiveContractV2 for Arc<Store>
-where
-    Store: StoreSessionArchiveContractV2 + ?Sized,
-{
-    fn archive_current_session_v2(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-        expected_workspace_revision: Revision,
-        expected_session_revision: Revision,
-        now: EpochMillisV1,
-    ) -> Result<SessionArchiveSummaryV2, StoreErrorV1> {
-        (**self).archive_current_session_v2(
-            identity,
-            expected_workspace_revision,
-            expected_session_revision,
-            now,
-        )
-    }
-
-    fn list_archived_sessions_v2(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-        window: usize,
-    ) -> Result<SessionArchiveListPageV2, StoreErrorV1> {
-        (**self).list_archived_sessions_v2(identity, window)
-    }
-
-    fn archived_session_summary_v2(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-        session_id: &SessionId,
-    ) -> Result<Option<SessionArchiveSummaryV2>, StoreErrorV1> {
-        (**self).archived_session_summary_v2(identity, session_id)
-    }
-
-    fn read_archived_session_v2(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-        session_id: &SessionId,
-    ) -> Result<Option<GraphSessionStateV2>, StoreErrorV1> {
-        (**self).read_archived_session_v2(identity, session_id)
-    }
-
-    fn read_archived_delegation_receipts_v1(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-        session_id: &SessionId,
-    ) -> Result<Option<crate::v2_delegation::DelegationReceiptSnapshotV1>, StoreErrorV1> {
-        (**self).read_archived_delegation_receipts_v1(identity, session_id)
-    }
-
-    fn read_archived_terminal_dispositions_v2(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-        session_id: &SessionId,
-    ) -> Result<Option<Vec<TerminalDispositionV2>>, StoreErrorV1> {
-        (**self).read_archived_terminal_dispositions_v2(identity, session_id)
-    }
-
-    fn purge_archived_session_v2(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-        session_id: &SessionId,
-        expected_session_revision: Revision,
-    ) -> Result<SessionArchiveSummaryV2, StoreErrorV1> {
-        (**self).purge_archived_session_v2(identity, session_id, expected_session_revision)
-    }
-}
-
-impl<Store> StoreGraphStateContractV2 for Arc<Store>
-where
-    Store: StoreGraphStateContractV2 + ?Sized,
-{
-    fn create_graph_session_v2(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-        state: GraphSessionStateV2,
-    ) -> Result<(), StoreErrorV1> {
-        (**self).create_graph_session_v2(identity, state)
-    }
-
-    fn replace_graph_session_v2(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-        expected_workspace_revision: Revision,
-        expected_session_revision: Revision,
-        state: GraphSessionStateV2,
-    ) -> Result<(), StoreErrorV1> {
-        (**self).replace_graph_session_v2(
-            identity,
-            expected_workspace_revision,
-            expected_session_revision,
-            state,
-        )
-    }
-
-    fn read_graph_session_v2(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-    ) -> Result<Option<GraphSessionStateV2>, StoreErrorV1> {
-        (**self).read_graph_session_v2(identity)
-    }
-
-    fn clear_graph_session_v2(
-        &self,
-        identity: &DurableWorktreeIdentityV1,
-        expected_workspace_revision: Revision,
-        expected_session_revision: Revision,
-    ) -> Result<(), StoreErrorV1> {
-        (**self).clear_graph_session_v2(
-            identity,
-            expected_workspace_revision,
-            expected_session_revision,
-        )
     }
 }
 
@@ -4015,58 +3502,7 @@ pub(crate) fn create_graph_session_transaction_v2(
     Ok(())
 }
 
-pub(crate) fn replace_graph_session_transaction_v2(
-    transaction: &Transaction<'_>,
-    expected_workspace_revision: Revision,
-    expected_session_revision: Revision,
-    next: &GraphSessionStateV2,
-) -> Result<(), StoreErrorV1> {
-    replace_graph_session_transaction_internal_v2(
-        transaction,
-        expected_workspace_revision,
-        expected_session_revision,
-        next,
-        false,
-    )
-}
-
-pub(crate) fn replace_graph_delegation_accept_transaction_v1(
-    transaction: &Transaction<'_>,
-    expected_workspace_revision: Revision,
-    expected_session_revision: Revision,
-    next: &GraphSessionStateV2,
-) -> Result<(), StoreErrorV1> {
-    replace_graph_session_transaction_internal_v2(
-        transaction,
-        expected_workspace_revision,
-        expected_session_revision,
-        next,
-        true,
-    )
-}
-
-fn replace_graph_session_transaction_internal_v2(
-    transaction: &Transaction<'_>,
-    expected_workspace_revision: Revision,
-    expected_session_revision: Revision,
-    next: &GraphSessionStateV2,
-    delegation_accept: bool,
-) -> Result<(), StoreErrorV1> {
-    let previous = load_graph_session_connection_v2(transaction)?
-        .ok_or_else(|| invalid_store("no current Procedure v2 graph session exists"))?;
-    replace_graph_session_from_previous_v2(
-        transaction,
-        &previous,
-        expected_workspace_revision,
-        expected_session_revision,
-        next,
-        delegation_accept,
-        false,
-    )
-}
-
-/// Direct persistence reuses the state loaded by its private transaction, and
-/// writes only changed attempt rows. Legacy callers preserve their existing path.
+/// Persistence reuses the state loaded by its private transaction and writes only changed attempts.
 pub(crate) fn replace_direct_graph_session_transaction_v2(
     transaction: &Transaction<'_>,
     previous: &GraphSessionStateV2,
@@ -4074,26 +3510,6 @@ pub(crate) fn replace_direct_graph_session_transaction_v2(
     expected_session_revision: Revision,
     next: &GraphSessionStateV2,
     delegation_accept: bool,
-) -> Result<(), StoreErrorV1> {
-    replace_graph_session_from_previous_v2(
-        transaction,
-        previous,
-        expected_workspace_revision,
-        expected_session_revision,
-        next,
-        delegation_accept,
-        true,
-    )
-}
-
-fn replace_graph_session_from_previous_v2(
-    transaction: &Transaction<'_>,
-    previous: &GraphSessionStateV2,
-    expected_workspace_revision: Revision,
-    expected_session_revision: Revision,
-    next: &GraphSessionStateV2,
-    delegation_accept: bool,
-    skip_unchanged_attempts: bool,
 ) -> Result<(), StoreErrorV1> {
     if previous.workspace_revision() != expected_workspace_revision {
         return Err(StoreErrorV1::PreconditionConflictV1 {
@@ -4190,7 +3606,7 @@ fn replace_graph_session_from_previous_v2(
         .zip(previous.attempt_metadata())
         .zip(next.trace().attempts().iter().zip(next.attempt_metadata()))
     {
-        if skip_unchanged_attempts && old_attempt == new_attempt && old_metadata == new_metadata {
+        if old_attempt == new_attempt && old_metadata == new_metadata {
             continue;
         }
         let changed = transaction
@@ -5183,110 +4599,47 @@ fn load_counters_v2(
 pub(crate) fn verify_v2_graph_state_connection_v2(
     connection: &Connection,
 ) -> Result<(), StoreErrorV1> {
-    let schema_version: u32 = connection
-        .query_row("PRAGMA user_version", [], |row| row.get(0))
-        .map_err(|error| record_error(error, StoreRecordKindV1::Workspace))?;
-    if schema_version >= 7 {
-        let orphan_snapshot_count: i64 = connection
-            .query_row(
-                "SELECT COUNT(*) FROM v2_procedure_snapshots p \
-                 LEFT JOIN v2_task_sessions s ON s.procedure_snapshot_id = p.snapshot_id \
-                 WHERE s.session_id IS NULL",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|error| record_error(error, StoreRecordKindV1::Snapshot))?;
-        if orphan_snapshot_count != 0 {
-            return Err(corrupt(StoreRecordKindV1::Snapshot));
-        }
-        load_graph_session_connection_v2(connection)?;
-        let invalid_inactive: i64 = connection
-            .query_row(
-                "SELECT COUNT(*) FROM v2_task_sessions \
-                 WHERE activity = 'inactive' \
-                 AND (archive_slot IS NULL OR archive_slot < 1 \
-                      OR archive_slot > ?1 \
-                      OR lifecycle NOT IN ('completed', 'cancelled'))",
-                params![MAX_ARCHIVE_SLOT_V2],
-                |row| row.get(0),
-            )
-            .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
-        if invalid_inactive != 0 {
-            return Err(corrupt(StoreRecordKindV1::Session));
-        }
-        let duplicate_slot = connection
-            .query_row(
-                "SELECT 1 FROM v2_task_sessions WHERE activity = 'inactive' \
-                 GROUP BY archive_slot HAVING COUNT(*) > 1 LIMIT 1",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .optional()
-            .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
-        if duplicate_slot.is_some() {
-            return Err(corrupt(StoreRecordKindV1::Session));
-        }
-        if schema_version >= 12 {
-            crate::v2_delegation::verify_receipts_connection_v1(connection)?;
-        }
-        return Ok(());
-    }
-    load_legacy_current_graph_session_connection_v2(connection).map(|_| ())
-}
-
-fn load_legacy_current_graph_session_connection_v2(
-    connection: &Connection,
-) -> Result<Option<GraphSessionStateV2>, StoreErrorV1> {
-    let session_count: i64 = connection
-        .query_row("SELECT COUNT(*) FROM v2_task_sessions", [], |row| {
-            row.get(0)
-        })
-        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
-    let workspace_count: i64 = connection
-        .query_row("SELECT COUNT(*) FROM v2_workspace_state", [], |row| {
-            row.get(0)
-        })
-        .map_err(|error| record_error(error, StoreRecordKindV1::Workspace))?;
-    if session_count == 0 && workspace_count == 0 {
-        return Ok(None);
-    }
-    if session_count != 1 || workspace_count != 1 {
-        return Err(corrupt(StoreRecordKindV1::Session));
-    }
-    let (workspace_revision, session) = connection
+    let orphan_snapshot_count: i64 = connection
         .query_row(
-            "SELECT w.workspace_revision, s.session_id, s.task_title, s.procedure_snapshot_id, \
-             s.lifecycle, s.session_revision, latest_trace_sequence, active_graph_node_id, \
-             active_attempt_id, active_trace_sequence, goal_tracking, current_goal_revision, \
-             created_at_ms, completed_at_ms, cancelled_at_ms, cancel_reason \
-             FROM v2_workspace_state w JOIN v2_task_sessions s ON s.singleton = w.singleton \
-             WHERE w.singleton = 1",
+            "SELECT COUNT(*) FROM v2_procedure_snapshots p \
+             LEFT JOIN v2_task_sessions s ON s.procedure_snapshot_id = p.snapshot_id \
+             WHERE s.session_id IS NULL",
             [],
-            |row| {
-                Ok((
-                    row.get(0)?,
-                    PersistedSessionV2 {
-                        session_id: row.get(1)?,
-                        task_title: row.get(2)?,
-                        snapshot_id: row.get(3)?,
-                        lifecycle: row.get(4)?,
-                        session_revision: row.get(5)?,
-                        latest_trace: row.get(6)?,
-                        active_node: row.get(7)?,
-                        active_attempt: row.get(8)?,
-                        active_trace: row.get(9)?,
-                        goal_tracking: row.get(10)?,
-                        current_goal_revision: row.get(11)?,
-                        created_at: row.get(12)?,
-                        completed_at: row.get(13)?,
-                        cancelled_at: row.get(14)?,
-                        cancel_reason: row.get(15)?,
-                    },
-                ))
-            },
+            |row| row.get(0),
+        )
+        .map_err(|error| record_error(error, StoreRecordKindV1::Snapshot))?;
+    if orphan_snapshot_count != 0 {
+        return Err(corrupt(StoreRecordKindV1::Snapshot));
+    }
+    load_graph_session_connection_v2(connection)?;
+    let invalid_inactive: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM v2_task_sessions \
+             WHERE activity = 'inactive' \
+             AND (archive_slot IS NULL OR archive_slot < 1 \
+                  OR archive_slot > ?1 \
+                  OR lifecycle NOT IN ('completed', 'cancelled'))",
+            params![MAX_ARCHIVE_SLOT_V2],
+            |row| row.get(0),
         )
         .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
-    load_present_graph_session_v2(connection, workspace_revision, session).map(Some)
+    if invalid_inactive != 0 {
+        return Err(corrupt(StoreRecordKindV1::Session));
+    }
+    let duplicate_slot = connection
+        .query_row(
+            "SELECT 1 FROM v2_task_sessions WHERE activity = 'inactive' \
+             GROUP BY archive_slot HAVING COUNT(*) > 1 LIMIT 1",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+    if duplicate_slot.is_some() {
+        return Err(corrupt(StoreRecordKindV1::Session));
+    }
+    crate::v2_delegation::verify_receipts_connection_v1(connection)?;
+    Ok(())
 }
 
 pub(crate) fn load_terminal_dispositions_connection_v2(

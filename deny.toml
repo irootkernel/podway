@@ -21,7 +21,9 @@ multiple-versions = "deny"
 wildcards = "deny"
 allow-wildcard-paths = true
 highlight = "all"
-deny = []
+deny = [
+  { name = "podway-service", reason = "ADR-0038 retires daemon and LaunchAgent hosting from the eight-crate product" },
+]
 skip = [
   { crate = "getrandom@=0.3.4", reason = "jsonschema runtime validation retains its upstream random source version" },
   { crate = "hashbrown@=0.16.1", reason = "transitive duplicate accepted by local dependency policy" },

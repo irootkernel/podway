@@ -31,8 +31,7 @@ Files consumed directly by builds and verification live outside this directory:
 - [`assets/presets/`](../assets/presets/) contains built-in Procedure YAML;
 - [`assets/schemas/`](../assets/schemas/) contains public JSON Schemas;
 - [`assets/specifications/`](../assets/specifications/) contains executable
-  catalogs, DDL, transition data, canonicalization rules, and the LaunchAgent
-  template;
+  catalogs, current Store DDL, transition data, and canonicalization rules;
 - [`contracts/`](../contracts/) contains repository and interface contracts.
 
 There are no generated documentation mirrors. Edit each canonical asset in place

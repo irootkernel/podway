@@ -31,10 +31,8 @@ use podway_engine::{
     },
 };
 use podway_protocol::{
-    CommandNameV1, MAX_FRAME_PAYLOAD_BYTES_V1, OutputEnvelopeInputV3, OutputEnvelopeV3,
-    RequestIdV1, ResponseEnvelopeV2, Rfc3339MillisV1, SessionLifecycleV1, SessionOutputV1,
-    WorkspaceOutputV1, decode_response_payload_v2, decode_single_frame_v1, encode_frame_v1,
-    encode_response_payload_v2, validate_frame_payload_length,
+    CommandNameV1, DirectSessionOutputV1, OutputEnvelopeInputV4, OutputEnvelopeV4, RequestIdV1,
+    Rfc3339MillisV1, WorkspaceOutputV1,
 };
 use podway_store::v2_delegation::{DelegationReadinessV1, DelegationReceiptSnapshotV1};
 use podway_store::{
@@ -371,8 +369,6 @@ fn view_with_terminal_disposition(
     GraphWorkspaceViewV2::new(
         identity(),
         Some(state),
-        0,
-        None,
         1,
         UnixMillis::new(1_700_000_000_100),
     )
@@ -413,6 +409,22 @@ fn delegated_prepared_state_from(source: &[u8]) -> GraphSessionStateV2 {
         UnixMillis::new(1_700_000_000_000),
     )
     .unwrap()
+}
+
+fn session_output(
+    id: SessionId,
+    title: impl Into<String>,
+    lifecycle: SessionLifecycle,
+    revision_before: Revision,
+    revision_after: Revision,
+) -> DirectSessionOutputV1 {
+    DirectSessionOutputV1 {
+        id,
+        title: title.into(),
+        lifecycle,
+        revision_before,
+        revision_after,
+    }
 }
 
 #[test]
@@ -507,9 +519,9 @@ fn assert_delegation_action(
     let next = project_graph_next_v2(&view).unwrap();
     let status = project_graph_status_v2(&view, GraphStatusTierV2::Standard, None).unwrap();
     let observation = project_graph_observation_v1(&view).unwrap();
-    assert_eq!(next["schema"], "podway.next-result/v4");
-    assert_eq!(status["schema"], "podway.status-result/v4");
-    assert_eq!(observation["schema"], "podway.observation-result/v4");
+    assert_eq!(next["schema"], "podway.next-result/v5");
+    assert_eq!(status["schema"], "podway.status-result/v5");
+    assert_eq!(observation["schema"], "podway.observation-result/v5");
     podway_protocol::validate_command_result_v2("session.next", &next).unwrap();
     podway_protocol::validate_command_result_v2("session.status", &status).unwrap();
     podway_protocol::validate_command_result_v2("session.observe", &observation).unwrap();
@@ -532,12 +544,12 @@ fn v2sdg006_delegated_prepared_and_missing_receipt_views_are_truthful() {
     let prepared = view(delegated_prepared_state());
     let prepared_next = project_graph_next_v2(&prepared).unwrap();
     output("session.next", prepared_next.clone());
-    assert_eq!(prepared_next["schema"], "podway.prepared-next-result/v2");
+    assert_eq!(prepared_next["schema"], "podway.prepared-next-result/v3");
     assert_eq!(prepared_next["delegated_placement_count"], 1);
     let prepared_status =
         project_graph_status_v2(&prepared, GraphStatusTierV2::Standard, None).unwrap();
     output("session.status", prepared_status.clone());
-    assert_eq!(prepared_status["schema"], "podway.status-result/v4");
+    assert_eq!(prepared_status["schema"], "podway.status-result/v5");
     assert_eq!(prepared_status["delegation"]["state"], "inactive");
     assert_eq!(prepared_status["delegation"]["reason"], "no_active_attempt");
     assert_eq!(
@@ -549,7 +561,7 @@ fn v2sdg006_delegated_prepared_and_missing_receipt_views_are_truthful() {
     output("session.status", prepared_compact.clone());
     assert_eq!(
         prepared_compact["schema"],
-        "podway.compact-status-result/v4"
+        "podway.compact-status-result/v5"
     );
     assert_eq!(
         prepared_compact["delegation"],
@@ -559,7 +571,7 @@ fn v2sdg006_delegated_prepared_and_missing_receipt_views_are_truthful() {
     output("session.observe", prepared_observation.clone());
     assert_eq!(
         prepared_observation["schema"],
-        "podway.observation-result/v4"
+        "podway.observation-result/v5"
     );
     assert_eq!(
         prepared_observation["status"]["delegation"],
@@ -581,7 +593,7 @@ fn v2sdg006_delegated_prepared_and_missing_receipt_views_are_truthful() {
     );
     let next = project_graph_next_v2(&running).unwrap();
     output("session.next", next.clone());
-    assert_eq!(next["schema"], "podway.next-result/v4");
+    assert_eq!(next["schema"], "podway.next-result/v5");
     assert_eq!(next["delegation"]["state"], "awaiting_acceptance");
     assert_eq!(next["delegation"]["reason"], "receipt_required");
     assert_eq!(next["instructions"].as_array().unwrap().len(), 16);
@@ -607,7 +619,7 @@ fn v2sdg006_delegated_prepared_and_missing_receipt_views_are_truthful() {
     );
     let observation = project_graph_observation_v1(&running).unwrap();
     output("session.observe", observation.clone());
-    assert_eq!(observation["schema"], "podway.observation-result/v4");
+    assert_eq!(observation["schema"], "podway.observation-result/v5");
     assert_eq!(observation["status"]["delegation"], next["delegation"]);
     assert_eq!(observation["guidance"]["delegation"], next["delegation"]);
 }
@@ -653,7 +665,7 @@ fn v2sdg006_prepared_projection_accepts_maximum_delegated_placements() {
     )
     .unwrap();
     let next = project_graph_next_v2(&view(prepared)).unwrap();
-    assert_eq!(next["schema"], "podway.prepared-next-result/v2");
+    assert_eq!(next["schema"], "podway.prepared-next-result/v3");
     assert_eq!(next["delegated_placement_count"], 1024);
     output("session.next", next);
 }
@@ -899,7 +911,7 @@ fn v2sdg006_current_and_stale_receipts_gate_completion_across_views() {
             assert_eq!(projection["delegation"]["reason"], expected_reason);
         }
         assert_eq!(compact["delegation"], status["delegation"]);
-        assert_eq!(verbose["schema"], "podway.status-result/v4");
+        assert_eq!(verbose["schema"], "podway.status-result/v5");
         assert_eq!(verbose["delegation"], status["delegation"]);
         assert_eq!(verbose["receipt_summaries"], status["receipt_summaries"]);
         podway_protocol::validate_command_result_v2("session.status", &compact).unwrap();
@@ -942,7 +954,7 @@ fn v2sdg006_current_and_stale_receipts_gate_completion_across_views() {
         assert_eq!(receipt_result["applicability"], expected_state);
         assert_eq!(receipt_result["reason"], expected_reason);
         assert_eq!(receipt_result["receipt"]["summary"], "Result reviewed: 界");
-        OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
+        OutputEnvelopeV4::new(OutputEnvelopeInputV4 {
             request_id: RequestIdV1::new(REQUEST_ID).unwrap(),
             command: CommandNameV1::new("delegation.receipt").unwrap(),
             generated_at: Rfc3339MillisV1::new("2026-08-09T00:00:00.000Z").unwrap(),
@@ -950,7 +962,6 @@ fn v2sdg006_current_and_stale_receipts_gate_completion_across_views() {
                 WorkspaceOutputV1::new(WorkspaceId::new(WORKSPACE_ID).unwrap(), "/worktree", 1)
                     .unwrap(),
             ),
-            job: None,
             session: None,
             result: receipt_result,
             warnings: Vec::new(),
@@ -1031,14 +1042,13 @@ fn v2sdg006_current_and_stale_receipts_gate_completion_across_views() {
     output("session.observe", observation);
 }
 
-fn output(command: &str, result: Map<String, Value>) -> OutputEnvelopeV3 {
+fn output(command: &str, result: Map<String, Value>) -> OutputEnvelopeV4 {
     let rendered_result = serde_json::to_string(&result).unwrap();
-    OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
+    OutputEnvelopeV4::new(OutputEnvelopeInputV4 {
         request_id: RequestIdV1::new(REQUEST_ID).unwrap(),
         command: CommandNameV1::new(command).unwrap(),
         generated_at: Rfc3339MillisV1::new("2026-08-09T00:00:00.000Z").unwrap(),
         workspace: None,
-        job: None,
         session: None,
         result,
         warnings: Vec::new(),
@@ -1046,7 +1056,7 @@ fn output(command: &str, result: Map<String, Value>) -> OutputEnvelopeV3 {
     .unwrap_or_else(|error| panic!("{error:?}: {rendered_result}"))
 }
 
-fn maximum_production_output(command: &str, result: Map<String, Value>) -> OutputEnvelopeV3 {
+fn maximum_production_output(command: &str, result: Map<String, Value>) -> OutputEnvelopeV4 {
     let warnings = (0..4)
         .map(|_| {
             json!({
@@ -1059,29 +1069,25 @@ fn maximum_production_output(command: &str, result: Map<String, Value>) -> Outpu
             .clone()
         })
         .collect();
-    OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
+    OutputEnvelopeV4::new(OutputEnvelopeInputV4 {
         request_id: RequestIdV1::new(REQUEST_ID).unwrap(),
         command: CommandNameV1::new(command).unwrap(),
         generated_at: Rfc3339MillisV1::new("2026-08-09T00:00:00.000Z").unwrap(),
         workspace: Some(
             WorkspaceOutputV1::new(
                 WorkspaceId::new(WORKSPACE_ID).unwrap(),
-                "\0".repeat(4_096),
+                format!("/{}", "\0".repeat(4_095)),
                 u64::MAX,
             )
             .unwrap(),
         ),
-        job: None,
-        session: Some(
-            SessionOutputV1::new(
-                SessionId::new(SESSION_ID).unwrap(),
-                "\0".repeat(500),
-                SessionLifecycleV1::Running,
-                Revision::new(u64::MAX),
-                Revision::new(u64::MAX),
-            )
-            .unwrap(),
-        ),
+        session: Some(session_output(
+            SessionId::new(SESSION_ID).unwrap(),
+            "\0".repeat(256),
+            SessionLifecycle::Running,
+            Revision::new(u64::MAX),
+            Revision::new(u64::MAX),
+        )),
         result,
         warnings,
     })
@@ -1094,48 +1100,55 @@ fn assert_maximum_production_output_v2(
     maximum_bytes: usize,
 ) -> usize {
     let output = maximum_production_output(command, result);
-    let workspace = output.workspace().unwrap();
-    assert_eq!(workspace.root().chars().count(), 4_096);
-    assert_eq!(workspace.latest_workspace_sequence(), u64::MAX);
-    let session = output.session().unwrap();
-    assert_eq!(session.title().chars().count(), 500);
-    assert_eq!(session.revision_before(), Revision::new(u64::MAX));
-    assert_eq!(session.revision_after(), Revision::new(u64::MAX));
-    assert_eq!(output.warnings().len(), 4);
-    assert!(output.warnings().iter().all(|warning| {
-        warning["code"].as_str().unwrap().chars().count() == 64
+    let value = output.as_value();
+    assert_eq!(
+        value["workspace"]["root"].as_str().unwrap().chars().count(),
+        4_096
+    );
+    assert_eq!(value["workspace"]["latest_workspace_sequence"], u64::MAX);
+    assert_eq!(
+        value["session"]["title"].as_str().unwrap().chars().count(),
+        256
+    );
+    assert_eq!(value["session"]["revision_before"], u64::MAX);
+    assert_eq!(value["session"]["revision_after"], u64::MAX);
+    let warnings = value["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 4);
+    assert!(warnings.iter().all(|warning| {
+        warning["code"] == "A".repeat(64)
             && warning["path"].as_str().unwrap().chars().count() == 256
             && warning["message"].as_str().unwrap().chars().count() == 512
-            && warning["code"] == "A".repeat(64)
             && ["path", "message"].into_iter().all(|field| {
                 warning[field]
                     .as_str()
-                    .is_some_and(|text| text.chars().all(|character| character == '\0'))
+                    .unwrap()
+                    .chars()
+                    .all(|character| character == '\0')
             })
     }));
 
-    let response = ResponseEnvelopeV2::OutputV2(output);
-    let encoded = encode_response_payload_v2(&response).unwrap();
+    let response = output;
+    let encoded = serde_json::to_vec(&response).unwrap();
     assert!(
         encoded.len() <= maximum_bytes,
         "maximum production {command} envelope exceeded {maximum_bytes} bytes: {}",
         encoded.len()
     );
-    validate_frame_payload_length(encoded.len()).unwrap();
-    assert_eq!(decode_response_payload_v2(&encoded).unwrap(), response);
-    let frame = encode_frame_v1(&encoded).unwrap();
-    assert_eq!(decode_single_frame_v1(&frame).unwrap(), encoded);
+    assert_eq!(
+        serde_json::from_slice::<OutputEnvelopeV4>(&encoded).unwrap(),
+        response
+    );
     encoded.len()
 }
 
 fn assert_output_v2(command: &str, result: Map<String, Value>) {
     let output = output(command, result);
-    let response = ResponseEnvelopeV2::OutputV2(output.clone());
-    let encoded = encode_response_payload_v2(&response).unwrap();
-    validate_frame_payload_length(encoded.len()).unwrap();
-    assert_eq!(decode_response_payload_v2(&encoded).unwrap(), response);
-    let frame = encode_frame_v1(&encoded).unwrap();
-    assert_eq!(decode_single_frame_v1(&frame).unwrap(), encoded);
+    let response = output.clone();
+    let encoded = serde_json::to_vec(&response).unwrap();
+    assert_eq!(
+        serde_json::from_slice::<OutputEnvelopeV4>(&encoded).unwrap(),
+        response
+    );
 }
 
 #[test]
@@ -1146,20 +1159,16 @@ fn v2run002_fresh_action_projects_closed_compact_standard_verbose_and_next_views
     let verbose = project_graph_status_v2(&view, GraphStatusTierV2::Verbose, None).unwrap();
     let next = project_graph_next_v2(&view).unwrap();
 
-    assert_eq!(compact["schema"], "podway.compact-status-result/v3");
-    assert_eq!(standard["schema"], "podway.status-result/v3");
+    assert_eq!(compact["schema"], "podway.compact-status-result/v5");
+    assert_eq!(standard["schema"], "podway.status-result/v5");
     assert_eq!(standard["tier"], "standard");
-    assert_eq!(verbose["schema"], "podway.status-result/v3");
+    assert_eq!(verbose["schema"], "podway.status-result/v5");
     assert_eq!(verbose["tier"], "verbose");
-    assert_eq!(next["schema"], "podway.next-result/v3");
+    assert_eq!(next["schema"], "podway.next-result/v5");
 
     for projection in [&compact, &standard, &verbose, &next] {
         assert_eq!(projection["trace_length"], 1);
         assert_eq!(projection["counters"].as_array().unwrap().len(), 3);
-        assert_eq!(projection["queue"]["pending_mutations"], false);
-        assert_eq!(projection["queue"]["queued_count"], 0);
-        assert!(projection["queue"]["running_job_id"].is_null());
-        assert_eq!(projection["queue"]["latest_workspace_sequence"], 1);
     }
     for projection in [&compact, &standard, &verbose] {
         assert_eq!(projection["session"]["id"], SESSION_ID);
@@ -1295,7 +1304,7 @@ fn v2agt002_observation_projects_typed_items_and_fenced_templates() {
     let view = view(fresh_state("applicability.json", APPLICABILITY_PROCEDURE));
     let observation = project_graph_observation_v1(&view).unwrap();
 
-    assert_eq!(observation["schema"], "podway.observation-result/v3");
+    assert_eq!(observation["schema"], "podway.observation-result/v5");
     assert_eq!(observation["status"]["session"]["lifecycle"], "running");
     assert_eq!(observation["guidance"]["node"]["graph_node_id"], "work");
     let items = observation["active_items"].as_array().unwrap();
@@ -1791,34 +1800,12 @@ fn v2run002_blocker_and_item_windows_are_newest_first_complete_and_display_bound
 }
 
 #[test]
-fn v2run002_missing_graph_and_nonidle_compact_reads_fail_closed() {
-    let missing = GraphWorkspaceViewV2::new(
-        identity(),
-        None,
-        0,
-        None,
-        1,
-        UnixMillis::new(1_700_000_000_100),
-    );
+fn v2run002_missing_graph_reads_fail_closed() {
+    let missing =
+        GraphWorkspaceViewV2::new(identity(), None, 1, UnixMillis::new(1_700_000_000_100));
     assert!(project_graph_status_v2(&missing, GraphStatusTierV2::Compact, None).is_err());
     assert!(project_graph_status_v2(&missing, GraphStatusTierV2::Standard, None).is_err());
     assert!(project_graph_next_v2(&missing).is_err());
-
-    let busy = GraphWorkspaceViewV2::new(
-        identity(),
-        Some(fresh_state("workflow.yaml", EQUIVALENT_YAML)),
-        1,
-        None,
-        2,
-        UnixMillis::new(1_700_000_000_100),
-    );
-    assert!(project_graph_status_v2(&busy, GraphStatusTierV2::Compact, None).is_err());
-    let standard = project_graph_status_v2(&busy, GraphStatusTierV2::Standard, None).unwrap();
-    assert_eq!(standard["queue"]["pending_mutations"], true);
-    assert_eq!(standard["queue"]["queued_count"], 1);
-    assert_eq!(standard["queue"]["latest_workspace_sequence"], 2);
-    let next = project_graph_next_v2(&busy).unwrap();
-    assert_eq!(next["queue"], standard["queue"]);
 }
 
 #[test]
@@ -2635,14 +2622,7 @@ fn escape_heavy_next_state(source: &[u8]) -> GraphSessionStateV2 {
 
 fn maximum_compact_view() -> GraphWorkspaceViewV2 {
     let state = combined_maximum_verbose_state();
-    GraphWorkspaceViewV2::new(
-        identity(),
-        Some(state),
-        0,
-        None,
-        u64::MAX,
-        UnixMillis::new(u64::MAX),
-    )
+    GraphWorkspaceViewV2::new(identity(), Some(state), u64::MAX, UnixMillis::new(u64::MAX))
 }
 
 fn status_values_boundary_state() -> GraphSessionStateV2 {
@@ -3161,7 +3141,7 @@ fn v2rel002_compact_status_with_maximum_non_graph_fields_fits_automation_cap() {
         64
     );
     assert_eq!(compact["session"]["revision"], u64::MAX);
-    assert_eq!(compact["queue"]["latest_workspace_sequence"], u64::MAX);
+    assert!(!compact.contains_key("queue"));
     assert_maximum_production_output_v2("session.status", compact, 262_144);
 }
 
@@ -3561,7 +3541,7 @@ fn complete_maximum_next_result() -> Map<String, Value> {
         .collect::<Vec<_>>();
 
     json!({
-        "schema": "podway.next-result/v3",
+        "schema": "podway.next-result/v5",
         "procedure_schema": "podway.procedure/v2",
         "procedure_digest": IDENTITY_DIGEST,
         "goal_tracking": true,
@@ -3592,12 +3572,6 @@ fn complete_maximum_next_result() -> Map<String, Value> {
             "attempt_count": u64::MAX,
             "rework_traversal_count": u64::MAX
         })).collect::<Vec<_>>(),
-        "queue": {
-            "pending_mutations": true,
-            "queued_count": u32::MAX,
-            "running_job_id": "00000000-0000-4000-8000-000000006100",
-            "latest_workspace_sequence": u64::MAX
-        },
         "revision": u64::MAX,
         "readiness": {
             "items_satisfied": false,
@@ -3644,10 +3618,10 @@ fn complete_maximum_next_result() -> Map<String, Value> {
 }
 
 #[test]
-fn v2rel002_boundary_rich_next_recipe_matches_current_budgets_and_framing() {
+fn v2rel002_boundary_rich_next_recipe_matches_current_budgets_and_direct_output() {
     const FRAME_BYTES: usize = 1_048_576;
     let recipe: Value = serde_json::from_slice(MAXIMUM_NEXT_RECIPE).unwrap();
-    assert_eq!(recipe["frame_bytes"], FRAME_BYTES);
+    assert_eq!(recipe["output_bytes"], FRAME_BYTES);
     for (name, budget) in [
         (
             "NEXT_SERIALIZATION_RESERVE",
@@ -3714,7 +3688,6 @@ fn v2rel002_boundary_rich_next_recipe_matches_current_budgets_and_framing() {
         "attempt",
         "trace_length",
         "counters",
-        "queue",
         "revision",
         "readiness",
         "title",
@@ -3766,24 +3739,22 @@ fn v2rel002_boundary_rich_next_recipe_matches_current_budgets_and_framing() {
         .collect::<Vec<_>>();
     let workspace = WorkspaceOutputV1::new(
         WorkspaceId::new(WORKSPACE_ID).unwrap(),
-        "\0".repeat(4_096),
+        format!("/{}", "\0".repeat(4_095)),
         u64::MAX,
     )
     .unwrap();
-    let session = SessionOutputV1::new(
+    let session = session_output(
         SessionId::new(SESSION_ID).unwrap(),
-        "\0".repeat(500),
-        SessionLifecycleV1::Running,
+        "\0".repeat(256),
+        SessionLifecycle::Running,
         Revision::new(u64::MAX),
         Revision::new(u64::MAX),
-    )
-    .unwrap();
-    let output = OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
+    );
+    let output = OutputEnvelopeV4::new(OutputEnvelopeInputV4 {
         request_id: RequestIdV1::new(REQUEST_ID).unwrap(),
         command: CommandNameV1::new("session.next").unwrap(),
         generated_at: Rfc3339MillisV1::new("2026-08-09T00:00:00.000Z").unwrap(),
         workspace: Some(workspace),
-        job: None,
         session: Some(session),
         result: result.clone(),
         warnings,
@@ -3792,17 +3763,17 @@ fn v2rel002_boundary_rich_next_recipe_matches_current_budgets_and_framing() {
     let output_value = serde_json::to_value(&output).unwrap();
     assert_eq!(output_value["warnings"].as_array().unwrap().len(), 4);
 
-    let response = ResponseEnvelopeV2::OutputV2(output);
-    let encoded = encode_response_payload_v2(&response).unwrap();
+    let response = output;
+    let encoded = serde_json::to_vec(&response).unwrap();
     assert!(
         encoded.len() <= FRAME_BYTES,
         "encoded next used {} bytes",
         encoded.len()
     );
-    validate_frame_payload_length(encoded.len()).unwrap();
-    assert_eq!(decode_response_payload_v2(&encoded).unwrap(), response);
-    let frame = encode_frame_v1(&encoded).unwrap();
-    assert_eq!(decode_single_frame_v1(&frame).unwrap(), encoded);
+    assert_eq!(
+        serde_json::from_slice::<OutputEnvelopeV4>(&encoded).unwrap(),
+        response
+    );
 }
 
 const SELECTED_READBACK_ITEM_IDS: [&str; 16] = [
@@ -4956,10 +4927,10 @@ fn v2ast006_maximal_check_result_readback_is_one_complete_bounded_page() {
     assert_eq!(read["truncated"], false);
     assert_eq!(read["next_page_token"], Value::Null);
 
-    let response = ResponseEnvelopeV2::OutputV2(output("evidence.read", read));
-    let encoded = encode_response_payload_v2(&response).unwrap();
+    let response = output("evidence.read", read);
+    let encoded = serde_json::to_vec(&response).unwrap();
     assert!(encoded.len() <= MAX_EVIDENCE_RESPONSE_BYTES_V2);
-    assert!(encoded.len() <= MAX_FRAME_PAYLOAD_BYTES_V1);
+    assert!(encoded.len() <= podway_protocol::MAX_DIRECT_OUTPUT_BYTES_V1);
 }
 
 #[test]
@@ -5093,13 +5064,13 @@ fn v2rel002_selected_readback_respects_value_and_wire_bounds() {
     assert!(production_budget.evidence_preview() <= podway_config::EVIDENCE_PREVIEW_BUDGET);
     assert!(production_budget.page_tokens() <= podway_config::PAGE_TOKEN_BUDGET);
 
-    let response = ResponseEnvelopeV2::OutputV2(output("session.next", next.clone()));
-    let encoded = encode_response_payload_v2(&response).unwrap();
+    let response = output("session.next", next.clone());
+    let encoded = serde_json::to_vec(&response).unwrap();
     assert!(encoded.len() <= FRAME_MAX);
-    validate_frame_payload_length(encoded.len()).unwrap();
-    assert_eq!(decode_response_payload_v2(&encoded).unwrap(), response);
-    let frame = encode_frame_v1(&encoded).unwrap();
-    assert_eq!(decode_single_frame_v1(&frame).unwrap(), encoded);
+    assert_eq!(
+        serde_json::from_slice::<OutputEnvelopeV4>(&encoded).unwrap(),
+        response
+    );
 }
 
 #[test]
@@ -5172,8 +5143,7 @@ fn v2run002_maxish_projector_outputs_remain_within_window_and_frame_budgets() {
         let envelope = output(command, result);
         let encoded = serde_json::to_vec(&envelope).unwrap();
         assert!(encoded.len() <= 1_048_576);
-        validate_frame_payload_length(encoded.len()).unwrap();
-        let decoded: OutputEnvelopeV3 = serde_json::from_slice(&encoded).unwrap();
+        let decoded: OutputEnvelopeV4 = serde_json::from_slice(&encoded).unwrap();
         assert_eq!(decoded, envelope);
     }
 }
@@ -5249,7 +5219,7 @@ fn maximum_satisfied_confirm_state() -> GraphSessionStateV2 {
 }
 
 #[test]
-fn v2agt007_dense_observation_templates_fit_the_public_schema_and_frame() {
+fn v2agt007_dense_observation_templates_fit_the_public_schema_and_direct_output() {
     let observation = project_graph_observation_v1(&view(maximum_satisfied_confirm_state()))
         .expect("maximum dense observation must project");
     let templates = observation["mutation_templates"].as_array().unwrap();
@@ -5265,7 +5235,7 @@ fn v2agt007_dense_observation_templates_fit_the_public_schema_and_frame() {
         json!(templates.len() < templates_total)
     );
     let schema: Value = serde_json::from_slice(include_bytes!(
-        "../../../assets/schemas/observation-result-v1.schema.json"
+        "../../../assets/schemas/observation-result-v5.schema.json"
     ))
     .unwrap();
     let schema_maximum = schema["properties"]["mutation_templates"]["maxItems"]
@@ -6325,7 +6295,7 @@ fn v2scl005_the_widest_compact_status_fits_its_allocation() {
     let charged = serde_json::to_vec(&compact).unwrap().len();
     // Pinned so a widening of the item or placement ceiling shows up here as a number rather than
     // as an observation that suddenly cannot be answered.
-    assert_eq!(charged, 152_428);
+    assert_eq!(charged, 152_323);
     assert_maximum_production_output_v2("session.status", compact.clone(), 262_144);
 
     let next = project_graph_next_v2(&session_view).unwrap();
@@ -6340,7 +6310,7 @@ fn v2scl005_the_widest_compact_status_fits_its_allocation() {
     assert_eq!(encoded_counters, 133_121);
     assert!(encoded_counters <= counter_charge);
     let next_envelope_bytes = assert_maximum_production_output_v2("session.next", next, 1_048_576);
-    assert_eq!(next_envelope_bytes, 213_927);
+    assert_eq!(next_envelope_bytes, 212_353);
     let mut status_without_counters = compact.clone();
     status_without_counters.remove("counters");
     let non_counter_bytes = serde_json::to_vec(&status_without_counters).unwrap().len();
@@ -6455,8 +6425,8 @@ fn v2scl005_observation_windows_are_bounded_by_bytes_and_report_their_exact_tota
         admitted <= 128 * 1_024,
         "the active-item window charged {admitted} bytes"
     );
-    let response = ResponseEnvelopeV2::OutputV2(output("session.observe", observation.clone()));
-    let encoded = podway_protocol::encode_response_payload_v2(&response).unwrap();
+    let response = output("session.observe", observation.clone());
+    let encoded = serde_json::to_vec(&response).unwrap();
     assert!(
         encoded.len() <= 1_048_576,
         "observation encoded to {} bytes",
@@ -6881,8 +6851,8 @@ fn v2scl004_evidence_read_continues_a_multi_page_text_value() {
     // the page data. A maximal page is the widest response there is, so this is where that bound
     // has to hold.
     for page in [&first, &second] {
-        let response = ResponseEnvelopeV2::OutputV2(output("evidence.read", page.clone()));
-        let encoded = encode_response_payload_v2(&response).unwrap();
+        let response = output("evidence.read", page.clone());
+        let encoded = serde_json::to_vec(&response).unwrap();
         assert!(
             encoded.len() <= 320 * 1_024,
             "an evidence read response encoded to {} bytes",

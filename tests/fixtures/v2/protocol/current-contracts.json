@@ -1,5 +1,5 @@
 {
-  "schema": "podway.daemon-free-contract-known-answers/v1",
+  "schema": "podway.current-protocol-known-answers/v1",
   "fixtures": {
     "podway.session-start-result/v4": {
       "schema": "podway.session-start-result/v4",
@@ -1036,6 +1036,291 @@
           "item_revision": 1
         }
       ]
+    },
+    "podway.procedure-preview-result/v2": {
+      "schema": "podway.procedure-preview-result/v2",
+      "file": "workflow.yaml",
+      "admissible": true,
+      "procedure_schema": "podway.procedure/v2",
+      "procedure_id": "workflow",
+      "procedure_version": "1",
+      "purpose": "test",
+      "procedure_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "goal_tracking": false,
+      "goal_assessment_graph_node_ids": [],
+      "summary": {
+        "definition_count": 1,
+        "graph_node_count": 1,
+        "action_node_count": 1,
+        "decision_node_count": 0,
+        "route_count": 0,
+        "cycle_count": 0,
+        "evidence_reference_count": 0,
+        "skippable_node_count": 0,
+        "manual_rework_target_count": 0
+      },
+      "checks": {
+        "validate": true,
+        "vet": true,
+        "lint": true
+      },
+      "graph": {
+        "entry_graph_node_id": "work",
+        "terminal_graph_node_ids": [
+          "work"
+        ],
+        "nodes": [
+          {
+            "graph_node_id": "work",
+            "node_definition_id": "work",
+            "node_type": "action",
+            "terminal": true,
+            "skippable": false
+          }
+        ],
+        "edges": []
+      },
+      "mermaid": "flowchart TD\n  work",
+      "start_suggestion": {
+        "command": "session.start",
+        "argv": [
+          "podway",
+          "start",
+          "--procedure",
+          "workflow.yaml",
+          "--expect-procedure-digest",
+          "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "--task",
+          "<title>"
+        ]
+      },
+      "diagnostics": [],
+      "diagnostics_truncated": false,
+      "diagnostics_total": 0,
+      "delegated_placement_count": 1,
+      "delegated_placements": [
+        "work"
+      ]
+    },
+    "podway.procedure-graph-result/v2": {
+      "schema": "podway.procedure-graph-result/v2",
+      "procedure_schema": "podway.procedure/v2",
+      "procedure_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "format": "mermaid",
+      "projection_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "projection": "flowchart TD",
+      "delegated_placement_count": 1,
+      "delegated_placements": [
+        "work"
+      ]
+    },
+    "podway.delegation-work-package/v1": {
+      "schema": "podway.delegation-work-package/v1",
+      "workspace_uuid": "00000000-0000-4000-8000-000000000001",
+      "procedure_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "placement_id": "work",
+      "attempt_id": "00000000-0000-4000-8000-000000000001",
+      "delegation": {
+        "binding_ref": "local-specialist",
+        "role_ref": "reviewer",
+        "role_snapshot_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "max_rounds": 3,
+        "after_accept": "retain"
+      },
+      "action": {
+        "title": "Work",
+        "intent": "Complete the action."
+      },
+      "goal": null,
+      "evidence": []
+    },
+    "podway.delegation-receipt/v1": {
+      "schema": "podway.delegation-receipt/v1",
+      "receipt_id": "00000000-0000-4000-8000-000000000001",
+      "workspace_uuid": "00000000-0000-4000-8000-000000000001",
+      "procedure_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "placement_id": "work",
+      "attempt_id": "00000000-0000-4000-8000-000000000001",
+      "delegation": {
+        "binding_ref": "local-specialist",
+        "role_ref": "reviewer",
+        "role_snapshot_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "max_rounds": 3,
+        "after_accept": "retain"
+      },
+      "package_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "execution": {
+        "binding_ref": "local-specialist",
+        "adapter_id": "fixture-adapter",
+        "adapter_version": "1",
+        "primary_host": "external",
+        "scope_kind": "engagement",
+        "scope_ref": "engagement-1",
+        "supervisor_ref": "primary-1",
+        "worker_ref": "worker-1",
+        "task_ref": "task-1",
+        "role_ref": "reviewer",
+        "role_snapshot_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "agent_configuration_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "accepted_task_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "rounds_used": 1,
+      "result_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "summary": "Primary accepted the complete selected result.",
+      "worker_disposition": "idle",
+      "accepted": true,
+      "accepted_items_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "accepted_at": "2026-09-17T00:00:00.000Z"
+    },
+    "podway.delegation-package-result/v1": {
+      "schema": "podway.delegation-package-result/v1",
+      "package": {
+        "schema": "podway.delegation-work-package/v1",
+        "workspace_uuid": "00000000-0000-4000-8000-000000000001",
+        "procedure_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "session_id": "00000000-0000-4000-8000-000000000001",
+        "placement_id": "work",
+        "attempt_id": "00000000-0000-4000-8000-000000000001",
+        "delegation": {
+          "binding_ref": "local-specialist",
+          "role_ref": "reviewer",
+          "role_snapshot_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "max_rounds": 3,
+          "after_accept": "retain"
+        },
+        "action": {
+          "title": "Work",
+          "intent": "Complete the action."
+        },
+        "goal": null,
+        "evidence": []
+      },
+      "package_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "workspace_uuid": "00000000-0000-4000-8000-000000000001",
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "session_revision": 1,
+      "attempt_id": "00000000-0000-4000-8000-000000000001"
+    },
+    "podway.delegation-accept-input/v1": {
+      "schema": "podway.delegation-accept-input/v1",
+      "workspace_uuid": "00000000-0000-4000-8000-000000000001",
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "session_revision": 1,
+      "attempt_id": "00000000-0000-4000-8000-000000000001",
+      "idempotency_key": "accept-1",
+      "package_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "execution": {
+        "binding_ref": "local-specialist",
+        "adapter_id": "fixture-adapter",
+        "adapter_version": "1",
+        "primary_host": "external",
+        "scope_kind": "engagement",
+        "scope_ref": "engagement-1",
+        "supervisor_ref": "primary-1",
+        "worker_ref": "worker-1",
+        "task_ref": "task-1",
+        "role_ref": "reviewer",
+        "role_snapshot_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "agent_configuration_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "accepted_task_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "rounds_used": 1,
+      "result_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "summary": "Primary accepted the complete selected result.",
+      "worker_disposition": "idle",
+      "accepted": true
+    },
+    "podway.delegation-receipt-result/v1": {
+      "schema": "podway.delegation-receipt-result/v1",
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "attempt_id": "00000000-0000-4000-8000-000000000001",
+      "receipt": {
+        "schema": "podway.delegation-receipt/v1",
+        "receipt_id": "00000000-0000-4000-8000-000000000001",
+        "workspace_uuid": "00000000-0000-4000-8000-000000000001",
+        "procedure_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "session_id": "00000000-0000-4000-8000-000000000001",
+        "placement_id": "work",
+        "attempt_id": "00000000-0000-4000-8000-000000000001",
+        "delegation": {
+          "binding_ref": "local-specialist",
+          "role_ref": "reviewer",
+          "role_snapshot_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "max_rounds": 3,
+          "after_accept": "retain"
+        },
+        "package_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "execution": {
+          "binding_ref": "local-specialist",
+          "adapter_id": "fixture-adapter",
+          "adapter_version": "1",
+          "primary_host": "external",
+          "scope_kind": "engagement",
+          "scope_ref": "engagement-1",
+          "supervisor_ref": "primary-1",
+          "worker_ref": "worker-1",
+          "task_ref": "task-1",
+          "role_ref": "reviewer",
+          "role_snapshot_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "agent_configuration_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "accepted_task_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "rounds_used": 1,
+        "result_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "summary": "Primary accepted the complete selected result.",
+        "worker_disposition": "idle",
+        "accepted": true,
+        "accepted_items_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "accepted_at": "2026-09-17T00:00:00.000Z"
+      },
+      "applicability": "accepted",
+      "reason": "current_receipt"
+    },
+    "podway.delegation-projection/v1": {
+      "state": "accepted",
+      "reason": "current_receipt",
+      "safe_next_action": "complete",
+      "receipt": {
+        "receipt_id": "00000000-0000-4000-8000-000000000001",
+        "attempt_id": "00000000-0000-4000-8000-000000000001",
+        "package_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "result_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "accepted_at": "2026-09-17T00:00:00.000Z"
+      }
+    },
+    "podway.evidence-read-result/v1": {
+      "schema": "podway.evidence-read-result/v1",
+      "procedure_schema": "podway.procedure/v2",
+      "consumer": {
+        "graph_node_id": "review",
+        "attempt_id": "00000000-0000-4000-8000-000000000002",
+        "attempt_number": 2
+      },
+      "source": {
+        "graph_node_id": "work",
+        "title": "Work",
+        "attempt_id": "00000000-0000-4000-8000-000000000001",
+        "attempt_number": 1,
+        "items_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "item": {
+        "item_id": "notes",
+        "type": "text",
+        "revision": 1
+      },
+      "value_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "total_size": 12,
+      "size_unit": "scalars",
+      "page": {
+        "offset": 0,
+        "size": 5,
+        "data": "first"
+      },
+      "truncated": true,
+      "next_page_token": "AQIDBAUGBwgJCgsMDQ4PEA",
+      "page_token_version": 1
     }
   },
   "cases": [
@@ -1726,5 +2011,29 @@
         }
       }
     }
-  ]
+  ],
+  "mapping_known_answers": {
+    "synthetic_domain": "podway.test-only.mapping-known-answer/v1; sorted compact UTF-8 JSON, no executor identity claim",
+    "role_same_label_changed_content": [
+      "sha256:095681544338f90d6d95710058b76c963e07a5fb6de41a9f533e94216fc525c3",
+      "sha256:85cd1325f883b9a251c6406007e0c7ce0e7793f23ac387e3b80fb35460b40cdd"
+    ],
+    "configuration_changed": [
+      "sha256:aaf146317a536301086ce1ea7f3711cfd09cf3b1edf375f7bda4f15fe182f289",
+      "sha256:3da2116844f305b83f9ebe14d21b44a6b62f444ac1248f64a01da669998a018f"
+    ],
+    "task_versus_envelope": [
+      "sha256:376f48ddd519f6afc2566dd4c2ae0bb97770c2fbaf4e5ed7ddd71ccd6bddf358",
+      "sha256:844e6a3766f5ff649ea419676fe3ef4c7800f9aeae4a318a7b41595752054432"
+    ],
+    "complete_result_versus_summary": [
+      "sha256:700233879f522329325d92928cf3efe51aa08cfcf81f8864127538fcccdd0830",
+      "sha256:573c59d76dfefc8f518a54d39071359d5dd4b94c9cc584558b65b70132ea9422"
+    ],
+    "lost_acknowledgement": {
+      "prepared_task_digest": "sha256:d154c1800e716b64540199f5a22586f862dd23eb97987594ad9f50e24be39737",
+      "task_ref": null,
+      "disposition": "unavailable_until_acknowledged_task_identity_is_recovered"
+    }
+  }
 }

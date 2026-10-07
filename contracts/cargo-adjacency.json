@@ -11,7 +11,6 @@
         "podway-config",
         "podway-store",
         "podway-git",
-        "podway-service",
         "podway-presets",
         "podway-cli",
         "podway-engine"
@@ -27,7 +26,6 @@
         "podway-config",
         "podway-store",
         "podway-git",
-        "podway-service",
         "podway-presets",
         "podway-cli",
         "podway-engine"
@@ -43,7 +41,6 @@
         "podway-protocol",
         "podway-store",
         "podway-git",
-        "podway-service",
         "podway-presets",
         "podway-cli",
         "podway-engine"
@@ -59,7 +56,6 @@
         "podway-protocol",
         "podway-config",
         "podway-git",
-        "podway-service",
         "podway-presets",
         "podway-cli",
         "podway-engine"
@@ -75,23 +71,6 @@
         "podway-protocol",
         "podway-config",
         "podway-store",
-        "podway-service",
-        "podway-presets",
-        "podway-cli",
-        "podway-engine"
-      ]
-    },
-    {
-      "name": "podway-service",
-      "path": "crates/podway-service",
-      "approved_dependencies": [
-        "podway-core"
-      ],
-      "forbidden_dependencies": [
-        "podway-protocol",
-        "podway-config",
-        "podway-store",
-        "podway-git",
         "podway-presets",
         "podway-cli",
         "podway-engine"
@@ -108,7 +87,6 @@
         "podway-protocol",
         "podway-store",
         "podway-git",
-        "podway-service",
         "podway-cli",
         "podway-engine"
       ]
@@ -125,7 +103,6 @@
         "podway-presets"
       ],
       "forbidden_dependencies": [
-        "podway-service",
         "podway-cli"
       ]
     },
@@ -141,8 +118,7 @@
       ],
       "forbidden_dependencies": [
         "podway-store",
-        "podway-git",
-        "podway-service"
+        "podway-git"
       ]
     }
   ]

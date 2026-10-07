@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::ResponseEnvelopeV2;
+use crate::OutputEnvelopeV3;
 
 const MANIFEST_SCHEMA_V1: &str = "podway.contract-manifest/v1";
 const VERSION_RESULT_SCHEMA_V1: &str = "podway.version-result/v1";
@@ -451,17 +451,12 @@ impl ContractSetV1 {
             &document,
             &format!("{role} identity envelope"),
         )?;
-        let response: ResponseEnvelopeV2 =
+        let output: OutputEnvelopeV3 =
             serde_json::from_value(document.clone()).map_err(|error| {
                 ReleaseContractErrorV1::new(format!(
-                    "{role} identity envelope fails the runtime protocol: {error}"
+                    "{role} identity envelope fails the version contract: {error}"
                 ))
             })?;
-        let ResponseEnvelopeV2::OutputV2(output) = response else {
-            return Err(ReleaseContractErrorV1::new(format!(
-                "{role} identity probe returned an error envelope"
-            )));
-        };
         if output.command().as_str() != "version" {
             return Err(ReleaseContractErrorV1::new(format!(
                 "{role} identity envelope has the wrong command"

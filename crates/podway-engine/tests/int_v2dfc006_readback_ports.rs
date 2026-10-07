@@ -344,27 +344,7 @@ fn complete(engine: &Engine, session: &str, number: &mut u64) -> Map<String, Val
 }
 
 fn assert_malformed_token_rejected_at_protocol_boundary() {
-    use podway_protocol::{
-        ClientInfoV1, CommandNameV1, OperationV1, PreconditionsV1, RequestEnvelopeInputV1,
-        RequestEnvelopeV1, RequestIdV1, RequestOptionsV1, WorkspaceContextV1,
-        WorktreeSelectorWireV1,
-    };
-    let selector =
-        WorktreeSelectorWireV1::new(b"/pure-token-fixture", "/pure-token-fixture", None).unwrap();
-    let envelope = RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
-        request_id: RequestIdV1::new("00000000-0000-4000-8000-000000000091").unwrap(),
-        client: ClientInfoV1::new("v2scl004-test", "1", 1).unwrap(),
-        operation: OperationV1::Query,
-        command: CommandNameV1::new("evidence.read").unwrap(),
-        workspace: Some(WorkspaceContextV1::new(selector.display(), None).unwrap()),
-        idempotency_key: None,
-        preconditions: PreconditionsV1::new(Some(SessionId::new("00000000-0000-4000-8000-000000000092").unwrap()),
-            None, None, None, None, None).unwrap(),
-        options: RequestOptionsV1::new(false, 5000).unwrap(),
-        payload: json!({"selector":selector,"source":"work","item_id":"result","page_token":"not-a-token"})
-            .as_object().unwrap().clone(),
-    }).unwrap();
-    assert!(podway_protocol::SliceRequestV1::from_envelope(&envelope).is_err());
+    assert!(EvidencePageTokenV1::decode("not-a-token").is_err());
 }
 
 mod decisions {

@@ -20,10 +20,8 @@ use podway_engine::{
     v2_read_service::{project_graph_next_v2, project_graph_observation_v1},
 };
 use podway_protocol::{
-    CommandNameV1, OutputEnvelopeInputV3, OutputEnvelopeV3, RequestIdV1, ResponseEnvelopeV2,
-    Rfc3339MillisV1, SessionLifecycleV1, SessionOutputV1, WorkspaceOutputV1,
-    decode_response_payload_v2, decode_single_frame_v1, encode_frame_v1,
-    encode_response_payload_v2, validate_frame_payload_length,
+    CommandNameV1, DirectSessionOutputV1, OutputEnvelopeInputV4, OutputEnvelopeV4, RequestIdV1,
+    Rfc3339MillisV1, WorkspaceOutputV1,
 };
 use podway_store::{
     AttemptMetadataV2, AttemptWorkflowMemoryV2, BlockerStateV2, DurableWorktreeIdentityV1,
@@ -511,7 +509,6 @@ const ENVELOPE_SELECTORS: &[&str] = &[
     "procedure_digest",
     "node",
     "attempt",
-    "queue",
     "revision",
     "missing_required_item_count",
     "readiness",
@@ -540,6 +537,22 @@ const STATIC_SELECTORS: &[&str] = &[
     "terminal",
     "title",
 ];
+
+fn session_output(
+    id: SessionId,
+    title: impl Into<String>,
+    lifecycle: SessionLifecycle,
+    revision_before: Revision,
+    revision_after: Revision,
+) -> DirectSessionOutputV1 {
+    DirectSessionOutputV1 {
+        id,
+        title: title.into(),
+        lifecycle,
+        revision_before,
+        revision_after,
+    }
+}
 
 #[test]
 fn v2grd_review_guarded_maximum_is_charged_before_runtime_projection() {
@@ -572,8 +585,6 @@ fn v2grd_review_guarded_maximum_is_charged_before_runtime_projection() {
     let view = GraphWorkspaceViewV2::new(
         identity(),
         Some(maximum_state_with_controller(&source, true)),
-        0,
-        None,
         u64::MAX,
         UnixMillis::new(1_700_000_030_000),
     );
@@ -635,7 +646,7 @@ const BLOCKER_SELECTORS: &[&str] = &["blockers", "blockers_total", "blockers_tru
 const COUNTER_SELECTORS: &[&str] = &["counters", "trace_length"];
 
 #[test]
-fn v2rel002_admitted_boundary_rich_next_uses_the_production_projector_and_frame() {
+fn v2rel002_admitted_boundary_rich_next_uses_the_production_projector_and_direct_envelope() {
     let source = maximum_source();
     let ParsedProcedure::V2(parsed) =
         parse_procedure_document(&source, ProcedureDocumentFormat::Json).unwrap()
@@ -703,8 +714,6 @@ fn v2rel002_admitted_boundary_rich_next_uses_the_production_projector_and_frame(
     let view = GraphWorkspaceViewV2::new(
         identity(),
         Some(maximum_state(&source)),
-        0,
-        None,
         u64::MAX,
         UnixMillis::new(1_700_000_030_000),
     );
@@ -855,29 +864,25 @@ fn v2rel002_admitted_boundary_rich_next_uses_the_production_projector_and_frame(
                 .clone()
         })
         .collect();
-    let output = OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
+    let output = OutputEnvelopeV4::new(OutputEnvelopeInputV4 {
         request_id: RequestIdV1::new(REQUEST_ID).unwrap(),
         command: CommandNameV1::new("session.next").unwrap(),
         generated_at: Rfc3339MillisV1::new("2026-08-12T00:00:00.000Z").unwrap(),
         workspace: Some(
             WorkspaceOutputV1::new(
                 WorkspaceId::new(WORKSPACE_ID).unwrap(),
-                "\0".repeat(4_096),
+                format!("/{}", "\0".repeat(4_095)),
                 u64::MAX,
             )
             .unwrap(),
         ),
-        job: None,
-        session: Some(
-            SessionOutputV1::new(
-                SessionId::new(SESSION_ID).unwrap(),
-                "\0".repeat(500),
-                SessionLifecycleV1::Running,
-                Revision::new(63),
-                Revision::new(63),
-            )
-            .unwrap(),
-        ),
+        session: Some(session_output(
+            SessionId::new(SESSION_ID).unwrap(),
+            "\0".repeat(256),
+            SessionLifecycle::Running,
+            Revision::new(63),
+            Revision::new(63),
+        )),
         result: next.clone(),
         warnings,
     })
@@ -892,7 +897,6 @@ fn v2rel002_admitted_boundary_rich_next_uses_the_production_projector_and_frame(
             "command",
             "generated_at",
             "workspace",
-            "job",
             "session",
             "warnings",
         ]
@@ -906,7 +910,7 @@ fn v2rel002_admitted_boundary_rich_next_uses_the_production_projector_and_frame(
     envelope_component
         .as_object_mut()
         .unwrap()
-        .insert("frame_length_prefix_bytes".into(), json!(4));
+        .insert("json_line_terminator_bytes".into(), json!(1));
     let envelope_encoded = serde_json::to_vec(&envelope_component).unwrap().len();
     let envelope_charged = charge(&envelope_component);
     assert!(envelope_encoded <= envelope_charged);
@@ -914,10 +918,10 @@ fn v2rel002_admitted_boundary_rich_next_uses_the_production_projector_and_frame(
         envelope_charged <= 65_536,
         "ENVELOPE_RESERVE charged {envelope_charged} bytes"
     );
-    let response = ResponseEnvelopeV2::OutputV2(output);
-    let encoded = encode_response_payload_v2(&response).unwrap();
-    validate_frame_payload_length(encoded.len()).unwrap();
-    assert_eq!(decode_response_payload_v2(&encoded).unwrap(), response);
-    let frame = encode_frame_v1(&encoded).unwrap();
-    assert_eq!(decode_single_frame_v1(&frame).unwrap(), encoded);
+    let response = output;
+    let encoded = serde_json::to_vec(&response).unwrap();
+    assert_eq!(
+        serde_json::from_slice::<OutputEnvelopeV4>(&encoded).unwrap(),
+        response
+    );
 }

@@ -941,18 +941,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "podway-service"
-version = "0.2.12"
-dependencies = [
- "nix",
- "podway-core",
- "serde",
- "serde_json",
- "sha2",
- "uuid",
-]
-
-[[package]]
 name = "podway-store"
 version = "0.2.12"
 dependencies = [

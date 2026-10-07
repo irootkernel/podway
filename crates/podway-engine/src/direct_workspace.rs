@@ -31,8 +31,6 @@ use podway_store::{
 use sha2::{Digest as _, Sha256};
 use std::{cell::Cell, fmt, sync::Arc, time::Instant};
 
-pub(crate) const DEFAULT_DIRECT_CONFIG: &[u8] = b"schema: podway.workspace/v1\nprocedure_paths:\n  - .podway/procedures\ndefault_preset: sw-dev-v2\nui:\n  show_stage_in_prompt: false\n";
-
 #[derive(Debug)]
 pub enum DirectWorkspaceErrorV1 {
     Resolution(DirectWorkspaceResolutionErrorV1),
@@ -302,7 +300,8 @@ fn initialize_workspace_inner_v1<R: GitResolverContractV1>(
     observer: Option<Arc<dyn Fn(DirectTransactionBoundaryV1) + Send + Sync>>,
 ) -> Result<OutputEnvelopeV4, DirectWorkspaceErrorV1> {
     let command = SliceCommandV1::WorkspaceInit(WorkspaceInitV1 { repair });
-    let (_, store) = resolver.resolve_candidate(request.selector.clone())?;
+    let (candidate, store) = resolver.resolve_candidate(request.selector.clone())?;
+    resolver.validate_workspace_config(&candidate)?;
     let store = match observer {
         Some(observer) => store.with_boundary_observer(move |boundary| observer(boundary)),
         None => store,
@@ -463,7 +462,7 @@ fn initialize_workspace_inner_v1<R: GitResolverContractV1>(
         return Ok(output);
     }
     WorkspaceLayoutInitializerV1::new()
-        .initialize_with_config(&candidate, DEFAULT_DIRECT_CONFIG)
+        .initialize_with_config(&candidate, podway_config::DEFAULT_WORKSPACE_CONFIG_YAML_V1)
         .map_err(DirectWorkspaceErrorV1::Layout)?;
     let (candidate, _) = resolver.resolve_candidate(request.selector.clone())?;
     resolver.revalidate_candidate(&candidate)?;

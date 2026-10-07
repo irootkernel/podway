@@ -267,7 +267,9 @@ fn v2scl003_record_many_answers_every_operation_the_input_admits() {
         })
         .collect();
     let output = engine.success(batch(&engine, operations), "wide");
-    assert!(serde_json::to_vec(&output).unwrap().len() <= MAX_FRAME_PAYLOAD_BYTES_V1);
+    assert!(
+        serde_json::to_vec(&output).unwrap().len() <= podway_protocol::MAX_DIRECT_OUTPUT_BYTES_V1
+    );
     assert_eq!(output["result"]["changed"], true);
     assert_eq!(
         output["result"]["items"].as_array().unwrap().len(),

@@ -4,11 +4,7 @@ use podway_core::{AttemptId, ProcedureSnapshotId, SessionId, UnixMillis};
 use podway_engine::execution::{
     EmbeddedPresetProcedureProviderV1, ProcedureProviderV1, prepare_preset_procedure_v2_start,
 };
-use podway_engine::{
-    native_execution::NativeProcedureProviderV1, workspace::SqliteWorkspaceBindingInspectorV1,
-};
 use podway_presets::catalog_v2;
-use podway_store::SqliteStoreOptionsV1;
 
 #[test]
 fn embedded_provider_prepares_all_v2_presets_from_their_shipped_digest() {
@@ -78,9 +74,18 @@ fn unknown_v2_preset_preparation_has_a_distinct_error() {
 
 #[test]
 fn native_production_provider_delegates_v2_presets_to_the_embedded_catalog() {
-    let provider = NativeProcedureProviderV1::new(SqliteWorkspaceBindingInspectorV1::new(
-        SqliteStoreOptionsV1::new(8).unwrap(),
-    ));
+    use super::int_v2dfc006_runtime_ports::Engine;
+    use podway_engine::native_execution::NativeDirectWorkspaceV1;
+    let engine = Engine::new(super::int_v2dfc006_fixture_ports::STATE_PROCEDURE);
+    let (resolved, _) = engine
+        .resolver
+        .resolve_existing(
+            engine.selector.clone(),
+            None,
+            super::int_v2dfc006_direct_execution::deadline(),
+        )
+        .unwrap();
+    let provider = NativeDirectWorkspaceV1::new(resolved);
     for preset in catalog_v2().list() {
         let (snapshot, pinned) = provider
             .load_preset_snapshot_v2(

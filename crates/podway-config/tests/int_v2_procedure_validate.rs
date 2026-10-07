@@ -2167,35 +2167,19 @@ fn v2scl003_procedure_schema_bounds_equal_the_domain_scale_envelope() {
 
     for (result_schema, counter_pointer) in [
         (
-            include_str!("../../../assets/schemas/next-result-v3.schema.json"),
+            include_str!("../../../assets/schemas/next-result-v5.schema.json"),
             "/properties/counters/maxItems",
         ),
         (
-            include_str!("../../../assets/schemas/next-result-v4.schema.json"),
+            include_str!("../../../assets/schemas/status-result-v5.schema.json"),
             "/properties/counters/maxItems",
         ),
         (
-            include_str!("../../../assets/schemas/status-result-v3.schema.json"),
+            include_str!("../../../assets/schemas/compact-status-result-v5.schema.json"),
             "/properties/counters/maxItems",
         ),
         (
-            include_str!("../../../assets/schemas/status-result-v4.schema.json"),
-            "/properties/counters/maxItems",
-        ),
-        (
-            include_str!("../../../assets/schemas/compact-status-result-v3.schema.json"),
-            "/properties/counters/maxItems",
-        ),
-        (
-            include_str!("../../../assets/schemas/compact-status-result-v4.schema.json"),
-            "/properties/counters/maxItems",
-        ),
-        (
-            include_str!("../../../assets/schemas/v2-result-components-v3.schema.json"),
-            "/$defs/observationStatus/properties/counters/maxItems",
-        ),
-        (
-            include_str!("../../../assets/schemas/observation-result-v4.schema.json"),
+            include_str!("../../../assets/schemas/observation-result-v5.schema.json"),
             "/$defs/delegationObservationStatus/properties/counters/maxItems",
         ),
     ] {
@@ -2203,18 +2187,6 @@ fn v2scl003_procedure_schema_bounds_equal_the_domain_scale_envelope() {
         assert_eq!(
             result.pointer(counter_pointer),
             Some(&json!(podway_core::MAX_GRAPH_NODES_PER_PROCEDURE_V2))
-        );
-    }
-
-    for frozen_schema in [
-        include_str!("../../../assets/schemas/next-result-v2.schema.json"),
-        include_str!("../../../assets/schemas/status-result-v2.schema.json"),
-        include_str!("../../../assets/schemas/compact-status-result-v2.schema.json"),
-    ] {
-        let frozen: Value = serde_json::from_str(frozen_schema).expect("frozen schema parses");
-        assert_eq!(
-            frozen["properties"]["counters"]["maxItems"], 64,
-            "released v2 result families retain their frozen counter bound"
         );
     }
 }

@@ -14,9 +14,8 @@ use podway_git::{
     ContainmentMetadataV1, DiagnosticPathDisplayV1, DurableWorktreeIdentityV1,
     GitInvariantViolationV1, GitReadOperationV1, GitRepresentationProblemV1, GitResolverContractV1,
     GitResolverErrorV1, LocalPathPresenceV1, LosslessPathV1, NativeGitResolverV1,
-    RegistryRepairActionV1, ValidatedWorktreeV1, ValidatedWorktreeValidationErrorV1,
-    WORKTREE_SELECTOR_VERSION_V1, WorkspaceIdentityStateV1, WorkspaceUuidVerificationV1,
-    WorktreeKindV1, WorktreeMoveMetadataV1, WorktreeRepairMetadataV1, WorktreeRootsV1,
+    ValidatedWorktreeV1, ValidatedWorktreeValidationErrorV1, WORKTREE_SELECTOR_VERSION_V1,
+    WorkspaceIdentityStateV1, WorktreeKindV1, WorktreeMoveMetadataV1, WorktreeRootsV1,
     WorktreeSelectorV1,
 };
 use tempfile::TempDir;
@@ -61,7 +60,6 @@ fn store_bound(identity: &DurableWorktreeIdentityV1) -> DurableWorktreeIdentityV
 fn manually_validated(
     identity: DurableWorktreeIdentityV1,
     root: LosslessPathV1,
-    repair_metadata: WorktreeRepairMetadataV1,
 ) -> Result<ValidatedWorktreeV1, ValidatedWorktreeValidationErrorV1> {
     let root_path = PathBuf::from(OsString::from_vec(
         root.decode_path_bytes().expect("root bytes"),
@@ -74,7 +72,6 @@ fn manually_validated(
         WorktreeKindV1::Main,
         ContainmentMetadataV1::new(root.clone(), podway, runtime),
         WorktreeMoveMetadataV1::stationary(root),
-        repair_metadata,
     )
 }
 
@@ -174,8 +171,8 @@ fn realistic_main_linked_nested_and_nearest_layouts_are_discovered() {
         inner.as_os_str().as_bytes()
     );
     assert_eq!(
-        resolved.repair_metadata().workspace_uuid_verification(),
-        &WorkspaceUuidVerificationV1::PendingStoreInitialization
+        resolved.identity().state(),
+        &WorkspaceIdentityStateV1::Candidate
     );
 
     let common = temporary.path().join("common.git");
@@ -377,8 +374,8 @@ fn durable_identity_uses_canonical_git_paths_and_supports_linked_root_moves() {
         .expect("matching durable identity");
     assert!(!stationary.move_metadata().relocated_from_prior_root());
     assert_eq!(
-        stationary.repair_metadata().workspace_uuid_verification(),
-        &WorkspaceUuidVerificationV1::RegistryCheckRequired
+        stationary.identity().state(),
+        &WorkspaceIdentityStateV1::Bound
     );
     let deleted_descendant = original.join("deleted-descendant");
     fs::create_dir_all(&deleted_descendant).expect("durable selector descendant");
@@ -457,10 +454,10 @@ fn durable_identity_uses_canonical_git_paths_and_supports_linked_root_moves() {
         .resolve(selector(&linked_moved, Some(linked_move_durable)))
         .expect("linked move with updated reciprocal backlink");
     assert!(linked_repaired.move_metadata().relocated_from_prior_root());
-    assert!(matches!(
-        linked_repaired.repair_metadata().registry_action(),
-        RegistryRepairActionV1::UpdateValidatedRoot { .. }
-    ));
+    assert_eq!(
+        linked_repaired.move_metadata().previous_root(),
+        Some(&lossless(&linked_move))
+    );
 
     fs::remove_dir_all(&moved).expect("remove worktree");
     assert!(matches!(
@@ -481,7 +478,6 @@ fn manual_and_long_lived_values_never_claim_native_object_evidence() {
     let manual = manually_validated(
         native.identity().clone(),
         native.roots().worktree_root().clone(),
-        native.repair_metadata().clone(),
     )
     .expect("structurally valid manual worktree");
 
@@ -519,7 +515,7 @@ fn local_path_observation_distinguishes_absence_without_following_symlinks() {
 }
 
 #[test]
-fn bound_live_workspace_uuid_requires_registry_conflict_verification_on_every_resolution() {
+fn bound_live_workspace_identity_is_revalidated_on_every_resolution() {
     let temporary = temp();
     let worktree = temporary.path().join("live-worktree");
     create_main(&worktree);
@@ -544,15 +540,8 @@ fn bound_live_workspace_uuid_requires_registry_conflict_verification_on_every_re
         second.identity().workspace_id(),
         "the resolver preserves the durable workspace UUID across live resolutions"
     );
-    assert_eq!(
-        first.repair_metadata().workspace_uuid_verification(),
-        &WorkspaceUuidVerificationV1::RegistryCheckRequired
-    );
-    assert_eq!(
-        second.repair_metadata().workspace_uuid_verification(),
-        &WorkspaceUuidVerificationV1::RegistryCheckRequired,
-        "Git identity validation must delegate duplicate-UUID rejection to the registry boundary"
-    );
+    assert_eq!(first.identity().state(), &WorkspaceIdentityStateV1::Bound);
+    assert_eq!(second.identity().state(), &WorkspaceIdentityStateV1::Bound);
 }
 #[test]
 fn durable_directory_fingerprints_ignore_permission_bit_changes() {
@@ -802,7 +791,7 @@ fn non_utf8_selectors_round_trip_when_the_platform_accepts_native_names() {
     );
 }
 #[test]
-fn validated_worktree_rejects_legacy_rootless_identity_and_quarantines_unique_metadata() {
+fn validated_worktree_rejects_rootless_identity_and_accepts_root_evidenced_binding() {
     let temporary = temp();
     let root_path = temporary.path().join("root");
     fs::create_dir(&root_path).expect("fixture root");
@@ -817,11 +806,7 @@ fn validated_worktree_rejects_legacy_rootless_identity_and_quarantines_unique_me
         root.clone(),
     );
     assert!(matches!(
-        manually_validated(
-            legacy,
-            root.clone(),
-            WorktreeRepairMetadataV1::not_required()
-        ),
+        manually_validated(legacy, root.clone(),),
         Err(ValidatedWorktreeValidationErrorV1::MissingRootDirectoryFingerprint)
     ));
 
@@ -832,21 +817,10 @@ fn validated_worktree_rejects_legacy_rootless_identity_and_quarantines_unique_me
         digest('c'),
         root.clone(),
     );
-    let validated = manually_validated(
-        bound,
-        root,
-        WorktreeRepairMetadataV1::not_required_with_uuid_verification(
-            WorkspaceUuidVerificationV1::Unique,
-        ),
-    )
-    .expect("legacy unique verification is quarantined");
+    let validated = manually_validated(bound, root).expect("root-evidenced binding");
     assert_eq!(
         validated.identity().state(),
         &WorkspaceIdentityStateV1::Bound
-    );
-    assert_eq!(
-        validated.repair_metadata().workspace_uuid_verification(),
-        &WorkspaceUuidVerificationV1::RegistryCheckRequired
     );
 }
 
@@ -864,9 +838,6 @@ fn validated_worktree_requires_exact_podway_and_runtime_roots() {
         root.clone(),
     );
     let roots = WorktreeRootsV1::new(root.clone(), root.clone(), root.clone());
-    let repair_metadata = WorktreeRepairMetadataV1::not_required_with_uuid_verification(
-        WorkspaceUuidVerificationV1::RegistryCheckRequired,
-    );
     let validate = |podway_directory: LosslessPathV1, runtime_directory: LosslessPathV1| {
         ValidatedWorktreeV1::new(
             identity.clone(),
@@ -874,7 +845,6 @@ fn validated_worktree_requires_exact_podway_and_runtime_roots() {
             WorktreeKindV1::Main,
             ContainmentMetadataV1::new(root.clone(), podway_directory, runtime_directory),
             WorktreeMoveMetadataV1::stationary(root.clone()),
-            repair_metadata.clone(),
         )
     };
 
@@ -936,11 +906,11 @@ fn competing_fresh_resolutions_expose_distinct_unbound_candidates() {
         second.identity().workspace_id()
     );
     assert_eq!(
-        first.repair_metadata().workspace_uuid_verification(),
-        &WorkspaceUuidVerificationV1::PendingStoreInitialization
+        first.identity().state(),
+        &WorkspaceIdentityStateV1::Candidate
     );
     assert_eq!(
-        second.repair_metadata().workspace_uuid_verification(),
-        &WorkspaceUuidVerificationV1::PendingStoreInitialization
+        second.identity().state(),
+        &WorkspaceIdentityStateV1::Candidate
     );
 }

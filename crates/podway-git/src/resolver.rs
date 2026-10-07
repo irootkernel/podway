@@ -14,8 +14,7 @@ use crate::{
     ContainmentMetadataV1, DurableWorktreeIdentityV1, GitInvariantViolationV1, GitReadOperationV1,
     GitResolverContractV1, GitResolverErrorV1, HashedLocalArtifactV1, LocalPathPresenceV1,
     LosslessPathV1, ReadLocalFileV1, TransientWorktreeEvidenceV1, ValidatedWorktreeV1,
-    WorkspaceIdentityStateV1, WorkspaceUuidVerificationV1, WorktreeMoveMetadataV1,
-    WorktreeRepairMetadataV1, WorktreeRootsV1, WorktreeSelectorV1,
+    WorkspaceIdentityStateV1, WorktreeMoveMetadataV1, WorktreeRootsV1, WorktreeSelectorV1,
 };
 
 /// A zero-configuration, read-only resolver for supported native Unix Git worktrees.
@@ -256,7 +255,7 @@ impl NativeGitResolverV1 {
         );
         let roots = WorktreeRootsV1::new(worktree_root.clone(), common_root, administration_root);
 
-        let (identity, move_metadata, repair_metadata) = match selector.durable_identity() {
+        let (identity, move_metadata) = match selector.durable_identity() {
             Some(expected) => {
                 let actual = identity_with_state(
                     expected.state(),
@@ -289,29 +288,13 @@ impl NativeGitResolverV1 {
                 } else {
                     WorktreeMoveMetadataV1::stationary(worktree_root.clone())
                 };
-                let verification = match expected.state() {
-                    WorkspaceIdentityStateV1::Candidate => {
-                        WorkspaceUuidVerificationV1::PendingStoreInitialization
-                    }
-                    WorkspaceIdentityStateV1::Bound => {
-                        WorkspaceUuidVerificationV1::RegistryCheckRequired
-                    }
-                    WorkspaceIdentityStateV1::UnvalidatedLegacy => {
-                        return Err(GitResolverErrorV1::IdentityMismatch {
-                            expected: Box::new(expected.clone()),
-                            actual: Box::new(actual),
-                        });
-                    }
-                };
-                let repair_metadata = if moved {
-                    WorktreeRepairMetadataV1::update_validated_root_with_uuid_verification(
-                        expected.last_validated_root().clone(),
-                        verification,
-                    )
-                } else {
-                    WorktreeRepairMetadataV1::not_required_with_uuid_verification(verification)
-                };
-                (actual, move_metadata, repair_metadata)
+                if expected.state() == &WorkspaceIdentityStateV1::UnvalidatedLegacy {
+                    return Err(GitResolverErrorV1::IdentityMismatch {
+                        expected: Box::new(expected.clone()),
+                        actual: Box::new(actual),
+                    });
+                }
+                (actual, move_metadata)
             }
             None => {
                 let identity = candidate_identity(
@@ -324,9 +307,6 @@ impl NativeGitResolverV1 {
                 (
                     identity,
                     WorktreeMoveMetadataV1::stationary(worktree_root.clone()),
-                    WorktreeRepairMetadataV1::not_required_with_uuid_verification(
-                        WorkspaceUuidVerificationV1::PendingStoreInitialization,
-                    ),
                 )
             }
         };
@@ -349,7 +329,6 @@ impl NativeGitResolverV1 {
             layout.kind,
             containment,
             move_metadata,
-            repair_metadata,
         )
         .map_err(|_| GitResolverErrorV1::Invariant {
             problem: GitInvariantViolationV1::MetadataChangedDuringResolution,

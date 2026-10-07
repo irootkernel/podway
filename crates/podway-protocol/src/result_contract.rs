@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::{
     collections::HashMap,
     error::Error,
@@ -8,14 +6,12 @@ use std::{
 };
 
 use jsonschema::{Retrieve, Uri, Validator};
-use podway_core::{JobId, Revision, Sha256Digest};
-use serde::{Deserialize, Deserializer, Serialize, de, de::Error as _};
+use serde::{Deserialize, Deserializer, Serialize, de};
 use serde_json::{Map, Value};
 
 use crate::{
-    CommandNameV1, ErrorEnvelopeV1, JobOutputV1, JobStateV1, OptionalField, ProtocolError,
-    RequestIdV1, Rfc3339MillisV1, SessionOutputV1, WorkspaceOutputV1,
-    validate_admission_metadata_v1, validate_json_document_depth, validate_json_map_depth,
+    CommandNameV1, ProtocolError, RequestIdV1, Rfc3339MillisV1, validate_json_document_depth,
+    validate_json_map_depth,
 };
 
 mod embedded_schemas {
@@ -30,7 +26,6 @@ const MAX_DELEGATION_RECEIPT_BYTES_V1: usize = 45_000;
 const MAX_DELEGATION_PROJECTION_BYTES_V1: usize = 16_384;
 const MAX_DELEGATION_PACKAGE_RESULT_BYTES_V1: usize = 1_000_000;
 const MAX_DELEGATION_ACCEPT_RESULT_BYTES_V1: usize = 8192;
-pub(crate) const MAX_DELEGATION_ERROR_DETAILS_BYTES_V1: usize = 8192;
 
 #[derive(Clone)]
 struct EmbeddedSchemaRetrieverV2(Arc<HashMap<String, Value>>);
@@ -46,9 +41,6 @@ impl Retrieve for EmbeddedSchemaRetrieverV2 {
         })
     }
 }
-
-static RESULT_VALIDATORS_V2: OnceLock<Result<HashMap<&'static str, Validator>, String>> =
-    OnceLock::new();
 
 fn embedded_schema_resources_v2() -> Result<EmbeddedSchemaRetrieverV2, String> {
     let mut resources = HashMap::new();
@@ -66,76 +58,6 @@ fn embedded_schema_resources_v2() -> Result<EmbeddedSchemaRetrieverV2, String> {
     Ok(EmbeddedSchemaRetrieverV2(Arc::new(resources)))
 }
 
-fn build_result_validators_v2() -> Result<HashMap<&'static str, Validator>, String> {
-    let retriever = embedded_schema_resources_v2()?;
-    let sources = embedded_schemas::EMBEDDED_JSON_SCHEMAS_V1
-        .iter()
-        .map(|(_, filename, source)| (*filename, *source))
-        .collect::<HashMap<_, _>>();
-    let mut validators = HashMap::new();
-    for contract in EXISTING_ROUTE_RESULT_SCHEMAS_V2
-        .iter()
-        .chain(NEW_ROUTE_RESULT_SCHEMAS_V1)
-        .chain(RESET_DOCUMENT_SCHEMAS_V1)
-        .chain(DELEGATION_DOCUMENT_SCHEMAS_V1)
-    {
-        let filename = contract
-            .schema_path
-            .strip_prefix("schemas/")
-            .ok_or_else(|| format!("invalid result schema path {}", contract.schema_path))?;
-        let source = sources
-            .get(filename)
-            .ok_or_else(|| format!("embedded result schema {filename} is missing"))?;
-        let mut schema: Value = serde_json::from_str(source)
-            .map_err(|error| format!("embedded result schema {filename} is invalid: {error}"))?;
-        schema
-            .as_object_mut()
-            .ok_or_else(|| format!("embedded result schema {filename} is not an object"))?
-            .remove("$id");
-        let validator = jsonschema::draft202012::options()
-            .with_base_uri(format!("{EMBEDDED_SCHEMA_BASE_V2}{filename}"))
-            .with_retriever(retriever.clone())
-            .should_validate_formats(true)
-            .build(&schema)
-            .map_err(|error| {
-                format!("embedded result schema {filename} does not compile: {error}")
-            })?;
-        validators.insert(contract.schema, validator);
-    }
-    let filename = "output-v3.schema.json";
-    let source = sources
-        .get(filename)
-        .ok_or_else(|| format!("embedded output schema {filename} is missing"))?;
-    let mut schema: Value = serde_json::from_str(source)
-        .map_err(|error| format!("embedded output schema {filename} is invalid: {error}"))?;
-    schema
-        .as_object_mut()
-        .ok_or_else(|| format!("embedded output schema {filename} is not an object"))?
-        .remove("$id");
-    let validator = jsonschema::draft202012::options()
-        .with_base_uri(format!("{EMBEDDED_SCHEMA_BASE_V2}{filename}"))
-        .with_retriever(retriever)
-        .should_validate_formats(true)
-        .build(&schema)
-        .map_err(|error| format!("embedded output schema {filename} does not compile: {error}"))?;
-    validators.insert(OUTPUT_SCHEMA_V3, validator);
-    Ok(validators)
-}
-
-fn validate_embedded_result_schema_v2(schema: &str, result: &Map<String, Value>) -> bool {
-    validate_embedded_schema_v2(schema, &Value::Object(result.clone()))
-}
-
-pub(crate) fn validate_embedded_schema_v2(schema: &str, value: &Value) -> bool {
-    RESULT_VALIDATORS_V2
-        .get_or_init(build_result_validators_v2)
-        .as_ref()
-        .ok()
-        .and_then(|validators| validators.get(schema))
-        .is_some_and(|validator| validator.is_valid(value))
-}
-
-/// Validates a reserved delegation document without enabling its runtime route.
 pub fn validate_delegation_document_v1(schema: &str, value: &Value) -> bool {
     let max_bytes = match schema {
         "podway.delegation-work-package/v1" => MAX_DELEGATION_WORK_PACKAGE_BYTES_V1,
@@ -244,7 +166,7 @@ pub fn validate_delegation_document_v1(schema: &str, value: &Value) -> bool {
     }
 }
 
-/// A closed result family reserved by the Procedure v2 public contract.
+/// A closed result family selected by the public contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ResultSchemaContractV2 {
     pub schema: &'static str,
@@ -252,322 +174,13 @@ pub struct ResultSchemaContractV2 {
     pub commands: &'static [&'static str],
 }
 
-/// Mutation routes whose v2 terminal responses and errors carry admission metadata.
-pub const V2_MUTATION_COMMANDS: &[&str] = &[
-    "session.start",
-    "session.start_replace",
-    "session.begin",
-    "session.terminal_disposition",
-    "session.complete",
-    "session.skip",
-    "session.retry",
-    "session.block",
-    "session.unblock",
-    "session.cancel",
-    "session.reset",
-    "session.archive",
-    "session.decide",
-    "session.rework",
-    "goal.define",
-    "goal.revise",
-    "goal.assess_criterion",
-    "item.check",
-    "item.uncheck",
-    "item.set",
-    "item.add",
-    "item.remove",
-    "item.attach",
-    "item.clear",
-    "item.record_many",
-];
-
-/// Result families for existing routes whose v2-session shape breaks from v1.
-pub const EXISTING_ROUTE_RESULT_SCHEMAS_V2: &[ResultSchemaContractV2] = &[
-    result_schema_v2(
-        "podway.procedure-validation-result/v2",
-        "schemas/procedure-validation-result-v2.schema.json",
-        &["procedure.validate"],
-    ),
-    result_schema_v2(
-        "podway.detached-admission-result/v2",
-        "schemas/detached-admission-result-v2.schema.json",
-        &[
-            "session.start",
-            "session.start_replace",
-            "session.begin",
-            "session.terminal_disposition",
-            "session.complete",
-            "session.skip",
-            "session.retry",
-            "session.block",
-            "session.unblock",
-            "session.cancel",
-            "session.reset",
-            "session.archive",
-            "session.decide",
-            "session.rework",
-            "goal.define",
-            "goal.revise",
-            "goal.assess_criterion",
-            "item.check",
-            "item.uncheck",
-            "item.set",
-            "item.add",
-            "item.remove",
-            "item.attach",
-            "item.clear",
-            "item.record_many",
-            "delegation.accept",
-        ],
-    ),
-    result_schema_v2(
-        "podway.session-start-result/v2",
-        "schemas/session-start-result-v2.schema.json",
-        &["session.start", "session.start_replace"],
-    ),
-    result_schema_v2(
-        "podway.session-start-result/v3",
-        "schemas/session-start-result-v3.schema.json",
-        &["session.start", "session.start_replace"],
-    ),
-    result_schema_v2(
-        "podway.status-result/v2",
-        "schemas/status-result-v2.schema.json",
-        &["session.status"],
-    ),
-    result_schema_v2(
-        "podway.status-result/v3",
-        "schemas/status-result-v3.schema.json",
-        &["session.status"],
-    ),
-    result_schema_v2(
-        "podway.status-result/v4",
-        "schemas/status-result-v4.schema.json",
-        &["session.status"],
-    ),
-    result_schema_v2(
-        "podway.compact-status-result/v2",
-        "schemas/compact-status-result-v2.schema.json",
-        &["session.status"],
-    ),
-    result_schema_v2(
-        "podway.compact-status-result/v3",
-        "schemas/compact-status-result-v3.schema.json",
-        &["session.status"],
-    ),
-    result_schema_v2(
-        "podway.compact-status-result/v4",
-        "schemas/compact-status-result-v4.schema.json",
-        &["session.status"],
-    ),
-    result_schema_v2(
-        "podway.next-result/v2",
-        "schemas/next-result-v2.schema.json",
-        &["session.next"],
-    ),
-    result_schema_v2(
-        "podway.next-result/v3",
-        "schemas/next-result-v3.schema.json",
-        &["session.next"],
-    ),
-    result_schema_v2(
-        "podway.next-result/v4",
-        "schemas/next-result-v4.schema.json",
-        &["session.next"],
-    ),
-    result_schema_v2(
-        "podway.prepared-next-result/v1",
-        "schemas/prepared-next-result-v1.schema.json",
-        &["session.next"],
-    ),
-    result_schema_v2(
-        "podway.prepared-next-result/v2",
-        "schemas/prepared-next-result-v2.schema.json",
-        &["session.next"],
-    ),
-    result_schema_v2(
-        "podway.stage-transition-result/v2",
-        "schemas/stage-transition-result-v2.schema.json",
-        &[
-            "session.complete",
-            "session.skip",
-            "session.retry",
-            "session.block",
-            "session.unblock",
-            "session.cancel",
-            "session.reset",
-        ],
-    ),
-    result_schema_v2(
-        "podway.item-mutation-result/v2",
-        "schemas/item-mutation-result-v2.schema.json",
-        &[
-            "item.check",
-            "item.uncheck",
-            "item.set",
-            "item.add",
-            "item.remove",
-            "item.attach",
-            "item.clear",
-        ],
-    ),
-    result_schema_v2(
-        "podway.job-lookup-result/v3",
-        "schemas/job-lookup-result-v3.schema.json",
-        &["job.lookup"],
-    ),
-    result_schema_v2(
-        "podway.job-result/v3",
-        "schemas/job-result-v3.schema.json",
-        &["job.status", "job.wait"],
-    ),
-    result_schema_v2(
-        "podway.job-lookup-result/v4",
-        "schemas/job-lookup-result-v4.schema.json",
-        &["job.lookup"],
-    ),
-    result_schema_v2(
-        "podway.job-lookup-result/v5",
-        "schemas/job-lookup-result-v5.schema.json",
-        &["job.lookup"],
-    ),
-    result_schema_v2(
-        "podway.job-result/v4",
-        "schemas/job-result-v4.schema.json",
-        &["job.status", "job.wait"],
-    ),
-    result_schema_v2(
-        "podway.job-result/v5",
-        "schemas/job-result-v5.schema.json",
-        &["job.status", "job.wait"],
-    ),
-];
-
-/// The shared Procedure v2 authoring diagnostics family.
+pub const EXISTING_ROUTE_RESULT_SCHEMAS_V2: &[ResultSchemaContractV2] = &[result_schema_v2(
+    "podway.procedure-validation-result/v2",
+    "schemas/procedure-validation-result-v2.schema.json",
+    &["procedure.validate"],
+)];
 pub const PROCEDURE_DIAGNOSTICS_RESULT_SCHEMA_V1: &str = "podway.procedure-diagnostics-result/v1";
-
-/// Result families for v2-only routes. New command surfaces begin at `/v1`.
 pub const NEW_ROUTE_RESULT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
-    result_schema_v2(
-        "podway.delegation-package-result/v1",
-        "schemas/delegation-package-result-v1.schema.json",
-        &["delegation.package"],
-    ),
-    result_schema_v2(
-        "podway.delegation-accept-result/v1",
-        "schemas/delegation-accept-result-v1.schema.json",
-        &["delegation.accept"],
-    ),
-    result_schema_v2(
-        "podway.delegation-receipt-result/v1",
-        "schemas/delegation-receipt-result-v1.schema.json",
-        &["delegation.receipt"],
-    ),
-    result_schema_v2(
-        "podway.observation-result/v4",
-        "schemas/observation-result-v4.schema.json",
-        &["session.observe"],
-    ),
-    result_schema_v2(
-        "podway.procedure-graph-result/v2",
-        "schemas/procedure-graph-result-v2.schema.json",
-        &["procedure.graph"],
-    ),
-    result_schema_v2(
-        "podway.procedure-preview-result/v2",
-        "schemas/procedure-preview-result-v2.schema.json",
-        &["procedure.preview"],
-    ),
-    result_schema_v2(
-        "podway.session-archive-show-result/v2",
-        "schemas/session-archive-show-result-v2.schema.json",
-        &["session.archive_show"],
-    ),
-    result_schema_v2(
-        "podway.runtime-reset-plan-result/v1",
-        "schemas/runtime-reset-plan-result-v1.schema.json",
-        &["runtime.reset.plan"],
-    ),
-    result_schema_v2(
-        "podway.runtime-reset-result/v1",
-        "schemas/runtime-reset-result-v1.schema.json",
-        &["runtime.reset.apply"],
-    ),
-    result_schema_v2(
-        "podway.runtime-reset-control-result/v1",
-        "schemas/runtime-reset-control-result-v1.schema.json",
-        &["daemon.runtime_reset"],
-    ),
-    result_schema_v2(
-        "podway.item-record-many-result/v1",
-        "schemas/item-record-many-result-v1.schema.json",
-        &["item.record_many"],
-    ),
-    result_schema_v2(
-        "podway.observation-result/v1",
-        "schemas/observation-result-v1.schema.json",
-        &["session.observe"],
-    ),
-    result_schema_v2(
-        "podway.observation-result/v2",
-        "schemas/observation-result-v2.schema.json",
-        &["session.observe"],
-    ),
-    result_schema_v2(
-        "podway.observation-result/v3",
-        "schemas/observation-result-v3.schema.json",
-        &["session.observe"],
-    ),
-    result_schema_v2(
-        "podway.evidence-read-result/v1",
-        "schemas/evidence-read-result-v1.schema.json",
-        &["evidence.read"],
-    ),
-    result_schema_v2(
-        "podway.session-begin-result/v1",
-        "schemas/session-begin-result-v1.schema.json",
-        &["session.begin"],
-    ),
-    result_schema_v2(
-        "podway.terminal-disposition-result/v1",
-        "schemas/terminal-disposition-result-v1.schema.json",
-        &["session.terminal_disposition"],
-    ),
-    result_schema_v2(
-        "podway.session-reset-result/v1",
-        "schemas/session-reset-result-v1.schema.json",
-        &["session.reset"],
-    ),
-    result_schema_v2(
-        "podway.session-archive-result/v1",
-        "schemas/session-archive-result-v1.schema.json",
-        &["session.archive"],
-    ),
-    result_schema_v2(
-        "podway.session-archive-list-result/v1",
-        "schemas/session-archive-list-result-v1.schema.json",
-        &["session.archive_list"],
-    ),
-    result_schema_v2(
-        "podway.session-archive-list-result/v2",
-        "schemas/session-archive-list-result-v2.schema.json",
-        &["session.archive_list"],
-    ),
-    result_schema_v2(
-        "podway.session-archive-show-result/v1",
-        "schemas/session-archive-show-result-v1.schema.json",
-        &["session.archive_show"],
-    ),
-    result_schema_v2(
-        "podway.session-archive-purge-result/v1",
-        "schemas/session-archive-purge-result-v1.schema.json",
-        &["session.archive_purge"],
-    ),
-    result_schema_v2(
-        "podway.procedure-source-result/v1",
-        "schemas/procedure-source-result-v1.schema.json",
-        &["procedure.format", "procedure.scaffold"],
-    ),
     result_schema_v2(
         PROCEDURE_DIAGNOSTICS_RESULT_SCHEMA_V1,
         "schemas/procedure-diagnostics-result-v1.schema.json",
@@ -582,6 +195,36 @@ pub const NEW_ROUTE_RESULT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
         ],
     ),
     result_schema_v2(
+        "podway.delegation-package-result/v1",
+        "schemas/delegation-package-result-v1.schema.json",
+        &["delegation.package"],
+    ),
+    result_schema_v2(
+        "podway.delegation-receipt-result/v1",
+        "schemas/delegation-receipt-result-v1.schema.json",
+        &["delegation.receipt"],
+    ),
+    result_schema_v2(
+        "podway.procedure-graph-result/v2",
+        "schemas/procedure-graph-result-v2.schema.json",
+        &["procedure.graph"],
+    ),
+    result_schema_v2(
+        "podway.procedure-preview-result/v2",
+        "schemas/procedure-preview-result-v2.schema.json",
+        &["procedure.preview"],
+    ),
+    result_schema_v2(
+        "podway.evidence-read-result/v1",
+        "schemas/evidence-read-result-v1.schema.json",
+        &["evidence.read"],
+    ),
+    result_schema_v2(
+        "podway.procedure-source-result/v1",
+        "schemas/procedure-source-result-v1.schema.json",
+        &["procedure.format", "procedure.scaffold"],
+    ),
+    result_schema_v2(
         "podway.procedure-graph-result/v1",
         "schemas/procedure-graph-result-v1.schema.json",
         &["procedure.graph"],
@@ -591,61 +234,7 @@ pub const NEW_ROUTE_RESULT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
         "schemas/procedure-preview-result-v1.schema.json",
         &["procedure.preview"],
     ),
-    result_schema_v2(
-        "podway.decision-result/v1",
-        "schemas/decision-result-v1.schema.json",
-        &["session.decide"],
-    ),
-    result_schema_v2(
-        "podway.rework-result/v1",
-        "schemas/rework-result-v1.schema.json",
-        &["session.rework"],
-    ),
-    result_schema_v2(
-        "podway.goal-definition-result/v1",
-        "schemas/goal-definition-result-v1.schema.json",
-        &["goal.define"],
-    ),
-    result_schema_v2(
-        "podway.goal-revision-result/v1",
-        "schemas/goal-revision-result-v1.schema.json",
-        &["goal.revise"],
-    ),
-    result_schema_v2(
-        "podway.criterion-assessment-result/v1",
-        "schemas/criterion-assessment-result-v1.schema.json",
-        &["goal.assess_criterion"],
-    ),
-    result_schema_v2(
-        "podway.workspace-removal-result/v1",
-        "schemas/workspace-removal-result-v1.schema.json",
-        &["workspace.remove"],
-    ),
-    result_schema_v2(
-        "podway.workspace-mode-plan-result/v1",
-        "schemas/workspace-mode-plan-result-v1.schema.json",
-        &["workspace.mode.plan"],
-    ),
-    result_schema_v2(
-        "podway.workspace-mode-apply-result/v1",
-        "schemas/workspace-mode-apply-result-v1.schema.json",
-        &["workspace.mode.apply"],
-    ),
 ];
-
-const RESET_DOCUMENT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
-    result_schema_v2(
-        "podway.runtime-reset-error-details/v1",
-        "schemas/runtime-reset-error-details-v1.schema.json",
-        &[],
-    ),
-    result_schema_v2(
-        "podway.runtime-reset-control-input/v1",
-        "schemas/runtime-reset-control-input-v1.schema.json",
-        &[],
-    ),
-];
-
 const DELEGATION_DOCUMENT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
     result_schema_v2(
         "podway.delegation-accept-input/v1",
@@ -667,28 +256,7 @@ const DELEGATION_DOCUMENT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
         "schemas/delegation-projection-v1.schema.json",
         &[],
     ),
-    result_schema_v2(
-        "podway.delegation-error-details/v1",
-        "schemas/delegation-error-details-v1.schema.json",
-        &[],
-    ),
 ];
-
-/// Validates the closed control envelope before any runtime-reset side effect. Namespace
-/// and process correlation are checked against the receiving daemon's retained identity.
-pub fn validate_runtime_reset_control_request_v1(request: &crate::RequestEnvelopeV1) -> bool {
-    request.command().as_str() == "daemon.runtime_reset"
-        && request.operation() == crate::OperationV1::Control
-        && request.workspace().is_none()
-        && request.idempotency_key().is_none()
-        && request.preconditions() == &crate::PreconditionsV1::default()
-        && !request.options().detach()
-        && request.options().wait_timeout_ms() == 0
-        && validate_embedded_schema_v2(
-            "podway.runtime-reset-control-input/v1",
-            &Value::Object(request.payload().clone()),
-        )
-}
 
 const fn result_schema_v2(
     schema: &'static str,
@@ -702,2610 +270,6 @@ const fn result_schema_v2(
     }
 }
 
-/// Decodes a result discriminator against the reserved v2-aware registry.
-///
-/// This does not make any future command routable. It only lets later route and
-/// runtime work select the exact closed family without extending a v1 shape.
-pub fn decode_result_schema_contract_v2(
-    result: &Map<String, Value>,
-) -> Option<&'static ResultSchemaContractV2> {
-    let schema = result.get("schema")?.as_str()?;
-    let contract = EXISTING_ROUTE_RESULT_SCHEMAS_V2
-        .iter()
-        .chain(NEW_ROUTE_RESULT_SCHEMAS_V1)
-        .find(|contract| contract.schema == schema)?;
-    let required = required_result_fields_v2(schema);
-    let allowed = allowed_result_fields_v2(schema);
-    (required.iter().all(|field| result.contains_key(*field))
-        && result.keys().all(|field| allowed.contains(&field.as_str()))
-        && validate_json_map_depth(result, 1).is_ok()
-        && validate_embedded_result_schema_v2(schema, result)
-        && validate_result_correlations_v2(schema, result))
-    .then_some(contract)
-}
-
-fn validate_result_correlations_v2(schema: &str, result: &Map<String, Value>) -> bool {
-    match schema {
-        "podway.runtime-reset-plan-result/v1" | "podway.runtime-reset-result/v1" => {
-            reset_resources_within_bound_v1(result)
-        }
-        "podway.terminal-disposition-result/v1" => result
-            .get("session_revision")
-            .zip(
-                result
-                    .get("disposition")
-                    .and_then(Value::as_object)
-                    .and_then(|value| value.get("session_revision")),
-            )
-            .is_some_and(|(session, disposition)| session == disposition),
-        "podway.delegation-package-result/v1" => {
-            let Some(package) = result.get("package").and_then(Value::as_object) else {
-                return false;
-            };
-            result_json_within_bound_v2(result, MAX_DELEGATION_PACKAGE_RESULT_BYTES_V1)
-                && validate_delegation_document_v1(
-                    "podway.delegation-work-package/v1",
-                    &Value::Object(package.clone()),
-                )
-                && ["workspace_uuid", "session_id", "attempt_id"]
-                    .iter()
-                    .all(|field| result.get(*field) == package.get(*field))
-        }
-        "podway.delegation-receipt-result/v1" => result
-            .get("receipt")
-            .filter(|receipt| !receipt.is_null())
-            .is_some_and(|receipt| {
-                validate_delegation_document_v1("podway.delegation-receipt/v1", receipt)
-                    && ["session_id", "attempt_id"]
-                        .iter()
-                        .all(|field| result.get(*field) == receipt.get(*field))
-            }),
-        "podway.delegation-accept-result/v1" => {
-            result_json_within_bound_v2(result, MAX_DELEGATION_ACCEPT_RESULT_BYTES_V1)
-        }
-        "podway.status-result/v4" | "podway.compact-status-result/v4" => {
-            delegation_projection_matches_current_attempt_v2(result)
-        }
-        "podway.next-result/v4" => {
-            let attempt = result
-                .get("attempt")
-                .and_then(|value| value.get("attempt_id"));
-            result.get("delegation").is_some_and(|projection| {
-                delegation_projection_matches_attempt_v2(projection, attempt)
-            })
-        }
-        "podway.observation-result/v4" => result
-            .get("status")
-            .and_then(Value::as_object)
-            .is_some_and(delegation_projection_matches_current_attempt_v2),
-        "podway.session-archive-show-result/v2" => result
-            .get("state")
-            .and_then(Value::as_object)
-            .is_some_and(delegation_projection_matches_current_attempt_v2),
-        "podway.decision-result/v1" => {
-            let Some(record) = result.get("record").and_then(Value::as_object) else {
-                return false;
-            };
-            [
-                "graph_node_id",
-                "attempt_id",
-                "attempt_number",
-                "option_id",
-                "effect",
-                "target_graph_node_id",
-            ]
-            .iter()
-            .all(|field| {
-                result
-                    .get(*field)
-                    .zip(record.get(*field))
-                    .is_some_and(|(projected, recorded)| projected == recorded)
-            })
-        }
-        "podway.job-result/v3" | "podway.job-result/v4" | "podway.job-result/v5" => {
-            let command_is_supported = if schema == "podway.job-result/v3" {
-                is_durable_job_command_v3
-            } else if schema == "podway.job-result/v5" {
-                is_durable_job_command_v5
-            } else {
-                is_durable_job_command_v4
-            };
-            terminal_response_command_v2(result.get("job"))
-                .is_some_and(|command| command.is_none_or(command_is_supported))
-                && result
-                    .get("job")
-                    .is_some_and(validate_terminal_response_typed_v2)
-        }
-        "podway.job-lookup-result/v3"
-        | "podway.job-lookup-result/v4"
-        | "podway.job-lookup-result/v5" => match result.get("found") {
-            Some(Value::Bool(false)) => !result.contains_key("job"),
-            Some(Value::Bool(true)) => {
-                let Some(job) = result.get("job").and_then(Value::as_object) else {
-                    return false;
-                };
-                let Some(job_command) = job.get("command").and_then(Value::as_str) else {
-                    return false;
-                };
-                let command_is_supported = if schema == "podway.job-lookup-result/v3" {
-                    is_durable_job_command_v3(job_command)
-                } else if schema == "podway.job-lookup-result/v5" {
-                    is_durable_job_command_v5(job_command)
-                } else {
-                    is_durable_job_command_v4(job_command)
-                };
-                command_is_supported
-                    && terminal_response_command_v2(job.get("terminal_response")).is_some_and(
-                        |terminal_command| {
-                            terminal_command.is_none_or(|value| value == job_command)
-                        },
-                    )
-                    && terminal_response_identity_matches_job_v2(job)
-                    && job
-                        .get("terminal_response")
-                        .is_some_and(validate_terminal_response_typed_v2)
-            }
-            _ => false,
-        },
-        _ => true,
-    }
-}
-
-fn result_json_within_bound_v2(result: &Map<String, Value>, limit: usize) -> bool {
-    serde_json::to_vec(result).is_ok_and(|encoded| encoded.len() <= limit)
-}
-
-fn delegation_projection_matches_current_attempt_v2(result: &Map<String, Value>) -> bool {
-    let attempt = result
-        .get("current")
-        .and_then(|current| current.get("attempt"))
-        .and_then(|attempt| attempt.get("attempt_id"));
-    result
-        .get("delegation")
-        .is_some_and(|projection| delegation_projection_matches_attempt_v2(projection, attempt))
-}
-
-fn delegation_projection_matches_attempt_v2(projection: &Value, attempt: Option<&Value>) -> bool {
-    let Some(state) = projection.get("state").and_then(Value::as_str) else {
-        return false;
-    };
-    if !serde_json::to_vec(projection)
-        .is_ok_and(|encoded| encoded.len() <= MAX_DELEGATION_PROJECTION_BYTES_V1)
-    {
-        return false;
-    }
-    match attempt {
-        Some(attempt_id) => {
-            state != "inactive"
-                && projection
-                    .get("receipt")
-                    .filter(|receipt| !receipt.is_null())
-                    .is_none_or(|receipt| receipt.get("attempt_id") == Some(attempt_id))
-        }
-        None => state == "inactive",
-    }
-}
-
-pub(crate) fn reset_resources_within_bound_v1(result: &Map<String, Value>) -> bool {
-    let collection = match result.get("schema").and_then(Value::as_str) {
-        Some("podway.runtime-reset-plan-result/v1") => "targets",
-        Some("podway.runtime-reset-result/v1") => "modes",
-        _ => return false,
-    };
-    result
-        .get(collection)
-        .and_then(Value::as_array)
-        .and_then(|modes| {
-            modes.iter().try_fold(0usize, |total, mode| {
-                total.checked_add(mode.get("resources")?.as_array()?.len())
-            })
-        })
-        .is_some_and(|total| total <= 4096)
-}
-
-fn validate_terminal_response_typed_v2(response: &Value) -> bool {
-    let Some(response) = response.as_object() else {
-        return response.is_null();
-    };
-    match response.get("schema").and_then(Value::as_str) {
-        Some(OUTPUT_SCHEMA_V3) => {
-            serde_json::from_value::<OutputEnvelopeV3>(Value::Object(response.clone())).is_ok()
-        }
-        Some(crate::ERROR_SCHEMA_V1) => {
-            serde_json::from_value::<ErrorEnvelopeV1>(Value::Object(response.clone())).is_ok()
-                && validate_terminal_error_v2(response)
-        }
-        None => response.get("kind").and_then(Value::as_str) == Some("cancelled"),
-        Some(_) => false,
-    }
-}
-
-fn validate_terminal_error_v2(response: &Map<String, Value>) -> bool {
-    const ALLOWED_FIELDS: &[&str] = &[
-        "schema",
-        "request_id",
-        "command",
-        "generated_at",
-        "code",
-        "message",
-        "retryable",
-        "exit_code",
-        "workspace",
-        "details",
-    ];
-    if !response
-        .keys()
-        .all(|field| ALLOWED_FIELDS.contains(&field.as_str()))
-    {
-        return false;
-    }
-    if serde_json::to_vec(response)
-        .map_or(true, |encoded| encoded.len() > MAX_V2_TERMINAL_ERROR_BYTES)
-    {
-        return false;
-    }
-    if !response
-        .get("message")
-        .and_then(Value::as_str)
-        .is_some_and(|message| {
-            let characters = message.chars().count();
-            (1..=crate::MAX_V2_RUNTIME_ERROR_MESSAGE_CHARS_V1).contains(&characters)
-        })
-    {
-        return false;
-    }
-    let Some(workspace) = response.get("workspace") else {
-        return false;
-    };
-    let Some(workspace) = workspace.as_object() else {
-        return false;
-    };
-    workspace.len() == 3
-        && ["uuid", "root", "latest_workspace_sequence"]
-            .iter()
-            .all(|field| workspace.contains_key(*field))
-        && serde_json::from_value::<WorkspaceOutputV1>(Value::Object(workspace.clone())).is_ok()
-}
-
-fn terminal_response_identity_matches_job_v2(job: &Map<String, Value>) -> bool {
-    let Some(response) = job.get("terminal_response") else {
-        return false;
-    };
-    if response.is_null()
-        || response
-            .as_object()
-            .and_then(|value| value.get("kind"))
-            .and_then(Value::as_str)
-            == Some("cancelled")
-    {
-        return true;
-    }
-    let Some(response) = response.as_object() else {
-        return false;
-    };
-    let admission = match response.get("schema").and_then(Value::as_str) {
-        Some(OUTPUT_SCHEMA_V3) => response
-            .get("result")
-            .and_then(Value::as_object)
-            .and_then(|result| result.get("admission")),
-        Some(crate::ERROR_SCHEMA_V1) => response
-            .get("details")
-            .and_then(Value::as_object)
-            .and_then(|details| details.get("admission")),
-        _ => return false,
-    };
-    let Some(admission) = admission.and_then(Value::as_object) else {
-        return false;
-    };
-    if admission.get("admitted") != Some(&Value::Bool(true))
-        || admission.get("job_id") != job.get("id")
-        || admission.get("workspace_sequence") != job.get("sequence")
-    {
-        return false;
-    }
-    if response.get("schema").and_then(Value::as_str) == Some(OUTPUT_SCHEMA_V3) {
-        let Some(response_job) = response.get("job").and_then(Value::as_object) else {
-            return false;
-        };
-        return [
-            "id",
-            "sequence",
-            "state",
-            "submitted_at",
-            "claimed_at",
-            "finished_at",
-        ]
-        .iter()
-        .all(|field| response_job.get(*field) == job.get(*field));
-    }
-    true
-}
-
-fn validate_job_result_output_v2(output: &OutputEnvelopeV3) -> bool {
-    if !matches!(
-        output.result.get("schema").and_then(Value::as_str),
-        Some("podway.job-result/v3" | "podway.job-result/v4" | "podway.job-result/v5")
-    ) {
-        return true;
-    }
-    let Some(job) = output.job.as_ref() else {
-        return false;
-    };
-    let Some(response) = output.result.get("job") else {
-        return false;
-    };
-    let state_matches = match job.state() {
-        JobStateV1::Queued | JobStateV1::Running => response.is_null(),
-        JobStateV1::Succeeded => {
-            response.get("schema").and_then(Value::as_str) == Some(OUTPUT_SCHEMA_V3)
-        }
-        JobStateV1::Failed => {
-            response.get("schema").and_then(Value::as_str) == Some(crate::ERROR_SCHEMA_V1)
-        }
-        JobStateV1::Cancelled => response.get("kind").and_then(Value::as_str) == Some("cancelled"),
-    };
-    if !state_matches {
-        return false;
-    }
-    let Ok(Value::Object(mut job_projection)) = serde_json::to_value(job) else {
-        return false;
-    };
-    job_projection.insert("terminal_response".to_owned(), response.clone());
-    terminal_response_identity_matches_job_v2(&job_projection)
-}
-
-fn terminal_response_command_v2(value: Option<&Value>) -> Option<Option<&str>> {
-    match value {
-        Some(Value::Null) => Some(None),
-        Some(Value::Object(response))
-            if response.get("kind").and_then(Value::as_str) == Some("cancelled") =>
-        {
-            Some(None)
-        }
-        Some(Value::Object(response)) => response.get("command").and_then(Value::as_str).map(Some),
-        _ => None,
-    }
-}
-
-fn is_v2_mutation_command(command: &str) -> bool {
-    V2_MUTATION_COMMANDS.contains(&command)
-}
-
-pub(crate) fn is_v2_mutation_contract_command(command: &str) -> bool {
-    is_v2_mutation_command(command)
-}
-
-fn is_durable_job_command_v3(command: &str) -> bool {
-    matches!(command, "workspace.init" | "workspace.reset_all")
-        || (is_v2_mutation_contract_command(command)
-            && !matches!(command, "session.begin" | "session.terminal_disposition"))
-}
-
-fn is_durable_job_command_v4(command: &str) -> bool {
-    matches!(command, "workspace.init" | "workspace.reset_all")
-        || is_v2_mutation_contract_command(command)
-}
-
-fn is_durable_job_command_v5(command: &str) -> bool {
-    is_durable_job_command_v4(command) || command == "delegation.accept"
-}
-
-fn required_result_fields_v2(schema: &str) -> &'static [&'static str] {
-    match schema {
-        "podway.runtime-reset-plan-result/v1" => &[
-            "schema",
-            "status",
-            "account_root",
-            "selection",
-            "targets",
-            "preserved",
-            "excluded",
-            "expires_at",
-            "plan_token",
-            "recovery_operation",
-        ],
-        "podway.runtime-reset-result/v1" => &[
-            "schema",
-            "status",
-            "operation_id",
-            "selection",
-            "modes",
-            "preserved",
-            "excluded",
-        ],
-        "podway.runtime-reset-control-result/v1" => &[
-            "schema",
-            "state",
-            "mode",
-            "namespace_root",
-            "process_id",
-            "operation_id",
-            "token_sha256",
-            "reservation_id",
-            "reason",
-        ],
-        "podway.procedure-validation-result/v2" => {
-            &["schema", "file", "procedure_schema", "digest", "valid"]
-        }
-        "podway.detached-admission-result/v2" => &["schema", "detached", "admission"],
-        "podway.session-start-result/v2" => &[
-            "schema",
-            "procedure_schema",
-            "procedure_digest",
-            "dry_run",
-            "goal_tracking",
-            "goal_defined",
-        ],
-        "podway.session-start-result/v3" => &[
-            "schema",
-            "procedure_schema",
-            "procedure_digest",
-            "dry_run",
-            "session_state",
-            "goal_tracking",
-            "goal_defined",
-            "active_attempt",
-            "goal_revision",
-        ],
-        "podway.session-begin-result/v1" => &[
-            "schema",
-            "procedure_schema",
-            "procedure_digest",
-            "session_id",
-            "revision",
-            "session_state",
-            "entry_graph_node_id",
-            "attempt",
-            "goal_tracking",
-            "goal_defined",
-            "goal_revision",
-            "admission",
-        ],
-        "podway.terminal-disposition-result/v1" => &[
-            "schema",
-            "session_id",
-            "session_revision",
-            "disposition",
-            "admission",
-        ],
-        "podway.session-reset-result/v1" => &[
-            "schema",
-            "dry_run",
-            "mode",
-            "session_id",
-            "session_revision",
-            "lifecycle",
-            "current_terminal_disposition",
-            "eligible",
-            "required_action",
-            "reset",
-        ],
-        "podway.session-archive-result/v1" => &[
-            "schema",
-            "session_id",
-            "session_revision",
-            "activity",
-            "lifecycle",
-            "admission",
-        ],
-        "podway.session-archive-list-result/v1" => &["schema", "maximum", "count", "sessions"],
-        "podway.session-archive-list-result/v2" => {
-            &["schema", "count", "truncated", "oldest", "sessions"]
-        }
-        "podway.session-archive-show-result/v1" => &[
-            "schema",
-            "activity",
-            "archive",
-            "terminal_disposition",
-            "state",
-        ],
-        "podway.session-archive-purge-result/v1" => &["schema", "purged", "session"],
-        "podway.compact-status-result/v2" | "podway.compact-status-result/v3" => &[
-            "schema",
-            "procedure",
-            "session",
-            "current",
-            "goal_tracking",
-            "goal_defined",
-            "trace_length",
-            "counters",
-            "items",
-            "queue",
-        ],
-        "podway.status-result/v2" | "podway.status-result/v3" => &[
-            "schema",
-            "tier",
-            "procedure",
-            "session",
-            "current",
-            "purpose",
-            "goal_tracking",
-            "goal_defined",
-            "trace_length",
-            "counters",
-            "items",
-            "queue",
-            "missing_required_item_ids",
-            "blocker_window",
-            "blockers_truncated",
-            "item_values",
-            "items_total",
-            "items_truncated",
-            "references",
-            "allowed_option_ids",
-            "allowed_manual_rework_targets",
-        ],
-        "podway.next-result/v2" => &[
-            "schema",
-            "procedure_schema",
-            "procedure_digest",
-            "goal_tracking",
-            "goal_defined",
-            "node",
-            "attempt",
-            "trace_length",
-            "counters",
-            "queue",
-            "revision",
-            "readiness",
-            "missing_required_item_count",
-            "blockers_total",
-            "allowed_actions",
-            "suggestions",
-            "references",
-            "readback",
-            "allowed_manual_rework_targets",
-        ],
-        "podway.next-result/v3" => &[
-            "schema",
-            "procedure_schema",
-            "procedure_digest",
-            "goal_tracking",
-            "goal_defined",
-            "node",
-            "attempt",
-            "trace_length",
-            "counters",
-            "queue",
-            "revision",
-            "readiness",
-            "missing_required_item_count",
-            "blockers_total",
-            "allowed_actions",
-            "suggestions",
-            "suggestions_total",
-            "suggestions_truncated",
-            "references",
-            "readback",
-            "readback_items_total",
-            "readback_items_truncated",
-            "allowed_manual_rework_targets",
-        ],
-        "podway.prepared-next-result/v1" => &[
-            "schema",
-            "procedure_schema",
-            "procedure_digest",
-            "session_id",
-            "session_state",
-            "revision",
-            "goal_tracking",
-            "goal_defined",
-            "trace_length",
-            "queue",
-            "allowed_actions",
-            "suggestions",
-        ],
-        "podway.observation-result/v1" | "podway.observation-result/v2" => &[
-            "schema",
-            "status",
-            "guidance",
-            "active_items",
-            "mutation_templates",
-        ],
-        "podway.observation-result/v3" => &[
-            "schema",
-            "status",
-            "guidance",
-            "active_items",
-            "active_items_total",
-            "active_items_truncated",
-            "mutation_templates",
-            "mutation_templates_total",
-            "mutation_templates_truncated",
-        ],
-        "podway.evidence-read-result/v1" => &[
-            "schema",
-            "procedure_schema",
-            "consumer",
-            "source",
-            "item",
-            "value_digest",
-            "total_size",
-            "size_unit",
-            "page",
-            "truncated",
-            "next_page_token",
-            "page_token_version",
-        ],
-        "podway.stage-transition-result/v2" => &["schema", "admission", "transition", "revision"],
-        "podway.item-mutation-result/v2" => &[
-            "schema",
-            "admission",
-            "changed",
-            "graph_node_id",
-            "attempt_id",
-            "attempt_number",
-            "item_id",
-            "revision",
-        ],
-        "podway.item-record-many-result/v1" => &[
-            "schema",
-            "admission",
-            "changed",
-            "graph_node_id",
-            "attempt_id",
-            "attempt_number",
-            "revision",
-            "items",
-        ],
-        "podway.job-lookup-result/v3" | "podway.job-lookup-result/v4" => &["schema", "found"],
-        "podway.job-result/v3" | "podway.job-result/v4" => &["schema", "job"],
-        "podway.procedure-source-result/v1" => &[
-            "schema",
-            "operation",
-            "target_schema",
-            "document",
-            "target_digest",
-        ],
-        "podway.procedure-diagnostics-result/v1" => &[
-            "schema",
-            "operation",
-            "procedure_schema",
-            "file",
-            "valid",
-            "diagnostics",
-            "diagnostics_truncated",
-            "diagnostics_total",
-        ],
-        "podway.procedure-graph-result/v1" => &[
-            "schema",
-            "procedure_schema",
-            "procedure_digest",
-            "format",
-            "projection_digest",
-            "projection",
-        ],
-        "podway.procedure-preview-result/v1" => &[
-            "schema",
-            "file",
-            "admissible",
-            "checks",
-            "diagnostics",
-            "diagnostics_truncated",
-            "diagnostics_total",
-        ],
-        "podway.decision-result/v1" => &[
-            "schema",
-            "admission",
-            "graph_node_id",
-            "attempt_id",
-            "attempt_number",
-            "option_id",
-            "effect",
-            "target_graph_node_id",
-            "target_attempt_id",
-            "revision",
-            "session_state",
-            "record",
-        ],
-        "podway.rework-result/v1" => &[
-            "schema",
-            "admission",
-            "from_graph_node_id",
-            "to_graph_node_id",
-            "target_attempt_id",
-            "reason",
-            "reactivated",
-            "revision",
-        ],
-        "podway.goal-definition-result/v1" => &[
-            "schema",
-            "admission",
-            "goal_revision",
-            "statement",
-            "criteria",
-            "recorded_at",
-            "revision",
-        ],
-        "podway.goal-revision-result/v1" => &[
-            "schema",
-            "admission",
-            "goal_revision",
-            "statement",
-            "criteria",
-            "reason",
-            "recorded_at",
-            "rework_to",
-            "reactivated",
-            "revision",
-        ],
-        "podway.criterion-assessment-result/v1" => &[
-            "schema",
-            "admission",
-            "graph_node_id",
-            "attempt_id",
-            "goal_revision",
-            "mode",
-            "result",
-            "complete",
-            "revision",
-        ],
-        "podway.workspace-removal-result/v1" => &[
-            "schema",
-            "worktree_root",
-            "workspace_uuid",
-            "registry_entry_removed",
-            "podway_directory_removed",
-            "already_absent",
-        ],
-        "podway.workspace-mode-plan-result/v1" => &[
-            "schema",
-            "status",
-            "worktree_root",
-            "workspace_uuid",
-            "source_mode",
-            "target_mode",
-            "disposable_state",
-            "expires_at",
-            "plan_token",
-        ],
-        "podway.workspace-mode-apply-result/v1" => &[
-            "schema",
-            "worktree_root",
-            "workspace_uuid",
-            "source_mode",
-            "target_mode",
-            "config_schema",
-            "runtime_state_removed",
-            "source_registry_retired",
-            "target_registry_published",
-            "already_applied",
-        ],
-        "podway.status-result/v4" => &[
-            "schema",
-            "tier",
-            "procedure",
-            "session",
-            "current",
-            "purpose",
-            "goal_tracking",
-            "goal_defined",
-            "trace_length",
-            "counters",
-            "items",
-            "queue",
-            "missing_required_item_ids",
-            "blocker_window",
-            "blockers_truncated",
-            "item_values",
-            "items_total",
-            "items_truncated",
-            "references",
-            "allowed_option_ids",
-            "allowed_manual_rework_targets",
-            "delegation",
-            "receipt_summaries",
-            "receipt_summaries_total",
-            "receipt_summaries_truncated",
-        ],
-        "podway.compact-status-result/v4" => &[
-            "schema",
-            "procedure",
-            "session",
-            "current",
-            "goal_tracking",
-            "goal_defined",
-            "trace_length",
-            "counters",
-            "items",
-            "queue",
-            "delegation",
-        ],
-        "podway.next-result/v4" => &[
-            "schema",
-            "procedure_schema",
-            "procedure_digest",
-            "goal_tracking",
-            "goal_defined",
-            "node",
-            "attempt",
-            "trace_length",
-            "counters",
-            "queue",
-            "revision",
-            "readiness",
-            "missing_required_item_count",
-            "blockers_total",
-            "allowed_actions",
-            "suggestions",
-            "suggestions_total",
-            "suggestions_truncated",
-            "references",
-            "readback",
-            "readback_items_total",
-            "readback_items_truncated",
-            "allowed_manual_rework_targets",
-            "delegation",
-        ],
-        "podway.prepared-next-result/v2" => &[
-            "schema",
-            "procedure_schema",
-            "procedure_digest",
-            "session_id",
-            "session_state",
-            "revision",
-            "goal_tracking",
-            "goal_defined",
-            "trace_length",
-            "queue",
-            "allowed_actions",
-            "suggestions",
-            "delegated_placement_count",
-        ],
-        "podway.job-lookup-result/v5" => &["schema", "found"],
-        "podway.job-result/v5" => &["schema", "job"],
-        "podway.delegation-package-result/v1" => &[
-            "schema",
-            "package",
-            "package_digest",
-            "workspace_uuid",
-            "session_id",
-            "session_revision",
-            "attempt_id",
-        ],
-        "podway.delegation-accept-result/v1" => &[
-            "schema",
-            "admission",
-            "receipt_id",
-            "workspace_uuid",
-            "session_id",
-            "session_revision",
-            "attempt_id",
-            "package_digest",
-            "result_digest",
-            "acceptance_state",
-        ],
-        "podway.delegation-receipt-result/v1" => &[
-            "schema",
-            "session_id",
-            "attempt_id",
-            "receipt",
-            "applicability",
-            "reason",
-        ],
-        "podway.observation-result/v4" => &[
-            "schema",
-            "status",
-            "guidance",
-            "active_items",
-            "active_items_total",
-            "active_items_truncated",
-            "mutation_templates",
-            "mutation_templates_total",
-            "mutation_templates_truncated",
-        ],
-        "podway.procedure-graph-result/v2" => &[
-            "schema",
-            "procedure_schema",
-            "procedure_digest",
-            "format",
-            "projection_digest",
-            "projection",
-            "delegated_placement_count",
-            "delegated_placements",
-        ],
-        "podway.procedure-preview-result/v2" => &[
-            "schema",
-            "file",
-            "admissible",
-            "checks",
-            "diagnostics",
-            "diagnostics_truncated",
-            "diagnostics_total",
-            "delegated_placement_count",
-            "delegated_placements",
-        ],
-        "podway.session-archive-show-result/v2" => &[
-            "schema",
-            "activity",
-            "archive",
-            "terminal_disposition",
-            "state",
-            "receipt_summaries",
-            "receipt_summaries_total",
-            "receipt_summaries_truncated",
-        ],
-        _ => &[],
-    }
-}
-
-fn allowed_result_fields_v2(schema: &str) -> &'static [&'static str] {
-    match schema {
-        "podway.detached-admission-result/v2" => {
-            &["schema", "detached", "admission", "procedure_digest"]
-        }
-        "podway.session-start-result/v2" => &[
-            "schema",
-            "procedure_schema",
-            "procedure_digest",
-            "dry_run",
-            "goal_tracking",
-            "admission",
-            "session_id",
-            "revision",
-            "entry_graph_node_id",
-            "goal_defined",
-        ],
-        "podway.session-start-result/v3" => &[
-            "schema",
-            "procedure_schema",
-            "procedure_digest",
-            "dry_run",
-            "session_state",
-            "goal_tracking",
-            "goal_defined",
-            "active_attempt",
-            "goal_revision",
-            "entry_graph_node_id",
-            "admission",
-            "session_id",
-            "revision",
-            "existing_session",
-        ],
-        "podway.session-begin-result/v1" => &[
-            "schema",
-            "procedure_schema",
-            "procedure_digest",
-            "session_id",
-            "revision",
-            "session_state",
-            "entry_graph_node_id",
-            "attempt",
-            "goal_tracking",
-            "goal_defined",
-            "goal_revision",
-            "admission",
-        ],
-        "podway.terminal-disposition-result/v1" => &[
-            "schema",
-            "session_id",
-            "session_revision",
-            "disposition",
-            "admission",
-        ],
-        "podway.session-reset-result/v1" => &[
-            "schema",
-            "dry_run",
-            "mode",
-            "session_id",
-            "session_revision",
-            "lifecycle",
-            "current_terminal_disposition",
-            "eligible",
-            "required_action",
-            "reset",
-            "admission",
-        ],
-        "podway.session-archive-result/v1" => &[
-            "schema",
-            "session_id",
-            "session_revision",
-            "activity",
-            "lifecycle",
-            "admission",
-        ],
-        "podway.session-archive-list-result/v1" => &["schema", "maximum", "count", "sessions"],
-        "podway.session-archive-list-result/v2" => {
-            &["schema", "count", "truncated", "oldest", "sessions"]
-        }
-        "podway.session-archive-show-result/v1" => &[
-            "schema",
-            "activity",
-            "archive",
-            "terminal_disposition",
-            "state",
-        ],
-        "podway.session-archive-purge-result/v1" => &["schema", "purged", "session"],
-        "podway.compact-status-result/v2" | "podway.compact-status-result/v3" => &[
-            "schema",
-            "procedure",
-            "session",
-            "current",
-            "goal_tracking",
-            "goal_defined",
-            "goal_revision",
-            "latest_goal_outcome",
-            "trace_length",
-            "counters",
-            "items",
-            "queue",
-        ],
-        "podway.status-result/v2" | "podway.status-result/v3" => &[
-            "schema",
-            "tier",
-            "procedure",
-            "session",
-            "current",
-            "purpose",
-            "goal_tracking",
-            "goal_defined",
-            "goal_revision",
-            "latest_goal_outcome",
-            "goal",
-            "trace_length",
-            "counters",
-            "items",
-            "queue",
-            "missing_required_item_ids",
-            "blocker_window",
-            "blockers_truncated",
-            "item_values",
-            "items_total",
-            "items_truncated",
-            "references",
-            "allowed_option_ids",
-            "next_graph_node_id",
-            "terminal",
-            "skip",
-            "allowed_manual_rework_targets",
-            "current_trace_history",
-            "stale_attempt_history",
-            "decision_history",
-            "rework_history",
-            "stale_goal_revision_history",
-            "stale_goal_assessment_history",
-        ],
-        "podway.next-result/v2" => &[
-            "schema",
-            "procedure_schema",
-            "procedure_digest",
-            "goal_tracking",
-            "goal_defined",
-            "goal_revision",
-            "latest_goal_outcome",
-            "goal",
-            "node",
-            "attempt",
-            "trace_length",
-            "counters",
-            "queue",
-            "revision",
-            "readiness",
-            "title",
-            "intent",
-            "description",
-            "objective",
-            "prompt",
-            "reason_policy",
-            "instructions",
-            "missing_required_item_count",
-            "missing_required_items",
-            "options",
-            "evidence_guidance",
-            "next_graph_node_id",
-            "terminal",
-            "skip",
-            "allowed_manual_rework_targets",
-            "allowed_actions",
-            "suggestions",
-            "references",
-            "readback",
-            "blockers_total",
-            "blockers",
-            "blockers_truncated",
-        ],
-        "podway.next-result/v3" => &[
-            "schema",
-            "procedure_schema",
-            "procedure_digest",
-            "goal_tracking",
-            "goal_defined",
-            "goal_revision",
-            "latest_goal_outcome",
-            "goal",
-            "node",
-            "attempt",
-            "trace_length",
-            "counters",
-            "queue",
-            "revision",
-            "readiness",
-            "title",
-            "intent",
-            "description",
-            "objective",
-            "prompt",
-            "reason_policy",
-            "instructions",
-            "missing_required_item_count",
-            "missing_required_items",
-            "missing_required_items_truncated",
-            "options",
-            "allowed_option_ids",
-            "option_guard_statuses",
-            "evidence_guidance",
-            "next_graph_node_id",
-            "terminal",
-            "skip",
-            "allowed_manual_rework_targets",
-            "allowed_actions",
-            "suggestions",
-            "suggestions_total",
-            "suggestions_truncated",
-            "references",
-            "readback",
-            "readback_items_total",
-            "readback_items_truncated",
-            "blockers_total",
-            "blockers",
-            "blockers_truncated",
-        ],
-        "podway.prepared-next-result/v1" => &[
-            "schema",
-            "procedure_schema",
-            "procedure_digest",
-            "session_id",
-            "session_state",
-            "revision",
-            "goal_tracking",
-            "goal_defined",
-            "trace_length",
-            "queue",
-            "allowed_actions",
-            "suggestions",
-        ],
-        "podway.observation-result/v1" | "podway.observation-result/v2" => &[
-            "schema",
-            "status",
-            "guidance",
-            "active_items",
-            "mutation_templates",
-        ],
-        "podway.observation-result/v3" => &[
-            "schema",
-            "status",
-            "guidance",
-            "active_items",
-            "active_items_total",
-            "active_items_truncated",
-            "mutation_templates",
-            "mutation_templates_total",
-            "mutation_templates_truncated",
-        ],
-        "podway.evidence-read-result/v1" => &[
-            "schema",
-            "procedure_schema",
-            "consumer",
-            "source",
-            "item",
-            "value_digest",
-            "total_size",
-            "size_unit",
-            "page",
-            "truncated",
-            "next_page_token",
-            "page_token_version",
-        ],
-        "podway.stage-transition-result/v2" => &[
-            "schema",
-            "admission",
-            "transition",
-            "from_graph_node_id",
-            "from_attempt_id",
-            "to_graph_node_id",
-            "to_attempt_id",
-            "blocker_id",
-            "all",
-            "reason",
-            "reset",
-            "revision",
-            "session_state",
-        ],
-        "podway.item-mutation-result/v2" => &[
-            "schema",
-            "admission",
-            "changed",
-            "graph_node_id",
-            "attempt_id",
-            "attempt_number",
-            "item_id",
-            "revision",
-            "value_digest",
-        ],
-        "podway.item-record-many-result/v1" => &[
-            "schema",
-            "admission",
-            "changed",
-            "graph_node_id",
-            "attempt_id",
-            "attempt_number",
-            "revision",
-            "items",
-        ],
-        "podway.job-lookup-result/v3" | "podway.job-lookup-result/v4" => {
-            &["schema", "found", "job"]
-        }
-        "podway.job-result/v3" | "podway.job-result/v4" => &["schema", "job"],
-        "podway.procedure-source-result/v1" => &[
-            "schema",
-            "operation",
-            "target_schema",
-            "document",
-            "target_digest",
-            "file",
-            "mode",
-            "changed",
-            "template",
-            "source_schema",
-            "source_digest",
-        ],
-        "podway.procedure-diagnostics-result/v1" => &[
-            "schema",
-            "operation",
-            "procedure_schema",
-            "file",
-            "digest",
-            "valid",
-            "diagnostics",
-            "diagnostics_truncated",
-            "diagnostics_total",
-        ],
-        "podway.procedure-preview-result/v1" => &[
-            "schema",
-            "file",
-            "admissible",
-            "procedure_schema",
-            "procedure_id",
-            "procedure_version",
-            "purpose",
-            "procedure_digest",
-            "goal_tracking",
-            "goal_assessment_graph_node_ids",
-            "summary",
-            "checks",
-            "graph",
-            "mermaid",
-            "start_suggestion",
-            "diagnostics",
-            "diagnostics_truncated",
-            "diagnostics_total",
-        ],
-        "podway.decision-result/v1" => &[
-            "schema",
-            "admission",
-            "graph_node_id",
-            "attempt_id",
-            "attempt_number",
-            "option_id",
-            "effect",
-            "target_graph_node_id",
-            "target_attempt_id",
-            "revision",
-            "session_state",
-            "record",
-        ],
-        "podway.goal-definition-result/v1" => &[
-            "schema",
-            "admission",
-            "goal_revision",
-            "statement",
-            "criteria",
-            "actor",
-            "recorded_at",
-            "revision",
-        ],
-        "podway.goal-revision-result/v1" => &[
-            "schema",
-            "admission",
-            "goal_revision",
-            "statement",
-            "criteria",
-            "reason",
-            "actor",
-            "recorded_at",
-            "rework_to",
-            "reactivated",
-            "revision",
-        ],
-        "podway.criterion-assessment-result/v1" => &[
-            "schema",
-            "admission",
-            "graph_node_id",
-            "attempt_id",
-            "goal_revision",
-            "mode",
-            "result",
-            "complete",
-            "determined_outcome",
-            "revision",
-        ],
-        "podway.workspace-removal-result/v1" => &[
-            "schema",
-            "worktree_root",
-            "workspace_uuid",
-            "registry_entry_removed",
-            "podway_directory_removed",
-            "already_absent",
-        ],
-        "podway.status-result/v4" => &[
-            "schema",
-            "tier",
-            "procedure",
-            "session",
-            "current",
-            "purpose",
-            "goal_tracking",
-            "goal_defined",
-            "goal_revision",
-            "latest_goal_outcome",
-            "goal",
-            "trace_length",
-            "counters",
-            "items",
-            "queue",
-            "missing_required_item_ids",
-            "blocker_window",
-            "blockers_truncated",
-            "item_values",
-            "items_total",
-            "items_truncated",
-            "references",
-            "allowed_option_ids",
-            "next_graph_node_id",
-            "terminal",
-            "skip",
-            "allowed_manual_rework_targets",
-            "current_trace_history",
-            "stale_attempt_history",
-            "decision_history",
-            "rework_history",
-            "stale_goal_revision_history",
-            "stale_goal_assessment_history",
-            "delegation",
-            "receipt_summaries",
-            "receipt_summaries_total",
-            "receipt_summaries_truncated",
-        ],
-        "podway.compact-status-result/v4" => &[
-            "schema",
-            "procedure",
-            "session",
-            "current",
-            "goal_tracking",
-            "goal_defined",
-            "goal_revision",
-            "latest_goal_outcome",
-            "trace_length",
-            "counters",
-            "items",
-            "queue",
-            "delegation",
-        ],
-        "podway.next-result/v4" => &[
-            "schema",
-            "procedure_schema",
-            "procedure_digest",
-            "goal_tracking",
-            "goal_defined",
-            "goal_revision",
-            "latest_goal_outcome",
-            "goal",
-            "node",
-            "attempt",
-            "trace_length",
-            "counters",
-            "queue",
-            "revision",
-            "readiness",
-            "title",
-            "intent",
-            "description",
-            "objective",
-            "prompt",
-            "reason_policy",
-            "instructions",
-            "missing_required_item_count",
-            "missing_required_items",
-            "missing_required_items_truncated",
-            "options",
-            "allowed_option_ids",
-            "option_guard_statuses",
-            "evidence_guidance",
-            "next_graph_node_id",
-            "terminal",
-            "skip",
-            "allowed_manual_rework_targets",
-            "allowed_actions",
-            "suggestions",
-            "suggestions_total",
-            "suggestions_truncated",
-            "references",
-            "readback",
-            "readback_items_total",
-            "readback_items_truncated",
-            "blockers_total",
-            "blockers",
-            "blockers_truncated",
-            "delegation",
-        ],
-        "podway.prepared-next-result/v2" => &[
-            "schema",
-            "procedure_schema",
-            "procedure_digest",
-            "session_id",
-            "session_state",
-            "revision",
-            "goal_tracking",
-            "goal_defined",
-            "trace_length",
-            "queue",
-            "allowed_actions",
-            "suggestions",
-            "delegated_placement_count",
-        ],
-        "podway.job-lookup-result/v5" => &["schema", "found", "job"],
-        "podway.job-result/v5" => &["schema", "job"],
-        "podway.delegation-package-result/v1" => &[
-            "schema",
-            "package",
-            "package_digest",
-            "workspace_uuid",
-            "session_id",
-            "session_revision",
-            "attempt_id",
-        ],
-        "podway.delegation-accept-result/v1" => &[
-            "schema",
-            "admission",
-            "receipt_id",
-            "workspace_uuid",
-            "session_id",
-            "session_revision",
-            "attempt_id",
-            "package_digest",
-            "result_digest",
-            "acceptance_state",
-        ],
-        "podway.delegation-receipt-result/v1" => &[
-            "schema",
-            "session_id",
-            "attempt_id",
-            "receipt",
-            "applicability",
-            "reason",
-        ],
-        "podway.observation-result/v4" => &[
-            "schema",
-            "status",
-            "guidance",
-            "active_items",
-            "active_items_total",
-            "active_items_truncated",
-            "mutation_templates",
-            "mutation_templates_total",
-            "mutation_templates_truncated",
-        ],
-        "podway.procedure-graph-result/v2" => &[
-            "schema",
-            "procedure_schema",
-            "procedure_digest",
-            "format",
-            "projection_digest",
-            "projection",
-            "delegated_placement_count",
-            "delegated_placements",
-        ],
-        "podway.procedure-preview-result/v2" => &[
-            "schema",
-            "file",
-            "admissible",
-            "procedure_schema",
-            "procedure_id",
-            "procedure_version",
-            "purpose",
-            "procedure_digest",
-            "goal_tracking",
-            "goal_assessment_graph_node_ids",
-            "summary",
-            "checks",
-            "graph",
-            "mermaid",
-            "start_suggestion",
-            "diagnostics",
-            "diagnostics_truncated",
-            "diagnostics_total",
-            "delegated_placement_count",
-            "delegated_placements",
-        ],
-        "podway.session-archive-show-result/v2" => &[
-            "schema",
-            "activity",
-            "archive",
-            "terminal_disposition",
-            "state",
-            "receipt_summaries",
-            "receipt_summaries_total",
-            "receipt_summaries_truncated",
-        ],
-        _ => required_result_fields_v2(schema),
-    }
-}
-
-/// Returns the exact required and allowed top-level keys for a registered family.
-pub fn result_schema_top_level_fields_v2(
-    schema: &str,
-) -> Option<(&'static [&'static str], &'static [&'static str])> {
-    EXISTING_ROUTE_RESULT_SCHEMAS_V2
-        .iter()
-        .chain(NEW_ROUTE_RESULT_SCHEMAS_V1)
-        .any(|contract| contract.schema == schema)
-        .then(|| {
-            (
-                required_result_fields_v2(schema),
-                allowed_result_fields_v2(schema),
-            )
-        })
-}
-
-pub const MAX_V2_OUTPUT_WARNINGS: usize = 4;
-pub const MAX_V2_WARNING_CODE_CHARS: usize = 64;
-pub const MAX_V2_WARNING_PATH_CHARS: usize = 256;
-pub const MAX_V2_WARNING_MESSAGE_CHARS: usize = 512;
-/// Maximum encoded bytes for an error retained inside one v2 job-result wrapper.
-pub const MAX_V2_TERMINAL_ERROR_BYTES: usize = 524_288;
-
-pub(crate) const MAX_RUNTIME_RESET_DOCUMENT_BYTES_V1: usize = 524_288;
-pub const OUTPUT_SCHEMA_V3: &str = "podway.output/v3";
-pub const SUPPORTED_OUTPUT_SCHEMAS_V3: &[&str] = &[OUTPUT_SCHEMA_V3];
-const PROCEDURE_INDEPENDENT_OUTPUT_COMMANDS_V3: &[&str] = &[
-    "help",
-    "version",
-    "completions",
-    "preset.list",
-    "preset.show",
-    "preset.explain",
-    "procedure.show",
-    "daemon.install",
-    "daemon.uninstall",
-    "daemon.start",
-    "daemon.stop",
-    "daemon.restart",
-    "daemon.status",
-    "daemon.wait-ready",
-    "daemon.logs",
-    "daemon.terminate",
-    "workspace.init",
-    "workspace.show",
-    "workspace.doctor",
-    "workspace.repair",
-    "workspace.remove",
-    "workspace.mode.plan",
-    "workspace.mode.apply",
-    "workspace.reset_all",
-    "job.list",
-    "job.cancel",
-    "__complete",
-];
-
-/// Checks the production warning bound for the open v2 success envelope.
-pub fn validate_v2_output_warnings(warnings: &[Map<String, Value>]) -> bool {
-    warnings.len() <= MAX_V2_OUTPUT_WARNINGS
-        && warnings.iter().all(|warning| {
-            warning.len() == 3
-                && warning
-                    .keys()
-                    .all(|field| matches!(field.as_str(), "code" | "path" | "message"))
-                && warning
-                    .get("code")
-                    .and_then(Value::as_str)
-                    .is_some_and(|value| {
-                        !value.is_empty() && value.chars().count() <= MAX_V2_WARNING_CODE_CHARS
-                    })
-                && warning
-                    .get("path")
-                    .and_then(Value::as_str)
-                    .is_some_and(|value| {
-                        !value.is_empty() && value.chars().count() <= MAX_V2_WARNING_PATH_CHARS
-                    })
-                && warning
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .is_some_and(|value| {
-                        !value.is_empty() && value.chars().count() <= MAX_V2_WARNING_MESSAGE_CHARS
-                    })
-        })
-}
-
-/// Validates the closed v2 result family selected by a public command name.
-///
-/// A route bound to more than one registered family accepts any of them. Unlike
-/// the v1 twin this never infers a discriminator: the caller must set the
-/// result `schema` because a v2 route can carry two families.
-pub fn validate_command_result_v2(
-    command: &str,
-    result: &Map<String, Value>,
-) -> Result<(), ProtocolError> {
-    if matches!(
-        command,
-        "runtime.reset.plan" | "runtime.reset.apply" | "daemon.runtime_reset"
-    ) && (serde_json::to_vec(result).map_or(true, |bytes| {
-        bytes.len() > MAX_RUNTIME_RESET_DOCUMENT_BYTES_V1
-    }) || (command == "runtime.reset.apply"
-        && result.get("status").and_then(Value::as_str) == Some("incomplete")))
-    {
-        return Err(ProtocolError::InvalidCommandResult {
-            command: command.to_owned(),
-        });
-    }
-    if decode_result_schema_contract_v2(result)
-        .is_some_and(|contract| contract.commands.contains(&command))
-        || (PROCEDURE_INDEPENDENT_OUTPUT_COMMANDS_V3.contains(&command)
-            && validate_command_result_v1(command, result).is_ok())
-    {
-        Ok(())
-    } else {
-        Err(ProtocolError::InvalidCommandResult {
-            command: command.to_owned(),
-        })
-    }
-}
-
-/// Validated fields used to construct one current success envelope.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct OutputEnvelopeInputV3 {
-    pub request_id: RequestIdV1,
-    pub command: CommandNameV1,
-    pub generated_at: Rfc3339MillisV1,
-    pub workspace: Option<WorkspaceOutputV1>,
-    pub job: Option<JobOutputV1>,
-    pub session: Option<SessionOutputV1>,
-    pub result: Map<String, Value>,
-    pub warnings: Vec<Map<String, Value>>,
-}
-
-/// A validated `podway.output/v3` response envelope.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct OutputEnvelopeV3 {
-    schema: String,
-    request_id: RequestIdV1,
-    command: CommandNameV1,
-    generated_at: Rfc3339MillisV1,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    workspace: Option<WorkspaceOutputV1>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    job: Option<JobOutputV1>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    session: Option<SessionOutputV1>,
-    result: Map<String, Value>,
-    warnings: Vec<Map<String, Value>>,
-}
-
-impl OutputEnvelopeV3 {
-    pub fn new(input: OutputEnvelopeInputV3) -> Result<Self, ProtocolError> {
-        let OutputEnvelopeInputV3 {
-            request_id,
-            command,
-            generated_at,
-            workspace,
-            job,
-            session,
-            mut result,
-            warnings,
-        } = input;
-        if PROCEDURE_INDEPENDENT_OUTPUT_COMMANDS_V3.contains(&command.as_str()) {
-            ensure_procedure_independent_result_schema_v1(command.as_str(), &mut result);
-        }
-        let output = Self {
-            schema: OUTPUT_SCHEMA_V3.to_owned(),
-            request_id,
-            command,
-            generated_at,
-            workspace,
-            job,
-            session,
-            result,
-            warnings,
-        };
-        output.validate()?;
-        Ok(output)
-    }
-
-    pub fn validate(&self) -> Result<(), ProtocolError> {
-        if self.schema != OUTPUT_SCHEMA_V3 {
-            return Err(ProtocolError::UnsupportedProtocol {
-                received: self.schema.clone(),
-                supported: SUPPORTED_OUTPUT_SCHEMAS_V3,
-            });
-        }
-        self.request_id.validate()?;
-        self.command.validate()?;
-        self.generated_at.validate()?;
-        if let Some(workspace) = &self.workspace {
-            workspace.validate()?;
-        }
-        if let Some(job) = &self.job {
-            job.validate()?;
-        }
-        if let Some(session) = &self.session {
-            session.validate()?;
-        }
-        if !self.validate_procedure_independent_projection_v1() {
-            return Err(ProtocolError::InvalidCommandResult {
-                command: self.command.as_str().to_owned(),
-            });
-        }
-        validate_json_map_depth(&self.result, 1)?;
-        validate_command_result_v2(self.command.as_str(), &self.result)?;
-        if !validate_job_result_output_v2(self) {
-            return Err(ProtocolError::InvalidCommandResult {
-                command: self.command.as_str().to_owned(),
-            });
-        }
-        if let Some(admission) = self.result.get("admission") {
-            match validate_admission_metadata_v1(admission, true)? {
-                None if self.job.is_none() => {}
-                Some((job_id, sequence))
-                    if self
-                        .job
-                        .as_ref()
-                        .is_some_and(|job| job.id() == &job_id && job.sequence() == sequence) => {}
-                None | Some(_) => return Err(ProtocolError::InvalidAdmissionMetadata),
-            }
-        }
-        if !validate_v2_output_warnings(&self.warnings) {
-            return Err(ProtocolError::InvalidOutputWarnings);
-        }
-        for warning in &self.warnings {
-            validate_json_map_depth(warning, 2)?;
-        }
-        let envelope_value =
-            serde_json::to_value(self).map_err(|_| ProtocolError::InvalidCommandResult {
-                command: self.command.as_str().to_owned(),
-            })?;
-        if !PROCEDURE_INDEPENDENT_OUTPUT_COMMANDS_V3.contains(&self.command.as_str())
-            && !validate_embedded_schema_v2(OUTPUT_SCHEMA_V3, &envelope_value)
-        {
-            return Err(ProtocolError::InvalidCommandResult {
-                command: self.command.as_str().to_owned(),
-            });
-        }
-        Ok(())
-    }
-
-    fn validate_procedure_independent_projection_v1(&self) -> bool {
-        match self.command.as_str() {
-            "version" | "daemon.status" | "daemon.wait-ready" => {
-                self.workspace.is_none() && self.job.is_none() && self.session.is_none()
-            }
-            "workspace.init" => {
-                self.workspace.is_some() && self.job.is_some() && self.session.is_none()
-            }
-            _ => true,
-        }
-    }
-
-    pub fn request_id(&self) -> &RequestIdV1 {
-        &self.request_id
-    }
-
-    pub fn command(&self) -> &CommandNameV1 {
-        &self.command
-    }
-
-    pub fn generated_at(&self) -> &Rfc3339MillisV1 {
-        &self.generated_at
-    }
-
-    pub fn workspace(&self) -> Option<&WorkspaceOutputV1> {
-        self.workspace.as_ref()
-    }
-
-    pub fn job(&self) -> Option<&JobOutputV1> {
-        self.job.as_ref()
-    }
-
-    pub fn session(&self) -> Option<&SessionOutputV1> {
-        self.session.as_ref()
-    }
-
-    pub fn result(&self) -> &Map<String, Value> {
-        &self.result
-    }
-
-    pub fn warnings(&self) -> &[Map<String, Value>] {
-        &self.warnings
-    }
-}
-impl<'de> Deserialize<'de> for OutputEnvelopeV3 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct RawOutputEnvelopeV3 {
-            schema: String,
-            request_id: RequestIdV1,
-            command: CommandNameV1,
-            generated_at: Rfc3339MillisV1,
-            #[serde(default)]
-            workspace: OptionalField<WorkspaceOutputV1>,
-            #[serde(default)]
-            job: OptionalField<JobOutputV1>,
-            #[serde(default)]
-            session: OptionalField<SessionOutputV1>,
-            result: Map<String, Value>,
-            warnings: Vec<Map<String, Value>>,
-        }
-
-        let value = Value::deserialize(deserializer)?;
-        validate_json_document_depth(&value).map_err(de::Error::custom)?;
-        let raw = RawOutputEnvelopeV3::deserialize(value).map_err(de::Error::custom)?;
-        let output = Self {
-            schema: raw.schema,
-            request_id: raw.request_id,
-            command: raw.command,
-            generated_at: raw.generated_at,
-            workspace: raw.workspace.0,
-            job: raw.job.0,
-            session: raw.session.0,
-            result: raw.result,
-            warnings: raw.warnings,
-        };
-        output.validate().map_err(de::Error::custom)?;
-        Ok(output)
-    }
-}
-
-const VERSION_RESULT_SCHEMA_V1: &str = "podway.version-result/v1";
-const DAEMON_STATUS_RESULT_SCHEMA_V1: &str = "podway.daemon-status-result/v1";
-const DAEMON_STATUS_RESULT_SCHEMA_V2: &str = "podway.daemon-status-result/v2";
-const DAEMON_STATUS_RESULT_SCHEMA_V3: &str = "podway.daemon-status-result/v3";
-const WORKSPACE_MODE_PLAN_RESULT_SCHEMA_V1: &str = "podway.workspace-mode-plan-result/v1";
-const WORKSPACE_MODE_APPLY_RESULT_SCHEMA_V1: &str = "podway.workspace-mode-apply-result/v1";
-const WORKSPACE_INIT_RESULT_SCHEMA_V1: &str = "podway.workspace-init-result/v1";
-const DETACHED_ADMISSION_RESULT_SCHEMA_V1: &str = "podway.detached-admission-result/v1";
-
-/// Adds the schema identifier for a command-selected closed result family.
-pub fn ensure_procedure_independent_result_schema_v1(
-    command: &str,
-    result: &mut Map<String, Value>,
-) {
-    if let Some(schema) = command_result_schema_v1(command, result) {
-        result
-            .entry("schema".to_owned())
-            .or_insert_with(|| Value::String(schema.to_owned()));
-    }
-}
-
-pub(crate) fn ensure_command_result_schema_v1(command: &str, result: &mut Map<String, Value>) {
-    ensure_procedure_independent_result_schema_v1(command, result);
-}
-
-/// Validates the closed result family selected by a public command name.
-pub fn validate_procedure_independent_result_v1(
-    command: &str,
-    result: &Map<String, Value>,
-) -> Result<(), ProtocolError> {
-    if !PROCEDURE_INDEPENDENT_OUTPUT_COMMANDS_V3.contains(&command) {
-        return Err(ProtocolError::InvalidCommandResult {
-            command: command.to_owned(),
-        });
-    }
-    let expected_schema = command_result_schema_v1(command, result);
-    let actual_schema = result.get("schema").and_then(Value::as_str);
-    let Some(expected_schema) = expected_schema else {
-        return if actual_schema.is_none() {
-            Ok(())
-        } else {
-            Err(ProtocolError::InvalidCommandResult {
-                command: command.to_owned(),
-            })
-        };
-    };
-    if actual_schema != Some(expected_schema) {
-        return Err(ProtocolError::InvalidCommandResult {
-            command: command.to_owned(),
-        });
-    }
-    let mut content = result.clone();
-    content.remove("schema");
-    let value = Value::Object(content);
-    let valid = match expected_schema {
-        VERSION_RESULT_SCHEMA_V1 => validate_version_result(value),
-        DAEMON_STATUS_RESULT_SCHEMA_V1 => {
-            validate_daemon_status_result(value.clone())
-                || validate_daemon_service_status_result(value)
-        }
-        DAEMON_STATUS_RESULT_SCHEMA_V2 => {
-            validate_daemon_status_result_v2(value.clone())
-                || validate_daemon_service_status_result_v2(value)
-        }
-        DAEMON_STATUS_RESULT_SCHEMA_V3 => validate_daemon_service_status_result_v3(value),
-        WORKSPACE_INIT_RESULT_SCHEMA_V1 => decode::<WorkspaceInitResultV1>(value),
-        DETACHED_ADMISSION_RESULT_SCHEMA_V1 => decode::<DetachedMutationResultV1>(value),
-        WORKSPACE_MODE_PLAN_RESULT_SCHEMA_V1 | WORKSPACE_MODE_APPLY_RESULT_SCHEMA_V1 => {
-            validate_embedded_result_schema_v2(expected_schema, result)
-        }
-        _ => unreachable!("procedure-independent schema selection is closed"),
-    };
-    if valid {
-        Ok(())
-    } else {
-        Err(ProtocolError::InvalidCommandResult {
-            command: command.to_owned(),
-        })
-    }
-}
-
-pub(crate) fn validate_command_result_v1(
-    command: &str,
-    result: &Map<String, Value>,
-) -> Result<(), ProtocolError> {
-    validate_procedure_independent_result_v1(command, result)
-}
-
-fn command_result_schema_v1(command: &str, result: &Map<String, Value>) -> Option<&'static str> {
-    if supports_detached(command)
-        && (result.get("detached") == Some(&Value::Bool(true))
-            || result.get("schema").and_then(Value::as_str)
-                == Some(DETACHED_ADMISSION_RESULT_SCHEMA_V1))
-    {
-        return Some(DETACHED_ADMISSION_RESULT_SCHEMA_V1);
-    }
-    match command {
-        "version" => Some(VERSION_RESULT_SCHEMA_V1),
-        "daemon.status"
-            if result.get("schema").and_then(Value::as_str)
-                == Some(DAEMON_STATUS_RESULT_SCHEMA_V3) =>
-        {
-            Some(DAEMON_STATUS_RESULT_SCHEMA_V3)
-        }
-        "daemon.status"
-            if result.get("schema").and_then(Value::as_str)
-                == Some(DAEMON_STATUS_RESULT_SCHEMA_V2) =>
-        {
-            Some(DAEMON_STATUS_RESULT_SCHEMA_V2)
-        }
-        "daemon.wait-ready"
-            if result.get("schema").and_then(Value::as_str)
-                == Some(DAEMON_STATUS_RESULT_SCHEMA_V3) =>
-        {
-            Some(DAEMON_STATUS_RESULT_SCHEMA_V3)
-        }
-        "daemon.wait-ready" => Some(DAEMON_STATUS_RESULT_SCHEMA_V2),
-        "daemon.status" => Some(DAEMON_STATUS_RESULT_SCHEMA_V1),
-        "workspace.init" => Some(WORKSPACE_INIT_RESULT_SCHEMA_V1),
-        "workspace.mode.plan" => Some(WORKSPACE_MODE_PLAN_RESULT_SCHEMA_V1),
-        "workspace.mode.apply" => Some(WORKSPACE_MODE_APPLY_RESULT_SCHEMA_V1),
-        _ => None,
-    }
-}
-
-fn supports_detached(command: &str) -> bool {
-    command == "workspace.init"
-}
-
-fn decode<T: for<'de> Deserialize<'de>>(value: Value) -> bool {
-    serde_json::from_value::<T>(value).is_ok()
-}
-
-fn non_empty(value: &str) -> bool {
-    !value.is_empty()
-}
-
-fn optional_absolute_path(path: &Option<String>) -> bool {
-    path.as_deref().is_none_or(|path| path.starts_with('/'))
-}
-
-fn unique_non_empty_strings(values: &[String]) -> bool {
-    values.iter().all(|value| non_empty(value))
-        && values
-            .iter()
-            .enumerate()
-            .all(|(index, value)| !values[..index].contains(value))
-}
-
-fn validate_version_result(value: Value) -> bool {
-    serde_json::from_value::<VersionResultV1>(value).is_ok_and(|result| {
-        result.product == "podway"
-            && non_empty(&result.version)
-            && non_empty(&result.target)
-            && result.source_commit.as_deref().is_none_or(non_empty)
-            && result.contract_manifest_schema == "podway.contract-manifest/v1"
-            && !result.supported_ipc_ids.is_empty()
-            && unique_non_empty_strings(&result.supported_ipc_ids)
-    })
-}
-
-fn validate_daemon_status_result(value: Value) -> bool {
-    serde_json::from_value::<DaemonStatusResultV1>(value).is_ok_and(|result| {
-        result.product == "podway"
-            && non_empty(&result.daemon_version)
-            && non_empty(&result.target)
-            && result.source_commit.as_deref().is_none_or(non_empty)
-            && result.contract_manifest_schema == "podway.contract-manifest/v1"
-            && !result.protocol_versions.is_empty()
-            && unique_non_empty_strings(&result.protocol_versions)
-            && result.pid > 0
-            && result.executable_path.starts_with('/')
-            && result.configured_socket_path.starts_with('/')
-            && result.effective_socket_path.starts_with('/')
-    })
-}
-
-fn validate_daemon_service_status_result(value: Value) -> bool {
-    serde_json::from_value::<DaemonServiceStatusResultV1>(value).is_ok_and(|result| {
-        matches!(
-            result.status.as_str(),
-            "not_installed" | "stopped" | "running"
-        ) && result
-            .product
-            .as_deref()
-            .is_none_or(|value| value == "podway")
-            && result.daemon_version.as_deref().is_none_or(non_empty)
-            && result.target.as_deref().is_none_or(non_empty)
-            && result.source_commit.as_deref().is_none_or(non_empty)
-            && result
-                .contract_manifest_schema
-                .as_deref()
-                .is_none_or(|value| value == "podway.contract-manifest/v1")
-            && unique_non_empty_strings(&result.protocol_versions)
-            && result.pid.is_none_or(|pid| pid > 0)
-            && optional_absolute_path(&result.executable_path)
-            && optional_absolute_path(&result.socket_path)
-            && optional_absolute_path(&result.configured_socket_path)
-            && optional_absolute_path(&result.effective_socket_path)
-            && if result.reachable {
-                result.installed
-                    && result.loaded
-                    && result.product.is_some()
-                    && result.daemon_version.is_some()
-                    && result.target.is_some()
-                    && result.build_identity.is_some()
-                    && result.contract_manifest_schema.is_some()
-                    && result.contract_manifest_digest.is_some()
-                    && !result.protocol_versions.is_empty()
-                    && result.pid.is_some()
-                    && result.process_id.is_some()
-                    && result.executable_path.is_some()
-                    && result.started_at.is_some()
-                    && result.uptime_ms.is_some()
-                    && result.socket_path.is_some()
-                    && result.configured_socket_path.is_some()
-                    && result.effective_socket_path.is_some()
-            } else {
-                result.pid.is_none()
-                    && result.process_id.is_none()
-                    && result.started_at.is_none()
-                    && result.uptime_ms.is_none()
-                    && result.effective_socket_path.is_none()
-            }
-    })
-}
-
-fn validate_daemon_status_result_v2(value: Value) -> bool {
-    serde_json::from_value::<DaemonStatusResultV2>(value).is_ok_and(|result| {
-        result.product == "podway"
-            && non_empty(&result.daemon_version)
-            && non_empty(&result.target)
-            && result.source_commit.as_deref().is_none_or(non_empty)
-            && result.contract_manifest_schema == "podway.contract-manifest/v1"
-            && !result.protocol_versions.is_empty()
-            && unique_non_empty_strings(&result.protocol_versions)
-            && result.pid > 0
-            && result.executable_path.starts_with('/')
-            && result.configured_socket_path.starts_with('/')
-            && result.effective_socket_path.starts_with('/')
-            && matches!(
-                result.readiness_state.as_str(),
-                "starting" | "recovering" | "ready" | "failed"
-            )
-            && matches!(
-                result.readiness_stage.as_str(),
-                "endpoint" | "registry" | "workspaces" | "jobs" | "ready" | "failed"
-            )
-            && (result.readiness_state != "ready" || result.readiness_stage == "ready")
-            && result.worktree_recovery.total <= 10_000
-            && result.worktree_recovery.completed <= result.worktree_recovery.total
-            && result.worktree_recovery.failed <= result.worktree_recovery.completed
-    })
-}
-
-fn validate_daemon_service_status_result_v2(value: Value) -> bool {
-    serde_json::from_value::<DaemonServiceStatusResultV2>(value).is_ok_and(|result| {
-        matches!(
-            result.status.as_str(),
-            "not_installed" | "stopped" | "running"
-        ) && result
-            .product
-            .as_deref()
-            .is_none_or(|value| value == "podway")
-            && result.daemon_version.as_deref().is_none_or(non_empty)
-            && result.target.as_deref().is_none_or(non_empty)
-            && result.source_commit.as_deref().is_none_or(non_empty)
-            && result
-                .contract_manifest_schema
-                .as_deref()
-                .is_none_or(|value| value == "podway.contract-manifest/v1")
-            && unique_non_empty_strings(&result.protocol_versions)
-            && result.pid.is_none_or(|pid| pid > 0)
-            && optional_absolute_path(&result.executable_path)
-            && optional_absolute_path(&result.socket_path)
-            && optional_absolute_path(&result.configured_socket_path)
-            && optional_absolute_path(&result.effective_socket_path)
-            && if result.reachable {
-                result.installed
-                    && result.loaded
-                    && result.product.is_some()
-                    && result.daemon_version.is_some()
-                    && result.target.is_some()
-                    && result.build_identity.is_some()
-                    && result.contract_manifest_schema.is_some()
-                    && result.contract_manifest_digest.is_some()
-                    && !result.protocol_versions.is_empty()
-                    && result.pid.is_some()
-                    && result.process_id.is_some()
-                    && result.executable_path.is_some()
-                    && result.started_at.is_some()
-                    && result.uptime_ms.is_some()
-                    && result.socket_path.is_some()
-                    && result.configured_socket_path.is_some()
-                    && result.effective_socket_path.is_some()
-                    && matches!(
-                        result.readiness_state.as_str(),
-                        "starting" | "recovering" | "ready" | "failed"
-                    )
-                    && result.readiness_stage.as_deref().is_some_and(|stage| {
-                        matches!(
-                            stage,
-                            "endpoint" | "registry" | "workspaces" | "jobs" | "ready" | "failed"
-                        )
-                    })
-                    && result.readiness_elapsed_ms.is_some()
-                    && result
-                        .worktree_recovery
-                        .as_ref()
-                        .is_some_and(valid_worktree_progress)
-                    && (result.readiness_state != "ready"
-                        || result.readiness_stage.as_deref() == Some("ready"))
-            } else {
-                result.pid.is_none()
-                    && result.process_id.is_none()
-                    && result.started_at.is_none()
-                    && result.uptime_ms.is_none()
-                    && result.effective_socket_path.is_none()
-                    && matches!(
-                        result.readiness_state.as_str(),
-                        "not_running" | "unreachable"
-                    )
-                    && result.readiness_stage.is_none()
-                    && result.readiness_elapsed_ms.is_none()
-                    && result.worktree_recovery.is_none()
-            }
-    })
-}
-
-fn validate_daemon_service_status_result_v3(mut value: Value) -> bool {
-    let Some(object) = value.as_object_mut() else {
-        return false;
-    };
-    let Some(mode) = object
-        .remove("mode")
-        .and_then(|value| value.as_str().map(str::to_owned))
-    else {
-        return false;
-    };
-    if podway_core::RuntimeModeV1::new(mode).is_err() {
-        return false;
-    }
-    let reachable = object.get("reachable").and_then(Value::as_bool);
-    let activity =
-        ["in_flight_client_count", "maintenance_operation_count"].map(|field| object.remove(field));
-    let activity_valid = match reachable {
-        Some(true) => activity
-            .iter()
-            .zip([1_024_u64, 10_000_u64])
-            .all(|(value, maximum)| {
-                value.as_ref().is_some_and(|value| {
-                    value.is_null() || value.as_u64().is_some_and(|count| count <= maximum)
-                })
-            }),
-        Some(false) => activity
-            .iter()
-            .all(|value| value.as_ref() == Some(&Value::Null)),
-        None => false,
-    };
-    if !activity_valid {
-        return false;
-    }
-    validate_daemon_service_status_result_v2(value)
-}
-
-fn valid_worktree_progress(progress: &WorktreeRecoveryProgressResultV1) -> bool {
-    progress.total <= 10_000
-        && progress.completed <= progress.total
-        && progress.failed <= progress.completed
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct VersionResultV1 {
-    product: String,
-    version: String,
-    target: String,
-    build_identity: Sha256Digest,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    source_commit: Option<String>,
-    contract_manifest_schema: String,
-    contract_manifest_digest: Sha256Digest,
-    supported_ipc_ids: Vec<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct DaemonStatusResultV1 {
-    product: String,
-    daemon_version: String,
-    target: String,
-    build_identity: Sha256Digest,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    source_commit: Option<String>,
-    contract_manifest_schema: String,
-    contract_manifest_digest: Sha256Digest,
-    protocol_versions: Vec<String>,
-    pid: u32,
-    process_id: JobId,
-    executable_path: String,
-    started_at: Rfc3339MillisV1,
-    uptime_ms: u64,
-    configured_socket_path: String,
-    effective_socket_path: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct DaemonStatusResultV2 {
-    product: String,
-    daemon_version: String,
-    target: String,
-    build_identity: Sha256Digest,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    source_commit: Option<String>,
-    contract_manifest_schema: String,
-    contract_manifest_digest: Sha256Digest,
-    protocol_versions: Vec<String>,
-    pid: u32,
-    process_id: JobId,
-    executable_path: String,
-    started_at: Rfc3339MillisV1,
-    uptime_ms: u64,
-    configured_socket_path: String,
-    effective_socket_path: String,
-    readiness_state: String,
-    readiness_stage: String,
-    readiness_elapsed_ms: u64,
-    worktree_recovery: WorktreeRecoveryProgressResultV1,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WorktreeRecoveryProgressResultV1 {
-    total: u32,
-    completed: u32,
-    failed: u32,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct DaemonServiceStatusResultV1 {
-    status: String,
-    installed: bool,
-    loaded: bool,
-    reachable: bool,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    product: Option<String>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    daemon_version: Option<String>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    target: Option<String>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    build_identity: Option<Sha256Digest>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    source_commit: Option<String>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    contract_manifest_schema: Option<String>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    contract_manifest_digest: Option<Sha256Digest>,
-    protocol_versions: Vec<String>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    pid: Option<u32>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    process_id: Option<JobId>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    executable_path: Option<String>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    started_at: Option<Rfc3339MillisV1>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    uptime_ms: Option<u64>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    socket_path: Option<String>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    configured_socket_path: Option<String>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    effective_socket_path: Option<String>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    registered_worktree_count: Option<u64>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    active_scheduler_count: Option<u64>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    queued_job_count: Option<u64>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    running_job_count: Option<u64>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct DaemonServiceStatusResultV2 {
-    status: String,
-    installed: bool,
-    loaded: bool,
-    reachable: bool,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    product: Option<String>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    daemon_version: Option<String>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    target: Option<String>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    build_identity: Option<Sha256Digest>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    source_commit: Option<String>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    contract_manifest_schema: Option<String>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    contract_manifest_digest: Option<Sha256Digest>,
-    protocol_versions: Vec<String>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    pid: Option<u32>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    process_id: Option<JobId>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    executable_path: Option<String>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    started_at: Option<Rfc3339MillisV1>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    uptime_ms: Option<u64>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    socket_path: Option<String>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    configured_socket_path: Option<String>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    effective_socket_path: Option<String>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    registered_worktree_count: Option<u64>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    active_scheduler_count: Option<u64>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    queued_job_count: Option<u64>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    running_job_count: Option<u64>,
-    readiness_state: String,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    readiness_stage: Option<String>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    readiness_elapsed_ms: Option<u64>,
-    #[serde(deserialize_with = "deserialize_required_option")]
-    worktree_recovery: Option<WorktreeRecoveryProgressResultV1>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AdmissionResultV1 {
-    #[serde(deserialize_with = "deserialize_true")]
-    admitted: bool,
-    job_id: JobId,
-    #[serde(deserialize_with = "deserialize_positive_u64")]
-    workspace_sequence: u64,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WorkspaceInitResultV1 {
-    #[serde(deserialize_with = "deserialize_true")]
-    initialized: bool,
-    revision: Revision,
-    admission: AdmissionResultV1,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct DetachedMutationResultV1 {
-    admission: AdmissionResultV1,
-    #[serde(deserialize_with = "deserialize_true")]
-    detached: bool,
-    #[serde(default)]
-    procedure_digest: Option<Sha256Digest>,
-}
-
-fn deserialize_required_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
-where
-    D: Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    Option::<T>::deserialize(deserializer)
-}
-
-fn deserialize_true<'de, D>(deserializer: D) -> Result<bool, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    match bool::deserialize(deserializer)? {
-        true => Ok(true),
-        false => Err(D::Error::custom("field must be true")),
-    }
-}
-
-fn deserialize_positive_u64<'de, D>(deserializer: D) -> Result<u64, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    match u64::deserialize(deserializer)? {
-        value if value > 0 => Ok(value),
-        _ => Err(D::Error::custom("field must be positive")),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use serde_json::{Value, json};
-
-    use super::{
-        MAX_DELEGATION_ACCEPT_INPUT_BYTES_V1, MAX_DELEGATION_ACCEPT_RESULT_BYTES_V1,
-        MAX_DELEGATION_ERROR_DETAILS_BYTES_V1, MAX_DELEGATION_PACKAGE_RESULT_BYTES_V1,
-        MAX_DELEGATION_PROJECTION_BYTES_V1, MAX_DELEGATION_RECEIPT_BYTES_V1,
-        MAX_DELEGATION_WORK_PACKAGE_BYTES_V1, build_result_validators_v2, embedded_schemas,
-        validate_command_result_v1,
-    };
-
-    #[test]
-    fn embedded_v2_only_result_schemas_compile() {
-        build_result_validators_v2().expect("embedded v2-only result schemas must compile");
-    }
-
-    #[test]
-    fn delegation_json_byte_caps_match_embedded_contracts() {
-        for (filename, limit) in [
-            (
-                "delegation-work-package-v1.schema.json",
-                MAX_DELEGATION_WORK_PACKAGE_BYTES_V1,
-            ),
-            (
-                "delegation-accept-input-v1.schema.json",
-                MAX_DELEGATION_ACCEPT_INPUT_BYTES_V1,
-            ),
-            (
-                "delegation-receipt-v1.schema.json",
-                MAX_DELEGATION_RECEIPT_BYTES_V1,
-            ),
-            (
-                "delegation-projection-v1.schema.json",
-                MAX_DELEGATION_PROJECTION_BYTES_V1,
-            ),
-            (
-                "delegation-package-result-v1.schema.json",
-                MAX_DELEGATION_PACKAGE_RESULT_BYTES_V1,
-            ),
-            (
-                "delegation-accept-result-v1.schema.json",
-                MAX_DELEGATION_ACCEPT_RESULT_BYTES_V1,
-            ),
-            (
-                "delegation-error-details-v1.schema.json",
-                MAX_DELEGATION_ERROR_DETAILS_BYTES_V1,
-            ),
-        ] {
-            let source = embedded_schemas::EMBEDDED_JSON_SCHEMAS_V1
-                .iter()
-                .find(|(_, name, _)| *name == filename)
-                .map(|(_, _, source)| *source)
-                .expect("delegation schema is embedded");
-            let schema: Value = serde_json::from_str(source).expect("valid embedded schema");
-            assert_eq!(
-                schema["x-podway-max-json-bytes"].as_u64(),
-                Some(limit as u64),
-                "{filename}"
-            );
-        }
-    }
-
-    const JOB_ID: &str = "00000000-0000-4000-8000-000000000001";
-    fn object(value: Value) -> serde_json::Map<String, Value> {
-        value.as_object().expect("test result object").clone()
-    }
-
-    #[test]
-    fn detached_admission_is_closed_and_uses_workspace_sequence() {
-        let valid = object(json!({
-            "schema": "podway.detached-admission-result/v1",
-            "admission": {
-                "admitted": true,
-                "job_id": JOB_ID,
-                "workspace_sequence": 1
-            },
-            "detached": true
-        }));
-        assert!(validate_command_result_v1("workspace.init", &valid).is_ok());
-
-        for malformed in [
-            json!({
-                "schema": "podway.detached-admission-result/v1",
-                "admission": {"admitted": true, "job_id": JOB_ID, "sequence": 1},
-                "detached": true
-            }),
-            json!({
-                "schema": "podway.detached-admission-result/v1",
-                "admission": {
-                    "admitted": true,
-                    "job_id": JOB_ID,
-                    "workspace_sequence": "1"
-                },
-                "detached": true
-            }),
-            json!({
-                "schema": "podway.detached-admission-result/v1",
-                "admission": {
-                    "admitted": true,
-                    "job_id": JOB_ID,
-                    "workspace_sequence": 1,
-                    "future": true
-                },
-                "detached": true
-            }),
-        ] {
-            assert!(validate_command_result_v1("workspace.init", &object(malformed)).is_err());
-        }
-    }
-
-    #[test]
-    fn procedure_v1_result_commands_and_discriminators_are_rejected() {
-        for (command, schema) in [
-            ("session.start", "podway.session-start-result/v1"),
-            ("session.status", "podway.status-result/v1"),
-            ("session.status", "podway.compact-status-result/v1"),
-            ("session.next", "podway.next-result/v1"),
-            ("session.complete", "podway.stage-transition-result/v1"),
-            ("item.set", "podway.item-mutation-result/v1"),
-            ("job.lookup", "podway.job-lookup-result/v1"),
-            ("job.status", "podway.job-result/v1"),
-        ] {
-            assert!(
-                validate_command_result_v1(command, &object(json!({"schema": schema}))).is_err(),
-                "removed {schema} must not remain accepted for {command}"
-            );
-        }
-
-        assert!(validate_command_result_v1("help", &object(json!({"text": "help"}))).is_ok());
-        assert!(
-            validate_command_result_v1(
-                "help",
-                &object(json!({"schema": "podway.status-result/v1", "text": "help"}))
-            )
-            .is_err()
-        );
-    }
-}
-
-/// Unemitted daemon-free documents; registration never enables a shipped route.
 pub const DAEMON_FREE_DOCUMENT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
     result_schema_v2(
         "podway.session-archive-limit-details/v2",
@@ -3597,6 +561,1147 @@ pub const DAEMON_FREE_DOCUMENT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
     ),
 ];
 
+pub fn decode_result_schema_contract_v2(
+    result: &Map<String, Value>,
+) -> Option<&'static ResultSchemaContractV2> {
+    let schema = result.get("schema")?.as_str()?;
+    let contract = current_result_contracts_v2().find(|contract| contract.schema == schema)?;
+    (validate_json_map_depth(result, 1).is_ok()
+        && validate_selected_direct_schema_v1(schema, "", &Value::Object(result.clone()))
+        && validate_result_correlations_v2(schema, result))
+    .then_some(contract)
+}
+fn current_result_contracts_v2() -> impl Iterator<Item = &'static ResultSchemaContractV2> {
+    EXISTING_ROUTE_RESULT_SCHEMAS_V2
+        .iter()
+        .chain(NEW_ROUTE_RESULT_SCHEMAS_V1)
+        .chain(
+            DAEMON_FREE_DOCUMENT_SCHEMAS_V1
+                .iter()
+                .filter(|contract| !contract.commands.is_empty()),
+        )
+}
+pub fn result_schema_top_level_fields_v2(
+    schema: &str,
+) -> Option<(&'static [&'static str], &'static [&'static str])> {
+    match schema {
+        "podway.procedure-diagnostics-result/v1" => Some((
+            &[
+                "schema",
+                "operation",
+                "procedure_schema",
+                "file",
+                "valid",
+                "diagnostics",
+                "diagnostics_truncated",
+                "diagnostics_total",
+            ],
+            &[
+                "schema",
+                "operation",
+                "procedure_schema",
+                "file",
+                "digest",
+                "valid",
+                "diagnostics",
+                "diagnostics_truncated",
+                "diagnostics_total",
+            ],
+        )),
+        "podway.procedure-validation-result/v2" => Some((
+            &["schema", "file", "procedure_schema", "digest", "valid"],
+            &["schema", "file", "procedure_schema", "digest", "valid"],
+        )),
+        "podway.delegation-package-result/v1" => Some((
+            &[
+                "schema",
+                "package",
+                "package_digest",
+                "workspace_uuid",
+                "session_id",
+                "session_revision",
+                "attempt_id",
+            ],
+            &[
+                "schema",
+                "package",
+                "package_digest",
+                "workspace_uuid",
+                "session_id",
+                "session_revision",
+                "attempt_id",
+            ],
+        )),
+        "podway.delegation-receipt-result/v1" => Some((
+            &[
+                "schema",
+                "session_id",
+                "attempt_id",
+                "receipt",
+                "applicability",
+                "reason",
+            ],
+            &[
+                "schema",
+                "session_id",
+                "attempt_id",
+                "receipt",
+                "applicability",
+                "reason",
+            ],
+        )),
+        "podway.procedure-graph-result/v2" => Some((
+            &[
+                "schema",
+                "procedure_schema",
+                "procedure_digest",
+                "format",
+                "projection_digest",
+                "projection",
+                "delegated_placement_count",
+                "delegated_placements",
+            ],
+            &[
+                "schema",
+                "procedure_schema",
+                "procedure_digest",
+                "format",
+                "projection_digest",
+                "projection",
+                "delegated_placement_count",
+                "delegated_placements",
+            ],
+        )),
+        "podway.procedure-preview-result/v2" => Some((
+            &[
+                "schema",
+                "file",
+                "admissible",
+                "checks",
+                "diagnostics",
+                "diagnostics_truncated",
+                "diagnostics_total",
+                "delegated_placement_count",
+                "delegated_placements",
+            ],
+            &[
+                "schema",
+                "file",
+                "admissible",
+                "procedure_schema",
+                "procedure_id",
+                "procedure_version",
+                "purpose",
+                "procedure_digest",
+                "goal_tracking",
+                "goal_assessment_graph_node_ids",
+                "summary",
+                "checks",
+                "graph",
+                "mermaid",
+                "start_suggestion",
+                "diagnostics",
+                "diagnostics_truncated",
+                "diagnostics_total",
+                "delegated_placement_count",
+                "delegated_placements",
+            ],
+        )),
+        "podway.evidence-read-result/v1" => Some((
+            &[
+                "schema",
+                "procedure_schema",
+                "consumer",
+                "source",
+                "item",
+                "value_digest",
+                "total_size",
+                "size_unit",
+                "page",
+                "truncated",
+                "next_page_token",
+                "page_token_version",
+            ],
+            &[
+                "schema",
+                "procedure_schema",
+                "consumer",
+                "source",
+                "item",
+                "value_digest",
+                "total_size",
+                "size_unit",
+                "page",
+                "truncated",
+                "next_page_token",
+                "page_token_version",
+            ],
+        )),
+        "podway.procedure-source-result/v1" => Some((
+            &[
+                "schema",
+                "operation",
+                "target_schema",
+                "document",
+                "target_digest",
+            ],
+            &[
+                "schema",
+                "operation",
+                "target_schema",
+                "document",
+                "target_digest",
+                "file",
+                "mode",
+                "changed",
+                "template",
+                "source_schema",
+                "source_digest",
+            ],
+        )),
+        "podway.procedure-graph-result/v1" => Some((
+            &[
+                "schema",
+                "procedure_schema",
+                "procedure_digest",
+                "format",
+                "projection_digest",
+                "projection",
+            ],
+            &[
+                "schema",
+                "procedure_schema",
+                "procedure_digest",
+                "format",
+                "projection_digest",
+                "projection",
+            ],
+        )),
+        "podway.procedure-preview-result/v1" => Some((
+            &[
+                "schema",
+                "file",
+                "admissible",
+                "checks",
+                "diagnostics",
+                "diagnostics_truncated",
+                "diagnostics_total",
+            ],
+            &[
+                "schema",
+                "file",
+                "admissible",
+                "procedure_schema",
+                "procedure_id",
+                "procedure_version",
+                "purpose",
+                "procedure_digest",
+                "goal_tracking",
+                "goal_assessment_graph_node_ids",
+                "summary",
+                "checks",
+                "graph",
+                "mermaid",
+                "start_suggestion",
+                "diagnostics",
+                "diagnostics_truncated",
+                "diagnostics_total",
+            ],
+        )),
+        "podway.compact-status-result/v5" => Some((
+            &[
+                "schema",
+                "procedure",
+                "session",
+                "current",
+                "goal_tracking",
+                "goal_defined",
+                "trace_length",
+                "counters",
+                "items",
+            ],
+            &[
+                "schema",
+                "procedure",
+                "session",
+                "current",
+                "goal_tracking",
+                "goal_defined",
+                "goal_revision",
+                "latest_goal_outcome",
+                "trace_length",
+                "counters",
+                "items",
+                "delegation",
+            ],
+        )),
+        "podway.criterion-assessment-result/v2" => Some((
+            &[
+                "schema",
+                "graph_node_id",
+                "attempt_id",
+                "goal_revision",
+                "mode",
+                "result",
+                "complete",
+                "revision",
+            ],
+            &[
+                "schema",
+                "graph_node_id",
+                "attempt_id",
+                "goal_revision",
+                "mode",
+                "result",
+                "complete",
+                "determined_outcome",
+                "revision",
+            ],
+        )),
+        "podway.decision-result/v2" => Some((
+            &[
+                "schema",
+                "graph_node_id",
+                "attempt_id",
+                "attempt_number",
+                "option_id",
+                "effect",
+                "target_graph_node_id",
+                "target_attempt_id",
+                "revision",
+                "session_state",
+                "record",
+            ],
+            &[
+                "schema",
+                "graph_node_id",
+                "attempt_id",
+                "attempt_number",
+                "option_id",
+                "effect",
+                "target_graph_node_id",
+                "target_attempt_id",
+                "revision",
+                "session_state",
+                "record",
+            ],
+        )),
+        "podway.delegation-accept-result/v2" => Some((
+            &[
+                "schema",
+                "receipt_id",
+                "workspace_uuid",
+                "session_id",
+                "session_revision",
+                "attempt_id",
+                "package_digest",
+                "result_digest",
+                "acceptance_state",
+            ],
+            &[
+                "schema",
+                "receipt_id",
+                "workspace_uuid",
+                "session_id",
+                "session_revision",
+                "attempt_id",
+                "package_digest",
+                "result_digest",
+                "acceptance_state",
+            ],
+        )),
+        "podway.goal-definition-result/v2" => Some((
+            &[
+                "schema",
+                "goal_revision",
+                "statement",
+                "criteria",
+                "recorded_at",
+                "revision",
+            ],
+            &[
+                "schema",
+                "goal_revision",
+                "statement",
+                "criteria",
+                "actor",
+                "recorded_at",
+                "revision",
+            ],
+        )),
+        "podway.goal-revision-result/v2" => Some((
+            &[
+                "schema",
+                "goal_revision",
+                "statement",
+                "criteria",
+                "reason",
+                "recorded_at",
+                "rework_to",
+                "reactivated",
+                "revision",
+            ],
+            &[
+                "schema",
+                "goal_revision",
+                "statement",
+                "criteria",
+                "reason",
+                "actor",
+                "recorded_at",
+                "rework_to",
+                "reactivated",
+                "revision",
+            ],
+        )),
+        "podway.item-mutation-result/v3" => Some((
+            &[
+                "schema",
+                "changed",
+                "graph_node_id",
+                "attempt_id",
+                "attempt_number",
+                "item_id",
+                "revision",
+            ],
+            &[
+                "schema",
+                "changed",
+                "graph_node_id",
+                "attempt_id",
+                "attempt_number",
+                "item_id",
+                "revision",
+                "value_digest",
+            ],
+        )),
+        "podway.item-record-many-result/v2" => Some((
+            &[
+                "schema",
+                "changed",
+                "graph_node_id",
+                "attempt_id",
+                "attempt_number",
+                "revision",
+                "items",
+            ],
+            &[
+                "schema",
+                "changed",
+                "graph_node_id",
+                "attempt_id",
+                "attempt_number",
+                "revision",
+                "items",
+            ],
+        )),
+        "podway.next-result/v5" => Some((
+            &[
+                "schema",
+                "procedure_schema",
+                "procedure_digest",
+                "goal_tracking",
+                "goal_defined",
+                "node",
+                "attempt",
+                "trace_length",
+                "counters",
+                "revision",
+                "readiness",
+                "missing_required_item_count",
+                "blockers_total",
+                "allowed_actions",
+                "suggestions",
+                "suggestions_total",
+                "suggestions_truncated",
+                "references",
+                "readback",
+                "readback_items_total",
+                "readback_items_truncated",
+                "allowed_manual_rework_targets",
+            ],
+            &[
+                "schema",
+                "procedure_schema",
+                "procedure_digest",
+                "goal_tracking",
+                "goal_defined",
+                "goal_revision",
+                "latest_goal_outcome",
+                "goal",
+                "node",
+                "attempt",
+                "trace_length",
+                "counters",
+                "revision",
+                "readiness",
+                "title",
+                "intent",
+                "description",
+                "objective",
+                "prompt",
+                "reason_policy",
+                "instructions",
+                "missing_required_item_count",
+                "missing_required_items",
+                "missing_required_items_truncated",
+                "options",
+                "allowed_option_ids",
+                "option_guard_statuses",
+                "evidence_guidance",
+                "next_graph_node_id",
+                "terminal",
+                "skip",
+                "allowed_manual_rework_targets",
+                "allowed_actions",
+                "suggestions",
+                "suggestions_total",
+                "suggestions_truncated",
+                "references",
+                "readback",
+                "readback_items_total",
+                "readback_items_truncated",
+                "blockers_total",
+                "blockers",
+                "blockers_truncated",
+                "delegation",
+            ],
+        )),
+        "podway.observation-result/v5" => Some((
+            &[
+                "schema",
+                "status",
+                "guidance",
+                "active_items",
+                "active_items_total",
+                "active_items_truncated",
+                "mutation_templates",
+                "mutation_templates_total",
+                "mutation_templates_truncated",
+            ],
+            &[
+                "schema",
+                "status",
+                "guidance",
+                "active_items",
+                "active_items_total",
+                "active_items_truncated",
+                "mutation_templates",
+                "mutation_templates_total",
+                "mutation_templates_truncated",
+            ],
+        )),
+        "podway.outcome-lookup-result/v1" => Some((
+            &["schema", "idempotency_key", "found", "outcome"],
+            &["schema", "idempotency_key", "found", "outcome"],
+        )),
+        "podway.prepared-next-result/v3" => Some((
+            &[
+                "schema",
+                "procedure_schema",
+                "procedure_digest",
+                "session_id",
+                "session_state",
+                "revision",
+                "goal_tracking",
+                "goal_defined",
+                "trace_length",
+                "allowed_actions",
+                "suggestions",
+            ],
+            &[
+                "schema",
+                "procedure_schema",
+                "procedure_digest",
+                "session_id",
+                "session_state",
+                "revision",
+                "goal_tracking",
+                "goal_defined",
+                "trace_length",
+                "allowed_actions",
+                "suggestions",
+                "delegated_placement_count",
+            ],
+        )),
+        "podway.rework-result/v2" => Some((
+            &[
+                "schema",
+                "from_graph_node_id",
+                "to_graph_node_id",
+                "target_attempt_id",
+                "reason",
+                "reactivated",
+                "revision",
+            ],
+            &[
+                "schema",
+                "from_graph_node_id",
+                "to_graph_node_id",
+                "target_attempt_id",
+                "reason",
+                "reactivated",
+                "revision",
+            ],
+        )),
+        "podway.session-archive-result/v2" => Some((
+            &[
+                "schema",
+                "session_id",
+                "session_revision",
+                "activity",
+                "lifecycle",
+            ],
+            &[
+                "schema",
+                "session_id",
+                "session_revision",
+                "activity",
+                "lifecycle",
+            ],
+        )),
+        "podway.session-archive-show-result/v3" => Some((
+            &[
+                "schema",
+                "activity",
+                "archive",
+                "terminal_disposition",
+                "state",
+            ],
+            &[
+                "schema",
+                "activity",
+                "archive",
+                "terminal_disposition",
+                "state",
+                "receipt_summaries",
+                "receipt_summaries_total",
+                "receipt_summaries_truncated",
+            ],
+        )),
+        "podway.session-begin-result/v2" => Some((
+            &[
+                "schema",
+                "procedure_schema",
+                "procedure_digest",
+                "session_id",
+                "revision",
+                "session_state",
+                "entry_graph_node_id",
+                "attempt",
+                "goal_tracking",
+                "goal_defined",
+                "goal_revision",
+            ],
+            &[
+                "schema",
+                "procedure_schema",
+                "procedure_digest",
+                "session_id",
+                "revision",
+                "session_state",
+                "entry_graph_node_id",
+                "attempt",
+                "goal_tracking",
+                "goal_defined",
+                "goal_revision",
+            ],
+        )),
+        "podway.session-reset-result/v2" => Some((
+            &[
+                "schema",
+                "dry_run",
+                "mode",
+                "session_id",
+                "session_revision",
+                "lifecycle",
+                "current_terminal_disposition",
+                "eligible",
+                "required_action",
+                "reset",
+            ],
+            &[
+                "schema",
+                "dry_run",
+                "mode",
+                "session_id",
+                "session_revision",
+                "lifecycle",
+                "current_terminal_disposition",
+                "eligible",
+                "required_action",
+                "reset",
+            ],
+        )),
+        "podway.session-start-result/v4" => Some((
+            &[
+                "schema",
+                "procedure_schema",
+                "procedure_digest",
+                "dry_run",
+                "session_state",
+                "goal_tracking",
+                "goal_defined",
+                "active_attempt",
+                "goal_revision",
+            ],
+            &[
+                "schema",
+                "procedure_schema",
+                "procedure_digest",
+                "dry_run",
+                "session_state",
+                "goal_tracking",
+                "goal_defined",
+                "active_attempt",
+                "goal_revision",
+                "entry_graph_node_id",
+                "session_id",
+                "revision",
+                "existing_session",
+            ],
+        )),
+        "podway.stage-transition-result/v3" => Some((
+            &["schema", "transition", "revision"],
+            &[
+                "schema",
+                "transition",
+                "from_graph_node_id",
+                "from_attempt_id",
+                "to_graph_node_id",
+                "to_attempt_id",
+                "blocker_id",
+                "all",
+                "reason",
+                "reset",
+                "revision",
+                "session_state",
+            ],
+        )),
+        "podway.status-result/v5" => Some((
+            &[
+                "schema",
+                "tier",
+                "procedure",
+                "session",
+                "current",
+                "purpose",
+                "goal_tracking",
+                "goal_defined",
+                "trace_length",
+                "counters",
+                "items",
+                "missing_required_item_ids",
+                "blocker_window",
+                "blockers_truncated",
+                "item_values",
+                "items_total",
+                "items_truncated",
+                "references",
+                "allowed_option_ids",
+                "allowed_manual_rework_targets",
+            ],
+            &[
+                "schema",
+                "tier",
+                "procedure",
+                "session",
+                "current",
+                "purpose",
+                "goal_tracking",
+                "goal_defined",
+                "goal_revision",
+                "latest_goal_outcome",
+                "goal",
+                "trace_length",
+                "counters",
+                "items",
+                "missing_required_item_ids",
+                "blocker_window",
+                "blockers_truncated",
+                "item_values",
+                "items_total",
+                "items_truncated",
+                "references",
+                "allowed_option_ids",
+                "next_graph_node_id",
+                "terminal",
+                "skip",
+                "allowed_manual_rework_targets",
+                "current_trace_history",
+                "stale_attempt_history",
+                "decision_history",
+                "rework_history",
+                "stale_goal_revision_history",
+                "stale_goal_assessment_history",
+                "delegation",
+                "receipt_summaries",
+                "receipt_summaries_total",
+                "receipt_summaries_truncated",
+            ],
+        )),
+        "podway.terminal-disposition-result/v2" => Some((
+            &["schema", "session_id", "session_revision", "disposition"],
+            &["schema", "session_id", "session_revision", "disposition"],
+        )),
+        "podway.version-result/v2" => Some((
+            &[
+                "schema",
+                "product",
+                "version",
+                "target",
+                "build_identity",
+                "source_commit",
+                "contract_manifest_schema",
+                "contract_manifest_digest",
+            ],
+            &[
+                "schema",
+                "product",
+                "version",
+                "target",
+                "build_identity",
+                "source_commit",
+                "contract_manifest_schema",
+                "contract_manifest_digest",
+            ],
+        )),
+        "podway.workspace-init-result/v2" => Some((
+            &["schema", "initialized", "revision"],
+            &["schema", "initialized", "revision"],
+        )),
+        "podway.workspace-removal-result/v2" => Some((
+            &[
+                "schema",
+                "worktree_root",
+                "workspace_uuid",
+                "podway_directory_removed",
+                "already_absent",
+            ],
+            &[
+                "schema",
+                "worktree_root",
+                "workspace_uuid",
+                "podway_directory_removed",
+                "already_absent",
+            ],
+        )),
+        _ => None,
+    }
+}
+fn validate_result_correlations_v2(schema: &str, result: &Map<String, Value>) -> bool {
+    match schema {
+        "podway.terminal-disposition-result/v2" => result
+            .get("session_revision")
+            .zip(
+                result
+                    .get("disposition")
+                    .and_then(Value::as_object)
+                    .and_then(|value| value.get("session_revision")),
+            )
+            .is_some_and(|(session, disposition)| session == disposition),
+        "podway.delegation-package-result/v1" => {
+            let Some(package) = result.get("package").and_then(Value::as_object) else {
+                return false;
+            };
+            result_json_within_bound_v2(result, MAX_DELEGATION_PACKAGE_RESULT_BYTES_V1)
+                && validate_delegation_document_v1(
+                    "podway.delegation-work-package/v1",
+                    &Value::Object(package.clone()),
+                )
+                && ["workspace_uuid", "session_id", "attempt_id"]
+                    .iter()
+                    .all(|field| result.get(*field) == package.get(*field))
+        }
+        "podway.delegation-receipt-result/v1" => result
+            .get("receipt")
+            .filter(|receipt| !receipt.is_null())
+            .is_some_and(|receipt| {
+                validate_delegation_document_v1("podway.delegation-receipt/v1", receipt)
+                    && ["session_id", "attempt_id"]
+                        .iter()
+                        .all(|field| result.get(*field) == receipt.get(*field))
+            }),
+        "podway.delegation-accept-result/v2" => {
+            result_json_within_bound_v2(result, MAX_DELEGATION_ACCEPT_RESULT_BYTES_V1)
+        }
+        "podway.status-result/v5" | "podway.compact-status-result/v5" => {
+            delegation_projection_matches_current_attempt_v2(result)
+        }
+        "podway.next-result/v5" => {
+            let attempt = result
+                .get("attempt")
+                .and_then(|value| value.get("attempt_id"));
+            result.get("delegation").is_none_or(|projection| {
+                delegation_projection_matches_attempt_v2(projection, attempt)
+            })
+        }
+        "podway.observation-result/v5" => result
+            .get("status")
+            .and_then(Value::as_object)
+            .is_some_and(delegation_projection_matches_current_attempt_v2),
+        "podway.session-archive-show-result/v3" => result
+            .get("state")
+            .and_then(Value::as_object)
+            .is_some_and(delegation_projection_matches_current_attempt_v2),
+        "podway.decision-result/v2" => {
+            let Some(record) = result.get("record").and_then(Value::as_object) else {
+                return false;
+            };
+            [
+                "graph_node_id",
+                "attempt_id",
+                "attempt_number",
+                "option_id",
+                "effect",
+                "target_graph_node_id",
+            ]
+            .iter()
+            .all(|field| {
+                result
+                    .get(*field)
+                    .zip(record.get(*field))
+                    .is_some_and(|(projected, recorded)| projected == recorded)
+            })
+        }
+        _ => true,
+    }
+}
+
+fn result_json_within_bound_v2(result: &Map<String, Value>, limit: usize) -> bool {
+    serde_json::to_vec(result).is_ok_and(|encoded| encoded.len() <= limit)
+}
+
+fn delegation_projection_matches_current_attempt_v2(result: &Map<String, Value>) -> bool {
+    let attempt = result
+        .get("current")
+        .and_then(|current| current.get("attempt"))
+        .and_then(|attempt| attempt.get("attempt_id"));
+    result
+        .get("delegation")
+        .is_none_or(|projection| delegation_projection_matches_attempt_v2(projection, attempt))
+}
+
+fn delegation_projection_matches_attempt_v2(projection: &Value, attempt: Option<&Value>) -> bool {
+    let Some(state) = projection.get("state").and_then(Value::as_str) else {
+        return false;
+    };
+    if !serde_json::to_vec(projection)
+        .is_ok_and(|encoded| encoded.len() <= MAX_DELEGATION_PROJECTION_BYTES_V1)
+    {
+        return false;
+    }
+    match attempt {
+        Some(attempt_id) => {
+            state != "inactive"
+                && projection
+                    .get("receipt")
+                    .filter(|receipt| !receipt.is_null())
+                    .is_none_or(|receipt| receipt.get("attempt_id") == Some(attempt_id))
+        }
+        None => state == "inactive",
+    }
+}
+
+pub const MAX_V2_OUTPUT_WARNINGS: usize = 4;
+pub const MAX_V2_WARNING_CODE_CHARS: usize = 64;
+pub const MAX_V2_WARNING_PATH_CHARS: usize = 256;
+pub const MAX_V2_WARNING_MESSAGE_CHARS: usize = 512;
+
+pub const OUTPUT_SCHEMA_V3: &str = "podway.output/v3";
+pub const SUPPORTED_OUTPUT_SCHEMAS_V3: &[&str] = &[OUTPUT_SCHEMA_V3];
+const PROCEDURE_INDEPENDENT_OUTPUT_COMMANDS_V3: &[&str] = &[
+    "help",
+    "version",
+    "completions",
+    "preset.list",
+    "preset.show",
+    "preset.explain",
+    "procedure.show",
+    "__complete",
+];
+pub fn validate_v2_output_warnings(warnings: &[Map<String, Value>]) -> bool {
+    warnings.len() <= MAX_V2_OUTPUT_WARNINGS
+        && warnings.iter().all(|warning| {
+            warning.len() == 3
+                && warning
+                    .keys()
+                    .all(|field| matches!(field.as_str(), "code" | "path" | "message"))
+                && warning
+                    .get("code")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| {
+                        !value.is_empty() && value.chars().count() <= MAX_V2_WARNING_CODE_CHARS
+                    })
+                && warning
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| {
+                        !value.is_empty() && value.chars().count() <= MAX_V2_WARNING_PATH_CHARS
+                    })
+                && warning
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| {
+                        !value.is_empty() && value.chars().count() <= MAX_V2_WARNING_MESSAGE_CHARS
+                    })
+        })
+}
+
+pub fn validate_command_result_v2(
+    command: &str,
+    result: &Map<String, Value>,
+) -> Result<(), ProtocolError> {
+    if decode_result_schema_contract_v2(result)
+        .is_some_and(|contract| contract.commands.contains(&command))
+        || (PROCEDURE_INDEPENDENT_OUTPUT_COMMANDS_V3.contains(&command)
+            && validate_procedure_independent_result_v1(command, result).is_ok())
+    {
+        Ok(())
+    } else {
+        Err(ProtocolError::InvalidCommandResult {
+            command: command.to_owned(),
+        })
+    }
+}
+/// The version identity retains output v3 until the Task009 identity cutover.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OutputEnvelopeInputV3 {
+    pub request_id: RequestIdV1,
+    pub command: CommandNameV1,
+    pub generated_at: Rfc3339MillisV1,
+    pub result: Map<String, Value>,
+    pub warnings: Vec<Map<String, Value>>,
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct OutputEnvelopeV3 {
+    schema: String,
+    request_id: RequestIdV1,
+    command: CommandNameV1,
+    generated_at: Rfc3339MillisV1,
+    result: Map<String, Value>,
+    warnings: Vec<Map<String, Value>>,
+}
+impl OutputEnvelopeV3 {
+    pub fn new(input: OutputEnvelopeInputV3) -> Result<Self, ProtocolError> {
+        let output = Self {
+            schema: OUTPUT_SCHEMA_V3.to_owned(),
+            request_id: input.request_id,
+            command: input.command,
+            generated_at: input.generated_at,
+            result: input.result,
+            warnings: input.warnings,
+        };
+        output.validate()?;
+        Ok(output)
+    }
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.schema != OUTPUT_SCHEMA_V3 {
+            return Err(ProtocolError::UnsupportedProtocol {
+                received: self.schema.clone(),
+                supported: SUPPORTED_OUTPUT_SCHEMAS_V3,
+            });
+        }
+        self.request_id.validate()?;
+        self.command.validate()?;
+        self.generated_at.validate()?;
+        if self.command.as_str() != "version"
+            || validate_procedure_independent_result_v1("version", &self.result).is_err()
+        {
+            return Err(ProtocolError::InvalidCommandResult {
+                command: self.command.as_str().to_owned(),
+            });
+        }
+        if !validate_v2_output_warnings(&self.warnings) {
+            return Err(ProtocolError::InvalidOutputWarnings);
+        }
+        let value =
+            serde_json::to_value(self).map_err(|_| ProtocolError::InvalidCommandResult {
+                command: "version".to_owned(),
+            })?;
+        validate_json_document_depth(&value)?;
+        if !validate_selected_direct_schema_v1(OUTPUT_SCHEMA_V3, "", &value) {
+            return Err(ProtocolError::InvalidCommandResult {
+                command: "version".to_owned(),
+            });
+        }
+        Ok(())
+    }
+    pub fn command(&self) -> &CommandNameV1 {
+        &self.command
+    }
+    pub fn result(&self) -> &Map<String, Value> {
+        &self.result
+    }
+}
+impl<'de> Deserialize<'de> for OutputEnvelopeV3 {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Raw {
+            schema: String,
+            request_id: RequestIdV1,
+            command: CommandNameV1,
+            generated_at: Rfc3339MillisV1,
+            result: Map<String, Value>,
+            warnings: Vec<Map<String, Value>>,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        let output = Self {
+            schema: raw.schema,
+            request_id: raw.request_id,
+            command: raw.command,
+            generated_at: raw.generated_at,
+            result: raw.result,
+            warnings: raw.warnings,
+        };
+        output.validate().map_err(de::Error::custom)?;
+        Ok(output)
+    }
+}
+pub fn ensure_procedure_independent_result_schema_v1(
+    command: &str,
+    result: &mut Map<String, Value>,
+) {
+    if command == "version" {
+        result
+            .entry("schema".to_owned())
+            .or_insert_with(|| Value::String("podway.version-result/v1".to_owned()));
+    }
+}
+pub fn validate_procedure_independent_result_v1(
+    command: &str,
+    result: &Map<String, Value>,
+) -> Result<(), ProtocolError> {
+    let valid = if command == "version" {
+        result.get("schema").and_then(Value::as_str) == Some("podway.version-result/v1") && {
+            let mut value = result.clone();
+            value.remove("schema");
+            validate_version_result(Value::Object(value))
+        }
+    } else {
+        PROCEDURE_INDEPENDENT_OUTPUT_COMMANDS_V3.contains(&command)
+            && !result.contains_key("schema")
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(ProtocolError::InvalidCommandResult {
+            command: command.to_owned(),
+        })
+    }
+}
+fn validate_version_result(mut value: Value) -> bool {
+    let Some(result) = value.as_object_mut() else {
+        return false;
+    };
+    result.insert(
+        "schema".to_owned(),
+        Value::String("podway.version-result/v1".to_owned()),
+    );
+    validate_selected_direct_schema_v1("podway.version-result/v1", "", &value)
+}
+
 /// Preserved input and output budgets, independent of IPC framing.
 pub const MAX_DIRECT_INPUT_BYTES_V1: usize = 1_048_576;
 pub const MAX_DIRECT_OUTPUT_BYTES_V1: usize = 1_048_576;
@@ -3612,23 +1717,23 @@ static DIRECT_SCHEMA_RESOURCES_V1: OnceLock<Result<EmbeddedSchemaRetrieverV2, St
 fn direct_document_contracts_v1() -> impl Iterator<Item = &'static ResultSchemaContractV2> {
     DAEMON_FREE_DOCUMENT_SCHEMAS_V1
         .iter()
-        .chain(NEW_ROUTE_RESULT_SCHEMAS_V1.iter().filter(|contract| {
-            matches!(
-                contract.schema,
-                "podway.evidence-read-result/v1"
-                    | "podway.delegation-package-result/v1"
-                    | "podway.delegation-receipt-result/v1"
-            )
-        }))
-        .chain(DELEGATION_DOCUMENT_SCHEMAS_V1.iter().filter(|contract| {
-            matches!(
-                contract.schema,
-                "podway.delegation-work-package/v1"
-                    | "podway.delegation-accept-input/v1"
-                    | "podway.delegation-receipt/v1"
-            )
-        }))
+        .chain(EXISTING_ROUTE_RESULT_SCHEMAS_V2)
+        .chain(NEW_ROUTE_RESULT_SCHEMAS_V1)
+        .chain(DELEGATION_DOCUMENT_SCHEMAS_V1)
+        .chain(LEGACY_IDENTITY_SCHEMAS_V1)
 }
+const LEGACY_IDENTITY_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
+    result_schema_v2(
+        "podway.output/v3",
+        "schemas/output-v3.schema.json",
+        &["version"],
+    ),
+    result_schema_v2(
+        "podway.version-result/v1",
+        "schemas/version-result-v1.schema.json",
+        &["version"],
+    ),
+];
 
 fn direct_schema_source_v1(contract: &ResultSchemaContractV2) -> Result<Value, String> {
     let filename = contract
@@ -3761,6 +1866,7 @@ fn build_direct_validator_v1(schema_id: &str, discriminator: &str) -> Result<Val
         .map_err(|error| format!("direct schema {filename} does not compile: {error}"))
 }
 
+#[cfg(test)]
 fn build_daemon_free_validators_v1() -> Result<HashMap<&'static str, Validator>, String> {
     let retriever = embedded_schema_resources_v2()?;
     let mut validators = HashMap::new();
@@ -3790,7 +1896,7 @@ fn build_daemon_free_validators_v1() -> Result<HashMap<&'static str, Validator>,
     Ok(validators)
 }
 
-/// Validate a reserved document explicitly, without changing runtime decoding.
+/// Validate one current or explicitly reserved document against its canonical schema.
 pub fn validate_daemon_free_document_v1(schema: &str, value: &Value) -> bool {
     let discriminator = match schema {
         "podway.output/v4" => value["command"].as_str(),
@@ -3845,7 +1951,10 @@ mod daemon_free_tests {
     ];
 
     fn delegation_fixtures() -> serde_json::Value {
-        serde_json::from_str(include_str!("../../../tests/fixtures/v2/compatibility/supervised-delegation-contract-reservation.json")).unwrap()
+        serde_json::from_str(include_str!(
+            "../../../tests/fixtures/v2/protocol/current-contracts.json"
+        ))
+        .unwrap()
     }
 
     #[test]
@@ -3854,7 +1963,7 @@ mod daemon_free_tests {
             return;
         };
         assert!(DELEGATION_SCHEMAS.contains(&schema.as_str()));
-        assert!(super::RESULT_VALIDATORS_V2.get().is_none());
+        assert!(super::DIRECT_SCHEMA_RESOURCES_V1.get().is_none());
         assert!(super::DAEMON_FREE_VALIDATORS_V1.get().is_none());
         let value = delegation_fixtures()["fixtures"][&schema].clone();
         assert!(super::validate_delegation_document_v1(&schema, &value));
@@ -3876,10 +1985,7 @@ mod daemon_free_tests {
                 .unwrap()
                 .is_ok()
         );
-        assert!(
-            super::RESULT_VALIDATORS_V2.get().is_none(),
-            "delegation eagerly initialized legacy result validators"
-        );
+
         let mut invalid = value.clone();
         invalid["schema"] = serde_json::json!("unknown");
         assert!(!super::validate_delegation_document_v1(&schema, &invalid));
@@ -3891,7 +1997,6 @@ mod daemon_free_tests {
                 .count(),
             1
         );
-        assert!(super::RESULT_VALIDATORS_V2.get().is_none());
     }
 
     #[test]
@@ -3929,7 +2034,7 @@ mod daemon_free_tests {
 
     #[test]
     fn selected_delegation_validators_match_full_canonical_validation() {
-        let full = super::build_result_validators_v2().unwrap();
+        let full = super::build_daemon_free_validators_v1().unwrap();
         let fixtures = delegation_fixtures();
         for schema in DELEGATION_SCHEMAS {
             let value = fixtures["fixtures"][schema].clone();
@@ -3978,7 +2083,7 @@ mod daemon_free_tests {
     fn selected_direct_validators_match_full_canonical_validation() {
         let validators = super::build_daemon_free_validators_v1().unwrap();
         let answers: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../docs/examples/json/daemon-free-contract-reservation-v1.json"
+            "../../../tests/fixtures/v2/protocol/current-contracts.json"
         ))
         .unwrap();
         let mut cases = answers["fixtures"]

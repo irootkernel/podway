@@ -1277,27 +1277,6 @@ fn every_legacy_generation_and_marker_is_classified_without_changing_files() {
 }
 
 #[test]
-fn legacy_store_rejects_direct_generation_fourteen_as_newer() {
-    let (_root, direct) = fixture();
-    let identity = direct
-        .read(deadline(), |snapshot| {
-            Ok(snapshot.binding().identity().clone())
-        })
-        .unwrap();
-    let legacy = podway_store::SqliteStoreV1::open(
-        direct.layout().database(),
-        direct.layout().root(),
-        identity,
-        podway_store::SqliteStoreOptionsV1::new(1000).unwrap(),
-        UnixMillis::new(30),
-    );
-    assert!(matches!(
-        legacy,
-        Err(podway_store::StoreErrorV1::NewerStateV1 { .. })
-    ));
-}
-
-#[test]
 fn cold_read_without_shm_uses_a_write_free_heap_snapshot() {
     let (_root, direct) = fixture();
     fs::remove_file(direct.layout().shm()).unwrap();

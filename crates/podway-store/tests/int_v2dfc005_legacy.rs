@@ -1,12 +1,10 @@
-//! Freeze the last legacy producer before the daemon/job implementation is removed.
+//! Frozen rejected legacy inputs survive production daemon-state retirement.
 
 use super::int_v2dfc005_direct_store::{deadline, request, store};
-use podway_core::UnixMillis;
 use podway_store::direct_store::{
     DirectStoreClassificationV1, DirectStoreErrorV1, classify_direct_store_v1,
 };
-use podway_store::{StoreGraphMutationContractV2, StoreGraphStateContractV2};
-use std::{fs, path::Path};
+use std::fs;
 use tempfile::TempDir;
 
 const RECIPE: &str =
@@ -98,55 +96,4 @@ fn frozen_populated_legacy_recipe_and_every_marker_remain_byte_identical() {
             assert!(!direct.layout().shm().exists());
         }
     }
-}
-
-#[test]
-#[ignore = "one-time explicit V2DFC-005 legacy text-recipe producer"]
-fn export_generation_thirteen_with_a_completed_job_and_delegation_receipt() {
-    let output =
-        std::env::var_os("PODWAY_LEGACY_RECIPE_EXPORT").expect("explicit owned output directory");
-    let output = Path::new(&output);
-    assert!(output.is_absolute() && output.is_dir());
-    let root = TempDir::new().unwrap();
-    let legacy = super::int_v2sdg004_receipt::open(&root, None);
-    let graph = super::int_v2sdg004_receipt::session_state();
-    legacy
-        .create_graph_session_v2(&super::int_v2sdg004_receipt::identity(), graph.clone())
-        .unwrap();
-    let job = super::int_v2sdg004_receipt::admit_and_claim(&legacy, &graph);
-    let next = graph
-        .accept_delegation_successor_v1(graph.trace().active_attempt().unwrap().attempt_id())
-        .unwrap();
-    legacy
-        .commit_graph_delegation_accept_terminal_v1(
-            job.claim().clone(),
-            graph.workspace_revision(),
-            graph.trace().revision(),
-            next,
-            super::int_v2sdg004_receipt::digest('d'),
-            super::int_v2sdg004_receipt::receipt(&graph),
-            UnixMillis::new(7),
-        )
-        .unwrap();
-    drop(legacy);
-    // The producer's supported close checkpoints its actual Store. The tracked
-    // fixture is a SQL/data recipe, not this machine-local database image.
-    let source = root.path().join("state.sqlite3");
-    let connection =
-        rusqlite::Connection::open_with_flags(&source, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .unwrap();
-    let version: u32 = connection
-        .query_row("PRAGMA user_version", [], |row| row.get(0))
-        .unwrap();
-    assert_eq!(version, 13);
-    for table in ["jobs", "v2_delegation_receipts", "v2_task_sessions"] {
-        let count: u64 = connection
-            .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
-                row.get(0)
-            })
-            .unwrap();
-        assert_eq!(count, 1);
-    }
-    drop(connection);
-    fs::copy(source, output.join("legacy-generation-13.sqlite3")).unwrap();
 }

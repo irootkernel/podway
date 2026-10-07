@@ -42,17 +42,18 @@ use podway_core::{
 };
 use podway_presets::{PresetError, catalog_v2};
 use podway_protocol::{
-    CommandNameV1, ItemRecordManyInputV1, MAX_FRAME_PAYLOAD_BYTES_V1,
-    MAX_SLICE_ITEM_TEXT_SCALARS_V1, MAX_WAIT_TIMEOUT_MILLIS_V1, OutputEnvelopeInputV3,
-    OutputEnvelopeV3, RequestIdV1, Rfc3339MillisV1, build_identity_v1,
-    decode_item_record_many_input_v1, ensure_procedure_independent_result_schema_v1,
-    validate_command_result_v2, validate_procedure_independent_result_v1,
+    CommandNameV1, ItemRecordManyInputV1, MAX_DIRECT_INPUT_BYTES_V1,
+    MAX_SLICE_ITEM_TEXT_SCALARS_V1, OutputEnvelopeInputV3, OutputEnvelopeV3, RequestIdV1,
+    Rfc3339MillisV1, build_identity_v1, decode_item_record_many_input_v1,
+    ensure_procedure_independent_result_schema_v1, validate_command_result_v2,
+    validate_procedure_independent_result_v1,
 };
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 use completion::Shell;
 
+const MAX_DIRECT_COMMAND_TIMEOUT_MILLIS_V1: u64 = 3_600_000;
 const LOCAL_USAGE_EXIT: i32 = 2;
 const LOCAL_CLIENT_EXIT: i32 = 6;
 
@@ -4220,13 +4221,13 @@ fn prepare_stdin_payload(command: &mut Command) -> Result<(), LocalFailure> {
             args.value = Some(read_stdin_text()?);
         }
         Command::Record(args) if args.stdin => {
-            let mut bytes = Vec::with_capacity(MAX_FRAME_PAYLOAD_BYTES_V1.min(8 * 1024));
+            let mut bytes = Vec::with_capacity(MAX_DIRECT_INPUT_BYTES_V1.min(8 * 1024));
             io::stdin()
-                .take((MAX_FRAME_PAYLOAD_BYTES_V1 + 1) as u64)
+                .take((MAX_DIRECT_INPUT_BYTES_V1 + 1) as u64)
                 .read_to_end(&mut bytes)
                 .map_err(|_| LocalFailure::request_invalid("cannot read record stdin"))?;
             args.input = Some(decode_item_record_many_input_v1(&bytes).map_err(|error| {
-                if bytes.len() > MAX_FRAME_PAYLOAD_BYTES_V1 {
+                if bytes.len() > MAX_DIRECT_INPUT_BYTES_V1 {
                     LocalFailure::catalog(
                         "REQUEST_TOO_LARGE",
                         "record stdin exceeds the maximum size",
@@ -4487,9 +4488,9 @@ fn parse_timeout_millis(value: &str) -> Result<u64, String> {
         .ok()
         .and_then(|number| number.checked_mul(multiplier))
         .ok_or_else(|| "duration is out of range".to_owned())?;
-    if millis > MAX_WAIT_TIMEOUT_MILLIS_V1 {
+    if millis > MAX_DIRECT_COMMAND_TIMEOUT_MILLIS_V1 {
         return Err(format!(
-            "duration exceeds the maximum of {MAX_WAIT_TIMEOUT_MILLIS_V1}ms"
+            "duration exceeds the maximum of {MAX_DIRECT_COMMAND_TIMEOUT_MILLIS_V1}ms"
         ));
     }
     Ok(millis)
@@ -4665,9 +4666,6 @@ fn render_result_with_clock_and_writers(
                             request_id,
                             command,
                             generated_at,
-                            workspace: None,
-                            job: None,
-                            session: None,
                             result: result.clone(),
                             warnings: Vec::new(),
                         })
@@ -5397,7 +5395,7 @@ mod tests {
         use podway_protocol::WorkspaceOutputV1;
 
         let mut result: Value = serde_json::from_str(include_str!(
-            "../../../docs/examples/json/daemon-free-contract-reservation-v1.json"
+            "../../../tests/fixtures/v2/protocol/current-contracts.json"
         ))
         .unwrap();
         result = result["fixtures"]["podway.status-result/v5"].take();
@@ -5534,7 +5532,7 @@ mod tests {
         })));
 
         let families: Value = serde_json::from_str(include_str!(
-            "../../../docs/examples/json/daemon-free-contract-reservation-v1.json"
+            "../../../tests/fixtures/v2/protocol/current-contracts.json"
         ))
         .unwrap();
         // A running observation: the prepared fixture supplies the closed status shape, the

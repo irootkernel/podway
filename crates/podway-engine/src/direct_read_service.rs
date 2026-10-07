@@ -1,4 +1,4 @@
-//! Direct projections reuse the pure Procedure projection without hosted queue state.
+//! Validated direct projections over a coherent Store snapshot.
 
 use podway_core::{
     AttemptId, GraphNodeId, ItemId, SessionLifecycle, TerminalDispositionKindV2,
@@ -24,8 +24,6 @@ fn projection_view(view: &DirectWorkspaceViewV1) -> GraphWorkspaceViewV2 {
     GraphWorkspaceViewV2::new(
         view.binding().identity().clone(),
         view.graph().cloned(),
-        0,
-        None,
         view.sequence(),
         view.observed_at(),
     )
@@ -138,7 +136,6 @@ pub fn project_direct_status_v1(
         GraphStatusTierV2::Compact => "podway.compact-status-result/v5",
         GraphStatusTierV2::Standard | GraphStatusTierV2::Verbose => "podway.status-result/v5",
     };
-    result.remove("queue");
     result.insert("schema".into(), Value::String(schema.into()));
     validate_projection(schema, result)
 }
@@ -159,7 +156,6 @@ pub fn project_direct_next_v1(
 ) -> Result<Map<String, Value>, GraphViewErrorV2> {
     let mut result = project_graph_next_v2(&projection_view(view))?;
     let schema = direct_next_schema(view);
-    result.remove("queue");
     result.insert("schema".into(), Value::String(schema.into()));
     validate_projection(schema, result)
 }
@@ -172,15 +168,13 @@ pub fn project_direct_observation_v1(
         "schema".into(),
         Value::String("podway.observation-result/v5".into()),
     );
-    let status = result
-        .get_mut("status")
-        .and_then(Value::as_object_mut)
+    result
+        .get("status")
+        .and_then(Value::as_object)
         .ok_or(GraphViewErrorV2::InconsistentState(
             "observation has no structured status",
         ))?;
-    status.remove("queue");
     if let Some(guidance) = result.get_mut("guidance").and_then(Value::as_object_mut) {
-        guidance.remove("queue");
         guidance.insert(
             "schema".into(),
             Value::String(direct_next_schema(view).into()),

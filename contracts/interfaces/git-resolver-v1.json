@@ -5,14 +5,13 @@
     "podway-core"
   ],
   "consumers": [
-    "podway-daemon"
+    "podway-engine"
   ],
   "contract_version": "podway.git-resolver-contract/v1",
   "error_type": {
     "name": "GitResolveErrorV1",
     "variants": [
       "BareRepositoryV1",
-      "CopiedWorkspaceUuidConflictV1",
       "DeletedWorktreeV1",
       "IdentityMismatchV1",
       "InvalidSelectorV1",
@@ -41,7 +40,7 @@
   "operations": [
     {
       "constraints": [
-        "daemon_authoritative",
+        "engine_revalidates_store_binding",
         "durable_identity_defines_workspace_equality",
         "no_git_mutation_api",
         "paths_do_not_define_workspace_equality"
@@ -72,39 +71,10 @@
     "git_mutation"
   ],
   "runtime_path_types": {
-    "ServiceRuntimePathsV1": {
-      "fields": [
-        {
-          "name": "global_lock_path",
-          "type": "LocalPlatformPathV1"
-        },
-        {
-          "name": "launch_agent_path",
-          "type": "LocalPlatformPathV1"
-        },
-        {
-          "name": "log_path",
-          "type": "LocalPlatformPathV1"
-        },
-        {
-          "name": "metadata_index_path",
-          "type": "LocalPlatformPathV1"
-        },
-        {
-          "name": "socket_path",
-          "type": "LocalPlatformPathV1"
-        }
-      ],
-      "scope": "global_service_runtime"
-    },
     "WorkspaceRuntimePathsV1": {
       "fields": [
         {
           "name": "database_path",
-          "type": "LocalPlatformPathV1"
-        },
-        {
-          "name": "jobs_path",
           "type": "LocalPlatformPathV1"
         },
         {
@@ -114,11 +84,7 @@
       ],
       "requires": "ValidatedWorktreeV1",
       "scope": "validated_workspace_runtime"
-    },
-    "separation_constraints": [
-      "service_runtime_paths_and_workspace_runtime_paths_are_disjoint",
-      "uninstall_cannot_traverse_workspace_runtime_paths"
-    ]
+    }
   },
   "type_definitions": {
     "DurableWorktreeIdentityV1": {
@@ -170,8 +136,8 @@
           "type": "MainOrLinkedWorktreeV1"
         },
         {
-          "name": "move_registry_repair",
-          "type": "MoveRegistryRepairV1"
+          "name": "move_metadata",
+          "type": "WorktreeMoveMetadataV1"
         },
         {
           "name": "root_display_path",
@@ -184,10 +150,6 @@
         {
           "name": "workspace_runtime_paths",
           "type": "WorkspaceRuntimePathsV1"
-        },
-        {
-          "name": "workspace_uuid_status",
-          "type": "WorkspaceUuidStatusV1"
         },
         {
           "name": "worktree_admin_identity",

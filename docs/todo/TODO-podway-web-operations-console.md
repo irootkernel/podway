@@ -197,7 +197,7 @@ This candidate may be promoted only when all of the following are true:
 - [Daemon and Write Queue](../architecture/daemon-and-write-queue.md)
 - [macOS Service Specification](../architecture/macos-service.md)
 - [CLI Specification](../specs/interfaces/cli-specification.md)
-- [IPC Protocol](../specs/interfaces/ipc-protocol.md)
+- [IPC Protocol](../specs/interfaces/json-contract.md#direct-cli-generation)
 - [Recovery, Retention, and Maintenance](../specs/storage/recovery-retention-and-maintenance.md)
 - [Observability](../specs/operations/observability.md)
 - [Security and Trust](../specs/operations/security-and-trust.md)

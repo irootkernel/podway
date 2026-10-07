@@ -9,15 +9,12 @@ use std::{
 use jsonschema::{Retrieve, Uri};
 use podway_core::{AuthoringDiagnostic, AuthoringDiagnosticCode, SourceLocation};
 use podway_protocol::{
-    CommandNameV1, DAEMON_COMMAND_NAMES_V1, EXISTING_ROUTE_RESULT_SCHEMAS_V2, ErrorEnvelopeV1,
-    JobOutputV1, JobStateV1, MAX_V2_OUTPUT_WARNINGS, MAX_V2_RUNTIME_ERROR_MESSAGE_CHARS_V1,
-    MAX_V2_TERMINAL_ERROR_BYTES, NEW_ROUTE_RESULT_SCHEMAS_V1, OUTPUT_SCHEMA_V3,
-    OutputEnvelopeInputV3, OutputEnvelopeV3, PROCEDURE_DIAGNOSTICS_RESULT_SCHEMA_V1, ProtocolError,
-    RequestIdV1, ResponseEnvelopeV2, Rfc3339MillisV1, V2_RUNTIME_ERROR_CODES_V1, WorkspaceOutputV1,
-    decode_response_payload_v2, decode_result_schema_contract_v2, decode_single_frame_v1,
-    encode_frame_v1, encode_response_payload_v2, result_schema_top_level_fields_v2,
-    validate_command_result_v2, validate_delegation_document_v1, validate_frame_payload_length,
-    validate_v2_output_warnings,
+    CommandNameV1, DAEMON_FREE_DOCUMENT_SCHEMAS_V1, EXISTING_ROUTE_RESULT_SCHEMAS_V2,
+    ErrorEnvelopeV2, MAX_DIRECT_OUTPUT_BYTES_V1, MAX_V2_OUTPUT_WARNINGS,
+    NEW_ROUTE_RESULT_SCHEMAS_V1, OUTPUT_SCHEMA_V4, OutputEnvelopeInputV4, OutputEnvelopeV4,
+    PROCEDURE_DIAGNOSTICS_RESULT_SCHEMA_V1, ProtocolError, RequestIdV1, Rfc3339MillisV1,
+    decode_result_schema_contract_v2, result_schema_top_level_fields_v2,
+    validate_command_result_v2, validate_delegation_document_v1,
 };
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -49,10 +46,6 @@ fn read_schema(relative: &str) -> Value {
     serde_json::from_slice(&fs::read(root().join("assets").join(relative)).unwrap()).unwrap()
 }
 
-fn admission() -> Value {
-    json!({"admitted":true,"job_id":UUID,"workspace_sequence":1})
-}
-
 fn graph_counters(count: usize) -> Value {
     Value::Array(
         (0..count)
@@ -66,42 +59,6 @@ fn graph_counters(count: usize) -> Value {
             .collect(),
     )
 }
-
-fn add_admitted_envelope_metadata(output: &mut Value) {
-    output["workspace"] = json!({
-        "uuid":UUID,"root":"/tmp/podway-v2ctr","latest_workspace_sequence":1
-    });
-    output["job"] = json!({
-        "id":UUID,"sequence":1,"state":"succeeded",
-        "submitted_at":"2026-08-04T00:00:00.000Z",
-        "claimed_at":"2026-08-04T00:00:00.001Z",
-        "finished_at":"2026-08-04T00:00:00.002Z"
-    });
-}
-
-fn add_workspace_envelope_metadata(output: &mut Value) {
-    output["workspace"] = json!({
-        "uuid":UUID,"root":"/tmp/podway-v2ctr","latest_workspace_sequence":1
-    });
-}
-
-fn add_queued_job_envelope_metadata(output: &mut Value) {
-    output["workspace"] = json!({
-        "uuid":UUID,"root":"/tmp/podway-v2ctr","latest_workspace_sequence":1
-    });
-    output["job"] = json!({
-        "id":UUID,"sequence":1,"state":"queued",
-        "submitted_at":"2026-08-04T00:00:00.000Z",
-        "finished_at":null
-    });
-}
-
-fn admission_matches_job(output: &Value) -> bool {
-    output["result"]["admission"]["admitted"] == json!(true)
-        && output["result"]["admission"]["job_id"] == output["job"]["id"]
-        && output["result"]["admission"]["workspace_sequence"] == output["job"]["sequence"]
-}
-
 fn local_schemas() -> LocalSchemas {
     let mut resources = HashMap::new();
     for entry in fs::read_dir(root().join("assets/schemas")).unwrap() {
@@ -121,7 +78,6 @@ fn local_schemas() -> LocalSchemas {
     }
     LocalSchemas(Arc::new(resources))
 }
-
 fn assert_valid(schema_path: &str, value: &Value) {
     let mut schema = read_schema(schema_path);
     schema.as_object_mut().unwrap().remove("$id");
@@ -145,7 +101,6 @@ fn assert_valid(schema_path: &str, value: &Value) {
         "{schema_path} rejected fixture: {errors:#?}"
     );
 }
-
 fn assert_invalid(schema_path: &str, value: &Value) {
     let mut schema = read_schema(schema_path);
     schema.as_object_mut().unwrap().remove("$id");
@@ -165,7 +120,6 @@ fn assert_invalid(schema_path: &str, value: &Value) {
         "{schema_path} accepted an invalid fixture"
     );
 }
-
 fn assert_ref_valid(reference: &str, value: &Value) {
     let schema = json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -185,7 +139,6 @@ fn assert_ref_valid(reference: &str, value: &Value) {
         "{reference} rejected fixture: {errors:#?}"
     );
 }
-
 fn assert_ref_invalid(reference: &str, value: &Value) {
     let schema = json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -201,65 +154,84 @@ fn assert_ref_invalid(reference: &str, value: &Value) {
         "{reference} accepted invalid fixture"
     );
 }
-
+fn maximum_identifier(index: usize) -> String {
+    let suffix = format!("-{index}");
+    format!("a{}{}", "a".repeat(63 - suffix.len()), suffix)
+}
+fn escape_heavy(characters: usize) -> String {
+    "\0".repeat(characters)
+}
+fn result_map(value: &Value) -> Map<String, Value> {
+    value.as_object().expect("result object").clone()
+}
+fn warning(code: &str) -> Map<String, Value> {
+    result_map(&json!({
+        "code": code, "path": "workflow.yaml", "message": "Review this field."
+    }))
+}
+fn authoring_input(command: &str, result: &Value) -> OutputEnvelopeInputV4 {
+    OutputEnvelopeInputV4 {
+        request_id: RequestIdV1::new(UUID).unwrap(),
+        command: CommandNameV1::new(command).unwrap(),
+        generated_at: Rfc3339MillisV1::new("2026-08-04T00:00:00.000Z").unwrap(),
+        workspace: None,
+        session: None,
+        result: result_map(result),
+        warnings: Vec::new(),
+    }
+}
+fn diagnostics_result(operation: &str) -> Value {
+    let mut result = examples()["podway.procedure-diagnostics-result/v1"].clone();
+    result["operation"] = json!(operation);
+    result
+}
+fn representative_authoring_diagnostic() -> AuthoringDiagnostic {
+    AuthoringDiagnostic::new(
+        AuthoringDiagnosticCode::EvidenceSourceDoesNotDominateConsumer,
+        "workflow.yaml",
+        SourceLocation::new(1, 1, 1, 8),
+        "graph.nodes[review].evidence_from[build]",
+        "Evidence does not dominate.",
+        "Use a dominating source.",
+    )
+    .with_node_definition_id("review")
+    .with_graph_node_id("review")
+    .with_related_graph_node_ids(["build".to_owned()])
+}
+fn check_result_value() -> Value {
+    json!({
+        "operation_id": "make-test",
+        "operation_digest": DIGEST,
+        "input_basis": {"descriptor": "HEAD and dirty-tree snapshot", "digest": DIGEST},
+        "executor": {"name": "gaori", "version": "1.0.0"},
+        "outcome": "pass",
+        "summary": "The complete development gate passed.",
+        "output_digest": DIGEST
+    })
+}
+fn check_result_preview() -> Value {
+    json!({
+        "operation_id": "make-test",
+        "outcome": "pass",
+        "operation_digest": DIGEST,
+        "input_basis": {"digest": DIGEST},
+        "output_digest": DIGEST
+    })
+}
+fn typed_guard_predicate_status() -> Value {
+    json!({
+        "source": {"kind": "evidence", "graph_node_id": "review", "item_id": "verdict"},
+        "operator": "equals",
+        "expected": "approved",
+        "actual": "approved",
+        "state": "met"
+    })
+}
 fn examples() -> BTreeMap<&'static str, Value> {
-    let node = json!({"node_definition_id":"work","graph_node_id":"work","node_type":"action"});
-    let attempt = json!({"attempt_id":UUID,"attempt_number":1});
-    let queue = json!({"pending_mutations":false,"queued_count":0,"running_job_id":null,"latest_workspace_sequence":1});
-    let readiness =
-        json!({"items_satisfied":true,"unblocked":true,"goal_ready":true,"can_advance":true});
     let mut examples = BTreeMap::from([
         (
             "podway.procedure-validation-result/v2",
             json!({"schema":"podway.procedure-validation-result/v2","file":"workflow.yaml","procedure_schema":"podway.procedure/v2","digest":DIGEST,"valid":true}),
-        ),
-        (
-            "podway.detached-admission-result/v2",
-            json!({"schema":"podway.detached-admission-result/v2","detached":true,"admission":admission()}),
-        ),
-        (
-            "podway.session-start-result/v2",
-            json!({"schema":"podway.session-start-result/v2","procedure_schema":"podway.procedure/v2","procedure_digest":DIGEST,"dry_run":false,"goal_tracking":false,"goal_defined":false,"admission":admission(),"session_id":UUID,"revision":1,"entry_graph_node_id":"work"}),
-        ),
-        (
-            "podway.compact-status-result/v2",
-            json!({"schema":"podway.compact-status-result/v2","procedure":{"schema":"podway.procedure/v2","id":"workflow","version":"1","digest":DIGEST},"session":{"id":UUID,"lifecycle":"running","revision":1},"current":{"node":node,"attempt":attempt,"readiness":readiness,"missing_required_item_count":0,"blockers_total":0},"goal_tracking":false,"goal_defined":false,"trace_length":1,"counters":[{"graph_node_id":"work","attempt_count":1,"rework_traversal_count":0}],"items":[],"queue":queue}),
-        ),
-        (
-            "podway.status-result/v2",
-            json!({"schema":"podway.status-result/v2","tier":"standard","procedure":{"schema":"podway.procedure/v2","id":"workflow","version":"1","digest":DIGEST},"session":{"id":UUID,"lifecycle":"running","revision":1},"current":{"node":node,"attempt":attempt,"readiness":readiness,"missing_required_item_count":0,"blockers_total":0},"purpose":"test","goal_tracking":false,"goal_defined":false,"trace_length":1,"counters":[{"graph_node_id":"work","attempt_count":1,"rework_traversal_count":0}],"items":[],"queue":queue,"missing_required_item_ids":[],"blocker_window":[],"blockers_truncated":false,"item_values":[],"items_total":0,"items_truncated":false,"references":[],"allowed_option_ids":[],"terminal":true,"allowed_manual_rework_targets":[]}),
-        ),
-        (
-            "podway.next-result/v2",
-            json!({"schema":"podway.next-result/v2","procedure_schema":"podway.procedure/v2","procedure_digest":DIGEST,"goal_tracking":false,"goal_defined":false,"node":node,"attempt":attempt,"trace_length":1,"counters":[{"graph_node_id":"work","attempt_count":1,"rework_traversal_count":0}],"queue":queue,"revision":1,"readiness":readiness,"title":"Work","intent":"Do work","instructions":[],"missing_required_item_count":0,"missing_required_items":[],"blockers_total":0,"blockers":[],"blockers_truncated":false,"terminal":true,"allowed_actions":["session.complete"],"suggestions":[{"command":"session.complete","argv":["podway","complete"]}],"references":[],"readback":[],"allowed_manual_rework_targets":[]}),
-        ),
-        (
-            "podway.stage-transition-result/v2",
-            json!({"schema":"podway.stage-transition-result/v2","admission":admission(),"transition":"complete","from_graph_node_id":"work","from_attempt_id":UUID,"revision":2,"session_state":"completed"}),
-        ),
-        (
-            "podway.item-mutation-result/v2",
-            json!({"schema":"podway.item-mutation-result/v2","admission":admission(),"changed":true,"graph_node_id":"work","attempt_id":UUID,"attempt_number":1,"item_id":"done","revision":2}),
-        ),
-        (
-            "podway.item-record-many-result/v1",
-            json!({"schema":"podway.item-record-many-result/v1","admission":admission(),"changed":true,"graph_node_id":"work","attempt_id":UUID,"attempt_number":1,"revision":2,"items":[{"item_id":"done","expected_item_revision":0,"changed":true,"item_revision":1}]}),
-        ),
-        (
-            "podway.job-lookup-result/v3",
-            json!({"schema":"podway.job-lookup-result/v3","found":false}),
-        ),
-        (
-            "podway.job-result/v3",
-            json!({"schema":"podway.job-result/v3","job":null}),
-        ),
-        (
-            "podway.job-lookup-result/v4",
-            json!({"schema":"podway.job-lookup-result/v4","found":false}),
-        ),
-        (
-            "podway.job-result/v4",
-            json!({"schema":"podway.job-result/v4","job":null}),
         ),
         (
             "podway.procedure-source-result/v1",
@@ -277,446 +249,21 @@ fn examples() -> BTreeMap<&'static str, Value> {
             "podway.procedure-preview-result/v1",
             json!({"schema":"podway.procedure-preview-result/v1","file":"workflow.yaml","admissible":true,"procedure_schema":"podway.procedure/v2","procedure_id":"workflow","procedure_version":"1","purpose":"test","procedure_digest":DIGEST,"goal_tracking":false,"goal_assessment_graph_node_ids":[],"summary":{"definition_count":1,"graph_node_count":1,"action_node_count":1,"decision_node_count":0,"route_count":0,"cycle_count":0,"evidence_reference_count":0,"skippable_node_count":0,"manual_rework_target_count":0},"checks":{"validate":true,"vet":true,"lint":true},"graph":{"entry_graph_node_id":"work","terminal_graph_node_ids":["work"],"nodes":[{"graph_node_id":"work","node_definition_id":"work","node_type":"action","terminal":true,"skippable":false}],"edges":[]},"mermaid":"flowchart TD\n  work","start_suggestion":{"command":"session.start","argv":["podway","start","--procedure","workflow.yaml","--expect-procedure-digest",DIGEST,"--task","<title>"]},"diagnostics":[],"diagnostics_truncated":false,"diagnostics_total":0}),
         ),
-        (
-            "podway.decision-result/v1",
-            json!({"schema":"podway.decision-result/v1","admission":admission(),"graph_node_id":"review","attempt_id":UUID,"attempt_number":1,"option_id":"accept","effect":"advance","target_graph_node_id":"finish","target_attempt_id":UUID,"revision":2,"session_state":"running","record":{"trace_sequence":1,"session_id":UUID,"session_revision":1,"procedure_schema":"podway.procedure/v2","procedure_snapshot_id":UUID,"procedure_digest":DIGEST,"graph_node_id":"review","node_definition_id":"review","attempt_id":UUID,"attempt_number":1,"goal_revision":null,"option_id":"accept","effect":"advance","target_graph_node_id":"finish","reason":"accepted","recorded_at":"2026-08-04T00:00:00.000Z","references":[]}}),
-        ),
-        (
-            "podway.rework-result/v1",
-            json!({"schema":"podway.rework-result/v1","admission":admission(),"from_graph_node_id":"finish","to_graph_node_id":"work","target_attempt_id":UUID,"reason":"retry","reactivated":true,"revision":2}),
-        ),
-        (
-            "podway.goal-definition-result/v1",
-            json!({"schema":"podway.goal-definition-result/v1","admission":admission(),"goal_revision":1,"statement":"Ship safely","criteria":[{"criterion_id":"tests","statement":"Tests pass"}],"actor":"master","recorded_at":"2026-08-04T00:00:00.000Z","revision":2}),
-        ),
-        (
-            "podway.goal-revision-result/v1",
-            json!({"schema":"podway.goal-revision-result/v1","admission":admission(),"goal_revision":2,"statement":"Ship safely","criteria":[{"criterion_id":"tests","statement":"Tests pass"}],"reason":"clarify","actor":"master","recorded_at":"2026-08-04T00:00:00.000Z","rework_to":"work","reactivated":false,"revision":3}),
-        ),
-        (
-            "podway.criterion-assessment-result/v1",
-            json!({"schema":"podway.criterion-assessment-result/v1","admission":admission(),"graph_node_id":"assess","attempt_id":UUID,"goal_revision":1,"mode":"assessment","result":{"criterion_id":"tests","status":"satisfied","reason":"verified","citations":[]},"complete":true,"determined_outcome":"achieved","revision":3}),
-        ),
-        (
-            "podway.workspace-removal-result/v1",
-            json!({"schema":"podway.workspace-removal-result/v1","worktree_root":"/tmp/podway-v2ret","workspace_uuid":UUID,"registry_entry_removed":true,"podway_directory_removed":true,"already_absent":false}),
-        ),
-        (
-            "podway.workspace-mode-plan-result/v1",
-            json!({"schema":"podway.workspace-mode-plan-result/v1","status":"ready","worktree_root":"/tmp/podway-v2dvc","workspace_uuid":UUID,"source_mode":"prod","target_mode":"dev","disposable_state":{"session_present":true,"queued_jobs":0,"running_jobs":0},"expires_at":"2026-08-31T12:00:00.000Z","plan_token":"opaque-token"}),
-        ),
-        (
-            "podway.workspace-mode-apply-result/v1",
-            json!({"schema":"podway.workspace-mode-apply-result/v1","worktree_root":"/tmp/podway-v2dvc","workspace_uuid":UUID,"source_mode":"prod","target_mode":"dev","config_schema":"podway.workspace/v2","runtime_state_removed":true,"source_registry_retired":true,"target_registry_published":true,"already_applied":false}),
-        ),
     ]);
-    let reset_fixtures = runtime_reset_fixtures();
-    for schema in [
-        "podway.runtime-reset-plan-result/v1",
-        "podway.runtime-reset-result/v1",
-        "podway.runtime-reset-control-result/v1",
-    ] {
-        examples.insert(schema, reset_fixtures[schema].clone());
-    }
-    examples.insert(
-        "podway.observation-result/v1",
-        json!({
-            "schema": "podway.observation-result/v1",
-            "status": examples["podway.status-result/v2"].clone(),
-            "guidance": examples["podway.next-result/v2"].clone(),
-            "active_items": [],
-            "mutation_templates": []
-        }),
-    );
-    let prepared_fixtures: Value = serde_json::from_str(include_str!(
-        "../../../tests/fixtures/v2/protocol/result-families.json"
+    let current: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/v2/protocol/current-contracts.json"
     ))
     .unwrap();
-    for schema in [
-        "podway.compact-status-result/v3",
-        "podway.evidence-read-result/v1",
-        "podway.next-result/v3",
-        "podway.observation-result/v2",
-        "podway.observation-result/v3",
-        "podway.prepared-next-result/v1",
-        "podway.session-begin-result/v1",
-        "podway.session-reset-result/v1",
-        "podway.session-archive-result/v1",
-        "podway.session-archive-list-result/v1",
-        "podway.session-archive-list-result/v2",
-        "podway.session-archive-show-result/v1",
-        "podway.session-archive-purge-result/v1",
-        "podway.session-start-result/v3",
-        "podway.status-result/v3",
-        "podway.terminal-disposition-result/v1",
-    ] {
-        examples.insert(schema, prepared_fixtures["fixtures"][schema].clone());
-    }
-    let delegation_fixtures: Value = serde_json::from_str(include_str!(
-        "../../../tests/fixtures/v2/compatibility/supervised-delegation-contract-reservation.json"
-    ))
-    .unwrap();
-    for schema in [
-        "podway.compact-status-result/v4",
-        "podway.status-result/v4",
-        "podway.next-result/v4",
-        "podway.observation-result/v4",
-        "podway.prepared-next-result/v2",
-        "podway.procedure-preview-result/v2",
-        "podway.procedure-graph-result/v2",
-        "podway.session-archive-show-result/v2",
-        "podway.job-result/v5",
-        "podway.job-lookup-result/v5",
-        "podway.delegation-package-result/v1",
-        "podway.delegation-accept-result/v1",
-        "podway.delegation-receipt-result/v1",
-    ] {
-        examples.insert(schema, delegation_fixtures["fixtures"][schema].clone());
+    for contract in DAEMON_FREE_DOCUMENT_SCHEMAS_V1
+        .iter()
+        .chain(NEW_ROUTE_RESULT_SCHEMAS_V1)
+    {
+        if let Some(value) = current["fixtures"].get(contract.schema) {
+            examples.insert(contract.schema, value.clone());
+        }
     }
     examples
 }
-
-fn runtime_reset_fixtures() -> Value {
-    let document: Value = serde_json::from_str(include_str!(
-        "../../../tests/fixtures/v2/compatibility/runtime-reset-contract-reservation.json"
-    ))
-    .unwrap();
-    document["fixtures"].clone()
-}
-
-#[test]
-fn v2frt001_reset_contracts_reject_unsafe_state_combinations() {
-    let fixtures = runtime_reset_fixtures();
-    for (schema, value) in fixtures.as_object().unwrap() {
-        let filename = schema.strip_prefix("podway.").unwrap().replace("/v", "-v");
-        assert_valid(&format!("schemas/{filename}.schema.json"), value);
-    }
-
-    let mut plan = fixtures["podway.runtime-reset-plan-result/v1"].clone();
-    plan["plan_token"] = json!(format!("e30.{}", "a".repeat(64)));
-    assert_invalid("schemas/runtime-reset-plan-result-v1.schema.json", &plan);
-    plan["status"] = json!("ready");
-    plan["expires_at"] = json!("2026-09-09T00:10:00.000Z");
-    plan["targets"][0]["state"] = json!("offline");
-    assert_valid("schemas/runtime-reset-plan-result-v1.schema.json", &plan);
-    plan["targets"][0]["state"] = json!("busy");
-    assert_invalid("schemas/runtime-reset-plan-result-v1.schema.json", &plan);
-    plan["targets"][0]["state"] = json!("offline");
-    plan["targets"] = json!(vec![plan["targets"][0].clone(); 65]);
-    assert_invalid("schemas/runtime-reset-plan-result-v1.schema.json", &plan);
-
-    let mut control = fixtures["podway.runtime-reset-control-input/v1"].clone();
-    control["action"] = json!("reserve");
-    assert_invalid(
-        "schemas/runtime-reset-control-input-v1.schema.json",
-        &control,
-    );
-    control["operation_id"] = json!(UUID);
-    control["token_sha256"] = json!(DIGEST);
-    assert_valid(
-        "schemas/runtime-reset-control-input-v1.schema.json",
-        &control,
-    );
-    control["action"] = json!("snapshot");
-    assert_invalid(
-        "schemas/runtime-reset-control-input-v1.schema.json",
-        &control,
-    );
-    control["reservation_id"] = json!(UUID);
-    assert_valid(
-        "schemas/runtime-reset-control-input-v1.schema.json",
-        &control,
-    );
-
-    let mut result = fixtures["podway.runtime-reset-result/v1"].clone();
-    result["modes"][0]["state"] = json!("pending");
-    assert_invalid("schemas/runtime-reset-result-v1.schema.json", &result);
-    result["status"] = json!("incomplete");
-    assert_valid("schemas/runtime-reset-result-v1.schema.json", &result);
-    assert!(
-        validate_command_result_v2("runtime.reset.apply", result.as_object().unwrap()).is_err()
-    );
-
-    let mut record = fixtures["podway.runtime-reset-record/v1"].clone();
-    record["modes"][0]["entries"] = json!([{
-        "class":"registry", "relative_path_bytes_base64url":"cmVnaXN0cnkuc3FsaXRlMw",
-        "identity":record["plan"]["account_identity"], "kind":"regular", "state":"pending"
-    }]);
-    assert_valid("schemas/runtime-reset-record-v1.schema.json", &record);
-    record["modes"][0]["entries"][0]["class"] = json!("singleton_lock");
-    assert_invalid("schemas/runtime-reset-record-v1.schema.json", &record);
-    record["phase"] = json!("completed");
-    assert_invalid("schemas/runtime-reset-record-v1.schema.json", &record);
-}
-
-#[test]
-fn v2frt001_reset_errors_and_outputs_preserve_account_scope() {
-    let fixtures = runtime_reset_fixtures();
-    let mut error = json!({
-        "schema":"podway.error/v1", "request_id":UUID,
-        "command":"runtime.reset.apply", "generated_at":"2026-09-09T00:00:00.000Z",
-        "code":"RUNTIME_RESET_INCOMPLETE", "exit_code":4, "retryable":true,
-        "message":"Reset requires explicit retry.",
-        "details":{
-            "schema":"podway.runtime-reset-error-details/v1", "mode":"prod", "reason":"io",
-            "result":fixtures["podway.runtime-reset-result/v1"],
-            "retry":{
-                "command":"runtime.reset.apply", "selection":{"kind":"mode","mode":"prod"},
-                "plan_token":format!("e30.{}", "a".repeat(64)), "requires_confirmation":true
-            }
-        }
-    });
-    assert_invalid("schemas/error-v1.schema.json", &error);
-    assert!(serde_json::from_value::<ErrorEnvelopeV1>(error.clone()).is_err());
-    error["details"]["result"]["status"] = json!("incomplete");
-    error["details"]["result"]["modes"][0]["state"] = json!("pending");
-    assert_valid("schemas/error-v1.schema.json", &error);
-    assert!(serde_json::from_value::<ErrorEnvelopeV1>(error.clone()).is_ok());
-    error["workspace"] = json!({"uuid":UUID});
-    assert_invalid("schemas/error-v1.schema.json", &error);
-    assert!(serde_json::from_value::<ErrorEnvelopeV1>(error).is_err());
-
-    for (command, schema) in [
-        ("runtime.reset.plan", "podway.runtime-reset-plan-result/v1"),
-        ("runtime.reset.apply", "podway.runtime-reset-result/v1"),
-        (
-            "daemon.runtime_reset",
-            "podway.runtime-reset-control-result/v1",
-        ),
-    ] {
-        let mut output = json!({
-            "schema":OUTPUT_SCHEMA_V3, "request_id":UUID, "command":command,
-            "generated_at":"2026-09-09T00:00:00.000Z", "result":fixtures[schema], "warnings":[]
-        });
-        assert_valid("schemas/output-v3.schema.json", &output);
-        assert!(serde_json::from_value::<OutputEnvelopeV3>(output.clone()).is_ok());
-        add_workspace_envelope_metadata(&mut output);
-        assert_invalid("schemas/output-v3.schema.json", &output);
-        assert!(serde_json::from_value::<OutputEnvelopeV3>(output).is_err());
-    }
-    assert!(!DAEMON_COMMAND_NAMES_V1.contains(&"daemon.runtime_reset"));
-}
-
-fn reset_error_fixture() -> Value {
-    let mut result = runtime_reset_fixtures()["podway.runtime-reset-result/v1"].clone();
-    result["status"] = json!("incomplete");
-    result["modes"][0]["state"] = json!("pending");
-    json!({
-        "schema":"podway.error/v1", "request_id":UUID, "command":"runtime.reset.apply",
-        "generated_at":"2026-09-09T00:00:00.000Z", "code":"RUNTIME_RESET_INCOMPLETE",
-        "exit_code":4, "retryable":true, "message":"Reset requires explicit retry.",
-        "details":{
-            "schema":"podway.runtime-reset-error-details/v1", "mode":"prod", "reason":"io",
-            "result":result, "retry":{
-                "command":"runtime.reset.apply", "selection":{"kind":"mode","mode":"prod"},
-                "plan_token":format!("e30.{}", "a".repeat(64)), "requires_confirmation":true
-            }
-        }
-    })
-}
-
-fn pad_reset_resources(document: &mut Value, pointer: &str, target_bytes: usize) {
-    *document.pointer_mut(pointer).unwrap() = json!(vec![
-        json!({
-            "class":"registry", "path":{"display":"x", "path_bytes_base64url":"Lw"},
-            "state":"removed"
-        });
-        128
-    ]);
-    let mut remaining = target_bytes
-        .checked_sub(serde_json::to_vec(document).unwrap().len())
-        .unwrap();
-    for entry in document
-        .pointer_mut(pointer)
-        .unwrap()
-        .as_array_mut()
-        .unwrap()
-    {
-        let padding = remaining.min(4095);
-        entry["path"]["display"] = json!("x".repeat(padding + 1));
-        remaining -= padding;
-    }
-    assert_eq!(remaining, 0);
-    assert_eq!(serde_json::to_vec(document).unwrap().len(), target_bytes);
-}
-
-#[test]
-fn v2frt001_reset_serialized_size_bound_is_exact() {
-    for size in [524_287, 524_288, 524_289] {
-        let mut result = runtime_reset_fixtures()["podway.runtime-reset-result/v1"].clone();
-        pad_reset_resources(&mut result, "/modes/0/resources", size);
-        assert_valid("schemas/runtime-reset-result-v1.schema.json", &result);
-        assert_eq!(
-            validate_command_result_v2("runtime.reset.apply", result.as_object().unwrap()).is_ok(),
-            size <= 524_288
-        );
-        let mut error = reset_error_fixture();
-        pad_reset_resources(&mut error["details"], "/result/modes/0/resources", size);
-        assert_valid("schemas/error-v1.schema.json", &error);
-        assert_eq!(
-            serde_json::from_value::<ErrorEnvelopeV1>(error).is_ok(),
-            size <= 524_288
-        );
-    }
-}
-
-#[test]
-fn v2frt001_reset_total_resource_bound_spans_modes() {
-    let resource = json!({
-        "class":"registry", "path":{"display":"/", "path_bytes_base64url":"Lw"},
-        "state":"removed"
-    });
-    for count in [4096, 4097] {
-        let mut result = runtime_reset_fixtures()["podway.runtime-reset-result/v1"].clone();
-        result["selection"] = json!({"kind":"all_modes"});
-        result["modes"] = json!([
-            {"mode":"prod", "state":"complete", "resources":vec![resource.clone(); 2048]},
-            {"mode":"dev", "state":"complete", "resources":vec![resource.clone(); count - 2048]}
-        ]);
-        assert!(serde_json::to_vec(&result).unwrap().len() < 524_288);
-        assert_valid("schemas/runtime-reset-result-v1.schema.json", &result);
-        assert_eq!(
-            validate_command_result_v2("runtime.reset.apply", result.as_object().unwrap()).is_ok(),
-            count <= 4096
-        );
-        let mut plan = runtime_reset_fixtures()["podway.runtime-reset-plan-result/v1"].clone();
-        plan["status"] = json!("ready");
-        plan["selection"] = json!({"kind":"all_modes"});
-        plan["expires_at"] = json!("2026-09-09T00:10:00.000Z");
-        plan["plan_token"] = json!(format!("e30.{}", "a".repeat(64)));
-        plan["targets"] = json!([plan["targets"][0].clone(), plan["targets"][0].clone()]);
-        for (index, mode) in ["prod", "dev"].iter().enumerate() {
-            plan["targets"][index]["mode"] = json!(mode);
-            plan["targets"][index]["state"] = json!("offline");
-            plan["targets"][index]["resources"] = result["modes"][index]["resources"].clone();
-            for resource in plan["targets"][index]["resources"].as_array_mut().unwrap() {
-                resource.as_object_mut().unwrap().remove("state");
-            }
-        }
-        assert_valid("schemas/runtime-reset-plan-result-v1.schema.json", &plan);
-        assert_eq!(
-            validate_command_result_v2("runtime.reset.plan", plan.as_object().unwrap()).is_ok(),
-            count <= 4096
-        );
-        let mut error = reset_error_fixture();
-        result["status"] = json!("incomplete");
-        result["modes"][1]["state"] = json!("incomplete");
-        error["details"]["result"] = result;
-        error["details"]["retry"]["selection"] = json!({"kind":"all_modes"});
-        assert_valid("schemas/error-v1.schema.json", &error);
-        assert_eq!(
-            serde_json::from_value::<ErrorEnvelopeV1>(error).is_ok(),
-            count <= 4096
-        );
-    }
-}
-
-#[test]
-fn v2frt001_reset_state_and_retry_branches_are_closed() {
-    let fixtures = runtime_reset_fixtures();
-    for (field, value) in [
-        ("result", Value::Null),
-        ("retry", Value::Null),
-        ("retry", json!("retry later")),
-    ] {
-        let mut error = reset_error_fixture();
-        error["details"][field] = value;
-        assert_invalid("schemas/error-v1.schema.json", &error);
-        assert!(serde_json::from_value::<ErrorEnvelopeV1>(error).is_err());
-    }
-    let mut control = fixtures["podway.runtime-reset-control-result/v1"].clone();
-    control["state"] = json!("reserved");
-    assert_invalid(
-        "schemas/runtime-reset-control-result-v1.schema.json",
-        &control,
-    );
-    control["operation_id"] = json!(UUID);
-    control["token_sha256"] = json!(DIGEST);
-    control["reservation_id"] = json!(UUID);
-    assert_valid(
-        "schemas/runtime-reset-control-result-v1.schema.json",
-        &control,
-    );
-    control["state"] = json!("idle");
-    assert_invalid(
-        "schemas/runtime-reset-control-result-v1.schema.json",
-        &control,
-    );
-
-    let mut plan = fixtures["podway.runtime-reset-plan-result/v1"].clone();
-    plan["status"] = json!("recovery_required");
-    assert_invalid("schemas/runtime-reset-plan-result-v1.schema.json", &plan);
-    plan["recovery_operation"] = json!({"operation_id":UUID, "token_sha256":DIGEST});
-    assert_valid("schemas/runtime-reset-plan-result-v1.schema.json", &plan);
-    plan["status"] = json!("no_change");
-    assert_invalid("schemas/runtime-reset-plan-result-v1.schema.json", &plan);
-    plan["recovery_operation"] = Value::Null;
-    plan["status"] = json!("blocked");
-    assert_invalid("schemas/runtime-reset-plan-result-v1.schema.json", &plan);
-    plan["targets"][0]["state"] = json!("unsafe");
-    plan["targets"][0]["reason"] = json!("unsafe_path");
-    assert_valid("schemas/runtime-reset-plan-result-v1.schema.json", &plan);
-    plan["status"] = json!("no_change");
-    assert_invalid("schemas/runtime-reset-plan-result-v1.schema.json", &plan);
-
-    for (code, exit_code, retryable) in [
-        ("RUNTIME_RESET_BUSY", 4, false),
-        ("RUNTIME_RESET_UNSAFE", 5, false),
-        ("RUNTIME_RESET_UNSUPPORTED", 3, false),
-        ("RUNTIME_RESET_PLAN_STALE", 4, false),
-        ("RUNTIME_RESET_LIMIT_EXCEEDED", 2, false),
-        ("RUNTIME_RESET_IN_PROGRESS", 4, true),
-    ] {
-        for field in ["result", "retry"] {
-            let mut error = reset_error_fixture();
-            error["code"] = json!(code);
-            error["exit_code"] = json!(exit_code);
-            error["retryable"] = json!(retryable);
-            let non_null = error["details"][field].clone();
-            error["details"]["result"] = Value::Null;
-            error["details"]["retry"] = Value::Null;
-            assert_valid("schemas/error-v1.schema.json", &error);
-            assert!(serde_json::from_value::<ErrorEnvelopeV1>(error.clone()).is_ok());
-            error["details"][field] = non_null;
-            assert_invalid("schemas/error-v1.schema.json", &error);
-            assert!(serde_json::from_value::<ErrorEnvelopeV1>(error).is_err());
-        }
-    }
-}
-
-#[test]
-fn v2run003_readback_schema_accepts_the_declared_list_maximum() {
-    let values = (0..1000)
-        .map(|index| format!("value-{index}"))
-        .collect::<Vec<_>>();
-    let mut next = examples()["podway.next-result/v2"].clone();
-    next["references"] = json!([{
-        "source_graph_node_id": "source",
-        "source_title": "Source",
-        "source_attempt_id": UUID,
-        "source_attempt_number": 1,
-        "items_digest": DIGEST,
-        "state": "resolved"
-    }]);
-    next["readback"] = json!([{
-        "source_graph_node_id": "source",
-        "source_title": "Source",
-        "source_attempt_id": UUID,
-        "source_attempt_number": 1,
-        "items_digest": DIGEST,
-        "state": "resolved",
-        "items": [{"item_id": "values", "type": "list", "value": values}]
-    }]);
-    assert_valid("schemas/next-result-v2.schema.json", &next);
-    assert!(decode_result_schema_contract_v2(next.as_object().unwrap()).is_some());
-
-    next["readback"][0]["items"][0]["value"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!("overflow"));
-    assert_invalid("schemas/next-result-v2.schema.json", &next);
-}
-
 #[test]
 fn v2grf005_graph_result_uses_plantuml_as_the_machine_format_name() {
     let mut result = examples()["podway.procedure-graph-result/v1"].clone();
@@ -726,7 +273,6 @@ fn v2grf005_graph_result_uses_plantuml_as_the_machine_format_name() {
     result["format"] = json!("puml");
     assert_invalid("schemas/procedure-graph-result-v1.schema.json", &result);
 }
-
 #[test]
 fn v2grf006_graph_result_admits_the_dot_machine_format() {
     let mut result = examples()["podway.procedure-graph-result/v1"].clone();
@@ -734,7 +280,6 @@ fn v2grf006_graph_result_admits_the_dot_machine_format() {
     result["projection"] = json!("digraph podway {}");
     assert_valid("schemas/procedure-graph-result-v1.schema.json", &result);
 }
-
 #[test]
 fn v2grf_preview_uses_one_closed_result_family_for_every_document_outcome() {
     let diagnostics_contract = NEW_ROUTE_RESULT_SCHEMAS_V1
@@ -749,76 +294,11 @@ fn v2grf_preview_uses_one_closed_result_family_for_every_document_outcome() {
         &diagnostics,
     );
     let output = json!({
-        "schema":OUTPUT_SCHEMA_V3,"request_id":UUID,"command":"procedure.preview",
+        "schema":OUTPUT_SCHEMA_V4,"request_id":UUID,"command":"procedure.preview",
         "generated_at":"2026-08-04T00:00:00.000Z","result":diagnostics,"warnings":[]
     });
-    assert_invalid("schemas/output-v3.schema.json", &output);
+    assert_invalid("schemas/output-v4.schema.json", &output);
 }
-
-#[test]
-fn v2ctr003_registry_is_versioned_and_covers_exactly_the_v2_authoring_routes() {
-    assert_eq!(EXISTING_ROUTE_RESULT_SCHEMAS_V2.len(), 23);
-    assert_eq!(NEW_ROUTE_RESULT_SCHEMAS_V1.len(), 35);
-    assert!(
-        EXISTING_ROUTE_RESULT_SCHEMAS_V2
-            .iter()
-            .chain(NEW_ROUTE_RESULT_SCHEMAS_V1)
-            .all(
-                |entry| entry.schema.rsplit_once("/v").is_some_and(|(_, version)| {
-                    version
-                        .bytes()
-                        .next()
-                        .is_some_and(|byte| byte.is_ascii_digit() && byte != b'0')
-                        && version.chars().all(|character| character.is_ascii_digit())
-                })
-            ),
-        "every registered result schema must carry a positive /vN suffix"
-    );
-
-    let routes: BTreeSet<_> = NEW_ROUTE_RESULT_SCHEMAS_V1
-        .iter()
-        .flat_map(|entry| entry.commands.iter().copied())
-        .collect();
-    assert_eq!(
-        routes,
-        BTreeSet::from([
-            "procedure.format",
-            "procedure.validate",
-            "procedure.vet",
-            "procedure.lint",
-            "procedure.check",
-            "procedure.graph",
-            "procedure.preview",
-            "procedure.scaffold",
-            "session.decide",
-            "session.begin",
-            "session.reset",
-            "session.archive",
-            "session.archive_list",
-            "session.archive_show",
-            "session.archive_purge",
-            "session.rework",
-            "session.observe",
-            "session.terminal_disposition",
-            "goal.define",
-            "goal.revise",
-            "goal.assess_criterion",
-            "item.record_many",
-            "evidence.read",
-            "workspace.remove",
-            "workspace.mode.plan",
-            "workspace.mode.apply",
-            "runtime.reset.plan",
-            "runtime.reset.apply",
-            "daemon.runtime_reset",
-            "delegation.package",
-            "delegation.accept",
-            "delegation.receipt",
-        ])
-    );
-    assert_eq!(routes.len(), 32);
-}
-
 #[test]
 fn v2ctr003_registry_top_level_fields_match_every_canonical_schema() {
     for contract in EXISTING_ROUTE_RESULT_SCHEMAS_V2
@@ -843,393 +323,11 @@ fn v2ctr003_registry_top_level_fields_match_every_canonical_schema() {
         assert_eq!(schema_allowed, allowed.iter().copied().collect());
     }
 }
-
-#[test]
-fn v2ret002_workspace_removal_result_is_closed_and_procedure_independent() {
-    let result = json!({
-        "schema": "podway.workspace-removal-result/v1",
-        "worktree_root": "/tmp/podway-v2ret",
-        "workspace_uuid": UUID,
-        "registry_entry_removed": true,
-        "podway_directory_removed": true,
-        "already_absent": false
-    });
-    assert_valid("schemas/workspace-removal-result-v1.schema.json", &result);
-    assert!(decode_result_schema_contract_v2(result.as_object().unwrap()).is_some());
-    assert!(validate_command_result_v2("workspace.remove", result.as_object().unwrap()).is_ok());
-
-    let output = json!({
-        "schema": OUTPUT_SCHEMA_V3,
-        "request_id": UUID,
-        "command": "workspace.remove",
-        "generated_at": "2026-08-28T00:00:00.000Z",
-        "result": result,
-        "warnings": []
-    });
-    assert_valid("schemas/output-v3.schema.json", &output);
-    let mut invalid = output;
-    add_workspace_envelope_metadata(&mut invalid);
-    assert_invalid("schemas/output-v3.schema.json", &invalid);
-
-    let absent = json!({
-        "schema": "podway.workspace-removal-result/v1",
-        "worktree_root": "/tmp/podway-v2ret",
-        "workspace_uuid": null,
-        "registry_entry_removed": false,
-        "podway_directory_removed": false,
-        "already_absent": true
-    });
-    assert_valid("schemas/workspace-removal-result-v1.schema.json", &absent);
-
-    let marker = json!({
-        "schema": "podway.workspace-removal-marker/v1",
-        "operation_id": UUID,
-        "request_digest": DIGEST,
-        "response_request_id": UUID,
-        "workspace_uuid": UUID,
-        "root_identity": {
-            "root_path_bytes_base64url": "L3RtcC9wb2R3YXktdjJyZXQ",
-            "common_dir_identity": DIGEST,
-            "worktree_admin_identity": DIGEST
-        },
-        "created_at": "2026-08-28T00:00:00.000Z"
-    });
-    assert_valid("schemas/workspace-removal-marker-v1.schema.json", &marker);
-}
-
-#[test]
-fn v2dvc002_reserves_closed_runtime_mode_contracts_without_runtime_admission() {
-    let workspace = json!({
-        "schema": "podway.workspace/v2",
-        "mode": "demo-2",
-        "procedure_paths": [".podway/procedures"]
-    });
-    assert_valid("schemas/workspace-v2.schema.json", &workspace);
-    let mut invalid_workspace = workspace;
-    invalid_workspace["mode"] = json!("Demo_2");
-    assert_invalid("schemas/workspace-v2.schema.json", &invalid_workspace);
-
-    let managed = json!({
-        "schema":"podway.managed-runtime/v3","metadata_version":3,
-        "purpose":"contributor","euid":501,"canonical_root":"/tmp/podway-managed",
-        "mode":"contributor",
-        "paths":{
-            "lock":"/tmp/podway-managed/run/podwayd.lock",
-            "socket":"/tmp/podway-managed/run/podwayd.sock",
-            "service_state":"/tmp/podway-managed/state/service.json",
-            "registry":"/tmp/podway-managed/state/workspaces.json",
-            "recovery":"/tmp/podway-managed/state/recovery.json",
-            "log":"/tmp/podway-managed/logs/podwayd.log",
-            "bootstrap_log":"/tmp/podway-managed/logs/podwayd-bootstrap.log"
-        },
-        "sandbox_root":"/tmp/podway-sandbox",
-        "executables":{
-            "cli":{"path":"/tmp/podway-managed/bin/podway","sha256":DIGEST},
-            "daemon":{"path":"/tmp/podway-managed/bin/podwayd","sha256":DIGEST},
-            "controller":null
-        },
-        "generation":null
-    });
-    assert_valid("schemas/managed-runtime-v3.schema.json", &managed);
-
-    let plan = json!({
-        "schema":"podway.workspace-mode-plan-result/v1","status":"ready",
-        "worktree_root":"/tmp/podway-v2dvc","workspace_uuid":UUID,
-        "source_mode":"prod","target_mode":"dev",
-        "disposable_state":{"session_present":true,"queued_jobs":0,"running_jobs":0},
-        "expires_at":"2026-08-31T12:00:00.000Z","plan_token":"opaque-token"
-    });
-    assert_valid("schemas/workspace-mode-plan-result-v1.schema.json", &plan);
-    assert!(decode_result_schema_contract_v2(plan.as_object().unwrap()).is_some());
-    assert!(validate_command_result_v2("workspace.mode.plan", plan.as_object().unwrap()).is_ok());
-
-    let apply = json!({
-        "schema":"podway.workspace-mode-apply-result/v1",
-        "worktree_root":"/tmp/podway-v2dvc","workspace_uuid":UUID,
-        "source_mode":"prod","target_mode":"dev","config_schema":"podway.workspace/v2",
-        "runtime_state_removed":true,"source_registry_retired":true,
-        "target_registry_published":true,"already_applied":false
-    });
-    assert_valid("schemas/workspace-mode-apply-result-v1.schema.json", &apply);
-    assert!(decode_result_schema_contract_v2(apply.as_object().unwrap()).is_some());
-    assert!(validate_command_result_v2("workspace.mode.apply", apply.as_object().unwrap()).is_ok());
-
-    for (command, result) in [
-        ("workspace.mode.plan", plan),
-        ("workspace.mode.apply", apply),
-    ] {
-        assert_valid(
-            "schemas/output-v3.schema.json",
-            &json!({
-                "schema":OUTPUT_SCHEMA_V3,"request_id":UUID,"command":command,
-                "generated_at":"2026-08-31T00:00:00.000Z","result":result,"warnings":[]
-            }),
-        );
-    }
-
-    let marker = json!({
-        "schema":"podway.workspace-mode-switch-marker/v1","operation_id":UUID,
-        "plan_token_digest":DIGEST,"workspace_uuid":UUID,
-        "source_mode":"prod","target_mode":"dev","config_digest":DIGEST,
-        "completed_steps":["source_closed","source_registry_retired"],
-        "created_at":"2026-08-31T00:00:00.000Z","updated_at":"2026-08-31T00:00:01.000Z"
-    });
-    assert_valid(
-        "schemas/workspace-mode-switch-marker-v1.schema.json",
-        &marker,
-    );
-
-    let mismatch = json!({
-        "schema":"podway.workspace-mode-mismatch-details/v1","boundary":"store",
-        "expected_mode":"dev","actual_mode":"prod"
-    });
-    assert_valid(
-        "schemas/workspace-mode-mismatch-details-v1.schema.json",
-        &mismatch,
-    );
-    let mut mutation_mismatch = mismatch.clone();
-    mutation_mismatch["admission"] = json!({"admitted":false});
-    assert_valid(
-        "schemas/workspace-mode-mismatch-details-v1.schema.json",
-        &mutation_mismatch,
-    );
-    mutation_mismatch["admission"] = admission();
-    assert_invalid(
-        "schemas/workspace-mode-mismatch-details-v1.schema.json",
-        &mutation_mismatch,
-    );
-
-    let status = json!({
-        "schema":"podway.daemon-status-result/v3","mode":"dev",
-        "status":"running","installed":true,"loaded":true,"reachable":true,
-        "product":"podway","daemon_version":"0.2.8","target":"aarch64-apple-darwin",
-        "build_identity":DIGEST,"source_commit":null,
-        "contract_manifest_schema":"podway.contract-manifest/v1",
-        "contract_manifest_digest":DIGEST,"protocol_versions":["podway.ipc/v1"],
-        "pid":42,"process_id":UUID,"executable_path":"/opt/podwayd",
-        "started_at":"2026-08-31T00:00:00.000Z","uptime_ms":1,
-        "socket_path":"/tmp/podway.sock","configured_socket_path":"/tmp/podway.sock",
-        "effective_socket_path":"/tmp/podway.sock","registered_worktree_count":0,
-        "active_scheduler_count":0,"queued_job_count":0,"running_job_count":0,
-        "in_flight_client_count":0,"maintenance_operation_count":0,
-        "readiness_state":"ready","readiness_stage":"ready","readiness_elapsed_ms":1,
-        "worktree_recovery":{"total":0,"completed":0,"failed":0}
-    });
-    assert_valid("schemas/daemon-status-result-v3.schema.json", &status);
-    assert_valid(
-        "schemas/output-v3.schema.json",
-        &json!({
-            "schema":OUTPUT_SCHEMA_V3,"request_id":UUID,"command":"daemon.wait-ready",
-            "generated_at":"2026-08-31T00:00:00.000Z","result":status,"warnings":[]
-        }),
-    );
-}
-
-#[test]
-fn v2dvc005_daemon_activity_fields_are_closed_bounded_nullable_and_bound_to_reachability() {
-    let mut status = json!({
-        "schema":"podway.daemon-status-result/v3","mode":"dev",
-        "status":"running","installed":true,"loaded":true,"reachable":true,
-        "product":"podway","daemon_version":"0.2.8","target":"aarch64-apple-darwin",
-        "build_identity":DIGEST,"source_commit":null,
-        "contract_manifest_schema":"podway.contract-manifest/v1",
-        "contract_manifest_digest":DIGEST,"protocol_versions":["podway.ipc/v1"],
-        "pid":42,"process_id":UUID,"executable_path":"/opt/podwayd",
-        "started_at":"2026-08-31T00:00:00.000Z","uptime_ms":1,
-        "socket_path":"/tmp/podway.sock","configured_socket_path":"/tmp/podway.sock",
-        "effective_socket_path":"/tmp/podway.sock","registered_worktree_count":0,
-        "active_scheduler_count":0,"queued_job_count":0,"running_job_count":0,
-        "in_flight_client_count":0,"maintenance_operation_count":0,
-        "readiness_state":"ready","readiness_stage":"ready","readiness_elapsed_ms":1,
-        "worktree_recovery":{"total":0,"completed":0,"failed":0}
-    });
-    let input = |result: &Value| OutputEnvelopeInputV3 {
-        request_id: RequestIdV1::new(UUID).unwrap(),
-        command: CommandNameV1::new("daemon.wait-ready").unwrap(),
-        generated_at: Rfc3339MillisV1::new("2026-08-31T00:00:00.000Z").unwrap(),
-        workspace: None,
-        job: None,
-        session: None,
-        result: result.as_object().unwrap().clone(),
-        warnings: Vec::new(),
-    };
-    assert!(OutputEnvelopeV3::new(input(&status)).is_ok());
-    assert_valid("schemas/daemon-status-result-v3.schema.json", &status);
-
-    status["in_flight_client_count"] = Value::Null;
-    assert!(OutputEnvelopeV3::new(input(&status)).is_ok());
-    assert_valid("schemas/daemon-status-result-v3.schema.json", &status);
-    status["in_flight_client_count"] = json!(0);
-
-    let mut string_count = status.clone();
-    string_count["in_flight_client_count"] = json!("0");
-    assert!(OutputEnvelopeV3::new(input(&string_count)).is_err());
-
-    let mut excessive = status.clone();
-    excessive["maintenance_operation_count"] = json!(10_001);
-    assert!(OutputEnvelopeV3::new(input(&excessive)).is_err());
-
-    let mut excessive_clients = status.clone();
-    excessive_clients["in_flight_client_count"] = json!(1_025);
-    assert!(OutputEnvelopeV3::new(input(&excessive_clients)).is_err());
-
-    let mut missing = status;
-    missing
-        .as_object_mut()
-        .unwrap()
-        .remove("in_flight_client_count");
-    assert!(OutputEnvelopeV3::new(input(&missing)).is_err());
-
-    let mut unreachable = json!({
-        "schema":"podway.daemon-status-result/v3","mode":"dev",
-        "status":"stopped","installed":true,"loaded":false,"reachable":false,
-        "product":"podway","daemon_version":"0.2.8","target":"aarch64-apple-darwin",
-        "build_identity":DIGEST,"source_commit":null,
-        "contract_manifest_schema":"podway.contract-manifest/v1",
-        "contract_manifest_digest":DIGEST,"protocol_versions":["podway.ipc/v1"],
-        "pid":null,"process_id":null,"executable_path":"/opt/podwayd",
-        "started_at":null,"uptime_ms":null,
-        "socket_path":"/tmp/podway.sock","configured_socket_path":"/tmp/podway.sock",
-        "effective_socket_path":null,"registered_worktree_count":null,
-        "active_scheduler_count":null,"queued_job_count":null,"running_job_count":null,
-        "in_flight_client_count":null,"maintenance_operation_count":null,
-        "readiness_state":"not_running","readiness_stage":null,"readiness_elapsed_ms":null,
-        "worktree_recovery":null
-    });
-    assert!(OutputEnvelopeV3::new(input(&unreachable)).is_ok());
-    assert_valid("schemas/daemon-status-result-v3.schema.json", &unreachable);
-    unreachable["in_flight_client_count"] = json!(0);
-    assert!(OutputEnvelopeV3::new(input(&unreachable)).is_err());
-    assert_invalid("schemas/daemon-status-result-v3.schema.json", &unreachable);
-}
-
-#[test]
-fn v2dvc005_aquarium_service_plan_schema_closes_action_semantics() {
-    let token = format!("sha256:{}", "0".repeat(64));
-    let mut plan = json!({
-        "schema":"aquarium-dev-service-plan/v1","project_id":"podway",
-        "target_git_sha":"0".repeat(40),"action":"activate",
-        "active_git_sha":"1".repeat(40),"busy":false,"plan_token":token
-    });
-    assert_valid("schemas/aquarium-dev-service-plan-v1.schema.json", &plan);
-
-    plan["plan_token"] = Value::Null;
-    assert_invalid("schemas/aquarium-dev-service-plan-v1.schema.json", &plan);
-
-    plan["action"] = json!("defer");
-    plan["busy"] = json!(true);
-    assert_valid("schemas/aquarium-dev-service-plan-v1.schema.json", &plan);
-
-    plan["busy"] = json!(false);
-    assert_invalid("schemas/aquarium-dev-service-plan-v1.schema.json", &plan);
-
-    plan["busy"] = json!(true);
-    plan["plan_token"] = json!(format!("sha256:{}", "0".repeat(64)));
-    assert_invalid("schemas/aquarium-dev-service-plan-v1.schema.json", &plan);
-}
-
-#[test]
-fn v2ctr003_every_registered_result_has_a_closed_schema_and_known_answer() {
-    let examples = examples();
-    let registry: Vec<_> = EXISTING_ROUTE_RESULT_SCHEMAS_V2
-        .iter()
-        .chain(NEW_ROUTE_RESULT_SCHEMAS_V1)
-        .collect();
-    assert_eq!(examples.len(), registry.len());
-    for contract in registry {
-        let example = examples
-            .get(contract.schema)
-            .unwrap_or_else(|| panic!("missing fixture for {}", contract.schema));
-        assert_valid(contract.schema_path, example);
-        let result: Map<String, Value> = example.as_object().unwrap().clone();
-        assert_eq!(decode_result_schema_contract_v2(&result), Some(contract));
-
-        let mut unknown = example.clone();
-        unknown
-            .as_object_mut()
-            .unwrap()
-            .insert("unknown".to_owned(), json!(true));
-        assert_eq!(
-            decode_result_schema_contract_v2(unknown.as_object().unwrap()),
-            None
-        );
-        let schema = read_schema(contract.schema_path);
-        assert_eq!(schema["additionalProperties"], json!(false));
-        let mut schema_without_id = schema.clone();
-        schema_without_id.as_object_mut().unwrap().remove("$id");
-        let filename = Path::new(contract.schema_path)
-            .file_name()
-            .unwrap()
-            .to_str()
-            .unwrap();
-        let validator = jsonschema::draft202012::options()
-            .with_base_uri(format!("{SCHEMA_BASE}{filename}"))
-            .with_retriever(local_schemas())
-            .should_validate_formats(true)
-            .build(&schema_without_id)
-            .unwrap();
-        assert!(
-            !validator.is_valid(&unknown),
-            "{} accepted an unknown field",
-            contract.schema
-        );
-    }
-    let expected_counters = json!([{
-        "graph_node_id":"work", "attempt_count":1, "rework_traversal_count":0
-    }]);
-    for schema in [
-        "podway.compact-status-result/v2",
-        "podway.status-result/v2",
-        "podway.next-result/v2",
-    ] {
-        assert_eq!(examples[schema]["counters"], expected_counters);
-    }
-}
-
-#[test]
-fn v2ctr003_output_v2_validates_every_registered_command_result_pair() {
-    let examples = examples();
-    for contract in EXISTING_ROUTE_RESULT_SCHEMAS_V2
-        .iter()
-        .chain(NEW_ROUTE_RESULT_SCHEMAS_V1)
-    {
-        for command in contract.commands {
-            let mut result = examples[contract.schema].clone();
-            if contract.schema == "podway.detached-admission-result/v2"
-                && matches!(*command, "session.start" | "session.start_replace")
-            {
-                result["procedure_digest"] = json!(DIGEST);
-            }
-            let mut output = json!({
-                "schema": OUTPUT_SCHEMA_V3,
-                "request_id": UUID,
-                "command": command,
-                "generated_at": "2026-08-04T00:00:00.000Z",
-                "result": result,
-                "warnings": []
-            });
-            if output["result"].get("admission").is_some() {
-                add_admitted_envelope_metadata(&mut output);
-            } else if command.starts_with("session.archive_")
-                || matches!(*command, "delegation.package" | "delegation.receipt")
-            {
-                add_workspace_envelope_metadata(&mut output);
-            } else if matches!(
-                contract.schema,
-                "podway.job-result/v3" | "podway.job-result/v4" | "podway.job-result/v5"
-            ) {
-                add_queued_job_envelope_metadata(&mut output);
-            }
-            assert_valid("schemas/output-v3.schema.json", &output);
-        }
-    }
-}
-
 #[test]
 fn v2sdg002_delegation_documents_reject_unbounded_and_mismatched_input() {
     let fixtures = examples();
     let documents: Value = serde_json::from_str(include_str!(
-        "../../../tests/fixtures/v2/compatibility/supervised-delegation-contract-reservation.json"
+        "../../../tests/fixtures/v2/protocol/current-contracts.json"
     ))
     .unwrap();
     let package = fixtures["podway.delegation-package-result/v1"]["package"].clone();
@@ -1467,7 +565,6 @@ fn v2sdg002_delegation_documents_reject_unbounded_and_mismatched_input() {
         }
     }
 }
-
 #[test]
 fn v2sdg002_work_package_json_limit_rejects_schema_valid_oversize() {
     let fixtures = examples();
@@ -1509,7 +606,6 @@ fn v2sdg002_work_package_json_limit_rejects_schema_valid_oversize() {
         &package
     ));
 }
-
 #[test]
 fn v2sdg002_delegation_result_correlations_reject_mismatched_identities() {
     let fixtures = examples();
@@ -1551,27 +647,26 @@ fn v2sdg002_delegation_result_correlations_reject_mismatched_identities() {
     );
     assert!(decode_result_schema_contract_v2(absent_receipt.as_object().unwrap()).is_none());
 }
-
 #[test]
 fn v2sdg002_delegation_views_bind_current_receipt_to_current_attempt() {
     let fixtures = examples();
     let documents: Value = serde_json::from_str(include_str!(
-        "../../../tests/fixtures/v2/compatibility/supervised-delegation-contract-reservation.json"
+        "../../../tests/fixtures/v2/protocol/current-contracts.json"
     ))
     .unwrap();
-    let mut next = fixtures["podway.next-result/v4"].clone();
+    let mut next = fixtures["podway.next-result/v5"].clone();
     next["delegation"]["receipt"]["attempt_id"] = json!("00000000-0000-4000-8000-000000000002");
-    assert_valid("schemas/next-result-v4.schema.json", &next);
+    assert_valid("schemas/next-result-v5.schema.json", &next);
     assert!(decode_result_schema_contract_v2(next.as_object().unwrap()).is_none());
 
     for (schema, fixture) in [
         (
-            "podway.status-result/v4",
-            &documents["fixtures"]["podway.status-result/v4"],
+            "podway.status-result/v5",
+            &documents["fixtures"]["podway.status-result/v5"],
         ),
         (
-            "podway.compact-status-result/v4",
-            &documents["fixtures"]["podway.compact-status-result/v4"],
+            "podway.compact-status-result/v5",
+            &documents["fixtures"]["podway.compact-status-result/v5"],
         ),
     ] {
         assert!(fixture["current"].is_null());
@@ -1584,7 +679,7 @@ fn v2sdg002_delegation_views_bind_current_receipt_to_current_attempt() {
             "{schema}"
         );
 
-        let active = &documents["fixtures"]["podway.next-result/v4"];
+        let active = &documents["fixtures"]["podway.next-result/v5"];
         let mut running = fixture.clone();
         running["session"]["lifecycle"] = json!("running");
         running["session"]["revision"] = json!(1);
@@ -1596,15 +691,15 @@ fn v2sdg002_delegation_views_bind_current_receipt_to_current_attempt() {
             "missing_required_item_count": 0, "blockers_total": 0
         });
         running["delegation"] = documents["fixtures"]["podway.delegation-projection/v1"].clone();
-        if schema == "podway.status-result/v4" {
+        if schema == "podway.status-result/v5" {
             running["terminal"] = json!(true);
             running["receipt_summaries"] = json!([running["delegation"]["receipt"]]);
             running["receipt_summaries_total"] = json!(1);
         }
-        let schema_path = if schema == "podway.status-result/v4" {
-            "schemas/status-result-v4.schema.json"
+        let schema_path = if schema == "podway.status-result/v5" {
+            "schemas/status-result-v5.schema.json"
         } else {
-            "schemas/compact-status-result-v4.schema.json"
+            "schemas/compact-status-result-v5.schema.json"
         };
         assert_valid(schema_path, &running);
         assert!(decode_result_schema_contract_v2(running.as_object().unwrap()).is_some());
@@ -1617,21 +712,20 @@ fn v2sdg002_delegation_views_bind_current_receipt_to_current_attempt() {
         assert_valid(schema_path, &running);
         assert!(decode_result_schema_contract_v2(running.as_object().unwrap()).is_none());
     }
-    let mut observation = fixtures["podway.observation-result/v4"].clone();
+    let mut observation = fixtures["podway.observation-result/v5"].clone();
     observation["status"]["delegation"] =
         documents["fixtures"]["podway.delegation-projection/v1"].clone();
     assert!(decode_result_schema_contract_v2(observation.as_object().unwrap()).is_none());
-    let mut archive = fixtures["podway.session-archive-show-result/v2"].clone();
+    let mut archive = fixtures["podway.session-archive-show-result/v3"].clone();
     archive["state"]["delegation"] =
         documents["fixtures"]["podway.delegation-projection/v1"].clone();
     assert!(decode_result_schema_contract_v2(archive.as_object().unwrap()).is_none());
 }
-
 #[test]
 fn v2sdg002_delegation_projection_and_receipt_states_are_closed() {
     let fixtures = examples();
     let documents: Value = serde_json::from_str(include_str!(
-        "../../../tests/fixtures/v2/compatibility/supervised-delegation-contract-reservation.json"
+        "../../../tests/fixtures/v2/protocol/current-contracts.json"
     ))
     .unwrap();
     let projection = documents["fixtures"]["podway.delegation-projection/v1"].clone();
@@ -1727,7 +821,6 @@ fn v2sdg002_delegation_projection_and_receipt_states_are_closed() {
         assert_invalid("schemas/delegation-receipt-result-v1.schema.json", &value);
     }
 }
-
 #[test]
 fn v2sdg002_delegated_procedure_cannot_declare_skip() {
     let mut procedure: Value = serde_yaml::from_str(include_str!(
@@ -1736,7 +829,7 @@ fn v2sdg002_delegated_procedure_cannot_declare_skip() {
     .unwrap();
     assert_valid("schemas/procedure-v2.schema.json", &procedure);
     let documents: Value = serde_json::from_str(include_str!(
-        "../../../tests/fixtures/v2/compatibility/supervised-delegation-contract-reservation.json"
+        "../../../tests/fixtures/v2/protocol/current-contracts.json"
     ))
     .unwrap();
     procedure["graph"]["nodes"][0]["delegation"] =
@@ -1745,83 +838,10 @@ fn v2sdg002_delegated_procedure_cannot_declare_skip() {
     procedure["graph"]["nodes"][0]["skip"] = json!({"allowed":true,"reason_required":true});
     assert_invalid("schemas/procedure-v2.schema.json", &procedure);
 }
-
-#[test]
-fn v2sdg002_delegation_errors_keep_closed_details_and_catalog_identity() {
-    let catalog = podway_protocol::error_code_catalog_v1()
-        .map(|(code, exit_code, retryable)| (code, (exit_code, retryable)))
-        .collect::<HashMap<_, _>>();
-    for (code, reason) in [
-        ("DELEGATION_NOT_APPLICABLE", "direct_attempt"),
-        ("DELEGATION_RECEIPT_REQUIRED", "receipt_missing"),
-        ("DELEGATION_RECEIPT_STALE", "package_changed"),
-        ("DELEGATION_BINDING_MISMATCH", "binding_mismatch"),
-        ("DELEGATION_ALREADY_ACCEPTED", "duplicate_acceptance"),
-    ] {
-        let (exit_code, retryable) = catalog[code];
-        assert_eq!((exit_code, retryable), (1, false));
-        let mut error = json!({
-            "schema":"podway.error/v1", "request_id":UUID,
-            "command":"delegation.accept", "generated_at":"2026-08-04T00:00:00.000Z",
-            "code":code, "message":"Delegation state must be corrected.",
-            "retryable":retryable, "exit_code":exit_code,
-            "details":{"schema":"podway.delegation-error-details/v1","reason":reason}
-        });
-        assert_valid("schemas/error-v1.schema.json", &error);
-        assert!(serde_json::from_value::<ErrorEnvelopeV1>(error.clone()).is_ok());
-        error["details"]["credential"] = json!("secret");
-        assert_invalid("schemas/error-v1.schema.json", &error);
-        assert!(serde_json::from_value::<ErrorEnvelopeV1>(error).is_err());
-    }
-    for (code, accepted_reasons, rejected_reason) in [
-        ("DELEGATION_NOT_APPLICABLE", &[][..], "receipt_missing"),
-        ("DELEGATION_RECEIPT_REQUIRED", &[][..], "direct_attempt"),
-        (
-            "DELEGATION_RECEIPT_STALE",
-            &["items_changed"][..],
-            "binding_mismatch",
-        ),
-        (
-            "DELEGATION_BINDING_MISMATCH",
-            &["role_mismatch", "disposition_mismatch", "round_limit"][..],
-            "package_changed",
-        ),
-        ("DELEGATION_ALREADY_ACCEPTED", &[][..], "role_mismatch"),
-    ] {
-        for reason in accepted_reasons
-            .iter()
-            .copied()
-            .chain(std::iter::once(rejected_reason))
-        {
-            let error = json!({
-                "schema":"podway.error/v1", "request_id":UUID,
-                "command":"delegation.accept", "generated_at":"2026-08-04T00:00:00.000Z",
-                "code":code, "message":"Delegation state must be corrected.",
-                "retryable":false, "exit_code":1,
-                "details":{"schema":"podway.delegation-error-details/v1","reason":reason}
-            });
-            if reason == rejected_reason {
-                assert_invalid("schemas/error-v1.schema.json", &error);
-            } else {
-                assert_valid("schemas/error-v1.schema.json", &error);
-            }
-            assert_eq!(
-                serde_json::from_value::<ErrorEnvelopeV1>(error).is_ok(),
-                reason != rejected_reason,
-                "{code} {reason}"
-            );
-        }
-    }
-    for reason in ["item_not_ready", "blocker_open"] {
-        let details = json!({"schema":"podway.delegation-error-details/v1","reason":reason});
-        assert_invalid("schemas/delegation-error-details-v1.schema.json", &details);
-    }
-}
-
 #[test]
 fn v2sdg002_mapping_known_answers_keep_distinct_immutable_domains() {
     let document: Value = serde_json::from_str(include_str!(
-        "../../../tests/fixtures/v2/compatibility/supervised-delegation-contract-reservation.json"
+        "../../../tests/fixtures/v2/protocol/current-contracts.json"
     ))
     .unwrap();
     let answers = &document["mapping_known_answers"];
@@ -1861,963 +881,6 @@ fn v2sdg002_mapping_known_answers_keep_distinct_immutable_domains() {
     );
     assert!(answers["lost_acknowledgement"]["task_ref"].is_null());
 }
-
-#[test]
-fn v2sdg008_detached_acceptance_decodes_without_widening_old_job_families() {
-    let result = examples()["podway.detached-admission-result/v2"].clone();
-    assert!(validate_command_result_v2("delegation.accept", result.as_object().unwrap()).is_ok());
-    let mut output = json!({
-        "schema":OUTPUT_SCHEMA_V3, "request_id":UUID, "command":"delegation.accept",
-        "generated_at":"2026-08-04T00:00:00.000Z", "result":result, "warnings":[]
-    });
-    add_workspace_envelope_metadata(&mut output);
-    add_queued_job_envelope_metadata(&mut output);
-    assert_valid("schemas/output-v3.schema.json", &output);
-    let decoded = decode_response_payload_v2(&serde_json::to_vec(&output).unwrap()).unwrap();
-    assert_eq!(serde_json::to_value(decoded).unwrap(), output);
-    for command in ["delegation.package", "delegation.receipt"] {
-        let mut read = output.clone();
-        read["command"] = json!(command);
-        assert_invalid("schemas/output-v3.schema.json", &read);
-        assert!(decode_response_payload_v2(&serde_json::to_vec(&read).unwrap()).is_err());
-    }
-    // Detached admission is not a terminal result, including in the new job family.
-    for version in [3, 4, 5] {
-        let wrapper = json!({"schema":format!("podway.job-result/v{version}"),"job":output});
-        assert_invalid(
-            &format!("schemas/job-result-v{version}.schema.json"),
-            &wrapper,
-        );
-    }
-}
-
-#[test]
-fn v2sdg002_job_v5_keeps_acceptance_terminal_and_job_identity_closed() {
-    let result = examples()["podway.delegation-accept-result/v1"].clone();
-    let mut terminal = json!({
-        "schema":OUTPUT_SCHEMA_V3, "request_id":UUID, "command":"delegation.accept",
-        "generated_at":"2026-08-04T00:00:00.000Z", "result":result, "warnings":[]
-    });
-    add_admitted_envelope_metadata(&mut terminal);
-    let wrapper = json!({
-        "schema":OUTPUT_SCHEMA_V3, "request_id":UUID, "command":"job.status",
-        "generated_at":"2026-08-04T00:00:00.000Z",
-        "workspace":terminal["workspace"], "job":terminal["job"],
-        "result":{"schema":"podway.job-result/v5","job":terminal}, "warnings":[]
-    });
-    assert_valid("schemas/output-v3.schema.json", &wrapper);
-    assert!(decode_response_payload_v2(&serde_json::to_vec(&wrapper).unwrap()).is_ok());
-
-    let mut old_wrapper = wrapper.clone();
-    old_wrapper["result"]["schema"] = json!("podway.job-result/v4");
-    assert_invalid("schemas/output-v3.schema.json", &old_wrapper);
-    assert!(decode_response_payload_v2(&serde_json::to_vec(&old_wrapper).unwrap()).is_err());
-
-    let mut mismatched = wrapper.clone();
-    mismatched["job"]["id"] = json!("00000000-0000-4000-8000-000000000002");
-    assert!(decode_response_payload_v2(&serde_json::to_vec(&mismatched).unwrap()).is_err());
-}
-
-#[test]
-fn v2sdg002_job_lookup_v5_binds_found_acceptance_terminal() {
-    let mut terminal = json!({
-        "schema":OUTPUT_SCHEMA_V3, "request_id":UUID, "command":"delegation.accept",
-        "generated_at":"2026-08-04T00:00:00.000Z",
-        "result":examples()["podway.delegation-accept-result/v1"], "warnings":[]
-    });
-    add_admitted_envelope_metadata(&mut terminal);
-    let lookup = json!({
-        "schema":"podway.job-lookup-result/v5", "found":true,
-        "job":{
-            "id":UUID,"sequence":1,"state":"succeeded",
-            "submitted_at":"2026-08-04T00:00:00.000Z",
-            "claimed_at":"2026-08-04T00:00:00.001Z",
-            "finished_at":"2026-08-04T00:00:00.002Z",
-            "command":"delegation.accept","request_digest":DIGEST,
-            "terminal_response":terminal
-        }
-    });
-    assert_valid("schemas/job-lookup-result-v5.schema.json", &lookup);
-    assert!(decode_result_schema_contract_v2(lookup.as_object().unwrap()).is_some());
-    let mut mismatch = lookup.clone();
-    mismatch["job"]["command"] = json!("session.complete");
-    assert!(decode_result_schema_contract_v2(mismatch.as_object().unwrap()).is_none());
-    let mut old = lookup;
-    old["schema"] = json!("podway.job-lookup-result/v4");
-    assert_invalid("schemas/job-lookup-result-v4.schema.json", &old);
-}
-
-#[test]
-fn v2plt006_production_codec_round_trips_every_registered_command_result_pair() {
-    let examples = examples();
-    for contract in EXISTING_ROUTE_RESULT_SCHEMAS_V2
-        .iter()
-        .chain(NEW_ROUTE_RESULT_SCHEMAS_V1)
-    {
-        for command in contract.commands {
-            let mut result = examples[contract.schema].clone();
-            if contract.schema == "podway.detached-admission-result/v2"
-                && matches!(*command, "session.start" | "session.start_replace")
-            {
-                result["procedure_digest"] = json!(DIGEST);
-            }
-            let mut expected = json!({
-                "schema": OUTPUT_SCHEMA_V3,
-                "request_id": UUID,
-                "command": command,
-                "generated_at": "2026-08-04T00:00:00.000Z",
-                "result": result,
-                "warnings": []
-            });
-            if expected["result"].get("admission").is_some() {
-                add_admitted_envelope_metadata(&mut expected);
-            } else if command.starts_with("session.archive_")
-                || matches!(*command, "delegation.package" | "delegation.receipt")
-            {
-                add_workspace_envelope_metadata(&mut expected);
-            } else if matches!(
-                contract.schema,
-                "podway.job-result/v3" | "podway.job-result/v4" | "podway.job-result/v5"
-            ) {
-                add_queued_job_envelope_metadata(&mut expected);
-            }
-
-            let decoded = decode_response_payload_v2(&serde_json::to_vec(&expected).unwrap())
-                .unwrap_or_else(|error| {
-                    panic!("{} for {command} did not decode: {error}", contract.schema)
-                });
-            assert!(matches!(decoded, ResponseEnvelopeV2::OutputV2(_)));
-            let encoded = encode_response_payload_v2(&decoded).unwrap();
-            assert_eq!(serde_json::from_slice::<Value>(&encoded).unwrap(), expected);
-        }
-    }
-}
-
-#[test]
-fn recon002_internal_error_admitted_reconstruction_details_are_closed() {
-    let details = json!({
-        "schema": "podway.internal-error-details/v1",
-        "kind": "ADMITTED_RESPONSE_RECONSTRUCTION_FAILED",
-        "diagnostic_id": UUID,
-        "job_id": "00000000-0000-4000-8000-000000000002",
-        "job_sequence": 7,
-        "admission": {
-            "admitted": true,
-            "job_id": "00000000-0000-4000-8000-000000000002",
-            "workspace_sequence": 7
-        }
-    });
-    assert_valid("schemas/internal-error-details-v1.schema.json", &details);
-    let envelope = json!({
-        "schema": "podway.error/v1",
-        "request_id": UUID,
-        "command": "item.record_many",
-        "generated_at": "2026-09-05T00:00:00.000Z",
-        "code": "INTERNAL_ERROR",
-        "message": "An unexpected internal error occurred.",
-        "retryable": false,
-        "exit_code": 6,
-        "details": details
-    });
-    assert_valid("schemas/error-v1.schema.json", &envelope);
-    assert!(serde_json::from_value::<ErrorEnvelopeV1>(envelope.clone()).is_ok());
-
-    let mut wrong_kind = envelope.clone();
-    wrong_kind["details"]["kind"] = json!("RECONSTRUCTION_FAILED");
-    assert_invalid(
-        "schemas/internal-error-details-v1.schema.json",
-        &wrong_kind["details"],
-    );
-    assert!(serde_json::from_value::<ErrorEnvelopeV1>(wrong_kind).is_err());
-
-    let mut wrong_diagnostic = envelope.clone();
-    wrong_diagnostic["details"]["diagnostic_id"] = json!("00000000-0000-4000-8000-000000000003");
-    assert!(serde_json::from_value::<ErrorEnvelopeV1>(wrong_diagnostic).is_err());
-
-    let mut mismatched_job = envelope.clone();
-    mismatched_job["details"]["admission"]["job_id"] =
-        json!("00000000-0000-4000-8000-000000000004");
-    assert!(serde_json::from_value::<ErrorEnvelopeV1>(mismatched_job).is_err());
-
-    let mut mismatched_sequence = envelope.clone();
-    mismatched_sequence["details"]["admission"]["workspace_sequence"] = json!(8);
-    assert!(serde_json::from_value::<ErrorEnvelopeV1>(mismatched_sequence).is_err());
-
-    let mut open = envelope;
-    open["details"].as_object_mut().unwrap().remove("schema");
-    open["details"].as_object_mut().unwrap().remove("kind");
-    open["details"]
-        .as_object_mut()
-        .unwrap()
-        .remove("diagnostic_id");
-    assert_valid(
-        "schemas/internal-error-details-v1.schema.json",
-        &open["details"],
-    );
-    assert!(serde_json::from_value::<ErrorEnvelopeV1>(open).is_ok());
-
-    let catalog: Value = serde_json::from_slice(
-        &fs::read(root().join("assets/specifications/error-codes.json")).unwrap(),
-    )
-    .unwrap();
-    let internal = catalog["errors"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|entry| entry["code"] == "INTERNAL_ERROR")
-        .unwrap();
-    assert_eq!(
-        internal["details_schema"],
-        "podway.internal-error-details/v1"
-    );
-}
-
-#[test]
-fn v2ctr003_v2_runtime_error_details_are_code_bound_and_closed() {
-    let valid_details = json!({
-        "schema": "podway.v2-runtime-error-details/v1",
-        "kind": "GRAPH_NODE_NOT_FOUND",
-        "graph_node_id": "review"
-    });
-    assert_valid(
-        "schemas/v2-runtime-error-details-v1.schema.json",
-        &valid_details,
-    );
-    let envelope = json!({
-        "schema": "podway.error/v1",
-        "request_id": UUID,
-        "command": "session.status",
-        "generated_at": "2026-08-04T00:00:00.000Z",
-        "code": "GRAPH_NODE_NOT_FOUND",
-        "message": "Graph node not found.",
-        "retryable": false,
-        "exit_code": 1,
-        "details": valid_details
-    });
-    assert_valid("schemas/error-v1.schema.json", &envelope);
-    assert!(serde_json::from_value::<ErrorEnvelopeV1>(envelope.clone()).is_ok());
-
-    let mut mismatched = envelope.clone();
-    mismatched["details"]["kind"] = json!("NODE_DEFINITION_NOT_FOUND");
-    assert_valid("schemas/error-v1.schema.json", &mismatched);
-    assert_invalid(
-        "schemas/v2-runtime-error-details-v1.schema.json",
-        &mismatched["details"],
-    );
-    assert!(serde_json::from_value::<ErrorEnvelopeV1>(mismatched).is_err());
-
-    let mut open = envelope.clone();
-    open["details"]["unknown"] = json!(true);
-    assert_valid("schemas/error-v1.schema.json", &open);
-    assert_invalid(
-        "schemas/v2-runtime-error-details-v1.schema.json",
-        &open["details"],
-    );
-    assert!(serde_json::from_value::<ErrorEnvelopeV1>(open).is_err());
-
-    let mut missing = envelope.clone();
-    missing["details"]
-        .as_object_mut()
-        .unwrap()
-        .remove("graph_node_id");
-    assert_valid("schemas/error-v1.schema.json", &missing);
-    assert_invalid(
-        "schemas/v2-runtime-error-details-v1.schema.json",
-        &missing["details"],
-    );
-    assert!(serde_json::from_value::<ErrorEnvelopeV1>(missing).is_err());
-
-    let mut maximum_message = envelope.clone();
-    maximum_message["message"] = json!("x".repeat(MAX_V2_RUNTIME_ERROR_MESSAGE_CHARS_V1));
-    assert!(serde_json::from_value::<ErrorEnvelopeV1>(maximum_message.clone()).is_ok());
-    maximum_message["message"] = json!("x".repeat(MAX_V2_RUNTIME_ERROR_MESSAGE_CHARS_V1 + 1));
-    assert!(serde_json::from_value::<ErrorEnvelopeV1>(maximum_message).is_err());
-
-    let mut mutation = envelope;
-    mutation["command"] = json!("session.complete");
-    assert_valid("schemas/error-v1.schema.json", &mutation);
-    assert_valid(
-        "schemas/v2-runtime-error-details-v1.schema.json",
-        &mutation["details"],
-    );
-    assert!(serde_json::from_value::<ErrorEnvelopeV1>(mutation.clone()).is_err());
-    mutation["details"]["admission"] = json!({"admitted":false});
-    assert_valid("schemas/error-v1.schema.json", &mutation);
-    assert_valid(
-        "schemas/v2-runtime-error-details-v1.schema.json",
-        &mutation["details"],
-    );
-    assert!(serde_json::from_value::<ErrorEnvelopeV1>(mutation).is_ok());
-}
-
-#[test]
-fn v2ctr004_v2_runtime_error_catalog_is_schema_and_decoder_bound() {
-    let catalog: Value = serde_json::from_slice(
-        &fs::read(root().join("assets/specifications/error-codes.json")).unwrap(),
-    )
-    .unwrap();
-    let catalog_codes = catalog["errors"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|entry| {
-            matches!(
-                entry["details_schema"].as_str(),
-                Some(
-                    "podway.v2-runtime-error-details/v1"
-                        | "podway.recoverable-v2-runtime-error-details/v1"
-                )
-            )
-        })
-        .map(|entry| entry["code"].as_str().unwrap().to_owned())
-        .collect::<BTreeSet<_>>();
-    let decoder_codes = V2_RUNTIME_ERROR_CODES_V1
-        .iter()
-        .map(|code| (*code).to_owned())
-        .collect::<BTreeSet<_>>();
-    let schema_codes = [
-        "schemas/v2-runtime-error-details-v1.schema.json",
-        "schemas/recoverable-v2-runtime-error-details-v1.schema.json",
-    ]
-    .into_iter()
-    .flat_map(|path| {
-        let details_schema = read_schema(path);
-        details_schema["$defs"]
-            .as_object()
-            .unwrap()
-            .values()
-            .filter_map(|definition| definition["allOf"].as_array())
-            .filter_map(|all_of| all_of.get(1))
-            .filter_map(|variant| variant["properties"]["kind"]["const"].as_str())
-            .map(str::to_owned)
-            .collect::<Vec<_>>()
-    })
-    .collect::<BTreeSet<_>>();
-
-    let conditionally_structured_codes = BTreeSet::from(["ITEM_CONSTRAINT_FAILED".to_owned()]);
-    assert_eq!(
-        catalog_codes
-            .union(&conditionally_structured_codes)
-            .cloned()
-            .collect::<BTreeSet<_>>(),
-        schema_codes,
-        "legacy-compatible errors may opt into structured details only when those details exist"
-    );
-    assert!(decoder_codes.is_subset(&catalog_codes));
-    assert_eq!(
-        catalog_codes
-            .difference(&decoder_codes)
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>(),
-        BTreeSet::new(),
-        "every closed Procedure v2 runtime error is admitted by the decoder"
-    );
-    assert_eq!(decoder_codes.len(), 31);
-}
-
-#[test]
-fn v2agt005_recovery_schemas_accept_exact_closed_read_only_fixtures() {
-    let daemon = json!({
-        "action":"inspect_daemon","command":"daemon.status",
-        "argv":["podway","--json","daemon","status"],
-        "reason":"Inspect daemon and contract health before deciding on a lifecycle action.",
-        "requires_explicit_authorization":false
-    });
-    let doctor = json!({
-        "action":"diagnose_workspace","command":"workspace.doctor",
-        "argv":["podway","--json","doctor"],
-        "reason":"Inspect bounded workspace diagnostics before deciding on a recovery action.",
-        "requires_explicit_authorization":false
-    });
-    let wait = json!({
-        "action":"wait_for_job","command":"job.wait",
-        "argv":["podway","--json","job","wait",UUID],
-        "reason":"Wait for the admitted job instead of resubmitting its mutation.",
-        "requires_explicit_authorization":false
-    });
-    let wait_ready = json!({
-        "action":"wait_for_daemon","command":"daemon.wait-ready",
-        "argv":["podway","--json","daemon","wait-ready"],
-        "reason":"Wait for verified daemon readiness without changing service state.",
-        "requires_explicit_authorization":false
-    });
-    let cases = [
-        (
-            "schemas/daemon-readiness-error-details-v1.schema.json",
-            json!({
-                "schema":"podway.daemon-readiness-error-details/v1",
-                "readiness_state":"recovering","readiness_stage":"workspaces",
-                "elapsed_ms":31_000,"worktree_recovery":{"total":4,"completed":2,"failed":1},
-                "admission":{"admitted":false},"recovery":wait_ready
-            }),
-        ),
-        (
-            "schemas/daemon-readiness-timeout-details-v1.schema.json",
-            json!({
-                "schema":"podway.daemon-readiness-timeout-details/v1",
-                "operation":"wait_ready","readiness_state":"recovering","readiness_stage":"jobs",
-                "elapsed_ms":120_000,"deadline_ms":120_000,"installed":true,"loaded":true,
-                "socket_present":true,"reachable":true,"contract_verified":true,
-                "same_command_retry_safe":true,"worktree_recovery":{"total":4,"completed":4,"failed":1},
-                "recovery":wait_ready
-            }),
-        ),
-        (
-            "schemas/daemon-readiness-timeout-details-v1.schema.json",
-            json!({
-                "schema":"podway.daemon-readiness-timeout-details/v1",
-                "operation":"wait_ready","readiness_state":"not_running","readiness_stage":null,
-                "elapsed_ms":120_000,"deadline_ms":120_000,"installed":false,"loaded":false,
-                "socket_present":false,"reachable":false,"contract_verified":false,
-                "same_command_retry_safe":true,"worktree_recovery":null,"recovery":wait_ready
-            }),
-        ),
-        (
-            "schemas/endpoint-error-details-v2.schema.json",
-            json!({"schema":"podway.endpoint-error-details/v2","recovery":daemon}),
-        ),
-        (
-            "schemas/daemon-contract-mismatch-details-v2.schema.json",
-            json!({
-                "schema":"podway.daemon-contract-mismatch-details/v2",
-                "expected":{"product":"podway","contract_manifest_digest":DIGEST},
-                "actual":{"product":"podway","contract_manifest_digest":DIGEST},
-                "admission":{"admitted":false},"recovery":daemon
-            }),
-        ),
-        (
-            "schemas/revision-conflict-details-v2.schema.json",
-            json!({"schema":"podway.revision-conflict-details/v2","expected_revision":1,"recovery":refresh_state_recovery()}),
-        ),
-        (
-            "schemas/attempt-conflict-details-v2.schema.json",
-            json!({"schema":"podway.attempt-conflict-details/v2","expected_attempt_id":UUID,"recovery":refresh_state_recovery()}),
-        ),
-        (
-            "schemas/job-wait-timeout-details-v2.schema.json",
-            json!({
-                "schema":"podway.job-wait-timeout-details/v2","job_id":UUID,"job_sequence":1,
-                "admission":{"admitted":true,"job_id":UUID,"workspace_sequence":1},"recovery":wait
-            }),
-        ),
-        (
-            "schemas/workspace-recovery-details-v1.schema.json",
-            json!({"schema":"podway.workspace-recovery-details/v1","recovery":doctor}),
-        ),
-        (
-            "schemas/recoverable-v2-runtime-error-details-v1.schema.json",
-            json!({
-                "schema":"podway.recoverable-v2-runtime-error-details/v1",
-                "kind":"GOAL_REVISION_STALE","expected_goal_revision":1,
-                "actual_goal_revision":2,"admission":{"admitted":false},
-                "recovery":refresh_state_recovery()
-            }),
-        ),
-    ];
-    for (schema, fixture) in cases {
-        assert_valid(schema, &fixture);
-        let mut open = fixture;
-        open["recovery"]["extra"] = json!(true);
-        assert_invalid(schema, &open);
-    }
-
-    for recipe in [
-        refresh_state_recovery(),
-        daemon,
-        doctor,
-        wait,
-        wait_ready,
-        json!({
-            "action":"reconcile_mutation","command":"job.lookup",
-            "argv":["podway","--json","job","lookup","--idempotency-key","key"],
-            "reason":"Reconcile the original idempotency key before considering another mutation.",
-            "requires_explicit_authorization":false
-        }),
-    ] {
-        assert_valid("schemas/recovery-recipe-v1.schema.json", &recipe);
-    }
-}
-
-#[test]
-fn v2rdy001_reserves_closed_phase_aware_status_and_wait_ready_output() {
-    let result = json!({
-        "schema":"podway.daemon-status-result/v2",
-        "status":"running","installed":true,"loaded":true,"reachable":true,
-        "product":"podway","daemon_version":"0.2.6","target":"aarch64-apple-darwin",
-        "build_identity":DIGEST,"source_commit":null,
-        "contract_manifest_schema":"podway.contract-manifest/v1",
-        "contract_manifest_digest":DIGEST,"protocol_versions":["podway.ipc/v1"],
-        "pid":42,"process_id":UUID,"executable_path":"/opt/podwayd",
-        "started_at":"2026-08-25T00:00:00.000Z","uptime_ms":47_000,
-        "socket_path":"/tmp/podway.sock","configured_socket_path":"/tmp/podway.sock",
-        "effective_socket_path":"/tmp/podway.sock","registered_worktree_count":4,
-        "active_scheduler_count":4,"queued_job_count":1,"running_job_count":0,
-        "readiness_state":"recovering","readiness_stage":"jobs","readiness_elapsed_ms":47_000,
-        "worktree_recovery":{"total":4,"completed":4,"failed":1}
-    });
-    assert_valid("schemas/daemon-status-result-v2.schema.json", &result);
-    assert_valid(
-        "schemas/output-v3.schema.json",
-        &json!({
-            "schema":OUTPUT_SCHEMA_V3,"request_id":UUID,"command":"daemon.wait-ready",
-            "generated_at":"2026-08-25T00:00:00.000Z","result":result,"warnings":[]
-        }),
-    );
-
-    let mut false_ready = result;
-    false_ready["readiness_state"] = json!("ready");
-    assert_invalid("schemas/daemon-status-result-v2.schema.json", &false_ready);
-}
-
-#[test]
-fn v2ctr003_job_reconciliation_is_non_recursive_and_state_consistent() {
-    let mut terminal_success = json!({
-        "schema": OUTPUT_SCHEMA_V3,
-        "request_id": UUID,
-        "command": "session.complete",
-        "generated_at": "2026-08-04T00:00:00.000Z",
-        "result": examples()["podway.stage-transition-result/v2"].clone(),
-        "warnings": []
-    });
-    add_admitted_envelope_metadata(&mut terminal_success);
-    let succeeded = json!({
-        "schema":"podway.job-lookup-result/v3",
-        "found":true,
-        "job":{
-            "id":UUID,"sequence":1,"state":"succeeded",
-            "submitted_at":"2026-08-04T00:00:00.000Z",
-            "claimed_at":"2026-08-04T00:00:00.001Z",
-            "finished_at":"2026-08-04T00:00:00.002Z",
-            "command":"session.complete","request_digest":DIGEST,
-            "terminal_response":terminal_success
-        }
-    });
-    assert_valid("schemas/job-lookup-result-v3.schema.json", &succeeded);
-
-    let terminal_error = json!({
-        "schema":"podway.error/v1","request_id":UUID,"command":"session.complete",
-        "generated_at":"2026-08-04T00:00:00.000Z","code":"GRAPH_NODE_NOT_FOUND",
-        "message":"Graph node not found.","retryable":false,"exit_code":1,
-        "workspace":{
-            "uuid":UUID,"root":"/tmp/podway-v2ctr","latest_workspace_sequence":1
-        },
-        "details":{
-            "schema":"podway.v2-runtime-error-details/v1","kind":"GRAPH_NODE_NOT_FOUND",
-            "graph_node_id":"work","admission":{"admitted":true,"job_id":UUID,"workspace_sequence":1}
-        }
-    });
-    let mut failed = succeeded.clone();
-    failed["job"]["state"] = json!("failed");
-    assert_invalid("schemas/job-lookup-result-v3.schema.json", &failed);
-    failed["job"]["terminal_response"] = terminal_error.clone();
-    assert_valid("schemas/job-lookup-result-v3.schema.json", &failed);
-    assert!(decode_result_schema_contract_v2(failed.as_object().unwrap()).is_some());
-
-    let mut query_error = failed.clone();
-    query_error["job"]["terminal_response"]["command"] = json!("job.status");
-    assert_invalid("schemas/job-lookup-result-v3.schema.json", &query_error);
-    assert!(decode_result_schema_contract_v2(query_error.as_object().unwrap()).is_none());
-
-    let mut mismatched_mutation_error = failed.clone();
-    mismatched_mutation_error["job"]["terminal_response"]["command"] = json!("item.set");
-    assert_valid(
-        "schemas/job-lookup-result-v3.schema.json",
-        &mismatched_mutation_error,
-    );
-    assert!(
-        decode_result_schema_contract_v2(mismatched_mutation_error.as_object().unwrap()).is_none()
-    );
-
-    let mut succeeded_with_error = succeeded.clone();
-    succeeded_with_error["job"]["terminal_response"] = terminal_error;
-    assert_invalid(
-        "schemas/job-lookup-result-v3.schema.json",
-        &succeeded_with_error,
-    );
-
-    let mut running_with_response = succeeded.clone();
-    running_with_response["job"]["state"] = json!("running");
-    running_with_response["job"]["finished_at"] = Value::Null;
-    assert_invalid(
-        "schemas/job-lookup-result-v3.schema.json",
-        &running_with_response,
-    );
-
-    let mut cancelled_with_success = succeeded.clone();
-    cancelled_with_success["job"]["state"] = json!("cancelled");
-    assert_invalid(
-        "schemas/job-lookup-result-v3.schema.json",
-        &cancelled_with_success,
-    );
-
-    let mut unsupported_command = succeeded.clone();
-    unsupported_command["job"]["command"] = json!("session.status");
-    assert_invalid(
-        "schemas/job-lookup-result-v3.schema.json",
-        &unsupported_command,
-    );
-
-    let nested_query = json!({
-        "schema":OUTPUT_SCHEMA_V3,"request_id":UUID,"command":"job.status",
-        "generated_at":"2026-08-04T00:00:00.000Z",
-        "result":{"schema":"podway.job-result/v3","job":null},"warnings":[]
-    });
-    assert_invalid(
-        "schemas/job-result-v3.schema.json",
-        &json!({
-            "schema":"podway.job-result/v3","job":nested_query
-        }),
-    );
-
-    let nested_authoring = json!({
-        "schema":OUTPUT_SCHEMA_V3,"request_id":UUID,"command":"procedure.format",
-        "generated_at":"2026-08-04T00:00:00.000Z",
-        "result":examples()["podway.procedure-source-result/v1"].clone(),"warnings":[]
-    });
-    assert_invalid(
-        "schemas/job-result-v3.schema.json",
-        &json!({
-            "schema":"podway.job-result/v3","job":nested_authoring
-        }),
-    );
-
-    let detached = json!({
-        "schema":OUTPUT_SCHEMA_V3,"request_id":UUID,"command":"session.complete",
-        "generated_at":"2026-08-04T00:00:00.000Z",
-        "result":examples()["podway.detached-admission-result/v2"].clone(),"warnings":[]
-    });
-    assert_invalid(
-        "schemas/job-result-v3.schema.json",
-        &json!({
-            "schema":"podway.job-result/v3","job":detached
-        }),
-    );
-}
-
-#[test]
-fn v2cut_workspace_jobs_reconcile_through_v3_terminal_wrappers() {
-    for command in ["workspace.init", "workspace.reset_all"] {
-        let result = if command == "workspace.init" {
-            json!({
-                "schema": "podway.workspace-init-result/v1",
-                "initialized": true,
-                "revision": 0,
-                "admission": admission(),
-            })
-        } else {
-            json!({"reset": true, "revision": 0, "admission": admission()})
-        };
-        let mut terminal_success = json!({
-            "schema": OUTPUT_SCHEMA_V3,
-            "request_id": UUID,
-            "command": command,
-            "generated_at": "2026-08-04T00:00:00.002Z",
-            "result": result,
-            "warnings": [],
-        });
-        add_admitted_envelope_metadata(&mut terminal_success);
-        assert!(
-            serde_json::from_value::<OutputEnvelopeV3>(terminal_success.clone()).is_ok(),
-            "{command} terminal success must remain a valid output/v3 envelope"
-        );
-
-        let succeeded_lookup = json!({
-            "schema": "podway.job-lookup-result/v3",
-            "found": true,
-            "job": {
-                "id": UUID,
-                "sequence": 1,
-                "state": "succeeded",
-                "submitted_at": "2026-08-04T00:00:00.000Z",
-                "claimed_at": "2026-08-04T00:00:00.001Z",
-                "finished_at": "2026-08-04T00:00:00.002Z",
-                "command": command,
-                "request_digest": DIGEST,
-                "terminal_response": terminal_success,
-            },
-        });
-        assert_valid(
-            "schemas/job-lookup-result-v3.schema.json",
-            &succeeded_lookup,
-        );
-        assert!(
-            decode_result_schema_contract_v2(succeeded_lookup.as_object().unwrap()).is_some(),
-            "{command} lookup success must pass the production validator"
-        );
-        let succeeded_job_result = json!({
-            "schema": "podway.job-result/v3",
-            "job": succeeded_lookup["job"]["terminal_response"].clone(),
-        });
-        assert_valid("schemas/job-result-v3.schema.json", &succeeded_job_result);
-        assert!(
-            decode_result_schema_contract_v2(succeeded_job_result.as_object().unwrap()).is_some()
-        );
-
-        let terminal_error = json!({
-            "schema": "podway.error/v1",
-            "request_id": UUID,
-            "command": command,
-            "generated_at": "2026-08-04T00:00:00.002Z",
-            "code": "INTERNAL_ERROR",
-            "message": "The durable workspace operation failed.",
-            "retryable": false,
-            "exit_code": 6,
-            "workspace": {
-                "uuid": UUID,
-                "root": "/tmp/podway-v2ctr",
-                "latest_workspace_sequence": 1,
-            },
-            "details": {"admission": admission()},
-        });
-        let mut failed_lookup = succeeded_lookup.clone();
-        failed_lookup["job"]["state"] = json!("failed");
-        failed_lookup["job"]["terminal_response"] = terminal_error.clone();
-        assert_valid("schemas/job-lookup-result-v3.schema.json", &failed_lookup);
-        assert!(
-            decode_result_schema_contract_v2(failed_lookup.as_object().unwrap()).is_some(),
-            "{command} lookup failure must pass the production validator"
-        );
-
-        let failed_job_result = json!({
-            "schema": "podway.job-result/v3",
-            "job": failed_lookup["job"]["terminal_response"].clone(),
-        });
-        assert_valid("schemas/job-result-v3.schema.json", &failed_job_result);
-        assert!(decode_result_schema_contract_v2(failed_job_result.as_object().unwrap()).is_some());
-    }
-
-    let mut unsupported = json!({
-        "schema": OUTPUT_SCHEMA_V3,
-        "request_id": UUID,
-        "command": "help",
-        "generated_at": "2026-08-04T00:00:00.002Z",
-        "result": {},
-        "warnings": [],
-    });
-    add_admitted_envelope_metadata(&mut unsupported);
-    assert_invalid(
-        "schemas/job-result-v3.schema.json",
-        &json!({"schema": "podway.job-result/v3", "job": unsupported}),
-    );
-}
-
-#[test]
-fn v2lif006_versions_lifecycle_job_wrappers_without_widening_v3() {
-    let mut terminal_success = json!({
-        "schema": OUTPUT_SCHEMA_V3,
-        "request_id": UUID,
-        "command": "session.begin",
-        "generated_at": "2026-08-04T00:00:00.002Z",
-        "result": examples()["podway.session-begin-result/v1"].clone(),
-        "warnings": [],
-    });
-    add_admitted_envelope_metadata(&mut terminal_success);
-
-    let v3_result = json!({
-        "schema": "podway.job-result/v3",
-        "job": terminal_success.clone(),
-    });
-    assert_invalid("schemas/job-result-v3.schema.json", &v3_result);
-    assert!(decode_result_schema_contract_v2(v3_result.as_object().unwrap()).is_none());
-
-    let v4_result = json!({
-        "schema": "podway.job-result/v4",
-        "job": terminal_success.clone(),
-    });
-    assert_valid("schemas/job-result-v4.schema.json", &v4_result);
-    assert!(decode_result_schema_contract_v2(v4_result.as_object().unwrap()).is_some());
-
-    let job = json!({
-        "id": UUID,
-        "sequence": 1,
-        "state": "succeeded",
-        "submitted_at": "2026-08-04T00:00:00.000Z",
-        "claimed_at": "2026-08-04T00:00:00.001Z",
-        "finished_at": "2026-08-04T00:00:00.002Z",
-        "command": "session.begin",
-        "request_digest": DIGEST,
-        "terminal_response": terminal_success,
-    });
-    let v3_lookup = json!({
-        "schema": "podway.job-lookup-result/v3",
-        "found": true,
-        "job": job.clone(),
-    });
-    assert_invalid("schemas/job-lookup-result-v3.schema.json", &v3_lookup);
-    assert!(decode_result_schema_contract_v2(v3_lookup.as_object().unwrap()).is_none());
-
-    let v4_lookup = json!({
-        "schema": "podway.job-lookup-result/v4",
-        "found": true,
-        "job": job,
-    });
-    assert_valid("schemas/job-lookup-result-v4.schema.json", &v4_lookup);
-    assert!(decode_result_schema_contract_v2(v4_lookup.as_object().unwrap()).is_some());
-
-    let mut output = json!({
-        "schema": OUTPUT_SCHEMA_V3,
-        "request_id": UUID,
-        "command": "job.status",
-        "generated_at": "2026-08-04T00:00:00.003Z",
-        "result": v4_result,
-        "warnings": [],
-    });
-    add_admitted_envelope_metadata(&mut output);
-    assert_valid("schemas/output-v3.schema.json", &output);
-    assert!(serde_json::from_value::<OutputEnvelopeV3>(output).is_ok());
-}
-
-#[test]
-fn v2cut_workspace_init_detached_preserves_its_procedure_independent_v1_result() {
-    let job = JobOutputV1::new(
-        podway_core::JobId::new(UUID).unwrap(),
-        1,
-        JobStateV1::Queued,
-        Rfc3339MillisV1::new("2026-08-04T00:00:00.000Z").unwrap(),
-        None,
-        None,
-    )
-    .unwrap();
-    let output = OutputEnvelopeV3::new(OutputEnvelopeInputV3 {
-        request_id: RequestIdV1::new(UUID).unwrap(),
-        command: CommandNameV1::new("workspace.init").unwrap(),
-        generated_at: Rfc3339MillisV1::new("2026-08-04T00:00:00.000Z").unwrap(),
-        workspace: Some(
-            WorkspaceOutputV1::new(
-                podway_core::WorkspaceId::new(UUID).unwrap(),
-                "/tmp/podway-v2cut",
-                1,
-            )
-            .unwrap(),
-        ),
-        job: Some(job),
-        session: None,
-        result: json!({"detached": true, "admission": admission()})
-            .as_object()
-            .unwrap()
-            .clone(),
-        warnings: Vec::new(),
-    })
-    .unwrap();
-
-    assert_eq!(
-        output.result()["schema"],
-        json!("podway.detached-admission-result/v1")
-    );
-    assert!(
-        serde_json::from_value::<OutputEnvelopeV3>(serde_json::to_value(output).unwrap()).is_ok()
-    );
-}
-
-#[test]
-fn v2cut_procedure_independent_output_schema_matches_the_production_decoder() {
-    let version_result = json!({
-        "schema": "podway.version-result/v1",
-        "product": "podway",
-        "version": "0.2.0",
-        "target": "aarch64-apple-darwin",
-        "build_identity": DIGEST,
-        "source_commit": null,
-        "contract_manifest_schema": "podway.contract-manifest/v1",
-        "contract_manifest_digest": DIGEST,
-        "supported_ipc_ids": ["podway.ipc/v1"]
-    });
-    let daemon_result = json!({
-        "schema": "podway.daemon-status-result/v1",
-        "status": "not_installed",
-        "installed": false,
-        "loaded": false,
-        "reachable": false,
-        "product": null,
-        "daemon_version": null,
-        "target": null,
-        "build_identity": null,
-        "source_commit": null,
-        "contract_manifest_schema": null,
-        "contract_manifest_digest": null,
-        "protocol_versions": [],
-        "pid": null,
-        "process_id": null,
-        "executable_path": null,
-        "started_at": null,
-        "uptime_ms": null,
-        "socket_path": "/tmp/podway.sock",
-        "configured_socket_path": "/tmp/podway.sock",
-        "effective_socket_path": null,
-        "registered_worktree_count": 0,
-        "active_scheduler_count": 0,
-        "queued_job_count": 0,
-        "running_job_count": 0
-    });
-    let workspace_init_result = json!({
-        "schema": "podway.workspace-init-result/v1",
-        "initialized": true,
-        "revision": 0,
-        "admission": admission()
-    });
-
-    let mut version = json!({
-        "schema": OUTPUT_SCHEMA_V3,
-        "request_id": UUID,
-        "command": "version",
-        "generated_at": "2026-08-04T00:00:00.000Z",
-        "result": version_result,
-        "warnings": []
-    });
-    let daemon = json!({
-        "schema": OUTPUT_SCHEMA_V3,
-        "request_id": UUID,
-        "command": "daemon.status",
-        "generated_at": "2026-08-04T00:00:00.000Z",
-        "result": daemon_result,
-        "warnings": []
-    });
-    let mut workspace_init = json!({
-        "schema": OUTPUT_SCHEMA_V3,
-        "request_id": UUID,
-        "command": "workspace.init",
-        "generated_at": "2026-08-04T00:00:00.000Z",
-        "result": workspace_init_result,
-        "warnings": []
-    });
-    add_admitted_envelope_metadata(&mut workspace_init);
-    let mut detached_workspace_init = workspace_init.clone();
-    detached_workspace_init["result"] = json!({
-        "schema": "podway.detached-admission-result/v1",
-        "detached": true,
-        "admission": admission()
-    });
-
-    for valid in [&version, &daemon, &workspace_init, &detached_workspace_init] {
-        assert_valid("schemas/output-v3.schema.json", valid);
-        assert!(serde_json::from_value::<OutputEnvelopeV3>(valid.clone()).is_ok());
-    }
-
-    for invalid in [
-        {
-            let mut value = version.clone();
-            value["result"] = json!({});
-            value
-        },
-        {
-            let mut value = daemon.clone();
-            value["result"] = version["result"].clone();
-            value
-        },
-        {
-            add_admitted_envelope_metadata(&mut version);
-            version
-        },
-        {
-            workspace_init.as_object_mut().unwrap().remove("workspace");
-            workspace_init
-        },
-    ] {
-        assert_invalid("schemas/output-v3.schema.json", &invalid);
-        assert!(serde_json::from_value::<OutputEnvelopeV3>(invalid).is_err());
-    }
-}
-
 #[test]
 fn v2ctr003_authoring_diagnostic_is_standalone_closed_and_bounded() {
     let mut diagnostic = json!({
@@ -2905,36 +968,6 @@ fn v2ctr003_authoring_diagnostic_is_standalone_closed_and_bounded() {
     diagnostic.as_object_mut().unwrap().remove("source_path");
     assert!(!validator.is_valid(&diagnostic));
 }
-
-#[test]
-fn v2ctr003_decoder_rejects_missing_non_string_and_unregistered_discriminators() {
-    assert_eq!(decode_result_schema_contract_v2(&Map::new()), None);
-    assert_eq!(
-        decode_result_schema_contract_v2(&Map::from_iter([("schema".to_owned(), json!(1))])),
-        None
-    );
-    assert_eq!(
-        decode_result_schema_contract_v2(&Map::from_iter([(
-            "schema".to_owned(),
-            json!("podway.status-result/v3")
-        )])),
-        None
-    );
-    assert_eq!(
-        EXISTING_ROUTE_RESULT_SCHEMAS_V2
-            .iter()
-            .filter(|entry| entry.schema.starts_with("podway.job-"))
-            .count(),
-        6
-    );
-    let mut incomplete = examples()["podway.next-result/v2"].clone();
-    incomplete.as_object_mut().unwrap().remove("node");
-    assert_eq!(
-        decode_result_schema_contract_v2(incomplete.as_object().unwrap()),
-        None
-    );
-}
-
 #[test]
 fn v2scl002_evidence_schema_bounds_equal_the_domain_scale_envelope() {
     // ADR-0024 requires executable tests proving exact equality between a schema literal and the
@@ -2974,13 +1007,14 @@ fn v2scl002_evidence_schema_bounds_equal_the_domain_scale_envelope() {
         u64::from(podway_protocol::EVIDENCE_PAGE_TOKEN_VERSION_V1)
     );
     assert_eq!(
-        components["$defs"]["evidenceItemMetadata"]["properties"]["total_size"]["$ref"],
-        "#/$defs/logicalSize"
+        read_schema("schemas/v2-result-components-v4.schema.json")["$defs"]["evidenceItemMetadata"]
+            ["properties"]["total_size"]["$ref"],
+        "urn:podway:schema:v2-result-components:v4#/$defs/logicalSize"
     );
     // The suggestion window is driven by per-item work, so its schema ceiling and the projection's
     // truncation are one number. Binding them here is what the epic kept having to learn.
     let next: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../assets/schemas/next-result-v3.schema.json"
+        "../../../assets/schemas/next-result-v5.schema.json"
     ))
     .expect("the next result schema parses");
     assert_eq!(
@@ -2999,39 +1033,6 @@ fn v2scl002_evidence_schema_bounds_equal_the_domain_scale_envelope() {
         "a logical size is measured in scalars, entries, or one value, so the widest is text"
     );
 }
-
-#[test]
-fn v2scl004_evidence_read_binds_one_result_family_and_is_admitted() {
-    let registered: Vec<_> = EXISTING_ROUTE_RESULT_SCHEMAS_V2
-        .iter()
-        .chain(NEW_ROUTE_RESULT_SCHEMAS_V1)
-        .filter(|contract| contract.commands.contains(&"evidence.read"))
-        .collect();
-    assert_eq!(
-        registered.len(),
-        1,
-        "evidence.read must bind exactly one reserved result family"
-    );
-    assert_eq!(registered[0].schema, "podway.evidence-read-result/v1");
-
-    let result = examples()["podway.evidence-read-result/v1"].clone();
-    assert_valid("schemas/evidence-read-result-v1.schema.json", &result);
-    let output = json!({
-        "schema": OUTPUT_SCHEMA_V3,
-        "request_id": UUID,
-        "command": "evidence.read",
-        "generated_at": "2026-08-19T00:00:00.000Z",
-        "result": result,
-        "warnings": []
-    });
-    assert_valid("schemas/output-v3.schema.json", &output);
-
-    assert!(
-        DAEMON_COMMAND_NAMES_V1.contains(&"evidence.read"),
-        "V2SCL-004 admits evidence.read to daemon request decoding"
-    );
-}
-
 #[test]
 fn v2scl002_evidence_read_result_conditional_branches_are_satisfiable_and_closed() {
     let base = examples()["podway.evidence-read-result/v1"].clone();
@@ -3124,10 +1125,9 @@ fn v2scl002_evidence_read_result_conditional_branches_are_satisfiable_and_closed
         &unknown_field,
     );
 }
-
 #[test]
 fn v2scl002_next_result_v3_evidence_window_is_exact_and_never_truncated() {
-    let mut next = examples()["podway.next-result/v3"].clone();
+    let mut next = examples()["podway.next-result/v5"].clone();
     next["readback"] = json!([{
         "source_graph_node_id": "source",
         "source_title": "Source",
@@ -3145,30 +1145,30 @@ fn v2scl002_next_result_v3_evidence_window_is_exact_and_never_truncated() {
         "items_truncated": false
     }]);
     next["readback_items_total"] = json!(1);
-    assert_valid("schemas/next-result-v3.schema.json", &next);
+    assert_valid("schemas/next-result-v5.schema.json", &next);
 
     let mut truncated_window = next.clone();
     truncated_window["readback_items_truncated"] = json!(true);
-    assert_invalid("schemas/next-result-v3.schema.json", &truncated_window);
+    assert_invalid("schemas/next-result-v5.schema.json", &truncated_window);
 
     let mut truncated_reference = next.clone();
     truncated_reference["readback"][0]["items_truncated"] = json!(true);
-    assert_invalid("schemas/next-result-v3.schema.json", &truncated_reference);
+    assert_invalid("schemas/next-result-v5.schema.json", &truncated_reference);
 
     let mut token_without_preview = next.clone();
     token_without_preview["readback"][0]["items"][0]
         .as_object_mut()
         .unwrap()
         .remove("preview");
-    assert_invalid("schemas/next-result-v3.schema.json", &token_without_preview);
+    assert_invalid("schemas/next-result-v5.schema.json", &token_without_preview);
 
     let mut oversized_window = next.clone();
     oversized_window["readback_items_total"] = json!(129);
-    assert_invalid("schemas/next-result-v3.schema.json", &oversized_window);
+    assert_invalid("schemas/next-result-v5.schema.json", &oversized_window);
 
     let mut stale_state = next.clone();
     stale_state["readback"][0]["state"] = json!("stale");
-    assert_invalid("schemas/next-result-v3.schema.json", &stale_state);
+    assert_invalid("schemas/next-result-v5.schema.json", &stale_state);
 
     let mut missing_truncation_flag = next.clone();
     missing_truncation_flag
@@ -3176,27 +1176,26 @@ fn v2scl002_next_result_v3_evidence_window_is_exact_and_never_truncated() {
         .unwrap()
         .remove("missing_required_items_truncated");
     assert_invalid(
-        "schemas/next-result-v3.schema.json",
+        "schemas/next-result-v5.schema.json",
         &missing_truncation_flag,
     );
 }
-
 #[test]
 fn v2scl002_observation_result_v3_pins_every_lifecycle_window() {
-    let prepared = examples()["podway.observation-result/v3"].clone();
-    assert_valid("schemas/observation-result-v3.schema.json", &prepared);
+    let prepared = examples()["podway.observation-result/v5"].clone();
+    assert_valid("schemas/observation-result-v5.schema.json", &prepared);
 
     let mut wrong_prepared_total = prepared.clone();
     wrong_prepared_total["mutation_templates_total"] = json!(2);
     assert_invalid(
-        "schemas/observation-result-v3.schema.json",
+        "schemas/observation-result-v5.schema.json",
         &wrong_prepared_total,
     );
 
     let mut status_with_values = prepared.clone();
     status_with_values["status"]["item_values"] = json!([]);
     assert_invalid(
-        "schemas/observation-result-v3.schema.json",
+        "schemas/observation-result-v5.schema.json",
         &status_with_values,
     );
 
@@ -3212,25 +1211,25 @@ fn v2scl002_observation_result_v3_pins_every_lifecycle_window() {
         "requires_explicit_authorization": false
     }]);
     terminal["mutation_templates_total"] = json!(1);
-    assert_valid("schemas/observation-result-v3.schema.json", &terminal);
+    assert_valid("schemas/observation-result-v5.schema.json", &terminal);
 
     let mut terminal_total_mismatch = terminal.clone();
     terminal_total_mismatch["mutation_templates_total"] = json!(2);
     assert_invalid(
-        "schemas/observation-result-v3.schema.json",
+        "schemas/observation-result-v5.schema.json",
         &terminal_total_mismatch,
     );
 
     let mut terminal_with_guidance = terminal.clone();
-    terminal_with_guidance["guidance"] = examples()["podway.next-result/v3"].clone();
+    terminal_with_guidance["guidance"] = examples()["podway.next-result/v5"].clone();
     assert_invalid(
-        "schemas/observation-result-v3.schema.json",
+        "schemas/observation-result-v5.schema.json",
         &terminal_with_guidance,
     );
 
     let mut oversized_argv = terminal.clone();
     oversized_argv["mutation_templates"][0]["argv"] = json!(["podway", "x".repeat(4_097)]);
-    assert_invalid("schemas/observation-result-v3.schema.json", &oversized_argv);
+    assert_invalid("schemas/observation-result-v5.schema.json", &oversized_argv);
 
     let disposed_template = |command: &str| {
         json!({
@@ -3249,12 +1248,12 @@ fn v2scl002_observation_result_v3_pins_every_lifecycle_window() {
         disposed_template("session.start_replace")
     ]);
     cancelled["mutation_templates_total"] = json!(2);
-    assert_valid("schemas/observation-result-v3.schema.json", &cancelled);
+    assert_valid("schemas/observation-result-v5.schema.json", &cancelled);
 
     let mut cancelled_total_mismatch = cancelled.clone();
     cancelled_total_mismatch["mutation_templates_total"] = json!(1);
     assert_invalid(
-        "schemas/observation-result-v3.schema.json",
+        "schemas/observation-result-v5.schema.json",
         &cancelled_total_mismatch,
     );
 
@@ -3267,11 +1266,12 @@ fn v2scl002_observation_result_v3_pins_every_lifecycle_window() {
         "missing_required_item_count": 0,
         "blockers_total": 0
     });
+    running["status"]["delegation"] = examples()["podway.next-result/v5"]["delegation"].clone();
     running["status"]["trace_length"] = json!(1);
-    running["guidance"] = examples()["podway.next-result/v3"].clone();
+    running["guidance"] = examples()["podway.next-result/v5"].clone();
     running["mutation_templates"] = json!([disposed_template("session.reset")]);
     running["mutation_templates_total"] = json!(1);
-    assert_valid("schemas/observation-result-v3.schema.json", &running);
+    assert_valid("schemas/observation-result-v5.schema.json", &running);
 
     let mut guidance_with_preview = running.clone();
     guidance_with_preview["guidance"]["readback"] = json!([{
@@ -3291,7 +1291,7 @@ fn v2scl002_observation_result_v3_pins_every_lifecycle_window() {
     }]);
     guidance_with_preview["guidance"]["readback_items_total"] = json!(1);
     assert_invalid(
-        "schemas/observation-result-v3.schema.json",
+        "schemas/observation-result-v5.schema.json",
         &guidance_with_preview,
     );
 
@@ -3300,30 +1300,47 @@ fn v2scl002_observation_result_v3_pins_every_lifecycle_window() {
     item.as_object_mut().unwrap().remove("preview");
     item.as_object_mut().unwrap().remove("preview_truncated");
     assert_valid(
-        "schemas/observation-result-v3.schema.json",
+        "schemas/observation-result-v5.schema.json",
         &guidance_metadata_only,
     );
 }
-
 #[test]
 fn v2gsc004_current_and_frozen_counter_schemas_accept_their_exact_boundaries() {
     let fixtures = examples();
     let mut current_fixtures = vec![
         (
-            "schemas/next-result-v3.schema.json",
-            fixtures["podway.next-result/v3"].clone(),
+            "schemas/next-result-v5.schema.json",
+            fixtures["podway.next-result/v5"].clone(),
         ),
         (
-            "schemas/status-result-v3.schema.json",
-            fixtures["podway.status-result/v2"].clone(),
+            "schemas/status-result-v5.schema.json",
+            fixtures["podway.status-result/v5"].clone(),
         ),
         (
-            "schemas/compact-status-result-v3.schema.json",
-            fixtures["podway.compact-status-result/v2"].clone(),
+            "schemas/compact-status-result-v5.schema.json",
+            fixtures["podway.compact-status-result/v5"].clone(),
         ),
     ];
-    current_fixtures[1].1["schema"] = json!("podway.status-result/v3");
-    current_fixtures[2].1["schema"] = json!("podway.compact-status-result/v3");
+    let active = &fixtures["podway.next-result/v5"];
+    for (schema, value) in &mut current_fixtures[1..] {
+        // Prepared sessions have no traversed graph counters. Exercise their zero bound separately.
+        let mut prepared_with_counter = value.clone();
+        prepared_with_counter["counters"] = graph_counters(1);
+        assert_invalid(schema, &prepared_with_counter);
+        value["session"]["lifecycle"] = json!("running");
+        value["session"]["revision"] = json!(1);
+        value["trace_length"] = json!(1);
+        value["current"] = json!({
+            "node":active["node"], "attempt":active["attempt"], "readiness":active["readiness"],
+            "missing_required_item_count":0, "blockers_total":0
+        });
+        value["delegation"] = active["delegation"].clone();
+        if *schema == "schemas/status-result-v5.schema.json" {
+            value["terminal"] = json!(true);
+            value["receipt_summaries"] = json!([value["delegation"]["receipt"]]);
+            value["receipt_summaries_total"] = json!(1);
+        }
+    }
     for (schema, mut at_limit) in current_fixtures {
         at_limit["counters"] = graph_counters(1_024);
         assert_valid(schema, &at_limit);
@@ -3331,7 +1348,7 @@ fn v2gsc004_current_and_frozen_counter_schemas_accept_their_exact_boundaries() {
         assert_invalid(schema, &at_limit);
     }
 
-    let mut running_observation = fixtures["podway.observation-result/v3"].clone();
+    let mut running_observation = fixtures["podway.observation-result/v5"].clone();
     running_observation["status"]["session"] =
         json!({"id":UUID,"lifecycle":"running","revision":4});
     running_observation["status"]["current"] = json!({
@@ -3341,8 +1358,10 @@ fn v2gsc004_current_and_frozen_counter_schemas_accept_their_exact_boundaries() {
         "missing_required_item_count": 0,
         "blockers_total": 0
     });
+    running_observation["status"]["delegation"] =
+        fixtures["podway.next-result/v5"]["delegation"].clone();
     running_observation["status"]["trace_length"] = json!(1);
-    running_observation["guidance"] = fixtures["podway.next-result/v3"].clone();
+    running_observation["guidance"] = fixtures["podway.next-result/v5"].clone();
     running_observation["mutation_templates"] = json!([{
         "command": "session.reset",
         "argv": ["podway", "reset"],
@@ -3359,74 +1378,52 @@ fn v2gsc004_current_and_frozen_counter_schemas_accept_their_exact_boundaries() {
     running_observation["status"]["counters"] = graph_counters(1_024);
     running_observation["guidance"]["counters"] = graph_counters(1_024);
     assert_valid(
-        "schemas/observation-result-v3.schema.json",
+        "schemas/observation-result-v5.schema.json",
         &running_observation,
     );
     running_observation["guidance"]["counters"] = graph_counters(1_025);
     assert_invalid(
-        "schemas/observation-result-v3.schema.json",
+        "schemas/observation-result-v5.schema.json",
         &running_observation,
     );
-
-    for (schema, family) in [
-        (
-            "schemas/next-result-v2.schema.json",
-            "podway.next-result/v2",
-        ),
-        (
-            "schemas/status-result-v2.schema.json",
-            "podway.status-result/v2",
-        ),
-        (
-            "schemas/compact-status-result-v2.schema.json",
-            "podway.compact-status-result/v2",
-        ),
-    ] {
-        let mut at_limit = fixtures[family].clone();
-        at_limit["counters"] = graph_counters(64);
-        assert_valid(schema, &at_limit);
-        at_limit["counters"] = graph_counters(65);
-        assert_invalid(schema, &at_limit);
-    }
 }
-
 #[test]
 fn v2lif002_prepared_result_families_enforce_the_reserved_lifecycle_boundary() {
     let fixtures = examples();
 
-    let mut dry_run = fixtures["podway.session-start-result/v3"].clone();
+    let mut dry_run = fixtures["podway.session-start-result/v4"].clone();
     dry_run["dry_run"] = json!(true);
     for field in ["admission", "session_id", "revision"] {
         dry_run.as_object_mut().unwrap().remove(field);
     }
-    assert_valid("schemas/session-start-result-v3.schema.json", &dry_run);
-    let mut started = fixtures["podway.session-start-result/v3"].clone();
+    assert_valid("schemas/session-start-result-v4.schema.json", &dry_run);
+    let mut started = fixtures["podway.session-start-result/v4"].clone();
     started["active_attempt"] = json!({"attempt_id":UUID,"attempt_number":1});
-    assert_invalid("schemas/session-start-result-v3.schema.json", &started);
+    assert_invalid("schemas/session-start-result-v4.schema.json", &started);
 
-    let mut begin_without_goal = fixtures["podway.session-begin-result/v1"].clone();
+    let mut begin_without_goal = fixtures["podway.session-begin-result/v2"].clone();
     begin_without_goal["goal_defined"] = json!(false);
     begin_without_goal["goal_revision"] = Value::Null;
     assert_valid(
-        "schemas/session-begin-result-v1.schema.json",
+        "schemas/session-begin-result-v2.schema.json",
         &begin_without_goal,
     );
     begin_without_goal["goal_revision"] = json!(1);
     assert_invalid(
-        "schemas/session-begin-result-v1.schema.json",
+        "schemas/session-begin-result-v2.schema.json",
         &begin_without_goal,
     );
 
-    let mut disposition = fixtures["podway.terminal-disposition-result/v1"].clone();
+    let mut disposition = fixtures["podway.terminal-disposition-result/v2"].clone();
     disposition["disposition"]["summary"] = json!("x".repeat(4001));
     assert_invalid(
-        "schemas/terminal-disposition-result-v1.schema.json",
+        "schemas/terminal-disposition-result-v2.schema.json",
         &disposition,
     );
-    let mut mismatched_disposition = fixtures["podway.terminal-disposition-result/v1"].clone();
+    let mut mismatched_disposition = fixtures["podway.terminal-disposition-result/v2"].clone();
     mismatched_disposition["disposition"]["session_revision"] = json!(3);
     assert_valid(
-        "schemas/terminal-disposition-result-v1.schema.json",
+        "schemas/terminal-disposition-result-v2.schema.json",
         &mismatched_disposition,
     );
     assert_eq!(
@@ -3434,1086 +1431,68 @@ fn v2lif002_prepared_result_families_enforce_the_reserved_lifecycle_boundary() {
         None
     );
 
-    let mut prepared_reset = fixtures["podway.session-reset-result/v1"].clone();
+    let mut prepared_reset = fixtures["podway.session-reset-result/v2"].clone();
     prepared_reset["session_revision"] = json!(1);
     assert_invalid(
-        "schemas/session-reset-result-v1.schema.json",
+        "schemas/session-reset-result-v2.schema.json",
         &prepared_reset,
     );
-    let mut reset_dry_run = fixtures["podway.session-reset-result/v1"].clone();
+    let mut reset_dry_run = fixtures["podway.session-reset-result/v2"].clone();
     reset_dry_run["dry_run"] = json!(true);
     reset_dry_run["reset"] = json!(false);
     reset_dry_run.as_object_mut().unwrap().remove("admission");
     assert_valid(
-        "schemas/session-reset-result-v1.schema.json",
+        "schemas/session-reset-result-v2.schema.json",
         &reset_dry_run,
     );
 
     let reset_not_eligible = json!({
-        "schema":"podway.session-reset-not-eligible-details/v1",
+        "schema":"podway.session-reset-not-eligible-details/v2",
         "lifecycle":"completed",
         "current_terminal_disposition":false,
-        "required_action":"record_disposition",
-        "admission":{"admitted":false}
+        "required_action":"record_disposition"
     });
     assert_valid(
-        "schemas/session-reset-not-eligible-details-v1.schema.json",
+        "schemas/session-reset-not-eligible-details-v2.schema.json",
         &reset_not_eligible,
     );
     let mut mismatched_reset_details = reset_not_eligible;
     mismatched_reset_details["required_action"] = json!("force");
     assert_invalid(
-        "schemas/session-reset-not-eligible-details-v1.schema.json",
+        "schemas/session-reset-not-eligible-details-v2.schema.json",
         &mismatched_reset_details,
     );
 
-    let mut status = fixtures["podway.status-result/v3"].clone();
-    status["current"] = fixtures["podway.status-result/v2"]["current"].clone();
-    assert_invalid("schemas/status-result-v3.schema.json", &status);
-    let mut compact = fixtures["podway.compact-status-result/v3"].clone();
+    let mut status = fixtures["podway.status-result/v5"].clone();
+    status["current"] = json!({"graph_node_id":"work", "attempt":fixtures["podway.next-result/v5"]["attempt"], "readiness":"ready"});
+    assert_invalid("schemas/status-result-v5.schema.json", &status);
+    let mut compact = fixtures["podway.compact-status-result/v5"].clone();
     compact["trace_length"] = json!(1);
-    assert_invalid("schemas/compact-status-result-v3.schema.json", &compact);
+    assert_invalid("schemas/compact-status-result-v5.schema.json", &compact);
 
-    let mut next = fixtures["podway.prepared-next-result/v1"].clone();
+    let mut next = fixtures["podway.prepared-next-result/v3"].clone();
     let duplicate_suggestion = next["suggestions"][1].clone();
     next["suggestions"][0] = duplicate_suggestion;
-    assert_invalid("schemas/prepared-next-result-v1.schema.json", &next);
+    assert_invalid("schemas/prepared-next-result-v3.schema.json", &next);
 
-    let mut observation = fixtures["podway.observation-result/v2"].clone();
+    let mut observation = fixtures["podway.observation-result/v5"].clone();
     observation["mutation_templates"][0]["preconditions"]
         .as_object_mut()
         .unwrap()
         .remove("session_revision");
-    assert_invalid("schemas/observation-result-v2.schema.json", &observation);
-    let mut duplicate_template = fixtures["podway.observation-result/v2"].clone();
+    assert_invalid("schemas/observation-result-v5.schema.json", &observation);
+    let mut duplicate_template = fixtures["podway.observation-result/v5"].clone();
     let duplicate_reset = duplicate_template["mutation_templates"][1].clone();
     duplicate_template["mutation_templates"][0] = duplicate_reset;
     assert_invalid(
-        "schemas/observation-result-v2.schema.json",
+        "schemas/observation-result-v5.schema.json",
         &duplicate_template,
     );
-
-    for command in ["session.begin", "session.terminal_disposition"] {
-        let queued_job = json!({
-            "schema":"podway.job-lookup-result/v4",
-            "found":true,
-            "job":{
-                "id":UUID,
-                "sequence":1,
-                "state":"queued",
-                "submitted_at":"2026-08-04T00:00:00.000Z",
-                "finished_at":null,
-                "command":command,
-                "request_digest":DIGEST,
-                "terminal_response":null
-            }
-        });
-        assert_valid("schemas/job-lookup-result-v4.schema.json", &queued_job);
-        assert!(
-            decode_result_schema_contract_v2(queued_job.as_object().unwrap()).is_some(),
-            "reserved durable job command was rejected: {command}"
-        );
-    }
 }
-
-#[test]
-fn v2plt006_production_decoder_rejects_deep_schema_violations_in_every_family() {
-    let fixtures = examples();
-    let mut invalid = Vec::new();
-
-    let mut value = fixtures["podway.procedure-validation-result/v2"].clone();
-    value["valid"] = json!("true");
-    invalid.push(value);
-    for (schema, pointer) in [
-        ("podway.detached-admission-result/v2", "/admission"),
-        ("podway.session-start-result/v2", "/admission"),
-        ("podway.compact-status-result/v2", "/procedure"),
-        ("podway.status-result/v2", "/current"),
-        ("podway.next-result/v2", "/node"),
-        ("podway.stage-transition-result/v2", "/admission"),
-        ("podway.item-mutation-result/v2", "/admission"),
-        ("podway.procedure-preview-result/v1", "/checks"),
-        ("podway.decision-result/v1", "/record"),
-        ("podway.goal-definition-result/v1", "/criteria/0"),
-        ("podway.goal-revision-result/v1", "/criteria/0"),
-        ("podway.criterion-assessment-result/v1", "/result"),
-    ] {
-        let mut value = fixtures[schema].clone();
-        value
-            .pointer_mut(pointer)
-            .unwrap()
-            .as_object_mut()
-            .unwrap()
-            .insert("unknown".to_owned(), json!(true));
-        invalid.push(value);
-    }
-    let mut value = fixtures["podway.job-lookup-result/v3"].clone();
-    value["found"] = json!(true);
-    invalid.push(value);
-    let mut value = fixtures["podway.job-result/v3"].clone();
-    value["job"] = json!({"unknown":true});
-    invalid.push(value);
-    let mut value = fixtures["podway.procedure-source-result/v1"].clone();
-    value["operation"] = json!("unknown");
-    invalid.push(value);
-    let mut value = fixtures["podway.procedure-diagnostics-result/v1"].clone();
-    value["diagnostics"] = json!([{"unknown":true}]);
-    value["diagnostics_total"] = json!(1);
-    invalid.push(value);
-    let mut value = fixtures["podway.procedure-graph-result/v1"].clone();
-    value["format"] = json!("unknown");
-    invalid.push(value);
-    let mut value = fixtures["podway.rework-result/v1"].clone();
-    value["reason"] = json!("x".repeat(2001));
-    invalid.push(value);
-
-    assert_eq!(invalid.len(), 19);
-    for value in invalid {
-        assert_eq!(
-            decode_result_schema_contract_v2(value.as_object().unwrap()),
-            None,
-            "production decoder accepted a deep schema violation in {}",
-            value["schema"]
-        );
-    }
-}
-
-#[test]
-fn v2plt006_production_output_decoder_validates_nested_terminal_receipts() {
-    let mut terminal = json!({
-        "schema":OUTPUT_SCHEMA_V3,
-        "request_id":UUID,
-        "command":"session.complete",
-        "generated_at":"2026-08-04T00:00:00.000Z",
-        "result":examples()["podway.stage-transition-result/v2"].clone(),
-        "warnings":[]
-    });
-    add_admitted_envelope_metadata(&mut terminal);
-    let lookup = json!({
-        "schema":OUTPUT_SCHEMA_V3,
-        "request_id":UUID,
-        "command":"job.lookup",
-        "generated_at":"2026-08-04T00:00:00.000Z",
-        "result":{
-            "schema":"podway.job-lookup-result/v3",
-            "found":true,
-            "job":{
-                "id":UUID,
-                "sequence":1,
-                "state":"succeeded",
-                "submitted_at":"2026-08-04T00:00:00.000Z",
-                "claimed_at":"2026-08-04T00:00:00.001Z",
-                "finished_at":"2026-08-04T00:00:00.002Z",
-                "command":"session.complete",
-                "request_digest":DIGEST,
-                "terminal_response":terminal
-            }
-        },
-        "warnings":[]
-    });
-    assert!(serde_json::from_value::<OutputEnvelopeV3>(lookup.clone()).is_ok());
-
-    let mut deep_open = lookup.clone();
-    deep_open["result"]["job"]["terminal_response"]["result"]["admission"]["unknown"] = json!(true);
-    assert!(serde_json::from_value::<OutputEnvelopeV3>(deep_open).is_err());
-
-    let mut mismatched_command = lookup.clone();
-    mismatched_command["result"]["job"]["terminal_response"]["command"] = json!("item.set");
-    assert!(serde_json::from_value::<OutputEnvelopeV3>(mismatched_command).is_err());
-
-    let mut mismatched_identity = lookup.clone();
-    mismatched_identity["result"]["job"]["id"] = json!("00000000-0000-4000-8000-000000000002");
-    assert!(serde_json::from_value::<OutputEnvelopeV3>(mismatched_identity).is_err());
-
-    let mut mismatched_job_projection = lookup.clone();
-    mismatched_job_projection["result"]["job"]["terminal_response"]["job"]["state"] =
-        json!("failed");
-    assert!(serde_json::from_value::<OutputEnvelopeV3>(mismatched_job_projection).is_err());
-
-    let mut mismatched_timestamp = lookup.clone();
-    mismatched_timestamp["result"]["job"]["terminal_response"]["job"]["submitted_at"] =
-        json!("2026-08-03T00:00:00.000Z");
-    assert!(serde_json::from_value::<OutputEnvelopeV3>(mismatched_timestamp).is_err());
-
-    let mut decision_terminal = json!({
-        "schema":OUTPUT_SCHEMA_V3,
-        "request_id":UUID,
-        "command":"session.decide",
-        "generated_at":"2026-08-04T00:00:00.000Z",
-        "result":examples()["podway.decision-result/v1"].clone(),
-        "warnings":[]
-    });
-    add_admitted_envelope_metadata(&mut decision_terminal);
-    decision_terminal["result"]["option_id"] = json!("other");
-    let mut mismatched_decision = lookup.clone();
-    mismatched_decision["result"]["job"]["command"] = json!("session.decide");
-    mismatched_decision["result"]["job"]["terminal_response"] = decision_terminal;
-    assert!(serde_json::from_value::<OutputEnvelopeV3>(mismatched_decision).is_err());
-
-    let mismatched_error = json!({
-        "schema":"podway.error/v1",
-        "request_id":UUID,
-        "command":"session.complete",
-        "generated_at":"2026-08-04T00:00:00.000Z",
-        "code":"GRAPH_NODE_NOT_FOUND",
-        "message":"Graph node not found.",
-        "retryable":false,
-        "exit_code":1,
-        "workspace":{
-            "uuid":UUID,
-            "root":"/tmp/podway-v2ctr",
-            "latest_workspace_sequence":1
-        },
-        "details":{
-            "schema":"podway.v2-runtime-error-details/v1",
-            "kind":"OPTION_NOT_FOUND",
-            "graph_node_id":"work",
-            "option_id":"accept",
-            "admission":admission()
-        }
-    });
-    let mut mismatched_error_lookup = lookup.clone();
-    mismatched_error_lookup["result"]["job"]["state"] = json!("failed");
-    mismatched_error_lookup["result"]["job"]["terminal_response"] = mismatched_error;
-    assert!(serde_json::from_value::<OutputEnvelopeV3>(mismatched_error_lookup).is_err());
-
-    let mut job_readback = json!({
-        "schema":OUTPUT_SCHEMA_V3,
-        "request_id":UUID,
-        "command":"job.status",
-        "generated_at":"2026-08-04T00:00:00.000Z",
-        "workspace":terminal["workspace"].clone(),
-        "job":terminal["job"].clone(),
-        "result":{"schema":"podway.job-result/v3","job":terminal.clone()},
-        "warnings":[]
-    });
-    assert!(serde_json::from_value::<OutputEnvelopeV3>(job_readback.clone()).is_ok());
-    job_readback.as_object_mut().unwrap().remove("job");
-    assert!(serde_json::from_value::<OutputEnvelopeV3>(job_readback).is_err());
-
-    let terminal_error_without_admission = json!({
-        "schema":"podway.error/v1",
-        "request_id":UUID,
-        "command":"session.complete",
-        "generated_at":"2026-08-04T00:00:00.000Z",
-        "code":"REQUEST_INVALID",
-        "message":"Request is invalid.",
-        "retryable":false,
-        "exit_code":2,
-        "details":{}
-    });
-    let mut failed_job = terminal["job"].clone();
-    failed_job["state"] = json!("failed");
-    let missing_admission = json!({
-        "schema":OUTPUT_SCHEMA_V3,
-        "request_id":UUID,
-        "command":"job.wait",
-        "generated_at":"2026-08-04T00:00:00.000Z",
-        "workspace":terminal["workspace"].clone(),
-        "job":failed_job,
-        "result":{"schema":"podway.job-result/v3","job":terminal_error_without_admission},
-        "warnings":[]
-    });
-    assert!(serde_json::from_value::<OutputEnvelopeV3>(missing_admission).is_err());
-
-    let mut recursive_lookup = lookup;
-    let nested = recursive_lookup.clone();
-    recursive_lookup["result"]["job"]["terminal_response"] = nested;
-    assert!(serde_json::from_value::<OutputEnvelopeV3>(recursive_lookup).is_err());
-}
-
-fn maximum_warnings() -> Vec<Value> {
-    (0..MAX_V2_OUTPUT_WARNINGS)
-        .map(|_| {
-            json!({
-                "code": "C".repeat(64),
-                "path": "\0".repeat(256),
-                "message": "\0".repeat(512)
-            })
-        })
-        .collect()
-}
-
-fn maximum_identifier(index: usize) -> String {
-    let suffix = format!("-{index}");
-    format!("a{}{}", "a".repeat(63 - suffix.len()), suffix)
-}
-
-fn escape_heavy(characters: usize) -> String {
-    "\0".repeat(characters)
-}
-
-fn maximum_admission() -> Value {
-    json!({"admitted":true,"job_id":UUID,"workspace_sequence":u64::MAX})
-}
-
-fn maximum_criteria() -> Value {
-    Value::Array(
-        (0..16)
-            .map(|index| {
-                json!({
-                    "criterion_id":maximum_identifier(index),
-                    "statement":escape_heavy(300)
-                })
-            })
-            .collect(),
-    )
-}
-
-fn maximum_citations() -> Value {
-    Value::Array(
-        (0..4)
-            .map(|index| json!({"reference_graph_node_id":maximum_identifier(index)}))
-            .collect(),
-    )
-}
-
-fn maximum_criterion_results() -> Value {
-    Value::Array(
-        (0..16)
-            .map(|index| {
-                json!({
-                    "criterion_id":maximum_identifier(index),
-                    "status":"unsatisfied",
-                    "reason":escape_heavy(2_000),
-                    "citations":maximum_citations()
-                })
-            })
-            .collect(),
-    )
-}
-
-fn maximum_reference_snapshots() -> Value {
-    Value::Array(
-        (0..8)
-            .map(|index| {
-                json!({
-                    "source_graph_node_id":maximum_identifier(index),
-                    "source_attempt_id":"ffffffff-ffff-4fff-8fff-ffffffffffff",
-                    "source_attempt_number":u64::MAX,
-                    "items_digest":DIGEST,
-                    "state":"resolved"
-                })
-            })
-            .collect(),
-    )
-}
-
-fn maximum_terminal_success_candidate(schema: &str) -> (&'static str, Value) {
-    let identifier = maximum_identifier(63);
-    let uuid = "ffffffff-ffff-4fff-8fff-ffffffffffff";
-    let timestamp = "9999-12-31T23:59:59.999Z";
-    let result = match schema {
-        "podway.session-start-result/v2" => json!({
-            "schema":schema,
-            "procedure_schema":"podway.procedure/v2",
-            "procedure_digest":DIGEST,
-            "dry_run":false,
-            "goal_tracking":false,
-            "goal_defined":false,
-            "admission":maximum_admission(),
-            "session_id":uuid,
-            "revision":u64::MAX,
-            "entry_graph_node_id":identifier
-        }),
-        "podway.stage-transition-result/v2" => json!({
-            "schema":schema,
-            "admission":maximum_admission(),
-            "transition":"retry",
-            "from_graph_node_id":identifier,
-            "from_attempt_id":uuid,
-            "to_graph_node_id":maximum_identifier(62),
-            "to_attempt_id":UUID,
-            "reason":escape_heavy(2_000),
-            "revision":u64::MAX,
-            "session_state":"running"
-        }),
-        "podway.item-mutation-result/v2" => json!({
-            "schema":schema,
-            "admission":maximum_admission(),
-            "changed":false,
-            "graph_node_id":identifier,
-            "attempt_id":uuid,
-            "attempt_number":u64::MAX,
-            "item_id":maximum_identifier(62),
-            "revision":u64::MAX,
-            "value_digest":DIGEST
-        }),
-        "podway.decision-result/v1" => {
-            let record = json!({
-                "trace_sequence":u64::MAX,
-                "session_id":uuid,
-                "session_revision":u64::MAX,
-                "procedure_schema":"podway.procedure/v2",
-                "procedure_snapshot_id":UUID,
-                "procedure_digest":DIGEST,
-                "graph_node_id":identifier,
-                "node_definition_id":maximum_identifier(61),
-                "attempt_id":uuid,
-                "attempt_number":u64::MAX,
-                "goal_revision":u64::MAX,
-                "option_id":maximum_identifier(60),
-                "effect":"advance",
-                "target_graph_node_id":maximum_identifier(59),
-                "reason":escape_heavy(2_000),
-                "actor":escape_heavy(256),
-                "recorded_at":timestamp,
-                "references":maximum_reference_snapshots(),
-                "assessment":"session_goal",
-                "assessment_mode":"assessment",
-                "goal_outcome":"not_achieved",
-                "criterion_results":maximum_criterion_results()
-            });
-            json!({
-                "schema":schema,
-                "admission":maximum_admission(),
-                "graph_node_id":record["graph_node_id"].clone(),
-                "attempt_id":record["attempt_id"].clone(),
-                "attempt_number":record["attempt_number"].clone(),
-                "option_id":record["option_id"].clone(),
-                "effect":record["effect"].clone(),
-                "target_graph_node_id":record["target_graph_node_id"].clone(),
-                "target_attempt_id":UUID,
-                "revision":u64::MAX,
-                "session_state":"running",
-                "record":record
-            })
-        }
-        "podway.rework-result/v1" => json!({
-            "schema":schema,
-            "admission":maximum_admission(),
-            "from_graph_node_id":identifier,
-            "to_graph_node_id":maximum_identifier(62),
-            "target_attempt_id":uuid,
-            "reason":escape_heavy(2_000),
-            "reactivated":false,
-            "revision":u64::MAX
-        }),
-        "podway.goal-definition-result/v1" => json!({
-            "schema":schema,
-            "admission":maximum_admission(),
-            "goal_revision":1,
-            "statement":escape_heavy(1_000),
-            "criteria":maximum_criteria(),
-            "actor":escape_heavy(256),
-            "recorded_at":timestamp,
-            "revision":u64::MAX
-        }),
-        "podway.goal-revision-result/v1" => json!({
-            "schema":schema,
-            "admission":maximum_admission(),
-            "goal_revision":u64::MAX,
-            "statement":escape_heavy(1_000),
-            "criteria":maximum_criteria(),
-            "reason":escape_heavy(1_000),
-            "actor":escape_heavy(256),
-            "recorded_at":timestamp,
-            "rework_to":identifier,
-            "reactivated":false,
-            "revision":u64::MAX
-        }),
-        "podway.criterion-assessment-result/v1" => json!({
-            "schema":schema,
-            "admission":maximum_admission(),
-            "graph_node_id":identifier,
-            "attempt_id":uuid,
-            "goal_revision":u64::MAX,
-            "mode":"assessment",
-            "result":{
-                "criterion_id":maximum_identifier(62),
-                "status":"unsatisfied",
-                "reason":escape_heavy(2_000),
-                "citations":maximum_citations()
-            },
-            "complete":true,
-            "determined_outcome":"not_achieved",
-            "revision":u64::MAX
-        }),
-        unexpected => panic!("unhandled terminal success schema {unexpected}"),
-    };
-    let command = match schema {
-        "podway.session-start-result/v2" => "session.start",
-        "podway.stage-transition-result/v2" => "session.retry",
-        "podway.item-mutation-result/v2" => "item.attach",
-        "podway.decision-result/v1" => "session.decide",
-        "podway.rework-result/v1" => "session.rework",
-        "podway.goal-definition-result/v1" => "goal.define",
-        "podway.goal-revision-result/v1" => "goal.revise",
-        "podway.criterion-assessment-result/v1" => "goal.assess_criterion",
-        _ => unreachable!(),
-    };
-    (command, result)
-}
-
-fn refresh_state_recovery() -> Value {
-    json!({
-        "action":"refresh_state",
-        "command":"session.observe",
-        "argv":["podway","--json","observe","--wait-for-idle"],
-        "reason":"Re-read bounded current state before deriving another request.",
-        "requires_explicit_authorization":false
-    })
-}
-
-fn maximum_runtime_error_details(code: &str) -> Value {
-    let identifier = maximum_identifier(0);
-    let identifiers_8 = (0..8).map(maximum_identifier).collect::<Vec<_>>();
-    let identifiers_16 = (0..16).map(maximum_identifier).collect::<Vec<_>>();
-    let attempt = "ffffffff-ffff-4fff-8fff-ffffffffffff";
-    let mut details = json!({
-        "schema":"podway.v2-runtime-error-details/v1",
-        "kind":code,
-        "admission":{"admitted":true,"job_id":UUID,"workspace_sequence":u64::MAX}
-    });
-    if matches!(
-        code,
-        "EVIDENCE_REFERENCE_STALE" | "GOAL_REVISION_STALE" | "EVIDENCE_PAGE_TOKEN_STALE"
-    ) {
-        details["schema"] = json!("podway.recoverable-v2-runtime-error-details/v1");
-        details["recovery"] = refresh_state_recovery();
-    }
-    match code {
-        "PROCEDURE_V2_SCHEMA_INVALID" => {
-            details["diagnostic_codes"] = Value::Array(
-                (0..256)
-                    .map(|index| json!(format!("E{index:03}_{}", "A".repeat(59))))
-                    .collect(),
-            );
-        }
-        "GRAPH_NODE_NOT_FOUND" | "DECISION_REASON_MISSING" => {
-            details["graph_node_id"] = json!(identifier);
-        }
-        "NODE_DEFINITION_NOT_FOUND" => details["node_definition_id"] = json!(identifier),
-        "GRAPH_NODE_TYPE_MISMATCH" => {
-            details["graph_node_id"] = json!(identifier);
-            details["expected_node_type"] = json!("decision");
-            details["actual_node_type"] = json!("action");
-        }
-        "OPTION_NOT_ALLOWED" => {
-            details["graph_node_id"] = json!(identifier);
-            details["option_id"] = json!(maximum_identifier(9));
-            details["allowed_option_ids"] = json!(identifiers_8);
-        }
-        "OPTION_GUARD_UNSATISFIED" => {
-            details["graph_node_id"] = json!(identifier);
-            details["option_id"] = json!(maximum_identifier(9));
-            details["state"] = json!("unmet");
-            details["predicates"] = Value::Array(
-                (0..4)
-                    .map(|offset| {
-                        json!({
-                            "source": {
-                                "kind": "evidence",
-                                "graph_node_id": maximum_identifier(offset),
-                                "item_id": maximum_identifier(offset + 4)
-                            },
-                            "operator": "equals",
-                            "expected": escape_heavy(120),
-                            "actual": escape_heavy(120),
-                            "state": "unmet"
-                        })
-                    })
-                    .collect(),
-            );
-        }
-        "ROUTE_NOT_ALLOWED" => {
-            details["graph_node_id"] = json!(identifier);
-            details["option_id"] = json!(maximum_identifier(9));
-        }
-        "EVIDENCE_REFERENCE_UNRESOLVED" => {
-            details["graph_node_id"] = json!(identifier);
-            details["source_graph_node_ids"] = json!(identifiers_8);
-        }
-        "EVIDENCE_REFERENCE_STALE" => {
-            details["graph_node_id"] = json!(identifier);
-            details["source_graph_node_id"] = json!(maximum_identifier(9));
-            details["expected_source_attempt_id"] = json!(attempt);
-            details["current_source_attempt_id"] = json!(UUID);
-        }
-        "MANUAL_REWORK_TARGET_NOT_ALLOWED"
-        | "MANUAL_REWORK_TARGET_NOT_ON_TRACE"
-        | "GOAL_REVISION_TARGET_NOT_ALLOWED"
-        | "GOAL_REVISION_TARGET_NOT_REVISION_SAFE" => {
-            details["target_graph_node_id"] = json!(identifier);
-        }
-        "SESSION_GOAL_ALREADY_DEFINED" | "FRESH_GOAL_ASSESSMENT_MISSING" => {
-            details["goal_revision"] = json!(u64::MAX);
-        }
-        "GOAL_REVISION_STALE" => {
-            details["expected_goal_revision"] = json!(u64::MAX);
-            details["actual_goal_revision"] = json!(u64::MAX - 1);
-        }
-        "CRITERION_MODE_MIXED" => {
-            details["criterion_id"] = json!(identifier);
-            details["expected_mode"] = json!("applicability");
-            details["actual_status"] = json!("not_applicable");
-        }
-        "CRITERION_CITATION_INVALID" => {
-            details["criterion_id"] = json!(identifier);
-            details["citation"] = json!({"reference_graph_node_id":maximum_identifier(9)});
-        }
-        "CRITERION_RESULT_MISSING" => {
-            details["missing_criterion_ids"] = json!(identifiers_16);
-        }
-        "CRITERION_NOT_FOUND" => details["criterion_id"] = json!(identifier),
-        "GOAL_ASSESSMENT_OUTCOME_NOT_ALLOWED" => {
-            details["option_id"] = json!(identifier);
-            details["determined_outcome"] = json!("not_achieved");
-            details["allowed_option_ids"] = json!(identifiers_8);
-        }
-        "DIGEST_CONFIRMATION_REQUIRED" => details["procedure_digest"] = json!(DIGEST),
-        "UNSUPPORTED_V2_CAPABILITY" => {
-            details["capability"] = json!(escape_heavy(128));
-            details["required_result_schema"] = json!(escape_heavy(128));
-            details["contract_manifest_digest"] = json!(DIGEST);
-        }
-        "GOAL_TRACKING_NOT_ENABLED" | "SESSION_GOAL_MISSING" | "REACTIVATION_FLAG_REQUIRED" => {}
-        "EVIDENCE_NOT_AVAILABLE" => {
-            details["graph_node_id"] = json!(identifier);
-            details["source_graph_node_id"] = json!(maximum_identifier(1));
-            details["item_id"] = json!(maximum_identifier(2));
-            details["reference_state"] = json!("skipped");
-        }
-        "ATTEMPT_CONTENT_LIMIT_EXCEEDED" => {
-            details["field"] = json!(escape_heavy(256));
-            details["actual"] = json!(u64::MAX);
-            details["maximum"] = json!(u64::MAX - 1);
-            details["unit"] = json!("scalars");
-        }
-        "EVIDENCE_PAGE_TOKEN_EXHAUSTED" => {
-            details["source_graph_node_id"] = json!(identifier);
-            details["item_id"] = json!(maximum_identifier(1));
-            details["offset"] = json!(u64::MAX);
-            details["total_size"] = json!(u64::MAX);
-            details["unit"] = json!("scalars");
-        }
-        "EVIDENCE_PAGE_TOKEN_STALE" => {
-            details["graph_node_id"] = json!(identifier);
-            details["source_graph_node_id"] = json!(maximum_identifier(1));
-            details["item_id"] = json!(maximum_identifier(2));
-            details["expected_value_digest"] = json!(DIGEST);
-            details["current_value_digest"] = json!(DIGEST);
-        }
-        unexpected => panic!("unhandled v2 runtime error code {unexpected}"),
-    }
-    details
-}
-
-fn shared_terminal_error_details(code: &str) -> Value {
-    match code {
-        "SESSION_REVISION_CONFLICT" | "ITEM_REVISION_CONFLICT" => json!({
-            "schema":"podway.revision-conflict-details/v2",
-            "expected_revision":u64::MAX,
-            "current_revision":u64::MAX - 1,
-            "recovery":refresh_state_recovery()
-        }),
-        "SESSION_ID_MISMATCH" => json!({
-            "schema":"podway.session-id-mismatch-details/v2",
-            "expected_session_id":UUID,
-            "actual_session_id":null,
-            "admission":{"admitted":false},
-            "recovery":refresh_state_recovery()
-        }),
-        "ATTEMPT_NOT_CURRENT" => json!({
-            "schema":"podway.attempt-conflict-details/v2",
-            "expected_attempt_id":UUID,
-            "recovery":refresh_state_recovery()
-        }),
-        "BLOCKER_LIMIT_REACHED" => json!({
-            "schema":"podway.blocker-limit-details/v1",
-            "maximum_open_blockers":64
-        }),
-        _ => json!({}),
-    }
-}
-
-#[test]
-fn v2rel002_largest_terminal_success_receipt_round_trips_once_in_job_reads() {
-    let candidates = [
-        "podway.session-start-result/v2",
-        "podway.stage-transition-result/v2",
-        "podway.item-mutation-result/v2",
-        "podway.decision-result/v1",
-        "podway.rework-result/v1",
-        "podway.goal-definition-result/v1",
-        "podway.goal-revision-result/v1",
-        "podway.criterion-assessment-result/v1",
-    ];
-    let mut direct = Vec::new();
-    for schema in candidates {
-        let (command, result) = maximum_terminal_success_candidate(schema);
-        let terminal = json!({
-            "schema": OUTPUT_SCHEMA_V3,
-            "request_id": "ffffffff-ffff-4fff-8fff-ffffffffffff",
-            "command": command,
-            "generated_at": "9999-12-31T23:59:59.999Z",
-            "workspace": {
-                "uuid":"ffffffff-ffff-4fff-8fff-ffffffffffff",
-                "root":escape_heavy(4_096),
-                "latest_workspace_sequence":u64::MAX
-            },
-            "job": {
-                "id":UUID,
-                "sequence":u64::MAX,
-                "state":"succeeded",
-                "submitted_at":"9999-12-31T23:59:59.997Z",
-                "claimed_at":"9999-12-31T23:59:59.998Z",
-                "finished_at":"9999-12-31T23:59:59.999Z"
-            },
-            "session": {
-                "id":"ffffffff-ffff-4fff-8fff-ffffffffffff",
-                "title":escape_heavy(500),
-                "lifecycle":"completed",
-                "revision_before":u64::MAX,
-                "revision_after":u64::MAX
-            },
-            "result": result,
-            "warnings": maximum_warnings()
-        });
-        assert_valid("schemas/output-v3.schema.json", &terminal);
-        let decoded = decode_response_payload_v2(&serde_json::to_vec(&terminal).unwrap())
-            .unwrap_or_else(|error| panic!("maximum {schema} terminal did not decode: {error}"));
-        let encoded = encode_response_payload_v2(&decoded).unwrap();
-        let frame = encode_frame_v1(&encoded).unwrap();
-        assert_eq!(decode_single_frame_v1(&frame).unwrap(), encoded);
-        assert_eq!(frame.len(), encoded.len() + 4);
-        direct.push((encoded.len(), terminal));
-    }
-
-    let largest_direct_length = direct.iter().map(|(length, _)| *length).max().unwrap();
-    let (_, largest) = direct
-        .into_iter()
-        .max_by_key(|(length, _)| *length)
-        .unwrap();
-    assert_eq!(largest["result"]["schema"], "podway.decision-result/v1");
-    assert_eq!(
-        serde_json::to_vec(&largest).unwrap().len(),
-        largest_direct_length
-    );
-
-    for command in ["job.status", "job.wait"] {
-        let receipt = json!({
-            "schema": OUTPUT_SCHEMA_V3,
-            "request_id": "ffffffff-ffff-4fff-8fff-ffffffffffff",
-            "command": command,
-            "generated_at": "9999-12-31T23:59:59.999Z",
-            "workspace": largest["workspace"].clone(),
-            "job": largest["job"].clone(),
-            "session":largest["session"].clone(),
-            "result": {"schema":"podway.job-result/v3", "job":largest.clone()},
-            "warnings": maximum_warnings()
-        });
-        assert_valid("schemas/output-v3.schema.json", &receipt);
-        let decoded = decode_response_payload_v2(&serde_json::to_vec(&receipt).unwrap()).unwrap();
-        let payload = encode_response_payload_v2(&decoded).unwrap();
-        assert!(payload.len() <= 1_048_576);
-        let frame = encode_frame_v1(&payload).unwrap();
-        assert_eq!(frame.len(), payload.len() + 4);
-        assert!(frame.len() <= 1_048_580);
-        assert_eq!(decode_single_frame_v1(&frame).unwrap(), payload);
-        assert_eq!(decode_response_payload_v2(&payload).unwrap(), decoded);
-    }
-}
-
-#[test]
-fn v2rel002_largest_terminal_error_receipt_round_trips_once_in_job_reads() {
-    let mut direct = Vec::new();
-    for code in V2_RUNTIME_ERROR_CODES_V1 {
-        let (exit_code, retryable) = match *code {
-            "EVIDENCE_REFERENCE_STALE" | "GOAL_REVISION_STALE" | "EVIDENCE_PAGE_TOKEN_STALE" => {
-                (4, true)
-            }
-            "DIGEST_CONFIRMATION_REQUIRED" | "EVIDENCE_PAGE_TOKEN_EXHAUSTED" => (2, false),
-            "UNSUPPORTED_V2_CAPABILITY" => (3, false),
-            _ => (1, false),
-        };
-        let details = maximum_runtime_error_details(code);
-        let details_schema = if matches!(
-            *code,
-            "EVIDENCE_REFERENCE_STALE" | "GOAL_REVISION_STALE" | "EVIDENCE_PAGE_TOKEN_STALE"
-        ) {
-            "schemas/recoverable-v2-runtime-error-details-v1.schema.json"
-        } else {
-            "schemas/v2-runtime-error-details-v1.schema.json"
-        };
-        assert_valid(details_schema, &details);
-        let error = json!({
-            "schema":"podway.error/v1",
-            "request_id":"ffffffff-ffff-4fff-8fff-ffffffffffff",
-            "command":"goal.assess_criterion",
-            "generated_at":"9999-12-31T23:59:59.999Z",
-            "code":code,
-            "message":escape_heavy(MAX_V2_RUNTIME_ERROR_MESSAGE_CHARS_V1),
-            "retryable":retryable,
-            "exit_code":exit_code,
-            "workspace":{
-                "uuid":"ffffffff-ffff-4fff-8fff-ffffffffffff",
-                "root":escape_heavy(4_096),
-                "latest_workspace_sequence":u64::MAX
-            },
-            "details":details
-        });
-        assert_valid("schemas/error-v1.schema.json", &error);
-        let nested = json!({"schema":"podway.job-result/v3","job":error.clone()});
-        assert_valid("schemas/job-result-v3.schema.json", &nested);
-        assert!(decode_result_schema_contract_v2(nested.as_object().unwrap()).is_some());
-        let decoded = decode_response_payload_v2(&serde_json::to_vec(&error).unwrap())
-            .unwrap_or_else(|failure| panic!("maximum {code} error did not decode: {failure}"));
-        assert!(matches!(decoded, ResponseEnvelopeV2::Error(_)));
-        let payload = encode_response_payload_v2(&decoded).unwrap();
-        assert_eq!(payload.len(), serde_json::to_vec(&error).unwrap().len());
-        let frame = encode_frame_v1(&payload).unwrap();
-        assert_eq!(decode_single_frame_v1(&frame).unwrap(), payload);
-        direct.push((payload.len(), error));
-    }
-    assert_eq!(direct.len(), 31);
-    let largest_direct_length = direct.iter().map(|(length, _)| *length).max().unwrap();
-    let (_, largest) = direct
-        .into_iter()
-        .max_by_key(|(length, _)| *length)
-        .unwrap();
-    assert_eq!(largest["code"], "PROCEDURE_V2_SCHEMA_INVALID");
-    assert_eq!(
-        serde_json::to_vec(&largest).unwrap().len(),
-        largest_direct_length
-    );
-
-    for command in ["job.status", "job.wait"] {
-        let receipt = json!({
-            "schema":OUTPUT_SCHEMA_V3,
-            "request_id":"ffffffff-ffff-4fff-8fff-ffffffffffff",
-            "command":command,
-            "generated_at":"9999-12-31T23:59:59.999Z",
-            "workspace":largest["workspace"].clone(),
-            "job":{
-                "id":UUID,"sequence":u64::MAX,"state":"failed",
-                "submitted_at":"9999-12-31T23:59:59.997Z",
-                "claimed_at":"9999-12-31T23:59:59.998Z",
-                "finished_at":"9999-12-31T23:59:59.999Z"
-            },
-            "result":{"schema":"podway.job-result/v3","job":largest.clone()},
-            "warnings":maximum_warnings()
-        });
-        assert_valid("schemas/output-v3.schema.json", &receipt);
-        let decoded = decode_response_payload_v2(&serde_json::to_vec(&receipt).unwrap()).unwrap();
-        let payload = encode_response_payload_v2(&decoded).unwrap();
-        assert!(payload.len() <= 1_048_576);
-        let frame = encode_frame_v1(&payload).unwrap();
-        assert_eq!(frame.len(), payload.len() + 4);
-        assert!(frame.len() <= 1_048_580);
-        assert_eq!(decode_single_frame_v1(&frame).unwrap(), payload);
-        assert_eq!(decode_response_payload_v2(&payload).unwrap(), decoded);
-
-        let mut recursive = receipt;
-        recursive["result"]["job"] = recursive.clone();
-        assert_invalid("schemas/output-v3.schema.json", &recursive);
-        assert!(decode_response_payload_v2(&serde_json::to_vec(&recursive).unwrap()).is_err());
-    }
-}
-
-#[test]
-fn v2rel002_terminal_error_is_contextually_closed_and_bounded() {
-    const SHARED_PERSISTED_TERMINAL_CODES: &[&str] = &[
-        "REQUEST_INVALID",
-        "INTERNAL_ERROR",
-        "SESSION_NOT_RUNNING",
-        "SESSION_CANCELLED",
-        "SESSION_REVISION_CONFLICT",
-        "SESSION_ID_MISMATCH",
-        "ATTEMPT_NOT_CURRENT",
-        "STAGE_NOT_SKIPPABLE",
-        "REQUIRED_ITEMS_MISSING",
-        "BLOCKERS_PRESENT",
-        "BLOCKER_LIMIT_REACHED",
-        "ITEM_NOT_FOUND",
-        "ITEM_REVISION_CONFLICT",
-        "ITEM_TYPE_MISMATCH",
-        "ITEM_CONSTRAINT_FAILED",
-        "LIST_VALUE_NOT_FOUND",
-        "LIST_VALUE_DUPLICATE",
-        "ARTIFACT_CHANGED",
-        "BLOCKER_NOT_FOUND",
-        "BLOCKER_NOT_CURRENT",
-    ];
-    let catalog = podway_protocol::error_code_catalog_v1()
-        .map(|(code, exit_code, retryable)| (code, (exit_code, retryable)))
-        .collect::<HashMap<_, _>>();
-    for code in SHARED_PERSISTED_TERMINAL_CODES {
-        let (exit_code, retryable) = catalog[code];
-        let error = json!({
-            "schema":"podway.error/v1",
-            "request_id":UUID,
-            "command":"session.complete",
-            "generated_at":"2026-08-04T00:00:00.000Z",
-            "code":code,
-            "message":"Bound persisted terminal failure.",
-            "retryable":retryable,
-            "exit_code":exit_code,
-            "workspace":{
-                "uuid":UUID,
-                "root":"/tmp/podway-v2rel002",
-                "latest_workspace_sequence":1
-            },
-            "details":shared_terminal_error_details(code)
-        });
-        assert!(
-            serde_json::from_value::<ErrorEnvelopeV1>(error.clone()).is_ok(),
-            "shared persisted terminal code {code} must remain a valid direct error"
-        );
-        let nested = json!({"schema":"podway.job-result/v3","job":error});
-        assert_valid("schemas/job-result-v3.schema.json", &nested);
-        assert!(
-            decode_result_schema_contract_v2(nested.as_object().unwrap()).is_some(),
-            "shared persisted terminal code {code} must remain valid when bounded"
-        );
-    }
-
-    let terminal = json!({
-        "schema":"podway.error/v1",
-        "request_id":UUID,
-        "command":"session.complete",
-        "generated_at":"2026-08-04T00:00:00.000Z",
-        "code":"GRAPH_NODE_NOT_FOUND",
-        "message":"Graph node not found.",
-        "retryable":false,
-        "exit_code":1,
-        "workspace":{
-            "uuid":UUID,
-            "root":"/tmp/podway-v2rel002",
-            "latest_workspace_sequence":1
-        },
-        "details":{
-            "schema":"podway.v2-runtime-error-details/v1",
-            "kind":"GRAPH_NODE_NOT_FOUND",
-            "graph_node_id":"work",
-            "admission":admission()
-        }
-    });
-    let normal_result = json!({"schema":"podway.job-result/v3","job":terminal.clone()});
-    assert_valid("schemas/job-result-v3.schema.json", &normal_result);
-    assert!(decode_result_schema_contract_v2(normal_result.as_object().unwrap()).is_some());
-
-    let normal_read = json!({
-        "schema":OUTPUT_SCHEMA_V3,
-        "request_id":UUID,
-        "command":"job.status",
-        "generated_at":"2026-08-04T00:00:00.000Z",
-        "workspace":terminal["workspace"].clone(),
-        "job":{
-            "id":UUID,"sequence":1,"state":"failed",
-            "submitted_at":"2026-08-04T00:00:00.000Z",
-            "claimed_at":"2026-08-04T00:00:00.001Z",
-            "finished_at":"2026-08-04T00:00:00.002Z"
-        },
-        "result":normal_result.clone(),
-        "warnings":[]
-    });
-    let normal = serde_json::from_value::<OutputEnvelopeV3>(normal_read).unwrap();
-    let normal = ResponseEnvelopeV2::OutputV2(normal);
-    let encoded = encode_response_payload_v2(&normal).unwrap();
-    assert_eq!(decode_response_payload_v2(&encoded).unwrap(), normal);
-
-    let mut oversized_root = terminal.clone();
-    oversized_root["workspace"]["root"] = json!("r".repeat(4097));
-    let oversized_root = json!({"schema":"podway.job-result/v3","job":oversized_root});
-    assert_invalid("schemas/job-result-v3.schema.json", &oversized_root);
-    assert!(decode_result_schema_contract_v2(oversized_root.as_object().unwrap()).is_none());
-
-    let mut generic = json!({
-        "schema":"podway.error/v1",
-        "request_id":UUID,
-        "command":"session.complete",
-        "generated_at":"2026-08-04T00:00:00.000Z",
-        "code":"INTERNAL_ERROR",
-        "message":"Internal error.",
-        "retryable":false,
-        "exit_code":6,
-        "workspace":{
-            "uuid":UUID,
-            "root":escape_heavy(4_096),
-            "latest_workspace_sequence":u64::MAX
-        },
-        "details":{
-            "context":"",
-            "admission":{"admitted":true,"job_id":UUID,"workspace_sequence":u64::MAX}
-        }
-    });
-    let baseline = serde_json::to_vec(&generic).unwrap().len();
-    generic["details"]["context"] = json!("x".repeat(MAX_V2_TERMINAL_ERROR_BYTES - baseline));
-    assert_eq!(
-        serde_json::to_vec(&generic).unwrap().len(),
-        MAX_V2_TERMINAL_ERROR_BYTES
-    );
-    let maximum_result = json!({"schema":"podway.job-result/v3","job":generic.clone()});
-    assert_valid("schemas/job-result-v3.schema.json", &maximum_result);
-    assert!(decode_result_schema_contract_v2(maximum_result.as_object().unwrap()).is_some());
-    assert_eq!(
-        generic["workspace"]["root"]
-            .as_str()
-            .unwrap()
-            .chars()
-            .count(),
-        4_096
-    );
-    for command in ["job.status", "job.wait"] {
-        let maximum_read = json!({
-            "schema":OUTPUT_SCHEMA_V3,
-            "request_id":UUID,
-            "command":command,
-            "generated_at":"9999-12-31T23:59:59.999Z",
-            "workspace":generic["workspace"].clone(),
-            "job":{
-                "id":UUID,"sequence":u64::MAX,"state":"failed",
-                "submitted_at":"9999-12-31T23:59:59.997Z",
-                "claimed_at":"9999-12-31T23:59:59.998Z",
-                "finished_at":"9999-12-31T23:59:59.999Z"
-            },
-            "result":maximum_result.clone(),
-            "warnings":maximum_warnings()
-        });
-        let decoded =
-            decode_response_payload_v2(&serde_json::to_vec(&maximum_read).unwrap()).unwrap();
-        assert!(matches!(
-            &decoded,
-            ResponseEnvelopeV2::OutputV2(output) if output.session().is_none()
-        ));
-        let encoded = encode_response_payload_v2(&decoded).unwrap();
-        assert!(encoded.len() <= 1_048_576);
-        assert_eq!(
-            decode_single_frame_v1(&encode_frame_v1(&encoded).unwrap()).unwrap(),
-            encoded
-        );
-    }
-
-    generic["details"]["context"] = json!("x".repeat(MAX_V2_TERMINAL_ERROR_BYTES + 1 - baseline));
-    let direct = serde_json::to_vec(&generic).unwrap();
-    assert_eq!(direct.len(), MAX_V2_TERMINAL_ERROR_BYTES + 1);
-    assert_valid("schemas/error-v1.schema.json", &generic);
-    assert!(matches!(
-        decode_response_payload_v2(&direct).unwrap(),
-        ResponseEnvelopeV2::Error(_)
-    ));
-
-    let oversized_result = json!({"schema":"podway.job-result/v3","job":generic});
-    assert_valid("schemas/job-result-v3.schema.json", &oversized_result);
-    assert!(decode_result_schema_contract_v2(oversized_result.as_object().unwrap()).is_none());
-    assert!(serde_json::to_vec(&oversized_result).unwrap().len() > MAX_V2_TERMINAL_ERROR_BYTES);
-
-    let mut oversized_message = normal_result;
-    oversized_message["job"]["code"] = json!("INTERNAL_ERROR");
-    oversized_message["job"]["retryable"] = json!(false);
-    oversized_message["job"]["exit_code"] = json!(6);
-    oversized_message["job"]["message"] = json!("m".repeat(513));
-    oversized_message["job"]["details"] = json!({});
-    assert!(serde_json::from_value::<ErrorEnvelopeV1>(oversized_message["job"].clone()).is_ok());
-    assert_invalid("schemas/job-result-v3.schema.json", &oversized_message);
-    assert!(decode_result_schema_contract_v2(oversized_message.as_object().unwrap()).is_none());
-}
-
 #[test]
 fn v2ctr003_decision_result_projections_match_the_immutable_record() {
-    let decision = examples()["podway.decision-result/v1"].clone();
-    assert_valid("schemas/decision-result-v1.schema.json", &decision);
+    let decision = examples()["podway.decision-result/v2"].clone();
+    assert_valid("schemas/decision-result-v2.schema.json", &decision);
     assert!(decode_result_schema_contract_v2(decision.as_object().unwrap()).is_some());
 
     for (field, mismatched) in [
@@ -4526,7 +1505,7 @@ fn v2ctr003_decision_result_projections_match_the_immutable_record() {
     ] {
         let mut result = decision.clone();
         result[field] = mismatched;
-        assert_valid("schemas/decision-result-v1.schema.json", &result);
+        assert_valid("schemas/decision-result-v2.schema.json", &result);
         assert_eq!(
             decode_result_schema_contract_v2(result.as_object().unwrap()),
             None,
@@ -4534,839 +1513,6 @@ fn v2ctr003_decision_result_projections_match_the_immutable_record() {
         );
     }
 }
-
-#[test]
-fn v2ctr003_critical_bounds_and_variant_rules_fail_closed() {
-    let fixtures = examples();
-
-    let mut decision_next = fixtures["podway.next-result/v2"].clone();
-    decision_next["node"]["node_type"] = json!("decision");
-    decision_next.as_object_mut().unwrap().remove("intent");
-    decision_next
-        .as_object_mut()
-        .unwrap()
-        .remove("instructions");
-    decision_next.as_object_mut().unwrap().remove("terminal");
-    decision_next["objective"] = json!("Choose");
-    decision_next["prompt"] = json!("Continue?");
-    decision_next["options"] = json!([{"option_id":"accept","label":"Accept"}]);
-    decision_next["reason_policy"] = json!({"required":true});
-    assert_valid("schemas/next-result-v2.schema.json", &decision_next);
-
-    let mut decision_status = fixtures["podway.status-result/v2"].clone();
-    decision_status["current"]["node"]["node_type"] = json!("decision");
-    decision_status.as_object_mut().unwrap().remove("terminal");
-    decision_status["allowed_option_ids"] = json!(["accept"]);
-    assert_valid("schemas/status-result-v2.schema.json", &decision_status);
-
-    let mut completed_status = fixtures["podway.status-result/v2"].clone();
-    completed_status["session"]["lifecycle"] = json!("completed");
-    completed_status["current"] = Value::Null;
-    completed_status.as_object_mut().unwrap().remove("terminal");
-    assert_valid("schemas/status-result-v2.schema.json", &completed_status);
-
-    let mut running_without_current = completed_status;
-    running_without_current["session"]["lifecycle"] = json!("running");
-    assert_invalid(
-        "schemas/status-result-v2.schema.json",
-        &running_without_current,
-    );
-
-    let mut dry_run = fixtures["podway.session-start-result/v2"].clone();
-    dry_run["dry_run"] = json!(true);
-    dry_run.as_object_mut().unwrap().remove("session_id");
-    dry_run.as_object_mut().unwrap().remove("revision");
-    dry_run.as_object_mut().unwrap().remove("admission");
-    dry_run
-        .as_object_mut()
-        .unwrap()
-        .remove("entry_graph_node_id");
-    assert_valid("schemas/session-start-result-v2.schema.json", &dry_run);
-
-    let mut dry_run_with_admission = dry_run.clone();
-    dry_run_with_admission["admission"] = admission();
-    assert_invalid(
-        "schemas/session-start-result-v2.schema.json",
-        &dry_run_with_admission,
-    );
-
-    let mut tracked_without_goal = fixtures["podway.session-start-result/v2"].clone();
-    tracked_without_goal["goal_tracking"] = json!(true);
-    assert_valid(
-        "schemas/session-start-result-v2.schema.json",
-        &tracked_without_goal,
-    );
-
-    let mut tracked_with_goal = tracked_without_goal.clone();
-    tracked_with_goal["goal_defined"] = json!(true);
-    assert_valid(
-        "schemas/session-start-result-v2.schema.json",
-        &tracked_with_goal,
-    );
-
-    let mut untracked_with_goal = fixtures["podway.session-start-result/v2"].clone();
-    untracked_with_goal["goal_defined"] = json!(true);
-    assert_invalid(
-        "schemas/session-start-result-v2.schema.json",
-        &untracked_with_goal,
-    );
-
-    let mut legacy_goal_required = fixtures["podway.session-start-result/v2"].clone();
-    legacy_goal_required["goal_required"] = json!(false);
-    assert_invalid(
-        "schemas/session-start-result-v2.schema.json",
-        &legacy_goal_required,
-    );
-
-    let mut terminal_compact = fixtures["podway.compact-status-result/v2"].clone();
-    terminal_compact["session"]["lifecycle"] = json!("completed");
-    terminal_compact["current"] = Value::Null;
-    assert_valid(
-        "schemas/compact-status-result-v2.schema.json",
-        &terminal_compact,
-    );
-
-    let mut compact_with_root_blockers = fixtures["podway.compact-status-result/v2"].clone();
-    compact_with_root_blockers["blockers"] = json!([]);
-    assert_invalid(
-        "schemas/compact-status-result-v2.schema.json",
-        &compact_with_root_blockers,
-    );
-
-    let mut status_with_root_blockers = fixtures["podway.status-result/v2"].clone();
-    status_with_root_blockers["blockers"] = json!([]);
-    assert_invalid(
-        "schemas/status-result-v2.schema.json",
-        &status_with_root_blockers,
-    );
-
-    let mut next = fixtures["podway.next-result/v2"].clone();
-    next["title"] = json!("x".repeat(121));
-    assert_invalid("schemas/next-result-v2.schema.json", &next);
-
-    let mut empty_intent = fixtures["podway.next-result/v2"].clone();
-    empty_intent["intent"] = json!("");
-    assert_invalid("schemas/next-result-v2.schema.json", &empty_intent);
-
-    let mut unknown_action = fixtures["podway.next-result/v2"].clone();
-    unknown_action["allowed_actions"] = json!(["session.explode"]);
-    assert_invalid("schemas/next-result-v2.schema.json", &unknown_action);
-
-    let mut unknown_suggestion = fixtures["podway.next-result/v2"].clone();
-    unknown_suggestion["suggestions"] = json!([{"command":"session.explode","argv":["explode"]}]);
-    assert_invalid("schemas/next-result-v2.schema.json", &unknown_suggestion);
-
-    let mut ambiguous_action = fixtures["podway.next-result/v2"].clone();
-    ambiguous_action["next_graph_node_id"] = json!("finish");
-    assert_invalid("schemas/next-result-v2.schema.json", &ambiguous_action);
-
-    let mut stale_readback = fixtures["podway.next-result/v2"].clone();
-    stale_readback["references"] = json!([{
-        "source_graph_node_id":"build", "source_title":"Build", "source_attempt_id":UUID,
-        "source_attempt_number":1, "items_digest":DIGEST, "state":"stale"
-    }]);
-    assert_invalid("schemas/next-result-v2.schema.json", &stale_readback);
-
-    let mut stale_readback_values = fixtures["podway.next-result/v2"].clone();
-    stale_readback_values["readback"] = json!([{
-        "source_graph_node_id":"build", "source_title":"Build", "source_attempt_id":UUID,
-        "source_attempt_number":1, "items_digest":DIGEST, "state":"stale", "items":[]
-    }]);
-    assert_invalid("schemas/next-result-v2.schema.json", &stale_readback_values);
-
-    let mut mixed_source = fixtures["podway.procedure-source-result/v1"].clone();
-    mixed_source["template"] = json!("minimal");
-    assert_invalid(
-        "schemas/procedure-source-result-v1.schema.json",
-        &mixed_source,
-    );
-
-    let mut incomplete_record = fixtures["podway.decision-result/v1"].clone();
-    incomplete_record["record"]
-        .as_object_mut()
-        .unwrap()
-        .remove("procedure_snapshot_id");
-    assert_invalid("schemas/decision-result-v1.schema.json", &incomplete_record);
-
-    let mut missing_target_attempt = fixtures["podway.decision-result/v1"].clone();
-    missing_target_attempt
-        .as_object_mut()
-        .unwrap()
-        .remove("target_attempt_id");
-    assert_invalid(
-        "schemas/decision-result-v1.schema.json",
-        &missing_target_attempt,
-    );
-
-    let mut completed_decision = fixtures["podway.decision-result/v1"].clone();
-    completed_decision["session_state"] = json!("completed");
-    assert_invalid(
-        "schemas/decision-result-v1.schema.json",
-        &completed_decision,
-    );
-
-    let mut stale_snapshot = fixtures["podway.decision-result/v1"].clone();
-    stale_snapshot["record"]["references"] = json!([{
-        "source_graph_node_id":"build", "source_attempt_id":UUID,
-        "source_attempt_number":1, "items_digest":DIGEST, "state":"stale"
-    }]);
-    assert_invalid("schemas/decision-result-v1.schema.json", &stale_snapshot);
-
-    let mut partial_assessment = fixtures["podway.decision-result/v1"].clone();
-    partial_assessment["record"]["goal_outcome"] = json!("achieved");
-    assert_invalid(
-        "schemas/decision-result-v1.schema.json",
-        &partial_assessment,
-    );
-
-    let mut complete_assessment = fixtures["podway.decision-result/v1"].clone();
-    complete_assessment["record"]["goal_revision"] = json!(1);
-    complete_assessment["record"]["assessment"] = json!("session_goal");
-    complete_assessment["record"]["assessment_mode"] = json!("assessment");
-    complete_assessment["record"]["goal_outcome"] = json!("achieved");
-    complete_assessment["record"]["criterion_results"] = json!([{
-        "criterion_id":"tests", "status":"satisfied", "reason":"verified", "citations":[]
-    }]);
-    assert_valid(
-        "schemas/decision-result-v1.schema.json",
-        &complete_assessment,
-    );
-
-    let mut achieved_with_unsatisfied = complete_assessment.clone();
-    achieved_with_unsatisfied["record"]["criterion_results"][0]["status"] = json!("unsatisfied");
-    assert_invalid(
-        "schemas/decision-result-v1.schema.json",
-        &achieved_with_unsatisfied,
-    );
-
-    let mut not_achieved_without_unsatisfied = complete_assessment.clone();
-    not_achieved_without_unsatisfied["record"]["goal_outcome"] = json!("not_achieved");
-    assert_invalid(
-        "schemas/decision-result-v1.schema.json",
-        &not_achieved_without_unsatisfied,
-    );
-
-    let mut superseded_with_citation = complete_assessment.clone();
-    superseded_with_citation["record"]["assessment_mode"] = json!("applicability");
-    superseded_with_citation["record"]["goal_outcome"] = json!("superseded");
-    superseded_with_citation["record"]["criterion_results"][0]["status"] = json!("not_applicable");
-    superseded_with_citation["record"]["criterion_results"][0]["citations"] =
-        json!([{"local_item_id":"reviewed"}]);
-    assert_invalid(
-        "schemas/decision-result-v1.schema.json",
-        &superseded_with_citation,
-    );
-
-    for citation in [
-        json!({"reference_graph_node_id":"build"}),
-        json!({"local_item_id":"reviewed"}),
-    ] {
-        let mut cited = complete_assessment.clone();
-        cited["record"]["criterion_results"][0]["citations"] = json!([citation]);
-        assert_valid("schemas/decision-result-v1.schema.json", &cited);
-    }
-    for citation in [
-        json!({"item_id":"reviewed"}),
-        json!({"reference_graph_node_id":"build","local_item_id":"reviewed"}),
-    ] {
-        let mut invalid_citation = complete_assessment.clone();
-        invalid_citation["record"]["criterion_results"][0]["citations"] = json!([citation]);
-        assert_invalid("schemas/decision-result-v1.schema.json", &invalid_citation);
-    }
-
-    let public_u64_max = json!(u64::MAX);
-    let mut max_criterion_revision = fixtures["podway.criterion-assessment-result/v1"].clone();
-    max_criterion_revision["goal_revision"] = public_u64_max.clone();
-    assert_valid(
-        "schemas/criterion-assessment-result-v1.schema.json",
-        &max_criterion_revision,
-    );
-    let mut max_decision_attempt = fixtures["podway.decision-result/v1"].clone();
-    max_decision_attempt["attempt_number"] = public_u64_max.clone();
-    assert_valid(
-        "schemas/decision-result-v1.schema.json",
-        &max_decision_attempt,
-    );
-    let mut max_goal_revision = fixtures["podway.goal-revision-result/v1"].clone();
-    max_goal_revision["goal_revision"] = public_u64_max.clone();
-    assert_valid(
-        "schemas/goal-revision-result-v1.schema.json",
-        &max_goal_revision,
-    );
-    let mut max_item_attempt = fixtures["podway.item-mutation-result/v2"].clone();
-    max_item_attempt["attempt_number"] = public_u64_max.clone();
-    assert_valid(
-        "schemas/item-mutation-result-v2.schema.json",
-        &max_item_attempt,
-    );
-    let mut max_next_goal_revision = fixtures["podway.next-result/v2"].clone();
-    max_next_goal_revision["goal_tracking"] = json!(true);
-    max_next_goal_revision["goal_defined"] = json!(true);
-    max_next_goal_revision["goal_revision"] = public_u64_max.clone();
-    max_next_goal_revision["goal"] = json!({
-        "revision": u64::MAX,
-        "statement": "Ship safely",
-        "criteria": [{"criterion_id":"tests","statement":"Tests pass","status":"unassessed"}]
-    });
-    assert_valid(
-        "schemas/next-result-v2.schema.json",
-        &max_next_goal_revision,
-    );
-
-    let mut invalid_block = fixtures["podway.stage-transition-result/v2"].clone();
-    invalid_block["transition"] = json!("block");
-    invalid_block["session_state"] = json!("running");
-    assert_invalid(
-        "schemas/stage-transition-result-v2.schema.json",
-        &invalid_block,
-    );
-
-    let running_skip = json!({
-        "schema":"podway.stage-transition-result/v2", "admission":admission(), "transition":"skip",
-        "from_graph_node_id":"work", "from_attempt_id":UUID,
-        "to_graph_node_id":"finish", "to_attempt_id":UUID,
-        "revision":2, "session_state":"running"
-    });
-    assert_valid(
-        "schemas/stage-transition-result-v2.schema.json",
-        &running_skip,
-    );
-    let completed_skip = json!({
-        "schema":"podway.stage-transition-result/v2", "admission":admission(), "transition":"skip",
-        "from_graph_node_id":"work", "from_attempt_id":UUID,
-        "revision":2, "session_state":"completed"
-    });
-    assert_valid(
-        "schemas/stage-transition-result-v2.schema.json",
-        &completed_skip,
-    );
-    let mut reasoned_skip = running_skip;
-    reasoned_skip["reason"] = json!("optional explanation");
-    assert_valid(
-        "schemas/stage-transition-result-v2.schema.json",
-        &reasoned_skip,
-    );
-    let retry_without_reason = json!({
-        "schema":"podway.stage-transition-result/v2", "admission":admission(), "transition":"retry",
-        "from_graph_node_id":"work", "from_attempt_id":UUID,
-        "to_graph_node_id":"work", "to_attempt_id":UUID,
-        "revision":2, "session_state":"running"
-    });
-    assert_invalid(
-        "schemas/stage-transition-result-v2.schema.json",
-        &retry_without_reason,
-    );
-
-    for (schema, schema_path) in [
-        (
-            "podway.session-start-result/v2",
-            "schemas/session-start-result-v2.schema.json",
-        ),
-        (
-            "podway.next-result/v2",
-            "schemas/next-result-v2.schema.json",
-        ),
-        (
-            "podway.stage-transition-result/v2",
-            "schemas/stage-transition-result-v2.schema.json",
-        ),
-        (
-            "podway.item-mutation-result/v2",
-            "schemas/item-mutation-result-v2.schema.json",
-        ),
-        (
-            "podway.decision-result/v1",
-            "schemas/decision-result-v1.schema.json",
-        ),
-        (
-            "podway.rework-result/v1",
-            "schemas/rework-result-v1.schema.json",
-        ),
-        (
-            "podway.goal-definition-result/v1",
-            "schemas/goal-definition-result-v1.schema.json",
-        ),
-        (
-            "podway.goal-revision-result/v1",
-            "schemas/goal-revision-result-v1.schema.json",
-        ),
-        (
-            "podway.criterion-assessment-result/v1",
-            "schemas/criterion-assessment-result-v1.schema.json",
-        ),
-    ] {
-        let mut zero_revision = fixtures[schema].clone();
-        zero_revision["revision"] = json!(0);
-        assert_invalid(schema_path, &zero_revision);
-    }
-    for (schema, schema_path) in [
-        (
-            "podway.compact-status-result/v2",
-            "schemas/compact-status-result-v2.schema.json",
-        ),
-        (
-            "podway.status-result/v2",
-            "schemas/status-result-v2.schema.json",
-        ),
-    ] {
-        let mut zero_revision = fixtures[schema].clone();
-        zero_revision["session"]["revision"] = json!(0);
-        assert_invalid(schema_path, &zero_revision);
-    }
-    let mut zero_record_revision = fixtures["podway.decision-result/v1"].clone();
-    zero_record_revision["record"]["session_revision"] = json!(0);
-    assert_invalid(
-        "schemas/decision-result-v1.schema.json",
-        &zero_record_revision,
-    );
-    let mut zero_item_revision = fixtures["podway.compact-status-result/v2"].clone();
-    zero_item_revision["items"] = json!([{
-        "item_id":"done", "type":"confirm", "required":true,
-        "satisfied":false, "revision":0
-    }]);
-    assert_valid(
-        "schemas/compact-status-result-v2.schema.json",
-        &zero_item_revision,
-    );
-
-    let mut standard_history = fixtures["podway.status-result/v2"].clone();
-    standard_history["current_trace_history"] = json!({"entries":[],"trace_truncated":false,"trace_window":{"first_sequence":1,"last_sequence":1}});
-    assert_invalid("schemas/status-result-v2.schema.json", &standard_history);
-
-    let mut false_skip = fixtures["podway.status-result/v2"].clone();
-    false_skip["skip"] = json!({"allowed":false,"reason_required":true});
-    assert_invalid("schemas/status-result-v2.schema.json", &false_skip);
-
-    let mut bad_blocker = fixtures["podway.status-result/v2"].clone();
-    bad_blocker["blocker_window"] = json!([{
-        "blocker_id":"not-a-uuid", "reason":"blocked", "created_at":"2026-08-04T00:00:00.000Z"
-    }]);
-    assert_invalid("schemas/status-result-v2.schema.json", &bad_blocker);
-
-    let mut mismatched_readback = fixtures["podway.next-result/v2"].clone();
-    mismatched_readback["readback"] = json!([{
-        "source_graph_node_id":"build","source_title":"Build","source_attempt_id":UUID,
-        "source_attempt_number":1,"items_digest":DIGEST,"state":"resolved",
-        "items":[{"item_id":"done","type":"confirm","value":"yes"}]
-    }]);
-    assert_invalid("schemas/next-result-v2.schema.json", &mismatched_readback);
-
-    let mut wrong_mode = fixtures["podway.criterion-assessment-result/v1"].clone();
-    wrong_mode["mode"] = json!("applicability");
-    assert_invalid(
-        "schemas/criterion-assessment-result-v1.schema.json",
-        &wrong_mode,
-    );
-
-    let mut incomplete = fixtures["podway.criterion-assessment-result/v1"].clone();
-    incomplete["complete"] = json!(false);
-    assert_invalid(
-        "schemas/criterion-assessment-result-v1.schema.json",
-        &incomplete,
-    );
-
-    let mut applicability_achieved = fixtures["podway.criterion-assessment-result/v1"].clone();
-    applicability_achieved["mode"] = json!("applicability");
-    applicability_achieved["result"]["status"] = json!("not_applicable");
-    applicability_achieved["determined_outcome"] = json!("achieved");
-    assert_invalid(
-        "schemas/criterion-assessment-result-v1.schema.json",
-        &applicability_achieved,
-    );
-
-    let mut assessment_superseded = fixtures["podway.criterion-assessment-result/v1"].clone();
-    assessment_superseded["determined_outcome"] = json!("superseded");
-    assert_invalid(
-        "schemas/criterion-assessment-result-v1.schema.json",
-        &assessment_superseded,
-    );
-
-    let mut unsatisfied_achieved = fixtures["podway.criterion-assessment-result/v1"].clone();
-    unsatisfied_achieved["result"]["status"] = json!("unsatisfied");
-    unsatisfied_achieved["determined_outcome"] = json!("achieved");
-    assert_invalid(
-        "schemas/criterion-assessment-result-v1.schema.json",
-        &unsatisfied_achieved,
-    );
-
-    let mut satisfied_not_achieved = fixtures["podway.criterion-assessment-result/v1"].clone();
-    satisfied_not_achieved["determined_outcome"] = json!("not_achieved");
-    assert_valid(
-        "schemas/criterion-assessment-result-v1.schema.json",
-        &satisfied_not_achieved,
-    );
-
-    let reset = json!({"schema":"podway.stage-transition-result/v2","admission":admission(),"transition":"reset","reset":true,"revision":3});
-    assert_valid("schemas/stage-transition-result-v2.schema.json", &reset);
-    let unblock_all = json!({"schema":"podway.stage-transition-result/v2","admission":admission(),"transition":"unblock","from_graph_node_id":"work","from_attempt_id":UUID,"all":true,"revision":3,"session_state":"running"});
-    assert_valid(
-        "schemas/stage-transition-result-v2.schema.json",
-        &unblock_all,
-    );
-    let invalid_cancel = json!({"schema":"podway.stage-transition-result/v2","admission":admission(),"transition":"cancel","from_graph_node_id":"work","from_attempt_id":UUID,"revision":3,"session_state":"running"});
-    assert_invalid(
-        "schemas/stage-transition-result-v2.schema.json",
-        &invalid_cancel,
-    );
-
-    let mut local_citation = fixtures["podway.criterion-assessment-result/v1"].clone();
-    local_citation["result"]["citations"] = json!([{"local_item_id":"reviewed"}]);
-    assert_valid(
-        "schemas/criterion-assessment-result-v1.schema.json",
-        &local_citation,
-    );
-
-    let mut verbose = fixtures["podway.status-result/v2"].clone();
-    verbose["tier"] = json!("verbose");
-    for field in [
-        "current_trace_history",
-        "stale_attempt_history",
-        "decision_history",
-        "rework_history",
-        "stale_goal_revision_history",
-        "stale_goal_assessment_history",
-    ] {
-        verbose[field] = json!({"entries":[],"trace_truncated":false,"trace_window":null});
-    }
-    assert_valid("schemas/status-result-v2.schema.json", &verbose);
-
-    let mut active_stale_reference = fixtures["podway.status-result/v2"].clone();
-    active_stale_reference["references"] = json!([{
-        "source_graph_node_id":"build", "source_title":"Build", "source_attempt_id":UUID,
-        "source_attempt_number":1, "items_digest":DIGEST, "state":"stale"
-    }]);
-    assert_invalid(
-        "schemas/status-result-v2.schema.json",
-        &active_stale_reference,
-    );
-
-    let stale_attempt = json!({
-        "trace_sequence":1, "graph_node_id":"work", "node_definition_id":"work",
-        "attempt_id":UUID, "attempt_number":1, "goal_revision":null,
-        "lifecycle":"abandoned", "validity":"stale",
-        "started_at":"2026-08-04T00:00:00.000Z",
-        "finished_at":"2026-08-04T00:01:00.000Z", "terminal_reason":"reworked",
-        "items":[], "items_total":0, "items_truncated":false,
-        "references":[
-            {"source_graph_node_id":"build", "source_title":"Build", "source_attempt_id":UUID,
-             "source_attempt_number":1, "items_digest":DIGEST, "state":"stale"},
-            {"source_graph_node_id":"optional", "state":"unresolved"}
-        ]
-    });
-    let mut historical_stale_references = verbose.clone();
-    historical_stale_references["stale_attempt_history"] = json!({
-        "entries":[stale_attempt.clone()], "trace_truncated":false,
-        "trace_window":{"first_sequence":1,"last_sequence":1}
-    });
-    assert_valid(
-        "schemas/status-result-v2.schema.json",
-        &historical_stale_references,
-    );
-
-    let mut historical_resolved_reference = historical_stale_references.clone();
-    historical_resolved_reference["stale_attempt_history"]["entries"][0]["references"][0]["state"] =
-        json!("resolved");
-    assert_invalid(
-        "schemas/status-result-v2.schema.json",
-        &historical_resolved_reference,
-    );
-
-    let mut historical_missing_references = historical_stale_references.clone();
-    historical_missing_references["stale_attempt_history"]["entries"][0]
-        .as_object_mut()
-        .unwrap()
-        .remove("references");
-    assert_invalid(
-        "schemas/status-result-v2.schema.json",
-        &historical_missing_references,
-    );
-
-    let mut legacy_history_markers = verbose.clone();
-    legacy_history_markers["current_trace_history"] =
-        json!({"entries":[],"truncated":false,"window":null});
-    assert_invalid(
-        "schemas/status-result-v2.schema.json",
-        &legacy_history_markers,
-    );
-
-    let mut max_trace_window = verbose.clone();
-    max_trace_window["current_trace_history"] = json!({
-        "entries":[{
-            "trace_sequence":u64::MAX,"graph_node_id":"work","node_definition_id":"work",
-            "attempt_id":UUID,"attempt_number":1,"goal_revision":null,"lifecycle":"active",
-            "validity":"valid","started_at":"2026-08-04T00:00:00.000Z"
-        }],
-        "trace_truncated":false,
-        "trace_window":{"first_sequence":u64::MAX,"last_sequence":u64::MAX}
-    });
-    assert_valid("schemas/status-result-v2.schema.json", &max_trace_window);
-
-    let mut decision_history = verbose.clone();
-    decision_history["decision_history"] = json!({
-        "entries":[fixtures["podway.decision-result/v1"]["record"].clone()],
-        "trace_truncated":false,
-        "trace_window":{"first_sequence":1,"last_sequence":1}
-    });
-    assert_valid("schemas/status-result-v2.schema.json", &decision_history);
-
-    let mut rework_history = verbose.clone();
-    rework_history["rework_history"] = json!({
-        "entries":[{
-            "trace_sequence":1,"kind":"manual","from_graph_node_id":"finish",
-            "to_graph_node_id":"work","target_attempt_id":UUID,"reason":"retry",
-            "reactivated":true,"recorded_at":"2026-08-04T00:00:00.000Z"
-        }],
-        "trace_truncated":false,
-        "trace_window":{"first_sequence":1,"last_sequence":1}
-    });
-    assert_valid("schemas/status-result-v2.schema.json", &rework_history);
-
-    let inadmissible_preview = json!({
-        "schema":"podway.procedure-preview-result/v1","file":"workflow.yaml",
-        "admissible":false,"checks":{"validate":false,"vet":false,"lint":false},
-        "diagnostics":[{
-            "code":"AUTHORING_SCHEMA_INVALID","severity":"error",
-            "schema":"podway.procedure/v2","source_path":"workflow.yaml",
-            "location":{"line":1,"column":1,"end_line":1,"end_column":1},
-            "field":"$","message":"The document is invalid.",
-            "hint":"Correct the document and retry."
-        }],
-        "diagnostics_truncated":false,"diagnostics_total":1
-    });
-    assert_valid(
-        "schemas/procedure-preview-result-v1.schema.json",
-        &inadmissible_preview,
-    );
-    for field in [
-        "procedure_schema",
-        "procedure_id",
-        "procedure_version",
-        "purpose",
-        "procedure_digest",
-        "goal_tracking",
-        "goal_assessment_graph_node_ids",
-        "summary",
-        "graph",
-        "mermaid",
-        "start_suggestion",
-    ] {
-        let mut candidate = inadmissible_preview.clone();
-        candidate[field] = fixtures["podway.procedure-preview-result/v1"][field].clone();
-        assert_invalid(
-            "schemas/procedure-preview-result-v1.schema.json",
-            &candidate,
-        );
-    }
-    for checks in [
-        json!({"validate":false,"vet":true,"lint":false}),
-        json!({"validate":false,"vet":false,"lint":true}),
-        json!({"validate":true,"vet":true,"lint":false}),
-    ] {
-        let mut candidate = inadmissible_preview.clone();
-        candidate["checks"] = checks;
-        assert_invalid(
-            "schemas/procedure-preview-result-v1.schema.json",
-            &candidate,
-        );
-    }
-    for (field, value) in [("diagnostics", json!([])), ("diagnostics_total", json!(0))] {
-        let mut candidate = inadmissible_preview.clone();
-        candidate[field] = value;
-        assert_invalid(
-            "schemas/procedure-preview-result-v1.schema.json",
-            &candidate,
-        );
-    }
-    let mut false_inadmissible = fixtures["podway.procedure-preview-result/v1"].clone();
-    false_inadmissible["admissible"] = json!(false);
-    false_inadmissible
-        .as_object_mut()
-        .unwrap()
-        .remove("start_suggestion");
-    assert_invalid(
-        "schemas/procedure-preview-result-v1.schema.json",
-        &false_inadmissible,
-    );
-
-    let mut invalid_goal_assessment_summary = verbose;
-    invalid_goal_assessment_summary["stale_goal_assessment_history"] = json!({
-        "entries":[{
-            "trace_sequence":1,"session_id":UUID,"session_revision":1,"procedure_snapshot_id":UUID,
-            "procedure_digest":DIGEST,"graph_node_id":"review","node_definition_id":"review",
-            "attempt_id":UUID,"attempt_number":1,"goal_revision":1,"assessment":"session_goal",
-            "option_id":"accept","effect":"advance","target_graph_node_id":"finish",
-            "mode":"assessment","outcome":"achieved",
-            "criterion_statuses":[{"criterion_id":"tests","status":"unsatisfied","citations":[]}],
-            "references":[],"actor":null,"recorded_at":"2026-08-04T00:00:00.000Z",
-            "record_digest":DIGEST
-        }],
-        "trace_truncated":false,
-        "trace_window":{"first_sequence":1,"last_sequence":1}
-    });
-    assert_invalid(
-        "schemas/status-result-v2.schema.json",
-        &invalid_goal_assessment_summary,
-    );
-
-    let mut invalid_not_achieved_summary = invalid_goal_assessment_summary.clone();
-    invalid_not_achieved_summary["stale_goal_assessment_history"]["entries"][0]["outcome"] =
-        json!("not_achieved");
-    invalid_not_achieved_summary["stale_goal_assessment_history"]["entries"][0]["criterion_statuses"]
-        [0]["status"] = json!("satisfied");
-    assert_invalid(
-        "schemas/status-result-v2.schema.json",
-        &invalid_not_achieved_summary,
-    );
-
-    let mut invalid_superseded_summary = invalid_goal_assessment_summary;
-    invalid_superseded_summary["stale_goal_assessment_history"]["entries"][0]["mode"] =
-        json!("applicability");
-    invalid_superseded_summary["stale_goal_assessment_history"]["entries"][0]["outcome"] =
-        json!("superseded");
-    invalid_superseded_summary["stale_goal_assessment_history"]["entries"][0]["criterion_statuses"]
-        [0]["status"] = json!("not_applicable");
-    invalid_superseded_summary["stale_goal_assessment_history"]["entries"][0]["criterion_statuses"]
-        [0]["citations"] = json!([{"local_item_id":"reviewed"}]);
-    assert_invalid(
-        "schemas/status-result-v2.schema.json",
-        &invalid_superseded_summary,
-    );
-}
-
-#[test]
-fn v2ctr003_mutation_successes_use_the_bounded_v2_admission_contract() {
-    for schema in [
-        "podway.detached-admission-result/v2",
-        "podway.session-start-result/v2",
-        "podway.stage-transition-result/v2",
-        "podway.item-mutation-result/v2",
-        "podway.decision-result/v1",
-        "podway.rework-result/v1",
-        "podway.goal-definition-result/v1",
-        "podway.goal-revision-result/v1",
-        "podway.criterion-assessment-result/v1",
-    ] {
-        let contract = EXISTING_ROUTE_RESULT_SCHEMAS_V2
-            .iter()
-            .chain(NEW_ROUTE_RESULT_SCHEMAS_V1)
-            .find(|contract| contract.schema == schema)
-            .unwrap();
-        let result = examples()[schema].clone();
-        assert_valid(contract.schema_path, &result);
-
-        let mut missing = result.clone();
-        missing.as_object_mut().unwrap().remove("admission");
-        assert_invalid(contract.schema_path, &missing);
-
-        let mut not_admitted = result.clone();
-        not_admitted["admission"] = json!({"admitted":false});
-        assert_invalid(contract.schema_path, &not_admitted);
-
-        let mut open = result;
-        open["admission"]["idempotency_key"] = json!("legacy-shape");
-        assert_invalid(contract.schema_path, &open);
-
-        let mut maximum = examples()[schema].clone();
-        maximum["admission"]["workspace_sequence"] = json!(u64::MAX);
-        assert_valid(contract.schema_path, &maximum);
-
-        let mut overflow = maximum;
-        overflow["admission"]["workspace_sequence"] =
-            serde_json::from_str("18446744073709551616").unwrap();
-        assert_invalid(contract.schema_path, &overflow);
-    }
-
-    let mut detached = examples()["podway.detached-admission-result/v2"].clone();
-    detached["job"] = json!({"job_id":UUID});
-    assert_invalid(
-        "schemas/detached-admission-result-v2.schema.json",
-        &detached,
-    );
-
-    let mut output = json!({
-        "schema":OUTPUT_SCHEMA_V3,"request_id":UUID,"command":"session.complete",
-        "generated_at":"2026-08-04T00:00:00.000Z",
-        "result":examples()["podway.stage-transition-result/v2"].clone(),"warnings":[]
-    });
-    add_admitted_envelope_metadata(&mut output);
-    assert_valid("schemas/output-v3.schema.json", &output);
-    assert!(admission_matches_job(&output));
-
-    output["job"]["sequence"] = json!(2);
-    assert!(!admission_matches_job(&output));
-}
-
-#[test]
-fn v2ctr003_retained_envelope_warnings_are_bounded_and_framing_is_separate() {
-    let warning = Map::from_iter([
-        ("code".to_owned(), json!("ADVISORY")),
-        ("path".to_owned(), json!("workflow.yaml")),
-        ("message".to_owned(), json!("Review this field.")),
-    ]);
-    assert!(validate_v2_output_warnings(std::slice::from_ref(&warning)));
-    assert!(!validate_v2_output_warnings(&vec![warning.clone(); 5]));
-
-    let mut oversized = warning.clone();
-    oversized.insert("message".to_owned(), json!("x".repeat(513)));
-    assert!(!validate_v2_output_warnings(&[oversized]));
-
-    let mut open = warning;
-    open.insert("unknown".to_owned(), json!(true));
-    assert!(!validate_v2_output_warnings(&[open]));
-
-    let result = examples()["podway.procedure-validation-result/v2"].clone();
-    let output = json!({
-        "schema":OUTPUT_SCHEMA_V3, "request_id":UUID,
-        "command":"procedure.validate", "generated_at":"2026-08-04T00:00:00.000Z",
-        "result":result, "warnings":[]
-    });
-    assert_valid("schemas/output-v3.schema.json", &output);
-    let encoded = serde_json::to_vec(&output).unwrap();
-    assert!(validate_frame_payload_length(encoded.len()).is_ok());
-
-    let mut legacy_output = output.clone();
-    legacy_output["schema"] = json!("podway.output/v1");
-    assert_invalid("schemas/output-v3.schema.json", &legacy_output);
-
-    let mut wrong_route = output.clone();
-    wrong_route["command"] = json!("procedure.graph");
-    assert_invalid("schemas/output-v3.schema.json", &wrong_route);
-
-    let mut oversized = output;
-    oversized["padding"] = json!("x".repeat(1_048_576));
-    assert_valid("schemas/output-v3.schema.json", &oversized);
-    assert!(validate_frame_payload_length(serde_json::to_vec(&oversized).unwrap().len()).is_err());
-}
-
-fn result_map(value: &Value) -> Map<String, Value> {
-    value.as_object().expect("result object").clone()
-}
-
-fn warning(code: &str) -> Map<String, Value> {
-    result_map(&json!({
-        "code": code, "path": "workflow.yaml", "message": "Review this field."
-    }))
-}
-
-fn authoring_input(command: &str, result: &Value) -> OutputEnvelopeInputV3 {
-    OutputEnvelopeInputV3 {
-        request_id: RequestIdV1::new(UUID).unwrap(),
-        command: CommandNameV1::new(command).unwrap(),
-        generated_at: Rfc3339MillisV1::new("2026-08-04T00:00:00.000Z").unwrap(),
-        workspace: None,
-        job: None,
-        session: None,
-        result: result_map(result),
-        warnings: Vec::new(),
-    }
-}
-
-fn diagnostics_result(operation: &str) -> Value {
-    let mut result = examples()["podway.procedure-diagnostics-result/v1"].clone();
-    result["operation"] = json!(operation);
-    result
-}
-
 #[test]
 fn v2aut001_output_v2_envelope_emits_schema_valid_authoring_results() {
     for (command, result) in [
@@ -5378,22 +1524,19 @@ fn v2aut001_output_v2_envelope_emits_schema_valid_authoring_results() {
     ] {
         let mut input = authoring_input(command, &result);
         input.warnings = vec![warning("ADVISORY")];
-        let envelope = OutputEnvelopeV3::new(input).unwrap();
-        assert_eq!(envelope.command().as_str(), command);
-        assert_eq!(envelope.result(), &result_map(&result));
-        assert_eq!(envelope.warnings(), &[warning("ADVISORY")]);
+        let envelope = OutputEnvelopeV4::new(input).unwrap();
+        assert_eq!(envelope.as_value()["command"], command);
+        assert_eq!(envelope.as_value()["result"], result);
+        assert_eq!(
+            envelope.as_value()["warnings"],
+            json!([warning("ADVISORY")])
+        );
 
         let line = serde_json::to_string(&envelope).unwrap();
-        assert!(
-            line.starts_with(&format!(
-                "{{\"schema\":\"{OUTPUT_SCHEMA_V3}\",\"request_id\":\"{UUID}\",\"command\":\"{command}\",\"generated_at\":"
-            )),
-            "unexpected canonical field order: {line}"
-        );
-        assert!(validate_frame_payload_length(line.len()).is_ok());
+        assert!(line.len() <= MAX_DIRECT_OUTPUT_BYTES_V1);
 
         let value: Value = serde_json::from_str(&line).unwrap();
-        assert_valid("schemas/output-v3.schema.json", &value);
+        assert_valid("schemas/output-v4.schema.json", &value);
         for absent in ["workspace", "job", "session"] {
             assert!(
                 value.get(absent).is_none(),
@@ -5401,30 +1544,11 @@ fn v2aut001_output_v2_envelope_emits_schema_valid_authoring_results() {
             );
         }
         assert_eq!(
-            serde_json::from_str::<OutputEnvelopeV3>(&line).unwrap(),
+            serde_json::from_str::<OutputEnvelopeV4>(&line).unwrap(),
             envelope
         );
     }
 }
-
-/// A representative `podway_core::AuthoringDiagnostic`, populated with its optional
-/// `node_definition_id`, `graph_node_id`, and `related_graph_node_ids` fields — unlike the
-/// hand-written JSON fixture in `v2ctr003_authoring_diagnostic_is_standalone_closed_and_bounded`,
-/// which leaves `node_definition_id` absent.
-fn representative_authoring_diagnostic() -> AuthoringDiagnostic {
-    AuthoringDiagnostic::new(
-        AuthoringDiagnosticCode::EvidenceSourceDoesNotDominateConsumer,
-        "workflow.yaml",
-        SourceLocation::new(1, 1, 1, 8),
-        "graph.nodes[review].evidence_from[build]",
-        "Evidence does not dominate.",
-        "Use a dominating source.",
-    )
-    .with_node_definition_id("review")
-    .with_graph_node_id("review")
-    .with_related_graph_node_ids(["build".to_owned()])
-}
-
 #[test]
 fn v2aut001_output_v2_envelope_embeds_a_real_authoring_diagnostic() {
     let diagnostic = representative_authoring_diagnostic();
@@ -5450,27 +1574,26 @@ fn v2aut001_output_v2_envelope_embeds_a_real_authoring_diagnostic() {
     result["diagnostics"] = json!([diagnostic_value.clone()]);
     result["diagnostics_total"] = json!(1);
 
-    let envelope = OutputEnvelopeV3::new(authoring_input("procedure.lint", &result)).unwrap();
+    let envelope = OutputEnvelopeV4::new(authoring_input("procedure.lint", &result)).unwrap();
     let value = serde_json::to_value(&envelope).unwrap();
     // And it round-trips intact through the full v2 output envelope, resolving the schema's
     // cross-file `$ref` from `procedure-diagnostics-result-v1` into `authoring-diagnostic-v1`.
-    assert_valid("schemas/output-v3.schema.json", &value);
+    assert_valid("schemas/output-v4.schema.json", &value);
     assert_eq!(value["result"]["diagnostics"], json!([diagnostic_value]));
 }
-
 #[test]
 fn v2aut001_output_v2_envelope_rejects_unbound_results_and_open_warnings() {
     let source = examples()["podway.procedure-source-result/v1"].clone();
     let valid = serde_json::to_value(
-        OutputEnvelopeV3::new(authoring_input("procedure.format", &source)).unwrap(),
+        OutputEnvelopeV4::new(authoring_input("procedure.format", &source)).unwrap(),
     )
     .unwrap();
-    assert_valid("schemas/output-v3.schema.json", &valid);
+    assert_valid("schemas/output-v4.schema.json", &valid);
 
     let mut legacy = valid.clone();
     legacy["schema"] = json!("podway.output/v1");
-    assert_invalid("schemas/output-v3.schema.json", &legacy);
-    assert!(serde_json::from_value::<OutputEnvelopeV3>(legacy).is_err());
+    assert_invalid("schemas/output-v4.schema.json", &legacy);
+    assert!(serde_json::from_value::<OutputEnvelopeV4>(legacy).is_err());
 
     let mut unknown_family = source.clone();
     unknown_family["schema"] = json!("podway.procedure-source-result/v2");
@@ -5483,14 +1606,14 @@ fn v2aut001_output_v2_envelope_rejects_unbound_results_and_open_warnings() {
         ("session.status", source.clone()),
         (
             "procedure.format",
-            examples()["podway.status-result/v2"].clone(),
+            examples()["podway.status-result/v5"].clone(),
         ),
         ("procedure.format", unknown_family),
         ("procedure.format", extra_field),
         ("procedure.format", released_v1_family),
     ] {
         assert_eq!(
-            OutputEnvelopeV3::new(authoring_input(command, &result)),
+            OutputEnvelopeV4::new(authoring_input(command, &result)),
             Err(ProtocolError::InvalidCommandResult {
                 command: command.to_owned()
             }),
@@ -5499,7 +1622,7 @@ fn v2aut001_output_v2_envelope_rejects_unbound_results_and_open_warnings() {
         let mut rejected = valid.clone();
         rejected["command"] = json!(command);
         rejected["result"] = result;
-        assert_invalid("schemas/output-v3.schema.json", &rejected);
+        assert_invalid("schemas/output-v4.schema.json", &rejected);
     }
 
     let mut oversized = authoring_input("procedure.format", &source);
@@ -5511,15 +1634,16 @@ fn v2aut001_output_v2_envelope_rejects_unbound_results_and_open_warnings() {
     for input in [oversized, open] {
         let warnings = Value::Array(input.warnings.iter().cloned().map(Value::Object).collect());
         assert_eq!(
-            OutputEnvelopeV3::new(input),
-            Err(ProtocolError::InvalidOutputWarnings)
+            OutputEnvelopeV4::new(input),
+            Err(ProtocolError::InvalidCommandResult {
+                command: "procedure.format".to_owned()
+            })
         );
         let mut rejected = valid.clone();
         rejected["warnings"] = warnings;
-        assert_invalid("schemas/output-v3.schema.json", &rejected);
+        assert_invalid("schemas/output-v4.schema.json", &rejected);
     }
 }
-
 #[test]
 fn v2aut001_validate_command_result_v2_binds_registered_families_to_their_routes() {
     let examples = examples();
@@ -5556,29 +1680,6 @@ fn v2aut001_validate_command_result_v2_binds_registered_families_to_their_routes
     missing.remove("schema");
     assert!(validate_command_result_v2("procedure.format", &missing).is_err());
 }
-
-fn check_result_value() -> Value {
-    json!({
-        "operation_id": "make-test",
-        "operation_digest": DIGEST,
-        "input_basis": {"descriptor": "HEAD and dirty-tree snapshot", "digest": DIGEST},
-        "executor": {"name": "gaori", "version": "1.0.0"},
-        "outcome": "pass",
-        "summary": "The complete development gate passed.",
-        "output_digest": DIGEST
-    })
-}
-
-fn check_result_preview() -> Value {
-    json!({
-        "operation_id": "make-test",
-        "outcome": "pass",
-        "operation_digest": DIGEST,
-        "input_basis": {"digest": DIGEST},
-        "output_digest": DIGEST
-    })
-}
-
 #[test]
 fn v2ast002_reserves_closed_check_result_declaration_and_record_shapes() {
     let procedure = json!({
@@ -5641,20 +1742,19 @@ fn v2ast002_reserves_closed_check_result_declaration_and_record_shapes() {
         &missing_executor,
     );
 }
-
 #[test]
 fn v2ast002_complete_preview_readback_and_artifact_branches_are_disjoint() {
     let complete = check_result_value();
     assert_ref_valid(
-        "urn:podway:schema:v2-result-components:v1#/$defs/checkResultValue",
+        "urn:podway:schema:v2-result-components:v4#/$defs/checkResultValue",
         &complete,
     );
     assert_ref_valid(
-        "urn:podway:schema:v2-result-components:v1#/$defs/itemValue",
+        "urn:podway:schema:v2-result-components:v4#/$defs/itemValue",
         &complete,
     );
     assert_ref_invalid(
-        "urn:podway:schema:v2-result-components:v1#/$defs/artifactValue",
+        "urn:podway:schema:v2-result-components:v4#/$defs/artifactValue",
         &complete,
     );
 
@@ -5663,29 +1763,29 @@ fn v2ast002_complete_preview_readback_and_artifact_branches_are_disjoint() {
         "size_bytes": 1, "media_type": "application/json"
     });
     assert_ref_valid(
-        "urn:podway:schema:v2-result-components:v1#/$defs/artifactValue",
+        "urn:podway:schema:v2-result-components:v4#/$defs/artifactValue",
         &artifact,
     );
     assert_ref_invalid(
-        "urn:podway:schema:v2-result-components:v1#/$defs/checkResultValue",
+        "urn:podway:schema:v2-result-components:v4#/$defs/checkResultValue",
         &artifact,
     );
 
     let preview = check_result_preview();
     assert_ref_valid(
-        "urn:podway:schema:v2-result-components:v1#/$defs/checkResultPreview",
+        "urn:podway:schema:v2-result-components:v4#/$defs/checkResultPreview",
         &preview,
     );
     assert_ref_invalid(
-        "urn:podway:schema:v2-result-components:v1#/$defs/checkResultPreview",
+        "urn:podway:schema:v2-result-components:v4#/$defs/checkResultPreview",
         &complete,
     );
+    let readback = json!({"item_id":"verification", "type":"check_result", "revision":1, "value_digest":DIGEST, "total_size":1, "size_unit":"bytes", "preview":check_result_preview(), "preview_truncated":false});
     assert_ref_valid(
-        "urn:podway:schema:v2-result-components:v1#/$defs/readbackItem",
-        &json!({"item_id":"verification", "type":"check_result", "value":complete}),
+        "urn:podway:schema:v2-result-components:v4#/$defs/evidenceItemMetadata",
+        &readback,
     );
 }
-
 #[test]
 fn v2ast002_reserves_observation_constraints_and_stdin_template_only_for_record_many() {
     let constraints = json!({
@@ -5696,7 +1796,7 @@ fn v2ast002_reserves_observation_constraints_and_stdin_template_only_for_record_
         "accepted_outcomes": ["pass"]
     });
     assert_ref_valid(
-        "urn:podway:schema:v2-result-components:v3#/$defs/itemConstraints",
+        "urn:podway:schema:v2-result-components:v4#/$defs/itemConstraints",
         &constraints,
     );
 
@@ -5715,19 +1815,19 @@ fn v2ast002_reserves_observation_constraints_and_stdin_template_only_for_record_
         "stdin_template": "{\"schema\":\"podway.item-record-many-input/v1\"}"
     });
     assert_ref_valid(
-        "urn:podway:schema:v2-result-components:v3#/$defs/mutationTemplate",
+        "urn:podway:schema:v2-result-components:v4#/$defs/mutationTemplate",
         &template,
     );
     let mut wrong_command = template;
     wrong_command["command"] = json!("item.set");
     assert_ref_invalid(
-        "urn:podway:schema:v2-result-components:v3#/$defs/mutationTemplate",
+        "urn:podway:schema:v2-result-components:v4#/$defs/mutationTemplate",
         &wrong_command,
     );
 
     let result = json!({
-        "schema": "podway.item-record-many-result/v1",
-        "admission": admission(),
+        "schema": "podway.item-record-many-result/v2",
+
         "changed": true,
         "graph_node_id": "work",
         "attempt_id": UUID,
@@ -5740,18 +1840,17 @@ fn v2ast002_reserves_observation_constraints_and_stdin_template_only_for_record_
             "item_revision": 1
         }]
     });
-    assert_valid("schemas/item-record-many-result-v1.schema.json", &result);
+    assert_valid("schemas/item-record-many-result-v2.schema.json", &result);
     // The result family stays record-kind agnostic. V2AST-002 reserved a disjoint check-result
     // entry carrying `type` and `value_digest`, but no producer ever emitted it, so the reserved
     // branch was withdrawn instead of remaining an unreachable published shape.
     let mut typed_entry = result.clone();
     typed_entry["items"][0]["type"] = json!("check_result");
     assert_invalid(
-        "schemas/item-record-many-result-v1.schema.json",
+        "schemas/item-record-many-result-v2.schema.json",
         &typed_entry,
     );
 }
-
 #[test]
 fn unsatisfied_check_result_reason_is_closed_and_check_result_only() {
     let mut item = json!({
@@ -5780,7 +1879,7 @@ fn unsatisfied_check_result_reason_is_closed_and_check_result_only() {
     ] {
         item["unsatisfied_reason"] = json!(reason);
         assert_ref_valid(
-            "urn:podway:schema:observation-result:v3#/$defs/activeItem",
+            "urn:podway:schema:observation-result:v5#/$defs/activeItem",
             &item,
         );
     }
@@ -5788,7 +1887,7 @@ fn unsatisfied_check_result_reason_is_closed_and_check_result_only() {
     let mut open_vocabulary = item.clone();
     open_vocabulary["unsatisfied_reason"] = json!("input_basis_mismatch");
     assert_ref_invalid(
-        "urn:podway:schema:observation-result:v3#/$defs/activeItem",
+        "urn:podway:schema:observation-result:v5#/$defs/activeItem",
         &open_vocabulary,
     );
 
@@ -5796,13 +1895,13 @@ fn unsatisfied_check_result_reason_is_closed_and_check_result_only() {
     let mut satisfied = item.clone();
     satisfied["satisfied"] = json!(true);
     assert_ref_invalid(
-        "urn:podway:schema:observation-result:v3#/$defs/activeItem",
+        "urn:podway:schema:observation-result:v5#/$defs/activeItem",
         &satisfied,
     );
     let mut empty_slot = item.clone();
     empty_slot["value"] = Value::Null;
     assert_ref_invalid(
-        "urn:podway:schema:observation-result:v3#/$defs/activeItem",
+        "urn:podway:schema:observation-result:v5#/$defs/activeItem",
         &empty_slot,
     );
     let mut unsatisfied_without_reason = item.clone();
@@ -5811,7 +1910,7 @@ fn unsatisfied_check_result_reason_is_closed_and_check_result_only() {
         .unwrap()
         .remove("unsatisfied_reason");
     assert_ref_valid(
-        "urn:podway:schema:observation-result:v3#/$defs/activeItem",
+        "urn:podway:schema:observation-result:v5#/$defs/activeItem",
         &unsatisfied_without_reason,
     );
 
@@ -5829,21 +1928,10 @@ fn unsatisfied_check_result_reason_is_closed_and_check_result_only() {
         "value_truncated": false
     });
     assert_ref_invalid(
-        "urn:podway:schema:observation-result:v3#/$defs/activeItem",
+        "urn:podway:schema:observation-result:v5#/$defs/activeItem",
         &text_item,
     );
 }
-
-fn typed_guard_predicate_status() -> Value {
-    json!({
-        "source": {"kind": "evidence", "graph_node_id": "review", "item_id": "verdict"},
-        "operator": "equals",
-        "expected": "approved",
-        "actual": "approved",
-        "state": "met"
-    })
-}
-
 #[test]
 fn v2grd002_reserves_closed_typed_condition_authoring_and_preview_shapes() {
     let procedure = json!({
@@ -5922,22 +2010,21 @@ fn v2grd002_reserves_closed_typed_condition_authoring_and_preview_shapes() {
     });
     assert_valid("schemas/procedure-preview-result-v1.schema.json", &preview);
 }
-
 #[test]
 fn v2grd002_reserves_bounded_condition_result_and_error_shapes() {
     let predicate = typed_guard_predicate_status();
     assert_ref_valid(
-        "urn:podway:schema:v2-result-components:v1#/$defs/predicateStatus",
+        "urn:podway:schema:v2-result-components:v4#/$defs/predicateStatus",
         &predicate,
     );
     let mut text_echo = predicate.clone();
     text_echo["recorded_text"] = json!("secret");
     assert_ref_invalid(
-        "urn:podway:schema:v2-result-components:v1#/$defs/predicateStatus",
+        "urn:podway:schema:v2-result-components:v4#/$defs/predicateStatus",
         &text_echo,
     );
 
-    let mut next = examples()["podway.next-result/v3"].clone();
+    let mut next = examples()["podway.next-result/v5"].clone();
     next["node"]["node_type"] = json!("decision");
     next.as_object_mut().unwrap().remove("intent");
     next.as_object_mut().unwrap().remove("instructions");
@@ -5954,7 +2041,7 @@ fn v2grd002_reserves_bounded_condition_result_and_error_shapes() {
         {"option_id": "approved", "state": "met", "predicates": [predicate.clone()]},
         {"option_id": "rework", "state": "met", "predicates": []}
     ]);
-    assert_valid("schemas/next-result-v3.schema.json", &next);
+    assert_valid("schemas/next-result-v5.schema.json", &next);
 
     let mut unguarded_next = next.clone();
     for option in unguarded_next["options"].as_array_mut().unwrap() {
@@ -5964,12 +2051,12 @@ fn v2grd002_reserves_bounded_condition_result_and_error_shapes() {
         .as_object_mut()
         .unwrap()
         .remove("option_guard_statuses");
-    assert_valid("schemas/next-result-v3.schema.json", &unguarded_next);
+    assert_valid("schemas/next-result-v5.schema.json", &unguarded_next);
     unguarded_next
         .as_object_mut()
         .unwrap()
         .remove("allowed_option_ids");
-    assert_invalid("schemas/next-result-v3.schema.json", &unguarded_next);
+    assert_invalid("schemas/next-result-v5.schema.json", &unguarded_next);
 
     let active_item = json!({
         "item_id": "notes", "type": "text", "prompt": "Record notes.",
@@ -5982,7 +2069,7 @@ fn v2grd002_reserves_bounded_condition_result_and_error_shapes() {
         "value": null, "value_truncated": false
     });
     assert_ref_valid(
-        "urn:podway:schema:observation-result:v3#/$defs/activeItem",
+        "urn:podway:schema:observation-result:v5#/$defs/activeItem",
         &active_item,
     );
 
@@ -5993,7 +2080,7 @@ fn v2grd002_reserves_bounded_condition_result_and_error_shapes() {
         .unwrap()
         .remove("condition_status");
     assert_ref_valid(
-        "urn:podway:schema:observation-result:v3#/$defs/activeItem",
+        "urn:podway:schema:observation-result:v5#/$defs/activeItem",
         &unconditional_item,
     );
     unconditional_item
@@ -6001,14 +2088,14 @@ fn v2grd002_reserves_bounded_condition_result_and_error_shapes() {
         .unwrap()
         .remove("required_now");
     assert_ref_invalid(
-        "urn:podway:schema:observation-result:v3#/$defs/activeItem",
+        "urn:podway:schema:observation-result:v5#/$defs/activeItem",
         &unconditional_item,
     );
 
     let details = json!({
-        "schema": "podway.v2-runtime-error-details/v1",
+        "schema": "podway.v2-runtime-error-details/v2",
         "kind": "OPTION_GUARD_UNSATISFIED",
-        "admission": admission(),
+
         "graph_node_id": "decide",
         "option_id": "approved",
         "state": "unmet",
@@ -6017,9 +2104,9 @@ fn v2grd002_reserves_bounded_condition_result_and_error_shapes() {
             "operator": "equals", "expected": "approved", "actual": "changes-requested", "state": "unmet"
         }]
     });
-    assert_valid("schemas/v2-runtime-error-details-v1.schema.json", &details);
+    assert_valid("schemas/v2-runtime-error-details-v2.schema.json", &details);
     let envelope = json!({
-        "schema": "podway.error/v1",
+        "schema": "podway.error/v2",
         "request_id": UUID,
         "command": "session.decide",
         "generated_at": "2026-08-22T00:00:00.000Z",
@@ -6029,16 +2116,15 @@ fn v2grd002_reserves_bounded_condition_result_and_error_shapes() {
         "exit_code": 1,
         "details": details.clone()
     });
-    assert!(serde_json::from_value::<ErrorEnvelopeV1>(envelope).is_ok());
+    assert!(serde_json::from_value::<ErrorEnvelopeV2>(envelope).is_ok());
 
     let mut retryable_shape = details;
     retryable_shape["recovery"] = json!({});
     assert_invalid(
-        "schemas/v2-runtime-error-details-v1.schema.json",
+        "schemas/v2-runtime-error-details-v2.schema.json",
         &retryable_shape,
     );
 }
-
 #[test]
 fn v2grd002_reserves_guard_response_budgets() {
     let maximal = json!({
@@ -6049,7 +2135,7 @@ fn v2grd002_reserves_guard_response_budgets() {
         "state": "met"
     });
     assert_ref_valid(
-        "urn:podway:schema:v2-result-components:v1#/$defs/predicateStatus",
+        "urn:podway:schema:v2-result-components:v4#/$defs/predicateStatus",
         &maximal,
     );
     let statuses = (0..8)
@@ -6070,38 +2156,898 @@ fn v2grd002_reserves_guard_response_budgets() {
 }
 
 #[test]
-fn v2grd002_freezes_catalog_replacements_before_runtime_admission() {
-    let authoring: Value = serde_json::from_slice(
-        &fs::read(root().join("assets/specifications/authoring-diagnostics.json")).unwrap(),
-    )
-    .unwrap();
-    let codes = authoring["diagnostics"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|entry| entry["code"].as_str().unwrap())
-        .collect::<BTreeSet<_>>();
-    assert!(codes.contains("OPTION_LABELS_NOT_DISTINCT"));
-    assert!(codes.contains("OPTION_CRITERIA_WEAK"));
-    assert!(!codes.contains("LARGE_OPTION_SET"));
-    assert!(!codes.contains("LARGE_CYCLE"));
-    assert_eq!(codes.len(), 59, "the replacement is exact, not count-only");
+fn v2dvc005_aquarium_service_plan_schema_closes_action_semantics() {
+    let token = format!("sha256:{}", "0".repeat(64));
+    let mut plan = json!({
+        "schema":"aquarium-dev-service-plan/v1","project_id":"podway",
+        "target_git_sha":"0".repeat(40),"action":"activate",
+        "active_git_sha":"1".repeat(40),"busy":false,"plan_token":token
+    });
+    assert_valid("schemas/aquarium-dev-service-plan-v1.schema.json", &plan);
 
-    let errors: Value = serde_json::from_slice(
-        &fs::read(root().join("assets/specifications/error-codes.json")).unwrap(),
-    )
-    .unwrap();
-    let guard = errors["errors"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|entry| entry["code"] == "OPTION_GUARD_UNSATISFIED")
-        .expect("reserved guard error");
-    assert_eq!(
-        guard["details_schema"],
-        "podway.v2-runtime-error-details/v1"
+    plan["plan_token"] = Value::Null;
+    assert_invalid("schemas/aquarium-dev-service-plan-v1.schema.json", &plan);
+
+    plan["action"] = json!("defer");
+    plan["busy"] = json!(true);
+    assert_valid("schemas/aquarium-dev-service-plan-v1.schema.json", &plan);
+
+    plan["busy"] = json!(false);
+    assert_invalid("schemas/aquarium-dev-service-plan-v1.schema.json", &plan);
+
+    plan["busy"] = json!(true);
+    plan["plan_token"] = json!(format!("sha256:{}", "0".repeat(64)));
+    assert_invalid("schemas/aquarium-dev-service-plan-v1.schema.json", &plan);
+}
+
+fn current_runtime_error_fields(code: &str) -> Map<String, Value> {
+    let fields = match code {
+        "PROCEDURE_V2_SCHEMA_INVALID" => json!({"diagnostic_codes":["AUTHORING_SCHEMA_INVALID"]}),
+        "GRAPH_NODE_NOT_FOUND" | "DECISION_REASON_MISSING" => json!({"graph_node_id":"review"}),
+        "NODE_DEFINITION_NOT_FOUND" => json!({"node_definition_id":"review"}),
+        "GRAPH_NODE_TYPE_MISMATCH" => {
+            json!({"graph_node_id":"review","expected_node_type":"decision","actual_node_type":"action"})
+        }
+        "OPTION_NOT_ALLOWED" => {
+            json!({"graph_node_id":"review","option_id":"reject","allowed_option_ids":["accept"]})
+        }
+        "OPTION_GUARD_UNSATISFIED" => json!({
+            "graph_node_id":"review",
+            "option_id":"accept",
+            "state":"unmet",
+            "predicates":[{
+                "source":{"kind":"evidence","graph_node_id":"build","item_id":"verdict"},
+                "operator":"equals",
+                "expected":"approved",
+                "actual":"changes-requested",
+                "state":"unmet"
+            }]
+        }),
+        "ROUTE_NOT_ALLOWED" => json!({"graph_node_id":"review","option_id":"accept"}),
+        "EVIDENCE_REFERENCE_UNRESOLVED" => {
+            json!({"graph_node_id":"review","source_graph_node_ids":["build"]})
+        }
+        "EVIDENCE_REFERENCE_STALE" => {
+            json!({"graph_node_id":"review","source_graph_node_id":"build","expected_source_attempt_id":UUID,"current_source_attempt_id":null})
+        }
+        "MANUAL_REWORK_TARGET_NOT_ALLOWED"
+        | "MANUAL_REWORK_TARGET_NOT_ON_TRACE"
+        | "GOAL_REVISION_TARGET_NOT_ALLOWED"
+        | "GOAL_REVISION_TARGET_NOT_REVISION_SAFE" => json!({"target_graph_node_id":"build"}),
+        "GOAL_TRACKING_NOT_ENABLED" | "SESSION_GOAL_MISSING" | "REACTIVATION_FLAG_REQUIRED" => {
+            json!({})
+        }
+        "SESSION_GOAL_ALREADY_DEFINED" | "FRESH_GOAL_ASSESSMENT_MISSING" => {
+            json!({"goal_revision":1})
+        }
+        "GOAL_REVISION_STALE" => json!({"expected_goal_revision":1,"actual_goal_revision":2}),
+        "CRITERION_MODE_MIXED" => {
+            json!({"criterion_id":"tests","expected_mode":"assessment","actual_status":"not_applicable"})
+        }
+        "CRITERION_CITATION_INVALID" => {
+            json!({"criterion_id":"tests","citation":{"local_item_id":"evidence"}})
+        }
+        "CRITERION_RESULT_MISSING" => json!({"missing_criterion_ids":["tests"]}),
+        "CRITERION_NOT_FOUND" => json!({"criterion_id":"tests"}),
+        "GOAL_ASSESSMENT_OUTCOME_NOT_ALLOWED" => {
+            json!({"option_id":"accept","determined_outcome":"achieved","allowed_option_ids":["reject"]})
+        }
+        "DIGEST_CONFIRMATION_REQUIRED" => {
+            json!({"procedure_digest":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"})
+        }
+        "EVIDENCE_NOT_AVAILABLE" => {
+            json!({"graph_node_id":"review","source_graph_node_id":"implement","item_id":"notes","reference_state":"skipped"})
+        }
+        "ATTEMPT_CONTENT_LIMIT_EXCEEDED" => {
+            json!({"field":"items.notes.value","actual":16_777_217,"maximum":16_777_216,"unit":"scalars"})
+        }
+        "ITEM_CONSTRAINT_FAILED" => {
+            json!({"field":"item list content","actual":300_001,"maximum":300_000,"unit":"scalars"})
+        }
+        "EVIDENCE_PAGE_TOKEN_EXHAUSTED" => {
+            json!({"source_graph_node_id":"implement","item_id":"notes","offset":4_000,"total_size":4_000,"unit":"scalars"})
+        }
+        "EVIDENCE_PAGE_TOKEN_STALE" => json!({
+            "graph_node_id":"review",
+            "source_graph_node_id":"implement",
+            "item_id":"notes",
+            "expected_value_digest":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "current_value_digest":"sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+        }),
+        _ => panic!("unknown current runtime error fixture: {code}"),
+    };
+    fields.as_object().unwrap().clone()
+}
+
+fn current_runtime_error_details(code: &str) -> Value {
+    let recoverable = matches!(
+        code,
+        "EVIDENCE_REFERENCE_STALE" | "GOAL_REVISION_STALE" | "EVIDENCE_PAGE_TOKEN_STALE"
     );
-    assert_eq!(guard["exit_code"], 1);
-    assert_eq!(guard["retryable"], false);
-    assert!(V2_RUNTIME_ERROR_CODES_V1.contains(&"OPTION_GUARD_UNSATISFIED"));
+    let mut fields = current_runtime_error_fields(code);
+    fields.insert(
+        "schema".to_owned(),
+        json!(if recoverable {
+            "podway.recoverable-v2-runtime-error-details/v2"
+        } else {
+            "podway.v2-runtime-error-details/v2"
+        }),
+    );
+    fields.insert("kind".to_owned(), json!(code));
+    if recoverable {
+        fields.insert(
+            "recovery".to_owned(),
+            examples()["podway.recoverable-v2-runtime-error-details/v2"]["recovery"].clone(),
+        );
+    }
+    Value::Object(fields)
+}
+
+fn current_error_envelope(code: &str, details: Value) -> Value {
+    let (_, exit, retryable) = podway_protocol::error_code_catalog_v1()
+        .find(|(registered, _, _)| *registered == code)
+        .expect("registered current error");
+    json!({
+        "schema":"podway.error/v2", "request_id":UUID, "command":"session.complete",
+        "generated_at":"2026-10-06T00:00:00.000Z", "code":code,
+        "message":"The command must satisfy its current contract.",
+        "retryable":retryable, "exit_code":exit, "details":details
+    })
+}
+
+fn current_error_validator() -> jsonschema::Validator {
+    let mut schema = read_schema("schemas/error-v2.schema.json");
+    schema.as_object_mut().unwrap().remove("$id");
+    jsonschema::draft202012::options()
+        .with_base_uri(format!("{SCHEMA_BASE}error-v2.schema.json"))
+        .with_retriever(local_schemas())
+        .should_validate_formats(true)
+        .build(&schema)
+        .unwrap()
+}
+
+fn assert_current_error_validation(
+    validator: &jsonschema::Validator,
+    value: &Value,
+    expected: bool,
+) {
+    assert_eq!(validator.is_valid(value), expected, "canonical: {value}");
+    assert_eq!(
+        podway_protocol::validate_daemon_free_document_v1("podway.error/v2", value),
+        expected,
+        "selected: {value}"
+    );
+    assert_eq!(
+        serde_json::from_value::<ErrorEnvelopeV2>(value.clone()).is_ok(),
+        expected,
+        "typed: {value}"
+    );
+}
+
+#[test]
+fn current_runtime_errors_bind_each_code_to_its_own_closed_details() {
+    let validator = current_error_validator();
+    for code in [
+        "PROCEDURE_V2_SCHEMA_INVALID",
+        "GRAPH_NODE_NOT_FOUND",
+        "NODE_DEFINITION_NOT_FOUND",
+        "GRAPH_NODE_TYPE_MISMATCH",
+        "OPTION_NOT_ALLOWED",
+        "OPTION_GUARD_UNSATISFIED",
+        "ROUTE_NOT_ALLOWED",
+        "DECISION_REASON_MISSING",
+        "EVIDENCE_REFERENCE_UNRESOLVED",
+        "EVIDENCE_REFERENCE_STALE",
+        "MANUAL_REWORK_TARGET_NOT_ALLOWED",
+        "MANUAL_REWORK_TARGET_NOT_ON_TRACE",
+        "GOAL_TRACKING_NOT_ENABLED",
+        "SESSION_GOAL_MISSING",
+        "SESSION_GOAL_ALREADY_DEFINED",
+        "GOAL_REVISION_STALE",
+        "GOAL_REVISION_TARGET_NOT_ALLOWED",
+        "GOAL_REVISION_TARGET_NOT_REVISION_SAFE",
+        "REACTIVATION_FLAG_REQUIRED",
+        "CRITERION_MODE_MIXED",
+        "CRITERION_CITATION_INVALID",
+        "CRITERION_RESULT_MISSING",
+        "CRITERION_NOT_FOUND",
+        "FRESH_GOAL_ASSESSMENT_MISSING",
+        "GOAL_ASSESSMENT_OUTCOME_NOT_ALLOWED",
+        "DIGEST_CONFIRMATION_REQUIRED",
+        "EVIDENCE_NOT_AVAILABLE",
+        "ATTEMPT_CONTENT_LIMIT_EXCEEDED",
+        "EVIDENCE_PAGE_TOKEN_EXHAUSTED",
+        "EVIDENCE_PAGE_TOKEN_STALE",
+    ] {
+        let valid = current_error_envelope(code, current_runtime_error_details(code));
+        assert_current_error_validation(&validator, &valid, true);
+        let other = match code {
+            "EVIDENCE_REFERENCE_STALE" | "EVIDENCE_PAGE_TOKEN_STALE" => "GOAL_REVISION_STALE",
+            "GOAL_REVISION_STALE" => "EVIDENCE_REFERENCE_STALE",
+            "GOAL_TRACKING_NOT_ENABLED" => "GRAPH_NODE_NOT_FOUND",
+            _ => "GOAL_TRACKING_NOT_ENABLED",
+        };
+        let mut mismatched = valid.clone();
+        // This is a valid complete branch of the same detail family, rather than malformed data.
+        mismatched["details"] = current_runtime_error_details(other);
+        assert!(podway_protocol::validate_daemon_free_document_v1(
+            mismatched["details"]["schema"].as_str().unwrap(),
+            &mismatched["details"]
+        ));
+        assert_current_error_validation(&validator, &mismatched, false);
+        let mut missing_kind = valid.clone();
+        missing_kind["details"]
+            .as_object_mut()
+            .unwrap()
+            .remove("kind");
+        assert_current_error_validation(&validator, &missing_kind, false);
+        let mut unknown = valid.clone();
+        unknown["details"]["credential"] = json!("unexpected");
+        assert_current_error_validation(&validator, &unknown, false);
+    }
+}
+
+#[test]
+fn current_item_constraint_errors_validate_structured_bounds_and_keep_generic_details() {
+    let validator = current_error_validator();
+    for details in [json!({}), json!({"constraint":"multiline"})] {
+        assert_current_error_validation(
+            &validator,
+            &current_error_envelope("ITEM_CONSTRAINT_FAILED", details),
+            true,
+        );
+    }
+    let valid = current_error_envelope(
+        "ITEM_CONSTRAINT_FAILED",
+        current_runtime_error_details("ITEM_CONSTRAINT_FAILED"),
+    );
+    assert_current_error_validation(&validator, &valid, true);
+    let mut wrong_kind = valid.clone();
+    wrong_kind["details"] = current_runtime_error_details("ATTEMPT_CONTENT_LIMIT_EXCEEDED");
+    assert!(podway_protocol::validate_daemon_free_document_v1(
+        "podway.v2-runtime-error-details/v2",
+        &wrong_kind["details"]
+    ));
+    assert_current_error_validation(&validator, &wrong_kind, false);
+    for field in ["schema", "kind", "actual", "maximum", "unit"] {
+        let mut missing = valid.clone();
+        missing["details"].as_object_mut().unwrap().remove(field);
+        assert_current_error_validation(&validator, &missing, false);
+    }
+    let mut unknown = valid;
+    unknown["details"]["credential"] = json!("unexpected");
+    assert_current_error_validation(&validator, &unknown, false);
+}
+
+#[test]
+fn current_delegation_errors_bind_each_code_to_its_exact_reason_set() {
+    let validator = current_error_validator();
+    for (code, accepted) in [
+        ("DELEGATION_NOT_APPLICABLE", &["direct_attempt"][..]),
+        ("DELEGATION_RECEIPT_REQUIRED", &["receipt_missing"][..]),
+        (
+            "DELEGATION_RECEIPT_STALE",
+            &["package_changed", "items_changed"][..],
+        ),
+        (
+            "DELEGATION_BINDING_MISMATCH",
+            &[
+                "binding_mismatch",
+                "role_mismatch",
+                "disposition_mismatch",
+                "round_limit",
+            ][..],
+        ),
+        ("DELEGATION_ALREADY_ACCEPTED", &["duplicate_acceptance"][..]),
+    ] {
+        for reason in [
+            "direct_attempt",
+            "receipt_missing",
+            "package_changed",
+            "items_changed",
+            "binding_mismatch",
+            "role_mismatch",
+            "duplicate_acceptance",
+            "disposition_mismatch",
+            "round_limit",
+            "item_not_ready",
+            "blocker_open",
+        ] {
+            let value = current_error_envelope(
+                code,
+                json!({"schema":"podway.delegation-error-details/v2", "reason":reason}),
+            );
+            assert_current_error_validation(&validator, &value, accepted.contains(&reason));
+        }
+        let mut open = current_error_envelope(
+            code,
+            json!({"schema":"podway.delegation-error-details/v2", "reason":accepted[0]}),
+        );
+        open["details"]["credential"] = json!("unexpected");
+        assert_current_error_validation(&validator, &open, false);
+    }
+}
+
+#[test]
+fn current_authoring_registry_has_the_exact_expected_families_and_routes() {
+    let actual = EXISTING_ROUTE_RESULT_SCHEMAS_V2
+        .iter()
+        .chain(NEW_ROUTE_RESULT_SCHEMAS_V1)
+        .flat_map(|contract| {
+            contract
+                .commands
+                .iter()
+                .filter(|command| command.starts_with("procedure."))
+                .map(move |command| (contract.schema, *command))
+        })
+        .collect::<BTreeSet<_>>();
+    let mut expected = BTreeSet::from([
+        (
+            "podway.procedure-validation-result/v2",
+            "procedure.validate",
+        ),
+        ("podway.procedure-source-result/v1", "procedure.format"),
+        ("podway.procedure-source-result/v1", "procedure.scaffold"),
+        ("podway.procedure-graph-result/v1", "procedure.graph"),
+        ("podway.procedure-graph-result/v2", "procedure.graph"),
+        ("podway.procedure-preview-result/v1", "procedure.preview"),
+        ("podway.procedure-preview-result/v2", "procedure.preview"),
+    ]);
+    for command in [
+        "procedure.format",
+        "procedure.validate",
+        "procedure.vet",
+        "procedure.lint",
+        "procedure.check",
+        "procedure.graph",
+        "procedure.scaffold",
+    ] {
+        expected.insert(("podway.procedure-diagnostics-result/v1", command));
+    }
+    assert_eq!(actual, expected);
+    for (schema, command) in expected {
+        assert!(
+            validate_command_result_v2(command, &result_map(&examples()[schema])).is_ok(),
+            "{schema}: {command}"
+        );
+    }
+}
+
+fn current_detail_fixtures() -> Value {
+    serde_json::from_str::<Value>(include_str!(
+        "../../../tests/fixtures/v2/protocol/current-contracts.json"
+    ))
+    .unwrap()["fixtures"]
+        .clone()
+}
+
+#[test]
+fn current_error_details_preserve_closed_actions_conflicts_and_identity_fences() {
+    let validator = current_error_validator();
+    let fixtures = current_detail_fixtures();
+    for (code, schema) in [
+        (
+            "SESSION_START_DECISION_REQUIRED",
+            "podway.session-start-decision-required-details/v2",
+        ),
+        (
+            "SESSION_START_STATE_CONFLICT",
+            "podway.session-start-state-conflict-details/v2",
+        ),
+        (
+            "SESSION_REVISION_CONFLICT",
+            "podway.revision-conflict-details/v3",
+        ),
+        ("ATTEMPT_NOT_CURRENT", "podway.attempt-conflict-details/v3"),
+        (
+            "IDEMPOTENCY_KEY_REUSED",
+            "podway.idempotency-key-reused-details/v2",
+        ),
+        ("BLOCKER_LIMIT_REACHED", "podway.blocker-limit-details/v2"),
+        (
+            "WORKSPACE_UUID_MISMATCH",
+            "podway.workspace-uuid-mismatch-details/v3",
+        ),
+        (
+            "SESSION_ID_MISMATCH",
+            "podway.session-id-mismatch-details/v3",
+        ),
+        (
+            "PROCEDURE_DIGEST_MISMATCH",
+            "podway.procedure-digest-mismatch-details/v3",
+        ),
+    ] {
+        let details = fixtures[schema].clone();
+        assert_current_error_validation(
+            &validator,
+            &current_error_envelope(code, details.clone()),
+            true,
+        );
+        let mut open = details.clone();
+        open["unexpected"] = json!(true);
+        assert_current_error_validation(&validator, &current_error_envelope(code, open), false);
+        for field in details.as_object().unwrap().keys() {
+            let mut missing = details.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            let valid = matches!(
+                (code, field.as_str()),
+                (
+                    "SESSION_REVISION_CONFLICT",
+                    "expected_revision" | "current_revision"
+                ) | ("ATTEMPT_NOT_CURRENT", "actual_attempt_id")
+            );
+            assert_current_error_validation(
+                &validator,
+                &current_error_envelope(code, missing),
+                valid,
+            );
+        }
+    }
+    let mut revision = fixtures["podway.revision-conflict-details/v3"].clone();
+    revision
+        .as_object_mut()
+        .unwrap()
+        .remove("expected_revision");
+    revision.as_object_mut().unwrap().remove("current_revision");
+    assert_current_error_validation(
+        &validator,
+        &current_error_envelope("SESSION_REVISION_CONFLICT", revision),
+        false,
+    );
+    for (code, schema) in [
+        (
+            "SESSION_START_DECISION_REQUIRED",
+            "podway.session-start-decision-required-details/v2",
+        ),
+        (
+            "SESSION_START_STATE_CONFLICT",
+            "podway.session-start-state-conflict-details/v2",
+        ),
+    ] {
+        let mut duplicate = fixtures[schema].clone();
+        duplicate["allowed_actions"] = json!(["continue", "continue"]);
+        assert_current_error_validation(
+            &validator,
+            &current_error_envelope(code, duplicate),
+            false,
+        );
+    }
+    let mut workspace = fixtures["podway.workspace-uuid-mismatch-details/v3"].clone();
+    workspace["actual_workspace_uuid"] = Value::Null;
+    assert_current_error_validation(
+        &validator,
+        &current_error_envelope("WORKSPACE_UUID_MISMATCH", workspace),
+        false,
+    );
+    for actual in [Value::Null, json!(UUID)] {
+        let mut session = fixtures["podway.session-id-mismatch-details/v3"].clone();
+        session["actual_session_id"] = actual;
+        assert_current_error_validation(
+            &validator,
+            &current_error_envelope("SESSION_ID_MISMATCH", session),
+            true,
+        );
+    }
+    let mut session = fixtures["podway.session-id-mismatch-details/v3"].clone();
+    session["expected_session_id"] = json!("not-a-uuid");
+    assert_current_error_validation(
+        &validator,
+        &current_error_envelope("SESSION_ID_MISMATCH", session),
+        false,
+    );
+}
+
+#[test]
+fn current_reset_eligibility_details_preserve_the_lifecycle_action_matrix() {
+    let validator = current_error_validator();
+    let base = current_detail_fixtures()["podway.session-reset-not-eligible-details/v2"].clone();
+    for (lifecycle, action, valid) in [
+        ("running", "force", true),
+        ("completed", "record_disposition", true),
+        ("cancelled", "record_disposition", true),
+        ("running", "record_disposition", false),
+        ("completed", "force", false),
+        ("cancelled", "force", false),
+        ("prepared", "force", false),
+    ] {
+        let mut details = base.clone();
+        details["lifecycle"] = json!(lifecycle);
+        details["required_action"] = json!(action);
+        assert_current_error_validation(
+            &validator,
+            &current_error_envelope("SESSION_RESET_NOT_ELIGIBLE", details),
+            valid,
+        );
+    }
+    for field in base.as_object().unwrap().keys() {
+        let mut details = base.clone();
+        details.as_object_mut().unwrap().remove(field);
+        assert_current_error_validation(
+            &validator,
+            &current_error_envelope("SESSION_RESET_NOT_ELIGIBLE", details),
+            false,
+        );
+    }
+    for (field, value) in [
+        ("current_terminal_disposition", json!(true)),
+        ("unexpected", json!(true)),
+        (
+            "schema",
+            json!("podway.session-reset-not-eligible-details/v1"),
+        ),
+    ] {
+        let mut details = base.clone();
+        details[field] = value;
+        assert_current_error_validation(
+            &validator,
+            &current_error_envelope("SESSION_RESET_NOT_ELIGIBLE", details),
+            false,
+        );
+    }
+}
+
+#[test]
+fn current_generic_error_depth_is_measured_from_the_full_envelope() {
+    let mut nested = Value::Null;
+    for _ in 0..podway_protocol::MAX_JSON_DEPTH_V1 - 1 {
+        nested = json!({"nested": nested});
+    }
+    let mut error = current_error_envelope("REQUEST_INVALID", nested.clone());
+    assert!(podway_protocol::validate_daemon_free_document_v1(
+        "podway.error/v2",
+        &error
+    ));
+    assert!(serde_json::from_value::<ErrorEnvelopeV2>(error.clone()).is_ok());
+    error["details"] = json!({"nested": nested});
+    assert!(!podway_protocol::validate_daemon_free_document_v1(
+        "podway.error/v2",
+        &error
+    ));
+    assert!(serde_json::from_value::<ErrorEnvelopeV2>(error).is_err());
+}
+
+#[test]
+fn current_recovery_recipes_preserve_closed_bounds_and_explicit_authority() {
+    let base = current_detail_fixtures()["podway.revision-conflict-details/v3"]["recovery"].clone();
+    let valid = |value: &Value| {
+        assert_valid("schemas/recovery-recipe-v2.schema.json", value);
+        assert!(serde_json::from_value::<podway_protocol::RecoveryRecipeV2>(value.clone()).is_ok());
+    };
+    let invalid = |value: Value| {
+        assert_invalid("schemas/recovery-recipe-v2.schema.json", &value);
+        assert!(serde_json::from_value::<podway_protocol::RecoveryRecipeV2>(value).is_err());
+    };
+    valid(&base);
+    let mut maximum = base.clone();
+    maximum["reason"] = json!("界".repeat(256));
+    valid(&maximum);
+    for (field, value) in [
+        ("reason", json!("界".repeat(257))),
+        ("reason", json!("")),
+        ("unexpected", json!(true)),
+        ("requires_explicit_authorization", json!(true)),
+        ("command", json!("session.reset")),
+        ("argv", json!(["podway", "reset", "--yes"])),
+        ("argv", json!(["podway", "--json", "observe", "extra"])),
+        ("argv", json!(["x".repeat(257), "--json", "observe"])),
+    ] {
+        let mut candidate = base.clone();
+        candidate[field] = value;
+        invalid(candidate);
+    }
+}
+
+#[test]
+fn current_results_round_trip_every_registered_direct_command_and_reject_discriminators() {
+    let fixtures = examples();
+    let contracts = EXISTING_ROUTE_RESULT_SCHEMAS_V2
+        .iter()
+        .chain(NEW_ROUTE_RESULT_SCHEMAS_V1)
+        .chain(
+            DAEMON_FREE_DOCUMENT_SCHEMAS_V1
+                .iter()
+                .filter(|entry| !entry.commands.is_empty()),
+        );
+    for contract in contracts {
+        let result = &fixtures[contract.schema];
+        for command in contract.commands {
+            let mut input = authoring_input(command, result);
+            if !command.starts_with("procedure.")
+                && !matches!(*command, "version" | "workspace.remove")
+            {
+                input.workspace = Some(
+                    serde_json::from_value::<podway_protocol::WorkspaceOutputV1>(json!({
+                        "uuid":UUID, "root":"/tmp/podway-example", "latest_workspace_sequence":1
+                    }))
+                    .unwrap(),
+                );
+            }
+            let output = OutputEnvelopeV4::new(input).unwrap();
+            let bytes = serde_json::to_vec(&output).unwrap();
+            let decoded: OutputEnvelopeV4 = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(
+                decoded.as_value(),
+                output.as_value(),
+                "{command}: {}",
+                contract.schema
+            );
+        }
+    }
+    for result in [
+        Map::new(),
+        Map::from_iter([("schema".to_owned(), json!(1))]),
+        Map::from_iter([("schema".to_owned(), json!("podway.unknown-result/v1"))]),
+    ] {
+        assert!(decode_result_schema_contract_v2(&result).is_none());
+    }
+    let mut incomplete = fixtures["podway.next-result/v5"].clone();
+    incomplete.as_object_mut().unwrap().remove("node");
+    assert!(decode_result_schema_contract_v2(incomplete.as_object().unwrap()).is_none());
+}
+
+#[test]
+fn current_result_decoders_preserve_deep_closed_family_and_variant_failures() {
+    let fixtures = examples();
+    let mut invalid = Vec::new();
+    for (schema, pointer) in [
+        ("podway.compact-status-result/v5", "/procedure"),
+        ("podway.next-result/v5", "/node"),
+        ("podway.procedure-preview-result/v1", "/checks"),
+        ("podway.decision-result/v2", "/record"),
+        ("podway.goal-definition-result/v2", "/criteria/0"),
+        ("podway.goal-revision-result/v2", "/criteria/0"),
+        ("podway.criterion-assessment-result/v2", "/result"),
+    ] {
+        let mut value = fixtures[schema].clone();
+        value
+            .pointer_mut(pointer)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert("unknown".to_owned(), json!(true));
+        invalid.push(value);
+    }
+    for (schema, field, replacement) in [
+        (
+            "podway.procedure-validation-result/v2",
+            "valid",
+            json!("true"),
+        ),
+        (
+            "podway.procedure-source-result/v1",
+            "operation",
+            json!("unknown"),
+        ),
+        (
+            "podway.procedure-source-result/v1",
+            "template",
+            json!("minimal"),
+        ),
+        (
+            "podway.procedure-diagnostics-result/v1",
+            "diagnostics",
+            json!([{"unknown":true}]),
+        ),
+        (
+            "podway.procedure-graph-result/v1",
+            "format",
+            json!("unknown"),
+        ),
+        ("podway.rework-result/v2", "reason", json!("x".repeat(2001))),
+        ("podway.next-result/v5", "title", json!("x".repeat(121))),
+        ("podway.next-result/v5", "intent", json!("")),
+        (
+            "podway.next-result/v5",
+            "allowed_actions",
+            json!(["session.explode"]),
+        ),
+        (
+            "podway.next-result/v5",
+            "suggestions",
+            json!([{"command":"session.explode","argv":["explode"]}]),
+        ),
+        (
+            "podway.next-result/v5",
+            "next_graph_node_id",
+            json!("finish"),
+        ),
+    ] {
+        let mut value = fixtures[schema].clone();
+        value[field] = replacement;
+        invalid.push(value);
+    }
+    for pointer in ["/record/procedure_snapshot_id", "/target_attempt_id"] {
+        let mut value = fixtures["podway.decision-result/v2"].clone();
+        let (parent, key) = pointer.rsplit_once('/').unwrap();
+        if parent.is_empty() {
+            value.as_object_mut().unwrap().remove(key);
+        } else {
+            value
+                .pointer_mut(parent)
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .remove(key);
+        }
+        invalid.push(value);
+    }
+    for value in invalid {
+        assert!(
+            decode_result_schema_contract_v2(value.as_object().unwrap()).is_none(),
+            "accepted malformed {}: {value}",
+            value["schema"]
+        );
+    }
+}
+
+#[test]
+fn current_warnings_and_workspace_removal_preserve_closed_scalar_boundaries() {
+    let result = examples()["podway.procedure-validation-result/v2"].clone();
+    let mut maximum = warning(&"A".repeat(64));
+    maximum.insert("path".to_owned(), json!("界".repeat(256)));
+    maximum.insert("message".to_owned(), json!("界".repeat(512)));
+    let mut input = authoring_input("procedure.validate", &result);
+    input.warnings = vec![maximum.clone(); 4];
+    assert!(OutputEnvelopeV4::new(input).is_ok());
+    for (field, value) in [
+        ("code", json!("A".repeat(65))),
+        ("code", json!("lowercase")),
+        ("path", json!("界".repeat(257))),
+        ("message", json!("界".repeat(513))),
+        ("message", json!("")),
+        ("unknown", json!(true)),
+    ] {
+        let mut warning = maximum.clone();
+        warning.insert(field.to_owned(), value);
+        let mut input = authoring_input("procedure.validate", &result);
+        input.warnings = vec![warning];
+        assert!(OutputEnvelopeV4::new(input).is_err());
+    }
+    let mut input = authoring_input("procedure.validate", &result);
+    input.warnings = vec![maximum; 5];
+    assert!(OutputEnvelopeV4::new(input).is_err());
+    let present = current_detail_fixtures()["podway.workspace-removal-result/v2"].clone();
+    let absent = json!({"schema":"podway.workspace-removal-result/v2","worktree_root":"/tmp/podway-example","workspace_uuid":null,"podway_directory_removed":false,"already_absent":true});
+    for result in [present, absent] {
+        assert!(OutputEnvelopeV4::new(authoring_input("workspace.remove", &result)).is_ok());
+        for field in result.as_object().unwrap().keys() {
+            let mut missing = result.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            assert!(OutputEnvelopeV4::new(authoring_input("workspace.remove", &missing)).is_err());
+        }
+        let mut open = result;
+        open["registry_entry_removed"] = json!(true);
+        assert!(OutputEnvelopeV4::new(authoring_input("workspace.remove", &open)).is_err());
+    }
+}
+
+#[test]
+fn retained_managed_runtime_v3_known_answer_remains_schema_valid_until_release_cutover() {
+    let managed = json!({
+        "schema":"podway.managed-runtime/v3","metadata_version":3,
+        "purpose":"contributor","euid":501,"canonical_root":"/tmp/podway-managed",
+        "mode":"contributor",
+        "paths":{
+            "lock":"/tmp/podway-managed/run/podwayd.lock",
+            "socket":"/tmp/podway-managed/run/podwayd.sock",
+            "service_state":"/tmp/podway-managed/state/service.json",
+            "registry":"/tmp/podway-managed/state/workspaces.json",
+            "recovery":"/tmp/podway-managed/state/recovery.json",
+            "log":"/tmp/podway-managed/logs/podwayd.log",
+            "bootstrap_log":"/tmp/podway-managed/logs/podwayd-bootstrap.log"
+        },
+        "sandbox_root":"/tmp/podway-sandbox",
+        "executables":{
+            "cli":{"path":"/tmp/podway-managed/bin/podway","sha256":DIGEST},
+            "daemon":{"path":"/tmp/podway-managed/bin/podwayd","sha256":DIGEST},
+            "controller":null
+        },
+        "generation":null
+    });
+    assert_valid("schemas/managed-runtime-v3.schema.json", &managed);
+}
+
+#[test]
+fn retained_version_output_v3_preserves_its_exact_closed_identity_boundary() {
+    let output = json!({
+        "schema":"podway.output/v3", "request_id":UUID, "command":"version",
+        "generated_at":"2026-08-04T00:00:00.000Z", "warnings":[],
+        "result":{"schema":"podway.version-result/v1","product":"podway","version":"0.2.0",
+            "target":"aarch64-apple-darwin","build_identity":DIGEST,"source_commit":null,
+            "contract_manifest_schema":"podway.contract-manifest/v1","contract_manifest_digest":DIGEST,
+            "supported_ipc_ids":["podway.ipc/v1"]}
+    });
+    assert_valid("schemas/output-v3.schema.json", &output);
+    let typed: podway_protocol::OutputEnvelopeV3 = serde_json::from_value(output.clone()).unwrap();
+    assert_eq!(serde_json::to_value(typed).unwrap(), output);
+    let mut invalid = Vec::new();
+    for field in output.as_object().unwrap().keys() {
+        let mut value = output.clone();
+        value.as_object_mut().unwrap().remove(field);
+        invalid.push(value);
+    }
+    for (field, value) in [
+        ("result", json!({})),
+        ("command", json!("daemon.status")),
+        ("workspace", json!({"uuid":UUID})),
+        ("job", json!({})),
+        ("schema", json!("podway.output/v1")),
+    ] {
+        let mut candidate = output.clone();
+        candidate[field] = value;
+        invalid.push(candidate);
+    }
+    for value in invalid {
+        assert_invalid("schemas/output-v3.schema.json", &value);
+        assert!(serde_json::from_value::<podway_protocol::OutputEnvelopeV3>(value).is_err());
+    }
+}
+
+#[test]
+fn current_direct_registry_preserves_the_accepted_known_answer_family_inventory() {
+    // This explicit inventory comes from the adopted daemon-free known answers,
+    // independently of the production registry and the current merged fixture.
+    let expected = BTreeSet::from([
+        "podway.attempt-conflict-details/v3",
+        "podway.blocker-limit-details/v2",
+        "podway.command-retired-details/v1",
+        "podway.compact-status-result/v5",
+        "podway.contract-manifest/v2",
+        "podway.criterion-assessment-result/v2",
+        "podway.decision-result/v2",
+        "podway.delegation-accept-result/v2",
+        "podway.delegation-error-details/v2",
+        "podway.error/v2",
+        "podway.goal-definition-result/v2",
+        "podway.goal-revision-result/v2",
+        "podway.idempotency-key-reused-details/v2",
+        "podway.internal-error-details/v2",
+        "podway.item-mutation-result/v3",
+        "podway.item-record-many-result/v2",
+        "podway.legacy-runtime-state-unsupported-details/v1",
+        "podway.mutation-outcome-unknown-details/v3",
+        "podway.next-result/v5",
+        "podway.observation-result/v5",
+        "podway.outcome-lookup-result/v1",
+        "podway.output/v4",
+        "podway.prepared-next-result/v3",
+        "podway.procedure-digest-mismatch-details/v3",
+        "podway.recoverable-v2-runtime-error-details/v2",
+        "podway.recovery-recipe/v2",
+        "podway.revision-conflict-details/v3",
+        "podway.rework-result/v2",
+        "podway.session-archive-limit-details/v2",
+        "podway.session-archive-not-eligible-details/v2",
+        "podway.session-archive-not-found-details/v2",
+        "podway.session-archive-result/v2",
+        "podway.session-archive-show-result/v3",
+        "podway.session-begin-result/v2",
+        "podway.session-id-mismatch-details/v3",
+        "podway.session-reset-not-eligible-details/v2",
+        "podway.session-reset-result/v2",
+        "podway.session-start-decision-required-details/v2",
+        "podway.session-start-result/v4",
+        "podway.session-start-state-conflict-details/v2",
+        "podway.stage-transition-result/v3",
+        "podway.status-result/v5",
+        "podway.terminal-disposition-result/v2",
+        "podway.v2-runtime-error-details/v2",
+        "podway.version-result/v2",
+        "podway.workspace-busy-details/v1",
+        "podway.workspace-contract-mismatch-details/v1",
+        "podway.workspace-init-result/v2",
+        "podway.workspace-maintenance-details/v1",
+        "podway.workspace-maintenance-intent-marker/v1",
+        "podway.workspace-recovery-details/v2",
+        "podway.workspace-removal-marker/v2",
+        "podway.workspace-removal-result/v2",
+        "podway.workspace-reset-marker/v1",
+        "podway.workspace-uuid-mismatch-details/v3",
+        "podway.writer-predecessor-declaration/v1",
+    ]);
+    let actual = DAEMON_FREE_DOCUMENT_SCHEMAS_V1
+        .iter()
+        .map(|entry| entry.schema)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(actual, expected);
 }

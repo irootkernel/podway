@@ -362,7 +362,7 @@ impl ContainmentMetadataV1 {
     }
 }
 
-/// Move evidence used to perform a safe registry-root update outside this crate.
+/// Read-only evidence of relocation from a previously bound worktree root.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorktreeMoveMetadataV1 {
     previous_root: Option<LosslessPathV1>,
@@ -403,89 +403,6 @@ impl WorktreeMoveMetadataV1 {
     }
 }
 
-/// Registry repair action that is safe only after identity and UUID validation.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum RegistryRepairActionV1 {
-    NotRequired,
-    UpdateValidatedRoot { previous_root: LosslessPathV1 },
-}
-
-/// The store/registry verification still required for the workspace UUID.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum WorkspaceUuidVerificationV1 {
-    /// A generated candidate that becomes durable only after store initialization.
-    PendingStoreInitialization,
-    /// A durable selector matched Git identity but still needs registry checking.
-    RegistryCheckRequired,
-    /// Retained as legacy input only; constructors quarantine it as registry checking required.
-    Unique,
-}
-
-/// Metadata the daemon needs to repair registration without guessing identity.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct WorktreeRepairMetadataV1 {
-    registry_action: RegistryRepairActionV1,
-    workspace_uuid_verification: WorkspaceUuidVerificationV1,
-}
-
-impl WorktreeRepairMetadataV1 {
-    /// Constructs metadata without root repair for a fresh, unpersisted workspace.
-    pub fn not_required() -> Self {
-        Self::not_required_with_uuid_verification(
-            WorkspaceUuidVerificationV1::PendingStoreInitialization,
-        )
-    }
-
-    /// Constructs no-repair metadata with an explicit store verification state.
-    pub fn not_required_with_uuid_verification(
-        workspace_uuid_verification: WorkspaceUuidVerificationV1,
-    ) -> Self {
-        Self {
-            registry_action: RegistryRepairActionV1::NotRequired,
-            workspace_uuid_verification: quarantine_legacy_uuid_verification(
-                workspace_uuid_verification,
-            ),
-        }
-    }
-
-    /// Constructs root-repair metadata for a fresh, unpersisted workspace.
-    pub fn update_validated_root(previous_root: LosslessPathV1) -> Self {
-        Self::update_validated_root_with_uuid_verification(
-            previous_root,
-            WorkspaceUuidVerificationV1::PendingStoreInitialization,
-        )
-    }
-
-    /// Constructs root-repair metadata with an explicit store verification state.
-    pub fn update_validated_root_with_uuid_verification(
-        previous_root: LosslessPathV1,
-        workspace_uuid_verification: WorkspaceUuidVerificationV1,
-    ) -> Self {
-        Self {
-            registry_action: RegistryRepairActionV1::UpdateValidatedRoot { previous_root },
-            workspace_uuid_verification: quarantine_legacy_uuid_verification(
-                workspace_uuid_verification,
-            ),
-        }
-    }
-
-    pub fn registry_action(&self) -> &RegistryRepairActionV1 {
-        &self.registry_action
-    }
-
-    pub fn workspace_uuid_verification(&self) -> &WorkspaceUuidVerificationV1 {
-        &self.workspace_uuid_verification
-    }
-}
-fn quarantine_legacy_uuid_verification(
-    verification: WorkspaceUuidVerificationV1,
-) -> WorkspaceUuidVerificationV1 {
-    match verification {
-        WorkspaceUuidVerificationV1::Unique => WorkspaceUuidVerificationV1::RegistryCheckRequired,
-        verification => verification,
-    }
-}
-
 /// Complete result of read-only Git discovery and validation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ValidatedWorktreeV1 {
@@ -495,7 +412,6 @@ pub struct ValidatedWorktreeV1 {
     kind: WorktreeKindV1,
     containment: ContainmentMetadataV1,
     move_metadata: WorktreeMoveMetadataV1,
-    repair_metadata: WorktreeRepairMetadataV1,
 }
 
 /// Request-local object evidence is deliberately separate from durable workspace identity.
@@ -608,7 +524,6 @@ impl ValidatedWorktreeV1 {
         kind: WorktreeKindV1,
         containment: ContainmentMetadataV1,
         move_metadata: WorktreeMoveMetadataV1,
-        repair_metadata: WorktreeRepairMetadataV1,
     ) -> Result<Self, ValidatedWorktreeValidationErrorV1> {
         Self::new_with_object_evidence(
             identity,
@@ -617,7 +532,6 @@ impl ValidatedWorktreeV1 {
             kind,
             containment,
             move_metadata,
-            repair_metadata,
         )
     }
 
@@ -628,39 +542,12 @@ impl ValidatedWorktreeV1 {
         kind: WorktreeKindV1,
         containment: ContainmentMetadataV1,
         move_metadata: WorktreeMoveMetadataV1,
-        repair_metadata: WorktreeRepairMetadataV1,
     ) -> Result<Self, ValidatedWorktreeValidationErrorV1> {
         if identity.root_directory_fingerprint().is_none() {
             return Err(ValidatedWorktreeValidationErrorV1::MissingRootDirectoryFingerprint);
         }
-        match (
-            identity.state(),
-            repair_metadata.workspace_uuid_verification(),
-        ) {
-            (
-                WorkspaceIdentityStateV1::Candidate,
-                WorkspaceUuidVerificationV1::PendingStoreInitialization,
-            )
-            | (
-                WorkspaceIdentityStateV1::Bound,
-                WorkspaceUuidVerificationV1::RegistryCheckRequired,
-            ) => {}
-            (WorkspaceIdentityStateV1::UnvalidatedLegacy, _) => {
-                return Err(ValidatedWorktreeValidationErrorV1::UnvalidatedLegacyIdentity);
-            }
-            (_, WorkspaceUuidVerificationV1::Unique) => {
-                return Err(
-                    ValidatedWorktreeValidationErrorV1::RegistryCheckRequiredForLegacyVerification,
-                );
-            }
-            (WorkspaceIdentityStateV1::Candidate, _) => {
-                return Err(ValidatedWorktreeValidationErrorV1::PendingStoreInitializationRequired);
-            }
-            (WorkspaceIdentityStateV1::Bound, _) => {
-                return Err(
-                    ValidatedWorktreeValidationErrorV1::RegistryCheckRequiredForBoundIdentity,
-                );
-            }
+        if identity.state() == &WorkspaceIdentityStateV1::UnvalidatedLegacy {
+            return Err(ValidatedWorktreeValidationErrorV1::UnvalidatedLegacyIdentity);
         }
         if !identity
             .last_validated_root()
@@ -694,19 +581,6 @@ impl ValidatedWorktreeV1 {
         {
             return Err(ValidatedWorktreeValidationErrorV1::MoveRootMismatch);
         }
-        match (
-            move_metadata.previous_root(),
-            repair_metadata.registry_action(),
-        ) {
-            (None, RegistryRepairActionV1::NotRequired) => {}
-            (
-                Some(previous_root),
-                RegistryRepairActionV1::UpdateValidatedRoot {
-                    previous_root: repair_root,
-                },
-            ) if previous_root.same_canonical_path(repair_root) => {}
-            _ => return Err(ValidatedWorktreeValidationErrorV1::RepairMetadataMismatch),
-        }
         Ok(Self {
             identity,
             object_evidence,
@@ -714,7 +588,6 @@ impl ValidatedWorktreeV1 {
             kind,
             containment,
             move_metadata,
-            repair_metadata,
         })
     }
 
@@ -764,10 +637,6 @@ impl ValidatedWorktreeV1 {
     pub fn move_metadata(&self) -> &WorktreeMoveMetadataV1 {
         &self.move_metadata
     }
-
-    pub fn repair_metadata(&self) -> &WorktreeRepairMetadataV1 {
-        &self.repair_metadata
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -795,13 +664,9 @@ pub enum ValidatedWorktreeValidationErrorV1 {
     RelocationWithoutRootChange,
     MissingRootDirectoryFingerprint,
     UnvalidatedLegacyIdentity,
-    PendingStoreInitializationRequired,
-    RegistryCheckRequiredForBoundIdentity,
-    RegistryCheckRequiredForLegacyVerification,
     IdentityRootMismatch,
     ContainmentRootMismatch,
     MoveRootMismatch,
-    RepairMetadataMismatch,
     PodwayDirectoryOutsideWorkspace,
     RuntimeDirectoryOutsidePodway,
 }
@@ -883,9 +748,6 @@ pub enum GitResolverErrorV1 {
     },
     SymlinkEscape {
         path: LosslessPathV1,
-    },
-    CopiedWorkspaceUuid {
-        workspace_id: WorkspaceId,
     },
     IdentityMismatch {
         expected: Box<DurableWorktreeIdentityV1>,

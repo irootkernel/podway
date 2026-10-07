@@ -6,7 +6,7 @@ use std::{
 };
 
 use podway_core::{
-    AttemptId, DomainError, ItemId, JobId, MAX_PROCEDURE_IDENTIFIER_BYTES, Revision, SessionId,
+    AttemptId, DomainError, ItemId, MAX_PROCEDURE_IDENTIFIER_BYTES, Revision, SessionId,
     Sha256Digest, WorkspaceId,
 };
 
@@ -27,7 +27,6 @@ fn arc_007_uuid_newtypes_accept_canonical_values_and_reject_noncanonical_values(
         AttemptId::new(CANONICAL_UUID).unwrap().as_str(),
         CANONICAL_UUID
     );
-    assert_eq!(JobId::new(CANONICAL_UUID).unwrap().as_str(), CANONICAL_UUID);
 
     assert_eq!(
         WorkspaceId::new("123E4567-e89b-12d3-a456-426614174000"),

@@ -1764,9 +1764,8 @@ Current authority and implementation context:
 Canonical assets relevant to any future promotion:
 
 - [`procedure-v2.schema.json`](../../assets/schemas/procedure-v2.schema.json)
-- [`sqlite-v3.sql`](../../assets/specifications/sqlite-v3.sql)
-- [`sqlite-v4.sql`](../../assets/specifications/sqlite-v4.sql)
-- [`job-result-v3.schema.json`](../../assets/schemas/job-result-v3.schema.json)
+- [Frozen rejected daemon-generation DDL](../../tests/fixtures/storage/daemon-era-v2dfc/generation-1-to-13-ddl.json)
+- [`outcome-lookup-result-v1.schema.json`](../../assets/schemas/outcome-lookup-result-v1.schema.json)
 - [`procedure-graph-result-v1.schema.json`](../../assets/schemas/procedure-graph-result-v1.schema.json)
 - [`procedure-preview-result-v1.schema.json`](../../assets/schemas/procedure-preview-result-v1.schema.json)
 

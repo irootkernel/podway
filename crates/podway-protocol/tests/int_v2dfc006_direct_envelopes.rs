@@ -1,5 +1,5 @@
 use podway_protocol::{
-    CommandNameV1, ErrorCodeV1, ErrorEnvelopeInputV2, ErrorEnvelopeV1, ErrorEnvelopeV2, ExitCodeV1,
+    CommandNameV1, ErrorCodeV1, ErrorEnvelopeInputV2, ErrorEnvelopeV2, ExitCodeV1,
     OutputEnvelopeInputV4, OutputEnvelopeV3, OutputEnvelopeV4, RecoveryRecipeV2, RequestIdV1,
     Rfc3339MillisV1, WorkspaceOutputV1,
 };
@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 fn answers() -> Value {
     serde_json::from_str(include_str!(
-        "../../../docs/examples/json/daemon-free-contract-reservation-v1.json"
+        "../../../tests/fixtures/v2/protocol/current-contracts.json"
     ))
     .unwrap()
 }
@@ -52,7 +52,6 @@ fn direct_constructors_and_decoders_validate_the_complete_envelope() {
         failure
     );
     assert!(serde_json::from_value::<OutputEnvelopeV3>(success.clone()).is_err());
-    assert!(serde_json::from_value::<ErrorEnvelopeV1>(error.clone()).is_err());
     for (field, invalid) in [
         ("schema", json!("podway.output/v3")),
         ("command", json!("daemon.status")),

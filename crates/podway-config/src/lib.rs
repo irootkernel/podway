@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use podway_core::{CanonicalJsonErrorV1, RuntimeModeV1, Sha256Digest, canonicalize_json_v1};
+use podway_core::{CanonicalJsonErrorV1, Sha256Digest, canonicalize_json_v1};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
@@ -83,10 +83,9 @@ pub use procedure_v2_vet::vet_procedure_v2;
 pub const WORKSPACE_SCHEMA_V1: &str = "podway.workspace/v1";
 pub const WORKSPACE_SCHEMA_V2: &str = "podway.workspace/v2";
 /// The complete, explicit v1 workspace configuration written for a new workspace.
-pub const DEFAULT_WORKSPACE_CONFIG_YAML_V1: &[u8] = b"schema: podway.workspace/v1\nprocedure_paths:\n  - .podway/procedures\ndefault_preset: sw-dev-v2\njob_queue:\n  max_pending: 256\nui:\n  show_stage_in_prompt: false\n";
+pub const DEFAULT_WORKSPACE_CONFIG_YAML_V1: &[u8] = b"schema: podway.workspace/v1\nprocedure_paths:\n  - .podway/procedures\ndefault_preset: sw-dev-v2\nui:\n  show_stage_in_prompt: false\n";
 
 const DEFAULT_PRESET: &str = "sw-dev-v2";
-const DEFAULT_MAX_PENDING: u16 = 256;
 
 #[derive(Clone, Debug, Eq, PartialEq, Error)]
 pub enum ConfigError {
@@ -157,14 +156,15 @@ pub enum ConfigError {
 #[serde(deny_unknown_fields)]
 pub struct WorkspaceConfigV1 {
     pub schema: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mode: Option<RuntimeModeV1>,
+    #[serde(default, skip_serializing)]
+    pub mode: Option<String>,
     #[serde(default = "default_procedure_paths")]
     pub procedure_paths: Vec<String>,
     #[serde(default = "default_preset")]
     pub default_preset: String,
-    #[serde(default)]
-    pub job_queue: JobQueueConfigV1,
+    /// Accepted legacy configuration; it has no effect and is never written.
+    #[serde(default, skip_serializing)]
+    pub job_queue: Option<serde_json::Value>,
     #[serde(default)]
     pub ui: UiConfigV1,
 }
@@ -176,7 +176,7 @@ impl Default for WorkspaceConfigV1 {
             mode: None,
             procedure_paths: default_procedure_paths(),
             default_preset: default_preset(),
-            job_queue: JobQueueConfigV1::default(),
+            job_queue: None,
             ui: UiConfigV1::default(),
         }
     }
@@ -186,7 +186,6 @@ impl WorkspaceConfigV1 {
     pub fn new(
         procedure_paths: Vec<String>,
         default_preset: impl Into<String>,
-        job_queue: JobQueueConfigV1,
         ui: UiConfigV1,
     ) -> Result<Self, ConfigError> {
         let config = Self {
@@ -194,7 +193,7 @@ impl WorkspaceConfigV1 {
             mode: None,
             procedure_paths,
             default_preset: default_preset.into(),
-            job_queue,
+            job_queue: None,
             ui,
         };
         config.validate()?;
@@ -210,7 +209,13 @@ impl WorkspaceConfigV1 {
                     reason: "requires workspace schema v2",
                 });
             }
-            WORKSPACE_SCHEMA_V2 => {}
+            WORKSPACE_SCHEMA_V2 if self.mode.as_deref().is_none_or(|mode| mode == "prod") => {}
+            WORKSPACE_SCHEMA_V2 => {
+                return Err(ConfigError::InvalidValue {
+                    field: "mode",
+                    reason: "retired runtime mode; remove mode and reset the workspace",
+                });
+            }
             _ => {
                 return Err(ConfigError::InvalidSchema {
                     expected: "podway.workspace/v1 or podway.workspace/v2",
@@ -232,119 +237,7 @@ impl WorkspaceConfigV1 {
         }
 
         validate_identifier("default_preset", &self.default_preset)?;
-        self.job_queue.validate()?;
         Ok(())
-    }
-
-    /// Returns the runtime namespace selected by this configuration.
-    ///
-    /// Workspace v1 and an omitted v2 `mode` both select production.
-    pub fn effective_mode(&self) -> RuntimeModeV1 {
-        self.mode.clone().unwrap_or_default()
-    }
-}
-
-/// Rewrites only the top-level schema and mode scalars needed for a workspace-mode switch.
-///
-/// The input must already be an admitted workspace configuration. Existing ordering, comments,
-/// and every unrelated supported value are preserved byte-for-byte.
-pub fn rewrite_workspace_mode_v1(
-    input: impl AsRef<[u8]>,
-    target: &RuntimeModeV1,
-) -> Result<Vec<u8>, ConfigError> {
-    let input = input.as_ref();
-    let config = parse_workspace_config_v1(input)?;
-    if config.effective_mode() == *target {
-        return Ok(input.to_vec());
-    }
-    let text = std::str::from_utf8(input).map_err(|_| ConfigError::InvalidDocument {
-        reason: "input must be valid UTF-8".to_owned(),
-    })?;
-    let mut lines: Vec<String> = text.split_inclusive('\n').map(str::to_owned).collect();
-    if !text.ends_with('\n') && lines.is_empty() {
-        lines.push(text.to_owned());
-    }
-    let schema_index = lines
-        .iter()
-        .position(|line| line.starts_with("schema:"))
-        .ok_or_else(|| ConfigError::InvalidDocument {
-            reason: "workspace config schema must be a top-level scalar".to_owned(),
-        })?;
-    let schema_comment = yaml_scalar_comment_suffix(&lines[schema_index]);
-    let newline = if lines[schema_index].ends_with("\r\n") {
-        "\r\n"
-    } else if lines[schema_index].ends_with('\n') {
-        "\n"
-    } else {
-        ""
-    };
-    let schema = if target.is_production() {
-        WORKSPACE_SCHEMA_V1
-    } else {
-        WORKSPACE_SCHEMA_V2
-    };
-    lines[schema_index] = format!("schema: {schema}{schema_comment}{newline}");
-
-    if let Some(mode_index) = lines.iter().position(|line| line.starts_with("mode:")) {
-        if target.is_production() {
-            lines.remove(mode_index);
-        } else {
-            let comment = yaml_scalar_comment_suffix(&lines[mode_index]);
-            let newline = if lines[mode_index].ends_with("\r\n") {
-                "\r\n"
-            } else if lines[mode_index].ends_with('\n') {
-                "\n"
-            } else {
-                ""
-            };
-            lines[mode_index] = format!("mode: {}{comment}{newline}", target.as_str());
-        }
-    } else if !target.is_production() {
-        let mode_newline = if newline.is_empty() {
-            lines[schema_index].push('\n');
-            ""
-        } else {
-            newline
-        };
-        lines.insert(
-            schema_index + 1,
-            format!("mode: {}{mode_newline}", target.as_str()),
-        );
-    }
-    let output = lines.concat().into_bytes();
-    let rewritten = parse_workspace_config_v1(&output)?;
-    if rewritten.effective_mode() != *target {
-        return Err(ConfigError::InvalidValue {
-            field: "mode",
-            reason: "rewritten mode did not match the requested target",
-        });
-    }
-    Ok(output)
-}
-
-fn yaml_scalar_comment_suffix(line: &str) -> &str {
-    let body = line.trim_end_matches(['\r', '\n']);
-    body.find(" #").map_or("", |index| &body[index..])
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct JobQueueConfigV1 {
-    #[serde(default = "default_max_pending")]
-    pub max_pending: u16,
-}
-
-impl Default for JobQueueConfigV1 {
-    fn default() -> Self {
-        Self {
-            max_pending: DEFAULT_MAX_PENDING,
-        }
-    }
-}
-
-impl JobQueueConfigV1 {
-    pub fn validate(&self) -> Result<(), ConfigError> {
-        validate_count("job_queue.max_pending", self.max_pending as usize, 1, 4_096)
     }
 }
 
@@ -554,8 +447,4 @@ fn default_procedure_paths() -> Vec<String> {
 
 fn default_preset() -> String {
     DEFAULT_PRESET.to_owned()
-}
-
-const fn default_max_pending() -> u16 {
-    DEFAULT_MAX_PENDING
 }

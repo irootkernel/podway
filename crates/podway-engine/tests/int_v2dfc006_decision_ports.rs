@@ -557,67 +557,9 @@ fn v2drw003_cancelled_session_rejects_manual_rework() {
 
 #[test]
 fn v2drw006_failure_receipts_are_atomic_and_cold_replayable() {
-    use podway_protocol::{
-        ClientInfoV1, CommandNameV1, OperationV1, PreconditionsV1, ProcedureV2MutationRequestV1,
-        RequestEnvelopeInputV1, RequestEnvelopeV1, RequestOptionsV1, WorkspaceContextV1,
-        WorktreeSelectorWireV1,
-    };
-    use std::os::unix::ffi::OsStrExt;
     let mut engine = at_review(FAILURE_PROCEDURE, true);
     let before = status(&engine);
     assert_eq!(before["current"]["readiness"]["can_advance"], true);
-    let selector = WorktreeSelectorWireV1::new(
-        engine.temporary.path().as_os_str().as_bytes(),
-        engine.temporary.path().display().to_string(),
-        None,
-    )
-    .unwrap();
-    for (n, command, payload) in [
-        (1, "session.decide", json!({"option_id":"accept"})),
-        (
-            2,
-            "session.decide",
-            json!({"option_id":"accept","reason":" \t\n"}),
-        ),
-        (
-            3,
-            "session.rework",
-            json!({"target_graph_node_id":"review"}),
-        ),
-        (
-            4,
-            "session.rework",
-            json!({"target_graph_node_id":"review","reason":" \t\n"}),
-        ),
-    ] {
-        let mut payload = payload.as_object().unwrap().clone();
-        payload.insert("selector".into(), serde_json::to_value(&selector).unwrap());
-        let fences = engine.fences();
-        let envelope = RequestEnvelopeV1::new(RequestEnvelopeInputV1 {
-            request_id: RequestIdV1::new(format!("00000000-0000-4000-8000-{n:012x}")).unwrap(),
-            client: ClientInfoV1::new("direct-decision-port", "1", 1).unwrap(),
-            operation: OperationV1::Mutate,
-            command: CommandNameV1::new(command).unwrap(),
-            workspace: Some(WorkspaceContextV1::new(selector.display(), None).unwrap()),
-            idempotency_key: Some(
-                podway_protocol::IdempotencyKeyV1::new(format!("malformed-{n}")).unwrap(),
-            ),
-            preconditions: PreconditionsV1::new(
-                Some(fences.expected_session_id),
-                Some(fences.expected_session_revision),
-                Some(fences.expected_attempt_id),
-                None,
-                None,
-                None,
-            )
-            .unwrap(),
-            options: RequestOptionsV1::new(false, 5000).unwrap(),
-            payload,
-        })
-        .unwrap();
-        assert!(ProcedureV2MutationRequestV1::from_envelope(&envelope).is_err());
-    }
-    assert_eq!(status(&engine), before);
     for reason in ["", " \t\n"] {
         let mut command = decide(&engine, "accept");
         let DirectCommandV1::Procedure(P::SessionDecide(input)) = &mut command else {

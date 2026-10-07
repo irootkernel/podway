@@ -20,7 +20,8 @@ fuzz_target!(|input: &[u8]| {
         let reparsed = parse_workspace_config_v1(canonical.as_bytes())
             .expect("canonical workspace config must parse");
         assert_eq!(
-            reparsed, config,
+            reparsed.canonical_json_v1().unwrap(),
+            canonical,
             "canonical workspace config must round-trip"
         );
         assert_eq!(

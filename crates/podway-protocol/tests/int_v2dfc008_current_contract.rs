@@ -2,20 +2,19 @@ use std::collections::BTreeSet;
 
 use podway_protocol::{
     DAEMON_FREE_DOCUMENT_SCHEMAS_V1, MAX_DIRECT_INPUT_BYTES_V1, MAX_DIRECT_OUTPUT_BYTES_V1,
-    SUPPORTED_ERROR_SCHEMAS_V1, SUPPORTED_OUTPUT_SCHEMAS_V3, decode_result_schema_contract_v2,
     validate_daemon_free_document_v1,
 };
 use serde_json::{Value, json};
 
 fn known_answers() -> Value {
     serde_json::from_str(include_str!(
-        "../../../docs/examples/json/daemon-free-contract-reservation-v1.json"
+        "../../../tests/fixtures/v2/protocol/current-contracts.json"
     ))
     .unwrap()
 }
 
 #[test]
-fn reserved_families_validate_without_enabling_runtime_decoders() {
+fn current_families_validate_with_the_direct_contract_registry() {
     let answers = known_answers();
     let fixtures = answers["fixtures"].as_object().unwrap();
     let registered = DAEMON_FREE_DOCUMENT_SCHEMAS_V1
@@ -23,13 +22,16 @@ fn reserved_families_validate_without_enabling_runtime_decoders() {
         .map(|contract| contract.schema)
         .collect::<BTreeSet<_>>();
     assert_eq!(registered.len(), DAEMON_FREE_DOCUMENT_SCHEMAS_V1.len());
-    assert_eq!(registered, fixtures.keys().map(String::as_str).collect());
-    for (schema, value) in fixtures {
+    assert!(
+        registered
+            .iter()
+            .all(|schema| fixtures.contains_key(*schema))
+    );
+    for (schema, value) in fixtures
+        .iter()
+        .filter(|(schema, _)| registered.contains(schema.as_str()))
+    {
         assert!(validate_daemon_free_document_v1(schema, value), "{schema}");
-        assert!(
-            decode_result_schema_contract_v2(value.as_object().unwrap()).is_none(),
-            "reserved family {schema} must not enter the shipped decoder"
-        );
     }
     for case in answers["cases"].as_array().unwrap() {
         assert!(
@@ -38,8 +40,6 @@ fn reserved_families_validate_without_enabling_runtime_decoders() {
             case["name"]
         );
     }
-    assert_eq!(SUPPORTED_OUTPUT_SCHEMAS_V3, &["podway.output/v3"]);
-    assert_eq!(SUPPORTED_ERROR_SCHEMAS_V1, &["podway.error/v1"]);
     assert_eq!(MAX_DIRECT_INPUT_BYTES_V1, 1_048_576);
     assert_eq!(MAX_DIRECT_OUTPUT_BYTES_V1, 1_048_576);
 }
@@ -392,4 +392,31 @@ fn generic_results_preserve_object_compatibility_and_document_bounds() {
         "podway.output/v4",
         &envelope
     ));
+}
+
+#[test]
+fn generic_direct_error_uses_the_same_exact_aggregate_byte_bound() {
+    let mut envelope = known_answers()["fixtures"]["podway.error/v2"].clone();
+    envelope["code"] = json!("REQUEST_INVALID");
+    envelope["retryable"] = json!(false);
+    envelope["exit_code"] = json!(2);
+    envelope["details"] = json!({"value":""});
+    let overhead = serde_json::to_vec(&envelope).unwrap().len();
+    envelope["details"]["value"] = json!("x".repeat(MAX_DIRECT_OUTPUT_BYTES_V1 - overhead));
+    assert_eq!(
+        serde_json::to_vec(&envelope).unwrap().len(),
+        MAX_DIRECT_OUTPUT_BYTES_V1
+    );
+    assert!(validate_daemon_free_document_v1(
+        "podway.error/v2",
+        &envelope
+    ));
+    let typed: podway_protocol::ErrorEnvelopeV2 = serde_json::from_value(envelope.clone()).unwrap();
+    assert_eq!(serde_json::to_value(typed).unwrap(), envelope);
+    envelope["details"]["value"] = json!("x".repeat(MAX_DIRECT_OUTPUT_BYTES_V1 - overhead + 1));
+    assert!(!validate_daemon_free_document_v1(
+        "podway.error/v2",
+        &envelope
+    ));
+    assert!(serde_json::from_value::<podway_protocol::ErrorEnvelopeV2>(envelope).is_err());
 }

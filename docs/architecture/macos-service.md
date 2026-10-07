@@ -89,7 +89,8 @@ The installed plist MUST:
 - avoid embedding secrets;
 - use user-owned paths only.
 
-The reference template is [`../../assets/specifications/launchagent.plist.template`](../../assets/specifications/launchagent.plist.template).
+The former LaunchAgent template was retired under [ADR-0038](../architecture-decision-records/0038-remove-the-daemon.md).
+The remaining sections describe the previous service generation.
 
 ## Commands
 

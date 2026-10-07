@@ -7,9 +7,8 @@ use podway_git::{
     Base64UrlPathBytesV1, ContainmentMetadataV1, DiagnosticPathDisplayV1,
     DurableWorktreeIdentityV1, GitResolveErrorV1, GitResolverContractV1, LosslessPathV1,
     MAX_SELECTOR_COMPONENT_BYTES_V1, SelectorValidationErrorV1, ValidatedWorktreeV1,
-    ValidatedWorktreeValidationErrorV1, WORKTREE_SELECTOR_VERSION_V1, WorkspaceUuidVerificationV1,
-    WorktreeKindV1, WorktreeMoveMetadataV1, WorktreeRepairMetadataV1, WorktreeRootsV1,
-    WorktreeSelectorV1,
+    ValidatedWorktreeValidationErrorV1, WORKTREE_SELECTOR_VERSION_V1, WorktreeKindV1,
+    WorktreeMoveMetadataV1, WorktreeRootsV1, WorktreeSelectorV1,
 };
 
 fn digest(hex_digit: char) -> Sha256Digest {
@@ -59,9 +58,6 @@ fn validated_worktree(
             path(runtime_directory),
         ),
         WorktreeMoveMetadataV1::stationary(path(b"/workspace")),
-        WorktreeRepairMetadataV1::not_required_with_uuid_verification(
-            WorkspaceUuidVerificationV1::RegistryCheckRequired,
-        ),
     )
 }
 struct SignatureResolver;
@@ -221,9 +217,6 @@ fn sec_002_git_v1_path_identity_ignores_diagnostic_display_text() {
             path_with_display(b"/workspace/.podway/runtime", "runtime directory"),
         ),
         WorktreeMoveMetadataV1::stationary(path_with_display(b"/workspace", "current root")),
-        WorktreeRepairMetadataV1::not_required_with_uuid_verification(
-            WorkspaceUuidVerificationV1::RegistryCheckRequired,
-        ),
     );
     assert!(worktree.is_ok());
 

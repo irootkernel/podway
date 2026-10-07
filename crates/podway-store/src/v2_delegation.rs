@@ -336,56 +336,6 @@ pub fn validate_acceptance_v1(
     Ok(())
 }
 
-/// The admitted request is immutable; its acceptance facts must be the ones persisted.
-pub(crate) fn acceptance_input_matches_receipt_v1(
-    input: &Value,
-    receipt: &DelegationReceiptV1,
-    session_revision: u64,
-    idempotency_key: &str,
-) -> bool {
-    let Some(object) = input.as_object() else {
-        return false;
-    };
-    if !exact_keys(
-        object,
-        &[
-            "schema",
-            "workspace_uuid",
-            "session_id",
-            "session_revision",
-            "attempt_id",
-            "idempotency_key",
-            "package_digest",
-            "execution",
-            "rounds_used",
-            "result_digest",
-            "summary",
-            "worker_disposition",
-            "accepted",
-        ],
-    ) || field(object, "schema") != Some("podway.delegation-accept-input/v1")
-        || object.get("session_revision").and_then(Value::as_u64) != Some(session_revision)
-        || field(object, "idempotency_key") != Some(idempotency_key)
-    {
-        return false;
-    }
-    const SHARED_FIELDS: [&str; 10] = [
-        "workspace_uuid",
-        "session_id",
-        "attempt_id",
-        "package_digest",
-        "execution",
-        "rounds_used",
-        "result_digest",
-        "summary",
-        "worker_disposition",
-        "accepted",
-    ];
-    SHARED_FIELDS
-        .iter()
-        .all(|field| object.get(*field) == receipt.value().get(*field))
-}
-
 pub(crate) fn completion_readiness_connection_v1(
     connection: &Connection,
     state: &GraphSessionStateV2,
@@ -453,7 +403,7 @@ pub(crate) fn receipt_snapshot_connection_v1(
         .map_err(|_| corrupt())?;
     let mut statement = connection
         .prepare(
-            "SELECT a.attempt_id, r.receipt_id, r.receipt_json FROM v2_attempts a \
+            "SELECT a.attempt_id, a.graph_node_id, r.receipt_id, r.receipt_json FROM v2_attempts a \
              JOIN v2_delegation_receipts r ON r.attempt_id = a.attempt_id AND r.session_id = a.session_id \
              WHERE a.session_id = ?1 ORDER BY a.trace_sequence DESC LIMIT ?2",
         )
@@ -469,6 +419,7 @@ pub(crate) fn receipt_snapshot_connection_v1(
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
                 ))
             },
         )
@@ -477,12 +428,28 @@ pub(crate) fn receipt_snapshot_connection_v1(
         .map_err(|_| corrupt())?;
     let receipts = receipt_rows
         .iter()
-        .map(|(attempt_id, receipt_id, json)| {
+        .map(|(attempt_id, graph_node_id, receipt_id, json)| {
             let receipt = DelegationReceiptV1::decode(json)?;
+            let node = state
+                .snapshot()
+                .graph_nodes()
+                .iter()
+                .find(|node| node.graph_node_id().as_str() == graph_node_id)
+                .ok_or_else(corrupt)?;
+            let placement: Value =
+                serde_json::from_str(node.canonical_placement_json()).map_err(|_| corrupt())?;
             if receipt.session_id() != *state.trace().session_id()
                 || receipt.attempt_id().as_str() != attempt_id
                 || receipt.receipt_id().as_str() != receipt_id
                 || receipt.workspace_uuid() != *workspace_uuid
+                || receipt
+                    .value
+                    .get("procedure_digest")
+                    .and_then(Value::as_str)
+                    != Some(state.snapshot().digest().as_str())
+                || receipt.value.get("placement_id").and_then(Value::as_str)
+                    != Some(graph_node_id.as_str())
+                || placement.get("delegation") != receipt.value.get("delegation")
             {
                 return Err(corrupt());
             }

@@ -1,41 +1,27 @@
-//! Procedure v2 goal revision and assessment persistence evidence.
-
-use std::{
-    os::unix::process::ExitStatusExt as _,
-    path::{Path, PathBuf},
-    process::Command,
-};
+//! Current Procedure v2 semantics and direct persistence regression evidence.
+use super::int_v2dfc008_persistence::{fixture, reject_corruption, seed};
+use rusqlite::Connection;
 
 use podway_core::{
-    ActorAttributionV2, AttemptId, AttemptLifecycle, AttemptNumberV2, AttemptValidityV2, BlockerId,
+    ActorAttributionV2, AttemptId, AttemptLifecycle, AttemptNumberV2, AttemptValidityV2,
     CanonicalProcedureJsonV1, CriterionAssessmentReasonV2, CriterionAssessmentResultV2,
     CriterionCitationV2, CriterionId, CriterionStatusV2, DecisionRecordInputV2, DecisionRecordV2,
-    DomainCommand, EvidenceReferenceSnapshotV2, GoalAssessmentRecordV2, GoalCriterionV2,
-    GoalDefinitionV2, GoalOutcome, GoalRevisionNumberV2, GoalRevisionReasonV2,
-    GoalRevisionRecordV2, GoalStatementV2, GraphNodeId, ItemId, ItemTypeV1, JobId,
-    NodeDefinitionId, OptionId, ProcedureSnapshotId, ProcedureSourceLabelV1, ReasonV2,
-    RecordedItemValueV2, ResolvedEvidenceReferenceV2, ResolvedEvidenceSetV2, Revision,
-    SessionAttemptV2, SessionId, SessionLifecycle, SessionTraceV2, Sha256Digest, TraceSequenceV2,
-    TransitionEffectV2, UnixMillis, WorkspaceId, canonicalize_json_v1,
+    EvidenceReferenceSnapshotV2, GoalAssessmentRecordV2, GoalCriterionV2, GoalDefinitionV2,
+    GoalOutcome, GoalRevisionNumberV2, GoalRevisionReasonV2, GoalRevisionRecordV2, GoalStatementV2,
+    GraphNodeId, ItemId, ItemTypeV1, NodeDefinitionId, OptionId, ProcedureSnapshotId,
+    ProcedureSourceLabelV1, ReasonV2, RecordedItemValueV2, ResolvedEvidenceReferenceV2,
+    ResolvedEvidenceSetV2, Revision, SessionAttemptV2, SessionId, SessionLifecycle, SessionTraceV2,
+    Sha256Digest, TraceSequenceV2, TransitionEffectV2, UnixMillis, WorkspaceId,
+    canonicalize_json_v1,
 };
-use podway_store::CanonicalExecutionJsonV1;
-use podway_store::schema::SQLITE_SCHEMA_VERSION_CURRENT;
 use podway_store::{
-    AdmissionSessionIdentityV1, AdmitOutcomeV1, AdmitRequestV1, AttemptCriterionAssessmentStateV2,
-    AttemptMetadataV2, AttemptWorkflowMemoryV2, CriterionAssessmentStateV2,
-    DurableWorktreeIdentityV1, EvidenceResolutionStateV2, GoalStateV2, GraphMutationErrorV2,
-    GraphNodeCounterV2, GraphSessionStateV2, IdempotencyKeyV1, ItemSlotStateV2, JobStateV1,
-    PersistedGraphMutationFailureV2, PersistedGraphTerminalOperationV2, PersistedResponseContextV1,
-    ProcedureSnapshotV2, RevisionAttemptItemPreconditionsV1, SqliteStoreOptionsV1, SqliteStoreV1,
-    StoreContractV1, StoreErrorV1, StoreFailpointActionV1, StoreFailpointV1,
-    StoreGraphMutationContractV2, StoreGraphStateContractV2, StoreIntegrityCheckV1,
-    StoreReadContractV1, StoreUnavailableReasonV1, TerminalResultV1, ValidatedWorkspaceRootV1,
-    WorkerIdV1, WorkflowMemoryStateV2,
+    AttemptCriterionAssessmentStateV2, AttemptMetadataV2, AttemptWorkflowMemoryV2,
+    CriterionAssessmentStateV2, DurableWorktreeIdentityV1, EvidenceResolutionStateV2, GoalStateV2,
+    GraphMutationErrorV2, GraphNodeCounterV2, GraphSessionStateV2, ItemSlotStateV2,
+    ProcedureSnapshotV2, WorkflowMemoryStateV2,
 };
-use rusqlite::Connection;
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use tempfile::TempDir;
 
 fn digest(nibble: char) -> Sha256Digest {
     Sha256Digest::new(format!("sha256:{}", nibble.to_string().repeat(64))).unwrap()
@@ -47,127 +33,6 @@ fn identity() -> DurableWorktreeIdentityV1 {
         WorkspaceId::new("00000000-0000-4000-8000-000000000401").unwrap(),
         digest('b'),
     )
-}
-
-fn root() -> ValidatedWorkspaceRootV1 {
-    ValidatedWorkspaceRootV1::from_path(Path::new("/tmp/podway-v2-goal-state")).unwrap()
-}
-
-fn database_path(temporary: &TempDir) -> PathBuf {
-    temporary.path().join("state.sqlite3")
-}
-
-fn open(temporary: &TempDir, options: SqliteStoreOptionsV1) -> SqliteStoreV1 {
-    SqliteStoreV1::open(
-        database_path(temporary),
-        &root(),
-        identity(),
-        options,
-        UnixMillis::new(1),
-    )
-    .unwrap()
-}
-
-const V2_ABORT_DATABASE_PATH_ENV: &str = "PODWAY_V2_GRAPH_ABORT_DATABASE_PATH";
-const V2_ABORT_CHILD_TEST: &str = "int_v2_goal_state::v2plt010_v2_graph_state_replace_abort_child";
-
-const V2_TABLES: [&str; 16] = [
-    "v2_attempts",
-    "v2_blockers",
-    "v2_criterion_assessment_results",
-    "v2_criterion_citations",
-    "v2_decision_records",
-    "v2_goal_assessments",
-    "v2_goal_criteria",
-    "v2_goal_revisions",
-    "v2_graph_node_counters",
-    "v2_graph_nodes",
-    "v2_item_slots",
-    "v2_procedure_snapshots",
-    "v2_resolved_evidence_references",
-    "v2_rework_records",
-    "v2_task_sessions",
-    "v2_workspace_state",
-];
-
-type BaseWorkspaceIdentity = (String, String, String, String, i64, i64, i64);
-type SchemaMigrationIdentity = (i64, String, String, i64);
-type BaseStoreIdentity = (BaseWorkspaceIdentity, Vec<SchemaMigrationIdentity>);
-
-fn v2_table_counts(path: &Path) -> Vec<(String, i64)> {
-    let connection = Connection::open(path).unwrap();
-    V2_TABLES
-        .iter()
-        .map(|table| {
-            let count = connection
-                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
-                    row.get(0)
-                })
-                .unwrap();
-            ((*table).to_owned(), count)
-        })
-        .collect()
-}
-
-fn base_store_identity(path: &Path) -> BaseStoreIdentity {
-    let connection = Connection::open(path).unwrap();
-    let workspace = connection
-        .query_row(
-            "SELECT workspace_uuid, git_common_fingerprint, git_worktree_fingerprint, \
-                    last_validated_root, next_workspace_sequence, created_at_ms, updated_at_ms \
-             FROM workspace_state WHERE singleton = 1",
-            [],
-            |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                    row.get(6)?,
-                ))
-            },
-        )
-        .unwrap();
-    let migrations = connection
-        .prepare(
-            "SELECT version, name, checksum, applied_at_ms \
-             FROM schema_migrations ORDER BY version",
-        )
-        .unwrap()
-        .query_map([], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
-        })
-        .unwrap()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
-    (workspace, migrations)
-}
-
-fn seed_running_workspace_job(store: &SqliteStoreV1, number: u64) {
-    let job_id = JobId::new(format!("00000000-0000-4000-8000-{number:012x}")).unwrap();
-    let request = AdmitRequestV1::new(
-        DomainCommand::WorkspaceInitialize,
-        IdempotencyKeyV1::new(format!("v2-recovery-{number}")).unwrap(),
-        job_id.clone(),
-        RevisionAttemptItemPreconditionsV1::new(None, None, None, None).unwrap(),
-        digest('d'),
-        UnixMillis::new(20),
-    );
-    assert!(matches!(
-        store.admit(&identity(), request),
-        Ok(AdmitOutcomeV1::New(_))
-    ));
-    let claimed = store
-        .claim_next(
-            &identity(),
-            WorkerIdV1::new(format!("v2-recovery-worker-{number}")).unwrap(),
-            UnixMillis::new(21),
-        )
-        .unwrap()
-        .unwrap();
-    assert_eq!(claimed.job().job_id(), &job_id);
 }
 
 fn node(value: &str) -> GraphNodeId {
@@ -735,33 +600,6 @@ fn partial_criterion_state() -> AttemptCriterionAssessmentStateV2 {
     .unwrap()
 }
 
-fn reverse_partial_criterion_state() -> AttemptCriterionAssessmentStateV2 {
-    AttemptCriterionAssessmentStateV2::new(
-        attempt_id(2),
-        GoalRevisionNumberV2::FIRST,
-        vec![criterion_result("a-safety", Vec::new())],
-    )
-    .unwrap()
-}
-
-fn reverse_complete_criterion_state() -> AttemptCriterionAssessmentStateV2 {
-    AttemptCriterionAssessmentStateV2::new(
-        attempt_id(2),
-        GoalRevisionNumberV2::FIRST,
-        vec![
-            criterion_result(
-                "z-proof",
-                vec![
-                    CriterionCitationV2::Evidence(node("clarify")),
-                    CriterionCitationV2::Item(item("assessment-note")),
-                ],
-            ),
-            criterion_result("a-safety", Vec::new()),
-        ],
-    )
-    .unwrap()
-}
-
 #[allow(clippy::too_many_arguments)]
 fn state(
     revision: u64,
@@ -825,27 +663,6 @@ fn counters(
         GraphNodeCounterV2::new(node("assess"), assess, 0),
         GraphNodeCounterV2::new(node("finish"), finish, 0),
     ]
-}
-
-fn initial_state() -> GraphSessionStateV2 {
-    state(
-        1,
-        SessionLifecycle::Running,
-        vec![attempt(
-            1,
-            "clarify",
-            1,
-            1,
-            AttemptLifecycle::Active,
-            AttemptValidityV2::Valid,
-            None,
-        )],
-        vec![AttemptMetadataV2::new(attempt_id(1), UnixMillis::new(10), None, None).unwrap()],
-        counters(1, 0, 0, 0),
-        WorkflowMemoryStateV2::new(vec![clarify_memory(1, false)], Vec::new(), Vec::new()).unwrap(),
-        GoalStateV2::empty(),
-        None,
-    )
 }
 
 fn defined_state(revision: u64, recorded: bool) -> GraphSessionStateV2 {
@@ -1015,46 +832,6 @@ fn decided_state(revision: u64, completed: bool) -> GraphSessionStateV2 {
     )
 }
 
-pub(crate) fn completed_goal_state_for_archive() -> GraphSessionStateV2 {
-    decided_state(9, true)
-}
-
-pub(crate) fn rich_v2_state_for_schema_migration() -> GraphSessionStateV2 {
-    let reworked = decided_state(9, true)
-        .manual_rework_v2(
-            Revision::new(9),
-            None,
-            node("clarify"),
-            attempt_id(4),
-            ReasonV2::new("Recheck the preserved assessment history.").unwrap(),
-            Some(ActorAttributionV2::new("migration-reviewer").unwrap()),
-            UnixMillis::new(80),
-        )
-        .unwrap()
-        .into_state();
-    let blocker = BlockerId::new("00000000-0000-4000-8000-000000000499").unwrap();
-    let blocked = reworked
-        .block_active_attempt_v2(
-            Revision::new(10),
-            &attempt_id(4),
-            blocker.clone(),
-            "Preserve this blocker through migration.",
-            UnixMillis::new(81),
-        )
-        .unwrap()
-        .into_state();
-    blocked
-        .unblock_active_attempt_v2(
-            Revision::new(11),
-            &attempt_id(4),
-            Some(&blocker),
-            false,
-            UnixMillis::new(82),
-        )
-        .unwrap()
-        .into_state()
-}
-
 fn revised_state() -> GraphSessionStateV2 {
     let clarify = clarify_memory(1, true);
     let assess = assess_memory(&clarify, true);
@@ -1144,785 +921,6 @@ fn revised_state() -> GraphSessionStateV2 {
     )
 }
 
-fn persist_through_assessment(store: &SqliteStoreV1) {
-    store
-        .create_graph_session_v2(&identity(), initial_state())
-        .unwrap();
-    store
-        .replace_graph_session_v2(
-            &identity(),
-            Revision::new(1),
-            Revision::new(1),
-            defined_state(2, false),
-        )
-        .unwrap();
-    store
-        .replace_graph_session_v2(
-            &identity(),
-            Revision::new(2),
-            Revision::new(2),
-            defined_state(3, true),
-        )
-        .unwrap();
-    store
-        .replace_graph_session_v2(
-            &identity(),
-            Revision::new(3),
-            Revision::new(3),
-            assessment_state(4, false, Vec::new()),
-        )
-        .unwrap();
-    store
-        .replace_graph_session_v2(
-            &identity(),
-            Revision::new(4),
-            Revision::new(4),
-            assessment_state(5, true, Vec::new()),
-        )
-        .unwrap();
-    store
-        .replace_graph_session_v2(
-            &identity(),
-            Revision::new(5),
-            Revision::new(5),
-            assessment_state(6, true, vec![partial_criterion_state()]),
-        )
-        .unwrap();
-    store
-        .replace_graph_session_v2(
-            &identity(),
-            Revision::new(6),
-            Revision::new(6),
-            assessment_state(7, true, vec![complete_criterion_state()]),
-        )
-        .unwrap();
-}
-
-fn persist_through_completed(store: &SqliteStoreV1) {
-    persist_through_assessment(store);
-    store
-        .replace_graph_session_v2(
-            &identity(),
-            Revision::new(7),
-            Revision::new(7),
-            decided_state(8, false),
-        )
-        .unwrap();
-    store
-        .replace_graph_session_v2(
-            &identity(),
-            Revision::new(8),
-            Revision::new(8),
-            decided_state(9, true),
-        )
-        .unwrap();
-}
-
-#[test]
-fn admission_goal_and_late_definition_round_trip_in_criterion_order() {
-    let admission = TempDir::new().unwrap();
-    let admission_store = open(&admission, SqliteStoreOptionsV1::new(8).unwrap());
-    let admission_state = defined_state(1, false);
-    admission_store
-        .create_graph_session_v2(&identity(), admission_state.clone())
-        .unwrap();
-    drop(admission_store);
-    let loaded = open(&admission, SqliteStoreOptionsV1::new(8).unwrap())
-        .read_graph_session_v2(&identity())
-        .unwrap()
-        .unwrap();
-    assert_eq!(loaded, admission_state);
-    assert_eq!(
-        loaded.goal_state().revisions()[0]
-            .criteria()
-            .criteria()
-            .iter()
-            .map(|criterion| criterion.id().as_str())
-            .collect::<Vec<_>>(),
-        vec!["z-proof", "a-safety"]
-    );
-
-    let late = TempDir::new().unwrap();
-    let late_store = open(&late, SqliteStoreOptionsV1::new(8).unwrap());
-    late_store
-        .create_graph_session_v2(&identity(), initial_state())
-        .unwrap();
-    late_store
-        .replace_graph_session_v2(
-            &identity(),
-            Revision::new(1),
-            Revision::new(1),
-            defined_state(2, false),
-        )
-        .unwrap();
-    let loaded = late_store
-        .read_graph_session_v2(&identity())
-        .unwrap()
-        .unwrap();
-    assert_eq!(loaded.workspace_revision(), Revision::new(2));
-    assert_eq!(loaded.trace().revision(), Revision::new(2));
-    assert_eq!(loaded.trace().attempts().len(), 1);
-    assert_eq!(
-        loaded.trace().active_attempt().unwrap().goal_revision(),
-        Some(GoalRevisionNumberV2::FIRST)
-    );
-    assert_eq!(loaded.counters(), counters(1, 0, 0, 0));
-}
-
-#[test]
-fn criterion_citations_final_assessment_and_reactivation_survive_reopen() {
-    let temporary = TempDir::new().unwrap();
-    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
-    persist_through_completed(&store);
-    let completed = store.read_graph_session_v2(&identity()).unwrap().unwrap();
-    assert_eq!(completed, decided_state(9, true));
-    assert_eq!(
-        completed
-            .goal_state()
-            .latest_fresh_assessment(completed.trace()),
-        completed.goal_state().assessments().first()
-    );
-    let result = &completed.goal_state().attempt_assessments()[0].results()[0];
-    assert_eq!(result.result().citations().len(), 2);
-    assert_eq!(
-        result.result().citations()[0],
-        CriterionCitationV2::Evidence(node("clarify"))
-    );
-    assert_eq!(
-        result.result().citations()[1],
-        CriterionCitationV2::Item(item("assessment-note"))
-    );
-    assert_eq!(completed.counters(), counters(1, 1, 1, 0));
-
-    store
-        .replace_graph_session_v2(
-            &identity(),
-            Revision::new(9),
-            Revision::new(9),
-            revised_state(),
-        )
-        .unwrap();
-    drop(store);
-    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
-    let revised = reopened
-        .read_graph_session_v2(&identity())
-        .unwrap()
-        .unwrap();
-    assert_eq!(revised, revised_state());
-    assert_eq!(revised.trace().attempts().len(), 4);
-    assert_eq!(revised.counters(), counters(2, 1, 1, 1));
-    assert!(
-        revised
-            .goal_state()
-            .latest_fresh_assessment(revised.trace())
-            .is_none()
-    );
-    assert_eq!(revised.goal_state().revisions().len(), 2);
-    assert_eq!(revised.goal_state().assessments().len(), 1);
-    assert_eq!(revised.goal_state().attempt_assessments().len(), 1);
-}
-
-#[test]
-fn v2drw004_completed_goal_reactivation_bit_flip_fails_reopen() {
-    let temporary = TempDir::new().unwrap();
-    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
-    store
-        .create_graph_session_v2(&identity(), revised_state())
-        .unwrap();
-    drop(store);
-
-    let connection = Connection::open(database_path(&temporary)).unwrap();
-    connection
-        .execute(
-            "UPDATE v2_goal_revisions SET reactivated = 0 WHERE goal_revision = 2",
-            [],
-        )
-        .unwrap();
-    drop(connection);
-
-    let error = match SqliteStoreV1::open(
-        database_path(&temporary),
-        &root(),
-        identity(),
-        SqliteStoreOptionsV1::new(8).unwrap(),
-        UnixMillis::new(100),
-    ) {
-        Ok(_) => panic!("completed goal reactivation bit flip must fail startup integrity"),
-        Err(error) => error,
-    };
-    assert!(matches!(
-        error,
-        StoreErrorV1::StorageIntegrityV1 {
-            check: StoreIntegrityCheckV1::SessionCursor
-        }
-    ));
-}
-
-#[test]
-fn goal_history_is_append_only_and_rewrite_failure_preserves_prior_state() {
-    let temporary = TempDir::new().unwrap();
-    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
-    store
-        .create_graph_session_v2(&identity(), initial_state())
-        .unwrap();
-    store
-        .replace_graph_session_v2(
-            &identity(),
-            Revision::new(1),
-            Revision::new(1),
-            defined_state(2, false),
-        )
-        .unwrap();
-    store
-        .replace_graph_session_v2(
-            &identity(),
-            Revision::new(2),
-            Revision::new(2),
-            defined_state(3, true),
-        )
-        .unwrap();
-    store
-        .replace_graph_session_v2(
-            &identity(),
-            Revision::new(3),
-            Revision::new(3),
-            assessment_state(4, false, Vec::new()),
-        )
-        .unwrap();
-    store
-        .replace_graph_session_v2(
-            &identity(),
-            Revision::new(4),
-            Revision::new(4),
-            assessment_state(5, true, Vec::new()),
-        )
-        .unwrap();
-    store
-        .replace_graph_session_v2(
-            &identity(),
-            Revision::new(5),
-            Revision::new(5),
-            assessment_state(6, true, vec![partial_criterion_state()]),
-        )
-        .unwrap();
-
-    store
-        .replace_graph_session_v2(
-            &identity(),
-            Revision::new(6),
-            Revision::new(6),
-            assessment_state(7, true, vec![complete_criterion_state()]),
-        )
-        .unwrap();
-
-    let base = assessment_state(8, true, vec![complete_criterion_state()]);
-    let rewritten_revision = GoalRevisionRecordV2::new(
-        GoalRevisionNumberV2::FIRST,
-        None,
-        GoalStatementV2::new("A rewritten historical goal.").unwrap(),
-        criteria(1),
-        None,
-        None,
-        false,
-        Some(ActorAttributionV2::new("planner").unwrap()),
-        TraceSequenceV2::FIRST,
-        UnixMillis::new(20),
-    )
-    .unwrap();
-    let rewritten = state(
-        8,
-        SessionLifecycle::Running,
-        base.trace().attempts().to_vec(),
-        base.attempt_metadata().to_vec(),
-        base.counters().to_vec(),
-        base.workflow_memory().clone(),
-        GoalStateV2::new(
-            Some(GoalRevisionNumberV2::FIRST),
-            vec![rewritten_revision],
-            vec![complete_criterion_state()],
-            Vec::new(),
-        )
-        .unwrap(),
-        None,
-    );
-    assert!(matches!(
-        store.replace_graph_session_v2(&identity(), Revision::new(7), Revision::new(7), rewritten),
-        Err(StoreErrorV1::InvalidStateV1(_))
-    ));
-    assert_eq!(
-        store.read_graph_session_v2(&identity()).unwrap(),
-        Some(assessment_state(7, true, vec![complete_criterion_state()]))
-    );
-}
-
-#[test]
-fn goal_revision_failpoint_rolls_back_and_corruption_fails_reopen() {
-    let temporary = TempDir::new().unwrap();
-    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
-    persist_through_completed(&store);
-    drop(store);
-
-    let failing = open(
-        &temporary,
-        SqliteStoreOptionsV1::new(8)
-            .unwrap()
-            .with_failpoint(Some(StoreFailpointV1::V2GraphStateBeforeCommit)),
-    );
-    let error = failing
-        .replace_graph_session_v2(
-            &identity(),
-            Revision::new(9),
-            Revision::new(9),
-            revised_state(),
-        )
-        .unwrap_err();
-    assert_eq!(
-        error,
-        StoreErrorV1::StorageUnavailableV1 {
-            reason: StoreUnavailableReasonV1::Recovery
-        }
-    );
-    drop(failing);
-    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
-    assert_eq!(
-        store.read_graph_session_v2(&identity()).unwrap(),
-        Some(decided_state(9, true))
-    );
-    store
-        .replace_graph_session_v2(
-            &identity(),
-            Revision::new(9),
-            Revision::new(9),
-            revised_state(),
-        )
-        .unwrap();
-    drop(store);
-
-    let connection = Connection::open(database_path(&temporary)).unwrap();
-    connection
-        .execute(
-            "UPDATE v2_task_sessions SET current_goal_revision = 1 WHERE activity = 'current'",
-            [],
-        )
-        .unwrap();
-    drop(connection);
-    assert!(
-        SqliteStoreV1::open(
-            database_path(&temporary),
-            &root(),
-            identity(),
-            SqliteStoreOptionsV1::new(8).unwrap(),
-            UnixMillis::new(100),
-        )
-        .is_err()
-    );
-}
-
-#[test]
-fn injected_storage_io_rolls_back_a_rich_goal_revision_and_retry_commits_once() {
-    let temporary = TempDir::new().unwrap();
-    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
-    persist_through_completed(&store);
-    let path = database_path(&temporary);
-    let expected = decided_state(9, true);
-    let counts_before = v2_table_counts(&path);
-    let base_before = base_store_identity(&path);
-    drop(store);
-
-    let constrained = open(
-        &temporary,
-        SqliteStoreOptionsV1::new(8)
-            .unwrap()
-            .with_failpoint(Some(StoreFailpointV1::V2GraphStateBeforeCommit))
-            .with_failpoint_action(StoreFailpointActionV1::ReturnInjectedStorageIo),
-    );
-    let error = constrained
-        .replace_graph_session_v2(
-            &identity(),
-            Revision::new(9),
-            Revision::new(9),
-            revised_state(),
-        )
-        .unwrap_err();
-    assert_eq!(
-        error,
-        StoreErrorV1::StorageUnavailableV1 {
-            reason: StoreUnavailableReasonV1::StorageIo,
-        }
-    );
-    assert_eq!(
-        constrained.read_graph_session_v2(&identity()).unwrap(),
-        Some(expected.clone())
-    );
-    assert_eq!(v2_table_counts(&path), counts_before);
-    assert_eq!(base_store_identity(&path), base_before);
-    drop(constrained);
-
-    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
-    assert_eq!(
-        reopened.read_graph_session_v2(&identity()).unwrap(),
-        Some(expected)
-    );
-    reopened
-        .replace_graph_session_v2(
-            &identity(),
-            Revision::new(9),
-            Revision::new(9),
-            revised_state(),
-        )
-        .unwrap();
-    drop(reopened);
-
-    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
-    assert_eq!(
-        reopened.read_graph_session_v2(&identity()).unwrap(),
-        Some(revised_state())
-    );
-}
-
-#[test]
-fn v2plt010_v2_graph_state_replace_abort_child() {
-    let Some(database_path) = std::env::var_os(V2_ABORT_DATABASE_PATH_ENV).map(PathBuf::from)
-    else {
-        return;
-    };
-    let store = SqliteStoreV1::open(
-        database_path,
-        &root(),
-        identity(),
-        SqliteStoreOptionsV1::new(8)
-            .unwrap()
-            .with_failpoint(Some(StoreFailpointV1::V2GraphStateBeforeCommit))
-            .with_failpoint_action(StoreFailpointActionV1::AbortProcess),
-        UnixMillis::new(100),
-    )
-    .unwrap();
-    let _ = store.replace_graph_session_v2(
-        &identity(),
-        Revision::new(9),
-        Revision::new(9),
-        revised_state(),
-    );
-    panic!("configured Procedure v2 graph-state failpoint returned instead of aborting");
-}
-
-#[test]
-fn v2plt010_process_abort_preserves_rich_v2_state_and_one_retry_commits() {
-    let temporary = TempDir::new().unwrap();
-    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
-    persist_through_completed(&store);
-    let predecessor = decided_state(9, true);
-    assert_eq!(
-        store.read_graph_session_v2(&identity()).unwrap(),
-        Some(predecessor.clone())
-    );
-    drop(store);
-
-    let output = Command::new(std::env::current_exe().unwrap())
-        .arg("--exact")
-        .arg(V2_ABORT_CHILD_TEST)
-        .arg("--nocapture")
-        .env(V2_ABORT_DATABASE_PATH_ENV, database_path(&temporary))
-        .output()
-        .unwrap();
-    assert_eq!(
-        output.status.signal(),
-        Some(6),
-        "child must abort at the v2 pre-commit seam: status={:?} stdout={} stderr={}",
-        output.status,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
-    );
-
-    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
-    assert_eq!(
-        reopened.read_graph_session_v2(&identity()).unwrap(),
-        Some(predecessor),
-        "an aborted rich replacement must expose exactly its predecessor"
-    );
-    let successor = revised_state();
-    reopened
-        .replace_graph_session_v2(
-            &identity(),
-            Revision::new(9),
-            Revision::new(9),
-            successor.clone(),
-        )
-        .unwrap();
-    assert_eq!(
-        reopened.read_graph_session_v2(&identity()).unwrap(),
-        Some(successor.clone())
-    );
-    drop(reopened);
-
-    let reopened_again = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
-    assert_eq!(
-        reopened_again
-            .startup_recovery_report()
-            .requeued_job_count(),
-        0
-    );
-    assert_eq!(
-        reopened_again.read_graph_session_v2(&identity()).unwrap(),
-        Some(successor)
-    );
-}
-
-#[test]
-fn startup_recovery_preserves_rich_v2_state_across_recovery_commit_boundaries() {
-    for (number, failpoint, expected_requeued_after_retry) in [
-        (501, StoreFailpointV1::RecoveryBeforeCommit, 1),
-        (502, StoreFailpointV1::RecoveryAfterCommitBeforeReturn, 0),
-    ] {
-        let temporary = TempDir::new().unwrap();
-        let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
-        persist_through_completed(&store);
-        seed_running_workspace_job(&store, number);
-        let expected = decided_state(9, true);
-        assert_eq!(
-            store.read_graph_session_v2(&identity()).unwrap(),
-            Some(expected.clone())
-        );
-        drop(store);
-
-        let failed = SqliteStoreV1::open(
-            database_path(&temporary),
-            &root(),
-            identity(),
-            SqliteStoreOptionsV1::new(8)
-                .unwrap()
-                .with_failpoint(Some(failpoint)),
-            UnixMillis::new(22),
-        );
-        assert!(matches!(
-            failed,
-            Err(StoreErrorV1::StorageUnavailableV1 {
-                reason: StoreUnavailableReasonV1::Recovery,
-            })
-        ));
-
-        let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
-        assert_eq!(
-            reopened.startup_recovery_report().requeued_job_count(),
-            expected_requeued_after_retry
-        );
-        assert_eq!(
-            reopened.read_graph_session_v2(&identity()).unwrap(),
-            Some(expected.clone())
-        );
-        let view = reopened.read_workspace_view(&identity()).unwrap();
-        assert_eq!(view.queued_job_count(), 1);
-        assert!(view.running_job_id().is_none());
-        drop(reopened);
-
-        let reopened_again = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
-        assert_eq!(
-            reopened_again
-                .startup_recovery_report()
-                .requeued_job_count(),
-            0
-        );
-        assert_eq!(
-            reopened_again.read_graph_session_v2(&identity()).unwrap(),
-            Some(expected)
-        );
-    }
-}
-
-#[test]
-fn v2_session_reset_is_revision_checked_atomic_and_complete() {
-    let temporary = TempDir::new().unwrap();
-    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
-    persist_through_completed(&store);
-    let expected = decided_state(9, true);
-    let path = database_path(&temporary);
-    let counts_before = v2_table_counts(&path);
-    let base_before = base_store_identity(&path);
-
-    assert_eq!(
-        store.clear_graph_session_v2(&identity(), Revision::new(8), Revision::new(9)),
-        Err(StoreErrorV1::PreconditionConflictV1 {
-            expected: Some(Revision::new(8)),
-            actual: Some(Revision::new(9)),
-        })
-    );
-    assert_eq!(v2_table_counts(&path), counts_before);
-    assert_eq!(
-        store.read_graph_session_v2(&identity()).unwrap(),
-        Some(expected.clone())
-    );
-
-    assert_eq!(
-        store.clear_graph_session_v2(&identity(), Revision::new(9), Revision::new(8)),
-        Err(StoreErrorV1::PreconditionConflictV1 {
-            expected: Some(Revision::new(8)),
-            actual: Some(Revision::new(9)),
-        })
-    );
-    assert_eq!(v2_table_counts(&path), counts_before);
-    assert_eq!(
-        store.read_graph_session_v2(&identity()).unwrap(),
-        Some(expected.clone())
-    );
-    drop(store);
-
-    let failing = open(
-        &temporary,
-        SqliteStoreOptionsV1::new(8)
-            .unwrap()
-            .with_failpoint(Some(StoreFailpointV1::V2GraphStateBeforeCommit)),
-    );
-    assert_eq!(
-        failing.clear_graph_session_v2(&identity(), Revision::new(9), Revision::new(9)),
-        Err(StoreErrorV1::StorageUnavailableV1 {
-            reason: StoreUnavailableReasonV1::Recovery,
-        })
-    );
-    drop(failing);
-    assert_eq!(v2_table_counts(&path), counts_before);
-
-    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
-    assert_eq!(
-        reopened.read_graph_session_v2(&identity()).unwrap(),
-        Some(expected)
-    );
-    reopened
-        .clear_graph_session_v2(&identity(), Revision::new(9), Revision::new(9))
-        .unwrap();
-    assert_eq!(reopened.read_graph_session_v2(&identity()).unwrap(), None);
-    assert_eq!(
-        v2_table_counts(&path),
-        V2_TABLES
-            .iter()
-            .map(|table| ((*table).to_owned(), 0))
-            .collect::<Vec<_>>()
-    );
-    assert_eq!(base_store_identity(&path), base_before);
-    drop(reopened);
-
-    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
-    assert_eq!(reopened.read_graph_session_v2(&identity()).unwrap(), None);
-    reopened
-        .create_graph_session_v2(&identity(), initial_state())
-        .unwrap();
-    assert_eq!(
-        reopened.read_graph_session_v2(&identity()).unwrap(),
-        Some(initial_state())
-    );
-}
-
-#[test]
-fn populated_newer_schema_fails_without_changing_v2_state() {
-    let newer = TempDir::new().unwrap();
-    let store = open(&newer, SqliteStoreOptionsV1::new(8).unwrap());
-    persist_through_completed(&store);
-    drop(store);
-    let newer_path = database_path(&newer);
-    let newer_counts = v2_table_counts(&newer_path);
-    let newer_base = base_store_identity(&newer_path);
-    let connection = Connection::open(&newer_path).unwrap();
-    let newer_version = SQLITE_SCHEMA_VERSION_CURRENT + 1;
-    connection
-        .pragma_update(None, "user_version", newer_version)
-        .unwrap();
-    drop(connection);
-
-    let newer_error = match SqliteStoreV1::open(
-        newer_path.clone(),
-        &root(),
-        identity(),
-        SqliteStoreOptionsV1::new(8).unwrap(),
-        UnixMillis::new(30),
-    ) {
-        Ok(_) => panic!("a populated newer schema must not open"),
-        Err(error) => error,
-    };
-    assert_eq!(
-        newer_error,
-        StoreErrorV1::NewerStateV1 {
-            found_schema_version: newer_version,
-            supported_schema_version: SQLITE_SCHEMA_VERSION_CURRENT,
-        }
-    );
-    assert_eq!(v2_table_counts(&newer_path), newer_counts);
-    assert_eq!(base_store_identity(&newer_path), newer_base);
-    let version: i64 = Connection::open(&newer_path)
-        .unwrap()
-        .query_row("PRAGMA user_version", [], |row| row.get(0))
-        .unwrap();
-    assert_eq!(version, i64::from(newer_version));
-}
-
-#[test]
-fn reverse_recording_order_reopens_in_goal_definition_order() {
-    let temporary = TempDir::new().unwrap();
-    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
-    store
-        .create_graph_session_v2(&identity(), initial_state())
-        .unwrap();
-    store
-        .replace_graph_session_v2(
-            &identity(),
-            Revision::new(1),
-            Revision::new(1),
-            defined_state(2, false),
-        )
-        .unwrap();
-    store
-        .replace_graph_session_v2(
-            &identity(),
-            Revision::new(2),
-            Revision::new(2),
-            defined_state(3, true),
-        )
-        .unwrap();
-    store
-        .replace_graph_session_v2(
-            &identity(),
-            Revision::new(3),
-            Revision::new(3),
-            assessment_state(4, false, Vec::new()),
-        )
-        .unwrap();
-    store
-        .replace_graph_session_v2(
-            &identity(),
-            Revision::new(4),
-            Revision::new(4),
-            assessment_state(5, true, Vec::new()),
-        )
-        .unwrap();
-    store
-        .replace_graph_session_v2(
-            &identity(),
-            Revision::new(5),
-            Revision::new(5),
-            assessment_state(6, true, vec![reverse_partial_criterion_state()]),
-        )
-        .unwrap();
-    store
-        .replace_graph_session_v2(
-            &identity(),
-            Revision::new(6),
-            Revision::new(6),
-            assessment_state(7, true, vec![reverse_complete_criterion_state()]),
-        )
-        .unwrap();
-    drop(store);
-
-    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
-    let loaded = reopened
-        .read_graph_session_v2(&identity())
-        .unwrap()
-        .unwrap();
-    let ids = loaded.goal_state().attempt_assessments()[0]
-        .results()
-        .iter()
-        .map(|state| state.result().criterion_id().as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(ids, vec!["z-proof", "a-safety"]);
-}
-
 #[test]
 fn criterion_mutation_is_cursor_stable_and_normalizes_reverse_call_order() {
     let initial = assessment_state(5, true, Vec::new());
@@ -2008,55 +1006,6 @@ fn criterion_mutation_is_cursor_stable_and_normalizes_reverse_call_order() {
 }
 
 #[test]
-fn criterion_mutation_persists_attribution_and_citations_atomically() {
-    let temporary = TempDir::new().unwrap();
-    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
-    let initial = assessment_state(5, true, Vec::new());
-    store
-        .create_graph_session_v2(&identity(), initial.clone())
-        .unwrap();
-    let assessment = criterion_result_at(
-        "z-proof",
-        CriterionStatusV2::Satisfied,
-        vec![
-            CriterionCitationV2::Evidence(node("clarify")),
-            CriterionCitationV2::Item(item("assessment-note")),
-        ],
-        40,
-    );
-    let next = initial
-        .assess_goal_criterion_v2(
-            Revision::new(5),
-            &attempt_id(2),
-            GoalRevisionNumberV2::FIRST,
-            assessment.result().clone(),
-            assessment.actor().cloned(),
-            assessment.recorded_at(),
-        )
-        .unwrap()
-        .into_state();
-    store
-        .replace_graph_session_v2(
-            &identity(),
-            Revision::new(5),
-            Revision::new(5),
-            next.clone(),
-        )
-        .unwrap();
-    drop(store);
-
-    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
-    let loaded = reopened
-        .read_graph_session_v2(&identity())
-        .unwrap()
-        .unwrap();
-    assert_eq!(loaded, next);
-    let result = &loaded.goal_state().attempt_assessments()[0].results()[0];
-    assert_eq!(result.actor(), assessment.actor());
-    assert_eq!(result.result().citations(), assessment.result().citations());
-}
-
-#[test]
 fn goal_assessment_decision_requires_complete_results_and_the_derived_outcome() {
     let incomplete = assessment_state(6, true, vec![partial_criterion_state()]);
     assert_eq!(
@@ -2139,183 +1088,6 @@ fn goal_assessment_decision_requires_complete_results_and_the_derived_outcome() 
 }
 
 #[test]
-fn legacy_v9_goal_assessment_failure_receipt_recomputes_and_survives_reopen() {
-    let temporary = TempDir::new().unwrap();
-    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
-    let current = assessment_state(7, true, vec![complete_criterion_state()]);
-    store
-        .create_graph_session_v2(&identity(), current.clone())
-        .unwrap();
-    let active = current.trace().active_attempt().unwrap();
-    let execution = CanonicalExecutionJsonV1::new(
-        canonicalize_json_v1(&json!({
-            "command":"session.decide",
-            "execution_version":9,
-            "fresh_attempt_id":attempt_id(3),
-            "payload":{
-                "actor":null,
-                "option_id":"achieved",
-                "reason":"Every criterion is satisfied."
-            },
-            "preconditions":{
-                "attempt_id":active.attempt_id(),
-                "session_id":current.trace().session_id(),
-                "session_revision":current.trace().revision().get()
-            },
-            "selector":{},
-            "workspace_id":identity().workspace_uuid()
-        }))
-        .unwrap(),
-    )
-    .unwrap();
-    let job_id = JobId::new("00000000-0000-4000-8000-000000000990").unwrap();
-    let request = AdmitRequestV1::new_with_canonical_execution(
-        DomainCommand::SessionDecide,
-        IdempotencyKeyV1::new("v2gol003-legacy-v9-assessment").unwrap(),
-        job_id.clone(),
-        RevisionAttemptItemPreconditionsV1::new(
-            Some(current.trace().revision()),
-            Some(active.attempt_id().clone()),
-            None,
-            None,
-        )
-        .unwrap(),
-        digest('9'),
-        UnixMillis::new(55),
-        execution,
-    )
-    .with_procedure_v2_execution()
-    .with_session_identity(AdmissionSessionIdentityV1::Exact(
-        current.trace().session_id().clone(),
-    ))
-    .with_response_context(
-        PersistedResponseContextV1::new(
-            "00000000-0000-4000-8000-000000000991",
-            "session.decide",
-            identity().workspace_uuid().clone(),
-            "/tmp/podway-v2-goal",
-            0,
-        )
-        .unwrap(),
-    );
-    assert!(matches!(
-        store.admit(&identity(), request),
-        Ok(AdmitOutcomeV1::New(_))
-    ));
-    let claimed = store
-        .claim_next(
-            &identity(),
-            WorkerIdV1::new("v2gol003-legacy-v9-worker").unwrap(),
-            UnixMillis::new(56),
-        )
-        .unwrap()
-        .unwrap();
-    let failure = PersistedGraphMutationFailureV2::GoalAssessmentDecisionRequiresAssessment {
-        graph_node_id: node("assess"),
-    };
-    let operation = PersistedGraphTerminalOperationV2::failure(failure.clone()).unwrap();
-    store
-        .commit_graph_mutation_terminal_v2(
-            claimed.claim().clone(),
-            current.workspace_revision(),
-            current.trace().revision(),
-            None,
-            TerminalResultV1::Failure(podway_core::DomainError::InvalidState {
-                reason: "Procedure v2 graph mutation failed",
-            }),
-            operation.clone(),
-            UnixMillis::new(57),
-        )
-        .unwrap();
-    assert_eq!(
-        store.read_graph_session_v2(&identity()).unwrap(),
-        Some(current.clone())
-    );
-    let job = store.read_job(&identity(), &job_id).unwrap().unwrap();
-    assert_eq!(job.state(), JobStateV1::Failed);
-    assert_eq!(
-        job.terminal_receipt()
-            .unwrap()
-            .graph_session_projection()
-            .unwrap()
-            .operation(),
-        Some(&operation)
-    );
-    drop(store);
-
-    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
-    assert_eq!(
-        reopened.read_graph_session_v2(&identity()).unwrap(),
-        Some(current)
-    );
-    let reopened_job = reopened.read_job(&identity(), &job_id).unwrap().unwrap();
-    assert_eq!(reopened_job.state(), JobStateV1::Failed);
-    assert!(matches!(
-        reopened_job
-            .terminal_receipt()
-            .unwrap()
-            .graph_session_projection()
-            .unwrap()
-            .operation(),
-        Some(PersistedGraphTerminalOperationV2::Failure { error }) if *error == failure
-    ));
-}
-
-#[test]
-fn goal_assessment_decision_atomically_persists_the_decision_and_immutable_assessment() {
-    let temporary = TempDir::new().unwrap();
-    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
-    let initial = assessment_state(7, true, vec![complete_criterion_state()]);
-    store
-        .create_graph_session_v2(&identity(), initial.clone())
-        .unwrap();
-
-    let outcome = initial
-        .decide_active_route_with_goal_revision_v2(
-            Revision::new(7),
-            &attempt_id(2),
-            OptionId::new("achieved").unwrap(),
-            attempt_id(3),
-            Some(GoalRevisionNumberV2::FIRST),
-            Some(ReasonV2::new("Every criterion is satisfied.").unwrap()),
-            Some(ActorAttributionV2::new("reviewer").unwrap()),
-            UnixMillis::new(60),
-        )
-        .unwrap();
-    assert_eq!(outcome.state(), &decided_state(8, false));
-    let assessment = outcome.goal_assessment_record().unwrap();
-    assert_eq!(assessment.outcome(), GoalOutcome::Achieved);
-    assert_eq!(assessment.decision_attempt_id(), &attempt_id(2));
-    assert_eq!(assessment.evidence(), outcome.decision_record().evidence());
-    assert_eq!(assessment.actor(), outcome.decision_record().actor());
-    assert_eq!(
-        assessment.recorded_at(),
-        outcome.decision_record().recorded_at()
-    );
-
-    store
-        .replace_graph_session_v2(
-            &identity(),
-            Revision::new(7),
-            Revision::new(7),
-            outcome.state().clone(),
-        )
-        .unwrap();
-    drop(store);
-
-    let reopened = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
-    let loaded = reopened
-        .read_graph_session_v2(&identity())
-        .unwrap()
-        .unwrap();
-    assert_eq!(loaded, *outcome.state());
-    assert_eq!(
-        loaded.goal_state().assessments(),
-        std::slice::from_ref(assessment)
-    );
-}
-
-#[test]
 fn goal_assessment_decision_derives_all_three_outcomes_from_homogeneous_results() {
     let cases = [
         (
@@ -2359,36 +1131,6 @@ fn goal_assessment_decision_derives_all_three_outcomes_from_homogeneous_results(
             expected_outcome
         );
     }
-}
-
-#[test]
-fn goal_assessment_outcome_failure_respects_the_public_option_set_bound() {
-    let options = (0..8)
-        .map(|index| OptionId::new(format!("allowed-{index}")).unwrap())
-        .collect::<Vec<_>>();
-    assert!(
-        PersistedGraphTerminalOperationV2::failure(
-            PersistedGraphMutationFailureV2::GoalAssessmentOutcomeNotAllowed {
-                option_id: OptionId::new("selected").unwrap(),
-                determined_outcome: "achieved".to_owned(),
-                allowed_option_ids: options.clone(),
-            },
-        )
-        .is_ok()
-    );
-
-    let mut oversized = options;
-    oversized.push(OptionId::new("allowed-8").unwrap());
-    assert!(
-        PersistedGraphTerminalOperationV2::failure(
-            PersistedGraphMutationFailureV2::GoalAssessmentOutcomeNotAllowed {
-                option_id: OptionId::new("selected").unwrap(),
-                determined_outcome: "achieved".to_owned(),
-                allowed_option_ids: oversized,
-            },
-        )
-        .is_err()
-    );
 }
 
 #[test]
@@ -2507,122 +1249,6 @@ fn malformed_goal_owners_opt_out_and_timestamp_bounds_are_rejected() {
             None,
         )
         .is_err()
-    );
-}
-
-#[test]
-fn decision_assessment_failpoint_is_atomic() {
-    let temporary = TempDir::new().unwrap();
-    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
-    persist_through_assessment(&store);
-    drop(store);
-    let failing = open(
-        &temporary,
-        SqliteStoreOptionsV1::new(8)
-            .unwrap()
-            .with_failpoint(Some(StoreFailpointV1::V2GraphStateBeforeCommit)),
-    );
-    assert!(matches!(
-        failing.replace_graph_session_v2(
-            &identity(),
-            Revision::new(7),
-            Revision::new(7),
-            decided_state(8, false),
-        ),
-        Err(StoreErrorV1::StorageUnavailableV1 {
-            reason: StoreUnavailableReasonV1::Recovery
-        })
-    ));
-    drop(failing);
-    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
-    assert_eq!(
-        store.read_graph_session_v2(&identity()).unwrap(),
-        Some(assessment_state(7, true, vec![complete_criterion_state()]))
-    );
-    store
-        .replace_graph_session_v2(
-            &identity(),
-            Revision::new(7),
-            Revision::new(7),
-            decided_state(8, false),
-        )
-        .unwrap();
-    assert_eq!(
-        store.read_graph_session_v2(&identity()).unwrap(),
-        Some(decided_state(8, false))
-    );
-}
-
-#[test]
-fn fk_off_orphan_goal_rows_fail_reopen() {
-    for orphan in ["criterion", "citation"] {
-        let temporary = TempDir::new().unwrap();
-        let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
-        store
-            .create_graph_session_v2(&identity(), defined_state(1, false))
-            .unwrap();
-        drop(store);
-        let connection = Connection::open(database_path(&temporary)).unwrap();
-        connection.execute("PRAGMA foreign_keys = OFF", []).unwrap();
-        if orphan == "criterion" {
-            connection.execute(
-                "INSERT INTO v2_goal_criteria (session_id, goal_revision, criterion_id, criterion_ordinal, statement) VALUES (?1, 99, 'orphan', 0, 'Orphan criterion.')",
-                [session_id().as_str()],
-            ).unwrap();
-        } else {
-            connection.execute(
-                "INSERT INTO v2_criterion_citations (attempt_id, criterion_id, citation_ordinal, citation_kind, source_graph_node_id, item_id) VALUES (?1, 'orphan', 0, 'item', NULL, 'proof')",
-                [attempt_id(99).as_str()],
-            ).unwrap();
-        }
-        drop(connection);
-        assert!(
-            SqliteStoreV1::open(
-                database_path(&temporary),
-                &root(),
-                identity(),
-                SqliteStoreOptionsV1::new(8).unwrap(),
-                UnixMillis::new(100),
-            )
-            .is_err(),
-            "{orphan} orphan must fail startup integrity"
-        );
-    }
-}
-
-#[test]
-fn duplicate_persisted_criterion_citation_values_fail_reopen() {
-    let temporary = TempDir::new().unwrap();
-    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
-    store
-        .create_graph_session_v2(
-            &identity(),
-            assessment_state(6, true, vec![partial_criterion_state()]),
-        )
-        .unwrap();
-    drop(store);
-
-    let connection = Connection::open(database_path(&temporary)).unwrap();
-    connection
-        .execute(
-            "UPDATE v2_criterion_citations SET citation_kind = 'evidence', \
-             source_graph_node_id = 'clarify', item_id = NULL \
-             WHERE attempt_id = ?1 AND criterion_id = 'z-proof' AND citation_ordinal = 1",
-            [attempt_id(2).as_str()],
-        )
-        .unwrap();
-    drop(connection);
-
-    assert!(
-        SqliteStoreV1::open(
-            database_path(&temporary),
-            &root(),
-            identity(),
-            SqliteStoreOptionsV1::new(8).unwrap(),
-            UnixMillis::new(100),
-        )
-        .is_err(),
-        "an ordinal-distinct duplicate citation target is not a supported persisted state"
     );
 }
 
@@ -3111,14 +1737,74 @@ fn assessment_cannot_be_staled_without_a_causal_transition() {
 }
 
 #[test]
-fn assessment_digest_tamper_fails_reopen() {
-    let temporary = TempDir::new().unwrap();
-    let store = open(&temporary, SqliteStoreOptionsV1::new(8).unwrap());
-    store
-        .create_graph_session_v2(&identity(), decided_state(9, true))
+fn v2drw004_completed_goal_reactivation_bit_flip_fails_reopen() {
+    let (_temporary, store) = fixture(&identity());
+    seed(&store, &(revised_state()));
+
+    let connection = Connection::open(store.layout().database()).unwrap();
+    connection
+        .execute(
+            "UPDATE v2_goal_revisions SET reactivated = 0 WHERE goal_revision = 2",
+            [],
+        )
         .unwrap();
-    drop(store);
-    let connection = Connection::open(database_path(&temporary)).unwrap();
+    drop(connection);
+
+    reject_corruption(&store, true);
+}
+
+#[test]
+fn fk_off_orphan_goal_rows_fail_reopen() {
+    for orphan in ["criterion", "citation"] {
+        let (_temporary, store) = fixture(&identity());
+        seed(&store, &(defined_state(1, false)));
+
+        let connection = Connection::open(store.layout().database()).unwrap();
+        connection.execute("PRAGMA foreign_keys = OFF", []).unwrap();
+        if orphan == "criterion" {
+            connection.execute(
+                "INSERT INTO v2_goal_criteria (session_id, goal_revision, criterion_id, criterion_ordinal, statement) VALUES (?1, 99, 'orphan', 0, 'Orphan criterion.')",
+                [session_id().as_str()],
+            ).unwrap();
+        } else {
+            connection.execute(
+                "INSERT INTO v2_criterion_citations (attempt_id, criterion_id, citation_ordinal, citation_kind, source_graph_node_id, item_id) VALUES (?1, 'orphan', 0, 'item', NULL, 'proof')",
+                [attempt_id(99).as_str()],
+            ).unwrap();
+        }
+        drop(connection);
+        reject_corruption(&store, false);
+    }
+}
+
+#[test]
+fn duplicate_persisted_criterion_citation_values_fail_reopen() {
+    let (_temporary, store) = fixture(&identity());
+    seed(
+        &store,
+        &(assessment_state(6, true, vec![partial_criterion_state()])),
+    );
+
+    let connection = Connection::open(store.layout().database()).unwrap();
+    connection
+        .execute(
+            "UPDATE v2_criterion_citations SET citation_kind = 'evidence', \
+             source_graph_node_id = 'clarify', item_id = NULL \
+             WHERE attempt_id = ?1 AND criterion_id = 'z-proof' AND citation_ordinal = 1",
+            [attempt_id(2).as_str()],
+        )
+        .unwrap();
+    drop(connection);
+
+    reject_corruption(&store, true);
+}
+
+#[test]
+fn assessment_digest_tamper_fails_reopen() {
+    let (_temporary, store) = fixture(&identity());
+    seed(&store, &(decided_state(9, true)));
+
+    let connection = Connection::open(store.layout().database()).unwrap();
     connection
         .execute(
             "UPDATE v2_goal_assessments SET record_digest = ?1 WHERE decision_attempt_id = ?2",
@@ -3126,14 +1812,130 @@ fn assessment_digest_tamper_fails_reopen() {
         )
         .unwrap();
     drop(connection);
-    assert!(
-        SqliteStoreV1::open(
-            database_path(&temporary),
-            &root(),
-            identity(),
-            SqliteStoreOptionsV1::new(8).unwrap(),
-            UnixMillis::new(100),
+    reject_corruption(&store, true);
+}
+
+#[test]
+fn goal_revision_corruption_fails_cold_read_without_rewriting_history() {
+    let (_temporary, store) = fixture(&identity());
+    seed(&store, &revised_state());
+    let connection = Connection::open(store.layout().database()).unwrap();
+    connection
+        .execute(
+            "UPDATE v2_task_sessions SET current_goal_revision=1 WHERE activity='current'",
+            [],
         )
-        .is_err()
+        .unwrap();
+    drop(connection);
+    reject_corruption(&store, true);
+}
+
+#[test]
+fn archived_goal_history_does_not_corrupt_a_goal_enabled_successor_after_cold_reopen() {
+    use super::int_v2dfc005_direct_store::{deadline, store as cold_store};
+    use super::int_v2dfc008_persistence::archive;
+    let (_temporary, direct) = fixture(&identity());
+    let completed = decided_state(9, true);
+    seed(&direct, &completed);
+    archive(&direct, &completed, UnixMillis::new(200));
+    let successor = GraphSessionStateV2::prepared(
+        Revision::new(1),
+        "Goal-enabled successor",
+        ProcedureSnapshotV2::new(
+            ProcedureSnapshotId::new("00000000-0000-4000-8000-000000000498").unwrap(),
+            completed.snapshot().canonical_json().clone(),
+            completed.snapshot().digest().clone(),
+            ProcedureSourceLabelV1::file("goal-successor.yaml").unwrap(),
+            UnixMillis::new(300),
+        )
+        .unwrap(),
+        SessionId::new("00000000-0000-4000-8000-000000000499").unwrap(),
+        UnixMillis::new(300),
+    )
+    .unwrap();
+    seed(&direct, &successor);
+    let cold = cold_store(direct.layout().root().to_path_buf().as_path());
+    assert_eq!(
+        cold.read(deadline(), |snapshot| snapshot.current_graph())
+            .unwrap(),
+        Some(successor)
     );
+    assert_eq!(
+        cold.read(deadline(), |snapshot| snapshot
+            .archived_graph(completed.trace().session_id()))
+            .unwrap(),
+        Some(completed)
+    );
+    cold.verify_integrity(deadline()).unwrap();
+}
+
+#[test]
+fn goal_history_is_append_only_and_rewrite_failure_preserves_prior_state() {
+    use super::int_v2dfc005_direct_store::{deadline, request, success};
+    let (_temporary, direct) = fixture(&identity());
+    let prior = assessment_state(7, true, vec![complete_criterion_state()]);
+    seed(&direct, &prior);
+    let base = assessment_state(8, true, vec![complete_criterion_state()]);
+    let rewritten_revision = GoalRevisionRecordV2::new(
+        GoalRevisionNumberV2::FIRST,
+        None,
+        GoalStatementV2::new("A rewritten historical goal.").unwrap(),
+        criteria(1),
+        None,
+        None,
+        false,
+        Some(ActorAttributionV2::new("planner").unwrap()),
+        TraceSequenceV2::FIRST,
+        UnixMillis::new(20),
+    )
+    .unwrap();
+    let rewritten = state(
+        8,
+        SessionLifecycle::Running,
+        base.trace().attempts().to_vec(),
+        base.attempt_metadata().to_vec(),
+        base.counters().to_vec(),
+        base.workflow_memory().clone(),
+        GoalStateV2::new(
+            Some(GoalRevisionNumberV2::FIRST),
+            vec![rewritten_revision],
+            vec![complete_criterion_state()],
+            Vec::new(),
+        )
+        .unwrap(),
+        None,
+    );
+    let change = request("rewrite-goal-history");
+    let sequence = direct
+        .read(deadline(), |snapshot| snapshot.committed_sequence())
+        .unwrap();
+    let result = direct.mutate(
+        &change,
+        deadline(),
+        || UnixMillis::new(200),
+        |transaction| {
+            transaction.now();
+            transaction.replace_graph(
+                prior.workspace_revision(),
+                prior.trace().revision(),
+                &rewritten,
+            )?;
+            Ok(success(&change, json!({"changed":true}), transaction.now()))
+        },
+    );
+    assert!(matches!(
+        result,
+        Err(podway_store::direct_store::DirectStoreErrorV1::State(
+            podway_store::StoreErrorV1::InvalidStateV1(_)
+        ))
+    ));
+    direct
+        .read(deadline(), |snapshot| {
+            assert_eq!(snapshot.current_graph()?, Some(prior));
+            assert_eq!(snapshot.committed_sequence()?, sequence);
+            assert!(snapshot.outcome(change.key())?.is_none());
+            Ok(())
+        })
+        .unwrap();
+    direct.verify_integrity(deadline()).unwrap();
 }

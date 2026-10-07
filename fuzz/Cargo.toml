@@ -16,15 +16,15 @@ podway-core = { path = "../crates/podway-core" }
 podway-git = { path = "../crates/podway-git" }
 
 [[bin]]
-name = "frame_decoder"
-path = "fuzz_targets/frame_decoder.rs"
+name = "workspace_config"
+path = "fuzz_targets/workspace_config.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "request_envelope"
-path = "fuzz_targets/request_envelope.rs"
+name = "item_record_many"
+path = "fuzz_targets/item_record_many.rs"
 test = false
 doc = false
 bench = false
@@ -42,8 +42,8 @@ test = false
 doc = false
 bench = false
 [[bin]]
-name = "response_v2"
-path = "fuzz_targets/response_v2.rs"
+name = "output_v4"
+path = "fuzz_targets/output_v4.rs"
 test = false
 doc = false
 bench = false

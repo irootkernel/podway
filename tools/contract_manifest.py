@@ -106,12 +106,16 @@ def checked_file(root: Path, relative: Path, label: str) -> Path:
     return current
 
 
-def matching_files(root: Path, directory: str, suffix: str) -> list[str]:
+def matching_files(root: Path, directory: str, suffix: str, *, required: bool = True) -> list[str]:
     relative = normalized_path(directory, "asset directory")
     base = root
     for part in relative.parts:
         base /= part
-        if base.is_symlink() or not base.is_dir():
+        if base.is_symlink():
+            fail(f"asset directory is missing or invalid: {directory}")
+        if not base.exists() and not required:
+            return []
+        if not base.is_dir():
             fail(f"asset directory is missing or invalid: {directory}")
 
     paths: list[str] = []
@@ -132,7 +136,7 @@ def matching_files(root: Path, directory: str, suffix: str) -> list[str]:
                     fail(f"asset directory contains a non-regular entry: {displayed}")
 
     visit(base)
-    if not paths:
+    if not paths and required:
         fail(f"asset directory contains no {suffix} files: {directory}")
     return sorted(paths)
 
@@ -145,7 +149,7 @@ def expected_asset_kinds(root: Path) -> dict[str, str]:
         if re.fullmatch(r".+-v[1-9][0-9]*\.schema\.json", relative) is None:
             fail(f"schema asset is not version-named: {path}")
         assets[f"schemas/{relative}"] = "schema"
-    for path in matching_files(root, "docs/examples/json", ".json"):
+    for path in matching_files(root, "docs/examples/json", ".json", required=False):
         assets[path] = "known_answer_fixture"
     for path in matching_files(root, "tests/fixtures/contract", ".json"):
         assets[path] = "known_answer_fixture"

@@ -1,22 +1,9 @@
 # Implementation Specifications
 
-- `sqlite-v1.sql`: reference authoritative base database DDL.
-- `sqlite-v2.sql`: response-context migration for durable terminal-envelope reconstruction.
-- `sqlite-v3.sql`: parallel Procedure v2 relational state and recovery migration.
-- `sqlite-v4.sql`: v2-only migration with fail-closed legacy Procedure state rejection.
-- `sqlite-v5.sql`: prepared-session and terminal-disposition migration reservation.
-- `sqlite-v6.sql`: external check-result item discriminator migration reservation.
-- `sqlite-v7.sql`: retained inactive terminal-session migration and originally bounded archive slots.
-- `sqlite-v8.sql`: successor-linked superseded terminal-disposition migration.
-- `sqlite-v9.sql`: ordinal-keyed duplicate evidence-reference migration.
-- `sqlite-v10.sql`: live workspace runtime-mode binding migration; legacy stores migrate as production and named-mode mismatches fail before normal Store access.
-- `sqlite-v11.sql`: drop the 32-slot inactive-session archive cap while keeping unique archive slots in `1..=4294967295`.
-- `sqlite-v12.sql`: add one immutable delegation receipt per attempt without rewriting existing state.
-- `sqlite-v13.sql`: mark the canonical-path workspace identity generation; runtime migration atomically rebinds supported v12 identity hashes.
-- `launchagent.plist.template`: reference macOS user LaunchAgent.
 - `error-codes.json`: stable public error and exit-code catalog, including reserved typed-guard failures.
 - `authoring-diagnostics.json`: stable authoring-time diagnostic catalog with ambiguity-based option replacements.
-- `command-catalog.yaml`: command classification, queue behavior, and preconditions.
+- `command-catalog.yaml`: command classification, direct execution behavior, and preconditions.
+- `sqlite-v14.sql`: complete direct-store production baseline; older generations are rejected input fixtures only.
 - `state-transition-matrix.csv`: compact transition reference.
 - `canonicalization-v1.json`: machine-readable canonical JSON and Procedure normalization rules.
 
@@ -26,7 +13,7 @@ registered under `assets/schemas/`, and their durable behavior is specified in
 `docs/specs/operations/aquarium-development-service.md`.
 
 `command-catalog.yaml` records every closed result discriminator in `result_schemas`;
-multiple entries represent request-selected or detached variants. Runtime errors in
+multiple entries represent command-selected variants. Runtime errors in
 `error-codes.json` and authoring findings in `authoring-diagnostics.json` are
 separate automation namespaces. `error-codes.json` uses `details_schema` only for
 errors with a closed public detail family or a discriminated family whose typed

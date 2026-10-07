@@ -275,7 +275,7 @@ relationship between a future successor's presets and group templates is open.
 ### 5.1 Bounded evidence scale and read-back
 
 [ADR-0024](../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md)
-and the [IPC evidence paging](../specs/interfaces/ipc-protocol.md#evidence-paging)
+and the [IPC evidence paging](../specs/interfaces/json-contract.md#evidence-paging)
 specification provide current-evidence paging and response-budget foundations while
 preserving one session, cursor, and active attempt. A generation design must not
 widen its `evidence.read` route into arbitrary stale history. It needs separate
