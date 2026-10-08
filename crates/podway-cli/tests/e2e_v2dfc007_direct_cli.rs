@@ -1232,31 +1232,6 @@ fn a_sqlite_writer_bounds_contention_without_recording_a_failed_outcome() {
     ]);
     fixture.run(&["begin", "--idempotency-key", "begin"]);
     let before = fixture.run(&["status"]);
-    let writer =
-        rusqlite::Connection::open(fixture.0.join(".podway/runtime/state.sqlite3")).unwrap();
-    writer.execute_batch("BEGIN IMMEDIATE").unwrap();
-    let started = Instant::now();
-    let output = fixture.output(&[
-        "--timeout",
-        "20ms",
-        "set",
-        "scope-summary",
-        "must not commit",
-        "--idempotency-key",
-        "contended-sqlite",
-    ]);
-    assert!(started.elapsed() < Duration::from_secs(2));
-    assert_eq!(output.status.code(), Some(4), "{output:?}");
-    let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(error.as_value()["code"], "WORKSPACE_BUSY");
-    assert_eq!(error.as_value()["command"], "item.set");
-    assert_eq!(error.as_value()["retryable"], true);
-    writer.execute_batch("ROLLBACK").unwrap();
-    assert_eq!(fixture.run(&["status"])["result"], before["result"]);
-    assert_eq!(
-        fixture.run(&["outcome", "lookup", "--idempotency-key", "contended-sqlite",])["result"]["found"],
-        false
-    );
     let arguments = [
         "set",
         "scope-summary",
@@ -1274,6 +1249,24 @@ fn a_sqlite_writer_bounds_contention_without_recording_a_failed_outcome() {
         "--idempotency-key",
         "contended-sqlite",
     ];
+    let writer =
+        rusqlite::Connection::open(fixture.0.join(".podway/runtime/state.sqlite3")).unwrap();
+    writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let started = Instant::now();
+    // Original fences bypass implicit status preflight and reach the SQLite writer.
+    let output = fixture.output(&[&["--timeout", "20ms"][..], &arguments[..]].concat());
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert_eq!(output.status.code(), Some(4), "{output:?}");
+    let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(error.as_value()["code"], "WORKSPACE_BUSY");
+    assert_eq!(error.as_value()["command"], "item.set");
+    assert_eq!(error.as_value()["retryable"], true);
+    writer.execute_batch("ROLLBACK").unwrap();
+    assert_eq!(fixture.run(&["status"])["result"], before["result"]);
+    assert_eq!(
+        fixture.run(&["outcome", "lookup", "--idempotency-key", "contended-sqlite",])["result"]["found"],
+        false
+    );
     let accepted = fixture.run(&arguments);
     assert_eq!(fixture.run(&arguments), accepted);
 }
