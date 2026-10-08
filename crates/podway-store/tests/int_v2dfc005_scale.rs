@@ -1,6 +1,6 @@
 //! Mandatory production direct-Store G1/G2 workloads at grown L and 1,024 nodes.
 
-use podway_core::{ItemId, Revision, Sha256Digest, UnixMillis};
+use podway_core::{AttemptId, ItemId, Revision, Sha256Digest, UnixMillis};
 use podway_store::{
     ActiveItemMutationV2, IdempotencyKeyV1,
     direct_store::{
@@ -35,6 +35,7 @@ fn scale_process_child() {
     let output = Path::new(input["output"].as_str().unwrap());
     let direct = store(root);
     let initial = direct.prepare_graph(deadline()).unwrap().unwrap();
+    let timed = input["timed"] == true;
     let initial_session_revision = initial.graph().trace().revision().get();
     let initial_workspace_revision = initial.graph().workspace_revision().get();
     fs::write(ready, b"ready").unwrap();
@@ -46,6 +47,15 @@ fn scale_process_child() {
     let began = Instant::now();
     if input["role"] == "observer" {
         let stop = Path::new(input["stop"].as_str().unwrap());
+        let initial_item_revisions: u64 = initial
+            .graph()
+            .workflow_memory()
+            .attempts()
+            .iter()
+            .flat_map(|attempt| attempt.item_slots())
+            .map(|slot| slot.revision().get())
+            .sum();
+        let initial_attempts = initial.graph().workflow_memory().attempts().len();
         let mut reads = 0;
         while !stop.exists() {
             direct
@@ -53,15 +63,27 @@ fn scale_process_child() {
                     let view = snapshot.view(UnixMillis::new(1000))?;
                     let state = view.graph().unwrap();
                     let changes = view.sequence() - 2;
-                    let sum: u64 = state
-                        .workflow_memory()
-                        .attempts()
-                        .last()
-                        .unwrap()
-                        .item_slots()
-                        .iter()
-                        .map(|slot| slot.revision().get())
-                        .sum();
+                    let sum: u64 = if timed {
+                        let item_revisions: u64 = state
+                            .workflow_memory()
+                            .attempts()
+                            .iter()
+                            .flat_map(|attempt| attempt.item_slots())
+                            .map(|slot| slot.revision().get())
+                            .sum();
+                        item_revisions - initial_item_revisions
+                            + (state.workflow_memory().attempts().len() - initial_attempts) as u64
+                    } else {
+                        state
+                            .workflow_memory()
+                            .attempts()
+                            .last()
+                            .unwrap()
+                            .item_slots()
+                            .iter()
+                            .map(|slot| slot.revision().get())
+                            .sum()
+                    };
                     assert_eq!(sum, changes, "snapshot exposed a partial state effect");
                     assert_eq!(
                         state.trace().revision().get(),
@@ -102,17 +124,28 @@ fn scale_process_child() {
     let mut stale_preparation = 0;
     let mut clocks = 0;
     let mut completed = 0;
+    let mut completed_actions = 0;
     for index in 0..count {
-        if input["timed"] == true && Path::new(input["stop"].as_str().unwrap()).exists() {
+        if timed && Path::new(input["stop"].as_str().unwrap()).exists() {
             break;
         }
-        let value = format!("{writer}:{index:062}");
+        let value = format!(
+            "{writer}:{index:0width$}",
+            width = if timed { 4094 } else { 62 }
+        );
+        assert_eq!(value.len(), if timed { 4096 } else { 64 });
+        let completing = timed && (index + 1) % 192 == 0 && completed_actions < 36;
+        let command_name = if completing {
+            "session.complete"
+        } else {
+            "item.set"
+        };
         let digest =
             Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(value.as_bytes()))).unwrap();
         let command = DirectMutationRequestV1::new(
             IdempotencyKeyV1::new(format!("writer-{writer}-{index}")).unwrap(),
             digest,
-            "item.set",
+            command_name,
             format!("00000000-0000-4000-8{writer:03x}-{index:012x}"),
             DirectOutcomeScopeV1::Session(initial.graph().trace().session_id().clone()),
         )
@@ -131,33 +164,48 @@ fn scale_process_child() {
                 |transaction| {
                     transaction.use_prepared_graph(&prepared)?;
                     let prior = prepared.graph();
-                    let item = ItemId::new(format!("item-{writer}")).unwrap();
-                    let slot = prior
-                        .workflow_memory()
-                        .attempts()
-                        .last()
-                        .unwrap()
-                        .item_slots()
-                        .iter()
-                        .find(|slot| slot.item_id() == &item)
-                        .unwrap();
-                    assert_eq!(
-                        slot.revision(),
-                        Revision::new(index),
-                        "a rejected attempt changed item state"
-                    );
                     let now = transaction.now();
-                    let next = prior
-                        .mutate_active_item_v2(
-                            prior.trace().active_attempt().unwrap().attempt_id(),
-                            &item,
-                            slot.revision(),
-                            ActiveItemMutationV2::Set {
-                                value: value.clone(),
-                            },
-                            now,
-                        )?
-                        .into_state();
+                    let next = if completing {
+                        prior
+                            .complete_active_action_v2(
+                                prior.trace().revision(),
+                                prior.trace().active_attempt().unwrap().attempt_id(),
+                                Some(AttemptId::new(format!(
+                                    "00000000-0000-4000-a{writer:03x}-{index:012x}"
+                                )).unwrap()),
+                                now,
+                            )?
+                            .into_state()
+                    } else {
+                        let item = ItemId::new(format!("item-{writer}")).unwrap();
+                        let slot = prior
+                            .workflow_memory()
+                            .attempts()
+                            .last()
+                            .unwrap()
+                            .item_slots()
+                            .iter()
+                            .find(|slot| slot.item_id() == &item)
+                            .unwrap();
+                        if !timed {
+                            assert_eq!(
+                                slot.revision(),
+                                Revision::new(index),
+                                "a rejected attempt changed item state"
+                            );
+                        }
+                        prior
+                            .mutate_active_item_v2(
+                                prior.trace().active_attempt().unwrap().attempt_id(),
+                                &item,
+                                slot.revision(),
+                                ActiveItemMutationV2::Set {
+                                    value: value.clone(),
+                                },
+                                now,
+                            )?
+                            .into_state()
+                    };
                     transaction.replace_graph(
                         prior.workspace_revision(),
                         prior.trace().revision(),
@@ -165,7 +213,7 @@ fn scale_process_child() {
                     )?;
                     Ok(success(
                         &command,
-                        json!({"changed":true,"writer":writer,"operation":index}),
+                        json!({"changed":true,"writer":writer,"operation":index,"kind":command_name}),
                         transaction.now(),
                     ))
                 },
@@ -217,6 +265,9 @@ fn scale_process_child() {
                     assert!(replay.replayed());
                     assert_eq!(replay.outcome(), committed.outcome());
                     completed += 1;
+                    if completing {
+                        completed_actions += 1;
+                    }
                     break;
                 }
                 Err(DirectStoreErrorV1::PreparedStateChanged { .. }) => {
@@ -236,6 +287,8 @@ fn scale_process_child() {
         serde_json::to_vec_pretty(
             &json!({"writer":writer,"successes":completed,"replays":completed,
         "clock_reads":clocks,"stale_preparation":stale_preparation,"samples":samples,
+        "set_successes":completed-completed_actions,"complete_successes":completed_actions,
+        "payload_characters":if timed {4096}else{64},
         "duration_ms":began.elapsed().as_millis()}),
         )
         .unwrap(),
@@ -268,6 +321,13 @@ fn direct_ten_minute_g9_wal_bound() {
             },
         )
         .unwrap();
+    let idle = rusqlite::Connection::open(direct.layout().database()).unwrap();
+    assert_eq!(
+        idle.query_row("PRAGMA journal_mode;", [], |row| row.get::<_, String>(0))
+            .unwrap(),
+        "wal"
+    );
+    assert!(idle.is_autocommit());
     let case = evidence.join("g9-grown-l");
     fs::create_dir(&case).unwrap();
     let start = case.join("start");
@@ -321,6 +381,7 @@ fn direct_ten_minute_g9_wal_bound() {
     fs::write(&stop, b"stop").unwrap();
     let mut reports = Vec::new();
     let mut successes = 0;
+    let mut completed_actions = 0;
     for (index, child) in children.iter_mut().enumerate() {
         assert!(
             child.child.wait().unwrap().success(),
@@ -332,6 +393,16 @@ fn direct_ten_minute_g9_wal_bound() {
             let count = report["successes"].as_u64().unwrap();
             assert!(count > 0);
             assert_eq!(report["replays"].as_u64(), Some(count));
+            assert_eq!(report["payload_characters"], 4096);
+            let completions = report["complete_successes"].as_u64().unwrap();
+            assert_eq!(completions, (count / 192).min(36));
+            if seconds == 600 {
+                assert!(
+                    completions > 0,
+                    "full G9 writer never reached its required completion"
+                );
+            }
+            completed_actions += completions;
             successes += count;
         } else {
             assert!(report["reads"].as_u64().unwrap() > 0);
@@ -359,15 +430,21 @@ fn direct_ten_minute_g9_wal_bound() {
         })
         .unwrap();
     direct.verify_integrity(deadline()).unwrap();
+    assert!(idle.is_autocommit());
     fs::write(case.join("summary.json"),serde_json::to_vec_pretty(&json!({"path":"production DirectStoreV1",
-        "profile":if seconds==600 {"required"}else{"diagnostic"},"nodes":300,"completed_nodes":7,
+        "profile":if seconds==600 {"required"}else{"diagnostic"},"nodes":300,
+        "initial_completed_nodes":7,"completed_nodes":7+completed_actions,
         "writers":8,"readers":4,"duration_seconds":seconds,"active_elapsed_ms":active_elapsed_ms,"measurement_samples":samples,"successes":successes,
+        "set_successes":successes-completed_actions,"complete_successes":completed_actions,
+        "payload_characters":4096,"completion_every_attempts":192,"completion_cap_per_writer":36,
+        "idle_wal_connection_held":true,"idle_connection_autocommit":idle.is_autocommit(),
         "maximum_active_wal_bytes":maximum_wal,"post_load_wal_bytes":final_wal,
         "post_load_observation_ms":finished.elapsed().as_millis()})).unwrap()).unwrap();
     assert!(
         final_wal <= 4 * 1024 * 1024,
         "WAL remained above 4 MiB five seconds after load: {final_wal}"
     );
+    drop(idle);
 }
 
 struct OwnedChild {
