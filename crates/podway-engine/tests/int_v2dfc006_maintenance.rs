@@ -37,6 +37,66 @@ const RESPONSE: &str = "00000000-0000-4000-8000-000000000001";
 const OTHER: &str = "00000000-0000-4000-8000-000000000002";
 
 #[test]
+fn typed_removal_without_cli_authorization_uses_diagnosis_without_changing_retry_identity() {
+    use podway_engine::direct_api::{
+        DirectCommandV1, DirectRequestV1, DirectResponseV1, execute_direct_v1,
+    };
+    use podway_protocol::Rfc3339MillisV1;
+    for (fenced, force) in [(false, false), (false, true), (true, false)] {
+        let root = fixture();
+        let old = initialize(root.path());
+        let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+        let mut original = request(root.path(), "typed-remove", fenced.then_some(old));
+        original.force = force;
+        let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            remove_workspace_with_boundary_observer_v1(
+                &resolver,
+                original.clone(),
+                &Clock,
+                |boundary| {
+                    if boundary == Boundary::MarkerPublished {
+                        panic!("stop at the admitted marker");
+                    }
+                },
+            )
+            .unwrap();
+        }));
+        assert!(stopped.is_err());
+        let before = files(&root.path().join(".podway"));
+        let response = execute_direct_v1(
+            &resolver,
+            DirectRequestV1 {
+                selector: selector(root.path()),
+                expected_workspace_id: None,
+                request_id: RequestIdV1::new(OTHER).unwrap(),
+                idempotency_key: None,
+                command: DirectCommandV1::WorkspaceShow,
+                observed_at: Rfc3339MillisV1::new("2026-10-08T00:00:00.000Z").unwrap(),
+                timeout_ms: 5000,
+                deadline: deadline(),
+            },
+            &NoEffects,
+            &NoEffects,
+        )
+        .unwrap();
+        let DirectResponseV1::Failure(error) = response else {
+            panic!("ordinary read admitted");
+        };
+        assert_eq!(error.as_value()["details"]["boundary"], "removal_marker");
+        let recipe = &error.as_value()["details"]["recovery"];
+        assert_eq!(recipe["command"], "workspace.doctor");
+        assert_eq!(recipe["requires_explicit_authorization"], false);
+        assert_eq!(
+            recipe["argv"],
+            serde_json::json!(["podway", "--json", "doctor"])
+        );
+        assert_eq!(files(&root.path().join(".podway")), before);
+        remove_workspace_v1(&resolver, original, &NoEffects).unwrap();
+        assert!(!root.path().join(".podway").exists());
+    }
+}
+
+#[test]
 fn marked_removal_config_read_failure_stays_maintenance_without_opening_store() {
     use podway_engine::direct_api::{
         DirectCommandV1, DirectRequestV1, DirectResponseV1, execute_direct_v1,
@@ -45,17 +105,14 @@ fn marked_removal_config_read_failure_stays_maintenance_without_opening_store() 
     let root = fixture();
     let original = initialize(root.path());
     let base = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let mut removal = request(root.path(), "marked-config-remove", Some(original.clone()));
+    removal.force = true;
     let interrupted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        remove_workspace_with_boundary_observer_v1(
-            &base,
-            request(root.path(), "marked-config-remove", Some(original.clone())),
-            &Clock,
-            |boundary| {
-                if boundary == Boundary::MarkerPublished {
-                    panic!("isolate the admitted removal marker");
-                }
-            },
-        )
+        remove_workspace_with_boundary_observer_v1(&base, removal.clone(), &Clock, |boundary| {
+            if boundary == Boundary::MarkerPublished {
+                panic!("isolate the admitted removal marker");
+            }
+        })
         .unwrap();
     }));
     assert!(interrupted.is_err());
@@ -103,12 +160,7 @@ fn marked_removal_config_read_failure_stays_maintenance_without_opening_store() 
     assert_eq!(std::fs::read(&outside_config).unwrap(), original_config);
     std::fs::remove_file(&config).unwrap();
     std::fs::write(&config, original_config).unwrap();
-    let removed = remove_workspace_v1(
-        &base,
-        request(root.path(), "marked-config-remove", None),
-        &NoEffects,
-    )
-    .unwrap();
+    let removed = remove_workspace_v1(&base, removal, &NoEffects).unwrap();
     assert_eq!(
         removed.as_value()["result"]["workspace_uuid"],
         original.as_str()
@@ -325,12 +377,22 @@ fn reset_all_replaces_generation_and_replays_before_old_workspace_fences() {
         reset_all_v1(&resolver, input.clone(), &NoEffects, &NoEffects).unwrap(),
         output
     );
-    let mut changed = input;
-    changed.expected_workspace_id = None;
-    assert_eq!(
-        reset_all_v1(&resolver, changed, &NoEffects, &NoEffects).unwrap(),
-        output
-    );
+    for expected in [
+        None,
+        Some(WorkspaceId::new(OTHER).unwrap()),
+        Some(fresh.clone()),
+    ] {
+        let mut changed = input.clone();
+        changed.expected_workspace_id = expected;
+        assert!(matches!(
+            reset_all_v1(&resolver, changed, &NoEffects, &NoEffects),
+            Err(Error::Workspace(
+                podway_engine::direct_workspace::DirectWorkspaceErrorV1::Store(
+                    podway_store::direct_store::DirectStoreErrorV1::IdempotencyKeyReused
+                )
+            ))
+        ));
+    }
     let (_, store) = resolver
         .resolve_existing(selector(root.path()), Some(&fresh), deadline())
         .unwrap();
@@ -374,6 +436,70 @@ fn maintenance_fixture_resolves_a_symlinked_temporary_parent() {
     remove_workspace_v1(&resolver, request(&selected, "remove", Some(fresh)), &Clock).unwrap();
     assert!(!root.path().join(".podway").exists());
 }
+#[test]
+fn reset_selector_workspace_assertion_survives_replacement_and_cannot_be_dropped_or_conflicted() {
+    let root = fixture();
+    let old = initialize(root.path());
+    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let (resolved, _) = resolver
+        .resolve_existing(selector(root.path()), Some(&old), deadline())
+        .unwrap();
+    let selected = WorktreeSelectorV1::new(
+        WORKTREE_SELECTOR_VERSION_V1,
+        Some(resolved.worktree().identity().clone()),
+        selector(root.path()).path().clone(),
+    )
+    .unwrap();
+    let mut original = request(root.path(), "selector-reset", None);
+    original.selector = selected.clone();
+    let output =
+        reset_all_v1(&resolver, original.clone(), &Clock, &NativeDirectIdSourceV1).unwrap();
+    assert_eq!(
+        reset_all_v1(&resolver, original, &NoEffects, &NoEffects).unwrap(),
+        output
+    );
+    // The CLI can express the same normalized assertion with its explicit UUID flag.
+    assert_eq!(
+        reset_all_v1(
+            &resolver,
+            request(root.path(), "selector-reset", Some(old.clone())),
+            &NoEffects,
+            &NoEffects
+        )
+        .unwrap(),
+        output
+    );
+    assert!(matches!(
+        reset_all_v1(
+            &resolver,
+            request(root.path(), "selector-reset", None),
+            &NoEffects,
+            &NoEffects
+        ),
+        Err(Error::Workspace(
+            podway_engine::direct_workspace::DirectWorkspaceErrorV1::Store(
+                podway_store::direct_store::DirectStoreErrorV1::IdempotencyKeyReused
+            )
+        ))
+    ));
+    let identity = selected.durable_identity().unwrap();
+    let wrong = podway_git::DurableWorktreeIdentityV1::new_with_root_directory_fingerprint(
+        WorkspaceId::new(OTHER).unwrap(),
+        identity.common_directory_fingerprint().clone(),
+        identity.worktree_administration_fingerprint().clone(),
+        identity.root_directory_fingerprint().unwrap().clone(),
+        identity.last_validated_root().clone(),
+    );
+    let mut conflicting = request(root.path(), "selector-reset", Some(old));
+    conflicting.selector = WorktreeSelectorV1::new(
+        WORKTREE_SELECTOR_VERSION_V1,
+        Some(wrong),
+        selected.path().clone(),
+    )
+    .unwrap();
+    assert!(reset_all_v1(&resolver, conflicting, &NoEffects, &NoEffects).is_err());
+}
+
 #[test]
 fn destructive_guards_and_shared_exclusion_reject_without_clock_identifiers_or_byte_changes() {
     let root = fixture();
@@ -585,6 +711,20 @@ fn exact_reset_retry_resumes_all_owned_marker_and_private_publication_windows() 
             ),
             Err(Error::Workspace(_))
         ));
+        let before = files(&root.path().join(".podway"));
+        for changed in [None, Some(WorkspaceId::new(OTHER).unwrap())] {
+            assert!(
+                reset_all_v1(
+                    &resolver,
+                    request(root.path(), "reset", changed),
+                    &NoEffects,
+                    &NoEffects
+                )
+                .is_err(),
+                "{phase}: changed original fence"
+            );
+            assert_eq!(files(&root.path().join(".podway")), before);
+        }
         let input = request(root.path(), "reset", Some(old));
         let result = reset_all_v1(&resolver, input.clone(), &NoEffects, &NoEffects).unwrap();
         assert!(validate_daemon_free_document_v1(
@@ -621,6 +761,23 @@ fn exact_removal_retry_resumes_markers_then_absence_destroys_retention() {
             ),
             Err(Error::Workspace(_))
         ));
+        let before = files(&root.path().join(".podway"));
+        for changed in [None, Some(WorkspaceId::new(OTHER).unwrap())] {
+            assert!(
+                remove_workspace_v1(
+                    &resolver,
+                    request(root.path(), "remove", changed),
+                    &NoEffects
+                )
+                .is_err(),
+                "{phase}: changed original fence"
+            );
+            assert_eq!(files(&root.path().join(".podway")), before);
+        }
+        let mut changed_force = request(root.path(), "remove", Some(old.clone()));
+        changed_force.force = true;
+        assert!(remove_workspace_v1(&resolver, changed_force, &NoEffects).is_err());
+        assert_eq!(files(&root.path().join(".podway")), before);
         let input = request(root.path(), "remove", Some(old.clone()));
         let result = remove_workspace_v1(&resolver, input.clone(), &NoEffects).unwrap();
         assert!(validate_daemon_free_document_v1(
@@ -820,7 +977,7 @@ fn concurrent_fresh_init_after_last_marker_survives_final_removal_and_old_uuid_r
 }
 
 #[test]
-fn removal_force_is_initial_authority_and_marked_recipe_resumes_without_it() {
+fn removal_force_and_original_workspace_fence_are_required_for_exact_marker_retry() {
     use podway_engine::direct_start::{
         DirectStartCommandV1, DirectStartRequestV1, start_session_v1,
     };
@@ -872,9 +1029,20 @@ fn removal_force_is_initial_authority_and_marked_recipe_resumes_without_it() {
         })
     }));
     assert!(interrupted.is_err());
-    // Canonical recipe omits authorization flags and UUID fence; the exact intent owns them.
-    let result =
-        remove_workspace_v1(&resolver, request(root.path(), "remove", None), &NoEffects).unwrap();
+    let marked = files(&root.path().join(".podway"));
+    for (expected, force) in [
+        (None, true),
+        (Some(old.clone()), false),
+        (Some(WorkspaceId::new(OTHER).unwrap()), true),
+    ] {
+        let mut changed = request(root.path(), "remove", expected);
+        changed.force = force;
+        assert!(remove_workspace_v1(&resolver, changed, &NoEffects).is_err());
+        assert_eq!(files(&root.path().join(".podway")), marked);
+    }
+    let mut exact = request(root.path(), "remove", Some(old.clone()));
+    exact.force = true;
+    let result = remove_workspace_v1(&resolver, exact, &NoEffects).unwrap();
     assert_eq!(result.as_value()["result"]["workspace_uuid"], old.as_str());
     assert!(!root.path().join(".podway").exists());
 }

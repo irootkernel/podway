@@ -908,7 +908,11 @@
       "contract_manifest_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "created_at": "2026-10-06T00:00:00.000Z",
       "command": "workspace.reset_all",
-      "phase": "prepared"
+      "phase": "prepared",
+      "request": {
+        "workspace_uuid": "00000000-0000-4000-8000-000000000001",
+        "force": false
+      }
     },
     "podway.workspace-removal-marker/v2": {
       "schema": "podway.workspace-removal-marker/v2",
@@ -925,7 +929,11 @@
       "contract_manifest_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "created_at": "2026-10-06T00:00:00.000Z",
       "command": "workspace.remove",
-      "phase": "prepared"
+      "phase": "prepared",
+      "request": {
+        "workspace_uuid": "00000000-0000-4000-8000-000000000001",
+        "force": false
+      }
     },
     "podway.workspace-maintenance-intent-marker/v1": {
       "schema": "podway.workspace-maintenance-intent-marker/v1",
@@ -941,7 +949,11 @@
       },
       "contract_manifest_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "created_at": "2026-10-06T00:00:00.000Z",
-      "command": "workspace.reset_all"
+      "command": "workspace.reset_all",
+      "request": {
+        "workspace_uuid": "00000000-0000-4000-8000-000000000001",
+        "force": false
+      }
     },
     "podway.output/v4": {
       "schema": "podway.output/v4",

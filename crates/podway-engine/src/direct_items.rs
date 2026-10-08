@@ -113,6 +113,21 @@ pub fn record_many_v1<R: GitResolverContractV1>(
         request.deadline,
     )?;
     validate_record_many_input_bound(&request, resolved.store_identity().workspace_uuid())?;
+    if request.input.operations.is_empty() || request.input.operations.len() > 128 {
+        return Err(DirectStoreErrorV1::InvalidInput {
+            reason: "batch requires 1 through 128 operations",
+        }
+        .into());
+    }
+    let mut seen = std::collections::HashSet::new();
+    for operation in &request.input.operations {
+        if !seen.insert(&operation.item_id) {
+            return Err(DirectStoreErrorV1::InvalidInput {
+                reason: "duplicate batch item",
+            }
+            .into());
+        }
+    }
     request
         .input
         .operations
@@ -185,17 +200,10 @@ pub fn record_many_v1<R: GitResolverContractV1>(
         check_session_fences(prior, &fences.expected_session_id, fences.expected_session_revision)?;
         if prior.trace().lifecycle() != SessionLifecycle::Running { return Err(GraphMutationErrorV2::SessionNotRunning.into()); }
         check_attempt_fence(prior, &fences.expected_attempt_id)?;
-        if request.input.operations.is_empty() || request.input.operations.len() > 128 {
-            return Err(DirectStoreErrorV1::InvalidInput { reason: "batch requires 1 through 128 operations" });
-        }
         let active = prior.trace().active_attempt().ok_or(GraphMutationErrorV2::SessionNotRunning)?;
         let memory = prior.workflow_memory().attempts().iter().find(|memory| memory.attempt_id() == active.attempt_id())
             .ok_or(DirectStoreErrorV1::Unreadable)?;
-        let mut seen = std::collections::HashSet::new();
         for operation in &request.input.operations {
-            if !seen.insert(&operation.item_id) {
-                return Err(DirectStoreErrorV1::InvalidInput { reason: "duplicate batch item" });
-            }
             let slot = memory.item_slots().iter().find(|slot| slot.item_id() == &operation.item_id)
                 .ok_or_else(|| GraphMutationErrorV2::ItemNotFound { item_id: operation.item_id.clone() })?;
             if slot.revision() != operation.expected_item_revision {

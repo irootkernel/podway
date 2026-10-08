@@ -105,21 +105,42 @@
         }
       },
       "then": {
-        "properties": {
-          "recovery": {
+        "oneOf": [
+          {
             "properties": {
-              "action": {
-                "const": "resume_maintenance"
-              },
-              "command": {
-                "const": "workspace.remove"
-              },
-              "requires_explicit_authorization": {
-                "const": true
+              "recovery": {
+                "properties": {
+                  "action": {
+                    "const": "resume_maintenance"
+                  },
+                  "command": {
+                    "const": "workspace.remove"
+                  },
+                  "requires_explicit_authorization": {
+                    "const": true
+                  }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "recovery": {
+                "properties": {
+                  "action": {
+                    "const": "diagnose_workspace"
+                  },
+                  "command": {
+                    "const": "workspace.doctor"
+                  },
+                  "requires_explicit_authorization": {
+                    "const": false
+                  }
+                }
               }
             }
           }
-        }
+        ]
       }
     }
   ]

@@ -1150,31 +1150,27 @@ fn an_absent_item_reaches_the_domain_error_without_creating_an_outcome() {
 
 #[test]
 fn published_maintenance_recipes_resume_the_real_cli_with_original_identity() {
-    for removal in [false, true] {
+    for (removal, fenced, force) in [
+        (false, false, false),
+        (false, true, false),
+        (true, true, true),
+    ] {
         let fixture = Fixture::new();
         let init = fixture.run(&["init", "--idempotency-key", "init"]);
         let workspace = init["workspace"]["uuid"].as_str().unwrap();
-        let arguments = if removal {
-            vec![
-                "workspace",
-                "remove",
-                "--force",
-                "--yes",
-                "--if-workspace-uuid",
-                workspace,
-                "--idempotency-key",
-                "original-maintenance-key",
-            ]
+        let mut arguments = if removal {
+            vec!["workspace", "remove"]
         } else {
-            vec![
-                "reset",
-                "--all",
-                "--force",
-                "--yes",
-                "--idempotency-key",
-                "original-maintenance-key",
-            ]
+            vec!["reset", "--all"]
         };
+        if force {
+            arguments.push("--force");
+        }
+        arguments.push("--yes");
+        if fenced {
+            arguments.extend(["--if-workspace-uuid", workspace]);
+        }
+        arguments.extend(["--idempotency-key", "original-maintenance-key"]);
         fixture.kill_at_maintenance_boundary(&arguments, "marker-published");
         let observed = Command::new(podway_binary())
             .arg("--worktree")
@@ -1197,12 +1193,43 @@ fn published_maintenance_recipes_resume_the_real_cli_with_original_identity() {
             .iter()
             .map(|value| value.as_str().unwrap())
             .collect();
+        assert_eq!(argv, arguments);
+        let before = fixture.podway_snapshot();
+        let mut changed = arguments.clone();
+        if removal {
+            changed.remove(2);
+        } else if fenced {
+            changed.drain(3..5);
+        } else {
+            changed.splice(3..3, ["--if-workspace-uuid", workspace]);
+        }
+        let rejected = fixture.output(&changed);
+        assert_eq!(
+            rejected.status.code(),
+            Some(if removal { 2 } else { 4 }),
+            "{rejected:?}"
+        );
+        let rejected: ErrorEnvelopeV2 = serde_json::from_slice(&rejected.stdout).unwrap();
+        assert_eq!(
+            rejected.as_value()["code"],
+            if removal {
+                "REQUEST_INVALID"
+            } else {
+                "WORKSPACE_MAINTENANCE"
+            }
+        );
+        fixture.assert_podway_snapshot(&before);
         let resumed = fixture.run(&argv);
         assert_eq!(resumed["command"], recipe["command"]);
         if removal {
             assert!(!fixture.0.join(".podway").exists());
             assert!(fixture.0.join(".git/config").exists());
         } else {
+            assert_eq!(fixture.run(&arguments), resumed);
+            let rejected = fixture.output(&changed);
+            assert_eq!(rejected.status.code(), Some(2), "{rejected:?}");
+            let rejected: ErrorEnvelopeV2 = serde_json::from_slice(&rejected.stdout).unwrap();
+            assert_eq!(rejected.as_value()["code"], "IDEMPOTENCY_KEY_REUSED");
             assert_eq!(fixture.run(&arguments), resumed);
             assert_eq!(
                 fixture.run(&[

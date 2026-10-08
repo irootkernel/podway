@@ -286,17 +286,53 @@ fn error_recovery_is_bound_to_the_required_operation() {
         "podway.workspace-maintenance-details/v1",
         &removal
     ));
-    for omitted in [4..5, 6..8] {
-        let mut unfenced = removal.clone();
-        unfenced["recovery"]["argv"]
+    let mut unforced = removal.clone();
+    unforced["recovery"]["argv"]
+        .as_array_mut()
+        .unwrap()
+        .remove(4);
+    assert!(!validate_daemon_free_document_v1(
+        "podway.workspace-maintenance-details/v1",
+        &unforced
+    ));
+    for omitted in [5..6, 6..8, 8..10] {
+        let mut malformed = removal.clone();
+        malformed["recovery"]["argv"]
             .as_array_mut()
             .unwrap()
             .drain(omitted);
         assert!(!validate_daemon_free_document_v1(
             "podway.workspace-maintenance-details/v1",
-            &unfenced
+            &malformed
         ));
     }
+    let mut diagnosed = removal.clone();
+    diagnosed["recovery"] = recipe("recovery-doctor");
+    assert!(validate_daemon_free_document_v1(
+        "podway.workspace-maintenance-details/v1",
+        &diagnosed
+    ));
+    let mut fenced_reset = answers["fixtures"]["podway.workspace-maintenance-details/v1"].clone();
+    fenced_reset["recovery"]["argv"] = json!([
+        "podway",
+        "--json",
+        "reset",
+        "--all",
+        "--yes",
+        "--if-workspace-uuid",
+        "00000000-0000-4000-8000-000000000001",
+        "--idempotency-key",
+        "example-key"
+    ]);
+    assert!(validate_daemon_free_document_v1(
+        "podway.workspace-maintenance-details/v1",
+        &fenced_reset
+    ));
+    fenced_reset["recovery"]["argv"][6] = json!("not-a-uuid");
+    assert!(!validate_daemon_free_document_v1(
+        "podway.workspace-maintenance-details/v1",
+        &fenced_reset
+    ));
     let mut reset = answers["fixtures"]["podway.workspace-maintenance-details/v1"].clone();
     reset["recovery"] = recipe("recovery-refresh");
     assert!(!validate_daemon_free_document_v1(

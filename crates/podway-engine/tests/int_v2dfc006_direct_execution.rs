@@ -451,7 +451,7 @@ fn marked_reads_return_the_original_maintenance_key_without_resuming_or_writing(
             request_id: RequestIdV1::new(ORIGINAL_RESPONSE).unwrap(),
             key: IdempotencyKeyV1::new("original-maintenance-key").unwrap(),
             confirmed: true,
-            force: false,
+            force: remove,
             deadline: deadline(),
         };
         let observer = |point| {
@@ -1391,6 +1391,94 @@ fn record_many_commits_ordered_items_atomically_and_replays_after_file_loss() {
         .is_err()
     );
     assert_eq!(clock.0.load(Ordering::SeqCst), calls);
+}
+
+#[test]
+fn typed_record_many_rejects_count_and_duplicates_before_write_admission() {
+    use podway_core::{AttemptId, ItemId, Revision, SessionId};
+    use podway_engine::direct_items::{DirectRecordManyRequestV1, record_many_v1};
+    use podway_protocol::{
+        ItemRecordManyDispositionV1, ItemRecordManyOperationV1, ItemRecordManyV1,
+        ItemRecordValueV1, SessionMutationPreconditionsWireV1,
+    };
+    use podway_store::direct_store::{DirectStoreErrorV1, DirectTransactionBoundaryV1};
+    struct NoClock;
+    impl ExecutionClockV1 for NoClock {
+        fn now(&self) -> UnixMillis {
+            panic!("invalid typed batch read the mutation clock")
+        }
+    }
+    let (fixture, selector, store, _) = fixture();
+    seed_running_items(&store);
+    std::fs::write(fixture.path().join("report.txt"), "Batch evidence").unwrap();
+    let operation = |id: &str| ItemRecordManyOperationV1 {
+        item_id: ItemId::new(id).unwrap(),
+        expected_item_revision: Revision::ZERO,
+        disposition: ItemRecordManyDispositionV1::Record {
+            record: ItemRecordValueV1::Artifact {
+                path: Some("report.txt".into()),
+                reference: None,
+                digest: None,
+                size_bytes: None,
+                media_type: Some("text/plain".into()),
+            },
+        },
+    };
+    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest())
+        .with_store_boundary_observer_v1(|boundary| {
+            if boundary == DirectTransactionBoundaryV1::BeforeBegin {
+                panic!("invalid typed batch entered write admission");
+            }
+        });
+    let before = store
+        .read(deadline(), |snapshot| snapshot.current_graph())
+        .unwrap();
+    for (key, operations, expected) in [
+        ("empty", vec![], "batch requires 1 through 128 operations"),
+        (
+            "too-many",
+            (0..129).map(|i| operation(&format!("item-{i}"))).collect(),
+            "batch requires 1 through 128 operations",
+        ),
+        (
+            "duplicates",
+            vec![operation("report"), operation("report")],
+            "duplicate batch item",
+        ),
+    ] {
+        let key = IdempotencyKeyV1::new(key).unwrap();
+        let error = record_many_v1(
+            &resolver,
+            DirectRecordManyRequestV1 {
+                request_id: RequestIdV1::new(ORIGINAL_RESPONSE).unwrap(),
+                selector: selector.clone(),
+                expected_workspace_id: Some(WorkspaceId::new(WORKSPACE).unwrap()),
+                key: key.clone(),
+                deadline: deadline(),
+                input: ItemRecordManyV1 {
+                    operations,
+                    preconditions: SessionMutationPreconditionsWireV1 {
+                        expected_session_id: SessionId::new(LOOKUP_RESPONSE).unwrap(),
+                        expected_session_revision: Revision::new(1),
+                        expected_attempt_id: AttemptId::new(LOOKUP_RESPONSE).unwrap(),
+                    },
+                },
+            },
+            &NoClock,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, DirectExecutionErrorV1::Store(DirectStoreErrorV1::InvalidInput { reason }) if reason == expected)
+        );
+        store
+            .read(deadline(), |snapshot| {
+                assert_eq!(snapshot.current_graph()?, before);
+                assert_eq!(snapshot.committed_sequence()?, 2);
+                assert!(snapshot.outcome(&key)?.is_none());
+                Ok(())
+            })
+            .unwrap();
+    }
 }
 
 #[test]

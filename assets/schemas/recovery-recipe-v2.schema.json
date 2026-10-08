@@ -168,35 +168,77 @@
           "const": true
         },
         "argv": {
-          "type": "array",
-          "minItems": 7,
-          "maxItems": 7,
-          "prefixItems": [
+          "oneOf": [
             {
-              "const": "podway"
+              "type": "array",
+              "minItems": 7,
+              "maxItems": 7,
+              "prefixItems": [
+                {
+                  "const": "podway"
+                },
+                {
+                  "const": "--json"
+                },
+                {
+                  "const": "reset"
+                },
+                {
+                  "const": "--all"
+                },
+                {
+                  "const": "--yes"
+                },
+                {
+                  "const": "--idempotency-key"
+                },
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                }
+              ],
+              "items": false
             },
             {
-              "const": "--json"
-            },
-            {
-              "const": "reset"
-            },
-            {
-              "const": "--all"
-            },
-            {
-              "const": "--yes"
-            },
-            {
-              "const": "--idempotency-key"
-            },
-            {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 256
+              "type": "array",
+              "minItems": 9,
+              "maxItems": 9,
+              "prefixItems": [
+                {
+                  "const": "podway"
+                },
+                {
+                  "const": "--json"
+                },
+                {
+                  "const": "reset"
+                },
+                {
+                  "const": "--all"
+                },
+                {
+                  "const": "--yes"
+                },
+                {
+                  "const": "--if-workspace-uuid"
+                },
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "const": "--idempotency-key"
+                },
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                }
+              ],
+              "items": false
             }
-          ],
-          "items": false
+          ]
         }
       }
     },

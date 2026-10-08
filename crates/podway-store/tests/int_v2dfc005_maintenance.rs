@@ -38,6 +38,7 @@ fn marker(kind: DirectMaintenanceMarkerKindV1, phase: &str) -> DirectMaintenance
         "created_at":"1970-01-01T00:00:00.010Z","root_identity":{"root_path_bytes_base64url":"L3RtcA",
             "common_dir_identity":digest('a'),"worktree_admin_identity":digest('b')}});
     if kind != DirectMaintenanceMarkerKindV1::Intent {
+        document["request"] = json!({"workspace_uuid":null,"force":false});
         document["phase"] = json!(phase);
     }
     DirectMaintenanceMarkerV1::new(

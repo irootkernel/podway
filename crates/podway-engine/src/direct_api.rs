@@ -296,18 +296,37 @@ fn observe_maintenance<R: GitResolverContractV1>(
     )
     .map_err(|_| DirectStoreErrorV1::Unreadable)?;
     resolver.revalidate_candidate(&worktree)?;
+    let parameters = || -> Result<_, DirectExecutionErrorV1> {
+        if crate::direct_maintenance::marker_request_digest_v1(&value)?.as_str()
+            != value["request_digest"]
+                .as_str()
+                .ok_or(DirectStoreErrorV1::Unreadable)?
+        {
+            return Err(DirectStoreErrorV1::Unreadable.into());
+        }
+        let workspace = match value["request"]["workspace_uuid"].as_str() {
+            Some(uuid) => Some(WorkspaceId::new(uuid).map_err(|_| DirectStoreErrorV1::Unreadable)?),
+            None if value["request"]["workspace_uuid"].is_null() => None,
+            _ => return Err(DirectStoreErrorV1::Unreadable.into()),
+        };
+        let force = value["request"]["force"]
+            .as_bool()
+            .ok_or(DirectStoreErrorV1::Unreadable)?;
+        Ok((workspace, force))
+    };
     Ok(match value["command"].as_str() {
-        Some("workspace.reset_all") => Some(DirectMaintenanceRecoveryV1::Reset { key }),
-        Some("workspace.remove") => Some(DirectMaintenanceRecoveryV1::Removal {
-            key,
-            workspace: WorkspaceId::new(
-                value["workspace_uuid"]
-                    .as_str()
-                    .ok_or(DirectStoreErrorV1::Unreadable)?
-                    .to_owned(),
-            )
-            .map_err(|_| DirectStoreErrorV1::Unreadable)?,
-        }),
+        Some("workspace.reset_all") => {
+            let (workspace, _) = parameters()?;
+            Some(DirectMaintenanceRecoveryV1::Reset { key, workspace })
+        }
+        Some("workspace.remove") => {
+            let (workspace, force) = parameters()?;
+            Some(DirectMaintenanceRecoveryV1::Removal {
+                key,
+                workspace,
+                force,
+            })
+        }
         // Init and predecessor intents use the canonical diagnostic recipe. They
         // are never resumed by observing them or by another command.
         _ => None,

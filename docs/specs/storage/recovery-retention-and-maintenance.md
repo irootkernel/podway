@@ -53,6 +53,16 @@ Marker publication is atomic and no-clobber. Replacement/removal requires the
 exact previous marker document. Marker identities bind the original key,
 canonical request digest, response request ID, writer contract, canonical root
 and Git identities, time, command and applicable workspace UUID.
+Reset and removal markers also retain a closed `request` object containing the
+original asserted `workspace_uuid` (nullable) and semantic `force` value. Reset's
+top-level `workspace_uuid` identifies the new generation; it is not the original
+request fence. Expected and selector-derived UUID assertions normalize to one
+request fence and must agree when both are supplied. The canonical digest binds
+that fence and force value; continuation recipes reconstruct those parameters
+without adding or dropping a fence or changing removal force. Typed removal
+requests without the UUID fence or force required by the JSON CLI retain typed
+exact retry and use read-only diagnosis instead of a command that would change
+the original request.
 
 An exact supported retry resumes its own published operation. Another request,
 key, digest, writer, root, Git identity or UUID cannot adopt it. Ordinary commands

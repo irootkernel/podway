@@ -1264,7 +1264,7 @@
       {
         "id": "urn:podway:schema:recovery-recipe:v2",
         "path": "schemas/recovery-recipe-v2.schema.json",
-        "sha256": "sha256:8d1a156304bc7fe68a72397b0a7a6e8505e5a39b7ebab87423af4bcd0cd489e2"
+        "sha256": "sha256:254e20bb52c7de72e683143d703c1db28c8fb0d5ecc8457dc46bc4b40d5c9556"
       },
       {
         "id": "urn:podway:schema:revision-conflict-details:v3",
@@ -1419,12 +1419,12 @@
       {
         "id": "urn:podway:schema:workspace-maintenance-details:v1",
         "path": "schemas/workspace-maintenance-details-v1.schema.json",
-        "sha256": "sha256:15e132f55e3e1835bfcaceaa3902078dd57101ca30ad68462ad1792d44a9fb89"
+        "sha256": "sha256:3f2c16ec9876d8901c060cda4ca76e55513bd1a70ffcd96113e78a16ba873c9b"
       },
       {
         "id": "urn:podway:schema:workspace-maintenance-intent-marker:v1",
         "path": "schemas/workspace-maintenance-intent-marker-v1.schema.json",
-        "sha256": "sha256:003e917027e618e506aae629094ac7dc83880dcd7ac184a216724df0c7bc69c3"
+        "sha256": "sha256:82f27aadae01a63c07456df5256752ab5a51f8fd77e4c1b1e7daa9bd2112ecd6"
       },
       {
         "id": "urn:podway:schema:workspace-recovery-details:v2",
@@ -1434,7 +1434,7 @@
       {
         "id": "urn:podway:schema:workspace-removal-marker:v2",
         "path": "schemas/workspace-removal-marker-v2.schema.json",
-        "sha256": "sha256:3475cce70013d1c971f076c7901abcd8c39f684a5004a896f619a91f3357a84e"
+        "sha256": "sha256:4163e577badd36a6e4dc4c3e805e2b0cb5a32754f833c0d553f843814e361dc4"
       },
       {
         "id": "urn:podway:schema:workspace-removal-result:v2",
@@ -1444,7 +1444,7 @@
       {
         "id": "urn:podway:schema:workspace-reset-marker:v1",
         "path": "schemas/workspace-reset-marker-v1.schema.json",
-        "sha256": "sha256:ddbe005f0bfb3cd0d046e51bb4194cd0bbedb12cdd76534727a6929ddfbc7802"
+        "sha256": "sha256:d41a65a151b93a6c2f40527a69bb11dc3a49088d4417a0362a3572ba56cbabb3"
       },
       {
         "id": "urn:podway:schema:workspace-uuid-mismatch-details:v3",

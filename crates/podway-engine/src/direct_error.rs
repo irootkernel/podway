@@ -39,10 +39,12 @@ pub struct DirectErrorContextV1 {
 pub enum DirectMaintenanceRecoveryV1 {
     Reset {
         key: IdempotencyKeyV1,
+        workspace: Option<podway_core::WorkspaceId>,
     },
     Removal {
         key: IdempotencyKeyV1,
-        workspace: podway_core::WorkspaceId,
+        workspace: Option<podway_core::WorkspaceId>,
+        force: bool,
     },
 }
 
@@ -470,25 +472,62 @@ fn state(error: &StoreErrorV1, context: &DirectErrorContextV1) -> Presentation {
     }
 }
 
+fn maintenance_argv(
+    removal: bool,
+    key: &IdempotencyKeyV1,
+    workspace: Option<&podway_core::WorkspaceId>,
+    force: bool,
+) -> Vec<String> {
+    let mut argv = if removal {
+        vec!["podway", "--json", "workspace", "remove"]
+    } else {
+        vec!["podway", "--json", "reset", "--all"]
+    }
+    .into_iter()
+    .map(str::to_owned)
+    .collect::<Vec<_>>();
+    if force {
+        argv.push("--force".into());
+    }
+    argv.push("--yes".into());
+    if let Some(workspace) = workspace {
+        argv.extend(["--if-workspace-uuid".into(), workspace.as_str().into()]);
+    }
+    argv.extend(["--idempotency-key".into(), key.as_str().into()]);
+    argv
+}
+
 fn store(error: &DirectStoreErrorV1, context: &DirectErrorContextV1) -> Presentation {
     use DirectStoreErrorV1 as E;
     match error {
         E::NotInitialized => simple("WORKSPACE_NOT_INITIALIZED"),
         E::Maintenance => {
             let (boundary, recipe) = match &context.maintenance {
-                Some(DirectMaintenanceRecoveryV1::Reset { key }) => (
+                Some(DirectMaintenanceRecoveryV1::Reset { key, workspace }) => (
                     "reset_marker",
                     json!({
                     "action":"resume_maintenance","command":"workspace.reset_all",
-                    "argv":["podway","--json","reset","--all","--yes","--idempotency-key",key.as_str()],
+                    "argv":maintenance_argv(false,key,workspace.as_ref(),false),
                     "reason":"Resume the published reset with its original idempotency key.","requires_explicit_authorization":true}),
                 ),
-                Some(DirectMaintenanceRecoveryV1::Removal { key, workspace }) => (
+                Some(DirectMaintenanceRecoveryV1::Removal {
+                    key,
+                    workspace,
+                    force,
+                }) => (
                     "removal_marker",
-                    json!({
+                    if workspace.is_none() || !force {
+                        let mut recipe = diagnose();
+                        recipe["reason"] = json!(
+                            "The original typed removal lacks the UUID fence or force required by the JSON CLI; retry the original typed request."
+                        );
+                        recipe
+                    } else {
+                        json!({
                     "action":"resume_maintenance","command":"workspace.remove",
-                    "argv":["podway","--json","workspace","remove","--force","--yes","--if-workspace-uuid",workspace.as_str(),"--idempotency-key",key.as_str()],
-                    "reason":"Resume the published removal with its original idempotency key.","requires_explicit_authorization":true}),
+                    "argv":maintenance_argv(true,key,workspace.as_ref(),*force),
+                    "reason":"Resume the published removal with its original idempotency key.","requires_explicit_authorization":true})
+                    },
                 ),
                 None => ("maintenance_lock", diagnose()),
             };

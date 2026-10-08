@@ -6,7 +6,7 @@ use super::{
 };
 use podway_core::WorkspaceId;
 use podway_engine::{
-    direct_api::{DirectCommandV1 as D, DirectResponseV1},
+    direct_api::{DirectCommandV1 as D, DirectResponseV1, execute_direct_v1},
     direct_execution::NativeDirectIdSourceV1,
     direct_maintenance::{
         DirectMaintenanceBoundaryV1 as B, DirectMaintenanceRequestV1,
@@ -465,7 +465,7 @@ fn reset_marker_resume_accepts_an_exact_root_with_detached_git_identity() {
     let interrupted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         reset_all_with_boundary_observer_v1(
             &engine.resolver,
-            request,
+            request.clone(),
             &Clock,
             &NativeDirectIdSourceV1,
             |b| {
@@ -477,7 +477,14 @@ fn reset_marker_resume_accepts_an_exact_root_with_detached_git_identity() {
     }));
     assert!(interrupted.is_err());
     podway_store::test_support::detach_git_identity(&database).unwrap();
-    let output = engine.success(D::WorkspaceResetAll { confirmed: true }, "detached-resume");
+    let mut retry = engine.request(D::WorkspaceResetAll { confirmed: true }, "detached-resume");
+    retry.expected_workspace_id = request.expected_workspace_id;
+    let output =
+        execute_direct_v1(&engine.resolver, retry, &Clock, &NativeDirectIdSourceV1).unwrap();
+    let DirectResponseV1::Success(output) = output else {
+        panic!("exact reset retry rejected");
+    };
+    let output = output.as_value();
     assert_eq!(output["result"]["reset"], true);
     assert_eq!(
         engine.success(D::WorkspaceDoctor { deep: true }, "doctor")["result"]["healthy"],

@@ -13,6 +13,8 @@ This file records concise shipped outcomes and the planned next stable release.
 ### Fixed
 
 - Verify delegation receipt digests at the Store acceptance boundary.
+- Preserve original maintenance request fences and force in retries and recovery commands.
+- Reject invalid typed batch counts and duplicate items before preparing mutations.
 - Preserve maintenance guidance when workspace removal interrupts a configuration read.
 
 ## v0.2.12 - 2026-09-29

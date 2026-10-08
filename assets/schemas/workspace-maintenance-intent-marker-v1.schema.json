@@ -49,6 +49,30 @@
         }
       ]
     },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workspace_uuid",
+        "force"
+      ],
+      "properties": {
+        "workspace_uuid": {
+          "oneOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "force": {
+          "type": "boolean"
+        }
+      }
+    },
     "root_identity": {
       "type": "object",
       "additionalProperties": false,
@@ -90,5 +114,51 @@
         "workspace.migrate"
       ]
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "command": {
+            "enum": [
+              "workspace.reset_all",
+              "workspace.remove"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "request"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "request"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "command": {
+            "const": "workspace.reset_all"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "request": {
+            "properties": {
+              "force": {
+                "const": false
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

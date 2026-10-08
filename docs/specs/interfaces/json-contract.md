@@ -200,16 +200,23 @@ Recovery recipes are constrained by the owning error. `MUTATION_OUTCOME_UNKNOWN`
 uses read-only `outcome.lookup` with the original idempotency key; its detail,
 reconciliation field, and recovery argv must agree on that key. Lock contention
 permits only read-only state refresh or workspace diagnosis. Legacy state requires
-explicit reset-all authorization. Reset and removal markers name their respective
-resuming command, while maintenance lock, intent, and predecessor contention keep
-read-only recovery. The current Rust validator enforces agreement among keys
-in both unknown-outcome details and error envelopes.
-Maintenance recipes retain the original key. Removal recipes also include
-`--force --yes` and the validated marker's workspace UUID. Reset-all uses
-`--all --yes`; `--force` is not required by the direct reset contract. A legacy
-reset recipe includes the explicit `<new-idempotency-key>` placeholder, which
-the caller must replace with its own fresh key before execution. Producing the
-recipe never generates a key or authorizes deletion.
+explicit reset-all authorization. Reset markers name their resuming command.
+Removal markers name their resuming command when the original request has a UUID
+fence and force authority. Other typed removal requests use read-only diagnosis
+because JSON CLI removal requires both. The caller can retry that original request
+through the typed API. Maintenance lock,
+intent, and predecessor contention keep read-only recovery. The current Rust
+validator enforces agreement among keys in both unknown-outcome details and error
+envelopes.
+Maintenance recipes retain the original key and the marker's original request
+parameters. They include `--if-workspace-uuid` only when that original request
+asserted a UUID, using that UUID even after reset creates a different generation.
+Removal recipes preserve the original `--force` authority and use `--yes`.
+Reset-all uses `--all --yes`; `--force` is not required by the direct reset
+contract. A legacy reset recipe includes the explicit
+`<new-idempotency-key>` placeholder, which the caller must replace with its own
+fresh key before execution. Producing the recipe never generates a key or
+authorizes deletion.
 Retained revision, attempt, session, Procedure digest, and stale-goal/evidence
 conflicts keep read-only `session.observe` recovery. Workspace identity, Store
 state/schema, and writer-contract diagnosis keep read-only `workspace.doctor`

@@ -238,6 +238,13 @@ fn reset_inner<R: GitResolverContractV1>(
                         if let Some(outcome) = snapshot.outcome(&request.key)? {
                             if outcome.digest() != &digest
                                 || outcome.command() != "workspace.reset_all"
+                                || request
+                                    .expected_workspace_id
+                                    .as_ref()
+                                    .zip(request.selector.durable_identity())
+                                    .is_some_and(|(expected, selected)| {
+                                        expected != selected.workspace_id()
+                                    })
                             {
                                 return Err(DirectStoreErrorV1::IdempotencyKeyReused);
                             }
@@ -778,9 +785,25 @@ fn identity(
     request: &DirectMaintenanceRequestV1,
     worktree: &ValidatedWorktreeV1,
 ) -> Result<Sha256Digest, DirectStoreErrorV1> {
+    marker_request_digest_v1(&serde_json::json!({"command":command,
+        "root_identity":root_identity(worktree),"request":request_parameters(request)}))
+}
+
+fn request_parameters(request: &DirectMaintenanceRequestV1) -> serde_json::Value {
+    let selector_workspace = request
+        .selector
+        .durable_identity()
+        .map(|i| i.workspace_id());
+    serde_json::json!({"workspace_uuid":request.expected_workspace_id.as_ref().or(selector_workspace),
+        "force":request.force})
+}
+
+pub(crate) fn marker_request_digest_v1(
+    value: &serde_json::Value,
+) -> Result<Sha256Digest, DirectStoreErrorV1> {
     let canonical = canonicalize_json_v1(
-        &serde_json::json!({"command":command,"root_identity":root_identity(worktree),
-        "confirmed":request.confirmed}),
+        &serde_json::json!({"command":value["command"],"root_identity":value["root_identity"],
+        "confirmed":true,"request":value["request"]}),
     )
     .map_err(|_| DirectStoreErrorV1::Unreadable)?;
     Ok(
@@ -808,6 +831,7 @@ fn make_marker(
     };
     let mut value = serde_json::json!({"schema":schema,"operation_id":response,"idempotency_key":request.key.as_str(),
         "request_digest":digest,"response_request_id":response,"workspace_uuid":uuid,
+        "request":request_parameters(request),
         "root_identity":root_identity(worktree),"contract_manifest_digest":manifest,
         "created_at":Rfc3339MillisV1::from_unix_millis(now.get())?,"command":command});
     if let Some(phase) = phase {
@@ -842,8 +866,20 @@ fn validate_marker(
         || value["command"] != command
         || value["root_identity"] != root_identity(worktree)
         || value["contract_manifest_digest"] != manifest.as_str()
-        || value["request_digest"] != digest.as_str()
         || value["idempotency_key"] != request.key.as_str()
+    {
+        return Err(DirectStoreErrorV1::Maintenance.into());
+    }
+    let fence = if command == "workspace.remove" {
+        &value["workspace_uuid"]
+    } else {
+        &value["request"]["workspace_uuid"]
+    };
+    if let Some(uuid) = fence.as_str() {
+        let uuid = WorkspaceId::new(uuid).map_err(|_| DirectStoreErrorV1::Unreadable)?;
+        guard_workspace(request, &uuid)?;
+    }
+    if value["request_digest"] != digest.as_str() || value["request"] != request_parameters(request)
     {
         return Err(DirectStoreErrorV1::Maintenance.into());
     }

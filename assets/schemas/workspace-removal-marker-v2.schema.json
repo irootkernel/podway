@@ -12,6 +12,7 @@
     "request_digest",
     "response_request_id",
     "workspace_uuid",
+    "request",
     "root_identity",
     "contract_manifest_digest",
     "created_at",
@@ -49,6 +50,30 @@
           "type": "null"
         }
       ]
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workspace_uuid",
+        "force"
+      ],
+      "properties": {
+        "workspace_uuid": {
+          "oneOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "force": {
+          "type": "boolean"
+        }
+      }
     },
     "root_identity": {
       "type": "object",
