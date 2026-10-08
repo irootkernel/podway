@@ -37,6 +37,86 @@ const RESPONSE: &str = "00000000-0000-4000-8000-000000000001";
 const OTHER: &str = "00000000-0000-4000-8000-000000000002";
 
 #[test]
+fn marked_removal_config_read_failure_stays_maintenance_without_opening_store() {
+    use podway_engine::direct_api::{
+        DirectCommandV1, DirectRequestV1, DirectResponseV1, execute_direct_v1,
+    };
+    use podway_protocol::Rfc3339MillisV1;
+    let root = fixture();
+    let original = initialize(root.path());
+    let base = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let interrupted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        remove_workspace_with_boundary_observer_v1(
+            &base,
+            request(root.path(), "marked-config-remove", Some(original.clone())),
+            &Clock,
+            |boundary| {
+                if boundary == Boundary::MarkerPublished {
+                    panic!("isolate the admitted removal marker");
+                }
+            },
+        )
+        .unwrap();
+    }));
+    assert!(interrupted.is_err());
+    let config = root.path().join(".podway/config.yaml");
+    let original_config = std::fs::read(&config).unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let outside_config = outside.path().join("config.yaml");
+    std::fs::write(&outside_config, &original_config).unwrap();
+    std::fs::remove_file(&config).unwrap();
+    std::os::unix::fs::symlink(&outside_config, &config).unwrap();
+    let before = files(&root.path().join(".podway"));
+    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest())
+        .with_store_boundary_observer_v1(|_| panic!("marked config failure opened Store"));
+    let response = execute_direct_v1(
+        &resolver,
+        DirectRequestV1 {
+            selector: selector(root.path()),
+            expected_workspace_id: None,
+            request_id: RequestIdV1::new(OTHER).unwrap(),
+            idempotency_key: None,
+            command: DirectCommandV1::WorkspaceShow,
+            observed_at: Rfc3339MillisV1::new("2026-10-08T00:00:00.000Z").unwrap(),
+            timeout_ms: 5000,
+            deadline: deadline(),
+        },
+        &NoEffects,
+        &NoEffects,
+    )
+    .unwrap();
+    let DirectResponseV1::Failure(error) = response else {
+        panic!("marked config failure admitted an ordinary read");
+    };
+    let value = error.as_value();
+    assert_eq!(value["code"], "WORKSPACE_MAINTENANCE");
+    assert_eq!(value["details"]["boundary"], "removal_marker");
+    assert_eq!(
+        value["details"]["recovery"]["argv"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap(),
+        "marked-config-remove"
+    );
+    assert_eq!(files(&root.path().join(".podway")), before);
+    assert_eq!(std::fs::read(&outside_config).unwrap(), original_config);
+    std::fs::remove_file(&config).unwrap();
+    std::fs::write(&config, original_config).unwrap();
+    let removed = remove_workspace_v1(
+        &base,
+        request(root.path(), "marked-config-remove", None),
+        &NoEffects,
+    )
+    .unwrap();
+    assert_eq!(
+        removed.as_value()["result"]["workspace_uuid"],
+        original.as_str()
+    );
+    assert!(!root.path().join(".podway").exists());
+}
+
+#[test]
 fn qualified_retirement_observer_reads_the_actual_generation_under_its_native_lease() {
     use podway_engine::direct_maintenance::{
         remove_workspace_with_lease_observers_v1, reset_all_with_lease_observers_v1,

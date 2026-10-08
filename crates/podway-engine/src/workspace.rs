@@ -41,7 +41,10 @@ use podway_git::{
 use podway_store::{
     DurableWorktreeIdentityV1 as StoreWorktreeIdentityV1, StoreValueErrorV1,
     ValidatedWorkspaceRootV1, WorkspaceBindingV1,
-    direct_store::{DirectStoreErrorV1, DirectStoreV1, DirectWorkspaceLayoutV1},
+    direct_store::{
+        DirectStoreClassificationV1, DirectStoreErrorV1, DirectStoreV1, DirectWorkspaceLayoutV1,
+        classify_direct_store_v1,
+    },
 };
 
 const STATE_DATABASE_FILE_NAME_V1: &str = "state.sqlite3";
@@ -1275,9 +1278,19 @@ impl<R: GitResolverContractV1> DirectWorkspaceResolverV1<R> {
             error
         })?;
         require_candidate_identity(&preliminary)?;
-        self.validate_workspace_config(&preliminary)?;
-        let database_path = database_path_from_worktree(&preliminary)?;
         let layout = DirectWorkspaceLayoutV1::new(store_root_from_worktree(&preliminary)?)?;
+        if let Err(error) = self.validate_workspace_config(&preliminary) {
+            // Removal can invalidate a config read while its marker still owns admission.
+            // Classify without opening SQLite; unmarked invalid config remains rejected.
+            if matches!(
+                classify_direct_store_v1(&layout),
+                Ok(DirectStoreClassificationV1::Maintenance)
+            ) {
+                return Err(DirectStoreErrorV1::Maintenance.into());
+            }
+            return Err(error.into());
+        }
+        let database_path = database_path_from_worktree(&preliminary)?;
         let store = DirectStoreV1::new(
             layout,
             self.manifest.clone(),

@@ -10,6 +10,10 @@ This file records concise shipped outcomes and the planned next stable release.
   and return replacement guidance for retired commands and explicit reset
   guidance for legacy workspaces.
 
+### Fixed
+
+- Preserve maintenance guidance when workspace removal interrupts a configuration read.
+
 ## v0.2.12 - 2026-09-29
 
 ### Added
