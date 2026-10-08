@@ -12,6 +12,7 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ### Fixed
 
+- Honor consumer-attempt fences on the first evidence page and its continuations.
 - Resume maintenance with original idempotency keys that begin with a hyphen.
 - Verify delegation receipt digests at the Store acceptance boundary.
 - Preserve original maintenance request fences and force in retries and recovery commands.

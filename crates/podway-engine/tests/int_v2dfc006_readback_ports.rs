@@ -189,6 +189,9 @@ fn query_request(
         "evidence.read" => DirectReadCommandV1::Evidence {
             source: GraphNodeId::new(payload["source"].as_str().unwrap()).unwrap(),
             item_id: ItemId::new(payload["item_id"].as_str().unwrap()).unwrap(),
+            expected_consumer_attempt_id: payload
+                .get("expected_consumer_attempt_id")
+                .map(|value| AttemptId::new(value.as_str().unwrap()).unwrap()),
             token: payload
                 .get("page_token")
                 .map(|value| EvidencePageTokenV1::decode(value.as_str().unwrap()).unwrap()),
@@ -723,12 +726,19 @@ mod decisions {
         assert_eq!(completed["to_graph_node_id"], "review");
 
         // The route answers through typed direct execution, not only through the projection helper.
+        let consumer_attempt = engine
+            .graph()
+            .trace()
+            .active_attempt()
+            .unwrap()
+            .attempt_id()
+            .clone();
         let page = query(
             &engine,
             &session_id,
             &mut number,
             "evidence.read",
-            json!({"source": "work", "item_id": "result"})
+            json!({"source": "work", "item_id": "result", "expected_consumer_attempt_id": consumer_attempt})
                 .as_object()
                 .unwrap()
                 .clone(),
@@ -797,6 +807,33 @@ mod decisions {
         set_item(&engine, &session_id, &mut number, "result", &wide);
         let completed = complete(&engine, &session_id, &mut number);
         assert_eq!(completed["to_graph_node_id"], "review");
+
+        // A first-page read must reject an old consumer even when its source/item is still declared.
+        let request = query_request(
+            next_number(&mut number), "evidence.read", &engine, &session_id,
+            json!({"source":"work","item_id":"result","expected_consumer_attempt_id":consumer_attempt})
+                .as_object().unwrap().clone(),
+        );
+        let DirectResponseV1::Failure(error) = dispatch(&engine, &request) else {
+            panic!("expected stale consumer refusal");
+        };
+        let error = error.into_value();
+        assert_eq!(error["code"], "ATTEMPT_NOT_CURRENT");
+        assert_eq!(error["exit_code"], 4);
+        assert_eq!(
+            error["details"]["expected_attempt_id"],
+            consumer_attempt.as_str()
+        );
+        assert_eq!(
+            error["details"]["actual_attempt_id"],
+            engine
+                .graph()
+                .trace()
+                .active_attempt()
+                .unwrap()
+                .attempt_id()
+                .as_str()
+        );
 
         let first_wide = query(
             &engine,

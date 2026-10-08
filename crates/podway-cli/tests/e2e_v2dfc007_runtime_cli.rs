@@ -387,6 +387,10 @@ fn evidence_continuations_preserve_unicode_pages_and_rework_invalidates_old_toke
         let session = before["result"]["status"]["session"]["id"]
             .as_str()
             .unwrap();
+        let consumer_attempt = before["result"]["status"]["current"]["attempt"]["attempt_id"]
+            .as_str()
+            .unwrap();
+        let workspace = before["workspace"]["uuid"].as_str().unwrap();
         let first = fixture.run(&[
             "evidence",
             "read",
@@ -394,8 +398,12 @@ fn evidence_continuations_preserve_unicode_pages_and_rework_invalidates_old_toke
             "work",
             "--item",
             "result",
+            "--if-workspace-uuid",
+            workspace,
             "--if-session-id",
             session,
+            "--if-attempt",
+            consumer_attempt,
         ]);
         assert_eq!(first["result"]["total_size"], 50_000);
         assert_eq!(first["result"]["truncated"], true);
@@ -409,6 +417,8 @@ fn evidence_continuations_preserve_unicode_pages_and_rework_invalidates_old_toke
             "result",
             "--page-token",
             token,
+            "--if-attempt",
+            consumer_attempt,
         ]);
         assert_eq!(next["result"]["page"]["offset"], 43_690);
         assert_eq!(next["result"]["truncated"], false);
@@ -421,6 +431,26 @@ fn evidence_continuations_preserve_unicode_pages_and_rework_invalidates_old_toke
             ),
             wide
         );
+        assert_eq!(fixture.run(&["observe"])["result"], before["result"]);
+        let invalid_revision = fixture.output(&[
+            "evidence",
+            "read",
+            "--source",
+            "work",
+            "--item",
+            "result",
+            "--if-attempt",
+            consumer_attempt,
+            "--if-session-revision",
+            "0",
+        ]);
+        assert_eq!(
+            invalid_revision.status.code(),
+            Some(2),
+            "{invalid_revision:?}"
+        );
+        let error: ErrorEnvelopeV2 = serde_json::from_slice(&invalid_revision.stdout).unwrap();
+        assert_eq!(error.as_value()["code"], "REQUEST_INVALID");
         assert_eq!(fixture.run(&["observe"])["result"], before["result"]);
         transition(
             &fixture,
@@ -451,6 +481,30 @@ fn evidence_continuations_preserve_unicode_pages_and_rework_invalidates_old_toke
         ]);
         fixture.run(&["complete", "--idempotency-key", "replacement-complete"]);
         let before = fixture.run(&["observe"]);
+        let stale_first = fixture.output(&[
+            "evidence",
+            "read",
+            "--source",
+            "work",
+            "--item",
+            "result",
+            "--if-session-id",
+            session,
+            "--if-attempt",
+            consumer_attempt,
+        ]);
+        assert_eq!(stale_first.status.code(), Some(4), "{stale_first:?}");
+        let error: ErrorEnvelopeV2 = serde_json::from_slice(&stale_first.stdout).unwrap();
+        assert_eq!(error.as_value()["code"], "ATTEMPT_NOT_CURRENT");
+        assert_eq!(
+            error.as_value()["details"]["expected_attempt_id"],
+            consumer_attempt
+        );
+        assert_eq!(
+            error.as_value()["details"]["actual_attempt_id"],
+            before["result"]["status"]["current"]["attempt"]["attempt_id"]
+        );
+        assert_eq!(fixture.run(&["observe"])["result"], before["result"]);
         let stale = fixture.output(&[
             "evidence",
             "read",

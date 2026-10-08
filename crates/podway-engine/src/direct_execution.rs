@@ -500,6 +500,7 @@ pub enum DirectReadCommandV1 {
         source: GraphNodeId,
         item_id: ItemId,
         token: Option<EvidencePageTokenV1>,
+        expected_consumer_attempt_id: Option<AttemptId>,
     },
     DelegationPackage,
 }
@@ -591,7 +592,19 @@ pub fn execute_read_v1<R: GitResolverContractV1>(
                     source,
                     item_id,
                     token,
-                } => project_direct_evidence_v1(&view, source, item_id, token.as_ref())?,
+                    expected_consumer_attempt_id,
+                } => {
+                    if let Some(expected) = expected_consumer_attempt_id {
+                        let actual = view.graph().and_then(|graph| graph.trace().active_attempt())
+                            .map(|attempt| attempt.attempt_id().clone());
+                        if actual.as_ref() != Some(expected) {
+                            return Err(DirectExecutionErrorV1::Domain(DomainError::AttemptNotCurrent {
+                                expected: expected.clone(), actual,
+                            }));
+                        }
+                    }
+                    project_direct_evidence_v1(&view, source, item_id, token.as_ref())?
+                },
                 DirectReadCommandV1::DelegationPackage => {
                     project_direct_delegation_package_v1(&view)?
                 }

@@ -643,6 +643,7 @@ pub(super) fn typed_command(
         } => read(ReadCommand::Evidence {
             source: GraphNodeId::new(args.source.clone()).map_err(invalid_v2_value)?,
             item_id: ItemId::new(args.item.clone()).map_err(invalid_v2_value)?,
+            expected_consumer_attempt_id: fences.attempt_id.clone(),
             token: args
                 .page_token
                 .as_deref()

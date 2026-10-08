@@ -187,6 +187,8 @@ existing goal and criterion bounds.
 
 `evidence read --source <graph-node-id> --item <item-id> [--page-token <token>]` returns one bounded page of an item selected by a currently resolved, declared evidence reference of the current consumer attempt. It is a query: it creates no durable job, no session revision, and no state change, and it cannot browse arbitrary attempts or stale history.
 
+Optional `--if-workspace-uuid`, `--if-session-id`, and `--if-attempt` fences are checked against the same coherent snapshot used for the read. `--if-attempt` identifies the consumer attempt; a changed consumer returns `ATTEMPT_NOT_CURRENT`, including on the first page without a continuation token.
+
 A read without a token starts at the beginning of the value. A response carries the complete-value digest, the total logical size, the page, a `truncated` flag, and a nullable continuation token. Text offsets and sizes count Unicode scalar values, list offsets and sizes count entries, and scalar item types return one terminal page. The token is opaque, bounded to 256 base64url characters, and is not an authentication or authorization credential.
 
 ## Delegation commands

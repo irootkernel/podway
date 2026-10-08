@@ -440,6 +440,7 @@ mod software_development {
             source: GraphNodeId::new("review").unwrap(),
             item_id: ItemId::new("review-findings").unwrap(),
             token,
+            expected_consumer_attempt_id: None,
         };
         let mut page = session.engine.read(command(None));
         let stale = page["next_page_token"].as_str().unwrap().to_owned();

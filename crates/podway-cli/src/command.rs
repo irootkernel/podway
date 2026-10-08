@@ -3811,6 +3811,7 @@ fn validate_direct_flags(cli: &Cli) -> Result<(), LocalFailure> {
     }
     if explicit.any_transition()
         && !command.needs_preflight()
+        && !(matches!(command, Command::Evidence { .. }) && explicit.session_revision.is_none())
         && !matches!(
             command,
             Command::Delegation {
