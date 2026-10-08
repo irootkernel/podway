@@ -134,9 +134,7 @@ pub fn execute_session_v1<R: GitResolverContractV1>(
         DirectSessionCommandV1::Archive(input) => {
             DirectOutcomeScopeV1::Session(input.preconditions.expected_session_id.clone())
         }
-        DirectSessionCommandV1::Purge(input) => {
-            DirectOutcomeScopeV1::Session(input.session_id.clone())
-        }
+        DirectSessionCommandV1::Purge(_) => DirectOutcomeScopeV1::Workspace,
     };
     let mutation = DirectMutationRequestV1::new(
         key,

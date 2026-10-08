@@ -2045,12 +2045,72 @@ fn direct_goal_decision_rework_completion_and_disposition_preserve_records_and_r
         read(DirectReadCommandV1::ArchiveList).as_value()["result"]["count"],
         0
     );
-    let looked_up = lookup_outcome_v1(&resolver, request(selector, "decide"), &Clock).unwrap();
+    let purge_lookup =
+        lookup_outcome_v1(&resolver, request(selector.clone(), "purge"), &Clock).unwrap();
+    assert_eq!(
+        purge_lookup.as_value()["result"]["outcome"]["scope"],
+        "workspace"
+    );
+    assert_eq!(
+        purge_lookup.as_value()["result"]["outcome"]["response"],
+        *purged.as_value()
+    );
+    let looked_up =
+        lookup_outcome_v1(&resolver, request(selector.clone(), "decide"), &Clock).unwrap();
     assert_eq!(
         looked_up.as_value()["result"]["outcome"]["response"],
         *decision.as_value()
     );
     assert_eq!(clock.0.load(Ordering::SeqCst), 12);
+
+    struct AfterRetention;
+    impl ExecutionClockV1 for AfterRetention {
+        fn now(&self) -> UnixMillis {
+            UnixMillis::new(NOW + 31 * 24 * 60 * 60 * 1000)
+        }
+    }
+    use podway_engine::direct_start::{
+        DirectStartCommandV1, DirectStartRequestV1, start_session_v1,
+    };
+    use podway_protocol::{SessionStartSourceV1, SessionStartV1};
+    start_session_v1(
+        &resolver,
+        DirectStartRequestV1 {
+            selector: selector.clone(),
+            expected_workspace_id: Some(WorkspaceId::new(WORKSPACE).unwrap()),
+            request_id: RequestIdV1::new(ORIGINAL_RESPONSE).unwrap(),
+            key: Some(IdempotencyKeyV1::new("after-retention").unwrap()),
+            command: DirectStartCommandV1::Start(SessionStartV1 {
+                source: SessionStartSourceV1::Preset {
+                    preset: "small-change-v2".into(),
+                },
+                expected_procedure_digest: None,
+                task_title: "After workspace retention".into(),
+                dry_run: false,
+            }),
+            deadline: deadline(),
+        },
+        &AfterRetention,
+        &ids,
+    )
+    .unwrap();
+    let expired = lookup_outcome_v1(
+        &resolver,
+        request(selector.clone(), "purge"),
+        &AfterRetention,
+    )
+    .unwrap();
+    assert_eq!(expired.as_value()["result"]["found"], false);
+    assert!(expired.as_value()["result"]["outcome"].is_null());
+    for (key, original) in [("decide", decision), ("archive", archived)] {
+        let retained =
+            lookup_outcome_v1(&resolver, request(selector.clone(), key), &AfterRetention).unwrap();
+        assert_eq!(retained.as_value()["result"]["outcome"]["scope"], "session");
+        assert_eq!(
+            retained.as_value()["result"]["outcome"]["response"],
+            *original.as_value()
+        );
+    }
 }
 
 #[test]
