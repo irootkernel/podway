@@ -355,6 +355,7 @@ fn accepted_fixture() -> (
                     current.workspace_revision(),
                     current.trace().revision(),
                     &accepted,
+                    &digest('d'),
                     &original,
                 )?;
                 Ok(success(
@@ -550,6 +551,7 @@ fn reject_acceptance(
                         current.workspace_revision(),
                         current.trace().revision(),
                         next,
+                        &digest('d'),
                         receipt,
                     )?;
                     Ok(success(&key, json!({"accepted":true}), transaction.now()))
@@ -585,6 +587,8 @@ fn v2sdg004_receipt_rejects_wrong_parent_without_state_or_outcome_commit() {
         "placement_id",
         "procedure_digest",
         "delegation",
+        "package_digest",
+        "accepted_items_digest",
     ] {
         let (_temporary, store) = fixture(&identity());
         let current = session_state();
@@ -598,7 +602,9 @@ fn v2sdg004_receipt_rejects_wrong_parent_without_state_or_outcome_commit() {
                 value[field] = json!("00000000-0000-4000-8000-000000000498")
             }
             "placement_id" => value[field] = json!("other"),
-            "procedure_digest" => value[field] = json!(digest('8')),
+            "procedure_digest" | "package_digest" | "accepted_items_digest" => {
+                value[field] = json!(digest('8'))
+            }
             "delegation" => {
                 value["delegation"]["role_ref"] = json!("other-role");
                 value["execution"]["role_ref"] = json!("other-role");
@@ -707,6 +713,7 @@ fn v2sdg006_receipt_history_reports_exact_total_and_newest_bounded_window() {
                         state.workspace_revision(),
                         state.trace().revision(),
                         &accepted,
+                        &digest('d'),
                         &original,
                     )?;
                     Ok(success(

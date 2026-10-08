@@ -357,8 +357,20 @@ impl<Clock: FnOnce() -> UnixMillis> DirectTransactionV1<'_, '_, Clock> {
         workspace_revision: Revision,
         session_revision: Revision,
         next: &GraphSessionStateV2,
+        expected_package_digest: &Sha256Digest,
         receipt: &DelegationReceiptV1,
     ) -> DirectStoreResultV1<()> {
+        let current = self
+            .current_graph()?
+            .ok_or(DirectStoreErrorV1::InvalidInput {
+                reason: "no current graph",
+            })?;
+        v2_delegation::validate_acceptance_v1(
+            current,
+            self.binding.identity().workspace_uuid(),
+            expected_package_digest,
+            receipt,
+        )?;
         self.replace(workspace_revision, session_revision, next, true)?;
         v2_delegation::insert_receipt_transaction_v1(
             self.transaction,

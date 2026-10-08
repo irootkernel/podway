@@ -374,6 +374,7 @@ fn delegation_disposition_archive_purge_and_session_reset_obey_retention() {
                     graph.workspace_revision(),
                     graph.trace().revision(),
                     &next,
+                    &digest('d'),
                     &accepted,
                 )?;
                 Ok(success(
@@ -411,6 +412,7 @@ fn delegation_disposition_archive_purge_and_session_reset_obey_retention() {
                         next.workspace_revision(),
                         next.trace().revision(),
                         &second,
+                        &digest('d'),
                         &accepted,
                     )?;
                     Ok(success(

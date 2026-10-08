@@ -130,7 +130,7 @@ pub fn accept_delegation_v1<R: GitResolverContractV1>(
             "package_digest":package.digest(), "result_digest":input["result_digest"], "acceptance_state":"accepted"});
         let response = graph_success(transaction, &resolved, request.request_id, command.command_name(), prior, &next,
             body.as_object().expect("delegation result is an object").clone())?;
-        transaction.accept_delegation(prior.workspace_revision(), prior.trace().revision(), &next, &receipt)?;
+        transaction.accept_delegation(prior.workspace_revision(), prior.trace().revision(), &next, package.digest(), &receipt)?;
         Ok(response)
     });
     if let Some(error) = execution_error {
