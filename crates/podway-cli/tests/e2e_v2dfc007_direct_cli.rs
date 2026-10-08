@@ -1245,6 +1245,64 @@ fn published_maintenance_recipes_resume_the_real_cli_with_original_identity() {
 }
 
 #[test]
+fn maintenance_recipes_preserve_flag_like_keys_without_granting_flag_authority() {
+    for (removal, key) in [
+        (false, "--yes"),
+        (false, "--mode"),
+        (false, "--"),
+        (true, "--force"),
+    ] {
+        let fixture = Fixture::new();
+        let init = fixture.run(&["init", "--idempotency-key", "init"]);
+        let workspace = init["workspace"]["uuid"].as_str().unwrap();
+        let before = fixture.podway_snapshot();
+        let unconfirmed = fixture.output(&["reset", "--all", "--idempotency-key", "--yes"]);
+        assert_eq!(unconfirmed.status.code(), Some(2), "{unconfirmed:?}");
+        let error: ErrorEnvelopeV2 = serde_json::from_slice(&unconfirmed.stdout).unwrap();
+        assert!(
+            ["REQUEST_INVALID", "CONFIRMATION_REQUIRED"]
+                .contains(&error.as_value()["code"].as_str().unwrap())
+        );
+        fixture.assert_podway_snapshot(&before);
+        let key_argument = format!("--idempotency-key={key}");
+        let mut arguments = if removal {
+            vec!["workspace", "remove", "--force"]
+        } else {
+            vec!["reset", "--all"]
+        };
+        arguments.extend(["--yes", "--if-workspace-uuid", workspace, &key_argument]);
+        fixture.kill_at_maintenance_boundary(&arguments, "marker-published");
+        let observed = fixture.output(&["status"]);
+        assert_eq!(observed.status.code(), Some(4), "{observed:?}");
+        let error: ErrorEnvelopeV2 = serde_json::from_slice(&observed.stdout).unwrap();
+        assert_eq!(error.as_value()["code"], "WORKSPACE_MAINTENANCE");
+        let recipe = &error.as_value()["details"]["recovery"];
+        assert_eq!(recipe["requires_explicit_authorization"], true);
+        let argv: Vec<_> = recipe["argv"].as_array().unwrap()[2..]
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect();
+        let mut expected = arguments[..arguments.len() - 1].to_vec();
+        expected.extend(["--idempotency-key", key]);
+        assert_eq!(argv, expected);
+        let resumed = fixture.run(&argv);
+        assert_eq!(resumed["command"], recipe["command"]);
+        if removal {
+            assert!(!fixture.0.join(".podway").exists());
+            assert!(fixture.0.join(".git/config").exists());
+        } else {
+            assert_eq!(fixture.run(&arguments), resumed);
+            assert_eq!(fixture.run(&argv), resumed);
+            assert_eq!(
+                fixture.run(&["outcome", "lookup", "--idempotency-key", key])["result"]["outcome"]
+                    ["response"],
+                resumed
+            );
+        }
+    }
+}
+
+#[test]
 fn a_sqlite_writer_bounds_contention_without_recording_a_failed_outcome() {
     let fixture = Fixture::new();
     let initialized = fixture.run(&["init", "--idempotency-key", "init"]);

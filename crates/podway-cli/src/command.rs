@@ -87,7 +87,7 @@ struct Cli {
     quiet: bool,
 
     /// Reuse this idempotency key instead of generating a UUID-v4 key.
-    #[arg(long, global = true, value_name = "KEY")]
+    #[arg(long, global = true, value_name = "KEY", allow_hyphen_values = true)]
     idempotency_key: Option<String>,
 
     /// Require an exact workspace identifier.
