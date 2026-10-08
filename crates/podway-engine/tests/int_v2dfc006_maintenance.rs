@@ -148,6 +148,8 @@ fn digest() -> Sha256Digest {
     Sha256Digest::new(format!("sha256:{}", "a".repeat(64))).unwrap()
 }
 fn selector(path: &std::path::Path) -> WorktreeSelectorV1 {
+    // Temporary roots can have symlinked parents, including macOS /var.
+    let path = std::fs::canonicalize(path).expect("canonical fixture worktree");
     WorktreeSelectorV1::new(
         WORKTREE_SELECTOR_VERSION_V1,
         None,
@@ -270,6 +272,27 @@ fn reset_all_replaces_generation_and_replays_before_old_workspace_fences() {
         .unwrap();
     assert!(!store.layout().intent_marker().exists());
     assert!(!store.layout().reset_marker().exists());
+}
+
+#[test]
+fn maintenance_fixture_resolves_a_symlinked_temporary_parent() {
+    let parent = tempfile::tempdir().unwrap();
+    let root = fixture();
+    let alias = parent.path().join("temporary-parent");
+    std::os::unix::fs::symlink(root.path().parent().unwrap(), &alias).unwrap();
+    let selected = alias.join(root.path().file_name().unwrap());
+    let old = initialize(&selected);
+    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let input = request(&selected, "reset", Some(old.clone()));
+    let output = reset_all_v1(&resolver, input.clone(), &Clock, &NativeDirectIdSourceV1).unwrap();
+    assert_eq!(
+        reset_all_v1(&resolver, input, &NoEffects, &NoEffects).unwrap(),
+        output
+    );
+    let fresh = WorkspaceId::new(output.as_value()["workspace"]["uuid"].as_str().unwrap()).unwrap();
+    assert_ne!(fresh, old);
+    remove_workspace_v1(&resolver, request(&selected, "remove", Some(fresh)), &Clock).unwrap();
+    assert!(!root.path().join(".podway").exists());
 }
 #[test]
 fn destructive_guards_and_shared_exclusion_reject_without_clock_identifiers_or_byte_changes() {

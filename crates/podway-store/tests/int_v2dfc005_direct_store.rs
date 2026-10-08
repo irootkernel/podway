@@ -257,8 +257,10 @@ pub(super) fn deadline() -> Instant {
 }
 
 pub(super) fn store(root: &Path) -> DirectStoreV1 {
+    // Positive fixtures supply the same canonical roots as the Engine.
+    let root = fs::canonicalize(root).expect("canonical fixture worktree");
     DirectStoreV1::new(
-        DirectWorkspaceLayoutV1::new(ValidatedWorkspaceRootV1::from_path(root).unwrap()).unwrap(),
+        DirectWorkspaceLayoutV1::new(ValidatedWorkspaceRootV1::from_path(&root).unwrap()).unwrap(),
         digest('c'),
         digest('a'),
         digest('b'),
@@ -335,6 +337,31 @@ pub(super) fn fixture() -> (TempDir, DirectStoreV1) {
         .unwrap();
     drop(lease);
     (root, store)
+}
+
+#[test]
+fn store_fixture_resolves_a_symlinked_temporary_parent() {
+    let parent = TempDir::new().unwrap();
+    let (root, direct) = fixture();
+    let alias = parent.path().join("temporary-parent");
+    std::os::unix::fs::symlink(root.path().parent().unwrap(), &alias).unwrap();
+    let selected = alias.join(root.path().file_name().unwrap());
+    let reopened = store(&selected);
+    let expected = direct
+        .read(deadline(), |snapshot| {
+            Ok(snapshot.binding().identity().clone())
+        })
+        .unwrap();
+    reopened
+        .read(deadline(), |snapshot| {
+            assert_eq!(snapshot.binding().identity(), &expected);
+            assert_eq!(
+                snapshot.outcome(request("init").key())?.unwrap().sequence(),
+                1
+            );
+            Ok(())
+        })
+        .unwrap();
 }
 
 #[derive(Debug, Eq, PartialEq)]

@@ -163,6 +163,8 @@ fn digest() -> Sha256Digest {
     Sha256Digest::new(format!("sha256:{}", "a".repeat(64))).unwrap()
 }
 fn selector(path: &std::path::Path) -> WorktreeSelectorV1 {
+    // Temporary roots can have symlinked parents, including macOS /var.
+    let path = std::fs::canonicalize(path).expect("canonical fixture worktree");
     WorktreeSelectorV1::new(
         WORKTREE_SELECTOR_VERSION_V1,
         None,
@@ -202,6 +204,30 @@ fn read(path: &std::path::Path) -> DirectWorkspaceReadRequestV1 {
         request_id: RequestIdV1::new(DIFFERENT).unwrap(),
         deadline: deadline(),
     }
+}
+
+#[test]
+fn workspace_fixture_resolves_a_symlinked_temporary_parent() {
+    let parent = tempfile::tempdir().unwrap();
+    let root = fixture();
+    let alias = parent.path().join("temporary-parent");
+    std::os::unix::fs::symlink(root.path().parent().unwrap(), &alias).unwrap();
+    let selected = alias.join(root.path().file_name().unwrap());
+    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let output = initialize_workspace_v1(
+        &resolver,
+        mutation(&selected, "init"),
+        false,
+        &Clock(AtomicUsize::new(0)),
+        &NativeDirectIdSourceV1,
+    )
+    .unwrap();
+    let shown = show_workspace_v1(&resolver, read(&selected), &Clock(AtomicUsize::new(0))).unwrap();
+    assert_eq!(
+        shown.as_value()["workspace"],
+        output.as_value()["workspace"]
+    );
+    assert!(root.path().join(".podway/runtime/state.sqlite3").is_file());
 }
 fn files(root: &std::path::Path) -> BTreeMap<String, String> {
     fn visit(

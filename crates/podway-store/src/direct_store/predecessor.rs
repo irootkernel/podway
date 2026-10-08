@@ -193,8 +193,9 @@ mod tests {
 
     fn check_declared_schema_migration(absent_wal: bool) {
         let root = tempfile::TempDir::new().unwrap();
+        let path = std::fs::canonicalize(root.path()).unwrap();
         let layout = super::super::DirectWorkspaceLayoutV1::new(
-            ValidatedWorkspaceRootV1::from_path(root.path()).unwrap(),
+            ValidatedWorkspaceRootV1::from_path(&path).unwrap(),
         )
         .unwrap();
         let old = DirectStoreV1::new(

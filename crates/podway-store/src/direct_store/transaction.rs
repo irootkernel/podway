@@ -923,15 +923,14 @@ mod tests {
         use serde_json::json;
         use sha2::{Digest, Sha256};
         let temporary = tempfile::TempDir::new().unwrap();
+        let path = std::fs::canonicalize(temporary.path()).unwrap();
         let digest = |nibble: char| {
             Sha256Digest::new(format!("sha256:{}", nibble.to_string().repeat(64))).unwrap()
         };
         let deadline = || Instant::now() + std::time::Duration::from_secs(10);
         let direct = DirectStoreV1::new(
-            DirectWorkspaceLayoutV1::new(
-                ValidatedWorkspaceRootV1::from_path(temporary.path()).unwrap(),
-            )
-            .unwrap(),
+            DirectWorkspaceLayoutV1::new(ValidatedWorkspaceRootV1::from_path(&path).unwrap())
+                .unwrap(),
             digest('c'),
             digest('a'),
             digest('b'),
