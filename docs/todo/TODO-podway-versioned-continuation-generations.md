@@ -24,6 +24,13 @@ declared in that snapshot. Promotion of any part of this candidate requires the
 experiments, decisions, ADRs, adopted dossier, and roadmap ownership described
 below.
 
+[ADR-0038](../architecture-decision-records/0038-remove-the-daemon.md) and the
+[System Architecture](../architecture/system.md) establish the current foreground
+Direct Engine and worktree-local Store. This candidate uses their serialized
+per-worktree mutation boundary, success-only outcomes, and caller-driven recovery
+without a resident process or daemon IPC. Its experiments must reopen the Store
+through a new foreground invocation after a caller exits or is killed.
+
 ## 1. Context
 
 Task classification can select an initial Procedure or preset before enough work
@@ -54,7 +61,7 @@ the topology selected after a plan.
 
 The goal is to determine whether Podway should support bounded, append-only,
 plan-bound execution generations while preserving its local procedure-guard role,
-single authoritative cursor, sole-writer mutation order, explicit routing,
+single authoritative cursor, serialized Direct Engine/Store mutations, explicit routing,
 idempotency, crash recovery, and fail-closed stale-state handling.
 
 A successful design would make the following facts inspectable:
@@ -275,7 +282,7 @@ relationship between a future successor's presets and group templates is open.
 ### 5.1 Bounded evidence scale and read-back
 
 [ADR-0024](../architecture-decision-records/0024-bounded-evidence-scale-and-paged-read-back.md)
-and the [IPC evidence paging](../specs/interfaces/json-contract.md#evidence-paging)
+and the [current evidence paging](../specs/interfaces/json-contract.md#evidence-paging)
 specification provide current-evidence paging and response-budget foundations while
 preserving one session, cursor, and active attempt. A generation design must not
 widen its `evidence.read` route into arbitrary stale history. It needs separate
@@ -284,7 +291,8 @@ projections, and any historical-value query.
 
 Only the active generation should contribute complete actionable content to
 `next` and `observe`. Retired generation summaries require independent pagination
-or truncation rules so accumulated history cannot break the 1 MiB frame contract.
+or truncation rules so accumulated history cannot exceed the public JSON response
+budget.
 
 ### 5.2 External check result typing
 
@@ -385,7 +393,7 @@ The following questions prevent adoption:
 12. What hard maxima apply to group versions, activations, nodes per group, total
     session nodes, attempts, fan work units, and retained history?
 13. What projection and pagination contracts keep current and historical reads
-    below public frame limits?
+    below public response limits?
 14. What happens to live fan claims and leases when execution returns to plan?
 15. Can a group be proposed by any caller, or must proposal and activation be
     separate roles or commands?
@@ -421,7 +429,9 @@ The experiment should cover:
 - replanning reuses the same group version;
 - replanning appends and activates a different group version;
 - an old mutation or fan report arrives after supersession;
-- the daemon restarts before and after activation;
+- a foreground caller exits or is killed before and after activation, and the
+  next invocation reopens the worktree Store and reconciles the original
+  idempotency identity;
 - the activation response is lost and reconciled by idempotency identity; and
 - history remains inspectable while retired work cannot satisfy current
   progression.
