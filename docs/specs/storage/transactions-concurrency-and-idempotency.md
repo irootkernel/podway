@@ -192,11 +192,16 @@ turn an acknowledged success into failure or unknown outcome.
 
 ## Busy and lock behavior
 
-`--timeout` supplies one absolute deadline for maintenance and SQLite lock waits;
-the default is five seconds. SQLite contention uses short bounded waits with
-jitter. Write-lock exhaustion returns retryable `WORKSPACE_BUSY`; maintenance
-lease contention or a published marker returns `WORKSPACE_MAINTENANCE`. Deadline
-failure before COMMIT leaves no partial state or outcome. Contention is an
+`--timeout` supplies one absolute deadline for maintenance, process-local
+connection exclusion and SQLite admission waits; the default is five seconds.
+Preflight, preparation and human confirmation consume this same budget. Each
+boundary makes one non-blocking attempt even with no remaining budget. Only
+retries and sleeps check the deadline; callbacks, doctor, bootstrap and COMMIT
+continue after successful acquisition. SQLite contention uses short bounded
+waits with jitter. `WORKSPACE_BUSY` identifies `connection_gate`,
+`sqlite_read_admission` or `sqlite_write_lock`; reads never report a writer lock.
+Maintenance lease contention or a published marker returns
+`WORKSPACE_MAINTENANCE`. Failed admission leaves no partial state or outcome. Contention is an
 ordinary consequence of independent processes and does not establish a disk
 fault or an internal daemon defect. There is no automatic replay after an
 ambiguous COMMIT.

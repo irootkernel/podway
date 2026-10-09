@@ -971,7 +971,7 @@
         "exit_code": 4,
         "retryable": true,
         "details_schema": "podway.workspace-busy-details/v1",
-        "summary": "The direct write deadline expired without a state effect."
+        "summary": "A direct connection or SQLite admission wait expired without a state effect."
       },
       {
         "code": "WORKSPACE_CONFIG_INVALID",
@@ -1404,7 +1404,7 @@
       {
         "id": "urn:podway:schema:workspace-busy-details:v1",
         "path": "schemas/workspace-busy-details-v1.schema.json",
-        "sha256": "sha256:b0553d0474293e71fed41a830e0bf341f242f70bcd6bd3ae6fcf3ceeeded3991"
+        "sha256": "sha256:723e08d06625173797c05aba0b0b8a7a1729a5e8e6946e85195d2f2ce811d099"
       },
       {
         "id": "urn:podway:schema:workspace-contract-mismatch-details:v1",

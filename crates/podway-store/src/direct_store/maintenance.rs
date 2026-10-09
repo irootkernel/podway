@@ -93,7 +93,6 @@ impl SharedMaintenanceLeaseV1 {
     ) -> DirectStoreResultV1<Self> {
         classify_direct_store_with_missing_observer_v1(layout, missing)?.require_current()?;
         loop {
-            check_deadline(deadline)?;
             if maintenance_marked(layout)? {
                 return Err(DirectStoreErrorV1::Maintenance);
             }
@@ -151,7 +150,6 @@ impl SharedMaintenanceLeaseV1 {
             }
             // Classification before waiting is not authority for the replacement generation.
             classify_direct_store_with_missing_observer_v1(layout, missing)?.require_current()?;
-            check_deadline(deadline)?;
             drop(intent);
             return Ok(Self {
                 podway,
@@ -193,7 +191,6 @@ impl ExclusiveMaintenanceLeaseV1 {
         create: bool,
     ) -> DirectStoreResultV1<Self> {
         loop {
-            check_deadline(deadline)?;
             if create {
                 ensure_runtime_directories(layout)?;
             }
@@ -245,7 +242,6 @@ impl ExclusiveMaintenanceLeaseV1 {
                 wait(deadline)?;
                 continue;
             }
-            check_deadline(deadline)?;
             return Ok(Self {
                 podway,
                 directory,

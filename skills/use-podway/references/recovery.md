@@ -40,7 +40,7 @@ An `IDEMPOTENCY_KEY_REUSED` error means the retained key is bound to a different
 ## Maintenance or workspace failure
 
 - Use `podway doctor` and `podway workspace show` to diagnose before proposing a mutation.
-- `WORKSPACE_BUSY` and `WORKSPACE_MAINTENANCE` report bounded SQLite or maintenance contention. They do not authorize reset or fence weakening. Inspect any structured recovery recipe before acting.
+- `WORKSPACE_BUSY` and `WORKSPACE_MAINTENANCE` report an expired admission wait. Read `details.boundary` to distinguish the maintenance lease, process-local connection gate and SQLite read/write admission. Each boundary tries once even after the original invocation budget expires; prompts do not renew it. These errors do not authorize reset or fence weakening. Inspect any structured recovery recipe before acting.
 - On `LEGACY_RUNTIME_STATE_UNSUPPORTED`, preserve the byte-identical unsupported
   state. Classification performs no migration, checkpoint or SHM creation. Before
   any reset, establish separately authorized retirement of every old writer,

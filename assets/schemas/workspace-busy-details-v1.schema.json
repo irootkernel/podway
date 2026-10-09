@@ -16,7 +16,11 @@
       "const": "podway.workspace-busy-details/v1"
     },
     "boundary": {
-      "const": "sqlite_write_lock"
+      "enum": [
+        "sqlite_write_lock",
+        "connection_gate",
+        "sqlite_read_admission"
+      ]
     },
     "timeout_ms": {
       "type": "integer",

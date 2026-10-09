@@ -59,9 +59,12 @@ Enter a worktree only after explicit activation for the current workflow.
 7. If no active session exists, continue the user's work without creating one unless the user explicitly asks to start or manage a Podway session.
 
 `--json` is a global flag on every command. Select the owning worktree with
-`--worktree <path>`. `--timeout <duration>` defaults to `5s` and bounds the combined
-maintenance/SQLite lock wait; it does not bound input reading, preparation or human
-confirmation. Durations are unsigned integers with `ms`, `s` or `m`, at most `60m`.
+`--worktree <path>`. `--timeout <duration>` defaults to `5s` and bounds maintenance
+lease, connection gate and SQLite read/write admission waits. Each boundary tries
+once even at `0ms` or after the budget expires. Input reading, preparation and human
+confirmation consume the original budget without renewing it; they are not cut
+off, and admitted work may finish after the deadline. Durations are unsigned
+integers with `ms`, `s` or `m`, at most `60m`.
 A deadline failure has no partial effect or outcome; distinguish `WORKSPACE_BUSY`
 from `WORKSPACE_MAINTENANCE` using its structured recovery recipe. `--mode`,
 `--dev`, `--socket`, `--detach`, `--wait-for-idle` and `--after-job` are retired.

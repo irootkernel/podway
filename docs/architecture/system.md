@@ -144,13 +144,19 @@ See [Security and Trust](../specs/operations/security-and-trust.md).
 CLI parses bounded input, selects worktree and supplies fences/key/deadline
   -> Engine classifies Store, resolves identity and prepares outside transaction
   -> Store qualifies writer/schema/binding without a writable foreign open
-  -> native maintenance lease and SQLite BEGIN IMMEDIATE within deadline
+  -> maintenance lease, process connection gate and SQLite BEGIN IMMEDIATE with one wait deadline
   -> same-key lookup returns original success or rejects a changed request
   -> required identities and prepared state are revalidated
   -> core computes transition; Engine constructs validated output/v4
   -> Store commits domain state, success outcome, sequence, journal and pruning
   -> CLI returns the committed response
 ```
+
+Each acquisition is attempted once even after the wait budget is exhausted;
+only retries and sleeps are deadline-bound. Preflight, preparation and human
+confirmation consume the original budget. Successful acquisition allows the
+operation to finish; reads distinguish connection-gate and SQLite read admission
+from SQLite writer contention.
 
 A rejection records no outcome. Only COMMIT I/O ambiguity maps to
 `MUTATION_OUTCOME_UNKNOWN`; response loss is reconciled with `outcome lookup` and

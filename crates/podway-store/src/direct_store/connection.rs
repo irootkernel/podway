@@ -75,12 +75,20 @@ pub(super) fn install_busy_deadline(
 
 pub(super) fn connection_gate(deadline: Instant) -> DirectStoreResultV1<MutexGuard<'static, ()>> {
     loop {
-        ensure_deadline(deadline)?;
         match CONNECTION_GATE.try_lock() {
             Ok(guard) => return Ok(guard),
-            Err(TryLockError::WouldBlock) => std::thread::sleep(
-                Duration::from_micros(500).min(deadline.saturating_duration_since(Instant::now())),
-            ),
+            Err(TryLockError::WouldBlock) => {
+                if Instant::now() >= deadline {
+                    return Err(DirectStoreErrorV1::ConnectionBusy);
+                }
+                std::thread::sleep(
+                    Duration::from_micros(500)
+                        .min(deadline.saturating_duration_since(Instant::now())),
+                );
+                if Instant::now() >= deadline {
+                    return Err(DirectStoreErrorV1::ConnectionBusy);
+                }
+            }
             Err(TryLockError::Poisoned(_)) => return Err(DirectStoreErrorV1::Unreadable),
         }
     }
@@ -167,7 +175,6 @@ impl DirectStoreV1 {
             };
             let result = read(&snapshot)?;
             self.revalidate_files(&lease, &database)?;
-            ensure_deadline(deadline)?;
             Ok(result)
         })
     }
@@ -180,28 +187,31 @@ impl DirectStoreV1 {
         deadline: Instant,
         read: impl FnOnce(&DirectReadSnapshotV1<'_>) -> DirectStoreResultV1<T>,
     ) -> DirectStoreResultV1<T> {
-        lease.revalidate(&self.layout)?;
-        super::classification::classify_unmarked_store_v1(&self.layout)?.require_current()?;
-        let _gate = connection_gate(deadline)?;
-        let database = super::classification::open_read_nofollow(&self.layout.database())?;
-        let (mut connection, immutable) = self.open_readonly_connection(
-            deadline,
-            !super::classification::path_exists(&self.layout.wal())?
-                || !super::classification::path_exists(&self.layout.shm())?,
-        )?;
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
-        let binding = self.validate_connection_with_mode(&transaction, immutable)?;
-        let snapshot = DirectReadSnapshotV1 {
-            connection: &transaction,
-            binding,
-        };
-        let result = read(&snapshot)?;
-        lease.revalidate(&self.layout)?;
-        if !super::maintenance::same_file(&database, &self.layout.database())? {
-            return Err(DirectStoreErrorV1::Maintenance);
-        }
-        ensure_deadline(deadline)?;
-        Ok(result)
+        (|| {
+            lease.revalidate(&self.layout)?;
+            super::classification::classify_unmarked_store_v1(&self.layout)?.require_current()?;
+            let _gate = connection_gate(deadline)?;
+            let database = super::classification::open_read_nofollow(&self.layout.database())?;
+            let (mut connection, immutable) = self.open_readonly_connection(
+                deadline,
+                !super::classification::path_exists(&self.layout.wal())?
+                    || !super::classification::path_exists(&self.layout.shm())?,
+            )?;
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
+            let binding = self.validate_connection_with_mode(&transaction, immutable)?;
+            let snapshot = DirectReadSnapshotV1 {
+                connection: &transaction,
+                binding,
+            };
+            let result = read(&snapshot)?;
+            lease.revalidate(&self.layout)?;
+            if !super::maintenance::same_file(&database, &self.layout.database())? {
+                return Err(DirectStoreErrorV1::Maintenance);
+            }
+            Ok(result)
+        })()
+        .map_err(read_admission_error)
     }
 
     /// Resume only a committed private bootstrap generation owned by the exact
@@ -226,7 +236,6 @@ impl DirectStoreV1 {
             if index >= 1024 {
                 return Err(DirectStoreErrorV1::Unreadable);
             }
-            ensure_deadline(deadline)?;
             let entry = entry?;
             let name = entry.file_name();
             let Some(name) = name.to_str() else { continue };
@@ -334,7 +343,6 @@ impl DirectStoreV1 {
         read: impl FnOnce(&rusqlite::Transaction<'_>, WorkspaceBindingV1) -> DirectStoreResultV1<T>,
     ) -> DirectStoreResultV1<T> {
         loop {
-            ensure_deadline(deadline)?;
             let (mut connection, immutable) =
                 match self.open_readonly_connection(deadline, heap_snapshot) {
                     Ok(connection) => connection,
@@ -342,18 +350,20 @@ impl DirectStoreV1 {
                         recovery_wait(deadline)?;
                         continue;
                     }
-                    Err(error) => return Err(error),
+                    Err(error) => return Err(read_admission_error(error)),
                 };
-            let transaction =
-                connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Deferred)
+                .map_err(DirectStoreErrorV1::from)
+                .map_err(read_admission_error)?;
             match self.validate_connection_with_mode(&transaction, immutable) {
-                Ok(binding) => return read(&transaction, binding),
+                Ok(binding) => return read(&transaction, binding).map_err(read_admission_error),
                 Err(error) if readonly_recovery(&error) => {
                     drop(transaction);
                     drop(connection);
                     recovery_wait(deadline)?;
                 }
-                Err(error) => return Err(error),
+                Err(error) => return Err(read_admission_error(error)),
             }
         }
     }
@@ -401,7 +411,6 @@ impl DirectStoreV1 {
         immutable: bool,
         deadline: Instant,
     ) -> DirectStoreResultV1<Connection> {
-        ensure_deadline(deadline)?;
         let flags = OpenFlags::SQLITE_OPEN_URI
             | OpenFlags::SQLITE_OPEN_NO_MUTEX
             | OpenFlags::SQLITE_OPEN_NOFOLLOW
@@ -498,63 +507,62 @@ impl DirectStoreV1 {
         deadline: Instant,
         read: impl FnOnce(&DirectReadSnapshotV1<'_>) -> DirectStoreResultV1<T>,
     ) -> DirectStoreResultV1<T> {
-        lease.revalidate(&self.layout)?;
-        let _connection_gate = connection_gate(deadline)?;
-        super::classify_direct_store_v1(&self.layout)?.require_current()?;
-        let database = super::classification::open_read_nofollow(&self.layout.database())?;
-        let (mut connection, immutable) = self.open_readonly_connection(
-            deadline,
-            !super::classification::path_exists(&self.layout.wal())?
-                || !super::classification::path_exists(&self.layout.shm())?,
-        )?;
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
-        let binding = self.validate_connection_with_mode(&transaction, immutable)?;
-        let check: String = transaction.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
-        if check != "ok" {
-            return Err(DirectStoreErrorV1::Unreadable);
-        }
-        if transaction
-            .prepare("PRAGMA foreign_key_check")?
-            .query([])?
-            .next()?
-            .is_some()
-        {
-            return Err(DirectStoreErrorV1::Unreadable);
-        }
-        v2_state::verify_v2_graph_state_connection_v2(&transaction)?;
-        // Retained inactive graphs are reconstructed one at a time, without an archive Vec.
-        let mut statement = transaction.prepare(
-            "SELECT session_id FROM v2_task_sessions WHERE activity = 'inactive' ORDER BY session_id")?;
-        let mut rows = statement.query([])?;
-        while let Some(row) = rows.next()? {
-            ensure_deadline(deadline)?;
-            let id: String = row.get(0)?;
-            let id = SessionId::new(id).map_err(|_| DirectStoreErrorV1::Unreadable)?;
-            let state = v2_state::load_archived_session_connection_v2(&transaction, &id)?
-                .ok_or(DirectStoreErrorV1::Unreadable)?;
-            v2_state::load_terminal_dispositions_connection_v2(&transaction, &state)?;
-        }
-        let mut outcomes = transaction
-            .prepare("SELECT idempotency_key FROM mutation_outcomes ORDER BY workspace_sequence")?;
-        let mut outcomes = outcomes.query([])?;
-        while let Some(row) = outcomes.next()? {
-            ensure_deadline(deadline)?;
-            let key: String = row.get(0)?;
-            let key = IdempotencyKeyV1::new(key).map_err(|_| DirectStoreErrorV1::Unreadable)?;
-            super::transaction::read_outcome(&transaction, &key)?
-                .ok_or(DirectStoreErrorV1::Unreadable)?;
-        }
-        let snapshot = DirectReadSnapshotV1 {
-            connection: &transaction,
-            binding,
-        };
-        let result = read(&snapshot)?;
-        lease.revalidate(&self.layout)?;
-        if !super::maintenance::same_file(&database, &self.layout.database())? {
-            return Err(DirectStoreErrorV1::Maintenance);
-        }
-        ensure_deadline(deadline)?;
-        Ok(result)
+        (|| {
+            lease.revalidate(&self.layout)?;
+            let _connection_gate = connection_gate(deadline)?;
+            super::classify_direct_store_v1(&self.layout)?.require_current()?;
+            let database = super::classification::open_read_nofollow(&self.layout.database())?;
+            let (mut connection, immutable) = self.open_readonly_connection(
+                deadline,
+                !super::classification::path_exists(&self.layout.wal())?
+                    || !super::classification::path_exists(&self.layout.shm())?,
+            )?;
+            let transaction = connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
+            let binding = self.validate_connection_with_mode(&transaction, immutable)?;
+            let check: String = transaction.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
+            if check != "ok" {
+                return Err(DirectStoreErrorV1::Unreadable);
+            }
+            if transaction
+                .prepare("PRAGMA foreign_key_check")?
+                .query([])?
+                .next()?
+                .is_some()
+            {
+                return Err(DirectStoreErrorV1::Unreadable);
+            }
+            v2_state::verify_v2_graph_state_connection_v2(&transaction)?;
+            // Retained inactive graphs are reconstructed one at a time, without an archive Vec.
+            let mut statement = transaction.prepare(
+                "SELECT session_id FROM v2_task_sessions WHERE activity = 'inactive' ORDER BY session_id")?;
+            let mut rows = statement.query([])?;
+            while let Some(row) = rows.next()? {
+                let id: String = row.get(0)?;
+                let id = SessionId::new(id).map_err(|_| DirectStoreErrorV1::Unreadable)?;
+                let state = v2_state::load_archived_session_connection_v2(&transaction, &id)?
+                    .ok_or(DirectStoreErrorV1::Unreadable)?;
+                v2_state::load_terminal_dispositions_connection_v2(&transaction, &state)?;
+            }
+            let mut outcomes = transaction
+                .prepare("SELECT idempotency_key FROM mutation_outcomes ORDER BY workspace_sequence")?;
+            let mut outcomes = outcomes.query([])?;
+            while let Some(row) = outcomes.next()? {
+                let key: String = row.get(0)?;
+                let key = IdempotencyKeyV1::new(key).map_err(|_| DirectStoreErrorV1::Unreadable)?;
+                super::transaction::read_outcome(&transaction, &key)?
+                    .ok_or(DirectStoreErrorV1::Unreadable)?;
+            }
+            let snapshot = DirectReadSnapshotV1 {
+                connection: &transaction,
+                binding,
+            };
+            let result = read(&snapshot)?;
+            lease.revalidate(&self.layout)?;
+            if !super::maintenance::same_file(&database, &self.layout.database())? {
+                return Err(DirectStoreErrorV1::Maintenance);
+            }
+            Ok(result)
+        })().map_err(read_admission_error)
     }
 }
 
@@ -564,11 +572,23 @@ fn readonly_recovery(error: &DirectStoreErrorV1) -> bool {
 }
 
 fn recovery_wait(deadline: Instant) -> DirectStoreResultV1<()> {
-    ensure_deadline(deadline)?;
+    if Instant::now() >= deadline {
+        return Err(DirectStoreErrorV1::ReadAdmissionBusy);
+    }
     std::thread::sleep(
         Duration::from_micros(200).min(deadline.saturating_duration_since(Instant::now())),
     );
-    ensure_deadline(deadline)
+    if Instant::now() >= deadline {
+        return Err(DirectStoreErrorV1::ReadAdmissionBusy);
+    }
+    Ok(())
+}
+
+pub(super) fn read_admission_error(error: DirectStoreErrorV1) -> DirectStoreErrorV1 {
+    match error {
+        DirectStoreErrorV1::Busy => DirectStoreErrorV1::ReadAdmissionBusy,
+        error => error,
+    }
 }
 
 /// A projection from a single WAL snapshot. Ordinary reads never expose a connection.
@@ -768,19 +788,11 @@ impl DirectWorkspaceViewV1 {
     }
 }
 
-pub(super) fn ensure_deadline(deadline: Instant) -> DirectStoreResultV1<()> {
-    if Instant::now() >= deadline {
-        return Err(DirectStoreErrorV1::Busy);
-    }
-    Ok(())
-}
-
 pub(super) fn configure_connection(
     connection: &Connection,
     readonly: bool,
     deadline: Instant,
 ) -> DirectStoreResultV1<()> {
-    ensure_deadline(deadline)?;
     install_busy_deadline(connection, deadline)?;
     // Bound SQLite decoding before a corrupt persisted cell can allocate memory.
     // The canonical 1 MiB document budget includes bounded row metadata headroom.

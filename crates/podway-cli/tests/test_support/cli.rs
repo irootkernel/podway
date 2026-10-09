@@ -248,6 +248,131 @@ impl Fixture {
         String::from_utf8(output.stdout).unwrap()
     }
 
+    pub(super) fn continue_in_pty_after_prompt(&self, delay: Duration) -> String {
+        let (output, _) = self.respond_in_pty_after_prompt(
+            &[
+                "start",
+                "--preset",
+                "small-change-v2",
+                "--task",
+                "successor",
+            ],
+            b"Choose [1]: ",
+            b"\n",
+            delay,
+        );
+        assert!(output.status.success(), "{output:?}");
+        let rendered = String::from_utf8(output.stdout).unwrap();
+        assert_eq!(
+            rendered.matches("podway-test-pty-exit:0").count(),
+            1,
+            "{rendered}"
+        );
+        rendered
+    }
+
+    pub(super) fn confirm_reset_in_pty_after_prompt(&self, delay: Duration) -> (Output, Duration) {
+        self.respond_in_pty_after_prompt(
+            &[
+                "reset",
+                "--all",
+                "--force",
+                "--idempotency-key",
+                "confirmed-reset",
+            ],
+            b"Continue? [y/N] ",
+            b"y\n",
+            delay,
+        )
+    }
+
+    fn respond_in_pty_after_prompt(
+        &self,
+        arguments: &[&str],
+        prompt: &'static [u8],
+        response: &[u8],
+        delay: Duration,
+    ) -> (Output, Duration) {
+        assert_packaged_fixture(&self.0);
+        let limit = Instant::now() + Duration::from_secs(20);
+        // script's status alone is not proof of the candidate's exit status.
+        // The fixed wrapper reports it after the exact CLI returns.
+        let child = Command::new("/usr/bin/script")
+            .args([
+                "-q", "/dev/null", "/bin/sh", "-c",
+                r#""$@"; podway_pty_exit=$?; printf '\npodway-test-pty-exit:%s\n' "$podway_pty_exit"; exit "$podway_pty_exit""#,
+                "podway-pty-test",
+            ])
+            .arg(podway_binary())
+            .arg("--worktree")
+            .arg(&self.0)
+            .args(arguments)
+            .process_group(0)
+            .current_dir(&self.0)
+            .env_remove("HOME")
+            .env_remove("XDG_CONFIG_HOME")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let group = nix::unistd::Pid::from_raw(i32::try_from(child.id()).unwrap());
+        let mut guard = GuardedChild(Some(child), Some(group));
+        let mut stdin = guard.0.as_mut().unwrap().stdin.take().unwrap();
+        let stdout = guard.0.as_mut().unwrap().stdout.take().unwrap();
+        let stderr = guard.0.as_mut().unwrap().stderr.take().unwrap();
+        let (send, receive) = mpsc::channel();
+        let stdout = thread::spawn(move || {
+            let mut stdout = stdout.take(1_048_578);
+            let mut bytes = Vec::new();
+            let mut chunk = [0; 256];
+            let mut announced = false;
+            loop {
+                let count = stdout.read(&mut chunk).unwrap();
+                if count == 0 {
+                    break;
+                }
+                bytes.extend_from_slice(&chunk[..count]);
+                if !announced && bytes.windows(prompt.len()).any(|window| window == prompt) {
+                    send.send(()).unwrap();
+                    announced = true;
+                }
+            }
+            bytes
+        });
+        let stderr = thread::spawn(move || {
+            let mut bytes = Vec::new();
+            stderr.take(65_537).read_to_end(&mut bytes).unwrap();
+            bytes
+        });
+        receive
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the real CLI must reach its prompt");
+        assert!(guard.0.as_mut().unwrap().try_wait().unwrap().is_none());
+        let prompted_at = Instant::now();
+        thread::sleep(delay);
+        assert!(prompted_at.elapsed() >= delay);
+        let responded_at = Instant::now();
+        stdin.write_all(response).unwrap();
+        let status = loop {
+            if let Some(status) = guard.0.as_mut().unwrap().try_wait().unwrap() {
+                break status;
+            }
+            assert!(
+                Instant::now() < limit,
+                "the delayed CLI exceeded its liveness bound"
+            );
+            thread::sleep(Duration::from_millis(5));
+        };
+        drop(stdin);
+        let output = Output {
+            status,
+            stdout: stdout.join().unwrap(),
+            stderr: stderr.join().unwrap(),
+        };
+        (output, responded_at.elapsed())
+    }
+
     pub(super) fn pause_at_maintenance_boundary(
         &self,
         arguments: &[&str],

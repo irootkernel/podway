@@ -347,8 +347,11 @@ the identical canonical request when authorized. Replay returns the entire origi
 success, including its original request ID. Retention is session-scoped or, for
 workspace outcomes, bounded to 100 entries or 30 days.
 
-`--timeout` defaults to five seconds and bounds the combined maintenance/SQLite
-lock wait. `WORKSPACE_BUSY` or `WORKSPACE_MAINTENANCE` leaves no partial effect.
+`--timeout` defaults to five seconds and bounds maintenance-lease, connection-gate
+and SQLite read/write admission waits. Each boundary tries once even at `0ms` or
+after the budget expires. Input, preparation and human confirmation consume the
+original budget without renewing it; admitted work may finish after the deadline.
+`WORKSPACE_BUSY` or `WORKSPACE_MAINTENANCE` leaves no partial effect.
 `MUTATION_OUTCOME_UNKNOWN` is limited to an I/O failure during COMMIT. Daemon, job,
 mode, detach and wait controls are retired; they fail with `COMMAND_RETIRED`.
 `podway record --stdin` accepts one closed, at-most-1-MiB JSON document to

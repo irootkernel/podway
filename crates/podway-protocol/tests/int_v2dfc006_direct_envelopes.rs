@@ -83,6 +83,22 @@ fn direct_constructors_and_decoders_validate_the_complete_envelope() {
         );
     }
     let mut candidate = error.clone();
+    for boundary in [
+        "sqlite_write_lock",
+        "connection_gate",
+        "sqlite_read_admission",
+    ] {
+        candidate["details"]["boundary"] = json!(boundary);
+        let value = ErrorEnvelopeV2::from_value(candidate.clone()).unwrap();
+        assert_eq!(
+            serde_json::from_value::<ErrorEnvelopeV2>(candidate.clone()).unwrap(),
+            value
+        );
+    }
+    candidate["details"]["boundary"] = json!("unknown_lock");
+    assert!(ErrorEnvelopeV2::from_value(candidate.clone()).is_err());
+    assert!(serde_json::from_value::<ErrorEnvelopeV2>(candidate).is_err());
+    let mut candidate = error.clone();
     candidate["details"]["recovery"]["argv"] = json!(["podway", "--json", "job", "lookup"]);
     assert!(ErrorEnvelopeV2::from_value(candidate).is_err());
 }

@@ -125,7 +125,13 @@ entire successor. Success retains the original response UUID for replay.
 
 SQLite uses WAL and `synchronous=FULL`, enables foreign keys, disables trusted
 schema and verifies schema objects. Ordinary admission does not verify page
-size or application ID. Lock waits use one invocation deadline. Only an I/O
+size or application ID. Maintenance, connection-gate and SQLite admission waits
+use one invocation deadline. An exhausted budget still permits one immediate
+attempt at each boundary; retries and sleeps consume the remaining budget.
+Successful acquisition does not impose a timer on snapshot callbacks, integrity
+scans, bootstrap or COMMIT. Read admission and connection-gate exhaustion have
+distinct `WORKSPACE_BUSY` boundaries; a read never reports a SQLite write lock.
+Only an I/O
 failure at the public mutation's COMMIT is an unknown outcome. Earlier failures
 roll back; post-commit checkpoint failure does not alter acknowledged success.
 

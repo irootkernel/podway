@@ -111,13 +111,18 @@ workspace, session, or attempt identity.
 
 `--timeout <duration>` uses an unsigned integer followed by `ms`, `s`, or `m`,
 with a maximum of 3,600,000 ms. The default is 5,000 ms; `0ms` is a valid
-immediate deadline. One absolute invocation deadline bounds the combined
-maintenance-lock and SQLite-write-lock wait. Elapsed preflight/preparation consumes
-the remaining wait budget; the write transaction does not receive a fresh budget.
+immediate deadline. One absolute invocation deadline bounds maintenance leases,
+the process-local connection gate, and SQLite read admission or write-lock waits.
+Each boundary makes one non-blocking attempt even if the budget is exhausted.
+Only retries and sleeps are deadline-bound. Elapsed preflight, preparation and
+human confirmation consume the remaining wait budget; no later step receives a
+fresh budget. Acquired locks allow the operation to finish past the deadline.
 This is not a hard timer for stdin, human confirmation, preparation, execution,
 filesystem cleanup, or response rendering.
 Lock expiry returns `WORKSPACE_MAINTENANCE` or `WORKSPACE_BUSY` with no partial
-mutation or retained rejection. Reads have no queue or completion barrier.
+mutation or retained rejection. Busy details distinguish `connection_gate`,
+`sqlite_read_admission`, and `sqlite_write_lock`; a read never reports a write lock.
+Reads have no queue or completion barrier.
 
 ## Retired surface
 

@@ -357,6 +357,79 @@ fn files(root: &std::path::Path) -> BTreeMap<String, String> {
     out
 }
 #[test]
+fn admitted_reset_finishes_after_the_wait_budget_expires() {
+    // An idle admission must not contend with other tests' process-local gate.
+    if std::env::var_os("PODWAY_RESET_DEADLINE_CHILD").is_none() {
+        struct OwnedChild(std::process::Child);
+        impl Drop for OwnedChild {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let mut child = OwnedChild(
+            Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "int_v2dfc006_maintenance::admitted_reset_finishes_after_the_wait_budget_expires",
+                    "--nocapture",
+                ])
+                .env("PODWAY_RESET_DEADLINE_CHILD", "1")
+                .spawn()
+                .unwrap(),
+        );
+        let limit = Instant::now() + Duration::from_secs(20);
+        loop {
+            if let Some(status) = child.0.try_wait().unwrap() {
+                assert!(status.success(), "{status}");
+                return;
+            }
+            assert!(Instant::now() < limit, "isolated reset test timed out");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    let root = fixture();
+    let old = initialize(root.path());
+    let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+    let mut input = request(root.path(), "expired-reset", Some(old.clone()));
+    input.deadline = Instant::now() + Duration::from_millis(500);
+    let budget = input.deadline;
+    let observed = Arc::new(Mutex::new(false));
+    let observer = observed.clone();
+    let output = reset_all_with_boundary_observer_v1(
+        &resolver,
+        input.clone(),
+        &Clock,
+        &NativeDirectIdSourceV1,
+        move |boundary| {
+            if boundary == Boundary::MarkerPublished {
+                *observer.lock().unwrap() = true;
+                std::thread::sleep(
+                    budget.saturating_duration_since(Instant::now()) + Duration::from_millis(20),
+                );
+            }
+        },
+    )
+    .unwrap();
+    assert!(*observed.lock().unwrap());
+    assert!(Instant::now() > budget);
+    assert_ne!(output.as_value()["workspace"]["uuid"], old.as_str());
+    assert_eq!(
+        reset_all_v1(&resolver, input, &NoEffects, &NoEffects).unwrap(),
+        output
+    );
+    assert!(validate_daemon_free_document_v1(
+        "podway.output/v4",
+        output.as_value()
+    ));
+    let (_, store) = resolver
+        .resolve_existing(selector(root.path()), None, deadline())
+        .unwrap();
+    assert!(!store.layout().intent_marker().exists());
+    assert!(!store.layout().reset_marker().exists());
+}
+
+#[test]
 fn reset_all_replaces_generation_and_replays_before_old_workspace_fences() {
     let root = fixture();
     let old = initialize(root.path());

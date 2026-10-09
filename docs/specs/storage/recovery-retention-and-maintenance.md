@@ -67,8 +67,11 @@ the original request.
 An exact supported retry resumes its own published operation. Another request,
 key, digest, writer, root, Git identity or UUID cannot adopt it. Ordinary commands
 and reads return `WORKSPACE_MAINTENANCE` instead of finishing cleanup. Reads never
-remove markers. Native lock contention is bounded by the command deadline;
-SQLite writer contention returns `WORKSPACE_BUSY`. Neither error authorizes
+remove markers. Native lock contention is bounded by the original invocation
+deadline, with one immediate acquisition attempt even if the budget is exhausted.
+Acquired locks permit maintenance to finish past that deadline. Connection-gate,
+SQLite read-admission and writer contention return `WORKSPACE_BUSY` with their
+distinct boundaries. Neither error authorizes
 manual marker deletion or editing a database.
 
 A cold hot-WAL/no-SHM read also temporarily drains managed readers under an

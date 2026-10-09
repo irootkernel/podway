@@ -340,6 +340,158 @@ pub(super) fn fixture() -> (TempDir, DirectStoreV1) {
 }
 
 #[test]
+fn exhausted_deadlines_try_idle_locks_once() {
+    if run_isolated_deadline_test("exhausted_deadlines_try_idle_locks_once") {
+        return;
+    }
+    let (_root, direct) = fixture();
+    let before = images(&direct.layout().runtime_directory());
+    direct
+        .read(Instant::now(), |snapshot| {
+            assert_eq!(snapshot.view(UnixMillis::new(20))?.sequence(), 1);
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(images(&direct.layout().runtime_directory()), before);
+    let request = request("zero-budget");
+    direct
+        .mutate(
+            &request,
+            Instant::now(),
+            || UnixMillis::new(20),
+            |transaction| {
+                Ok(success(
+                    &request,
+                    json!({"repaired": true}),
+                    transaction.now(),
+                ))
+            },
+        )
+        .unwrap();
+    direct.verify_integrity(Instant::now()).unwrap();
+    assert!(
+        !direct
+            .migrate_declared_writer(Instant::now(), || panic!("current writer has no migration"))
+            .unwrap()
+    );
+    direct
+        .read(deadline(), |snapshot| {
+            assert_eq!(snapshot.view(UnixMillis::new(20))?.sequence(), 2);
+            assert!(snapshot.outcome(request.key())?.is_some());
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn read_sqlite_contention_is_classified_without_retrying_the_callback() {
+    let (_root, direct) = fixture();
+    let before = images(&direct.layout().runtime_directory());
+    let calls = std::cell::Cell::new(0);
+    let result = direct.read::<()>(deadline(), |_| {
+        calls.set(calls.get() + 1);
+        // Controlled native-error injection verifies read-context conversion.
+        Err(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+            None,
+        )
+        .into())
+    });
+    assert!(matches!(result, Err(DirectStoreErrorV1::ReadAdmissionBusy)));
+    assert_eq!(calls.get(), 1);
+    assert_eq!(images(&direct.layout().runtime_directory()), before);
+}
+
+#[test]
+fn acquired_locks_allow_callbacks_to_finish_after_the_deadline() {
+    if run_isolated_deadline_test("acquired_locks_allow_callbacks_to_finish_after_the_deadline") {
+        return;
+    }
+    let (_root, direct) = fixture();
+    let request = request("slow-callback");
+    let limit = Instant::now() + Duration::from_millis(500);
+    direct
+        .mutate(
+            &request,
+            limit,
+            || UnixMillis::new(20),
+            |transaction| {
+                std::thread::sleep(
+                    limit.saturating_duration_since(Instant::now()) + Duration::from_millis(20),
+                );
+                Ok(success(
+                    &request,
+                    json!({"repaired": true}),
+                    transaction.now(),
+                ))
+            },
+        )
+        .unwrap();
+    direct
+        .read(deadline(), |snapshot| {
+            assert_eq!(snapshot.view(UnixMillis::new(20))?.sequence(), 2);
+            assert!(snapshot.outcome(request.key())?.is_some());
+            Ok(())
+        })
+        .unwrap();
+    let before = images(&direct.layout().runtime_directory());
+    let limit = Instant::now() + Duration::from_millis(500);
+    direct
+        .read(limit, |_| {
+            std::thread::sleep(
+                limit.saturating_duration_since(Instant::now()) + Duration::from_millis(20),
+            );
+            Ok(())
+        })
+        .unwrap();
+    let lease = ExclusiveMaintenanceLeaseV1::acquire(direct.layout(), deadline(), false).unwrap();
+    let limit = Instant::now() + Duration::from_millis(500);
+    direct
+        .verify_integrity_under_exclusive_lease(&lease, limit, |_| {
+            std::thread::sleep(
+                limit.saturating_duration_since(Instant::now()) + Duration::from_millis(20),
+            );
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(images(&direct.layout().runtime_directory()), before);
+}
+
+// Idle and slow-callback admission cannot share the global gate with other tests.
+fn run_isolated_deadline_test(name: &str) -> bool {
+    if std::env::var_os("PODWAY_STORE_DEADLINE_CHILD").is_some() {
+        return false;
+    }
+    struct OwnedChild(std::process::Child);
+    impl Drop for OwnedChild {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let mut child = OwnedChild(
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                &format!("int_v2dfc005_direct_store::{name}"),
+                "--nocapture",
+            ])
+            .env("PODWAY_STORE_DEADLINE_CHILD", "1")
+            .spawn()
+            .unwrap(),
+    );
+    let limit = Instant::now() + Duration::from_secs(20);
+    loop {
+        if let Some(status) = child.0.try_wait().unwrap() {
+            assert!(status.success(), "{status}");
+            return true;
+        }
+        assert!(Instant::now() < limit, "isolated deadline test timed out");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
 fn store_fixture_resolves_a_symlinked_temporary_parent() {
     let parent = TempDir::new().unwrap();
     let (root, direct) = fixture();
@@ -676,14 +828,20 @@ fn managed_same_process_reads_never_inherit_a_writers_writable_shm_mapping() {
     });
     ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
     let before = images(&direct.layout().runtime_directory());
-    let blocked = direct.read::<()>(Instant::now() + Duration::from_millis(20), |_| {
-        panic!("writer still owns its connection")
+    let blocked = [0, 20].map(|timeout| {
+        direct.read::<()>(Instant::now() + Duration::from_millis(timeout), |_| {
+            panic!("writer still owns its connection")
+        })
     });
     let after = images(&direct.layout().runtime_directory());
     release_tx.send(()).unwrap();
     let result = child.join().unwrap();
     assert!(result.is_ok());
-    assert!(matches!(blocked, Err(DirectStoreErrorV1::Busy)));
+    assert!(
+        blocked
+            .into_iter()
+            .all(|result| matches!(result, Err(DirectStoreErrorV1::ConnectionBusy)))
+    );
     assert_eq!(after, before);
     let before = images(&direct.layout().runtime_directory());
     direct

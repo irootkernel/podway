@@ -131,7 +131,7 @@ human explanation. Historical defensive entries do not establish new guarantees.
 | `SESSION_START_STATE_CONFLICT` | 4 | yes | The existing session state changed after the start policy was selected. |
 | `STAGE_NOT_SKIPPABLE` | 1 | no | The active stage cannot be skipped. |
 | `WORKSPACE_ALREADY_INITIALIZED` | 1 | no | Workspace is already initialized. |
-| `WORKSPACE_BUSY` | 4 | yes | The SQLite write-lock deadline expired without a state effect. |
+| `WORKSPACE_BUSY` | 4 | yes | A direct connection or SQLite admission wait expired without a state effect. |
 | `WORKSPACE_CONFIG_INVALID` | 5 | no | Workspace configuration is invalid. |
 | `WORKSPACE_CONTRACT_MISMATCH` | 5 | no | The Store writer contract is not supported by this binary. |
 | `WORKSPACE_ID_CONFLICT` | 5 | no | Persisted workspace binding conflicts with the resolved canonical Git/worktree identity. |
@@ -152,7 +152,7 @@ Named details contain no admission or job facts.
 
 | Code or family | Current detail schema | Important facts |
 |---|---|---|
-| `WORKSPACE_BUSY` | `workspace-busy-details/v1` | `boundary: sqlite_write_lock`, `timeout_ms`, refresh |
+| `WORKSPACE_BUSY` | `workspace-busy-details/v1` | `boundary`: `connection_gate`, `sqlite_read_admission`, or `sqlite_write_lock`; `timeout_ms`, refresh |
 | `WORKSPACE_MAINTENANCE` | `workspace-maintenance-details/v1` | Boundary, timeout, boundary-specific recovery |
 | `LEGACY_RUNTIME_STATE_UNSUPPORTED` | `legacy-runtime-state-unsupported-details/v1` | Store generation, marker names, authorized reset |
 | `WORKSPACE_CONTRACT_MISMATCH` | `workspace-contract-mismatch-details/v1` | Expected/actual writer manifest digest, diagnosis |
@@ -183,10 +183,16 @@ messages are bounded to 512 Unicode scalars; the outer message bound is separate
 
 ## Direct workspace and contention failures
 
-`WORKSPACE_BUSY` reports SQLite write-lock expiry and the invocation's bounded
-`timeout_ms`. `WORKSPACE_MAINTENANCE` distinguishes `maintenance_lock`,
+`WORKSPACE_BUSY` reports the invocation's bounded `timeout_ms` and the actual
+expired wait: `connection_gate` for process-local connection exclusion,
+`sqlite_read_admission` for SQLite read snapshot admission/recovery, or
+`sqlite_write_lock` for a SQLite writer. Reads never report `sqlite_write_lock`.
+`WORKSPACE_MAINTENANCE` distinguishes `maintenance_lock`,
 `intent_marker`, `reset_marker`, `removal_marker`, and `predecessor_migration`.
-One absolute invocation deadline bounds the combined maintenance/SQLite wait;
+One absolute invocation deadline bounds all of these waits. Each boundary makes
+one non-blocking attempt even with an exhausted budget; acquired locks allow the
+operation to finish past the deadline. Preflight, preparation and confirmation
+consume the original wait budget without creating a new one;
 it is not a hard timer for stdin, human confirmation, preparation, filesystem
 cleanup, or rendering. Neither contention error retains a rejected outcome.
 Reads never resume published maintenance.

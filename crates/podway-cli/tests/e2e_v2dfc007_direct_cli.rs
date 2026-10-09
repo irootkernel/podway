@@ -14,6 +14,123 @@ use podway_protocol::{ErrorEnvelopeV2, OutputEnvelopeV4};
 use serde_json::{Value, json};
 
 #[test]
+fn v2dfc012_zero_budget_executes_idle_reads_mutations_and_maintenance() {
+    let fixture = Fixture::new();
+    let initialized = fixture.run(&["--timeout", "0ms", "init", "--idempotency-key", "init"]);
+    for command in [vec!["workspace", "show"], vec!["doctor", "--deep"]] {
+        fixture.run(&[&["--timeout", "0ms"][..], &command[..]].concat());
+    }
+    fixture.run(&[
+        "--timeout",
+        "0ms",
+        "start",
+        "--preset",
+        "small-change-v2",
+        "--task",
+        "zero budget",
+        "--idempotency-key",
+        "start",
+    ]);
+    fixture.run(&["--timeout", "0ms", "begin", "--idempotency-key", "begin"]);
+    fixture.run(&[
+        "--timeout",
+        "0ms",
+        "set",
+        "scope-summary",
+        "committed",
+        "--idempotency-key",
+        "set",
+    ]);
+    let outcome = fixture.run(&[
+        "--timeout",
+        "0ms",
+        "outcome",
+        "lookup",
+        "--idempotency-key",
+        "set",
+    ]);
+    assert_eq!(outcome["result"]["found"], true);
+    let reset = fixture.run(&[
+        "--timeout",
+        "0ms",
+        "reset",
+        "--all",
+        "--force",
+        "--yes",
+        "--idempotency-key",
+        "reset",
+    ]);
+    assert_ne!(reset["workspace"]["uuid"], initialized["workspace"]["uuid"]);
+    assert_eq!(
+        fixture.run(&["--timeout", "0ms", "doctor", "--deep"])["result"]["healthy"],
+        true
+    );
+}
+
+#[test]
+fn v2dfc012_start_interview_after_six_seconds_continues_without_changes() {
+    let fixture = Fixture::new();
+    fixture.run(&["init", "--idempotency-key", "init"]);
+    fixture.run(&[
+        "start",
+        "--preset",
+        "small-change-v2",
+        "--task",
+        "original",
+        "--idempotency-key",
+        "start",
+    ]);
+    fixture.run(&["begin", "--idempotency-key", "begin"]);
+    let before = fixture.run(&["status"]);
+    let rendered = fixture.continue_in_pty_after_prompt(Duration::from_secs(6));
+    assert!(
+        rendered.contains("No new session was created"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains(before["result"]["session"]["id"].as_str().unwrap()),
+        "{rendered}"
+    );
+    assert_eq!(fixture.run(&["status"])["result"], before["result"]);
+}
+
+#[test]
+fn v2dfc012_destructive_confirmation_does_not_renew_the_wait_budget() {
+    let fixture = Fixture::new();
+    fixture.run(&["init", "--idempotency-key", "init"]);
+    let before = fixture.run(&["workspace", "show"]);
+    let paused = fixture.pause_at_maintenance_boundary(
+        &[
+            "reset",
+            "--all",
+            "--force",
+            "--yes",
+            "--idempotency-key",
+            "paused-reset",
+        ],
+        "lease-acquired",
+    );
+    let (output, elapsed) = fixture.confirm_reset_in_pty_after_prompt(Duration::from_secs(6));
+    assert!(elapsed < Duration::from_secs(2), "{elapsed:?}: {output:?}");
+    let rendered = String::from_utf8(output.stdout).unwrap();
+    assert!(rendered.contains("WORKSPACE_MAINTENANCE"), "{rendered}");
+    assert_eq!(
+        rendered.matches("podway-test-pty-exit:4").count(),
+        1,
+        "{rendered}"
+    );
+    drop(paused);
+    assert_eq!(
+        fixture.run(&["workspace", "show"])["result"],
+        before["result"]
+    );
+    assert_eq!(
+        fixture.run(&["outcome", "lookup", "--idempotency-key", "confirmed-reset"])["result"]["found"],
+        false
+    );
+}
+
+#[test]
 fn interrupted_removal_rejects_changed_workspace_fences_without_consuming_the_intent() {
     let fixture = Fixture::new();
     let initialized = fixture.run(&["init", "--idempotency-key", "init"]);
@@ -1337,15 +1454,19 @@ fn a_sqlite_writer_bounds_contention_without_recording_a_failed_outcome() {
     let writer =
         rusqlite::Connection::open(fixture.0.join(".podway/runtime/state.sqlite3")).unwrap();
     writer.execute_batch("BEGIN IMMEDIATE").unwrap();
-    let started = Instant::now();
     // Original fences bypass implicit status preflight and reach the SQLite writer.
-    let output = fixture.output(&[&["--timeout", "20ms"][..], &arguments[..]].concat());
-    assert!(started.elapsed() < Duration::from_secs(2));
-    assert_eq!(output.status.code(), Some(4), "{output:?}");
-    let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(error.as_value()["code"], "WORKSPACE_BUSY");
-    assert_eq!(error.as_value()["command"], "item.set");
-    assert_eq!(error.as_value()["retryable"], true);
+    for (timeout, millis) in [("0ms", 0), ("20ms", 20)] {
+        let started = Instant::now();
+        let output = fixture.output(&[&["--timeout", timeout][..], &arguments[..]].concat());
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert_eq!(output.status.code(), Some(4), "{output:?}");
+        let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(error.as_value()["code"], "WORKSPACE_BUSY");
+        assert_eq!(error.as_value()["command"], "item.set");
+        assert_eq!(error.as_value()["retryable"], true);
+        assert_eq!(error.as_value()["details"]["boundary"], "sqlite_write_lock");
+        assert_eq!(error.as_value()["details"]["timeout_ms"], millis);
+    }
     writer.execute_batch("ROLLBACK").unwrap();
     assert_eq!(fixture.run(&["status"])["result"], before["result"]);
     assert_eq!(
@@ -1382,40 +1503,33 @@ fn a_competing_process_honors_the_deadline_and_attributes_preflight_failure_to_t
         ],
         "lease-acquired",
     );
-    let started = std::time::Instant::now();
-    let output = Command::new(podway_binary())
-        .arg("--worktree")
-        .arg(&fixture.0)
-        .args([
-            "--json",
+    for (timeout, millis) in [("0ms", 0), ("20ms", 20)] {
+        let started = Instant::now();
+        let output = fixture.output(&[
             "--timeout",
-            "20ms",
+            timeout,
             "set",
             "scope-summary",
             "must not commit",
             "--idempotency-key",
             "contended",
-        ])
-        .current_dir(&fixture.0)
-        .env_remove("HOME")
-        .env_remove("XDG_CONFIG_HOME")
-        .output()
-        .unwrap();
-    assert!(
-        started.elapsed() < Duration::from_secs(2),
-        "the invocation must not restart its lock budget"
-    );
-    assert_eq!(output.status.code(), Some(4), "{output:?}");
-    let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(error.as_value()["code"], "WORKSPACE_MAINTENANCE");
-    assert_eq!(error.as_value()["details"]["boundary"], "maintenance_lock");
-    assert_eq!(error.as_value()["details"]["timeout_ms"], 20);
-    assert_eq!(
-        error.as_value()["command"],
-        "item.set",
-        "internal status preflight must preserve the requested command identity"
-    );
-    assert_eq!(error.as_value()["retryable"], true);
+        ]);
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "the invocation must not restart its lock budget"
+        );
+        assert_eq!(output.status.code(), Some(4), "{output:?}");
+        let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(error.as_value()["code"], "WORKSPACE_MAINTENANCE");
+        assert_eq!(error.as_value()["details"]["boundary"], "maintenance_lock");
+        assert_eq!(error.as_value()["details"]["timeout_ms"], millis);
+        assert_eq!(
+            error.as_value()["command"],
+            "item.set",
+            "internal status preflight must preserve the requested command identity"
+        );
+        assert_eq!(error.as_value()["retryable"], true);
+    }
     drop(paused);
     assert_eq!(fixture.run(&["status"])["result"], before["result"]);
     assert_eq!(

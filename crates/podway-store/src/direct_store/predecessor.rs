@@ -56,20 +56,28 @@ impl DirectStoreV1 {
             classification => classification.require_current()?,
         }
         let database = super::classification::open_read_nofollow(&self.layout.database())?;
-        let (mut readonly, immutable) = self.open_readonly_connection(
-            deadline,
-            !super::classification::path_exists(&self.layout.wal())?
-                || !super::classification::path_exists(&self.layout.shm())?,
-        )?;
-        let snapshot = readonly.transaction_with_behavior(TransactionBehavior::Deferred)?;
-        let actual: String = snapshot.query_row(
-            "SELECT contract_manifest_digest FROM writer_contract WHERE singleton=1",
-            [],
-            |row| row.get(0),
-        )?;
+        let (mut readonly, immutable) = self
+            .open_readonly_connection(
+                deadline,
+                !super::classification::path_exists(&self.layout.wal())?
+                    || !super::classification::path_exists(&self.layout.shm())?,
+            )
+            .map_err(super::connection::read_admission_error)?;
+        let snapshot = readonly
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .map_err(DirectStoreErrorV1::from)
+            .map_err(super::connection::read_admission_error)?;
+        let actual: String = snapshot
+            .query_row(
+                "SELECT contract_manifest_digest FROM writer_contract WHERE singleton=1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(DirectStoreErrorV1::from)
+            .map_err(super::connection::read_admission_error)?;
         if actual == self.manifest.as_str() {
-            self.validate_connection_with_mode(&snapshot, immutable)?;
-            super::connection::ensure_deadline(deadline)?;
+            self.validate_connection_with_mode(&snapshot, immutable)
+                .map_err(super::connection::read_admission_error)?;
             lease.revalidate(&self.layout)?;
             if !super::maintenance::same_file(&database, &self.layout.database())? {
                 return Err(DirectStoreErrorV1::Maintenance);
@@ -83,7 +91,8 @@ impl DirectStoreV1 {
                 expected: self.manifest.clone(),
                 actual: actual.clone(),
             })?;
-        self.validate_predecessor(&snapshot, predecessor, immutable)?;
+        self.validate_predecessor(&snapshot, predecessor, immutable)
+            .map_err(super::connection::read_admission_error)?;
         drop(snapshot);
         drop(readonly);
         lease.revalidate(&self.layout)?;
@@ -111,7 +120,6 @@ impl DirectStoreV1 {
         transaction.execute("INSERT INTO operational_journal(recorded_at_ms,level,event_name,summary) VALUES(?1,'info','writer_migrated',?2)",
             params![now,predecessor.migration_id])?;
         self.validate_connection(&transaction)?;
-        super::connection::ensure_deadline(deadline)?;
         lease.revalidate(&self.layout)?;
         if !super::maintenance::same_file(&database, &self.layout.database())? {
             return Err(DirectStoreErrorV1::Maintenance);

@@ -25,7 +25,11 @@ struct Invocation {
 use podway_engine::direct_api as protocol_boundary;
 
 impl Invocation {
-    fn new(target: &WorkspaceTarget, timeout_ms: u64) -> Result<Self, LocalFailure> {
+    fn new(
+        target: &WorkspaceTarget,
+        timeout_ms: u64,
+        started: Instant,
+    ) -> Result<Self, LocalFailure> {
         let selector = protocol_boundary::WorktreeSelectorV1::new(
             protocol_boundary::WORKTREE_SELECTOR_VERSION_V1,
             None,
@@ -45,7 +49,7 @@ impl Invocation {
                 manifest,
             ),
             selector,
-            deadline: Instant::now()
+            deadline: started
                 .checked_add(Duration::from_millis(timeout_ms))
                 .ok_or_else(|| {
                     LocalFailure::request_invalid("timeout exceeds the monotonic clock range")
@@ -258,12 +262,13 @@ fn preflight_error(
 }
 
 pub(super) fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
+    let started = Instant::now();
     if let Command::CompleteDynamic { kind } = &cli.command {
         let target = match workspace_target(cli.worktree.clone()) {
             Ok(target) => target,
             Err(_) => return Ok(empty_dynamic_completion()),
         };
-        let invocation = Invocation::new(&target, 500)?;
+        let invocation = Invocation::new(&target, 500, started)?;
         return match invocation.execute(
             Direct::Read {
                 command: ReadCommand::Status {
@@ -319,7 +324,7 @@ pub(super) fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
     confirm_if_required(&cli, route, &target)?;
     let mut fences = ExplicitPreconditions::parse(&cli)?;
     apply_archive_purge_revision(&mut cli.command, &fences)?;
-    let invocation = Invocation::new(&target, cli.timeout.unwrap_or(5_000))?;
+    let invocation = Invocation::new(&target, cli.timeout.unwrap_or(5_000), started)?;
     let mut preflight = None;
     if needs_facts(&cli.command, &fences) {
         let status = invocation.execute(

@@ -537,10 +537,13 @@ fn store(error: &DirectStoreErrorV1, context: &DirectErrorContextV1) -> Presenta
                 "boundary":boundary,"timeout_ms":context.timeout_ms,"recovery":recipe}),
             }
         }
-        E::Busy => Presentation {
+        E::Busy | E::ConnectionBusy | E::ReadAdmissionBusy => Presentation {
             code: "WORKSPACE_BUSY",
             details: json!({"schema":"podway.workspace-busy-details/v1",
-            "boundary":"sqlite_write_lock","timeout_ms":context.timeout_ms,"recovery":refresh()}),
+            "boundary": if matches!(error, E::ConnectionBusy) {"connection_gate"}
+                else if matches!(error, E::ReadAdmissionBusy) {"sqlite_read_admission"}
+                else {"sqlite_write_lock"},
+            "timeout_ms":context.timeout_ms,"recovery":refresh()}),
         },
         E::Legacy { generation, marker } => Presentation {
             code: "LEGACY_RUNTIME_STATE_UNSUPPORTED",

@@ -74,7 +74,7 @@ struct Cli {
     #[arg(long, global = true, value_name = "PATH")]
     worktree: Option<PathBuf>,
 
-    /// Bound the complete direct operation, including lock acquisition.
+    /// Bound lock-acquisition waits; admitted work continues past the deadline.
     #[arg(long, global = true, value_name = "DURATION", value_parser = parse_timeout_millis)]
     timeout: Option<u64>,
 

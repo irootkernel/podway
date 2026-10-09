@@ -12,8 +12,7 @@ use crate::{
 
 use super::{
     DirectStoreErrorV1, DirectStoreResultV1, DirectStoreV1, ExclusiveMaintenanceLeaseV1,
-    connection::{configure_connection, ensure_deadline},
-    maintenance::DirectOpenLease,
+    connection::configure_connection, maintenance::DirectOpenLease,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -548,7 +547,6 @@ impl DirectStoreV1 {
         let outcome = persist_success(&transaction, &self.layout, &request, response, now)?;
         drop(context);
         self.revalidate_files(&lease, &database)?;
-        ensure_deadline(deadline)?;
         commit(transaction)?;
         self.boundary(DirectTransactionBoundaryV1::AfterCommitBeforeOutput);
         checkpoint_after_success(&connection, &self.layout);
@@ -594,7 +592,6 @@ impl DirectStoreV1 {
                 reason: "Store bootstrap requires a missing database",
             });
         }
-        ensure_deadline(deadline)?;
         let temporary = tempfile::Builder::new()
             .prefix(".direct-store-")
             .tempfile_in(self.layout.runtime_directory())?;
@@ -636,7 +633,6 @@ impl DirectStoreV1 {
         let outcome = persist_success(&transaction, &self.layout, request, response, now)?;
         drop(context);
         lease.revalidate(&self.layout)?;
-        ensure_deadline(deadline)?;
         // This commit affects only an unpublished private inode. Its failure
         // cannot make the public mutation outcome uncertain.
         transaction.commit()?;

@@ -49,6 +49,8 @@ pub enum DirectStoreErrorV1 {
     NotInitialized,
     Maintenance,
     Busy,
+    ConnectionBusy,
+    ReadAdmissionBusy,
     Legacy {
         generation: Option<u32>,
         marker: Option<&'static str>,
