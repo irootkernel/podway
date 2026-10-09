@@ -3,10 +3,7 @@
 use podway_core::{AttemptId, ItemId, Revision, Sha256Digest, UnixMillis};
 use podway_store::{
     ActiveItemMutationV2, IdempotencyKeyV1,
-    direct_store::{
-        DirectMutationRequestV1, DirectOutcomeScopeV1, DirectStoreErrorV1,
-        DirectTransactionBoundaryV1,
-    },
+    direct_store::{DirectMutationRequestV1, DirectOutcomeScopeV1, DirectTransactionBoundaryV1},
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -121,7 +118,6 @@ fn scale_process_child() {
         observer.lock().unwrap().push((boundary, Instant::now()))
     });
     let mut samples = Vec::new();
-    let mut stale_preparation = 0;
     let mut clocks = 0;
     let mut completed = 0;
     let mut completed_actions = 0;
@@ -151,131 +147,124 @@ fn scale_process_child() {
         )
         .unwrap();
         let limit = Instant::now() + Duration::from_secs(5);
-        loop {
-            let prepared = direct.prepare_graph(limit).unwrap().unwrap();
-            events.lock().unwrap().clear();
-            let result = direct.mutate(
-                &command,
-                limit,
-                || {
-                    clocks += 1;
-                    UnixMillis::new(1000 + prepared.sequence())
-                },
-                |transaction| {
-                    transaction.use_prepared_graph(&prepared)?;
-                    let prior = prepared.graph();
-                    let now = transaction.now();
-                    let next = if completing {
-                        prior
-                            .complete_active_action_v2(
-                                prior.trace().revision(),
-                                prior.trace().active_attempt().unwrap().attempt_id(),
-                                Some(AttemptId::new(format!(
+        let prepared = direct.prepare_graph(limit).unwrap().unwrap();
+        events.lock().unwrap().clear();
+        let result = direct.mutate(
+            &command,
+            limit,
+            || {
+                clocks += 1;
+                UnixMillis::new(1000 + prepared.sequence())
+            },
+            |transaction| {
+                let prior = transaction.use_prepared_graph(Some(&prepared))?.unwrap();
+                let now = transaction.now();
+                let next = if completing {
+                    prior
+                        .complete_active_action_v2(
+                            prior.trace().revision(),
+                            prior.trace().active_attempt().unwrap().attempt_id(),
+                            Some(
+                                AttemptId::new(format!(
                                     "00000000-0000-4000-a{writer:03x}-{index:012x}"
-                                )).unwrap()),
-                                now,
-                            )?
-                            .into_state()
-                    } else {
-                        let item = ItemId::new(format!("item-{writer}")).unwrap();
-                        let slot = prior
-                            .workflow_memory()
-                            .attempts()
-                            .last()
-                            .unwrap()
-                            .item_slots()
-                            .iter()
-                            .find(|slot| slot.item_id() == &item)
-                            .unwrap();
-                        if !timed {
-                            assert_eq!(
-                                slot.revision(),
-                                Revision::new(index),
-                                "a rejected attempt changed item state"
-                            );
-                        }
-                        prior
-                            .mutate_active_item_v2(
-                                prior.trace().active_attempt().unwrap().attempt_id(),
-                                &item,
-                                slot.revision(),
-                                ActiveItemMutationV2::Set {
-                                    value: value.clone(),
-                                },
-                                now,
-                            )?
-                            .into_state()
-                    };
-                    transaction.replace_graph(
-                        prior.workspace_revision(),
-                        prior.trace().revision(),
-                        &next,
-                    )?;
-                    Ok(success(
-                        &command,
-                        json!({"changed":true,"writer":writer,"operation":index,"kind":command_name}),
-                        transaction.now(),
-                    ))
-                },
-            );
-            let finished = Instant::now();
-            let event = events.lock().unwrap();
-            assert!(
-                event.len() >= 2,
-                "writer {writer} operation {index}: {result:?}; boundaries={event:?}"
-            );
-            assert_eq!(event[0].0, DirectTransactionBoundaryV1::BeforeBegin);
-            assert_eq!(event[1].0, DirectTransactionBoundaryV1::AfterBegin);
-            let hold = if event.len() == 4 {
-                event[3].1
-            } else {
-                finished
-            };
-            samples.push(
-                json!({"wait_us":event[1].1.duration_since(event[0].1).as_micros(),
-                "hold_us":hold.duration_since(event[1].1).as_micros(),"committed":result.is_ok()}),
-            );
-            drop(event);
-            match result {
-                Ok(committed) => {
-                    assert!(!committed.replayed());
-                    events.lock().unwrap().clear();
-                    let replay_request = DirectMutationRequestV1::new(
-                        command.key().clone(),
-                        command.digest().clone(),
-                        command.command(),
-                        format!("00000000-0000-4000-9{writer:03x}-{index:012x}"),
-                        command.scope().clone(),
-                    )
-                    .unwrap();
-                    let replay = direct
-                        .mutate(
-                            &replay_request,
-                            deadline(),
-                            || panic!("replay clock"),
-                            |_| panic!("replay callback"),
-                        )
+                                ))
+                                .unwrap(),
+                            ),
+                            now,
+                        )?
+                        .into_state()
+                } else {
+                    let item = ItemId::new(format!("item-{writer}")).unwrap();
+                    let slot = prior
+                        .workflow_memory()
+                        .attempts()
+                        .last()
+                        .unwrap()
+                        .item_slots()
+                        .iter()
+                        .find(|slot| slot.item_id() == &item)
                         .unwrap();
-                    let finished = Instant::now();
-                    let event = events.lock().unwrap();
-                    assert_eq!(event.len(), 2, "replay must not enter state/commit seams");
-                    samples.push(json!({"wait_us":event[1].1.duration_since(event[0].1).as_micros(),
-                        "hold_us":finished.duration_since(event[1].1).as_micros(),"committed":false,"replayed":true}));
-                    drop(event);
-                    assert!(replay.replayed());
-                    assert_eq!(replay.outcome(), committed.outcome());
-                    completed += 1;
-                    if completing {
-                        completed_actions += 1;
+                    if !timed {
+                        assert_eq!(
+                            slot.revision(),
+                            Revision::new(index),
+                            "a rejected attempt changed item state"
+                        );
                     }
-                    break;
-                }
-                Err(DirectStoreErrorV1::PreparedStateChanged { .. }) => {
-                    stale_preparation += 1;
-                    assert!(Instant::now() < limit);
-                }
-                Err(error) => panic!("direct writer {writer} operation {index} failed: {error}"),
-            }
+                    prior
+                        .mutate_active_item_v2(
+                            prior.trace().active_attempt().unwrap().attempt_id(),
+                            &item,
+                            slot.revision(),
+                            ActiveItemMutationV2::Set {
+                                value: value.clone(),
+                            },
+                            now,
+                        )?
+                        .into_state()
+                };
+                transaction.replace_graph(
+                    prior.workspace_revision(),
+                    prior.trace().revision(),
+                    &next,
+                )?;
+                Ok(success(
+                    &command,
+                    json!({"changed":true,"writer":writer,"operation":index,"kind":command_name}),
+                    transaction.now(),
+                ))
+            },
+        );
+        let finished = Instant::now();
+        let event = events.lock().unwrap();
+        assert!(
+            event.len() >= 2,
+            "writer {writer} operation {index}: {result:?}; boundaries={event:?}"
+        );
+        assert_eq!(event[0].0, DirectTransactionBoundaryV1::BeforeBegin);
+        assert_eq!(event[1].0, DirectTransactionBoundaryV1::AfterBegin);
+        let hold = if event.len() == 4 {
+            event[3].1
+        } else {
+            finished
+        };
+        samples.push(
+            json!({"wait_us":event[1].1.duration_since(event[0].1).as_micros(),
+                "hold_us":hold.duration_since(event[1].1).as_micros(),"committed":result.is_ok()}),
+        );
+        drop(event);
+        let committed = result.unwrap_or_else(|error| {
+            panic!("direct writer {writer} operation {index} failed: {error}")
+        });
+        assert!(!committed.replayed());
+        events.lock().unwrap().clear();
+        let replay_request = DirectMutationRequestV1::new(
+            command.key().clone(),
+            command.digest().clone(),
+            command.command(),
+            format!("00000000-0000-4000-9{writer:03x}-{index:012x}"),
+            command.scope().clone(),
+        )
+        .unwrap();
+        let replay = direct
+            .mutate(
+                &replay_request,
+                deadline(),
+                || panic!("replay clock"),
+                |_| panic!("replay callback"),
+            )
+            .unwrap();
+        let finished = Instant::now();
+        let event = events.lock().unwrap();
+        assert_eq!(event.len(), 2, "replay must not enter state/commit seams");
+        samples.push(json!({"wait_us":event[1].1.duration_since(event[0].1).as_micros(),
+                        "hold_us":finished.duration_since(event[1].1).as_micros(),"committed":false,"replayed":true}));
+        drop(event);
+        assert!(replay.replayed());
+        assert_eq!(replay.outcome(), committed.outcome());
+        completed += 1;
+        if completing {
+            completed_actions += 1;
         }
     }
     assert_eq!(
@@ -286,7 +275,7 @@ fn scale_process_child() {
         output,
         serde_json::to_vec_pretty(
             &json!({"writer":writer,"successes":completed,"replays":completed,
-        "clock_reads":clocks,"stale_preparation":stale_preparation,"samples":samples,
+        "clock_reads":clocks,"samples":samples,
         "set_successes":completed-completed_actions,"complete_successes":completed_actions,
         "payload_characters":if timed {4096}else{64},
         "duration_ms":began.elapsed().as_millis()}),

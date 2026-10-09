@@ -191,13 +191,9 @@ pub fn start_session_v1<R: GitResolverContractV1>(
             )
         },
         |transaction| {
-            let prior = if let Some(prepared) = &prepared_graph {
-                Some(prepared.graph().clone())
-            } else {
-                transaction.current_graph()?.cloned()
-            };
-            if let (Some(graph), DirectStartCommandV1::Replace(replace)) =
-                (&prior, &request.command)
+            let prior = transaction.use_prepared_graph(prepared_graph.as_ref())?;
+            let prior = prior.as_deref();
+            if let (Some(graph), DirectStartCommandV1::Replace(replace)) = (prior, &request.command)
             {
                 check_session_fences(
                     graph,
@@ -211,20 +207,22 @@ pub fn start_session_v1<R: GitResolverContractV1>(
                     }
                 })?;
             }
-            if let Some(prepared) = &prepared_graph {
-                transaction.use_prepared_graph(prepared)?;
-            }
             resolver
                 .revalidate(&resolved, transaction.binding())
-                .map_err(|_| DirectStoreErrorV1::BindingMismatch)?;
+                .map_err(|error| {
+                    failure.replace(Some(DirectExecutionErrorV1::from(error)));
+                    DirectStoreErrorV1::InvalidInput {
+                        reason: "workspace revalidation failed",
+                    }
+                })?;
             let dispositions = transaction.terminal_dispositions()?;
-            let disposed = prior.as_ref().is_some_and(|graph| {
+            let disposed = prior.is_some_and(|graph| {
                 dispositions
                     .iter()
                     .any(|record| record.terminal_session_revision() == graph.trace().revision())
             });
-            let policy = current_policy(&request.command, prior.as_ref(), disposed, false)
-                .map_err(|error| {
+            let policy =
+                current_policy(&request.command, prior, disposed, false).map_err(|error| {
                     failure.replace(Some(error));
                     DirectStoreErrorV1::InvalidInput {
                         reason: "start current-state policy rejected",
@@ -269,7 +267,7 @@ pub fn start_session_v1<R: GitResolverContractV1>(
                 now,
             )
             .map_err(GraphMutationErrorV2::InvalidState)?;
-            if let (Some(prior), Some(policy)) = (&prior, policy) {
+            if let (Some(prior), Some(policy)) = (prior, policy) {
                 body["existing_session"] = existing_session(prior, policy);
                 match policy {
                     Policy::Delete => transaction

@@ -71,13 +71,16 @@ pub fn accept_delegation_v1<R: GitResolverContractV1>(
     let prepared = store.prepare_graph(request.deadline)?;
     let mut execution_error = None;
     let result = store.mutate(&mutation, request.deadline, || clock.now(), |transaction| {
-        let prepared = prepared.as_ref().ok_or(GraphMutationErrorV2::SessionNotRunning)?;
-        let prior = prepared.graph();
+        let current = transaction.use_prepared_graph(prepared.as_ref())?;
+        let current = current.as_ref().ok_or(GraphMutationErrorV2::SessionNotRunning)?;
+        let prior = current.as_ref();
         check_session_fences(prior, &fences.expected_session_id, fences.expected_session_revision)?;
         check_attempt_fence(prior, &fences.expected_attempt_id)?;
         if prior.trace().lifecycle() != SessionLifecycle::Running { return Err(GraphMutationErrorV2::SessionNotRunning.into()); }
-        transaction.use_prepared_graph(prepared)?;
-        resolver.revalidate(&resolved, transaction.binding()).map_err(|_| DirectStoreErrorV1::BindingMismatch)?;
+        resolver.revalidate(&resolved, transaction.binding()).map_err(|error| {
+            execution_error = Some(DirectExecutionErrorV1::from(error));
+            DirectStoreErrorV1::InvalidInput { reason: "workspace revalidation failed" }
+        })?;
         let input = &request.input.input;
         if !validate_delegation_document_v1("podway.delegation-accept-input/v1", input)
             || input["workspace_uuid"].as_str() != Some(transaction.binding().identity().workspace_uuid().as_str())

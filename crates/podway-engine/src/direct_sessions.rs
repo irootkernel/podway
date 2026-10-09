@@ -148,8 +148,12 @@ pub fn execute_session_v1<R: GitResolverContractV1>(
     } else {
         store.prepare_graph(request.deadline)?
     };
+    let mut execution_error = None;
     let result = store.mutate(&mutation, request.deadline, || clock.now(), |transaction| {
-        resolver.revalidate(&resolved, transaction.binding()).map_err(|_| DirectStoreErrorV1::BindingMismatch)?;
+        resolver.revalidate(&resolved, transaction.binding()).map_err(|error| {
+            execution_error = Some(DirectExecutionErrorV1::from(error));
+            DirectStoreErrorV1::InvalidInput { reason: "workspace revalidation failed" }
+        })?;
         let body = match &request.command {
             DirectSessionCommandV1::Purge(input) => {
                 if !input.confirmed { return Err(DirectStoreErrorV1::InvalidInput { reason: "archive purge requires confirmation" }); }
@@ -166,11 +170,11 @@ pub fn execute_session_v1<R: GitResolverContractV1>(
                 json!({"schema":"podway.session-archive-purge-result/v1", "purged":true, "session":archive_summary(&purged)})
             }
             DirectSessionCommandV1::Reset(input) => {
-                let prepared = prepared.as_ref().ok_or_else(|| GraphMutationErrorV2::Domain(DomainError::SessionIdentityMismatch {
+                let current = transaction.use_prepared_graph(prepared.as_ref())?;
+                let current = current.as_ref().ok_or_else(|| GraphMutationErrorV2::Domain(DomainError::SessionIdentityMismatch {
                     expected: input.preconditions.expected_session_id.clone(), actual: None }))?;
-                let graph = prepared.graph();
+                let graph = current.as_ref();
                 check_session_fences(graph, &input.preconditions.expected_session_id, input.preconditions.expected_session_revision)?;
-                transaction.use_prepared_graph(prepared)?;
                 let disposed = transaction.terminal_dispositions()?.iter().any(|record| record.terminal_session_revision() == graph.trace().revision());
                 let body = reset_result(graph, &input.mode, disposed, false)?;
                 transaction.now();
@@ -178,11 +182,11 @@ pub fn execute_session_v1<R: GitResolverContractV1>(
                 body
             }
             DirectSessionCommandV1::Archive(input) => {
-                let prepared = prepared.as_ref().ok_or_else(|| GraphMutationErrorV2::Domain(DomainError::SessionIdentityMismatch {
+                let current = transaction.use_prepared_graph(prepared.as_ref())?;
+                let current = current.as_ref().ok_or_else(|| GraphMutationErrorV2::Domain(DomainError::SessionIdentityMismatch {
                     expected: input.preconditions.expected_session_id.clone(), actual: None }))?;
-                let graph = prepared.graph();
+                let graph = current.as_ref();
                 check_session_fences(graph, &input.preconditions.expected_session_id, input.preconditions.expected_session_revision)?;
-                transaction.use_prepared_graph(prepared)?;
                 let disposed = transaction.terminal_dispositions()?.iter().any(|record| record.terminal_session_revision() == graph.trace().revision());
                 if !matches!(graph.trace().lifecycle(), SessionLifecycle::Completed | SessionLifecycle::Cancelled) || !disposed {
                     return Err(StoreErrorV1::SessionArchiveNotEligibleV1 { lifecycle: graph.trace().lifecycle(), current_terminal_disposition: disposed }.into());
@@ -204,7 +208,11 @@ pub fn execute_session_v1<R: GitResolverContractV1>(
                 .map_err(|_| DirectStoreErrorV1::InvalidInput { reason: "session success violates the canonical envelope" })?;
         CanonicalExecutionJsonV1::new(podway_core::canonicalize_json_v1(response.as_value()).map_err(|_| DirectStoreErrorV1::Unreadable)?)
             .map_err(|_| DirectStoreErrorV1::InvalidInput { reason: "session success exceeds the outcome bound" })
-    })?;
+    });
+    if let Some(error) = execution_error {
+        return Err(error);
+    }
+    let result = result?;
     serde_json::from_str(result.outcome().response().as_str())
         .map_err(|_| DirectStoreErrorV1::Unreadable.into())
 }

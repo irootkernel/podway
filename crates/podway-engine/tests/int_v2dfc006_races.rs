@@ -18,8 +18,11 @@ use podway_core::{
 };
 use podway_engine::{
     direct_api::{DirectCommandV1, DirectRequestV1, DirectResponseV1, execute_direct_v1},
-    direct_execution::{DirectCursorCommandV1, DirectIdSourceV1, NativeDirectIdSourceV1},
+    direct_execution::{
+        DirectCursorCommandV1, DirectIdSourceV1, DirectReadCommandV1, NativeDirectIdSourceV1,
+    },
     direct_items::DirectItemCommandV1,
+    direct_sessions::DirectSessionCommandV1,
     direct_start::DirectStartCommandV1,
     execution::{ExecutionClockV1, prepare_workspace_procedure_source_v2},
     workspace::DirectWorkspaceResolverV1,
@@ -29,11 +32,13 @@ use podway_git::{
     WorktreeSelectorV1,
 };
 use podway_protocol::{
-    ItemAttachSourceV1, ItemAttachV1, ItemMutationPreconditionsWireV1, ItemRecordManyDispositionV1,
-    ItemRecordManyOperationV1, ItemRecordManyV1, ItemRecordValueV1, ItemSetV1,
-    ProcedureV2MutationCommandV1, RequestIdV1, Rfc3339MillisV1, SessionBeginV1, SessionCompleteV1,
-    SessionIdentityPreconditionsWireV1, SessionMutationPreconditionsWireV1, SessionStartSourceV1,
-    SessionStartV1, validate_daemon_free_document_v1,
+    DelegationAcceptV1, ItemAttachSourceV1, ItemAttachV1, ItemMutationPreconditionsWireV1,
+    ItemRecordManyDispositionV1, ItemRecordManyOperationV1, ItemRecordManyV1, ItemRecordValueV1,
+    ItemSetV1, ProcedureV2MutationCommandV1, RequestIdV1, Rfc3339MillisV1, SessionArchiveV1,
+    SessionBeginV1, SessionCancelV1, SessionCompleteV1, SessionDeletionModeV1,
+    SessionIdentityPreconditionsWireV1, SessionMutationPreconditionsWireV1, SessionResetV1,
+    SessionStartReplaceV1, SessionStartSourceV1, SessionStartV1, SessionTerminalDispositionV1,
+    TerminalDispositionInputV1, validate_daemon_free_document_v1,
 };
 use podway_store::{
     GraphSessionStateV2, IdempotencyKeyV1,
@@ -291,6 +296,10 @@ fn prepare_fixture() -> (tempfile::TempDir, WorktreeSelectorV1, DirectStoreV1) {
 #[serde(deny_unknown_fields)]
 struct CompetingRequest {
     trial: usize,
+    #[serde(default)]
+    item: Option<String>,
+    #[serde(default)]
+    start: bool,
 }
 
 // One owned child avoids the process-local SQLite mapping gate while the parent
@@ -302,6 +311,10 @@ struct Competitor {
 }
 impl Competitor {
     fn new(root: &std::path::Path) -> Self {
+        Self::with_trials(root, TRIALS)
+    }
+    fn with_trials(root: &std::path::Path, trials: usize) -> Self {
+        assert!((1..=TRIALS).contains(&trials));
         let mut child = Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
@@ -310,6 +323,7 @@ impl Competitor {
                 "--test-threads=1",
             ])
             .env("PODWAY_ENGINE_G6_OWNED_FIXTURE", root)
+            .env("PODWAY_ENGINE_G6_TRIALS", trials.to_string())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -336,8 +350,17 @@ impl Competitor {
         }
     }
     fn commit(&mut self, trial: usize) -> Value {
+        self.commit_request(json!({"trial":trial}))
+    }
+    fn commit_item(&mut self, trial: usize, item: &str) -> Value {
+        self.commit_request(json!({"trial":trial,"item":item}))
+    }
+    fn start(&mut self) -> Value {
+        self.commit_request(json!({"trial":0,"start":true}))
+    }
+    fn commit_request(&mut self, request: Value) -> Value {
         let input = self.input.as_mut().unwrap();
-        writeln!(input, "{{\"trial\":{trial}}}").unwrap();
+        writeln!(input, "{request}").unwrap();
         input.flush().unwrap();
         self.output
             .recv_timeout(Duration::from_secs(4))
@@ -383,6 +406,11 @@ fn preparation_race_child() {
         .resolve_existing(selector.clone(), None, deadline())
         .unwrap();
     let mut input = BufReader::new(std::io::stdin());
+    let trials: usize = std::env::var("PODWAY_ENGINE_G6_TRIALS")
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!((1..=TRIALS).contains(&trials));
     let mut count = 0;
     loop {
         let mut line = String::new();
@@ -390,12 +418,20 @@ fn preparation_race_child() {
             break;
         }
         assert!(line.len() <= 4096 && line.ends_with('\n'));
-        let CompetingRequest { trial } = serde_json::from_str(&line).unwrap();
+        let CompetingRequest { trial, item, start } = serde_json::from_str(&line).unwrap();
         assert_eq!(trial, count);
-        assert!(trial < TRIALS);
-        let item = if trial % 3 == 0 { "i01" } else { "i16" };
+        assert!(trial < trials);
+        let item = item
+            .as_deref()
+            .unwrap_or(if trial % 3 == 0 { "i01" } else { "i16" });
+        assert!(matches!(item, "i01" | "i16"));
         let key = format!("g6-competing-{trial}");
-        let command = set(&graph(&store), item, &format!("competing-{trial}"));
+        let command = if start {
+            assert_eq!((trial, trials), (0, 1));
+            plain_start(&root)
+        } else {
+            set(&graph(&store), item, &format!("competing-{trial}"))
+        };
         let input = request(&selector, command, &key);
         let output = success(
             execute_direct_v1(&resolver(), input.clone(), &Clock, &NativeDirectIdSourceV1).unwrap(),
@@ -409,7 +445,416 @@ fn preparation_race_child() {
         std::io::stdout().flush().unwrap();
         count += 1;
     }
-    assert_eq!(count, TRIALS);
+    assert_eq!(count, trials);
+}
+
+fn plain_start(root: &std::path::Path) -> DirectCommandV1 {
+    let source = std::fs::read(root.join("race.json")).unwrap();
+    DirectCommandV1::Start(DirectStartCommandV1::Start(SessionStartV1 {
+        source: SessionStartSourceV1::Procedure {
+            procedure: "race.json".into(),
+        },
+        expected_procedure_digest: Some(
+            prepare_workspace_procedure_source_v2("race.json", &source)
+                .unwrap()
+                .digest()
+                .clone(),
+        ),
+        task_title: "Concurrent plain start".into(),
+        dry_run: false,
+    }))
+}
+
+#[test]
+fn plain_start_race_rechecks_the_winning_session_policy_without_a_revision_hint() {
+    let (temporary, selector, store) = prepare_fixture();
+    let current = graph(&store);
+    let cancel = DirectCommandV1::Cursor(DirectCursorCommandV1::Cancel(SessionCancelV1 {
+        reason: "Finish the isolated predecessor fixture.".into(),
+        preconditions: cursor_fences(&current),
+    }));
+    success(
+        execute_direct_v1(
+            &resolver(),
+            request(&selector, cancel, "cancel-predecessor"),
+            &Clock,
+            &NativeDirectIdSourceV1,
+        )
+        .unwrap(),
+    );
+    let terminal = graph(&store);
+    let disposition = DirectCommandV1::Procedure(
+        ProcedureV2MutationCommandV1::SessionTerminalDisposition(SessionTerminalDispositionV1 {
+            disposition: TerminalDispositionInputV1::NotRequired {
+                reason: "The isolated fixture has no external handoff.".into(),
+            },
+            actor: None,
+            preconditions: SessionIdentityPreconditionsWireV1 {
+                expected_session_id: terminal.trace().session_id().clone(),
+                expected_session_revision: terminal.trace().revision(),
+            },
+        }),
+    );
+    success(
+        execute_direct_v1(
+            &resolver(),
+            request(&selector, disposition, "dispose-predecessor"),
+            &Clock,
+            &NativeDirectIdSourceV1,
+        )
+        .unwrap(),
+    );
+    let before_sequence = sequence(&store);
+    let competitor = Arc::new(Mutex::new(Competitor::with_trials(temporary.path(), 1)));
+    let instrumented = resolver().with_store_boundary_observer_v1({
+        let competitor = Arc::clone(&competitor);
+        move |boundary| {
+            if boundary == DirectTransactionBoundaryV1::BeforeBegin {
+                competitor.lock().unwrap().start();
+            }
+        }
+    });
+    let input = request(
+        &selector,
+        plain_start(temporary.path()),
+        "losing-plain-start",
+    );
+    let DirectResponseV1::Failure(error) =
+        execute_direct_v1(&instrumented, input, &NoEffects, &NoEffects).unwrap()
+    else {
+        panic!("concurrent plain start replaced the winning session");
+    };
+    competitor.lock().unwrap().finish();
+    let error = error.into_value();
+    assert!(validate_daemon_free_document_v1("podway.error/v2", &error));
+    assert_eq!(error["code"], "SESSION_START_DECISION_REQUIRED");
+    assert_eq!(error["details"]["lifecycle"], "prepared");
+    assert_eq!(error["details"]["current_terminal_disposition"], false);
+    assert_eq!(sequence(&store), before_sequence + 1);
+    assert!(outcome(&store, "losing-plain-start").is_none());
+    assert_ne!(
+        graph(&store).trace().session_id(),
+        terminal.trace().session_id()
+    );
+    assert_eq!(graph(&store).trace().revision(), Revision::ZERO);
+    assert!(outcome(&store, "g6-competing-0").is_some());
+}
+
+#[test]
+fn unrelated_item_commit_preserves_exact_item_fences_and_replay() {
+    let (temporary, selector, store) = prepare_fixture();
+    let before = graph(&store);
+    let before_sequence = sequence(&store);
+    let competitor = Arc::new(Mutex::new(Competitor::with_trials(temporary.path(), 1)));
+    let instrumented = resolver().with_store_boundary_observer_v1({
+        let competitor = Arc::clone(&competitor);
+        move |boundary| {
+            if boundary == DirectTransactionBoundaryV1::BeforeBegin {
+                competitor.lock().unwrap().commit_item(0, "i16");
+            }
+        }
+    });
+    let input = request(&selector, set(&before, "i01", "parent"), "independent-item");
+    let output = success(
+        execute_direct_v1(
+            &instrumented,
+            input.clone(),
+            &Clock,
+            &NativeDirectIdSourceV1,
+        )
+        .unwrap(),
+    );
+    competitor.lock().unwrap().finish();
+    assert_eq!(sequence(&store), before_sequence + 2);
+    assert_eq!(
+        item_fences(&graph(&store), "i01").expected_item_revision,
+        Revision::new(1)
+    );
+    assert_eq!(
+        item_fences(&graph(&store), "i16").expected_item_revision,
+        Revision::new(1)
+    );
+    assert_eq!(outcome(&store, "independent-item"), Some(output.clone()));
+    assert!(outcome(&store, "g6-competing-0").is_some());
+    assert_eq!(
+        success(execute_direct_v1(&resolver(), input, &NoEffects, &NoEffects).unwrap()),
+        output
+    );
+    assert_eq!(sequence(&store), before_sequence + 2);
+}
+
+#[test]
+fn same_item_race_reports_the_current_revision_without_effects() {
+    let (temporary, selector, store) = prepare_fixture();
+    let before = graph(&store);
+    let before_sequence = sequence(&store);
+    let competitor = Arc::new(Mutex::new(Competitor::with_trials(temporary.path(), 1)));
+    let instrumented = resolver().with_store_boundary_observer_v1({
+        let competitor = Arc::clone(&competitor);
+        move |boundary| {
+            if boundary == DirectTransactionBoundaryV1::BeforeBegin {
+                competitor.lock().unwrap().commit_item(0, "i01");
+            }
+        }
+    });
+    let input = request(&selector, set(&before, "i01", "parent"), "same-item-stale");
+    let DirectResponseV1::Failure(error) =
+        execute_direct_v1(&instrumented, input, &NoEffects, &NoEffects).unwrap()
+    else {
+        panic!("stale item fence committed");
+    };
+    competitor.lock().unwrap().finish();
+    let error = error.into_value();
+    assert!(validate_daemon_free_document_v1("podway.error/v2", &error));
+    assert_eq!(error["code"], "ITEM_REVISION_CONFLICT");
+    assert_eq!(error["details"]["current_revision"], 1);
+    assert_eq!(sequence(&store), before_sequence + 1);
+    assert!(outcome(&store, "same-item-stale").is_none());
+    assert_eq!(
+        item_fences(&graph(&store), "i01").expected_item_revision,
+        Revision::new(1)
+    );
+}
+
+#[test]
+fn in_transaction_workspace_revalidation_keeps_typed_errors_and_exact_retry() {
+    for (route, unsafe_git) in [
+        "item",
+        "repair",
+        "record-many",
+        "cursor",
+        "begin",
+        "procedure",
+        "reset",
+        "archive",
+        "start",
+        "delegation",
+    ]
+    .into_iter()
+    .flat_map(|route| [false, true].map(|unsafe_git| (route, unsafe_git)))
+    {
+        let (temporary, selector, store) = prepare_fixture();
+        let command = typed_revalidation_command(route, temporary.path(), &selector, &store);
+        let before = graph(&store);
+        let before_sequence = sequence(&store);
+        let root = temporary.path().to_path_buf();
+        let config = root.join(".podway/config.yaml");
+        let original_config = std::fs::read(&config).ok();
+        let instrumented = resolver().with_store_boundary_observer_v1({
+            let root = root.clone();
+            let config = config.clone();
+            move |boundary| {
+                if boundary == DirectTransactionBoundaryV1::BeforeBegin {
+                    if unsafe_git {
+                        std::fs::rename(root.join(".git"), root.join("owned-git")).unwrap();
+                        std::os::unix::fs::symlink("owned-git", root.join(".git")).unwrap();
+                    } else {
+                        std::fs::write(&config, b"invalid: [\n").unwrap();
+                    }
+                }
+            }
+        });
+        let input = request(&selector, command, "typed-revalidation");
+        let response =
+            execute_direct_v1(&instrumented, input.clone(), &NoEffects, &NoEffects).unwrap();
+        if unsafe_git {
+            std::fs::remove_file(root.join(".git")).unwrap();
+            std::fs::rename(root.join("owned-git"), root.join(".git")).unwrap();
+        } else if let Some(original_config) = original_config {
+            std::fs::write(&config, original_config).unwrap();
+        } else {
+            std::fs::remove_file(&config).unwrap();
+        }
+        rejection(
+            response,
+            if unsafe_git {
+                "WORKSPACE_PATH_UNSAFE"
+            } else {
+                "WORKSPACE_CONFIG_INVALID"
+            },
+        );
+        assert_eq!(graph(&store), before);
+        assert_eq!(sequence(&store), before_sequence);
+        assert!(outcome(&store, "typed-revalidation").is_none());
+        let output = success(
+            execute_direct_v1(&resolver(), input.clone(), &Clock, &NativeDirectIdSourceV1).unwrap(),
+        );
+        assert_eq!(
+            success(execute_direct_v1(&resolver(), input, &NoEffects, &NoEffects).unwrap()),
+            output
+        );
+        assert_eq!(sequence(&store), before_sequence + 1);
+    }
+}
+
+fn typed_revalidation_command(
+    route: &str,
+    root: &std::path::Path,
+    selector: &WorktreeSelectorV1,
+    store: &DirectStoreV1,
+) -> DirectCommandV1 {
+    let execute = |command, key| {
+        success(
+            execute_direct_v1(
+                &resolver(),
+                request(selector, command, key),
+                &Clock,
+                &NativeDirectIdSourceV1,
+            )
+            .unwrap(),
+        )
+    };
+    let identity = |current: &GraphSessionStateV2| SessionIdentityPreconditionsWireV1 {
+        expected_session_id: current.trace().session_id().clone(),
+        expected_session_revision: current.trace().revision(),
+    };
+    let force = || SessionDeletionModeV1::Force {
+        progress_summary: "Replace the isolated revalidation fixture.".into(),
+    };
+    if route == "begin" {
+        execute(
+            DirectCommandV1::Session(DirectSessionCommandV1::Reset(SessionResetV1 {
+                mode: force(),
+                dry_run: false,
+                preconditions: identity(&graph(store)),
+            })),
+            "typed-fixture-reset",
+        );
+        execute(plain_start(root), "typed-fixture-start");
+    }
+    if matches!(route, "procedure" | "archive") {
+        execute(
+            DirectCommandV1::Cursor(DirectCursorCommandV1::Cancel(SessionCancelV1 {
+                reason: "Finish the isolated revalidation fixture.".into(),
+                preconditions: cursor_fences(&graph(store)),
+            })),
+            "typed-fixture-cancel",
+        );
+    }
+    if route == "archive" {
+        execute(
+            DirectCommandV1::Procedure(ProcedureV2MutationCommandV1::SessionTerminalDisposition(
+                SessionTerminalDispositionV1 {
+                    disposition: TerminalDispositionInputV1::NotRequired {
+                        reason: "No external fixture handoff is required.".into(),
+                    },
+                    actor: None,
+                    preconditions: identity(&graph(store)),
+                },
+            )),
+            "typed-fixture-dispose",
+        );
+    }
+    if route == "delegation" {
+        let mut source: Value =
+            serde_json::from_slice(&std::fs::read(root.join("race.json")).unwrap()).unwrap();
+        source["graph"]["nodes"][0]["delegation"] = json!({"binding_ref":"local-specialist", "role_ref":"reviewer",
+            "role_snapshot_digest":digest(), "max_rounds":3, "after_accept":"retain"});
+        let source = serde_json::to_vec(&source).unwrap();
+        std::fs::write(root.join("typed-delegated.json"), &source).unwrap();
+        execute(
+            DirectCommandV1::Start(DirectStartCommandV1::Replace(SessionStartReplaceV1 {
+                start: SessionStartV1 {
+                    source: SessionStartSourceV1::Procedure {
+                        procedure: "typed-delegated.json".into(),
+                    },
+                    expected_procedure_digest: Some(
+                        prepare_workspace_procedure_source_v2("typed-delegated.json", &source)
+                            .unwrap()
+                            .digest()
+                            .clone(),
+                    ),
+                    task_title: "Delegated revalidation fixture".into(),
+                    dry_run: false,
+                },
+                mode: force(),
+                preconditions: identity(&graph(store)),
+            })),
+            "typed-fixture-delegation-start",
+        );
+        execute(
+            DirectCommandV1::Procedure(ProcedureV2MutationCommandV1::SessionBegin(
+                SessionBeginV1 {
+                    initial_goal: None,
+                    preconditions: identity(&graph(store)),
+                },
+            )),
+            "typed-fixture-delegation-begin",
+        );
+        attach(selector, store, "typed-fixture-delegation-attach");
+    }
+    let current = graph(store);
+    match route {
+        "item" => set(&current, "i01", "parent"),
+        "repair" => DirectCommandV1::WorkspaceRepair,
+        "record-many" => state_command(&current, 1),
+        "cursor" => DirectCommandV1::Cursor(DirectCursorCommandV1::Cancel(SessionCancelV1 {
+            reason: "Cancel the isolated fixture.".into(),
+            preconditions: cursor_fences(&current),
+        })),
+        "begin" => {
+            DirectCommandV1::Procedure(ProcedureV2MutationCommandV1::SessionBegin(SessionBeginV1 {
+                initial_goal: None,
+                preconditions: identity(&current),
+            }))
+        }
+        "procedure" => {
+            DirectCommandV1::Procedure(ProcedureV2MutationCommandV1::SessionTerminalDisposition(
+                SessionTerminalDispositionV1 {
+                    disposition: TerminalDispositionInputV1::NotRequired {
+                        reason: "No external fixture handoff is required.".into(),
+                    },
+                    actor: None,
+                    preconditions: identity(&current),
+                },
+            ))
+        }
+        "reset" => DirectCommandV1::Session(DirectSessionCommandV1::Reset(SessionResetV1 {
+            mode: force(),
+            dry_run: false,
+            preconditions: identity(&current),
+        })),
+        "archive" => DirectCommandV1::Session(DirectSessionCommandV1::Archive(SessionArchiveV1 {
+            preconditions: identity(&current),
+        })),
+        "start" => {
+            let DirectCommandV1::Start(DirectStartCommandV1::Start(start)) = plain_start(root)
+            else {
+                unreachable!()
+            };
+            DirectCommandV1::Start(DirectStartCommandV1::Replace(SessionStartReplaceV1 {
+                start,
+                mode: force(),
+                preconditions: identity(&current),
+            }))
+        }
+        "delegation" => {
+            let package = execute(
+                DirectCommandV1::Read {
+                    command: DirectReadCommandV1::DelegationPackage,
+                    expected_session_id: None,
+                },
+                "typed-fixture-package",
+            );
+            let workspace = store
+                .read(deadline(), |snapshot| {
+                    Ok(snapshot.binding().identity().workspace_uuid().clone())
+                })
+                .unwrap();
+            DirectCommandV1::DelegationAccept(DelegationAcceptV1 {
+                input: json!({"schema":"podway.delegation-accept-input/v1", "workspace_uuid":workspace,
+                    "session_id":current.trace().session_id(), "session_revision":current.trace().revision(),
+                    "attempt_id":current.trace().active_attempt().unwrap().attempt_id(), "idempotency_key":"typed-revalidation",
+                    "package_digest":package["result"]["package_digest"],
+                    "execution":{"binding_ref":"local-specialist", "adapter_id":"fixture", "adapter_version":"1", "primary_host":"external",
+                        "scope_kind":"test", "scope_ref":"scope-1", "supervisor_ref":"supervisor-1", "worker_ref":"worker-1", "task_ref":"task-1",
+                        "role_ref":"reviewer", "role_snapshot_digest":digest(), "agent_configuration_digest":digest(), "accepted_task_digest":digest()},
+                    "rounds_used":1, "result_digest":digest(), "summary":"Verified delegated fixture.", "worker_disposition":"idle", "accepted":true}),
+                preconditions: cursor_fences(&current),
+            })
+        }
+        _ => unreachable!(),
+    }
 }
 
 #[test]

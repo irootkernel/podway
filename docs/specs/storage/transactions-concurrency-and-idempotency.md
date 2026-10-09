@@ -26,9 +26,15 @@ A custom Procedure start requires its canonical digest confirmation.
 
 The Engine revalidates the relevant session, attempt, goal and item identities,
 Procedure digest, graph preparation and artifact metadata at the transaction
-boundary. A changed input fails closed rather than applying preparation to a
-new state. Preparation does not reserve a queue position or promise an eventual
-execution. An exact successful start replay can recover its original pinned
+boundary. A changed workspace sequence alone is not a caller conflict. The Store
+reuses an unchanged prepared graph or loads transaction-current state, then the
+Engine evaluates the command's own fences and start policy against that state.
+Unrelated item commits preserve valid item fences; a stale fence reports the
+current revision. A plain start that loses a race reports the current session's
+start decision instead of an internal error. Changed artifact or Procedure inputs
+still fail closed, and native resolution failures retain their typed errors.
+Preparation does not reserve a queue position or promise an eventual execution.
+An exact successful start replay can recover its original pinned
 source digest from the stored outcome; it does not require the original file to
 remain available.
 

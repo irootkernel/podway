@@ -130,10 +130,11 @@ pub fn execute_procedure_v1<R: GitResolverContractV1>(
     let native = NativeDirectWorkspaceV1::new(resolved.clone());
     let mut execution_error = None;
     let result = store.mutate(&mutation, request.deadline, || clock.now(), |transaction| {
-        let prepared = prepared.as_ref().ok_or_else(|| GraphMutationErrorV2::Domain(DomainError::SessionIdentityMismatch {
+        let current = transaction.use_prepared_graph(prepared.as_ref())?;
+        let current = current.as_ref().ok_or_else(|| GraphMutationErrorV2::Domain(DomainError::SessionIdentityMismatch {
             expected: session.clone(), actual: None,
         }))?;
-        let prior = prepared.graph();
+        let prior = current.as_ref();
         check_session_fences(prior, session, revision)?;
         if matches!(command, C::SessionRework(_)) && attempt.is_some()
             && prior.trace().active_attempt().is_none() {
@@ -165,8 +166,10 @@ pub fn execute_procedure_v1<R: GitResolverContractV1>(
                 return Err(GraphMutationErrorV2::GoalRevisionStale { expected: GoalRevisionNumberV2::new(expected), actual }.into());
             }
         }
-        transaction.use_prepared_graph(prepared)?;
-        resolver.revalidate(&resolved, transaction.binding()).map_err(|_| DirectStoreErrorV1::BindingMismatch)?;
+        resolver.revalidate(&resolved, transaction.binding()).map_err(|error| {
+            execution_error = Some(DirectExecutionErrorV1::from(error));
+            DirectStoreErrorV1::InvalidInput { reason: "workspace revalidation failed" }
+        })?;
         if matches!(command, C::SessionDecide(_)) {
             let artifacts = required_local_artifacts_v2(prior).map_err(|error| {
                 execution_error = Some(DirectExecutionErrorV1::Preparation(error));

@@ -943,6 +943,73 @@ mod decisions {
         // Nothing about the named session, attempt, or item may leak into the refusal.
         assert_eq!(error["details"], json!({}));
 
+        for (token_session, token_item) in [
+            ("00000000-0000-4000-8000-0000000000ff", "result"),
+            (session_id.as_str(), "another-item"),
+        ] {
+            let token = EvidencePageTokenV1::new(
+                token_session,
+                &source_attempt,
+                &source_attempt,
+                token_item,
+                page["value_digest"].as_str().unwrap(),
+                0,
+            )
+            .unwrap()
+            .encode();
+            let mut input = query_request(
+                next_number(&mut number),
+                "evidence.read",
+                &engine,
+                "00000000-0000-4000-8000-0000000000fe",
+                json!({"source":"work","item_id":"result","page_token":token,
+                    "expected_consumer_attempt_id":source_attempt})
+                .as_object()
+                .unwrap()
+                .clone(),
+            );
+            input.expected_workspace_id = Some(
+                podway_core::WorkspaceId::new("00000000-0000-4000-8000-0000000000fd").unwrap(),
+            );
+            let DirectResponseV1::Failure(error) = dispatch(&engine, &input) else {
+                panic!("unbound token escaped validation");
+            };
+            let error = error.into_value();
+            assert_eq!(error["code"], "REQUEST_INVALID");
+            assert_eq!(error["details"], json!({}));
+        }
+        let bound = EvidencePageTokenV1::new(
+            &session_id,
+            consumer_attempt.as_str(),
+            &source_attempt,
+            "result",
+            page["value_digest"].as_str().unwrap(),
+            0,
+        )
+        .unwrap()
+        .encode();
+        let input = query_request(
+            next_number(&mut number),
+            "evidence.read",
+            &engine,
+            &session_id,
+            json!({"source":"work","item_id":"result","page_token":bound,
+                "expected_consumer_attempt_id":source_attempt})
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
+        let mut wrong_workspace = input.clone();
+        wrong_workspace.expected_workspace_id =
+            Some(podway_core::WorkspaceId::new("00000000-0000-4000-8000-0000000000fd").unwrap());
+        let DirectResponseV1::Failure(error) = dispatch(&engine, &wrong_workspace) else {
+            panic!("bound token bypassed workspace fence");
+        };
+        assert_eq!(error.into_value()["code"], "WORKSPACE_UUID_MISMATCH");
+        let DirectResponseV1::Failure(error) = dispatch(&engine, &input) else {
+            panic!("stale caller attempt escaped validation");
+        };
+        assert_eq!(error.into_value()["code"], "ATTEMPT_NOT_CURRENT");
         assert_malformed_token_rejected_at_protocol_boundary();
     }
 }

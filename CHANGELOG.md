@@ -13,6 +13,7 @@ This file records concise shipped outcomes and the planned next stable release.
 ### Fixed
 
 - Apply timeouts only to lock waits, permit an immediate attempt with no remaining budget, and preserve the original budget through interactive prompts.
+- Preserve independent item writes across concurrent changes, report current stale revisions, and re-evaluate concurrent session starts against current state.
 
 - Return valid JSON errors for local CLI failures and oversized output, honor a late `--json`, and provide retired-family help and outcome identity completion.
 

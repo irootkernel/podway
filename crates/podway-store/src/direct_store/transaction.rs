@@ -246,33 +246,33 @@ impl<Clock: FnOnce() -> UnixMillis> DirectTransactionV1<'_, '_, Clock> {
         Ok(self.previous.get().and_then(Option::as_deref))
     }
 
-    /// Revalidate the opaque prepared snapshot before clock/state effects. The
-    /// successful-mutation sequence also detects disposition/archive-only writes.
+    /// Select transaction-current state before clock/state effects. Reuse the
+    /// prepared Arc only when its sequence and graph stamps are unchanged.
     pub fn use_prepared_graph(
         &mut self,
-        prepared: &super::DirectPreparedGraphV1,
-    ) -> DirectStoreResultV1<()> {
+        prepared: Option<&super::DirectPreparedGraphV1>,
+    ) -> DirectStoreResultV1<Option<Arc<GraphSessionStateV2>>> {
         if self.state_written || self.now.is_some() {
             return Err(DirectStoreErrorV1::InvalidInput {
                 reason: "prepared graph must be validated before clock or state effects",
             });
         }
+        let Some(prepared) = prepared else {
+            self.current_graph()?;
+            return Ok(self.previous.get().cloned().flatten());
+        };
         let (sequence, generation, manifest, uuid, root): (i64,String,String,String,String) = self.transaction.query_row(
             "SELECT w.next_workspace_sequence,c.generation_id,c.contract_manifest_digest,w.workspace_uuid,w.last_validated_root \
              FROM workspace_state w JOIN writer_contract c ON c.singleton=w.singleton WHERE w.singleton=1",
             [], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?)))?;
         let sequence = u64::try_from(sequence).map_err(|_| DirectStoreErrorV1::Unreadable)?;
-        if sequence != prepared.sequence
-            || generation != prepared.generation_id
+        if generation != prepared.generation_id
             || manifest != prepared.manifest.as_str()
             || uuid != prepared.workspace.as_str()
             || prepared.root != self.root
             || self.binding.last_validated_root().as_encoded() != root
         {
-            return Err(DirectStoreErrorV1::PreparedStateChanged {
-                expected_sequence: prepared.sequence,
-                actual_sequence: sequence,
-            });
+            return Err(DirectStoreErrorV1::BindingMismatch);
         }
         let stamps: Option<(String,i64,i64,String,String)> = self.transaction.query_row(
             "SELECT s.session_id,s.session_revision,w.workspace_revision,s.procedure_snapshot_id,p.digest \
@@ -280,24 +280,26 @@ impl<Clock: FnOnce() -> UnixMillis> DirectTransactionV1<'_, '_, Clock> {
              JOIN v2_procedure_snapshots p ON p.snapshot_id=s.procedure_snapshot_id WHERE w.singleton=1",
             [], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?))).optional()?;
         let graph = prepared.graph();
-        if stamps.as_ref().is_none_or(
-            |(id, session_revision, workspace_revision, snapshot, digest)| {
-                id != graph.trace().session_id().as_str()
-                    || u64::try_from(*session_revision).ok() != Some(graph.trace().revision().get())
-                    || u64::try_from(*workspace_revision).ok()
-                        != Some(graph.workspace_revision().get())
-                    || snapshot != graph.snapshot().snapshot_id().as_str()
-                    || digest != graph.snapshot().digest().as_str()
-            },
-        ) {
-            return Err(DirectStoreErrorV1::PreparedStateChanged {
-                expected_sequence: prepared.sequence,
-                actual_sequence: sequence,
-            });
+        if sequence != prepared.sequence
+            || stamps.as_ref().is_none_or(
+                |(id, session_revision, workspace_revision, snapshot, digest)| {
+                    id != graph.trace().session_id().as_str()
+                        || u64::try_from(*session_revision).ok()
+                            != Some(graph.trace().revision().get())
+                        || u64::try_from(*workspace_revision).ok()
+                            != Some(graph.workspace_revision().get())
+                        || snapshot != graph.snapshot().snapshot_id().as_str()
+                        || digest != graph.snapshot().digest().as_str()
+                },
+            )
+        {
+            self.previous.take();
+            self.current_graph()?;
+            return Ok(self.previous.get().cloned().flatten());
         }
         self.previous.take();
         let _ = self.previous.set(Some(Arc::clone(&prepared.graph)));
-        Ok(())
+        Ok(Some(Arc::clone(&prepared.graph)))
     }
 
     fn require_clock(&self) -> DirectStoreResultV1<UnixMillis> {

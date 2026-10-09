@@ -122,11 +122,12 @@ pub fn execute_cursor_v1<R: GitResolverContractV1>(
     let native = crate::native_execution::NativeDirectWorkspaceV1::new(resolved.clone());
     let mut execution_error = None;
     let result = store.mutate(&mutation, request.deadline, || clock.now(), |transaction| {
-        let prepared = prepared.as_ref().ok_or_else(|| DirectStoreErrorV1::Domain(
+        let current = transaction.use_prepared_graph(prepared.as_ref())?;
+        let current = current.as_ref().ok_or_else(|| DirectStoreErrorV1::Domain(
             GraphMutationErrorV2::Domain(DomainError::SessionIdentityMismatch {
                 expected: fences.expected_session_id.clone(), actual: None,
             })))?;
-        let prior = prepared.graph();
+        let prior = current.as_ref();
         if prior.trace().session_id() != &fences.expected_session_id {
             return Err(GraphMutationErrorV2::Domain(DomainError::SessionIdentityMismatch {
                 expected: fences.expected_session_id.clone(), actual: Some(prior.trace().session_id().clone()),
@@ -146,8 +147,10 @@ pub fn execute_cursor_v1<R: GitResolverContractV1>(
                 expected: fences.expected_attempt_id.clone(), actual: Some(active.attempt_id().clone()),
             }.into());
         }
-        transaction.use_prepared_graph(prepared)?;
-        resolver.revalidate(&resolved, transaction.binding()).map_err(|_| DirectStoreErrorV1::BindingMismatch)?;
+        resolver.revalidate(&resolved, transaction.binding()).map_err(|error| {
+            execution_error = Some(DirectExecutionErrorV1::from(error));
+            DirectStoreErrorV1::InvalidInput { reason: "workspace revalidation failed" }
+        })?;
         if matches!(request.command, DirectCursorCommandV1::Complete(_)) {
             use podway_store::v2_delegation::DelegationReadinessV1;
             let failure = match transaction.delegation_receipts()?.readiness() {
@@ -349,12 +352,14 @@ pub fn begin_session_v1<R: GitResolverContractV1>(
         .transpose()
         .map_err(DirectExecutionErrorV1::Domain)?;
     let prepared = store.prepare_graph(request.deadline)?;
+    let mut execution_error = None;
     let result = store.mutate(&mutation, request.deadline, || clock.now(), |transaction| {
-        let prepared = prepared.as_ref().ok_or_else(|| DirectStoreErrorV1::Domain(
+        let current = transaction.use_prepared_graph(prepared.as_ref())?;
+        let current = current.as_ref().ok_or_else(|| DirectStoreErrorV1::Domain(
             GraphMutationErrorV2::Domain(DomainError::SessionIdentityMismatch {
                 expected: request.input.preconditions.expected_session_id.clone(), actual: None,
             })))?;
-        let prior = prepared.graph();
+        let prior = current.as_ref();
         let fences = &request.input.preconditions;
         if prior.trace().session_id() != &fences.expected_session_id {
             return Err(GraphMutationErrorV2::Domain(DomainError::SessionIdentityMismatch {
@@ -372,9 +377,10 @@ pub fn begin_session_v1<R: GitResolverContractV1>(
         if initial_goal.is_some() && !prior.snapshot().goal_tracking() {
             return Err(GraphMutationErrorV2::GoalTrackingNotEnabled.into());
         }
-        transaction.use_prepared_graph(prepared)?;
-        resolver.revalidate(&resolved, transaction.binding())
-            .map_err(|_| DirectStoreErrorV1::BindingMismatch)?;
+        resolver.revalidate(&resolved, transaction.binding()).map_err(|error| {
+            execution_error = Some(DirectExecutionErrorV1::from(error));
+            DirectStoreErrorV1::InvalidInput { reason: "workspace revalidation failed" }
+        })?;
         let attempt_id = ids.next_attempt_id();
         let now = transaction.now();
         let outcome = prior.begin_v2(fences.expected_session_revision, attempt_id.clone(), initial_goal, now)?;
@@ -406,7 +412,11 @@ pub fn begin_session_v1<R: GitResolverContractV1>(
             .map_err(|_| DirectStoreErrorV1::InvalidInput { reason: "begin success exceeds the outcome bound" })?;
         transaction.replace_graph(prior.workspace_revision(), prior.trace().revision(), next)?;
         Ok(response)
-    })?;
+    });
+    if let Some(error) = execution_error {
+        return Err(error);
+    }
+    let result = result?;
     serde_json::from_str(result.outcome().response().as_str())
         .map_err(|_| DirectStoreErrorV1::Unreadable.into())
 }
@@ -535,9 +545,17 @@ pub fn execute_read_v1<R: GitResolverContractV1>(
     request: DirectReadRequestV1,
     clock: &impl ExecutionClockV1,
 ) -> Result<OutputEnvelopeV4, DirectExecutionErrorV1> {
+    let token_read = matches!(
+        &request.command,
+        DirectReadCommandV1::Evidence { token: Some(_), .. }
+    );
     let (resolved, store) = resolver.resolve_existing(
         request.selector,
-        request.expected_workspace_id.as_ref(),
+        if token_read {
+            None
+        } else {
+            request.expected_workspace_id.as_ref()
+        },
         request.deadline,
     )?;
     store.read(request.deadline, |snapshot| {
@@ -555,6 +573,19 @@ pub fn execute_read_v1<R: GitResolverContractV1>(
                     snapshot.archived_view(session_id, now)?.ok_or(GraphViewErrorV2::MissingGraphSession)?,
                 _ => current,
             };
+            if let DirectReadCommandV1::Evidence { item_id, token, .. } = &request.command {
+                crate::v2_read_service::check_evidence_token_binding_v1(
+                    view.graph().map(|graph| graph.trace().session_id()), item_id, token.as_ref(),
+                )?;
+            }
+            if token_read && let Some(expected) = &request.expected_workspace_id
+                && expected != snapshot.binding().identity().workspace_uuid()
+            {
+                return Err(crate::workspace::WorkspaceResolutionErrorV1::ExpectedWorkspaceUuidMismatch {
+                    expected: expected.clone(),
+                    actual: snapshot.binding().identity().workspace_uuid().clone(),
+                }.into());
+            }
             if let Some(expected) = request.expected_session_id
                 && !view.graph().is_some_and(|graph| graph.trace().session_id() == &expected)
             {

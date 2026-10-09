@@ -26,7 +26,6 @@ fn context(command: &str) -> DirectErrorContextV1 {
         observed_at: Rfc3339MillisV1::new("2023-11-14T22:13:20.000Z").unwrap(),
         idempotency_key: Some(IdempotencyKeyV1::new("original-key").unwrap()),
         timeout_ms: 5000,
-        expected_revision: Some(Revision::new(2)),
         maintenance: None,
     }
 }
@@ -265,13 +264,6 @@ fn direct_failure_catalog_preserves_store_fences_domain_and_recovery() {
             "MUTATION_OUTCOME_UNKNOWN",
         ),
         (
-            store(DirectStoreErrorV1::PreparedStateChanged {
-                expected_sequence: 300,
-                actual_sequence: 301,
-            }),
-            "SESSION_REVISION_CONFLICT",
-        ),
-        (
             graph(GraphMutationErrorV2::SessionRevisionConflict {
                 expected: Revision::new(2),
                 actual: Revision::new(3),
@@ -452,15 +444,15 @@ fn direct_failure_catalog_preserves_store_fences_domain_and_recovery() {
         }
     }
     let value = assert_error(
-        store(DirectStoreErrorV1::PreparedStateChanged {
-            expected_sequence: 300,
-            actual_sequence: 301,
+        graph(GraphMutationErrorV2::ItemRevisionConflict {
+            expected: Revision::new(2),
+            actual: Revision::new(3),
         }),
         "item.set",
         "ITEM_REVISION_CONFLICT",
     );
     assert_eq!(value["details"]["expected_revision"], 2);
-    assert!(value["details"].get("current_revision").is_none());
+    assert_eq!(value["details"]["current_revision"], 3);
     let value = assert_error(
         DirectExecutionErrorV1::Domain(DomainError::SessionIdentityMismatch {
             expected: SessionId::new(ID).unwrap(),

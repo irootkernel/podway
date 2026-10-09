@@ -2,7 +2,7 @@
 
 use std::{sync::Arc, time::Instant};
 
-use podway_core::{Revision, SessionId, WorkspaceId};
+use podway_core::{SessionId, WorkspaceId};
 use podway_git::GitResolverContractV1;
 pub use podway_git::{
     DiagnosticPathDisplayV1, LosslessPathV1, NativeGitResolverV1, WORKTREE_SELECTOR_VERSION_V1,
@@ -92,51 +92,6 @@ impl DirectCommandV1 {
             Self::WorkspaceRemove { .. } => "workspace.remove",
         }
     }
-
-    fn expected_revision(&self) -> Option<Revision> {
-        match self {
-            Self::Cursor(command) => Some(command.preconditions().expected_session_revision),
-            Self::Item(command) => Some(command.preconditions().expected_item_revision),
-            Self::RecordMany(input) => Some(input.preconditions.expected_session_revision),
-            Self::DelegationAccept(input) => Some(input.preconditions.expected_session_revision),
-            Self::Start(DirectStartCommandV1::Replace(input)) => {
-                Some(input.preconditions.expected_session_revision)
-            }
-            Self::Session(command) => Some(match command {
-                DirectSessionCommandV1::Reset(input) => {
-                    input.preconditions.expected_session_revision
-                }
-                DirectSessionCommandV1::Archive(input) => {
-                    input.preconditions.expected_session_revision
-                }
-                DirectSessionCommandV1::Purge(input) => input.expected_session_revision,
-            }),
-            Self::Procedure(command) => Some(match command {
-                ProcedureV2MutationCommandV1::SessionBegin(input) => {
-                    input.preconditions.expected_session_revision
-                }
-                ProcedureV2MutationCommandV1::SessionTerminalDisposition(input) => {
-                    input.preconditions.expected_session_revision
-                }
-                ProcedureV2MutationCommandV1::SessionDecide(input) => {
-                    input.preconditions.expected_session_revision
-                }
-                ProcedureV2MutationCommandV1::SessionRework(input) => {
-                    input.preconditions.expected_session_revision
-                }
-                ProcedureV2MutationCommandV1::GoalDefine(input) => {
-                    input.preconditions.expected_session_revision
-                }
-                ProcedureV2MutationCommandV1::GoalRevise(input) => {
-                    input.preconditions.expected_session_revision
-                }
-                ProcedureV2MutationCommandV1::GoalAssessCriterion(input) => {
-                    input.preconditions.expected_session_revision
-                }
-            }),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -218,7 +173,6 @@ fn execute_direct_inner_v1<R: GitResolverContractV1>(
         observed_at: request.observed_at.clone(),
         idempotency_key: request.idempotency_key.clone(),
         timeout_ms: request.timeout_ms,
-        expected_revision: request.command.expected_revision(),
         maintenance: None,
     };
     let selector = request.selector.clone();

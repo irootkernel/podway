@@ -31,7 +31,6 @@ pub struct DirectErrorContextV1 {
     pub observed_at: Rfc3339MillisV1,
     pub idempotency_key: Option<IdempotencyKeyV1>,
     pub timeout_ms: u64,
-    pub expected_revision: Option<podway_core::Revision>,
     pub maintenance: Option<DirectMaintenanceRecoveryV1>,
 }
 
@@ -567,19 +566,6 @@ fn store(error: &DirectStoreErrorV1, context: &DirectErrorContextV1) -> Presenta
         E::IdempotencyKeyReused => Presentation {
             code: "IDEMPOTENCY_KEY_REUSED",
             details: json!({"schema":"podway.idempotency-key-reused-details/v2"}),
-        },
-        E::PreparedStateChanged { .. } => match context.expected_revision {
-            Some(expected) => Presentation {
-                code: if context.command.as_str().starts_with("item.")
-                    && context.command.as_str() != "item.record_many"
-                {
-                    "ITEM_REVISION_CONFLICT"
-                } else {
-                    "SESSION_REVISION_CONFLICT"
-                },
-                details: json!({"schema":"podway.revision-conflict-details/v3","expected_revision":expected,"recovery":refresh()}),
-            },
-            None => simple("INTERNAL_ERROR"),
         },
         E::MutationOutcomeUnknown => {
             let Some(key) = &context.idempotency_key else {

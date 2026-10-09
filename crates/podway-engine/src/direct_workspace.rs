@@ -233,8 +233,12 @@ fn existing_mutation<R: GitResolverContractV1>(
         return Err(WorkspaceResolutionErrorV1::BootstrapBindingAlreadyPresent.into());
     }
     let refused_plain_init = Cell::new(false);
+    let mut resolution_error = None;
     let outcome = store.mutate(&mutation, request.deadline, || clock.now(), |transaction| {
-        resolver.revalidate(&resolved, transaction.binding()).map_err(|_| DirectStoreErrorV1::BindingMismatch)?;
+        resolver.revalidate(&resolved, transaction.binding()).map_err(|error| {
+            resolution_error = Some(DirectWorkspaceErrorV1::from(error));
+            DirectStoreErrorV1::InvalidInput { reason: "workspace revalidation failed" }
+        })?;
         if plain_init {
             // Retention can remove the preliminary outcome before BEGIN. Only
             // the transaction's retained exact success may replay plain init.
@@ -253,6 +257,9 @@ fn existing_mutation<R: GitResolverContractV1>(
             &uuid, resolved.worktree(), sequence, result).map_err(|_| DirectStoreErrorV1::InvalidInput {
                 reason:"invalid workspace success envelope" })?)
     });
+    if let Some(error) = resolution_error {
+        return Err(error);
+    }
     if refused_plain_init.get() {
         return Err(WorkspaceResolutionErrorV1::BootstrapBindingAlreadyPresent.into());
     }

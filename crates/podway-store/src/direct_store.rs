@@ -70,10 +70,6 @@ pub enum DirectStoreErrorV1 {
         actual: WorkspaceId,
     },
     IdempotencyKeyReused,
-    PreparedStateChanged {
-        expected_sequence: u64,
-        actual_sequence: u64,
-    },
     MutationOutcomeUnknown,
     InvalidInput {
         reason: &'static str,

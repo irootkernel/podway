@@ -1600,7 +1600,6 @@ fn record_many_enforces_aggregate_encoded_input_bound_without_effects_and_preser
                     observed_at,
                     idempotency_key: Some(key.clone()),
                     timeout_ms: 5000,
-                    expected_revision: Some(input.preconditions.expected_session_revision),
                     maintenance: None,
                 };
                 match record_many_v1(

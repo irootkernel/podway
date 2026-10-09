@@ -668,6 +668,21 @@ impl From<GraphViewErrorV2> for EvidenceReadErrorV2 {
     }
 }
 
+/// Reject cross-session or wrong-item tokens before caller and snapshot fences.
+pub(crate) fn check_evidence_token_binding_v1(
+    session_id: Option<&podway_core::SessionId>,
+    item_id: &ItemId,
+    token: Option<&EvidencePageTokenV1>,
+) -> Result<(), EvidenceReadErrorV2> {
+    if let Some(token) = token
+        && (session_id.is_none_or(|session| token.session_id() != session.as_str())
+            || token.item_id() != item_id.as_str())
+    {
+        return Err(EvidenceReadErrorV2::TokenNotBound);
+    }
+    Ok(())
+}
+
 /// Serves one bounded page of a selected evidence item under the current consumer attempt.
 ///
 /// The read is fenced by the session, the consumer attempt, the declared reference, and, when a
@@ -679,6 +694,11 @@ pub fn project_evidence_read_v1(
     item_id: &ItemId,
     token: Option<&EvidencePageTokenV1>,
 ) -> Result<Map<String, Value>, EvidenceReadErrorV2> {
+    check_evidence_token_binding_v1(
+        view.graph_state().map(|state| state.trace().session_id()),
+        item_id,
+        token,
+    )?;
     let state = graph_state(view)?;
     let active = state
         .trace()
@@ -686,12 +706,6 @@ pub fn project_evidence_read_v1(
         .ok_or(GraphViewErrorV2::TerminalSessionHasNoNext)?;
 
     if let Some(token) = token {
-        // Cross-session and wrong-item tokens never reach a state comparison.
-        if token.session_id() != state.trace().session_id().as_str()
-            || token.item_id() != item_id.as_str()
-        {
-            return Err(EvidenceReadErrorV2::TokenNotBound);
-        }
         // A changed consumer attempt is a moved snapshot, not a forged token: ADR-0024 makes it
         // retryable so a caller re-reads state and continues rather than treating it as malformed.
         if token.consumer_attempt_id() != active.attempt_id().as_str() {

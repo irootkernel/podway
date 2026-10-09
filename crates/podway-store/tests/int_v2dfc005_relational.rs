@@ -134,8 +134,8 @@ fn advance(
             deadline(),
             || UnixMillis::new(time),
             |transaction| {
-                transaction.use_prepared_graph(&prepared)?;
-                let next = transition(prior, transaction.now())?;
+                let prior = transaction.use_prepared_graph(Some(&prepared))?.unwrap();
+                let next = transition(&prior, transaction.now())?;
                 transaction.replace_graph(
                     prior.workspace_revision(),
                     prior.trace().revision(),

@@ -12,8 +12,8 @@ use podway_core::{
     Sha256Digest, UnixMillis, WorkspaceId, canonicalize_json_v1,
 };
 use podway_store::{
-    CanonicalExecutionJsonV1, GraphSessionStateV2, IdempotencyKeyV1, ProcedureSnapshotV2,
-    ValidatedWorkspaceRootV1,
+    CanonicalExecutionJsonV1, GraphMutationErrorV2, GraphSessionStateV2, IdempotencyKeyV1,
+    ProcedureSnapshotV2, ValidatedWorkspaceRootV1,
     direct_store::{
         DirectMutationRequestV1, DirectOutcomeScopeV1, DirectStoreClassificationV1,
         DirectStoreErrorV1, DirectStoreV1, DirectTransactionBoundaryV1, DirectWorkspaceLayoutV1,
@@ -159,7 +159,7 @@ fn direct_scale_transaction_probe() {
                     || UnixMillis::new(300 + index),
                     |transaction| {
                         phases.push(Instant::now());
-                        transaction.use_prepared_graph(&prepared)?;
+                        transaction.use_prepared_graph(Some(&prepared))?;
                         let prior = transaction.current_graph()?.unwrap().clone();
                         phases.push(Instant::now());
                         let active = prior.trace().active_attempt().unwrap().attempt_id();
@@ -1568,7 +1568,7 @@ fn hot_wal_read_snapshot_is_write_free_with_an_open_writer_process() {
 }
 
 #[test]
-fn prepared_graph_is_fenced_before_clock_and_replay_bypasses_stale_preparation() {
+fn prepared_graph_refreshes_before_fences_and_replay_bypasses_preparation() {
     use podway_core::AttemptId;
     let (_root, direct) = fixture();
     let seed = request("seed-prepared");
@@ -1592,9 +1592,8 @@ fn prepared_graph_is_fenced_before_clock_and_replay_bypasses_stale_preparation()
             deadline(),
             || UnixMillis::new(30),
             |transaction| {
-                transaction.use_prepared_graph(&prepared)?;
+                let prior = transaction.use_prepared_graph(Some(&prepared))?.unwrap();
                 let now = transaction.now();
-                let prior = prepared.graph();
                 let next = prior
                     .begin_v2(
                         Revision::ZERO,
@@ -1618,7 +1617,7 @@ fn prepared_graph_is_fenced_before_clock_and_replay_bypasses_stale_preparation()
             deadline(),
             || panic!("no replay clock"),
             |transaction| {
-                transaction.use_prepared_graph(&prepared)?;
+                transaction.use_prepared_graph(Some(&prepared))?;
                 panic!("no replay callback")
             },
         )
@@ -1629,18 +1628,22 @@ fn prepared_graph_is_fenced_before_clock_and_replay_bypasses_stale_preparation()
     let rejected = direct.mutate(
         &stale,
         deadline(),
-        || panic!("stale preparation has no clock"),
+        || panic!("stale caller fence has no clock"),
         |transaction| {
-            transaction.use_prepared_graph(&prepared)?;
-            panic!("stale preparation cannot execute")
+            let current = transaction.use_prepared_graph(Some(&prepared))?.unwrap();
+            assert_eq!(current.trace().revision(), Revision::new(1));
+            Err(GraphMutationErrorV2::SessionRevisionConflict {
+                expected: prepared.graph().trace().revision(),
+                actual: current.trace().revision(),
+            }
+            .into())
         },
     );
     assert!(matches!(
         rejected,
-        Err(DirectStoreErrorV1::PreparedStateChanged {
-            expected_sequence: 2,
-            actual_sequence: 3
-        })
+        Err(DirectStoreErrorV1::Domain(GraphMutationErrorV2::SessionRevisionConflict {
+            expected, actual,
+        })) if expected == Revision::ZERO && actual == Revision::new(1)
     ));
     direct
         .read(deadline(), |snapshot| {
@@ -1650,6 +1653,98 @@ fn prepared_graph_is_fenced_before_clock_and_replay_bypasses_stale_preparation()
         .unwrap();
     let fresh = direct.prepare_graph(deadline()).unwrap().unwrap();
     assert_eq!(fresh.graph().trace().revision(), Revision::new(1));
+}
+
+#[test]
+fn prepared_graph_refreshes_after_sequence_only_success_and_replays_exactly() {
+    use podway_core::AttemptId;
+    let (_root, direct) = fixture();
+    let seed = request("sequence-only-seed");
+    direct
+        .mutate(
+            &seed,
+            deadline(),
+            || UnixMillis::new(20),
+            |transaction| {
+                let now = transaction.now();
+                transaction.create_graph(&prepared_graph(now))?;
+                Ok(success(&seed, json!({"seeded":true}), transaction.now()))
+            },
+        )
+        .unwrap();
+    let prepared = direct.prepare_graph(deadline()).unwrap().unwrap();
+    let before_sequence = direct
+        .read(deadline(), |snapshot| snapshot.committed_sequence())
+        .unwrap();
+    let independent = request("sequence-only-outcome");
+    direct
+        .mutate(
+            &independent,
+            deadline(),
+            || UnixMillis::new(30),
+            |transaction| {
+                Ok(success(
+                    &independent,
+                    json!({"recorded":true}),
+                    transaction.now(),
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        direct.prepare_graph(deadline()).unwrap().unwrap().graph(),
+        prepared.graph()
+    );
+    assert_eq!(
+        direct
+            .read(deadline(), |snapshot| snapshot.committed_sequence())
+            .unwrap(),
+        before_sequence + 1
+    );
+    let begin = request("sequence-only-begin");
+    let changed = direct
+        .mutate(
+            &begin,
+            deadline(),
+            || UnixMillis::new(40),
+            |transaction| {
+                let current = transaction.use_prepared_graph(Some(&prepared))?.unwrap();
+                assert_eq!(current.as_ref(), prepared.graph());
+                let next = current
+                    .begin_v2(
+                        Revision::ZERO,
+                        AttemptId::new("00000000-0000-4000-8000-000000000005").unwrap(),
+                        None,
+                        transaction.now(),
+                    )?
+                    .into_state();
+                transaction.replace_graph(
+                    current.workspace_revision(),
+                    current.trace().revision(),
+                    &next,
+                )?;
+                Ok(success(&begin, json!({"begun":true}), transaction.now()))
+            },
+        )
+        .unwrap();
+    let replay = direct
+        .mutate(
+            &begin,
+            deadline(),
+            || panic!("no replay clock"),
+            |_| panic!("no replay callback"),
+        )
+        .unwrap();
+    assert!(replay.replayed());
+    assert_eq!(replay.outcome(), changed.outcome());
+    direct
+        .read(deadline(), |snapshot| {
+            assert_eq!(snapshot.committed_sequence()?, before_sequence + 2);
+            assert!(snapshot.outcome(independent.key())?.is_some());
+            assert!(snapshot.outcome(begin.key())?.is_some());
+            Ok(())
+        })
+        .unwrap();
 }
 
 #[test]
@@ -1677,21 +1772,18 @@ fn prepared_graph_cannot_cross_store_root_or_reuse_after_clock() {
         deadline(),
         || panic!("foreign token has no clock"),
         |transaction| {
-            transaction.use_prepared_graph(&prepared)?;
+            transaction.use_prepared_graph(Some(&prepared))?;
             panic!("foreign token cannot execute")
         },
     );
-    assert!(matches!(
-        rejected,
-        Err(DirectStoreErrorV1::PreparedStateChanged { .. })
-    ));
+    assert!(matches!(rejected, Err(DirectStoreErrorV1::BindingMismatch)));
     let rejected = first.mutate(
         &request("late-token"),
         deadline(),
         || UnixMillis::new(30),
         |transaction| {
             transaction.now();
-            transaction.use_prepared_graph(&prepared)?;
+            transaction.use_prepared_graph(Some(&prepared))?;
             panic!("late token cannot execute")
         },
     );
