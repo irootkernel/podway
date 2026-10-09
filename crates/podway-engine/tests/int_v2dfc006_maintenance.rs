@@ -651,6 +651,7 @@ fn maintenance_crash_child() {
     let action = std::env::var("PODWAY_MAINTENANCE_ACTION").unwrap();
     let phase = std::env::var("PODWAY_MAINTENANCE_PHASE").unwrap();
     let uuid = WorkspaceId::new(std::env::var("PODWAY_MAINTENANCE_UUID").unwrap()).unwrap();
+    let expected_uuid = (std::env::var_os("PODWAY_MAINTENANCE_UNFENCED").is_none()).then_some(uuid);
     let resolver = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
     let observer = move |actual| {
         let expected = match phase.as_str() {
@@ -686,7 +687,7 @@ fn maintenance_crash_child() {
     if action == "reset" {
         reset_all_with_boundary_observer_v1(
             &resolver,
-            request(std::path::Path::new(&path), "reset", Some(uuid)),
+            request(std::path::Path::new(&path), "reset", expected_uuid),
             &Clock,
             &NativeDirectIdSourceV1,
             observer,
@@ -695,7 +696,7 @@ fn maintenance_crash_child() {
     } else {
         remove_workspace_with_boundary_observer_v1(
             &resolver,
-            request(std::path::Path::new(&path), "remove", Some(uuid)),
+            request(std::path::Path::new(&path), "remove", expected_uuid),
             &Clock,
             observer,
         )

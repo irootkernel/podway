@@ -60,9 +60,8 @@
       },
       "else": {
         "properties": {
-          "workspace_uuid": {
-            "type": "string",
-            "format": "uuid"
+          "podway_directory_removed": {
+            "const": true
           }
         }
       }

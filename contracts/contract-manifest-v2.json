@@ -28,7 +28,7 @@
     {
       "kind": "catalog",
       "path": "release/dolgorae-adapter-contract-v3.json",
-      "sha256": "sha256:b5a3590c4dcaf9aec494bfcd6c12a1b3294013b887bf52cb900cc0907ad10fb3"
+      "sha256": "sha256:38a7474e098b5c8393e0d289944ac8f3f7bd07416fead0947cac6f266f957fc1"
     },
     {
       "kind": "schema",
@@ -118,7 +118,7 @@
     {
       "kind": "schema",
       "path": "schemas/error-v2.schema.json",
-      "sha256": "sha256:4b32c502c96ca9854c5017a894d150f6f84999f19805002c01dfa2287cc51025"
+      "sha256": "sha256:aed90b53f6c4df7ddd88ef53c46f76feda2ee9a4746e3a3e30826de24c00ce5d"
     },
     {
       "kind": "schema",
@@ -423,12 +423,17 @@
     {
       "kind": "schema",
       "path": "schemas/workspace-removal-result-v2.schema.json",
-      "sha256": "sha256:a00bf0a3c29c2512b7c961f7d64c9a54278ba7c241b80f4a89e05c861894bc65"
+      "sha256": "sha256:67777dac56267bf7279be88b4f5490b6bf48ea719105240f49f49ac7e19ba7ff"
     },
     {
       "kind": "schema",
       "path": "schemas/workspace-reset-marker-v1.schema.json",
       "sha256": "sha256:d41a65a151b93a6c2f40527a69bb11dc3a49088d4417a0362a3572ba56cbabb3"
+    },
+    {
+      "kind": "schema",
+      "path": "schemas/workspace-schema-unsupported-details-v1.schema.json",
+      "sha256": "sha256:6e7b60af7ea7d8f8b24832afe440a87e7f8a7bf52ea4e2b32b8e127a5378c977"
     },
     {
       "kind": "schema",
@@ -468,7 +473,7 @@
     {
       "kind": "catalog",
       "path": "spec/error-codes.json",
-      "sha256": "sha256:3a8b1d531b68f3dc7de5b8c00d59b438ddc46eb19e59948e839f6764a948892e"
+      "sha256": "sha256:dc8d58fff7db778544c71474f0afb1baa5b1bf4bb8dce711f252b6122715c285"
     },
     {
       "kind": "catalog",
@@ -588,7 +593,7 @@
     {
       "kind": "known_answer_fixture",
       "path": "tests/fixtures/v2/protocol/current-contracts.json",
-      "sha256": "sha256:34b8e816191100af7693d83328a18f3d3720376a6628ed8bd54ca714403148d3"
+      "sha256": "sha256:3cff46c3c8f6ceb8c9d7251eafe101986ec10a1b1ff008fe125da8f4c872e660"
     },
     {
       "kind": "known_answer_fixture",
@@ -596,7 +601,7 @@
       "sha256": "sha256:7de5f4f024eb795ae7fb73594d4847b833016bea6be9f2737c567b524ae5466e"
     }
   ],
-  "digest": "sha256:dafc4348f6b07f0c379a14c6d47307bbbe38fcb4b006df32acc64abf62f3414c",
+  "digest": "sha256:be497b8404cf168432f455f687c5390eecf6a8c1e79817c6a17b518c2db47956",
   "product": "podway",
   "product_version": "0.2.12",
   "schema_version": "podway.contract-manifest/v2"

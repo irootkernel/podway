@@ -249,22 +249,38 @@ fn confirmed_reset_all_recovers_a_store_when_the_registry_entry_is_missing() {
     );
 }
 #[test]
-fn reset_rejects_a_store_bound_to_another_exact_root() {
+fn confirmed_unfenced_reset_recovers_a_copied_store_but_fenced_reset_refuses() {
     let source = engine();
-    let target = engine();
+    let mut target = engine();
+    let old = uuid(&source);
     // An actual copied Store in an unrelated native Git root has foreign fingerprints.
     std::fs::copy(
         source.store.layout().database(),
         target.store.layout().database(),
     )
     .unwrap();
-    reject(
-        &target,
-        target.request(D::WorkspaceResetAll { confirmed: true }, "foreign-root"),
-        "WORKSPACE_ID_CONFLICT",
-    );
+    let mut fenced = target.request(D::WorkspaceResetAll { confirmed: true }, "foreign-root");
+    fenced.expected_workspace_id = Some(old.clone());
+    reject(&target, fenced, "WORKSPACE_ID_CONFLICT");
     assert!(!target.store.layout().reset_marker().exists());
     assert!(!target.store.layout().intent_marker().exists());
+    let request = target.request(D::WorkspaceResetAll { confirmed: true }, "foreign-root");
+    let once = target.output(target.execute(request.clone(), &Clock));
+    assert_ne!(once["workspace"]["uuid"], old.as_str());
+    target.cold();
+    assert_eq!(target.output(target.execute(request, &NoClock)), once);
+    assert_eq!(
+        target.success(D::WorkspaceDoctor { deep: true }, "doctor")["result"]["healthy"],
+        true
+    );
+    assert!(
+        target
+            .store
+            .read(deadline(), |snapshot| snapshot
+                .outcome(&IdempotencyKeyV1::new("init").unwrap()))
+            .unwrap()
+            .is_none()
+    );
 }
 #[test]
 fn reset_rejects_a_local_store_uuid_registered_at_another_root_before_deletion() {
@@ -360,6 +376,173 @@ fn v2cut_legacy_schema_v3_rejects_then_confirmed_reset_all_replaces_and_cold_reo
     assert_eq!(lookup["result"]["found"], true);
     assert_eq!(lookup["result"]["outcome"]["response"], once);
 }
+#[test]
+fn confirmed_unfenced_removal_reports_a_present_invalid_store_without_adopting_its_uuid() {
+    let source = engine();
+    let mut target = engine();
+    let old = uuid(&source);
+    std::fs::copy(
+        source.store.layout().database(),
+        target.store.layout().database(),
+    )
+    .unwrap();
+    for command in [
+        D::WorkspaceResetAll { confirmed: true },
+        D::WorkspaceRemove {
+            confirmed: true,
+            force: false,
+        },
+    ] {
+        let mut fenced = target.request(command, "selector-fenced");
+        fenced.selector = mismatched_selector(&target, old.clone());
+        assert!(fenced.expected_workspace_id.is_none());
+        reject(&target, fenced, "WORKSPACE_ID_CONFLICT");
+    }
+    let request = target.request(
+        D::WorkspaceRemove {
+            confirmed: true,
+            force: false,
+        },
+        "invalid-remove",
+    );
+    let once = target.output(target.execute(request.clone(), &Clock));
+    assert!(once["result"]["workspace_uuid"].is_null());
+    assert_eq!(once["result"]["podway_directory_removed"], true);
+    assert_eq!(once["result"]["already_absent"], false);
+    assert!(!target.temporary.path().join(".podway").exists());
+    assert!(target.temporary.path().join(".git").exists());
+    assert_eq!(uuid(&source), old);
+    target.cold();
+    let absent = target.output(target.execute(request, &Clock));
+    assert!(absent["result"]["workspace_uuid"].is_null());
+    assert_eq!(absent["result"]["podway_directory_removed"], false);
+    assert_eq!(absent["result"]["already_absent"], true);
+}
+#[test]
+fn invalid_unfenced_removal_marker_survives_crash_and_requires_exact_retry() {
+    let source = engine();
+    let mut engine = engine();
+    let old = uuid(&engine);
+    std::fs::copy(
+        source.store.layout().database(),
+        engine.store.layout().database(),
+    )
+    .unwrap();
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "int_v2dfc006_maintenance::maintenance_crash_child",
+            "--nocapture",
+        ])
+        .env("PODWAY_MAINTENANCE_FIXTURE", engine.temporary.path())
+        .env("PODWAY_MAINTENANCE_UUID", old.as_str())
+        .env("PODWAY_MAINTENANCE_ACTION", "remove")
+        .env("PODWAY_MAINTENANCE_PHASE", "marker")
+        .env("PODWAY_MAINTENANCE_UNFENCED", "1")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(77), "{output:?}");
+    let marker: Value =
+        serde_json::from_slice(&std::fs::read(engine.store.layout().removal_marker()).unwrap())
+            .unwrap();
+    assert!(marker["workspace_uuid"].is_null());
+    engine.cold();
+    reject(
+        &engine,
+        engine.request(
+            D::WorkspaceRemove {
+                confirmed: true,
+                force: false,
+            },
+            "wrong-key",
+        ),
+        "WORKSPACE_MAINTENANCE",
+    );
+    let result = engine.output(engine.execute(
+        engine.request(
+            D::WorkspaceRemove {
+                confirmed: true,
+                force: false,
+            },
+            "remove",
+        ),
+        &NoClock,
+    ));
+    assert!(result["result"]["workspace_uuid"].is_null());
+    assert_eq!(result["result"]["already_absent"], false);
+    assert_eq!(result["result"]["podway_directory_removed"], true);
+    assert!(!engine.temporary.path().join(".podway").exists());
+    assert!(engine.temporary.path().join(".git").is_dir());
+}
+
+#[test]
+fn invalid_unfenced_recovery_does_not_override_a_shared_lease_or_foreign_intent() {
+    use podway_store::direct_store::SharedMaintenanceLeaseV1;
+    for foreign_intent in [false, true] {
+        let source = engine();
+        let engine = engine();
+        let mut original = maintenance(&engine, "owned-intent");
+        original.expected_workspace_id = None;
+        let shared = if foreign_intent {
+            None
+        } else {
+            Some(SharedMaintenanceLeaseV1::acquire(engine.store.layout(), deadline()).unwrap())
+        };
+        std::fs::copy(
+            source.store.layout().database(),
+            engine.store.layout().database(),
+        )
+        .unwrap();
+        if foreign_intent {
+            let interrupted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                reset_all_with_boundary_observer_v1(
+                    &engine.resolver,
+                    original,
+                    &Clock,
+                    &NativeDirectIdSourceV1,
+                    |boundary| {
+                        if boundary == B::IntentPublished {
+                            panic!("interrupt at owned intent");
+                        }
+                    },
+                )
+                .unwrap();
+            }));
+            assert!(interrupted.is_err());
+            assert!(engine.store.layout().intent_marker().exists());
+        }
+        for command in [
+            D::WorkspaceResetAll { confirmed: true },
+            D::WorkspaceRemove {
+                confirmed: true,
+                force: false,
+            },
+        ] {
+            let mut request = engine.request(command, "foreign-request");
+            request.deadline = std::time::Instant::now();
+            request.timeout_ms = 0;
+            reject(&engine, request, "WORKSPACE_MAINTENANCE");
+        }
+        drop(shared);
+    }
+}
+
+#[test]
+fn unfenced_valid_active_removal_still_requires_force_without_effects() {
+    let engine = Engine::new(STATE_PROCEDURE);
+    reject(
+        &engine,
+        engine.request(
+            D::WorkspaceRemove {
+                confirmed: true,
+                force: false,
+            },
+            "no-force",
+        ),
+        "REQUEST_INVALID",
+    );
+}
+
 #[test]
 fn confirmed_removal_deletes_only_podway_and_converges_on_replay() {
     let mut engine = engine();

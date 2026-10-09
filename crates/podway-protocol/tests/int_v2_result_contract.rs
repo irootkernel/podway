@@ -2883,7 +2883,9 @@ fn current_warnings_and_workspace_removal_preserve_closed_scalar_boundaries() {
     assert!(OutputEnvelopeV4::new(input).is_err());
     let present = current_detail_fixtures()["podway.workspace-removal-result/v2"].clone();
     let absent = json!({"schema":"podway.workspace-removal-result/v2","worktree_root":"/tmp/podway-example","workspace_uuid":null,"podway_directory_removed":false,"already_absent":true});
-    for result in [present, absent] {
+    let mut invalid_present = present.clone();
+    invalid_present["workspace_uuid"] = Value::Null;
+    for result in [present, invalid_present.clone(), absent] {
         assert!(OutputEnvelopeV4::new(authoring_input("workspace.remove", &result)).is_ok());
         for field in result.as_object().unwrap().keys() {
             let mut missing = result.clone();
@@ -2894,6 +2896,8 @@ fn current_warnings_and_workspace_removal_preserve_closed_scalar_boundaries() {
         open["registry_entry_removed"] = json!(true);
         assert!(OutputEnvelopeV4::new(authoring_input("workspace.remove", &open)).is_err());
     }
+    invalid_present["podway_directory_removed"] = json!(false);
+    assert!(OutputEnvelopeV4::new(authoring_input("workspace.remove", &invalid_present)).is_err());
 }
 
 #[test]
@@ -3009,6 +3013,7 @@ fn current_direct_registry_preserves_the_accepted_known_answer_family_inventory(
         "podway.workspace-removal-marker/v2",
         "podway.workspace-removal-result/v2",
         "podway.workspace-reset-marker/v1",
+        "podway.workspace-schema-unsupported-details/v1",
         "podway.workspace-uuid-mismatch-details/v3",
         "podway.writer-predecessor-declaration/v1",
     ]);

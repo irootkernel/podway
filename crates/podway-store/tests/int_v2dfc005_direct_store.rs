@@ -384,6 +384,86 @@ fn exhausted_deadlines_try_idle_locks_once() {
 }
 
 #[test]
+fn exclusive_maintenance_reads_distinguish_corruption_from_io_and_contention() {
+    let (_root, store) = fixture();
+    let lease = ExclusiveMaintenanceLeaseV1::acquire(store.layout(), deadline(), true).unwrap();
+    let before = images(&store.layout().runtime_directory());
+    for code in [
+        rusqlite::ffi::SQLITE_IOERR,
+        rusqlite::ffi::SQLITE_PERM,
+        rusqlite::ffi::SQLITE_BUSY,
+        rusqlite::ffi::SQLITE_CORRUPT,
+    ] {
+        let result: Result<(), DirectStoreErrorV1> =
+            store.read_under_exclusive_lease(&lease, deadline(), |_| {
+                Err(DirectStoreErrorV1::Sqlite(rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(code),
+                    None,
+                )))
+            });
+        if code == rusqlite::ffi::SQLITE_CORRUPT {
+            assert!(matches!(result, Err(DirectStoreErrorV1::Unreadable)));
+        } else {
+            assert!(
+                matches!(result, Err(DirectStoreErrorV1::Sqlite(rusqlite::Error::SqliteFailure(actual, _))) if actual.extended_code == code)
+            );
+        }
+        assert_eq!(images(&store.layout().runtime_directory()), before);
+    }
+    let result: Result<(), DirectStoreErrorV1> =
+        store.read_under_exclusive_lease(&lease, deadline(), |_| {
+            Err(DirectStoreErrorV1::State(
+                podway_store::StoreErrorV1::StorageUnavailableV1 {
+                    reason: podway_store::StoreUnavailableReasonV1::StorageIo,
+                },
+            ))
+        });
+    assert!(matches!(
+        result,
+        Err(DirectStoreErrorV1::State(
+            podway_store::StoreErrorV1::StorageUnavailableV1 {
+                reason: podway_store::StoreUnavailableReasonV1::StorageIo
+            }
+        ))
+    ));
+    assert_eq!(images(&store.layout().runtime_directory()), before);
+}
+
+#[test]
+fn exclusive_failed_reads_revalidate_database_and_lock_witnesses() {
+    for replacement in ["none", "database", "lock"] {
+        let (root, store) = fixture();
+        let lease =
+            ExclusiveMaintenanceLeaseV1::acquire(store.layout(), deadline(), false).unwrap();
+        let result: Result<(), _> = store.read_under_exclusive_lease(&lease, deadline(), |_| {
+            let path = match replacement {
+                "database" => Some(store.layout().database()),
+                "lock" => Some(store.layout().maintenance_lock()),
+                "none" => None,
+                _ => unreachable!(),
+            };
+            if let Some(path) = path {
+                let moved = root.path().join("replaced-witness");
+                fs::rename(&path, &moved).unwrap();
+                fs::copy(&moved, &path).unwrap();
+                assert_ne!(
+                    fs::metadata(&path).unwrap().ino(),
+                    fs::metadata(&moved).unwrap().ino()
+                );
+            }
+            Err(DirectStoreErrorV1::SchemaMismatch)
+        });
+        match replacement {
+            "none" => assert!(matches!(result, Err(DirectStoreErrorV1::SchemaMismatch))),
+            _ => assert!(
+                matches!(result, Err(DirectStoreErrorV1::Maintenance)),
+                "{replacement}: {result:?}"
+            ),
+        }
+    }
+}
+
+#[test]
 fn read_sqlite_contention_is_classified_without_retrying_the_callback() {
     let (_root, direct) = fixture();
     let before = images(&direct.layout().runtime_directory());

@@ -59,6 +59,58 @@ pub fn classify_direct_store_v1(
     classify_direct_store_with_missing_observer_v1(layout, &mut || {})
 }
 
+/// Destructive maintenance must resolve generation independently of marker diagnosis.
+/// An inconclusive WAL cannot become deletion authority merely because a marker exists.
+pub fn require_destructive_generation_v1(
+    layout: &DirectWorkspaceLayoutV1,
+) -> DirectStoreResultV1<()> {
+    let directories = ClassificationDirectories::open(layout)?;
+    let mut witnesses = Vec::new();
+    for path in [layout.database(), layout.wal()] {
+        let mut held = match open_read_nofollow(&path) {
+            Ok(file) => Some(file),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error.into()),
+        };
+        if path == layout.database()
+            && let Some(file) = held.as_mut()
+        {
+            let mut header = [0; SQLITE_HEADER_BYTES];
+            if read_prefix(file, &mut header)? == SQLITE_HEADER_BYTES
+                && &header[..16] == SQLITE_MAGIC
+                && be_u32(&header[60..64]) > DIRECT_SCHEMA_GENERATION_V1
+            {
+                directories.revalidate(layout)?;
+                if !super::maintenance::same_file(file, &path)? {
+                    return Err(DirectStoreErrorV1::Maintenance);
+                }
+                return Err(DirectStoreErrorV1::UnsupportedGeneration {
+                    generation: be_u32(&header[60..64]),
+                });
+            }
+        }
+        witnesses.push((held, path));
+    }
+    let result =
+        classify_database_store_v1(layout).and_then(|classification| match classification {
+            DirectStoreClassificationV1::Newer { generation } => {
+                Err(DirectStoreErrorV1::UnsupportedGeneration { generation })
+            }
+            _ => Ok(()),
+        });
+    directories.revalidate(layout)?;
+    for (held, path) in witnesses {
+        let same = match held {
+            Some(file) => super::maintenance::same_file(&file, &path)?,
+            None => !path_exists(&path)?,
+        };
+        if !same {
+            return Err(DirectStoreErrorV1::Maintenance);
+        }
+    }
+    result
+}
+
 pub(super) fn classify_direct_store_with_missing_observer_v1(
     layout: &DirectWorkspaceLayoutV1,
     missing: &mut dyn FnMut(),
@@ -73,7 +125,10 @@ fn classify_at_inspection(
 ) -> DirectStoreResultV1<DirectStoreClassificationV1> {
     let directories = ClassificationDirectories::open(layout)?;
     let mut result = if maintenance_marked(layout)? {
-        Ok(DirectStoreClassificationV1::Maintenance)
+        Ok(match classify_database_store_v1(layout) {
+            Ok(classification @ DirectStoreClassificationV1::Newer { .. }) => classification,
+            _ => DirectStoreClassificationV1::Maintenance,
+        })
     } else {
         before_inspection();
         classify_unmarked_store_v1(layout)
@@ -95,6 +150,13 @@ fn classify_at_inspection(
 pub(super) fn classify_unmarked_store_v1(
     layout: &DirectWorkspaceLayoutV1,
 ) -> DirectStoreResultV1<DirectStoreClassificationV1> {
+    let classification = classify_database_store_v1(layout);
+    if matches!(
+        classification,
+        Ok(DirectStoreClassificationV1::Newer { .. })
+    ) {
+        return classification;
+    }
     for marker in LEGACY_RUNTIME_MARKERS_V1 {
         if path_exists(&layout.runtime_directory().join(marker))? {
             return Ok(DirectStoreClassificationV1::Legacy {
@@ -109,27 +171,41 @@ pub(super) fn classify_unmarked_store_v1(
             marker: Some(LEGACY_PODWAY_MARKER_V1),
         });
     }
+    classification
+}
+
+fn classify_database_store_v1(
+    layout: &DirectWorkspaceLayoutV1,
+) -> DirectStoreResultV1<DirectStoreClassificationV1> {
     let mut file = match open_read_nofollow(&layout.database()) {
-        Ok(file) => file,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return Ok(
-                if path_exists(&layout.wal())? || path_exists(&layout.shm())? {
-                    DirectStoreClassificationV1::Unrecognized
-                } else {
-                    DirectStoreClassificationV1::Missing
-                },
-            );
-        }
+        Ok(file) => Some(file),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
         Err(error) => return Err(error.into()),
     };
     let mut header = [0; SQLITE_HEADER_BYTES];
-    let length = read_prefix(&mut file, &mut header)?;
+    let length = match file.as_mut() {
+        Some(file) => read_prefix(file, &mut header)?,
+        None => 0,
+    };
     let main_generation = (length == SQLITE_HEADER_BYTES && &header[..16] == SQLITE_MAGIC)
         .then(|| be_u32(&header[60..64]));
+    // A known unsupported main file must still refuse when its WAL is unreadable.
+    if let Some(generation) = main_generation.filter(|value| *value > DIRECT_SCHEMA_GENERATION_V1) {
+        return Ok(DirectStoreClassificationV1::Newer { generation });
+    }
     // Even a nonzero main generation can precede a newer committed page-one WAL image.
     let Some(generation) = committed_wal_generation(&layout.wal())?.or(main_generation) else {
-        return Ok(DirectStoreClassificationV1::Unrecognized);
+        return Ok(
+            if file.is_none() && !path_exists(&layout.wal())? && !path_exists(&layout.shm())? {
+                DirectStoreClassificationV1::Missing
+            } else {
+                DirectStoreClassificationV1::Unrecognized
+            },
+        );
     };
+    if file.is_none() && generation <= DIRECT_SCHEMA_GENERATION_V1 {
+        return Ok(DirectStoreClassificationV1::Unrecognized);
+    }
     Ok(match generation {
         DIRECT_SCHEMA_GENERATION_V1 => DirectStoreClassificationV1::Current,
         0 => DirectStoreClassificationV1::Unrecognized,
@@ -186,17 +262,22 @@ fn be_u32(bytes: &[u8]) -> u32 {
 }
 
 fn committed_wal_generation(path: &Path) -> DirectStoreResultV1<Option<u32>> {
+    committed_wal_generation_with_limit(path, MAX_CLASSIFIED_WAL_BYTES)
+}
+
+fn committed_wal_generation_with_limit(
+    path: &Path,
+    limit: u64,
+) -> DirectStoreResultV1<Option<u32>> {
     let file = match open_read_nofollow(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
     let length = file.metadata()?.len();
-    if length > MAX_CLASSIFIED_WAL_BYTES {
-        return Err(DirectStoreErrorV1::Unreadable);
-    }
-    // Freeze the observed length; an appending writer cannot extend this read's budget.
-    let mut input = file.take(length);
+    // Freeze and cap the observed length; still inspect trustworthy committed
+    // prefixes before declaring a valid stream too large to resolve.
+    let mut input = file.take(length.min(limit));
     let mut header = [0; WAL_HEADER_BYTES];
     if read_prefix(&mut input, &mut header)? != WAL_HEADER_BYTES {
         return Ok(None);
@@ -217,14 +298,21 @@ fn committed_wal_generation(path: &Path) -> DirectStoreResultV1<Option<u32>> {
     let mut frame = vec![0; WAL_FRAME_HEADER_BYTES + page_size];
     let mut pending_generation = None;
     let mut committed_generation = None;
-    while read_prefix(&mut input, &mut frame)? == frame.len() {
+    loop {
+        if read_prefix(&mut input, &mut frame)? != frame.len() {
+            return if length > limit {
+                Err(DirectStoreErrorV1::Unreadable)
+            } else {
+                Ok(committed_generation)
+            };
+        }
         if frame[8..16] != header[16..24] || be_u32(&frame[..4]) == 0 {
-            break;
+            return Ok(committed_generation);
         }
         checksum = wal_checksum(big_endian, checksum, &frame[..8]);
         checksum = wal_checksum(big_endian, checksum, &frame[WAL_FRAME_HEADER_BYTES..]);
         if checksum != (be_u32(&frame[16..20]), be_u32(&frame[20..24])) {
-            break;
+            return Ok(committed_generation);
         }
         if be_u32(&frame[..4]) == 1 {
             let page = &frame[WAL_FRAME_HEADER_BYTES..];
@@ -233,10 +321,15 @@ fn committed_wal_generation(path: &Path) -> DirectStoreResultV1<Option<u32>> {
         if be_u32(&frame[4..8]) != 0
             && let Some(generation) = pending_generation
         {
-            committed_generation = Some(generation.ok_or(DirectStoreErrorV1::Unreadable)?);
+            let generation = generation.ok_or(DirectStoreErrorV1::Unreadable)?;
+            // A validated committed unsupported image is sufficient to refuse;
+            // neither a huge tail nor a later downgrade grants an older writer authority.
+            if generation > DIRECT_SCHEMA_GENERATION_V1 {
+                return Ok(Some(generation));
+            }
+            committed_generation = Some(generation);
         }
     }
-    Ok(committed_generation)
 }
 
 /// Parent components are also no-follow inputs. A raced directory replacement is
@@ -450,6 +543,49 @@ mod tests {
     }
 
     #[test]
+    fn unresolved_valid_wal_stream_is_bounded_and_known_main_newer_ignores_unsafe_wal() {
+        let root = tempfile::TempDir::new().unwrap();
+        let layout = DirectWorkspaceLayoutV1::new(
+            crate::ValidatedWorkspaceRootV1::from_path(root.path()).unwrap(),
+        )
+        .unwrap();
+        fs::create_dir_all(layout.runtime_directory()).unwrap();
+        let first_frame = (WAL_HEADER_BYTES + WAL_FRAME_HEADER_BYTES + 512) as u64;
+        fs::write(
+            layout.wal(),
+            wal(false, &[(1, 1, Some(14)), (1, 1, Some(15))]),
+        )
+        .unwrap();
+        assert!(matches!(
+            committed_wal_generation_with_limit(&layout.wal(), first_frame),
+            Err(DirectStoreErrorV1::Unreadable)
+        ));
+        assert_eq!(committed_wal_generation(&layout.wal()).unwrap(), Some(15));
+        fs::remove_file(layout.wal()).unwrap();
+        std::os::unix::fs::symlink("missing-wal", layout.wal()).unwrap();
+        let mut main = [0; SQLITE_HEADER_BYTES];
+        main[..16].copy_from_slice(SQLITE_MAGIC);
+        main[60..64].copy_from_slice(&15_u32.to_be_bytes());
+        fs::write(layout.database(), main).unwrap();
+        assert_eq!(
+            classify_direct_store_v1(&layout).unwrap(),
+            DirectStoreClassificationV1::Newer { generation: 15 }
+        );
+        assert!(matches!(
+            require_destructive_generation_v1(&layout),
+            Err(DirectStoreErrorV1::UnsupportedGeneration { generation: 15 })
+        ));
+        assert_eq!(fs::read(layout.database()).unwrap(), main);
+        assert!(
+            fs::symlink_metadata(layout.wal())
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(!layout.shm().exists());
+    }
+
+    #[test]
     fn committed_wal_overrides_a_nonzero_main_header_and_scan_size_is_bounded() {
         let root = tempfile::TempDir::new().unwrap();
         let layout = DirectWorkspaceLayoutV1::new(
@@ -473,10 +609,145 @@ mod tests {
         );
         let file = OpenOptions::new().write(true).open(layout.wal()).unwrap();
         file.set_len(MAX_CLASSIFIED_WAL_BYTES + 1).unwrap();
-        assert!(matches!(
-            classify_direct_store_v1(&layout),
-            Err(DirectStoreErrorV1::Unreadable)
-        ));
+        assert_eq!(
+            classify_direct_store_v1(&layout).unwrap(),
+            DirectStoreClassificationV1::Newer { generation: 15 }
+        );
         assert!(!layout.shm().exists());
+    }
+    #[test]
+    fn committed_newer_wal_refuses_markers_overbound_tail_and_missing_main() {
+        for main_present in [false, true] {
+            for marker in [
+                None,
+                Some("reset.marker"),
+                Some("reset-all.marker"),
+                Some("mode-switch.json"),
+            ] {
+                let root = tempfile::TempDir::new().unwrap();
+                let layout = DirectWorkspaceLayoutV1::new(
+                    crate::ValidatedWorkspaceRootV1::from_path(root.path()).unwrap(),
+                )
+                .unwrap();
+                fs::create_dir_all(layout.runtime_directory()).unwrap();
+                if main_present {
+                    let mut main = [0; SQLITE_HEADER_BYTES];
+                    main[..16].copy_from_slice(SQLITE_MAGIC);
+                    main[60..64].copy_from_slice(&14_u32.to_be_bytes());
+                    fs::write(layout.database(), main).unwrap();
+                }
+                fs::write(layout.wal(), wal(false, &[(1, 1, Some(15))])).unwrap();
+                OpenOptions::new()
+                    .write(true)
+                    .open(layout.wal())
+                    .unwrap()
+                    .set_len(MAX_CLASSIFIED_WAL_BYTES + 1)
+                    .unwrap();
+                if let Some(marker) = marker {
+                    let directory = if marker == "mode-switch.json" {
+                        layout.podway_directory()
+                    } else {
+                        layout.runtime_directory()
+                    };
+                    fs::write(directory.join(marker), b"foreign marker").unwrap();
+                }
+                assert_eq!(
+                    classify_direct_store_v1(&layout).unwrap(),
+                    DirectStoreClassificationV1::Newer { generation: 15 },
+                    "main={main_present}, marker={marker:?}"
+                );
+                assert!(!layout.shm().exists());
+            }
+        }
+    }
+
+    #[test]
+    fn marked_wal_scan_failures_preserve_recovery_and_known_newer_refusal() {
+        use std::os::unix::fs::MetadataExt;
+        for generation in [14_u32, 15] {
+            for oversized in [false, true] {
+                for marker in [
+                    None,
+                    Some("maintenance-intent.json"),
+                    Some("reset-all.marker"),
+                    Some("removal.marker"),
+                    Some(LEGACY_RUNTIME_MARKERS_V1[0]),
+                    Some(LEGACY_PODWAY_MARKER_V1),
+                ] {
+                    let root = tempfile::TempDir::new().unwrap();
+                    let layout = DirectWorkspaceLayoutV1::new(
+                        crate::ValidatedWorkspaceRootV1::from_path(root.path()).unwrap(),
+                    )
+                    .unwrap();
+                    fs::create_dir_all(layout.runtime_directory()).unwrap();
+                    let mut main = [0; SQLITE_HEADER_BYTES];
+                    main[..16].copy_from_slice(SQLITE_MAGIC);
+                    main[60..64].copy_from_slice(&generation.to_be_bytes());
+                    fs::write(layout.database(), main).unwrap();
+                    let bytes = wal(false, &[(1, 1, None)]);
+                    fs::write(layout.wal(), &bytes).unwrap();
+                    if oversized {
+                        OpenOptions::new()
+                            .write(true)
+                            .open(layout.wal())
+                            .unwrap()
+                            .set_len(MAX_CLASSIFIED_WAL_BYTES + 1)
+                            .unwrap();
+                    }
+                    if let Some(marker) = marker {
+                        let directory = if marker == LEGACY_PODWAY_MARKER_V1 {
+                            layout.podway_directory()
+                        } else {
+                            layout.runtime_directory()
+                        };
+                        fs::write(directory.join(marker), b"retained marker").unwrap();
+                    }
+                    let before = fs::metadata(layout.wal()).unwrap();
+                    let result = classify_direct_store_v1(&layout);
+                    let admission = require_destructive_generation_v1(&layout);
+                    if generation > DIRECT_SCHEMA_GENERATION_V1 {
+                        assert!(matches!(
+                            admission,
+                            Err(DirectStoreErrorV1::UnsupportedGeneration { generation: 15 })
+                        ));
+                    } else {
+                        assert!(matches!(admission, Err(DirectStoreErrorV1::Unreadable)));
+                    }
+                    if generation > DIRECT_SCHEMA_GENERATION_V1 {
+                        assert_eq!(
+                            result.unwrap(),
+                            DirectStoreClassificationV1::Newer { generation }
+                        );
+                    } else if let Some(marker) = marker {
+                        let expected = if marker == LEGACY_PODWAY_MARKER_V1
+                            || LEGACY_RUNTIME_MARKERS_V1.contains(&marker)
+                        {
+                            DirectStoreClassificationV1::Legacy {
+                                generation: None,
+                                marker: Some(marker),
+                            }
+                        } else {
+                            DirectStoreClassificationV1::Maintenance
+                        };
+                        assert_eq!(result.unwrap(), expected);
+                    } else {
+                        assert!(matches!(result, Err(DirectStoreErrorV1::Unreadable)));
+                    }
+                    assert_eq!(fs::read(layout.database()).unwrap(), main);
+                    let after = fs::metadata(layout.wal()).unwrap();
+                    assert_eq!(
+                        (after.dev(), after.ino(), after.len()),
+                        (before.dev(), before.ino(), before.len())
+                    );
+                    let mut prefix = vec![0; bytes.len()];
+                    open_read_nofollow(&layout.wal())
+                        .unwrap()
+                        .read_exact(&mut prefix)
+                        .unwrap();
+                    assert_eq!(prefix, bytes);
+                    assert!(!layout.shm().exists());
+                }
+            }
+        }
     }
 }

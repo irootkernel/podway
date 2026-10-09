@@ -1019,10 +1019,10 @@
       },
       {
         "code": "WORKSPACE_SCHEMA_UNSUPPORTED",
-        "details_schema": "podway.workspace-recovery-details/v2",
+        "details_schema": "podway.workspace-schema-unsupported-details/v1",
         "exit_code": 5,
         "retryable": false,
-        "summary": "Workspace schema is unsupported."
+        "summary": "The Store generation is newer than this Podway supports."
       },
       {
         "code": "WORKSPACE_STATE_UNREADABLE",
@@ -1134,7 +1134,7 @@
       {
         "id": "urn:podway:schema:error:v2",
         "path": "schemas/error-v2.schema.json",
-        "sha256": "sha256:4b32c502c96ca9854c5017a894d150f6f84999f19805002c01dfa2287cc51025"
+        "sha256": "sha256:aed90b53f6c4df7ddd88ef53c46f76feda2ee9a4746e3a3e30826de24c00ce5d"
       },
       {
         "id": "urn:podway:schema:evidence-read-result:v1",
@@ -1439,12 +1439,17 @@
       {
         "id": "urn:podway:schema:workspace-removal-result:v2",
         "path": "schemas/workspace-removal-result-v2.schema.json",
-        "sha256": "sha256:a00bf0a3c29c2512b7c961f7d64c9a54278ba7c241b80f4a89e05c861894bc65"
+        "sha256": "sha256:67777dac56267bf7279be88b4f5490b6bf48ea719105240f49f49ac7e19ba7ff"
       },
       {
         "id": "urn:podway:schema:workspace-reset-marker:v1",
         "path": "schemas/workspace-reset-marker-v1.schema.json",
         "sha256": "sha256:d41a65a151b93a6c2f40527a69bb11dc3a49088d4417a0362a3572ba56cbabb3"
+      },
+      {
+        "id": "urn:podway:schema:workspace-schema-unsupported-details:v1",
+        "path": "schemas/workspace-schema-unsupported-details-v1.schema.json",
+        "sha256": "sha256:6e7b60af7ea7d8f8b24832afe440a87e7f8a7bf52ea4e2b32b8e127a5378c977"
       },
       {
         "id": "urn:podway:schema:workspace-uuid-mismatch-details:v3",
@@ -1487,7 +1492,7 @@
     "authoring_diagnostics": 59,
     "routes": 57,
     "runtime_errors": 97,
-    "schemas": 84
+    "schemas": 85
   },
   "migration_boundary": {
     "adapter_database_access": "forbidden",

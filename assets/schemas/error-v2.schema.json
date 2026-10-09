@@ -479,7 +479,7 @@
             "const": false
           },
           "details": {
-            "$ref": "urn:podway:schema:workspace-recovery-details:v2"
+            "$ref": "urn:podway:schema:workspace-schema-unsupported-details:v1"
           }
         }
       }

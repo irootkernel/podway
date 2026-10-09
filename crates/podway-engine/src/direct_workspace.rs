@@ -308,7 +308,14 @@ fn initialize_workspace_inner_v1<R: GitResolverContractV1>(
 ) -> Result<OutputEnvelopeV4, DirectWorkspaceErrorV1> {
     let command = SliceCommandV1::WorkspaceInit(WorkspaceInitV1 { repair });
     let (candidate, store) = resolver.resolve_candidate(request.selector.clone())?;
-    resolver.validate_workspace_config(&candidate)?;
+    if let Err(error) = resolver.validate_workspace_config(&candidate) {
+        if let Ok(DirectStoreClassificationV1::Newer { generation }) =
+            classify_direct_store_v1(store.layout())
+        {
+            return Err(DirectStoreErrorV1::UnsupportedGeneration { generation }.into());
+        }
+        return Err(error.into());
+    }
     let store = match observer {
         Some(observer) => store.with_boundary_observer(move |boundary| observer(boundary)),
         None => store,

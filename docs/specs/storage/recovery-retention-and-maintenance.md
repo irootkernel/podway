@@ -88,7 +88,9 @@ published generation and original outcome; it removes intent after verification.
 
 A writer mismatch is diagnosed without writing. A future release declaring a
 predecessor must migrate it under an exclusive lease with matching durable
-recovery authority. The current production registry is empty: Engine refuses
+recovery authority. Before reporting completion, it checkpoints the successor's
+schema, writer identity and generation into the main file and syncs it under the
+same exclusive lease and database inode witness. The current production registry is empty: Engine refuses
 other writer digests, and only the Store framework is exercised with isolated
 test declarations. This is not an active public migration route and does not
 authorize daemon-era conversion, feature-work declarations or read-side migration.
@@ -102,9 +104,15 @@ performs no task-state conversion. A newer unsupported Store is refused.
 1. Resolve the exact Git worktree and validate safe contained filesystem state.
 2. Acquire and revalidate exclusive intent/maintenance leases and reject a
    competing removal or mismatched published operation.
-3. For a current Store, validate any expected workspace UUID before effects or
-   recognize the same already-committed reset. Unsupported legacy state supplies
-   no inferred current-workspace identity for a fenced reset.
+3. For a valid current Store, validate any expected workspace UUID before effects
+   or recognize the same already-committed reset. An unfenced confirmed request
+   can recover current-generation writer, schema or binding admission failures,
+   including malformed or unreadable rows and pages encountered during qualification
+   or the maintenance read of current state and outcomes,
+   without adopting its old UUID or using unvalidated old outcomes as recovery
+   authority. Fenced requests
+   preserve the original admission failure. Unsupported legacy state supplies no
+   inferred current-workspace identity for a fenced reset.
 4. Publish durable intent and the reset phase marker with the target UUID and
    original response identity. Persist them before destructive work.
 5. Clear authorized runtime contents while preserving recovery anchors; retire
@@ -118,6 +126,10 @@ exact retry. Reset preserves tracked Procedure files, `.podway/.gitignore`,
 configuration unrelated to legacy mode, and Git worktree/index/ref state. All
 current and inactive runtime sessions, attempts and old outcomes are discarded.
 It creates a new workspace UUID rather than adopting unsupported old state.
+Recovery of invalid current state retains all path, descriptor, exclusive lease
+and exact-marker checks, including database inode revalidation when admission
+fails. Contention, I/O failures, changed ancestry and foreign maintenance markers
+do not qualify as invalid-state recovery authority.
 
 ## Workspace removal
 
@@ -126,6 +138,15 @@ fences under exclusive maintenance authority. A running session requires the
 explicit force policy in addition to removal confirmation. Runtime and
 configuration deletion proceed through the recorded phases; the full response
 is prepared before namespace deletion destroys retention.
+An unfenced confirmed removal can discard invalid current-generation state,
+including copied or rebound runtime, under the same safety checks. It does not
+adopt the invalid Store's UUID, graph or outcomes; fenced requests refuse it.
+A present invalid Store that is removed reports `already_absent=false` and
+`podway_directory_removed=true`, with `workspace_uuid=null` when its prior identity
+could not be validated. A later request after complete removal reports
+`already_absent=true`; absence is independent of whether a UUID was readable.
+The non-interactive CLI still requires its explicit UUID fence; unfenced CLI
+removal uses the interactive exact-path confirmation.
 
 Descriptor-relative traversal rejects symlinks, mounts, changed ancestry,
 foreign ownership and unknown residual contents. Durable intent survives the
@@ -158,6 +179,32 @@ root without persisting it, and a successful mutation or workspace repair rebind
 it transactionally. Moving a main/common Git root, changing UUID or copying
 state with different canonical identities fails closed. No registry rediscovery,
 global UUID-uniqueness check or queued-work drain exists.
+Confirmed unfenced reset or interactive removal can discard that invalid current
+runtime at the selected canonical worktree; reset creates a fresh identity.
+
+## Newer Store generations
+
+Every workspace Store admission, including init, doctor, reset and removal,
+refuses a newer committed main-file or WAL generation before acquiring native
+leases or creating SHM. This refusal also takes precedence over maintenance or
+legacy marker names and invalid workspace configuration. Existing bytes and
+file identities remain unchanged; no new lock or marker is created.
+`WORKSPACE_SCHEMA_UNSUPPORTED` reports the actual and supported generations and
+guidance to use a Podway version that supports the newer Store. It provides no
+doctor/reset recipe: this older binary cannot recover or discard that generation.
+Marker diagnosis remains available when the bounded generation inspection is
+inconclusive. It does not authorize deletion: reset and removal independently
+inspect generation before acquiring a lease, again under the exclusive lease,
+and at runtime destruction. A checksum-valid committed newer WAL prefix refuses
+even with an oversized tail or a missing main file. An unresolved valid stream
+beyond the scan budget, or an unreadable committed page-one generation, refuses
+destructive maintenance even when a marker exists. An invalid WAL header or tail
+cannot authorize later frames; supported main-file recovery retains exact-marker
+checks. These probes create no SQLite sidecars and revalidate file identities.
+
+A maintenance lock or marker protocol change requires a Store generation bump
+so an older destructive writer refuses it. The existing protocol is unchanged
+by invalid-current recovery and newer-generation guidance.
 
 ## Worktree deletion and corrupt state
 

@@ -2,7 +2,7 @@
 
 use std::{
     fs,
-    io::Read,
+    io::{Read, Seek, SeekFrom, Write},
     os::unix::process::ExitStatusExt,
     process::{Command, Stdio},
     thread,
@@ -12,6 +12,627 @@ use std::{
 use super::cli_fixture::{Fixture, GuardedChild, podway_binary};
 use podway_protocol::{ErrorEnvelopeV2, OutputEnvelopeV4};
 use serde_json::{Value, json};
+
+#[test]
+fn v2dfc015_invalid_current_stores_require_unfenced_confirmed_recovery() {
+    for defect in [
+        "writer",
+        "missing-table",
+        "extra-table",
+        "missing-row",
+        "malformed-writer-row",
+        "corrupt-page",
+        "corrupt-current-data",
+        "moved",
+        "copied",
+    ] {
+        let mut fixture = Fixture::new();
+        let initialized = fixture.run(&["init", "--idempotency-key", "init"]);
+        let old_uuid = initialized["workspace"]["uuid"].as_str().unwrap();
+        let expected_code = match defect {
+            "writer" => "WORKSPACE_CONTRACT_MISMATCH",
+            "moved" | "copied" => "WORKSPACE_ID_CONFLICT",
+            _ => "WORKSPACE_STATE_UNREADABLE",
+        };
+        match defect {
+            "moved" => {
+                let moved = fixture.0.with_extension("moved");
+                fs::rename(&fixture.0, &moved).unwrap();
+                fixture.0 = moved;
+            }
+            "copied" => {
+                let target = Fixture::new();
+                target.run(&["init", "--idempotency-key", "target-init"]);
+                let source = fixture.0.join(".podway/runtime/state.sqlite3");
+                fs::copy(source, target.0.join(".podway/runtime/state.sqlite3")).unwrap();
+                fixture = target;
+            }
+            "corrupt-current-data" => corrupt_current_data_pages(&fixture),
+            "malformed-writer-row" => corrupt_writer_row_type(&fixture),
+            "corrupt-page" => {
+                let path = fixture.0.join(".podway/runtime/state.sqlite3");
+                let database = fs::OpenOptions::new().write(true).open(path).unwrap();
+                // Retain the authentic SQLite/current-generation header while
+                // truncating required pages, so qualification reads real corruption.
+                database.set_len(100).unwrap();
+            }
+            _ => {
+                let connection =
+                    rusqlite::Connection::open(fixture.0.join(".podway/runtime/state.sqlite3"))
+                        .unwrap();
+                let sql = match defect {
+                    "writer" => {
+                        "UPDATE writer_contract SET contract_manifest_digest='sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'"
+                    }
+                    "missing-table" => "DROP TABLE writer_contract",
+                    "extra-table" => "CREATE TABLE unrecognized(value INTEGER)",
+                    "missing-row" => "DELETE FROM writer_contract",
+                    _ => unreachable!(),
+                };
+                connection.execute_batch(sql).unwrap();
+                connection
+                    .execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+                    .unwrap();
+            }
+        }
+        let before = fixture.podway_snapshot();
+        for args in [
+            vec![
+                "reset",
+                "--all",
+                "--yes",
+                "--if-workspace-uuid",
+                old_uuid,
+                "--idempotency-key",
+                "recover",
+            ],
+            vec![
+                "workspace",
+                "remove",
+                "--force",
+                "--yes",
+                "--if-workspace-uuid",
+                old_uuid,
+                "--idempotency-key",
+                "remove",
+            ],
+        ] {
+            let output = fixture.output(&args);
+            assert!(!output.status.success(), "{defect}: {output:?}");
+            let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(error.as_value()["code"], expected_code, "{defect}");
+            fixture.assert_podway_snapshot(&before);
+        }
+        let reset_args = ["reset", "--all", "--yes", "--idempotency-key", "recover"];
+        let recovered = fixture.run(&reset_args);
+        assert_ne!(recovered["workspace"]["uuid"], old_uuid, "{defect}");
+        assert_eq!(fixture.run(&reset_args), recovered, "{defect}");
+        assert_eq!(
+            fixture.run(&["outcome", "lookup", "--idempotency-key", "init"])["result"]["found"],
+            false
+        );
+        assert_eq!(
+            fixture.run(&["doctor", "--deep"])["result"]["healthy"],
+            true
+        );
+    }
+}
+
+#[test]
+fn v2dfc015_confirmed_unfenced_removal_discards_invalid_runtime() {
+    for defect in [
+        "copied",
+        "writer",
+        "missing-table",
+        "missing-row",
+        "malformed-writer-row",
+        "corrupt-current-data",
+    ] {
+        let source = Fixture::new();
+        let initialized = source.run(&["init", "--idempotency-key", "init"]);
+        let fixture = Fixture::new();
+        let target_initialized = fixture.run(&["init", "--idempotency-key", "target-init"]);
+        if defect == "copied" {
+            fs::copy(
+                source.0.join(".podway/runtime/state.sqlite3"),
+                fixture.0.join(".podway/runtime/state.sqlite3"),
+            )
+            .unwrap();
+        } else if defect == "corrupt-current-data" {
+            corrupt_current_data_pages(&fixture);
+        } else if defect == "malformed-writer-row" {
+            corrupt_writer_row_type(&fixture);
+        } else {
+            let connection =
+                rusqlite::Connection::open(fixture.0.join(".podway/runtime/state.sqlite3"))
+                    .unwrap();
+            let sql = match defect {
+                "writer" => {
+                    "UPDATE writer_contract SET contract_manifest_digest='sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'"
+                }
+                "missing-table" => "DROP TABLE writer_contract",
+                "missing-row" => "DELETE FROM writer_contract",
+                _ => unreachable!(),
+            };
+            connection.execute_batch(sql).unwrap();
+            connection
+                .execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+                .unwrap();
+        }
+        let before = fixture.podway_snapshot();
+        let refused = fixture.output(&[
+            "workspace",
+            "remove",
+            "--force",
+            "--yes",
+            "--if-workspace-uuid",
+            if defect == "copied" {
+                initialized["workspace"]["uuid"].as_str().unwrap()
+            } else {
+                target_initialized["workspace"]["uuid"].as_str().unwrap()
+            },
+            "--idempotency-key",
+            "remove",
+        ]);
+        assert!(!refused.status.success());
+        let error: ErrorEnvelopeV2 = serde_json::from_slice(&refused.stdout).unwrap();
+        let expected = match defect {
+            "copied" => "WORKSPACE_ID_CONFLICT",
+            "writer" => "WORKSPACE_CONTRACT_MISMATCH",
+            _ => "WORKSPACE_STATE_UNREADABLE",
+        };
+        assert_eq!(error.as_value()["code"], expected, "{defect}");
+        fixture.assert_podway_snapshot(&before);
+        let removed = fixture.confirm_removal_in_pty();
+        let rendered = String::from_utf8(removed.stdout).unwrap();
+        assert_eq!(
+            rendered.matches("podway-test-pty-exit:0").count(),
+            1,
+            "{defect}: {rendered}"
+        );
+        assert!(removed.status.success(), "{defect}: {rendered}");
+        assert!(!fixture.0.join(".podway").exists());
+        assert!(fixture.0.join(".git/config").exists());
+        assert_eq!(
+            source.run(&["workspace", "show"])["workspace"]["uuid"],
+            initialized["workspace"]["uuid"]
+        );
+    }
+}
+
+fn corrupt_writer_row_type(fixture: &Fixture) {
+    let connection =
+        rusqlite::Connection::open(fixture.0.join(".podway/runtime/state.sqlite3")).unwrap();
+    let canonical: String = connection
+        .query_row(
+            "SELECT sql FROM sqlite_schema WHERE name='writer_contract'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let relaxed = canonical.strip_suffix(" STRICT").unwrap();
+    // This isolated corruption fixture restores the exact canonical STRICT
+    // schema before admission, leaving a real persisted type-invalid row.
+    connection
+        .execute_batch("PRAGMA writable_schema=ON")
+        .unwrap();
+    assert_eq!(
+        connection
+            .execute(
+                "UPDATE sqlite_schema SET sql=?1 WHERE name='writer_contract'",
+                [relaxed],
+            )
+            .unwrap(),
+        1
+    );
+    connection
+        .execute_batch(
+            "PRAGMA writable_schema=RESET; UPDATE writer_contract SET recorded_at_ms='corrupt'; PRAGMA writable_schema=ON",
+        )
+        .unwrap();
+    assert_eq!(
+        connection
+            .execute(
+                "UPDATE sqlite_schema SET sql=?1 WHERE name='writer_contract'",
+                [&canonical],
+            )
+            .unwrap(),
+        1
+    );
+    connection
+        .execute_batch("PRAGMA writable_schema=RESET; PRAGMA wal_checkpoint(TRUNCATE)")
+        .unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT sql FROM sqlite_schema WHERE name='writer_contract'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        canonical
+    );
+    assert!(matches!(
+        connection.query_row("SELECT recorded_at_ms FROM writer_contract", [], |row| {
+            row.get::<_, i64>(0)
+        }),
+        Err(rusqlite::Error::InvalidColumnType(..))
+    ));
+}
+
+fn corrupt_current_data_pages(fixture: &Fixture) {
+    let path = fixture.0.join(".podway/runtime/state.sqlite3");
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    let page_size: u64 = connection
+        .query_row("PRAGMA page_size", [], |row| row.get(0))
+        .unwrap();
+    let pages = connection.prepare(
+        "SELECT rootpage FROM sqlite_schema WHERE tbl_name IN ('mutation_outcomes','v2_task_sessions') AND rootpage > 0",
+    ).unwrap().query_map([], |row| row.get::<_, u64>(0)).unwrap()
+        .collect::<Result<Vec<_>, _>>().unwrap();
+    drop(connection);
+    let mut file = fs::OpenOptions::new().write(true).open(path).unwrap();
+    for page in pages {
+        file.seek(SeekFrom::Start((page - 1) * page_size)).unwrap();
+        file.write_all(&vec![0; usize::try_from(page_size).unwrap()])
+            .unwrap();
+    }
+}
+
+#[test]
+fn v2dfc015_removal_confirmation_success_preserves_fence_policy() {
+    for invalid in [false, true] {
+        let fixture = Fixture::new();
+        fixture.run(&["init", "--idempotency-key", "init"]);
+        if invalid {
+            corrupt_current_data_pages(&fixture);
+        }
+        let response = format!("{}\n", fixture.0.display());
+        let output = fixture.removal_answer_in_pty(&response, true);
+        let rendered = String::from_utf8(output.stdout).unwrap();
+        assert!(output.status.success(), "{rendered}");
+        assert_eq!(rendered.matches("podway-test-pty-exit:0").count(), 1);
+        assert!(rendered.contains("Type that exact path to remove all .podway content: "));
+        assert!(!fixture.0.join(".podway").exists());
+        assert!(fixture.0.join(".git/config").exists());
+    }
+    let fixture = Fixture::new();
+    let initialized = fixture.run(&["init", "--idempotency-key", "init"]);
+    let output = fixture.fenced_removal_in_pty(initialized["workspace"]["uuid"].as_str().unwrap());
+    let rendered = String::from_utf8(output.stdout).unwrap();
+    assert!(output.status.success(), "{rendered}");
+    assert_eq!(rendered.matches("podway-test-pty-exit:0").count(), 1);
+    assert!(!rendered.contains("Type that exact path to remove all .podway content: "));
+    assert!(!fixture.0.join(".podway").exists());
+    assert!(fixture.0.join(".git/config").exists());
+}
+
+#[test]
+fn v2dfc015_unfenced_removal_rejects_a_wrong_path_even_with_yes() {
+    for invalid in [false, true] {
+        for yes in [false, true] {
+            let fixture = Fixture::new();
+            fixture.run(&["init", "--idempotency-key", "init"]);
+            if invalid {
+                corrupt_current_data_pages(&fixture);
+            }
+            let before = fixture.podway_snapshot();
+            let wrong = format!("{}/\n", fixture.0.display());
+            let output = fixture.removal_answer_in_pty(&wrong, yes);
+            let rendered = String::from_utf8(output.stdout).unwrap();
+            assert!(
+                rendered.contains("explicit confirmation is required"),
+                "{rendered}"
+            );
+            assert!(rendered.contains("podway-test-pty-exit:2"), "{rendered}");
+            fixture.assert_podway_snapshot(&before);
+        }
+    }
+}
+
+#[test]
+fn v2dfc015_newer_wal_prefix_refuses_overbound_tail_and_markers() {
+    use sha2::{Digest as _, Sha256};
+    use std::os::unix::fs::MetadataExt;
+    fn image(root: &std::path::Path) -> Vec<(std::path::PathBuf, u64, u64, u64, Option<[u8; 32]>)> {
+        let mut pending = vec![root.to_path_buf()];
+        let mut entries = Vec::new();
+        while let Some(path) = pending.pop() {
+            let metadata = fs::symlink_metadata(&path).unwrap();
+            let digest = if metadata.is_file() {
+                let mut file = fs::File::open(&path).unwrap();
+                let mut hash = Sha256::new();
+                let mut buffer = [0; 65_536];
+                loop {
+                    let count = file.read(&mut buffer).unwrap();
+                    if count == 0 {
+                        break;
+                    }
+                    hash.update(&buffer[..count]);
+                }
+                Some(hash.finalize().into())
+            } else {
+                assert!(metadata.is_dir());
+                pending.extend(
+                    fs::read_dir(&path)
+                        .unwrap()
+                        .map(|entry| entry.unwrap().path()),
+                );
+                None
+            };
+            entries.push((
+                path.strip_prefix(root).unwrap().to_path_buf(),
+                metadata.dev(),
+                metadata.ino(),
+                metadata.len(),
+                digest,
+            ));
+        }
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        entries
+    }
+    for marker in [None, Some("reset.marker"), Some("reset-all.marker")] {
+        let fixture = Fixture::new();
+        let initialized = fixture.run(&["init", "--idempotency-key", "init"]);
+        let workspace = initialized["workspace"]["uuid"].as_str().unwrap();
+        let runtime = fixture.0.join(".podway/runtime");
+        let staging = fixture.0.join("newer-producer");
+        fs::create_dir(&staging).unwrap();
+        fs::copy(runtime.join("state.sqlite3"), staging.join("state.sqlite3")).unwrap();
+        let producer = rusqlite::Connection::open(staging.join("state.sqlite3")).unwrap();
+        producer
+            .execute_batch(
+                "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; PRAGMA user_version=15",
+            )
+            .unwrap();
+        assert_eq!(
+            producer
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))
+                .unwrap(),
+            15
+        );
+        fs::remove_dir_all(&runtime).unwrap();
+        fs::create_dir(&runtime).unwrap();
+        for suffix in ["", "-wal"] {
+            fs::copy(
+                staging.join(format!("state.sqlite3{suffix}")),
+                runtime.join(format!("state.sqlite3{suffix}")),
+            )
+            .unwrap();
+        }
+        drop(producer);
+        let main = fs::read(runtime.join("state.sqlite3")).unwrap();
+        assert_eq!(u32::from_be_bytes(main[60..64].try_into().unwrap()), 14);
+        let wal = fs::OpenOptions::new()
+            .write(true)
+            .open(runtime.join("state.sqlite3-wal"))
+            .unwrap();
+        wal.set_len(512 * 1024 * 1024 + 1).unwrap();
+        drop(wal);
+        if let Some(marker) = marker {
+            fs::write(runtime.join(marker), b"retained foreign marker").unwrap();
+        }
+        let before = image(&fixture.0.join(".podway"));
+        for args in [
+            vec!["status"],
+            vec!["reset", "--all", "--yes", "--idempotency-key", "reset"],
+            vec![
+                "workspace",
+                "remove",
+                "--force",
+                "--yes",
+                "--if-workspace-uuid",
+                workspace,
+                "--idempotency-key",
+                "remove",
+            ],
+        ] {
+            let output = fixture.output(&args);
+            assert_eq!(
+                output.status.code(),
+                Some(5),
+                "{marker:?}/{args:?}: {output:?}"
+            );
+            let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(
+                error.as_value()["code"],
+                "WORKSPACE_SCHEMA_UNSUPPORTED",
+                "{marker:?}/{args:?}"
+            );
+            assert_eq!(error.as_value()["details"]["store_schema_version"], 15);
+            assert!(error.as_value()["details"].get("recovery").is_none());
+        }
+        assert_eq!(image(&fixture.0.join(".podway")), before);
+    }
+}
+
+#[test]
+fn v2dfc015_owned_reset_marker_recovers_after_a_bounded_wal_scan_failure() {
+    use std::os::unix::fs::MetadataExt;
+    let fixture = Fixture::new();
+    let old = fixture.run(&["init", "--idempotency-key", "init"]);
+    let args = [
+        "reset",
+        "--all",
+        "--yes",
+        "--idempotency-key",
+        "marked-reset",
+    ];
+    fixture.kill_at_maintenance_boundary(&args, "marker-published");
+    let runtime = fixture.0.join(".podway/runtime");
+    let database = runtime.join("state.sqlite3");
+    let wal = runtime.join("state.sqlite3-wal");
+    let main = fs::read(&database).unwrap();
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&wal)
+        .unwrap();
+    file.set_len(512 * 1024 * 1024 + 1).unwrap();
+    drop(file);
+    let before = fs::metadata(&wal).unwrap();
+    let output = fixture.output(&["status"]);
+    let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(error.as_value()["code"], "WORKSPACE_MAINTENANCE");
+    assert_eq!(fs::read(&database).unwrap(), main);
+    let after = fs::metadata(&wal).unwrap();
+    assert_eq!(
+        (after.dev(), after.ino(), after.len()),
+        (before.dev(), before.ino(), before.len())
+    );
+    let recovered = fixture.run(&args);
+    assert_ne!(recovered["workspace"]["uuid"], old["workspace"]["uuid"]);
+    assert_eq!(fixture.run(&args), recovered);
+    assert_eq!(
+        fixture.run(&["doctor", "--deep"])["result"]["healthy"],
+        true
+    );
+}
+
+#[test]
+fn v2dfc015_newer_generations_refuse_every_store_admission_without_new_files() {
+    for generation in [15_u32, i32::MAX as u32] {
+        for checkpointed in [false, true] {
+            for marker in [None, Some("reset-all.marker"), Some("reset.marker")] {
+                let fixture = Fixture::new();
+                let initialized = fixture.run(&["init", "--idempotency-key", "init"]);
+                let workspace = initialized["workspace"]["uuid"].as_str().unwrap();
+                let runtime = fixture.0.join(".podway/runtime");
+                let staging = fixture.0.join("newer-producer");
+                fs::create_dir(&staging).unwrap();
+                fs::copy(runtime.join("state.sqlite3"), staging.join("state.sqlite3")).unwrap();
+                let connection = rusqlite::Connection::open(staging.join("state.sqlite3")).unwrap();
+                connection
+                    .execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0")
+                    .unwrap();
+                connection
+                    .pragma_update(None, "user_version", generation)
+                    .unwrap();
+                assert_eq!(
+                    connection
+                        .query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))
+                        .unwrap(),
+                    generation,
+                );
+                if checkpointed {
+                    connection
+                        .execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+                        .unwrap();
+                }
+                fs::remove_dir_all(&runtime).unwrap();
+                fs::create_dir(&runtime).unwrap();
+                for suffix in ["", "-wal"] {
+                    fs::copy(
+                        staging.join(format!("state.sqlite3{suffix}")),
+                        runtime.join(format!("state.sqlite3{suffix}")),
+                    )
+                    .unwrap();
+                }
+                drop(connection);
+                if let Some(marker) = marker {
+                    fs::write(runtime.join(marker), b"foreign marker").unwrap();
+                }
+                let before = fixture.podway_snapshot();
+                for args in [
+                    vec!["workspace", "show"],
+                    vec!["doctor", "--deep"],
+                    vec!["status"],
+                    vec!["observe"],
+                    vec!["next"],
+                    vec!["outcome", "lookup", "--idempotency-key", "init"],
+                    vec!["init", "--idempotency-key", "init"],
+                    vec!["workspace", "repair", "--idempotency-key", "repair"],
+                    vec![
+                        "start",
+                        "--preset",
+                        "small-change-v2",
+                        "--task",
+                        "refuse",
+                        "--idempotency-key",
+                        "start",
+                    ],
+                    vec!["begin", "--idempotency-key", "begin"],
+                    vec!["set", "scope-summary", "refuse", "--idempotency-key", "set"],
+                    vec!["complete", "--idempotency-key", "complete"],
+                    vec!["reset", "--all", "--yes", "--idempotency-key", "reset"],
+                    vec![
+                        "workspace",
+                        "remove",
+                        "--force",
+                        "--yes",
+                        "--if-workspace-uuid",
+                        workspace,
+                        "--idempotency-key",
+                        "remove",
+                    ],
+                ] {
+                    let output = fixture.output(&args);
+                    assert_eq!(
+                        output.status.code(),
+                        Some(5),
+                        "{generation}/{checkpointed}/{marker:?}/{args:?}: {output:?}"
+                    );
+                    let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
+                    let error = error.as_value();
+                    assert_eq!(
+                        error["code"], "WORKSPACE_SCHEMA_UNSUPPORTED",
+                        "{generation}/{checkpointed}/{marker:?}/{args:?}: {error}"
+                    );
+                    assert_eq!(
+                        error["details"]["schema"],
+                        "podway.workspace-schema-unsupported-details/v1"
+                    );
+                    assert_eq!(error["details"]["store_schema_version"], generation);
+                    assert_eq!(error["details"]["supported_store_schema_version"], 14);
+                    assert!(
+                        error["details"]["guidance"]
+                            .as_str()
+                            .unwrap()
+                            .contains(&format!("generation {generation}"))
+                    );
+                    assert!(error["details"].get("recovery").is_none());
+                    fixture.assert_podway_snapshot(&before);
+                }
+                let human = fixture.raw_output(&["doctor"]);
+                assert_eq!(human.status.code(), Some(5));
+                assert!(String::from_utf8(human.stderr).unwrap().contains(&format!(
+                    "hint: Use a Podway version that supports Store generation {generation}."
+                )));
+                fixture.assert_podway_snapshot(&before);
+                fs::write(fixture.0.join(".podway/config.yaml"), b"invalid: [").unwrap();
+                let before_invalid_config = fixture.podway_snapshot();
+                for args in [
+                    vec!["init", "--idempotency-key", "config-init"],
+                    vec!["status"],
+                    vec!["workspace", "repair", "--idempotency-key", "config-repair"],
+                    vec![
+                        "workspace",
+                        "remove",
+                        "--force",
+                        "--yes",
+                        "--if-workspace-uuid",
+                        workspace,
+                        "--idempotency-key",
+                        "config-remove",
+                    ],
+                    vec![
+                        "reset",
+                        "--all",
+                        "--yes",
+                        "--idempotency-key",
+                        "config-reset",
+                    ],
+                ] {
+                    let output = fixture.output(&args);
+                    let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
+                    assert_eq!(error.as_value()["code"], "WORKSPACE_SCHEMA_UNSUPPORTED");
+                    fixture.assert_podway_snapshot(&before_invalid_config);
+                }
+            }
+        }
+    }
+}
 
 #[test]
 fn v2dfc012_zero_budget_executes_idle_reads_mutations_and_maintenance() {

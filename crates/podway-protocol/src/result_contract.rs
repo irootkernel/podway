@@ -546,6 +546,11 @@ pub const DAEMON_FREE_DOCUMENT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
         &[],
     ),
     result_schema_v2(
+        "podway.workspace-schema-unsupported-details/v1",
+        "schemas/workspace-schema-unsupported-details-v1.schema.json",
+        &[],
+    ),
+    result_schema_v2(
         "podway.workspace-uuid-mismatch-details/v3",
         "schemas/workspace-uuid-mismatch-details-v3.schema.json",
         &[],

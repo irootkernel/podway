@@ -82,6 +82,28 @@ impl DirectStoreV1 {
             if !super::maintenance::same_file(&database, &self.layout.database())? {
                 return Err(DirectStoreErrorV1::Maintenance);
             }
+            drop(snapshot);
+            drop(readonly);
+            if super::classification::path_exists(&self.layout.wal())?
+                && super::classification::open_read_nofollow(&self.layout.wal())?
+                    .metadata()?
+                    .len()
+                    > 0
+            {
+                // A retry after COMMIT can observe the successor in WAL before
+                // its main-file checkpoint finished. Complete that same suffix.
+                let connection = self.open_connection(false, deadline)?;
+                self.validate_connection(&connection)?;
+                self.checkpoint_migration(&connection, lease, &database)?;
+            } else {
+                // TRUNCATE can have completed before a prior durability sync failed.
+                database.sync_all()?;
+                super::maintenance::open_directory(&self.layout.runtime_directory())?.sync_all()?;
+                lease.revalidate(&self.layout)?;
+                if !super::maintenance::same_file(&database, &self.layout.database())? {
+                    return Err(DirectStoreErrorV1::Maintenance);
+                }
+            }
             return Ok(false);
         }
         let predecessor = predecessors
@@ -127,7 +149,34 @@ impl DirectStoreV1 {
         // Engine retries its durable migration intent and checks writer identity;
         // this internal maintenance step is not a public mutation outcome.
         transaction.commit()?;
+        self.checkpoint_migration(&connection, lease, &database)?;
         Ok(true)
+    }
+
+    fn checkpoint_migration(
+        &self,
+        connection: &rusqlite::Connection,
+        lease: &ExclusiveMaintenanceLeaseV1,
+        database: &std::fs::File,
+    ) -> DirectStoreResultV1<()> {
+        lease.revalidate(&self.layout)?;
+        if !super::maintenance::same_file(database, &self.layout.database())? {
+            return Err(DirectStoreErrorV1::Maintenance);
+        }
+        let checkpoint: (i64, i64, i64) =
+            connection.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?;
+        if checkpoint != (0, 0, 0) {
+            return Err(DirectStoreErrorV1::Busy);
+        }
+        lease.revalidate(&self.layout)?;
+        if !super::maintenance::same_file(database, &self.layout.database())? {
+            return Err(DirectStoreErrorV1::Maintenance);
+        }
+        database.sync_all()?;
+        super::maintenance::open_directory(&self.layout.runtime_directory())?.sync_all()?;
+        Ok(())
     }
 
     fn validate_predecessor(
@@ -195,11 +244,16 @@ mod tests {
     fn empty_production_registry_and_declared_schema_migration_are_atomic() {
         assert_eq!(writer_predecessor_manifests_v1().count(), 0);
         for absent_wal in [false, true] {
-            check_declared_schema_migration(absent_wal);
+            check_declared_schema_migration(absent_wal, false);
         }
     }
 
-    fn check_declared_schema_migration(absent_wal: bool) {
+    #[test]
+    fn declared_migration_checkpoint_busy_retains_main_and_retry_converges() {
+        check_declared_schema_migration(true, true);
+    }
+
+    fn check_declared_schema_migration(absent_wal: bool, blocked_checkpoint: bool) {
         let root = tempfile::TempDir::new().unwrap();
         let path = std::fs::canonicalize(root.path()).unwrap();
         let layout = super::super::DirectWorkspaceLayoutV1::new(
@@ -279,19 +333,101 @@ mod tests {
             migrate: migration,
         };
         let mut clocks = 0;
-        assert!(
-            new.migrate_writer_with_declarations(
-                &lease,
-                deadline(),
-                || {
-                    clocks += 1;
-                    UnixMillis::new(30)
-                },
-                &[accepted]
-            )
-            .unwrap()
-        );
+        let mut checkpoint_reader = None;
+        if blocked_checkpoint {
+            let reader = rusqlite::Connection::open(layout.database()).unwrap();
+            reader
+                .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); BEGIN DEFERRED;")
+                .unwrap();
+            assert_eq!(
+                reader
+                    .query_row(
+                        "SELECT contract_manifest_digest FROM writer_contract WHERE singleton=1",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .unwrap(),
+                OLD
+            );
+            let main_before = std::fs::read(layout.database()).unwrap();
+            let started = Instant::now();
+            assert!(matches!(
+                new.migrate_writer_with_declarations(
+                    &lease,
+                    Instant::now() + std::time::Duration::from_millis(200),
+                    || {
+                        clocks += 1;
+                        UnixMillis::new(30)
+                    },
+                    &[accepted],
+                ),
+                Err(DirectStoreErrorV1::Busy)
+            ));
+            assert!(started.elapsed() < std::time::Duration::from_secs(2));
+            assert_eq!(std::fs::read(layout.database()).unwrap(), main_before);
+            assert!(!std::fs::read(layout.wal()).unwrap().is_empty());
+            reader.execute_batch("ROLLBACK").unwrap();
+            assert!(
+                !new.migrate_writer_with_declarations(
+                    &lease,
+                    deadline(),
+                    || panic!("committed migration retry has no clock"),
+                    &[],
+                )
+                .unwrap()
+            );
+            checkpoint_reader = Some(reader);
+        } else {
+            assert!(
+                new.migrate_writer_with_declarations(
+                    &lease,
+                    deadline(),
+                    || {
+                        clocks += 1;
+                        UnixMillis::new(30)
+                    },
+                    &[accepted],
+                )
+                .unwrap()
+            );
+        }
         assert_eq!(clocks, 1);
+        // Immutable mode observes only the main file, even while WAL/SHM exist.
+        // Completion must publish schema, writer and generation there together.
+        let main = rusqlite::Connection::open_with_flags(
+            format!("file:{}?immutable=1", layout.database().display()),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+        )
+        .unwrap();
+        assert_eq!(
+            main.query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))
+                .unwrap(),
+            super::super::DIRECT_SCHEMA_GENERATION_V1
+        );
+        assert_eq!(
+            main.query_row(
+                "SELECT contract_manifest_digest FROM writer_contract WHERE singleton=1",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+            new.manifest.as_str()
+        );
+        super::super::connection::verify_declared_schema(&main, super::super::DIRECT_STORE_DDL_V1)
+            .unwrap();
+        assert!(std::fs::read(layout.wal()).unwrap().is_empty());
+        drop(main);
+        drop(checkpoint_reader);
+        // Model a committed successor whose checkpoint did not finish. Keep a
+        // native connection alive so closing its writer cannot checkpoint it.
+        let pending = new.open_connection(false, deadline()).unwrap();
+        pending
+            .execute(
+                "UPDATE writer_contract SET recorded_at_ms=31 WHERE singleton=1",
+                [],
+            )
+            .unwrap();
+        assert!(!std::fs::read(layout.wal()).unwrap().is_empty());
         assert!(
             !new.migrate_writer_with_declarations(
                 &lease,
@@ -301,6 +437,32 @@ mod tests {
             )
             .unwrap()
         );
+        let main = rusqlite::Connection::open_with_flags(
+            format!("file:{}?immutable=1", layout.database().display()),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+        )
+        .unwrap();
+        assert_eq!(
+            main.query_row(
+                "SELECT recorded_at_ms FROM writer_contract WHERE singleton=1",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            31
+        );
+        assert_eq!(
+            main.query_row(
+                "SELECT COUNT(*) FROM operational_journal WHERE event_name='writer_migrated'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert!(std::fs::read(layout.wal()).unwrap().is_empty());
+        drop(main);
+        drop(pending);
         drop(_gate);
         drop(lease);
         new.verify_integrity(deadline()).unwrap();

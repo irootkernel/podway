@@ -1302,11 +1302,14 @@ impl<R: GitResolverContractV1> DirectWorkspaceResolverV1<R> {
         if let Err(error) = self.validate_workspace_config(&preliminary) {
             // Removal can invalidate a config read while its marker still owns admission.
             // Classify without opening SQLite; unmarked invalid config remains rejected.
-            if matches!(
-                classify_direct_store_v1(&layout),
-                Ok(DirectStoreClassificationV1::Maintenance)
-            ) {
-                return Err(DirectStoreErrorV1::Maintenance.into());
+            match classify_direct_store_v1(&layout) {
+                Ok(DirectStoreClassificationV1::Newer { generation }) => {
+                    return Err(DirectStoreErrorV1::UnsupportedGeneration { generation }.into());
+                }
+                Ok(DirectStoreClassificationV1::Maintenance) => {
+                    return Err(DirectStoreErrorV1::Maintenance.into());
+                }
+                _ => {}
             }
             return Err(error.into());
         }

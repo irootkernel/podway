@@ -143,8 +143,10 @@ usage failures. Family help topics are `daemon`, `job`, `runtime`,
 ## Workspace lifecycle
 
 `workspace remove --force [--if-workspace-uuid <uuid>] [--yes]` removes the
-complete `.podway` tree and preserves the Git worktree and user files. Human TTY
-use may omit `--yes` and must confirm the exact resolved absolute root. JSON and
+complete `.podway` tree and preserves the Git worktree and user files. Unfenced
+human TTY
+use must confirm the exact resolved absolute root, including when `--yes` is
+supplied. A UUID-fenced TTY request may use `--yes` instead of that prompt. JSON and
 non-TTY use require `--yes`, the workspace UUID fence, and an idempotency key.
 
 `reset --all --yes --idempotency-key <key>` replaces runtime state with a fresh
@@ -152,7 +154,9 @@ Store while preserving Procedure sources and configuration unrelated to retired
 legacy mode; legacy-mode configuration/markers are intentionally retired.
 `--force` is not required for reset-all. Store generations 1–13 and daemon-era
 markers are refused without conversion or deletion; explicit reset-all is the
-supported destructive recovery. A recipe alone grants no reset authority.
+supported destructive recovery. A Store newer than this binary supports is
+refused even for reset and removal; use a Podway that supports it. A recipe alone
+grants no reset authority.
 
 Normal opens refuse unknown writer-contract digests. A declared direct
 predecessor may migrate under exclusive maintenance; the v0.2.13 cutover declares

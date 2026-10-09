@@ -192,24 +192,31 @@ impl DirectStoreV1 {
             super::classification::classify_unmarked_store_v1(&self.layout)?.require_current()?;
             let _gate = connection_gate(deadline)?;
             let database = super::classification::open_read_nofollow(&self.layout.database())?;
-            let (mut connection, immutable) = self.open_readonly_connection(
-                deadline,
-                !super::classification::path_exists(&self.layout.wal())?
-                    || !super::classification::path_exists(&self.layout.shm())?,
-            )?;
-            let transaction =
-                connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
-            let binding = self.validate_connection_with_mode(&transaction, immutable)?;
-            let snapshot = DirectReadSnapshotV1 {
-                connection: &transaction,
-                binding,
-            };
-            let result = read(&snapshot)?;
+            let result = (|| {
+                let (mut connection, immutable) = self
+                    .open_readonly_connection(
+                        deadline,
+                        !super::classification::path_exists(&self.layout.wal())?
+                            || !super::classification::path_exists(&self.layout.shm())?,
+                    )
+                    .map_err(invalid_admission_error)?;
+                let transaction = connection
+                    .transaction_with_behavior(TransactionBehavior::Deferred)
+                    .map_err(DirectStoreErrorV1::from)
+                    .map_err(invalid_admission_error)?;
+                let binding = self.validate_connection_with_mode(&transaction, immutable)?;
+                read(&DirectReadSnapshotV1 {
+                    connection: &transaction,
+                    binding,
+                })
+                .map_err(invalid_admission_error)
+            })();
+            // Invalid admission can authorize confirmed recovery only for this exact file.
             lease.revalidate(&self.layout)?;
             if !super::maintenance::same_file(&database, &self.layout.database())? {
                 return Err(DirectStoreErrorV1::Maintenance);
             }
-            Ok(result)
+            result
         })()
         .map_err(read_admission_error)
     }
@@ -445,6 +452,15 @@ impl DirectStoreV1 {
         connection: &Connection,
         immutable: bool,
     ) -> DirectStoreResultV1<WorkspaceBindingV1> {
+        self.validate_current_connection(connection, immutable)
+            .map_err(invalid_admission_error)
+    }
+
+    fn validate_current_connection(
+        &self,
+        connection: &Connection,
+        immutable: bool,
+    ) -> DirectStoreResultV1<WorkspaceBindingV1> {
         let generation: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         if generation != DIRECT_SCHEMA_GENERATION_V1 {
             return Err(if generation > DIRECT_SCHEMA_GENERATION_V1 {
@@ -460,6 +476,7 @@ impl DirectStoreV1 {
         if mode != if immutable { "delete" } else { "wal" } {
             return Err(DirectStoreErrorV1::SchemaMismatch);
         }
+        verify_schema(connection)?;
         let writer: (String, String, i64) = connection.query_row(
             "SELECT contract_manifest_digest, generation_id, recorded_at_ms FROM writer_contract WHERE singleton = 1",
             [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
@@ -472,7 +489,6 @@ impl DirectStoreV1 {
         if writer.1.is_empty() || writer.1.len() > 64 || writer.2 < 0 {
             return Err(DirectStoreErrorV1::Unreadable);
         }
-        verify_schema(connection)?;
         let binding = read_binding(connection)?;
         if binding.identity().common_dir_identity() != &self.common
             || binding.identity().worktree_admin_identity() != &self.admin
@@ -587,6 +603,29 @@ fn recovery_wait(deadline: Instant) -> DirectStoreResultV1<()> {
 pub(super) fn read_admission_error(error: DirectStoreErrorV1) -> DirectStoreErrorV1 {
     match error {
         DirectStoreErrorV1::Busy => DirectStoreErrorV1::ReadAdmissionBusy,
+        error => error,
+    }
+}
+
+fn invalid_admission_error(error: DirectStoreErrorV1) -> DirectStoreErrorV1 {
+    match error {
+        DirectStoreErrorV1::State(crate::StoreErrorV1::CorruptStateV1 { .. }) => {
+            DirectStoreErrorV1::Unreadable
+        }
+        DirectStoreErrorV1::Sqlite(
+            rusqlite::Error::QueryReturnedNoRows
+            | rusqlite::Error::InvalidColumnType(..)
+            | rusqlite::Error::IntegralValueOutOfRange(..)
+            | rusqlite::Error::FromSqlConversionFailure(..),
+        ) => DirectStoreErrorV1::Unreadable,
+        DirectStoreErrorV1::Sqlite(rusqlite::Error::SqliteFailure(code, _))
+            if matches!(
+                code.code,
+                rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase
+            ) =>
+        {
+            DirectStoreErrorV1::Unreadable
+        }
         error => error,
     }
 }

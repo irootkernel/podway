@@ -26,6 +26,12 @@ fences; a lookup miss does not disprove an effect outside outcome retention.
 RecoveryRecipe v2 describes read-only diagnosis or explicitly authorized
 marker-backed maintenance. It never grants deletion authority.
 
+The closed `workspace-removal-result/v2` reports absence separately from identity.
+Removing a present invalid Store reports `already_absent=false`,
+`podway_directory_removed=true` and `workspace_uuid=null` when that identity could
+not be validated. An already-absent Store requires `workspace_uuid=null`;
+`already_absent=false` requires an actual directory removal.
+
 ## Previous daemon generation
 
 The following describes the previous generation superseded by the direct CLI.
@@ -219,9 +225,15 @@ fresh key before execution. Producing the recipe never generates a key or
 authorizes deletion.
 Retained revision, attempt, session, Procedure digest, and stale-goal/evidence
 conflicts keep read-only `session.observe` recovery. Workspace identity, Store
-state/schema, and writer-contract diagnosis keep read-only `workspace.doctor`
+state, and writer-contract diagnosis keep read-only `workspace.doctor`
 recovery. Their current detail schemas exclude legacy reset, maintenance retry,
 and outcome lookup recipes; error/v2 applies the same owning detail constraints.
+Newer Store generations use `workspace-schema-unsupported-details/v1` instead:
+`store_schema_version` is the actual newer generation,
+`supported_store_schema_version` is this binary's generation, and `guidance`
+requests a Podway version that supports that Store. The closed object admits no
+recovery recipe; older binaries refuse reset and removal as well as ordinary
+Store commands. Human output renders the same compatibility guidance.
 
 `podway.version-result/v2` and `podway.contract-manifest/v2` omit
 `supported_ipc_ids`. The generated manifest is

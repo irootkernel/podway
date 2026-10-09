@@ -70,6 +70,9 @@ reduced metadata-only patch gate cannot do so.
 A declared migration verifies the complete predecessor schema and identity
 before opening a writer, holds the exclusive native lease, applies the reviewed
 migration and writer update atomically, then validates the successor. The
+exclusive lease and exact database witness remain held through a bounded
+TRUNCATE checkpoint and sync, so the main file carries the successor schema,
+writer identity and `user_version` before completion. The
 framework's isolated tests do not establish a released predecessor or automatic
 daemon-era migration.
 
@@ -95,10 +98,21 @@ pruning and root rebind commit together.
 
 Classification reads the SQLite header and checksum-valid committed WAL page one
 through bounded no-follow handles, before any read-write SQLite open. A partial
-or uncommitted WAL tail cannot promote generation. Legacy markers, generations
+or uncommitted WAL tail cannot promote generation. A validated committed newer
+page-one prefix refuses even with a missing main file or an oversized tail; a
+later downgrade does not grant an older writer destructive authority. The bounded
+scan refuses an unresolved valid stream rather than falling back to an older
+main generation. Marker diagnosis never substitutes for destructive generation
+admission, which independently revalidates the main/WAL file identities.
+Legacy markers, generations
 1–13, unsupported newer state, unknown writer, schema drift and foreign Git
 identity refuse ordinary reads and writes without modifying legacy bytes or
 creating SHM.
+Newer committed generations take precedence over legacy/maintenance markers and
+invalid configuration, including for reset and removal. They refuse before any
+lock creation, with actual/supported generation and compatible-Podway guidance.
+Changing a maintenance lock or marker protocol requires a Store generation bump;
+an unchanged protocol does not.
 
 Every ordinary open acquires and revalidates its native maintenance lease and
 current runtime-directory, lock and database identities. A normal read uses one

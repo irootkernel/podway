@@ -257,7 +257,7 @@ impl Fixture {
                 "--task",
                 "successor",
             ],
-            b"Choose [1]: ",
+            Some(b"Choose [1]: "),
             b"\n",
             delay,
         );
@@ -280,16 +280,60 @@ impl Fixture {
                 "--idempotency-key",
                 "confirmed-reset",
             ],
-            b"Continue? [y/N] ",
+            Some(b"Continue? [y/N] "),
             b"y\n",
             delay,
         )
     }
 
+    pub(super) fn confirm_removal_in_pty(&self) -> Output {
+        let response = format!("{}\n", self.0.display());
+        self.removal_answer_in_pty(&response, false)
+    }
+
+    pub(super) fn removal_answer_in_pty(&self, response: &str, yes: bool) -> Output {
+        let mut arguments = vec![
+            "workspace",
+            "remove",
+            "--force",
+            "--idempotency-key",
+            "remove",
+        ];
+        if yes {
+            arguments.push("--yes");
+        }
+        self.respond_in_pty_after_prompt(
+            &arguments,
+            Some(b"Type that exact path to remove all .podway content: "),
+            response.as_bytes(),
+            Duration::ZERO,
+        )
+        .0
+    }
+
+    pub(super) fn fenced_removal_in_pty(&self, uuid: &str) -> Output {
+        self.respond_in_pty_after_prompt(
+            &[
+                "workspace",
+                "remove",
+                "--force",
+                "--yes",
+                "--if-workspace-uuid",
+                uuid,
+                "--idempotency-key",
+                "remove",
+            ],
+            None,
+            b"",
+            Duration::ZERO,
+        )
+        .0
+    }
+
     fn respond_in_pty_after_prompt(
         &self,
         arguments: &[&str],
-        prompt: &'static [u8],
+        prompt: Option<&'static [u8]>,
         response: &[u8],
         delay: Duration,
     ) -> (Output, Duration) {
@@ -333,7 +377,11 @@ impl Fixture {
                     break;
                 }
                 bytes.extend_from_slice(&chunk[..count]);
-                if !announced && bytes.windows(prompt.len()).any(|window| window == prompt) {
+                if !announced
+                    && prompt.is_some_and(|prompt| {
+                        bytes.windows(prompt.len()).any(|window| window == prompt)
+                    })
+                {
                     send.send(()).unwrap();
                     announced = true;
                 }
@@ -345,15 +393,21 @@ impl Fixture {
             stderr.take(65_537).read_to_end(&mut bytes).unwrap();
             bytes
         });
-        receive
-            .recv_timeout(Duration::from_secs(10))
-            .expect("the real CLI must reach its prompt");
-        assert!(guard.0.as_mut().unwrap().try_wait().unwrap().is_none());
+        if prompt.is_some() {
+            receive
+                .recv_timeout(Duration::from_secs(10))
+                .expect("the real CLI must reach its prompt");
+            assert!(guard.0.as_mut().unwrap().try_wait().unwrap().is_none());
+        }
         let prompted_at = Instant::now();
         thread::sleep(delay);
         assert!(prompted_at.elapsed() >= delay);
         let responded_at = Instant::now();
-        stdin.write_all(response).unwrap();
+        if prompt.is_some() {
+            stdin.write_all(response).unwrap();
+        } else {
+            drop(stdin);
+        }
         let status = loop {
             if let Some(status) = guard.0.as_mut().unwrap().try_wait().unwrap() {
                 break status;
@@ -364,7 +418,6 @@ impl Fixture {
             );
             thread::sleep(Duration::from_millis(5));
         };
-        drop(stdin);
         let output = Output {
             status,
             stdout: stdout.join().unwrap(),

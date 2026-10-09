@@ -1333,6 +1333,12 @@
       "truncated": true,
       "next_page_token": "AQIDBAUGBwgJCgsMDQ4PEA",
       "page_token_version": 1
+    },
+    "podway.workspace-schema-unsupported-details/v1": {
+      "schema": "podway.workspace-schema-unsupported-details/v1",
+      "store_schema_version": 15,
+      "supported_store_schema_version": 14,
+      "guidance": "Use a Podway version that supports Store generation 15."
     }
   },
   "cases": [

@@ -551,7 +551,18 @@ fn store(error: &DirectStoreErrorV1, context: &DirectErrorContextV1) -> Presenta
             "markers":marker.iter().collect::<Vec<_>>(), "recovery":{"action":"reset_legacy_state","command":"workspace.reset_all",
                 "argv":["podway","--json","reset","--all","--yes","--idempotency-key","<new-idempotency-key>"], "reason":"Replace <new-idempotency-key> with a fresh caller-owned key, then explicitly reset unsupported daemon-era runtime state.","requires_explicit_authorization":true}}),
         },
-        E::UnsupportedGeneration { .. } => recovery("WORKSPACE_SCHEMA_UNSUPPORTED"),
+        E::UnsupportedGeneration { generation } => {
+            let supported = podway_store::direct_store::DIRECT_SCHEMA_GENERATION_V1;
+            Presentation {
+                code: "WORKSPACE_SCHEMA_UNSUPPORTED",
+                details: json!({
+                    "schema":"podway.workspace-schema-unsupported-details/v1",
+                    "store_schema_version":generation,
+                    "supported_store_schema_version":supported,
+                    "guidance":format!("Use a Podway version that supports Store generation {generation}. This binary supports generation {supported} and cannot open, reset or remove this newer Store.")
+                }),
+            }
+        }
         E::Unreadable | E::SchemaMismatch | E::Storage(_) | E::Sqlite(_) => {
             recovery("WORKSPACE_STATE_UNREADABLE")
         }

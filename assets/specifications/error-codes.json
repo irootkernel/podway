@@ -624,10 +624,10 @@
     },
     {
       "code": "WORKSPACE_SCHEMA_UNSUPPORTED",
-      "details_schema": "podway.workspace-recovery-details/v2",
+      "details_schema": "podway.workspace-schema-unsupported-details/v1",
       "exit_code": 5,
       "retryable": false,
-      "summary": "Workspace schema is unsupported."
+      "summary": "The Store generation is newer than this Podway supports."
     },
     {
       "code": "WORKSPACE_STATE_UNREADABLE",

@@ -20,7 +20,9 @@ mod markers;
 mod predecessor;
 mod transaction;
 
-pub use classification::{DirectStoreClassificationV1, classify_direct_store_v1};
+pub use classification::{
+    DirectStoreClassificationV1, classify_direct_store_v1, require_destructive_generation_v1,
+};
 pub use connection::{
     DirectPreparedGraphV1, DirectReadSnapshotV1, DirectStoreV1, DirectWorkspaceViewV1,
 };

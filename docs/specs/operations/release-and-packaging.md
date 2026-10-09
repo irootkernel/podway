@@ -252,9 +252,12 @@ scratch worktrees rather than runtime modes.
 ## Downgrade
 
 Database downgrade is unsupported. A newer schema or undeclared writer digest
-fails closed without changing the Store. Upgrade to a compatible writer or choose
-an explicitly confirmed destructive worktree reset; a version string alone never
-permits reopening incompatible state.
+fails closed without changing the Store. Use a compatible writer for newer
+generations; an older binary refuses even destructive reset and removal. A
+compatible generation that fails writer, schema or binding qualification,
+including unreadable rows or pages, can instead be discarded by a confirmed
+unfenced reset or interactive removal. A version string
+alone never permits reopening incompatible state.
 
 ## Uninstall
 

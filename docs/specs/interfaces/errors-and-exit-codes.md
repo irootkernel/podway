@@ -139,7 +139,7 @@ human explanation. Historical defensive entries do not establish new guarantees.
 | `WORKSPACE_MAINTENANCE` | 4 | yes | Process-independent maintenance exclusion or a published recovery marker blocks access. |
 | `WORKSPACE_NOT_INITIALIZED` | 5 | no | Podway workspace state is absent. |
 | `WORKSPACE_PATH_UNSAFE` | 5 | no | Podway workspace path is unsafe. |
-| `WORKSPACE_SCHEMA_UNSUPPORTED` | 5 | no | Workspace schema is unsupported. |
+| `WORKSPACE_SCHEMA_UNSUPPORTED` | 5 | no | The Store generation is newer than this Podway supports. |
 | `WORKSPACE_STATE_UNREADABLE` | 5 | no | Workspace state is corrupt or inaccessible. |
 | `WORKSPACE_UUID_MISMATCH` | 4 | no | The workspace UUID differs from the expected identity. |
 | `WORKTREE_GONE` | 5 | no | The bound Git worktree no longer exists. |
@@ -167,7 +167,8 @@ Named details contain no admission or job facts.
 | `BLOCKER_LIMIT_REACHED` | `blocker-limit-details/v2` | `maximum_open_blockers: 64` |
 | `IDEMPOTENCY_KEY_REUSED` | `idempotency-key-reused-details/v2` | Closed schema marker |
 | `MUTATION_OUTCOME_UNKNOWN` | `mutation-outcome-unknown-details/v3` | Original key and matching lookup/recovery key |
-| `WORKSPACE_STATE_UNREADABLE`, `WORKSPACE_SCHEMA_UNSUPPORTED` | `workspace-recovery-details/v2` | Diagnosis |
+| `WORKSPACE_STATE_UNREADABLE` | `workspace-recovery-details/v2` | Diagnosis |
+| `WORKSPACE_SCHEMA_UNSUPPORTED` | `workspace-schema-unsupported-details/v1` | Actual/supported Store generations and compatible-Podway guidance; no recovery recipe |
 | `SESSION_RESET_NOT_ELIGIBLE` | `session-reset-not-eligible-details/v2` | Lifecycle, disposition, required action |
 | `SESSION_START_DECISION_REQUIRED` | `session-start-decision-required-details/v2` | Lifecycle, disposition, allowed actions |
 | `SESSION_START_STATE_CONFLICT` | `session-start-state-conflict-details/v2` | Current lifecycle/disposition, allowed actions |

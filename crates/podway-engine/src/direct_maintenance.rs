@@ -21,7 +21,7 @@ use podway_store::{
         DirectMutationRequestV1, DirectOutcomeScopeV1,
         DirectStoreClassificationV1 as Classification, DirectStoreErrorV1,
         DirectTransactionBoundaryV1, ExclusiveMaintenanceLeaseV1, classify_direct_store_v1,
-        observe_direct_maintenance_marker_v1,
+        observe_direct_maintenance_marker_v1, require_destructive_generation_v1,
     },
 };
 use sha2::{Digest as _, Sha256};
@@ -187,9 +187,7 @@ fn reset_inner<R: GitResolverContractV1>(
         }
         None => store,
     };
-    if let Classification::Newer { generation } = classify_direct_store_v1(store.layout())? {
-        return Err(DirectStoreErrorV1::UnsupportedGeneration { generation }.into());
-    }
+    require_destructive_generation_v1(store.layout())?;
     let acquisition_started = lease_observer.as_ref().map(|_| Instant::now());
     let lease = ExclusiveMaintenanceLeaseV1::acquire(store.layout(), request.deadline, true)?;
     if let Some(started) = acquisition_started {
@@ -204,6 +202,7 @@ fn reset_inner<R: GitResolverContractV1>(
     }
     let (worktree, _) = resolver.resolve_candidate(request.selector.clone())?;
     resolver.revalidate_candidate(&worktree)?;
+    require_destructive_generation_v1(store.layout())?;
     if lease.read_marker(store.layout(), Kind::Removal)?.is_some() {
         return Err(DirectStoreErrorV1::Maintenance.into());
     }
@@ -252,7 +251,15 @@ fn reset_inner<R: GitResolverContractV1>(
                         }
                         guard_workspace(&request, snapshot.binding().identity().workspace_uuid())?;
                         Ok(None)
-                    })?;
+                    });
+                let observed = match observed {
+                    Ok(value) => value,
+                    Err(error) if unfenced_invalid_current_store(&request, &error) => {
+                        require_destructive_generation_v1(store.layout())?;
+                        None
+                    }
+                    Err(error) => return Err(error.into()),
+                };
                 if let Some(outcome) = observed {
                     return decode(outcome.response());
                 }
@@ -332,6 +339,10 @@ fn reset_inner<R: GitResolverContractV1>(
                 let observed = match observed {
                     Ok(value) => value,
                     Err(DirectStoreErrorV1::Legacy { .. } | DirectStoreErrorV1::Unreadable) => None,
+                    Err(error) if unfenced_invalid_current_store(&request, &error) => {
+                        require_destructive_generation_v1(store.layout())?;
+                        None
+                    }
                     Err(error) => return Err(error.into()),
                 };
                 if let Some(outcome) = observed {
@@ -379,6 +390,7 @@ fn reset_inner<R: GitResolverContractV1>(
             &store,
             &lease,
         );
+        require_destructive_generation_v1(store.layout())?;
         removal.clear_direct_contents(false)?;
         removal.remove_direct_legacy_configuration_marker()?;
         notify(&observer, DirectMaintenanceBoundaryV1::RuntimeCleared);
@@ -518,6 +530,7 @@ fn remove_inner<R: GitResolverContractV1>(
             false,
         );
     }
+    require_destructive_generation_v1(store.layout())?;
     match classify_direct_store_v1(store.layout())? {
         Classification::Legacy { generation, marker } => {
             return Err(DirectStoreErrorV1::Legacy { generation, marker }.into());
@@ -572,6 +585,7 @@ fn remove_inner<R: GitResolverContractV1>(
     }
     let (worktree, _) = resolver.resolve_candidate(request.selector.clone())?;
     resolver.revalidate_candidate(&worktree)?;
+    require_destructive_generation_v1(store.layout())?;
     if lease.read_marker(store.layout(), Kind::Reset)?.is_some() {
         return Err(DirectStoreErrorV1::Maintenance.into());
     }
@@ -604,7 +618,7 @@ fn remove_inner<R: GitResolverContractV1>(
         }
         let uuid = match classify_direct_store_v1(store.layout())? {
             Classification::Current => {
-                let (uuid, active) =
+                let observed =
                     store.read_under_exclusive_lease(&lease, request.deadline, |snapshot| {
                         guard_workspace(&request, snapshot.binding().identity().workspace_uuid())?;
                         let active = snapshot.current_graph()?.is_some_and(|graph| {
@@ -618,11 +632,19 @@ fn remove_inner<R: GitResolverContractV1>(
                             snapshot.binding().identity().workspace_uuid().clone(),
                             active,
                         ))
-                    })?;
+                    });
+                let (uuid, active) = match observed {
+                    Ok(value) => (Some(value.0), value.1),
+                    Err(error) if unfenced_invalid_current_store(&request, &error) => {
+                        require_destructive_generation_v1(store.layout())?;
+                        (None, false)
+                    }
+                    Err(error) => return Err(error.into()),
+                };
                 if active && !request.force {
                     return Err(DirectMaintenanceErrorV1::ForceRequired);
                 }
-                Some(uuid)
+                uuid
             }
             Classification::Missing => None,
             Classification::Legacy { generation, marker } => {
@@ -693,6 +715,7 @@ fn remove_inner<R: GitResolverContractV1>(
             &store,
             &lease,
         );
+        require_destructive_generation_v1(store.layout())?;
         removal.clear_direct_contents(false)?;
         notify(&observer, DirectMaintenanceBoundaryV1::RuntimeCleared);
         let next = with_phase(&marker, "runtime_removed")?;
@@ -710,14 +733,7 @@ fn remove_inner<R: GitResolverContractV1>(
         notify(&observer, DirectMaintenanceBoundaryV1::PhaseAdvanced);
     }
     // Prepare the complete response before namespace deletion destroys retention.
-    let output = removal_result(
-        &response,
-        now,
-        &worktree,
-        uuid.as_ref(),
-        uuid.is_none(),
-        true,
-    )?;
+    let output = removal_result(&response, now, &worktree, uuid.as_ref(), false, true)?;
     removal.finish_direct_removal(
         || {
             lease
@@ -1013,6 +1029,21 @@ fn envelope(
         warnings: Vec::new(),
     })?)
 }
+fn unfenced_invalid_current_store(
+    request: &DirectMaintenanceRequestV1,
+    error: &DirectStoreErrorV1,
+) -> bool {
+    request.expected_workspace_id.is_none()
+        && request.selector.durable_identity().is_none()
+        && matches!(
+            error,
+            DirectStoreErrorV1::WriterMismatch { .. }
+                | DirectStoreErrorV1::SchemaMismatch
+                | DirectStoreErrorV1::BindingMismatch
+                | DirectStoreErrorV1::Unreadable
+        )
+}
+
 fn removal_result(
     response: &RequestIdV1,
     now: UnixMillis,

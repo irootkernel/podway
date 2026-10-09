@@ -100,6 +100,47 @@ fn daemon_metadata_and_invalid_reconciliation_fail_closed() {
 }
 
 #[test]
+fn newer_schema_errors_require_closed_compatibility_guidance_without_doctor_recipes() {
+    let answers = known_answers();
+    let schema = "podway.workspace-schema-unsupported-details/v1";
+    let valid = answers["fixtures"][schema].clone();
+    let mut error = answers["fixtures"]["podway.error/v2"].clone();
+    error["code"] = json!("WORKSPACE_SCHEMA_UNSUPPORTED");
+    error["exit_code"] = json!(5);
+    error["retryable"] = json!(false);
+    error["details"] = valid.clone();
+    assert!(validate_daemon_free_document_v1("podway.error/v2", &error));
+    for generation in [15_u64, u64::from(u32::MAX)] {
+        error["details"]["store_schema_version"] = json!(generation);
+        assert!(validate_daemon_free_document_v1("podway.error/v2", &error));
+    }
+    for (field, value) in [
+        ("store_schema_version", json!(14)),
+        ("store_schema_version", json!(u64::from(u32::MAX) + 1)),
+        ("supported_store_schema_version", json!(15)),
+        ("guidance", json!("")),
+        (
+            "recovery",
+            answers["fixtures"]["podway.recovery-recipe/v2"].clone(),
+        ),
+    ] {
+        let mut invalid = valid.clone();
+        invalid[field] = value;
+        assert!(
+            !validate_daemon_free_document_v1(schema, &invalid),
+            "{field}"
+        );
+        error["details"] = invalid;
+        assert!(
+            !validate_daemon_free_document_v1("podway.error/v2", &error),
+            "{field}"
+        );
+    }
+    error["details"] = answers["fixtures"]["podway.workspace-recovery-details/v2"].clone();
+    assert!(!validate_daemon_free_document_v1("podway.error/v2", &error));
+}
+
+#[test]
 fn error_recovery_is_bound_to_the_required_operation() {
     let answers = known_answers();
     let cases = answers["cases"].as_array().unwrap();

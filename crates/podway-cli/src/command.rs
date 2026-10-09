@@ -4171,7 +4171,13 @@ fn confirm_if_required(
     if matches!(cli.command, Command::Start(_)) {
         return Ok(());
     }
-    if !cli.command.is_destructive() || cli.yes {
+    let unfenced_removal = matches!(
+        cli.command,
+        Command::Workspace {
+            command: WorkspaceCommand::Remove { .. }
+        }
+    ) && cli.if_workspace_uuid.is_none();
+    if !cli.command.is_destructive() || (cli.yes && !unfenced_removal) {
         return Ok(());
     }
     if cli.json || !io::stdin().is_terminal() {
@@ -4778,6 +4784,11 @@ fn render_human_error_direct(
             error["message"].as_str().unwrap_or_default()
         ),
     )?;
+    if error["code"] == "WORKSPACE_SCHEMA_UNSUPPORTED"
+        && let Some(guidance) = error["details"].get("guidance").and_then(Value::as_str)
+    {
+        write_text_line(stderr, format_args!("hint: {guidance}"))?;
+    }
     if error["code"]
         .as_str()
         .unwrap_or_default()
@@ -5216,7 +5227,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Usage:\n  podway workspace repair\n\nExample:\n  podway workspace repair"
         }
         "workspace.remove" => {
-            "Usage:\n  podway [--worktree <path>] workspace remove --force [--if-workspace-uuid <uuid>] [--yes]\n\nInteractive use prints the resolved absolute worktree root and requires that exact path as confirmation. JSON and non-interactive use require --yes and --if-workspace-uuid. Success removes all .podway content, including tracked files, while preserving the Git worktree."
+            "Usage:\n  podway [--worktree <path>] workspace remove --force [--if-workspace-uuid <uuid>] [--yes]\n\nUnfenced interactive use requires the exact resolved absolute worktree root as confirmation, including with --yes. JSON and non-interactive use require --yes and --if-workspace-uuid. Success removes all .podway content, including tracked files, while preserving the Git worktree."
         }
         "session.start" => {
             "Usage:\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> [--on-existing <preserve|delete>] [--supersede-reason <text>] [--actor <text>] [--progress-summary <text>] [--dry-run]\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'implement feature'\n  podway start --preset sw-dev-v2 --task 'start successor' --on-existing preserve --supersede-reason 'The successor has priority.'\n  podway start --preset sw-dev-v2 --task 'replace running work' --on-existing delete --progress-summary 'The current progress was reviewed.' --yes\n  podway start --preset bug-fix-v2 --task 'preview deletion' --dry-run --on-existing delete\n\nHuman TTY mode interviews when a nonterminal session already exists; Enter continues it and creates nothing. Noninteractive callers must choose preserve or delete. Disposed terminal sessions archive automatically. A successful start creates a prepared session at revision 0 without a cursor, attempt, or goal."
