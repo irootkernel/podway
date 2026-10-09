@@ -1038,6 +1038,7 @@ pub struct DirectWorkspaceResolverV1<R> {
     git_resolver: R,
     manifest: podway_core::Sha256Digest,
     store_boundary_observer: Option<DirectStoreBoundaryObserverV1>,
+    artifact_hash_observer: Option<crate::native_execution::NativeArtifactHashObserverV1>,
 }
 
 #[derive(Debug)]
@@ -1082,6 +1083,7 @@ impl<R: GitResolverContractV1> DirectWorkspaceResolverV1<R> {
             git_resolver,
             manifest,
             store_boundary_observer: None,
+            artifact_hash_observer: None,
         }
     }
 
@@ -1106,6 +1108,24 @@ impl<R: GitResolverContractV1> DirectWorkspaceResolverV1<R> {
             }
             None => store,
         }
+    }
+
+    /// Observes actual artifact streaming for native qualification; no product flags.
+    #[doc(hidden)]
+    pub fn with_artifact_hash_observer_v1(
+        mut self,
+        observer: impl Fn(&LosslessPathV1, u64) + Send + Sync + 'static,
+    ) -> Self {
+        self.artifact_hash_observer = Some(std::sync::Arc::new(observer));
+        self
+    }
+
+    pub(crate) fn native_workspace(
+        &self,
+        resolved: ResolvedWorkspaceV1,
+    ) -> crate::native_execution::NativeDirectWorkspaceV1 {
+        crate::native_execution::NativeDirectWorkspaceV1::new(resolved)
+            .with_hash_observer(self.artifact_hash_observer.clone())
     }
 
     fn resolve_preliminary(

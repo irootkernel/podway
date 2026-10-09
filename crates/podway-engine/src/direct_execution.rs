@@ -28,8 +28,7 @@ use crate::{
         project_direct_observation_v1, project_direct_status_v1,
     },
     execution::{
-        ArtifactVerifierV1, ExecutionBoundaryErrorV1, ExecutionClockV1, ExecutionErrorV1,
-        goal_definition_from_wire_v2, required_local_artifacts_v2,
+        ExecutionBoundaryErrorV1, ExecutionClockV1, ExecutionErrorV1, goal_definition_from_wire_v2,
     },
     v2_read_service::{EvidenceReadErrorV2, GraphStatusTierV2, GraphViewErrorV2},
     workspace::{DirectWorkspaceResolutionErrorV1, DirectWorkspaceResolverV1},
@@ -95,7 +94,7 @@ pub fn execute_cursor_v1<R: GitResolverContractV1>(
     clock: &impl ExecutionClockV1,
     ids: &impl DirectIdSourceV1,
 ) -> Result<OutputEnvelopeV4, DirectExecutionErrorV1> {
-    let (resolved, store) = resolver.resolve_existing(
+    let (resolved, store, binding) = resolver.resolve_existing_with_binding(
         request.selector,
         request.expected_workspace_id.as_ref(),
         request.deadline,
@@ -119,7 +118,16 @@ pub fn execute_cursor_v1<R: GitResolverContractV1>(
         DirectOutcomeScopeV1::Session(fences.expected_session_id.clone()),
     )?;
     let prepared = store.prepare_graph(request.deadline)?;
-    let native = crate::native_execution::NativeDirectWorkspaceV1::new(resolved.clone());
+    let native = resolver.native_workspace(resolved.clone());
+    let artifacts = if matches!(request.command, DirectCursorCommandV1::Complete(_)) {
+        prepared
+            .as_ref()
+            .map(|prior| native.prepare_required_artifacts_v2(&binding, prior.graph()))
+            .transpose()
+            .map(|artifacts| artifacts.unwrap_or_default())
+    } else {
+        Ok(Vec::new())
+    };
     let mut execution_error = None;
     let result = store.mutate(&mutation, request.deadline, || clock.now(), |transaction| {
         let current = transaction.use_prepared_graph(prepared.as_ref())?;
@@ -163,15 +171,13 @@ pub fn execute_cursor_v1<R: GitResolverContractV1>(
                 execution_error = Some(DirectExecutionErrorV1::Delegation(failure));
                 return Err(DirectStoreErrorV1::InvalidInput { reason: "delegation is not ready for completion" });
             }
-            let artifacts = required_local_artifacts_v2(prior).map_err(|error| {
-                execution_error = Some(DirectExecutionErrorV1::Preparation(error));
+            let artifacts = artifacts.map_err(|error| {
+                execution_error = Some(error);
                 DirectStoreErrorV1::InvalidInput { reason: "required artifact preparation failed" }
             })?;
-            for (item, artifact) in artifacts {
-                if let Err(error) = native.revalidate_local_artifact(transaction.binding(), &item, &artifact) {
-                    execution_error = Some(DirectExecutionErrorV1::Boundary(error));
-                    return Err(DirectStoreErrorV1::InvalidInput { reason: "required artifact changed" });
-                }
+            if let Err(error) = native.verify_required_artifacts_v2(transaction.binding(), prior, &artifacts) {
+                execution_error = Some(error);
+                return Err(DirectStoreErrorV1::InvalidInput { reason: "required artifact changed" });
             }
         }
         let (next, mut body) = match &request.command {

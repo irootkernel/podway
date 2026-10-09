@@ -12,6 +12,7 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ### Fixed
 
+- Hash local artifacts before writer admission and reject changed file stamps without reading artifact bytes inside the transaction.
 - Apply timeouts only to lock waits, permit an immediate attempt with no remaining budget, and preserve the original budget through interactive prompts.
 - Preserve independent item writes across concurrent changes, report current stale revisions, and re-evaluate concurrent session starts against current state.
 

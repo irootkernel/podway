@@ -2891,11 +2891,10 @@ fn cursor_commands_preserve_fences_history_and_exact_replay_across_a_real_store(
 }
 
 #[test]
-fn direct_artifact_verification_rehashes_inside_the_transaction_without_opening_sqlite() {
-    use podway_core::{DomainError, ItemId};
+fn direct_artifact_verification_checks_prepared_stamps_without_artifact_byte_reads() {
+    use podway_core::DomainError;
     use podway_engine::{
-        execution::{ArtifactVerifierV1, ExecutionBoundaryErrorV1},
-        native_execution::NativeDirectWorkspaceV1,
+        execution::ExecutionBoundaryErrorV1, native_execution::NativeDirectWorkspaceV1,
     };
     use podway_store::{GraphMutationErrorV2, direct_store::DirectStoreErrorV1};
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -2913,10 +2912,10 @@ fn direct_artifact_verification_rehashes_inside_the_transaction_without_opening_
     let binding = store
         .read(deadline(), |snapshot| Ok(snapshot.binding().clone()))
         .unwrap();
-    let artifact = verifier
-        .hash_local_artifact(&binding, "report.txt", Some("text/plain"))
+    let prepared = verifier
+        .prepare_local_artifact_v1(&binding, "report.txt", Some("text/plain"))
         .unwrap();
-    let item = ItemId::new("report").unwrap();
+
     let clock_reads = AtomicUsize::new(0);
     let request = DirectMutationRequestV1::new(
         IdempotencyKeyV1::new("verify-artifact").unwrap(),
@@ -2928,8 +2927,7 @@ fn direct_artifact_verification_rehashes_inside_the_transaction_without_opening_
     .unwrap();
     store.mutate(&request, deadline(), || { clock_reads.fetch_add(1, Ordering::SeqCst); UnixMillis::new(NOW + 20) },
         |transaction| {
-            let verified = verifier.revalidate_local_artifact(transaction.binding(), &item, &artifact).unwrap();
-            assert_eq!(&verified.digest, artifact.digest());
+            verifier.verify_prepared_local_artifact_v1(transaction.binding(), &prepared).unwrap();
             transaction.now();
             Ok(CanonicalExecutionJsonV1::new(canonicalize_json_v1(&json!({
                 "schema":"podway.output/v4", "request_id":ORIGINAL_RESPONSE, "command":"workspace.repair",
@@ -2950,11 +2948,9 @@ fn direct_artifact_verification_rehashes_inside_the_transaction_without_opening_
         &changed,
         deadline(),
         || panic!("changed artifact read the mutation clock"),
-        |transaction| match verifier.revalidate_local_artifact(
-            transaction.binding(),
-            &item,
-            &artifact,
-        ) {
+        |transaction| match verifier
+            .verify_prepared_local_artifact_v1(transaction.binding(), &prepared)
+        {
             Err(ExecutionBoundaryErrorV1::Domain(DomainError::ArtifactChanged)) => {
                 Err(GraphMutationErrorV2::Domain(DomainError::ArtifactChanged).into())
             }
@@ -2985,12 +2981,12 @@ fn direct_artifact_verification_rehashes_inside_the_transaction_without_opening_
     .unwrap();
     assert!(
         verifier
-            .hash_local_artifact(&binding, "report-link.txt", None)
+            .prepare_local_artifact_v1(&binding, "report-link.txt", None)
             .is_err()
     );
     assert!(
         verifier
-            .hash_local_artifact(&binding, "../report.txt", None)
+            .prepare_local_artifact_v1(&binding, "../report.txt", None)
             .is_err()
     );
 }

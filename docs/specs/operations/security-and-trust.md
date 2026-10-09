@@ -106,8 +106,10 @@ own exact bounds, retry semantics and compatibility generation.
 ## Artifact handling
 
 Local artifacts retain worktree-relative location, digest, size and media type,
-not content. Required local artifacts are rehashed at completion with item and
-worktree revalidation. External references remain caller-provided and unverified.
+not content. Required local artifacts are hashed before writer admission for
+completion and decisions. The transaction reobserves safe descriptor stamps and
+item/worktree identities without reading artifact bytes. External references remain
+caller-provided and unverified.
 A digest identifies bytes when the relevant bytes were hashed; it authenticates
 no actor and does not establish that the artifact remains unchanged afterward.
 

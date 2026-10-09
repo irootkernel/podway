@@ -12,9 +12,10 @@ use uuid::Uuid;
 use crate::native;
 use crate::{
     ContainmentMetadataV1, DurableWorktreeIdentityV1, GitInvariantViolationV1, GitReadOperationV1,
-    GitResolverContractV1, GitResolverErrorV1, HashedLocalArtifactV1, LocalPathPresenceV1,
-    LosslessPathV1, ReadLocalFileV1, TransientWorktreeEvidenceV1, ValidatedWorktreeV1,
-    WorkspaceIdentityStateV1, WorktreeMoveMetadataV1, WorktreeRootsV1, WorktreeSelectorV1,
+    GitResolverContractV1, GitResolverErrorV1, HashedLocalArtifactV1, LocalArtifactStampV1,
+    LocalPathPresenceV1, LosslessPathV1, ReadLocalFileV1, TransientWorktreeEvidenceV1,
+    ValidatedWorktreeV1, WorkspaceIdentityStateV1, WorktreeMoveMetadataV1, WorktreeRootsV1,
+    WorktreeSelectorV1,
 };
 
 /// A zero-configuration, read-only resolver for supported native Unix Git worktrees.
@@ -96,6 +97,26 @@ impl NativeGitResolverV1 {
         worktree: &ValidatedWorktreeV1,
         artifact: &LosslessPathV1,
     ) -> Result<HashedLocalArtifactV1, GitResolverErrorV1> {
+        self.hash_artifact(worktree, artifact, None)
+    }
+
+    /// Observes actual streaming for native qualification without a product flag.
+    #[doc(hidden)]
+    pub fn hash_local_artifact_with_observer_v1(
+        &self,
+        worktree: &ValidatedWorktreeV1,
+        artifact: &LosslessPathV1,
+        observer: &dyn Fn(u64),
+    ) -> Result<HashedLocalArtifactV1, GitResolverErrorV1> {
+        self.hash_artifact(worktree, artifact, Some(observer))
+    }
+
+    fn hash_artifact(
+        &self,
+        worktree: &ValidatedWorktreeV1,
+        artifact: &LosslessPathV1,
+        observer: Option<&dyn Fn(u64)>,
+    ) -> Result<HashedLocalArtifactV1, GitResolverErrorV1> {
         let layout = self.reestablish_artifact_layout(worktree)?;
         let supplied = native::decode_lossless_path(artifact)?;
         if !native::is_strictly_contained(layout.worktree_root.path(), &supplied) {
@@ -118,10 +139,16 @@ impl NativeGitResolverV1 {
             byte_length = byte_length
                 .checked_add(count as u64)
                 .ok_or_else(artifact_metadata_changed)?;
+            if byte_length > opened.expected_size() {
+                return Err(artifact_metadata_changed());
+            }
+            if let Some(observer) = observer {
+                observer(byte_length);
+            }
         }
 
         #[cfg(test)]
-        native::synchronize_artifact_hash_replacement_for_test();
+        native::synchronize_artifact_hash_replacement_for_test(opened.path());
         if byte_length != opened.expected_size() {
             return Err(artifact_metadata_changed());
         }
@@ -133,7 +160,30 @@ impl NativeGitResolverV1 {
             native::lossless_path(opened.path())?,
             sha256_digest(hasher)?,
             byte_length,
+            opened.stamp(),
         ))
+    }
+
+    /// Reobserves a regular file through the same no-follow descriptor chain,
+    /// without reading artifact bytes. Git and parent identities are revalidated.
+    pub fn observe_local_artifact_stamp_v1(
+        &self,
+        worktree: &ValidatedWorktreeV1,
+        artifact: &LosslessPathV1,
+    ) -> Result<LocalArtifactStampV1, GitResolverErrorV1> {
+        let layout = self.reestablish_artifact_layout(worktree)?;
+        let supplied = native::decode_lossless_path(artifact)?;
+        if !native::is_strictly_contained(layout.worktree_root.path(), &supplied) {
+            return Err(GitResolverErrorV1::PathEscape {
+                path: artifact.clone(),
+            });
+        }
+        let opened = native::open_artifact_beneath(&layout.worktree_root, &supplied)
+            .map_err(map_snapshot_change_to_artifact)?;
+        layout.validate_artifact_snapshot()?;
+        self.ensure_artifact_layout_matches(worktree, &layout)?;
+        opened.validate()?;
+        Ok(opened.stamp())
     }
 
     /// Reads one stable regular file beneath a freshly revalidated worktree root.
@@ -175,7 +225,7 @@ impl NativeGitResolverV1 {
         }
 
         #[cfg(test)]
-        native::synchronize_artifact_hash_replacement_for_test();
+        native::synchronize_artifact_hash_replacement_for_test(opened.path());
         if bytes.len() as u64 != opened.expected_size() {
             return Err(artifact_metadata_changed());
         }
@@ -597,7 +647,10 @@ mod tests {
         fs::write(&artifact_path, b"original artifact").expect("artifact bytes");
         let artifact = native::lossless_path(&artifact_path).expect("lossless artifact");
         let barrier = Arc::new(Barrier::new(2));
-        native::install_artifact_hash_replacement_hook_for_test(Arc::clone(&barrier));
+        native::install_artifact_hash_replacement_hook_for_test(
+            artifact_path.clone(),
+            Arc::clone(&barrier),
+        );
 
         let hash_worktree = validated.clone();
         let hash_artifact = artifact.clone();
@@ -710,7 +763,10 @@ mod tests {
             .expect("validated worktree");
         let artifact = native::lossless_path(&artifact).expect("lossless artifact");
         let barrier = Arc::new(Barrier::new(2));
-        native::install_artifact_hash_replacement_hook_for_test(Arc::clone(&barrier));
+        native::install_artifact_hash_replacement_hook_for_test(
+            worktree.join("artifact"),
+            Arc::clone(&barrier),
+        );
 
         let hash_worktree = validated.clone();
         let hash_artifact = artifact.clone();
@@ -735,6 +791,46 @@ mod tests {
         assert_eq!(
             fs::read(worktree.join("artifact")).expect("replacement bytes"),
             b"replacement artifact"
+        );
+    }
+
+    #[test]
+    fn artifact_hash_hook_ignores_unrelated_bounded_reads() {
+        let _hook_guard = ARTIFACT_HASH_TEST_LOCK
+            .lock()
+            .expect("artifact hash test lock");
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("worktree");
+        create_main(&root);
+        let root = fs::canonicalize(root).expect("canonical root");
+        fs::write(root.join("artifact"), b"artifact").expect("artifact bytes");
+        fs::write(root.join("procedure.yaml"), b"procedure").expect("procedure bytes");
+        let resolver = NativeGitResolverV1::new();
+        let worktree = resolver.resolve_native(selector(&root)).expect("worktree");
+        let source = native::lossless_path(&root.join("procedure.yaml")).expect("source path");
+        let barrier = Arc::new(Barrier::new(2));
+        native::install_artifact_hash_replacement_hook_for_test(
+            root.join("artifact"),
+            Arc::clone(&barrier),
+        );
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let worker = thread::spawn(move || {
+            let result = resolver.read_bounded_local_file(&worktree, &source, 128);
+            sender.send(()).expect("completion signal");
+            result
+        });
+        let finished = receiver
+            .recv_timeout(std::time::Duration::from_millis(250))
+            .is_ok();
+        if !finished {
+            barrier.wait();
+            barrier.wait();
+        }
+        assert!(worker.join().expect("bounded reader").is_ok());
+        native::clear_artifact_hash_replacement_hook_for_test();
+        assert!(
+            finished,
+            "an unrelated bounded read consumed the artifact hash hook"
         );
     }
 
@@ -827,7 +923,10 @@ mod tests {
         let source = native::lossless_path(&worktree.join("procedure.yaml"))
             .expect("lossless procedure path");
         let barrier = Arc::new(Barrier::new(2));
-        native::install_artifact_hash_replacement_hook_for_test(Arc::clone(&barrier));
+        native::install_artifact_hash_replacement_hook_for_test(
+            worktree.join("procedure.yaml"),
+            Arc::clone(&barrier),
+        );
 
         let worker =
             thread::spawn(move || resolver.read_bounded_local_file(&validated, &source, 64));

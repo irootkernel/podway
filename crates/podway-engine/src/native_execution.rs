@@ -12,8 +12,9 @@ use podway_core::{
 };
 use podway_git::{
     DiagnosticPathDisplayV1, GitInvariantViolationV1, GitReadOperationV1,
-    GitRepresentationProblemV1, GitResolverContractV1, GitResolverErrorV1, LosslessPathV1,
-    NativeGitResolverV1, ValidatedWorktreeV1, WORKTREE_SELECTOR_VERSION_V1, WorktreeSelectorV1,
+    GitRepresentationProblemV1, GitResolverContractV1, GitResolverErrorV1, LocalArtifactStampV1,
+    LosslessPathV1, NativeGitResolverV1, ValidatedWorktreeV1, WORKTREE_SELECTOR_VERSION_V1,
+    WorktreeSelectorV1,
 };
 use podway_store::WorkspaceBindingV1;
 
@@ -94,14 +95,165 @@ impl ExecutionClockV1 for WallUtcExecutionClockV1 {
 
 /// Transaction-safe Procedure reads and artifact verification from a qualified direct workspace.
 /// The owning snapshot or transaction supplies the binding; this adapter never opens SQLite.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct NativeDirectWorkspaceV1 {
     resolved: ResolvedWorkspaceV1,
+    hash_observer: Option<NativeArtifactHashObserverV1>,
+}
+
+pub(crate) type NativeArtifactHashObserverV1 =
+    std::sync::Arc<dyn Fn(&LosslessPathV1, u64) + Send + Sync>;
+
+impl std::fmt::Debug for NativeDirectWorkspaceV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("NativeDirectWorkspaceV1")
+            .field("resolved", &self.resolved)
+            .finish_non_exhaustive()
+    }
+}
+
+/// A request-local digest and opaque descriptor stamp, never persisted or serialized.
+#[derive(Clone, Debug)]
+pub struct PreparedLocalArtifactV1 {
+    artifact: ArtifactValueV1,
+    stamp: LocalArtifactStampV1,
+}
+
+impl PreparedLocalArtifactV1 {
+    pub fn artifact(&self) -> &ArtifactValueV1 {
+        &self.artifact
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct PreparedRequiredArtifactV2 {
+    item_id: ItemId,
+    item_revision: podway_core::Revision,
+    attempt_id: podway_core::AttemptId,
+    artifact: PreparedLocalArtifactV1,
 }
 
 impl NativeDirectWorkspaceV1 {
     pub fn new(resolved: ResolvedWorkspaceV1) -> Self {
-        Self { resolved }
+        Self {
+            resolved,
+            hash_observer: None,
+        }
+    }
+
+    pub(crate) fn with_hash_observer(
+        mut self,
+        observer: Option<NativeArtifactHashObserverV1>,
+    ) -> Self {
+        self.hash_observer = observer;
+        self
+    }
+
+    /// Streams the digest before writer admission and retains only metadata and a stamp.
+    pub fn prepare_local_artifact_v1(
+        &self,
+        binding: &WorkspaceBindingV1,
+        path: &str,
+        media_type: Option<&str>,
+    ) -> Result<PreparedLocalArtifactV1, ExecutionBoundaryErrorV1> {
+        self.prepare_artifact(
+            binding,
+            path,
+            media_type.unwrap_or_else(|| embedded_media_type_v1(path)),
+            false,
+        )
+    }
+
+    /// Reobserves metadata through the safe descriptor chain, without artifact-byte reads.
+    pub fn verify_prepared_local_artifact_v1(
+        &self,
+        binding: &WorkspaceBindingV1,
+        prepared: &PreparedLocalArtifactV1,
+    ) -> Result<(), ExecutionBoundaryErrorV1> {
+        let worktree = self.revalidate_worktree(binding)?;
+        let candidate = artifact_path_from_root_v1(
+            self.resolved.workspace_root(),
+            prepared.artifact.location(),
+        )?;
+        let current = NativeGitResolverV1::new()
+            .observe_local_artifact_stamp_v1(&worktree, &candidate)
+            .map_err(artifact_revalidation_boundary_error_v1)?;
+        if current != prepared.stamp {
+            return Err(ExecutionBoundaryErrorV1::domain(
+                DomainError::ArtifactChanged,
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn prepare_required_artifacts_v2(
+        &self,
+        binding: &WorkspaceBindingV1,
+        state: &podway_store::GraphSessionStateV2,
+    ) -> Result<Vec<PreparedRequiredArtifactV2>, crate::direct_execution::DirectExecutionErrorV1>
+    {
+        use crate::direct_execution::DirectExecutionErrorV1 as E;
+        let required =
+            crate::execution::required_local_artifacts_v2(state).map_err(E::Preparation)?;
+        required
+            .into_iter()
+            .map(|(item_id, recorded)| {
+                let artifact = self
+                    .prepare_artifact(binding, recorded.location(), recorded.media_type(), true)
+                    .map_err(E::Boundary)?;
+                if artifact.artifact != recorded {
+                    return Err(E::Boundary(ExecutionBoundaryErrorV1::domain(
+                        DomainError::ArtifactChanged,
+                    )));
+                }
+                Ok(PreparedRequiredArtifactV2 {
+                    item_revision: active_item_revision(state, &item_id).map_err(E::Boundary)?,
+                    attempt_id: state
+                        .trace()
+                        .active_attempt()
+                        .expect("required artifact has an active attempt")
+                        .attempt_id()
+                        .clone(),
+                    item_id,
+                    artifact,
+                })
+            })
+            .collect()
+    }
+
+    pub(crate) fn verify_required_artifacts_v2(
+        &self,
+        binding: &WorkspaceBindingV1,
+        state: &podway_store::GraphSessionStateV2,
+        prepared: &[PreparedRequiredArtifactV2],
+    ) -> Result<(), crate::direct_execution::DirectExecutionErrorV1> {
+        use crate::direct_execution::DirectExecutionErrorV1 as E;
+        let changed = || {
+            E::Boundary(ExecutionBoundaryErrorV1::domain(
+                DomainError::ArtifactChanged,
+            ))
+        };
+        let current =
+            crate::execution::required_local_artifacts_v2(state).map_err(E::Preparation)?;
+        if current.len() != prepared.len() {
+            return Err(changed());
+        }
+        for ((item, artifact), prior) in current.iter().zip(prepared) {
+            if item != &prior.item_id
+                || artifact != prior.artifact.artifact()
+                || active_item_revision(state, item).map_err(E::Boundary)? != prior.item_revision
+                || state
+                    .trace()
+                    .active_attempt()
+                    .is_none_or(|active| active.attempt_id() != &prior.attempt_id)
+            {
+                return Err(changed());
+            }
+            self.verify_prepared_local_artifact_v1(binding, &prior.artifact)
+                .map_err(E::Boundary)?;
+        }
+        Ok(())
     }
 
     fn revalidate_worktree(
@@ -141,6 +293,17 @@ impl NativeDirectWorkspaceV1 {
         media_type: &str,
         revalidation: bool,
     ) -> Result<ArtifactValueV1, ExecutionBoundaryErrorV1> {
+        self.prepare_artifact(binding, path, media_type, revalidation)
+            .map(|prepared| prepared.artifact)
+    }
+
+    fn prepare_artifact(
+        &self,
+        binding: &WorkspaceBindingV1,
+        path: &str,
+        media_type: &str,
+        revalidation: bool,
+    ) -> Result<PreparedLocalArtifactV1, ExecutionBoundaryErrorV1> {
         let worktree = self.revalidate_worktree(binding)?;
         let candidate =
             artifact_path_from_root_v1(self.resolved.workspace_root(), path).map_err(|_| {
@@ -148,28 +311,63 @@ impl NativeDirectWorkspaceV1 {
                     crate::execution::LocalArtifactFailureV1::PathOutsideWorktree,
                 )
             })?;
-        let hashed = NativeGitResolverV1::new()
-            .hash_local_artifact(&worktree, &candidate)
-            .map_err(|error| {
-                if revalidation {
-                    artifact_revalidation_boundary_error_v1(error)
-                } else {
-                    direct_artifact_boundary_error_v1(error, &candidate)
-                }
-            })?;
+        let resolver = NativeGitResolverV1::new();
+        let hashed = match &self.hash_observer {
+            Some(observer) => {
+                resolver.hash_local_artifact_with_observer_v1(&worktree, &candidate, &|bytes| {
+                    observer(&candidate, bytes)
+                })
+            }
+            None => resolver.hash_local_artifact(&worktree, &candidate),
+        }
+        .map_err(|error| {
+            if revalidation {
+                artifact_revalidation_boundary_error_v1(error)
+            } else {
+                direct_artifact_boundary_error_v1(error, &candidate)
+            }
+        })?;
         if hashed.canonical_path() != &candidate {
             return Err(domain_invalid_state_v1(
                 "artifact resolver returned another canonical path",
             ));
         }
-        ArtifactValueV1::local_path(
+        let artifact = ArtifactValueV1::local_path(
             path,
             hashed.digest().clone(),
             hashed.byte_length(),
             media_type,
         )
-        .map_err(ExecutionBoundaryErrorV1::domain)
+        .map_err(ExecutionBoundaryErrorV1::domain)?;
+        Ok(PreparedLocalArtifactV1 {
+            artifact,
+            stamp: hashed.stamp(),
+        })
     }
+}
+
+fn active_item_revision(
+    state: &podway_store::GraphSessionStateV2,
+    item: &ItemId,
+) -> Result<podway_core::Revision, ExecutionBoundaryErrorV1> {
+    state
+        .trace()
+        .active_attempt()
+        .and_then(|active| {
+            state
+                .workflow_memory()
+                .attempts()
+                .iter()
+                .find(|memory| memory.attempt_id() == active.attempt_id())
+        })
+        .and_then(|memory| {
+            memory
+                .item_slots()
+                .iter()
+                .find(|slot| slot.item_id() == item)
+        })
+        .map(|slot| slot.revision())
+        .ok_or_else(|| domain_invalid_state_v1("required artifact has no active item slot"))
 }
 
 fn direct_artifact_boundary_error_v1(
@@ -178,6 +376,9 @@ fn direct_artifact_boundary_error_v1(
 ) -> ExecutionBoundaryErrorV1 {
     use crate::execution::LocalArtifactFailureV1 as E;
     let failure = match error {
+        GitResolverErrorV1::Invariant {
+            problem: GitInvariantViolationV1::MetadataChangedDuringArtifactHash,
+        } => return ExecutionBoundaryErrorV1::domain(DomainError::ArtifactChanged),
         GitResolverErrorV1::PathEscape { .. } | GitResolverErrorV1::SymlinkEscape { .. } => {
             E::PathOutsideWorktree
         }
@@ -212,20 +413,6 @@ fn direct_artifact_boundary_error_v1(
 }
 
 impl ArtifactVerifierV1 for NativeDirectWorkspaceV1 {
-    fn hash_local_artifact(
-        &self,
-        workspace: &WorkspaceBindingV1,
-        path: &str,
-        requested_media_type: Option<&str>,
-    ) -> Result<ArtifactValueV1, ExecutionBoundaryErrorV1> {
-        self.hash(
-            workspace,
-            path,
-            requested_media_type.unwrap_or_else(|| embedded_media_type_v1(path)),
-            false,
-        )
-    }
-
     fn revalidate_local_artifact(
         &self,
         workspace: &WorkspaceBindingV1,

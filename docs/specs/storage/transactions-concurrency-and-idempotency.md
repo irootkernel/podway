@@ -142,11 +142,22 @@ and outcome unchanged. See [Supervised Delegation](../interfaces/supervised-dele
 
 ## Artifact completion race
 
-Read artifact item revisions and metadata, hash local files outside the write
-transaction, then validate the active attempt, item revisions, size and fresh
-digest before completing. A mismatch returns `ARTIFACT_CHANGED` without an
-effect. The filesystem may change afterward; Podway is not a security boundary
-against same-user processes and retains metadata rather than artifact bytes.
+For attach, record, complete and decide, resolve and hash local artifacts before
+writer admission. Capture each file's device/inode identity, size and nanosecond
+modification/change times before streaming, and require the same stamp afterward.
+A change while hashing returns `ARTIFACT_CHANGED`.
+
+Inside the write transaction, read no artifact bytes. Reobserve each prepared
+stamp through the same no-follow descriptor chain and validate the active attempt,
+item revisions, recorded size/digest, required-artifact set and workspace/Git
+identity against preparation. A mismatch returns `ARTIFACT_CHANGED` without
+an effect. Caller fences retain their ordinary typed rejection ordering. Consume
+captured preparation failures only after authoritative successful-outcome replay
+and caller fences, so an exact replay does not depend on today's file.
+
+The filesystem may change afterward; Podway is not a security boundary against
+same-user processes and retains metadata rather than artifact bytes. The separate
+deep Doctor check retains its exclusive integrity-lease verification.
 
 ## Session reset, archive and replacement
 

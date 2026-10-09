@@ -3,8 +3,7 @@
 use std::time::Instant;
 
 use podway_core::{
-    ArtifactLocationKindV1, ArtifactValueV1, DomainError, SessionLifecycle, Sha256Digest,
-    WorkspaceId, canonicalize_json_v1,
+    ArtifactValueV1, DomainError, SessionLifecycle, Sha256Digest, WorkspaceId, canonicalize_json_v1,
 };
 use podway_git::{GitResolverContractV1, WorktreeSelectorV1};
 use podway_protocol::{
@@ -21,8 +20,7 @@ use sha2::{Digest as _, Sha256};
 
 use crate::{
     direct_execution::DirectExecutionErrorV1,
-    execution::{ArtifactVerifierV1, ExecutionClockV1, prepare_procedure_v2_item_mutation_v1},
-    native_execution::NativeDirectWorkspaceV1,
+    execution::{ExecutionClockV1, prepare_procedure_v2_item_mutation_v1},
     workspace::DirectWorkspaceResolverV1,
 };
 
@@ -150,7 +148,8 @@ pub fn record_many_v1<R: GitResolverContractV1>(
         request.request_id.as_str(),
         DirectOutcomeScopeV1::Session(fences.expected_session_id.clone()),
     )?;
-    let native = NativeDirectWorkspaceV1::new(resolved.clone());
+    let native = resolver.native_workspace(resolved.clone());
+    let mut local_artifacts = Vec::new();
     let attachments = request
         .input
         .operations
@@ -165,9 +164,14 @@ pub fn record_many_v1<R: GitResolverContractV1>(
                     reason: "invalid batch artifact source",
                 })?;
                 let artifact = match source {
-                    ItemAttachSourceV1::Path { path, media_type } => native
-                        .hash_local_artifact(&binding, &path, media_type.as_deref())
-                        .map_err(DirectExecutionErrorV1::Boundary)?,
+                    ItemAttachSourceV1::Path { path, media_type } => {
+                        let prepared = native
+                            .prepare_local_artifact_v1(&binding, &path, media_type.as_deref())
+                            .map_err(DirectExecutionErrorV1::Boundary)?;
+                        let artifact = prepared.artifact().clone();
+                        local_artifacts.push(prepared);
+                        artifact
+                    }
                     ItemAttachSourceV1::OpaqueReference {
                         reference,
                         digest,
@@ -217,7 +221,7 @@ pub fn record_many_v1<R: GitResolverContractV1>(
             execution_error = Some(DirectExecutionErrorV1::from(error));
             DirectStoreErrorV1::InvalidInput { reason: "workspace revalidation failed" }
         })?;
-        let attachments = attachments.map_err(|error| {
+        attachments.map_err(|error| {
             execution_error = Some(error);
             DirectStoreErrorV1::InvalidInput { reason: "batch attachment preparation failed" }
         })?;
@@ -226,9 +230,8 @@ pub fn record_many_v1<R: GitResolverContractV1>(
                 execution_error = Some(DirectExecutionErrorV1::Preparation(error));
                 DirectStoreErrorV1::InvalidInput { reason: "batch preparation failed" }
             })?;
-        for attachment in &attachments {
-            if attachment.artifact.location_kind() == ArtifactLocationKindV1::LocalPath
-                && let Err(error) = native.revalidate_local_artifact(transaction.binding(), &attachment.item_id, &attachment.artifact) {
+        for artifact in &local_artifacts {
+            if let Err(error) = native.verify_prepared_local_artifact_v1(transaction.binding(), artifact) {
                 execution_error = Some(DirectExecutionErrorV1::Boundary(error));
                 return Err(DirectStoreErrorV1::InvalidInput { reason: "batch attachment revalidation failed" });
             }
@@ -342,15 +345,21 @@ pub fn execute_item_v1<R: GitResolverContractV1>(
         request.request_id.as_str(),
         DirectOutcomeScopeV1::Session(fences.expected_session_id.clone()),
     )?;
-    let native = NativeDirectWorkspaceV1::new(resolved.clone());
+    let native = resolver.native_workspace(resolved.clone());
     // Preparation stays outside the writer gate, but its failure belongs to the
     // mutation callback. An authoritative replay must not depend on today's file.
+    let mut local_artifact = None;
     let attachment = (|| {
         Ok::<_, DirectExecutionErrorV1>(match &request.command {
             DirectItemCommandV1::Attach(input) => Some(match &input.source {
-                ItemAttachSourceV1::Path { path, media_type } => native
-                    .hash_local_artifact(&binding, path, media_type.as_deref())
-                    .map_err(DirectExecutionErrorV1::Boundary)?,
+                ItemAttachSourceV1::Path { path, media_type } => {
+                    let prepared = native
+                        .prepare_local_artifact_v1(&binding, path, media_type.as_deref())
+                        .map_err(DirectExecutionErrorV1::Boundary)?;
+                    let artifact = prepared.artifact().clone();
+                    local_artifact = Some(prepared);
+                    artifact
+                }
                 ItemAttachSourceV1::OpaqueReference {
                     reference,
                     digest,
@@ -407,7 +416,7 @@ pub fn execute_item_v1<R: GitResolverContractV1>(
             execution_error = Some(DirectExecutionErrorV1::from(error));
             DirectStoreErrorV1::InvalidInput { reason: "workspace revalidation failed" }
         })?;
-        let attachment = attachment.map_err(|error| {
+        attachment.map_err(|error| {
             execution_error = Some(error);
             DirectStoreErrorV1::InvalidInput { reason: "attachment preparation failed" }
         })?;
@@ -417,9 +426,8 @@ pub fn execute_item_v1<R: GitResolverContractV1>(
                 execution_error = Some(DirectExecutionErrorV1::Preparation(error));
                 DirectStoreErrorV1::InvalidInput { reason: "item preparation failed" }
             })?.into_parts();
-        if let Some(artifact) = &attachment
-            && artifact.location_kind() == ArtifactLocationKindV1::LocalPath
-            && let Err(error) = native.revalidate_local_artifact(transaction.binding(), item_id, artifact) {
+        if let Some(artifact) = &local_artifact
+            && let Err(error) = native.verify_prepared_local_artifact_v1(transaction.binding(), artifact) {
                 execution_error = Some(DirectExecutionErrorV1::Boundary(error));
                 return Err(DirectStoreErrorV1::InvalidInput { reason: "attachment revalidation failed" });
         }

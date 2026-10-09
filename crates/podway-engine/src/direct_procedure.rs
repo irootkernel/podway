@@ -25,11 +25,7 @@ use crate::{
         DirectBeginRequestV1, DirectExecutionErrorV1, DirectIdSourceV1, begin_session_v1,
     },
     direct_mutation::{check_attempt_fence, check_session_fences, graph_success},
-    execution::{
-        ArtifactVerifierV1, ExecutionClockV1, goal_definition_from_wire_v2,
-        required_local_artifacts_v2,
-    },
-    native_execution::NativeDirectWorkspaceV1,
+    execution::{ExecutionClockV1, goal_definition_from_wire_v2},
     v2_read_service::decision_readback_projection,
     workspace::DirectWorkspaceResolverV1,
 };
@@ -65,7 +61,7 @@ pub fn execute_procedure_v1<R: GitResolverContractV1>(
             ids,
         );
     }
-    let (resolved, store) = resolver.resolve_existing(
+    let (resolved, store, binding) = resolver.resolve_existing_with_binding(
         request.selector,
         request.expected_workspace_id.as_ref(),
         request.deadline,
@@ -127,7 +123,66 @@ pub fn execute_procedure_v1<R: GitResolverContractV1>(
         DirectOutcomeScopeV1::Session(session.clone()),
     )?;
     let prepared = store.prepare_graph(request.deadline)?;
-    let native = NativeDirectWorkspaceV1::new(resolved.clone());
+    let native = resolver.native_workspace(resolved.clone());
+    let artifacts = if matches!(command, C::SessionDecide(_)) {
+        prepared
+            .as_ref()
+            .map(|prior| native.prepare_required_artifacts_v2(&binding, prior.graph()))
+            .transpose()
+            .map(|artifacts| artifacts.unwrap_or_default())
+    } else {
+        Ok(Vec::new())
+    };
+    let assessment = if let C::GoalAssessCriterion(input) = command {
+        Some(
+            (|| -> Result<CriterionAssessmentResultV2, DirectStoreErrorV1> {
+                if input.evidence.len().saturating_add(input.items.len())
+                    > podway_core::MAX_CRITERION_CITATIONS_V2
+                {
+                    return Err(GraphMutationErrorV2::Domain(DomainError::InvalidState {
+                        reason: "a criterion result carries at most four citations",
+                    })
+                    .into());
+                }
+                let status = input.status.parse::<CriterionStatusV2>().map_err(|_| {
+                    DirectStoreErrorV1::InvalidInput {
+                        reason: "invalid criterion status",
+                    }
+                })?;
+                if input
+                    .evidence
+                    .iter()
+                    .enumerate()
+                    .any(|(index, value)| input.evidence[..index].contains(value))
+                    || input
+                        .items
+                        .iter()
+                        .enumerate()
+                        .any(|(index, value)| input.items[..index].contains(value))
+                {
+                    return Err(DirectStoreErrorV1::InvalidInput {
+                        reason: "duplicate criterion citation",
+                    });
+                }
+                CriterionAssessmentResultV2::new(
+                    input.criterion_id.clone(),
+                    status,
+                    CriterionAssessmentReasonV2::new(input.reason.clone())
+                        .map_err(GraphMutationErrorV2::Domain)?,
+                    input
+                        .evidence
+                        .iter()
+                        .cloned()
+                        .map(CriterionCitationV2::Evidence)
+                        .chain(input.items.iter().cloned().map(CriterionCitationV2::Item))
+                        .collect(),
+                )
+                .map_err(|error| DirectStoreErrorV1::Domain(GraphMutationErrorV2::Domain(error)))
+            })(),
+        )
+    } else {
+        None
+    };
     let mut execution_error = None;
     let result = store.mutate(&mutation, request.deadline, || clock.now(), |transaction| {
         let current = transaction.use_prepared_graph(prepared.as_ref())?;
@@ -171,15 +226,13 @@ pub fn execute_procedure_v1<R: GitResolverContractV1>(
             DirectStoreErrorV1::InvalidInput { reason: "workspace revalidation failed" }
         })?;
         if matches!(command, C::SessionDecide(_)) {
-            let artifacts = required_local_artifacts_v2(prior).map_err(|error| {
-                execution_error = Some(DirectExecutionErrorV1::Preparation(error));
+            let artifacts = artifacts.map_err(|error| {
+                execution_error = Some(error);
                 DirectStoreErrorV1::InvalidInput { reason: "required artifact preparation failed" }
             })?;
-            for (item, artifact) in artifacts {
-                if let Err(error) = native.revalidate_local_artifact(transaction.binding(), &item, &artifact) {
-                    execution_error = Some(DirectExecutionErrorV1::Boundary(error));
-                    return Err(DirectStoreErrorV1::InvalidInput { reason: "required artifact changed" });
-                }
+            if let Err(error) = native.verify_required_artifacts_v2(transaction.binding(), prior, &artifacts) {
+                execution_error = Some(error);
+                return Err(DirectStoreErrorV1::InvalidInput { reason: "required artifact changed" });
             }
         }
         let (next, body, disposition) = match command {
@@ -205,16 +258,7 @@ pub fn execute_procedure_v1<R: GitResolverContractV1>(
                 (outcome.into_state(), body, None)
             }
             C::GoalAssessCriterion(input) => {
-                let status = input.status.parse::<CriterionStatusV2>().map_err(|_| DirectStoreErrorV1::InvalidInput { reason: "invalid criterion status" })?;
-                if input.evidence.iter().enumerate().any(|(index, value)| input.evidence[..index].contains(value))
-                    || input.items.iter().enumerate().any(|(index, value)| input.items[..index].contains(value)) {
-                    return Err(DirectStoreErrorV1::InvalidInput { reason: "duplicate criterion citation" });
-                }
-                let result = CriterionAssessmentResultV2::new(input.criterion_id.clone(), status,
-                    CriterionAssessmentReasonV2::new(input.reason.clone()).map_err(GraphMutationErrorV2::Domain)?,
-                    input.evidence.iter().cloned().map(CriterionCitationV2::Evidence)
-                        .chain(input.items.iter().cloned().map(CriterionCitationV2::Item)).collect())
-                    .map_err(GraphMutationErrorV2::Domain)?;
+                let result = assessment.expect("criterion assessment is prepared outside the writer")?;
                 let actor = actor(&input.actor)?;
                 let outcome = prior.assess_goal_criterion_v2(revision, &input.preconditions.expected_attempt_id,
                     GoalRevisionNumberV2::new(input.expected_goal_revision), result, actor, transaction.now())?;

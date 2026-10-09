@@ -23,7 +23,8 @@ use crate::{AttemptId, CriterionId, DomainError, GraphNodeId, ItemId, UnixMillis
 
 const MIN_GOAL_ASSESSMENT_RESULTS: usize = 1;
 const MAX_GOAL_ASSESSMENT_RESULTS: usize = 16;
-const MAX_CRITERION_CITATIONS: usize = 4;
+/// Maximum citations retained by one typed criterion assessment.
+pub const MAX_CRITERION_CITATIONS_V2: usize = 4;
 
 const fn invalid(reason: &'static str) -> DomainError {
     DomainError::InvalidState { reason }
@@ -247,7 +248,7 @@ impl CriterionAssessmentResultV2 {
         reason: CriterionAssessmentReasonV2,
         citations: Vec<CriterionCitationV2>,
     ) -> Result<Self, DomainError> {
-        if citations.len() > MAX_CRITERION_CITATIONS {
+        if citations.len() > MAX_CRITERION_CITATIONS_V2 {
             return Err(invalid("a criterion result carries at most four citations"));
         }
         if citations.iter().collect::<BTreeSet<_>>().len() != citations.len() {

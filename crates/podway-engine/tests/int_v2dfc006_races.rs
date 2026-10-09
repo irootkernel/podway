@@ -858,7 +858,7 @@ fn typed_revalidation_command(
 }
 
 #[test]
-fn attach_rehash_rejects_a_change_after_actual_preparation_and_retries_once() {
+fn attach_stamp_check_rejects_a_change_after_actual_preparation_and_retries_once() {
     let (temporary, selector, store) = prepare_fixture();
     let before = graph(&store);
     let before_sequence = sequence(&store);
@@ -1076,4 +1076,724 @@ fn g6_rejects_500_state_and_500_artifact_preparation_races_without_stale_commits
     println!(
         "G6 actual Engine: {state_rejected} state +{artifact_rejected} artifact races rejected; 0 stale commits"
     );
+}
+
+fn artifact_route_fixture(route: &str) -> (tempfile::TempDir, WorktreeSelectorV1, DirectStoreV1) {
+    let (temporary, selector, store) = prepare_fixture();
+    if route == "decide" {
+        let source = serde_json::to_vec(&json!({"schema":"podway.procedure/v2", "id":"artifact-decision", "version":"1",
+            "name":"Artifact decision", "purpose":"Verify decision artifact preparation.",
+            "node_definitions":{"choice":{"type":"decision", "title":"Choose", "objective":"Use a current artifact.",
+                "prompt":"Continue?", "items":[{"id":"artifact", "type":"artifact", "prompt":"Attach report.", "required":true}],
+                "options":[{"id":"continue", "label":"Continue"}], "reason":{"required":true}},
+                "finish":{"type":"action", "title":"Finish", "intent":"Finish the fixture."}},
+            "graph":{"entry":"choice", "nodes":[{"id":"choice", "use":"choice", "routes":{"continue":{"to":"finish", "effect":"advance"}}},
+                {"id":"finish", "use":"finish", "terminal":true}]}})).unwrap();
+        std::fs::write(temporary.path().join("decision.json"), &source).unwrap();
+        let current = graph(&store);
+        success(
+            execute_direct_v1(
+                &resolver(),
+                request(
+                    &selector,
+                    DirectCommandV1::Start(DirectStartCommandV1::Replace(SessionStartReplaceV1 {
+                        start: SessionStartV1 {
+                            source: SessionStartSourceV1::Procedure {
+                                procedure: "decision.json".into(),
+                            },
+                            expected_procedure_digest: Some(
+                                prepare_workspace_procedure_source_v2("decision.json", &source)
+                                    .unwrap()
+                                    .digest()
+                                    .clone(),
+                            ),
+                            task_title: "Artifact decision fixture".into(),
+                            dry_run: false,
+                        },
+                        mode: SessionDeletionModeV1::Force {
+                            progress_summary: "Replace the isolated fixture.".into(),
+                        },
+                        preconditions: SessionIdentityPreconditionsWireV1 {
+                            expected_session_id: current.trace().session_id().clone(),
+                            expected_session_revision: current.trace().revision(),
+                        },
+                    })),
+                    "task014-decision-start",
+                ),
+                &Clock,
+                &NativeDirectIdSourceV1,
+            )
+            .unwrap(),
+        );
+        let current = graph(&store);
+        success(
+            execute_direct_v1(
+                &resolver(),
+                request(
+                    &selector,
+                    DirectCommandV1::Procedure(ProcedureV2MutationCommandV1::SessionBegin(
+                        SessionBeginV1 {
+                            initial_goal: None,
+                            preconditions: SessionIdentityPreconditionsWireV1 {
+                                expected_session_id: current.trace().session_id().clone(),
+                                expected_session_revision: current.trace().revision(),
+                            },
+                        },
+                    )),
+                    "task014-decision-begin",
+                ),
+                &Clock,
+                &NativeDirectIdSourceV1,
+            )
+            .unwrap(),
+        );
+    }
+    (temporary, selector, store)
+}
+
+fn artifact_command(current: &GraphSessionStateV2, route: &str) -> DirectCommandV1 {
+    match route {
+        "attach" => DirectCommandV1::Item(DirectItemCommandV1::Attach(ItemAttachV1 {
+            item_id: ItemId::new("artifact").unwrap(),
+            source: ItemAttachSourceV1::Path {
+                path: "artifact.txt".into(),
+                media_type: Some("text/plain".into()),
+            },
+            preconditions: item_fences(current, "artifact"),
+        })),
+        "record" => DirectCommandV1::RecordMany(ItemRecordManyV1 {
+            preconditions: cursor_fences(current),
+            operations: vec![ItemRecordManyOperationV1 {
+                item_id: ItemId::new("artifact").unwrap(),
+                expected_item_revision: item_fences(current, "artifact").expected_item_revision,
+                disposition: ItemRecordManyDispositionV1::Record {
+                    record: ItemRecordValueV1::Artifact {
+                        path: Some("artifact.txt".into()),
+                        reference: None,
+                        digest: None,
+                        size_bytes: None,
+                        media_type: Some("text/plain".into()),
+                    },
+                },
+            }],
+        }),
+        "complete" => complete(current),
+        "decide" => DirectCommandV1::Procedure(ProcedureV2MutationCommandV1::SessionDecide(
+            podway_protocol::SessionDecideV2 {
+                option_id: podway_core::OptionId::new("continue").unwrap(),
+                reason: "Use the verified report.".into(),
+                actor: None,
+                preconditions: cursor_fences(current),
+                expected_goal_revision: None,
+            },
+        )),
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn artifact_stamps_reject_same_size_rewrites_renames_and_mid_hash_changes_on_every_route() {
+    for route in ["attach", "record", "complete", "decide"] {
+        for change in ["rewrite", "rename", "mid-hash"] {
+            let (temporary, selector, store) = artifact_route_fixture(route);
+            let path = temporary.path().join("artifact.txt");
+            let original = vec![b'a'; 128 * 1024];
+            std::fs::write(&path, &original).unwrap();
+            attach(&selector, &store, "task014-baseline-attach");
+            let before = graph(&store);
+            let before_sequence = sequence(&store);
+            let input = request(
+                &selector,
+                artifact_command(&before, route),
+                "task014-stamp-race",
+            );
+            let entered = Arc::new(AtomicUsize::new(0));
+            let streamed = Arc::new(AtomicUsize::new(0));
+            let instrumented = resolver()
+                .with_store_boundary_observer_v1({
+                    let path = path.clone();
+                    let entered = Arc::clone(&entered);
+                    let original = original.clone();
+                    move |boundary| {
+                        if boundary == DirectTransactionBoundaryV1::BeforeBegin {
+                            assert_eq!(entered.fetch_add(1, Ordering::SeqCst), 0);
+                            match change {
+                                "rewrite" => {
+                                    std::fs::write(&path, vec![b'b'; original.len()]).unwrap()
+                                }
+                                "rename" => {
+                                    let replacement = path.with_extension("replacement");
+                                    std::fs::write(&replacement, &original).unwrap();
+                                    std::fs::rename(replacement, &path).unwrap();
+                                }
+                                "mid-hash" => (),
+                                _ => unreachable!(),
+                            }
+                        }
+                    }
+                })
+                .with_artifact_hash_observer_v1({
+                    let path = path.clone();
+                    let entered = Arc::clone(&entered);
+                    let streamed = Arc::clone(&streamed);
+                    move |_, bytes| {
+                        assert_eq!(
+                            entered.load(Ordering::SeqCst),
+                            0,
+                            "artifact bytes read after writer admission"
+                        );
+                        streamed.fetch_add(1, Ordering::SeqCst);
+                        if change == "mid-hash" && bytes == 64 * 1024 {
+                            std::fs::write(&path, vec![b'b'; 128 * 1024]).unwrap();
+                        }
+                    }
+                });
+            rejection(
+                execute_direct_v1(&instrumented, input.clone(), &NoEffects, &NoEffects).unwrap(),
+                "ARTIFACT_CHANGED",
+            );
+            assert!(streamed.load(Ordering::SeqCst) > 0);
+            assert_eq!(entered.load(Ordering::SeqCst), 1);
+            assert_eq!(graph(&store), before);
+            assert_eq!(sequence(&store), before_sequence);
+            assert!(outcome(&store, "task014-stamp-race").is_none());
+            std::fs::write(&path, &original).unwrap();
+            let output = success(
+                execute_direct_v1(&resolver(), input.clone(), &Clock, &NativeDirectIdSourceV1)
+                    .unwrap(),
+            );
+            assert_eq!(sequence(&store), before_sequence + 1);
+            std::fs::remove_file(path).unwrap();
+            assert_eq!(
+                success(execute_direct_v1(&resolver(), input, &NoEffects, &NoEffects).unwrap()),
+                output
+            );
+            assert_eq!(sequence(&store), before_sequence + 1);
+            store.verify_integrity(deadline()).unwrap();
+        }
+    }
+}
+
+#[test]
+fn every_artifact_stamp_is_checked_in_batches_and_required_item_sets() {
+    for route in ["record", "complete", "decide"] {
+        let (temporary, selector, store) = prepare_fixture();
+        let items = json!([
+            {"id":"artifact", "type":"artifact", "prompt":"Attach first report.", "required":true},
+            {"id":"artifact2", "type":"artifact", "prompt":"Attach second report.", "required":true}
+        ]);
+        let work = if route == "decide" {
+            json!({"type":"decision", "title":"Choose", "objective":"Use current reports.",
+                "prompt":"Continue?", "items":items,
+                "options":[{"id":"continue", "label":"Continue"}], "reason":{"required":true}})
+        } else {
+            json!({"type":"action", "title":"Work", "intent":"Use current reports.", "items":items})
+        };
+        let first = if route == "decide" {
+            json!({"id":"work", "use":"work", "routes":{"continue":{"to":"finish", "effect":"advance"}}})
+        } else {
+            json!({"id":"work", "use":"work", "next":"finish"})
+        };
+        let source = serde_json::to_vec(&json!({"schema":"podway.procedure/v2", "id":"two-artifacts", "version":"1",
+            "name":"Two artifacts", "purpose":"Check every prepared artifact stamp.",
+            "node_definitions":{"work":work, "finish":{"type":"action", "title":"Finish", "intent":"Finish the fixture."}},
+            "graph":{"entry":"work", "nodes":[first, {"id":"finish", "use":"finish", "terminal":true}]}})).unwrap();
+        std::fs::write(temporary.path().join("two-artifacts.json"), &source).unwrap();
+        let current = graph(&store);
+        success(
+            execute_direct_v1(
+                &resolver(),
+                request(
+                    &selector,
+                    DirectCommandV1::Start(DirectStartCommandV1::Replace(SessionStartReplaceV1 {
+                        start: SessionStartV1 {
+                            source: SessionStartSourceV1::Procedure {
+                                procedure: "two-artifacts.json".into(),
+                            },
+                            expected_procedure_digest: Some(
+                                prepare_workspace_procedure_source_v2(
+                                    "two-artifacts.json",
+                                    &source,
+                                )
+                                .unwrap()
+                                .digest()
+                                .clone(),
+                            ),
+                            task_title: "Two-artifact fixture".into(),
+                            dry_run: false,
+                        },
+                        mode: SessionDeletionModeV1::Force {
+                            progress_summary: "Replace the isolated fixture.".into(),
+                        },
+                        preconditions: SessionIdentityPreconditionsWireV1 {
+                            expected_session_id: current.trace().session_id().clone(),
+                            expected_session_revision: current.trace().revision(),
+                        },
+                    })),
+                    "task014-two-artifacts-start",
+                ),
+                &Clock,
+                &NativeDirectIdSourceV1,
+            )
+            .unwrap(),
+        );
+        let current = graph(&store);
+        success(
+            execute_direct_v1(
+                &resolver(),
+                request(
+                    &selector,
+                    DirectCommandV1::Procedure(ProcedureV2MutationCommandV1::SessionBegin(
+                        SessionBeginV1 {
+                            initial_goal: None,
+                            preconditions: SessionIdentityPreconditionsWireV1 {
+                                expected_session_id: current.trace().session_id().clone(),
+                                expected_session_revision: current.trace().revision(),
+                            },
+                        },
+                    )),
+                    "task014-two-artifacts-begin",
+                ),
+                &Clock,
+                &NativeDirectIdSourceV1,
+            )
+            .unwrap(),
+        );
+        let original = vec![b'a'; 128 * 1024];
+        for item in ["artifact", "artifact2"] {
+            std::fs::write(temporary.path().join(format!("{item}.txt")), &original).unwrap();
+            success(
+                execute_direct_v1(
+                    &resolver(),
+                    request(
+                        &selector,
+                        DirectCommandV1::Item(DirectItemCommandV1::Attach(ItemAttachV1 {
+                            item_id: ItemId::new(item).unwrap(),
+                            source: ItemAttachSourceV1::Path {
+                                path: format!("{item}.txt"),
+                                media_type: Some("text/plain".into()),
+                            },
+                            preconditions: item_fences(&graph(&store), item),
+                        })),
+                        &format!("task014-two-artifacts-{item}"),
+                    ),
+                    &Clock,
+                    &NativeDirectIdSourceV1,
+                )
+                .unwrap(),
+            );
+        }
+        let before = graph(&store);
+        let before_sequence = sequence(&store);
+        let command = if route == "record" {
+            DirectCommandV1::RecordMany(ItemRecordManyV1 {
+                preconditions: cursor_fences(&before),
+                operations: ["artifact", "artifact2"]
+                    .into_iter()
+                    .map(|item| ItemRecordManyOperationV1 {
+                        item_id: ItemId::new(item).unwrap(),
+                        expected_item_revision: item_fences(&before, item).expected_item_revision,
+                        disposition: ItemRecordManyDispositionV1::Record {
+                            record: ItemRecordValueV1::Artifact {
+                                path: Some(format!("{item}.txt")),
+                                reference: None,
+                                digest: None,
+                                size_bytes: None,
+                                media_type: Some("text/plain".into()),
+                            },
+                        },
+                    })
+                    .collect(),
+            })
+        } else {
+            artifact_command(&before, route)
+        };
+        let input = request(&selector, command, "task014-two-artifacts-race");
+        let entered = Arc::new(AtomicUsize::new(0));
+        let prepared = Arc::new(AtomicUsize::new(0));
+        let second_path = temporary.path().join("artifact2.txt");
+        let instrumented = resolver()
+            .with_store_boundary_observer_v1({
+                let entered = Arc::clone(&entered);
+                let prepared = Arc::clone(&prepared);
+                let second_path = second_path.clone();
+                move |boundary| {
+                    if boundary == DirectTransactionBoundaryV1::BeforeBegin {
+                        assert_eq!(entered.fetch_add(1, Ordering::SeqCst), 0);
+                        assert_eq!(prepared.load(Ordering::SeqCst), 2);
+                        std::fs::write(&second_path, vec![b'b'; 128 * 1024]).unwrap();
+                    }
+                }
+            })
+            .with_artifact_hash_observer_v1({
+                let entered = Arc::clone(&entered);
+                let prepared = Arc::clone(&prepared);
+                move |_, bytes| {
+                    assert_eq!(
+                        entered.load(Ordering::SeqCst),
+                        0,
+                        "artifact bytes read after writer admission"
+                    );
+                    if bytes == 128 * 1024 {
+                        prepared.fetch_add(1, Ordering::SeqCst);
+                    }
+                }
+            });
+        rejection(
+            execute_direct_v1(&instrumented, input.clone(), &NoEffects, &NoEffects).unwrap(),
+            "ARTIFACT_CHANGED",
+        );
+        assert_eq!(entered.load(Ordering::SeqCst), 1);
+        assert_eq!(graph(&store), before);
+        assert_eq!(sequence(&store), before_sequence);
+        assert!(outcome(&store, "task014-two-artifacts-race").is_none());
+        std::fs::write(&second_path, &original).unwrap();
+        let output = success(
+            execute_direct_v1(&resolver(), input.clone(), &Clock, &NativeDirectIdSourceV1).unwrap(),
+        );
+        assert_eq!(sequence(&store), before_sequence + 1);
+        for item in ["artifact", "artifact2"] {
+            std::fs::remove_file(temporary.path().join(format!("{item}.txt"))).unwrap();
+        }
+        assert_eq!(
+            success(execute_direct_v1(&resolver(), input, &NoEffects, &NoEffects).unwrap()),
+            output
+        );
+        assert_eq!(sequence(&store), before_sequence + 1);
+        store.verify_integrity(deadline()).unwrap();
+    }
+}
+
+#[test]
+fn caller_fences_precede_artifact_preparation_failures_and_stamp_changes_on_every_route() {
+    for route in ["attach", "record", "complete", "decide"] {
+        for change in ["missing-preparation", "changed-stamp"] {
+            let (temporary, selector, store) = artifact_route_fixture(route);
+            let path = temporary.path().join("artifact.txt");
+            let original = vec![b'a'; 128 * 1024];
+            std::fs::write(&path, &original).unwrap();
+            attach(&selector, &store, "task014-fence-baseline");
+            let prior = graph(&store);
+            let input = request(
+                &selector,
+                artifact_command(&prior, route),
+                "task014-fence-race",
+            );
+            // Identical attachments preserve the item revision. Change recorded bytes
+            // through a real public mutation to stale both item and cursor fences.
+            let original = vec![b'b'; 128 * 1024];
+            std::fs::write(&path, &original).unwrap();
+            attach(&selector, &store, "task014-fence-competing");
+            let current = graph(&store);
+            let current_sequence = sequence(&store);
+            if change == "missing-preparation" {
+                std::fs::remove_file(&path).unwrap();
+            }
+            let instrumented = resolver().with_store_boundary_observer_v1({
+                let path = path.clone();
+                move |boundary| {
+                    if boundary == DirectTransactionBoundaryV1::BeforeBegin
+                        && change == "changed-stamp"
+                    {
+                        std::fs::write(&path, vec![b'c'; 128 * 1024]).unwrap();
+                    }
+                }
+            });
+            rejection(
+                execute_direct_v1(&instrumented, input, &NoEffects, &NoEffects).unwrap(),
+                if route == "attach" {
+                    "ITEM_REVISION_CONFLICT"
+                } else {
+                    "SESSION_REVISION_CONFLICT"
+                },
+            );
+            assert_eq!(graph(&store), current);
+            assert_eq!(sequence(&store), current_sequence);
+            assert!(outcome(&store, "task014-fence-race").is_none());
+            std::fs::write(&path, &original).unwrap();
+            let corrected = request(
+                &selector,
+                artifact_command(&current, route),
+                "task014-fence-race",
+            );
+            let output = success(
+                execute_direct_v1(
+                    &resolver(),
+                    corrected.clone(),
+                    &Clock,
+                    &NativeDirectIdSourceV1,
+                )
+                .unwrap(),
+            );
+            assert_eq!(sequence(&store), current_sequence + 1);
+            std::fs::remove_file(path).unwrap();
+            assert_eq!(
+                success(execute_direct_v1(&resolver(), corrected, &NoEffects, &NoEffects).unwrap()),
+                output
+            );
+            assert_eq!(sequence(&store), current_sequence + 1);
+            store.verify_integrity(deadline()).unwrap();
+        }
+    }
+}
+
+#[test]
+fn typed_citation_bounds_reject_before_effects_and_preserve_fences_retry_and_replay() {
+    use super::int_v2dfc006_runtime_ports::Engine;
+    use podway_core::{CriterionId, GraphNodeId};
+    use podway_protocol::{GoalAssessCriterionV2, GoalCriterionWireV2, GoalDefineV2};
+
+    let items: Vec<Value> = (1..=4)
+        .map(|index| {
+            json!({"id":format!("note{index}"),
+            "type":"text", "prompt":"Record a local citation.", "required":false, "max_length":1000})
+        })
+        .collect();
+    let source = json!({"node_definitions":{"assess":{"type":"decision", "title":"Assess", "objective":"Assess the goal.",
+            "prompt":"Which outcome?", "items":items, "reason":{"required":true},
+            "options":[{"id":"achieved", "label":"Achieved"}, {"id":"failed", "label":"Failed"}, {"id":"superseded", "label":"Superseded"}],
+            "assessment":{"target":"session_goal", "outcomes":{"achieved":"achieved", "failed":"not_achieved", "superseded":"superseded"}}},
+            "finish":{"type":"action", "title":"Finish", "intent":"Finish the fixture."}},
+        "graph":{"entry":"assess", "nodes":[{"id":"assess", "use":"assess", "routes":{
+            "achieved":{"to":"finish", "effect":"advance"}, "failed":{"to":"finish", "effect":"advance"}, "superseded":{"to":"finish", "effect":"advance"}}},
+            {"id":"finish", "use":"finish", "terminal":true}]}});
+    // The shared harness admits source.yaml, which requires a block YAML document.
+    let source = format!(
+        "schema: podway.procedure/v2\nid: citation-bound\nversion: \"1\"\nname: Citation bound\npurpose: Verify typed citation rejection.\ngoal_tracking: true\nnode_definitions: {}\ngraph: {}\n",
+        source["node_definitions"], source["graph"]
+    );
+    let engine = Engine::new(&source);
+    let current = engine.graph();
+    engine.success(
+        DirectCommandV1::Procedure(ProcedureV2MutationCommandV1::GoalDefine(GoalDefineV2 {
+            goal: "Verify the typed citation bound.".into(),
+            criteria: vec![GoalCriterionWireV2 {
+                criterion_id: CriterionId::new("done").unwrap(),
+                statement: "The bound holds.".into(),
+            }],
+            actor: None,
+            preconditions: SessionIdentityPreconditionsWireV1 {
+                expected_session_id: current.trace().session_id().clone(),
+                expected_session_revision: current.trace().revision(),
+            },
+        })),
+        "citation-define",
+    );
+    for index in 1..=4 {
+        engine.set(
+            &format!("note{index}"),
+            "Recorded citation.",
+            &format!("citation-note{index}"),
+        );
+    }
+    let before = engine.graph();
+    let before_sequence = engine.sequence();
+    let mut corrected = None;
+    for evidence_count in [0, 2, 5] {
+        for status in ["satisfied", "invalid"] {
+            for stale in [false, true] {
+                let mut input = GoalAssessCriterionV2 {
+                    criterion_id: CriterionId::new("done").unwrap(),
+                    status: status.into(),
+                    reason: "Verify the bound.".into(),
+                    evidence: (0..evidence_count)
+                        .map(|i| GraphNodeId::new(format!("evidence{i}")).unwrap())
+                        .collect(),
+                    items: (0..5 - evidence_count)
+                        .map(|i| ItemId::new(format!("item{i}")).unwrap())
+                        .collect(),
+                    actor: None,
+                    preconditions: cursor_fences(&before),
+                    expected_goal_revision: 1,
+                };
+                if stale {
+                    input.preconditions.expected_session_revision = Revision::ZERO;
+                }
+                let key = format!("citation-bound-{evidence_count}-{status}-{stale}");
+                let input_request = request(
+                    &engine.selector,
+                    DirectCommandV1::Procedure(ProcedureV2MutationCommandV1::GoalAssessCriterion(
+                        input.clone(),
+                    )),
+                    &key,
+                );
+                rejection(
+                    execute_direct_v1(&engine.resolver, input_request, &NoEffects, &NoEffects)
+                        .unwrap(),
+                    if stale {
+                        "SESSION_REVISION_CONFLICT"
+                    } else {
+                        "REQUEST_INVALID"
+                    },
+                );
+                assert_eq!(engine.graph(), before);
+                assert_eq!(engine.sequence(), before_sequence);
+                assert!(outcome(&engine.store, &key).is_none());
+                if evidence_count == 0 && status == "satisfied" && !stale {
+                    input.items = (1..=4)
+                        .map(|i| ItemId::new(format!("note{i}")).unwrap())
+                        .collect();
+                    corrected = Some(request(
+                        &engine.selector,
+                        DirectCommandV1::Procedure(
+                            ProcedureV2MutationCommandV1::GoalAssessCriterion(input),
+                        ),
+                        &key,
+                    ));
+                }
+            }
+        }
+    }
+    let corrected = corrected.unwrap();
+    let output = success(
+        execute_direct_v1(
+            &engine.resolver,
+            corrected.clone(),
+            &Clock,
+            &NativeDirectIdSourceV1,
+        )
+        .unwrap(),
+    );
+    assert_eq!(
+        output["result"]["result"]["citations"]
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
+    assert_eq!(engine.sequence(), before_sequence + 1);
+    assert_eq!(
+        success(execute_direct_v1(&engine.resolver, corrected, &NoEffects, &NoEffects).unwrap()),
+        output
+    );
+    assert_eq!(engine.sequence(), before_sequence + 1);
+    engine.store.verify_integrity(deadline()).unwrap();
+}
+
+#[test]
+fn another_process_commits_during_actual_hashing_before_writer_admission() {
+    let (temporary, selector, store) = prepare_fixture();
+    std::fs::write(
+        temporary.path().join("artifact.txt"),
+        vec![b'a'; 128 * 1024],
+    )
+    .unwrap();
+    let before = graph(&store);
+    let before_sequence = sequence(&store);
+    let competitor = Arc::new(Mutex::new(Competitor::with_trials(temporary.path(), 1)));
+    let acknowledged = Arc::new(Mutex::new(None));
+    let entered = Arc::new(AtomicUsize::new(0));
+    let instrumented = resolver()
+        .with_store_boundary_observer_v1({
+            let entered = Arc::clone(&entered);
+            move |boundary| {
+                if boundary == DirectTransactionBoundaryV1::BeforeBegin {
+                    entered.fetch_add(1, Ordering::SeqCst);
+                }
+            }
+        })
+        .with_artifact_hash_observer_v1({
+            let entered = Arc::clone(&entered);
+            let competitor = Arc::clone(&competitor);
+            let acknowledged = Arc::clone(&acknowledged);
+            move |_, bytes| {
+                assert_eq!(
+                    entered.load(Ordering::SeqCst),
+                    0,
+                    "writer admitted before hashing finished"
+                );
+                if bytes == 64 * 1024 {
+                    *acknowledged.lock().unwrap() =
+                        Some(competitor.lock().unwrap().commit_item(0, "i01"));
+                }
+            }
+        });
+    let input = request(
+        &selector,
+        artifact_command(&before, "attach"),
+        "task014-hashing-writer",
+    );
+    success(execute_direct_v1(&instrumented, input, &Clock, &NativeDirectIdSourceV1).unwrap());
+    assert_eq!(
+        outcome(&store, "g6-competing-0"),
+        acknowledged.lock().unwrap().take()
+    );
+    assert!(outcome(&store, "g6-competing-0").is_some());
+    assert_eq!(entered.load(Ordering::SeqCst), 1);
+    assert_eq!(sequence(&store), before_sequence + 2);
+    competitor.lock().unwrap().finish();
+    store.verify_integrity(deadline()).unwrap();
+}
+
+#[test]
+fn multi_gib_sparse_artifact_attach_and_complete_succeed_at_the_default_timeout() {
+    use std::os::unix::fs::MetadataExt;
+    const CHILD_ROOT: &str = "PODWAY_ENGINE_LARGE_ARTIFACT_CHILD_ROOT";
+    if let Some(root) = std::env::var_os(CHILD_ROOT) {
+        assert_eq!(std::env::var_os("TMPDIR"), Some(root.clone()));
+        assert!(std::path::Path::new(&root).is_dir());
+    } else {
+        // This deliberately exceeds the original wait budget. A separate process
+        // keeps other worktrees' test-only connections from racing its idle admission.
+        let owned = tempfile::Builder::new().prefix("p14-").tempdir().unwrap();
+        let root = std::fs::canonicalize(owned.path()).unwrap();
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "int_v2dfc006_races::multi_gib_sparse_artifact_attach_and_complete_succeed_at_the_default_timeout",
+                "--nocapture", "--test-threads=1"])
+            .env(CHILD_ROOT, &root).env("TMPDIR", &root)
+            .stdin(Stdio::null()).stdout(Stdio::inherit()).stderr(Stdio::inherit())
+            .spawn().unwrap();
+        let limit = Instant::now() + Duration::from_secs(1200);
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) if Instant::now() < limit => std::thread::sleep(Duration::from_millis(10)),
+                state => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("owned large-artifact child failed to finish: {state:?}");
+                }
+            }
+        };
+        assert!(status.success(), "native large-artifact child failed");
+        // TempDir removes only this parent's exact fixture root after the child is reaped.
+        return;
+    }
+    let (temporary, selector, store) = prepare_fixture();
+    let path = temporary.path().join("artifact.txt");
+    let size = 3 * 1024 * 1024 * 1024_u64;
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(&path)
+        .unwrap();
+    file.set_len(size).unwrap();
+    drop(file);
+    assert!(std::fs::metadata(&path).unwrap().blocks() * 512 < size / 16);
+    for route in ["attach", "complete"] {
+        let current = graph(&store);
+        let mut input = request(
+            &selector,
+            artifact_command(&current, route),
+            &format!("task014-large-{route}"),
+        );
+        input.deadline = Instant::now() + Duration::from_secs(5);
+        let started = Instant::now();
+        let output = success(
+            execute_direct_v1(&resolver(), input, &Clock, &NativeDirectIdSourceV1).unwrap(),
+        );
+        assert_eq!(
+            output["command"],
+            if route == "attach" {
+                "item.attach"
+            } else {
+                "session.complete"
+            }
+        );
+        eprintln!(
+            "Task014 native {route}: {size} sparse bytes, {} ms, original 5000 ms wait budget",
+            started.elapsed().as_millis()
+        );
+    }
+    store.verify_integrity(deadline()).unwrap();
 }

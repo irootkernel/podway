@@ -36,7 +36,7 @@ static DISCOVERY_MARKER_CREATION_TARGET: Mutex<Option<(PathBuf, PathBuf)>> = Mut
 #[cfg(all(test, target_os = "linux"))]
 static REGULAR_FILE_FIFO_REPLACEMENT_TARGET: Mutex<Option<PathBuf>> = Mutex::new(None);
 #[cfg(test)]
-static ARTIFACT_HASH_REPLACEMENT_BARRIER: Mutex<Option<Arc<Barrier>>> = Mutex::new(None);
+static ARTIFACT_HASH_REPLACEMENT_BARRIER: Mutex<Option<(PathBuf, Arc<Barrier>)>> = Mutex::new(None);
 #[cfg(test)]
 static WORKSPACE_LAYOUT_ROOT_REPLACEMENT_BARRIER: Mutex<Option<(PathBuf, Arc<Barrier>)>> =
     Mutex::new(None);
@@ -190,18 +190,37 @@ fn replace_regular_file_with_fifo_for_test(path: &Path) {
 }
 
 #[cfg(test)]
-pub(crate) fn install_artifact_hash_replacement_hook_for_test(barrier: Arc<Barrier>) {
+pub(crate) fn install_artifact_hash_replacement_hook_for_test(
+    path: PathBuf,
+    barrier: Arc<Barrier>,
+) {
     *ARTIFACT_HASH_REPLACEMENT_BARRIER
         .lock()
-        .expect("artifact hash test hook lock") = Some(barrier);
+        .expect("artifact hash test hook lock") = Some((path, barrier));
 }
 
 #[cfg(test)]
-pub(crate) fn synchronize_artifact_hash_replacement_for_test() {
-    let barrier = ARTIFACT_HASH_REPLACEMENT_BARRIER
+pub(crate) fn clear_artifact_hash_replacement_hook_for_test() {
+    *ARTIFACT_HASH_REPLACEMENT_BARRIER
         .lock()
-        .expect("artifact hash test hook lock")
-        .take();
+        .expect("artifact hash test hook lock") = None;
+}
+
+#[cfg(test)]
+pub(crate) fn synchronize_artifact_hash_replacement_for_test(path: &Path) {
+    let barrier = {
+        let mut configured = ARTIFACT_HASH_REPLACEMENT_BARRIER
+            .lock()
+            .expect("artifact hash test hook lock");
+        if configured
+            .as_ref()
+            .is_some_and(|(target, _)| target == path)
+        {
+            configured.take().map(|(_, barrier)| barrier)
+        } else {
+            None
+        }
+    };
     if let Some(barrier) = barrier {
         barrier.wait();
         barrier.wait();
@@ -573,6 +592,10 @@ pub(crate) struct OpenedArtifact {
 }
 
 impl OpenedArtifact {
+    pub(crate) fn stamp(&self) -> crate::LocalArtifactStampV1 {
+        crate::LocalArtifactStampV1(self.file.snapshot)
+    }
+
     pub(crate) fn path(&self) -> &Path {
         &self.file.path
     }

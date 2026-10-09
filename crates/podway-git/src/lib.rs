@@ -677,7 +677,13 @@ pub struct HashedLocalArtifactV1 {
     canonical_path: LosslessPathV1,
     digest: Sha256Digest,
     byte_length: u64,
+    stamp: LocalArtifactStampV1,
 }
+
+/// Request-local file identity, size and nanosecond modification/change times.
+/// Only descriptor-safe Git resolution can produce this opaque stamp.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LocalArtifactStampV1(native::FileSnapshot);
 
 /// Stable bytes read from one regular file inside a validated worktree.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -710,11 +716,13 @@ impl HashedLocalArtifactV1 {
         canonical_path: LosslessPathV1,
         digest: Sha256Digest,
         byte_length: u64,
+        stamp: LocalArtifactStampV1,
     ) -> Self {
         Self {
             canonical_path,
             digest,
             byte_length,
+            stamp,
         }
     }
 
@@ -731,6 +739,11 @@ impl HashedLocalArtifactV1 {
     /// Returns the exact number of streamed artifact bytes.
     pub fn byte_length(&self) -> u64 {
         self.byte_length
+    }
+
+    /// Returns the unchanged descriptor snapshot captured before streaming.
+    pub fn stamp(&self) -> LocalArtifactStampV1 {
+        self.stamp
     }
 }
 

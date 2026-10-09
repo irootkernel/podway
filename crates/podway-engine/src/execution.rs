@@ -838,17 +838,9 @@ fn procedure_document_format(
     }
 }
 
-/// Streams a local artifact through a verified worktree boundary. The same operation is used when
-/// attaching a path and again at completion, preventing a stored digest from standing in for a
-/// current filesystem check.
+/// Rehashes local artifacts through a verified worktree boundary for independent deep integrity
+/// checks. Direct mutations use prepared descriptor stamps through the native workspace adapter.
 pub trait ArtifactVerifierV1: Send + Sync {
-    fn hash_local_artifact(
-        &self,
-        workspace: &WorkspaceBindingV1,
-        path: &str,
-        requested_media_type: Option<&str>,
-    ) -> Result<ArtifactValueV1, ExecutionBoundaryErrorV1>;
-
     fn revalidate_local_artifact(
         &self,
         workspace: &WorkspaceBindingV1,
