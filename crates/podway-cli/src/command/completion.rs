@@ -1002,6 +1002,7 @@ const ROUTES: &[Route] = &[
     Route {
         words: "outcome lookup",
         flags: &[
+            &IF_WORKSPACE_UUID,
             &JSON,
             &WORKTREE,
             &TIMEOUT,
@@ -1376,6 +1377,36 @@ mod tests {
             .find(|route| route.words == "delegation receipt")
             .expect("delegation receipt completion route must exist");
         assert!(receipt.flags.contains(&&IF_WORKSPACE_UUID));
+    }
+
+    #[test]
+    fn outcome_lookup_completes_the_workspace_fence() {
+        let route = ROUTES
+            .iter()
+            .find(|route| route.words == "outcome lookup")
+            .unwrap();
+        assert!(route.flags.contains(&&IF_WORKSPACE_UUID));
+        for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
+            let script = shell.script();
+            let offered = match shell {
+                Shell::Bash | Shell::Zsh => script
+                    .split("\"outcome lookup\")\n")
+                    .nth(1)
+                    .unwrap()
+                    .split(";;")
+                    .next()
+                    .unwrap()
+                    .contains("--if-workspace-uuid"),
+                Shell::Fish => script.lines().any(|line| {
+                    line.contains("__podway_route_is \"outcome lookup\"")
+                        && line.contains("-l if-workspace-uuid")
+                }),
+            };
+            assert!(
+                offered,
+                "{shell:?} omits the outcome lookup workspace fence"
+            );
+        }
     }
 
     #[test]

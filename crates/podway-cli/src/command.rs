@@ -140,12 +140,12 @@ enum Command {
         #[arg(value_enum)]
         shell: Shell,
     },
-    /// Validate or display a procedure without a daemon.
+    /// Validate or display a local procedure.
     Procedure {
         #[command(subcommand)]
         command: ProcedureCommand,
     },
-    /// Inspect built-in presets without a daemon.
+    /// Inspect built-in presets locally.
     Preset {
         #[command(subcommand)]
         command: PresetCommand,
@@ -1165,7 +1165,20 @@ impl LocalFailure {
             exit_code,
             command: command.into(),
             request_id: None,
-            details: Map::new(),
+            details: if code == "INTERNAL_ERROR" {
+                Map::from_iter([
+                    (
+                        "schema".to_owned(),
+                        json!("podway.internal-error-details/v2"),
+                    ),
+                    (
+                        "diagnostic_id".to_owned(),
+                        json!(Uuid::new_v4().to_string()),
+                    ),
+                ])
+            } else {
+                Map::new()
+            },
         }
     }
 
@@ -3134,7 +3147,7 @@ fn procedure_graph_diagnostics(
 /// The route every `procedure preview` result reports under.
 const PROCEDURE_PREVIEW_COMMAND: &str = "procedure.preview";
 
-/// Aggregates the complete local admission preview without touching daemon or runtime state.
+/// Aggregates the complete local admission preview without touching runtime state.
 fn execute_procedure_preview(file: &Path) -> Result<RunResult, LocalFailure> {
     const NAME: &str = PROCEDURE_PREVIEW_COMMAND;
 
@@ -4671,7 +4684,15 @@ fn render_result_with_clock_and_writers(
                         warnings: Vec::new(),
                     },
                 ) else {
-                    return LOCAL_CLIENT_EXIT;
+                    return render_local_failure_with_clock_and_writers(
+                        LocalFailure::response_invalid(
+                            "local output exceeds the protocol bounds or is invalid",
+                        ),
+                        true,
+                        clock,
+                        stdout,
+                        stderr,
+                    );
                 };
                 let output = output.into_value();
                 if serde_json::to_writer(&mut *stdout, &output).is_err()
@@ -4710,7 +4731,15 @@ fn render_result_with_clock_and_writers(
                         warnings: Vec::new(),
                     },
                 ) else {
-                    return LOCAL_CLIENT_EXIT;
+                    return render_local_failure_with_clock_and_writers(
+                        LocalFailure::response_invalid(
+                            "local output exceeds the protocol bounds or is invalid",
+                        ),
+                        true,
+                        clock,
+                        stdout,
+                        stderr,
+                    );
                 };
                 if serde_json::to_writer(&mut *stdout, &output).is_err()
                     || writeln!(stdout).is_err()
@@ -4991,10 +5020,12 @@ fn render_local_failure_with_clock_and_writers(
                     "message": failure.message,
                     "retryable": failure.retryable,
                     "exit_code": failure.exit_code,
-                    "details": {}
+                    "details": failure.details
                 });
-                podway_protocol::ErrorEnvelopeV2::from_value(fallback)
-                    .expect("the static local fallback error is protocol-valid")
+                match podway_protocol::ErrorEnvelopeV2::from_value(fallback) {
+                    Ok(output) => output,
+                    Err(_) => return render_clock_failure_to(failure, stderr),
+                }
             }
         };
         if serde_json::to_writer(&mut *stdout, &output).is_err() || writeln!(stdout).is_err() {
@@ -5111,7 +5142,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             .collect::<Vec<_>>()
             .join(", ");
         return Ok(format!(
-            "Podway coordinates durable worktree-local procedures.\n\nTrust boundary:\n  Podway trusts same-user processes reading and writing local workspace state.\n  It provides no authentication or workspace access key.\n  It does not protect against malicious same-user processes.\n  It records caller assertions and does not judge their semantic truth.\n\nDirect execution:\n  Worktree commands execute in this process.\n  Use --worktree <path> to select a Git worktree and --timeout <duration> to bound the operation.\n  Automation mutations require an explicit --idempotency-key; recover lost output with outcome lookup.\n\nUsage:\n  podway help [<route>]\n  podway -h\n  podway --help\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'add retry backoff' --idempotency-key start-example\n  podway begin --idempotency-key begin-example\n  podway status --json\n  podway observe --json\n\nProcedure v2 routes:\n  procedure format|vet|lint|check|graph|preview|scaffold\n  session.begin, session.terminal_disposition, session.decide, session.rework\n  goal.define, goal.revise, goal.assess_criterion\n  evidence read\n  delegation package|accept|receipt\n\nShipped presets: {preset_ids}. Start prepares a session; begin creates its first active attempt. Contributors use disposable Git worktrees for isolated development; see help workflow."
+            "Podway coordinates durable worktree-local procedures.\n\nTrust boundary:\n  Podway trusts same-user processes reading and writing local workspace state.\n  It provides no authentication or workspace access key.\n  It does not protect against malicious same-user processes.\n  It records caller assertions and does not judge their semantic truth.\n\nDirect execution:\n  Worktree commands execute in this process.\n  Use --worktree <path> to select a Git worktree and --timeout <duration> to bound lock waiting.\n  Automation mutations require an explicit --idempotency-key; recover lost output with outcome lookup.\n\nUsage:\n  podway help [<route>]\n  podway -h\n  podway --help\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'add retry backoff' --idempotency-key start-example\n  podway begin --idempotency-key begin-example\n  podway status --json\n  podway observe --json\n\nProcedure v2 routes:\n  procedure format|vet|lint|check|graph|preview|scaffold\n  session.begin, session.terminal_disposition, session.decide, session.rework\n  goal.define, goal.revise, goal.assess_criterion\n  evidence read\n  delegation package|accept|receipt\n\nShipped presets: {preset_ids}. Start prepares a session; begin creates its first active attempt. Contributors use disposable Git worktrees for isolated development; see help workflow."
         ));
     }
     if let Some(guidance) = retirement::help_guidance(topic)
@@ -5156,7 +5187,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Usage:\n  podway procedure graph <file> --format <json|mermaid|puml|dot>\n\nEmits a deterministic JSON, Mermaid, PlantUML, or DOT projection of a validated\nand vetted Procedure v2 graph without writing anything.\n\nExample:\n  podway procedure graph .podway/procedures/custom.yaml --format dot"
         }
         "procedure.preview" => {
-            "Usage:\n  podway procedure preview <worktree-relative-file>\n\nRuns validation, graph vetting, and advisory lint in memory, then prints the\nnormalized graph, Mermaid review projection, and an exact session start suggestion\nwhen the Procedure v2 document is admissible. The file must use the same UTF-8,\nworktree-relative, no-parent spelling accepted by start. Reads only and never\ncontacts the daemon.\n\nExample:\n  podway procedure preview .podway/procedures/custom.yaml"
+            "Usage:\n  podway procedure preview <worktree-relative-file>\n\nRuns validation, graph vetting, and advisory lint in memory, then prints the\nnormalized graph, Mermaid review projection, and an exact session start suggestion\nwhen the Procedure v2 document is admissible. The file must use the same UTF-8,\nworktree-relative, no-parent spelling accepted by start. Reads only and never\nopens workspace runtime state.\n\nExample:\n  podway procedure preview .podway/procedures/custom.yaml"
         }
         "procedure.lint" => {
             "Usage:\n  podway procedure lint <file> [--warnings-as-errors]\n\nReports advisory authoring findings for a Procedure v2 document. Every finding is\na warning, so the file stays valid and the exit code stays 0 unless\n--warnings-as-errors makes any finding fatal.\n\nExample:\n  podway procedure lint .podway/procedures/custom.yaml --warnings-as-errors"
@@ -5185,7 +5216,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Usage:\n  podway workspace repair\n\nExample:\n  podway workspace repair"
         }
         "workspace.remove" => {
-            "Usage:\n  podway [--worktree <path>] workspace remove --force [--if-workspace-uuid <uuid>] [--yes]\n\nInteractive use prints the resolved absolute worktree root and requires that exact path as confirmation. JSON and non-interactive use require --yes and --if-workspace-uuid. Success removes all .podway content, including tracked files, while preserving the Git worktree. The direct CLI owns no global daemon logs."
+            "Usage:\n  podway [--worktree <path>] workspace remove --force [--if-workspace-uuid <uuid>] [--yes]\n\nInteractive use prints the resolved absolute worktree root and requires that exact path as confirmation. JSON and non-interactive use require --yes and --if-workspace-uuid. Success removes all .podway content, including tracked files, while preserving the Git worktree."
         }
         "session.start" => {
             "Usage:\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> [--on-existing <preserve|delete>] [--supersede-reason <text>] [--actor <text>] [--progress-summary <text>] [--dry-run]\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'implement feature'\n  podway start --preset sw-dev-v2 --task 'start successor' --on-existing preserve --supersede-reason 'The successor has priority.'\n  podway start --preset sw-dev-v2 --task 'replace running work' --on-existing delete --progress-summary 'The current progress was reviewed.' --yes\n  podway start --preset bug-fix-v2 --task 'preview deletion' --dry-run --on-existing delete\n\nHuman TTY mode interviews when a nonterminal session already exists; Enter continues it and creates nothing. Noninteractive callers must choose preserve or delete. Disposed terminal sessions archive automatically. A successful start creates a prepared session at revision 0 without a cursor, attempt, or goal."
@@ -5281,10 +5312,10 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Usage:\n  podway set <item-id> (<value> | --stdin) [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-attempt <uuid>] [--if-item-revision <n>]\n\nExample:\n  podway set implementation-summary 'completed work'"
         }
         "item.add" => {
-            "Usage:\n  podway add <item-id> <value> [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-attempt <uuid>] [--if-item-revision <n>]\n\nExample:\n  podway add affected-components daemon"
+            "Usage:\n  podway add <item-id> <value> [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-attempt <uuid>] [--if-item-revision <n>]\n\nExample:\n  podway add affected-components engine"
         }
         "item.remove" => {
-            "Usage:\n  podway remove <item-id> <value> [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-attempt <uuid>] [--if-item-revision <n>] [--ignore-missing]\n\nExample:\n  podway remove affected-components daemon"
+            "Usage:\n  podway remove <item-id> <value> [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-attempt <uuid>] [--if-item-revision <n>] [--ignore-missing]\n\nExample:\n  podway remove affected-components engine"
         }
         "item.attach" => {
             "Usage:\n  podway attach <item-id> (<path> [--media-type <type>] | --reference <ref> --digest <sha256> --size <bytes> --media-type <type>) [--if-workspace-uuid <uuid>] [--if-session-id <uuid>] [--if-attempt <uuid>] [--if-item-revision <n>]\n\nExample:\n  podway attach verification-reference report.md --media-type text/markdown"
@@ -5317,8 +5348,8 @@ mod tests {
         Cli, Command, CommandNameV1, LocalEnvelopeClock, LocalFailure, ParseFailureCommandContext,
         RequestIdV1, Rfc3339MillisV1, RunResult, StatusPreflight, WorkspaceTarget,
         contains_check_result_projection_v1, direct_response_result, dynamic_candidates_v2,
-        local_generated_at, local_result, parse_failure_command_context, parse_timeout_millis,
-        procedure_validate_v2_diagnostics, render_authoring_diagnostics,
+        local_generated_at, local_result, local_result_v2, parse_failure_command_context,
+        parse_timeout_millis, procedure_validate_v2_diagnostics, render_authoring_diagnostics,
         render_local_failure_with_clock_and_writers, render_result_with_clock_and_writers,
         unsatisfied_check_result_lines_v1, validate_command_shape, validate_direct_flags,
         workspace_removal_confirmation_path,
@@ -6331,17 +6362,77 @@ mod tests {
     }
 
     #[test]
-    fn oversized_output_is_an_integrity_failure_without_partial_stdout() {
+    fn oversized_output_returns_a_valid_error_without_partial_success() {
         let clock = FixedClock(UNIX_EPOCH + Duration::from_millis(12));
         for (length, exit) in [
             (65_537, 0),
             (podway_protocol::MAX_DIRECT_OUTPUT_BYTES_V1, 6),
         ] {
-            let result = local_result(
-                "procedure.show",
-                json!({"canonical_json": "x".repeat(length)}),
-                String::new(),
-            );
+            let Value::Object(source) = json!({
+                "schema": "podway.procedure-source-result/v1",
+                "operation": "scaffold",
+                "target_schema": "podway.procedure/v2",
+                "target_digest": format!("sha256:{}", "0".repeat(64)),
+                "document": "x".repeat(length),
+                "template": "basic",
+            }) else {
+                unreachable!();
+            };
+            for (result, field) in [
+                (
+                    local_result(
+                        "procedure.show",
+                        json!({"canonical_json": "x".repeat(length)}),
+                        String::new(),
+                    ),
+                    "canonical_json",
+                ),
+                (
+                    local_result_v2("procedure.scaffold", source, String::new(), 0),
+                    "document",
+                ),
+            ] {
+                let mut stdout = Vec::new();
+                let mut stderr = Vec::new();
+                assert_eq!(
+                    render_result_with_clock_and_writers(
+                        &result,
+                        true,
+                        false,
+                        &clock,
+                        &mut stdout,
+                        &mut stderr,
+                    ),
+                    exit,
+                );
+                assert!(stderr.is_empty());
+                if exit == 0 {
+                    let output: OutputEnvelopeV4 = serde_json::from_slice(&stdout).unwrap();
+                    assert_eq!(
+                        output.as_value()["result"][field].as_str().unwrap().len(),
+                        length
+                    );
+                } else {
+                    let error: podway_protocol::ErrorEnvelopeV2 =
+                        serde_json::from_slice(&stdout).unwrap();
+                    assert_eq!(error.as_value()["code"], "INTERNAL_ERROR");
+                    assert_eq!(
+                        error.as_value()["details"]["schema"],
+                        "podway.internal-error-details/v2"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_clock_returns_bounded_stderr_without_partial_json() {
+        let clock = FixedClock(UNIX_EPOCH - Duration::from_secs(1));
+        let digest = podway_core::Sha256Digest::new(format!("sha256:{}", "0".repeat(64))).unwrap();
+        for result in [
+            local_result("help", json!({"text": "help"}), "help".to_owned()),
+            procedure_validate_v2_diagnostics("workflow.yaml", Some(&digest), Vec::new()),
+        ] {
             let mut stdout = Vec::new();
             let mut stderr = Vec::new();
             assert_eq!(
@@ -6353,22 +6444,49 @@ mod tests {
                     &mut stdout,
                     &mut stderr,
                 ),
-                exit,
+                6
             );
-            assert!(stderr.is_empty());
-            if exit == 0 {
-                let output: OutputEnvelopeV4 = serde_json::from_slice(&stdout).unwrap();
-                assert_eq!(
-                    output.as_value()["result"]["canonical_json"]
-                        .as_str()
-                        .unwrap()
-                        .len(),
-                    length
-                );
-            } else {
-                assert!(stdout.is_empty());
-            }
+            assert!(stdout.is_empty());
+            assert!(stderr.starts_with(b"error: "));
+            assert!(stderr.len() < 512);
         }
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        assert_eq!(
+            render_local_failure_with_clock_and_writers(
+                LocalFailure::internal("clock failure"),
+                true,
+                &clock,
+                &mut stdout,
+                &mut stderr,
+            ),
+            6
+        );
+        assert!(stdout.is_empty());
+        assert!(stderr.starts_with(b"error: "));
+        assert!(stderr.len() < 512);
+    }
+
+    #[test]
+    fn invalid_local_error_uses_a_valid_internal_fallback() {
+        let clock = FixedClock(UNIX_EPOCH + Duration::from_millis(12));
+        let mut failure = LocalFailure::internal("invalid details");
+        failure.details.clear();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        assert_eq!(
+            render_local_failure_with_clock_and_writers(
+                failure,
+                true,
+                &clock,
+                &mut stdout,
+                &mut stderr
+            ),
+            6
+        );
+        let error: podway_protocol::ErrorEnvelopeV2 = serde_json::from_slice(&stdout).unwrap();
+        assert_eq!(error.as_value()["code"], "INTERNAL_ERROR");
+        assert!(stderr.is_empty());
     }
 
     #[test]

@@ -46,6 +46,147 @@ fn one_json(output: &Output) -> Value {
 }
 
 #[test]
+fn v2dfc011_json_write_failure_returns_a_valid_internal_error() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new();
+    let directory = fixture.root.join("read-only");
+    fs::create_dir(&directory).unwrap();
+    // Use valid but noncanonical YAML so formatting reaches the write boundary.
+    let scaffold = fixture.run(&["procedure".into(), "scaffold".into()]);
+    assert!(scaffold.status.success());
+    let source = String::from_utf8(scaffold.stdout)
+        .unwrap()
+        .replace("version: \"1\"", "version: '1'");
+    fs::write(directory.join("procedure.yaml"), source).unwrap();
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o555)).unwrap();
+    let output = fixture.run(&[
+        "procedure".into(),
+        "format".into(),
+        "read-only/procedure.yaml".into(),
+        "--write".into(),
+        "--json".into(),
+    ]);
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(output.status.code(), Some(6), "{output:?}");
+    let error = one_json(&output);
+    assert_eq!(error["code"], "INTERNAL_ERROR");
+    assert_eq!(
+        error["details"]["schema"],
+        "podway.internal-error-details/v2"
+    );
+    assert!(output.stderr.is_empty(), "{output:?}");
+}
+
+#[test]
+fn v2dfc011_deleted_current_directory_returns_a_valid_internal_error() {
+    use std::{
+        ffi::CString,
+        os::unix::{ffi::OsStrExt, process::CommandExt},
+        process::{Command, Stdio},
+    };
+
+    let fixture = Fixture::new();
+    let directory = fixture.root.join("deleted-cwd");
+    fs::create_dir(&directory).unwrap();
+    let path = CString::new(directory.as_os_str().as_bytes()).unwrap();
+    let mut command = Command::new(super::cli_fixture::podway_binary());
+    command
+        .args(["--json", "status"])
+        .current_dir(&directory)
+        .env_remove("HOME")
+        .env_remove("XDG_CONFIG_HOME")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    // Only the async-signal-safe syscall runs between fork and exec. The parent
+    // keeps its working directory; the fixture owns this empty directory.
+    unsafe {
+        command.pre_exec(move || {
+            if nix::libc::rmdir(path.as_ptr()) == 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::last_os_error())
+            }
+        });
+    }
+    let output = super::cli_fixture::bounded_output(
+        super::cli_fixture::GuardedChild::new(command.spawn().unwrap()),
+        &["deleted cwd"],
+    );
+    assert_eq!(output.status.code(), Some(6), "{output:?}");
+    assert_eq!(one_json(&output)["code"], "INTERNAL_ERROR");
+    assert!(output.stderr.is_empty(), "{output:?}");
+}
+
+#[test]
+fn v2dfc011_late_json_usage_errors() {
+    let fixture = Fixture::new();
+    for arguments in [
+        vec!["unknown", "--json"],
+        vec!["status", "--unknown", "--json"],
+        vec!["status", "-x", "--json"],
+    ] {
+        let output = fixture.cli.raw_output(&arguments);
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+        assert_eq!(one_json(&output)["code"], "REQUEST_INVALID");
+        assert!(output.stderr.is_empty(), "{output:?}");
+    }
+    for arguments in [
+        vec!["unknown", "--", "--json"],
+        vec!["status", "--unknown", "--", "--json"],
+        vec!["status", "-x", "--", "--json"],
+        vec!["status", "--unknown", "--idempotency-key", "--json"],
+    ] {
+        let output = fixture.cli.raw_output(&arguments);
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        assert!(!output.stderr.is_empty(), "{output:?}");
+    }
+}
+
+#[test]
+fn v2dfc011_retired_family_help_and_catalog_identity() {
+    let fixture = Fixture::new();
+    for topic in [
+        "daemon",
+        "runtime",
+        "runtime.reset",
+        "workspace.mode",
+        "job",
+    ] {
+        let output = fixture.cli.output(&["help", topic]);
+        assert!(output.status.success(), "{topic}: {output:?}");
+        assert!(
+            one_json(&output)["result"]["text"]
+                .as_str()
+                .unwrap()
+                .contains("retired")
+        );
+    }
+    let table: Value = serde_json::from_str(include_str!(
+        "../../../assets/specifications/retired-commands-v1.json"
+    ))
+    .unwrap();
+    for arguments in [
+        vec!["daemon", "mystery"],
+        vec!["runtime", "reset", "mystery"],
+        vec!["workspace", "mode", "mystery"],
+    ] {
+        let output = fixture.cli.output(&arguments);
+        let error = one_json(&output);
+        assert_eq!(error["code"], "COMMAND_RETIRED");
+        assert!(
+            table["commands"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["command"] == error["details"]["retired"])
+        );
+    }
+}
+
+#[test]
 fn v2dfc003_reserved_output_preserves_large_admitted_procedure_show() {
     let fixture = Fixture::new();
     let definitions = (0..128)

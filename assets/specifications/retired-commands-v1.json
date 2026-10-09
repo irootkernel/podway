@@ -3,6 +3,10 @@
   "availability": "executable",
   "commands": [
     {
+      "command": "daemon *",
+      "replacement": null
+    },
+    {
       "command": "daemon.install",
       "replacement": null
     },
@@ -43,6 +47,10 @@
       "replacement": null
     },
     {
+      "command": "job *",
+      "replacement": null
+    },
+    {
       "command": "job.cancel",
       "replacement": null
     },
@@ -63,11 +71,19 @@
       "replacement": null
     },
     {
+      "command": "runtime reset *",
+      "replacement": null
+    },
+    {
       "command": "runtime.reset.apply",
       "replacement": null
     },
     {
       "command": "runtime.reset.plan",
+      "replacement": null
+    },
+    {
+      "command": "workspace mode *",
       "replacement": null
     },
     {

@@ -473,7 +473,7 @@
     {
       "kind": "catalog",
       "path": "spec/retired-commands-v1.json",
-      "sha256": "sha256:2720cf1186989c30aad1c6c737a569cf28b1ced3fc343031cdabbb730e9af6d6"
+      "sha256": "sha256:929beee983120d40903ace6465e125a28843c49a62ecbf5a64f3e6f24b30c812"
     },
     {
       "kind": "store_schema",
@@ -523,7 +523,7 @@
     {
       "kind": "known_answer_fixture",
       "path": "tests/fixtures/v2/payload/truncation-and-overflow-recipe.json",
-      "sha256": "sha256:3639fba9a5c6eab5abeca5c85ecc988e14c2553da57be9ec3915758158209cfb"
+      "sha256": "sha256:e0f6eddf4a4442ff6025ac119d7983df324c2331dd43e85f200f99f80f79d373"
     },
     {
       "kind": "known_answer_fixture",
@@ -596,7 +596,7 @@
       "sha256": "sha256:7de5f4f024eb795ae7fb73594d4847b833016bea6be9f2737c567b524ae5466e"
     }
   ],
-  "digest": "sha256:db4d737b3b635a6b1e7ca3b70eefab309a864d711de8387ff8144cd353b61f27",
+  "digest": "sha256:d4bbc10aa4e1a4215c69cab967c28cd5fa980534b48513aea88c7e4f7d289c3a",
   "product": "podway",
   "product_version": "0.2.12",
   "schema_version": "podway.contract-manifest/v2"

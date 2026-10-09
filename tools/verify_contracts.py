@@ -163,6 +163,7 @@ PROHIBITED_CAPABILITIES = {"command_runner", "git_mutation", "network"}
 DEPENDENCY_TABLES = {"dependencies", "dev-dependencies", "build-dependencies"}
 RETIRED_COMMANDS = frozenset(
     {
+        "daemon *",
         "daemon.install",
         "daemon.logs",
         "daemon.restart",
@@ -174,13 +175,16 @@ RETIRED_COMMANDS = frozenset(
         "daemon.uninstall",
         "daemon.wait-ready",
         "job.cancel",
+        "job *",
         "job.list",
         "job.lookup",
         "job.status",
         "job.wait",
         "runtime.reset.apply",
+        "runtime reset *",
         "runtime.reset.plan",
         "workspace.mode.apply",
+        "workspace mode *",
         "workspace.mode.plan",
     }
 )

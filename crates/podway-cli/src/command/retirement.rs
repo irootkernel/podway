@@ -77,6 +77,7 @@ pub(super) fn help_guidance(topic: &str) -> Result<Option<String>, serde_json::E
         "daemon" => "daemon *",
         "runtime" | "runtime.reset" => "runtime reset *",
         "workspace.mode" => "workspace mode *",
+        "job" => "job *",
         _ => topic,
     };
     Ok(table
@@ -108,6 +109,7 @@ pub(super) fn classify(
     let mut family: Option<&str> = None;
     let mut refine_family = false;
     let mut retained = vec![arguments.first().cloned().unwrap_or_default()];
+    let mut unknown_syntax = false;
 
     for argument in arguments.iter().skip(1) {
         let bytes = argument.as_bytes();
@@ -135,7 +137,7 @@ pub(super) fn classify(
             if name == b"json" && !attached {
                 result.json_requested = true;
             }
-            if let Some(takes_value) = retired_arity(name) {
+            if !unknown_syntax && let Some(takes_value) = retired_arity(name) {
                 if result.retired.is_none() {
                     let entry = table
                         .flags
@@ -161,7 +163,8 @@ pub(super) fn classify(
                     // an attached value remains opaque while a later global --json still applies.
                     continue;
                 }
-                break;
+                unknown_syntax = true;
+                continue;
             };
             retained.push(argument.clone());
             if !attached && arg.get_num_args().is_some_and(|range| range.takes_values()) {
@@ -173,7 +176,11 @@ pub(super) fn classify(
             if family.is_some() {
                 continue;
             }
-            break;
+            unknown_syntax = true;
+            continue;
+        }
+        if unknown_syntax {
+            continue;
         }
         if let Some(prefix) = family {
             if refine_family {
@@ -251,7 +258,7 @@ pub(super) fn classify(
             positional += 1;
             retained.push(argument.clone());
         } else {
-            break;
+            unknown_syntax = true;
         }
     }
     if let Some(retired) = &mut result.retired
@@ -287,6 +294,16 @@ mod tests {
                 "daemon.status",
             ),
             (vec!["daemon", "mystery"], "daemon *", "cli"),
+            (
+                vec!["runtime", "reset", "mystery"],
+                "runtime reset *",
+                "cli",
+            ),
+            (
+                vec!["workspace", "mode", "mystery"],
+                "workspace mode *",
+                "cli",
+            ),
             (
                 vec!["runtime", "reset", "apply"],
                 "runtime.reset.apply",
@@ -358,6 +375,33 @@ mod tests {
         }
         assert!(!classified(&["set", "item", "--", "--json"]).json_requested);
         assert!(!classified(&["start", "--task=--json"]).json_requested);
+    }
+
+    #[test]
+    fn late_json_respects_unknown_syntax_and_delimiters() {
+        for arguments in [
+            vec!["unknown", "--json"],
+            vec!["status", "--unknown", "--json"],
+            vec!["status", "-x", "--json"],
+            vec![
+                "status",
+                "--unknown",
+                "--idempotency-key",
+                "--json",
+                "--json",
+            ],
+        ] {
+            assert!(classified(&arguments).json_requested, "{arguments:?}");
+        }
+        for arguments in [
+            vec!["unknown", "--", "--json"],
+            vec!["status", "--unknown", "--", "--json"],
+            vec!["status", "-x", "--", "--json"],
+            vec!["unknown", "--task=--json"],
+            vec!["status", "--unknown", "--idempotency-key", "--json"],
+        ] {
+            assert!(!classified(&arguments).json_requested, "{arguments:?}");
+        }
     }
 
     #[test]

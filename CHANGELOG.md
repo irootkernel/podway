@@ -12,6 +12,8 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ### Fixed
 
+- Return valid JSON errors for local CLI failures and oversized output, honor a late `--json`, and provide retired-family help and outcome identity completion.
+
 - Apply workspace outcome retention to archive purge while preserving original session outcomes.
 - Honor consumer-attempt fences on the first evidence page and its continuations.
 - Resume maintenance with original idempotency keys that begin with a hyphen.

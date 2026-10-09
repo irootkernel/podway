@@ -129,6 +129,11 @@ return `COMMAND_RETIRED` before workspace resolution, stdin consumption, or Stor
 access. `job.lookup` names `outcome.lookup` as its replacement; other null
 replacements mean no replacement exists. Ordinary unknown syntax remains a usage
 failure. Literal values after `--` or in value positions are not retired syntax.
+Retirement classification stops at ordinary unknown syntax; a retired flag
+appearing later remains part of that usage failure.
+The `job *` table entry supplies `help job` guidance; unknown job children remain
+usage failures. Family help topics are `daemon`, `job`, `runtime`,
+`runtime.reset`, and `workspace.mode`.
 
 ## Workspace lifecycle
 
@@ -322,5 +327,11 @@ never text. Text mode is advisory rendering of the same result. Exit status foll
 the canonical [exit-code table](errors-and-exit-codes.md#exit-codes).
 
 Every JSON invocation emits exactly one bounded newline-terminated object on stdout.
+Outside recognized value positions, usage failures honor a standalone `--json`
+anywhere before the `--` delimiter, including after unknown syntax. Local internal
+failures and local results that exceed the output budget return a validated error
+envelope with a diagnostic UUID. If the clock cannot supply a valid timestamp or
+the rebuilt error envelope cannot be validated, rendering falls back to a stderr
+diagnostic and exit 6 without aborting.
 Diagnostics go to the structured envelope in JSON mode and stderr only where the
 command contract explicitly has no JSON response.
