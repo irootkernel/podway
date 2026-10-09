@@ -692,10 +692,17 @@ release, installation, or replacement of an active daemon.
 
 ## V2DFC — Daemon-Free Core
 
-Status: Completed.
+Status: In Progress.
+
+Reopened on October 9, 2026. An independent implementation review of the
+completed Epic found acceptance gaps. The [adopted dossier](../todo/TODO-podway-daemon-free-core.md)
+records them, with their remediation decisions. `V2DFC-011` through
+`V2DFC-018` remediate them. The earlier closeout does not satisfy the final
+closeout of the reopened Epic. Reopening registers work only: it starts no
+task, and it authorizes no commit, release or installation.
 
 Conditional release target: `v0.2.13`. Inclusion requires completion of
-`V2DFC-001` through `V2DFC-010`, the required development acceptance, and a
+`V2DFC-001` through `V2DFC-018`, the required development acceptance, and a
 separately authorized stable-release qualification. Installation additionally
 requires Aquarium and Dolgorae releases that support the new contract
 generation.
@@ -730,6 +737,14 @@ installation, or removal of an installed daemon.
 | `V2DFC-008` | Retire residual daemon-era infrastructure and contracts | Completed | Delete the service crate, IPC protocol, legacy Store and migrations, runtime modes, and daemon-only schemas and errors, and retarget fuzzing. | [repository structure](../architecture/repository-structure.md), [testing and conformance](../specs/quality/testing-and-conformance.md) |
 | `V2DFC-009` | Rebuild release and development tooling around one binary | Completed | Package and qualify one binary, regenerate identity and handoff contracts, retire the Aquarium development service, and rewrite release QA. | [release workflow](../implementation-tips/release.md), [upgrade QA](../implementation-tips/release-upgrade-qa.md) |
 | `V2DFC-010` | Promote durable documentation | Completed | Promote lasting decisions and verification baselines to specifications, architecture, README, skills, and AGENTS.md, and update related candidates before the final Epic audit. | [documentation authorities](../README.md), [requirements traceability](../specs/quality/requirements-traceability.md) |
+| `V2DFC-011` | Repair CLI-local failure envelopes and retired-surface guidance | Planned | Emit a validated error envelope for every JSON-mode failure without aborting, honor a late `--json`, and complete retired-command help and completion. | [errors and exit codes](../specs/interfaces/errors-and-exit-codes.md), [CLI](../specs/interfaces/cli-specification.md) |
+| `V2DFC-012` | Bound only lock waits by the invocation deadline | Planned | Attempt every lock once before reporting expiry, remove post-acquisition deadline checks, and report the boundary that actually expired. | [CLI](../specs/interfaces/cli-specification.md), [automation client](../specs/interfaces/automation-client-contract.md) |
+| `V2DFC-013` | Revalidate prepared state against current fences | Planned | Re-evaluate fences and start policy inside the transaction instead of failing on any workspace sequence change, and never report contention as an internal error. | [transactions](../specs/storage/transactions-concurrency-and-idempotency.md), [errors and exit codes](../specs/interfaces/errors-and-exit-codes.md) |
+| `V2DFC-014` | Prepare artifact digests outside the write transaction | Planned | Hash local artifacts during preparation, then require each file's stamp, recorded metadata and revisions to match inside the transaction without reading file bytes. | [automation client](../specs/interfaces/automation-client-contract.md), [transactions](../specs/storage/transactions-concurrency-and-idempotency.md) |
+| `V2DFC-015` | Provide confirmed destructive recovery and the newer-generation policy | Planned | Let explicitly confirmed reset and removal recover invalid generation-14 Stores, refuse newer generations with actionable guidance, and record the generation-bump invariant. | [recovery](../specs/storage/recovery-retention-and-maintenance.md), [release and packaging](../specs/operations/release-and-packaging.md) |
+| `V2DFC-016` | Report maintenance markers truthfully and close removal finalization | Planned | Emit distinct maintenance boundaries with recipes that can make progress, and reproduce the removal lock-unlink race before resolving it. | [errors and exit codes](../specs/interfaces/errors-and-exit-codes.md), [recovery](../specs/storage/recovery-retention-and-maintenance.md) |
+| `V2DFC-017` | Restore qualification execution paths and re-measure the candidate | Planned | Give every required qualification a documented execution path, close test and fuzz gaps, and re-measure G1/G2, G7/G8, and G9 on the remediated candidate. | [testing and conformance](../specs/quality/testing-and-conformance.md), [performance qualification](../implementation-tips/direct-cli-performance-qualification.md) |
+| `V2DFC-018` | Promote remediated documentation and contract corrections | Planned | Remove daemon-era normative claims and stale examples, complete the changelog, correct contract drift, and settle stale records before the final Epic audit. | [documentation authorities](../README.md), [requirements traceability](../specs/quality/requirements-traceability.md) |
 
 Tasks execute in numeric order with one active task across this epic. At most
 the first incomplete task may be In Progress, In Review, or Blocked; every later

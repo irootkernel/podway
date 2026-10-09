@@ -85,7 +85,7 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 
 ## Current adopted dossiers
 
-None.
+- [Daemon-free core](TODO-podway-daemon-free-core.md): `V2DFC` removal of `podwayd`, in-process Store transactions, and a new contract generation for the conditional `v0.2.13` target. Reopened on October 9, 2026 for remediation tasks `V2DFC-011` through `V2DFC-018`. Task order and state live only in the active roadmap; adoption activates no runtime, release, or installation.
 
 ## Related candidates
 
