@@ -14,7 +14,7 @@ are not release or support targets.
 Product releases use semantic versioning. Product and contract versions are
 independent. Current public identities are `podway.output/v4`, `podway.error/v2`,
 `podway.version-result/v2`, `podway.contract-manifest/v2`, workspace configuration
-v1/v2, Procedure v2, and direct SQLite generation 14. The manifest has no
+v1/v2, Procedure v2, and direct SQLite generation 15. The manifest has no
 `supported_ipc_ids`. Breaking public changes require an explicit versioned
 contract and adopted compatibility plan; there is no inferred migration promise.
 
@@ -230,6 +230,8 @@ maintenance markers as unsupported legacy input. Classification refuses without
 opening for writes, migration,
 checkpointing or SHM creation and reports `LEGACY_RUNTIME_STATE_UNSUPPORTED` with
 an explicit reset recipe. There is no daemon-era state conversion.
+The unreleased generation-14 direct baseline is also refused unchanged with this
+older-state error and reset recipe; generation 15 declares no predecessor for it.
 
 After backing up any desired historical evidence and confirming the exact target,
 run `podway --worktree <root> --json reset --all --yes --idempotency-key <new-key>`.

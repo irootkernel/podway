@@ -137,10 +137,13 @@ implementing a FIFO scheduler.
 
 Reset-all/removal persist typed intent and phase markers. Only an exact retry with
 the original key, request identity and required fences resumes them. Removal
-retains recoverable intent through final operation-marker deletion and deletes
-intent last. Durable marker writes and directory changes are synced through the
-existing descriptor-safe primitives. Never manually edit these files or a database
-to simulate recovery. The [recovery specification](../specs/storage/recovery-retention-and-maintenance.md)
+deletes the intent and named locks first, retaining the validated removal marker
+as the exact-retry identity until that final marker is deleted. Reset keeps its
+intent until reset-marker cleanup completes. The held runtime inode exclusion
+survives marker and lock-name deletion. Durable marker writes and directory
+changes are synced through the existing descriptor-safe primitives. Never
+manually edit these files or a database to simulate recovery. The
+[recovery specification](../specs/storage/recovery-retention-and-maintenance.md)
 owns retention and public retry recipes.
 
 ## Tracked and untracked content
@@ -175,11 +178,13 @@ from current admission checks.
 ## Initialization behavior
 
 `init` validates Git identity and publishes a safe local layout, custom-config
-preservation and ignore rule before initializing the generation-14 Store under
+preservation and ignore rule before initializing the current Store under
 exclusive exclusion. Private Store construction is checkpointed/synced and
 published without clobbering authoritative state. Compatible existing state
 returns `WORKSPACE_ALREADY_INITIALIZED`, except exact-key replay of the original
-success. Incompatible content fails closed.
+success. Incompatible content fails closed. Initialization classifies persisted maintenance and
+newer-generation compatibility before validating configuration, so invalid
+configuration cannot hide either refusal.
 
 `init --repair` may repair supported missing layout/ignore details; it must not
 overwrite valid custom config or adopt conflicting identity. `workspace repair`

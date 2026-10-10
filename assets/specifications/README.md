@@ -3,7 +3,7 @@
 - `error-codes.json`: stable public error and exit-code catalog, including current typed-guard failures.
 - `authoring-diagnostics.json`: stable authoring-time diagnostic catalog with ambiguity-based option replacements.
 - `command-catalog.yaml`: command classification, direct execution behavior, and preconditions.
-- `sqlite-v14.sql`: complete direct-store production baseline; older generations are rejected input fixtures only.
+- `sqlite-v15.sql`: complete direct-store production baseline; older generations are rejected input fixtures only.
 - `state-transition-matrix.csv`: compact transition reference.
 - `canonicalization-v1.json`: machine-readable canonical JSON and Procedure normalization rules.
 

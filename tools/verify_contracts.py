@@ -835,6 +835,18 @@ def validate_routes(root: Path) -> int:
         fail(f"command routes do not exactly cover catalog commands; missing={sorted(expected_commands - commands)}")
     return len(commands)
 def validate_direct_contracts(root: Path) -> int:
+    store_source = (root / "crates/podway-store/src/direct_store.rs").read_text(encoding="utf-8")
+    generation_match = re.search(r"pub const DIRECT_SCHEMA_GENERATION_V1: u32 = ([0-9]+);", store_source)
+    if generation_match is None:
+        fail("current Store generation is missing or ambiguous")
+    generation = int(generation_match[1])
+    unsupported = read_json(root, Path("assets/schemas/workspace-schema-unsupported-details-v1.schema.json"), "newer generation contract")
+    if unsupported["properties"]["supported_store_schema_version"] != {"const": generation} \
+            or unsupported["properties"]["store_schema_version"]["minimum"] != generation + 1:
+        fail("newer generation contract disagrees with the current Store generation")
+    older = read_json(root, Path("assets/schemas/legacy-runtime-state-unsupported-details-v1.schema.json"), "older generation contract")
+    if older["properties"]["store_schema_version"]["maximum"] != generation - 1:
+        fail("older generation contract disagrees with the current Store generation")
     retired = read_json(root, Path("assets/specifications/retired-commands-v1.json"), "retired command table")
     expected = {
         "schema": "podway.retired-command-table/v1",
@@ -847,6 +859,10 @@ def validate_direct_contracts(root: Path) -> int:
     if retired != expected:
         fail("retired command table must match the exact active cutover guidance surface")
     answers = read_json(root, Path("tests/fixtures/v2/protocol/current-contracts.json"), "direct known answers")
+    unsupported_answer = answers["fixtures"]["podway.workspace-schema-unsupported-details/v1"]
+    if unsupported_answer["supported_store_schema_version"] != generation \
+            or unsupported_answer["store_schema_version"] <= generation:
+        fail("newer generation known answer disagrees with the current Store generation")
     replacements = {entry["command"]: entry["replacement"] for entry in retired["commands"]}
     replacements.update({entry["flag"]: entry["replacement"] for entry in retired["flags"]})
     examples = list(answers["fixtures"].values()) + [case["value"] for case in answers["cases"]]
@@ -855,10 +871,10 @@ def validate_direct_contracts(root: Path) -> int:
         if isinstance(details, dict) and details.get("schema") == "podway.command-retired-details/v1":
             if details["retired"] not in replacements or details["replacement"] != replacements[details["retired"]]:
                 fail("retired-command known answer disagrees with its canonical replacement")
-    ddl_path = repository_assets.checked_path(root, Path("assets/specifications/sqlite-v14.sql"), "Store v14 baseline")
+    ddl_path = repository_assets.checked_path(root, Path(f"assets/specifications/sqlite-v{generation}.sql"), "Current Store baseline")
     ddl = ddl_path.read_text(encoding="utf-8")
     if re.search(r"\b(?:ALTER|DROP)\s+TABLE\b", ddl, flags=re.IGNORECASE):
-        fail("Store v14 must be a complete baseline, not a legacy migration")
+        fail("Current Store must be a complete baseline, not a legacy migration")
     try:
         with sqlite3.connect(":memory:") as connection:
             connection.executescript(ddl)
@@ -872,21 +888,21 @@ def validate_direct_contracts(root: Path) -> int:
                 "v2_criterion_citations", "v2_goal_assessments", "v2_terminal_dispositions",
                 "v2_delegation_receipts",
             }
-            if tables != expected_tables or connection.execute("PRAGMA user_version").fetchone() != (14,):
-                fail("Store v14 baseline has an unexpected table inventory or generation")
+            if tables != expected_tables or connection.execute("PRAGMA user_version").fetchone() != (generation,):
+                fail("Current Store baseline has an unexpected table inventory or generation")
             for table in sorted(tables):
                 parents = {row[2] for row in connection.execute(f'PRAGMA foreign_key_list("{table}")')}
                 missing = parents - tables
                 if missing:
-                    fail(f"Store v14 {table} references missing foreign-key parents: {sorted(missing)}")
+                    fail(f"Current Store {table} references missing foreign-key parents: {sorted(missing)}")
             if connection.execute("PRAGMA foreign_key_check").fetchall():
-                fail("Store v14 baseline has invalid foreign keys")
+                fail("Current Store baseline has invalid foreign keys")
             columns = {row[1] for row in connection.execute("PRAGMA table_info(workspace_state)")}
             if "runtime_mode" in columns:
-                fail("Store v14 must not persist daemon runtime modes")
+                fail("Current Store must not persist daemon runtime modes")
             columns = {row[1] for row in connection.execute("PRAGMA table_info(operational_journal)")}
             if "job_id" in columns:
-                fail("Store v14 must not persist daemon job metadata")
+                fail("Current Store must not persist daemon job metadata")
             digest = "sha256:" + "a" * 64
             sql = "INSERT INTO mutation_outcomes VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
             connection.execute(sql, ("success", digest, "workspace.init", 1, "workspace", None,
@@ -902,15 +918,15 @@ def validate_direct_contracts(root: Path) -> int:
                     connection.execute(sql, (key, digest, "workspace.init", sequence, scope, session, response, 0))
                 except sqlite3.IntegrityError:
                     continue
-                fail(f"Store v14 accepted an invalid success outcome: {key}")
+                fail(f"Current Store accepted an invalid success outcome: {key}")
             try:
                 connection.execute("INSERT INTO writer_contract VALUES (1, 'foreign', 'generation', 0)")
             except sqlite3.IntegrityError:
                 pass
             else:
-                fail("Store v14 accepted a malformed writer contract digest")
+                fail("Current Store accepted a malformed writer contract digest")
     except sqlite3.Error as error:
-        fail(f"Store v14 baseline cannot instantiate: {error}")
+        fail(f"Current Store baseline cannot instantiate: {error}")
     return len(expected_tables)
 
 
@@ -1144,11 +1160,32 @@ def run_sentinels(root: Path) -> list[str]:
         reservation_fixture.mkdir()
         shutil.copytree(root / "assets", reservation_fixture / "assets")
         copy_contracts(root, reservation_fixture)
+        store_source = Path("crates/podway-store/src/direct_store.rs")
+        (reservation_fixture / store_source).parent.mkdir(parents=True)
+        shutil.copy2(root / store_source, reservation_fixture / store_source)
         examples = reservation_fixture / "tests/fixtures/v2/protocol"
         examples.mkdir(parents=True)
         known_answers = root / "tests/fixtures/v2/protocol/current-contracts.json"
         answer_path = examples / known_answers.name
         shutil.copy2(known_answers, answer_path)
+        validate_direct_contracts(reservation_fixture)
+        unsupported_path = reservation_fixture / "assets/schemas/workspace-schema-unsupported-details-v1.schema.json"
+        unsupported = json.loads(unsupported_path.read_text(encoding="utf-8"))
+        for field in ["supported_store_schema_version", "store_schema_version"]:
+            original = dict(unsupported["properties"][field])
+            bound = "const" if field == "supported_store_schema_version" else "minimum"
+            unsupported["properties"][field][bound] += 1
+            unsupported_path.write_text(json.dumps(unsupported) + "\n", encoding="utf-8")
+            require_known_failure("current Store versus newer-generation contract drift", lambda: validate_direct_contracts(reservation_fixture))
+            unsupported["properties"][field] = original
+        unsupported_path.write_text(json.dumps(unsupported) + "\n", encoding="utf-8")
+        older_path = reservation_fixture / "assets/schemas/legacy-runtime-state-unsupported-details-v1.schema.json"
+        older = json.loads(older_path.read_text(encoding="utf-8"))
+        older["properties"]["store_schema_version"]["maximum"] -= 1
+        older_path.write_text(json.dumps(older) + "\n", encoding="utf-8")
+        require_known_failure("current Store versus older-generation contract drift", lambda: validate_direct_contracts(reservation_fixture))
+        shutil.copy2(root / "assets/schemas/legacy-runtime-state-unsupported-details-v1.schema.json", older_path)
+        completed.append("direct_generation_contract_drift")
         answer = json.loads(answer_path.read_text(encoding="utf-8"))
         answer["fixtures"]["podway.command-retired-details/v1"]["replacement"] = None
         answer_path.write_text(json.dumps(answer) + "\n", encoding="utf-8")
@@ -1160,10 +1197,10 @@ def run_sentinels(root: Path) -> list[str]:
         retired_path.write_text(json.dumps(retired) + "\n", encoding="utf-8")
         require_known_failure("missing retired flag", lambda: validate_direct_contracts(reservation_fixture))
         shutil.copy2(root / "assets/specifications/retired-commands-v1.json", retired_path)
-        ddl_path = reservation_fixture / "assets/specifications/sqlite-v14.sql"
+        ddl_path = reservation_fixture / "assets/specifications/sqlite-v15.sql"
         ddl_path.write_text(ddl_path.read_text(encoding="utf-8") + "\nCREATE TABLE jobs (job_id TEXT);\n", encoding="utf-8")
         require_known_failure("daemon table in direct baseline", lambda: validate_direct_contracts(reservation_fixture))
-        shutil.copy2(root / "assets/specifications/sqlite-v14.sql", ddl_path)
+        shutil.copy2(root / "assets/specifications/sqlite-v15.sql", ddl_path)
         ddl = ddl_path.read_text(encoding="utf-8")
         ddl_path.write_text(ddl.replace('REFERENCES "v2_task_sessions"', 'REFERENCES "v2_task_sessions_missing"', 1), encoding="utf-8")
         require_known_failure("missing direct session foreign-key parent", lambda: validate_direct_contracts(reservation_fixture))

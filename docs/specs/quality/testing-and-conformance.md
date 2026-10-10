@@ -61,7 +61,7 @@ daemon dogfood is retired; it is not a current proof locator.
 Current Store tests are registered in `podway-store`'s `int_suite`, including
 `int_v2dfc005_direct_store`, `_legacy`, `_maintenance`, `_relational`, `_scale`,
 `int_v2dfc006_execution_boundary`, and `int_v2dfc008_persistence`. They bind
-canonical [generation-14 DDL](../../../assets/specifications/sqlite-v14.sql),
+canonical [generation-15 DDL](../../../assets/specifications/sqlite-v15.sql),
 workspace and Git binding, schema object identity, writer-contract identity,
 current and archived reconstruction, rollback, and success-only outcome lookup.
 

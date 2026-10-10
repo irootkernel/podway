@@ -196,10 +196,15 @@ operation to finish past the deadline. Preflight, preparation and confirmation
 consume the original wait budget without creating a new one;
 it is not a hard timer for stdin, human confirmation, preparation, filesystem
 cleanup, or rendering. Neither contention error retains a rejected outcome.
-Reads never resume published maintenance.
+Reads never resume published maintenance. Markerless maintenance contention
+without a Store, including init and reset during final removal, emits read-only
+`version --identity`; wait for the owner and retry the original request with its
+key and fences. State refresh applies only when a Store is present.
 
 Normal reads, writes, and replay refuse daemon-era Store generations 1–13 and
-markers without conversion, deletion, or SHM creation. Unsupported newer state
+markers without conversion, deletion, or SHM creation. The unreleased older direct
+generation 14 also reports `LEGACY_RUNTIME_STATE_UNSUPPORTED` with an explicitly
+confirmed reset recipe; it is not an admitted predecessor. Unsupported newer state
 uses `WORKSPACE_SCHEMA_UNSUPPORTED`; corruption uses `WORKSPACE_STATE_UNREADABLE`.
 An unsupported writer digest uses `WORKSPACE_CONTRACT_MISMATCH` before key replay.
 Unsupported legacy workspace configuration fails validation before Store access.
@@ -264,19 +269,32 @@ the client's controlled invocation context.
 | Owning condition | Allowed recipe | Authorization flag |
 |---|---|---|
 | Session/revision/attempt/Procedure digest, stale goal/evidence, SQLite contention | `refresh_state` / `session.observe` | false |
-| Workspace UUID, state/schema, writer identity | `diagnose_workspace` / `workspace.doctor` | false |
-| Maintenance lock/intent/predecessor | Owning schema's read-only refresh or diagnosis | false |
+| Workspace UUID mismatch | `diagnose_workspace` / `workspace.doctor` | false |
+| Invalid Store or writer contract | `diagnose_writer` / `version --identity` with conditional explicit discard guidance | false |
+| Maintenance lock with a Store | `refresh_state` / `session.observe` after the owner finishes | false |
+| Store-less final-removal or residual lock | `diagnose_writer` / `version --identity`; wait for the owner and retry the original request | false |
+| Removal parent repopulated before cleanup | `diagnose_writer` / `version --identity`; preserve current contents and inspect the workspace | false |
+| Init intent | `resume_maintenance` / `workspace.init` with original key and repair policy | true |
+| Foreign writer/root or predecessor intent | `diagnose_writer` / `version --identity`; recovery belongs to the original writer and worktree | false |
 | Uncertain COMMIT I/O | `reconcile_mutation` / `outcome.lookup` with original key | false |
 | Unsupported legacy state | `reset_legacy_state` / `workspace.reset_all` with `<new-idempotency-key>` | true |
 | Published reset marker | `resume_maintenance` / `workspace.reset_all` with original key | true |
-| Published removal marker | `resume_maintenance` / `workspace.remove` with original key and UUID | true |
+| Reset/removal intent-only window | Corresponding `resume_maintenance` recipe with original parameters | true |
+| Published removal marker | `resume_maintenance` / `workspace.remove` with original key, fence and force policy | true |
 
-Read-only argv uses `podway --json observe` or `podway --json doctor`; lookup uses
+Read-only argv uses `podway --json observe`, `podway --json doctor`, or
+`podway --json version --identity`; lookup uses
 `podway --json outcome lookup --idempotency-key <original-key>`. Legacy reset uses
 `reset --all --yes --idempotency-key <new-idempotency-key>`; replace the placeholder
 with a fresh caller-owned key only after destructive authorization. Published
-reset recovery retains its original key. Removal includes `--force --yes`,
-`--if-workspace-uuid`, and its original key. Reading a recipe never authorizes
+reset recovery retains its original key. Removal retains its original force and
+UUID assertions. The JSON recipe includes `--force --yes` and the original UUID.
+A typed request without JSON authorization uses a human-terminal recipe; an
+unfenced recipe omits `--json` and `--yes` and requires typing the exact canonical
+worktree path. It keeps the original key and does not add force or a fence.
+Human errors show the recipe reason, including terminal confirmation and owning
+writer requirements. `version --identity` diagnoses a foreign marker without
+opening its Store; it does not resume it. Reading a recipe never authorizes
 execution or resumes a marker. No recipe weakens fences, changes a replay key,
 alters a historical service, or executes external work.
 
@@ -375,3 +393,14 @@ artifact bytes, or unrelated item values. `INTERNAL_ERROR` is non-retryable with
 a diagnostic UUID. Success is validated before commit; an internal failure is
 not a job receipt or evidence of admission/continued work. Caller-side uncertainty
 requires original-key reconciliation rather than assumed fresh-key retry.
+
+For an invalid Store, `WORKSPACE_STATE_UNREADABLE` and
+`WORKSPACE_CONTRACT_MISMATCH` can provide the read-only `diagnose_writer` recipe
+`podway --json version --identity`, which succeeds without opening that Store.
+Its reason distinguishes restoring access or returning to the original writer
+from explicitly discarding invalid state. After retiring other writers, the
+operator may confirm an unfenced `reset --all` with a new idempotency key, or
+perform unfenced removal in a human terminal by typing the exact worktree path.
+This guidance grants no destructive authorization and never permits a newer
+Store generation. `WORKSPACE_ID_CONFLICT` human output names the original
+worktree and the same explicitly confirmed discard alternatives.

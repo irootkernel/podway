@@ -84,7 +84,9 @@ impl From<podway_protocol::ProtocolError> for DirectMaintenanceErrorV1 {
 /// Explicit isolated-fixture instrumentation of Engine-owned marker phases.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DirectMaintenanceBoundaryV1 {
-    LeaseAcquired { wait: std::time::Duration },
+    LeaseAcquired {
+        wait: std::time::Duration,
+    },
     BeforeRuntimeDestruction,
     IntentPublished,
     MarkerPublished,
@@ -94,6 +96,9 @@ pub enum DirectMaintenanceBoundaryV1 {
     BeforeFinalRemoval,
     AfterFirstRemovalMarker,
     AfterLastRemovalMarker,
+    AfterRuntimeDirectoryRemoval,
+    /// Init-only qualification alias; reset retains its StoreBoundary event.
+    BeforeStorePublication,
     ResetMarkerRemoved,
     IntentMarkerRemoved,
     DirectoriesRemoved,
@@ -546,12 +551,12 @@ fn remove_inner<R: GitResolverContractV1>(
             resolver.revalidate_candidate(&initial)?;
             let removal = ValidatedPodwayRemovalDirectoryV1::open(&initial)?
                 .ok_or(WorkspaceRemovalFilesystemErrorV1::UnsafePath)?;
-            removal.remove_empty_residual()?;
+            removal.remove_empty_residual(request.deadline)?;
             notify(&observer, DirectMaintenanceBoundaryV1::DirectoriesRemoved);
             return removal_result(&request.request_id, clock.now(), &initial, None, true, true);
         }
         Classification::Maintenance => {
-            // Final removal can retain only intent after unlinking both locks.
+            // Final removal can retain only its operation marker after unlinking both locks.
             // Refuse a mismatched recovery request before recreating them;
             // the exclusive lease still revalidates every marker before effects.
             if let Some(marker) = observe_direct_maintenance_marker_v1(store.layout())? {
@@ -590,8 +595,42 @@ fn remove_inner<R: GitResolverContractV1>(
         return Err(DirectStoreErrorV1::Maintenance.into());
     }
     let digest = identity("workspace.remove", &request, &worktree)?;
-    let existing_intent = lease.read_marker(store.layout(), Kind::Intent)?;
+    let mut existing_intent = lease.read_marker(store.layout(), Kind::Intent)?;
     let existing_removal = lease.read_marker(store.layout(), Kind::Removal)?;
+    if existing_intent.is_none()
+        && let Some(marker) = existing_removal.as_ref()
+    {
+        let mut value = validate_marker(
+            marker,
+            "workspace.remove",
+            &request,
+            &worktree,
+            resolver.manifest(),
+            &digest,
+        )?;
+        time_from_marker(&value)?;
+        workspace_from_marker(&value)?;
+        value["schema"] = serde_json::json!("podway.workspace-maintenance-intent-marker/v1");
+        value
+            .as_object_mut()
+            .ok_or(DirectStoreErrorV1::Unreadable)?
+            .remove("phase");
+        if !validate_daemon_free_document_v1(
+            "podway.workspace-maintenance-intent-marker/v1",
+            &value,
+        ) {
+            return Err(DirectStoreErrorV1::Unreadable.into());
+        }
+        let intent = Marker::new(
+            Kind::Intent,
+            CanonicalExecutionJsonV1::new(
+                canonicalize_json_v1(&value).map_err(|_| DirectStoreErrorV1::Unreadable)?,
+            )
+            .map_err(|_| DirectStoreErrorV1::Unreadable)?,
+        )?;
+        lease.write_marker(store.layout(), &intent, None)?;
+        existing_intent = Some(intent);
+    }
     let (intent, uuid, now, response) = if let Some(intent) = existing_intent {
         let value = validate_marker(
             &intent,
@@ -765,6 +804,12 @@ fn remove_inner<R: GitResolverContractV1>(
             notify(
                 &observer,
                 DirectMaintenanceBoundaryV1::AfterLastRemovalMarker,
+            )
+        },
+        || {
+            notify(
+                &observer,
+                DirectMaintenanceBoundaryV1::AfterRuntimeDirectoryRemoval,
             )
         },
     )?;

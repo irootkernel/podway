@@ -28,7 +28,7 @@
     {
       "kind": "catalog",
       "path": "release/dolgorae-adapter-contract-v3.json",
-      "sha256": "sha256:38a7474e098b5c8393e0d289944ac8f3f7bd07416fead0947cac6f266f957fc1"
+      "sha256": "sha256:0d2af732e6f61f3e5c86d7b5a2223977f312fba77b75112fa709e5b91e7d633c"
     },
     {
       "kind": "schema",
@@ -163,7 +163,7 @@
     {
       "kind": "schema",
       "path": "schemas/legacy-runtime-state-unsupported-details-v1.schema.json",
-      "sha256": "sha256:fff3db09cc011113752a22c35ef055156e20b609bb5edd4bc73efc127bfe0bdd"
+      "sha256": "sha256:90ce5bb5a0287c4b425a3469305af9af5c1be3b990c561b0136aeb0fc8b05f0e"
     },
     {
       "kind": "schema",
@@ -248,7 +248,7 @@
     {
       "kind": "schema",
       "path": "schemas/recovery-recipe-v2.schema.json",
-      "sha256": "sha256:254e20bb52c7de72e683143d703c1db28c8fb0d5ecc8457dc46bc4b40d5c9556"
+      "sha256": "sha256:11bea21289c378a596999fccc080b5bf7b54e686806e4fb7ac9c23fe0a270959"
     },
     {
       "kind": "schema",
@@ -393,7 +393,7 @@
     {
       "kind": "schema",
       "path": "schemas/workspace-contract-mismatch-details-v1.schema.json",
-      "sha256": "sha256:666ff87e63bf791ca9cf469e492474f5c1b198cf5c20df5863ff7719301b1321"
+      "sha256": "sha256:b27c31bf5508ceafad908e8b8cfa17c3c5ca6b441b0414489b71cf4a9e3ee0ff"
     },
     {
       "kind": "schema",
@@ -403,7 +403,7 @@
     {
       "kind": "schema",
       "path": "schemas/workspace-maintenance-details-v1.schema.json",
-      "sha256": "sha256:3f2c16ec9876d8901c060cda4ca76e55513bd1a70ffcd96113e78a16ba873c9b"
+      "sha256": "sha256:c834b31591bd2fe57afd36c65dec988f43b89ffd9c63483af1da702b8da4e7c3"
     },
     {
       "kind": "schema",
@@ -413,7 +413,7 @@
     {
       "kind": "schema",
       "path": "schemas/workspace-recovery-details-v2.schema.json",
-      "sha256": "sha256:786c88a6046457b9594a39810489b408ee371f800c953ada5db97013dc58edc0"
+      "sha256": "sha256:8af9e5e6e016f33a9698ce7a02c1099083ee1f0411cdbcbd80d7c67650993827"
     },
     {
       "kind": "schema",
@@ -433,7 +433,7 @@
     {
       "kind": "schema",
       "path": "schemas/workspace-schema-unsupported-details-v1.schema.json",
-      "sha256": "sha256:6e7b60af7ea7d8f8b24832afe440a87e7f8a7bf52ea4e2b32b8e127a5378c977"
+      "sha256": "sha256:8ed328aa966ad552e935f7d4f969e1497ea873acb4c6b46703fbab8f95d11fe2"
     },
     {
       "kind": "schema",
@@ -482,13 +482,13 @@
     },
     {
       "kind": "store_schema",
-      "path": "spec/sqlite-v14.sql",
-      "sha256": "sha256:d4b2cd9e4fa3f71c6762fefe78a715b81dec5f4ef2b15e0c6aa766c576cf5d48"
+      "path": "spec/sqlite-v15.sql",
+      "sha256": "sha256:32b994da3bc317e40bfbf41764b416a446a709e1887727a1fb6a48d14ef1d61c"
     },
     {
       "kind": "transition_matrix",
       "path": "spec/state-transition-matrix.csv",
-      "sha256": "sha256:76912716ef6faccbc207b3e13d2796629a9f9f22981b767433801e2ee09b0aed"
+      "sha256": "sha256:e6d509bc08dfdf6475cafd40b671b194e08a23f8d7487a9b6010535bf01256b0"
     },
     {
       "kind": "known_answer_fixture",
@@ -593,7 +593,7 @@
     {
       "kind": "known_answer_fixture",
       "path": "tests/fixtures/v2/protocol/current-contracts.json",
-      "sha256": "sha256:3cff46c3c8f6ceb8c9d7251eafe101986ec10a1b1ff008fe125da8f4c872e660"
+      "sha256": "sha256:75a21b10683852da6bb6859aeb1df8ab8163858957035a6aa9640e749ad6ce0a"
     },
     {
       "kind": "known_answer_fixture",
@@ -601,7 +601,7 @@
       "sha256": "sha256:7de5f4f024eb795ae7fb73594d4847b833016bea6be9f2737c567b524ae5466e"
     }
   ],
-  "digest": "sha256:be497b8404cf168432f455f687c5390eecf6a8c1e79817c6a17b518c2db47956",
+  "digest": "sha256:2e2e13a0271b273ae1c805f0ac5051ce73e3cda559309ff2928fdb853ab1c466",
   "product": "podway",
   "product_version": "0.2.12",
   "schema_version": "podway.contract-manifest/v2"

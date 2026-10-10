@@ -12,6 +12,7 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ### Fixed
 
+- Preserve removal exclusion through final cleanup and report observed maintenance markers with original-key recovery guidance.
 - Recover invalid current workspaces through confirmed unfenced reset or removal, and refuse newer Stores with compatible-version guidance.
 - Hash local artifacts before writer admission and reject changed file stamps without reading artifact bytes inside the transaction.
 - Apply timeouts only to lock waits, permit an immediate attempt with no remaining budget, and preserve the original budget through interactive prompts.

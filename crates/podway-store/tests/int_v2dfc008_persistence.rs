@@ -3,7 +3,7 @@
 use podway_core::{UnixMillis, WorkspaceId};
 use podway_store::{
     DurableWorktreeIdentityV1, GraphSessionStateV2,
-    direct_store::{DirectStoreV1, ExclusiveMaintenanceLeaseV1},
+    direct_store::{DIRECT_SCHEMA_GENERATION_V1, DirectStoreV1, ExclusiveMaintenanceLeaseV1},
 };
 use tempfile::TempDir;
 
@@ -35,7 +35,10 @@ pub(super) fn fixture(identity: &DurableWorktreeIdentityV1) -> (TempDir, DirectS
     direct
         .read(deadline(), |snapshot| {
             assert_eq!(snapshot.binding().identity(), identity);
-            assert_eq!(snapshot.binding().schema_version(), 14);
+            assert_eq!(
+                snapshot.binding().schema_version(),
+                DIRECT_SCHEMA_GENERATION_V1
+            );
             Ok(())
         })
         .unwrap();
@@ -115,7 +118,10 @@ fn current_workspace_binding_and_shared_values_preserve_bounds_and_lossless_path
         ValidatedWorkspaceRootV1::from_encoded(root.as_encoded()).unwrap(),
         root
     );
-    assert_eq!(WorkspaceBindingV1::new(identity, root).schema_version(), 14);
+    assert_eq!(
+        WorkspaceBindingV1::new(identity, root).schema_version(),
+        DIRECT_SCHEMA_GENERATION_V1
+    );
     assert!(IdempotencyKeyV1::new("k".repeat(256)).is_ok());
     assert!(IdempotencyKeyV1::new("k".repeat(257)).is_err());
     assert!(CanonicalExecutionJsonV1::new("{\"a\":1}").is_ok());

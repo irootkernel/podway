@@ -2,19 +2,24 @@ use std::{
     fs::TryLockError,
     fs::{self, File, OpenOptions},
     io,
-    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::Path,
     thread,
     time::{Duration, Instant},
 };
 
-use nix::fcntl::OFlag;
+use nix::{
+    errno::Errno,
+    fcntl::{OFlag, openat},
+    sys::stat::{Mode, mkdirat},
+};
 
 use super::classification::{classify_direct_store_with_missing_observer_v1, maintenance_marked};
 use super::{
     DirectStoreClassificationV1, DirectStoreErrorV1, DirectStoreResultV1, DirectWorkspaceLayoutV1,
 };
 
+// Empty-residual directory admission in Engine workspace.rs uses the same cadence.
 const LOCK_RETRY_SLEEP: Duration = Duration::from_micros(500);
 
 /// Ordinary opens start shared. Missing WAL or SHM requires stronger exclusion:
@@ -192,11 +197,25 @@ impl ExclusiveMaintenanceLeaseV1 {
     ) -> DirectStoreResultV1<Self> {
         loop {
             if create {
-                ensure_runtime_directories(layout)?;
+                match ensure_runtime_directories(layout) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                        // Final removal can retire this namespace while it is
+                        // being opened. Retry the native creation boundary,
+                        // without extending the original wait deadline.
+                        wait(deadline)?;
+                        continue;
+                    }
+                    Err(error) => return Err(error.into()),
+                }
             }
             let podway = match open_directory(&layout.podway_directory()) {
                 Ok(file) => file,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    if create {
+                        wait(deadline)?;
+                        continue;
+                    }
                     return Err(DirectStoreErrorV1::NotInitialized);
                 }
                 Err(error) => return Err(error.into()),
@@ -204,10 +223,26 @@ impl ExclusiveMaintenanceLeaseV1 {
             let directory = match open_directory(&layout.runtime_directory()) {
                 Ok(file) => file,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    if create {
+                        wait(deadline)?;
+                        continue;
+                    }
                     return Err(DirectStoreErrorV1::NotInitialized);
                 }
                 Err(error) => return Err(error.into()),
             };
+            // The directory inode remains the exclusion anchor even after final
+            // removal unlinks the named lock files. Do not recreate those files
+            // until this exact runtime directory is exclusively held.
+            while !try_lock(&directory, true)? {
+                wait(deadline)?;
+            }
+            if !same_file(&podway, &layout.podway_directory())?
+                || !same_file(&directory, &layout.runtime_directory())?
+            {
+                wait(deadline)?;
+                continue;
+            }
             let intent = match open_lock(&layout.intent_lock(), create) {
                 Ok(file) => file,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -267,16 +302,29 @@ impl ExclusiveMaintenanceLeaseV1 {
 fn ensure_runtime_directories(layout: &DirectWorkspaceLayoutV1) -> io::Result<()> {
     // A resolver-owned root must already exist; maintenance never creates a worktree.
     let root = open_directory(&layout.root().to_path_buf())?;
-    for path in [layout.podway_directory(), layout.runtime_directory()] {
-        match fs::DirBuilder::new().mode(0o700).create(&path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(error),
-        }
-        let directory = open_directory(&path)?;
-        directory.sync_all()?;
-    }
+    let podway = ensure_child_directory(&root, &layout.root().to_path_buf(), ".podway")?;
+    ensure_child_directory(&podway, &layout.podway_directory(), "runtime")?;
     root.sync_all()
+}
+
+fn ensure_child_directory(parent: &File, parent_path: &Path, name: &str) -> io::Result<File> {
+    // A final remover can retire the parent between path lookup and mkdir. Use
+    // its held descriptor so creation cannot resolve through a replacement.
+    match mkdirat(parent, name, Mode::from_bits_truncate(0o700)) {
+        Ok(()) | Err(Errno::EEXIST) => {}
+        Err(Errno::EINVAL) if !same_file(parent, parent_path)? => {
+            return Err(io::ErrorKind::NotFound.into());
+        }
+        Err(error) => return Err(error.into()),
+    }
+    let directory = File::from(openat(
+        parent,
+        name,
+        OFlag::O_CLOEXEC | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_RDONLY,
+        Mode::empty(),
+    )?);
+    directory.sync_all()?;
+    Ok(directory)
 }
 
 pub(super) fn open_directory(path: &Path) -> io::Result<File> {
@@ -348,4 +396,26 @@ fn wait(deadline: Instant) -> DirectStoreResultV1<()> {
     check_deadline(deadline)?;
     thread::sleep(LOCK_RETRY_SLEEP.min(deadline.saturating_duration_since(Instant::now())));
     check_deadline(deadline)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retired_parent_creation_does_not_publish_into_its_replacement() {
+        let temporary = tempfile::TempDir::new().unwrap();
+        let path = temporary.path().canonicalize().unwrap().join(".podway");
+        fs::create_dir(&path).unwrap();
+        let retired = open_directory(&path).unwrap();
+        fs::remove_dir(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        let error = ensure_child_directory(&retired, &path, "runtime").unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        assert_eq!(fs::read_dir(&path).unwrap().count(), 0);
+        let current = open_directory(&path).unwrap();
+        let runtime = ensure_child_directory(&current, &path, "runtime").unwrap();
+        assert!(same_file(&runtime, &path.join("runtime")).unwrap());
+        assert_eq!(fs::read_dir(path.join("runtime")).unwrap().count(), 0);
+    }
 }

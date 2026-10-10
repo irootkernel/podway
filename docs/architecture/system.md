@@ -78,7 +78,7 @@ remote includes, executable plugins or configured commands.
 
 ### Store
 
-`podway-store` owns generation-14 SQLite initialization, coherent read snapshots,
+`podway-store` owns current Store initialization, coherent read snapshots,
 private transactions, worktree binding, writer-contract identity, relational
 Procedure state, atomic success outcomes and bounded journal retention.
 SQLite relational state is authoritative; there is no event-sourced rebuild.

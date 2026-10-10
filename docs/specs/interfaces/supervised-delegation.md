@@ -457,7 +457,7 @@ published identifier with another meaning is not permitted.
 
 ## SDG-009: Persistence and isolation
 
-Current Store v14 retains the immutable receipt side table keyed by session and
+Current Store v15 retains the immutable receipt side table keyed by session and
 attempt, canonical-path workspace identity, and a writer-manifest identity.
 The [SQLite model](../storage/sqlite-model.md) owns DDL and generation behavior.
 Receipt persistence must not rewrite unrelated snapshots, items, trace, goals,

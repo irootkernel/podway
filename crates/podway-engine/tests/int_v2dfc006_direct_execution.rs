@@ -1,4 +1,4 @@
-//! Real Git and generation-14 Store boundaries without an installed runtime.
+//! Real Git and current-generation Store boundaries without an installed runtime.
 
 use std::{
     os::unix::ffi::OsStrExt,

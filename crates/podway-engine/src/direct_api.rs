@@ -1,5 +1,6 @@
 //! Typed in-process request boundary shared by CLI and programmatic callers.
 
+use sha2::{Digest as _, Sha256};
 use std::{sync::Arc, time::Instant};
 
 use podway_core::{SessionId, WorkspaceId};
@@ -226,22 +227,42 @@ fn observe_maintenance<R: GitResolverContractV1>(
     let Some(marker) =
         podway_store::direct_store::observe_direct_maintenance_marker_v1(store.layout())?
     else {
+        if podway_store::direct_store::classify_direct_store_v1(store.layout())?
+            == podway_store::direct_store::DirectStoreClassificationV1::Missing
+        {
+            resolver.revalidate_candidate(&worktree)?;
+            return Ok(Some(DirectMaintenanceRecoveryV1::WriterIdentity {
+                boundary: "maintenance_lock",
+                reason: "Inspect writer identity without opening a Store. Wait for the maintenance owner to finish, then retry the original request with its key and fences.",
+            }));
+        }
         return Ok(None);
     };
     let value: serde_json::Value = serde_json::from_str(marker.document().as_str())
         .map_err(|_| DirectStoreErrorV1::Unreadable)?;
+    let boundary = match marker.kind() {
+        podway_store::direct_store::DirectMaintenanceMarkerKindV1::Intent => "intent_marker",
+        podway_store::direct_store::DirectMaintenanceMarkerKindV1::Reset => "reset_marker",
+        podway_store::direct_store::DirectMaintenanceMarkerKindV1::Removal => "removal_marker",
+    };
     let schema = value["schema"]
         .as_str()
         .ok_or(DirectStoreErrorV1::Unreadable)?;
-    if !podway_protocol::validate_daemon_free_document_v1(schema, &value)
-        || value["contract_manifest_digest"] != resolver.manifest().as_str()
+    if !podway_protocol::validate_daemon_free_document_v1(schema, &value) {
+        return Err(DirectStoreErrorV1::Unreadable.into());
+    }
+    resolver.revalidate_candidate(&worktree)?;
+    if value["contract_manifest_digest"] != resolver.manifest().as_str()
         || value["root_identity"]
             != serde_json::json!({
             "root_path_bytes_base64url":worktree.roots().worktree_root().path_bytes_base64url().as_str(),
             "common_dir_identity":worktree.identity().common_directory_fingerprint(),
             "worktree_admin_identity":worktree.identity().worktree_administration_fingerprint()})
     {
-        return Err(DirectStoreErrorV1::Unreadable.into());
+        return Ok(Some(DirectMaintenanceRecoveryV1::WriterIdentity {
+            boundary,
+            reason: "Inspect the current writer identity; resume this marker with its original Podway writer and original worktree. The current writer cannot recover it.",
+        }));
     }
     let key = IdempotencyKeyV1::new(
         value["idempotency_key"]
@@ -271,19 +292,52 @@ fn observe_maintenance<R: GitResolverContractV1>(
     Ok(match value["command"].as_str() {
         Some("workspace.reset_all") => {
             let (workspace, _) = parameters()?;
-            Some(DirectMaintenanceRecoveryV1::Reset { key, workspace })
+            Some(DirectMaintenanceRecoveryV1::Reset {
+                boundary,
+                key,
+                workspace,
+            })
         }
         Some("workspace.remove") => {
             let (workspace, force) = parameters()?;
             Some(DirectMaintenanceRecoveryV1::Removal {
+                boundary,
                 key,
                 workspace,
                 force,
             })
         }
-        // Init and predecessor intents use the canonical diagnostic recipe. They
-        // are never resumed by observing them or by another command.
-        _ => None,
+        Some("workspace.init") => {
+            let workspace = WorkspaceId::new(
+                value["workspace_uuid"]
+                    .as_str()
+                    .ok_or(DirectStoreErrorV1::Unreadable)?,
+            )
+            .map_err(|_| DirectStoreErrorV1::Unreadable)?;
+            let mut matched = None;
+            for repair in [false, true] {
+                let command = podway_protocol::SliceCommandV1::WorkspaceInit(
+                    podway_protocol::WorkspaceInitV1 { repair },
+                );
+                let canonical = podway_protocol::canonical_direct_slice_mutation_identity_v1(
+                    &command, &workspace,
+                )
+                .map_err(|_| DirectStoreErrorV1::Unreadable)?;
+                if value["request_digest"]
+                    == format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))
+                {
+                    matched = Some(repair);
+                    break;
+                }
+            }
+            let repair = matched.ok_or(DirectStoreErrorV1::Unreadable)?;
+            Some(DirectMaintenanceRecoveryV1::Init { key, repair })
+        }
+        Some("workspace.migrate") => Some(DirectMaintenanceRecoveryV1::WriterIdentity {
+            boundary,
+            reason: "Inspect writer identity; this writer declares no predecessor. Resume the migration intent with its original Podway writer and original worktree.",
+        }),
+        _ => return Err(DirectStoreErrorV1::Unreadable.into()),
     })
 }
 
@@ -408,7 +462,16 @@ fn dispatch<R: GitResolverContractV1>(
             clock,
         ),
         DirectCommandV1::WorkspaceInit { repair } => {
-            initialize_workspace_v1(resolver, mutation()?, repair, clock, ids).map_err(Into::into)
+            match maintenance_observer {
+                Some(observer) => crate::direct_workspace::initialize_workspace_with_boundary_observer_v1(
+                    resolver, mutation()?, repair, clock, ids,
+                    move |boundary| observer(match boundary {
+                        podway_store::direct_store::DirectTransactionBoundaryV1::BeforeMaintenancePublication => crate::direct_maintenance::DirectMaintenanceBoundaryV1::BeforeStorePublication,
+                        boundary => crate::direct_maintenance::DirectMaintenanceBoundaryV1::StoreBoundary(boundary),
+                    }),
+                ).map_err(Into::into),
+                None => initialize_workspace_v1(resolver, mutation()?, repair, clock, ids).map_err(Into::into),
+            }
         }
         DirectCommandV1::WorkspaceShow => {
             show_workspace_v1(resolver, read(), clock).map_err(Into::into)

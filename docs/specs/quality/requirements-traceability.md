@@ -78,7 +78,7 @@ compatibility qualification; framework coverage cannot establish it today.
 
 ## Direct Engine ownership and proof
 
-The typed API executes against native Git worktrees and generation-14 Stores.
+The typed API executes against native Git worktrees and generation-15 Stores.
 Engine tests below are registered in `int_suite`. Actual CLI tests separately
 prove grammar, stdin, envelopes, deadlines and recovery. Neither layer alone
 establishes packaged-byte identity, distribution readiness, or installation.
@@ -118,7 +118,7 @@ CLI `e2e_suite` case.
 | SDG-006 currency/correction; [guidance](../../implementation-tips/supervised-delegation.md#finish-recording-before-acceptance) | Accepted item-state digest; completion validation and views | Store no-op/rollback/edit/revert/blocker matrix; Engine `int_v2run002_views`; native correction matrix |
 | SDG-007 lifecycle/recovery; [guidance](../../implementation-tips/supervised-delegation.md#recover-without-repeating-external-effects-automatically) | Original success outcomes; retry/rework/goals; historical receipts | Store lifecycle/receipt tests; native lost-response lookup/retry and controlled external effect counts |
 | SDG-008 closed current results; [JSON](../interfaces/json-contract.md#direct-cli-generation), [CLI](../interfaces/cli-specification.md#delegation-commands), [errors](../interfaces/errors-and-exit-codes.md#delegation-failure-behavior) | Direct envelopes; route admission; CLI rendering | Protocol direct envelopes; native route tests; Engine archived readback |
-| SDG-009 persistence/isolation; [SQLite](../storage/sqlite-model.md) | [v14 DDL](../../../assets/specifications/sqlite-v14.sql); [direct transaction](../../../crates/podway-store/src/direct_store/transaction.rs); receipt constraints | Direct Store reopen/corruption/rollback/replay tests; native legacy refusal and explicit reset |
+| SDG-009 persistence/isolation; [SQLite](../storage/sqlite-model.md) | [v15 DDL](../../../assets/specifications/sqlite-v15.sql); [direct transaction](../../../crates/podway-store/src/direct_store/transaction.rs); receipt constraints | Direct Store reopen/corruption/rollback/replay tests; native legacy refusal and explicit reset |
 | SDG-010 continuity/acceptance; [conformance](testing-and-conformance.md) | Direct single-cursor and atomic worktree-local writes | [Frozen Direct control](../../../tests/fixtures/v2/compatibility/supervised-delegation-direct-control.yaml); preset reference ports; native fixture cleanup; combined development gate and independent acceptance |
 
 The actual CLI native case is

@@ -129,7 +129,7 @@ For deciding whether to track a session goal, writing its statement and criteria
 
 ## Recover failures
 
-- When `details.recovery` is present, validate the closed RecoveryRecipe v2 shape and follow [references/recovery.md](references/recovery.md). Its read-only commands are `session.observe`, `outcome.lookup`, and `workspace.doctor`; destructive recipes require applicable explicit authorization. A recipe never grants authorization or permission to weaken fences.
+- When `details.recovery` is present, validate the closed RecoveryRecipe v2 shape and follow [references/recovery.md](references/recovery.md). Its read-only commands are `session.observe`, `outcome.lookup`, `workspace.doctor`, and `version`; `workspace.init` resumes and destructive recipes require applicable explicit authorization. A recipe never grants authorization or permission to weaken fences.
 - On a stale revision, attempt, identity, or item precondition, do not weaken the fence. Re-read observe, then derive a fresh action.
 - Only validated successes are retained atomically with state; a rejection has no
   outcome. Exact replay returns the entire original envelope and original request ID.

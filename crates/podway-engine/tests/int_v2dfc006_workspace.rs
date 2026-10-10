@@ -1,4 +1,4 @@
-//! Real Git worktrees and generation-14 workspace commands without a daemon.
+//! Real Git worktrees and current-generation workspace commands without a daemon.
 use podway_core::{
     AttemptId, BlockerId, DelegationReceiptIdV1, ProcedureSnapshotId, SessionId, Sha256Digest,
     UnixMillis, WorkspaceId,

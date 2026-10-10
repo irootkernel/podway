@@ -542,6 +542,8 @@ mod tests {
         }
     }
 
+    const NEWER_GENERATION: u32 = DIRECT_SCHEMA_GENERATION_V1 + 1;
+
     #[test]
     fn unresolved_valid_wal_stream_is_bounded_and_known_main_newer_ignores_unsafe_wal() {
         let root = tempfile::TempDir::new().unwrap();
@@ -553,27 +555,40 @@ mod tests {
         let first_frame = (WAL_HEADER_BYTES + WAL_FRAME_HEADER_BYTES + 512) as u64;
         fs::write(
             layout.wal(),
-            wal(false, &[(1, 1, Some(14)), (1, 1, Some(15))]),
+            wal(
+                false,
+                &[
+                    (1, 1, Some(DIRECT_SCHEMA_GENERATION_V1)),
+                    (1, 1, Some(NEWER_GENERATION)),
+                ],
+            ),
         )
         .unwrap();
         assert!(matches!(
             committed_wal_generation_with_limit(&layout.wal(), first_frame),
             Err(DirectStoreErrorV1::Unreadable)
         ));
-        assert_eq!(committed_wal_generation(&layout.wal()).unwrap(), Some(15));
+        assert_eq!(
+            committed_wal_generation(&layout.wal()).unwrap(),
+            Some(NEWER_GENERATION)
+        );
         fs::remove_file(layout.wal()).unwrap();
         std::os::unix::fs::symlink("missing-wal", layout.wal()).unwrap();
         let mut main = [0; SQLITE_HEADER_BYTES];
         main[..16].copy_from_slice(SQLITE_MAGIC);
-        main[60..64].copy_from_slice(&15_u32.to_be_bytes());
+        main[60..64].copy_from_slice(&NEWER_GENERATION.to_be_bytes());
         fs::write(layout.database(), main).unwrap();
         assert_eq!(
             classify_direct_store_v1(&layout).unwrap(),
-            DirectStoreClassificationV1::Newer { generation: 15 }
+            DirectStoreClassificationV1::Newer {
+                generation: NEWER_GENERATION
+            }
         );
         assert!(matches!(
             require_destructive_generation_v1(&layout),
-            Err(DirectStoreErrorV1::UnsupportedGeneration { generation: 15 })
+            Err(DirectStoreErrorV1::UnsupportedGeneration {
+                generation: NEWER_GENERATION
+            })
         ));
         assert_eq!(fs::read(layout.database()).unwrap(), main);
         assert!(
@@ -597,21 +612,29 @@ mod tests {
         main[..16].copy_from_slice(SQLITE_MAGIC);
         main[60..64].copy_from_slice(&13_u32.to_be_bytes());
         fs::write(layout.database(), main).unwrap();
-        fs::write(layout.wal(), wal(false, &[(1, 1, Some(14))])).unwrap();
+        fs::write(
+            layout.wal(),
+            wal(false, &[(1, 1, Some(DIRECT_SCHEMA_GENERATION_V1))]),
+        )
+        .unwrap();
         assert_eq!(
             classify_direct_store_v1(&layout).unwrap(),
             DirectStoreClassificationV1::Current
         );
-        fs::write(layout.wal(), wal(true, &[(1, 1, Some(15))])).unwrap();
+        fs::write(layout.wal(), wal(true, &[(1, 1, Some(NEWER_GENERATION))])).unwrap();
         assert_eq!(
             classify_direct_store_v1(&layout).unwrap(),
-            DirectStoreClassificationV1::Newer { generation: 15 }
+            DirectStoreClassificationV1::Newer {
+                generation: NEWER_GENERATION
+            }
         );
         let file = OpenOptions::new().write(true).open(layout.wal()).unwrap();
         file.set_len(MAX_CLASSIFIED_WAL_BYTES + 1).unwrap();
         assert_eq!(
             classify_direct_store_v1(&layout).unwrap(),
-            DirectStoreClassificationV1::Newer { generation: 15 }
+            DirectStoreClassificationV1::Newer {
+                generation: NEWER_GENERATION
+            }
         );
         assert!(!layout.shm().exists());
     }
@@ -633,10 +656,10 @@ mod tests {
                 if main_present {
                     let mut main = [0; SQLITE_HEADER_BYTES];
                     main[..16].copy_from_slice(SQLITE_MAGIC);
-                    main[60..64].copy_from_slice(&14_u32.to_be_bytes());
+                    main[60..64].copy_from_slice(&DIRECT_SCHEMA_GENERATION_V1.to_be_bytes());
                     fs::write(layout.database(), main).unwrap();
                 }
-                fs::write(layout.wal(), wal(false, &[(1, 1, Some(15))])).unwrap();
+                fs::write(layout.wal(), wal(false, &[(1, 1, Some(NEWER_GENERATION))])).unwrap();
                 OpenOptions::new()
                     .write(true)
                     .open(layout.wal())
@@ -653,7 +676,9 @@ mod tests {
                 }
                 assert_eq!(
                     classify_direct_store_v1(&layout).unwrap(),
-                    DirectStoreClassificationV1::Newer { generation: 15 },
+                    DirectStoreClassificationV1::Newer {
+                        generation: NEWER_GENERATION
+                    },
                     "main={main_present}, marker={marker:?}"
                 );
                 assert!(!layout.shm().exists());
@@ -664,7 +689,7 @@ mod tests {
     #[test]
     fn marked_wal_scan_failures_preserve_recovery_and_known_newer_refusal() {
         use std::os::unix::fs::MetadataExt;
-        for generation in [14_u32, 15] {
+        for generation in [DIRECT_SCHEMA_GENERATION_V1, NEWER_GENERATION] {
             for oversized in [false, true] {
                 for marker in [
                     None,
@@ -708,7 +733,9 @@ mod tests {
                     if generation > DIRECT_SCHEMA_GENERATION_V1 {
                         assert!(matches!(
                             admission,
-                            Err(DirectStoreErrorV1::UnsupportedGeneration { generation: 15 })
+                            Err(DirectStoreErrorV1::UnsupportedGeneration {
+                                generation: NEWER_GENERATION
+                            })
                         ));
                     } else {
                         assert!(matches!(admission, Err(DirectStoreErrorV1::Unreadable)));

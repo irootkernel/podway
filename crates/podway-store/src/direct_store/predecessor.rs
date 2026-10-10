@@ -311,7 +311,7 @@ mod tests {
         let _gate = super::super::connection::connection_gate(deadline()).unwrap();
         let rejected = DeclaredPredecessor {
             manifest: OLD,
-            generation: 14,
+            generation: super::super::DIRECT_SCHEMA_GENERATION_V1,
             ddl: &ddl,
             migration_id: "test-rejection",
             migrate: rejected_migration,
@@ -327,7 +327,7 @@ mod tests {
         ));
         let accepted = DeclaredPredecessor {
             manifest: OLD,
-            generation: 14,
+            generation: super::super::DIRECT_SCHEMA_GENERATION_V1,
             ddl: &ddl,
             migration_id: "test-forward",
             migrate: migration,

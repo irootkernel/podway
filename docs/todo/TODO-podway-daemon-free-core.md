@@ -656,7 +656,7 @@ behavior changes have stable targets.
   command catalog and `contracts/command-routes.json` under a new `direct`
   execution class; the retired-command table; known answers under
   `docs/examples/json`.
-- Store DDL: `assets/specifications/sqlite-v14.sql` as a complete baseline,
+- Store DDL: `assets/specifications/sqlite-v15.sql` as a complete baseline,
   registered as a contract-manifest asset.
 - Rust: `podway-protocol` validators, `ERROR_CODE_CATALOG_V1` entries,
   fixtures, and result-family registrations.
@@ -1088,7 +1088,7 @@ final audit (DFC-M6, DFC-M7, DFC-M8, decision 8).
   Dolgorae adapter:
   - Set the command catalog's archive-purge idempotency scope to `workspace`,
     with a contract check that ties catalog scopes to Engine scopes.
-  - Remove the unused busy-timeout pragma from `sqlite-v14.sql`.
+  - Remove the unused busy-timeout pragma from `sqlite-v15.sql`.
 - Resolve the stale deferred-feedback entries DF-018 to DF-021, the closeout
   residue, and the index and guidance drift.
 - Confirm that no section 4.16 decision exists only in this dossier.

@@ -207,26 +207,42 @@ uses read-only `outcome.lookup` with the original idempotency key; its detail,
 reconciliation field, and recovery argv must agree on that key. Lock contention
 permits only read-only state refresh or workspace diagnosis. Legacy state requires
 explicit reset-all authorization. Reset markers name their resuming command.
-Removal markers name their resuming command when the original request has a UUID
-fence and force authority. Other typed removal requests use read-only diagnosis
-because JSON CLI removal requires both. The caller can retry that original request
-through the typed API. Maintenance lock,
-intent, and predecessor contention keep read-only recovery. The current Rust
-validator enforces agreement among keys in both unknown-outcome details and error
-envelopes.
+Invalid-Store and writer-contract failures can diagnose the writer through
+`version --identity` without opening the rejected Store. The reason separates
+restoring access or using the original writer from explicitly confirmed
+unfenced discard; neither the recipe nor its read-only command grants destructive
+authorization. The closed schemas retain their earlier doctor form for compatibility.
+Maintenance reports the observed marker kind, including `intent_marker` for
+init, predecessor and reset/removal intent-only windows. Initialization resumes
+with its original key and repair policy. Removal without JSON authorization
+uses a human-terminal recipe that preserves the original request; unfenced
+removal requires exact-path confirmation. Foreign writer/root markers remain
+`WORKSPACE_MAINTENANCE` with `diagnose_writer` / `version --identity`, which
+identifies the current writer and directs recovery to the original writer and
+worktree. Predecessor intents use that diagnosis while the compiled predecessor
+registry is empty. Maintenance-lock contention uses read-only `session.observe`
+after the owner finishes when a Store is present. Store-less final-removal or residual
+contention uses `version --identity` without opening a Store and directs an exact
+retry after the owner finishes. A repopulated removal parent retains
+`WORKSPACE_STATE_UNREADABLE` with writer diagnosis and explicit preservation of
+the current contents, rather than invalid-Store discard guidance.
+No ordinary read resumes a marker.
 Maintenance recipes retain the original key and the marker's original request
 parameters. They include `--if-workspace-uuid` only when that original request
 asserted a UUID, using that UUID even after reset creates a different generation.
-Removal recipes preserve the original `--force` authority and use `--yes`.
+Removal recipes preserve the original `--force` authority; a human unfenced
+recipe omits `--json` and `--yes` so the CLI requires exact-path confirmation.
 Reset-all uses `--all --yes`; `--force` is not required by the direct reset
 contract. A legacy reset recipe includes the explicit
 `<new-idempotency-key>` placeholder, which the caller must replace with its own
 fresh key before execution. Producing the recipe never generates a key or
 authorizes deletion.
 Retained revision, attempt, session, Procedure digest, and stale-goal/evidence
-conflicts keep read-only `session.observe` recovery. Workspace identity, Store
-state, and writer-contract diagnosis keep read-only `workspace.doctor`
-recovery. Their current detail schemas exclude legacy reset, maintenance retry,
+conflicts keep read-only `session.observe` recovery. Workspace UUID mismatch
+keeps read-only `workspace.doctor` recovery. Invalid-Store and writer-contract
+failures emit `diagnose_writer` / `version --identity`; their closed detail
+schemas retain the earlier doctor form for compatibility and exclude legacy
+reset, maintenance retry,
 and outcome lookup recipes; error/v2 applies the same owning detail constraints.
 Newer Store generations use `workspace-schema-unsupported-details/v1` instead:
 `store_schema_version` is the actual newer generation,
@@ -240,7 +256,7 @@ Store commands. Human output renders the same compatibility guidance.
 `contracts/contract-manifest-v2.json`, and `version --json --identity` emits
 version-result v2 inside output v4. The single-binary release verifier validates
 the complete version envelope and manifest through the canonical schema registry.
-Store v14 DDL is enrolled in the current
+Store v15 DDL is enrolled in the current
 manifest with asset kind `store_schema` so its bytes affect writer identity.
 
 ## Evidence paging

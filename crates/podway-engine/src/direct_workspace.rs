@@ -308,11 +308,13 @@ fn initialize_workspace_inner_v1<R: GitResolverContractV1>(
 ) -> Result<OutputEnvelopeV4, DirectWorkspaceErrorV1> {
     let command = SliceCommandV1::WorkspaceInit(WorkspaceInitV1 { repair });
     let (candidate, store) = resolver.resolve_candidate(request.selector.clone())?;
+    let classification = classify_direct_store_v1(store.layout())?;
+    if let DirectStoreClassificationV1::Newer { generation } = classification {
+        return Err(DirectStoreErrorV1::UnsupportedGeneration { generation }.into());
+    }
     if let Err(error) = resolver.validate_workspace_config(&candidate) {
-        if let Ok(DirectStoreClassificationV1::Newer { generation }) =
-            classify_direct_store_v1(store.layout())
-        {
-            return Err(DirectStoreErrorV1::UnsupportedGeneration { generation }.into());
+        if classification == DirectStoreClassificationV1::Maintenance {
+            return Err(DirectStoreErrorV1::Maintenance.into());
         }
         return Err(error.into());
     }
@@ -320,7 +322,7 @@ fn initialize_workspace_inner_v1<R: GitResolverContractV1>(
         Some(observer) => store.with_boundary_observer(move |boundary| observer(boundary)),
         None => store,
     };
-    match classify_direct_store_v1(store.layout())? {
+    match classification {
         DirectStoreClassificationV1::Current => {
             return existing_mutation(resolver, request, command, clock);
         }

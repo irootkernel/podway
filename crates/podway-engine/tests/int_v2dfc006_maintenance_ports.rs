@@ -608,6 +608,51 @@ fn uuid_mismatch_rejects_removal_without_mutation() {
     }
 }
 #[test]
+fn markerless_residual_exclusion_expires_without_recreating_names_and_then_converges() {
+    let engine = engine();
+    let old = uuid(&engine);
+    engine.success(
+        D::WorkspaceRemove {
+            confirmed: true,
+            force: true,
+        },
+        "remove-initial",
+    );
+    let podway = engine.temporary.path().join(".podway");
+    let runtime = podway.join("runtime");
+    std::fs::create_dir_all(&runtime).unwrap();
+    let holder = std::fs::File::open(&runtime).unwrap();
+    holder.try_lock().unwrap();
+    let before = std::fs::metadata(&runtime).unwrap();
+    let mut request = engine.request(
+        D::WorkspaceRemove {
+            confirmed: true,
+            force: true,
+        },
+        "remove-residual",
+    );
+    request.expected_workspace_id = Some(old);
+    request.deadline = std::time::Instant::now() + std::time::Duration::from_millis(30);
+    let started = std::time::Instant::now();
+    let error = reject(&engine, request.clone(), "WORKSPACE_MAINTENANCE");
+    assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    assert_eq!(error["exit_code"], 4);
+    assert_eq!(error["details"]["boundary"], "maintenance_lock");
+    assert_eq!(error["details"]["recovery"]["action"], "diagnose_writer");
+    assert_eq!(error["details"]["recovery"]["command"], "version");
+    let after = std::fs::metadata(&runtime).unwrap();
+    assert_eq!((before.dev(), before.ino()), (after.dev(), after.ino()));
+    assert_eq!(std::fs::read_dir(&runtime).unwrap().count(), 0);
+    assert_eq!(std::fs::read_dir(&podway).unwrap().count(), 1);
+    drop(holder);
+    request.deadline = deadline();
+    let removed = engine.output(engine.execute(request, &Clock));
+    assert_eq!(removed["result"]["already_absent"], true);
+    assert_eq!(removed["result"]["podway_directory_removed"], true);
+    assert!(!podway.exists());
+}
+
+#[test]
 fn markerless_residual_converges_only_when_descriptor_verified_empty() {
     let engine = engine();
     let old = uuid(&engine);

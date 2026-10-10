@@ -598,7 +598,7 @@ enum WorkspaceCommand {
     Show,
     Repair,
     Remove {
-        #[arg(long, required = true, action = ArgAction::SetTrue)]
+        #[arg(long, action = ArgAction::SetTrue)]
         force: bool,
     },
 }
@@ -1189,7 +1189,11 @@ impl LocalFailure {
     fn confirmation_required(command: &str) -> Self {
         Self::catalog(
             "CONFIRMATION_REQUIRED",
-            "explicit confirmation is required",
+            if command == "workspace.remove" {
+                "explicit confirmation is required: use --yes --if-workspace-uuid <uuid> for non-interactive removal, or a human terminal to type the exact worktree path for unfenced removal"
+            } else {
+                "explicit confirmation is required"
+            },
             command,
         )
     }
@@ -3885,6 +3889,18 @@ fn validate_direct_flags(cli: &Cli) -> Result<(), LocalFailure> {
             "archive purge requires --yes",
         ));
     }
+    if cli.json
+        && matches!(
+            command,
+            Command::Workspace {
+                command: WorkspaceCommand::Remove { force: false }
+            }
+        )
+    {
+        return Err(LocalFailure::request_invalid(
+            "JSON workspace removal requires --force",
+        ));
+    }
     if matches!(
         command,
         Command::Workspace {
@@ -4784,10 +4800,24 @@ fn render_human_error_direct(
             error["message"].as_str().unwrap_or_default()
         ),
     )?;
+    if error["code"] == "WORKSPACE_ID_CONFLICT" {
+        write_text_line(
+            stderr,
+            format_args!(
+                "hint: Use the original worktree, or retire other writers and explicitly confirm an unfenced reset --all with a new idempotency key to discard the copied or rebound runtime. Unfenced removal requires a human terminal and the exact worktree path."
+            ),
+        )?;
+    }
     if error["code"] == "WORKSPACE_SCHEMA_UNSUPPORTED"
         && let Some(guidance) = error["details"].get("guidance").and_then(Value::as_str)
     {
         write_text_line(stderr, format_args!("hint: {guidance}"))?;
+    }
+    if let Some(reason) = error["details"]["recovery"]
+        .get("reason")
+        .and_then(Value::as_str)
+    {
+        write_text_line(stderr, format_args!("reason: {reason}"))?;
     }
     if error["code"]
         .as_str()
@@ -5227,7 +5257,7 @@ fn help_text(topic: Option<&str>) -> Result<String, LocalFailure> {
             "Usage:\n  podway workspace repair\n\nExample:\n  podway workspace repair"
         }
         "workspace.remove" => {
-            "Usage:\n  podway [--worktree <path>] workspace remove --force [--if-workspace-uuid <uuid>] [--yes]\n\nUnfenced interactive use requires the exact resolved absolute worktree root as confirmation, including with --yes. JSON and non-interactive use require --yes and --if-workspace-uuid. Success removes all .podway content, including tracked files, while preserving the Git worktree."
+            "Usage:\n  podway [--worktree <path>] workspace remove [--force] [--if-workspace-uuid <uuid>] [--yes]\n\nUnfenced interactive use requires the exact resolved absolute worktree root as confirmation, including with --yes. JSON use also requires --force. JSON and non-interactive use require --yes and --if-workspace-uuid. Success removes all .podway content, including tracked files, while preserving the Git worktree."
         }
         "session.start" => {
             "Usage:\n  podway start (--preset <name> | --procedure <file> [--expect-procedure-digest <sha256:hex>]) --task <title> [--on-existing <preserve|delete>] [--supersede-reason <text>] [--actor <text>] [--progress-summary <text>] [--dry-run]\n\nExamples:\n  podway start --preset sw-dev-v2 --task 'implement feature'\n  podway start --preset sw-dev-v2 --task 'start successor' --on-existing preserve --supersede-reason 'The successor has priority.'\n  podway start --preset sw-dev-v2 --task 'replace running work' --on-existing delete --progress-summary 'The current progress was reviewed.' --yes\n  podway start --preset bug-fix-v2 --task 'preview deletion' --dry-run --on-existing delete\n\nHuman TTY mode interviews when a nonterminal session already exists; Enter continues it and creates nothing. Noninteractive callers must choose preserve or delete. Disposed terminal sessions archive automatically. A successful start creates a prepared session at revision 0 without a cursor, attempt, or goal."

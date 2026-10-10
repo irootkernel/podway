@@ -36,14 +36,24 @@ pub struct DirectErrorContextV1 {
 
 #[derive(Clone, Debug)]
 pub enum DirectMaintenanceRecoveryV1 {
+    Init {
+        key: IdempotencyKeyV1,
+        repair: bool,
+    },
     Reset {
+        boundary: &'static str,
         key: IdempotencyKeyV1,
         workspace: Option<podway_core::WorkspaceId>,
     },
     Removal {
+        boundary: &'static str,
         key: IdempotencyKeyV1,
         workspace: Option<podway_core::WorkspaceId>,
         force: bool,
+    },
+    WriterIdentity {
+        boundary: &'static str,
+        reason: &'static str,
     },
 }
 
@@ -69,10 +79,23 @@ fn diagnose() -> Value {
         "reason":"Inspect the worktree-local Store and its binding.", "requires_explicit_authorization":false})
 }
 
+fn diagnose_writer(reason: &str) -> Value {
+    json!({"action":"diagnose_writer", "command":"version",
+        "argv":["podway","--json","version","--identity"],
+        "reason":reason,
+        "requires_explicit_authorization":false})
+}
+
+fn diagnose_invalid_workspace() -> Value {
+    diagnose_writer(
+        "Inspect writer identity. Restore access or use the original writer. To discard invalid state, retire other writers and confirm an unfenced reset --all with a new key; unfenced removal needs a terminal and exact path. Newer generations stay refused.",
+    )
+}
+
 fn recovery(code: &'static str) -> Presentation {
     Presentation {
         code,
-        details: json!({"schema":"podway.workspace-recovery-details/v2", "recovery":diagnose()}),
+        details: json!({"schema":"podway.workspace-recovery-details/v2", "recovery":diagnose_invalid_workspace()}),
     }
 }
 
@@ -502,33 +525,67 @@ fn store(error: &DirectStoreErrorV1, context: &DirectErrorContextV1) -> Presenta
         E::NotInitialized => simple("WORKSPACE_NOT_INITIALIZED"),
         E::Maintenance => {
             let (boundary, recipe) = match &context.maintenance {
-                Some(DirectMaintenanceRecoveryV1::Reset { key, workspace }) => (
-                    "reset_marker",
+                Some(DirectMaintenanceRecoveryV1::Init { key, repair }) => {
+                    let mut argv = vec!["podway", "--json", "init"];
+                    if *repair {
+                        argv.push("--repair");
+                    }
+                    argv.extend(["--idempotency-key", key.as_str()]);
+                    (
+                        "intent_marker",
+                        json!({"action":"resume_maintenance","command":"workspace.init",
+                        "argv":argv,"reason":"Restore valid worktree configuration if needed, then resume initialization with its original idempotency key.","requires_explicit_authorization":true}),
+                    )
+                }
+                Some(DirectMaintenanceRecoveryV1::Reset {
+                    boundary,
+                    key,
+                    workspace,
+                }) => (
+                    *boundary,
                     json!({
                     "action":"resume_maintenance","command":"workspace.reset_all",
                     "argv":maintenance_argv(false,key,workspace.as_ref(),false),
                     "reason":"Resume the published reset with its original idempotency key.","requires_explicit_authorization":true}),
                 ),
                 Some(DirectMaintenanceRecoveryV1::Removal {
+                    boundary,
                     key,
                     workspace,
                     force,
-                }) => (
-                    "removal_marker",
-                    if workspace.is_none() || !force {
-                        let mut recipe = diagnose();
-                        recipe["reason"] = json!(
-                            "The original typed removal lacks the UUID fence or force required by the JSON CLI; retry the original typed request."
-                        );
-                        recipe
+                }) => (*boundary, {
+                    let mut argv = maintenance_argv(true, key, workspace.as_ref(), *force);
+                    let reason = if workspace.is_none() || !force {
+                        argv = vec!["podway".into(), "workspace".into(), "remove".into()];
+                        if *force {
+                            argv.push("--force".into());
+                        }
+                        if let Some(workspace) = workspace {
+                            argv.extend([
+                                "--yes".into(),
+                                "--if-workspace-uuid".into(),
+                                workspace.as_str().into(),
+                            ]);
+                        }
+                        argv.extend(["--idempotency-key".into(), key.as_str().into()]);
+                        "Resume the original removal in a human terminal with the same key and flags; an unfenced request requires typing the exact worktree path."
                     } else {
-                        json!({
+                        "Resume the published removal with its original idempotency key."
+                    };
+                    json!({
                     "action":"resume_maintenance","command":"workspace.remove",
-                    "argv":maintenance_argv(true,key,workspace.as_ref(),*force),
-                    "reason":"Resume the published removal with its original idempotency key.","requires_explicit_authorization":true})
-                    },
-                ),
-                None => ("maintenance_lock", diagnose()),
+                    "argv":argv,"reason":reason,"requires_explicit_authorization":true})
+                }),
+                Some(DirectMaintenanceRecoveryV1::WriterIdentity { boundary, reason }) => {
+                    (*boundary, diagnose_writer(reason))
+                }
+                None => ("maintenance_lock", {
+                    let mut recipe = refresh();
+                    recipe["reason"] = json!(
+                        "Wait for the maintenance owner to finish, then read the current committed state before retrying."
+                    );
+                    recipe
+                }),
             };
             Presentation {
                 code: "WORKSPACE_MAINTENANCE",
@@ -549,7 +606,7 @@ fn store(error: &DirectStoreErrorV1, context: &DirectErrorContextV1) -> Presenta
             details: json!({
             "schema":"podway.legacy-runtime-state-unsupported-details/v1", "store_schema_version":generation,
             "markers":marker.iter().collect::<Vec<_>>(), "recovery":{"action":"reset_legacy_state","command":"workspace.reset_all",
-                "argv":["podway","--json","reset","--all","--yes","--idempotency-key","<new-idempotency-key>"], "reason":"Replace <new-idempotency-key> with a fresh caller-owned key, then explicitly reset unsupported daemon-era runtime state.","requires_explicit_authorization":true}}),
+                "argv":["podway","--json","reset","--all","--yes","--idempotency-key","<new-idempotency-key>"], "reason":"Replace <new-idempotency-key> with a fresh caller-owned key, then explicitly reset unsupported older runtime state.","requires_explicit_authorization":true}}),
         },
         E::UnsupportedGeneration { generation } => {
             let supported = podway_store::direct_store::DIRECT_SCHEMA_GENERATION_V1;
@@ -570,7 +627,7 @@ fn store(error: &DirectStoreErrorV1, context: &DirectErrorContextV1) -> Presenta
             code: "WORKSPACE_CONTRACT_MISMATCH",
             details: json!({
             "schema":"podway.workspace-contract-mismatch-details/v1", "expected_contract_manifest_digest":expected,
-            "actual_contract_manifest_digest":actual,"recovery":diagnose()}),
+            "actual_contract_manifest_digest":actual,"recovery":diagnose_invalid_workspace()}),
         },
         E::BindingMismatch => simple("WORKSPACE_ID_CONFLICT"),
         E::ExpectedWorkspaceUuidMismatch { expected, actual } => workspace(expected, actual),
@@ -750,6 +807,21 @@ fn maintenance(
         }
         E::Filesystem(F::MarkerChanged | F::MarkerMissing) => {
             store(&DirectStoreErrorV1::Maintenance, context)
+        }
+        E::Filesystem(F::MaintenanceBusy) => Presentation {
+            code: "WORKSPACE_MAINTENANCE",
+            details: json!({"schema":"podway.workspace-maintenance-details/v1",
+                "boundary":"maintenance_lock","timeout_ms":context.timeout_ms,
+                "recovery":diagnose_writer("Inspect writer identity without opening a Store. Wait for the residual-removal owner to finish, then retry the original workspace removal with the same key and fences.")}),
+        },
+        E::Filesystem(F::Path { source, .. })
+            if source.kind() == std::io::ErrorKind::DirectoryNotEmpty =>
+        {
+            Presentation {
+                code: "WORKSPACE_STATE_UNREADABLE",
+                details: json!({"schema":"podway.workspace-recovery-details/v2",
+                    "recovery":diagnose_writer("The workspace directory was repopulated before removal finished. Preserve its current contents; inspect writer identity and the current workspace before considering any new authorized request.")}),
+            }
         }
         E::Filesystem(F::Path { .. }) => recovery("WORKSPACE_STATE_UNREADABLE"),
         E::Workspace(W::Resolution(DirectWorkspaceResolutionErrorV1::Resolution(error))) => {

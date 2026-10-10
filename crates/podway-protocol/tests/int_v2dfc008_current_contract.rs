@@ -110,14 +110,15 @@ fn newer_schema_errors_require_closed_compatibility_guidance_without_doctor_reci
     error["retryable"] = json!(false);
     error["details"] = valid.clone();
     assert!(validate_daemon_free_document_v1("podway.error/v2", &error));
-    for generation in [15_u64, u64::from(u32::MAX)] {
+    let supported = valid["supported_store_schema_version"].as_u64().unwrap();
+    for generation in [supported + 1, u64::from(u32::MAX)] {
         error["details"]["store_schema_version"] = json!(generation);
         assert!(validate_daemon_free_document_v1("podway.error/v2", &error));
     }
     for (field, value) in [
-        ("store_schema_version", json!(14)),
+        ("store_schema_version", json!(supported)),
         ("store_schema_version", json!(u64::from(u32::MAX) + 1)),
-        ("supported_store_schema_version", json!(15)),
+        ("supported_store_schema_version", json!(supported + 1)),
         ("guidance", json!("")),
         (
             "recovery",
@@ -138,6 +139,25 @@ fn newer_schema_errors_require_closed_compatibility_guidance_without_doctor_reci
     }
     error["details"] = answers["fixtures"]["podway.workspace-recovery-details/v2"].clone();
     assert!(!validate_daemon_free_document_v1("podway.error/v2", &error));
+}
+
+#[test]
+fn older_generation_refusal_does_not_admit_the_current_generation() {
+    let answers = known_answers();
+    let current = answers["fixtures"]["podway.workspace-schema-unsupported-details/v1"]
+        ["supported_store_schema_version"]
+        .as_u64()
+        .unwrap();
+    let schema = "podway.legacy-runtime-state-unsupported-details/v1";
+    let mut details = answers["fixtures"][schema].clone();
+    for generation in 1..current {
+        details["store_schema_version"] = json!(generation);
+        assert!(validate_daemon_free_document_v1(schema, &details));
+    }
+    for generation in [0, current, current + 1] {
+        details["store_schema_version"] = json!(generation);
+        assert!(!validate_daemon_free_document_v1(schema, &details));
+    }
 }
 
 #[test]
@@ -285,19 +305,37 @@ fn error_recovery_is_bound_to_the_required_operation() {
             );
         }
     }
+    let writer_recipe = json!({"action":"diagnose_writer","command":"version",
+        "argv":["podway","--json","version","--identity"],
+        "reason":"Inspect writer identity and resume with the owning writer and worktree.",
+        "requires_explicit_authorization":false});
     for boundary in ["maintenance_lock", "intent_marker", "predecessor_migration"] {
         let mut details = answers["fixtures"]["podway.workspace-maintenance-details/v1"].clone();
         details["boundary"] = json!(boundary);
-        for permitted in ["recovery-refresh", "recovery-doctor"] {
-            details["recovery"] = recipe(permitted);
+        details["recovery"] = if boundary == "maintenance_lock" {
+            recipe("recovery-refresh")
+        } else {
+            writer_recipe.clone()
+        };
+        assert!(
+            validate_daemon_free_document_v1("podway.workspace-maintenance-details/v1", &details),
+            "{boundary}: permitted recovery"
+        );
+        if boundary == "maintenance_lock" {
+            details["recovery"] = writer_recipe.clone();
             assert!(
                 validate_daemon_free_document_v1(
                     "podway.workspace-maintenance-details/v1",
                     &details
                 ),
-                "{boundary}: {permitted}"
+                "Store-less residual admission: writer diagnosis"
             );
         }
+        details["recovery"] = recipe("recovery-doctor");
+        assert!(
+            !validate_daemon_free_document_v1("podway.workspace-maintenance-details/v1", &details),
+            "{boundary}: doctor loop"
+        );
         details["recovery"] = recipe("recovery-reset");
         assert!(
             !validate_daemon_free_document_v1("podway.workspace-maintenance-details/v1", &details),
@@ -347,8 +385,78 @@ fn error_recovery_is_bound_to_the_required_operation() {
             &malformed
         ));
     }
+    for argv in [
+        json!([
+            "podway",
+            "workspace",
+            "remove",
+            "--idempotency-key",
+            "--json"
+        ]),
+        json!([
+            "podway",
+            "workspace",
+            "remove",
+            "--force",
+            "--idempotency-key",
+            "--yes"
+        ]),
+        json!([
+            "podway",
+            "workspace",
+            "remove",
+            "--yes",
+            "--if-workspace-uuid",
+            "00000000-0000-4000-8000-000000000001",
+            "--idempotency-key",
+            "original"
+        ]),
+    ] {
+        let mut interactive = removal.clone();
+        interactive["recovery"]["argv"] = argv;
+        assert!(validate_daemon_free_document_v1(
+            "podway.workspace-maintenance-details/v1",
+            &interactive
+        ));
+        interactive["recovery"]["requires_explicit_authorization"] = json!(false);
+        assert!(!validate_daemon_free_document_v1(
+            "podway.workspace-maintenance-details/v1",
+            &interactive
+        ));
+    }
+    for argv in [
+        json!([
+            "podway",
+            "--json",
+            "init",
+            "--idempotency-key",
+            "--original-key"
+        ]),
+        json!([
+            "podway",
+            "--json",
+            "init",
+            "--repair",
+            "--idempotency-key",
+            "--original-key"
+        ]),
+    ] {
+        let mut initializing = removal.clone();
+        initializing["boundary"] = json!("intent_marker");
+        initializing["recovery"]["command"] = json!("workspace.init");
+        initializing["recovery"]["argv"] = argv;
+        assert!(validate_daemon_free_document_v1(
+            "podway.workspace-maintenance-details/v1",
+            &initializing
+        ));
+        initializing["boundary"] = json!("reset_marker");
+        assert!(!validate_daemon_free_document_v1(
+            "podway.workspace-maintenance-details/v1",
+            &initializing
+        ));
+    }
     let mut diagnosed = removal.clone();
-    diagnosed["recovery"] = recipe("recovery-doctor");
+    diagnosed["recovery"] = writer_recipe;
     assert!(validate_daemon_free_document_v1(
         "podway.workspace-maintenance-details/v1",
         &diagnosed

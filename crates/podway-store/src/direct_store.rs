@@ -36,8 +36,8 @@ pub use transaction::{
     DirectTransactionBoundaryV1, DirectTransactionV1,
 };
 
-pub const DIRECT_SCHEMA_GENERATION_V1: u32 = 14;
-pub const DIRECT_STORE_DDL_V1: &str = include_str!("../../../assets/specifications/sqlite-v14.sql");
+pub const DIRECT_SCHEMA_GENERATION_V1: u32 = 15;
+pub const DIRECT_STORE_DDL_V1: &str = include_str!("../../../assets/specifications/sqlite-v15.sql");
 pub const LEGACY_RUNTIME_MARKERS_V1: [&str; 3] = [
     "reset.marker",
     "workspace-removal.marker",

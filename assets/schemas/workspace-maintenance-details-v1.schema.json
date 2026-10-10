@@ -38,36 +38,128 @@
       "if": {
         "properties": {
           "boundary": {
-            "enum": [
-              "maintenance_lock",
-              "intent_marker",
-              "predecessor_migration"
-            ]
+            "const": "maintenance_lock"
           }
         }
       },
       "then": {
-        "properties": {
-          "recovery": {
+        "oneOf": [
+          {
             "properties": {
-              "action": {
-                "enum": [
-                  "refresh_state",
-                  "diagnose_workspace"
-                ]
-              },
-              "command": {
-                "enum": [
-                  "session.observe",
-                  "workspace.doctor"
-                ]
-              },
-              "requires_explicit_authorization": {
-                "const": false
+              "recovery": {
+                "properties": {
+                  "action": {
+                    "const": "refresh_state"
+                  },
+                  "command": {
+                    "const": "session.observe"
+                  },
+                  "requires_explicit_authorization": {
+                    "const": false
+                  }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "recovery": {
+                "properties": {
+                  "action": {
+                    "const": "diagnose_writer"
+                  },
+                  "command": {
+                    "const": "version"
+                  },
+                  "requires_explicit_authorization": {
+                    "const": false
+                  }
+                }
               }
             }
           }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "boundary": {
+            "const": "intent_marker"
+          }
         }
+      },
+      "then": {
+        "oneOf": [
+          {
+            "properties": {
+              "recovery": {
+                "properties": {
+                  "action": {
+                    "const": "diagnose_writer"
+                  },
+                  "command": {
+                    "const": "version"
+                  },
+                  "requires_explicit_authorization": {
+                    "const": false
+                  }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "recovery": {
+                "properties": {
+                  "action": {
+                    "const": "resume_maintenance"
+                  },
+                  "command": {
+                    "const": "workspace.init"
+                  },
+                  "requires_explicit_authorization": {
+                    "const": true
+                  }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "recovery": {
+                "properties": {
+                  "action": {
+                    "const": "resume_maintenance"
+                  },
+                  "command": {
+                    "const": "workspace.reset_all"
+                  },
+                  "requires_explicit_authorization": {
+                    "const": true
+                  }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "recovery": {
+                "properties": {
+                  "action": {
+                    "const": "resume_maintenance"
+                  },
+                  "command": {
+                    "const": "workspace.remove"
+                  },
+                  "requires_explicit_authorization": {
+                    "const": true
+                  }
+                }
+              }
+            }
+          }
+        ]
       }
     },
     {
@@ -79,21 +171,42 @@
         }
       },
       "then": {
-        "properties": {
-          "recovery": {
+        "oneOf": [
+          {
             "properties": {
-              "action": {
-                "const": "resume_maintenance"
-              },
-              "command": {
-                "const": "workspace.reset_all"
-              },
-              "requires_explicit_authorization": {
-                "const": true
+              "recovery": {
+                "properties": {
+                  "action": {
+                    "const": "diagnose_writer"
+                  },
+                  "command": {
+                    "const": "version"
+                  },
+                  "requires_explicit_authorization": {
+                    "const": false
+                  }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "recovery": {
+                "properties": {
+                  "action": {
+                    "const": "resume_maintenance"
+                  },
+                  "command": {
+                    "const": "workspace.reset_all"
+                  },
+                  "requires_explicit_authorization": {
+                    "const": true
+                  }
+                }
               }
             }
           }
-        }
+        ]
       }
     },
     {
@@ -111,6 +224,23 @@
               "recovery": {
                 "properties": {
                   "action": {
+                    "const": "diagnose_writer"
+                  },
+                  "command": {
+                    "const": "version"
+                  },
+                  "requires_explicit_authorization": {
+                    "const": false
+                  }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "recovery": {
+                "properties": {
+                  "action": {
                     "const": "resume_maintenance"
                   },
                   "command": {
@@ -122,16 +252,29 @@
                 }
               }
             }
-          },
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "boundary": {
+            "const": "predecessor_migration"
+          }
+        }
+      },
+      "then": {
+        "oneOf": [
           {
             "properties": {
               "recovery": {
                 "properties": {
                   "action": {
-                    "const": "diagnose_workspace"
+                    "const": "diagnose_writer"
                   },
                   "command": {
-                    "const": "workspace.doctor"
+                    "const": "version"
                   },
                   "requires_explicit_authorization": {
                     "const": false

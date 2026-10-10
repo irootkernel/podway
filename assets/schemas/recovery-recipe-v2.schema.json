@@ -19,7 +19,8 @@
         "reconcile_mutation",
         "diagnose_workspace",
         "resume_maintenance",
-        "reset_legacy_state"
+        "reset_legacy_state",
+        "diagnose_writer"
       ]
     },
     "command": {
@@ -28,7 +29,9 @@
         "outcome.lookup",
         "workspace.doctor",
         "workspace.reset_all",
-        "workspace.remove"
+        "workspace.remove",
+        "workspace.init",
+        "version"
       ]
     },
     "argv": {
@@ -254,45 +257,228 @@
           "const": true
         },
         "argv": {
-          "type": "array",
-          "minItems": 10,
-          "maxItems": 10,
-          "prefixItems": [
+          "oneOf": [
             {
-              "const": "podway"
+              "type": "array",
+              "minItems": 10,
+              "maxItems": 10,
+              "prefixItems": [
+                {
+                  "const": "podway"
+                },
+                {
+                  "const": "--json"
+                },
+                {
+                  "const": "workspace"
+                },
+                {
+                  "const": "remove"
+                },
+                {
+                  "const": "--force"
+                },
+                {
+                  "const": "--yes"
+                },
+                {
+                  "const": "--if-workspace-uuid"
+                },
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "const": "--idempotency-key"
+                },
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                }
+              ],
+              "items": false
             },
             {
-              "const": "--json"
+              "type": "array",
+              "minItems": 5,
+              "maxItems": 5,
+              "prefixItems": [
+                {
+                  "const": "podway"
+                },
+                {
+                  "const": "workspace"
+                },
+                {
+                  "const": "remove"
+                },
+                {
+                  "const": "--idempotency-key"
+                },
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                }
+              ],
+              "items": false
             },
             {
-              "const": "workspace"
+              "type": "array",
+              "minItems": 6,
+              "maxItems": 6,
+              "prefixItems": [
+                {
+                  "const": "podway"
+                },
+                {
+                  "const": "workspace"
+                },
+                {
+                  "const": "remove"
+                },
+                {
+                  "const": "--force"
+                },
+                {
+                  "const": "--idempotency-key"
+                },
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                }
+              ],
+              "items": false
             },
             {
-              "const": "remove"
-            },
-            {
-              "const": "--force"
-            },
-            {
-              "const": "--yes"
-            },
-            {
-              "const": "--if-workspace-uuid"
-            },
-            {
-              "type": "string",
-              "format": "uuid"
-            },
-            {
-              "const": "--idempotency-key"
-            },
-            {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 256
+              "type": "array",
+              "minItems": 8,
+              "maxItems": 8,
+              "prefixItems": [
+                {
+                  "const": "podway"
+                },
+                {
+                  "const": "workspace"
+                },
+                {
+                  "const": "remove"
+                },
+                {
+                  "const": "--yes"
+                },
+                {
+                  "const": "--if-workspace-uuid"
+                },
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "const": "--idempotency-key"
+                },
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                }
+              ],
+              "items": false
             }
-          ],
-          "items": false
+          ]
+        }
+      }
+    },
+    {
+      "properties": {
+        "action": {
+          "const": "diagnose_writer"
+        },
+        "command": {
+          "const": "version"
+        },
+        "argv": {
+          "const": [
+            "podway",
+            "--json",
+            "version",
+            "--identity"
+          ]
+        },
+        "requires_explicit_authorization": {
+          "const": false
+        }
+      }
+    },
+    {
+      "properties": {
+        "action": {
+          "const": "resume_maintenance"
+        },
+        "command": {
+          "const": "workspace.init"
+        },
+        "requires_explicit_authorization": {
+          "const": true
+        },
+        "argv": {
+          "oneOf": [
+            {
+              "type": "array",
+              "minItems": 5,
+              "maxItems": 5,
+              "prefixItems": [
+                {
+                  "const": "podway"
+                },
+                {
+                  "const": "--json"
+                },
+                {
+                  "const": "init"
+                },
+                {
+                  "const": "--idempotency-key"
+                },
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                }
+              ],
+              "items": false
+            },
+            {
+              "type": "array",
+              "minItems": 6,
+              "maxItems": 6,
+              "prefixItems": [
+                {
+                  "const": "podway"
+                },
+                {
+                  "const": "--json"
+                },
+                {
+                  "const": "init"
+                },
+                {
+                  "const": "--repair"
+                },
+                {
+                  "const": "--idempotency-key"
+                },
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                }
+              ],
+              "items": false
+            }
+          ]
         }
       }
     }

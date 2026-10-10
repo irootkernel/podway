@@ -233,6 +233,13 @@ fn direct_failure_catalog_preserves_store_fences_domain_and_recovery() {
             "LEGACY_RUNTIME_STATE_UNSUPPORTED",
         ),
         (
+            store(DirectStoreErrorV1::Legacy {
+                generation: Some(podway_store::direct_store::DIRECT_SCHEMA_GENERATION_V1 - 1),
+                marker: None,
+            }),
+            "LEGACY_RUNTIME_STATE_UNSUPPORTED",
+        ),
+        (
             store(DirectStoreErrorV1::WriterMismatch {
                 expected: sha.clone(),
                 actual: sha.as_str().into(),
@@ -240,7 +247,9 @@ fn direct_failure_catalog_preserves_store_fences_domain_and_recovery() {
             "WORKSPACE_CONTRACT_MISMATCH",
         ),
         (
-            store(DirectStoreErrorV1::UnsupportedGeneration { generation: 15 }),
+            store(DirectStoreErrorV1::UnsupportedGeneration {
+                generation: podway_store::direct_store::DIRECT_SCHEMA_GENERATION_V1 + 1,
+            }),
             "WORKSPACE_SCHEMA_UNSUPPORTED",
         ),
         (

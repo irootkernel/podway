@@ -385,4 +385,4 @@ CREATE TABLE mutation_outcomes (
 CREATE INDEX ix_mutation_outcomes_scope
 ON mutation_outcomes(scope_kind, scope_session_id, recorded_at_ms, workspace_sequence);
 
-PRAGMA user_version = 14;
+PRAGMA user_version = 15;

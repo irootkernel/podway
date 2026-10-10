@@ -159,9 +159,9 @@
       "proof": {
         "failpoint": "AfterFirstRemovalMarker",
         "test": "crates/podway-engine/tests/int_v2dfc006_maintenance.rs::sigkill_between_final_removal_markers_preserves_exact_retry_and_original_response",
-        "termination": "Actual child SIGKILL after durable operation-marker deletion and before recovery-intent deletion",
-        "recovery": "Exact retry preserves the original response identifier and timestamp; another key or writer manifest cannot resume.",
-        "invariant": "Recovery intent survives until the removal marker is durably absent; marked reads never resume maintenance.",
+        "termination": "Actual child SIGKILL after durable recovery-intent and named-lock deletion and before removal-marker deletion",
+        "recovery": "A matching lone removal marker restores its original intent under the retained runtime-directory exclusion; exact retry preserves response identifier and timestamp, and another key or writer cannot resume.",
+        "invariant": "The removal marker survives until the intent and named locks are durably absent; the live runtime directory lease excludes maintenance contenders until final cleanup. Ordinary marked reads never resume maintenance.",
         "source_locator": "crates/podway-engine/src/workspace.rs::ValidatedPodwayRemovalDirectoryV1::finish_direct_removal"
       }
     }

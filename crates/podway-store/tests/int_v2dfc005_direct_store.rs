@@ -212,7 +212,7 @@ fn direct_scale_transaction_probe() {
             evidence.join(format!("probe-{nodes}.json")),
             serde_json::to_vec_pretty(&json!({
             "nodes":nodes,"completed_nodes":7,"items_per_node":16,"characters_per_item":55000,
-            "batches_per_node":6,"samples":samples,"schema":14,"path":"production DirectStoreV1"}))
+            "batches_per_node":6,"samples":samples,"schema":podway_store::direct_store::DIRECT_SCHEMA_GENERATION_V1,"path":"production DirectStoreV1"}))
             .unwrap(),
         )
         .unwrap();
@@ -751,7 +751,7 @@ fn absent_wal_read_refuses_non_wal_main_format_without_writes() {
 }
 
 #[test]
-fn complete_generation_fourteen_bootstrap_and_cold_read_are_write_free() {
+fn complete_current_generation_bootstrap_and_cold_read_are_write_free() {
     let (_root, store) = fixture();
     assert_eq!(
         classify_direct_store_v1(store.layout()).unwrap(),
@@ -760,7 +760,10 @@ fn complete_generation_fourteen_bootstrap_and_cold_read_are_write_free() {
     let before = images(&store.layout().runtime_directory());
     store
         .read(deadline(), |snapshot| {
-            assert_eq!(snapshot.binding().schema_version(), 14);
+            assert_eq!(
+                snapshot.binding().schema_version(),
+                podway_store::direct_store::DIRECT_SCHEMA_GENERATION_V1
+            );
             assert!(snapshot.current_graph()?.is_none());
             assert_eq!(
                 snapshot.outcome(request("init").key())?.unwrap().sequence(),

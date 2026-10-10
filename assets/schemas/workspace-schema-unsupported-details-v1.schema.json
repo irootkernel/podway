@@ -16,11 +16,11 @@
     },
     "store_schema_version": {
       "type": "integer",
-      "minimum": 15,
+      "minimum": 16,
       "maximum": 4294967295
     },
     "supported_store_schema_version": {
-      "const": 14
+      "const": 15
     },
     "guidance": {
       "type": "string",

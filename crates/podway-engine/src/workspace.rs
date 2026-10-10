@@ -62,6 +62,7 @@ pub enum WorkspaceRemovalFilesystemErrorV1 {
     UnsafePath,
     MarkerMissing,
     MarkerChanged,
+    MaintenanceBusy,
     NotEmptyResidual,
 }
 
@@ -73,6 +74,7 @@ impl fmt::Display for WorkspaceRemovalFilesystemErrorV1 {
             Self::UnsafePath => formatter.write_str("workspace removal path is unsafe"),
             Self::MarkerMissing => formatter.write_str("workspace removal marker is missing"),
             Self::MarkerChanged => formatter.write_str("workspace removal marker changed"),
+            Self::MaintenanceBusy => formatter.write_str("workspace maintenance exclusion is held"),
             Self::NotEmptyResidual => {
                 formatter.write_str("Podway directory is not an empty removal residual")
             }
@@ -279,13 +281,14 @@ impl ValidatedPodwayRemovalDirectoryV1 {
         }
     }
 
-    /// Keep the recovery intent until the operation marker is durably removed.
+    /// Keep the operation marker until the intent and named locks are durably removed.
     /// A concurrently repopulated directory is retained and fails closed.
     pub fn finish_direct_removal(
         &self,
         before_last_marker: impl FnOnce() -> Result<(), WorkspaceRemovalFilesystemErrorV1>,
         after_first_marker: impl FnOnce(),
         after_last_marker: impl FnOnce(),
+        after_runtime_directory: impl FnOnce(),
     ) -> Result<(), WorkspaceRemovalFilesystemErrorV1> {
         #[cfg(unix)]
         {
@@ -319,7 +322,7 @@ impl ValidatedPodwayRemovalDirectoryV1 {
             for name in [
                 "maintenance-intent.lock",
                 "maintenance.lock",
-                "removal.marker",
+                "maintenance-intent.json",
             ] {
                 validate_removal_ancestry_v1(
                     &self.root,
@@ -345,13 +348,8 @@ impl ValidatedPodwayRemovalDirectoryV1 {
                 self.podway_identity.device,
                 &relative,
             )?;
-            unlinkat(
-                &runtime,
-                "maintenance-intent.json",
-                UnlinkatFlags::NoRemoveDir,
-            )
-            .map_err(|source| {
-                removal_path_error("remove direct maintenance intent", source.into())
+            unlinkat(&runtime, "removal.marker", UnlinkatFlags::NoRemoveDir).map_err(|source| {
+                removal_path_error("remove direct removal marker", source.into())
             })?;
             runtime
                 .sync_all()
@@ -371,18 +369,64 @@ impl ValidatedPodwayRemovalDirectoryV1 {
             self.podway
                 .sync_all()
                 .map_err(|source| removal_path_error("sync .podway directory", source))?;
+            after_runtime_directory();
             self.remove_podway_directory()
         }
         #[cfg(not(unix))]
         {
-            let _ = (before_last_marker, after_first_marker, after_last_marker);
+            let _ = (
+                before_last_marker,
+                after_first_marker,
+                after_last_marker,
+                after_runtime_directory,
+            );
             Err(WorkspaceRemovalFilesystemErrorV1::UnsupportedPlatform)
         }
     }
 
-    pub fn remove_empty_residual(&self) -> Result<(), WorkspaceRemovalFilesystemErrorV1> {
+    pub fn remove_empty_residual(
+        &self,
+        deadline: std::time::Instant,
+    ) -> Result<(), WorkspaceRemovalFilesystemErrorV1> {
         #[cfg(unix)]
         {
+            let runtime = self.open_child_directory(&self.podway, "runtime")?;
+            if let Some(runtime) = runtime.as_ref() {
+                // Match Store's ExclusiveMaintenanceLeaseV1 admission budget and cadence.
+                loop {
+                    match runtime.try_lock() {
+                        Ok(()) => break,
+                        Err(std::fs::TryLockError::WouldBlock) => {
+                            let remaining =
+                                deadline.saturating_duration_since(std::time::Instant::now());
+                            if remaining.is_zero() {
+                                return Err(WorkspaceRemovalFilesystemErrorV1::MaintenanceBusy);
+                            }
+                            std::thread::sleep(
+                                remaining.min(std::time::Duration::from_micros(500)),
+                            );
+                        }
+                        Err(std::fs::TryLockError::Error(source)) => {
+                            return Err(removal_path_error("lock empty runtime directory", source));
+                        }
+                    }
+                }
+                let identity =
+                    RemovalObjectIdentityV1::from_metadata(&runtime.metadata().map_err(
+                        |source| removal_path_error("inspect empty runtime directory", source),
+                    )?);
+                validate_removal_ancestry_v1(
+                    &self.root,
+                    runtime,
+                    self.podway_identity,
+                    self.current_uid,
+                    self.podway_identity.device,
+                    &[RemovalPathComponentV1 {
+                        name: OsString::from("runtime"),
+                        identity,
+                    }],
+                )?;
+            }
             let mut inspection_budget = RemovalTraversalBudgetV1::new();
             if !inspect_empty_directories_v1(
                 &self.podway,

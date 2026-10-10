@@ -3,10 +3,17 @@
 ## Current generation
 
 The sole production baseline is
-[`sqlite-v14.sql`](../../../assets/specifications/sqlite-v14.sql), owned by
+[`sqlite-v15.sql`](../../../assets/specifications/sqlite-v15.sql), owned by
 [ADR-0038](../../architecture-decision-records/0038-remove-the-daemon.md).
 `podway_store::direct_store::DirectStoreV1` creates and opens this generation.
 The DDL is a contract-manifest asset: changing it changes writer identity.
+Generation 15 adds a retained runtime-directory exclusion anchor through removal
+and accepts exact recovery from a lone matching removal marker. Generation 14
+was the unreleased direct baseline; this change declares no predecessor or
+automatic migration. Generation 14 is refused unchanged through the older-state
+`LEGACY_RUNTIME_STATE_UNSUPPORTED` contract with an explicitly confirmed reset
+recipe. Public older- and newer-generation bounds are checked against the
+Store constant and instantiated DDL by the standard contract gate.
 There is no production daemon Store, legacy migration chain, runtime-mode
 column, job table, job-backed receipt, linear Procedure v1 state, or global
 workspace registry.

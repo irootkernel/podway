@@ -257,7 +257,7 @@ def adapter_contract() -> dict[str, Any]:
             "output_schema": "podway.output/v4",
             "error_schema": "podway.error/v2",
             "recovery_recipe_schema": "podway.recovery-recipe/v2",
-            "store_schema": "spec/sqlite-v14.sql",
+            "store_schema": "spec/sqlite-v15.sql",
             "retired_command_table": "spec/retired-commands-v1.json",
             "consumer_adoption": "requires-separate-Aquarium-and-Dolgorae-work",
             "version_identity": {
@@ -275,7 +275,7 @@ def adapter_contract() -> dict[str, Any]:
         "migration_boundary": {
             "adapter_database_access": "forbidden",
             "development_state_migration_promise": False,
-            "released_workspace_upgrade": "declared-generation-14-writer-predecessors-only",
+            "released_workspace_upgrade": "declared-current-writer-predecessors-only",
             "released_workspace_upgrade_owner": "podway-engine",
             "legacy_procedure_state": "rejected-without-conversion-or-deletion",
             "v2_downgrade": "forbidden",

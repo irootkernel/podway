@@ -14,17 +14,34 @@
     },
     "recovery": {
       "$ref": "urn:podway:schema:recovery-recipe:v2",
-      "properties": {
-        "action": {
-          "const": "diagnose_workspace"
+      "oneOf": [
+        {
+          "properties": {
+            "action": {
+              "const": "diagnose_workspace"
+            },
+            "command": {
+              "const": "workspace.doctor"
+            },
+            "requires_explicit_authorization": {
+              "const": false
+            }
+          }
         },
-        "command": {
-          "const": "workspace.doctor"
-        },
-        "requires_explicit_authorization": {
-          "const": false
+        {
+          "properties": {
+            "action": {
+              "const": "diagnose_writer"
+            },
+            "command": {
+              "const": "version"
+            },
+            "requires_explicit_authorization": {
+              "const": false
+            }
+          }
         }
-      }
+      ]
     }
   },
   "$defs": {},

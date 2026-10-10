@@ -116,6 +116,7 @@ fn qualification_pause_stage() -> Option<&'static str> {
         "after-first-removal-marker",
         "after-last-removal-marker",
         "directories-removed",
+        "before-store-publication",
     ]
     .into_iter()
     .find(|stage| requested == OsStr::new(stage))
@@ -137,6 +138,7 @@ fn qualification_pause(
         Boundary::AfterFirstRemovalMarker => "after-first-removal-marker",
         Boundary::AfterLastRemovalMarker => "after-last-removal-marker",
         Boundary::DirectoriesRemoved => "directories-removed",
+        Boundary::BeforeStorePublication => "before-store-publication",
         _ => return,
     };
     if stage != actual {

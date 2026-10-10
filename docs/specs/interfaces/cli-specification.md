@@ -64,7 +64,7 @@ fields return `REQUEST_INVALID`.
 | `procedure graph <FILE> --format <json\|mermaid\|puml\|dot>` | Required projection format |
 | `procedure scaffold [--template minimal]` | `minimal` is the only accepted template |
 | `init [--repair]`, `doctor [--deep]`, `workspace show\|repair` | Local initialization, diagnosis, or explicit repair; Doctor uses the retained generic result object |
-| `workspace remove --force [--yes]` | Confirmed complete `.podway` removal and workspace fencing below |
+| `workspace remove [--force] [--yes]` | Confirmed complete `.podway` removal and workspace fencing below |
 | `start (--preset <NAME>\|--procedure <FILE>) --task <TITLE>` | Optional file-only digest, policy, reason/actor/summary, and dry-run controls below |
 | `begin [--goal <TEXT> --criterion <ID=STATEMENT>...] [--actor <TEXT>]` | Goal and criteria require each other; actor requires goal |
 | `status [--compact\|--verbose [--history-before <N>]]` | Compact conflicts with verbose/history; history requires verbose and a positive trace sequence |
@@ -142,12 +142,15 @@ usage failures. Family help topics are `daemon`, `job`, `runtime`,
 
 ## Workspace lifecycle
 
-`workspace remove --force [--if-workspace-uuid <uuid>] [--yes]` removes the
+`workspace remove [--force] [--if-workspace-uuid <uuid>] [--yes]` removes the
 complete `.podway` tree and preserves the Git worktree and user files. Unfenced
 human TTY
 use must confirm the exact resolved absolute root, including when `--yes` is
 supplied. A UUID-fenced TTY request may use `--yes` instead of that prompt. JSON and
 non-TTY use require `--yes`, the workspace UUID fence, and an idempotency key.
+JSON use also requires `--force`. Human removal may omit `--force` when no
+prepared or running session exists; a recovery recipe preserves the original
+force policy rather than changing the canonical request.
 
 `reset --all --yes --idempotency-key <key>` replaces runtime state with a fresh
 Store while preserving Procedure sources and configuration unrelated to retired

@@ -330,6 +330,16 @@ impl Fixture {
         .0
     }
 
+    pub(super) fn removal_recipe_in_pty(&self, arguments: &[&str]) -> Output {
+        self.respond_in_pty_after_prompt(
+            arguments,
+            Some(b"Type that exact path to remove all .podway content: "),
+            format!("{}\n", self.0.display()).as_bytes(),
+            Duration::ZERO,
+        )
+        .0
+    }
+
     fn respond_in_pty_after_prompt(
         &self,
         arguments: &[&str],
@@ -431,11 +441,30 @@ impl Fixture {
         arguments: &[&str],
         stage: &str,
     ) -> GuardedChild {
+        self.pause_maintenance_boundary(arguments, stage, true)
+    }
+
+    pub(super) fn pause_at_human_maintenance_boundary(
+        &self,
+        arguments: &[&str],
+        stage: &str,
+    ) -> GuardedChild {
+        self.pause_maintenance_boundary(arguments, stage, false)
+    }
+
+    fn pause_maintenance_boundary(
+        &self,
+        arguments: &[&str],
+        stage: &str,
+        json: bool,
+    ) -> GuardedChild {
         assert_packaged_fixture(&self.0);
-        let child = Command::new(podway_binary())
-            .arg("--worktree")
-            .arg(&self.0)
-            .arg("--json")
+        let mut command = Command::new(podway_binary());
+        command.arg("--worktree").arg(&self.0);
+        if json {
+            command.arg("--json");
+        }
+        let child = command
             .args(arguments)
             .current_dir(&self.0)
             .env_remove("HOME")

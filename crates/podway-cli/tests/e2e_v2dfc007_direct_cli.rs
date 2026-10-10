@@ -13,6 +13,444 @@ use super::cli_fixture::{Fixture, GuardedChild, podway_binary};
 use podway_protocol::{ErrorEnvelopeV2, OutputEnvelopeV4};
 use serde_json::{Value, json};
 
+fn initialized_schema_generation(fixture: &Fixture) -> u32 {
+    rusqlite::Connection::open_with_flags(
+        fixture.0.join(".podway/runtime/state.sqlite3"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap()
+    .pragma_query_value(None, "user_version", |row| row.get(0))
+    .unwrap()
+}
+
+#[test]
+fn v2dfc016_storeless_residual_contention_emits_a_working_read_only_recipe() {
+    let fixture = Fixture::new();
+    let init = fixture.run(&["init", "--idempotency-key", "init"]);
+    let uuid = init["workspace"]["uuid"].as_str().unwrap();
+    fixture.run(&[
+        "workspace",
+        "remove",
+        "--force",
+        "--yes",
+        "--if-workspace-uuid",
+        uuid,
+        "--idempotency-key",
+        "remove-initial",
+    ]);
+    let runtime = fixture.0.join(".podway/runtime");
+    fs::create_dir_all(&runtime).unwrap();
+    let holder = fs::File::open(&runtime).unwrap();
+    holder.try_lock().unwrap();
+    let args = [
+        "--timeout",
+        "20ms",
+        "workspace",
+        "remove",
+        "--force",
+        "--yes",
+        "--if-workspace-uuid",
+        uuid,
+        "--idempotency-key",
+        "remove-residual",
+    ];
+    let before = fixture.podway_snapshot();
+    let started = Instant::now();
+    let output = fixture.output(&args);
+    assert!(started.elapsed() < Duration::from_secs(2));
+    let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(output.status.code(), Some(4));
+    assert_eq!(error.as_value()["code"], "WORKSPACE_MAINTENANCE");
+    assert_eq!(error.as_value()["details"]["boundary"], "maintenance_lock");
+    let recipe = &error.as_value()["details"]["recovery"];
+    assert_eq!(recipe["action"], "diagnose_writer");
+    assert_eq!(recipe["command"], "version");
+    assert_eq!(recipe["requires_explicit_authorization"], false);
+    assert_eq!(
+        recipe["argv"],
+        json!(["podway", "--json", "version", "--identity"])
+    );
+    let argv: Vec<&str> = recipe["argv"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .skip(1)
+        .map(|value| value.as_str().unwrap())
+        .collect();
+    let identity = fixture.raw_output(&argv);
+    assert!(identity.status.success(), "{identity:?}");
+    let identity: OutputEnvelopeV4 = serde_json::from_slice(&identity.stdout).unwrap();
+    assert_eq!(identity.as_value()["command"], "version");
+    fixture.assert_podway_snapshot(&before);
+    drop(holder);
+    let removed = fixture.run(&args);
+    assert_eq!(removed["result"]["already_absent"], true);
+    assert_eq!(removed["result"]["podway_directory_removed"], true);
+    assert!(!fixture.0.join(".podway").exists());
+}
+
+#[test]
+fn v2dfc016_human_removal_preserves_optional_force_and_recovery() {
+    let fixture = Fixture::new();
+    let init = fixture.run(&["init", "--idempotency-key", "init"]);
+    let uuid = init["workspace"]["uuid"].as_str().unwrap();
+    let args = [
+        "workspace",
+        "remove",
+        "--yes",
+        "--if-workspace-uuid",
+        uuid,
+        "--idempotency-key",
+        "unforced-remove",
+    ];
+    let before = fixture.podway_snapshot();
+    let rejected = fixture.output(&args);
+    assert_eq!(rejected.status.code(), Some(2));
+    fixture.assert_podway_snapshot(&before);
+    let removed = fixture.raw_output(&args);
+    assert!(removed.status.success(), "{:?}", removed);
+    assert!(!fixture.0.join(".podway").exists());
+
+    for stage in ["intent-published", "marker-published"] {
+        let fixture = Fixture::new();
+        let init = fixture.run(&["init", "--idempotency-key", "init"]);
+        let uuid = init["workspace"]["uuid"].as_str().unwrap();
+        let args = [
+            "workspace",
+            "remove",
+            "--yes",
+            "--if-workspace-uuid",
+            uuid,
+            "--idempotency-key",
+            "unforced-remove",
+        ];
+        let mut owner = fixture.pause_at_human_maintenance_boundary(&args, stage);
+        owner.0.as_mut().unwrap().kill().unwrap();
+        assert_eq!(owner.0.take().unwrap().wait().unwrap().signal(), Some(9));
+        let before = fixture.podway_snapshot();
+        let output = fixture.output(&["status"]);
+        let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
+        let recipe = &error.as_value()["details"]["recovery"];
+        let mut expected = vec!["podway"];
+        expected.extend(args);
+        assert_eq!(recipe["argv"], json!(expected));
+        fixture.assert_podway_snapshot(&before);
+        let argv: Vec<&str> = recipe["argv"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .skip(1)
+            .map(|value| value.as_str().unwrap())
+            .collect();
+        let resumed = fixture.raw_output(&argv);
+        assert!(resumed.status.success(), "{:?}", resumed);
+        assert!(!fixture.0.join(".podway").exists());
+    }
+    let fixture = Fixture::new();
+    fixture.run(&["init", "--idempotency-key", "init"]);
+    let removed = fixture.removal_recipe_in_pty(&[
+        "workspace",
+        "remove",
+        "--idempotency-key",
+        "unfenced-unforced-remove",
+    ]);
+    let rendered = String::from_utf8(removed.stdout).unwrap();
+    assert!(removed.status.success(), "{rendered}");
+    assert_eq!(rendered.matches("podway-test-pty-exit:0").count(), 1);
+    assert!(rendered.contains("Type that exact path to remove all .podway content: "));
+    assert!(!fixture.0.join(".podway").exists());
+}
+
+#[test]
+fn v2dfc016_interrupted_init_reports_intent_and_its_exact_working_recipe() {
+    for repair in [false, true] {
+        let fixture = Fixture::new();
+        let key = "--original-init-key";
+        let mut args = vec!["init"];
+        if repair {
+            args.push("--repair");
+        }
+        args.extend(["--idempotency-key", key]);
+        fixture.kill_at_maintenance_boundary(&args, "before-store-publication");
+        let marker_path = fixture.0.join(".podway/runtime/maintenance-intent.json");
+        let original = fs::read(&marker_path).unwrap();
+        let marker: Value = serde_json::from_slice(&original).unwrap();
+        let before = fixture.podway_snapshot();
+        let output = fixture.output(&["status"]);
+        let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(output.status.code(), Some(4));
+        assert_eq!(error.as_value()["code"], "WORKSPACE_MAINTENANCE");
+        assert_eq!(error.as_value()["details"]["boundary"], "intent_marker");
+        let mut expected = vec!["podway", "--json"];
+        expected.extend(args.iter().copied());
+        assert_eq!(
+            error.as_value()["details"]["recovery"]["argv"],
+            json!(expected)
+        );
+        assert_eq!(fixture.podway_snapshot(), before);
+        for foreign in ["writer", "root", "predecessor", "request-digest"] {
+            let mut altered = marker.clone();
+            match foreign {
+                "writer" => {
+                    altered["contract_manifest_digest"] =
+                        json!(format!("sha256:{}", "b".repeat(64)))
+                }
+                "root" => {
+                    altered["root_identity"]["common_dir_identity"] =
+                        json!(format!("sha256:{}", "b".repeat(64)))
+                }
+                "predecessor" => altered["command"] = json!("workspace.migrate"),
+                "request-digest" => {
+                    altered["request_digest"] = json!(format!("sha256:{}", "b".repeat(64)))
+                }
+                _ => unreachable!(),
+            }
+            fs::write(&marker_path, serde_json::to_vec(&altered).unwrap()).unwrap();
+            let before = fixture.podway_snapshot();
+            let output = fixture.output(&["status"]);
+            let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
+            let (exit, code) = if foreign == "request-digest" {
+                (5, "WORKSPACE_STATE_UNREADABLE")
+            } else {
+                (4, "WORKSPACE_MAINTENANCE")
+            };
+            assert_eq!(output.status.code(), Some(exit), "{foreign}");
+            assert_eq!(error.as_value()["code"], code, "{foreign}");
+            if foreign != "request-digest" {
+                assert_eq!(error.as_value()["details"]["boundary"], "intent_marker");
+            }
+            let recipe = &error.as_value()["details"]["recovery"];
+            assert_eq!(
+                recipe["argv"],
+                json!(["podway", "--json", "version", "--identity"])
+            );
+            let identity = Command::new(podway_binary())
+                .args(["--json", "version", "--identity"])
+                .current_dir(&fixture.0)
+                .env_remove("HOME")
+                .env_remove("XDG_CONFIG_HOME")
+                .output()
+                .unwrap();
+            assert!(identity.status.success(), "{foreign}");
+            let identity: OutputEnvelopeV4 = serde_json::from_slice(&identity.stdout).unwrap();
+            assert_eq!(identity.as_value()["command"], "version");
+            assert_eq!(fixture.podway_snapshot(), before);
+        }
+        fs::write(marker_path, &original).unwrap();
+        let mut mismatched = vec!["init"];
+        if !repair {
+            mismatched.push("--repair");
+        }
+        mismatched.extend(["--idempotency-key", key]);
+        let before = fixture.podway_snapshot();
+        let rejected = fixture.output(&mismatched);
+        let error: ErrorEnvelopeV2 = serde_json::from_slice(&rejected.stdout).unwrap();
+        assert_eq!(rejected.status.code(), Some(4));
+        assert_eq!(error.as_value()["code"], "WORKSPACE_MAINTENANCE");
+        assert_eq!(error.as_value()["details"]["boundary"], "intent_marker");
+        assert_eq!(
+            error.as_value()["details"]["recovery"]["argv"],
+            json!(expected)
+        );
+        fixture.assert_podway_snapshot(&before);
+        let result = fixture.run(&args);
+        assert_eq!(result["workspace"]["uuid"], marker["workspace_uuid"]);
+        assert_eq!(result["generated_at"], marker["created_at"]);
+        assert_eq!(fixture.run(&args), result);
+        assert!(
+            !fixture
+                .0
+                .join(".podway/runtime/maintenance-intent.json")
+                .exists()
+        );
+        assert_eq!(fixture.run(&["doctor"])["result"]["healthy"], true);
+    }
+}
+
+#[test]
+fn v2dfc016_intent_only_reset_and_removal_report_the_observed_boundary() {
+    for removal in [false, true] {
+        let fixture = Fixture::new();
+        let init = fixture.run(&["init", "--idempotency-key", "init"]);
+        let uuid = init["workspace"]["uuid"].as_str().unwrap();
+        let args = if removal {
+            vec![
+                "workspace",
+                "remove",
+                "--force",
+                "--yes",
+                "--if-workspace-uuid",
+                uuid,
+                "--idempotency-key",
+                "--original-remove-key",
+            ]
+        } else {
+            vec![
+                "reset",
+                "--all",
+                "--yes",
+                "--if-workspace-uuid",
+                uuid,
+                "--idempotency-key",
+                "--original-reset-key",
+            ]
+        };
+        fixture.kill_at_maintenance_boundary(&args, "intent-published");
+        let before = fixture.podway_snapshot();
+        let human = fixture.raw_output(&["status"]);
+        assert_eq!(human.status.code(), Some(4));
+        let rendered = String::from_utf8(human.stderr).unwrap();
+        assert!(rendered.contains("reason: "), "{rendered}");
+        assert!(rendered.contains("original idempotency key"), "{rendered}");
+        let output = fixture.output(&["init", "--idempotency-key", "contender-init"]);
+        let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(error.as_value()["code"], "WORKSPACE_MAINTENANCE");
+        assert_eq!(error.as_value()["details"]["boundary"], "intent_marker");
+        let mut expected = vec!["podway", "--json"];
+        expected.extend(args.iter().copied());
+        assert_eq!(
+            error.as_value()["details"]["recovery"]["argv"],
+            json!(expected)
+        );
+        assert_eq!(fixture.podway_snapshot(), before);
+        let config = fixture.0.join(".podway/config.yaml");
+        let original = fs::read(&config).unwrap();
+        fs::write(&config, b"invalid: [").unwrap();
+        let output = fixture.output(&["init", "--idempotency-key", "contender-init"]);
+        let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(error.as_value()["code"], "WORKSPACE_MAINTENANCE");
+        assert_eq!(error.as_value()["details"]["boundary"], "intent_marker");
+        fs::write(config, original).unwrap();
+        fixture.run(&args);
+        if removal {
+            assert!(!fixture.0.join(".podway").exists());
+        } else {
+            assert_ne!(
+                fixture.run(&["workspace", "show"])["workspace"]["uuid"],
+                init["workspace"]["uuid"]
+            );
+        }
+    }
+}
+
+#[test]
+fn v2dfc016_final_removal_blocks_native_contenders_without_recreating_locks() {
+    for stage in ["after-first-removal-marker", "after-last-removal-marker"] {
+        let fixture = Fixture::new();
+        let init = fixture.run(&["init", "--idempotency-key", "init"]);
+        let uuid = init["workspace"]["uuid"].as_str().unwrap();
+        let removal = [
+            "workspace",
+            "remove",
+            "--force",
+            "--yes",
+            "--if-workspace-uuid",
+            uuid,
+            "--idempotency-key",
+            "original-remove",
+        ];
+        let mut owner = fixture.pause_at_maintenance_boundary(&removal, stage);
+        let before = fixture.podway_snapshot();
+        for contender in [
+            vec!["init", "--idempotency-key", "contender-init"],
+            vec![
+                "reset",
+                "--all",
+                "--yes",
+                "--if-workspace-uuid",
+                uuid,
+                "--idempotency-key",
+                "contender-reset",
+            ],
+            removal.to_vec(),
+        ] {
+            let mut args = vec!["--timeout", "100ms"];
+            args.extend(contender);
+            let output = fixture.output(&args);
+            let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(
+                error.as_value()["code"],
+                "WORKSPACE_MAINTENANCE",
+                "{stage}: {args:?}"
+            );
+            if stage == "after-last-removal-marker" {
+                let recipe = &error.as_value()["details"]["recovery"];
+                assert_eq!(recipe["action"], "diagnose_writer", "{args:?}");
+                assert_eq!(recipe["command"], "version", "{args:?}");
+                let argv: Vec<_> = recipe["argv"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|part| part.as_str().unwrap())
+                    .collect();
+                let diagnosis = fixture.raw_output(&argv[1..]);
+                assert!(diagnosis.status.success(), "{args:?}");
+            }
+            assert_eq!(fixture.podway_snapshot(), before, "{stage}: {args:?}");
+        }
+        owner.0.as_mut().unwrap().kill().unwrap();
+        let killed = owner.0.take().unwrap().wait_with_output().unwrap();
+        assert_eq!(killed.status.signal(), Some(9));
+        assert!(killed.stdout.is_empty());
+        fixture.run(&removal);
+        assert!(!fixture.0.join(".podway").exists());
+        let fresh = fixture.run(&["init", "--idempotency-key", "fresh-init"]);
+        assert_ne!(fresh["workspace"]["uuid"], init["workspace"]["uuid"]);
+        let before = fixture.podway_snapshot();
+        let stale = fixture.output(&removal);
+        let error: ErrorEnvelopeV2 = serde_json::from_slice(&stale.stdout).unwrap();
+        assert_eq!(error.as_value()["code"], "WORKSPACE_UUID_MISMATCH");
+        assert_eq!(fixture.podway_snapshot(), before);
+    }
+}
+
+#[test]
+fn v2dfc016_previous_direct_generation_has_a_valid_refusal_and_reset_recipe() {
+    let fixture = Fixture::new();
+    fixture.run(&["init", "--idempotency-key", "init"]);
+    let generation = initialized_schema_generation(&fixture) - 1;
+    let connection =
+        rusqlite::Connection::open(fixture.0.join(".podway/runtime/state.sqlite3")).unwrap();
+    connection
+        .execute_batch(&format!(
+            "PRAGMA user_version={generation}; PRAGMA wal_checkpoint(TRUNCATE)"
+        ))
+        .unwrap();
+    drop(connection);
+    let before = fixture.podway_snapshot();
+    let mut recovery = None;
+    for args in [
+        vec!["status"],
+        vec!["doctor"],
+        vec!["workspace", "show"],
+        vec!["init", "--idempotency-key", "contender-init"],
+    ] {
+        let output = fixture.output(&args);
+        let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(error.as_value()["code"], "LEGACY_RUNTIME_STATE_UNSUPPORTED");
+        assert_eq!(
+            error.as_value()["details"]["store_schema_version"],
+            generation
+        );
+        assert_eq!(fixture.podway_snapshot(), before, "{args:?}");
+        recovery = Some(error.as_value()["details"]["recovery"].clone());
+    }
+    let recovery = recovery.unwrap();
+    let argv: Vec<_> = recovery["argv"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|part| match part.as_str().unwrap() {
+            "<new-idempotency-key>" => "previous-direct-reset",
+            other => other,
+        })
+        .collect();
+    let reset = fixture.raw_output(&argv[1..]);
+    assert!(reset.status.success());
+    assert_eq!(initialized_schema_generation(&fixture), generation + 1);
+    fixture.run(&["doctor"]);
+}
+
 #[test]
 fn v2dfc015_invalid_current_stores_require_unfenced_confirmed_recovery() {
     for defect in [
@@ -74,6 +512,29 @@ fn v2dfc015_invalid_current_stores_require_unfenced_confirmed_recovery() {
                     .execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
                     .unwrap();
             }
+        }
+        let guidance = fixture.raw_output(&["status"]);
+        let human = String::from_utf8(guidance.stderr).unwrap();
+        assert!(human.contains("unfenced reset --all"), "{defect}: {human}");
+        let refusal = fixture.output(&["status"]);
+        let error: ErrorEnvelopeV2 = serde_json::from_slice(&refusal.stdout).unwrap();
+        if expected_code != "WORKSPACE_ID_CONFLICT" {
+            let argv = error.as_value()["details"]["recovery"]["argv"]
+                .as_array()
+                .unwrap();
+            assert_eq!(
+                argv,
+                &vec![
+                    json!("podway"),
+                    json!("--json"),
+                    json!("version"),
+                    json!("--identity")
+                ]
+            );
+            assert_eq!(
+                fixture.run(&["version", "--identity"])["command"],
+                "version"
+            );
         }
         let before = fixture.podway_snapshot();
         for args in [
@@ -324,6 +785,11 @@ fn v2dfc015_unfenced_removal_rejects_a_wrong_path_even_with_yes() {
                 rendered.contains("explicit confirmation is required"),
                 "{rendered}"
             );
+            assert!(
+                rendered.contains("--yes --if-workspace-uuid <uuid>"),
+                "{rendered}"
+            );
+            assert!(rendered.contains("exact worktree path"), "{rendered}");
             assert!(rendered.contains("podway-test-pty-exit:2"), "{rendered}");
             fixture.assert_podway_snapshot(&before);
         }
@@ -375,21 +841,23 @@ fn v2dfc015_newer_wal_prefix_refuses_overbound_tail_and_markers() {
         let fixture = Fixture::new();
         let initialized = fixture.run(&["init", "--idempotency-key", "init"]);
         let workspace = initialized["workspace"]["uuid"].as_str().unwrap();
+        let current = initialized_schema_generation(&fixture);
+        let newer = current + 1;
         let runtime = fixture.0.join(".podway/runtime");
         let staging = fixture.0.join("newer-producer");
         fs::create_dir(&staging).unwrap();
         fs::copy(runtime.join("state.sqlite3"), staging.join("state.sqlite3")).unwrap();
         let producer = rusqlite::Connection::open(staging.join("state.sqlite3")).unwrap();
         producer
-            .execute_batch(
-                "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; PRAGMA user_version=15",
-            )
+            .execute_batch(&format!(
+                "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; PRAGMA user_version={newer}"
+            ))
             .unwrap();
         assert_eq!(
             producer
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))
                 .unwrap(),
-            15
+            newer
         );
         fs::remove_dir_all(&runtime).unwrap();
         fs::create_dir(&runtime).unwrap();
@@ -402,7 +870,10 @@ fn v2dfc015_newer_wal_prefix_refuses_overbound_tail_and_markers() {
         }
         drop(producer);
         let main = fs::read(runtime.join("state.sqlite3")).unwrap();
-        assert_eq!(u32::from_be_bytes(main[60..64].try_into().unwrap()), 14);
+        assert_eq!(
+            u32::from_be_bytes(main[60..64].try_into().unwrap()),
+            current
+        );
         let wal = fs::OpenOptions::new()
             .write(true)
             .open(runtime.join("state.sqlite3-wal"))
@@ -439,7 +910,7 @@ fn v2dfc015_newer_wal_prefix_refuses_overbound_tail_and_markers() {
                 "WORKSPACE_SCHEMA_UNSUPPORTED",
                 "{marker:?}/{args:?}"
             );
-            assert_eq!(error.as_value()["details"]["store_schema_version"], 15);
+            assert_eq!(error.as_value()["details"]["store_schema_version"], newer);
             assert!(error.as_value()["details"].get("recovery").is_none());
         }
         assert_eq!(image(&fixture.0.join(".podway")), before);
@@ -492,7 +963,10 @@ fn v2dfc015_owned_reset_marker_recovers_after_a_bounded_wal_scan_failure() {
 
 #[test]
 fn v2dfc015_newer_generations_refuse_every_store_admission_without_new_files() {
-    for generation in [15_u32, i32::MAX as u32] {
+    let probe = Fixture::new();
+    probe.run(&["init", "--idempotency-key", "init"]);
+    let current = initialized_schema_generation(&probe);
+    for generation in [current + 1, i32::MAX as u32] {
         for checkpointed in [false, true] {
             for marker in [None, Some("reset-all.marker"), Some("reset.marker")] {
                 let fixture = Fixture::new();
@@ -584,7 +1058,7 @@ fn v2dfc015_newer_generations_refuse_every_store_admission_without_new_files() {
                         "podway.workspace-schema-unsupported-details/v1"
                     );
                     assert_eq!(error["details"]["store_schema_version"], generation);
-                    assert_eq!(error["details"]["supported_store_schema_version"], 14);
+                    assert_eq!(error["details"]["supported_store_schema_version"], current);
                     assert!(
                         error["details"]["guidance"]
                             .as_str()
@@ -2144,6 +2618,18 @@ fn a_competing_process_honors_the_deadline_and_attributes_preflight_failure_to_t
         assert_eq!(error.as_value()["code"], "WORKSPACE_MAINTENANCE");
         assert_eq!(error.as_value()["details"]["boundary"], "maintenance_lock");
         assert_eq!(error.as_value()["details"]["timeout_ms"], millis);
+        assert_eq!(
+            error.as_value()["details"]["recovery"]["action"],
+            "refresh_state"
+        );
+        assert_eq!(
+            error.as_value()["details"]["recovery"]["command"],
+            "session.observe"
+        );
+        assert_eq!(
+            error.as_value()["details"]["recovery"]["argv"],
+            json!(["podway", "--json", "observe"])
+        );
         assert_eq!(
             error.as_value()["command"],
             "item.set",

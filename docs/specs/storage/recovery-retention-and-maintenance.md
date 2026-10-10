@@ -38,14 +38,26 @@ reconciles that uncertainty; there is no queued/running/admission status to poll
 
 Runtime coordination is local to `.podway/runtime/`:
 
+- The runtime directory inode: exclusively locked by maintenance before named
+  locks may be created, and retained through final removal even after those
+  names are unlinked. Empty-residual removal obeys the same directory exclusion.
 - `maintenance.lock`: shared for ordinary opens, exclusive for destructive
   maintenance, creation, doctor and declared predecessor migration.
 - `maintenance-intent.lock`: exclusive entrants take it before draining shared
   leases, preventing an endless stream of new readers from starving maintenance.
-- `maintenance-intent.json`: durable operation identity through publication and
-  cleanup, distinct from the native intent lock.
+- `maintenance-intent.json`: durable operation identity during publication and
+  reset cleanup, distinct from the native intent lock. Removal deletes this intent
+  before its final operation marker, which then retains the exact-retry identity.
 - `reset-all.marker` and `removal.marker`: the corresponding operation's
   resumable phase and identity.
+
+Maintenance-lock contention uses read-only `session.observe` after the owner
+finishes when a Store is present. Store-less contention during final removal or
+empty-residual cleanup instead
+emits `version --identity`, which works without a Store; wait for the owner and
+retry the original request with its key and fences. If removal finds its parent
+directory repopulated, it refuses cleanup and directs the caller to preserve the
+current contents and inspect the writer and workspace before any new request.
 
 Lock holders revalidate directory, lock and database path/inode identity after
 acquisition and before effects; a replaced or unlinked anchor is not authority.
@@ -61,8 +73,18 @@ request fence and must agree when both are supplied. The canonical digest binds
 that fence and force value; continuation recipes reconstruct those parameters
 without adding or dropping a fence or changing removal force. Typed removal
 requests without the UUID fence or force required by the JSON CLI retain typed
-exact retry and use read-only diagnosis instead of a command that would change
-the original request.
+exact retry and receive a human-terminal removal recipe with the original key
+and flags. An unfenced recipe omits `--json` and `--yes`, requiring exact-path
+confirmation. It does not add force or a UUID assertion.
+
+The error boundary follows the observed marker kind: an intent-only window
+reports `intent_marker`, independently of the requested command. Interrupted
+initialization gives its original-key `init` recipe, preserving `--repair`. A
+foreign writer or root remains `WORKSPACE_MAINTENANCE`; its nonrecursive
+`version --json --identity` recipe identifies the current writer and directs
+recovery to the owning writer and worktree. A predecessor intent receives that
+identity diagnosis because this writer declares no production predecessor.
+Neither case authorizes the current writer to adopt or remove the marker.
 
 An exact supported retry resumes its own published operation. Another request,
 key, digest, writer, root, Git identity or UUID cannot adopt it. Ordinary commands
@@ -149,9 +171,19 @@ The non-interactive CLI still requires its explicit UUID fence; unfenced CLI
 removal uses the interactive exact-path confirmation.
 
 Descriptor-relative traversal rejects symlinks, mounts, changed ancestry,
-foreign ownership and unknown residual contents. Durable intent survives the
-operation marker and lock-unlink windows, so ordinary commands still fail closed
-until final cleanup. Matching retry converges through the validated suffix. A
+foreign ownership and unknown residual contents. Removal clears the intent and
+named locks before its final operation marker. The live runtime directory lease
+excludes init, reset, duplicate removal and empty-residual contenders across both
+marker-unlink windows. A crash can leave only the matching removal marker; an
+exact validated retry restores its intent under the directory lease and converges
+through the remaining suffix without changing the original response or clock.
+Ordinary reads fail closed until the last marker is gone; exclusive entrants
+still respect the retained directory lease. A fresh runtime published after the old runtime directory is removed is
+preserved; old-parent cleanup can fail closed if that parent is repopulated.
+Creation uses held parent descriptors and retries disappearing directories within
+its original wait budget. Cold classification refuses changed directory witnesses
+before admitting initialization; the caller can retry the same request after
+removal finishes. An old UUID cannot authorize deletion of the fresh workspace. A
 fully removed workspace has no outcome Store; a later already-absent removal is
 idempotent convergence, not retained original-result lookup. An empty residual
 may be removed only after descriptor validation, never by broad recursive

@@ -6,7 +6,7 @@ Read this reference after a stale precondition, uncertain mutation outcome, main
 
 Require `podway.error/v2` and branch on the stable `code`, its exit class (0 success, 1 domain, 2 usage, 4 conflict, 5 workspace, 6 internal), and `retryable`. Exit class 3 is retired. Never branch on message text, which may change without a schema change.
 
-When `details.recovery` is present, validate RecoveryRecipe v2: exactly `action`, `command`, `argv`, `reason`, and `requires_explicit_authorization`. Read-only recipes name `session.observe`, `outcome.lookup`, or `workspace.doctor` and require `requires_explicit_authorization=false`. Destructive recipes name `workspace.reset_all` or `workspace.remove` and require `requires_explicit_authorization=true`. Validate the command/argv combination against its canonical schema, preserve the established exact worktree, and fill only declared placeholders from supported facts. Reject open fields, unsupported commands, or weakened fences. A recipe is guidance, never user authorization; execute a destructive recipe only within an applicable explicit grant.
+When `details.recovery` is present, validate RecoveryRecipe v2: exactly `action`, `command`, `argv`, `reason`, and `requires_explicit_authorization`. Read-only recipes name `session.observe`, `outcome.lookup`, `workspace.doctor`, or `version` and require `requires_explicit_authorization=false`. Initialization resumes name `workspace.init`; destructive recipes name `workspace.reset_all` or `workspace.remove`. Both require `requires_explicit_authorization=true`. Validate the command/argv combination against its canonical schema, preserve the established exact worktree, and fill only declared placeholders from supported facts. Reject open fields, unsupported commands, or weakened fences. A recipe is guidance, never user authorization; execute a destructive recipe only within an applicable explicit grant.
 
 ## Stale state
 
@@ -39,8 +39,8 @@ An `IDEMPOTENCY_KEY_REUSED` error means the retained key is bound to a different
 
 ## Maintenance or workspace failure
 
-- Use `podway doctor` and `podway workspace show` to diagnose before proposing a mutation.
-- `WORKSPACE_BUSY` and `WORKSPACE_MAINTENANCE` report an expired admission wait. Read `details.boundary` to distinguish the maintenance lease, process-local connection gate and SQLite read/write admission. Each boundary tries once even after the original invocation budget expires; prompts do not renew it. These errors do not authorize reset or fence weakening. Inspect any structured recovery recipe before acting.
+- Follow the validated read-only recipe before proposing a mutation. Invalid-Store and writer-contract failures use `podway --json version --identity`, which does not open the rejected Store. Use `podway doctor` and `podway workspace show` when Store admission permits them.
+- `WORKSPACE_BUSY` reports an expired admission wait. `WORKSPACE_MAINTENANCE` reports unavailable maintenance admission or an observed maintenance marker; a marker may be reported before the wait budget expires. Read `details.boundary` to distinguish the maintenance lease, process-local connection gate, SQLite read/write admission, and observed `intent_marker`, `reset_marker`, `removal_marker`, or `predecessor_migration` boundaries. Each boundary tries once even after the original invocation budget expires; prompts do not renew it. These errors do not authorize reset or fence weakening. Inspect any structured recovery recipe before acting.
 - On `LEGACY_RUNTIME_STATE_UNSUPPORTED`, preserve the byte-identical unsupported
   state. Classification performs no migration, checkpoint or SHM creation. Before
   any reset, establish separately authorized retirement of every old writer,
@@ -55,7 +55,9 @@ An `IDEMPOTENCY_KEY_REUSED` error means the retained key is bound to a different
   predecessor. Only an explicitly declared release-owned predecessor permits
   migration; v0.2.13 declares none. Development with changed contract bytes uses a
   disposable worktree rather than a runtime mode.
-- Reset/removal retain descriptor-safe intent and operation markers. A marked
+- Initialization resumes preserve the original idempotency key and `--repair` policy. Foreign writer/root markers and reserved predecessor intents provide read-only writer diagnosis; the current writer declares no production predecessor. Resume only with the original writer and owning worktree, under an applicable grant.
+- Maintenance-lock contention with a Store provides `observe` after the owner finishes. Store-less final-removal or residual contention provides `version --identity`, then an exact retry after the owner finishes. If removal reports a repopulated parent, preserve its current contents and inspect the writer and workspace before considering a new authorized request; this error does not establish invalid state.
+- Init/reset/removal retain descriptor-safe intent and operation markers. A marked
   workspace returns `WORKSPACE_MAINTENANCE`; ordinary reads never resume it. Resume
   only the original canonical operation, idempotency key, applicable UUID and exact
   root/fences from the recipe. A newly generated key is not recovery. Do not remove
