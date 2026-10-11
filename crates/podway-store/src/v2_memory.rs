@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::str::FromStr;
+use std::sync::{Arc, OnceLock};
 
 use podway_core::{
     ActorAttributionV2, ArtifactLocationKindV1, ArtifactValueV1, AttemptId, AttemptLifecycle,
@@ -24,7 +25,9 @@ use rusqlite::{Connection, Transaction, params};
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
-use crate::v2_state::{AttemptMetadataV2, GraphNodeCounterV2, ProcedureSnapshotV2};
+use crate::v2_state::{
+    AttemptMetadataV2, GraphNodeCounterV2, GraphNodeSnapshotV2, ProcedureSnapshotV2,
+};
 use crate::{
     RusqliteErrorContextV1, StoreErrorV1, StoreRecordKindV1, StoreValueErrorV1,
     map_rusqlite_error_v1,
@@ -451,10 +454,24 @@ pub struct ItemSlotStateV2 {
     item_id: ItemId,
     item_type: ItemTypeV1,
     revision: Revision,
-    value: Option<RecordedItemValueV2>,
+    value: Option<Arc<RecordedSlotValueV2>>,
     created_at: UnixMillis,
     updated_at: UnixMillis,
 }
+
+#[derive(Debug)]
+struct RecordedSlotValueV2 {
+    value: RecordedItemValueV2,
+    admitted_declaration: OnceLock<ItemSpecV2>,
+}
+
+impl PartialEq for RecordedSlotValueV2 {
+    fn eq(&self, other: &Self) -> bool {
+        self.value == other.value
+    }
+}
+
+impl Eq for RecordedSlotValueV2 {}
 
 impl ItemSlotStateV2 {
     #[allow(clippy::too_many_arguments)]
@@ -486,7 +503,12 @@ impl ItemSlotStateV2 {
             item_id,
             item_type,
             revision,
-            value,
+            value: value.map(|value| {
+                Arc::new(RecordedSlotValueV2 {
+                    value,
+                    admitted_declaration: OnceLock::new(),
+                })
+            }),
             created_at,
             updated_at,
         })
@@ -505,7 +527,23 @@ impl ItemSlotStateV2 {
         self.revision
     }
     pub fn value(&self) -> Option<&RecordedItemValueV2> {
-        self.value.as_ref()
+        self.value.as_ref().map(|value| &value.value)
+    }
+
+    fn value_is_admitted(&self, declaration: &ItemSpecV2) -> bool {
+        let Some(value) = &self.value else {
+            return true;
+        };
+        if value.admitted_declaration.get() == Some(declaration) {
+            return true;
+        }
+        if !declaration.admits_recorded_value(&value.value) {
+            return false;
+        }
+        // Immutable values can share a successful admission only for the exact
+        // declaration. The memo does not participate in domain-state equality.
+        let _ = value.admitted_declaration.set(declaration.clone());
+        true
     }
     pub const fn created_at(&self) -> UnixMillis {
         self.created_at
@@ -2372,14 +2410,14 @@ pub fn canonical_recorded_items_json_v2(
         .map_err(|_| invalid("Procedure v2 recorded items are not canonicalizable"))
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct EvidenceSpecV2 {
     source_node: GraphNodeId,
     required: bool,
     selected_item_ids: Vec<ItemId>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct NodeMemorySpecV2 {
     node_kind: podway_core::NodeKindV2,
     node_definition_id: podway_core::NodeDefinitionId,
@@ -2395,15 +2433,22 @@ struct NodeMemorySpecV2 {
     routes: BTreeMap<OptionId, (GraphNodeId, TransitionEffectV2)>,
 }
 
-#[derive(Clone, Debug)]
-struct SnapshotMemoryModelV2 {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SnapshotMemoryModelV2 {
     nodes: BTreeMap<GraphNodeId, NodeMemorySpecV2>,
     manual_rework_targets: BTreeSet<GraphNodeId>,
 }
 
 impl SnapshotMemoryModelV2 {
-    fn from_snapshot(snapshot: &ProcedureSnapshotV2) -> Result<Self, StoreValueErrorV1> {
-        let document: Value = serde_json::from_str(snapshot.canonical_json().as_str())
+    fn from_snapshot(snapshot: &ProcedureSnapshotV2) -> Result<&Self, StoreValueErrorV1> {
+        snapshot.memory_model()
+    }
+
+    pub(crate) fn parse(
+        canonical_json: &str,
+        graph_nodes: &[GraphNodeSnapshotV2],
+    ) -> Result<Self, StoreValueErrorV1> {
+        let document: Value = serde_json::from_str(canonical_json)
             .map_err(|_| invalid("Procedure v2 snapshot memory metadata is invalid"))?;
         let root = document
             .as_object()
@@ -2413,7 +2458,7 @@ impl SnapshotMemoryModelV2 {
             .and_then(Value::as_object)
             .ok_or_else(|| invalid("Procedure v2 node definitions are missing"))?;
         let mut nodes = BTreeMap::new();
-        for node in snapshot.graph_nodes() {
+        for node in graph_nodes {
             let placement: Value = serde_json::from_str(node.canonical_placement_json())
                 .map_err(|_| invalid("Procedure v2 placement memory metadata is invalid"))?;
             let placement = placement
@@ -3009,7 +3054,6 @@ fn decode_item_value_v2(
     encoded: &str,
     expected: ItemTypeV1,
 ) -> Result<RecordedItemValueV2, StoreErrorV1> {
-    verify_canonical_json_v1(encoded.as_bytes()).map_err(|_| corrupt(StoreRecordKindV1::Item))?;
     let value: Value =
         serde_json::from_str(encoded).map_err(|_| corrupt(StoreRecordKindV1::Item))?;
     let object = value
@@ -3136,6 +3180,9 @@ fn decode_item_value_v2(
         }
         _ => return Err(corrupt(StoreRecordKindV1::Item)),
     };
+    // Exact typed re-encoding checks both canonical bytes and normalization.
+    // A preceding generic canonical check would parse and encode the same
+    // bounded payload a second time on every cold read.
     if encode_item_value_v2(&decoded)? != encoded {
         return Err(corrupt(StoreRecordKindV1::Item));
     }
@@ -3250,10 +3297,7 @@ pub(crate) fn validate_workflow_memory_v2(
                     "Procedure v2 item slot timestamps are inconsistent",
                 ));
             }
-            if slot
-                .value()
-                .is_some_and(|value| !item.admits_recorded_value(value))
-            {
+            if !slot.value_is_admitted(item) {
                 return Err(invalid(
                     "Procedure v2 item value violates its immutable declaration",
                 ));
@@ -3325,12 +3369,12 @@ pub(crate) fn validate_workflow_memory_v2(
         )?;
     }
 
-    validate_decision_history_v2(snapshot, trace, metadata, memory, &model)?;
+    validate_decision_history_v2(snapshot, trace, metadata, memory, model)?;
     validate_rework_history_v2(
         trace,
         metadata,
         memory,
-        &model,
+        model,
         goal_rework_target_attempt_ids,
         reactivated_goal_rework_target_attempt_ids,
     )?;
@@ -4390,6 +4434,7 @@ pub(crate) fn load_workflow_memory_v2(
     snapshot: &ProcedureSnapshotV2,
     trace: &SessionTraceV2,
     metadata: &[AttemptMetadataV2],
+    cached: Option<&WorkflowMemoryStateV2>,
 ) -> Result<WorkflowMemoryStateV2, StoreErrorV1> {
     let model = SnapshotMemoryModelV2::from_snapshot(snapshot)
         .map_err(|_| corrupt(StoreRecordKindV1::Snapshot))?;
@@ -4402,6 +4447,12 @@ pub(crate) fn load_workflow_memory_v2(
             model
                 .node(attempt.graph_node_id())
                 .map_err(|_| corrupt(StoreRecordKindV1::Attempt))?,
+            cached.and_then(|memory| {
+                memory
+                    .attempts()
+                    .iter()
+                    .find(|memory| memory.attempt_id() == attempt.attempt_id())
+            }),
         )?);
     }
     let decisions = load_decisions_v2(connection, snapshot, trace, &attempts)?;
@@ -4415,13 +4466,25 @@ fn load_attempt_memory_v2(
     attempt: &SessionAttemptV2,
     metadata: &AttemptMetadataV2,
     specification: &NodeMemorySpecV2,
+    cached: Option<&AttemptWorkflowMemoryV2>,
 ) -> Result<AttemptWorkflowMemoryV2, StoreErrorV1> {
-    type SlotRow = (String, String, i64, Option<String>, i64, i64);
+    type SlotRow = (
+        String,
+        String,
+        i64,
+        bool,
+        Option<i64>,
+        Option<i64>,
+        Option<String>,
+    );
     let mut statement = connection
-        .prepare(
-            "SELECT item_id, item_type, item_revision, value_json, created_at_ms, updated_at_ms \
-         FROM v2_item_slots WHERE attempt_id = ?1",
-        )
+        .prepare(if cached.is_some() {
+            "SELECT item_id, item_type, item_revision, typeof(value_json) != 'null', NULL, NULL, NULL \
+             FROM v2_item_slots WHERE attempt_id = ?1"
+        } else {
+            "SELECT item_id, item_type, item_revision, value_json IS NOT NULL, created_at_ms, updated_at_ms, value_json \
+             FROM v2_item_slots WHERE attempt_id = ?1"
+        })
         .map_err(|error| record_error(error, StoreRecordKindV1::Item))?;
     let rows = statement
         .query_map([attempt.attempt_id().as_str()], |row| {
@@ -4432,6 +4495,7 @@ fn load_attempt_memory_v2(
                 row.get(3)?,
                 row.get(4)?,
                 row.get(5)?,
+                row.get(6)?,
             ))
         })
         .map_err(|error| record_error(error, StoreRecordKindV1::Item))?;
@@ -4444,22 +4508,58 @@ fn load_attempt_memory_v2(
     }
     let mut slots = Vec::with_capacity(specification.items.len());
     for item in &specification.items {
-        let (_, item_type, revision, value, created_at, updated_at) = loaded
+        let (_, item_type, revision, has_value, created_at, updated_at, loaded_value) = loaded
             .remove(item.id().as_str())
             .ok_or_else(|| corrupt(StoreRecordKindV1::Item))?;
-        if parse_item_type(&item_type).map_err(|_| corrupt(StoreRecordKindV1::Item))?
-            != item.item_type()
-        {
+        let item_type =
+            parse_item_type(&item_type).map_err(|_| corrupt(StoreRecordKindV1::Item))?;
+        if item_type != item.item_type() {
             return Err(corrupt(StoreRecordKindV1::Item));
         }
+        let revision = Revision::new(persisted_u64(revision, StoreRecordKindV1::Item)?);
+        if let Some(slot) = cached
+            .and_then(|memory| {
+                memory
+                    .item_slots()
+                    .iter()
+                    .find(|slot| slot.item_id() == item.id())
+            })
+            .filter(|slot| {
+                slot.item_type() == item_type
+                    && slot.revision() == revision
+                    && slot.value().is_some() == has_value
+            })
+        {
+            // Compatible writers keep identity/creation metadata immutable and
+            // advance the revision with any value/update-time change. Reading
+            // only the header avoids loading unchanged overflow-page payloads.
+            slots.push(slot.clone());
+            continue;
+        }
+        let (value, created_at, updated_at) = if cached.is_some() {
+            let (value, created_at, updated_at) = connection
+                .query_row(
+                    "SELECT value_json, created_at_ms, updated_at_ms FROM v2_item_slots WHERE attempt_id=?1 AND item_id=?2",
+                    params![attempt.attempt_id().as_str(), item.id().as_str()],
+                    |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)),
+                )
+                .map_err(|error| record_error(error, StoreRecordKindV1::Item))?;
+            (value, created_at, updated_at)
+        } else {
+            (
+                loaded_value,
+                created_at.ok_or_else(|| corrupt(StoreRecordKindV1::Item))?,
+                updated_at.ok_or_else(|| corrupt(StoreRecordKindV1::Item))?,
+            )
+        };
         slots.push(
             ItemSlotStateV2::new(
                 attempt.attempt_id().clone(),
                 item.id().clone(),
-                item.item_type(),
-                Revision::new(persisted_u64(revision, StoreRecordKindV1::Item)?),
+                item_type,
+                revision,
                 value
-                    .map(|value| decode_item_value_v2(&value, item.item_type()))
+                    .map(|value| decode_item_value_v2(&value, item_type))
                     .transpose()?,
                 UnixMillis::new(persisted_u64(created_at, StoreRecordKindV1::Item)?),
                 UnixMillis::new(persisted_u64(updated_at, StoreRecordKindV1::Item)?),

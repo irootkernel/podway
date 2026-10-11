@@ -18,6 +18,8 @@ export PRESET_ID PRESET_NAME PRESET_DESCRIPTION PRESET_FILE PRESET_DIR PRESET_VA
 	toolchain format format-check vet lint lint-all architecture architecture-static preset-validator \
 	preset-create preset-import preset-tool-test contract-manifest dist dist-patch
 
+.PHONY: test-native-qualification development-qualification
+
 toolchain:
 	@$(RUST_TOOLCHAIN_ENV) cargo --version
 	@$(RUST_TOOLCHAIN_ENV) rustc --version
@@ -75,6 +77,7 @@ architecture-static:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_docs.py self-test
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_test_layout.py --check
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_quality_contracts.py
+	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_qualification_tools.py
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_patch_release.py self-test
 	$(RUST_TOOLCHAIN_ENV) python3 tools/create_dolgorae_handoff.py self-test
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_contracts.py --check
@@ -112,7 +115,7 @@ preset-tool-test: preset-validator
 
 test-rust:
 	$(RUST_GATE_ENV) cargo test --workspace --lib --bins \
-		--test 'arch_*' --test 'int_*' --locked -- \
+		--test 'arch_*' --test 'int_*' --features podway-store/test-support --locked -- \
 		--test-threads=$(TEST_THREADS)
 
 test-unit:
@@ -121,7 +124,7 @@ test-unit:
 
 test-int:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_test_layout.py --check
-	$(RUST_GATE_ENV) cargo test --workspace --test 'int_*' --locked -- \
+	$(RUST_GATE_ENV) cargo test --workspace --test 'int_*' --features podway-store/test-support --locked -- \
 		--test-threads=$(TEST_THREADS)
 
 contract-verifier-test:
@@ -142,6 +145,12 @@ test-e2e:
 test-e2e-exact:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/verify_test_layout.py --check
 	$(RUST_GATE_ENV) python3 tools/run_e2e.py --exact-test "$(E2E_TEST)"
+
+test-native-qualification:
+	$(RUST_GATE_ENV) python3 tools/run_native_qualification.py --evidence-parent "$(NATIVE_EVIDENCE_PARENT)"
+
+development-qualification:
+	$(RUST_GATE_ENV) python3 tools/qualify_development.py --output-dir "$(DEVELOPMENT_OUTPUT_DIR)"
 
 release-version-check:
 	$(RUST_TOOLCHAIN_ENV) python3 tools/release_archive.py verify-version \

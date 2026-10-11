@@ -2962,3 +2962,43 @@ fn workflow_history_rewrite_and_evidence_digest_corruption_fail_closed() {
     drop(connection);
     reject_corruption(&direct, true);
 }
+
+#[test]
+fn cold_item_decode_rejects_noncanonical_and_mismatched_values_without_repair() {
+    let state = initial_state()
+        .mutate_active_item_v2(
+            &attempt_id(1),
+            &item("z-summary"),
+            Revision::ZERO,
+            ActiveItemMutationV2::Set {
+                value: "Summary".to_owned(),
+            },
+            UnixMillis::new(20),
+        )
+        .unwrap()
+        .into_state();
+    for encoded in [
+        r#" {"kind":"text","value":"Summary"}"#,
+        r#"{"value":"Summary","kind":"text"}"#,
+        r#"{"kind":"text","value":"\u0053ummary"}"#,
+        r#"{"kind":"text","kind":"text","value":"Summary"}"#,
+        r#"{"kind":"text","unknown":true,"value":"Summary"}"#,
+        r#"{"kind":"integer","value":1}"#,
+        r#"{"kind":"text","value":1}"#,
+    ] {
+        let (_temporary, direct) = fixture(&identity());
+        seed(&direct, &state);
+        let connection = Connection::open(direct.layout().database()).unwrap();
+        assert_eq!(
+            connection
+                .execute(
+                    "UPDATE v2_item_slots SET value_json=?1 WHERE item_id='z-summary'",
+                    [encoded],
+                )
+                .unwrap(),
+            1,
+        );
+        drop(connection);
+        reject_corruption(&direct, true);
+    }
+}

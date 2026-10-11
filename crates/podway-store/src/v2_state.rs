@@ -1,7 +1,7 @@
 //! Procedure v2 graph, cursor, counter, and attempt persistence.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use podway_core::{
     ActorAttributionV2, AdvanceTerminalV2, AttemptId, AttemptLifecycle, AttemptNumberV2, BlockerId,
@@ -24,9 +24,9 @@ use crate::v2_goal::{
 };
 use crate::v2_memory::{
     ActiveItemMutationRequestV2, ActiveItemMutationV2, EvidenceLookupErrorV2, EvidenceReadbackV2,
-    GraphMutationErrorV2, SelectedEvidenceItemV2, WorkflowGoalTransitionV2, WorkflowMemoryStateV2,
-    insert_workflow_memory_v2, load_workflow_memory_v2, replace_workflow_memory_v2,
-    validate_workflow_memory_successor_v2, validate_workflow_memory_v2,
+    GraphMutationErrorV2, SelectedEvidenceItemV2, SnapshotMemoryModelV2, WorkflowGoalTransitionV2,
+    WorkflowMemoryStateV2, insert_workflow_memory_v2, load_workflow_memory_v2,
+    replace_workflow_memory_v2, validate_workflow_memory_successor_v2, validate_workflow_memory_v2,
 };
 use crate::{
     DurableWorktreeIdentityV1, EpochMillisV1, RusqliteErrorContextV1, StoreErrorV1,
@@ -427,6 +427,7 @@ pub struct ProcedureSnapshotV2 {
     goal_tracking: bool,
     entry_graph_node_id: GraphNodeId,
     graph_nodes: Vec<GraphNodeSnapshotV2>,
+    memory_model: Arc<Result<SnapshotMemoryModelV2, StoreValueErrorV1>>,
     created_at: UnixMillis,
 }
 
@@ -542,6 +543,13 @@ impl ProcedureSnapshotV2 {
             return Err(invalid("Procedure v2 entry graph node is absent"));
         }
 
+        // This derived model belongs to these immutable canonical bytes. Keep
+        // parse errors for the same workflow-memory admission point as before.
+        let memory_model = Arc::new(SnapshotMemoryModelV2::parse(
+            canonical_json.as_str(),
+            &graph_nodes,
+        ));
+
         Ok(Self {
             snapshot_id,
             procedure_id,
@@ -554,6 +562,7 @@ impl ProcedureSnapshotV2 {
             goal_tracking,
             entry_graph_node_id,
             graph_nodes,
+            memory_model,
             created_at,
         })
     }
@@ -599,6 +608,10 @@ impl ProcedureSnapshotV2 {
         self.graph_nodes
             .iter()
             .find(|node| node.graph_node_id() == id)
+    }
+
+    pub(crate) fn memory_model(&self) -> Result<&SnapshotMemoryModelV2, StoreValueErrorV1> {
+        self.memory_model.as_ref().as_ref().map_err(Clone::clone)
     }
 }
 
@@ -3716,11 +3729,12 @@ pub(crate) fn replace_direct_graph_session_transaction_v2(
 
 pub(crate) fn clear_graph_session_transaction_v2(
     transaction: &Transaction<'_>,
+    previous: Option<&GraphSessionStateV2>,
     expected_workspace_revision: Revision,
     expected_session_revision: Revision,
 ) -> Result<(), StoreErrorV1> {
-    let previous = load_graph_session_connection_v2(transaction)?
-        .ok_or_else(|| invalid_store("no current Procedure v2 graph session exists"))?;
+    let previous =
+        previous.ok_or_else(|| invalid_store("no current Procedure v2 graph session exists"))?;
     if previous.workspace_revision() != expected_workspace_revision {
         return Err(StoreErrorV1::PreconditionConflictV1 {
             expected: Some(expected_workspace_revision),
@@ -3815,12 +3829,13 @@ pub(crate) fn clear_graph_session_transaction_v2(
 
 pub(crate) fn archive_current_session_transaction_v2(
     transaction: &Transaction<'_>,
+    current: Option<&GraphSessionStateV2>,
     expected_workspace_revision: Revision,
     expected_session_revision: Revision,
     now: EpochMillisV1,
 ) -> Result<SessionArchiveSummaryV2, StoreErrorV1> {
-    let current = load_graph_session_connection_v2(transaction)?
-        .ok_or_else(|| invalid_store("no current Procedure v2 graph session exists"))?;
+    let current =
+        current.ok_or_else(|| invalid_store("no current Procedure v2 graph session exists"))?;
     if current.workspace_revision() != expected_workspace_revision {
         return Err(StoreErrorV1::PreconditionConflictV1 {
             expected: Some(expected_workspace_revision),
@@ -3833,7 +3848,7 @@ pub(crate) fn archive_current_session_transaction_v2(
             actual: Some(current.trace().revision()),
         });
     }
-    let dispositions = load_terminal_dispositions_connection_v2(transaction, &current)?;
+    let dispositions = load_terminal_dispositions_connection_v2(transaction, current)?;
     let current_disposition =
         terminal_disposition_is_current_v2(&dispositions, current.trace().revision());
     if !matches!(
@@ -4215,6 +4230,13 @@ struct PersistedSessionV2 {
 pub(crate) fn load_graph_session_connection_v2(
     connection: &Connection,
 ) -> Result<Option<GraphSessionStateV2>, StoreErrorV1> {
+    load_graph_session_with_cache_v2(connection, None)
+}
+
+pub(crate) fn load_graph_session_with_cache_v2(
+    connection: &Connection,
+    cached: Option<&GraphSessionStateV2>,
+) -> Result<Option<GraphSessionStateV2>, StoreErrorV1> {
     let current_count: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM v2_task_sessions WHERE activity = 'current'",
@@ -4267,7 +4289,8 @@ pub(crate) fn load_graph_session_connection_v2(
             },
         )
         .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
-    load_present_graph_session_v2(connection, workspace_revision, session).map(Some)
+    load_present_graph_session_with_cache_v2(connection, workspace_revision, session, cached)
+        .map(Some)
 }
 
 fn load_present_graph_session_v2(
@@ -4275,7 +4298,34 @@ fn load_present_graph_session_v2(
     workspace_revision: i64,
     persisted: PersistedSessionV2,
 ) -> Result<GraphSessionStateV2, StoreErrorV1> {
-    let snapshot = load_snapshot_v2(connection, &persisted.snapshot_id)?;
+    load_present_graph_session_with_cache_v2(connection, workspace_revision, persisted, None)
+}
+
+fn load_present_graph_session_with_cache_v2(
+    connection: &Connection,
+    workspace_revision: i64,
+    persisted: PersistedSessionV2,
+    cached: Option<&GraphSessionStateV2>,
+) -> Result<GraphSessionStateV2, StoreErrorV1> {
+    let cached = cached.filter(|state| {
+        state.trace().session_id().as_str() == persisted.session_id
+            && state.snapshot().snapshot_id().as_str() == persisted.snapshot_id
+    });
+    let snapshot = if let Some(cached) = cached {
+        let digest: String = connection
+            .query_row(
+                "SELECT digest FROM v2_procedure_snapshots WHERE snapshot_id=?1",
+                [&persisted.snapshot_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| record_error(error, StoreRecordKindV1::Snapshot))?;
+        if digest != cached.snapshot().digest().as_str() {
+            return Err(corrupt(StoreRecordKindV1::Snapshot));
+        }
+        cached.snapshot().clone()
+    } else {
+        load_snapshot_v2(connection, &persisted.snapshot_id)?
+    };
     if persisted.goal_tracking != i64::from(snapshot.goal_tracking()) {
         return Err(corrupt(StoreRecordKindV1::Session));
     }
@@ -4296,7 +4346,13 @@ fn load_present_graph_session_v2(
     .map_err(|_| corrupt(StoreRecordKindV1::Session))?;
     let counters = load_counters_v2(connection, trace.session_id(), &snapshot)?;
     let metadata = load_attempt_metadata_v2(connection, trace.session_id())?;
-    let workflow_memory = load_workflow_memory_v2(connection, &snapshot, &trace, &metadata)?;
+    let workflow_memory = load_workflow_memory_v2(
+        connection,
+        &snapshot,
+        &trace,
+        &metadata,
+        cached.map(GraphSessionStateV2::workflow_memory),
+    )?;
     let current_goal_revision = persisted
         .current_goal_revision
         .map(|value| {

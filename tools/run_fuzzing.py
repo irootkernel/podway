@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import tomllib
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -15,7 +16,7 @@ FUZZ_TOOLCHAIN = "nightly-2026-07-17"
 FUZZ_CARGO_VERSION = "cargo-fuzz 0.13.2"
 FUZZ_RUNS = 100_000
 FUZZ_SEED = 0x50D0A7
-FUZZ_TARGETS = ("workspace_config", "item_record_many", "output_v4", "config_procedure")
+FUZZ_TARGETS = ("workspace_config", "item_record_many", "output_v4", "config_procedure", "canonical_json", "selector", "delegation_accept")
 VALID_V2_PROCEDURE_PATHS = (
     ROOT / "assets/presets/sw-dev-v2.yaml",
     ROOT / "tests/fixtures/v2/procedures/equivalent-procedure.json",
@@ -75,11 +76,32 @@ def seed_corpus(directory: Path, target: str) -> None:
     elif target == "config_procedure":
         for path in VALID_V2_PROCEDURE_PATHS:
             (directory / path.name).write_bytes(path.read_bytes())
+    elif target == "canonical_json":
+        (directory / "canonical-object").write_bytes(b'{"z":1,"a":[true,"text"]}')
+    elif target == "selector":
+        (directory / "utf8-path").write_bytes(b"/fuzz-selector")
+        (directory / "non-utf8-path").write_bytes(b"/fuzz-\xff")
+    elif target == "delegation_accept":
+        digest = "sha256:" + "a" * 64
+        value = {
+            "schema": "podway.delegation-accept-input/v1", "workspace_uuid": "00000000-0000-4000-8000-000000000001",
+            "session_id": "00000000-0000-4000-8000-000000000002", "session_revision": 0,
+            "attempt_id": "00000000-0000-4000-8000-000000000003", "idempotency_key": "fuzz-accept",
+            "package_digest": digest, "execution": {"binding_ref": "fixture", "adapter_id": "fixture", "adapter_version": "1",
+                "primary_host": "external", "scope_kind": "test", "scope_ref": "scope", "supervisor_ref": "supervisor",
+                "worker_ref": "worker", "task_ref": "task", "role_ref": "reviewer", "role_snapshot_digest": digest,
+                "agent_configuration_digest": digest, "accepted_task_digest": digest},
+            "rounds_used": 1, "result_digest": digest, "summary": "Accepted fixture.", "worker_disposition": "idle", "accepted": True,
+        }
+        (directory / "valid-acceptance").write_bytes(json.dumps(value).encode())
     else:
         raise FuzzGateError(f"no corpus seeds configured for target {target}")
 
 
 def main() -> int:
+    registered = {entry["name"] for entry in tomllib.loads((ROOT / "fuzz/Cargo.toml").read_text())["bin"]}
+    if registered != set(FUZZ_TARGETS) or len(FUZZ_TARGETS) != len(registered):
+        raise FuzzGateError("every registered fuzz target must run exactly once")
     cargo = rustup_executable("cargo")
     rustc = rustup_executable("rustc")
     environment = os.environ.copy()

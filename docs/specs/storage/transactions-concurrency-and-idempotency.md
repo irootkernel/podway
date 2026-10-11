@@ -70,6 +70,11 @@ changed rows, while preserving complete domain validation. New-session creation
 and destructive maintenance have the separately guarded publication protocols
 in [Recovery](recovery-retention-and-maintenance.md).
 
+Post-commit checkpointing is best effort and does not change a committed result.
+A passive checkpoint never waits. An oversized WAL gets a bounded truncation
+attempt only after the passive result reports every frame copied; a pinned older
+reader otherwise would make repeated truncation waits contend with writers.
+
 An existing matching outcome is returned before the transition callback or
 clock runs. It preserves the original `request_id`, timestamps, workspace
 sequence, result and complete `podway.output/v4` envelope. Replaying a committed
@@ -222,3 +227,25 @@ Maintenance lease contention or a published marker returns
 ordinary consequence of independent processes and does not establish a disk
 fault or an internal daemon defect. There is no automatic replay after an
 ambiguous COMMIT.
+
+### Request-owned prepared value reuse
+
+A prepared graph belongs to one request and its Store/root/writer identity.
+When another compatible writer advances the sequence, transaction admission
+reloads the current cursor, revisions, attempt metadata, blockers, evidence and
+goals. It may reuse immutable parsed Procedure data only for the same session,
+snapshot identifier and digest. It may reuse a decoded item value only when its
+item identity, type, revision and presence match the current row. Compatible
+writers keep creation metadata immutable and advance the item revision on every
+value or update-time change; those unchanged slot timestamps belong to the same
+revision. Changed or new rows are decoded again; normal cold reads and integrity
+checks decode persistent values. The cache does not become durable authority.
+
+Item values are immutable and shared between typed state copies, so transitions
+do not copy completed-attempt payload bytes. They reuse the parsed memory
+declarations belonging to the immutable Procedure snapshot. A successful value
+admission is reusable only for the exact immutable value and item declaration.
+Cold reads decode slot values in their metadata query; a stale prepared graph reloads only values
+whose authoritative slot stamps changed. Reset, archive and replacement use
+the transaction's already selected current graph; they keep revision checks and
+avoid a second full reload under the writer lock.

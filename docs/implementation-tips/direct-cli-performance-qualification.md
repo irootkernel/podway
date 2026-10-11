@@ -200,3 +200,17 @@ zero owned child processes. Cleanup is required after failure/interruption too;
 retained owned fixture files are private local evidence, not installed state or
 tracked promoted evidence. No test here installs software, starts a daemon,
 uses account state, proves a stable release, or establishes downstream adoption.
+
+## L lifecycle costs
+
+The same frozen CLI runner also measures `reset`, `archive` and `start` on the
+retained API-grown L fixture with 20 warm-ups and 220 measured calls per command.
+Every tuple restores the original L image; archive follows cancellation and an
+explicit not-required disposition, and start follows archive. Only the named
+command invocation is timed; preparation calls are retained and canonically
+validated separately. `L_lifecycle` reports p50, p95, p99 and maximum. These
+whole-invocation costs are informational: G7 registers no daemon comparator for
+these three commands, and G8 limits open cost rather than total lifecycle time.
+The registered G1/G2 transaction thresholds and G7/G8 limits remain unchanged.
+Python optimization is refused before creating evidence or fixtures, and a G7
+regression is recorded as `G7-failed` rather than inferred from G8 success.

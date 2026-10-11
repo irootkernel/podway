@@ -20,6 +20,7 @@ sha2.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+podway-store = { path = "../podway-store", features = ["test-support"] }
 tempfile.workspace = true
 
 [[test]]

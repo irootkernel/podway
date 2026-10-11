@@ -293,8 +293,11 @@ impl<Clock: FnOnce() -> UnixMillis> DirectTransactionV1<'_, '_, Clock> {
                 },
             )
         {
+            let current =
+                v2_state::load_graph_session_with_cache_v2(self.transaction, Some(graph))?
+                    .map(Arc::new);
             self.previous.take();
-            self.current_graph()?;
+            let _ = self.previous.set(current);
             return Ok(self.previous.get().cloned().flatten());
         }
         self.previous.take();
@@ -394,6 +397,7 @@ impl<Clock: FnOnce() -> UnixMillis> DirectTransactionV1<'_, '_, Clock> {
             .map(|state| state.trace().session_id().clone());
         v2_state::clear_graph_session_transaction_v2(
             self.transaction,
+            self.current_graph()?,
             workspace_revision,
             session_revision,
         )?;
@@ -416,6 +420,7 @@ impl<Clock: FnOnce() -> UnixMillis> DirectTransactionV1<'_, '_, Clock> {
         self.state_written = true;
         let summary = v2_state::archive_current_session_transaction_v2(
             self.transaction,
+            self.current_graph()?,
             workspace_revision,
             session_revision,
             now,
@@ -877,8 +882,18 @@ fn checkpoint_after_success(connection: &Connection, layout: &super::DirectWorks
     // checkpointing meets another active snapshot or writer. Passive work never
     // waits; an oversized WAL gets at most 100 ms to truncate on close.
     let _ = connection.busy_timeout(std::time::Duration::ZERO);
-    let _ = connection.execute_batch("PRAGMA wal_checkpoint(PASSIVE);");
-    if fs::metadata(layout.wal()).is_ok_and(|metadata| metadata.len() > 4 * 1024 * 1024) {
+    let checkpoint = connection.query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, i64>(2)?,
+        ))
+    });
+    // A pinned older snapshot already proves truncation cannot finish now.
+    // Repeated waits would hold SQLite's writer lock behind the same reader.
+    if checkpoint.is_ok_and(|(busy, frames, copied)| busy == 0 && frames >= 0 && frames == copied)
+        && fs::metadata(layout.wal()).is_ok_and(|metadata| metadata.len() > 4 * 1024 * 1024)
+    {
         let _ = super::connection::install_busy_deadline(
             connection,
             Instant::now() + std::time::Duration::from_millis(100),

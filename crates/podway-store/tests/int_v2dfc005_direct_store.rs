@@ -1875,3 +1875,159 @@ fn prepared_graph_cannot_cross_store_root_or_reuse_after_clock() {
         Err(DirectStoreErrorV1::InvalidInput { .. })
     ));
 }
+
+#[test]
+fn shared_item_values_revalidate_changed_declarations_without_changing_equality() {
+    let graph = grown_graph(2, 1);
+    for maximum in [65_536, 64] {
+        let original = graph.snapshot();
+        let mut document: serde_json::Value =
+            serde_json::from_str(original.canonical_json().as_str()).unwrap();
+        let item = &mut document["node_definitions"]["work"]["items"][0];
+        item["prompt"] = json!("Changed declaration.");
+        item["max_length"] = json!(maximum);
+        let canonical = canonicalize_json_v1(&document).unwrap();
+        let digest =
+            Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes())))
+                .unwrap();
+        let snapshot = ProcedureSnapshotV2::new(
+            original.snapshot_id().clone(),
+            CanonicalProcedureJsonV1::new(canonical).unwrap(),
+            digest,
+            original.source().clone(),
+            original.created_at(),
+        )
+        .unwrap();
+        let reconstructed = GraphSessionStateV2::new_with_workflow_memory(
+            graph.workspace_revision(),
+            graph.task_title(),
+            snapshot,
+            graph.trace().clone(),
+            graph.counters().to_vec(),
+            graph.attempt_metadata().to_vec(),
+            graph.workflow_memory().clone(),
+            graph.created_at(),
+            graph.completed_at(),
+            graph.cancelled_at(),
+            graph.cancel_reason().map(str::to_owned),
+        );
+        if maximum == 65_536 {
+            assert_eq!(
+                reconstructed.unwrap().workflow_memory(),
+                graph.workflow_memory(),
+                "admission memo changed typed memory equality"
+            );
+        } else {
+            assert!(matches!(
+                reconstructed,
+                Err(podway_store::StoreValueErrorV1::InvalidProcedureV2State {
+                    reason: "Procedure v2 item value violates its immutable declaration"
+                })
+            ));
+        }
+    }
+}
+
+#[test]
+fn stale_prepared_history_matches_cold_state_after_set_clear_and_complete() {
+    use podway_core::{AttemptId, ItemId};
+    use podway_store::ActiveItemMutationV2;
+    let (_root, direct) = fixture();
+    let graph = grown_graph(300, 2);
+    let seed = request("cached-history-seed");
+    direct
+        .mutate(
+            &seed,
+            deadline(),
+            || UnixMillis::new(100),
+            |transaction| {
+                transaction.now();
+                transaction.create_graph(&graph)?;
+                Ok(success(&seed, json!({"seeded":true}), transaction.now()))
+            },
+        )
+        .unwrap();
+    let prepared = direct.prepare_graph(deadline()).unwrap().unwrap();
+    for index in 0..3 {
+        let change = request(&format!("cached-history-change-{index}"));
+        direct
+            .mutate(
+                &change,
+                deadline(),
+                || UnixMillis::new(200 + index * 10),
+                |transaction| {
+                    let prior = transaction.current_graph()?.unwrap().clone();
+                    let active = prior.trace().active_attempt().unwrap().attempt_id();
+                    let next = if index == 2 {
+                        prior
+                            .complete_active_action_v2(
+                                prior.trace().revision(),
+                                active,
+                                Some(
+                                    AttemptId::new("00000000-0000-4000-8000-000000000099").unwrap(),
+                                ),
+                                transaction.now(),
+                            )?
+                            .into_state()
+                    } else {
+                        let item = ItemId::new("item-0").unwrap();
+                        prior
+                            .mutate_active_item_v2(
+                                active,
+                                &item,
+                                Revision::new(index),
+                                if index == 0 {
+                                    ActiveItemMutationV2::Set {
+                                        value: "current value".into(),
+                                    }
+                                } else {
+                                    ActiveItemMutationV2::Clear
+                                },
+                                transaction.now(),
+                            )?
+                            .into_state()
+                    };
+                    transaction.replace_graph(
+                        prior.workspace_revision(),
+                        prior.trace().revision(),
+                        &next,
+                    )?;
+                    Ok(success(&change, json!({"changed":true}), transaction.now()))
+                },
+            )
+            .unwrap();
+        let cold = direct.prepare_graph(deadline()).unwrap().unwrap();
+        let probe = request(&format!("cached-history-probe-{index}"));
+        let rejected = direct.mutate(
+            &probe,
+            deadline(),
+            || panic!("comparison has no clock"),
+            |transaction| {
+                let current = transaction.use_prepared_graph(Some(&prepared))?.unwrap();
+                assert_eq!(
+                    current.as_ref(),
+                    cold.graph(),
+                    "stale prepared history substituted for current rows"
+                );
+                Err(GraphMutationErrorV2::SessionRevisionConflict {
+                    expected: prepared.graph().trace().revision(),
+                    actual: current.trace().revision(),
+                }
+                .into())
+            },
+        );
+        assert!(matches!(
+            rejected,
+            Err(DirectStoreErrorV1::Domain(
+                GraphMutationErrorV2::SessionRevisionConflict { .. }
+            ))
+        ));
+        direct
+            .read(deadline(), |snapshot| {
+                assert!(snapshot.outcome(probe.key())?.is_none());
+                Ok(())
+            })
+            .unwrap();
+    }
+    direct.verify_integrity(deadline()).unwrap();
+}

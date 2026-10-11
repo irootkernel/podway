@@ -866,7 +866,7 @@ def package(arguments: argparse.Namespace) -> dict[str, Any]:
         fail("development-qualification requires exactly the development gate")
     if gate != "patch" and (arguments.patch_base_commit is not None or arguments.prior_make_test_passed is not None):
         fail("non-patch evidence must not carry patch-gate inputs")
-    if not development and arguments.development_source_snapshot_sha256 is not None:
+    if not development and (arguments.development_source_snapshot_sha256 is not None or arguments.development_checks is not None):
         fail("distribution must not carry development source snapshot admission")
     require_native_host()
     dirty = require_clean_tree(arguments.allow_dirty)
@@ -875,6 +875,15 @@ def package(arguments: argparse.Namespace) -> dict[str, Any]:
     snapshot = source_snapshot_sha256()
     if development and arguments.development_source_snapshot_sha256 != snapshot:
         fail("development source snapshot must match the exact source checked and built before packaging")
+    if development:
+        if arguments.development_checks is None:
+            fail("development packaging requires the frozen gate/build checks receipt")
+        from qualify_development import validate_checks
+        try:
+            checks = json.loads(arguments.development_checks.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            fail(f"cannot read development checks receipt: {error}")
+        validate_checks(checks, snapshot, arguments.podway)
     patch_gate = None
     if gate == "patch":
         if not isinstance(arguments.patch_base_commit, str) or not isinstance(arguments.prior_make_test_passed, str):
@@ -973,6 +982,7 @@ def main() -> int:
     )
     package_parser.add_argument("--gate", choices=("full", "patch", "development"), default="full")
     package_parser.add_argument("--development-source-snapshot-sha256")
+    package_parser.add_argument("--development-checks", type=Path)
     package_parser.add_argument("--patch-base-commit")
     package_parser.add_argument("--prior-make-test-passed")
     package_parser.add_argument("--output-dir", type=Path, required=True)

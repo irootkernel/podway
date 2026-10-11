@@ -1232,7 +1232,7 @@ fn assert_fresh_workspace_survives_old_retry(
     assert_ne!(fresh, old);
     let before = files(&root.join(".podway"));
     assert!(matches!(
-        remove_workspace_v1(&resolver, request(root, "remove", Some(old)), &NoEffects),
+        remove_workspace_v1(resolver, request(root, "remove", Some(old)), &NoEffects),
         Err(Error::Workspace(_))
     ));
     assert_eq!(files(&root.join(".podway")), before);

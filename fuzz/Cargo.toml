@@ -56,3 +56,10 @@ doc = false
 bench = false
 
 [workspace]
+
+[[bin]]
+name = "delegation_accept"
+path = "fuzz_targets/delegation_accept.rs"
+test = false
+doc = false
+bench = false

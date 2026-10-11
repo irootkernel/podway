@@ -121,7 +121,8 @@ fn record(graph: &GraphSessionStateV2, values: &[(usize, String)]) -> DirectComm
 }
 
 /// L is produced only by successful public Engine operations, never by seeded state.
-fn grow_l(engine: &Engine, source: &str) -> (u64, u64, usize) {
+fn grow_active_l(engine: &Engine) -> (u64, usize) {
+    let session = engine.graph().trace().session_id().clone();
     let mut completed_nodes = 0;
     let growth_end = Instant::now() + Duration::from_secs(600);
     loop {
@@ -161,6 +162,13 @@ fn grow_l(engine: &Engine, source: &str) -> (u64, u64, usize) {
         grown_bytes >= L_MINIMUM_BYTES,
         "actual API-grown L is only {grown_bytes} bytes"
     );
+    assert_eq!(engine.graph().trace().session_id(), &session);
+    assert!(engine.graph().workflow_memory().attempts().len() > 1);
+    (grown_bytes, completed_nodes)
+}
+
+fn grow_l(engine: &Engine, source: &str) -> (u64, u64, usize) {
+    let (grown_bytes, completed_nodes) = grow_active_l(engine);
     let old_session = engine.graph().trace().session_id().clone();
     engine.success(
         DirectCommandV1::Cursor(DirectCursorCommandV1::Cancel(SessionCancelV1 {
@@ -595,6 +603,7 @@ fn engine_scale_child() {
     let mut failures = 0_u64;
     let mut counts = BTreeMap::<String, u64>::new();
     for index in 0..count {
+        let sample_start = samples.len();
         loop {
             assert!(Instant::now() < end, "writer {writer} deadline expired");
             let graph = harness.graph();
@@ -683,6 +692,9 @@ fn engine_scale_child() {
                     failures += 1;
                 }
             }
+        }
+        for sample in &mut samples[sample_start..] {
+            sample["warmup"] = json!(index < 20);
         }
     }
     outcomes.sync_all().unwrap();
@@ -841,7 +853,8 @@ fn qualify(nodes: usize) {
         "sha256:{:x}",
         Sha256::digest(fs::read(&executable).unwrap())
     );
-    let (engine, (grown_bytes, fresh_bytes, growth_nodes)) = grown_l_engine(nodes);
+    let engine = Engine::new(&procedure(nodes));
+    let (grown_bytes, growth_nodes) = grow_active_l(&engine);
     let initial = engine.graph();
     let initial_sequence = engine.sequence();
     let diagnostic = std::env::var(COUNT_ENV)
@@ -966,8 +979,10 @@ fn qualify(nodes: usize) {
             )
             .unwrap();
             for sample in samples {
-                waits.push(sample["wait_us"].as_u64().unwrap());
-                holds.push(sample["hold_us"].as_u64().unwrap());
+                if sample["warmup"] != true {
+                    waits.push(sample["wait_us"].as_u64().unwrap());
+                    holds.push(sample["hold_us"].as_u64().unwrap());
+                }
                 let kind = if sample["kind"] == "replay" {
                     "replay"
                 } else if sample["success"] == true {
@@ -1046,9 +1061,11 @@ fn qualify(nodes: usize) {
     let summary = json!({"nodes":nodes,"profile":"release","diagnostic":diagnostic.is_some(),
         "g1_gate":diagnostic.is_none(),"g2_gate":nodes==300 && diagnostic.is_none(),"test_binary_sha256":executable_sha256,
         "commit_hold_endpoint":"AfterCommitBeforeOutput","replay_rejection_hold_endpoint":"typed_API_return_conservative_upper_bound",
-        "grown_main_database_bytes":grown_bytes,"fresh_main_database_bytes":fresh_bytes,"growth_completed_nodes":growth_nodes,"writers":8,"observers":2,
+        "grown_main_database_bytes":grown_bytes,"active_session_is_grown":true,"growth_completed_nodes":growth_nodes,"writers":8,"observers":2,
         "successes_per_writer":count,"acknowledged":accepted.len(),"serial_replay_matches":true,
         "lost":0,"duplicated":0,"stale_fence_commits":0,"busy_reaching_caller":0,"observer_violations":0,
+        "warmup_successes_per_writer":20,"samples":waits.len(),"wait_p50_us":percentile(&mut waits,50),"wait_p95_us":percentile(&mut waits,95),
+        "hold_p50_us":percentile(&mut holds,50),"hold_p95_us":percentile(&mut holds,95),
         "wait_p99_us":wait_p99,"wait_max_us":wait_max,"hold_p99_us":hold_p99,"hold_max_us":hold_max,
         "fastest_writer_us":fastest,"slowest_writer_us":slowest,"transactions":transactions,"reports":reports});
     fs::write(

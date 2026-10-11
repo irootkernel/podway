@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import re
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -175,6 +176,8 @@ def validate_reference_paths() -> int:
             fail(f"{case_id} runtime proof must be Rust or Python")
         if re.search(pattern, proof_text) is None:
             fail(f"{case_id} runtime proof function is missing")
+        if proof_path.suffix == ".rs":
+            require_test_route(proof_path, proof_symbol)
     return len(cases)
 
 
@@ -185,6 +188,33 @@ def locator_parts(locator: Any, label: str) -> tuple[Path, str]:
     if not symbol:
         fail(f"{label} has an empty symbol")
     return repository_file(relative, label), symbol
+
+
+def require_test_route(path: Path, function: str) -> None:
+    """A proof must be a registered test with a documented executable route."""
+    from run_native_qualification import CASES
+    from verify_test_layout import target_sources
+
+    crate = path.relative_to(ROOT).parts[1]
+    manifest = tomllib.loads((ROOT / "crates" / crate / "Cargo.toml").read_text())
+    selected = None
+    for target in manifest.get("test", []):
+        if target["name"].startswith(("arch_", "int_", "e2e_")) and path in target_sources(ROOT / "crates" / crate / target["path"]):
+            selected = target["name"]
+            break
+    # Library and binary unit tests have the standard --lib/--bins route.
+    if selected is None and "src" not in path.relative_to(ROOT / "crates" / crate).parts:
+        fail(f"unregistered Rust test source: {path.relative_to(ROOT)}")
+    match = re.search(
+        rf"(?P<attributes>(?:#\[[^\]]*\]\s*)+)fn\s+{re.escape(function.rsplit('::', 1)[-1])}\s*\(",
+        path.read_text(),
+    )
+    if match is None or "#[test]" not in match["attributes"]:
+        fail(f"proof locator is not a Rust test: {path.relative_to(ROOT)}::{function}")
+    if "#[ignore" in match["attributes"] and (
+        crate, f"{path.stem}::{function}"
+    ) not in CASES:
+        fail(f"ignored proof has no documented native execution route: {path.relative_to(ROOT)}::{function}")
 
 
 def validate_payload_proof(proof: Any, label: str) -> int:
@@ -213,6 +243,7 @@ def validate_payload_proof(proof: Any, label: str) -> int:
     source = path.read_text(encoding="utf-8")
     if re.search(FUNCTION_RE_TEMPLATE.format(name=re.escape(function)), source) is None:
         fail(f"{label} function is missing")
+    require_test_route(path, function)
     return 1
 
 
@@ -303,6 +334,7 @@ def validate_crash_registry() -> int:
             FUNCTION_RE_TEMPLATE.format(name=re.escape(test_function)), test_text
         ) is None:
             fail(f"{boundary_id} crash test function is missing")
+        require_test_route(test_path, test_function)
         if source_symbol.rsplit("::", 1)[-1] not in source_text:
             fail(f"{boundary_id} crash source symbol is missing")
     return len(windows)

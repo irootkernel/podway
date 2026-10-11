@@ -24,6 +24,40 @@ fn initialized_schema_generation(fixture: &Fixture) -> u32 {
 }
 
 #[test]
+fn v2dfc017_oversize_record_and_set_stdin_refuse_without_runtime_effects() {
+    let fixture = Fixture::new();
+    fixture.run(&["init", "--idempotency-key", "init"]);
+    fixture.run(&[
+        "start",
+        "--preset",
+        "sw-dev-v2",
+        "--task",
+        "stdin bounds",
+        "--idempotency-key",
+        "start",
+    ]);
+    fixture.run(&["begin", "--idempotency-key", "begin"]);
+    let before = fixture.podway_snapshot();
+    for arguments in [
+        &["record", "--stdin"][..],
+        &[
+            "set",
+            "unknown-item",
+            "--stdin",
+            "--idempotency-key",
+            "oversize-set",
+        ][..],
+    ] {
+        let output = fixture.output_with_stdin(arguments, &vec![b'a'; 1_048_577]);
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(error.as_value()["code"], "REQUEST_TOO_LARGE");
+        fixture.assert_podway_snapshot(&before);
+    }
+}
+
+#[test]
 fn v2dfc016_storeless_residual_contention_emits_a_working_read_only_recipe() {
     let fixture = Fixture::new();
     let init = fixture.run(&["init", "--idempotency-key", "init"]);
@@ -800,7 +834,8 @@ fn v2dfc015_unfenced_removal_rejects_a_wrong_path_even_with_yes() {
 fn v2dfc015_newer_wal_prefix_refuses_overbound_tail_and_markers() {
     use sha2::{Digest as _, Sha256};
     use std::os::unix::fs::MetadataExt;
-    fn image(root: &std::path::Path) -> Vec<(std::path::PathBuf, u64, u64, u64, Option<[u8; 32]>)> {
+    type ImageEntry = (std::path::PathBuf, u64, u64, u64, Option<[u8; 32]>);
+    fn image(root: &std::path::Path) -> Vec<ImageEntry> {
         let mut pending = vec![root.to_path_buf()];
         let mut entries = Vec::new();
         while let Some(path) = pending.pop() {

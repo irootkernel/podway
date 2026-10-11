@@ -743,8 +743,136 @@ installation, or removal of an installed daemon.
 | `V2DFC-014` | Prepare artifact digests outside the write transaction | Completed | Hash local artifacts during preparation, then require each file's stamp, recorded metadata and revisions to match inside the transaction without reading file bytes. | [automation client](../specs/interfaces/automation-client-contract.md), [transactions](../specs/storage/transactions-concurrency-and-idempotency.md) |
 | `V2DFC-015` | Provide confirmed destructive recovery and the newer-generation policy | Completed | Let explicitly confirmed reset and removal recover invalid generation-14 Stores, refuse newer generations with actionable guidance, and record the generation-bump invariant. | [recovery](../specs/storage/recovery-retention-and-maintenance.md), [release and packaging](../specs/operations/release-and-packaging.md) |
 | `V2DFC-016` | Report maintenance markers truthfully and close removal finalization | Completed | Emit distinct maintenance boundaries with recipes that can make progress, and reproduce the removal lock-unlink race before resolving it. | [errors and exit codes](../specs/interfaces/errors-and-exit-codes.md), [recovery](../specs/storage/recovery-retention-and-maintenance.md) |
-| `V2DFC-017` | Restore qualification execution paths and re-measure the candidate | Planned | Give every required qualification a documented execution path, close test and fuzz gaps, and re-measure G1/G2, G7/G8, and G9 on the remediated candidate. | [testing and conformance](../specs/quality/testing-and-conformance.md), [performance qualification](../implementation-tips/direct-cli-performance-qualification.md) |
+| `V2DFC-017` | Restore qualification execution paths and re-measure the candidate | Completed | Give every required qualification a documented execution path, close test and fuzz gaps, and re-measure G1/G2, G7/G8, and G9 on the remediated candidate. | [testing and conformance](../specs/quality/testing-and-conformance.md), [performance qualification](../implementation-tips/direct-cli-performance-qualification.md) |
 | `V2DFC-018` | Promote remediated documentation and contract corrections | Planned | Remove daemon-era normative claims and stale examples, complete the changelog, correct contract drift, and settle stale records before the final Epic audit. | [documentation authorities](../README.md), [requirements traceability](../specs/quality/requirements-traceability.md) |
+
+### V2DFC-017 remediation qualification (October 11, 2026)
+
+The first completion review identified a Store stale-fence workload omission,
+an output-line boundary defect, missing tool failure-path sentinels, and a G9
+drain clock starting after report collection. All four corrections passed
+focused regression checks. Corrected Store qualification and the complete
+source-bound development chain passed. The completion assessment confirmed the
+corrected candidate, and the Task is accepted under the approved Epic execution
+envelope. Task018 and the final Epic audit remain pending.
+No numerical threshold failure or threshold change was recorded.
+
+Native qualification used Apple M5 Pro (18 logical CPUs, 64 GiB), macOS 27.0.1
+build 26A434, pinned Rust 1.97.1, release profile and observed AC power with
+AC low-power mode off. Source was dirty on base
+`4101a014a187d175e6c7cd53df9b671d613ba625`; no diagnostic override was used.
+Measurements have separate frozen bases:
+
+- Retained seven Engine cases: source
+  `002f0a0bdbf33bea2f68efd70be087ca7d53a5f40ff2361c3f007054c64403b1`,
+  suite SHA-256 `929b65933fdd378e1bea3b8da6a87f5681b9367ba479ed41f6664bba811c6429`.
+- Corrected CLI G7/G8 and L lifecycle: source
+  `d53789b648d9abb992da27e1439616207f33026a17d8c5d2bfcb98f8ab06b036`,
+  CLI SHA-256 `a44fd4b3128420c192e9acc25812ccb69250e2cb457a4936c737bec225e83157`.
+  The intervening qualifier repair removed unsupported session-reset `--force`.
+- Corrected Store G1/G2 and G9, and fresh complete development chain: source
+  `f1f9604ddf43a6f5b9055e56fb6c448acf8f7df8d1fcb04f6cd8a71000111081`,
+  Store suite SHA-256 `1d7e7bbf085afb59c92b82187e4e4338c5de75ecfdded0a053f381181f41f96a`.
+  The freshly checked/package-qualified CLI retained the exact SHA-256 above.
+
+Source reconstruction proves the later six-path correction left production,
+Engine qualification inputs, the CLI qualifier and schemas unchanged. Retained
+Engine results belong only to their original frozen suite; an unselected newly
+built Engine suite with a different hash is not covered by those results.
+Earlier Store G1/G2 and G9 measurements are superseded. The development chain
+began after required Store/300 measurements passed, while Store/1024 and G9
+ran in separate fixtures; host load was not exclusive. Measured-record and
+lifecycle metadata follow the frozen checks without changing executable inputs.
+
+G1 used eight writers with 1,000 successes each, exact replays, two observers
+and 20 warm-up successes per writer. Every grown main database exceeded
+43,384,832 bytes; Engine used the same API-grown active session. Both sizes
+passed serial replay and correctness. Stale preparations reject with no outcome
+and retry under a fresh key. Engine loss, duplication, stale-fence commits,
+Busy reaching the caller and observer violations were zero. G2 thresholds
+apply at 300 nodes; 1,024-node latency is informational. Timing below is
+p50/p95/p99/maximum in milliseconds.
+
+- Store / 300: 40,765 measured samples (7,840 commits, 7,840 replays, 25,085 stale-fence rejections);
+  wait 0.002/8.381/16.871/107.072 ms;
+  hold 5.363/9.272/11.573/23.902 ms; writer fairness 1.070.
+  Rejection outcomes and stale-fence commits: zero; G1/G2 pass.
+- Store / 1024: 39,646 measured samples (7,840 commits, 7,840 replays, 23,966 stale-fence rejections);
+  wait 0.002/15.363/30.545/492.070 ms;
+  hold 7.469/13.604/16.789/507.636 ms; writer fairness 1.067.
+  Rejection outcomes and stale-fence commits: zero; G1 pass; G2 informational.
+- Engine / 300: 39,879 measured samples; wait 0.003/8.417/21.658/396.506 ms;
+  hold 6.297/16.049/24.342/406.843 ms; writer fairness 1.063; G1/G2 pass.
+- Engine / 1024: 40,521 measured samples; wait 0.003/11.646/28.456/514.327 ms;
+  hold 9.331/20.018/29.547/522.954 ms; writer fairness 1.024; G1 pass;
+  G2 informational.
+
+Commit hold ends at `AfterCommitBeforeOutput`; replay/rejection hold uses typed
+API return as a conservative upper bound. Passing that bound establishes the
+hold limit without claiming exact rollback instrumentation. Retained Engine
+cases passed G3, all five crash windows (20 SIGKILLs each), 200 random SIGKILLs,
+G5 and G6, in addition to both G1/G2 sizes. G5 completed 100 cycles with four
+writers/readers, 1,500 marker-step SIGKILLs and 596 acknowledged writes: zero
+loss, marked/unexplained missing or unexpected outcomes. Its 1,500 acquisition
+samples had p99 97.637 ms against the unchanged 2 s limit. G6 rejected all
+500 state and 500 artifact preparation races.
+
+G9 used eight writers/four readers for 600,004 ms: 13,560 successes, including
+69 completes, and 10,574 WAL observations. Maximum observed active WAL was
+21,147,992 bytes (limit 64 MiB). At 331 ms from stop-marker publication it was
+4,041,752 bytes, satisfying 4 MiB within 5 s. This conservative endpoint includes
+in-flight work and child/report cleanup; it is never restarted after cleanup.
+The idle WAL connection stayed open and no post-load nudge writes ran. A real
+one-second negative fixture with six-second observer cleanup verifies that a
+late observation cannot pass by resetting the clock; it is not the required soak.
+
+G7 matched S/M/L history with 20 warm-ups and 220 measured calls per cell.
+Every p50/p99 met the unchanged recorded daemon comparator. Full-invocation
+p50/p95/p99/maximum in milliseconds:
+
+- S observe: 40.329/48.291/50.858/51.597 ms; Pass.
+- S set: 71.498/86.680/90.536/102.939 ms; Pass.
+- S record: 48.437/63.412/68.272/86.662 ms; Pass.
+- S complete: 48.677/63.707/71.999/78.094 ms; Pass.
+- M observe: 40.555/54.789/66.648/78.423 ms; Pass.
+- M set: 72.241/88.859/113.815/154.427 ms; Pass.
+- M record: 49.585/67.100/82.538/113.122 ms; Pass.
+- M complete: 50.331/68.200/113.163/142.034 ms; Pass.
+- L observe: 76.645/87.436/103.469/130.165 ms; Pass.
+- L set: 109.952/123.423/142.542/147.245 ms; Pass.
+- L record: 87.938/102.766/125.268/133.238 ms; Pass.
+- L complete: 87.445/102.983/119.576/127.411 ms; Pass.
+
+G8 restored genuine mode tuples and matched L/E1 prehistory, with 20 warm-ups
+and 220 measured calls per cell. Full invocation is a conservative open-cost
+upper bound, rather than isolated-open instrumentation. Required L results,
+p50/p95/p99/maximum in milliseconds:
+
+- L ro-warm: 24.606/25.856/28.083/70.060 ms; p99 limit 100 ms; Pass.
+- L ro-cold: 26.120/27.634/29.366/39.748 ms; p99 limit 1000 ms; Pass.
+- L rw-warm: 22.360/25.118/27.225/63.844 ms; p99 limit 100 ms; Pass.
+- L rw-cold: 23.475/24.444/25.480/71.926 ms; p99 limit 1000 ms; Pass.
+
+L lifecycle restored the original grown image per tuple; archive followed
+cancellation and explicit not-required disposition, and start followed archive.
+Each command had 20 warm-ups and 220 measured calls. These full-invocation
+costs are informational; no lifecycle comparator or total-call limit was invented.
+
+- reset: 131.702/140.116/252.917/749.823 ms; informational.
+- archive: 121.599/131.331/168.170/192.605 ms; informational.
+- start: 50.842/58.439/75.226/222.545 ms; informational.
+
+The corrected complete CLI run passed canonical shipped validation for every
+successful response, retained frozen executable hashes and left zero owned
+children. Its first attempt stopped at invalid lifecycle argv before final
+validation; it is not an overall pass or a threshold failure. The freshly frozen
+corrected source passed `make test`, `make release-prepare`, all seven fuzz
+targets (100,000 runs each), the locked release CLI build and the source-bound
+development package, qualification, local handoff and bundle verification.
+All 16 packaged-conformance scenarios passed. Its artifact class is
+`development-qualification`, nonpublishable. Private receipts/logs remain local
+runtime evidence. Task018 and final Epic acceptance are separate. These checks
+establish no release, installation, activation or consumer acceptance.
 
 Tasks execute in numeric order with one active task across this epic. At most
 the first incomplete task may be In Progress, In Review, or Blocked; every later

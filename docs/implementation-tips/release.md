@@ -58,23 +58,18 @@ record its real dirty state, HEAD/tree, and source snapshot rather than presenti
 it as a clean distribution. Freeze source before the final gates and build:
 
 ```bash
-python3 tools/release_archive.py source-snapshot
-make test
-make release-prepare
-make test-fuzzing
+make development-qualification DEVELOPMENT_OUTPUT_DIR=<fresh-absolute-owned-output>
 ```
 
-Retain the returned `source_snapshot_sha256`. Build the unchanged candidate with
-`cargo +1.97.1 build --release --locked -p podway-cli --bin podway`, the pinned
-single-binary build step used by `make dist`. This dry run does not invoke the
-clean-distribution target. Then use an absolute, agent-owned output directory:
-
-```bash
-python3 tools/release_archive.py package --podway <release-profile-podway> --artifact-class development-qualification --gate development --allow-dirty --development-source-snapshot-sha256 <snapshot-sha256> --output-dir <owned-output>
-python3 tools/qualify_distribution.py qualify --output-dir <owned-output> --gate development
-python3 tools/create_dolgorae_handoff.py create --output-dir <owned-output> --gate development
-python3 tools/verify_release_bundle.py verify --output-dir <owned-output> --gate development
-```
+`tools/qualify_development.py` captures one source snapshot before `make test`,
+`make release-prepare`, `make test-fuzzing`, and the pinned release build. It
+rechecks that original snapshot before and after each step and stops on drift.
+Its `development-checks.json` receipt records the exact commands, exits, source
+bindings and built CLI digest. Development packaging requires this completed
+receipt and the original `--development-source-snapshot-sha256`; a new snapshot
+at package time cannot replace the checked source. The same runner performs
+package, qualification, handoff and final bundle verification with
+`--gate development`. No clean release guard is relaxed.
 
 Every stage rechecks the source snapshot. This class uses the gate label
 `make test + make release-prepare + make test-fuzzing: passed`, keeps all test hooks

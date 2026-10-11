@@ -14,6 +14,7 @@ import shutil
 import signal
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import time
 from typing import Any
@@ -463,6 +464,35 @@ class Qualification:
                                      "index": str(self.index)}, "validate-output")
         assert self.reap(child, "validate-output", kill=False) == 0
 
+    def l_lifecycle(self, fixture: dict[str, Any]) -> dict[str, Any]:
+        """Measure lifecycle commands on the same retained L active history."""
+        worktree = fixture["worktree"]
+        digest = self.invoke(worktree, ["procedure", "preview", "gate.yaml"], "procedure.preview")[0]["result"]["procedure_digest"]
+        samples = {name: [] for name in ("reset", "archive", "start")}
+        for iteration in range(240):
+            self.restore(worktree, fixture["base"])
+            _, elapsed = self.invoke(worktree, ["reset", "--yes", "--progress-summary",
+                "Owned L lifecycle qualification.", "--idempotency-key", f"l-reset-{iteration}"], "session.reset")
+            if iteration >= 20:
+                samples["reset"].append(elapsed)
+            self.restore(worktree, fixture["base"])
+            self.invoke(worktree, ["cancel", "--reason", "Owned archive qualification.",
+                "--idempotency-key", f"l-cancel-{iteration}"], "session.cancel")
+            self.invoke(worktree, ["disposition", "not-required", "--reason", "Owned fixture needs no handoff.",
+                "--idempotency-key", f"l-dispose-{iteration}"], "session.terminal_disposition")
+            _, elapsed = self.invoke(worktree, ["archive", "--idempotency-key", f"l-archive-{iteration}"], "session.archive")
+            if iteration >= 20:
+                samples["archive"].append(elapsed)
+            _, elapsed = self.invoke(worktree, ["start", "--procedure", "gate.yaml", "--expect-procedure-digest", digest,
+                "--task", "Owned L lifecycle qualification", "--idempotency-key", f"l-start-{iteration}"], "session.start")
+            if iteration >= 20:
+                samples["start"].append(elapsed)
+            save(self.root / "l-lifecycle-samples.json", samples)
+        # G7 has no historical comparator for these commands. Do not invent a
+        # daemon baseline or apply G8 open-cost limits to whole invocations.
+        return {name: {**statistics(values), "metric": "full_invocation_us", "verdict": "informational",
+                       "threshold": None} for name, values in samples.items()}
+
     def cleanup(self) -> None:
         for child in self.children:
             if child.poll() is None:
@@ -471,6 +501,8 @@ class Qualification:
 
 
 def main() -> int:
+    if sys.flags.optimize:
+        raise SystemExit("native qualification requires Python assertions; optimization is unsupported")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cli", type=Path, required=True)
     parser.add_argument("--helper", type=Path, required=True,
@@ -525,12 +557,18 @@ def main() -> int:
                     "verdict": "pass" if stats["p50_us"] <= p50 * 1000 and stats["p99_us"] <= p99 * 1000 else "fail"}
         report["G7"] = g7
         save(output / "report.json", report)
-        assert all(cell["verdict"] == "pass" for fixture in g7.values() for cell in fixture.values()), "G7 failed; do not retry without owner direction"
+        if not all(cell["verdict"] == "pass" for fixture in g7.values() for cell in fixture.values()):
+            report["status"] = "G7-failed"
+            raise RuntimeError("G7 failed; do not retry without owner direction")
         report["G8"] = run.g8(fixtures)
+        report["L_lifecycle"] = run.l_lifecycle(fixtures["L"])
         run.validate()
         assert sha(run.cli) == identity["cli_sha256"] and sha(run.helper) == identity["helper_sha256"]
         report["output_validation"] = "passed canonical shipped validator for every successful workload response; version identity metadata retained separately"
-        report["status"] = "passed" if all(cell["verdict"] == "pass" for cell in report["G8"]["L"].values()) else "G8-unverified-by-upper-bound"
+        report["status"] = "passed" if (
+            all(cell["verdict"] == "pass" for fixture in report["G7"].values() for cell in fixture.values())
+            and all(cell["verdict"] == "pass" for cell in report["G8"]["L"].values())
+        ) else "G8-unverified-by-upper-bound"
     finally:
         run.cleanup()
         report["owned_children_remaining"] = 0

@@ -12,6 +12,7 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ### Fixed
 
+- Reuse immutable Procedure and item data during writes, and require executable native qualifications, nonempty exact tests and frozen development bundles.
 - Preserve removal exclusion through final cleanup and report observed maintenance markers with original-key recovery guidance.
 - Recover invalid current workspaces through confirmed unfenced reset or removal, and refuse newer Stores with compatible-version guidance.
 - Hash local artifacts before writer admission and reject changed file stamps without reading artifact bytes inside the transaction.

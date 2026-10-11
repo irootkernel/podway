@@ -169,7 +169,9 @@ command deadline without inventing a failed outcome or changing request identity
 There is no FIFO admission promise or background job recovery.
 
 The dossier's long G1–G6/G9 cases are registered ignored tests and require explicit
-execution, including:
+execution through `make test-native-qualification` (see the
+[native runner and environment](../../implementation-tips/testing.md#native-runtime-qualification)),
+including:
 
 - Engine `int_v2dfc006_scale::engine_g1_g2_grown_l_300` and
   `engine_g1_g2_grown_l_1024` for native multi-process serial equivalence and
