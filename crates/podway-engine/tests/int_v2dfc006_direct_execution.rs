@@ -2050,6 +2050,28 @@ fn direct_goal_decision_rework_completion_and_disposition_preserve_records_and_r
         purge_lookup.as_value()["result"]["outcome"]["scope"],
         "workspace"
     );
+    let catalog: serde_yaml::Value = serde_yaml::from_str(include_str!(
+        "../../../assets/specifications/command-catalog.yaml"
+    ))
+    .unwrap();
+    for (name, key) in [
+        ("session.archive", "archive"),
+        ("session.archive_purge", "purge"),
+    ] {
+        let declared = catalog["commands"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["name"].as_str() == Some(name))
+            .unwrap();
+        let actual = lookup_outcome_v1(&resolver, request(selector.clone(), key), &Clock).unwrap();
+        assert_eq!(
+            declared["idempotency_scope"].as_str(),
+            actual.as_value()["result"]["outcome"]["scope"].as_str(),
+            "canonical catalog scope differs from the retained Engine outcome for {name}"
+        );
+    }
+
     assert_eq!(
         purge_lookup.as_value()["result"]["outcome"]["response"],
         *purged.as_value()

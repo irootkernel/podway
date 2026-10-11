@@ -84,9 +84,10 @@ permanently removes one inactive session under its exact revision fence.
 Force reset requires explicit destructive confirmation (`--yes` for JSON or
 non-terminal callers, or an interactive prompt), a non-blank progress summary
 bounded to 4,000 Unicode scalars, and the same workspace, session, and revision fences. The
-summary is retained only in the bounded durable request and terminal receipt
-that outlive session-row deletion under normal retention rules. It is not a new
-evidence archive.
+summary participates in the bounded canonical request identity. The validated
+workspace-scoped success outcome survives session deletion under normal retention
+rules; no durable job or rejected-request receipt is stored. Podway does not turn
+the summary into a separate evidence archive.
 
 State-aware `start` selects the terminal archival path automatically when the
 current terminal disposition is current. Human TTY mode may continue the current
@@ -99,9 +100,12 @@ as one transaction. Automation selects `preserve` or `delete` explicitly;
 continuation is interactive-only. Running deletion retains explicit confirmation
 and the progress-summary rule.
 Eligibility is derived only from authoritative Podway lifecycle and disposition
-state in the sole-writer transaction; Git cleanliness, roadmap status, process
+state in the direct write transaction; Git cleanliness, roadmap status, process
 state, and external reference reachability never participate.
 
 `reset --all` recreates runtime state through the guarded filesystem protocol;
-it remains the supported recovery after the user has backed up state rejected as
-`LEGACY_PROCEDURE_STATE_UNSUPPORTED`.
+it remains the explicitly confirmed destructive recovery for legacy runtime state
+and an invalid supported current Store. It performs no backup or conversion,
+never adopts the rejected Store's UUID, and refuses newer generations. Retire old
+writers under their original owners before the
+[legacy cutover](../operations/release-and-packaging.md#upgrade).

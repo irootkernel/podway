@@ -7,7 +7,11 @@ The V2DFC-007 CLI emits `podway.output/v4` for retained commands and
 [`output-v4.schema.json`](../../../assets/schemas/output-v4.schema.json) and
 [`error-v2.schema.json`](../../../assets/schemas/error-v2.schema.json).
 `version --json --identity` also emits output v4, with version-result v2 and
-manifest v2 identity.
+manifest v2 identity. The existing
+[CLI failure-rendering boundary](cli-specification.md#output-and-exits) applies
+when a valid timestamp or rebuilt error envelope cannot be supplied: bounded
+stderr and exit 6 replace JSON, without partial output or process abort. This
+exception does not permit emitting an invalid Error v2 envelope.
 
 Direct and delegated Procedures share status, compact status, running next,
 and observation v5, with prepared next v3. The success envelope has no job or

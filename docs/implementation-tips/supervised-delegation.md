@@ -29,10 +29,11 @@ activation authority.
 
 At task start inspect Git state and the affected authorities. Preserve unrelated
 work. Record the exact baseline for executable comparison, including the real
-current Store generation. The planning baseline was generation 11; the current
-Store is generation 13. Delegation receipts were added in generation 12 and
-canonical-path workspace identity in generation 13. The
-[SQLite model](../specs/storage/sqlite-model.md) owns migration details. Do not
+current Store generation. The historical V2SDG planning baseline was daemon generation 11; delegation
+receipts and canonical Git identity arrived in generations 12 and 13. The current
+product uses direct generation 15 and declares no predecessor. The
+[SQLite model](../specs/storage/sqlite-model.md) owns current compatibility and
+unchanged legacy refusal; the historical generations are rejected test inputs. Do not
 resurrect the obsolete 32-session inactive-retention cap.
 
 ## Use established isolated runtimes
@@ -63,13 +64,16 @@ Keep the omitted-declaration path structurally simple. Avoid adapter lookups,
 new global configuration, provider-dependent health checks, package construction,
 or delegation-record scans for an ordinary Direct attempt unless needed by an
 existing invariant. New feature failure cannot be repaired by weakening old
-manifest, mode, Store-integrity, or FIFO guarantees.
+manifest, writer identity, Store integrity, fencing or success-only outcome
+guarantees. The current direct product has no runtime mode or FIFO admission
+contract.
 
 Expose only explicitly authored delegated Procedures. Built-in presets and
 tracked Aquarium workflows are compatibility fixtures, not convenient places to
 turn the feature on. Source-distributed skill changes must distinguish
 implemented local capability from absent real adapters and require explicit
-feature use; do not install those changes into the owner's environment.
+feature use. Verify installed copies against the current direct contract; source
+changes do not install or update them in the owner's environment.
 
 ## Preserve the reviewed adapter semantics
 
@@ -117,7 +121,7 @@ alone as a freshness test.
 For example, correcting an item from `All test pass` to `All tests pass` after
 acceptance is still a recorded-value/revision change. The edit is allowed and
 its success remains success, but completion must now reject stale acceptance.
-Showing an old acceptance success from job lookup does not restore readiness.
+Showing an old acceptance success from `outcome lookup` does not restore readiness.
 Use a current observation before suggesting the next transition.
 
 Help and delegated guidance must explain this cost before acceptance and again
@@ -165,7 +169,8 @@ another isolated worktree continues its ordinary Direct workflow.
    reservation. Then run focused schema, domain, package/digest, storage, and
    projection checks using the existing Make targets and exact aggregated Rust
    test conventions.
-3. Run native CLI/daemon/Store scenarios in isolated named runtimes, including
+3. Run native single-CLI/Direct Engine/Store scenarios in standalone scratch
+   Git worktrees, including
    the complete post-acceptance matrix, acceptance/edit/completion races, lost
    response and replay after a later edit, restart, retry/rework/goals, retention,
    and reset/removal. Preserve ordinary fence-error precedence.
@@ -173,8 +178,10 @@ another isolated worktree continues its ordinary Direct workflow.
    an executor/receipt while an unrelated Direct worktree starts, records,
    progresses, retries, and completes. Verify no provider polling or global
    blocked state has been introduced.
-5. Exercise populated-Store upgrade, transaction/crash failure, strict
-   newer-state rejection, and restore on copies with exact binaries. Reconcile
+5. Exercise write-free legacy refusal, confirmed destructive cutover,
+   transaction/crash failure and strict newer-state rejection on frozen copies
+   with exact binaries. A future declared direct predecessor needs its own
+   migration and restoration proof. Reconcile
    fixture cleanup without broad deletion or installed service changes.
 6. Pass the full `make test` development gate through the repository-prescribed
    Gaori entry point and independently review the complete epic against its
@@ -193,7 +200,7 @@ complete intended diff, including new files.
 | Lifecycle | Prepared/start/begin, action completion, decisions, retry, rework, goal revision/assessment, cancellation and disposition |
 | Evidence | Existing item/check-result recording, paging, guards, blockers, byte limits and error precedence |
 | Persistence | Admitted snapshots, attempts, current/inactive sessions, canonical values, old terminal envelopes and replay |
-| Runtime | Daemon readiness/recovery, worktree FIFO, unrelated worktree progress, mode/manifest rejection and no fallback |
+| Runtime | Direct process crash/retry, unrelated worktree progress, writer-manifest and newer-generation rejection, write-free reads and no fallback |
 | Maintenance | Existing archive, reset, removal, retention and confirmation boundaries |
 | Delegation only | Mandatory gate, no skip bypass, exact package, round/disposition checks, complete post-acceptance matrix, immutable receipt, warnings and explicit stale recovery |
 | Adapter mapping | Distinct Role/task/result digest domains, permitted value sources, explicit unsupported paths, no fabricated provenance or automatic redispatch |
@@ -217,16 +224,16 @@ live WAL database's main file is not adequate evidence of a restorable backup.
 Do not overwrite post-upgrade user work with an older copy under a generic
 rollback instruction; stop and obtain an explicit recovery decision.
 
-[ADR-0031](../architecture-decision-records/0031-keyed-runtime-modes-and-managed-development-service.md)
-prohibits ordinary managed-generation activation when an irreversible runtime
-migration would make proven restoration impossible. Keep that restriction;
-opening delegation is not an exception. Production migration/restore and
-managed-runtime activation are separate operational work, not a final
-implementation-task side effect.
+[ADR-0038](../architecture-decision-records/0038-remove-the-daemon.md) supersedes
+the runtime-mode and managed-service architecture. Current Podway cannot control
+an old installed writer; retirement belongs to its original owner under separate
+authorization. The cutover has no daemon-era migration or restoration promise.
+A future direct predecessor, consumer adoption and installation each require
+separate qualification and authority; delegation implementation grants none.
 
 ## Handoff, not deployment
 
-A completed foundation handoff records exact tested source, CLI/daemon,
+A completed foundation handoff records exact tested source, single CLI,
 manifest and Store identities; the scenario inventory; failures resolved;
 remaining external integration exclusions; and fixture cleanup. Include the
 reviewed field/digest matrix, unavailable real-path prerequisites, and the

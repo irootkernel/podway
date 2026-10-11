@@ -9,9 +9,27 @@ This file records concise shipped outcomes and the planned next stable release.
 - Run Podway commands directly without a daemon, preserve crash-safe retries,
   and return replacement guidance for retired commands and explicit reset
   guidance for legacy workspaces.
+- Publish the direct contract generation: Output v4, Error v2, version-result v2,
+  manifest v2, observation v5 and SQLite generation 15, without daemon-era
+  compatibility or a declared Store predecessor.
+- Retire daemon, job, IPC, socket, account-runtime and workspace-mode commands,
+  flags and error families, including exit class 3. Retired syntax returns
+  `COMMAND_RETIRED` (exit 2); `job lookup` points to `outcome lookup`.
+- Reconcile uncertain mutations through read-only `outcome lookup` using the
+  original key and request. Only committed successes retain exact replayable
+  responses; rejected requests retain no outcome.
+- Refuse legacy generations 1–14 unchanged. Explicitly confirmed reset discards
+  runtime history and creates a fresh workspace without backup or migration;
+  an older binary cannot reset or remove a newer Store.
+- Require compatible Aquarium and Dolgorae releases before installation. Finish
+  legacy sessions, retire every old writer through its original owner, install
+  the qualified single CLI, separately retire legacy account state, then confirm
+  reset of each selected worktree. Contract corrections land before `v0.2.13`
+  so consumers pin the final contract identity once.
 
 ### Fixed
 
+- Align product and lifecycle documentation, worked examples and the archive-purge catalog with the direct contract, and retire obsolete prototype feedback.
 - Reuse immutable Procedure and item data during writes, and require executable native qualifications, nonempty exact tests and frozen development bundles.
 - Preserve removal exclusion through final cleanup and report observed maintenance markers with original-key recovery guidance.
 - Recover invalid current workspaces through confirmed unfenced reset or removal, and refuse newer Stores with compatible-version guidance.

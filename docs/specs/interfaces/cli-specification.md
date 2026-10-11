@@ -338,7 +338,8 @@ Machine clients consume schema IDs, command names, stable fields, and error code
 never text. Text mode is advisory rendering of the same result. Exit status follows
 the canonical [exit-code table](errors-and-exit-codes.md#exit-codes).
 
-Every JSON invocation emits exactly one bounded newline-terminated object on stdout.
+Except for the failure-rendering escape boundary below, versioned JSON emits
+exactly one bounded newline-terminated object on stdout.
 Outside recognized value positions, usage failures honor a standalone `--json`
 anywhere before the `--` delimiter, including after unknown syntax. Local internal
 failures and local results that exceed the output budget return a validated error

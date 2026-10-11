@@ -1,11 +1,11 @@
 # Procedure v2 Workflow
 
 This walkthrough exercises the shipped `bug-fix-v2` preset through the normal
-daemon endpoint. Run it in the Git worktree whose task Podway should guard. The
+in-process Direct Engine. Run it in the Git worktree whose task Podway should guard. The
 canonical preset records a caller's evidence and decisions. Podway enforces the
 declared progression rules, but it does not run checks or decide whether recorded
-claims are true. The local socket trusts same-user processes; actor labels provide
-correlation, not authentication or authorization.
+claims are true. The local worktree trusts same-user processes; actor labels
+provide correlation, not authentication or authorization.
 
 Write Procedure definitions, prompts, goal statements and criteria, narrative
 text and list evidence, check-result descriptors and summaries, and mutation or
@@ -28,8 +28,8 @@ podway --json start \
   --dry-run
 ```
 
-The dry run returns `podway.output/v3` with
-`result.schema: podway.session-start-result/v3`, `result.dry_run: true`, and the
+The dry run returns `podway.output/v4` with
+`result.schema: podway.session-start-result/v4`, `result.dry_run: true`, and the
 shipped `result.procedure_digest`; it creates no session. Remove `--dry-run` to
 create a prepared session, then begin it with the optional initial goal:
 
@@ -57,8 +57,9 @@ podway --json begin
 ```
 
 `podway init` configures `sw-dev-v2` as the default for later new sessions; it
-does not reinterpret an existing session. The three established presets are version
-3. A newly started preset session admits its exact current embedded bytes and
+does not reinterpret an existing session. `analysis-v2` is version 1;
+`bug-fix-v2`, `small-change-v2` and `sw-dev-v2` are version 3. A newly started
+preset session admits its exact current embedded bytes and
 digest. A session admitted under an earlier version keeps its immutable snapshot
 until it is explicitly replaced; there is no in-place migration.
 
@@ -178,11 +179,11 @@ The source must still be a dominating `required: true` evidence reference with
 ## Read stable state before each mutation
 
 ```bash
-podway --json observe --wait-for-idle
+podway --json observe
 ```
 
 Automation uses the JSON contract, never human-readable text. The observation
-returns `podway.observation-result/v3` for a Direct Procedure or `podway.observation-result/v4` for a Procedure with delegation; read these stable fields:
+returns `podway.observation-result/v5` for every Procedure; read these stable fields:
 
 | JSON field | CLI precondition or use |
 |---|---|
@@ -194,7 +195,6 @@ returns `podway.observation-result/v3` for a Direct Procedure or `podway.observa
 | `result.active_items[].item_id` and `.revision` | select the matching `--if-item-revision` |
 | `result.guidance.allowed_actions[]` | legal current mutations |
 | `result.guidance.allowed_manual_rework_targets[]` | legal `rework --to` values |
-| `result.status.queue.pending_mutations` | false after the requested queue barrier |
 
 `result.guidance.readback[].items[]` carries each selected evidence item's identity,
 digest, and total size. Observation guidance is metadata only: it never carries a
@@ -217,7 +217,12 @@ the recorded value changed: re-read observe and restart that item from its first
 `result.mutation_templates[]` supplies the applicable optimistic-concurrency
 fences and states whether explicit authorization is required. Templates still
 contain semantic and idempotency placeholders; callers must fill them from
-performed work and their own stable key. Human-readable wording is not an
+performed work and their own stable key. A read has no queue barrier and reflects
+one committed snapshot. Before another mutation, re-observe and derive its fences.
+After response loss or an uncertain COMMIT, use
+`podway --json outcome lookup --idempotency-key <original-key>` and preserve the
+exact original request. Reconcile any original writer still in progress before
+identical retry; a retained success returns its complete original response. Human-readable wording is not an
 automation key.
 
 Pass all applicable fences for a direct mutation. The examples below abbreviate
@@ -261,7 +266,7 @@ podway --json record --stdin <<'JSON'
 JSON
 ```
 
-The result schema is `podway.item-record-many-result/v1`. Its `items` array is
+The result schema is `podway.item-record-many-result/v2`. Its `items` array is
 ordered by item ID and reports each item revision; any invalid or stale operation
 leaves the whole set unchanged.
 
@@ -320,7 +325,7 @@ podway --json complete \
 
 If an action or decision attempt must be discarded and repeated, use retry. A
 successful retry creates a fresh attempt. Before recording any new item, re-run
-`podway observe --json --wait-for-idle`:
+`podway observe --json`:
 
 ```bash
 podway --json retry \
@@ -350,7 +355,7 @@ podway --json decide \
 
 The success result exposes `result.effect`, `result.target_graph_node_id`,
 `result.target_attempt_id`, and `result.revision`. Do not infer later state from
-these fields alone; instead, re-run `podway observe --json --wait-for-idle`.
+these fields alone; instead, re-run `podway observe --json`.
 
 ## Rework and revise the goal
 

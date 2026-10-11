@@ -1,4 +1,4 @@
-//! Generation-14 direct persistence.
+//! Generation-15 direct persistence.
 //!
 //! This boundary owns native maintenance leases and private SQLite transactions. The
 //! engine supplies pure domain transitions and validates the complete public success.

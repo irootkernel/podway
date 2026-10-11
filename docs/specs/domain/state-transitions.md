@@ -10,13 +10,17 @@ mutations fence the item revision; goal mutations fence the goal revision where
 applicable. Single-item mutations retain their item-local concurrency exception
 and do not require an unchanged session revision. An atomic multi-item mutation
 fences the observed session and active attempt plus every selected item revision.
-Durable mutations also carry an idempotency key.
+Direct mutations also carry an idempotency key.
 
 The evaluator first validates identity and preconditions, then domain legality,
 then writes the complete transition atomically. A changed session advances its
-revision exactly once. A rejected transition does not write domain state. Retrying
-the same admitted idempotency key returns the original receipt or terminal result;
-using the key with a different canonical request fails.
+revision exactly once. The state change, journal, workspace sequence and validated
+success outcome commit in one transaction. A rejected transition writes no state
+or outcome. Retrying a retained successful key with the identical canonical
+request returns its complete original response; using that key with different
+input fails. Rejected requests are evaluated again under current state. The
+[transaction contract](../storage/transactions-concurrency-and-idempotency.md)
+owns lookup-first validation and retention.
 
 Supported lifecycle transitions are start, start-replace, begin, complete, skip,
 retry, block, unblock, cancel, terminal disposition, reset, decide, rework, goal

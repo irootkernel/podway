@@ -468,7 +468,7 @@
     {
       "kind": "catalog",
       "path": "spec/command-catalog.yaml",
-      "sha256": "sha256:390dde54c0e54dbc7c3d23bcc006a4324dfa1d77226baa3ff20cf9a2e39cd441"
+      "sha256": "sha256:175caaf4a982fa05a2685815c2991fd550f35a781e428bf3611d295833957b9f"
     },
     {
       "kind": "catalog",
@@ -483,7 +483,7 @@
     {
       "kind": "store_schema",
       "path": "spec/sqlite-v15.sql",
-      "sha256": "sha256:32b994da3bc317e40bfbf41764b416a446a709e1887727a1fb6a48d14ef1d61c"
+      "sha256": "sha256:968187d89ad612b47e3ec7ff0e8c415d447dd462cd2b5faec372a4b8f0cecf7a"
     },
     {
       "kind": "transition_matrix",
@@ -601,7 +601,7 @@
       "sha256": "sha256:7de5f4f024eb795ae7fb73594d4847b833016bea6be9f2737c567b524ae5466e"
     }
   ],
-  "digest": "sha256:2e2e13a0271b273ae1c805f0ac5051ce73e3cda559309ff2928fdb853ab1c466",
+  "digest": "sha256:c7302b444f34e8f38e940a5290d40b16afc0b8837309e3ea831f6a6a30a18edc",
   "product": "podway",
   "product_version": "0.2.12",
   "schema_version": "podway.contract-manifest/v2"

@@ -10,7 +10,7 @@ establish that the check passed for a particular candidate.
 1. Pure graph, goal, item, decision, retry, rework, and delegation domain tests.
 2. Procedure parsing, semantic validation, canonicalization, package digests,
    source containment, and shipped preset identity tests.
-3. Generation-14 Store initialization, reconstruction, identity classification,
+3. Generation-15 Store initialization, reconstruction, identity classification,
    atomic success outcomes, retention, corruption, and legacy refusal tests.
 4. Typed Engine execution, preparation/revalidation races, coherent read
    snapshots, bounded lock contention, maintenance, and crash recovery tests.

@@ -89,8 +89,9 @@ podway version --json --identity
 ## Legacy state and cutover
 
 The daemon-free contract has no backward compatibility with daemon-era output,
-error codes or Store generations 1–13. An old worktree or old maintenance marker
-returns `LEGACY_RUNTIME_STATE_UNSUPPORTED` without changing its bytes, migrating,
+error codes or Store generations 1–13. The unreleased direct generation 14 is
+also refused unchanged; generation 15 declares no predecessor. An old worktree
+or old maintenance marker returns `LEGACY_RUNTIME_STATE_UNSUPPORTED` without changing its bytes, migrating,
 checkpointing or creating SQLite SHM. Reset is destructive: it makes no backup and
 performs no conversion. Active sessions and retained runtime history are lost.
 
@@ -180,6 +181,11 @@ curl -fsSLo "$procedure_skill_dir/agents/openai.yaml" \
 ```
 
 The authoring skill produces and validates declarative source, then hands off preview's exact digest-fenced start suggestion without starting or mutating a session. Consult the agent's documentation for skill reload requirements. The commands above require network access and `curl`, and overwrite existing files with the same names. Replace `main` with one exact release tag or commit SHA when a reproducible, pinned skill version is required.
+
+Installing the CLI neither installs nor updates these skills. Before direct-generation
+use, verify that the installed copies support Output v4, Error v2, observation
+v5, success-only outcome lookup and the legacy cutover. Update daemon-era
+copies through an explicitly authorized skill installation.
 
 For supervised delegation, follow the [worked review example](docs/examples/supervised-delegation.md)
 and its canonical YAML. The example is exercised by the real direct CLI in

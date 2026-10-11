@@ -3,7 +3,6 @@
 PRAGMA foreign_keys = ON;
 PRAGMA journal_mode = WAL;
 PRAGMA synchronous = FULL;
-PRAGMA busy_timeout = 5000;
 PRAGMA trusted_schema = OFF;
 
 CREATE TABLE workspace_state (

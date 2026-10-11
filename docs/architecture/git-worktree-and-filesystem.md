@@ -71,7 +71,7 @@ they do not protect against root or malicious same-user modification.
 
 ## Workspace identity
 
-Generation-14 Store binding contains the generated workspace UUID, Git common
+Generation-15 Store binding contains the generated workspace UUID, Git common
 and worktree-administration fingerprints, and last validated canonical root.
 The fingerprints retain ADR-0036's role-tagged hashes of lossless canonical path
 bytes. Device/inode/type/birth-time evidence detects replacement during a request;

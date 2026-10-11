@@ -100,7 +100,8 @@ completion commit. Freeze the exact development source, capture
 unchanged release-profile CLI.
 
 Use `package --artifact-class development-qualification --gate development
---allow-dirty --development-source-snapshot-sha256 <hash>`, then the `qualify`,
+--allow-dirty --development-source-snapshot-sha256 <hash>
+--development-checks <frozen-checks-receipt>`, then the `qualify`,
 `create` handoff and `verify` bundle commands with `--gate development`, as listed
 in the [release workflow](../../implementation-tips/release.md#non-distribution-development-qualification).
 This is explicitly nonpublishable. It permits an open current changelog section
@@ -177,6 +178,12 @@ catalog drift is rejected. Preparing this contract does not certify Aquarium or
 Dolgorae adoption or change either external repository.
 
 ### Consumer adoption prerequisites
+
+Every public contract correction must land before the stable `v0.2.13` candidate
+is qualified. Aquarium and Dolgorae pin that final release's exact contract
+identity once, after the canonical assets, manifest and adapter are settled.
+Intermediate source identities and earlier development receipts do not authorize
+consumer activation or promise compatibility with the final release.
 
 Installation of `v0.2.13` waits for Aquarium and Dolgorae releases that support
 the direct contract generation. Their implementation and qualification belong

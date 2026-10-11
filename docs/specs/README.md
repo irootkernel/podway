@@ -1,14 +1,14 @@
 # Specifications
 
 These documents define the behavior Podway must satisfy. They cover the CLI and
-daemon as one product and are grouped by concern:
+its in-process Direct Engine as one product and are grouped by concern:
 
 - [Product](product/): goals, vocabulary, workflows, and supported boundaries.
 - [Domain](domain/): procedures, items, transitions, rework, and presets.
-- [Interfaces](interfaces/): CLI, JSON, IPC, automation, errors, and exit codes.
+- [Interfaces](interfaces/): direct CLI, JSON, automation, errors, and exit codes.
 - [Storage](storage/): SQLite state, transactions, recovery, and retention.
-- [Operations](operations/): trust, observability, installation, packaging, and the Aquarium development service.
-- [Runtime reset](operations/runtime-reset.md): read-only ordinary account-runtime planning and reserved retirement, preservation, coordination and exact recovery contracts.
+- [Operations](operations/): trust, observability, installation, packaging and legacy cutover.
+- [Historical runtime reset](operations/runtime-reset.md): the retired account-runtime contract, retained for historical reference; it is not a current command surface.
 - [Quality](quality/): tests, acceptance criteria, and traceability.
 
 ## Supervised delegation

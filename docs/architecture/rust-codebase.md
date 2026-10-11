@@ -22,7 +22,7 @@ Architecture targets cannot launch product binaries. Shared fixtures live in
 | `podway-core` | Pure domain values, transitions, satisfaction, graph status, invariants and errors |
 | `podway-config` | Bounded workspace/Procedure parsing, semantics, canonical snapshots and safe source resolution |
 | `podway-protocol` | Closed public JSON envelopes/results/errors, typed direct inputs, schema validation, build identity and offline release verifier |
-| `podway-store` | Generation-14 persistence, coherent snapshots, atomic success outcomes, native maintenance leases, classification, retention and integrity |
+| `podway-store` | Generation-15 persistence, coherent snapshots, atomic success outcomes, native maintenance leases, classification, retention and integrity |
 | `podway-git` | Read-only native worktree discovery, canonical-path identity, containment, descriptor and replacement-race checks |
 | `podway-presets` | Embedding and validation of canonical `assets/presets/` YAML and catalog metadata |
 | `podway-engine` | Direct API composition, preparation, request identity, projections, native artifact/source adapters and maintenance protocols |

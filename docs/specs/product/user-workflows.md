@@ -42,9 +42,15 @@ target. Podway creates a fresh attempt and applies the procedure's evidence
 invalidation rules. Blockers prevent advancement until explicitly resolved.
 
 Automation uses `--json`, carries the latest workspace/session/attempt/item/goal
-preconditions, and assigns an idempotency key to every mutation. On response loss it
-uses `job lookup --idempotency-key` before retrying. A detached mutation is followed
-through `job status` or `job wait`.
+preconditions, and assigns a stable idempotency key to every mutation. Each command
+runs synchronously. On response loss or `MUTATION_OUTCOME_UNKNOWN`, use
+`outcome lookup --idempotency-key <original-key>` and preserve the exact canonical
+request. A retained success replays its original response; a rejected request
+retains no outcome. Not-found after response loss alone does not prove rollback:
+reconcile any still-running original writer before an identical-request retry.
+There is no detached execution, job status, or queue barrier. Reads return one
+committed snapshot; a later writer may change it, so re-observe before deriving
+new mutations. See the [transaction contract](../storage/transactions-concurrency-and-idempotency.md).
 
 Actors may hand off within a worktree by reading one recorded v2 observation
 result; chat history is not authority. Parallel tasks belong in separate Git
@@ -56,5 +62,8 @@ Before default reset or replacement of a completed or cancelled session, record 
 handoff or not-required disposition for its exact current terminal revision. Force
 deletion of running or undisposed terminal work requires explicit authorization and
 a bounded progress summary. If opening old runtime state returns
-`LEGACY_PROCEDURE_STATE_UNSUPPORTED`, back up `.podway/runtime/` first and use
-`podway reset --all` only with explicit authorization.
+`LEGACY_RUNTIME_STATE_UNSUPPORTED`, follow the separately authorized
+[ordered cutover](../operations/release-and-packaging.md#upgrade) before confirmed
+`podway reset --all --yes --idempotency-key <new-key>`. Reset itself makes no
+backup or migration. Newer-generation refusal requires a supporting binary;
+an older binary cannot reset or remove that Store.

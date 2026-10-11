@@ -448,7 +448,7 @@ commands:
   - session_revision
   result_schemas:
   - podway.session-archive-purge-result/v1
-  idempotency_scope: session
+  idempotency_scope: workspace
 - name: workspace.reset_all
   availability: executable
   cli:

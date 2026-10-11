@@ -16,7 +16,7 @@ initialize a worktree
   -> satisfy the active action node
   -> complete, retry, decide, or follow declared rework
   -> reach a terminal node and close the goal
-  -> reset the worktree for the next task
+  -> record terminal ownership, then archive or start the next task
 ```
 
 Podway answers which Procedure governs the task, which node is active, which
@@ -25,23 +25,28 @@ declared rework path applies.
 
 ## Product composition
 
-Podway consists of the `podway` CLI and the user-scoped `podwayd` daemon. The
-daemon is the sole normal writer and executes at most one mutation per worktree;
-independent worktrees may progress concurrently. Authoritative task state lives
-under `.podway/runtime/` in the owning worktree.
+Podway ships one `podway` CLI. Its in-process Direct Engine reads one committed
+snapshot or commits a fenced mutation and its validated success outcome in the
+owning worktree. Native maintenance leases and SQLite serialize compatible
+writers; there is no durable admission queue or FIFO guarantee. Authoritative
+task state and maintenance locks live under `.podway/runtime/`. Podway creates
+no daemon, socket, LaunchAgent, account state, or global workspace registry.
 
 The public product accepts only `podway.procedure/v2`, emits successful results
-through `podway.output/v3`, and ships exactly `analysis-v2`, `bug-fix-v2`,
+through `podway.output/v4`, and ships exactly `analysis-v2`, `bug-fix-v2`,
 `small-change-v2`, and `sw-dev-v2`.
-Procedure-independent contracts such as `podway.ipc/v1`, `podway.error/v1`, the
-workspace configuration, and the contract manifest retain their own versions.
+Failures use `podway.error/v2`. Version identity and the contract manifest use
+their v2 families, and every Procedure uses `podway.observation-result/v5`.
+Workspace configuration and other result families retain their own versions;
+Procedure support is identified by `podway.procedure/v2`.
 
 ## Principles
 
 1. The current task and its formal next action come first.
 2. Procedure definitions are bounded data, never executable code.
 3. Retry, decisions, and declared rework are explicit graph transitions.
-4. Mutations are durable, serialized, fenced, atomic, and idempotent.
+4. Successful mutations commit atomically with fenced, idempotent outcomes;
+   rejected mutations have no outcome and are re-evaluated on retry.
 5. Automation consumes versioned JSON and stable error codes.
 6. Worktree-local state is not copied into a global task ledger.
 7. Same-user local trust prevents accidents; it is not a security boundary.
@@ -55,13 +60,15 @@ stores artifact metadata rather than artifact bytes.
 
 ## Supported boundary
 
-The supported release target is native Apple Silicon macOS. SQLite schema-v13 is
-the canonical store. Empty predecessors and supported Procedure v2 predecessors
-through schema-v9 migrate transactionally only in `prod`; named modes reject
-pre-v10 stores without mutation. Schema-v10 through schema-v12 preserve their
-stored runtime-mode ownership while migrating transactionally in every matching
-mode. Any predecessor containing Procedure v1 domain state fails closed with
-`LEGACY_PROCEDURE_STATE_UNSUPPORTED` and is never converted or deleted automatically.
+The supported release target is native Apple Silicon macOS. Direct SQLite
+generation 15 is the canonical Store. It declares no predecessor: daemon-era
+generations 1–13 and the unreleased direct generation 14 are refused unchanged
+with `LEGACY_RUNTIME_STATE_UNSUPPORTED`. Explicitly confirmed reset discards
+their runtime history and creates a fresh workspace without conversion or backup.
+Newer generations are refused even by destructive commands and require a
+compatible writer. The [SQLite model](../storage/sqlite-model.md) owns writer
+compatibility, and [release and packaging](../operations/release-and-packaging.md)
+owns separately authorized consumer adoption and legacy-writer retirement.
 
 Continue with [goals and non-goals](goals-and-non-goals.md), [terminology and
 invariants](terminology-and-invariants.md), and [user workflows](user-workflows.md).

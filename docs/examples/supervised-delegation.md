@@ -9,7 +9,7 @@ owns release availability.
 
 ## What this example proves
 
-The example runs against real Podway CLI and daemon binaries with a deterministic
+The example runs against the real single Podway CLI with a deterministic
 test executor. No model, Dolgorae service, credentials, or network access is
 needed for the scenario. Source builds require the pinned Rust toolchain and
 its build dependencies. The test does not qualify a live adapter or establish
@@ -52,27 +52,28 @@ The fixture's three rounds and feedback are simulated, not executed model work.
 From this source checkout on native Apple Silicon macOS, run:
 
 ```bash
-make test-e2e-exact E2E_TEST=podway-cli::e2e_suite::e2e_v2sdg008_qualification::v2sdg008_native_lifecycle_migration_and_host_qualification
+make test-e2e-exact E2E_TEST=podway-cli::e2e_suite::e2e_v2sdg008_qualification::supervised_delegation_preserves_documented_example_hosts_and_recovery
 ```
 
-This registered test builds the required binaries and executes the example plus
-the existing host, recovery, and migration scenarios. Its helper creates a
-temporary Git workspace, passes both `--mode dev` and its exact disposable
-`PODWAY_DEV_HOME`, verifies the socket, and cleans up its daemon and socket.
-It copies the linked YAML byte-for-byte; it does not reconstruct the graph or
-change any installed daemon, active user worktree, or global skill installation.
+This registered test builds and freezes the exact CLI and executes the example
+plus the host and response-loss/restart scenarios. Its helper uses standalone
+scratch Git worktrees and explicit worktree selectors, validates direct binary
+and contract identities, and reaps its bounded children before removing owned
+fixtures. It copies the linked YAML byte-for-byte and does not reconstruct the
+graph or use an installed service, active user worktree or global skill as a fixture.
 
-After those binaries are prepared, a shorter diagnostic runs only the example:
+After the CLI is prepared, a shorter diagnostic runs only the example:
 
 ```bash
 python3 tools/qualify_supervised_delegation.py \
-  --podway target/debug/podway --podwayd target/debug/podwayd --scenario example
+  --podway target/debug/podway --scenario example
 ```
 
-The helper rejects binaries without test isolation before starting a process.
-Success reports `checks.example: true`, the example source SHA-256 and canonical
-Procedure digest, binary hashes, daemon contract identity, and
-`runtime_cleanup: true`. `live_adapter` and `live_model` remain `not_performed`.
+The helper verifies Output v4, version-result v2 and manifest v2, then runs only
+the frozen CLI in its owned fixtures. Success uses
+`podway.direct-delegation-qualification/v2` and reports `checks.example: true`,
+the example source SHA-256 and canonical Procedure digest, CLI hash and direct
+contract identity, and `runtime_cleanup: true`. `live_adapter` and `live_model` remain `not_performed`.
 The complete development gate is still `make test`.
 
 ## Follow the command sequence
@@ -91,10 +92,11 @@ podway --json procedure preview .podway/procedures/supervised-review-v2.yaml
 
 The following table explains the runtime operations executed by the isolated
 helper. These are command tails, not commands to paste into an active workspace.
-For manual use in a separately authorized workspace, preserve its exact runtime
+For manual use in a separately authorized workspace, preserve its exact CLI
 and worktree selector and derive every mutation from fresh observation. Run
-`observe --json --wait-for-idle` after each mutation. A delegated Procedure uses
-`podway.observation-result/v4`, including during its Direct placements.
+`observe --json` after each mutation. Every Procedure uses
+`podway.observation-result/v5`, including delegated and Direct placements;
+observation is one committed snapshot, not a queue barrier.
 
 | Step | Command tail or external responsibility | Expected observation |
 | --- | --- | --- |
@@ -103,7 +105,7 @@ and worktree selector and derive every mutation from fresh observation. Run
 | Read | `delegation package --json`; `evidence read --json --source source --item input` | Exact package digest and full selected input; follow paging tokens if truncated. |
 | Supervise | Integration dispatches and records feedback; Primary judges the result. | Executor-acknowledged task, complete result, round count, and settled worker state. |
 | Record | `set result <final-result>` and, if needed, `set note <final-note>` | Items ready; input package digest unchanged. |
-| Accept | `delegation accept --stdin --json < acceptance.json` | `podway.delegation-accept-result/v1`; observation state `accepted`, same cursor and attempt. |
+| Accept | `delegation accept --stdin --json < acceptance.json` | `podway.delegation-accept-result/v2`; observation state `accepted`, same cursor and attempt. |
 | Inspect | `delegation receipt --json --session <session-id> --attempt <attempt-id>` | `podway.delegation-receipt-result/v1` with current applicability. |
 | Advance | Fenced `complete` | Active `closeout`; previous receipt is historical. |
 | Close | Read selected `work.result`, `set closeout <conclusion>`, then `complete` | Session lifecycle `completed`. |
@@ -117,7 +119,9 @@ command help rather than copying old values.
 The acceptance document alone carries its fences and idempotency key; do not
 also supply command-line identity flags. Use the
 [acceptance field-source table](../../skills/use-podway/references/delegation.md#acceptance-field-sources)
-to assemble it. The integration supplies external identities and digests; the
+and the [delegation specification](../specs/interfaces/supervised-delegation.md)
+to assemble it. Require installed skill copies qualified for this direct
+generation. The integration supplies external identities and digests; the
 Primary supplies the decision. Podway computes the accepted item-state digest.
 An optional note may remain unset, but adding it after acceptance changes the
 accepted item state.
@@ -140,12 +144,16 @@ Retry/rework does not promise another model call and does not decide whether an
 artifact is reusable. The integration must reconcile uncertain external work
 and explicitly validate any reused result against the new inputs and task
 identity. For a lost acceptance response, keep the original request and key,
-use job lookup, and inspect current readiness before completing. The existing
+use `outcome lookup --idempotency-key <original-key>` and inspect current
+readiness before completing. A not-found read after response loss is not proof
+that the original writer has finished; reconcile it before identical retry. The existing
 recovery scenarios test response loss and process restart independently.
 
 ## Adapt for real work
 
 Use [delegation authoring guidance](../../skills/create-podway-procedure/references/delegation.md)
+and the
+[adapter mapping requirements](../implementation-tips/delegation-adapter-contract-review.md#integration-handoff)
 to replace the synthetic binding and Role identity with a qualified mapping and
 choose an appropriate round budget and worker disposition. Revalidate the exact
 modified file and use its new preview digest. Record supported-release evidence
