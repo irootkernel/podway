@@ -200,6 +200,10 @@ Reads never resume published maintenance. Markerless maintenance contention
 without a Store, including init and reset during final removal, emits read-only
 `version --identity`; wait for the owner and retry the original request with its
 key and fences. State refresh applies only when a Store is present.
+If Git metadata changes while constructing maintenance recovery guidance, the
+original maintenance refusal remains with read-only `version --identity` guidance.
+Its boundary names the observed marker, or `maintenance_lock` when no marker was
+observed; the changed diagnostic snapshot grants no recovery authority.
 
 Normal reads, writes, and replay refuse daemon-era Store generations 1–13 and
 markers without conversion, deletion, or SHM creation. The unreleased older direct

@@ -29,6 +29,7 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ### Fixed
 
+- Preserve maintenance refusals when recovery diagnostics race with workspace removal.
 - Align product and lifecycle documentation, worked examples and the archive-purge catalog with the direct contract, and retire obsolete prototype feedback.
 - Reuse immutable Procedure and item data during writes, and require executable native qualifications, nonempty exact tests and frozen development bundles.
 - Preserve removal exclusion through final cleanup and report observed maintenance markers with original-key recovery guidance.

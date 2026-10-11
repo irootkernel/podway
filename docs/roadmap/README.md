@@ -874,6 +874,43 @@ All 16 packaged-conformance scenarios passed. Its artifact class is
 runtime evidence. Task018 and final Epic acceptance are separate. These checks
 establish no release, installation, activation or consumer acceptance.
 
+### V2DFC final audit maintenance correction (October 12, 2026)
+
+The first full direct audit found a maintenance recovery diagnostic race owned
+by `V2DFC-016`. A read had already refused maintenance, but secondary recovery
+diagnostics replaced that refusal with `WORKSPACE_STATE_UNREADABLE` when native
+Git metadata changed during final removal. The bounded correction is active
+within the continuing Epic audit. Completed member states retain their accepted
+history; the roadmap has no reopen state for an earlier completed member while
+later members remain Completed.
+
+The failed native run used clean source
+`ba98bd9784824b8218a67c0d0a38d719484d9c7e`, snapshot
+`799c94e60d166eacd6d708f6062fe49ed0575a3a5abc95973500311329219eb3`,
+Apple M5 Pro (18 logical CPUs, 64 GiB), macOS 27.0.1 build 26A434, AC power,
+release profile and pinned Rust 1.97.1. Host load was not exclusive. Store suite
+SHA-256 was `dd85f253fd7c3cbc27a29c24471478d712bc91c8ff4e65915c4c69a7ceb8cd3d`;
+Engine suite SHA-256 was `2acc83279cfdb4de14e40966bf9c68e0fb0bff1bd223772919af6c4e65f1636b`.
+
+Store and Engine G1/G2 at both sizes, the deadline check, all five crash
+boundaries and random SIGKILL recovery passed. G2 at 1,024 nodes remains
+informational. G5 completed 100 cycles and 1,500 killed attempts with four
+writers and four readers: 755 acknowledgments, zero lost outcomes, zero marked
+or unexplained missing responses, and acquisition p99 79.156 ms over 1,500
+samples. Two unexpected state-unreadable responses failed its correctness gate.
+The run stopped after 97 minutes 18.738 seconds; G6 and G9 were not executed.
+Both frozen binary hashes and the source snapshot remained unchanged. All owned
+children were reaped and the exact disposable G5 worktree was removed.
+
+The correction preserves the original maintenance refusal and uses read-only
+writer diagnosis when the recovery snapshot changes. A permanent NativeGit and
+Engine regression first failed with the same public error, then passed unchanged
+after the fix. It replaces real Git roots at two diagnostic intervals, validates
+both recovery boundaries and proves no Store effect or new-root initialization.
+The correction requires `make test` before its completion commit. Changed-candidate
+native qualification, current packaging, matched G7/G8, whole-Epic review and
+actual owner acceptance remain separate obligations; no threshold was relaxed.
+
 Tasks execute in numeric order with one active task across this epic. At most
 the first incomplete task may be In Progress, In Review, or Blocked; every later
 task remains Planned. Each task is one logical implementation-and-verification

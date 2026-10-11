@@ -223,6 +223,32 @@ fn observe_maintenance<R: GitResolverContractV1>(
     resolver: &DirectWorkspaceResolverV1<R>,
     selector: WorktreeSelectorV1,
 ) -> Result<Option<DirectMaintenanceRecoveryV1>, DirectExecutionErrorV1> {
+    use crate::workspace::{DirectWorkspaceResolutionErrorV1, WorkspaceResolutionErrorV1};
+    use podway_git::{GitInvariantViolationV1, GitResolverErrorV1};
+
+    let mut observed_boundary = "maintenance_lock";
+    match observe_maintenance_snapshot(resolver, selector, &mut observed_boundary) {
+        Err(DirectExecutionErrorV1::Workspace(DirectWorkspaceResolutionErrorV1::Resolution(
+            WorkspaceResolutionErrorV1::Git {
+                source:
+                    GitResolverErrorV1::Invariant {
+                        problem: GitInvariantViolationV1::MetadataChangedDuringResolution,
+                    },
+                ..
+            },
+        ))) => Ok(Some(DirectMaintenanceRecoveryV1::WriterIdentity {
+            boundary: observed_boundary,
+            reason: "Maintenance changed while inspecting recovery. Inspect writer identity, wait for the maintenance owner to finish, then retry the original request with its key and fences.",
+        })),
+        observed => observed,
+    }
+}
+
+fn observe_maintenance_snapshot<R: GitResolverContractV1>(
+    resolver: &DirectWorkspaceResolverV1<R>,
+    selector: WorktreeSelectorV1,
+    observed_boundary: &mut &'static str,
+) -> Result<Option<DirectMaintenanceRecoveryV1>, DirectExecutionErrorV1> {
     let (worktree, store) = resolver.resolve_candidate(selector)?;
     let Some(marker) =
         podway_store::direct_store::observe_direct_maintenance_marker_v1(store.layout())?
@@ -245,6 +271,7 @@ fn observe_maintenance<R: GitResolverContractV1>(
         podway_store::direct_store::DirectMaintenanceMarkerKindV1::Reset => "reset_marker",
         podway_store::direct_store::DirectMaintenanceMarkerKindV1::Removal => "removal_marker",
     };
+    *observed_boundary = boundary;
     let schema = value["schema"]
         .as_str()
         .ok_or(DirectStoreErrorV1::Unreadable)?;

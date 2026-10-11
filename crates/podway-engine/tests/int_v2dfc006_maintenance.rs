@@ -42,6 +42,124 @@ const RESPONSE: &str = "00000000-0000-4000-8000-000000000001";
 const OTHER: &str = "00000000-0000-4000-8000-000000000002";
 
 #[test]
+fn maintenance_recovery_snapshot_replacement_keeps_read_only_refusal() {
+    use podway_engine::direct_api::{
+        DirectCommandV1, DirectRequestV1, DirectResponseV1, execute_direct_v1,
+    };
+    use podway_git::{GitResolveErrorV1, GitResolverContractV1, ValidatedWorktreeV1};
+    use podway_protocol::Rfc3339MillisV1;
+    use std::{fs, path::PathBuf};
+
+    struct ReplaceRecoveryRoot {
+        root: PathBuf,
+        retired: PathBuf,
+        after_discovery: bool,
+        calls: AtomicUsize,
+    }
+    impl ReplaceRecoveryRoot {
+        fn replace(&self) {
+            fs::rename(&self.root, &self.retired).unwrap();
+            fs::create_dir(&self.root).unwrap();
+            fs::rename(self.retired.join(".git"), self.root.join(".git")).unwrap();
+        }
+    }
+    impl GitResolverContractV1 for ReplaceRecoveryRoot {
+        fn resolve(
+            &self,
+            selector: WorktreeSelectorV1,
+        ) -> Result<ValidatedWorktreeV1, GitResolveErrorV1> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+            if !self.after_discovery && call == 3 {
+                self.replace();
+            }
+            let resolved = NativeGitResolverV1::new().resolve(selector)?;
+            if self.after_discovery && call == 2 {
+                self.replace();
+            }
+            Ok(resolved)
+        }
+    }
+
+    for after_discovery in [false, true] {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("worktree");
+        let retired = parent.path().join("retired");
+        fs::create_dir(&root).unwrap();
+        assert!(
+            Command::new("git")
+                .args(["init", "--quiet"])
+                .arg(&root)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let original = initialize(&root);
+        let base = DirectWorkspaceResolverV1::new(NativeGitResolverV1::new(), digest());
+        let mut removal = request(&root, "diagnostic-race-remove", Some(original));
+        removal.force = true;
+        let interrupted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            remove_workspace_with_boundary_observer_v1(&base, removal, &Clock, |boundary| {
+                if boundary == Boundary::MarkerPublished {
+                    panic!("retain the real admitted removal marker");
+                }
+            })
+            .unwrap();
+        }));
+        assert!(interrupted.is_err());
+        let before = files(&root.join(".podway"));
+        let resolver = DirectWorkspaceResolverV1::new(
+            ReplaceRecoveryRoot {
+                root: root.clone(),
+                retired: retired.clone(),
+                after_discovery,
+                calls: AtomicUsize::new(0),
+            },
+            digest(),
+        );
+        let response = execute_direct_v1(
+            &resolver,
+            DirectRequestV1 {
+                selector: selector(&root),
+                expected_workspace_id: None,
+                request_id: RequestIdV1::new(OTHER).unwrap(),
+                idempotency_key: None,
+                command: DirectCommandV1::WorkspaceShow,
+                observed_at: Rfc3339MillisV1::new("2026-10-12T00:00:00.000Z").unwrap(),
+                timeout_ms: 5000,
+                deadline: deadline(),
+            },
+            &NoEffects,
+            &NoEffects,
+        )
+        .unwrap();
+        let DirectResponseV1::Failure(error) = response else {
+            panic!("maintenance diagnostic admitted an ordinary read");
+        };
+        let value = error.as_value();
+        assert_eq!(value["code"], "WORKSPACE_MAINTENANCE");
+        assert_eq!(
+            value["details"]["boundary"],
+            if after_discovery {
+                "maintenance_lock"
+            } else {
+                "removal_marker"
+            }
+        );
+        assert_eq!(
+            value["details"]["recovery"]["argv"],
+            serde_json::json!(["podway", "--json", "version", "--identity"])
+        );
+        assert_eq!(
+            value["details"]["recovery"]["requires_explicit_authorization"],
+            false
+        );
+        assert!(validate_daemon_free_document_v1("podway.error/v2", value));
+        assert_eq!(files(&retired.join(".podway")), before);
+        assert!(!root.join(".podway").exists());
+    }
+}
+
+#[test]
 fn typed_removal_without_cli_authorization_preserves_the_interactive_retry_identity() {
     use podway_engine::direct_api::{
         DirectCommandV1, DirectRequestV1, DirectResponseV1, execute_direct_v1,
