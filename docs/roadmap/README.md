@@ -692,14 +692,16 @@ release, installation, or replacement of an active daemon.
 
 ## V2DFC — Daemon-Free Core
 
-Status: In Progress.
+Status: Completed.
 
 Reopened on October 9, 2026. An independent implementation review of the
-completed Epic found acceptance gaps. The [adopted dossier](../todo/TODO-podway-daemon-free-core.md)
-records them, with their remediation decisions. `V2DFC-011` through
-`V2DFC-018` remediate them. The earlier closeout does not satisfy the final
-closeout of the reopened Epic. Reopening registers work only: it starts no
-task, and it authorizes no commit, release or installation.
+completed Epic found acceptance gaps. `V2DFC-011` through `V2DFC-018`
+remediated them under the
+[direct execution contract](../specs/storage/transactions-concurrency-and-idempotency.md),
+[filesystem architecture](../architecture/git-worktree-and-filesystem.md), and
+[acceptance checks](../specs/quality/testing-and-conformance.md). The earlier
+closeout did not satisfy the final closeout of the reopened Epic. Reopening
+registered work only; it did not authorize release or installation.
 
 Conditional release target: `v0.2.13`. Inclusion requires completion of
 `V2DFC-001` through `V2DFC-018`, the required development acceptance, and a
@@ -1030,8 +1032,49 @@ response passed the canonical shipped validator; frozen CLI/helper hashes
 remained unchanged and zero owned children remained. Isolated measurement
 fixtures were retained as local evidence. Earlier Task017 measurements retain
 their original source identity; this record supplies the corrected final-audit
-basis. All member Tasks remain Completed and the Epic remains In Progress.
-Whole-Epic Independent Review and actual Master final acceptance remain pending.
+basis. At this measured-record commit, all member Tasks were Completed and
+the Epic remained In Progress. Whole-Epic Independent Review and actual Master
+final acceptance were pending; the final closeout below records their settlement.
+
+### Reopened Epic closeout
+
+The owner accepted the completed reopened Epic and this exact documentation
+closeout. All eighteen member Tasks are Completed. The
+accepted technical baseline is `2a381487305eccb9d5c93e0a4f4bf7e9425b1e59`,
+including the maintenance race correction in `1f78827394b1337f31869aa4d0be2d52ae9cb26d`
+and the current measurement record above. The full Epic audit found no current
+correctness, contract, completion, or required-evidence gap.
+
+Three fresh Independent Review reports assessed the complete original member
+requirements, nine cross-task seams, direct execution traceability, and retained
+domain and delegation behavior. Every applicable criterion was met; no actionable
+finding, unmet criterion, or unverified criterion remained. Reviewers inspected
+source and supplied execution receipts; they did not execute the checks themselves.
+The first whole-Epic review completed cleanly, so no additional review was required.
+
+The native nine-case matrix, complete development gate, bounded fuzzing, sixteen
+packaged scenarios, local handoff and bundle verification, and matched packaged
+CLI G7/G8 checks passed on the unchanged clean implementation baseline `1f78827`.
+Commit `2a38148` changes only the required roadmap measurement record; the accepted
+baseline retains identical executable, contract, test, fixture, and version bytes.
+The final closeout changes only roadmap and TODO lifecycle documentation and passed
+focused documentation preparation checks. Earlier failed qualification and its
+corrected source identity remain recorded; no threshold or acceptance scope changed.
+
+Last-consumer inspection found only this Epic's roadmap link and the TODO index
+entry. Lasting requirements already belong to ADR-0038, the linked specifications,
+architecture and quality contracts, and the
+[performance qualification](../implementation-tips/direct-cli-performance-qualification.md)
+and [release guide](../implementation-tips/release.md). The adopted implementation
+dossier and its index entry are retired in this closeout. Independent future work
+remains in the [deferred-feedback register](../deferred-feedback/README.md).
+
+This is development completion. Packaged qualification used the nonpublishable
+`development-qualification` class; no stable distribution gate, publication,
+installation, runtime activation, external consumer modification, or fresh UTM
+qualification is claimed. The conditional `v0.2.13` release and its Aquarium and
+Dolgorae prerequisites remain separately authorized. No additional release-note
+entry is required for this documentation-only closeout.
 
 Tasks execute in numeric order with one active task across this epic. At most
 the first incomplete task may be In Progress, In Review, or Blocked; every later
