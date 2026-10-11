@@ -911,6 +911,128 @@ The correction requires `make test` before its completion commit. Changed-candid
 native qualification, current packaging, matched G7/G8, whole-Epic review and
 actual owner acceptance remain separate obligations; no threshold was relaxed.
 
+### V2DFC corrected-candidate qualification (October 12, 2026)
+
+The Task016 maintenance diagnostic correction passed its permanent NativeGit
+regression, the complete development gate and its owned correction commit.
+Fresh full native qualification then passed all nine registered cases on clean
+source `1f78827394b1337f31869aa4d0be2d52ae9cb26d`, snapshot
+`9cb39b845c3bdf77a00aa95ec786e5e817a36633c0913bd455469d7a8267e180`.
+The earlier failed run remains historical failure evidence; it is not relabelled
+as a pass. No threshold or workload was relaxed.
+
+The host was Apple M5 Pro (18 logical CPUs, 64 GiB), macOS 27.0.1 build 26A434,
+with observed AC power, pinned Rust 1.97.1 and release profile. Initial load
+averages were 3.998/3.696/6.966; host load was not exclusive. Store suite SHA-256
+was `dd85f253fd7c3cbc27a29c24471478d712bc91c8ff4e65915c4c69a7ceb8cd3d`;
+Engine suite SHA-256 was
+`83c93c97b76de7caa00b9fdb49afd3e7c421fbdde414ffa4e198097ec23c8e22`.
+Source and both frozen suites remained unchanged. All required cases completed
+in 99 minutes 14.497 seconds; bounded owned children were reaped and the
+maintenance harness's disposable worktree was removed.
+
+G1 used eight writers with 1,000 successes each, two observers, exact replays
+and stale-fence rejections on grown L-scale Stores at both sizes. Each writer
+had 20 warm-up successes. Engine retained the same API-grown active session.
+Every initial main database exceeded 43,384,832 bytes. G1 and serial replay
+passed at both sizes, with zero rejection outcomes, stale-fence commits,
+Engine loss, duplication, Busy reaching the caller or observer violations.
+G2 gates apply at 300 nodes; 1,024-node latency is informational. Percentiles
+below are p50/p95/p99/maximum in milliseconds.
+
+- Store / 300: 38,954 measured samples; wait 0.003/12.066/24.908/171.076 ms; hold 5.963/12.326/18.472/471.025 ms; writer fairness 1.216; G1/G2 pass.
+- Store / 1024: 38,948 measured samples; wait 0.004/21.527/44.224/404.019 ms; hold 9.476/18.717/29.213/475.814 ms; writer fairness 1.134; G1 pass; G2 informational.
+- Engine / 300: 38,362 measured samples; wait 0.003/7.492/19.117/466.577 ms; hold 6.217/13.784/19.347/467.802 ms; writer fairness 1.098; G1/G2 pass.
+- Engine / 1024: 38,992 measured samples; wait 0.002/9.013/20.975/80.746 ms; hold 8.088/15.615/20.876/220.787 ms; writer fairness 1.061; G1 pass; G2 informational.
+
+Store measured 7,840 commits and 7,840 replays per size, plus 23,274 stale-fence
+rejections at 300 nodes and 23,268 at 1,024. Engine includes 8,000 commits and
+8,000 replays in its transaction counters, including warm-ups; rejected counts
+were 22,683 and 23,313. Hold ends at `AfterCommitBeforeOutput` for commits;
+replay and rejection use typed API return as a conservative upper bound.
+
+The deadline check, all five crash windows (20 SIGKILLs each), 200 random
+SIGKILLs, G5 and G6 passed. G5 completed 100 reset/remove cycles, 1,500 killed
+attempts and 1,500 acquisition samples with four writers and four readers:
+1,110 acknowledgments, zero lost outcomes, zero marked or unexplained missing
+responses and zero unexpected responses. Acquisition p99 was 32.591 ms against
+the unchanged 2 s limit. G6 rejected all 500 state and 500 artifact races.
+
+G9 ran eight writers and four readers for 600,001 ms, recording 13,687
+successes, including 66 completes, and 10,735 WAL samples. Maximum active WAL
+was 21,840,152 bytes against the 64 MiB limit. At 237 ms from stop-marker
+publication it was 103,032 bytes, satisfying 4 MiB within 5 s. The idle WAL
+connection remained open. The drain endpoint conservatively includes in-flight
+work and child/report cleanup; it is never restarted after cleanup.
+
+The same unchanged clean source passed the complete frozen development chain:
+`make test`, `make release-prepare`, all seven fuzz targets (100,000 runs each),
+the pinned locked release CLI build, development packaging, all 16 packaged
+conformance scenarios, local handoff creation and final bundle verification.
+The chain completed in 19 minutes 55.371 seconds. Its artifact class is
+`development-qualification`, nonpublishable. Packaged qualification disabled
+hooks and removed all exact owned children and worktrees. Manifest digest was
+`sha256:c7302b444f34e8f38e940a5290d40b16afc0b8837309e3ea831f6a6a30a18edc`.
+The extracted packaged CLI and checked build both had SHA-256
+`c4d0d23bb692993033e555dde2d913e10ed5d55b687a999a14f984ea2fe0ed81`.
+The local handoff is contract-delivery evidence only; it does not establish
+consumer adoption. No release, installation or runtime activation occurred.
+
+Matched G7/G8 used that extracted packaged CLI and the qualified Engine suite
+above on the same clean source, with 20 warm-ups and 220 measured calls per
+cell. S/M/L block history, genuine original mode tuples and L/E1 prehistory
+followed the unchanged performance guide. No daemon was executed for the
+comparison. Every required G7 p50/p99 met its recorded daemon comparator.
+Full-invocation p50/p95/p99/maximum in milliseconds:
+
+- S / observe: 41.757/52.087/54.000/55.918 ms; 220 measured samples; pass.
+- S / set: 47.909/63.504/76.041/91.197 ms; 220 measured samples; pass.
+- S / record: 49.527/66.918/72.902/75.661 ms; 220 measured samples; pass.
+- S / complete: 48.199/63.230/69.328/102.593 ms; 220 measured samples; pass.
+- M / observe: 41.875/51.039/52.734/57.455 ms; 220 measured samples; pass.
+- M / set: 46.760/61.858/65.503/67.354 ms; 220 measured samples; pass.
+- M / record: 49.614/64.080/67.457/70.175 ms; 220 measured samples; pass.
+- M / complete: 48.452/62.825/65.834/66.529 ms; 220 measured samples; pass.
+- L / observe: 76.090/86.179/88.985/92.213 ms; 220 measured samples; pass.
+- L / set: 83.623/97.389/101.677/109.622 ms; 220 measured samples; pass.
+- L / record: 86.101/100.845/104.829/110.643 ms; 220 measured samples; pass.
+- L / complete: 84.715/98.579/103.100/108.826 ms; 220 measured samples; pass.
+
+G8 full invocation is a conservative upper bound on open cost. All four
+required L cells passed the unchanged p99 limits: 100 ms warm and 1 s cold.
+S/M cells are informational, including the M read-write warm tail; no limit
+is assigned to them by the registered method.
+
+- S / ro-warm: 24.581/26.155/27.358/28.800 ms; 220 measured samples; informational.
+- S / ro-cold: 26.333/27.933/28.934/29.896 ms; 220 measured samples; informational.
+- S / rw-warm: 23.471/25.951/32.884/33.450 ms; 220 measured samples; informational.
+- S / rw-cold: 23.737/25.112/25.656/34.403 ms; 220 measured samples; informational.
+- M / ro-warm: 24.687/26.362/27.923/31.197 ms; 220 measured samples; informational.
+- M / ro-cold: 26.433/28.051/29.562/30.942 ms; 220 measured samples; informational.
+- M / rw-warm: 25.439/31.291/249.319/256.556 ms; 220 measured samples; informational.
+- M / rw-cold: 24.229/25.641/26.878/26.878 ms; 220 measured samples; informational.
+- L / ro-warm: 25.629/29.202/30.804/34.852 ms; 220 measured samples; pass.
+- L / ro-cold: 26.706/28.452/30.085/33.586 ms; 220 measured samples; pass.
+- L / rw-warm: 25.429/37.549/85.251/160.218 ms; 220 measured samples; pass.
+- L / rw-cold: 23.897/30.261/34.203/36.772 ms; 220 measured samples; pass.
+
+The L lifecycle restored the original grown image before each tuple; archive
+followed cancellation and explicit not-required disposition, and start followed
+archive. Each command had 20 warm-ups and 220 measured calls. Full-invocation
+costs are informational, with no lifecycle comparator or total-call limit:
+
+- reset: 154.230/194.573/571.079/608.766 ms; 220 measured samples; informational.
+- archive: 141.772/168.331/275.405/737.209 ms; 220 measured samples; informational.
+- start: 57.256/71.621/109.817/166.146 ms; 220 measured samples; informational.
+
+The matched CLI run completed in 14 minutes 25.863 seconds. Every successful
+response passed the canonical shipped validator; frozen CLI/helper hashes
+remained unchanged and zero owned children remained. Isolated measurement
+fixtures were retained as local evidence. Earlier Task017 measurements retain
+their original source identity; this record supplies the corrected final-audit
+basis. All member Tasks remain Completed and the Epic remains In Progress.
+Whole-Epic Independent Review and actual Master final acceptance remain pending.
+
 Tasks execute in numeric order with one active task across this epic. At most
 the first incomplete task may be In Progress, In Review, or Blocked; every later
 task remains Planned. Each task is one logical implementation-and-verification
