@@ -29,6 +29,8 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ### Fixed
 
+- Replace discontinued YAML dependencies with maintained Norway forks while
+  preserving Procedure and workspace configuration contracts.
 - Preserve maintenance refusals when recovery diagnostics race with workspace removal.
 - Align product and lifecycle documentation, worked examples and the archive-purge catalog with the direct contract, and retire obsolete prototype feedback.
 - Reuse immutable Procedure and item data during writes, and require executable native qualifications, nonempty exact tests and frozen development bundles.

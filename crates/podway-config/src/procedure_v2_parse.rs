@@ -110,7 +110,7 @@ impl ParsedProcedureV2 {
 /// caller (`parse_procedure_document`) is responsible for the single bounded admission; this
 /// function performs only order-preserving DTO deserialization and constructor mapping.
 pub(crate) fn parse_procedure_v2_yaml(text: &str) -> Result<ParsedProcedureV2, ConfigError> {
-    let document: ProcedureV2DocumentWire = serde_yaml::from_str(text).map_err(wire_error)?;
+    let document: ProcedureV2DocumentWire = serde_norway::from_str(text).map_err(wire_error)?;
     map_document(document)
 }
 
@@ -135,14 +135,14 @@ pub(crate) fn parse_procedure_v2_json(text: &str) -> Result<ParsedProcedureV2, C
 /// Two independent, mechanical trims are applied, both derived from the two crates' own error
 /// formatting code (not guessed):
 ///
-/// - A trailing `" at line <n> column <n>"` suffix, which both `serde_yaml` and `serde_json`
-///   append to every `Error::custom`-style message that has position info. `serde_yaml`'s
+/// - A trailing `" at line <n> column <n>"` suffix, which both `serde_norway` and `serde_json`
+///   append to every `Error::custom`-style message that has position info. `serde_norway`'s
 ///   libyaml layer can separately format a bare `" at position <n>"` (when a mark carries a byte
 ///   offset but no line/column); it is not reachable from this call site given the upstream
 ///   bounded decoder already rejects raw YAML syntax hazards, but is still trimmed defensively.
-/// - A leading structural-path prefix that `serde_yaml` (only) prepends whenever the failure
+/// - A leading structural-path prefix that `serde_norway` (only) prepends whenever the failure
 ///   happens while deserializing the value of a struct field, e.g. `"node_definitions: unknown
-///   field ..."` or `"graph.nodes[0].terminal: invalid type ..."`. This is `serde_yaml::Path`'s
+///   field ..."` or `"graph.nodes[0].terminal: invalid type ..."`. This is `serde_norway::Path`'s
 ///   own `ident(.ident|[<digits>])*` rendering (see its `Display` impl); `serde_json` never adds
 ///   it. The prefix is recognized by that exact closed grammar, so stripping it is a mechanical
 ///   trim of format-specific context, not a rewrite of the message body — but it is a real, if
@@ -157,7 +157,7 @@ fn wire_error(error: impl std::fmt::Display) -> ConfigError {
     ConfigError::InvalidDocument { reason }
 }
 
-/// Strips a leading `serde_yaml` structural path (`ident(.ident|[<digits>])*`) immediately
+/// Strips a leading `serde_norway` structural path (`ident(.ident|[<digits>])*`) immediately
 /// followed by `": "`, when present; a no-op for `serde_json` messages, which never carry one.
 fn strip_yaml_path_prefix(message: &str) -> &str {
     let Some(prefix_end) = message.find(": ") else {
@@ -173,8 +173,8 @@ fn strip_yaml_path_prefix(message: &str) -> &str {
 
 /// True for a non-empty `ident(.ident|[<digits>])*` token: an ASCII letter or underscore, then
 /// any run of ASCII alphanumerics, underscores, `.` separators, and `[<digits>]` index groups.
-/// This is exactly `serde_yaml::path::Path`'s `Display` grammar, so it can only match a path
-/// `serde_yaml` itself generated — never organic content from either serde front-end's own
+/// This is exactly `serde_norway::path::Path`'s `Display` grammar, so it can only match a path
+/// `serde_norway` itself generated — never organic content from either serde front-end's own
 /// message text (verified against every message shape reachable here: `missing field`, `unknown
 /// field`, `unknown variant`, `duplicate field`, `invalid length`, `invalid type`/`invalid
 /// value`; the latter two are the only ones containing `": "` natively, and both fail this
@@ -929,7 +929,7 @@ mod wire_error_tests {
 
     // Exact `Display` strings captured from `serde_yaml` 0.9.34 / `serde_json` 1.0.150 for a
     // handful of structural violations against `ProcedureV2DocumentWire`. These pin the two
-    // trims in `wire_error` against the real quirks they exist to normalize: `serde_yaml`
+    // trims in `wire_error` against the real quirks they exist to normalize: `serde_norway`
     // sometimes omits the trailing location (a root-level `missing field`), and prepends a
     // structural path for anything nested one struct-field deeper (`node_definitions: `,
     // `graph.nodes[0].terminal: `) that `serde_json` never adds.
@@ -952,7 +952,7 @@ mod wire_error_tests {
 
     #[test]
     fn leaves_root_level_missing_field_message_that_yaml_never_suffixes() {
-        // serde_yaml: no Mark is available for a structural "field never appeared" check, so
+        // serde_norway: no Mark is available for a structural "field never appeared" check, so
         // there is no " at line/column" to trim in the first place.
         assert_eq!(
             strip_location_suffix("missing field `name`"),

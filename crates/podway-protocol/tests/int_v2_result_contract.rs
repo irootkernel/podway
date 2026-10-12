@@ -823,7 +823,7 @@ fn v2sdg002_delegation_projection_and_receipt_states_are_closed() {
 }
 #[test]
 fn v2sdg002_delegated_procedure_cannot_declare_skip() {
-    let mut procedure: Value = serde_yaml::from_str(include_str!(
+    let mut procedure: Value = serde_norway::from_str(include_str!(
         "../../../tests/fixtures/v2/compatibility/supervised-delegation-direct-control.yaml"
     ))
     .unwrap();

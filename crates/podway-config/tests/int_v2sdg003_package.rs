@@ -214,7 +214,7 @@ fn v2sdg003_decision_source_items_count_toward_static_package_budget() {
 #[test]
 fn v2sdg003_decision_evidence_preserves_selection_and_declared_types() {
     for selected in [false, true] {
-        let mut document: serde_json::Value = serde_yaml::from_str(&delegated_source()).unwrap();
+        let mut document: serde_json::Value = serde_norway::from_str(&delegated_source()).unwrap();
         document["node_definitions"]["source"] = serde_json::json!({
             "type": "decision", "title": "Choose input", "objective": "Record source evidence.",
             "prompt": "Proceed?", "options": [{"id": "go", "label": "Go"}],
@@ -237,7 +237,7 @@ fn v2sdg003_decision_evidence_preserves_selection_and_declared_types() {
                 "routes": {"go": {"to": "work", "effect": "advance"}},
             }),
         );
-        let procedure = admit(&serde_yaml::to_string(&document).unwrap());
+        let procedure = admit(&serde_norway::to_string(&document).unwrap());
         let podway_core::GraphPlacementV2::Action(action) =
             &procedure.parsed().graph().placements()[1]
         else {

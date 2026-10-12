@@ -407,7 +407,7 @@ mod tests {
     #[test]
     fn ordered_map_preserves_source_order_for_arbitrary_keys() {
         let yaml = "beta: 2\nalpha: 1\ngamma: 3\n";
-        let map: OrderedMap<String, u32> = serde_yaml::from_str(yaml).unwrap();
+        let map: OrderedMap<String, u32> = serde_norway::from_str(yaml).unwrap();
         assert_eq!(
             map.entries(),
             vec![

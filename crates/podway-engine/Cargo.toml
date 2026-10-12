@@ -20,7 +20,7 @@ sha2.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-serde_yaml.workspace = true
+serde_norway.workspace = true
 podway-store = { path = "../podway-store", features = ["test-support"] }
 tempfile.workspace = true
 

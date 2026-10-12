@@ -610,7 +610,7 @@ pub(crate) fn scan_source(
         for (column, character) in line.chars().enumerate() {
             // Characters a YAML reader breaks lines on but `split('\n')` does not. Left in place they
             // would silently fold to a space inside a quoted scalar (verified for U+0085 and a lone
-            // `\r` against `serde_yaml` 0.9) and would put every location this module reports one or
+            // `\r` against `serde_norway` 0.9) and would put every location this module reports one or
             // more lines out, so the "one node per source line" invariant rejects them outright.
             let kind = match character {
                 '\r' => SourceConstructKind::LoneCarriageReturn,

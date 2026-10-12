@@ -2050,7 +2050,7 @@ fn direct_goal_decision_rework_completion_and_disposition_preserve_records_and_r
         purge_lookup.as_value()["result"]["outcome"]["scope"],
         "workspace"
     );
-    let catalog: serde_yaml::Value = serde_yaml::from_str(include_str!(
+    let catalog: serde_norway::Value = serde_norway::from_str(include_str!(
         "../../../assets/specifications/command-catalog.yaml"
     ))
     .unwrap();

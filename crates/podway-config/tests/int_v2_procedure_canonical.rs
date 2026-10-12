@@ -398,7 +398,7 @@ fn v2sdg003_delegation_declaration_is_canonical_and_opt_in() {
     let direct = yaml(&source);
     let from_yaml = yaml(&delegated);
     let delegated_json =
-        serde_json::to_string(&serde_yaml::from_str::<Value>(&delegated).unwrap()).unwrap();
+        serde_json::to_string(&serde_norway::from_str::<Value>(&delegated).unwrap()).unwrap();
     let from_json = json(&delegated_json);
     assert_eq!(from_yaml.digest(), from_json.digest());
     assert_eq!(from_yaml.canonical_json(), from_json.canonical_json());
@@ -477,7 +477,7 @@ fn v2ast003_check_result_yaml_and_json_share_one_canonical_declaration() {
         "graph:\n  entry: work\n  nodes:\n    - id: work\n      use: work\n      terminal: true\n",
     );
     let json_source = serde_json::to_string(
-        &serde_yaml::from_str::<serde_json::Value>(yaml_source).expect("yaml value"),
+        &serde_norway::from_str::<serde_json::Value>(yaml_source).expect("yaml value"),
     )
     .expect("json source");
     let from_yaml = accept(yaml_source, ProcedureDocumentFormat::Yaml);

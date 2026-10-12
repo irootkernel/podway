@@ -495,7 +495,7 @@ fn v2gsc004_preview_fails_closed_when_its_required_mermaid_projection_overflows(
 
 #[test]
 fn v2grf007_yaml_and_json_are_semantically_equivalent_and_repeatable() {
-    let yaml_value: serde_yaml::Value = serde_yaml::from_str(CLEAN_YAML).expect("yaml fixture");
+    let yaml_value: serde_norway::Value = serde_norway::from_str(CLEAN_YAML).expect("yaml fixture");
     let json = serde_json::to_string(&yaml_value).expect("json equivalent");
     let source = CLEAN_YAML.to_owned();
     let source_before = source.clone();

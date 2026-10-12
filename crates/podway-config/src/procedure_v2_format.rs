@@ -23,7 +23,7 @@
 //! decides `true`/`0`/`~`/`1.5`; `parser::reject_noncanonical_yaml_scalar` is literally the rule the
 //! document's own preflight applies, so emission and admission cannot drift; the construct
 //! scanner's own line lexer runs over the candidate, which makes the emitter a fixpoint of its own
-//! supported-construct grammar; and finally `serde_yaml` — the reader that will actually parse the
+//! supported-construct grammar; and finally `serde_norway` — the reader that will actually parse the
 //! output — must return the identical string. Block scalars are never emitted: a `\n`-bearing
 //! string becomes a one-line double-quoted scalar with `\n` escapes, which preserves the model and
 //! therefore the digest.
@@ -67,7 +67,7 @@ use crate::{
 /// Characters that may never open a plain scalar: every YAML indicator, plus the quote characters.
 const PLAIN_SCALAR_FORBIDDEN_FIRST: &str = "-?:,[]{}#&*!|>'\"%@`";
 
-/// YAML 1.1 boolean words. `yaml-rust2` and `serde_yaml` resolve YAML 1.2 core, where these stay
+/// YAML 1.1 boolean words. `yaml-rust2` and `serde_norway` resolve YAML 1.2 core, where these stay
 /// strings, but quoting them costs one pair of quotes and removes a resolver dependency.
 const YAML_ONE_ONE_BOOLEAN_WORDS: [&str; 6] = ["yes", "no", "on", "off", "y", "n"];
 
@@ -543,24 +543,24 @@ fn is_plain_safe(value: &str) -> bool {
     if !plain_scalar_is_lexically_inert(value) {
         return false;
     }
-    // 9. The reader's own verdict, and the last word. `serde_yaml` is the parser that will actually
+    // 9. The reader's own verdict, and the last word. `serde_norway` is the parser that will actually
     //    read this document back, and clause 5's resolver only approximates it: verified against
     //    `yaml-rust2` 0.11, `Yaml::from_str` resolves `null` but not `Null` or `NULL`, both of which
-    //    `serde_yaml` reads as null. Round-tripping the candidate through the real reader closes
+    //    `serde_norway` reads as null. Round-tripping the candidate through the real reader closes
     //    that gap and every future one like it.
     survives_yaml_round_trip(value)
 }
 
-/// True when `serde_yaml` reads `value`, written plain as a mapping value, back byte-identically.
+/// True when `serde_norway` reads `value`, written plain as a mapping value, back byte-identically.
 ///
 /// The target type is `serde_json::Value` because that is exactly what `decode_procedure_document`
-/// deserializes into: `serde_yaml` is type-directed, so asking it for a `String` would hand back the
+/// deserializes into: `serde_norway` is type-directed, so asking it for a `String` would hand back the
 /// raw scalar text and hide the very resolution this clause exists to detect (`x: Null` really does
 /// deserialize to the string "Null" when a `String` is requested, and to null when a value is).
 fn survives_yaml_round_trip(value: &str) -> bool {
     let document = format!("x: {value}\n");
     matches!(
-        serde_yaml::from_str::<serde_json::Value>(&document),
+        serde_norway::from_str::<serde_json::Value>(&document),
         Ok(serde_json::Value::Object(entries))
             if entries.get("x") == Some(&serde_json::Value::String(value.to_owned()))
     )

@@ -260,7 +260,7 @@ fn parse_yaml_value(
 
     let nodes = Cell::new(0usize);
     let failure = RefCell::new(None);
-    let mut documents = serde_yaml::Deserializer::from_str(input);
+    let mut documents = serde_norway::Deserializer::from_str(input);
     let Some(document) = documents.next() else {
         return Err(ConfigError::InvalidDocument {
             reason: "procedure document must not be empty".to_owned(),
@@ -287,7 +287,7 @@ fn parse_yaml_value(
         });
     }
 
-    serde_yaml::from_str(input).map_err(|error| ConfigError::InvalidDocument {
+    serde_norway::from_str(input).map_err(|error| ConfigError::InvalidDocument {
         reason: error.to_string(),
     })
 }
@@ -304,7 +304,7 @@ fn parse_yaml_workspace_config(
 
     let nodes = Cell::new(0usize);
     let failure = RefCell::new(None);
-    let mut documents = serde_yaml::Deserializer::from_str(input);
+    let mut documents = serde_norway::Deserializer::from_str(input);
     let Some(document) = documents.next() else {
         return Err(ConfigError::InvalidDocument {
             reason: "workspace config document must not be empty".to_owned(),
@@ -331,7 +331,7 @@ fn parse_yaml_workspace_config(
         });
     }
 
-    serde_yaml::from_str(input).map_err(|error| ConfigError::InvalidDocument {
+    serde_norway::from_str(input).map_err(|error| ConfigError::InvalidDocument {
         reason: error.to_string(),
     })
 }
