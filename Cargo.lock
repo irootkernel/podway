@@ -850,7 +850,7 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
 name = "podway-cli"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "clap",
  "nix",
@@ -868,7 +868,7 @@ dependencies = [
 
 [[package]]
 name = "podway-config"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "podway-core",
  "serde",
@@ -881,7 +881,7 @@ dependencies = [
 
 [[package]]
 name = "podway-core"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "serde",
  "serde_json",
@@ -890,7 +890,7 @@ dependencies = [
 
 [[package]]
 name = "podway-engine"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "nix",
  "podway-config",
@@ -909,7 +909,7 @@ dependencies = [
 
 [[package]]
 name = "podway-git"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "libc",
  "podway-core",
@@ -921,7 +921,7 @@ dependencies = [
 
 [[package]]
 name = "podway-presets"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "podway-config",
  "podway-core",
@@ -930,7 +930,7 @@ dependencies = [
 
 [[package]]
 name = "podway-protocol"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "jsonschema",
  "podway-core",
@@ -943,7 +943,7 @@ dependencies = [
 
 [[package]]
 name = "podway-store"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "nix",
  "podway-core",
