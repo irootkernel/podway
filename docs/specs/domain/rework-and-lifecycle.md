@@ -31,8 +31,9 @@ cancelled because it contains no execution.
 
 ## Progression and rework
 
-`retry` abandons the current action attempt and creates a clean attempt on the
-same node. `rework --to <node>` targets only a declared manual-rework placement
+`retry` abandons the current action or decision attempt and creates a clean
+attempt on the same node. `block` and `unblock` also apply to either active node
+type. `rework --to <node>` targets only a declared manual-rework placement
 with a valid attempt on the current trace. It creates a new target attempt and
 applies the Procedure's explicit evidence invalidation rules; node identity and
 trace membership remain authoritative throughout the transition.

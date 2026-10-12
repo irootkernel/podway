@@ -23,7 +23,8 @@ use crate::{
 };
 
 /// Error rendering uses the host's actual request observation time, independently of the
-/// mutation clock. A rejected transition or an exact replay never reads that mutation clock.
+/// mutation clock. Fence rejections and exact replay do not read it; domain evaluation may
+/// read it once before a rejected transition rolls back.
 #[derive(Clone, Debug)]
 pub struct DirectErrorContextV1 {
     pub request_id: RequestIdV1,

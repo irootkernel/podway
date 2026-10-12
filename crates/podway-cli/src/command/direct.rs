@@ -348,6 +348,46 @@ pub(super) fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
         };
         let facts = StatusPreflight::from_direct(&output)?;
         fill_facts(&cli.command, &mut fences, &facts);
+        if facts.facts.lifecycle == "prepared"
+            && (cli.command.is_item_mutation()
+                || matches!(
+                    &cli.command,
+                    Command::Complete
+                        | Command::Skip { .. }
+                        | Command::Retry { .. }
+                        | Command::Block { .. }
+                        | Command::Unblock { .. }
+                        | Command::Cancel { .. }
+                        | Command::Decide(_)
+                        | Command::Goal {
+                            command: GoalCommand::Revise(_) | GoalCommand::AssessCriterion(_)
+                        }
+                ))
+        {
+            // Prepared state has no attempt or goal fence to autofill. Reject it
+            // without manufacturing identities, after checking caller-owned fences.
+            if let Some(key) = &cli.idempotency_key {
+                protocol_boundary::IdempotencyKeyV1::new(key.clone()).map_err(invalid_v2_value)?;
+            } else if cli.json || !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+                return Err(LocalFailure::request_invalid(
+                    "automation mutations require --idempotency-key",
+                ));
+            }
+            if let Some(expected) = fences.session_revision
+                && expected != facts.facts.session_revision
+            {
+                return Err(LocalFailure::session_revision_conflict(
+                    route,
+                    expected,
+                    facts.facts.session_revision,
+                ));
+            }
+            return Err(LocalFailure::catalog(
+                "SESSION_NOT_RUNNING",
+                "the command requires a running session",
+                route,
+            ));
+        }
         preflight = Some(facts);
     }
     if let (Command::Start(_), Some(preflight)) = (&cli.command, &preflight) {

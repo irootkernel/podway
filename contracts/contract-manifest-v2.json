@@ -488,7 +488,7 @@
     {
       "kind": "transition_matrix",
       "path": "spec/state-transition-matrix.csv",
-      "sha256": "sha256:e6d509bc08dfdf6475cafd40b671b194e08a23f8d7487a9b6010535bf01256b0"
+      "sha256": "sha256:60162dc96f234a5b944ca549641ad675a823159a998646b0fda7abc58ad68920"
     },
     {
       "kind": "known_answer_fixture",
@@ -593,7 +593,7 @@
     {
       "kind": "known_answer_fixture",
       "path": "tests/fixtures/v2/protocol/current-contracts.json",
-      "sha256": "sha256:75a21b10683852da6bb6859aeb1df8ab8163858957035a6aa9640e749ad6ce0a"
+      "sha256": "sha256:7d91051e97600f8b34ebdb2165612930ad102d477930f14ef17880827865ede9"
     },
     {
       "kind": "known_answer_fixture",
@@ -601,7 +601,7 @@
       "sha256": "sha256:7de5f4f024eb795ae7fb73594d4847b833016bea6be9f2737c567b524ae5466e"
     }
   ],
-  "digest": "sha256:c7302b444f34e8f38e940a5290d40b16afc0b8837309e3ea831f6a6a30a18edc",
+  "digest": "sha256:be10fc9aa17e1e60f2952dda0053e013a54fde0acf7c97102f60d7cfbf978201",
   "product": "podway",
   "product_version": "0.2.12",
   "schema_version": "podway.contract-manifest/v2"

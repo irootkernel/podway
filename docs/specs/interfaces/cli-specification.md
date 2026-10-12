@@ -73,7 +73,7 @@ fields return `REQUEST_INVALID`.
 | `delegation package` | Current delegated action package |
 | `delegation accept --stdin` | Closed complete acceptance document supplies its own identities |
 | `delegation receipt --session <UUID> --attempt <UUID>` | Exact receipt; not a current-session precondition override |
-| `complete`, `skip [--reason <TEXT>]`, `retry --reason <TEXT>` | Procedure-governed action transitions |
+| `complete`, `skip [--reason <TEXT>]`, `retry --reason <TEXT>` | Complete/skip act on actions; retry repeats the active action or decision |
 | `block --reason <TEXT>`, `unblock (<BLOCKER>\|--all)`, `cancel --reason <TEXT>` | Exactly one unblock selector |
 | `decide --option <ID> --reason <TEXT> [--actor <TEXT>]` | Goal fence also applies to goal-assessment decisions |
 | `rework --to <NODE> --reason <TEXT> [--actor <TEXT>]` | Declared manual rework |
@@ -252,7 +252,8 @@ After lost stdout or uncertain COMMIT I/O, look up the original key before exact
 replay of a retained Store mutation. `MUTATION_OUTCOME_UNKNOWN` is emitted only
 for uncertain COMMIT I/O; an external process kill or lost stdout is a caller-side uncertainty, not a job state.
 
-`retry` remains on the active action node. `rework --to <node>` uses the Procedure
+`retry` remains on the active action or decision node. `block` and `unblock` also
+apply to either active node type. `rework --to <node>` uses the Procedure
 v2 manual-rework contract. Decisions, goals, and criterion assessments use their
 typed commands. Cursor changes occur only through declared graph effects.
 

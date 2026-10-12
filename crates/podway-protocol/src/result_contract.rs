@@ -413,6 +413,11 @@ pub const DAEMON_FREE_DOCUMENT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
         &["session.rework"],
     ),
     result_schema_v2(
+        "podway.session-archive-list-result/v2",
+        "schemas/session-archive-list-result-v2.schema.json",
+        &["session.archive_list"],
+    ),
+    result_schema_v2(
         "podway.session-archive-not-eligible-details/v2",
         "schemas/session-archive-not-eligible-details-v2.schema.json",
         &[],
@@ -421,6 +426,11 @@ pub const DAEMON_FREE_DOCUMENT_SCHEMAS_V1: &[ResultSchemaContractV2] = &[
         "podway.session-archive-not-found-details/v2",
         "schemas/session-archive-not-found-details-v2.schema.json",
         &[],
+    ),
+    result_schema_v2(
+        "podway.session-archive-purge-result/v1",
+        "schemas/session-archive-purge-result-v1.schema.json",
+        &["session.archive_purge"],
     ),
     result_schema_v2(
         "podway.session-archive-result/v2",

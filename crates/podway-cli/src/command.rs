@@ -1150,6 +1150,8 @@ impl LocalFailure {
             | "PROCEDURE_INVALID"
             | "PROCEDURE_SCHEMA_UNSUPPORTED" => (1, false),
             "GOAL_TRACKING_NOT_ENABLED" => (1, false),
+            "SESSION_NOT_RUNNING" => (1, false),
+            "SESSION_REVISION_CONFLICT" => (4, true),
             "ITEM_CONSTRAINT_FAILED" => (1, false),
             "DIGEST_CONFIRMATION_REQUIRED" => (LOCAL_USAGE_EXIT, false),
             "PROCEDURE_DIGEST_MISMATCH" => (4, false),
@@ -1184,6 +1186,29 @@ impl LocalFailure {
 
     fn request_invalid(message: impl Into<String>) -> Self {
         Self::catalog("REQUEST_INVALID", message, "cli")
+    }
+
+    fn session_revision_conflict(command: &str, expected: Revision, current: Revision) -> Self {
+        let mut failure = Self::catalog(
+            "SESSION_REVISION_CONFLICT",
+            "the session changed after it was observed",
+            command,
+        );
+        failure.details = json!({
+            "schema": "podway.revision-conflict-details/v3",
+            "expected_revision": expected,
+            "current_revision": current,
+            "recovery": {
+                "action": "refresh_state", "command": "session.observe",
+                "argv": ["podway", "--json", "observe"],
+                "reason": "Read the current committed state before retrying.",
+                "requires_explicit_authorization": false,
+            },
+        })
+        .as_object()
+        .expect("revision conflict details are an object")
+        .clone();
+        failure
     }
 
     fn confirmation_required(command: &str) -> Self {
@@ -4001,6 +4026,16 @@ fn validate_direct_flags(cli: &Cli) -> Result<(), LocalFailure> {
 }
 
 fn validate_command_shape(command: &Command) -> Result<(), LocalFailure> {
+    if let Some(id) = item_id(command) {
+        ItemId::new(id.to_owned()).map_err(invalid_v2_value)?;
+    }
+    if let Command::Unblock {
+        blocker_id: Some(id),
+        ..
+    } = command
+    {
+        podway_core::BlockerId::new(id.clone()).map_err(invalid_v2_value)?;
+    }
     if let Command::Start(StartArgs {
         expect_procedure_digest: Some(digest),
         ..

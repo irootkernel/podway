@@ -37,10 +37,12 @@ responses must pass the current full `output/v4` or `error/v2` validation.
 2. Begin the session, then submit a genuinely stale fence and a domain-invalid
    mutation with distinct keys. Require their documented typed errors, unchanged
    graph/item revisions and evidence, and not-found for both outcome lookups.
-   A rejection records no outcome and reads no mutation clock. If clock evidence
-   is required, use the existing injected clock dependency rather than a product
-   flag. Submit the corrected operation with current fences and a new key; require
-   exactly one state effect and one validated success outcome.
+   Neither rejection records an outcome or committed sequence. A stale fence
+   rejects before reading the mutation clock; domain evaluation may read it once
+   after valid fences and prepared-input checks, then roll back without an effect.
+   If clock evidence is required, use the existing injected clock dependency
+   rather than a product flag. Submit the corrected operation with current fences
+   and a new key; require exactly one state effect and one validated success outcome.
 3. Perform a normal mutation with another stable key and deliberately discard its
    returned success at the caller boundary. Close that process before the caller
    records an acknowledgement. In a new process, use read-only `outcome.lookup`

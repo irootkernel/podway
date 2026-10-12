@@ -2713,6 +2713,49 @@ fn current_recovery_recipes_preserve_closed_bounds_and_explicit_authority() {
 }
 
 #[test]
+fn archive_list_and_purge_results_decode_and_bind_to_their_retained_commands() {
+    let summary = json!({
+        "session_id": UUID,
+        "task_title": "Archived task",
+        "lifecycle": "completed",
+        "session_revision": 2,
+        "archive_slot": 1,
+        "archived_at_ms": 1,
+        "archived_workspace_revision": 3,
+    });
+    for (command, schema_path, result) in [
+        (
+            "session.archive_list",
+            "schemas/session-archive-list-result-v2.schema.json",
+            json!({
+                "schema": "podway.session-archive-list-result/v2",
+                "count": 1, "truncated": false,
+                "oldest": summary.clone(), "sessions": [summary.clone()],
+            }),
+        ),
+        (
+            "session.archive_purge",
+            "schemas/session-archive-purge-result-v1.schema.json",
+            json!({
+                "schema": "podway.session-archive-purge-result/v1",
+                "purged": true, "session": summary,
+            }),
+        ),
+    ] {
+        assert_valid(schema_path, &result);
+        let body = result_map(&result);
+        let contract = decode_result_schema_contract_v2(&body).expect("retained archive result");
+        assert_eq!(contract.schema_path, schema_path);
+        validate_command_result_v2(command, &body).unwrap();
+        assert!(validate_command_result_v2("session.archive_show", &body).is_err());
+        let mut invalid = body;
+        invalid.insert("unexpected".to_owned(), json!(true));
+        assert!(decode_result_schema_contract_v2(&invalid).is_none());
+        assert!(validate_command_result_v2(command, &invalid).is_err());
+    }
+}
+
+#[test]
 fn current_results_round_trip_every_registered_direct_command_and_reject_discriminators() {
     let fixtures = examples();
     let contracts = EXISTING_ROUTE_RESULT_SCHEMAS_V2
@@ -2988,8 +3031,10 @@ fn current_direct_registry_preserves_the_accepted_known_answer_family_inventory(
         "podway.revision-conflict-details/v3",
         "podway.rework-result/v2",
         "podway.session-archive-limit-details/v2",
+        "podway.session-archive-list-result/v2",
         "podway.session-archive-not-eligible-details/v2",
         "podway.session-archive-not-found-details/v2",
+        "podway.session-archive-purge-result/v1",
         "podway.session-archive-result/v2",
         "podway.session-archive-show-result/v3",
         "podway.session-begin-result/v2",

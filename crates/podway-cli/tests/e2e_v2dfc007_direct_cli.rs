@@ -24,6 +24,152 @@ fn initialized_schema_generation(fixture: &Fixture) -> u32 {
 }
 
 #[test]
+fn prepared_cursor_and_item_mutations_report_session_not_running_without_effects() {
+    let fixture = Fixture::new();
+    fixture.run(&["init", "--idempotency-key", "init"]);
+    fixture.run(&[
+        "start",
+        "--preset",
+        "small-change-v2",
+        "--task",
+        "prepared errors",
+        "--idempotency-key",
+        "start",
+    ]);
+    let before = fixture.podway_snapshot();
+    for (command, arguments) in [
+        ("session.complete", vec!["complete"]),
+        ("session.retry", vec!["retry", "--reason", "repeat"]),
+        ("session.block", vec!["block", "--reason", "blocked"]),
+        ("session.unblock", vec!["unblock", "--all"]),
+        ("session.skip", vec!["skip", "--reason", "skip"]),
+        ("session.cancel", vec!["cancel", "--reason", "cancel"]),
+        (
+            "session.decide",
+            vec!["decide", "--option", "continue", "--reason", "continue"],
+        ),
+        ("item.check", vec!["check", "verification"]),
+        ("item.set", vec!["set", "scope-summary", "scope"]),
+        (
+            "goal.revise",
+            vec![
+                "goal",
+                "revise",
+                "--goal",
+                "goal",
+                "--criterion",
+                "done=done",
+                "--rework-to",
+                "inspect",
+                "--reason",
+                "revised",
+            ],
+        ),
+        (
+            "goal.assess_criterion",
+            vec![
+                "goal",
+                "assess-criterion",
+                "done",
+                "--status",
+                "satisfied",
+                "--reason",
+                "done",
+            ],
+        ),
+    ] {
+        let mut args = arguments;
+        args.extend(["--idempotency-key", command]);
+        let output = fixture.output(&args);
+        assert_eq!(output.status.code(), Some(1), "{args:?}: {output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(error.as_value()["command"], command);
+        assert_eq!(error.as_value()["code"], "SESSION_NOT_RUNNING");
+        fixture.assert_podway_snapshot(&before);
+        assert_eq!(
+            fixture.run(&["outcome", "lookup", "--idempotency-key", command])["result"]["found"],
+            false
+        );
+        fixture.assert_podway_snapshot(&before);
+    }
+    for (arguments, code, exit) in [
+        (
+            vec![
+                "complete",
+                "--if-session-revision",
+                "1",
+                "--idempotency-key",
+                "stale-prepared",
+            ],
+            "SESSION_REVISION_CONFLICT",
+            4,
+        ),
+        (
+            vec![
+                "complete",
+                "--if-session-id",
+                "00000000-0000-4000-8000-000000000001",
+                "--idempotency-key",
+                "wrong-session",
+            ],
+            "SESSION_ID_MISMATCH",
+            4,
+        ),
+        (
+            vec![
+                "complete",
+                "--if-workspace-uuid",
+                "00000000-0000-4000-8000-000000000001",
+                "--idempotency-key",
+                "wrong-workspace",
+            ],
+            "WORKSPACE_UUID_MISMATCH",
+            4,
+        ),
+        (
+            vec!["check", "!!!", "--idempotency-key", "invalid-item"],
+            "REQUEST_INVALID",
+            2,
+        ),
+        (
+            vec![
+                "unblock",
+                "not-a-uuid",
+                "--idempotency-key",
+                "invalid-blocker",
+            ],
+            "REQUEST_INVALID",
+            2,
+        ),
+        (
+            vec!["complete", "--idempotency-key", ""],
+            "REQUEST_INVALID",
+            2,
+        ),
+        (vec!["complete"], "REQUEST_INVALID", 2),
+    ] {
+        let output = fixture.output(&arguments);
+        assert_eq!(
+            output.status.code(),
+            Some(exit),
+            "{arguments:?}: {output:?}"
+        );
+        let error: ErrorEnvelopeV2 = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(error.as_value()["code"], code);
+        fixture.assert_podway_snapshot(&before);
+    }
+    fixture.run(&["begin", "--idempotency-key", "begin"]);
+    fixture.run(&[
+        "retry",
+        "--reason",
+        "repeat running attempt",
+        "--idempotency-key",
+        "retry-running",
+    ]);
+}
+
+#[test]
 fn v2dfc017_oversize_record_and_set_stdin_refuse_without_runtime_effects() {
     let fixture = Fixture::new();
     fixture.run(&["init", "--idempotency-key", "init"]);

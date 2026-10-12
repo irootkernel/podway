@@ -1339,6 +1339,44 @@
       "store_schema_version": 16,
       "supported_store_schema_version": 15,
       "guidance": "Use a Podway version that supports Store generation 16."
+    },
+    "podway.session-archive-list-result/v2": {
+      "schema": "podway.session-archive-list-result/v2",
+      "count": 1,
+      "truncated": false,
+      "oldest": {
+        "session_id": "00000000-0000-4000-8000-000000000001",
+        "task_title": "Archived task",
+        "lifecycle": "completed",
+        "session_revision": 2,
+        "archive_slot": 1,
+        "archived_at_ms": 1,
+        "archived_workspace_revision": 3
+      },
+      "sessions": [
+        {
+          "session_id": "00000000-0000-4000-8000-000000000001",
+          "task_title": "Archived task",
+          "lifecycle": "completed",
+          "session_revision": 2,
+          "archive_slot": 1,
+          "archived_at_ms": 1,
+          "archived_workspace_revision": 3
+        }
+      ]
+    },
+    "podway.session-archive-purge-result/v1": {
+      "schema": "podway.session-archive-purge-result/v1",
+      "purged": true,
+      "session": {
+        "session_id": "00000000-0000-4000-8000-000000000001",
+        "task_title": "Archived task",
+        "lifecycle": "completed",
+        "session_revision": 2,
+        "archive_slot": 1,
+        "archived_at_ms": 1,
+        "archived_workspace_revision": 3
+      }
     }
   },
   "cases": [
