@@ -1,59 +1,78 @@
 # Session Goals and Criteria
 
-Read this reference when deciding whether to track a session goal, writing its statement and criteria, assessing a criterion, revising the goal, or operating an authorized Podway workflow alongside a Codex goal.
+Read when choosing, defining, assessing or revising a goal, or operating Podway
+alongside an authorized Codex goal. A goal defines the accountable end state,
+not a task title, activity list or progress summary.
+
+## Choose and define
+
+- Goal tracking is declared by the Procedure. `small-change-v2` omits it;
+  `analysis-v2`, `bug-fix-v2` and `sw-dev-v2` require fresh assessment before
+  terminal progression. An untracked Procedure rejects goal input with
+  `GOAL_TRACKING_NOT_ENABLED`.
+- Prefer an untracked graph for bounded work whose required items already establish
+  completion. Track an outcome that needs assessment across attempts, actors or
+  different terminal results. Define/revise only with explicit user intent;
+  propose unknown goal wording rather than inferring it from a title.
+- When known before begin, provide the initial goal/criteria there; revision 1 is
+  created atomically with attempt 1. Otherwise `goal define` is accepted exactly
+  once while running; a second definition fails `SESSION_GOAL_ALREADY_DEFINED`.
+  Missing goal blocks assessment and terminal progression.
+- `goal define` needs workspace/session identity and session revision fences, not a
+  goal revision. `goal revise` and `goal assess-criterion` also require the exact
+  current `--if-goal-revision`. Consult command help for their complete arguments.
+
+Write one scoped end-state sentence, at most 1,000 characters. Use 1..16 distinct,
+externally checkable criteria, each at most 300 characters, with unique lowercase
+kebab-case IDs beginning with a letter and at most 64 bytes. `--criterion
+<id>=<statement>` separates that ID from its condition. Every criterion must
+meaningfully admit an unsatisfied result; effort, overlapping conditions and
+unverifiable quality claims do not define completion.
+
+Identify the fresh evidence source or decision-local item that can substantiate
+each criterion. A recorded assertion or a structurally valid goal does not prove
+external truth; Podway does not require citations to make an unsupported assertion
+invalid mechanically.
+
+## Assess and revise
+
+Assess only at the active goal-assessment decision attempt after performing the
+cited work. Supply an English reason describing what was observed. Cite at most
+four resolved source nodes or decision-local items per result. `not_applicable`
+carries no citations.
+
+The complete current result set derives:
+
+| Results | Goal outcome |
+| --- | --- |
+| Every criterion satisfied | `achieved` |
+| Any criterion unsatisfied | `not_achieved` |
+| Every criterion not applicable | `superseded` |
+
+Assess every criterion first or receive `CRITERION_RESULT_MISSING`. Assessment
+modes cannot mix (`CRITERION_MODE_MIXED`); not-applicable retires a whole goal
+revision, not an inconvenient criterion. The following decision must select an
+option matching the derived outcome or receive `GOAL_ASSESSMENT_OUTCOME_NOT_ALLOWED`.
+
+Revise only when the intended outcome changes, not to make a failed assessment
+pass. `goal revise` restates the entire goal/criteria with `--rework-to <node>` and
+`--reason`, safely reworking to that target. Revision or rework past assessment
+requires fresh assessment before terminal completion (`FRESH_GOAL_ASSESSMENT_MISSING`).
+Reactivation of a completed session needs explicit intent; cancelled sessions do
+not reactivate.
 
 ## Cooperate with Codex goals
 
-- A Codex goal and a Podway session goal are separate objects with separate lifecycles. Neither creates, revises, or authorizes the other. Follow explicit user intent and each system's creation rules; an active Codex goal does not require Podway goal tracking. Keep using an untracked Procedure when its existing completion conditions fit bounded work.
-- When both are authorized, align scope and acceptance conditions with the user's objective without duplicating Podway's complete criteria or status history in another evolving checklist. Resolve divergent objectives against user instructions; do not silently revise criteria to make statuses agree.
-- A terminal session, null guidance, or successful transition does not prove the Codex objective was achieved. Verify the actual authorized requirements, applicable external checks, and Podway completion conditions. For a mapped goal-tracked session, inspect its current derived outcome: `not_achieved` and `superseded` do not establish achievement of the original objective, and even `achieved` records caller assertions rather than external truth.
-- A bounded Podway session may cover only part of a broader Codex goal. Continue remaining authorized work before completing that goal.
-- A Podway blocker does not automatically make a Codex goal `blocked`. Follow the active Codex tool contract, including any recurrence threshold, and continue useful independent work within scope. Report the dependency and required input or state change instead of repeatedly polling an unchanged blocker or repeating failed work solely because automatic continuation remains active.
-- Do not reset, cancel, replace, reactivate, or otherwise change Podway lifecycle state to synchronize goal statuses. These rules add no synchronization loop and impose no Codex feature requirement on ordinary Podway operation.
+Codex and Podway goals have independent creation, authorization and completion
+rules. Neither creates or revises the other. When both are authorized, align
+scope without duplicating the full session history or evolving criteria elsewhere.
+A session may cover only part of the broader objective.
 
-## Decide whether to track a goal
+Podway success, terminal state and null guidance are not proof of the Codex goal.
+Verify the actual requirements and external work; even `achieved` records caller
+assertions. Continue independent remaining work before closing a broader goal.
 
-- Treat the session goal as the outcome this session is held accountable to across retry, rework, and actor handoff. It is not a task title, a plan, or a summary of the work performed.
-- Goal tracking exists only when the Procedure opts into it, so the decision happens when choosing the Procedure for `start`. `small-change-v2` deliberately omits it, while `analysis-v2`, `bug-fix-v2`, and `sw-dev-v2` require a fresh assessment before any terminal node.
-- Prefer an untracked Procedure when the work is bounded and mechanical and the graph's own required items already prove completion. Choosing a goal-tracked Procedure for such work produces ceremony, not assurance, and a Procedure without goal tracking rejects goal input with `GOAL_TRACKING_NOT_ENABLED`.
-- Track a goal when the session may outlive its current actor, span several attempts or reworks, or end in a completion claim that someone without the conversation must be able to check.
-- Define or revise a goal only with explicit user intent, and propose wording for approval instead of recording an inferred goal. Do not derive a goal from the task title.
-- Settle the goal and criteria before `begin` when the outcome is already known, so goal revision 1 is created atomically with attempt 1. Otherwise `goal define` is accepted exactly once while the session is running, and a second definition fails with `SESSION_GOAL_ALREADY_DEFINED`.
-- Define early rather than late. A goal-tracked graph expects the goal clarified within its first nodes, and no criterion can be assessed and no terminal node can complete while the goal is missing.
-- Do not confuse a session goal criterion with the authored `criteria:` field of a decision option, which states when that option applies and belongs to `$create-podway-procedure`.
-
-## Write the goal statement
-
-- State one desired end state in one sentence, scoped to what this session can deliver. Name what will be true when the session ends, not the activity that gets there. The bound reaches 1,000 characters, but a statement that long is a plan and belongs in items.
-- Name both the change and the constraint it must not break, so one reading fixes the scope.
-- Avoid effort verbs such as investigate, try, or work on, and avoid open-ended quality words that no observation ever closes.
-- Write for an actor who has lost all context. The statement and its criteria must be enough to know what to verify without the conversation that produced them.
-
-## Write the criteria
-
-- Treat the criteria set as the definition of done. Podway derives the goal outcome from it, so a condition that is not a criterion falls outside done, and a criterion that is not a condition of done does not belong.
-- Give each criterion exactly one externally checkable condition, and write it so that both a satisfied and an unsatisfied answer are honestly possible.
-- Reject any criterion that no honest observation could ever record as `unsatisfied`. It asserts nothing, and its assessment can only ever be a rubber stamp.
-- Keep criteria distinct. Overlapping criteria record one failure twice and hide which check actually failed.
-- Use the `--criterion <id>=<statement>` split deliberately. The identifier names the check so a later reader can tell which check failed, and the statement states the condition that decides it.
-- Keep identifiers unique, lowercase kebab-case, starting with a letter, and within 64 bytes. Keep each statement a complete English sentence within 300 characters.
-- Reject the recurring failure modes: a one-word label that names a topic instead of a condition, placeholder text left from drafting, a restatement of the goal under a different name, an aspiration that no external actor could substantiate, and a duplicate that overlaps a criterion already present.
-- Treat acceptance as silence, not approval. Every bound above is a shape check, and a criteria set can clear all of them while defining nothing.
-- Use the fewest criteria that define done. The bound is one to 16, but a set the assessor cannot hold at once has become a checklist of steps.
-- Decide before defining how each criterion will be substantiated: which resolved evidence source node or decision-local item its assessment will cite. Podway accepts an assessment with no citations, so a criterion that nothing in the graph can substantiate fails honesty, not validation.
-
-## Accept the derived outcome
-
-- Podway derives the outcome from the complete result set: every criterion satisfied gives `achieved`, any unsatisfied gives `not_achieved`, and every criterion not applicable gives `superseded`. Assess every criterion of the current goal revision first, or the decision fails with `CRITERION_RESULT_MISSING`.
-- The following `decide` must choose the option whose declared outcome matches that derivation, and a disagreeing option is rejected with `GOAL_ASSESSMENT_OUTCOME_NOT_ALLOWED`. A criterion you cannot honestly satisfy therefore forces `not_achieved`, so add a criterion as a condition of done and never as an intention or a stretch target.
-- Record `not_achieved` when the work does not support the goal. It is a supported result with its own route, and softening a statement or re-reading a criterion until it passes converts a real outcome into a false record.
-- Assessment modes never mix within one assessment, and mixing fails with `CRITERION_MODE_MIXED`, so `not_applicable` cannot retire one stale criterion beside satisfied ones. Use it only when the whole goal revision stopped being the desired outcome, and use `goal revise` for anything smaller.
-
-## Assess and revise honestly
-
-- Assess a criterion only on the active goal-assessment decision attempt, and only after performing the cited work; the graph reaches that decision near its terminals so the goal is judged once the work is done. Podway records caller assertions and does not judge their semantic truth, so a satisfied criterion is your claim and never Podway's finding.
-- Supply a reason for every status in English, reporting what was observed rather than restating that the criterion was met.
-- Cite at most four resolved evidence sources or decision-local items per criterion result. A citation identifies fresh Podway state and does not validate the external truth of the claim, and a `not_applicable` result carries none.
-- Revise as soon as the desired outcome itself changes, and never because a criterion became inconvenient; do not carry a goal you know is stale into its assessment. `goal revise` records a full restatement of the goal and the complete criteria set rather than a diff together with `--rework-to <graph-node-id>` and `--reason`, and it always reworks the session to that revision-safe target so a goal assessment runs again; it never edits the goal in place.
-- Expect a revision, or a rework past the assessment, to invalidate freshness and to require assessing every criterion again before a terminal node, reported as `FRESH_GOAL_ASSESSMENT_MISSING`. That cost is deliberate; budget for it instead of avoiding a needed revision.
-- Read `podway help goal.define`, `podway help goal.revise`, and `podway help goal.assess_criterion` for the current grammar of each command.
+A Podway blocker does not automatically block a Codex goal. Follow that tool's
+recurrence/creation rules and continue useful work within scope. Do not poll an
+unchanged dependency or reset, cancel, replace or reactivate a session merely to
+synchronize statuses.

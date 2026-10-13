@@ -1,95 +1,79 @@
 # Procedure v2 Capability Inventory
 
-Use this inventory after resolving the exact Podway binary that will validate the
-Procedure. The canonical schema shipped with that binary remains authoritative;
-this reference prevents the minimal scaffold and any one preset from being mistaken
-for the complete grammar.
+Read before choosing features. The exact validating binary's manifest-bound
+schema remains authoritative; scaffold and any single preset are incomplete views.
 
 ```podway-capability-inventory
 {"item_types":["artifact","check_result","choice","confirm","integer","list","text"],"predicate_operators":["at_least","at_most","empty","equals","non_empty","not_equals"]}
 ```
 
-## Choose item types deliberately
+## Items
 
-| Type | Use it for | Important boundary |
-| --- | --- | --- |
-| `confirm` | An attributed boolean assertion. | It is not independent verification. |
-| `text` | One bounded narrative value. | Keep logs and large documents outside Podway. |
-| `choice` | One value from a closed authored set. | Use stable machine values, not prose variants. |
-| `integer` | A bounded count, ordinal, or status number. | Declare a meaningful minimum and maximum when the workflow has them. |
-| `list` | Repeated bounded values with count, uniqueness, and total-size controls. | Enable multi-page read-back only when the selected evidence can exceed one page. |
-| `artifact` | A stable reference with media-type metadata. | Podway stores neither artifact bytes nor an attestation of their content. |
-| `check_result` | A result tied to an authored operation ID and digest, with closed `pass`, `fail`, and `inconclusive` outcomes. | The digest binds the abstract operation; it does not prove execution. |
+| Type | Meaning and boundary |
+| --- | --- |
+| `confirm` | Attributed boolean assertion, not independent verification |
+| `text` | Bounded narrative; logs and large documents stay outside Podway |
+| `choice` | One value from a closed authored set |
+| `integer` | Bounded count, ordinal or status number |
+| `list` | Repeated values with count, uniqueness and total-size bounds |
+| `artifact` | Stable media-typed reference; no stored bytes or content attestation |
+| `check_result` | Authored operation ID/digest and closed pass/fail/inconclusive result; no proof of execution |
 
-Every item may use `required_when` only while declaring `required: false`. Its one
-to four predicates must reference earlier, unconditionally required items in the
-same action definition. Use it for structurally decidable conditional evidence,
-not semantic policy.
+`required_when` is permitted only with `required: false`; its 1..4 predicates
+reference earlier unconditionally required items in the same node definition
+(action or decision), and controllers cannot themselves be conditional.
+It selects conditional evidence mechanically, not semantic policy.
 
-## Use predicates only where their types fit
+## Predicates and evidence
 
-The six operators are `equals`, `not_equals`, `empty`, `non_empty`, `at_least`, and
-`at_most`. `required_when` predicates select a same-action `item`; decision guards
-select prior fresh evidence with `evidence.node` and `evidence.item`. For a
-`check_result`, add `field: outcome` when comparing its outcome.
+The six operators are `equals`, `not_equals`, `empty`, `non_empty`, `at_least` and
+`at_most`. `required_when` selects same-node `item`; decision guards select
+`evidence.node` and `evidence.item`. For check-result outcome comparison, use
+`field: outcome`.
 
-- Use `equals` and `not_equals` for boolean, choice, integer, or check-result outcome
-  equality supported by the validating schema.
-- Use `empty` and `non_empty` for collections whose cardinality is the intended
-  mechanical condition.
-- Use `at_least` and `at_most` for integer values or collection counts supported by
-  the validating schema.
-- Make the guarded options exhaustive over every reachable value. Every guard source
-  must be required, fresh, explicitly selected by that decision's evidence, and
-  mechanically compatible with the operator.
+| Operators | Admitted item types |
+| --- | --- |
+| `equals`, `not_equals` | `confirm`, `choice`, `integer`, `check_result` with `field: outcome` |
+| `empty`, `non_empty` | `text`, `list` |
+| `at_least`, `at_most` | `integer` only |
 
-## Select evidence and read-back scope
+Predicate literals must match the admitted item type. Use an integer count item
+for collection thresholds. Guard evidence must be
+required, fresh and explicitly selected by the decision. Make options exhaustive
+over reachable values.
 
-An evidence reference names an earlier graph node and optionally selects only the
-item IDs the consumer needs. An omitted selector publishes no item preview; it does
-not grant arbitrary access. Required sources must dominate the consumer. Optional
-branch sources remain optional when their branch did not execute.
+An omitted evidence item selector publishes no item previews. Required sources
+dominate consumers; absent optional branch evidence does not block them.
+Selected text/list values may require paged read-back. Qualify complete digest/counts,
+continuation and stale-token rejection only when selected evidence needs multiple
+pages. Do not inflate evidence merely to demonstrate paging.
 
-Selected text and list evidence may require paged read-back. Size the list from the
-workflow requirement first. When paging is genuinely needed, qualify the first page,
-continuation token, complete-value digest and counts, plus stale-token rejection after
-rework. Do not enlarge evidence merely to demonstrate paging.
+## Lifecycle features
 
-## Preserve lifecycle semantics
+- `skip` is placement policy, not a general bypass. Do not skip a required evidence
+  source or decision-owning phase; use an accounted not-applicable choice instead.
+- `goal_tracking: true` requires goal definition and fresh assessment near closeout.
+  Map every terminal outcome and its supporting evidence.
+- Decision `effect: rework` replaces the stale suffix from an owned target;
+  `manual_rework.allowed_targets` independently limits operator rework.
+- A schema-admitted closed `delegation` declaration belongs to an action placement,
+  never a decision or skip-enabled action. It binds the logical integration,
+  immutable Role, round bound and worker disposition. It is not an execution hook.
+  Omission remains Direct. A package/receipt adds a structural completion condition;
+  committed item-state changes after acceptance require a fresh attempt. See
+  [delegation authoring](delegation.md) for fields and correction design.
 
-An exact binary that supports supervised delegation may admit one closed
-`delegation` object on an action placement. It declares the logical binding,
-immutable Role identity, round bound, and worker disposition; it is not a node
-kind, executor hook, or provider configuration. It rejects decisions and
-skip-enabled actions. Keep the omitted declaration byte-stable and preserve
-Direct defaults. A matching package and one structurally accepted receipt add
-a completion gate; they do not prove real work. After acceptance, a changed
-item requires a fresh attempt before another acceptance. Qualify a real adapter
-separately and never infer availability from this source inventory or semver.
-For field selection and a worked example, read [delegation authoring](delegation.md).
+## Exact provenance
 
-- `skip` is an authored placement policy, not a general bypass. Do not make required
-  evidence or a decision-owning phase skippable; prefer an explicit `not-applicable`
-  choice when the phase must account for that outcome.
-- `goal_tracking: true` opts the Procedure into goal definition and a fresh goal
-  assessment near closeout. Map every terminal outcome deliberately and cite only the
-  evidence needed to assess the criteria.
-- Decision `effect: rework` routes replace the stale suffix from the owning target.
-  `manual_rework.allowed_targets` is a separate operator allowlist. Declare only
-  phases where an externally requested correction is meaningful.
+Use `podway version --json` and `podway version --json --identity`; the identity
+call must report Output v4, version-result v2 and contract-manifest v2. Record version, target,
+build identity, available source commit and manifest digest, plus preview's
+canonical Procedure digest.
 
-## Bind validation to exact provenance
-
-Run both `podway version --json` and `podway version --json --identity`.
-Require Output v4, version-result v2 and contract-manifest v2 for the current
-single CLI. Record the version, target, build identity, source
-commit when present, contract-manifest schema, and contract-manifest digest. Record
-the exact canonical Procedure digest produced by preview.
-
-Do not infer feature support from the product version alone. A source checkout,
-development build, and published binary can report the same semver while embedding
-different manifests. For a local Procedure, report the exact binary identity used.
-For a distributed Procedure, separately identify and test the first immutable
-published release whose manifest includes every required capability. An unreleased
-source revision may prove future compatibility, but it is not released-support
-evidence.
+Matching semver is insufficient: different source/builds may embed different
+manifests. Local work reports its validation binary; distributed work separately
+identifies the first immutable published release supporting all required features
+and the same Output v4, version-result v2 and contract-manifest v2 schema families.
+Validate with that exact released binary. Obtaining it is a prerequisite, not
+authority to download or install it.
+Unreleased source may establish future compatibility, not released support.

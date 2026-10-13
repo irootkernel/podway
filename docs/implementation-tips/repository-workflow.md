@@ -18,7 +18,7 @@ pinned toolchain with an unrelated Rust installation from `PATH`.
 4. Add or update a focused test that observes the required behavior.
 5. Run focused checks, then the complete gate before release acceptance.
 
-Changes to lifecycle semantics, commands, JSON, IPC, SQLite, worktree identity,
+Changes to lifecycle semantics, commands, JSON, SQLite, worktree identity,
 trust boundaries, artifact handling, or release scope require synchronized
 documentation and contract updates.
 
@@ -28,8 +28,8 @@ Build-consumed assets have exactly one source:
 
 - `assets/presets/`: built-in procedures;
 - `assets/schemas/`: public JSON Schemas;
-- `assets/specifications/`: executable catalogs, DDL, transition data,
-  canonicalization rules, and the LaunchAgent template.
+- `assets/specifications/`: executable catalogs, DDL, transition data and
+  canonicalization rules.
 
 Create or import a preset candidate with:
 

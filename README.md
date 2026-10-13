@@ -50,14 +50,15 @@ System Settings before its first run.
 
 ## Install a release
 
-This checkout documents the daemon-free `v0.2.13` target; source implementation
+This checkout prepares `v0.2.14`; source implementation
 is not evidence that a matching stable release has been published. Select an
 archive whose identity matches this direct generation, or use an explicitly
 chosen source build without claiming stable-release qualification.
 
 If an older daemon-based generation is installed, complete the separately
 authorized [legacy cutover](#legacy-state-and-cutover) before installing this CLI
-or resetting its worktrees.
+or resetting its worktrees. If a direct release such as `v0.2.13` is installed,
+read [Upgrade and uninstall](#upgrade-and-uninstall) before replacing it.
 
 Download the selected Apple Silicon archive and its `.sha256` file from [GitHub Releases](https://github.com/irootkernel/podway/releases). Then verify and extract it:
 
@@ -137,7 +138,7 @@ For a small project-wide policy, add this template to the project's `AGENTS.md`:
 ```markdown
 ## Podway
 
-- Podway supports Procedure v2 only. Treat `LEGACY_RUNTIME_STATE_UNSUPPORTED` as an explicit destructive-reset boundary, after separately authorized retirement of every old writer; do not edit the database or attempt conversion.
+- Podway supports Procedure v2 only. Preserve incompatible workspace state and follow its structured recovery guidance; reset or removal requires explicit intent for the exact deletion boundary. Before discard, confirm that no other Podway writer still uses that worktree; retiring one needs its owner's separate authority.
 - When the current workflow authorizes Podway use and `.podway/config.yaml` exists, read `podway observe --json` before task work. Require Output v4 and `podway.observation-result/v5` for every Procedure, and re-read after every mutation.
 - Treat the active Podway graph node and attempt as the current work boundary. Perform the work before recording an item. Side work may run outside Podway, but record only conclusions supported by current evidence on the active attempt.
 - Use JSON fields, stable error codes, explicit preconditions, and idempotency keys for mutations. Never parse human-readable output as an API.
@@ -145,47 +146,51 @@ For a small project-wide policy, add this template to the project's `AGENTS.md`:
 - Podway records assertions; it does not run the work or prove semantic truth.
 ```
 
-For fuller runtime guidance, install the complete [`use-podway` skill](https://github.com/irootkernel/podway/tree/main/skills/use-podway) directory under `~/.agents/skills/`:
+After `v0.2.14` is published, install the complete [`use-podway` skill](https://github.com/irootkernel/podway/tree/v0.2.14/skills/use-podway) directory under `~/.agents/skills/`:
 
 ```bash
 podway_skill_dir="$HOME/.agents/skills/use-podway"
 mkdir -p "$podway_skill_dir/references"
 
 curl -fsSLo "$podway_skill_dir/SKILL.md" \
-  https://raw.githubusercontent.com/irootkernel/podway/main/skills/use-podway/SKILL.md
+  https://raw.githubusercontent.com/irootkernel/podway/v0.2.14/skills/use-podway/SKILL.md
 
 for reference in lifecycle goal recovery delegation; do
   curl -fsSLo "$podway_skill_dir/references/$reference.md" \
-    "https://raw.githubusercontent.com/irootkernel/podway/main/skills/use-podway/references/$reference.md"
+    "https://raw.githubusercontent.com/irootkernel/podway/v0.2.14/skills/use-podway/references/$reference.md"
 done
 ```
 
 The runtime skill covers the active-session loop and loads separate references only for lifecycle, session-goal, recovery, or explicitly delegated work.
 
-Install [`create-podway-procedure`](https://github.com/irootkernel/podway/tree/main/skills/create-podway-procedure) separately only when the agent needs to create, revise, review, or harden custom Procedure source:
+Install [`create-podway-procedure`](https://github.com/irootkernel/podway/tree/v0.2.14/skills/create-podway-procedure) separately only when the agent needs to create, revise, review, or harden custom Procedure source:
 
 ```bash
 procedure_skill_dir="$HOME/.agents/skills/create-podway-procedure"
 mkdir -p "$procedure_skill_dir/references" "$procedure_skill_dir/agents"
 
 curl -fsSLo "$procedure_skill_dir/SKILL.md" \
-  https://raw.githubusercontent.com/irootkernel/podway/main/skills/create-podway-procedure/SKILL.md
+  https://raw.githubusercontent.com/irootkernel/podway/v0.2.14/skills/create-podway-procedure/SKILL.md
 
 for reference in authoring capabilities distribution delegation; do
   curl -fsSLo "$procedure_skill_dir/references/$reference.md" \
-    "https://raw.githubusercontent.com/irootkernel/podway/main/skills/create-podway-procedure/references/$reference.md"
+    "https://raw.githubusercontent.com/irootkernel/podway/v0.2.14/skills/create-podway-procedure/references/$reference.md"
 done
 
 curl -fsSLo "$procedure_skill_dir/agents/openai.yaml" \
-  https://raw.githubusercontent.com/irootkernel/podway/main/skills/create-podway-procedure/agents/openai.yaml
+  https://raw.githubusercontent.com/irootkernel/podway/v0.2.14/skills/create-podway-procedure/agents/openai.yaml
 ```
 
-The authoring skill produces and validates declarative source, then hands off preview's exact digest-fenced start suggestion without starting or mutating a session. Consult the agent's documentation for skill reload requirements. The commands above require network access and `curl`, and overwrite existing files with the same names. Replace `main` with one exact release tag or commit SHA when a reproducible, pinned skill version is required.
+The authoring skill produces and validates declarative source, then hands off preview's exact digest-fenced start suggestion without starting or mutating a session. Consult the agent's documentation for skill reload requirements. The commands above require network access and `curl`, and overwrite existing files with the same names. Both complete skill directories are pinned to the same release tag; use another exact tag or commit only after verifying its CLI compatibility.
 
-Installing the CLI neither installs nor updates these skills. Before direct-generation
-use, verify that the installed copies support Output v4, Error v2, observation
-v5, success-only outcome lookup and the legacy cutover. Update daemon-era
-copies through an explicitly authorized skill installation.
+The CLI archive does not include these skills. Installing or resetting Podway
+does not update them; replace the complete skill directories separately. They
+describe the current Direct model with Output v4, Error v2, observation v5 and
+success-only outcome lookup.
+
+Before replacing an existing CLI or resetting workspace state, read
+[Upgrade and uninstall](#upgrade-and-uninstall). Skill installation does not grant
+runtime-deletion authority.
 
 For supervised delegation, follow the [worked review example](docs/examples/supervised-delegation.md)
 and its canonical YAML. The example is exercised by the real direct CLI in
@@ -385,7 +390,7 @@ live under `.podway/runtime/` in the owning worktree. Deleting the worktree dele
 that state. Podway neither reads nor creates `~/.podway`, a global workspace
 registry, daemon logs, sockets or service metadata. A different writer manifest
 fails closed unless the release explicitly declares a compatible predecessor;
-`v0.2.13` declares none.
+neither `v0.2.13` nor the planned `v0.2.14` declares one.
 
 Podway trusts processes running as the same operating-system user. It is not a security boundary against malicious same-user processes. It performs no network I/O and exposes no arbitrary command-execution or Git-mutation API.
 
@@ -394,6 +399,30 @@ Podway trusts processes running as the same operating-system user. It is not a s
 For the daemon-era cutover, follow [legacy state and cutover](#legacy-state-and-cutover)
 before installing or resetting. Later direct-to-direct upgrades require declared
 writer-predecessor compatibility; a version string alone does not permit migration.
+
+The planned `v0.2.14` changes the writer manifest digest because that digest includes
+the product version. Workspaces bound to the `v0.2.13` manifest are therefore refused
+unchanged with `WORKSPACE_CONTRACT_MISMATCH`; `observe`, plain `reset` and UUID-fenced
+reset-all cannot reopen them. Finish or explicitly abandon active sessions with
+their original writer before replacing it, or retain that exact writer to continue
+the worktree without discarding history.
+
+To use `v0.2.14` with an existing incompatible workspace, explicitly accept loss of
+all current/inactive sessions and runtime history. After identifying the exact
+worktree and confirming no other Podway writer still uses it, run the new writer's
+unfenced replacement request:
+
+```bash
+podway --worktree <absolute-root> --json reset --all --yes --idempotency-key <new-key>
+```
+
+It creates a fresh UUID and Store without backup or conversion, preserving
+configuration and Procedure source. Do not add `--if-workspace-uuid` from the refused
+Store. Keep this request and key for interrupted-operation recovery. Plain reset
+deletes only the current session in a compatible workspace; force mode uses
+`--yes --progress-summary <text>` for running or undisposed terminal sessions with
+explicit confirmation. It cannot resolve writer mismatch. A newer unsupported
+Store remains refused.
 
 Remove the CLI through the original installation mechanism when no longer needed.
 That does not delete `.podway` in any worktree. Explicitly confirmed

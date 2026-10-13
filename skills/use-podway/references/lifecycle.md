@@ -1,85 +1,180 @@
 # Workspace and Session Lifecycle
 
-Read this reference only when the user asks to initialize Podway, start or replace a session, archive or purge retained state, cancel or reset state, remove Podway from a workspace, repair a workspace, or inspect retired lifecycle guidance.
+Read for an authorized initialization, start/replacement, archive/purge,
+cancel/reset, workspace removal or repair. Preserve the exact target and deletion
+boundary; one operation does not authorize another.
 
-## Diagnose first
+## Inspect and initialize
 
-1. Run `podway version --json --identity` when binary identity is relevant. Require
-   Output v4, version-result v2 and contract-manifest v2 for the current single CLI.
-   Record its manifest/source/build identity, not just semver. Daemon, job and
-   account-runtime commands are retired.
-2. Inside an initialized target Git worktree, inspect `.podway/config.yaml` and use `podway observe --json` for current session state. Use `podway workspace show` and `podway doctor` when workspace identity or health needs diagnosis.
-3. Use `podway help <route>` before every unfamiliar lifecycle command.
-4. Preserve existing state on a diagnostic failure. Do not repair, reset, or remove anything merely to make the diagnostic pass succeed. Carry an established explicit authorization forward within its exact scope.
+- When identity matters, run `podway version --json --identity`. Require Output v4,
+  version-result v2 and contract-manifest v2; record build/source/manifest identity,
+  not semver alone.
+- In an initialized worktree, use `podway observe --json`, `podway workspace show`
+  and, when health diagnosis is needed, `podway doctor`. Consult `podway help
+  <route>` for unfamiliar operations. Diagnostic failure is not repair authority.
+- `podway init` requires explicit initialization intent for that worktree. Do not
+  initialize a side-work fixture as part of a session owned elsewhere. A new-key
+  init refuses an initialized workspace; diagnosed repair is a separate operation.
+- Preserve configuration, existing state and unsupported Stores on failure.
+  Follow [recovery](recovery.md), not manual database or marker edits.
 
-## Initialize and start
+## Prepare and start
 
-- Run `podway init` only when the user explicitly asks to initialize the target worktree. Do not initialize scratch worktrees that merely perform side work for a session owned elsewhere.
-- Before starting, inspect choices with `podway preset list` and `podway preset explain <name>`. This skill supports only the built-in Procedure v2 presets `analysis-v2`, `bug-fix-v2`, `small-change-v2`, and `sw-dev-v2`. Select `analysis-v2` for source-backed research or technical analysis; select any preset only when it matches the user's task, otherwise author and review a bounded custom Procedure v2.
-- For a custom file, validate and preview it using `$create-podway-procedure`. Start it with the exact `--expect-procedure-digest` reported by the reviewed v2 document; omitting the digest fails with `DIGEST_CONFIRMATION_REQUIRED`. Presets do not use this option.
-- Dry-run a start when its task, Procedure, or replacement effect needs review.
-- Plain `start --dry-run` previews only the Procedure when no existing-session policy is supplied. Use `--dry-run --on-existing preserve|delete` to inspect the observed lifecycle and proposed state action. A dry run may become stale immediately, so the real command still revalidates.
-- Human TTY `start` interviews only after observing an existing session. Enter or EOF continues the current work, creates nothing, and returns fresh current guidance. Prepared state offers continue or delete; running offers continue, preserve as superseded, or delete; an undisposed terminal session offers continue, handed-off, or not-required. Never supply disposition text, a supersede reason, progress summary, or actor that the user did not provide.
-- Automation, JSON, quiet, and non-TTY execution never prompts. Use `--on-existing preserve --supersede-reason <text>` only when the user authorizes retaining the identified running session; add `--actor` only when supplied. Use `--on-existing delete` only for authorized prepared/running deletion. Running deletion additionally requires the user-supplied `--progress-summary <text>` and `--yes`.
-- Plain `start` automatically archives a completed or cancelled current session only when its disposition is current. Treat a request to start the next session as authorization for this retention transition. Never evict history automatically.
-- A successful `start` or replacement returns `podway.session-start-result/v4` and creates a prepared session at revision 0 without an active attempt or goal. Re-read `podway observe --json`, then use its fenced `session.begin` template to create attempt 1. Supply the optional initial goal, criteria, and actor only to `begin`, and supply a goal only with explicit user intent; when it is omitted, a goal-tracking Procedure still accepts `goal define` once later.
+Inspect `podway preset list` and `podway preset explain <name>`. Supported built-ins
+are `analysis-v2`, `bug-fix-v2`, `small-change-v2` and `sw-dev-v2`; select from the
+actual task. For custom source, use `$create-podway-procedure`, then copy preview's
+exact start suggestion and `--expect-procedure-digest`. Missing custom digest
+fails with `DIGEST_CONFIRMATION_REQUIRED`; presets do not use it.
 
-## Manage terminal and destructive operations
+A plain `start --dry-run` previews the Procedure only. Add
+`--dry-run --on-existing preserve|delete` to inspect an existing-session policy.
+The real start always revalidates; a dry run is not authorization.
 
-- Match the command to the requested deletion boundary. `reset` deletes the current session and its session-scoped history. `archive purge` permanently deletes one selected inactive session. `reset --all` reinitializes all workspace runtime state while preserving reviewable `.podway` configuration and Procedures. `workspace remove` deletes the complete `.podway` tree while preserving the Git worktree. Do not widen one request into another boundary.
-- Treat `cancel` as ending the current task, not as a pause.
-- Treat `reset` as deletion of session-scoped history. Show or summarize the current session first and require an explicit user request before invoking it. Default reset is eligible only for prepared state or terminal state with a disposition for the exact current revision. Force reset requires a bounded progress summary and explicit confirmation.
-- A completed or cancelled session becomes eligible only after `disposition handed-off` or `disposition not-required` records its current ownership outcome. `superseded` is created only by atomic running-session preservation during `start`. Never invent the summary, reference, reason, or actor.
-- Prefer `archive` when the user wants to free the current slot while retaining a completed or cancelled session. Re-read the exact terminal identity and revision, use `podway help session.archive`, and preserve every supplied fence. Confirm success only from `podway.session-archive-result/v2` with `activity: inactive`.
-- Use `archive list` and `archive show --session-id <uuid>` for retained read-only state. Show includes the immutable terminal disposition, including the reason, actor, and successor ID for superseded work. Add `--verbose --history-before <n>` only when bounded history is needed. Inactive sessions cannot be restored, reactivated, or mutated.
-- Treat `archive purge` as permanent deletion. Require an explicit purge request, the exact retained session ID and revision from a fresh list/show, `--yes`, an explicit stable idempotency key, and `podway help session.archive_purge`. Never purge merely to make room. After response loss, follow outcome lookup and identical-request recovery, then re-read the archive. Absence alone does not identify which caller deleted it.
-- Treat `reset --all` as workspace-wide destructive reinitialization. Use it only for the exact target and within explicit authorization, with `--yes` and a stable explicit idempotency key. Preserve the workspace UUID fence when available. `--force` is accepted only with `reset --all` and is unnecessary; the command preserves reviewable configuration, Procedures, and paths outside runtime state.
-- Use `workspace repair` only for a diagnosed condition and an explicit request. Plain `init` with a new key refuses an already initialized workspace; repair is a separate operation.
-- Do not edit `.podway/runtime/`, SQLite files, maintenance markers, or filesystem identities manually to simulate a supported lifecycle action.
+Human TTY start interviews only for an existing session. Enter or EOF continues
+that session without creating one. Prepared state offers continue/delete; running
+offers continue/preserve/delete; an undisposed terminal state offers continue or
+a supplied handed-off/not-required disposition. Do not invent a summary, reference,
+reason, actor or disposition.
 
-## Retired account-runtime and service commands
+JSON, quiet and non-TTY starts never prompt:
 
-Daemon, job, runtime-reset, socket, mode, and detach controls return
-`COMMAND_RETIRED`; they do not manage a direct workspace. Report the structured
-retirement guidance. Preserve legacy user-global state and installed services.
-If the user separately authorizes legacy service retirement, use the original
-generation's supported owner and exact target; do not reinterpret that request
-as workspace reset or removal. Never install, stop, replace, or delete a legacy
-service solely to make the new CLI usable.
+- `--on-existing preserve --supersede-reason <text>` retains an identified running
+  session only when authorized. Add `--actor` only when supplied.
+- `--on-existing delete` deletes identified prepared/running work only when
+  authorized. Running deletion also requires `--progress-summary <text> --yes`.
+- Plain start automatically archives a completed/cancelled current session only
+  when its disposition matches the current revision. The next-session request
+  permits this retention transition; it never permits evicting inactive history.
 
-For an explicitly authorized daemon-era cutover, first finish or abandon old
-sessions, retire the ordinary LaunchAgent through the old binary, and retire any
-Aquarium managed writer through its original controller under that owner's separate
-authority. Establish that all old writers are gone BEFORE installing the new CLI
-or resetting shared legacy worktrees. Only then install the new CLI, clean old
-account state under a separate grant, and explicitly reset each identified legacy
-worktree. No automatic conversion or backup occurs. The current CLI does not own
-legacy account/service cleanup.
+Require `podway.session-start-result/v4`: the new session is prepared at revision
+0, with no attempt or goal. Re-observe, then use its fenced `session.begin`
+template. Provide an initial goal only with explicit intent; a goal-tracking
+Procedure permits `goal define` once later when begin omitted it.
 
-## Remove Podway from a workspace
+## Choose the lifecycle boundary
 
-Use this flow only when the user explicitly asks to stop using Podway in one exact existing Git worktree and accepts deletion of its complete `.podway` tree. A generic cleanup request, a missing session, or an old registry entry is not workspace-removal authorization.
+| Operation | Effect |
+| --- | --- |
+| `cancel` | Terminally abandons running work; retains session/history; it is not a pause |
+| `archive` | Frees the current slot while retaining an eligible terminal session |
+| `reset` | Deletes the current session and its session-scoped history |
+| `archive purge` | Permanently deletes one selected inactive session |
+| `reset --all` | Replaces all workspace runtime state; keeps configuration and Procedures |
+| `workspace remove` | Deletes the entire `.podway` tree; keeps the Git worktree and outside paths |
 
-1. Resolve and state the exact absolute Git worktree root. Run `podway help workspace.remove`, then inspect the current target with `podway workspace show --json` and `podway doctor` as applicable. Obtain the current workspace UUID from supported output; never invent a missing UUID.
-2. Explain that removal deletes configuration, ignore rules, custom Procedures, current and inactive sessions, runtime state, and unknown content below `.podway`. It preserves the Git worktree and every path outside `.podway` and does not mutate Git. Inspect `git status --short -- .podway` and `git ls-files -- .podway` so tracked or modified project content that will appear deleted is visible before authorization.
-3. Require the request to identify the exact worktree and accept complete `.podway` deletion. Approval to reset or purge a session, retire a legacy service, or delete a Git worktree is a different boundary.
-4. Immediately before mutation, re-read the workspace through supported commands and require the same absolute root and workspace UUID. For JSON or non-TTY execution, invoke `podway --worktree <absolute-root> workspace remove --force --if-workspace-uuid <workspace-uuid> --yes --idempotency-key <original-key>`, retaining the exact request for recovery. Unfenced human TTY removal requires typing the exact resolved absolute root even with `--yes`. A UUID-fenced TTY request may use `--yes` instead of that prompt.
-5. Confirm success only from `podway.workspace-removal-result/v2`. Report `worktree_root`, the prior `workspace_uuid`, `podway_directory_removed`, and `already_absent`. Verify through supported read-only workspace status and filesystem inspection that the selected `.podway` tree is absent while the Git worktree remains.
-6. After response loss or an interrupted removal, preserve the original request, key, and UUID. Reinspect the exact root with supported workspace diagnostics and follow its marker-backed maintenance recovery recipe. Resume only the original canonical operation; do not invent a new key, manually delete residual state, or weaken the UUID fence. Stop if the root, UUID, filesystem identity, or deletion boundary is ambiguous.
+A terminal disposition applies to one exact session revision. `disposition
+handed-off` and `disposition not-required` make completed/cancelled sessions eligible;
+`superseded` is produced only by atomic running-session preservation at start.
+Inactive sessions are immutable and cannot reactivate. Completed current sessions
+can reactivate only under authorized rework or goal revision.
 
-Do not combine workspace removal with legacy service retirement, Git cleanup, worktree deletion, commit, or publication unless each additional operation is explicitly requested.
+### Archive and purge
 
-## Discard the current session
+Re-read terminal identity/revision before `session.archive`, preserve every fence,
+and require `podway.session-archive-result/v2` with `activity: inactive`.
+Use `archive list` or `archive show --session-id <uuid>` for retained state.
+Show includes disposition and successor identity for superseded work; request
+bounded verbose history only when needed.
 
-Use this flow only when the user explicitly asks to remove, discard, clear, or reset the current session. Do not decide that a session is stale merely because it is old, incomplete, or unrelated to the current task.
+Purge needs explicit permanent-deletion intent, the exact inactive session ID and
+revision from fresh list/show, workspace UUID, `--yes` and a stable explicit key.
+Read `podway help session.archive_purge`. After response loss, reconcile through
+outcome lookup; absence alone does not identify which caller deleted a session.
+Re-list after success before selecting another candidate.
 
-1. Run `podway observe --json` and require `podway.observation-result/v5`. Summarize the Procedure ID and purpose, lifecycle, current node and attempt when present, session ID and revision, current terminal disposition when present, and recorded progress.
-2. If observation returns `SESSION_NOT_FOUND`, report that no current session exists and stop successfully. Do not escalate to `reset --all`.
-3. Explain the requested disposition. `cancel` terminally abandons a running task but preserves the current session and its history. `archive` frees the current slot while retaining an eligible terminal session as inactive. `reset` deletes the current session and all session-scoped history while preserving workspace initialization. When deletion is the stated goal, use `reset` directly; when preservation is the goal, use `archive`. Do not cancel first solely to enable either operation.
-4. Read `podway help session.reset`. Preview the exact observed target with `podway reset --dry-run`, passing the latest workspace UUID, session ID, and session revision fences. Do not pass `--yes`, an idempotency key, or a progress summary to the dry run.
-5. Read the structured eligibility result. A prepared session is eligible immediately. A terminal session with `required_action: record_disposition` needs a caller-supplied current disposition before default reset. A running or otherwise ineligible session requires force mode; show the irreversible history loss and obtain a bounded progress summary plus explicit authorization. A dry run is not authorization and may become stale immediately.
-6. After authorization and any required disposition, re-run `podway observe --json`. Use only the fresh `session.reset` mutation template, substitute a unique stable idempotency key, and preserve every supplied fence. Invoke eligible reset without `--yes`; invoke force reset with the authorized `--progress-summary <text> --yes`.
-7. On an uncertain mutation outcome, retain the original canonical request and idempotency key and follow outcome-lookup recovery. Do not blindly retry or weaken a fence.
-8. After reset success, run `podway observe --json` again and require `podway.error/v2` with `SESSION_NOT_FOUND`. Report that workspace initialization remains and that only the session-scoped state was deleted.
+Above the entry advisory threshold of 10, offer exactly these alternatives without
+executing or blocking work:
 
-After every other lifecycle mutation, re-read `podway observe --json` or the relevant workspace status and report the resulting state. Do not imply that a session mutation installed, committed, pushed, or executed project work.
+```bash
+# Reinitialize all workspace runtime state.
+podway reset --all --yes --if-workspace-uuid <workspace-uuid> --idempotency-key <new-key>
+
+# Purge only the oldest inactive session from the same archive-list envelope.
+podway archive purge --session-id <oldest-session-id> --if-session-revision <revision> --yes --if-workspace-uuid <workspace-uuid> --idempotency-key <new-key>
+```
+
+Both commands use `workspace.uuid` from the same archive-list envelope; purge also
+uses `oldest.session_id` and `oldest.session_revision`. Summarize all-runtime
+history loss before authorized reset-all.
+Neither the threshold nor an error recipe authorizes deletion.
+
+### Discard the current session
+
+1. Observe and summarize the Procedure, lifecycle, current node/attempt, session
+   ID/revision, disposition and recorded progress. `SESSION_NOT_FOUND` means there
+   is nothing to discard; stop without escalating to reset-all.
+2. Match the user's intent to the table. Delete with reset, retain with archive,
+   abandon with cancel. Do not cancel merely to enable deletion or archival.
+3. Read `podway help session.reset`; preview `reset --dry-run` with current workspace,
+   session and revision fences. A dry run accepts no key, `--yes` or progress summary.
+4. Prepared state is eligible for default reset. Terminal state may require a
+   caller-supplied current disposition. An ineligible running session requires the
+   force-mode history-loss boundary, a bounded progress summary and explicit intent.
+5. After any disposition, re-observe and use the current `session.reset` template.
+   Eligible reset needs no `--yes`; force mode uses the authorized summary and
+   `--yes`. Supply a unique stable key and preserve every template fence. Check help
+   rather than inventing a force flag.
+6. Reconcile an uncertain result with the original key/request. On success,
+   observation must return `SESSION_NOT_FOUND`; workspace initialization remains.
+
+### Reinitialize runtime state
+
+`reset --all --yes --idempotency-key <key>` discards all current/inactive sessions
+and runtime history without backup or conversion, preserving reviewable configuration,
+Procedures and outside files. It creates a fresh workspace UUID. Use it only for
+the identified worktree with explicit destructive intent.
+
+For a readable Store admitted by the current writer, retain its validated UUID
+with `--if-workspace-uuid`. For writer, schema or binding mismatch, corrupt or
+unsupported older state, a UUID-fenced reset is refused. Restore access first for
+inaccessible state under separate access-repair authority. To preserve history
+after a binding mismatch, use the original worktree or its original location
+instead of discarding. I/O, permission and contention failures are not discard
+authority. For these discard-eligible states, after read-only diagnosis, exact-target
+identification and explicit discard authorization, use:
+
+```bash
+podway --worktree <absolute-root> --json reset --all --yes --idempotency-key <new-key>
+```
+
+This is a new unfenced discard request, not a weakened retry of a failed fenced
+mutation. Confirm that no other Podway writer still uses the target before discard;
+retiring one needs its owner's separate authority.
+Keep the original request/key after response loss. A newer unsupported Store stays
+refused; use a binary supporting its generation instead. For the reset route,
+`--force` is accepted only with `--all` and is unnecessary. Never edit markers or
+databases to bypass admission.
+
+## Remove Podway from one workspace
+
+Removal needs an explicit request accepting deletion of the complete `.podway`
+tree in one absolute existing Git worktree. Reset, purge or Git-worktree deletion
+authority does not cover it.
+
+1. Resolve and state the absolute root. Read `podway help workspace.remove`, then
+   inspect workspace identity/health. Obtain the UUID from supported output.
+2. Disclose loss of configuration, ignore rules, custom Procedures, current/inactive
+   sessions, runtime state and unknown `.podway` content. Inspect `git status --short
+   -- .podway` and `git ls-files -- .podway` so tracked/modified deletions are visible.
+3. After authorization, re-read and require the same root and UUID. JSON/non-TTY use:
+
+   ```bash
+   podway --worktree <absolute-root> workspace remove --force --if-workspace-uuid <workspace-uuid> --yes --idempotency-key <original-key>
+   ```
+
+   Unfenced human TTY removal must type the exact resolved root even with `--yes`;
+   a UUID-fenced request can use `--yes` instead. Do not invent a missing UUID;
+   invalid current-generation state needs human-terminal removal with exact-root
+   confirmation. Unsupported older or unrecognizable-header state requires an
+   authorized reset-all first. Do not add `--json` or invent a UUID for that path.
+4. Require `podway.workspace-removal-result/v2`. Report root, prior UUID,
+   `podway_directory_removed` and `already_absent`; verify only the selected
+   `.podway` tree is absent and its Git worktree remains.
+5. For response loss/interruption, retain the original request/key/UUID. Follow
+   marker-backed recovery for that same operation, root and filesystem identity.
+   Do not regenerate a key, delete residual state or weaken a fence. Stop on an
+   ambiguous target, identity or deletion boundary.
+
+Do not combine lifecycle effects with Git cleanup, installation, commits or
+publication unless separately requested. After each mutation, inspect current
+observation or workspace status; report only the supported state change.

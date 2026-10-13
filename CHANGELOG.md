@@ -4,6 +4,18 @@ This file records concise shipped outcomes and the planned next stable release.
 
 ## v0.2.14 - Unreleased
 
+### Changed
+
+- Rewrite the runtime and Procedure-authoring skills around the current Direct
+  model, shorten references, and preserve lifecycle, recovery, evidence, Goal
+  and delegation safeguards.
+- Pin optional skill installation and examples to `v0.2.14`, clarify writer
+  recovery and workspace reset, and correct contributor and adapter terminology.
+- Require fresh runtime state to use `v0.2.14` with workspaces bound to the
+  `v0.2.13` manifest: no writer predecessor is declared. Finish or abandon old
+  sessions with their original writer before upgrading; an explicitly confirmed
+  unfenced reset-all discards runtime history without backup or conversion.
+
 ## v0.2.13 - 2026-10-12
 
 ### Changed

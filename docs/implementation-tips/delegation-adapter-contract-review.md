@@ -61,9 +61,9 @@ These labels classify field mappings, not roadmap status:
 A mapping may have a source-level positive observation and an unresolved adapter
 obligation. Do not collapse those into a claim of supported integration. An
 unavailable required field makes that real adapter path unavailable, not the
-Podway daemon or unrelated Direct work. Do not make a required field optional,
-fill it with a placeholder, or weaken its meaning merely to obtain a passing
-schema instance.
+Podway Direct Engine or unrelated Direct work. Do not make a required field
+optional, fill it with a placeholder, or weaken its meaning merely to obtain a
+passing schema instance.
 
 ## Field and authority matrix
 
@@ -104,7 +104,7 @@ The following distinctions are mandatory:
 - `package_digest` is Podway's attempt-bound input identity, not an executor task
   hash. It remains defined by SDG-004.
 - `accepted_items_digest` is Store-computed final item state, including item
-  revisions, not either external digest. The V2SDG-007 daemon supplies the trusted
+  revisions, not either external digest. The Direct Engine supplies the trusted
   expected package digest for the public route. The item digest remains
   defined by SDG-005.
 - A Role reference hash cannot substitute for an immutable Role-content digest.

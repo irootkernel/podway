@@ -1,65 +1,58 @@
 ---
 name: create-podway-procedure
-description: Create, revise, review, or harden a custom Podway Procedure v2 from repository-owned workflow requirements. Use for Procedure source and its authoring evidence, not for starting, advancing, recovering, or deleting Podway sessions.
+description: Author, review, revise and validate custom Podway Procedure v2 source from repository-owned workflow requirements. This skill hands off declarative source without operating sessions or changing workspace runtime state.
 ---
 
 # Create a Podway Procedure
 
-## Preserve ownership and runtime boundaries
+## Establish ownership and readiness
 
-- Treat the requesting repository as the owner of workflow meaning, canonical Procedure paths, supported Podway versions, tests, and distribution policy. Podway owns the Procedure v2 grammar and runtime semantics.
-- Produce declarative Procedure v2 source only. Do not add command execution, Git mutation, arbitrary expressions, plugins, parallel cursors, or another workflow engine.
-- Do not initialize a workspace, inspect or mutate a session, install Podway, or alter runtime state. Use `$use-podway` only for a separately requested runtime operation.
-- Prefer an existing built-in or repository-owned Procedure when it already expresses the required gates. Do not create a custom graph merely to rename phases.
+The requesting repository owns workflow meaning, canonical paths, compatibility,
+tests and distribution. Podway owns the Procedure v2 grammar and runtime semantics.
+Prefer an existing built-in or repository Procedure when its gates already fit.
+Do not add execution hooks, Git mutation, expressions, plugins or parallel cursors.
 
-## Establish authoring readiness
+1. Resolve one Git worktree. Run `podway version --json` for its compact version and
+   `podway version --json --identity` for Output v4, version-result v2 and
+   contract-manifest v2. Record exact build/source/manifest identity, not semver
+   alone. Missing Podway is a prerequisite, not installation authority.
+2. Read repository guidance and `.podway/config.yaml`. Resolve the canonical target
+   through policy and `procedure_paths`; otherwise use
+   `.podway/procedures/<procedure-id>.yaml`.
+3. On absent configuration, `WORKSPACE_CONFIG_INVALID` or an excluded target, stop
+   before editing and hand off initialization/diagnosis to `$use-podway` under
+   separate intent. Authoring does not authorize workspace or session mutation.
+4. Establish task purpose, action/decision owners, evidence producers, accepted
+   outcomes, correction routes and goal need. Resolve ambiguity that would change
+   the graph, trust claim or supported contract before writing it.
 
-1. Resolve one Git worktree and run `podway version --json` plus
-   `podway version --json --identity`. Require current Output v4, version-result v2
-   and contract-manifest v2; record exact binary/build/source/manifest provenance,
-   not only semver. If Podway is unavailable, stop and report the missing prerequisite; do not install it.
-2. Read the repository authorities and `.podway/config.yaml`. Resolve the canonical target from repository policy and configured `procedure_paths`; when neither chooses a different path, use `.podway/procedures/<procedure-id>.yaml`.
-3. If the workspace configuration is absent, invalid, or excludes the intended target, stop before editing and request a separate `$use-podway` initialization or diagnosis. Do not treat `WORKSPACE_CONFIG_INVALID` as permission to repair the workspace.
-4. For a worktree-local Procedure, record the exact Podway binary identity used for validation. Require a minimum immutable stable release only when the Procedure will be distributed or maintained in other worktrees; never promote an unreleased source build to released-support evidence.
+Read [authoring](references/authoring.md) and the complete
+[capability inventory](references/capabilities.md) before changing source.
+For a managed/distributed bundle, also read [distribution](references/distribution.md)
+and identify the minimum immutable released manifest supporting every feature
+and those current identity families. Validate with that exact release binary.
+A local Procedure needs exact validation-binary provenance, not a new release pin.
 
-## Establish the authoring contract
+Delegation requires explicit intent, an exact admitting schema and a reviewed
+integration mapping for all identities. It applies only to non-skippable action
+placements; omission remains Direct. Read [delegation](references/delegation.md)
+before declaring it. Source support does not supply a live executor or permit
+invented binding refs or Role digests.
 
-Before editing, read the repository authorities and identify:
+## Author and verify
 
-- the workflow purpose and the cases that should select this Procedure;
-- the owner of every action, decision, external result, and terminal claim;
-- required inputs, accepted outcomes, rework owners, and goal-tracking need;
-- the canonical target path and whether the Procedure is local or distributed;
-- the installed validation version and, only for a distributed Procedure, its minimum supported stable release.
+Inspect exact-binary sources with `podway preset list`, then
+`podway preset show analysis-v2` for analysis or `podway preset show sw-dev-v2`
+for broad development.
+Use only returned presets. Consult `podway help procedure.<operation>` and the
+manifest-bound schema; neither a preset nor minimal scaffold defines the grammar.
+`podway procedure scaffold --template minimal` writes stdout, not a canonical file.
 
-Stop when unresolved product intent would change the graph, trust boundary, compatibility, or completion claim. Do not infer those decisions from a preset example.
+Write the smallest graph with one cursor/attempt, owned actions and decisions,
+bounded evidence, explicit advance/rework routes and terminal outcomes. Keep
+narrative guidance in English. Review the complete canonical source diff.
 
-For explicitly requested supervised delegation, first confirm that the exact
-validation binary admits the closed action-placement `delegation` object.
-Unreleased source support is not stable-release support. Keep ordinary Direct
-placements unchanged; delegation is unavailable on decisions or skip-enabled
-actions. The logical binding and immutable Role-content digest require a
-reviewed integration mapping. Do not invent provider commands, convert default
-Procedures, or treat a Role-name hash as Role content. Podway's source foundation
-ships no live adapter; authoring success alone does not qualify execution.
-
-Read [references/delegation.md](references/delegation.md) before authoring a
-delegated placement. It covers the five required declaration fields, evidence
-and correction design, and the isolated supervised-review example.
-
-Read [references/authoring.md](references/authoring.md) and the complete [capability inventory](references/capabilities.md) before creating or changing Procedure source. For a Procedure shipped to other repositories or installed as a managed bundle, also read [references/distribution.md](references/distribution.md).
-
-## Author the smallest complete graph
-
-1. Inspect built-ins with `podway preset list` and use only identifiers returned by that exact binary. When present, use `podway preset show analysis-v2` for source-backed research or technical analysis and `podway preset show sw-dev-v2` for the broadest software-development example. If a referenced preset is absent, do not infer it from the skill or another release; inspect an available preset or author the required custom Procedure. No single preset is the complete grammar; inspect a smaller preset when its boundary better matches the requested workflow.
-2. Read command behavior with `podway help procedure.<operation>` and scaffold with `podway procedure scaffold --template minimal` when starting from nothing. Neither command help nor the minimal scaffold is a complete YAML grammar; reconcile the capability inventory with the exact manifest-bound schema. The scaffold writes to stdout; place the reviewed result only at the repository-owned canonical target.
-3. Model one cursor and one active attempt. Use explicit action evidence, decisions, advance routes, owned rework routes, and terminal outcomes; omit phases and features that do not enforce a verified requirement.
-4. Record narrative guidance in English while preserving exact commands, paths, hashes, identifiers, enumerated values, and product names verbatim.
-5. Review the complete source diff before treating the Procedure as a candidate.
-
-## Verify the candidate
-
-Run the repository's stricter checks plus the complete Podway authoring sequence:
+Run repository-required checks plus the following from the owning worktree root:
 
 ```bash
 podway procedure format <file> --check
@@ -70,8 +63,13 @@ podway procedure check <file> --warnings-as-errors
 podway --json procedure preview <worktree-relative-file>
 ```
 
-Use `podway procedure graph <file> --format mermaid` only as a review projection. The canonical source and digest are authoritative.
+`podway procedure graph <file> --format mermaid` is a review projection; source and digest
+remain authoritative. For local source, these checks/preview suffice unless the
+repository requires more. Distributed accepted-path evidence needs separate runtime
+authorization under [distribution](references/distribution.md).
 
-For a local Procedure, the authoring checks and preview are the required qualification unless repository authority requires more. For a distributed Procedure, follow [references/distribution.md](references/distribution.md) and keep runtime path qualification under separate runtime authorization.
-
-Report the selection boundary, canonical path, Procedure ID/version/digest, exact validation binary identity and manifest provenance, graph and evidence decisions, exact checks and outcomes, compatibility impact, released-support evidence, and any unverified assumption. Copy the exact start suggestion returned by preview, including `--expect-procedure-digest`, into the handoff without executing it. Report distributed runtime proof separately when it exists. Do not claim that Podway executed external work or judged recorded evidence true.
+Report path, ID/version/digest, selection boundary, exact validation identity,
+checks/outcomes, evidence and correction decisions, compatibility and remaining
+uncertainty. Copy preview's exact start suggestion, including
+`--expect-procedure-digest`, without executing it. Keep structural validation,
+runtime qualification, released support and real integration proof distinct.

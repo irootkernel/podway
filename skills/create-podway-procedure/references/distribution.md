@@ -1,30 +1,49 @@
 # Distributed Procedure Bundles
 
-Read this reference only when a repository ships Procedure source to other worktrees or maintains installed copies.
+Read for source shipped to other worktrees or maintained as installed copies.
 
-## Bind the consumer contract
+## Bind support and ownership
 
-- Keep one consumer-owned canonical source. Installed or repository-local copies must be byte-identical and must never become a second authoring source.
-- Call consumer-owned files managed Procedures, not Podway built-in presets. Only the catalog embedded in the Podway binary is a built-in preset.
-- Identify the first immutable stable Podway release whose exact manifest supports every authored feature. Record validation binary identity and published-release evidence separately. Do not infer support from semver alone, ship against an unreleased branch, silently widen a supported release range, or validate only with a newer incompatible binary.
-- Preserve admitted sessions as immutable snapshots. A new Procedure version affects only later starts; never rewrite or reinterpret runtime history during managed-file replacement.
-- Treat copying, replacing, installing, or deleting a managed Procedure as a separate consumer-authorized mutation. Active-session disposition does not grant file replacement authority.
+Keep one consumer-owned canonical source and byte-identical managed copies;
+a managed copy never becomes a second authoring source.
+Managed Procedures are not built-in presets; only the CLI's embedded catalog is.
+Select the first immutable published release that reports Output v4, version-result
+v2 and contract-manifest v2 and supports all authored features in that manifest.
+Validate with that exact binary, retaining separate validation and release provenance.
+Do not infer support from
+semver alone, widen a supported range silently or substitute a newer incompatible
+build.
 
-## Require executable path evidence
+Admitted sessions keep immutable source snapshots. Updating a managed file affects
+later starts, not history. Copying/replacing/installing/deleting a bundle needs
+consumer authorization; session disposition does not grant file replacement.
 
-- Inventory every accepted clean, failure, conditional, guarded, goal-outcome, branch-specific, and declared manual-rework path. Give each case a stable ID, expected result, and exact runtime proof locator.
-- Treat Procedure authoring as authority to prepare this inventory, not to initialize a workspace, start a session or retire an installed legacy runtime. Exercise the canonical bytes only under separate runtime authorization, using `$use-podway` when available.
-- When runtime qualification is authorized, exercise the canonical bytes through the exact public direct CLI in a disposable Git worktree. Static parsing, a graph projection, or a copied upstream preset test does not prove the consumer Procedure's runtime paths.
-- Test failure and stale-evidence behavior needed by the graph, not only successful closeout. Include paging continuation and stale-token rejection only when the Procedure intentionally selects multi-page evidence.
-- Run the consumer repository's complete development gate after focused qualification. Keep raw runtime evidence in ignored local storage and commit only the durable inventory and test implementation required by repository policy.
+## Qualify accepted paths
 
-## Deliver a versioned bundle
+Build an accepted-path inventory of clean, failure, conditional, guarded, goal-outcome,
+branch and declared manual-rework paths with stable case IDs, expected results and
+runtime proof locators bound to preview's canonical digest and exact CLI identity.
+Authoring prepares this inventory only. Exercise the exact canonical bytes through the exact public CLI
+in a disposable Git worktree under separate runtime authorization, using `$use-podway`.
+Parsing, graph projections and copied preset tests are not consumer-path proof.
 
-1. Update the canonical Procedure and its version.
-2. Validate the exact canonical bytes with the minimum supported released Podway manifest and retain its identity output as provenance.
-3. Refresh every managed copy byte-for-byte and verify its digest.
-4. Update consumer skills, documentation, installation diagnostics, and compatibility pins that name the Procedure, version, items, options, routes, or digest.
-5. Hand off the exact preview start suggestion and accepted-path inventory. Under separate runtime authorization, run the qualification and complete consumer gate.
-6. Report source and copy digests, supported Podway release, runtime proof, existing-session behavior, and publication state separately.
+Verify required failure/stale-evidence behavior, and paging only when the graph
+intentionally selects multi-page evidence. Run the complete consumer gate after
+focused qualification. Keep raw evidence ignored/local and track only the required
+durable inventory and test implementation.
 
-Do not dynamically generate a distributed Procedure during consumer setup or normal workflow execution. Ship reviewed static source so users can inspect the exact graph before it is admitted.
+## Deliver
+
+1. Update canonical source/version; validate those exact canonical bytes with the
+   minimum compatible released binary above and retain its identity and preview digest.
+2. Install managed copies only within each consumer's configured `procedure_paths`;
+   otherwise stop for consumer configuration authority. Refresh them byte-for-byte
+   and verify file SHA-256 digests. This is bundle policy, not a CLI path-enforcement claim.
+3. Update affected consumer skills, installation checks, documentation and pins.
+4. Hand off the exact preview start suggestion and accepted-path inventory;
+   qualification still needs separate runtime authorization.
+5. Report source/copy digests, released support, runtime proof, existing-session
+   behavior and publication state separately.
+
+Ship reviewed static source. Do not generate a distributed graph dynamically during
+setup or normal execution, and do not execute preview's start suggestion as authoring.
