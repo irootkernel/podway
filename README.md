@@ -50,7 +50,7 @@ System Settings before its first run.
 
 ## Install a release
 
-This checkout prepares `v0.2.14`; source implementation
+This checkout targets `v0.2.14`; source implementation
 is not evidence that a matching stable release has been published. Select an
 archive whose identity matches this direct generation, or use an explicitly
 chosen source build without claiming stable-release qualification.
@@ -390,7 +390,7 @@ live under `.podway/runtime/` in the owning worktree. Deleting the worktree dele
 that state. Podway neither reads nor creates `~/.podway`, a global workspace
 registry, daemon logs, sockets or service metadata. A different writer manifest
 fails closed unless the release explicitly declares a compatible predecessor;
-neither `v0.2.13` nor the planned `v0.2.14` declares one.
+neither `v0.2.13` nor `v0.2.14` declares one.
 
 Podway trusts processes running as the same operating-system user. It is not a security boundary against malicious same-user processes. It performs no network I/O and exposes no arbitrary command-execution or Git-mutation API.
 
@@ -400,7 +400,7 @@ For the daemon-era cutover, follow [legacy state and cutover](#legacy-state-and-
 before installing or resetting. Later direct-to-direct upgrades require declared
 writer-predecessor compatibility; a version string alone does not permit migration.
 
-The planned `v0.2.14` changes the writer manifest digest because that digest includes
+`v0.2.14` changes the writer manifest digest because that digest includes
 the product version. Workspaces bound to the `v0.2.13` manifest are therefore refused
 unchanged with `WORKSPACE_CONTRACT_MISMATCH`; `observe`, plain `reset` and UUID-fenced
 reset-all cannot reopen them. Finish or explicitly abandon active sessions with

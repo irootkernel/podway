@@ -601,8 +601,8 @@
       "sha256": "sha256:7de5f4f024eb795ae7fb73594d4847b833016bea6be9f2737c567b524ae5466e"
     }
   ],
-  "digest": "sha256:dc47bcc5449f7c2e60c920c5b820eb793405b5f2d2f573346ee326f90264d2aa",
+  "digest": "sha256:c699977dd232891041f4063d66295b94004702875855baace876f8a7e0c6391d",
   "product": "podway",
-  "product_version": "0.2.13",
+  "product_version": "0.2.14",
   "schema_version": "podway.contract-manifest/v2"
 }
