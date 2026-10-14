@@ -14,9 +14,126 @@ including the [v0.1.1 release roadmap](archive/v0.1.1.md).
 - `Deferred`: intentionally removed from the current release scope
 - `Blocked`: cannot progress without an external decision or prerequisite
 
-New roadmap task IDs use the five-character epic ID, a hyphen, and a
-three-digit sequence, for example `V2CTR-001`. Existing `REL12` compact task
-IDs are retained as historical identifiers.
+New epic IDs use exactly five uppercase ASCII letters (`[A-Z]{5}`), without
+a version prefix. Task IDs use that epic ID, a hyphen, and a three-digit
+sequence, for example `OPTIM-001`. Existing alphanumeric epic IDs, including
+`V2CTR` and `REL12`, and the compact `REL12` task IDs remain unchanged historical
+identifiers. Do not rename completed work to apply the new convention.
+
+## Current internal improvements
+
+On 2026-10-14 the owner adopted three internal-improvement epics, based on the
+v0.2.14 review at `fa29dba929777b020377bc9803cb0a3954d219b1`:
+
+```text
+OPTIM -> BOUND -> READS
+```
+
+These are three separately accepted development epics with one shared goal and
+a fixed order, not a release program and not parallel work. No release version,
+installation, source commit/push or external-consumer change is authorized here.
+V2DFC remains completed; its historical qualification is not a fresh measurement
+for these improvements.
+
+Only the first incomplete task of the first eligible epic may be In Progress,
+In Review or Blocked. All later tasks remain Planned. Finish and accept each
+epic before starting its successor; there is no cross-epic implementation
+interleaving. Initial execution starts at `OPTIM-001`. Planning registration does
+not satisfy that task's baseline measurements or tests. The 2026-10-14 plan
+review is incorporated into the target inventories and verification requirements
+before OPTIM-001 freezes its baseline; this is plan refinement, not task progress.
+
+Each task includes its own focused verification. An executable change must pass
+`make test` under [AGENTS.md](../../AGENTS.md); a documentation-only task uses the
+applicable documentation checks. Final tasks integrate the epic-wide checks,
+independent review and acceptance, not defer all testing until the end. The
+roadmap alone owns status/order; the three adopted dossiers own their respective
+unfinished designs and acceptance criteria. Every epic closeout must also run
+the [native scale route](../implementation-tips/direct-cli-performance-qualification.md#native-scale-execution)
+for the three ignored Store/Engine cases. `make test` does not execute those
+cases. Reuse existing required paths rather than treating a named test file or
+successful ordinary test gate as evidence that a scenario actually ran.
+
+### Preservation rules
+
+- Keep current CLI grammar, JSON schemas, error codes/details/retryability/exit
+  semantics, canonical Procedure bytes/digests, stored request/outcome identity,
+  and supported current-Store continuity. No reset, migration, new index/table,
+  public canonical-asset or writer-manifest-input change is part of this scope.
+  Verification-only fixtures and test registration may change without rotating
+  public/storage contracts. Preserve legacy/newer/foreign-writer refusal.
+- Preserve normal cold-read decoding for the existing graph-reading paths,
+  including values outside status/history/archive-show windows. Keep archive-list
+  summary-only and ordinary-open checks unchanged; do not move doctor scans onto
+  those paths. Purpose-specific views may reduce queries/copies/rendering but
+  cannot weaken required validation. Typed fence preflight must also preserve
+  failures from its former status projection/schema/envelope validation. Reduced
+  loading is optional where an equivalent guarantee can be proven.
+- Preserve command-specific fences and validation order, atomic success-only
+  outcomes, exact replay, clock/ID ordering, original wait deadlines, coherent
+  write-free snapshots and maintenance/file-identity checks. Artifact bytes stay
+  outside writer transactions. Single-item and batch fence policies remain
+  distinct. No performance result can compensate for a correctness regression.
+- Stay within the existing eight-crate dependency direction and daemon-free,
+  single-cursor product. No generic framework, persistent cache or new runtime
+  service is implied. Use request-scoped sharing and existing test infrastructure.
+- Freeze the current-Direct baseline and comparison policy before optimization;
+  retain existing qualification thresholds. Follow the
+  [comparison protocol](../implementation-tips/direct-cli-performance-qualification.md#internal-improvement-comparisons).
+  OPTIM-001 delivers the current-Direct comparator and freezes all 12 G7 plus
+  four L G8 latency cells using at least three matched blocks, separately from
+  deterministic projection/batch probes. READS-001 owns later SQL/facts probes.
+  Required payload/container evidence cannot be replaced with optional RSS.
+  Time/memory regressions and work-count misses fail independently. Historical
+  daemon superiority is not current acceptance; unreliable or mismatched-host
+  evidence is incomplete, not a relaxed gate.
+- Graph/continuation research may proceed independently, but implementation that
+  restructures the same domain model should follow BOUND. Any new history/read
+  features must reconcile with READS first. The existing feature candidates
+  remain unadopted; these improvements do not approve them.
+
+An implementation that requires a preserved contract or validation policy to
+change is out of scope and returns for separate authorization. Technical naming,
+module layout and test implementation within these boundaries need no new
+product decision. At closeout, promote durable requirements and evidence,
+replace dossier links, and retire each dossier under the
+[TODO lifecycle](../todo/README.md#lifecycle).
+
+## OPTIM — Execution Path Optimization
+
+Dependencies: none. Design: [OPTIM dossier](../todo/TODO-podway-execution-path-optimization.md).
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `OPTIM-001` | Freeze the current Direct baseline and regression checks | Planned | Deliver the current-Direct report comparator/self-tests and freeze matched mandatory latency, projection/batch and memory baselines before optimizing. | [Task design](../todo/TODO-podway-execution-path-optimization.md#optim-001-freeze-the-current-direct-baseline-and-regression-checks) |
+| `OPTIM-002` | Share validated read projections | Planned | Reuse the validated Procedure and current projection across all seven Direct read entries, including package validation, and reduce owned-view copies; absorb DF-007. | [Task design](../todo/TODO-podway-execution-path-optimization.md#optim-002-share-validated-read-projections) |
+| `OPTIM-003` | Apply atomic batches through one draft | Planned | Collapse per-item WorkflowMemoryStateV2 reconstruction; prove sorted intermediate limits on preloaded attempts while preserving no-op revisions and atomic outcomes. | [Task design](../todo/TODO-podway-execution-path-optimization.md#optim-003-apply-atomic-batches-through-one-draft) |
+| `OPTIM-004` | Qualify and close execution-path optimization | Planned | Prove behavioral equivalence and current-Direct performance, complete independent review, and promote durable documentation. | [Task design](../todo/TODO-podway-execution-path-optimization.md#optim-004-qualify-and-close-execution-path-optimization) |
+
+## BOUND — Domain and Application Boundaries
+
+Dependencies: accepted `OPTIM` completion. Design: [BOUND dossier](../todo/TODO-podway-domain-application-boundaries.md).
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `BOUND-001` | Freeze responsibility and invariant ownership | Planned | Inventory type/error seams, all nine callback transports, three helper groups, preflight ownership and verification against accepted OPTIM. | [Task design](../todo/TODO-podway-domain-application-boundaries.md#bound-001-freeze-responsibility-and-invariant-ownership) |
+| `BOUND-002` | Separate domain state and transitions from persistence | Planned | Move pure graph/workflow/goal rules into Core while retaining SQL reconstruction, relational checks and changed-row writes in Store. | [Task design](../todo/TODO-podway-domain-application-boundaries.md#bound-002-separate-domain-state-and-transitions-from-persistence) |
+| `BOUND-003` | Clarify Procedure runtime representation and admission | Planned | Share pure runtime declarations without merging authoring and persistence validation or adding reverse dependencies. | [Task design](../todo/TODO-podway-domain-application-boundaries.md#bound-003-clarify-procedure-runtime-representation-and-admission) |
+| `BOUND-004` | Unify typed mutation failure transport and shared helpers | Planned | Replace all inventoried callback error transports with per-site failure/replay proof, preserving distinct fences/envelopes and ordering; absorb DF-023. | [Task design](../todo/TODO-podway-domain-application-boundaries.md#bound-004-unify-typed-mutation-failure-transport-and-shared-helpers) |
+| `BOUND-005` | Decompose CLI responsibilities without changing behavior | Planned | Decompose CLI concerns and move fence-preflight fetching/parsing together under one owner for READS, leaving completion and separate start observations unchanged. | [Task design](../todo/TODO-podway-domain-application-boundaries.md#bound-005-decompose-cli-responsibilities-without-changing-behavior) |
+| `BOUND-006` | Qualify and close boundary refactoring | Planned | Prove dependency direction, current-Store continuity, error/behavior equivalence and no performance regression, then complete review and promotion. | [Task design](../todo/TODO-podway-domain-application-boundaries.md#bound-006-qualify-and-close-boundary-refactoring) |
+
+## READS — Read Models and Data Access
+
+Dependencies: accepted `BOUND` completion. Design: [READS dossier](../todo/TODO-podway-read-models-data-access.md).
+
+| id | title | status | goal | references |
+|---|---|---|---|---|
+| `READS-001` | Freeze data requirements and validation equivalence | Planned | Map queries, decode/validation scope, error ordering and cost measurements before reducing data-access work. | [Task design](../todo/TODO-podway-read-models-data-access.md#reads-001-freeze-data-requirements-and-validation-equivalence) |
+| `READS-002` | Bulk-load attempt data without reducing validation | Planned | Bulk-load slots/blockers/evidence, goal criteria and citations; batch changed-slot reloads while preserving header-only reuse, validation order and bounded memory. | [Task design](../todo/TODO-podway-read-models-data-access.md#reads-002-bulk-load-attempt-data-without-reducing-validation) |
+| `READS-003` | Build purpose-specific views over validated state | Planned | Build typed views over shared validation, prove hidden historical-value refusal and keep archive-list summary-only without reintroducing OPTIM's eliminated copies. | [Task design](../todo/TODO-podway-read-models-data-access.md#reads-003-build-purpose-specific-views-over-validated-state) |
+| `READS-004` | Replace CLI status-JSON preflight with typed facts | Planned | Replace the named fence-preflight module with typed Engine facts, preserving status-only failures; prove zero stdin preflight and the post-facts competing-writer gap. | [Task design](../todo/TODO-podway-read-models-data-access.md#reads-004-replace-cli-status-json-preflight-with-typed-facts) |
+| `READS-005` | Qualify and close validated data-access improvements | Planned | Verify SQL/copy reductions, cold-read validation, native concurrency and matched performance, then complete review and durable promotion. | [Task design](../todo/TODO-podway-read-models-data-access.md#reads-005-qualify-and-close-validated-data-access-improvements) |
 
 ## REL12 — Podway v0.1.2 Contract Recovery and Release
 

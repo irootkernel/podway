@@ -85,6 +85,23 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 
 ## Current adopted dossiers
 
+The owner adopted three separately accepted internal-improvement epics on
+2026-10-14 with one shared goal and a fixed order, not parallel work. The
+[roadmap](../roadmap/README.md#current-internal-improvements) alone owns order and
+status: OPTIM, then BOUND, then READS. They are not a release program and do not
+select a release version. Existing external/storage contracts and cold-read
+validation remain unchanged; archive-list retains its summary-only boundary.
+The reviewed plan now names actual call sites, test oracles, measurement ownership
+and required native execution routes. All 15 tasks remain Planned; refined
+acceptance criteria do not count as baseline capture or implementation.
+
+- [Execution path optimization](TODO-podway-execution-path-optimization.md): all Direct projection entries, memory-layer batch drafts, preloaded content-limit proof and delivery of the current-Direct comparator/baseline.
+- [Domain and application boundaries](TODO-podway-domain-application-boundaries.md): domain/error admission seams, nine callback transports, three helper groups and a single fence-preflight owner for the READS handoff.
+- [Read models and data access](TODO-podway-read-models-data-access.md): bulk history/goal/citation queries, selective changed-slot reload, hidden-value corruption proof and typed preflight preserving status-only failures.
+
+Each dossier is retired independently after its owning epic is accepted and its
+lasting information is promoted. References to a prerequisite use the durable
+roadmap rather than retaining another epic's temporary dossier.
 
 ## Related candidates
 

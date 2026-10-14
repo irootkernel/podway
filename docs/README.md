@@ -24,6 +24,19 @@ write-free snapshot reads are the current product boundaries.
 [Examples](examples/) provide walkthroughs and versioned known-answer payloads.
 
 Current adopted work is tracked by the [active roadmap](roadmap/).
+The [internal-improvement sequence](roadmap/README.md#current-internal-improvements)
+is OPTIM, BOUND, then READS, with 15 planned tasks and
+[three adopted design dossiers](todo/README.md#current-adopted-dossiers).
+Start implementation at OPTIM-001, which delivers the current-Direct comparison
+aggregator/self-tests and captures the registered uninstrumented CLI baseline.
+Its required projection/batch count probes are separate from READS' later SQL
+and preflight probes. The three epics have separate acceptance and a fixed order.
+The refined plans name failure oracles and the separate native route for ignored
+scale tests; no baseline, comparator implementation or scale execution is claimed
+by these documentation updates. External/storage contracts and existing
+command-specific validation stay preserved, including summary-only archive-list.
+These are unfinished internal improvements, not a selected release program.
+
 The implemented direct model is specified by [ADR-0038](architecture-decision-records/0038-remove-the-daemon.md)
 and the [direct execution requirements](specs/quality/requirements-traceability.md#direct-execution-requirements).
 Historical feasibility baselines and the current matching protocol remain in the

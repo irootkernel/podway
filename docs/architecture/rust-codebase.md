@@ -122,6 +122,39 @@ explicit IDs/revisions and exhaustive public enum handling. Reuse existing crate
 and domain boundaries. Schema/contract changes update their canonical assets and
 meaningful success, failure and compatibility tests together.
 
+## Adopted internal refinements
+
+The [OPTIM, BOUND and READS sequence](../roadmap/README.md#current-internal-improvements)
+is adopted unfinished work, not a description of already refactored code.
+At the reviewed v0.2.14 baseline, several pure graph/workflow/goal transitions
+still live beside Store row mapping, and nested projections and CLI preflight
+perform avoidable reconstruction. BOUND aligns those implementations with the
+ownership table above; it does not create a new crate or reverse dependency.
+OPTIM first removes request-local duplicate work across all seven Direct read
+entries and the workflow-memory batch layer. Its Engine context retains the
+Config-owned validated Procedure; it does not attach that representation to
+Store's separate cached memory model. BOUND separates Store-specific errors and
+schema/SQL admission from pure types while preserving deferred-model error timing.
+READS then changes data access and internal facts/view construction, including
+goal/citation loops and selective changed-slot reloads, while preserving current
+cold-read validation. Archive-list remains summary-only; graph windows still
+validate their required hidden historical values.
+
+BOUND's CLI move gives fence-preflight fetching/parsing one internal owner.
+READS replaces that boundary, not completion status, start/reset dry-run or later
+interactive-start retry reads. Preserving preflight means preserving failures
+from the former status projection/schema/envelope as well as Store admission.
+The [performance protocol](../implementation-tips/direct-cli-performance-qualification.md#internal-improvement-comparisons)
+separates test-only work probes from the timed release CLI and identifies the
+ignored native scale execution that ordinary `make test` does not perform.
+
+The [adopted dossiers](../todo/README.md#current-adopted-dossiers) own target
+interfaces, task boundaries and acceptance until implementation is complete.
+Do not weaken Store admission, move required read checks to doctor, introduce
+persistent caching or change public/storage identity to simplify this work.
+Update this architecture with the actual accepted implementation at each epic's
+closeout; do not present planned responsibility moves as current behavior.
+
 ## Testability requirements
 
 Internal traits and test observers support deterministic clocks, IDs, artifact
