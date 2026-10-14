@@ -368,8 +368,8 @@ trivial changes with no meaningful decision context.
   explicitly requests a review. An explicit task-handler invocation authorizes
   its task-scoped Mulgae review phase.
 - Configure the `logic`, `security`, `maintainability`, `product`,
-  `documentation`, and `testing` roles with ZCode as their only provider. Use a
-  `60m` provider timeout for ZCode.
+  `documentation`, and `testing` roles using the assignments in
+  `.mulgae/config.yaml`. Preserve the configured `60m` timeout for ZCode.
 - Use `--diff origin/main...HEAD` for a branch or pull request, `--stage` for
   staged changes, `--dirty` for staged and unstaged changes, or `--workspace`
   only when Master explicitly requests all tracked files. Preflight the same
