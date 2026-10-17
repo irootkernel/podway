@@ -5,31 +5,15 @@ use podway_core::{
     TerminalDispositionV2, TraceSequenceV2,
 };
 use podway_protocol::{EvidencePageTokenV1, Rfc3339MillisV1, validate_daemon_free_document_v1};
-use podway_store::{GraphWorkspaceViewV2, direct_store::DirectWorkspaceViewV1};
+use podway_store::direct_store::DirectWorkspaceViewV1;
 use serde_json::{Map, Value};
 
 use crate::v2_read_service::{
-    EvidenceReadErrorV2, GraphStatusTierV2, GraphViewErrorV2, delegation_work_package_from_view_v1,
-    project_delegation_package_result_v1, project_evidence_read_v1, project_graph_next_v2,
-    project_graph_observation_v1, project_graph_status_v2,
+    EvidenceReadErrorV2, GraphStatusTierV2, GraphViewErrorV2, ReadScope,
+    delegation_work_package_in, project_delegation_package_result_in,
+    project_delegation_receipt_read_in, project_evidence_read_in, project_graph_archive_show_in,
+    project_graph_next_in, project_graph_observation_in, project_graph_status_in,
 };
-
-fn projection_view(view: &DirectWorkspaceViewV1) -> GraphWorkspaceViewV2 {
-    let disposed = view.graph().is_some_and(|graph| {
-        view.terminal_dispositions().iter().any(|record| {
-            record.session_id() == graph.trace().session_id()
-                && record.terminal_session_revision() == graph.trace().revision()
-        })
-    });
-    GraphWorkspaceViewV2::new(
-        view.binding().identity().clone(),
-        view.graph().cloned(),
-        view.sequence(),
-        view.observed_at(),
-    )
-    .with_delegation_receipts(view.delegation_receipts().clone())
-    .with_current_terminal_disposition(disposed)
-}
 
 pub(crate) fn archive_summary(summary: &podway_store::SessionArchiveSummaryV2) -> Value {
     serde_json::json!({"session_id":summary.session_id(), "task_title":summary.task_title(),
@@ -73,15 +57,16 @@ pub fn project_direct_archive_show_v1(
     tier: GraphStatusTierV2,
     history_before: Option<TraceSequenceV2>,
 ) -> Result<Map<String, Value>, GraphViewErrorV2> {
-    let status = project_direct_status_v1(view, tier, history_before)?;
+    let scope = ReadScope::from_direct(view);
+    let status = direct_status(&scope, tier, history_before)?;
     let disposition =
         view.terminal_dispositions()
             .last()
             .ok_or(GraphViewErrorV2::InconsistentState(
                 "archive has no disposition",
             ))?;
-    let result = crate::v2_read_service::project_graph_archive_show_result_v2(
-        &projection_view(view),
+    let result = project_graph_archive_show_in(
+        &scope,
         status,
         archive_summary(summary),
         terminal_disposition(disposition)?,
@@ -106,11 +91,7 @@ pub fn project_direct_receipt_v1(
 ) -> Result<Map<String, Value>, GraphViewErrorV2> {
     validate_projection(
         "podway.delegation-receipt-result/v1",
-        crate::v2_read_service::project_delegation_receipt_read_result_v1(
-            &projection_view(view),
-            attempt,
-            receipt,
-        )?,
+        project_delegation_receipt_read_in(&ReadScope::from_direct(view), attempt, receipt)?,
     )
 }
 
@@ -118,12 +99,20 @@ fn validate_projection(
     schema: &str,
     result: Map<String, Value>,
 ) -> Result<Map<String, Value>, GraphViewErrorV2> {
-    if !validate_daemon_free_document_v1(schema, &Value::Object(result.clone())) {
+    let value = Value::Object(result);
+    if !validate_daemon_free_document_v1(schema, &value) {
         return Err(GraphViewErrorV2::InconsistentState(
             "direct projection violates its canonical schema",
         ));
     }
-    Ok(result)
+    match value {
+        Value::Object(result) => Ok(result),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
+            Err(GraphViewErrorV2::InconsistentState(
+                "direct projection is not an object",
+            ))
+        }
+    }
 }
 
 pub fn project_direct_status_v1(
@@ -131,7 +120,15 @@ pub fn project_direct_status_v1(
     tier: GraphStatusTierV2,
     history_before: Option<TraceSequenceV2>,
 ) -> Result<Map<String, Value>, GraphViewErrorV2> {
-    let mut result = project_graph_status_v2(&projection_view(view), tier, history_before)?;
+    direct_status(&ReadScope::from_direct(view), tier, history_before)
+}
+
+fn direct_status(
+    scope: &ReadScope<'_>,
+    tier: GraphStatusTierV2,
+    history_before: Option<TraceSequenceV2>,
+) -> Result<Map<String, Value>, GraphViewErrorV2> {
+    let mut result = project_graph_status_in(scope, tier, history_before)?;
     let schema = match tier {
         GraphStatusTierV2::Compact => "podway.compact-status-result/v5",
         GraphStatusTierV2::Standard | GraphStatusTierV2::Verbose => "podway.status-result/v5",
@@ -154,7 +151,7 @@ fn direct_next_schema(view: &DirectWorkspaceViewV1) -> &'static str {
 pub fn project_direct_next_v1(
     view: &DirectWorkspaceViewV1,
 ) -> Result<Map<String, Value>, GraphViewErrorV2> {
-    let mut result = project_graph_next_v2(&projection_view(view))?;
+    let mut result = project_graph_next_in(&ReadScope::from_direct(view))?;
     let schema = direct_next_schema(view);
     result.insert("schema".into(), Value::String(schema.into()));
     validate_projection(schema, result)
@@ -163,7 +160,7 @@ pub fn project_direct_next_v1(
 pub fn project_direct_observation_v1(
     view: &DirectWorkspaceViewV1,
 ) -> Result<Map<String, Value>, GraphViewErrorV2> {
-    let mut result = project_graph_observation_v1(&projection_view(view))?;
+    let mut result = project_graph_observation_in(&ReadScope::from_direct(view))?;
     result.insert(
         "schema".into(),
         Value::String("podway.observation-result/v5".into()),
@@ -189,7 +186,7 @@ pub fn project_direct_evidence_v1(
     item_id: &ItemId,
     token: Option<&EvidencePageTokenV1>,
 ) -> Result<Map<String, Value>, EvidenceReadErrorV2> {
-    let result = project_evidence_read_v1(&projection_view(view), source, item_id, token)?;
+    let result = project_evidence_read_in(&ReadScope::from_direct(view), source, item_id, token)?;
     Ok(validate_projection(
         "podway.evidence-read-result/v1",
         result,
@@ -199,10 +196,10 @@ pub fn project_direct_evidence_v1(
 pub fn project_direct_delegation_package_v1(
     view: &DirectWorkspaceViewV1,
 ) -> Result<Map<String, Value>, GraphViewErrorV2> {
-    let view = projection_view(view);
-    let package = delegation_work_package_from_view_v1(&view)?;
+    let scope = ReadScope::from_direct(view);
+    let package = delegation_work_package_in(&scope)?;
     validate_projection(
         "podway.delegation-package-result/v1",
-        project_delegation_package_result_v1(&view, &package)?,
+        project_delegation_package_result_in(&scope, &package)?,
     )
 }

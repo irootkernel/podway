@@ -537,7 +537,7 @@ fn acquired_locks_allow_callbacks_to_finish_after_the_deadline() {
     assert_eq!(images(&direct.layout().runtime_directory()), before);
 }
 
-// Idle and slow-callback admission cannot share the global gate with other tests.
+// Deadline-sensitive admission cannot share the process-global gate with other tests.
 fn run_isolated_deadline_test(name: &str) -> bool {
     if std::env::var_os("PODWAY_STORE_DEADLINE_CHILD").is_some() {
         return false;
@@ -1342,6 +1342,11 @@ fn private_publication_does_not_clobber_a_raced_destination() {
 
 #[test]
 fn a_real_controller_write_lock_returns_busy_within_deadline_without_effects() {
+    if run_isolated_deadline_test(
+        "a_real_controller_write_lock_returns_busy_within_deadline_without_effects",
+    ) {
+        return;
+    }
     let (root, direct) = fixture();
     let signal = root.path().join("lock-ready");
     let release = root.path().join("release-lock");

@@ -60,3 +60,9 @@ mod int_v2dfc006_exclusion;
 
 #[path = "int_v2dfc006_maintenance_ports.rs"]
 mod int_v2dfc006_maintenance_ports;
+
+#[path = "int_optim001_engine_overflow.rs"]
+mod int_optim001_engine_overflow;
+
+#[path = "int_optim001_direct_identity.rs"]
+mod int_optim001_direct_identity;

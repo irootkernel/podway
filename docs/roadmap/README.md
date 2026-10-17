@@ -30,7 +30,8 @@ OPTIM -> BOUND -> READS
 ```
 
 These are three separately accepted development epics with one shared goal and
-a fixed order, not a release program and not parallel work. No release version,
+a fixed order, not a release program and not parallel work. OPTIM is Completed.
+BOUND and READS remain Planned and have not started. No release version,
 installation, source commit/push or external-consumer change is authorized here.
 V2DFC remains completed; its historical qualification is not a fresh measurement
 for these improvements.
@@ -38,21 +39,23 @@ for these improvements.
 Only the first incomplete task of the first eligible epic may be In Progress,
 In Review or Blocked. All later tasks remain Planned. Finish and accept each
 epic before starting its successor; there is no cross-epic implementation
-interleaving. Initial execution starts at `OPTIM-001`. Planning registration does
-not satisfy that task's baseline measurements or tests. The 2026-10-14 plan
-review is incorporated into the target inventories and verification requirements
-before OPTIM-001 freezes its baseline; this is plan refinement, not task progress.
+interleaving. Execution started at `OPTIM-001`, and that epic is accepted. The
+2026-10-14 plan review is incorporated into the target inventories. On
+2026-10-16 the owner withdrew OPTIM performance measurement; that withdrawal
+revises OPTIM-001. Measurement requirements were withdrawn; completion is
+recorded below.
 
 Each task includes its own focused verification. An executable change must pass
 `make test` under [AGENTS.md](../../AGENTS.md); a documentation-only task uses the
 applicable documentation checks. Final tasks integrate the epic-wide checks,
 independent review and acceptance, not defer all testing until the end. The
-roadmap alone owns status/order; the three adopted dossiers own their respective
-unfinished designs and acceptance criteria. Every epic closeout must also run
-the [native scale route](../implementation-tips/direct-cli-performance-qualification.md#native-scale-execution)
-for the three ignored Store/Engine cases. `make test` does not execute those
-cases. Reuse existing required paths rather than treating a named test file or
-successful ordinary test gate as evidence that a scenario actually ran.
+roadmap alone owns status and order. Completed OPTIM behavior is recorded in
+architecture, testing guidance, and this roadmap. The two remaining adopted
+dossiers own the unfinished BOUND and READS designs and acceptance criteria.
+OPTIM closeout does not run the native scale route. Scale and
+native-qualification work that a later epic still owns stays in that epic's
+dossier. Reuse existing required paths rather than treating a named test file
+or successful ordinary test gate as evidence that a scenario actually ran.
 
 ### Preservation rules
 
@@ -77,16 +80,13 @@ successful ordinary test gate as evidence that a scenario actually ran.
 - Stay within the existing eight-crate dependency direction and daemon-free,
   single-cursor product. No generic framework, persistent cache or new runtime
   service is implied. Use request-scoped sharing and existing test infrastructure.
-- Freeze the current-Direct baseline and comparison policy before optimization;
-  retain existing qualification thresholds. Follow the
-  [comparison protocol](../implementation-tips/direct-cli-performance-qualification.md#internal-improvement-comparisons).
-  OPTIM-001 delivers the current-Direct comparator and freezes all 12 G7 plus
-  four L G8 latency cells using at least three matched blocks, separately from
-  deterministic projection/batch probes. READS-001 owns later SQL/facts probes.
-  Required payload/container evidence cannot be replaced with optional RSS.
-  Time/memory regressions and work-count misses fail independently. Historical
-  daemon superiority is not current acceptance; unreliable or mismatched-host
-  evidence is incomplete, not a relaxed gate.
+- OPTIM acceptance is behavioral and structural. Established release
+  qualification remains the historical G7/G8 protocol in the
+  [performance qualification guide](../implementation-tips/direct-cli-performance-qualification.md);
+  it is not an OPTIM latency, count, or memory baseline. Do not add OPTIM
+  projection probes, batch-copy probes, or a current-Direct comparator. A
+  missing OPTIM performance baseline is not a prerequisite for OPTIM-002 or
+  later OPTIM tasks, and later epics must not treat one as inherited evidence.
 - Graph/continuation research may proceed independently, but implementation that
   restructures the same domain model should follow BOUND. Any new history/read
   features must reconcile with READS first. The existing feature candidates
@@ -101,14 +101,23 @@ replace dossier links, and retire each dossier under the
 
 ## OPTIM — Execution Path Optimization
 
-Dependencies: none. Design: [OPTIM dossier](../todo/TODO-podway-execution-path-optimization.md).
+Dependencies: none. Status: Completed. The owner accepted the current working
+tree on 2026-10-17. All four tasks are Completed.
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `OPTIM-001` | Freeze the current Direct baseline and regression checks | Planned | Deliver the current-Direct report comparator/self-tests and freeze matched mandatory latency, projection/batch and memory baselines before optimizing. | [Task design](../todo/TODO-podway-execution-path-optimization.md#optim-001-freeze-the-current-direct-baseline-and-regression-checks) |
-| `OPTIM-002` | Share validated read projections | Planned | Reuse the validated Procedure and current projection across all seven Direct read entries, including package validation, and reduce owned-view copies; absorb DF-007. | [Task design](../todo/TODO-podway-execution-path-optimization.md#optim-002-share-validated-read-projections) |
-| `OPTIM-003` | Apply atomic batches through one draft | Planned | Collapse per-item WorkflowMemoryStateV2 reconstruction; prove sorted intermediate limits on preloaded attempts while preserving no-op revisions and atomic outcomes. | [Task design](../todo/TODO-podway-execution-path-optimization.md#optim-003-apply-atomic-batches-through-one-draft) |
-| `OPTIM-004` | Qualify and close execution-path optimization | Planned | Prove behavioral equivalence and current-Direct performance, complete independent review, and promote durable documentation. | [Task design](../todo/TODO-podway-execution-path-optimization.md#optim-004-qualify-and-close-execution-path-optimization) |
+| `OPTIM-001` | Retain functional characterization | Completed | Remove OPTIM measurement scaffolding and baseline requirements. Keep identity, overflow, and atomicity behavior. | [Procedure identity boundaries](../architecture/system.md#procedure-identity-boundaries); [functional regression owners](../implementation-tips/testing.md#functional-regression-owners); [Internal-improvement comparisons](../implementation-tips/direct-cli-performance-qualification.md#internal-improvement-comparisons) |
+| `OPTIM-002` | Share validated read projections | Completed | Share one validated request-scoped projection across the seven Direct read entries, including package validation, while preserving behavior and identity; absorb DF-007. | [Request-scoped read composition](../architecture/system.md#request-scoped-read-composition); [functional regression owners](../implementation-tips/testing.md#functional-regression-owners) |
+| `OPTIM-003` | Apply atomic batches through one draft | Completed | Collapse per-item WorkflowMemoryStateV2 reconstruction; prove sorted intermediate limits on preloaded attempts while preserving no-op revisions and atomic outcomes. | [Unpublished batch draft](../architecture/system.md#unpublished-batch-draft); [functional regression owners](../implementation-tips/testing.md#functional-regression-owners) |
+| `OPTIM-004` | Qualify and close execution-path optimization | Completed | Prove behavioral equivalence, complete the development gate and independent review, and promote durable documentation. | [OPTIM completion](#optim-completion); [functional regression owners](../implementation-tips/testing.md#functional-regression-owners); [Internal-improvement comparisons](../implementation-tips/direct-cli-performance-qualification.md#internal-improvement-comparisons) |
+
+### OPTIM completion
+
+The owner accepted the implementation and test changes on 2026-10-17. Those
+changes passed the default full `make test` with the inherited `/var` `TMPDIR`
+and four workers. Independent Codex, Grok, and agy integration reviews were
+complete, including the agy repair review. Acceptance records no latency, count,
+or memory metric. Main verified this documentation closeout separately.
 
 ## BOUND — Domain and Application Boundaries
 

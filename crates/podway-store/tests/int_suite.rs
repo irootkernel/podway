@@ -21,3 +21,8 @@ mod int_v2sdg005_semantics;
 
 #[path = "int_v2dfc008_persistence.rs"]
 mod int_v2dfc008_persistence;
+
+#[path = "int_optim001_batch.rs"]
+mod int_optim001_batch;
+#[path = "int_optim003_draft.rs"]
+mod int_optim003_draft;

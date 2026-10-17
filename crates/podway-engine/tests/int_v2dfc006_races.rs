@@ -315,6 +315,9 @@ impl Competitor {
     }
     fn with_trials(root: &std::path::Path, trials: usize) -> Self {
         assert!((1..=TRIALS).contains(&trials));
+        // Temporary roots can have symlinked parents, including macOS /var.
+        // The child passes these bytes to the fail-closed resolver unchanged.
+        let root = std::fs::canonicalize(root).expect("canonical owned fixture root");
         let mut child = Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
@@ -322,7 +325,7 @@ impl Competitor {
                 "--nocapture",
                 "--test-threads=1",
             ])
-            .env("PODWAY_ENGINE_G6_OWNED_FIXTURE", root)
+            .env("PODWAY_ENGINE_G6_OWNED_FIXTURE", &root)
             .env("PODWAY_ENGINE_G6_TRIALS", trials.to_string())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -446,6 +449,27 @@ fn preparation_race_child() {
         count += 1;
     }
     assert_eq!(count, trials);
+}
+
+#[test]
+fn competing_child_resolves_a_symlinked_temporary_parent() {
+    let (temporary, _selector, store) = prepare_fixture();
+    let canonical = std::fs::canonicalize(temporary.path()).unwrap();
+    let parent = tempfile::tempdir().unwrap();
+    let alias = parent.path().join("temporary-parent");
+    std::os::unix::fs::symlink(canonical.parent().unwrap(), &alias).unwrap();
+    let linked = alias.join(canonical.file_name().unwrap());
+    assert_ne!(linked, canonical);
+    assert!(
+        std::fs::symlink_metadata(&alias)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    let mut competitor = Competitor::with_trials(&linked, 1);
+    let committed = competitor.commit_item(0, "i01");
+    competitor.finish();
+    assert_eq!(outcome(&store, "g6-competing-0"), Some(committed));
 }
 
 fn plain_start(root: &std::path::Path) -> DirectCommandV1 {

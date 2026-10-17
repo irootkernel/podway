@@ -74,6 +74,7 @@ impl Fixture {
     pub(super) fn new() -> Self {
         let root = std::env::temp_dir().join(format!("podway-direct-cli-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&root).unwrap();
+        let root = root.canonicalize().unwrap();
         assert_packaged_fixture(&root);
         assert!(
             Command::new("git")

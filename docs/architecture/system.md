@@ -163,6 +163,29 @@ A rejection records no outcome. Only COMMIT I/O ambiguity maps to
 an exact retry. Reset-all and removal are marker-governed maintenance protocols,
 not ordinary single-transaction mutations.
 
+### Unpublished batch draft
+
+`WorkflowMemoryStateV2::mutate_active_items_v2` sorts the batch and applies every
+item through one pure `UnpublishedAttemptDraftV2`. The draft is an in-memory
+value: it owns no connection, transaction, or Store error, and its rules remain
+separable from storage and error mapping. Single-item calls and nested item
+calls use that same primitive. The outer `GraphSessionStateV2` wrapper still
+builds one graph successor after the memory draft succeeds.
+
+Input bounds, item-ID ordering, duplicate detection, and fences stay first.
+Each sorted operation then keeps its item revision, timestamp, value, and
+attempt-content checks. An earlier sorted item that crosses the attempt-content
+ceiling is rejected even when a later item would shrink the final total. One
+memory value is published only after every item succeeds, through the existing
+changed-row persistence and atomic success outcome. Failure discards the draft
+and records no outcome.
+
+A changed item advances its own revision. A changed batch advances the session
+and workspace revision once. A successful all-item no-op leaves item, session,
+and domain revisions unchanged, still commits its success outcome, and advances
+the committed workspace sequence. Recorded payloads stay immutable shared
+values, and the snapshot keeps its parsed memory model.
+
 ## Read path
 
 A read classifies and qualifies the Store, takes one committed read snapshot and
@@ -171,6 +194,55 @@ It reports committed sequence/revisions rather than queue activity. A read is no
 a reservation: a later writer may commit before the caller's next request.
 Doctor performs explicit integrity and graph/outcome checks under exclusion;
 ordinary opens do not run those expensive scans.
+
+### Request-scoped read composition
+
+`ReadScope` borrows the coherent view the caller already owns, either
+`DirectWorkspaceViewV1` or an existing `GraphWorkspaceViewV2`. It does not clone
+`GraphSessionStateV2`. Public wrappers remain. Nested consumers of the same
+request reuse the scope.
+
+Declaration parsing and validation stay lazy. The first use that needs
+declarations parses and validates the Config-owned `ValidatedProcedureV2` once,
+at the admission point that use already had. A branch that returns before
+declarations are required still returns before validation.
+
+The scope covers seven Direct entries: `project_direct_status_v1`;
+`project_direct_next_v1` with running and prepared next;
+`project_direct_observation_v1` and its nested next;
+`project_direct_archive_show_v1` with nested status and archive-show;
+`project_direct_evidence_v1` on branches that need Procedure declarations;
+`project_direct_receipt_v1`; and `project_direct_delegation_package_v1` for
+work-package construction and package-result projection. Archive-show and
+prepared or running nested projections share that one scope.
+
+Reuse follows the current request's snapshot, session, Procedure snapshot
+identifier, and stored digest. Store keeps a distinct `SnapshotMemoryModelV2`.
+The read scope does not attach the Config-owned Procedure to
+`ProcedureSnapshotV2` or the session cache, and `from_snapshot` returns the
+retained memory model without reparsing it.
+
+Schema selection remains a separate owner from the borrow. Canonical projection
+and output validation, lazy schema compilation, and response admission stay in
+place. Counters, ordering, exact totals, truncation flags, page-token identity,
+evidence freshness, delegation readiness, and byte budgets stay in place.
+Terminal observation guidance remains null.
+
+### Procedure identity boundaries
+
+Sharing `ValidatedProcedureV2` shares computation. Revalidation can materialize
+defaults, so the wrapper's canonical bytes and digest can differ from the stored
+snapshot. The boundaries below keep their own sources.
+
+| Boundary | Preserved source |
+|---|---|
+| Stored ordinary read identity | Status, next, observation, and archive use `state.snapshot().digest()` and the original stored canonical bytes. |
+| Validated-wrapper package identity | Delegation work-package construction uses `ValidatedProcedureV2::digest()` as `procedure_digest`. |
+| Package result mismatch rejection | Package-result admission compares that package `procedure_digest` with `state.snapshot().digest()` and rejects a mismatch. Workspace, session, attempt, placement, and package-digest checks remain. A constructed package is not yet an admitted public response. |
+| Execution digest and bytes mismatch refusal | `rehydrate_procedure_v2_execution_v1` rejects a wrapper digest or canonical bytes that differ from the stored snapshot. This execution path sits outside the seven Direct read entries. |
+
+Historical snapshots that ordinary reads already accept stay acceptable there.
+Package-result admission and execution rehydration keep their mismatch refusals.
 
 ## Dependency direction
 

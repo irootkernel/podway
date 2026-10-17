@@ -218,229 +218,29 @@ regression is recorded as `G7-failed` rather than inferred from G8 success.
 ## Internal-improvement comparisons
 
 The [OPTIM, BOUND and READS roadmap](../roadmap/README.md#current-internal-improvements)
-adds a current-Direct comparison alongside the existing qualification protocol.
-This section defines the measurement method; it contains no fresh result and
-changes none of the historical G1-G10 thresholds or their acceptance limits.
-Being faster than the retired daemon alone does not demonstrate improvement
-against the current implementation.
+is separate from the historical qualification protocol above. On 2026-10-16 the
+owner withdrew OPTIM latency, count, and memory measurement. OPTIM does not
+freeze a current-Direct baseline, comparator, work-count ceiling, or memory
+gate. Established G1-G10 qualification thresholds are unchanged historical
+release evidence. A missing OPTIM baseline does not block OPTIM implementation
+and is not inherited evidence for a later epic.
 
-### Baseline and identity
+Accepted OPTIM evidence is the recorded implementation and functional
+characterization: request-scoped read sharing, single-draft batch application,
+and identity, overflow, rollback, and replay behavior. That evidence supplies
+no performance baseline, comparator, or count ceiling.
 
-OPTIM-001 freezes the actual pre-optimization source, release CLI/helper bytes,
-contract/writer identity, host and fixture recipes. The review used v0.2.14 at
-`fa29dba929777b020377bc9803cb0a3954d219b1`, but a later starting checkout must be
-recorded as such rather than described as that exact baseline. BOUND compares
-with accepted OPTIM; READS compares with accepted BOUND. Retain the initial
-baseline as well to detect cumulative drift hidden by successive comparisons.
-For preregistered latency and measured-memory cells whose workload remains
-identical, later epic closeout must also pass against the initial OPTIM-001
-baseline under its original B and T. Tolerances do not accumulate across epics.
-Work counts are outside that rule: they use deterministic ceilings/reductions,
-not equality to the original counts. Historical G7 Direct columns, V2DFC pass
-numbers and the review commit are provenance, not the OPTIM-001 measurement.
+### Separately registered future scope
 
-Use the pinned toolchain and native Apple Silicon release profile. Register the
-exact machine, OS/build, toolchain/features, AC/low-power state, fixture recipes
-and measurement units. A block differing from that registration is incomplete;
-do not widen tolerance to absorb host, OS or power changes. Record load and
-thermal/power observations where available so noise is not mistaken for code
-cost. Freeze binaries outside build output paths and record source diffs honestly.
-Do not mutate the candidate or run source-changing checks during measurement.
-Build provenance differences are distinct from public/storage contract changes.
-
-An unavoidable later environment change requires a separately identified matched
-comparison epoch, not mixed old/new blocks. Re-run the preserved original and
-immediate-predecessor reference binaries as well as the candidate on the new
-registered environment. Keep source, executable identity, fixtures, metrics,
-original B/T and earlier verdicts. Report old-epoch comparisons as incomparable,
-not passed. New B/T is registered from source-identical reference runs before
-candidate verdicts and cannot be fitted to candidate results. A known regression
-or an original-threshold failure cannot be erased this way; it returns for owner
-direction. Cumulative comparison still uses the original executable remeasured
-under the new matched conditions, not a conveniently slower new source baseline.
-
-Use the established G7 S/M/L workload, growing history, warm-up/sample counts,
-percentile method and G8 warm/cold tuple restoration exactly as specified above.
-Do not substitute fresh-per-command fixtures, smaller payloads, debug binaries
-or changed fences. Store/Engine 1,024-node checks remain distinct from the
-300-node CLI comparator. Report nodes, retained attempts and database/payload
-sizes separately.
-
-### Mandatory matrix and diagnostic ownership
-
-The mandatory latency set is closed: all 12 G7 full-invocation cells (S/M/L times
-observe, set, record with 16 items, complete), and the four L G8 cells (read-only
-warm/cold and mutation warm/cold). Record p50 and p99 separately for each of
-these 16 cells. S/M G8 and L lifecycle results remain informational unless an
-additional comparison is preregistered; do not silently turn them into new
-historical gates. Existing command keys/recipes and per-block sample counts
-remain unchanged.
-
-Counts are separate single-invocation deterministic probes, not percentiles of
-the G7 blocks. Scope the batch-successor ceiling to the pure
-`WorkflowMemoryStateV2::mutate_active_items_v2` computation including its nested
-calls/clones. Count outer graph/Store cache copies separately in whole-invocation
-container evidence, not as substitutes for the inner probe. Freeze exact fixture
-identities, sizes, supported branches and count boundaries before editing paths. Reuse existing fixtures
-and helpers; add only missing probes and a small result comparator.
-
-| Owner | Required probe set |
-|---|---|
-| OPTIM-001 | All seven Direct projection entries in the OPTIM inventory. Include prepared/running/completed/cancelled observation, prepared/running next, archive-show with and without delegation, and valid evidence/receipt/package branches. Register each route/lifecycle against the [projection work-count ceilings](#projection-work-count-ceilings). Count actual rehydration parse, semantic validation and derive invocations separately; returning no active projection does not imply zero derive calls. |
-| OPTIM-001 | 1/16/128-operation changed and no-op batches at fixed history, plus a grown-history repeat. Count actual `WorkflowMemoryStateV2` successors and history-container copies, not only the already-single graph wrapper. Input bounds remain unchanged. |
-| OPTIM-001 | Required shared-payload bytes and copied-container counts/bytes for those projection/batch probes. Freeze their measurement method and units; peak process RSS is an additional diagnostic, not a substitute. |
-| BOUND-001 | Inherit and remeasure OPTIM's count/memory probes against accepted OPTIM without loosening their ceilings. Capture matched mandatory latency blocks before production moves. |
-| READS-001 | Cold current/archive reads at small and grown histories, including L and 1,024 nodes; slots/blockers/evidence/goal-criteria/criterion-citation prepare and execution counts. Include multiple goal revisions/assessments and sparse/dense changed-slot reloads. Record decoded rows/bytes and unchanged-payload reuse. |
-| READS-001 | Ordinary automatic fence fill versus explicit-fence bypass, and both record/delegation stdin commands: facts-preflight and status-envelope counts per command invocation, excluding parent setup. Completion/start-dry-run/interactive-start-retry reads are separate controls, not replacement targets. |
-| READS-001 | Required payload/container memory measurements on the selected read/facts fixtures; preserve inherited OPTIM count limits. Additional explicit/automatic-preflight latency cells must be registered before changes if used for a speedup claim. |
-
-READS SQL/facts probes are not prerequisites for OPTIM-001. Within its own scope,
-that first task must name every required cell, including the fixture, oracle and
-owner; a general area label is not a complete registration. A node ceiling is
-not an attempt-count ceiling. Record nodes, attempts, goal revisions, assessments
-and changed-slot counts separately. Grow fixtures only through admitted bounds.
-Missing mandatory probes or required memory evidence mean incomplete, not zero.
-
-### Projection work-count ceilings
-
-These are post-optimization ceilings for actual `CurrentProjection::derive`
-invocations across one composed read, including nested consumers. OPTIM-001
-records the existing baseline counts, even when they exceed those targets; it
-must not relabel a guarded call returning `None` as no invocation. OPTIM-002
-implements the ceilings and OPTIM-004 checks them. The comparison registry and
-self-tests use these route/lifecycle distinctions rather than one global
-non-running or zero-work rule.
-
-| Read composition | Lifecycle or branch | Maximum derive calls | Preserved behavior |
-|---|---|---:|---|
-| Status | Running | 1 | Existing active projection |
-| Status | Prepared, completed or cancelled | 1 | Guarded discovery returns no active projection |
-| Observation, including nested next | Running | 1 | Nested consumers reuse the current projection |
-| Observation | Prepared, completed or cancelled | 1 | One guarded discovering call is allowed, no active projection; terminal guidance remains null |
-| Next | Running | 1 | Existing active projection |
-| Next | Prepared | 0 | Prepared guidance without derive |
-| Next | Completed or cancelled | 1 | No active projection and the existing terminal-next refusal |
-| Archive-show, including nested status | Admitted archived session | 1 | Status discovery without an active projection; no second derive in composition |
-| Evidence read | Every branch | 0 | No current-projection derivation |
-| Receipt read | Every branch | 0 | No current-projection derivation |
-| Delegation package | Running | 1 | Existing active projection and delegation applicability checks |
-| Delegation package | Non-running | 1 | Existing no-active-attempt refusal, not an active projection |
-
-Early-rejection paths may perform fewer calls; these maxima do not authorize
-moving work ahead of an existing check. Prepared and terminal observation with
-one guarded call pass, while two calls fail. Any derive in prepared next,
-evidence or receipt fails, even if it returns `None`. Do not add a discovering
-call to a branch that currently never calls derive.
-
-Rehydration parse and semantic validation have their own counters: at most one
-of each per distinct required snapshot, and zero when the reached branch never
-consults Procedure declarations. Prepared next and receipt may rehydrate while
-derive stays zero; evidence rehydration is branch-dependent. Store snapshot
-admission/decoding is outside these Engine rehydration counters and keeps its
-own validation boundary. Neither a null result nor a zero derive count proves
-zero parsing. Count removal must retain the separate stored-read,
-wrapper-backed package and execution identity checks in the OPTIM design.
-
-### Instrumentation and measured executables
-
-Compile new parse/derive/successor/container/SQL counters and rendezvous barriers
-only into tests or explicit nonpublishable test-support builds. The release CLI
-timed by G7/G8 contains none of those probes and exposes no flag or environment
-switch to enable them. Record the exact feature sets and hashes of both the
-instrumented evidence build and the uninstrumented measured build. Demonstrate
-production-byte exclusion, not merely an inactive runtime branch.
-
-Observe actual production-path parsing and SQLite connections in test builds.
-Count SQL prepare and execute separately, exclude fixture setup, and never add,
-drop, reorder or rewrite statements, results or errors through the observer.
-A mock database or counting SQL strings cannot establish the query reductions.
-CLI process probes report only to private test evidence, not the public envelope.
-
-The existing helper is a fixture/output-validation executable and may retain
-its test-support facilities. It is not the timed product CLI. Keep its additional
-probes disabled outside explicit diagnostic runs and any validation/profiling
-outside the timed call; account for helper-owned reader conditions identically
-on both sides. Hash and report it separately rather than require all test code
-to be absent from a test helper. Instrumented timings cannot substitute for the
-uninstrumented CLI measurements. Required payload/container measurements must
-run; unavailable peak RSS is explicitly not measured and does not authorize
-omitting those required probes or claiming a peak-memory improvement.
-
-### Freeze comparison acceptance before changes
-
-Use the same preregistered odd block count, at least three, for reference and
-candidate. Each epic's first task captures its matched baseline before changes.
-For each of the 16 mandatory latency cells and each percentile separately, sort
-the baseline block values and define B as the middle value. Define
-`T = (max_block - min_block) / B`. Latency B must be positive and finite. Reject
-an invalid baseline; if T exceeds 0.05, mark it incomplete rather than clamp it
-and pass. Preserve every attempted block and the environmental reason for any
-invalidity; do not choose a passing subset. Do not fit T after seeing candidates.
-
-At closeout the median candidate p50 and p99 must each be no greater than
-`B * (1 + T)` for every required cell. Each measured block must also satisfy the
-original applicable qualification rules; a median cannot hide a failing G7/G8
-block. Alternate baseline/candidate order for contemporaneous controls where
-practical and restore exact registered fixtures, preserving within-block G7
-history growth. A drifted reference control makes the comparison inconclusive,
-not permission to normalize away a regression. The matched-epoch rule above
-handles legitimate environmental changes without cumulative tolerance growth.
-
-For required deterministic memory bytes/counts, use T=0 and a one-sided
-no-increase bound; zero baseline means the allowed value is zero, without a
-division. For a preregistered measured-memory metric with genuine run noise,
-use the same odd-block B/T rule and 5 percent maximum. Specify units, boundary
-and estimator before capture. Optional unmeasured RSS has no fabricated numeric
-verdict. A latency gain cannot compensate for a required memory regression.
-
-Work-count gates are independent and have zero noise tolerance:
-
-| Closeout | Required deterministic verdict |
-|---|---|
-| OPTIM-004 | Apply the [route/lifecycle-specific projection ceilings](#projection-work-count-ceilings): prepared/terminal observation permits one guarded derive returning no projection, but prepared next/evidence/receipt permit zero. Enforce separate rehydration/semantic-validation ceilings and zero declaration-bypass work. At most one new workflow-memory successor per successful batch, including no-op; no per-operation copying of retained history. |
-| BOUND-006 | No increase in inherited parse/derive/workflow-successor/history-copy counts versus accepted OPTIM; preserve all absolute OPTIM ceilings. |
-| READS-005 | Strictly lower selected-family execution counts on preregistered repeated-query fixtures versus accepted BOUND, including goals/citations; no unnecessary count increase on empty/single-entry controls. Changed-slot reload counts follow the registered bounded-batch rule and preserve unchanged-payload reuse. Ordinary automatic fence preflight builds zero public status envelopes; explicit/stdin paths perform zero facts preflight and zero preflight status builds. Preserve inherited OPTIM ceilings. |
-
-A count miss fails even when every latency cell is inside T. A required
-latency/memory regression fails even when counts fall. Count reduction never
-means matching the original count exactly, and need not be strict where the
-reference fixture already has a minimal query count. Claim time/memory gains
-only beyond the frozen noise and only for actually measured cells.
-
-### Current-Direct comparator delivery
-
-The existing `tools/qualify_direct_cli.py` measures a single workload block and
-compares G7 with the historical daemon column. It does not currently accept a
-current-Direct baseline, aggregate multiple blocks or apply T. OPTIM-001 owns a
-small extension or companion aggregator over its existing reports, not a new
-benchmark framework or an implied completed capability.
-
-The comparator consumes the frozen registration and every identified block,
-checks the registered source/binary/helper identity for each reference/candidate
-role and matched host/OS/power/fixture/units, then verifies matrix completeness.
-Reference and candidate executable hashes are expected to differ; accidental
-replacement within either role is not. Emit separate existing-gate, resource,
-count and completeness verdicts. READS-001 extends its probe registry for READS-specific cells. No test
-or report validator depends on a temporary TODO path. Register tooling tests
-under the repository's established verification entry points.
-
-Before OPTIM-002, self-tests must prove acceptance at the boundary and rejection
-of missing/duplicate cells or blocks, too few/even block counts, zero or nonfinite
-latency, negative counts, mixed identities/units, noise above 5 percent, forbidden
-instrumented timing, count-ceiling misses with good latency, and resource
-regressions with lower counts. Test zero-work baselines, cumulative comparisons,
-legitimate matched-epoch records and refusal to overwrite earlier failures.
-For projection counters, explicitly accept one guarded derive returning no
-projection for prepared/terminal observation and reject two; reject even one
-for prepared next, evidence and receipt. Test the independent rehydration counter
-so zero derive cannot conceal parsing or permit parsing on a bypassed branch.
-The actual baseline capture and these executable self-tests belong to OPTIM-001;
-editing this protocol does not claim either ran.
+BOUND and READS do not inherit OPTIM probe sets, baselines, comparators, or
+count ceilings. A comparison either epic owns becomes acceptance evidence only
+after that epic registers its fixtures, oracles, and owners in its own scope.
+Accepted OPTIM evidence is not that registration.
 
 ### Native scale execution
 
-All three epic closeouts require the existing Make entry point, under AGENTS.md
-Gaori routing, with an absolute owned evidence directory:
+A later epic that registers native qualification uses the existing Make entry
+point, under AGENTS.md Gaori routing, with an absolute owned evidence directory:
 
 ```bash
 make test-native-qualification NATIVE_EVIDENCE_PARENT=<absolute-owned-directory>
@@ -459,19 +259,22 @@ G2 result into a new absolute threshold. `make test` and ordinary `make test-int
 do not execute these `#[ignore]` cases. Running the native entry point also runs
 its other registered cases; do not silently trim that matrix. This is native
 qualification, not a claim of a new UTM run, distribution or installed activation.
+It is not an OPTIM latency, count, or memory gate.
 
 ### Evidence and completion boundaries
 
-Validate every workload's response, state and replay identity. Use deterministic
-clocks/IDs for semantic differential tests; do not normalize exact stored replay
-responses or discard error-order changes. Reopen baseline-created current Stores
-with the candidate in owned fixtures and prove continuation without reset or
-migration. Unsupported/newer/foreign Stores still fail closed.
+Functional checks validate response, state, and replay identity. Use
+deterministic clocks and IDs for semantic comparisons; do not normalize exact
+stored replay responses or discard error-order changes. Current Stores continue
+in owned fixtures without reset or migration. Unsupported, newer, and foreign
+Stores still fail closed. That continuation is functional evidence, not an
+inherited OPTIM metric.
 
-Keep raw samples, fixture copies, profiler output and frozen binaries under
-ignored owned evidence roots according to AGENTS.md. Durable documentation
-retains the exact source identity, methodology, selected cells, verdicts and
-material limitations, not private runtime paths. Never bind executable tests to
-a temporary TODO dossier. Development gate success, a benchmark pass, Epic
-acceptance and a stable release are separate claims. No comparison here grants
-commit, publication, installation, runtime retirement or external-consumer writes.
+When a later epic registers its own comparison, keep raw samples, fixture
+copies, profiler output, and frozen binaries under ignored owned evidence roots
+according to AGENTS.md. Durable documentation retains source identity,
+methodology, selected cells, verdicts, and material limitations, not private
+runtime paths. Never bind executable tests to a temporary TODO dossier.
+Development-gate success, a benchmark pass, Epic acceptance, and a stable
+release are separate claims. No comparison grants commit, publication,
+installation, runtime retirement, or external-consumer writes.

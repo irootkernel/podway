@@ -62,6 +62,47 @@ Use registered direct CLI cases through `make test-e2e-exact` or the complete
 `make test-e2e` suite. A fixture's synthetic delegation provenance proves local
 protocol behavior, not a live executor integration.
 
+## Functional regression owners
+
+These tests own direct identity, attempt-content overflow, and one-draft atomic
+batch behavior:
+
+- [Direct identity](../../crates/podway-engine/tests/int_optim001_direct_identity.rs):
+  `optim001_direct_identity_preserves_four_boundaries`,
+  `optim001_direct_prepared_identity_keeps_stored_bytes`
+- [Engine overflow](../../crates/podway-engine/tests/int_optim001_engine_overflow.rs):
+  `optim001_engine_record_many_rejects_attempt_content_without_outcome`
+- [Store batch](../../crates/podway-store/tests/int_optim001_batch.rs):
+  `optim001_preloaded_attempt_rejects_earlier_overflow_before_later_reduction`,
+  `optim001_persisted_store_rejects_attempt_content_without_outcome`
+- [Store draft](../../crates/podway-store/tests/int_optim003_draft.rs):
+  `optim003_batch_shapes_publish_one_revision_for_mixed_noops`,
+  `optim003_sorted_position_failures_publish_nothing`,
+  `optim003_supported_forms_follow_sorted_item_order`
+- [Direct CLI](../../crates/podway-cli/tests/e2e_v2dfc007_direct_cli.rs):
+  `record_stdin_preserves_identity_applies_one_atomic_batch_and_replays_without_preflight`
+
+The preloaded overflow oracle is
+`optim001_preloaded_attempt_rejects_earlier_overflow_before_later_reduction`
+in the Store batch file above. It seeds a real attempt to within one legal list
+addition of the attempt-content ceiling, then submits a batch whose
+sorted-earlier item crosses that ceiling while a later item would reduce the
+final total. The expected result is the existing content-limit rejection,
+unchanged item and graph revisions, no outcome, and the seeded preimage.
+
+These cases own symlinked temporary-parent fixtures under the ambient temp root:
+
+- [Engine races](../../crates/podway-engine/tests/int_v2dfc006_races.rs):
+  `competing_child_resolves_a_symlinked_temporary_parent`
+- [Store direct fixtures](../../crates/podway-store/tests/int_v2dfc005_direct_store.rs):
+  `store_fixture_resolves_a_symlinked_temporary_parent`
+
+Store lock isolation is owned by
+`a_real_controller_write_lock_returns_busy_within_deadline_without_effects` in
+that Store file. The case runs in its own process and still acquires the
+connection gate inside the request. Unrelated tests no longer contend for that
+process-global gate during the SQLite busy assertion.
+
 ## Optional diagnostics
 
 - The pinned fuzz targets cover canonical JSON, selectors, response decoding,

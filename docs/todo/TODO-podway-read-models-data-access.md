@@ -271,8 +271,8 @@ changed source/test ownership references.
   before optimization. Register the paired list-success/show-refusal oracle for
   the same corrupted archived session, including its visibility in the list
   window, and the post-facts release of transaction/gate/DirectOpenLease before
-  the competing commit. Extend OPTIM's comparator for these new probes; do not
-  present their future measurements as part of OPTIM-001's baseline.
+  the competing commit. OPTIM recorded no performance baseline or comparator
+  for READS to extend. Do not present later measurements as an OPTIM baseline.
 
 ### READS-002: Bulk-load attempt data without reducing validation
 
@@ -336,8 +336,8 @@ changed source/test ownership references.
 - Acceptance: original thresholds, matched latency/memory criteria and
   deterministic SQL/facts count rules all pass independently. Repeated-query
   fixtures must improve; small controls need not improve an already minimal
-  count. Inherited OPTIM count ceilings remain satisfied, and no cold-read,
-  status-failure, archive-list, storage-contract or side-effect guarantee changes.
+  count. No cold-read, status-failure, archive-list, storage-contract or
+  side-effect guarantee changes.
 - Promote actual design, query requirements and measurement summaries to durable
   authorities. Complete independent Epic audit/review and owner acceptance before
   marking completion or retiring the dossier. No release is implied.

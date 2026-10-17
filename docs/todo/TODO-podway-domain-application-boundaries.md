@@ -237,9 +237,11 @@ after BOUND, not in the middle of a type move.
   deferred memory-model errors. Reconcile all nine callback sites and the three
   helper groups above, not only matches for one error variable.
 - Register a failure/replay test case per callback site and concrete old/new
-  ownership of the fence-preflight fetch, parser and callers. Freeze the inherited
-  OPTIM count ceilings and capture the matched resource baseline using the shared
-  comparison protocol before moving production code.
+  ownership of the fence-preflight fetch, parser and callers. Preserve the
+  accepted OPTIM request-scoped sharing and single-draft structure before moving
+  production code. OPTIM supplies accepted implementation and functional
+  evidence, no performance baseline, comparator, or count ceilings. Any
+  BOUND-owned future comparison must be registered independently.
 - Record the concrete module/type moves and callback-failure mechanism before
   editing those production paths. This is engineering inventory within the
   approved ownership model, not reopening product or compatibility policy.
@@ -312,8 +314,9 @@ after BOUND, not in the middle of a type move.
 - Run the full development gate, applicable native crash/race/maintenance and
   Store/Engine scale checks through the
   [native qualification entry point](../implementation-tips/direct-cli-performance-qualification.md#native-scale-execution),
-  plus current-Direct comparison against accepted OPTIM. The three ignored scale
-  cases require that separate route; a successful `make test` is insufficient.
+  and preserve accepted OPTIM request-scoped sharing and single-draft structure.
+  The three ignored scale cases require that separate route; a successful
+  `make test` is insufficient.
 - Verify canonical assets, manifest inputs, DDL and stored replay envelopes did
   not change; prove fresh-process continuation of current Stores without reset.
 - Acceptance: invariant/error mapping is complete, all applicable tests and
@@ -321,8 +324,10 @@ after BOUND, not in the middle of a type move.
   ownership table. Promote durable architecture/traceability before independent
   Epic review and exact owner acceptance. Performance gains are not required
   for a boundary-only move, but regressions cannot be hidden by file relocation.
-  Independently require inherited parse/derive/memory-successor counts not to
-  increase versus accepted OPTIM; timing tolerance cannot excuse a count regression.
+  Preserve accepted OPTIM request-scoped sharing and single-draft structure.
+  OPTIM supplies accepted implementation and functional evidence, no performance
+  baseline, comparator, or count ceilings. Any BOUND-owned future comparison
+  must be registered independently.
 
 ## 7. Verification and release acceptance
 

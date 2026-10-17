@@ -429,6 +429,125 @@ pub(crate) struct ActiveItemMemoryMutationOutcomeV2 {
     pub value_digest: Option<Sha256Digest>,
 }
 
+/// Unpublished slots for one active attempt.
+///
+/// Sorted item rules update this value in place. Blockers, evidence, other
+/// attempts, and decision or rework history stay on the source memory and are
+/// copied once, when a successful batch publishes its final memory.
+struct UnpublishedAttemptDraftV2 {
+    attempt_index: usize,
+    slots: Vec<ItemSlotStateV2>,
+    changed: bool,
+}
+
+impl UnpublishedAttemptDraftV2 {
+    fn open(
+        memory: &WorkflowMemoryStateV2,
+        expected_attempt_id: &AttemptId,
+    ) -> Result<Self, GraphMutationErrorV2> {
+        let attempt_index = memory
+            .attempts
+            .iter()
+            .position(|attempt| attempt.attempt_id() == expected_attempt_id)
+            .ok_or_else(|| invalid("active Procedure v2 workflow memory is absent"))?;
+        Ok(Self {
+            attempt_index,
+            slots: memory.attempts[attempt_index].item_slots.clone(),
+            changed: false,
+        })
+    }
+
+    fn apply_item(
+        &mut self,
+        specification: &ItemSpecV2,
+        item_id: &ItemId,
+        expected_item_revision: Revision,
+        mutation: ActiveItemMutationV2,
+        now: UnixMillis,
+    ) -> Result<ActiveItemMemoryMutationOutcomeV2, GraphMutationErrorV2> {
+        let slot_index = self
+            .slots
+            .iter()
+            .position(|slot| slot.item_id() == item_id)
+            .ok_or_else(|| invalid("active Procedure v2 item slot is absent"))?;
+        let current = &self.slots[slot_index];
+        if current.revision() != expected_item_revision {
+            return Err(GraphMutationErrorV2::ItemRevisionConflict {
+                expected: expected_item_revision,
+                actual: current.revision(),
+            });
+        }
+        if now < current.updated_at() {
+            return Err(invalid("Procedure v2 item mutation timestamp regressed").into());
+        }
+
+        let next_value = mutate_item_value_v2(specification, current.value(), mutation)?;
+        let value_digest = next_value
+            .as_ref()
+            .and_then(RecordedItemValueV2::as_artifact)
+            .map(|artifact| artifact.digest().clone());
+        if current.value() == next_value.as_ref() {
+            return Ok(ActiveItemMemoryMutationOutcomeV2 {
+                item_id: item_id.clone(),
+                changed: false,
+                item_revision: current.revision(),
+                value_digest,
+            });
+        }
+        let next_revision = current
+            .revision()
+            .checked_next()
+            .map_err(GraphMutationErrorV2::Domain)?;
+        let next_slot = ItemSlotStateV2::new(
+            current.attempt_id().clone(),
+            current.item_id().clone(),
+            current.item_type(),
+            next_revision,
+            next_value,
+            current.created_at(),
+            now,
+        )?;
+        self.slots[slot_index] = next_slot;
+        // ADR-0024 bounds the recorded text and list content one attempt may accumulate. Check
+        // this item before the next one: a later item that shrinks the attempt does not excuse
+        // an earlier overflow.
+        let content =
+            recorded_content_scalars_v2(self.slots.iter().filter_map(ItemSlotStateV2::value));
+        if content > MAX_ATTEMPT_CONTENT_SCALARS_V2 {
+            return Err(GraphMutationErrorV2::Domain(
+                attempt_content_bound_error_v2(content),
+            ));
+        }
+        self.changed = true;
+        Ok(ActiveItemMemoryMutationOutcomeV2 {
+            item_id: item_id.clone(),
+            changed: true,
+            item_revision: next_revision,
+            value_digest,
+        })
+    }
+
+    fn publish(
+        self,
+        source: &WorkflowMemoryStateV2,
+    ) -> Result<WorkflowMemoryStateV2, GraphMutationErrorV2> {
+        if !self.changed {
+            return Ok(source.clone());
+        }
+        let active = &source.attempts[self.attempt_index];
+        let replacement = AttemptWorkflowMemoryV2::new(
+            active.attempt_id.clone(),
+            self.slots,
+            active.blockers.clone(),
+            active.evidence.clone(),
+        )?;
+        let mut attempts = source.attempts.clone();
+        attempts[self.attempt_index] = replacement;
+        WorkflowMemoryStateV2::new(attempts, source.decisions.clone(), source.reworks.clone())
+            .map_err(Into::into)
+    }
+}
+
 pub(crate) struct DecisionMemoryTransitionV2 {
     pub trace: SessionTraceV2,
     pub memory: WorkflowMemoryStateV2,
@@ -1018,41 +1137,6 @@ impl WorkflowMemoryStateV2 {
             });
         }
 
-        let mut memory = self.clone();
-        let mut outcomes = Vec::with_capacity(ordered.len());
-        for request in ordered {
-            let outcome = memory.mutate_active_item_v2(
-                snapshot,
-                trace,
-                expected_attempt_id,
-                request.item_id(),
-                request.expected_item_revision(),
-                request.mutation().clone(),
-                now,
-            )?;
-            outcomes.push(ActiveItemMemoryMutationOutcomeV2 {
-                item_id: request.item_id().clone(),
-                changed: outcome.changed,
-                item_revision: outcome.item_revision,
-                value_digest: outcome.value_digest,
-            });
-            memory = outcome.memory;
-        }
-
-        Ok(ActiveItemsMemoryMutationV2 { memory, outcomes })
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn mutate_active_item_v2(
-        &self,
-        snapshot: &ProcedureSnapshotV2,
-        trace: &SessionTraceV2,
-        expected_attempt_id: &AttemptId,
-        item_id: &ItemId,
-        expected_item_revision: Revision,
-        mutation: ActiveItemMutationV2,
-        now: UnixMillis,
-    ) -> Result<ActiveItemMemoryMutationV2, GraphMutationErrorV2> {
         if trace.lifecycle() != SessionLifecycle::Running {
             return Err(GraphMutationErrorV2::SessionNotRunning);
         }
@@ -1071,90 +1155,62 @@ impl WorkflowMemoryStateV2 {
         }
         let model = SnapshotMemoryModelV2::from_snapshot(snapshot)?;
         let node = model.node(active.graph_node_id())?;
-        let specification = node
-            .items
-            .iter()
-            .find(|specification| specification.id() == item_id)
-            .ok_or_else(|| GraphMutationErrorV2::ItemNotFound {
-                item_id: item_id.clone(),
-            })?;
-        let attempt_index = self
-            .attempts
-            .iter()
-            .position(|memory| memory.attempt_id() == expected_attempt_id)
-            .ok_or_else(|| invalid("active Procedure v2 workflow memory is absent"))?;
-        let slot_index = self.attempts[attempt_index]
-            .item_slots
-            .iter()
-            .position(|slot| slot.item_id() == item_id)
-            .ok_or_else(|| invalid("active Procedure v2 item slot is absent"))?;
-        let current = &self.attempts[attempt_index].item_slots[slot_index];
-        if current.revision() != expected_item_revision {
-            return Err(GraphMutationErrorV2::ItemRevisionConflict {
-                expected: expected_item_revision,
-                actual: current.revision(),
-            });
-        }
-        if now < current.updated_at() {
-            return Err(invalid("Procedure v2 item mutation timestamp regressed").into());
-        }
 
-        let next_value = mutate_item_value_v2(specification, current.value(), mutation)?;
-        let value_digest = next_value
-            .as_ref()
-            .and_then(RecordedItemValueV2::as_artifact)
-            .map(|artifact| artifact.digest().clone());
-        if current.value() == next_value.as_ref() {
-            return Ok(ActiveItemMemoryMutationV2 {
-                memory: self.clone(),
-                changed: false,
-                item_revision: current.revision(),
-                value_digest,
-            });
+        let mut draft = None;
+        let mut outcomes = Vec::with_capacity(ordered.len());
+        for request in ordered {
+            let specification = node
+                .items
+                .iter()
+                .find(|specification| specification.id() == request.item_id())
+                .ok_or_else(|| GraphMutationErrorV2::ItemNotFound {
+                    item_id: request.item_id().clone(),
+                })?;
+            if draft.is_none() {
+                draft = Some(UnpublishedAttemptDraftV2::open(self, expected_attempt_id)?);
+            }
+            let outcome = draft
+                .as_mut()
+                .expect("the first present item opens the draft")
+                .apply_item(
+                    specification,
+                    request.item_id(),
+                    request.expected_item_revision(),
+                    request.mutation().clone(),
+                    now,
+                )?;
+            outcomes.push(outcome);
         }
-        let next_revision = current
-            .revision()
-            .checked_next()
-            .map_err(GraphMutationErrorV2::Domain)?;
-        let next_slot = ItemSlotStateV2::new(
-            current.attempt_id().clone(),
-            current.item_id().clone(),
-            current.item_type(),
-            next_revision,
-            next_value,
-            current.created_at(),
-            now,
-        )?;
-        let mut attempts = self.attempts.clone();
-        let active_memory = &self.attempts[attempt_index];
-        let mut slots = active_memory.item_slots.clone();
-        slots[slot_index] = next_slot;
-        // ADR-0024 bounds the recorded text and list content one attempt may accumulate. The check
-        // belongs on the write path, not only where the terminal snapshot is built, so a caller
-        // learns the exact field, observed value, and maximum on the mutation that crosses it.
-        //
-        // No test crosses it here. A single text value caps at 65,536 scalars and 128 of them
-        // reach only half the aggregate, so tripping this needs 128 wide list items — about 17 MB
-        // of recorded content. The equivalent check in `RecordedItemSetV2::new` is tested from
-        // both sides, and this one is a duplicate placed on the write path for the error's timing,
-        // not for a different rule.
-        let content = recorded_content_scalars_v2(slots.iter().filter_map(ItemSlotStateV2::value));
-        if content > MAX_ATTEMPT_CONTENT_SCALARS_V2 {
-            return Err(GraphMutationErrorV2::Domain(
-                attempt_content_bound_error_v2(content),
-            ));
-        }
-        attempts[attempt_index] = AttemptWorkflowMemoryV2::new(
-            active_memory.attempt_id.clone(),
-            slots,
-            active_memory.blockers.clone(),
-            active_memory.evidence.clone(),
-        )?;
+        let memory = draft
+            .expect("a non-empty batch opens one draft")
+            .publish(self)?;
+        Ok(ActiveItemsMemoryMutationV2 { memory, outcomes })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn mutate_active_item_v2(
+        &self,
+        snapshot: &ProcedureSnapshotV2,
+        trace: &SessionTraceV2,
+        expected_attempt_id: &AttemptId,
+        item_id: &ItemId,
+        expected_item_revision: Revision,
+        mutation: ActiveItemMutationV2,
+        now: UnixMillis,
+    ) -> Result<ActiveItemMemoryMutationV2, GraphMutationErrorV2> {
+        let request = [ActiveItemMutationRequestV2::new(
+            item_id.clone(),
+            expected_item_revision,
+            mutation,
+        )];
+        let batch =
+            self.mutate_active_items_v2(snapshot, trace, expected_attempt_id, &request, now)?;
+        let outcome = batch.outcomes.into_iter().next().expect("one item request");
         Ok(ActiveItemMemoryMutationV2 {
-            memory: Self::new(attempts, self.decisions.clone(), self.reworks.clone())?,
-            changed: true,
-            item_revision: next_revision,
-            value_digest,
+            memory: batch.memory,
+            changed: outcome.changed,
+            item_revision: outcome.item_revision,
+            value_digest: outcome.value_digest,
         })
     }
 

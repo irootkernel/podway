@@ -3,7 +3,11 @@
 //! Projection consumes one coherent Store observation and the immutable canonical snapshot
 //! captured at session start. It never resolves the Procedure source or mutates runtime state.
 
-use std::{error::Error, fmt};
+use std::{
+    cell::{Ref, RefCell},
+    error::Error,
+    fmt,
+};
 
 use podway_config::{
     DelegationEvidenceItemV1, DelegationEvidenceResolutionV1, DelegationEvidenceV1,
@@ -57,10 +61,13 @@ use podway_core::{
     canonicalize_json_v1,
 };
 use podway_protocol::{EVIDENCE_PAGE_TOKEN_VERSION_V1, EvidencePageTokenV1};
-use podway_store::v2_delegation::{DelegationReadinessV1, DelegationReceiptV1};
+use podway_store::direct_store::DirectWorkspaceViewV1;
+use podway_store::v2_delegation::{
+    DelegationReadinessV1, DelegationReceiptSnapshotV1, DelegationReceiptV1,
+};
 use podway_store::{
-    AttemptWorkflowMemoryV2, EvidenceLookupErrorV2, EvidenceReadbackV2, EvidenceResolutionStateV2,
-    GraphSessionStateV2, GraphWorkspaceViewV2, recorded_value_digest_v2,
+    AttemptWorkflowMemoryV2, DurableWorktreeIdentityV1, EvidenceLookupErrorV2, EvidenceReadbackV2,
+    EvidenceResolutionStateV2, GraphSessionStateV2, GraphWorkspaceViewV2, recorded_value_digest_v2,
     recorded_value_encoded_size_v2,
 };
 use serde_json::{Map, Value, json};
@@ -132,7 +139,7 @@ fn delegated_placement_count(procedure: &ParsedProcedureV2) -> usize {
 }
 
 fn delegation_projection(
-    view: &GraphWorkspaceViewV2,
+    scope: &ReadScope<'_>,
     state: &GraphSessionStateV2,
     current: Option<&CurrentProjection<'_>>,
 ) -> Value {
@@ -146,7 +153,7 @@ fn delegation_projection(
     if !current.delegated() {
         return json!({"state":"not_applicable","reason":"direct_placement","safe_next_action":"continue_direct"});
     }
-    let receipts = view.delegation_receipts();
+    let receipts = scope.receipts();
     match receipts.readiness() {
         DelegationReadinessV1::ReceiptCurrent => json!({
             "state":"accepted", "reason":"current_receipt", "safe_next_action":"complete",
@@ -177,9 +184,16 @@ fn delegation_projection(
 pub fn delegation_work_package_from_view_v1(
     view: &GraphWorkspaceViewV2,
 ) -> Result<DelegationWorkPackageV1, GraphViewErrorV2> {
-    let state = graph_state(view)?;
-    let procedure = rehydrate_snapshot(state)?;
-    let current = CurrentProjection::derive(view, state, &procedure)?
+    delegation_work_package_in(&ReadScope::from_graph(view))
+}
+
+pub(crate) fn delegation_work_package_in(
+    scope: &ReadScope<'_>,
+) -> Result<DelegationWorkPackageV1, GraphViewErrorV2> {
+    let state = scope.graph()?;
+    let validated = scope.validated()?;
+    let procedure = validated.parsed();
+    let current = CurrentProjection::derive(scope, state, procedure)?
         .ok_or(GraphViewErrorV2::NoActiveAttempt)?;
     let GraphPlacementV2::Action(action) = current.placement else {
         return Err(GraphViewErrorV2::DelegationNotApplicable);
@@ -187,8 +201,6 @@ pub fn delegation_work_package_from_view_v1(
     if action.delegation().is_none() {
         return Err(GraphViewErrorV2::DelegationNotApplicable);
     }
-    let validated =
-        validate_procedure_v2(procedure.clone()).map_err(|_| GraphViewErrorV2::InvalidSnapshot)?;
     let readback = state
         .selected_evidence_readback(current.attempt.attempt_id())
         .map_err(|_| GraphViewErrorV2::InconsistentState("delegation evidence is invalid"))?;
@@ -310,7 +322,7 @@ pub fn delegation_work_package_from_view_v1(
     });
     project_delegation_work_package_v1(DelegationWorkPackageInputV1 {
         procedure: &validated,
-        workspace_uuid: view.identity().workspace_uuid(),
+        workspace_uuid: scope.identity().workspace_uuid(),
         session_id: state.trace().session_id(),
         placement_id: current.attempt.graph_node_id(),
         attempt_id: current.attempt.attempt_id(),
@@ -324,7 +336,14 @@ pub fn project_delegation_package_result_v1(
     view: &GraphWorkspaceViewV2,
     package: &DelegationWorkPackageV1,
 ) -> Result<Map<String, Value>, GraphViewErrorV2> {
-    let state = graph_state(view)?;
+    project_delegation_package_result_in(&ReadScope::from_graph(view), package)
+}
+
+pub(crate) fn project_delegation_package_result_in(
+    scope: &ReadScope<'_>,
+    package: &DelegationWorkPackageV1,
+) -> Result<Map<String, Value>, GraphViewErrorV2> {
+    let state = scope.graph()?;
     let active = state
         .trace()
         .active_attempt()
@@ -332,7 +351,7 @@ pub fn project_delegation_package_result_v1(
             "delegation package requires an active attempt",
         ))?;
     let value = package.package();
-    if value.get("workspace_uuid") != Some(&json!(view.identity().workspace_uuid()))
+    if value.get("workspace_uuid") != Some(&json!(scope.identity().workspace_uuid()))
         || value.get("session_id") != Some(&json!(state.trace().session_id()))
         || value.get("attempt_id") != Some(&json!(active.attempt_id()))
         || value.get("placement_id") != Some(&json!(active.graph_node_id()))
@@ -346,7 +365,7 @@ pub fn project_delegation_package_result_v1(
         "schema":"podway.delegation-package-result/v1",
         "package":value,
         "package_digest":package.digest().as_str(),
-        "workspace_uuid":view.identity().workspace_uuid().as_str(),
+        "workspace_uuid":scope.identity().workspace_uuid().as_str(),
         "session_id":state.trace().session_id().as_str(),
         "session_revision":state.trace().revision().get(),
         "attempt_id":active.attempt_id().as_str(),
@@ -366,8 +385,15 @@ pub fn project_delegation_receipt_result_v1(
     view: &GraphWorkspaceViewV2,
     receipt: &DelegationReceiptV1,
 ) -> Result<Map<String, Value>, GraphViewErrorV2> {
-    let state = graph_state(view)?;
-    if receipt.workspace_uuid() != *view.identity().workspace_uuid()
+    project_delegation_receipt_result_in(&ReadScope::from_graph(view), receipt)
+}
+
+pub(crate) fn project_delegation_receipt_result_in(
+    scope: &ReadScope<'_>,
+    receipt: &DelegationReceiptV1,
+) -> Result<Map<String, Value>, GraphViewErrorV2> {
+    let state = scope.graph()?;
+    if receipt.workspace_uuid() != *scope.identity().workspace_uuid()
         || receipt.session_id() != *state.trace().session_id()
         || !state
             .trace()
@@ -383,7 +409,7 @@ pub fn project_delegation_receipt_result_v1(
         .trace()
         .active_attempt()
         .is_some_and(|attempt| attempt.attempt_id() == &receipt.attempt_id());
-    if active && view.delegation_receipts().current_receipt() != Some(receipt) {
+    if active && scope.receipts().current_receipt() != Some(receipt) {
         return Err(GraphViewErrorV2::InconsistentState(
             "active delegation receipt differs from the coherent workspace view",
         ));
@@ -391,7 +417,7 @@ pub fn project_delegation_receipt_result_v1(
     let (applicability, reason) = if !active {
         ("historical", "historical_attempt")
     } else {
-        match view.delegation_receipts().readiness() {
+        match scope.receipts().readiness() {
             DelegationReadinessV1::ReceiptCurrent => ("accepted", "current_receipt"),
             DelegationReadinessV1::PackageChanged => ("stale_acceptance", "package_changed"),
             DelegationReadinessV1::ItemsChanged => ("stale_acceptance", "items_changed"),
@@ -426,14 +452,22 @@ pub fn project_delegation_receipt_read_result_v1(
     attempt_id: &AttemptId,
     receipt: Option<&DelegationReceiptV1>,
 ) -> Result<Map<String, Value>, GraphViewErrorV2> {
-    let state = graph_state(view)?;
+    project_delegation_receipt_read_in(&ReadScope::from_graph(view), attempt_id, receipt)
+}
+
+pub(crate) fn project_delegation_receipt_read_in(
+    scope: &ReadScope<'_>,
+    attempt_id: &AttemptId,
+    receipt: Option<&DelegationReceiptV1>,
+) -> Result<Map<String, Value>, GraphViewErrorV2> {
+    let state = scope.graph()?;
     let attempt = state
         .trace()
         .attempts()
         .iter()
         .find(|attempt| attempt.attempt_id() == attempt_id)
         .ok_or(GraphViewErrorV2::AttemptNotFound)?;
-    let procedure = rehydrate_snapshot(state)?;
+    let procedure = scope.procedure()?;
     let delegated = procedure.graph().placements().iter().any(|placement| {
         placement.id() == attempt.graph_node_id()
             && matches!(placement, GraphPlacementV2::Action(action) if action.delegation().is_some())
@@ -441,8 +475,8 @@ pub fn project_delegation_receipt_read_result_v1(
     if !delegated {
         return Err(GraphViewErrorV2::DelegationNotApplicable);
     }
-    project_delegation_receipt_result_v1(
-        view,
+    project_delegation_receipt_result_in(
+        scope,
         receipt.ok_or(GraphViewErrorV2::DelegationReceiptMissing)?,
     )
 }
@@ -452,14 +486,22 @@ pub fn project_graph_status_v2(
     tier: GraphStatusTierV2,
     history_before: Option<TraceSequenceV2>,
 ) -> Result<Map<String, Value>, GraphViewErrorV2> {
-    let state = graph_state(view)?;
+    project_graph_status_in(&ReadScope::from_graph(view), tier, history_before)
+}
+
+pub(crate) fn project_graph_status_in(
+    scope: &ReadScope<'_>,
+    tier: GraphStatusTierV2,
+    history_before: Option<TraceSequenceV2>,
+) -> Result<Map<String, Value>, GraphViewErrorV2> {
+    let state = scope.graph()?;
     if tier != GraphStatusTierV2::Verbose && history_before.is_some() {
         return Err(GraphViewErrorV2::InconsistentState(
             "a history cursor is valid only for verbose status",
         ));
     }
-    let procedure = rehydrate_snapshot(state)?;
-    let current = CurrentProjection::derive(view, state, &procedure)?;
+    let procedure = scope.procedure()?;
+    let current = CurrentProjection::derive(scope, state, &procedure)?;
     let delegated = delegated_placement_count(&procedure) != 0;
 
     let mut result = Map::new();
@@ -513,14 +555,14 @@ pub fn project_graph_status_v2(
     if delegated {
         result.insert(
             "delegation".to_owned(),
-            delegation_projection(view, state, current.as_ref()),
+            delegation_projection(scope, state, current.as_ref()),
         );
     }
     if tier == GraphStatusTierV2::Compact {
         return Ok(result);
     }
     if delegated {
-        let receipts = view.delegation_receipts();
+        let receipts = scope.receipts();
         result.insert("receipt_summaries".to_owned(), json!(receipts.summaries()));
         result.insert(
             "receipt_summaries_total".to_owned(),
@@ -595,7 +637,22 @@ pub fn project_graph_archive_show_result_v2(
     archive: Value,
     terminal_disposition: Value,
 ) -> Result<Value, GraphViewErrorV2> {
-    let delegated = delegated_placement_count(&rehydrate_snapshot(graph_state(view)?)?) != 0;
+    project_graph_archive_show_in(
+        &ReadScope::from_graph(view),
+        status,
+        archive,
+        terminal_disposition,
+    )
+}
+
+pub(crate) fn project_graph_archive_show_in(
+    scope: &ReadScope<'_>,
+    status: Map<String, Value>,
+    archive: Value,
+    terminal_disposition: Value,
+) -> Result<Value, GraphViewErrorV2> {
+    let procedure = scope.procedure()?;
+    let delegated = delegated_placement_count(&procedure) != 0;
     let mut result = json!({
         "schema": "podway.session-archive-show-result/v3",
         "activity": "inactive",
@@ -604,7 +661,7 @@ pub fn project_graph_archive_show_result_v2(
         "state": status,
     });
     if delegated {
-        let receipts = view.delegation_receipts();
+        let receipts = scope.receipts();
         result["receipt_summaries"] = json!(receipts.summaries());
         result["receipt_summaries_total"] = json!(receipts.total());
         result["receipt_summaries_truncated"] = json!(receipts.truncated());
@@ -694,12 +751,21 @@ pub fn project_evidence_read_v1(
     item_id: &ItemId,
     token: Option<&EvidencePageTokenV1>,
 ) -> Result<Map<String, Value>, EvidenceReadErrorV2> {
+    project_evidence_read_in(&ReadScope::from_graph(view), source, item_id, token)
+}
+
+pub(crate) fn project_evidence_read_in(
+    scope: &ReadScope<'_>,
+    source: &GraphNodeId,
+    item_id: &ItemId,
+    token: Option<&EvidencePageTokenV1>,
+) -> Result<Map<String, Value>, EvidenceReadErrorV2> {
     check_evidence_token_binding_v1(
-        view.graph_state().map(|state| state.trace().session_id()),
+        scope.graph_state().map(|state| state.trace().session_id()),
         item_id,
         token,
     )?;
-    let state = graph_state(view)?;
+    let state = scope.graph()?;
     let active = state
         .trace()
         .active_attempt()
@@ -820,17 +886,17 @@ pub fn project_evidence_read_v1(
             "attempt_number": selected.consumer_attempt_number().get(),
         }),
     );
+    let source_procedure = scope.procedure()?;
+    let source_title =
+        definition_title_for_node(&source_procedure, selected.source_graph_node_id().as_str())
+            .ok_or(GraphViewErrorV2::InconsistentState(
+                "evidence source definition is absent",
+            ))?;
     result.insert(
         "source".to_owned(),
         json!({
             "graph_node_id": selected.source_graph_node_id().as_str(),
-            "title": definition_title_for_node(
-                &rehydrate_snapshot(state)?,
-                selected.source_graph_node_id().as_str(),
-            )
-            .ok_or(GraphViewErrorV2::InconsistentState(
-                "evidence source definition is absent",
-            ))?,
+            "title": source_title,
             "attempt_id": selected.source_attempt_id().as_str(),
             "attempt_number": selected.source_attempt_number().get(),
             "items_digest": selected.items_digest().as_str(),
@@ -990,20 +1056,36 @@ fn evidence_page_v1(value: &RecordedItemValueV2, offset: u64) -> Option<Evidence
 pub fn project_graph_next_v2(
     view: &GraphWorkspaceViewV2,
 ) -> Result<Map<String, Value>, GraphViewErrorV2> {
-    let state = graph_state(view)?;
+    project_graph_next_in(&ReadScope::from_graph(view))
+}
+
+pub(crate) fn project_graph_next_in(
+    scope: &ReadScope<'_>,
+) -> Result<Map<String, Value>, GraphViewErrorV2> {
+    let state = scope.graph()?;
     if state.trace().lifecycle() == SessionLifecycle::Prepared {
-        return project_prepared_next_v1(view, state);
+        let procedure = scope.procedure()?;
+        return project_prepared_next_v1(state, &procedure);
     }
-    let procedure = rehydrate_snapshot(state)?;
-    let current = CurrentProjection::derive(view, state, &procedure)?
+    let procedure = scope.procedure()?;
+    let current = CurrentProjection::derive(scope, state, &procedure)?
         .ok_or(GraphViewErrorV2::TerminalSessionHasNoNext)?;
-    let delegated = delegated_placement_count(&procedure) != 0;
+    project_running_next(scope, state, &procedure, &current)
+}
+
+fn project_running_next(
+    scope: &ReadScope<'_>,
+    state: &GraphSessionStateV2,
+    procedure: &ParsedProcedureV2,
+    current: &CurrentProjection<'_>,
+) -> Result<Map<String, Value>, GraphViewErrorV2> {
+    let delegated = delegated_placement_count(procedure) != 0;
     let mut result = Map::new();
     result.insert("schema".to_owned(), json!("podway.next-result/v5"));
     if delegated {
         result.insert(
             "delegation".to_owned(),
-            delegation_projection(view, state, Some(&current)),
+            delegation_projection(scope, state, Some(current)),
         );
     }
     result.insert("procedure_schema".to_owned(), json!("podway.procedure/v2"));
@@ -1020,7 +1102,7 @@ pub fn project_graph_next_v2(
         json!(state.goal_state().current_revision().is_some()),
     );
     add_goal_summary(&mut result, state);
-    if let Some(goal) = goal_display(state, Some(&current)) {
+    if let Some(goal) = goal_display(state, Some(current)) {
         result.insert("goal".to_owned(), goal);
     }
     result.insert("node".to_owned(), current.node_identity());
@@ -1055,9 +1137,9 @@ pub fn project_graph_next_v2(
     result.insert("blockers_truncated".to_owned(), json!(blockers_truncated));
     result.insert(
         "references".to_owned(),
-        Value::Array(current.reference_metadata(&procedure)?),
+        Value::Array(current.reference_metadata(procedure)?),
     );
-    let (readback_values, readback_items_total) = readback(state, &current, &procedure)?;
+    let (readback_values, readback_items_total) = readback(state, current, procedure)?;
     result.insert("readback".to_owned(), Value::Array(readback_values));
     result.insert(
         "readback_items_total".to_owned(),
@@ -1069,7 +1151,7 @@ pub fn project_graph_next_v2(
     result.insert("readback_items_truncated".to_owned(), json!(false));
     result.insert(
         "allowed_manual_rework_targets".to_owned(),
-        manual_rework_targets(state, &procedure),
+        manual_rework_targets(state, procedure),
     );
 
     match current.definition {
@@ -1080,7 +1162,7 @@ pub fn project_graph_next_v2(
                 result.insert("description".to_owned(), json!(description));
             }
             result.insert("instructions".to_owned(), json!(definition.instructions()));
-            add_static_disposition(&mut result, Some(&current));
+            add_static_disposition(&mut result, Some(current));
         }
         ParsedNodeDefinition::Decision(definition) => {
             result.insert("title".to_owned(), json!(definition.title()));
@@ -1133,7 +1215,7 @@ pub fn project_graph_next_v2(
             }
         }
     }
-    let actions = current.allowed_actions(state, &procedure);
+    let actions = current.allowed_actions(state, procedure);
     result.insert("allowed_actions".to_owned(), json!(actions));
     let suggestions = current.suggestions(state, &actions);
     // The window and its total are equal today because the suggestion builder truncates to the
@@ -1148,9 +1230,15 @@ pub fn project_graph_next_v2(
 pub fn project_graph_observation_v1(
     view: &GraphWorkspaceViewV2,
 ) -> Result<Map<String, Value>, GraphViewErrorV2> {
-    let state = graph_state(view)?;
-    let procedure = rehydrate_snapshot(state)?;
-    let current = CurrentProjection::derive(view, state, &procedure)?;
+    project_graph_observation_in(&ReadScope::from_graph(view))
+}
+
+pub(crate) fn project_graph_observation_in(
+    scope: &ReadScope<'_>,
+) -> Result<Map<String, Value>, GraphViewErrorV2> {
+    let state = scope.graph()?;
+    let procedure = scope.procedure()?;
+    let current = CurrentProjection::derive(scope, state, &procedure)?;
     let delegated = delegated_placement_count(&procedure) != 0;
     // ADR-0024 reduces the observation status member to a value-free compact projection: guidance
     // and the active-item window already carry what a mutation needs, and a caller that wants the
@@ -1159,11 +1247,15 @@ pub fn project_graph_observation_v1(
     if delegated {
         status.insert(
             "delegation".to_owned(),
-            delegation_projection(view, state, current.as_ref()),
+            delegation_projection(scope, state, current.as_ref()),
         );
     }
     let guidance = if current.is_some() || state.trace().lifecycle() == SessionLifecycle::Prepared {
-        let mut next = project_graph_next_v2(view)?;
+        let mut next = if state.trace().lifecycle() == SessionLifecycle::Prepared {
+            project_prepared_next_v1(state, &procedure)?
+        } else {
+            project_running_next(scope, state, &procedure, current.as_ref().unwrap())?
+        };
         strip_evidence_previews_v1(&mut next);
         Value::Object(next)
     } else {
@@ -1201,16 +1293,16 @@ pub fn project_graph_observation_v1(
     );
     result.insert("active_items".to_owned(), Value::Array(active_items));
     let mutation_templates = if state.trace().lifecycle() == SessionLifecycle::Prepared {
-        prepared_mutation_templates(view, state)
+        prepared_mutation_templates(scope, state)
     } else if matches!(
         state.trace().lifecycle(),
         SessionLifecycle::Completed | SessionLifecycle::Cancelled
     ) {
-        terminal_mutation_templates(view, state)
+        terminal_mutation_templates(scope, state)
     } else {
         current
             .as_ref()
-            .map(|current| current.mutation_templates(view, state, &procedure))
+            .map(|current| current.mutation_templates(scope, state, &procedure))
             .unwrap_or_default()
     };
     let (mutation_templates, mutation_templates_total) = admit_templates_within_bytes_v1(
@@ -1413,10 +1505,10 @@ fn strip_evidence_previews_v1(next: &mut Map<String, Value>) {
 }
 
 fn project_prepared_next_v1(
-    _view: &GraphWorkspaceViewV2,
     state: &GraphSessionStateV2,
+    procedure: &ParsedProcedureV2,
 ) -> Result<Map<String, Value>, GraphViewErrorV2> {
-    let delegated_placement_count = delegated_placement_count(&rehydrate_snapshot(state)?);
+    let delegated_placement_count = delegated_placement_count(procedure);
     let mut result = json!({
         "schema": "podway.prepared-next-result/v3",
         "procedure_schema": "podway.procedure/v2",
@@ -1446,16 +1538,13 @@ fn project_prepared_next_v1(
     Ok(result)
 }
 
-fn prepared_mutation_templates(
-    view: &GraphWorkspaceViewV2,
-    state: &GraphSessionStateV2,
-) -> Vec<Value> {
+fn prepared_mutation_templates(scope: &ReadScope<'_>, state: &GraphSessionStateV2) -> Vec<Value> {
     let template = |command: &str, argv: Vec<&str>| {
         json!({
             "command": command,
             "argv": argv,
             "preconditions": {
-                "workspace_uuid": view.identity().workspace_uuid(),
+                "workspace_uuid": scope.identity().workspace_uuid(),
                 "session_id": state.trace().session_id(),
                 "session_revision": state.trace().revision(),
             },
@@ -1474,16 +1563,13 @@ fn prepared_mutation_templates(
     ]
 }
 
-fn terminal_mutation_templates(
-    view: &GraphWorkspaceViewV2,
-    state: &GraphSessionStateV2,
-) -> Vec<Value> {
+fn terminal_mutation_templates(scope: &ReadScope<'_>, state: &GraphSessionStateV2) -> Vec<Value> {
     let template = |command: &str, argv: Vec<&str>| {
         json!({
             "command": command,
             "argv": argv,
             "preconditions": {
-                "workspace_uuid": view.identity().workspace_uuid(),
+                "workspace_uuid": scope.identity().workspace_uuid(),
                 "session_id": state.trace().session_id(),
                 "session_revision": state.trace().revision(),
             },
@@ -1492,7 +1578,7 @@ fn terminal_mutation_templates(
             "requires_explicit_authorization": false,
         })
     };
-    if view.current_terminal_disposition() {
+    if scope.current_terminal_disposition() {
         vec![
             template("session.reset", vec!["podway", "reset"]),
             template("session.start_replace", vec!["podway", "start"]),
@@ -1505,23 +1591,103 @@ fn terminal_mutation_templates(
     }
 }
 
-fn graph_state(view: &GraphWorkspaceViewV2) -> Result<&GraphSessionStateV2, GraphViewErrorV2> {
-    view.graph_state()
-        .ok_or(GraphViewErrorV2::MissingGraphSession)
-}
-
-fn rehydrate_snapshot(state: &GraphSessionStateV2) -> Result<ParsedProcedureV2, GraphViewErrorV2> {
+fn rehydrate_validated(
+    state: &GraphSessionStateV2,
+) -> Result<podway_config::ValidatedProcedureV2, GraphViewErrorV2> {
     let parsed = parse_procedure_document(
         state.snapshot().canonical_json().as_str().as_bytes(),
         ProcedureDocumentFormat::Json,
     )
     .map_err(|_| GraphViewErrorV2::InvalidSnapshot)?;
     let ParsedProcedure::V2(parsed) = parsed;
-    let validated = validate_procedure_v2(parsed).map_err(|_| GraphViewErrorV2::InvalidSnapshot)?;
-    // ProcedureSnapshotV2 already binds the stored canonical bytes to their digest. Validation may
-    // materialize defaults added after that snapshot was admitted, so its newly projected identity
-    // must not replace or invalidate the immutable historical identity.
-    Ok(validated.parsed().clone())
+    validate_procedure_v2(parsed).map_err(|_| GraphViewErrorV2::InvalidSnapshot)
+}
+
+/// Request-scoped admission over one coherent view the caller already owns.
+///
+/// The graph and receipts are borrowed. This context does not clone
+/// `GraphSessionStateV2` or build another workspace view. The first declaration
+/// use parses and semantically validates once. Nested consumers of the same
+/// request reuse that wrapper. Read projections keep `state.snapshot().digest()`;
+/// package construction keeps `ValidatedProcedureV2::digest()`. Those identities
+/// are not rewritten to match.
+pub(crate) struct ReadScope<'a> {
+    identity: &'a DurableWorktreeIdentityV1,
+    graph: Option<&'a GraphSessionStateV2>,
+    receipts: &'a DelegationReceiptSnapshotV1,
+    current_terminal_disposition: bool,
+    validated: RefCell<Option<podway_config::ValidatedProcedureV2>>,
+}
+
+impl<'a> ReadScope<'a> {
+    pub(crate) fn from_graph(view: &'a GraphWorkspaceViewV2) -> Self {
+        Self {
+            identity: view.identity(),
+            graph: view.graph_state(),
+            receipts: view.delegation_receipts(),
+            current_terminal_disposition: view.current_terminal_disposition(),
+            validated: RefCell::new(None),
+        }
+    }
+
+    pub(crate) fn from_direct(view: &'a DirectWorkspaceViewV1) -> Self {
+        let current_terminal_disposition = view.graph().is_some_and(|graph| {
+            view.terminal_dispositions().iter().any(|record| {
+                record.session_id() == graph.trace().session_id()
+                    && record.terminal_session_revision() == graph.trace().revision()
+            })
+        });
+        Self {
+            identity: view.binding().identity(),
+            graph: view.graph(),
+            receipts: view.delegation_receipts(),
+            current_terminal_disposition,
+            validated: RefCell::new(None),
+        }
+    }
+
+    pub(crate) fn identity(&self) -> &'a DurableWorktreeIdentityV1 {
+        self.identity
+    }
+
+    pub(crate) fn graph_state(&self) -> Option<&'a GraphSessionStateV2> {
+        self.graph
+    }
+
+    fn graph(&self) -> Result<&'a GraphSessionStateV2, GraphViewErrorV2> {
+        self.graph.ok_or(GraphViewErrorV2::MissingGraphSession)
+    }
+
+    pub(crate) fn receipts(&self) -> &'a DelegationReceiptSnapshotV1 {
+        self.receipts
+    }
+
+    fn current_terminal_disposition(&self) -> bool {
+        self.current_terminal_disposition
+    }
+
+    fn admit(&self) -> Result<(), GraphViewErrorV2> {
+        if self.validated.borrow().is_some() {
+            return Ok(());
+        }
+        let validated = rehydrate_validated(self.graph()?)?;
+        *self.validated.borrow_mut() = Some(validated);
+        Ok(())
+    }
+
+    fn validated(&self) -> Result<Ref<'_, podway_config::ValidatedProcedureV2>, GraphViewErrorV2> {
+        self.admit()?;
+        Ok(Ref::map(self.validated.borrow(), |slot| {
+            slot.as_ref().expect("admitted procedure")
+        }))
+    }
+
+    fn procedure(&self) -> Result<Ref<'_, ParsedProcedureV2>, GraphViewErrorV2> {
+        self.admit()?;
+        Ok(Ref::map(self.validated.borrow(), |slot| {
+            slot.as_ref().expect("admitted procedure").parsed()
+        }))
+    }
 }
 
 struct CurrentProjection<'a> {
@@ -1542,7 +1708,7 @@ struct CurrentProjection<'a> {
 
 impl<'a> CurrentProjection<'a> {
     fn derive(
-        view: &GraphWorkspaceViewV2,
+        scope: &ReadScope<'_>,
         state: &'a GraphSessionStateV2,
         procedure: &'a ParsedProcedureV2,
     ) -> Result<Option<Self>, GraphViewErrorV2> {
@@ -1671,7 +1837,7 @@ impl<'a> CurrentProjection<'a> {
             goal_ready,
             evidence_ready,
             evidence_readback,
-            delegation_readiness: view.delegation_receipts().readiness(),
+            delegation_readiness: scope.receipts().readiness(),
         }))
     }
 
@@ -1873,7 +2039,7 @@ impl<'a> CurrentProjection<'a> {
 
     fn mutation_templates(
         &self,
-        view: &GraphWorkspaceViewV2,
+        scope: &ReadScope<'_>,
         state: &GraphSessionStateV2,
         procedure: &ParsedProcedureV2,
     ) -> Vec<Value> {
@@ -1982,7 +2148,7 @@ impl<'a> CurrentProjection<'a> {
                 append_flag(
                     &mut argv,
                     "--if-workspace-uuid",
-                    view.identity().workspace_uuid().as_str(),
+                    scope.identity().workspace_uuid().as_str(),
                 );
                 append_flag(
                     &mut argv,
@@ -1993,7 +2159,7 @@ impl<'a> CurrentProjection<'a> {
                 let mut fences = Map::new();
                 fences.insert(
                     "workspace_uuid".to_owned(),
-                    json!(view.identity().workspace_uuid().as_str()),
+                    json!(scope.identity().workspace_uuid().as_str()),
                 );
                 fences.insert(
                     "session_id".to_owned(),
@@ -2035,7 +2201,7 @@ impl<'a> CurrentProjection<'a> {
                         };
                         let stdin_template = json!({
                             "schema": "podway.item-record-many-input/v1",
-                            "workspace_uuid": view.identity().workspace_uuid().as_str(),
+                            "workspace_uuid": scope.identity().workspace_uuid().as_str(),
                             "session_id": state.trace().session_id().as_str(),
                             "session_revision": state.trace().revision().get(),
                             "attempt_id": self.attempt.attempt_id().as_str(),

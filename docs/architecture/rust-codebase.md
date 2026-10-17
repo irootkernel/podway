@@ -125,16 +125,19 @@ meaningful success, failure and compatibility tests together.
 ## Adopted internal refinements
 
 The [OPTIM, BOUND and READS sequence](../roadmap/README.md#current-internal-improvements)
-is adopted unfinished work, not a description of already refactored code.
+is the adopted internal-improvement order. OPTIM is completed. Current read
+composition, procedure-identity boundaries, and the unpublished batch draft are
+in [System Architecture](system.md#request-scoped-read-composition). BOUND and
+READS remain unfinished.
+
 At the reviewed v0.2.14 baseline, several pure graph/workflow/goal transitions
-still live beside Store row mapping, and nested projections and CLI preflight
-perform avoidable reconstruction. BOUND aligns those implementations with the
-ownership table above; it does not create a new crate or reverse dependency.
-OPTIM first removes request-local duplicate work across all seven Direct read
-entries and the workflow-memory batch layer. Its Engine context retains the
-Config-owned validated Procedure; it does not attach that representation to
-Store's separate cached memory model. BOUND separates Store-specific errors and
-schema/SQL admission from pure types while preserving deferred-model error timing.
+still live beside Store row mapping, and CLI preflight performs avoidable
+reconstruction. BOUND aligns those implementations with the ownership table
+above; it does not create a new crate or reverse dependency. The completed
+Engine read context retains the Config-owned validated Procedure and does not
+attach that representation to Store's separate cached memory model. BOUND
+separates Store-specific errors and schema/SQL admission from pure types while
+preserving deferred-model error timing.
 READS then changes data access and internal facts/view construction, including
 goal/citation loops and selective changed-slot reloads, while preserving current
 cold-read validation. Archive-list remains summary-only; graph windows still
@@ -145,11 +148,12 @@ READS replaces that boundary, not completion status, start/reset dry-run or late
 interactive-start retry reads. Preserving preflight means preserving failures
 from the former status projection/schema/envelope as well as Store admission.
 The [performance protocol](../implementation-tips/direct-cli-performance-qualification.md#internal-improvement-comparisons)
-separates test-only work probes from the timed release CLI and identifies the
-ignored native scale execution that ordinary `make test` does not perform.
+records the withdrawn OPTIM measurements and the separately registered future
+BOUND and READS scope. Ordinary `make test` omits the ignored native cases.
 
-The [adopted dossiers](../todo/README.md#current-adopted-dossiers) own target
-interfaces, task boundaries and acceptance until implementation is complete.
+The [remaining adopted dossiers](../todo/README.md#current-adopted-dossiers) own
+BOUND and READS target interfaces, task boundaries, and acceptance until those
+epics are complete.
 Do not weaken Store admission, move required read checks to doctor, introduce
 persistent caching or change public/storage identity to simplify this work.
 Update this architecture with the actual accepted implementation at each epic's
