@@ -1600,3 +1600,47 @@ fn assessment_cannot_be_staled_without_a_causal_transition() {
         ))
     );
 }
+
+#[test]
+fn bound003_goal_interpretation_and_deferred_memory_admission_remain_independent() {
+    fn changed_snapshot(document: serde_json::Value) -> ProcedureSnapshotV2 {
+        let original = snapshot();
+        let canonical = canonicalize_json_v1(&document).unwrap();
+        let digest =
+            Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes())))
+                .unwrap();
+        snapshot_from_canonical(
+            original.snapshot_id().clone(),
+            CanonicalProcedureJsonV1::new(canonical).unwrap(),
+            digest,
+            original.source().clone(),
+            original.created_at(),
+        )
+        .unwrap()
+    }
+    let original = snapshot();
+    let mut document: serde_json::Value =
+        serde_json::from_str(original.canonical_json().as_str()).unwrap();
+    document["node_definitions"]["clarify-def"]["items"][0]["min_length"] = json!(2);
+    document["node_definitions"]["clarify-def"]["items"][0]["max_length"] = json!(1);
+    let memory_invalid = changed_snapshot(document);
+    assert!(memory_invalid.validate_memory_declarations_v2().is_err());
+    assert!(super::GoalSnapshotModelV2::parse(&memory_invalid).is_ok());
+    assert!(
+        memory_invalid
+            .graph_node(&node("clarify"))
+            .unwrap()
+            .action_outcome()
+            .is_ok()
+    );
+
+    let mut document: serde_json::Value =
+        serde_json::from_str(original.canonical_json().as_str()).unwrap();
+    document["node_definitions"]["assess-def"]["assessment"]
+        .as_object_mut()
+        .unwrap()
+        .remove("outcomes");
+    let goal_invalid = changed_snapshot(document);
+    assert!(goal_invalid.validate_memory_declarations_v2().is_ok());
+    assert!(super::GoalSnapshotModelV2::parse(&goal_invalid).is_err());
+}

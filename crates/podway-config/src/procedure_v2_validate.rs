@@ -67,6 +67,20 @@ impl ValidatedProcedureV2 {
         &self.canonical_json
     }
 
+    /// Constructs the shared pure runtime representation from validated source identity.
+    /// Persisted documents use Store's independent shape admission instead.
+    pub fn runtime_v2(
+        &self,
+    ) -> Result<podway_core::ProcedureRuntimeV2, podway_core::ProcedureStateErrorV2> {
+        let canonical = podway_core::CanonicalProcedureJsonV1::new(self.canonical_json.as_str())
+            .map_err(|_| {
+                podway_core::ProcedureStateErrorV2::new("Procedure v2 canonical source is invalid")
+            })?;
+        let document =
+            podway_core::CanonicalProcedureDocumentV2::new(canonical, self.digest.clone())?;
+        podway_core::ProcedureRuntimeV2::from_admitted_document(document)
+    }
+
     /// The SHA-256 digest over the canonical bytes.
     pub fn digest(&self) -> &Sha256Digest {
         &self.digest

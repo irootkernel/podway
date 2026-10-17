@@ -2474,24 +2474,22 @@ impl SnapshotMemoryModelV2 {
     }
 
     pub(crate) fn parse(
-        canonical_json: &str,
+        root: &serde_json::Map<String, Value>,
         graph_nodes: &[GraphNodeSnapshotV2],
     ) -> Result<Self, ProcedureStateErrorV2> {
-        let document: Value = serde_json::from_str(canonical_json)
-            .map_err(|_| invalid("Procedure v2 snapshot memory metadata is invalid"))?;
-        let root = document
-            .as_object()
-            .ok_or_else(|| invalid("Procedure v2 snapshot memory metadata is invalid"))?;
         let definitions = root
             .get("node_definitions")
             .and_then(Value::as_object)
             .ok_or_else(|| invalid("Procedure v2 node definitions are missing"))?;
         let mut nodes = BTreeMap::new();
         for node in graph_nodes {
-            let placement: Value = serde_json::from_str(node.canonical_placement_json())
-                .map_err(|_| invalid("Procedure v2 placement memory metadata is invalid"))?;
-            let placement = placement
-                .as_object()
+            let placement = root
+                .get("graph")
+                .and_then(Value::as_object)
+                .and_then(|graph| graph.get("nodes"))
+                .and_then(Value::as_array)
+                .and_then(|placements| placements.get(node.placement_index() as usize))
+                .and_then(Value::as_object)
                 .ok_or_else(|| invalid("Procedure v2 placement memory metadata is invalid"))?;
             let definition = definitions
                 .get(node.node_definition_id().as_str())
@@ -2631,15 +2629,8 @@ impl SnapshotMemoryModelV2 {
                             .collect()
                     },
                 )?;
-            let advance_target = placement
-                .get("next")
-                .and_then(Value::as_str)
-                .map(|target| {
-                    GraphNodeId::new(target.to_owned())
-                        .map_err(|_| invalid("Procedure v2 action target is invalid"))
-                })
-                .transpose()?;
-            let terminal = placement.get("terminal").and_then(Value::as_bool) == Some(true);
+            let advance_target = node.advance_target()?.cloned();
+            let terminal = node.is_terminal();
             nodes.insert(
                 node.graph_node_id().clone(),
                 NodeMemorySpecV2 {

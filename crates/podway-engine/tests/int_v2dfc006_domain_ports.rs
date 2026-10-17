@@ -30,6 +30,96 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 #[test]
+fn bound003_source_and_stored_adapters_share_runtime_declarations() {
+    fn compare(source: podway_engine::execution::PreparedProcedureSourceV2) {
+        let expected_digest = source.digest().clone();
+        let snapshot = source
+            .into_snapshot(
+                ProcedureSnapshotId::new("00000000-0000-4000-8000-000000000030").unwrap(),
+                Clock.now(),
+            )
+            .unwrap();
+        let stored = podway_store::admit_procedure_snapshot_v2(
+            snapshot.snapshot_id().clone(),
+            snapshot.canonical_json().clone(),
+            expected_digest.clone(),
+            snapshot.source().clone(),
+            snapshot.created_at(),
+        )
+        .unwrap();
+        assert_eq!(snapshot.digest(), &expected_digest);
+        // Compares metadata, topology, all item/evidence/decision declarations and the
+        // retained model result, without regenerating stored canonical identity.
+        assert_eq!(snapshot.runtime(), stored.runtime());
+        for node in snapshot.graph_nodes() {
+            assert_eq!(
+                snapshot.item_declarations_v2(node.graph_node_id()).unwrap(),
+                stored.item_declarations_v2(node.graph_node_id()).unwrap()
+            );
+        }
+    }
+    for preset in podway_presets::catalog_v2().list() {
+        let source =
+            podway_engine::execution::prepare_preset_procedure_source_v2(preset.metadata.id)
+                .unwrap()
+                .unwrap();
+        assert_eq!(source.digest().as_str(), preset.shipped_digest);
+        compare(source);
+    }
+    for (path, bytes) in [
+        (
+            "equivalent.json",
+            include_bytes!("../../../tests/fixtures/v2/procedures/equivalent-procedure.json")
+                .as_slice(),
+        ),
+        (
+            "equivalent.yaml",
+            include_bytes!("../../../tests/fixtures/v2/procedures/equivalent-procedure.yaml")
+                .as_slice(),
+        ),
+    ] {
+        compare(prepare_workspace_procedure_source_v2(path, bytes).unwrap());
+    }
+}
+
+#[test]
+fn bound003_runtime_defaults_preserve_unmaterialized_snapshot_identity() {
+    let document = json!({
+        "schema":"podway.procedure/v2", "id":"historical-default", "version":"1",
+        "name":"Historical default", "purpose":"Preserve stored identity.",
+        "node_definitions":{"work":{"type":"action", "title":"Work", "intent":"Record.",
+            "items":[{"id":"values", "type":"list", "prompt":"Values", "required":false}]}},
+        "graph":{"entry":"work", "nodes":[{"id":"work", "use":"work", "terminal":true}]}
+    });
+    let canonical = canonicalize_json_v1(&document).unwrap();
+    let digest =
+        Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))).unwrap();
+    let stored = podway_store::admit_procedure_snapshot_v2(
+        ProcedureSnapshotId::new("00000000-0000-4000-8000-000000000031").unwrap(),
+        CanonicalProcedureJsonV1::new(canonical.clone()).unwrap(),
+        digest.clone(),
+        ProcedureSourceLabelV1::file("historical.json").unwrap(),
+        Clock.now(),
+    )
+    .unwrap();
+    let fresh = prepare_workspace_procedure_source_v2("fresh.json", canonical.as_bytes())
+        .unwrap()
+        .into_snapshot(stored.snapshot_id().clone(), Clock.now())
+        .unwrap();
+    assert_eq!(stored.canonical_json().as_str(), canonical);
+    assert_eq!(stored.digest(), &digest);
+    assert_ne!(fresh.digest(), stored.digest());
+    assert_eq!(
+        fresh
+            .item_declarations_v2(fresh.entry_graph_node_id())
+            .unwrap(),
+        stored
+            .item_declarations_v2(stored.entry_graph_node_id())
+            .unwrap()
+    );
+}
+
+#[test]
 fn bound001_deferred_memory_error_keeps_public_mapping_and_fence_priority() {
     let engine = empty(STATE_PROCEDURE);
     let canonical = canonicalize_json_v1(&json!({

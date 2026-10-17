@@ -122,6 +122,11 @@ impl ValidatedPresetV2 {
         self.preset.metadata
     }
 
+    /// Transfers the validated source after the caller has checked the preset digest pin.
+    pub fn into_procedure(self) -> ValidatedProcedureV2 {
+        self.procedure
+    }
+
     pub fn parsed(&self) -> &ParsedProcedureV2 {
         self.procedure.parsed()
     }

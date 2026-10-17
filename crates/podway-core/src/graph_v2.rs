@@ -85,6 +85,11 @@ pub struct GraphNodeSnapshotV2 {
     node_kind: NodeKindV2,
     goal_assessment: bool,
     canonical_placement_json: String,
+    action_target: Result<Option<GraphNodeId>, ProcedureStateErrorV2>,
+    invalid_next_type: bool,
+    terminal: bool,
+    skip: Option<crate::SkipPolicyV2>,
+    delegated: bool,
 }
 
 impl GraphNodeSnapshotV2 {
@@ -111,34 +116,60 @@ impl GraphNodeSnapshotV2 {
     pub fn canonical_placement_json(&self) -> &str {
         &self.canonical_placement_json
     }
+    /// Reads placement topology without admitting the independent workflow model.
+    pub fn next_target(&self) -> Result<Option<&GraphNodeId>, ProcedureStateErrorV2> {
+        if self.invalid_next_type {
+            return Err(invalid("Procedure v2 action target is invalid"));
+        }
+        self.advance_target()
+    }
+
+    // Domain interpretation historically ignores non-string `next`; the Engine
+    // preparation query rejects it. Store schema admission rejects either input.
+    pub(crate) fn advance_target(&self) -> Result<Option<&GraphNodeId>, ProcedureStateErrorV2> {
+        self.action_target
+            .as_ref()
+            .map(Option::as_ref)
+            .map_err(Clone::clone)
+    }
+    pub const fn is_terminal(&self) -> bool {
+        self.terminal
+    }
+    pub const fn skip_policy(&self) -> Option<&crate::SkipPolicyV2> {
+        self.skip.as_ref()
+    }
+    pub const fn has_delegation(&self) -> bool {
+        self.delegated
+    }
+    pub fn action_outcome(&self) -> Result<crate::ActionOutcomeV2, ProcedureStateErrorV2> {
+        match (self.advance_target()?, self.terminal) {
+            (Some(target), false) => Ok(crate::ActionOutcomeV2::Next(target.clone())),
+            (None, true) => Ok(crate::ActionOutcomeV2::Terminal),
+            _ => Err(invalid("Procedure v2 action outcome is invalid")),
+        }
+    }
 }
 
-/// A canonical immutable Procedure v2 snapshot ready for relational persistence.
+/// Immutable runtime declarations bound to exact canonical Procedure v2 bytes.
+/// Source and persisted adapters admit their own inputs before constructing this value.
+/// Derived workflow failures remain deferred; goal declarations stay independent.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ProcedureSnapshotV2 {
-    snapshot_id: ProcedureSnapshotId,
+pub struct ProcedureRuntimeV2 {
     procedure_id: String,
     procedure_version: String,
     name: String,
     purpose: String,
     digest: Sha256Digest,
     canonical_json: CanonicalProcedureJsonV1,
-    source: ProcedureSourceLabelV1,
     goal_tracking: bool,
     entry_graph_node_id: GraphNodeId,
     graph_nodes: Vec<GraphNodeSnapshotV2>,
     memory_model: Arc<Result<SnapshotMemoryModelV2, ProcedureStateErrorV2>>,
-    created_at: UnixMillis,
 }
 
-impl ProcedureSnapshotV2 {
-    /// Constructs pure runtime state from independently shape-admitted bytes.
-    /// Keeps derived declaration failures deferred until their existing callers.
+impl ProcedureRuntimeV2 {
     pub fn from_admitted_document(
-        snapshot_id: ProcedureSnapshotId,
         document: CanonicalProcedureDocumentV2,
-        source: ProcedureSourceLabelV1,
-        created_at: UnixMillis,
     ) -> Result<Self, ProcedureStateErrorV2> {
         let CanonicalProcedureDocumentV2 {
             canonical_json,
@@ -210,6 +241,29 @@ impl ProcedureSnapshotV2 {
                 .is_some_and(|target| target == "session_goal");
             let canonical_placement_json = canonicalize_json_v1(placement)
                 .map_err(|_| invalid("Procedure v2 graph placement is not canonicalizable"))?;
+            // Capture declaration failures without making aggregate admission eager.
+            let invalid_next_type = placement_object
+                .get("next")
+                .is_some_and(|value| !value.is_string());
+            let action_target = placement_object
+                .get("next")
+                .and_then(Value::as_str)
+                .map(|target| {
+                    GraphNodeId::new(target)
+                        .map_err(|_| invalid("Procedure v2 action target is invalid"))
+                })
+                .transpose();
+            let terminal = placement_object.get("terminal").and_then(Value::as_bool) == Some(true);
+            let skip = placement_object
+                .get("skip")
+                .and_then(Value::as_object)
+                .filter(|skip| skip.get("allowed").and_then(Value::as_bool) == Some(true))
+                .map(|skip| {
+                    crate::SkipPolicyV2::allowed_with(
+                        skip.get("reason_required").and_then(Value::as_bool) == Some(true),
+                    )
+                });
+            let delegated = placement_object.contains_key("delegation");
             graph_nodes.push(GraphNodeSnapshotV2 {
                 graph_node_id,
                 node_definition_id,
@@ -218,6 +272,11 @@ impl ProcedureSnapshotV2 {
                 node_kind,
                 goal_assessment,
                 canonical_placement_json,
+                action_target,
+                invalid_next_type,
+                terminal,
+                skip,
+                delegated,
             });
         }
         if !seen.contains(&entry_graph_node_id) {
@@ -226,31 +285,22 @@ impl ProcedureSnapshotV2 {
 
         // This derived model belongs to these immutable canonical bytes. Keep
         // parse errors for the same workflow-memory admission point as before.
-        let memory_model = Arc::new(SnapshotMemoryModelV2::parse(
-            canonical_json.as_str(),
-            &graph_nodes,
-        ));
+        let memory_model = Arc::new(SnapshotMemoryModelV2::parse(document, &graph_nodes));
 
         Ok(Self {
-            snapshot_id,
             procedure_id,
             procedure_version,
             name,
             purpose,
             digest,
             canonical_json,
-            source,
             goal_tracking,
             entry_graph_node_id,
             graph_nodes,
             memory_model,
-            created_at,
         })
     }
 
-    pub fn snapshot_id(&self) -> &ProcedureSnapshotId {
-        &self.snapshot_id
-    }
     pub fn procedure_id(&self) -> &str {
         &self.procedure_id
     }
@@ -269,9 +319,6 @@ impl ProcedureSnapshotV2 {
     pub fn canonical_json(&self) -> &CanonicalProcedureJsonV1 {
         &self.canonical_json
     }
-    pub fn source(&self) -> &ProcedureSourceLabelV1 {
-        &self.source
-    }
     pub const fn goal_tracking(&self) -> bool {
         self.goal_tracking
     }
@@ -280,9 +327,6 @@ impl ProcedureSnapshotV2 {
     }
     pub fn graph_nodes(&self) -> &[GraphNodeSnapshotV2] {
         &self.graph_nodes
-    }
-    pub const fn created_at(&self) -> UnixMillis {
-        self.created_at
     }
 
     pub fn graph_node(&self, id: &GraphNodeId) -> Option<&GraphNodeSnapshotV2> {
@@ -303,6 +347,101 @@ impl ProcedureSnapshotV2 {
 
     pub(crate) fn memory_model(&self) -> Result<&SnapshotMemoryModelV2, ProcedureStateErrorV2> {
         self.memory_model.as_ref().as_ref().map_err(Clone::clone)
+    }
+}
+
+/// A runtime Procedure bound to its immutable stored identity and creation metadata.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProcedureSnapshotV2 {
+    snapshot_id: ProcedureSnapshotId,
+    runtime: ProcedureRuntimeV2,
+    source: ProcedureSourceLabelV1,
+    created_at: UnixMillis,
+}
+
+impl ProcedureSnapshotV2 {
+    pub fn from_admitted_document(
+        snapshot_id: ProcedureSnapshotId,
+        document: CanonicalProcedureDocumentV2,
+        source: ProcedureSourceLabelV1,
+        created_at: UnixMillis,
+    ) -> Result<Self, ProcedureStateErrorV2> {
+        Ok(Self::from_runtime(
+            snapshot_id,
+            ProcedureRuntimeV2::from_admitted_document(document)?,
+            source,
+            created_at,
+        ))
+    }
+
+    pub fn from_runtime(
+        snapshot_id: ProcedureSnapshotId,
+        runtime: ProcedureRuntimeV2,
+        source: ProcedureSourceLabelV1,
+        created_at: UnixMillis,
+    ) -> Self {
+        Self {
+            snapshot_id,
+            runtime,
+            source,
+            created_at,
+        }
+    }
+
+    pub fn runtime(&self) -> &ProcedureRuntimeV2 {
+        &self.runtime
+    }
+    pub fn snapshot_id(&self) -> &ProcedureSnapshotId {
+        &self.snapshot_id
+    }
+    pub fn source(&self) -> &ProcedureSourceLabelV1 {
+        &self.source
+    }
+    pub const fn created_at(&self) -> UnixMillis {
+        self.created_at
+    }
+    pub fn procedure_id(&self) -> &str {
+        self.runtime.procedure_id()
+    }
+    pub fn procedure_version(&self) -> &str {
+        self.runtime.procedure_version()
+    }
+    pub fn name(&self) -> &str {
+        self.runtime.name()
+    }
+    pub fn purpose(&self) -> &str {
+        self.runtime.purpose()
+    }
+    pub fn digest(&self) -> &Sha256Digest {
+        self.runtime.digest()
+    }
+    pub fn canonical_json(&self) -> &CanonicalProcedureJsonV1 {
+        self.runtime.canonical_json()
+    }
+    pub const fn goal_tracking(&self) -> bool {
+        self.runtime.goal_tracking()
+    }
+    pub fn entry_graph_node_id(&self) -> &GraphNodeId {
+        self.runtime.entry_graph_node_id()
+    }
+    pub fn graph_nodes(&self) -> &[GraphNodeSnapshotV2] {
+        self.runtime.graph_nodes()
+    }
+
+    pub fn graph_node(&self, id: &GraphNodeId) -> Option<&GraphNodeSnapshotV2> {
+        self.runtime.graph_node(id)
+    }
+    pub fn validate_memory_declarations_v2(&self) -> Result<(), ProcedureStateErrorV2> {
+        self.runtime.validate_memory_declarations_v2()
+    }
+    pub fn item_declarations_v2(
+        &self,
+        node: &GraphNodeId,
+    ) -> Result<&[crate::ItemSpecV2], ProcedureStateErrorV2> {
+        self.runtime.item_declarations_v2(node)
+    }
+    pub(crate) fn memory_model(&self) -> Result<&SnapshotMemoryModelV2, ProcedureStateErrorV2> {
+        self.runtime.memory_model()
     }
 }
 
@@ -838,9 +977,7 @@ impl GraphSessionStateV2 {
             .iter()
             .find(|node| node.graph_node_id() == active.graph_node_id())
             .ok_or_else(|| invalid("delegation placement is absent"))?;
-        let document: Value = serde_json::from_str(placement.canonical_placement_json())
-            .map_err(|_| invalid("delegation placement is malformed"))?;
-        if document.get("delegation").is_none() {
+        if !placement.has_delegation() {
             return Err(invalid("delegation acceptance requires a delegated action").into());
         }
         self.workflow_memory
@@ -1530,23 +1667,9 @@ impl GraphSessionStateV2 {
                 actual: node.node_kind(),
             });
         }
-        let placement: Value = serde_json::from_str(node.canonical_placement_json())
-            .map_err(|_| invalid("active Procedure v2 placement is invalid"))?;
-        let placement = placement
-            .as_object()
-            .ok_or_else(|| invalid("active Procedure v2 placement is invalid"))?;
-        let target = placement
-            .get("next")
-            .and_then(Value::as_str)
-            .map(|value| {
-                GraphNodeId::new(value.to_owned())
-                    .map_err(|_| invalid("Procedure v2 action target is invalid"))
-            })
-            .transpose()?;
-        let terminal = placement.get("terminal").and_then(Value::as_bool) == Some(true);
-        if target.is_some() == terminal {
-            return Err(invalid("Procedure v2 action outcome is invalid").into());
-        }
+        let outcome = node.action_outcome()?;
+        let target = outcome.next_target().cloned();
+        let terminal = outcome.is_terminal();
         if terminal && self.snapshot.goal_tracking() {
             let goal_revision = self
                 .goal_state
@@ -2727,35 +2850,19 @@ impl GraphSessionStateV2 {
                 actual: node.node_kind(),
             });
         }
-        let placement: Value = serde_json::from_str(node.canonical_placement_json())
-            .map_err(|_| invalid("active Procedure v2 placement is invalid"))?;
-        let placement = placement
-            .as_object()
-            .ok_or_else(|| invalid("active Procedure v2 placement is invalid"))?;
-        let skip = placement
-            .get("skip")
-            .and_then(Value::as_object)
-            .filter(|skip| skip.get("allowed").and_then(Value::as_bool) == Some(true))
+        let skip = node
+            .skip_policy()
             .ok_or_else(|| GraphMutationErrorV2::SkipNotAllowed {
                 graph_node_id: active.graph_node_id().clone(),
             })?;
-        if skip.get("reason_required").and_then(Value::as_bool) == Some(true) && reason.is_none() {
+        if skip.reason_required() && reason.is_none() {
             return Err(GraphMutationErrorV2::SkipReasonRequired {
                 graph_node_id: active.graph_node_id().clone(),
             });
         }
-        let target = placement
-            .get("next")
-            .and_then(Value::as_str)
-            .map(|value| {
-                GraphNodeId::new(value.to_owned())
-                    .map_err(|_| invalid("Procedure v2 action target is invalid"))
-            })
-            .transpose()?;
-        let terminal = placement.get("terminal").and_then(Value::as_bool) == Some(true);
-        if target.is_some() == terminal {
-            return Err(invalid("Procedure v2 action outcome is invalid").into());
-        }
+        let outcome = node.action_outcome()?;
+        let target = outcome.next_target().cloned();
+        let terminal = outcome.is_terminal();
         if terminal && self.snapshot.goal_tracking() {
             let goal_revision = self
                 .goal_state
@@ -2922,12 +3029,7 @@ fn validate_terminal_graph_state_v2(
                     if node.node_kind() != NodeKindV2::Action {
                         return false;
                     }
-                    let Ok(placement) =
-                        serde_json::from_str::<Value>(node.canonical_placement_json())
-                    else {
-                        return false;
-                    };
-                    placement.get("terminal").and_then(Value::as_bool) == Some(true)
+                    node.is_terminal()
                 })
                 && completed_at == last_metadata.ended_at()
                 && cancelled_at.is_none()
@@ -3013,5 +3115,76 @@ fn validate_attempt_metadata(
         Err(invalid(
             "Procedure v2 attempt lifecycle metadata is inconsistent",
         ))
+    }
+}
+
+#[cfg(test)]
+mod boundary_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn runtime(placement: Value) -> ProcedureRuntimeV2 {
+        let document = json!({
+            "schema":"podway.procedure/v2", "id":"accessors", "version":"1",
+            "name":"Accessors", "purpose":"Preserve local interpretation.",
+            "node_definitions":{"work":{"type":"action", "title":"Work", "intent":"Record."}},
+            "graph":{"entry":"work", "nodes":[placement]}
+        });
+        let canonical = canonicalize_json_v1(&document).unwrap();
+        let digest =
+            Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes())))
+                .unwrap();
+        ProcedureRuntimeV2::from_admitted_document(
+            CanonicalProcedureDocumentV2::new(
+                CanonicalProcedureJsonV1::new(canonical).unwrap(),
+                digest,
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn bound003_local_placement_queries_preserve_deferred_and_presence_semantics() {
+        for next in [Value::Null, json!([]), json!(false)] {
+            let runtime = runtime(
+                json!({"id":"work", "use":"work", "next":next, "terminal":true,
+                "skip":null, "delegation":null}),
+            );
+            let node = &runtime.graph_nodes()[0];
+            assert_eq!(
+                node.action_outcome().unwrap(),
+                crate::ActionOutcomeV2::Terminal
+            );
+            assert!(node.next_target().is_err());
+            assert!(node.skip_policy().is_none());
+            assert!(node.has_delegation());
+            assert!(runtime.validate_memory_declarations_v2().is_ok());
+        }
+        for placement in [
+            json!({"id":"work", "use":"work"}),
+            json!({"id":"work", "use":"work", "next":"work", "terminal":true}),
+        ] {
+            let runtime = runtime(placement);
+            assert!(runtime.graph_nodes()[0].action_outcome().is_err());
+            assert!(runtime.validate_memory_declarations_v2().is_ok());
+        }
+        let invalid = runtime(json!({"id":"work", "use":"work", "next":"invalid?"}));
+        assert!(invalid.graph_nodes()[0].action_outcome().is_err());
+        assert!(invalid.validate_memory_declarations_v2().is_err());
+        for (skip, expected) in [
+            (json!({"allowed":false, "reason_required":true}), None),
+            (json!({"allowed":true}), Some(false)),
+            (json!({"allowed":true, "reason_required":null}), Some(false)),
+            (json!({"allowed":true, "reason_required":true}), Some(true)),
+        ] {
+            let runtime = runtime(json!({"id":"work", "use":"work", "terminal":true, "skip":skip}));
+            let node = &runtime.graph_nodes()[0];
+            assert_eq!(
+                node.skip_policy().map(crate::SkipPolicyV2::reason_required),
+                expected
+            );
+            assert!(!node.has_delegation());
+        }
     }
 }

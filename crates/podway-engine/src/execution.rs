@@ -4,7 +4,7 @@ use std::{error::Error, fmt};
 
 use podway_config::{
     AuthoringContext, ParsedNodeDefinition, ParsedProcedure, ParsedProcedureV2,
-    ProcedureDocumentFormat, ProcedureSourceLabel, parse_procedure_document,
+    ProcedureDocumentFormat, ProcedureSourceLabel, ValidatedProcedureV2, parse_procedure_document,
     sniff_procedure_schema, validate_procedure_v2, vet_procedure_v2,
 };
 use podway_core::{
@@ -231,23 +231,23 @@ pub fn workspace_procedure_snapshot_from_bytes_v2(
 
 #[derive(Clone, Debug)]
 pub struct PreparedProcedureSourceV2 {
-    canonical_json: CanonicalProcedureJsonV1,
-    digest: Sha256Digest,
+    validated: ValidatedProcedureV2,
     source: ProcedureSourceLabelV1,
     source_bytes_digest: Option<Sha256Digest>,
-    goal_tracking: bool,
-    entry_graph_node_id: podway_core::GraphNodeId,
 }
 
 impl PreparedProcedureSourceV2 {
     pub fn goal_tracking(&self) -> bool {
-        self.goal_tracking
+        self.validated
+            .parsed()
+            .goal_tracking()
+            .is_some_and(|opt_in| opt_in.is_enabled())
     }
     pub fn entry_graph_node_id(&self) -> &podway_core::GraphNodeId {
-        &self.entry_graph_node_id
+        self.validated.parsed().graph().entry()
     }
     pub fn digest(&self) -> &Sha256Digest {
-        &self.digest
+        self.validated.digest()
     }
     pub fn source_bytes_digest(&self) -> Option<&Sha256Digest> {
         self.source_bytes_digest.as_ref()
@@ -257,20 +257,19 @@ impl PreparedProcedureSourceV2 {
         snapshot_id: ProcedureSnapshotId,
         created_at: UnixMillis,
     ) -> Result<ProcedureSnapshotV2, ProcedureV2SourceAdmissionErrorV1> {
-        podway_store::admit_procedure_snapshot_v2(
-            snapshot_id,
-            self.canonical_json,
-            self.digest,
-            self.source,
-            created_at,
-        )
-        .map_err(|_| {
+        let runtime = self.validated.runtime_v2().map_err(|_| {
             ProcedureV2SourceAdmissionErrorV1::Rejected(ExecutionBoundaryErrorV1::domain(
                 DomainError::InvalidState {
                     reason: "Procedure v2 snapshot admission failed",
                 },
             ))
-        })
+        })?;
+        Ok(ProcedureSnapshotV2::from_runtime(
+            snapshot_id,
+            runtime,
+            self.source,
+            created_at,
+        ))
     }
 }
 
@@ -294,22 +293,16 @@ pub fn prepare_preset_procedure_source_v2(
             },
         ))
     })?;
+    // Preserve bounded canonical admission before source-label construction.
+    CanonicalProcedureJsonV1::new(admitted.canonical_json().as_str()).map_err(|error| {
+        ProcedureV2SourceAdmissionErrorV1::Rejected(ExecutionBoundaryErrorV1::domain(error))
+    })?;
     Ok(Some(PreparedProcedureSourceV2 {
-        canonical_json: CanonicalProcedureJsonV1::new(admitted.canonical_json().as_str()).map_err(
-            |error| {
-                ProcedureV2SourceAdmissionErrorV1::Rejected(ExecutionBoundaryErrorV1::domain(error))
-            },
-        )?,
-        digest: admitted.digest().clone(),
+        validated: admitted.into_procedure(),
         source: ProcedureSourceLabelV1::new(label.display_label()).map_err(|error| {
             ProcedureV2SourceAdmissionErrorV1::Rejected(ExecutionBoundaryErrorV1::domain(error))
         })?,
         source_bytes_digest: None,
-        goal_tracking: admitted
-            .parsed()
-            .goal_tracking()
-            .is_some_and(|opt_in| opt_in.is_enabled()),
-        entry_graph_node_id: admitted.parsed().graph().entry().clone(),
     }))
 }
 
@@ -360,25 +353,18 @@ pub fn prepare_workspace_procedure_source_v2(
         let diagnostic_codes = distinct_error_diagnostic_codes(&diagnostics);
         return Err(ProcedureV2SourceAdmissionErrorV1::SchemaInvalid { diagnostic_codes });
     }
-    let canonical_json = CanonicalProcedureJsonV1::new(
-        validated.canonical_json().as_str().to_owned(),
-    )
-    .map_err(|error| {
-        ProcedureV2SourceAdmissionErrorV1::Rejected(ExecutionBoundaryErrorV1::domain(error))
-    })?;
+    CanonicalProcedureJsonV1::new(validated.canonical_json().as_str().to_owned()).map_err(
+        |error| {
+            ProcedureV2SourceAdmissionErrorV1::Rejected(ExecutionBoundaryErrorV1::domain(error))
+        },
+    )?;
     let source = ProcedureSourceLabelV1::new(source_label.display_label()).map_err(|error| {
         ProcedureV2SourceAdmissionErrorV1::Rejected(ExecutionBoundaryErrorV1::domain(error))
     })?;
     Ok(PreparedProcedureSourceV2 {
-        canonical_json,
-        digest: validated.digest().clone(),
+        validated,
         source,
         source_bytes_digest: Some(source_bytes_digest),
-        goal_tracking: validated
-            .parsed()
-            .goal_tracking()
-            .is_some_and(|opt_in| opt_in.is_enabled()),
-        entry_graph_node_id: validated.parsed().graph().entry().clone(),
     })
 }
 

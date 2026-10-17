@@ -405,6 +405,25 @@ than repairing a deferred BOUND-002 prerequisite.
   digests remain stable; no Store-to-Config dependency or schema infrastructure
   in Core is introduced.
 
+BOUND-003 implementation handoff: `ProcedureRuntimeV2` now owns the existing
+immutable canonical identity, graph declarations and retained memory result;
+`ProcedureSnapshotV2` adds stored ID/source/time. Config's validated source
+adapter and Store's independently schema-admitted adapter construct that same
+runtime. Engine invokes the source adapter at the existing late snapshot point
+and retains the original bounded canonical preparation check. The decoded
+canonical document is reused for memory interpretation; no goal-model cache or
+all-or-nothing admission was added. Action outcome, skip policy and delegation
+presence queries now belong to Core and are reused by transitions and native
+preparation/readiness. Store receipt/row comparisons keep their independent
+canonical checks. The separate new-aggregate INSERT shape guard remains.
+
+Registered Engine parity cases cover the four presets, YAML/JSON equivalents
+and an unmaterialized historical list bound without rotating stored identity.
+Core cases preserve independent goal/memory interpretation and local
+absent/null/malformed placement semantics. BOUND-001's deferred/competing/cold
+refusal characterizations remain required, along with exact replay and the full
+development gate. This handoff records implementation, not Task acceptance.
+
 ### BOUND-004: Unify typed mutation failure transport and shared helpers
 
 - Implement one transaction callback failure path and migrate every affected

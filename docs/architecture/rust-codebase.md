@@ -53,6 +53,10 @@ Core's `graph_v2`, `workflow_v2` and `goal_state_v2` modules own pure aggregate
 state, transitions and history predicates. Store's `v2_state`, `v2_memory` and
 `v2_goal` modules retain schema admission, row codecs and transactional
 persistence, reexporting the same Core values for existing Rust consumers.
+Config's `ValidatedProcedureV2::runtime_v2` and Store's independently admitted
+snapshot path construct Core's same `ProcedureRuntimeV2`; `ProcedureSnapshotV2`
+adds persisted identity metadata. Placement queries live with that runtime,
+while source diagnostics and persisted schema/row admission retain their owners.
 `ProcedureStateErrorV2` is a pure structural failure; explicit Store/Engine
 conversion preserves its existing public classification separately from row
 corruption and ordinary command-domain rejection.

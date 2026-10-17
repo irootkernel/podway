@@ -172,15 +172,30 @@ remain explicit inputs. Store reexports these same values while retaining native
 row decoding, independent persisted validation, successor admission and
 changed-row writes; it has no second domain transition implementation.
 
-Snapshot admission first constructs Core's `CanonicalProcedureDocumentV2`,
-which binds exact canonical bytes and digest to one parsed document. Store's
-`admit_procedure_snapshot_v2` checks the canonical schema, then passes that value
-to `ProcedureSnapshotV2::from_admitted_document`. Core constructs bounded graph
-metadata and retains the derived memory-model result. Goal interpretation stays
-independent and on demand. No schema assets or SQL enter Core.
-Store also independently checks snapshot shape before inserting a newly supplied
-Core aggregate; a pure constructor cannot bypass persisted admission. This check
-does not admit a retained derived-model error earlier or alter successor writes.
+`ProcedureRuntimeV2` owns exact canonical bytes, digest, bounded graph metadata
+and the retained workflow-declaration result. `ProcedureSnapshotV2` adds the
+stored snapshot ID, source label and creation time. Config's validated-source
+adapter (`ValidatedProcedureV2::runtime_v2`) and Store's independently
+shape-admitted snapshot adapter construct the same Core runtime value. The
+Engine retains the validated source until the existing late snapshot boundary;
+bounded canonical preparation, supplied IDs/time and source diagnostics keep
+their ordering.
+
+Both adapters bind identity through `CanonicalProcedureDocumentV2`. Runtime
+construction reuses its decoded document for memory declarations and associates
+placements by their admitted index. Node accessors share action topology, skip
+policy and delegation presence without demanding the whole workflow model.
+Malformed declarations remain retained failures, rather than earlier aggregate
+rejections; delegation presence is not declaration validation. Goal
+interpretation stays independent and on demand. Historical runtime defaults
+never regenerate stored canonical bytes or rotate their digest.
+
+Store retains canonical/digest/schema admission on loading, relational row
+verification, and a separate shape check before inserting a newly supplied Core
+aggregate. That INSERT check still parses the supplied canonical bytes; a pure
+constructor cannot bypass persisted admission. It does not admit a retained
+derived-model error earlier or alter successor writes. No schema assets or SQL
+enter Core.
 
 Snapshot construction can succeed with a retained declaration error. Convenience
 `prepared` construction demands the model, while explicit empty-workflow

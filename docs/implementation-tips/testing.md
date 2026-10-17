@@ -77,6 +77,14 @@ The BOUND-001 Store/Engine characterization in `int_v2dfc005_relational` and
 timing, competing revision priority and distinct cold persisted refusal. Keep
 those checks when adapting either runtime declarations or stored admission.
 
+BOUND-003 adds registered Engine checks for all four shipped presets and both
+equivalent source formats through the source and persisted adapters, comparing
+complete runtime declarations and pinned identity. A historical unmaterialized
+list fixture checks equal runtime defaults with unchanged stored bytes/digest.
+Core checks keep goal interpretation independent of deferred memory errors and
+preserve local placement queries for absent, null, malformed and contradictory
+fields. These pure malformed examples do not authorize Store schema bypass.
+
 These tests own direct identity, attempt-content overflow, and one-draft atomic
 batch behavior:
 

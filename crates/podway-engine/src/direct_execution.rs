@@ -289,19 +289,9 @@ fn action_successor(
         }
         .into());
     }
-    let placement: serde_json::Value = serde_json::from_str(node.canonical_placement_json())
-        .map_err(|_| DirectStoreErrorV1::Unreadable)?;
-    placement
-        .get("next")
-        .map(|value| {
-            value
-                .as_str()
-                .ok_or(DirectStoreErrorV1::Unreadable)
-                .and_then(|value| {
-                    GraphNodeId::new(value).map_err(|_| DirectStoreErrorV1::Unreadable)
-                })
-        })
-        .transpose()
+    node.next_target()
+        .map(|target| target.cloned())
+        .map_err(|_| DirectStoreErrorV1::Unreadable)
 }
 
 #[derive(Clone, Debug)]

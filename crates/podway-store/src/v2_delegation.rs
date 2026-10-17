@@ -350,9 +350,7 @@ pub(crate) fn completion_readiness_connection_v1(
         .iter()
         .find(|node| node.graph_node_id() == active.graph_node_id())
         .ok_or_else(corrupt)?;
-    let document: Value =
-        serde_json::from_str(placement.canonical_placement_json()).map_err(|_| corrupt())?;
-    if document.get("delegation").is_none() {
+    if !placement.has_delegation() {
         return Ok(DelegationReadinessV1::Direct);
     }
     let receipt_json: Option<String> = connection
