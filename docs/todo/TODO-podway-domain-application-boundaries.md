@@ -509,6 +509,23 @@ checks, the full development gate and independent completion review.
   baseline, comparator, or count ceilings. Any BOUND-owned future comparison
   must be registered independently.
 
+BOUND-006 implementation handoff: architecture now records the implemented Core,
+Config, Store, Engine and CLI responsibilities; requirements traceability maps
+those owners to retained and added executable proof. Canonical assets, contracts,
+manifest inputs, DDL, dependencies and toolchain remain unchanged from the accepted
+OPTIM baseline. The supported generation-15 continuity scenario uses the accepted
+pre-CLI-decomposition executable to create state, then fresh candidate processes
+to observe, replay, continue and replay the original old-attempt request. Both
+replays reproduce the complete original stdout bytes; lookup/replay have no
+logical state or sequence effect, while continuation advances one node/sequence.
+Writer-contract and snapshot bytes/digests remain unchanged without reset/migration.
+
+Completion still requires the selected complete nine-case native matrix, the
+full development gate and independent integrated Main/AGY review. Main may accept
+member Tasks under Epic Harmony delegation; only Master can accept the whole epic.
+The dossier remains adopted until that owner decision, with durable implementation
+knowledge already promoted to architecture, traceability and testing guidance.
+
 ## 7. Verification and release acceptance
 
 | Concern | Existing verification owner to retain or extend |

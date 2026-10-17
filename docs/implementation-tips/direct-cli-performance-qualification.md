@@ -236,6 +236,8 @@ BOUND and READS do not inherit OPTIM probe sets, baselines, comparators, or
 count ceilings. A comparison either epic owns becomes acceptance evidence only
 after that epic registers its fixtures, oracles, and owners in its own scope.
 Accepted OPTIM evidence is not that registration.
+BOUND-006 selects the existing complete native matrix below for boundary
+qualification. That selection adds no OPTIM baseline, comparator or count ceiling.
 
 ### Native scale execution
 

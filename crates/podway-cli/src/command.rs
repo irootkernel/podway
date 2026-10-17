@@ -11,9 +11,11 @@ mod completion;
 mod direct;
 mod retirement;
 
+#[cfg(debug_assertions)]
+use std::ffi::OsStr;
 use std::{
     env,
-    ffi::{OsStr, OsString},
+    ffi::OsString,
     fs::{self},
     io::{self, IsTerminal, Read, Write},
     os::unix::ffi::OsStrExt,

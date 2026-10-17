@@ -62,6 +62,32 @@ Use registered direct CLI cases through `make test-e2e-exact` or the complete
 `make test-e2e` suite. A fixture's synthetic delegation provenance proves local
 protocol behavior, not a live executor integration.
 
+## Supported Store continuity
+
+For a boundary refactor, preserve an accepted prechange CLI and create an owned
+standalone Git fixture through that CLI: init, start, begin and record one required
+item with explicit fences and a caller key. Retain the original stdout bytes,
+status, Store generation, writer-contract row and canonical snapshot bytes/digest.
+Use a fresh CLI process for every later observation or mutation.
+
+The candidate must read the same recorded state, replay the original fully fenced
+request byte-for-byte, and return that response through read-only outcome lookup.
+Then complete the satisfied action with current explicit fences, verify the next
+node, and replay the original request again with its original old attempt/item
+fences. Both replays and lookups leave logical database state and sequence
+unchanged; only continuation advances the sequence. Generation, writer-contract
+and snapshot identity remain unchanged throughout, without reset or migration.
+
+Verification binaries built from a reviewed dirty tree may embed the Git parent
+that existed before the completion commit. Retain that actual build stamp and
+binary hash; bind the reviewed source-file hashes to the accepted commit rather
+than relabeling the artifact. Recheck replay/continuation after a later rebuild
+when claiming behavior of that rebuilt CLI.
+
+BOUND-006 exercises this scenario across the CLI decomposition against a
+supported generation-15 Store. It complements registered persistence/replay tests
+and does not establish legacy migration or installed-runtime compatibility.
+
 ## Functional regression owners
 
 Pure workflow and goal tests live beside their Core implementations in

@@ -57,7 +57,7 @@ They connect normative behavior to current production boundaries and proof.
 | AUT-DIRECT-004: prepare outside transaction, revalidate inside | Engine preparation and native descriptor adapters | Engine direct execution prepared-stamp checks; `int_v2dfc006_races` native rewrite/rename/mid-hash rejection, every-artifact batch and required-set checks, independent writer and multi-GiB timeout proofs; `typed_citation_bounds_reject_before_effects_and_preserve_fences_retry_and_replay` covers typed citation bounds, fence precedence, rejection without effects and exact retry/replay |
 | AUT-DIRECT-005: one absolute wait budget across maintenance, connection-gate and SQLite read/write admission; one immediate attempt after expiry | Store lease/connection gate/busy handler; CLI original invocation deadline; Engine request deadline | Store zero-budget/slow-callback cases; Engine admitted reset/public boundaries; CLI zero-budget contention and real-PTY prompt cases |
 | AUT-DIRECT-006: caller key and complete original resolved fences | Engine request identity; CLI grammar and stdin decoding | Protocol typed/stdin bounds; Engine errors/identity; CLI retained-command fences and stdin replay |
-| AUT-DIRECT-007: exact success replay after UUID/writer classification | Store qualification and outcome lookup before mutation callback | Store direct Store/legacy tests; CLI concurrent incompatible writer and old replay test |
+| AUT-DIRECT-007: exact success replay after UUID/writer classification | Store qualification and outcome lookup; identity resolution before digest/replay selection; execution callback bypass on replay | Store direct Store/legacy tests; CLI concurrent incompatible writer and old replay test |
 | AUT-DIRECT-008: success-only retention; only COMMIT I/O yields unknown | Store commit classification; Engine error envelope | Store execution boundary; Engine errors/crashes; CLI post-COMMIT-before-stdout SIGKILL |
 | AUT-DIRECT-009: read-only outcome.lookup | Store snapshot/outcome projection; Engine direct query | Store outcome lookup tests; Engine direct execution; CLI exact outcome reconciliation |
 | AUT-DIRECT-010: session/workspace outcome retention | Store retention and reset boundaries | Store direct Store/relational/persistence; Engine domain and readback ports |
@@ -100,6 +100,26 @@ The ignored native scale, SIGKILL, deadline, races, exclusion, and WAL cases
 require explicit selected execution. G7/G8 use the
 [direct CLI performance method](../../implementation-tips/direct-cli-performance-qualification.md).
 Their existence or an older log is not qualification for the current candidate.
+
+## Boundary refactoring ownership and proof
+
+These owners implement existing domain, transaction and CLI requirements; the
+BOUND refactoring introduces no new public or persisted contract.
+
+| Responsibility | Production owner | Executable proof |
+| --- | --- | --- |
+| Pure aggregate state, workflow transitions and goal history | Core `graph_v2`, `workflow_v2`, `goal_state_v2`; Store `v2_state`, `v2_memory`, `v2_goal` retain admission/codecs/SQL | Core workflow/goal unit tests; retained Store workflow/goal round trips and relational corruption tests |
+| Shared immutable runtime declarations with independent source/stored admission | Core `ProcedureRuntimeV2`; Config `ValidatedProcedureV2::runtime_v2`; Store snapshot reconstruction | Engine `int_v2dfc006_domain_ports` adapter parity and historical-default checks; Core placement/goal independence; Store relational admission |
+| Deferred memory failure, competing revision priority and cold persisted refusal | Core snapshot/prepared domain boundaries; Store cold loading; Engine public mapping | BOUND-001 characterization in Store `int_v2dfc005_relational` and Engine `int_v2dfc006_domain_ports` |
+| Typed callback failures without side-channel error slots | Store `DirectMutationFailureV1<E>` and one typed runner; all nine Engine sites | Store `bound004_typed_identity_and_execution_failures_roll_back_and_retry`; Engine 20-route revalidation; transaction COMMIT-only uncertainty unit test |
+| One fence-preflight owner with separate completion/start observations | CLI `command/preflight.rs`, original `direct::Invocation`; private grammar/authoring/files/start/render modules | CLI original command unit tests and registered E2E: file safety, maintenance/completion budget, stdin precedence, previews, PTY deadlines and archive replay |
+| Accepted request-scoped sharing and one unpublished batch draft | Engine borrowed read composition; Core `workflow_v2` immutable slot memo and unpublished draft; Store persistence consumer | Registered `int_optim001_*` and `int_optim003_draft` suites; actual record-stdin CLI replay |
+
+The [testing guide](../../implementation-tips/testing.md#supported-store-continuity)
+records the fresh-process supported-Store continuation scenario. The separately
+selected [native matrix](../../implementation-tips/direct-cli-performance-qualification.md#native-scale-execution)
+owns ignored crash/race/maintenance/scale/WAL qualification. Development, native
+qualification and owner acceptance are separate completion facts.
 
 ## Supervised delegation ownership and proof
 

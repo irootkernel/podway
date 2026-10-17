@@ -131,7 +131,7 @@ Dependencies: accepted `OPTIM` completion. Design: [BOUND dossier](../todo/TODO-
 | `BOUND-003` | Clarify Procedure runtime representation and admission | Completed | Share pure runtime declarations without merging authoring and persistence validation or adding reverse dependencies. | [Task design](../todo/TODO-podway-domain-application-boundaries.md#bound-003-clarify-procedure-runtime-representation-and-admission) |
 | `BOUND-004` | Unify typed mutation failure transport and shared helpers | Completed | Replace all inventoried callback error transports with per-site failure/replay proof, preserving distinct fences/envelopes and ordering; absorb DF-023. | [Task design](../todo/TODO-podway-domain-application-boundaries.md#bound-004-unify-typed-mutation-failure-transport-and-shared-helpers) |
 | `BOUND-005` | Decompose CLI responsibilities without changing behavior | Completed | Decompose CLI concerns and move fence-preflight fetching/parsing together under one owner for READS, leaving completion and separate start observations unchanged. | [Task design](../todo/TODO-podway-domain-application-boundaries.md#bound-005-decompose-cli-responsibilities-without-changing-behavior) |
-| `BOUND-006` | Qualify and close boundary refactoring | Planned | Prove dependency direction, current-Store continuity, error/behavior equivalence and no performance regression, then complete review and promotion. | [Task design](../todo/TODO-podway-domain-application-boundaries.md#bound-006-qualify-and-close-boundary-refactoring) |
+| `BOUND-006` | Qualify and close boundary refactoring | Completed | Prove dependency direction, current-Store continuity, error/behavior equivalence and no performance regression, then complete review and promotion. | [Task design](../todo/TODO-podway-domain-application-boundaries.md#bound-006-qualify-and-close-boundary-refactoring) |
 
 ### BOUND delivery record
 
@@ -164,6 +164,23 @@ Main-native CLI PASS verdicts, the Leader's consolidated PASS, actual file-safet
 preview, completion-budget, stdin-priority and archive-replay regressions, static
 checks and the full `make test` development gate. Private CLI modules now own
 grammar, authoring, file access, start, rendering and fence preflight.
+
+Main accepted BOUND-006 under the same delegation after independent Main and
+AGY integrated PASS verdicts, final Judge and two Worker confirmation, the final
+`make test` development gate, pinned release Clippy and the complete nine-case
+native qualification. Supported generation-15 Stores continue without reset or
+migration, preserving writer/snapshot identity and exact original response bytes
+before and after progression. The final CLI also passes fresh-process observation,
+old-attempt replay and read-only lookup without logical state changes.
+
+The final compiler-only CLI import correction retains the native qualification
+of the byte-identical Store/Engine release test executables; the original native
+source snapshot remains distinct from the final overall source snapshot. Existing
+300-node blocking and maximum-graph informational policies remain unchanged; no
+OPTIM baseline, comparator or count ceiling was introduced. Architecture,
+traceability and testing guidance record the implemented ownership. All six member
+Tasks are complete under Main delegation. Master's whole-Epic acceptance remains
+pending; READS has not started.
 
 ## READS — Read Models and Data Access
 

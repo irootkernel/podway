@@ -151,19 +151,23 @@ meaningful success, failure and compatibility tests together.
 ## Adopted internal refinements
 
 The [OPTIM, BOUND and READS sequence](../roadmap/README.md#current-internal-improvements)
-is the adopted internal-improvement order. OPTIM is completed. Current read
-composition, procedure-identity boundaries, and the unpublished batch draft are
-in [System Architecture](system.md#request-scoped-read-composition). BOUND and
-READS remain unfinished.
+is the adopted internal-improvement order. OPTIM is completed; BOUND's domain,
+runtime, callback and CLI implementation is present, with final qualification
+and owner acceptance tracked separately by the roadmap. READS remains planned.
+Current read composition, procedure-identity boundaries and the unpublished
+batch draft are in [System Architecture](system.md#request-scoped-read-composition).
 
-At the reviewed v0.2.14 baseline, several pure graph/workflow/goal transitions
-still live beside Store row mapping, and CLI preflight performs avoidable
-reconstruction. BOUND aligns those implementations with the ownership table
-above; it does not create a new crate or reverse dependency. The completed
-Engine read context retains the Config-owned validated Procedure and does not
-attach that representation to Store's separate cached memory model. BOUND
-separates Store-specific errors and schema/SQL admission from pure types while
-preserving deferred-model error timing.
+Core now owns pure graph/workflow/goal transitions and shared immutable
+`ProcedureRuntimeV2` declarations. Config source admission and Store persisted
+admission remain independent; Store retains schema checks, row reconstruction,
+SQL and persistence error classification. Deferred memory errors do not become
+mandatory during snapshot construction or independent goal interpretation.
+One Store transaction runner transports typed identity/execution failures from
+all nine Engine callback sites; identity resolution still precedes replay.
+Private CLI modules separate grammar, authoring, file access, start, rendering
+and fence preflight without adding a crate or changing dependency direction.
+The Engine read context still retains Config's validated Procedure independently
+of Store's cached memory model; accepted OPTIM sharing and draft behavior remain.
 READS then changes data access and internal facts/view construction, including
 goal/citation loops and selective changed-slot reloads, while preserving current
 cold-read validation. Archive-list remains summary-only; graph windows still
@@ -175,7 +179,7 @@ interactive-start retry reads. Preserving preflight means preserving failures
 from the former status projection/schema/envelope as well as Store admission.
 The [performance protocol](../implementation-tips/direct-cli-performance-qualification.md#internal-improvement-comparisons)
 records the withdrawn OPTIM measurements and the separately registered future
-BOUND and READS scope. Ordinary `make test` omits the ignored native cases.
+BOUND qualification and future READS scope. Ordinary `make test` omits the ignored native cases.
 
 The [remaining adopted dossiers](../todo/README.md#current-adopted-dossiers) own
 BOUND and READS target interfaces, task boundaries, and acceptance until those
