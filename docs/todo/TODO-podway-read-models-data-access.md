@@ -7,7 +7,8 @@
 - Owning epic: [READS](../roadmap/README.md#reads-read-models-and-data-access)
 - Dependency: accepted BOUND completion, including inherited OPTIM improvements
 - Review baseline: v0.2.14, `fa29dba929777b020377bc9803cb0a3954d219b1`
-- Implementation baseline: the actual accepted BOUND source and evidence
+- Implementation baseline: accepted BOUND `036e86ed922a4e153acce02ae3e267b357a217a1`
+  and its [delivery record](../roadmap/README.md#bound-delivery-record)
 
 The owner selected preservation of both existing external/storage contracts and
 existing read validation guarantees. This narrows the earlier read-optimization
@@ -28,7 +29,7 @@ and is not an automatic fallback if an optimization proves infeasible.
 | Full reconstruction serves current views, mutation preparation and archive-show | [Store read API](../../crates/podway-store/src/direct_store/connection.rs), `view`, `prepare_graph`; [graph loader](../../crates/podway-store/src/v2_state.rs), `load_present_graph_session_with_cache_v2`, `load_archived_session_connection_v2` | Preserve validation outside the displayed window; archive-list is a different, summary-only path |
 | Slots, blockers and evidence are queried per attempt, with extra value point-queries for mismatched cached slots | [workflow loader](../../crates/podway-store/src/v2_memory.rs), `load_workflow_memory_v2`, `load_attempt_memory_v2`, `load_blockers_v2`, `load_evidence_v2` | Bulk cold acquisition and selective prepared reload need separate probes; preserve header-only reuse of unchanged payloads |
 | Goal criteria are queried per revision and citations per criterion assessment | [goal loader](../../crates/podway-store/src/v2_goal.rs), `load_goal_revisions_v2`, `load_criterion_assessments_v2`, `load_citations_v2` | Include these loops in READS-002 rather than leaving a second source of history-dependent SQL |
-| CLI obtains missing fences from a standard-status envelope whose projection/validation can also fail | [CLI adapter](../../crates/podway-cli/src/command/direct.rs), `needs_facts`, `fill_facts`, gated status fetch; [CLI parser](../../crates/podway-cli/src/command.rs), `StatusPreflight::from_direct` | BOUND-005 extracts this fetch/parser together; READS-004 replaces that boundary, not every CLI status read |
+| CLI obtains missing fences from a standard-status envelope whose projection/validation can also fail | [CLI preflight](../../crates/podway-cli/src/command/preflight.rs), `needs_facts`, `fill_facts`, `prepare`, `StatusPreflight::from_direct`; [implemented boundary](../architecture/system.md#podway-cli) | BOUND-005 extracted this fetch/parser together; READS-004 replaces that boundary, not every CLI status read |
 
 Attempt, counter, decision and rework acquisition are already session-scoped
 statements. Record their counts but do not claim they are per-attempt loops.

@@ -31,7 +31,7 @@ OPTIM -> BOUND -> READS
 
 These are three separately accepted development epics with one shared goal and
 a fixed order, not a release program and not parallel work. OPTIM is Completed.
-BOUND is In Progress; READS remains Planned. Master separately authorized local
+BOUND is Completed and owner-accepted; READS remains Planned. Master separately authorized local
 BOUND Task commits and delegated Task acceptance to Main for Epic Harmony.
 No release version, installation, remote push or external-consumer change is authorized here.
 V2DFC remains completed; its historical qualification is not a fresh measurement
@@ -51,8 +51,8 @@ Each task includes its own focused verification. An executable change must pass
 applicable documentation checks. Final tasks integrate the epic-wide checks,
 independent review and acceptance, not defer all testing until the end. The
 roadmap alone owns status and order. Completed OPTIM behavior is recorded in
-architecture, testing guidance, and this roadmap. The two remaining adopted
-dossiers own the unfinished BOUND and READS designs and acceptance criteria.
+architecture, testing guidance, and this roadmap, as is completed BOUND behavior.
+The remaining adopted dossier owns the unfinished READS design and acceptance criteria.
 OPTIM closeout does not run the native scale route. Scale and
 native-qualification work that a later epic still owns stays in that epic's
 dossier. Reuse existing required paths rather than treating a named test file
@@ -122,16 +122,18 @@ or memory metric. Main verified this documentation closeout separately.
 
 ## BOUND — Domain and Application Boundaries
 
-Dependencies: accepted `OPTIM` completion. Design: [BOUND dossier](../todo/TODO-podway-domain-application-boundaries.md).
+Dependencies: accepted `OPTIM` completion. Status: Completed. Implementation:
+[System Architecture](../architecture/system.md#component-responsibilities) and
+[boundary traceability](../specs/quality/requirements-traceability.md#boundary-refactoring-ownership-and-proof).
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `BOUND-001` | Freeze responsibility and invariant ownership | Completed | Inventory type/error seams, all nine callback transports, three helper groups, preflight ownership and verification against accepted OPTIM. | [Task design](../todo/TODO-podway-domain-application-boundaries.md#bound-001-freeze-responsibility-and-invariant-ownership) |
-| `BOUND-002` | Separate domain state and transitions from persistence | Completed | Move pure graph/workflow/goal rules into Core while retaining SQL reconstruction, relational checks and changed-row writes in Store. | [Task design](../todo/TODO-podway-domain-application-boundaries.md#bound-002-separate-domain-state-and-transitions-from-persistence) |
-| `BOUND-003` | Clarify Procedure runtime representation and admission | Completed | Share pure runtime declarations without merging authoring and persistence validation or adding reverse dependencies. | [Task design](../todo/TODO-podway-domain-application-boundaries.md#bound-003-clarify-procedure-runtime-representation-and-admission) |
-| `BOUND-004` | Unify typed mutation failure transport and shared helpers | Completed | Replace all inventoried callback error transports with per-site failure/replay proof, preserving distinct fences/envelopes and ordering; absorb DF-023. | [Task design](../todo/TODO-podway-domain-application-boundaries.md#bound-004-unify-typed-mutation-failure-transport-and-shared-helpers) |
-| `BOUND-005` | Decompose CLI responsibilities without changing behavior | Completed | Decompose CLI concerns and move fence-preflight fetching/parsing together under one owner for READS, leaving completion and separate start observations unchanged. | [Task design](../todo/TODO-podway-domain-application-boundaries.md#bound-005-decompose-cli-responsibilities-without-changing-behavior) |
-| `BOUND-006` | Qualify and close boundary refactoring | Completed | Prove dependency direction, current-Store continuity, error/behavior equivalence and no performance regression, then complete review and promotion. | [Task design](../todo/TODO-podway-domain-application-boundaries.md#bound-006-qualify-and-close-boundary-refactoring) |
+| `BOUND-001` | Freeze responsibility and invariant ownership | Completed | Inventory type/error seams, all nine callback transports, three helper groups, preflight ownership and verification against accepted OPTIM. | [Ownership and proof](../specs/quality/requirements-traceability.md#boundary-refactoring-ownership-and-proof) |
+| `BOUND-002` | Separate domain state and transitions from persistence | Completed | Move pure graph/workflow/goal rules into Core while retaining SQL reconstruction, relational checks and changed-row writes in Store. | [Pure state and persisted admission](../architecture/system.md#pure-graph-state-and-persisted-admission) |
+| `BOUND-003` | Clarify Procedure runtime representation and admission | Completed | Share pure runtime declarations without merging authoring and persistence validation or adding reverse dependencies. | [Runtime and admission](../architecture/system.md#pure-graph-state-and-persisted-admission) |
+| `BOUND-004` | Unify typed mutation failure transport and shared helpers | Completed | Replace all inventoried callback error transports with per-site failure/replay proof, preserving distinct fences/envelopes and ordering; absorb DF-023. | [Typed callback failures](../architecture/system.md#typed-mutation-callback-failures) |
+| `BOUND-005` | Decompose CLI responsibilities without changing behavior | Completed | Decompose CLI concerns and move fence-preflight fetching/parsing together under one owner for READS, leaving completion and separate start observations unchanged. | [CLI responsibilities](../architecture/system.md#podway-cli) |
+| `BOUND-006` | Qualify and close boundary refactoring | Completed | Prove dependency direction, current-Store continuity, error/behavior equivalence and no performance regression, then complete review and promotion. | [Continuity](../implementation-tips/testing.md#supported-store-continuity), [native qualification](../implementation-tips/direct-cli-performance-qualification.md#native-scale-execution) |
 
 ### BOUND delivery record
 
@@ -139,7 +141,7 @@ On 2026-10-17 Main accepted BOUND-001 under Master's Epic Harmony delegation,
 after independent Judge and two Worker reviews, focused deferred-admission and
 nine-callback failure/replay checks, the full `make test` development gate and
 post-correction documentation checks. This is delegated Task acceptance;
-user acceptance of the complete BOUND epic remains pending.
+the owner's subsequent whole-Epic acceptance is recorded below.
 
 Main accepted BOUND-002 on the same delegation after independent Judge and two
 Worker PASS verdicts, pure-test migration and persisted-admission regression
@@ -179,8 +181,15 @@ source snapshot remains distinct from the final overall source snapshot. Existin
 300-node blocking and maximum-graph informational policies remain unchanged; no
 OPTIM baseline, comparator or count ceiling was introduced. Architecture,
 traceability and testing guidance record the implemented ownership. All six member
-Tasks are complete under Main delegation. Master's whole-Epic acceptance remains
-pending; READS has not started.
+Tasks are complete under Main delegation.
+
+Master explicitly accepted the complete BOUND epic on 2026-10-17 at
+`036e86ed922a4e153acce02ae3e267b357a217a1`, after receiving the integrated
+implementation, verification and six local Task commits. This is user Epic
+acceptance, distinct from Main's delegated Task acceptance. Durable requirements,
+ownership and verification guidance replace the retired BOUND dossier under the
+[TODO lifecycle](../todo/README.md#lifecycle). READS remains Planned and has not
+started. No release, installation or remote publication is included.
 
 ## READS — Read Models and Data Access
 

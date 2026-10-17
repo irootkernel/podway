@@ -103,6 +103,15 @@ The BOUND-001 Store/Engine characterization in `int_v2dfc005_relational` and
 timing, competing revision priority and distinct cold persisted refusal. Keep
 those checks when adapting either runtime declarations or stored admission.
 
+The fixture's schema-valid text declaration has `min_length: 2` and
+`max_length: 1`. Snapshot construction succeeds; convenience `prepared` fails,
+but explicit empty-workflow Prepared construction succeeds. In `begin`, a stale
+revision wins over the retained declaration error; a matching revision exposes
+it without changing the aggregate. Persisting the explicit fixture succeeds,
+while an independent cold load rejects it as snapshot corruption before Engine
+domain fences, clock access or outcome recording. This deliberately malformed
+fixture is not a supported Store continuity case.
+
 BOUND-003 adds registered Engine checks for all four shipped presets and both
 equivalent source formats through the source and persisted adapters, comparing
 complete runtime declarations and pinned identity. A historical unmaterialized

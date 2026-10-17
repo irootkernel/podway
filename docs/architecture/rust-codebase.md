@@ -151,9 +151,9 @@ meaningful success, failure and compatibility tests together.
 ## Adopted internal refinements
 
 The [OPTIM, BOUND and READS sequence](../roadmap/README.md#current-internal-improvements)
-is the adopted internal-improvement order. OPTIM is completed; BOUND's domain,
-runtime, callback and CLI implementation is present, with final qualification
-and owner acceptance tracked separately by the roadmap. READS remains planned.
+is the adopted internal-improvement order. OPTIM and BOUND are completed and
+owner-accepted; the roadmap records qualification and acceptance separately.
+READS remains planned.
 Current read composition, procedure-identity boundaries and the unpublished
 batch draft are in [System Architecture](system.md#request-scoped-read-composition).
 
@@ -178,16 +178,15 @@ READS replaces that boundary, not completion status, start/reset dry-run or late
 interactive-start retry reads. Preserving preflight means preserving failures
 from the former status projection/schema/envelope as well as Store admission.
 The [performance protocol](../implementation-tips/direct-cli-performance-qualification.md#internal-improvement-comparisons)
-records the withdrawn OPTIM measurements and the separately registered future
-BOUND qualification and future READS scope. Ordinary `make test` omits the ignored native cases.
+records the withdrawn OPTIM measurements, BOUND's completed native qualification
+scope and future READS scope. Ordinary `make test` omits the ignored native cases.
 
-The [remaining adopted dossiers](../todo/README.md#current-adopted-dossiers) own
-BOUND and READS target interfaces, task boundaries, and acceptance until those
-epics are complete.
+The [remaining adopted dossier](../todo/README.md#current-adopted-dossiers) owns
+READS target interfaces, task boundaries, and acceptance until that epic is complete.
 Do not weaken Store admission, move required read checks to doctor, introduce
 persistent caching or change public/storage identity to simplify this work.
-Update this architecture with the actual accepted implementation at each epic's
-closeout; do not present planned responsibility moves as current behavior.
+Update this architecture with the actual accepted implementation at READS
+closeout; do not present planned read-model changes as current behavior.
 
 ## Testability requirements
 

@@ -196,6 +196,18 @@ callback errors separate from Store qualification, transaction and persistence
 failures; Engine maps either branch without placeholder Store errors or outer
 error slots. Bootstrap keeps its distinct private-publication protocol.
 
+The nine typed Engine callback sites are:
+
+| Module | Callbacks |
+| --- | --- |
+| `direct_execution` | `execute_cursor_v1`, `begin_session_v1` |
+| `direct_items` | `record_many_v1`, `execute_item_v1` |
+| `direct_delegation` | `accept_delegation_v1` |
+| `direct_procedure` | `execute_procedure_v1` |
+| `direct_sessions` | `execute_session_v1` |
+| `direct_start` | `start_session_v1` |
+| `direct_workspace` | `existing_mutation` |
+
 Outcome lookup still precedes identity resolution, which precedes resolved-key
 and digest checks. Exact replay runs identity resolution but bypasses execution,
 clock and IDs. Start recovers the original pinned digest on replay; failed fresh
@@ -250,6 +262,13 @@ there. Cold Store reconstruction independently rejects malformed declarations
 as unreadable persisted state. `ProcedureStateErrorV2` carries the pure
 structural reason; Store/Engine conversions preserve the existing public error
 categories, details and exit status.
+
+In particular, `GraphMutationErrorV2::InvalidState` remains `INTERNAL_ERROR`
+(exit 6, nonretryable, internal diagnostic details), while
+`DomainError::InvalidState` remains `REQUEST_INVALID` (exit 2). Corrupt persisted
+canonical/schema/digest or relational state remains Store-owned and maps to
+`WORKSPACE_STATE_UNREADABLE` (exit 5, nonretryable, workspace recovery details).
+Source admission retains Config diagnostics and `PROCEDURE_INVALID`.
 
 ### Unpublished batch draft
 

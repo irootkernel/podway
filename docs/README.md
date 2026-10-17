@@ -25,13 +25,14 @@ write-free snapshot reads are the current product boundaries.
 
 Current adopted work is tracked by the [active roadmap](roadmap/).
 The [internal-improvement sequence](roadmap/README.md#current-internal-improvements)
-is OPTIM, then BOUND, then READS. OPTIM is completed; the owner accepted the
-current working tree on 2026-10-17. BOUND is In Progress; READS remains Planned, with
-[two adopted design dossiers](todo/README.md#current-adopted-dossiers).
+is OPTIM, then BOUND, then READS. OPTIM and BOUND are completed and owner-accepted
+on 2026-10-17. READS remains Planned, with
+[one adopted design dossier](todo/README.md#current-adopted-dossiers).
 On 2026-10-16 the owner withdrew OPTIM latency, count, and memory measurement,
 including any baseline that would have blocked implementation. Completed OPTIM
 behavior is one validated request-scoped read projection and one unpublished
-batch draft. The remaining epics have separate acceptance and a fixed order.
+batch draft. BOUND separates pure domain rules, persisted admission, typed
+mutation failures and CLI responsibilities. READS retains its own acceptance.
 External/storage contracts and existing command-specific validation stay
 preserved, including summary-only archive-list. These improvements are not a
 selected release program.

@@ -230,14 +230,16 @@ characterization: request-scoped read sharing, single-draft batch application,
 and identity, overflow, rollback, and replay behavior. That evidence supplies
 no performance baseline, comparator, or count ceiling.
 
-### Separately registered future scope
+### Separately registered improvement scope
 
 BOUND and READS do not inherit OPTIM probe sets, baselines, comparators, or
 count ceilings. A comparison either epic owns becomes acceptance evidence only
 after that epic registers its fixtures, oracles, and owners in its own scope.
 Accepted OPTIM evidence is not that registration.
-BOUND-006 selects the existing complete native matrix below for boundary
+BOUND-006 completed the existing complete native matrix below for boundary
 qualification. That selection adds no OPTIM baseline, comparator or count ceiling.
+Its accepted outcome is recorded in the
+[BOUND delivery record](../roadmap/README.md#bound-delivery-record); READS scope remains planned.
 
 ### Native scale execution
 

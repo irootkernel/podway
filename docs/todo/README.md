@@ -86,17 +86,16 @@ must not use the release-program identifier as a synthetic epic or task prefix.
 ## Current adopted dossiers
 
 The owner adopted three sequential internal-improvement epics on 2026-10-14
-with one shared goal and a fixed order, not parallel work. OPTIM completed on
-2026-10-17 and its dossier is removed. The
+with one shared goal and a fixed order, not parallel work. OPTIM and BOUND were
+accepted on 2026-10-17 and their dossiers are removed. The
 [roadmap](../roadmap/README.md#current-internal-improvements) alone owns order and
-status. Two adopted dossiers remain: BOUND, then READS. They are not a release
-program and do not select a release version. Existing external/storage contracts
+status. Only the READS dossier remains. These epics are not a release program
+and do not select a release version. Existing external/storage contracts
 and cold-read validation remain unchanged; archive-list retains its summary-only
 boundary. On 2026-10-16 the owner withdrew OPTIM performance measurement.
 Roadmap status is authoritative; a missing OPTIM baseline is not implementation
 evidence.
 
-- [Domain and application boundaries](TODO-podway-domain-application-boundaries.md): domain/error admission seams, nine callback transports, three helper groups and a single fence-preflight owner for the READS handoff.
 - [Read models and data access](TODO-podway-read-models-data-access.md): bulk history/goal/citation queries, selective changed-slot reload, hidden-value corruption proof and typed preflight preserving status-only failures.
 
 Each dossier is retired independently after its owning epic is accepted and its
