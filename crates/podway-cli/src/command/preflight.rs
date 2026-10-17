@@ -288,3 +288,91 @@ pub(super) fn prepare(
     }
     Ok(ControlFlow::Continue(Some(facts)))
 }
+
+#[cfg(test)]
+mod reads001_parser_surface_tests {
+    //! READS-001 characterization of the fence-preflight parser's rejection
+    //! surface with unit-crafted maps. These branches are not producible by
+    //! the real engine's success envelope absent an engine bug: they are the
+    //! recorded replacement obligations for READS-004, kept separate from
+    //! input-reachable failures that flow through `preflight_error`.
+    use super::*;
+    use serde_json::json;
+
+    fn workspace() -> WorkspaceId {
+        WorkspaceId::new("00000000-0000-4000-8000-000000000001").unwrap()
+    }
+
+    #[test]
+    fn crafted_schema_tag_rejection_surface() {
+        let mut result = json!({
+            "schema": "podway.status-result/v4",
+            "session": {"id": "00000000-0000-4000-8000-000000000002", "revision": 1, "lifecycle": "running"},
+        });
+        assert!(StatusPreflight::from_parts(result.as_object().unwrap(), workspace()).is_err());
+        result["schema"] = json!("podway.status-result/v5");
+        assert!(StatusPreflight::from_parts(result.as_object().unwrap(), workspace()).is_ok());
+    }
+
+    #[test]
+    fn crafted_session_shape_rejection_surface() {
+        let base = json!({
+            "schema": "podway.status-result/v5",
+            "session": {"id": "00000000-0000-4000-8000-000000000002", "revision": 1, "lifecycle": "running"},
+        });
+        let mut missing_session = base.clone();
+        missing_session.as_object_mut().unwrap().remove("session");
+        assert!(
+            StatusPreflight::from_parts(missing_session.as_object().unwrap(), workspace()).is_err()
+        );
+        let mut bad_id = base.clone();
+        bad_id["session"]["id"] = json!("not-a-session-id");
+        assert!(StatusPreflight::from_parts(bad_id.as_object().unwrap(), workspace()).is_err());
+        let mut bad_revision = base.clone();
+        bad_revision["session"]["revision"] = json!(-1);
+        assert!(
+            StatusPreflight::from_parts(bad_revision.as_object().unwrap(), workspace()).is_err()
+        );
+        let mut bad_lifecycle = base.clone();
+        bad_lifecycle["session"]["lifecycle"] = json!("paused");
+        assert!(
+            StatusPreflight::from_parts(bad_lifecycle.as_object().unwrap(), workspace()).is_err()
+        );
+    }
+
+    #[test]
+    fn crafted_item_and_goal_fact_extraction() {
+        let result = json!({
+            "schema": "podway.status-result/v5",
+            "session": {"id": "00000000-0000-4000-8000-000000000002", "revision": 7, "lifecycle": "running"},
+            "current": {"attempt": {"attempt_id": "00000000-0000-4000-8000-000000000003"}},
+            "items": [{"item_id": "summary", "revision": 4}],
+            "goal_revision": 2,
+        });
+        let preflight =
+            StatusPreflight::from_parts(result.as_object().unwrap(), workspace()).unwrap();
+        assert_eq!(preflight.facts.session_revision, Revision::new(7));
+        assert_eq!(
+            preflight.facts.attempt_id.as_ref().map(AttemptId::as_str),
+            Some("00000000-0000-4000-8000-000000000003")
+        );
+        assert_eq!(
+            preflight.facts.item_revisions,
+            vec![("summary".to_owned(), Revision::new(4))]
+        );
+        assert_eq!(
+            preflight.facts.goal_revision,
+            Some(GoalRevisionNumberV2::new(2))
+        );
+        // Optional sections absent: extraction stays permissive there.
+        let minimal = json!({
+            "schema": "podway.status-result/v5",
+            "session": {"id": "00000000-0000-4000-8000-000000000002", "revision": 1, "lifecycle": "prepared"},
+        });
+        let preflight =
+            StatusPreflight::from_parts(minimal.as_object().unwrap(), workspace()).unwrap();
+        assert!(preflight.facts.attempt_id.is_none());
+        assert!(preflight.facts.item_revisions.is_empty());
+        assert!(preflight.facts.goal_revision.is_none());
+    }
+}

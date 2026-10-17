@@ -265,6 +265,96 @@ its other registered cases; do not silently trim that matrix. This is native
 qualification, not a claim of a new UTM run, distribution or installed activation.
 It is not an OPTIM latency, count, or memory gate.
 
+### READS registered unchanged-query baseline
+
+READS-001 registers its own scoped data-access characterization; it extends no
+OPTIM baseline. The counters live in `podway-store` `query_accounting`
+behind the `test-support` feature: one prepare per statement compilation
+(including the implicit prepare inside `Connection::query_row`), one execute
+per `query_row`/`query_map`/statement `query` initiation, and one delivered
+row per row-mapper invocation including rows whose conversion fails. Each
+delivered row also counts its variable-length column bytes (TEXT/BLOB bytes
+only; scalars and NULLs count zero). These are scoped measurements over the
+registered read, preflight and prepared-admission call sites in `v2_state`,
+`v2_memory`, `v2_goal`, `v2_delegation` and the direct-store read methods —
+never a total SQL counter. Uncovered by registration: open-time schema
+inventory and admission PRAGMAs, integrity verification, maintenance,
+predecessor and mutation-transaction reads.
+
+Logical retention units (not allocator or heap claims) cover the item-slot
+family: per-attempt raw serialized payload bytes held from row acquisition to
+consumption (peak and window peak), fresh decoded payload bytes (cumulative
+and held by reconstructed results), measured cached-input payload bytes for
+prepared-graph revalidation, payload pointer-identity reuse versus fresh
+decode, container clones, and the combined simultaneous peak of raw plus
+decoded plus cached input. Failed scopes and failed whole-graph
+reconstructions release their bytes at scope end and are reported exactly.
+
+Registered fixture recipes (newly chosen for READS Store-level registration;
+CLI qualification keeps its own G7/G8 recipes). Each recipe is one linear
+graph alternating work and goal-assessment decision nodes; every completed
+decision attempt records a decision, criterion results and a goal
+assessment, and the two-revision recipes end with a terminal-reactivation
+rework repeat attempt, so the attempt count is one above the node count:
+
+| Fixture | Nodes | Attempts | Items/attempt | Slot rows | Goal revisions | Assessment owners | Criterion results | Citation rows | Blockers | Evidence rows |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| S | 5 | 6 | 2 | 12 | 2 | 2 | 4 | 6 | 1 | 1 |
+| M | 24 | 25 | 8 | 200 | 2 | 11 | 44 | 48 | 6 | 1 |
+| grown-L | 40 | 41 | 16 | 656 | 2 | 19 | 57 | 60 | 4 | 1 |
+| maximum | 1,024 | 1,025 | 1 | 1,025 | 2 | 511 | 1,022 | 1,024 | 8 | 1 |
+| empty | 1 | 1 | 1 (unset) | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
+| single | 1 | 1 | 2 | 2 | 1 | 0 | 0 | 0 | 0 | 0 |
+
+Actual unchanged-query baselines, measured as one cold `current_graph` read
+per fixture. The instrumented build ran from the READS-001 working tree at
+base `052f8625f9c5944b90faf3c907e9a385d133be1c` with the observers as
+uncommitted working-tree changes (a truthful dirty-source snapshot, not a
+claim that a pristine commit produced it); the separately frozen pristine
+baseline CLI is SHA-256
+`28e52cc7be6f228bd862f716166121f6881ddbb8eec16643802eccaf434f7344`
+(provenance file records base `052f8625`, accepted BOUND `036e86ed`):
+
+| Fixture | Prepares | Executes | Delivered rows | TEXT/BLOB column bytes | Fresh payload bytes | Raw window peak | Combined peak |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| S | 43 | 43 | 65 | 6,819 | 792 | 132 | 858 |
+| M | 140 | 140 | 438 | 231,250 | 205,200 | 8,208 | 206,226 |
+| grown-L | 201 | 201 | 995 | 36,141,030 | 36,097,056 | 880,416 | 36,152,082 |
+| maximum | 4,118 | 4,118 | 8,215 | 822,518 | 51,250 | 50 | 51,300 |
+| empty | 23 | 23 | 16 | 2,089 | 0 | 0 | 0 |
+| single | 23 | 23 | 17 | 2,421 | 72 | 72 | 108 |
+
+The grown-L database reached 36,642,816 bytes (registered floor 16 MiB).
+Fresh payload bytes equal the sum of canonical encoded slot sizes on every
+recipe. Prepared selective reload on M (25 attempts, 200 slots): unchanged
+0 header executes and 0 point reloads (pure stamp reuse); sparse 25 header
+executes, 1 point reload, 199 pointer-proven payload reuses; dense 25, 8,
+192, with cached-input bytes measured from the live prepared graph before
+the window and included in the combined peak.
+
+Future-code predicates registered for READS-002 (never asserted against the
+unchanged path): changed-slot reload batches of at most 128 identity pairs
+(≤256 identity bind parameters, other parameters accounted), changed-only
+reload executions ≤ ceil(changed/128), strict execution decrease against the
+registered baselines on repeated-family fixtures, small/empty/single
+controls with no unnecessary increase under a three-pair no-worse policy,
+and prepare counts asserted separately.
+
+### READS registered latency comparison protocol
+
+READS freezes its matched comparison before any optimization. Comparisons
+run on the same host and fixtures; 20 warm-up plus 220 measured calls per
+cell; three predetermined paired blocks alternating candidate/BOUND order;
+per-cell median-block p50 and, separately, p99 candidate ≤ BOUND; the
+original historical G7/G8 thresholds and failure/stop policies apply
+independently to every applicable block; no +10% margin, pooling, posthoc
+tolerance or selected reruns; explicit and automatic-fence diagnostic cells
+are both required because G7 explicit fences alone cannot prove preflight
+gains; G7 retains its history-growth recipe and G8 its exact mode-tuple
+restoration and replay/upper-bound classifications. READS-001 registers the
+protocol and the frozen baseline CLI; READS-005 executes it. Nothing is
+measured as latency in READS-001.
+
 ### Evidence and completion boundaries
 
 Functional checks validate response, state, and replay identity. Use

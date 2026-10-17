@@ -14,6 +14,9 @@ use rusqlite::{Connection, Transaction, params};
 use serde_json::json;
 use sha2::{Digest as _, Sha256};
 
+use crate::query_accounting::{
+    accounted_prepare, accounted_query_map_prepared, accounted_query_row,
+};
 use crate::{
     RusqliteErrorContextV1, StoreErrorV1, StoreRecordKindV1, StoreValueErrorV1,
     map_rusqlite_error_v1,
@@ -270,9 +273,9 @@ pub(crate) fn load_goal_state_v2(
             .sum(),
         assessments.len(),
     ];
-    let actual: (i64, i64, i64, i64, i64) = connection
-        .query_row(
-            "SELECT (SELECT COUNT(*) FROM v2_goal_revisions WHERE session_id = ?1), \
+    let actual: (i64, i64, i64, i64, i64) = accounted_query_row(
+        connection,
+        "SELECT (SELECT COUNT(*) FROM v2_goal_revisions WHERE session_id = ?1), \
              (SELECT COUNT(*) FROM v2_goal_criteria WHERE session_id = ?1), \
              (SELECT COUNT(*) FROM v2_criterion_assessment_results WHERE session_id = ?1), \
              (SELECT COUNT(*) FROM v2_criterion_citations AS citation \
@@ -281,18 +284,18 @@ pub(crate) fn load_goal_state_v2(
                  AND result.criterion_id = citation.criterion_id \
                WHERE result.session_id = ?1), \
              (SELECT COUNT(*) FROM v2_goal_assessments WHERE session_id = ?1)",
-            [session_id.as_str()],
-            |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                ))
-            },
-        )
-        .map_err(record_error)?;
+        [session_id.as_str()],
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        },
+    )
+    .map_err(record_error)?;
     if expected_counts
         .iter()
         .zip([actual.0, actual.1, actual.2, actual.3, actual.4])
@@ -324,13 +327,15 @@ fn load_goal_revisions_v2(
         i64,
         i64,
     );
-    let mut statement = connection.prepare(
-        "SELECT goal_revision, predecessor_revision, statement, reason, rework_to_graph_node_id, \
+    let revisions_sql = "SELECT goal_revision, predecessor_revision, statement, reason, rework_to_graph_node_id, \
          reactivated, actor, binding_trace_sequence, created_at_ms FROM v2_goal_revisions \
-         WHERE session_id = ?1 ORDER BY goal_revision",
-    ).map_err(record_error)?;
-    let rows = statement
-        .query_map([session_id.as_str()], |row| {
+         WHERE session_id = ?1 ORDER BY goal_revision";
+    let mut statement = accounted_prepare(connection, revisions_sql).map_err(record_error)?;
+    let rows = accounted_query_map_prepared(
+        &mut statement,
+        revisions_sql,
+        [session_id.as_str()],
+        |row| {
             Ok((
                 row.get(0)?,
                 row.get(1)?,
@@ -342,30 +347,33 @@ fn load_goal_revisions_v2(
                 row.get(7)?,
                 row.get(8)?,
             ))
-        })
-        .map_err(record_error)?
-        .collect::<Result<Vec<RevisionRow>, _>>()
-        .map_err(record_error)?;
+        },
+    )
+    .map_err(record_error)?
+    .collect::<Result<Vec<RevisionRow>, _>>()
+    .map_err(record_error)?;
     let mut revisions = Vec::with_capacity(rows.len());
     for row in rows {
         let number = GoalRevisionNumberV2::new(persisted_u64(row.0)?);
-        let mut criteria_statement = connection
-            .prepare(
-                "SELECT criterion_id, criterion_ordinal, statement FROM v2_goal_criteria \
-             WHERE session_id = ?1 AND goal_revision = ?2 ORDER BY criterion_ordinal",
-            )
-            .map_err(record_error)?;
-        let criteria_rows = criteria_statement
-            .query_map(params![session_id.as_str(), row.0], |value| {
+        let criteria_sql = "SELECT criterion_id, criterion_ordinal, statement FROM v2_goal_criteria \
+             WHERE session_id = ?1 AND goal_revision = ?2 ORDER BY criterion_ordinal";
+        let mut criteria_statement =
+            accounted_prepare(connection, criteria_sql).map_err(record_error)?;
+        let criteria_rows = accounted_query_map_prepared(
+            &mut criteria_statement,
+            criteria_sql,
+            params![session_id.as_str(), row.0],
+            |value| {
                 Ok((
                     value.get::<_, String>(0)?,
                     value.get::<_, i64>(1)?,
                     value.get::<_, String>(2)?,
                 ))
-            })
-            .map_err(record_error)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(record_error)?;
+            },
+        )
+        .map_err(record_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(record_error)?;
         let mut criteria = Vec::with_capacity(criteria_rows.len());
         for (index, (id, ordinal, statement)) in criteria_rows.into_iter().enumerate() {
             if ordinal != i64::try_from(index).map_err(|_| corrupt())? {
@@ -425,15 +433,17 @@ fn load_criterion_assessments_v2(
         Option<String>,
         i64,
     );
-    let mut statement = connection.prepare(
-        "SELECT r.attempt_id, r.goal_revision, r.criterion_id, r.status, r.mode, r.reason, r.actor, r.recorded_at_ms \
+    let assessments_sql = "SELECT r.attempt_id, r.goal_revision, r.criterion_id, r.status, r.mode, r.reason, r.actor, r.recorded_at_ms \
          FROM v2_criterion_assessment_results r JOIN v2_attempts a ON a.attempt_id = r.attempt_id \
          JOIN v2_goal_criteria c ON c.session_id = r.session_id AND c.goal_revision = r.goal_revision \
            AND c.criterion_id = r.criterion_id WHERE r.session_id = ?1 \
-         ORDER BY a.trace_sequence, c.criterion_ordinal",
-    ).map_err(record_error)?;
-    let rows = statement
-        .query_map([session_id.as_str()], |row| {
+         ORDER BY a.trace_sequence, c.criterion_ordinal";
+    let mut statement = accounted_prepare(connection, assessments_sql).map_err(record_error)?;
+    let rows = accounted_query_map_prepared(
+        &mut statement,
+        assessments_sql,
+        [session_id.as_str()],
+        |row| {
             Ok((
                 row.get(0)?,
                 row.get(1)?,
@@ -444,10 +454,11 @@ fn load_criterion_assessments_v2(
                 row.get(6)?,
                 row.get(7)?,
             ))
-        })
-        .map_err(record_error)?
-        .collect::<Result<Vec<ResultRow>, _>>()
-        .map_err(record_error)?;
+        },
+    )
+    .map_err(record_error)?
+    .collect::<Result<Vec<ResultRow>, _>>()
+    .map_err(record_error)?;
     let mut grouped: Vec<(
         AttemptId,
         GoalRevisionNumberV2,
@@ -502,22 +513,25 @@ fn load_citations_v2(
     attempt_id: &AttemptId,
     criterion_id: &CriterionId,
 ) -> Result<Vec<CriterionCitationV2>, StoreErrorV1> {
-    let mut statement = connection.prepare(
-        "SELECT citation_ordinal, citation_kind, source_graph_node_id, item_id FROM v2_criterion_citations \
-         WHERE attempt_id = ?1 AND criterion_id = ?2 ORDER BY citation_ordinal",
-    ).map_err(record_error)?;
-    let rows = statement
-        .query_map(params![attempt_id.as_str(), criterion_id.as_str()], |row| {
+    let citations_sql = "SELECT citation_ordinal, citation_kind, source_graph_node_id, item_id FROM v2_criterion_citations \
+         WHERE attempt_id = ?1 AND criterion_id = ?2 ORDER BY citation_ordinal";
+    let mut statement = accounted_prepare(connection, citations_sql).map_err(record_error)?;
+    let rows = accounted_query_map_prepared(
+        &mut statement,
+        citations_sql,
+        params![attempt_id.as_str(), criterion_id.as_str()],
+        |row| {
             Ok((
                 row.get::<_, i64>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, Option<String>>(2)?,
                 row.get::<_, Option<String>>(3)?,
             ))
-        })
-        .map_err(record_error)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(record_error)?;
+        },
+    )
+    .map_err(record_error)?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(record_error)?;
     rows.into_iter()
         .enumerate()
         .map(|(index, (ordinal, kind, source, item))| {
@@ -556,13 +570,16 @@ fn load_goal_assessments_v2(
         i64,
         String,
     );
-    let mut statement = connection.prepare(
-        "SELECT decision_attempt_id, goal_revision, decision_trace_sequence, outcome, mode, selected_option_id, \
+    let goal_assessments_sql = "SELECT decision_attempt_id, goal_revision, decision_trace_sequence, outcome, mode, selected_option_id, \
          route_effect, route_target_graph_node_id, actor, recorded_at_ms, record_digest FROM v2_goal_assessments \
-         WHERE session_id = ?1 ORDER BY decision_trace_sequence",
-    ).map_err(record_error)?;
-    let rows = statement
-        .query_map([session_id.as_str()], |row| {
+         WHERE session_id = ?1 ORDER BY decision_trace_sequence";
+    let mut statement =
+        accounted_prepare(connection, goal_assessments_sql).map_err(record_error)?;
+    let rows = accounted_query_map_prepared(
+        &mut statement,
+        goal_assessments_sql,
+        [session_id.as_str()],
+        |row| {
             Ok((
                 row.get(0)?,
                 row.get(1)?,
@@ -576,10 +593,11 @@ fn load_goal_assessments_v2(
                 row.get(9)?,
                 row.get(10)?,
             ))
-        })
-        .map_err(record_error)?
-        .collect::<Result<Vec<AssessmentRow>, _>>()
-        .map_err(record_error)?;
+        },
+    )
+    .map_err(record_error)?
+    .collect::<Result<Vec<AssessmentRow>, _>>()
+    .map_err(record_error)?;
     let mut assessments = Vec::with_capacity(rows.len());
     for row in rows {
         let attempt_id = AttemptId::new(row.0).map_err(|_| corrupt())?;

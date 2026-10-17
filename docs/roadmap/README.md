@@ -31,7 +31,7 @@ OPTIM -> BOUND -> READS
 
 These are three separately accepted development epics with one shared goal and
 a fixed order, not a release program and not parallel work. OPTIM is Completed.
-BOUND is Completed and owner-accepted; READS remains Planned. Master separately authorized local
+BOUND is Completed and owner-accepted; READS is In Progress. Master separately authorized local
 BOUND Task commits and delegated Task acceptance to Main for Epic Harmony.
 No release version, installation, remote push or external-consumer change is authorized here.
 V2DFC remains completed; its historical qualification is not a fresh measurement
@@ -193,11 +193,16 @@ started. No release, installation or remote publication is included.
 
 ## READS — Read Models and Data Access
 
-Dependencies: accepted `BOUND` completion. Design: [READS dossier](../todo/TODO-podway-read-models-data-access.md).
+Dependencies: accepted `BOUND` completion. Status: In Progress. Design: [READS dossier](../todo/TODO-podway-read-models-data-access.md).
+
+Master authorized direct Epic Harmony delivery of READS on 2026-10-17, including
+Main's delegated Task acceptance, lifecycle decisions and local Task commits.
+Whole-Epic acceptance remains Master-owned. No Aquarium handler or Podway
+session is required for this delivery.
 
 | id | title | status | goal | references |
 |---|---|---|---|---|
-| `READS-001` | Freeze data requirements and validation equivalence | Planned | Map queries, decode/validation scope, error ordering and cost measurements before reducing data-access work. | [Task design](../todo/TODO-podway-read-models-data-access.md#reads-001-freeze-data-requirements-and-validation-equivalence) |
+| `READS-001` | Freeze data requirements and validation equivalence | Completed | Map queries, decode/validation scope, error ordering and cost measurements before reducing data-access work. | [Task design](../todo/TODO-podway-read-models-data-access.md#reads-001-freeze-data-requirements-and-validation-equivalence) |
 | `READS-002` | Bulk-load attempt data without reducing validation | Planned | Bulk-load slots/blockers/evidence, goal criteria and citations; batch changed-slot reloads while preserving header-only reuse, validation order and bounded memory. | [Task design](../todo/TODO-podway-read-models-data-access.md#reads-002-bulk-load-attempt-data-without-reducing-validation) |
 | `READS-003` | Build purpose-specific views over validated state | Planned | Build typed views over shared validation, prove hidden historical-value refusal and keep archive-list summary-only without reintroducing OPTIM's eliminated copies. | [Task design](../todo/TODO-podway-read-models-data-access.md#reads-003-build-purpose-specific-views-over-validated-state) |
 | `READS-004` | Replace CLI status-JSON preflight with typed facts | Planned | Replace the named fence-preflight module with typed Engine facts, preserving status-only failures; prove zero stdin preflight and the post-facts competing-writer gap. | [Task design](../todo/TODO-podway-read-models-data-access.md#reads-004-replace-cli-status-json-preflight-with-typed-facts) |

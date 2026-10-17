@@ -390,40 +390,39 @@ pub(crate) fn receipt_snapshot_connection_v1(
     {
         return Ok(DelegationReceiptSnapshotV1::empty());
     }
-    let total: i64 = connection
-        .query_row(
-            "SELECT COUNT(*) FROM v2_attempts a WHERE a.session_id = ?1 AND EXISTS (\
-             SELECT 1 FROM v2_delegation_receipts r \
-             WHERE r.attempt_id = a.attempt_id AND r.session_id = a.session_id)",
-            [state.trace().session_id().as_str()],
-            |row| row.get(0),
-        )
+    let total: i64 = crate::query_accounting::accounted_query_row(
+        connection,
+        "SELECT COUNT(*) FROM v2_attempts a WHERE a.session_id = ?1 AND EXISTS (\
+         SELECT 1 FROM v2_delegation_receipts r \
+         WHERE r.attempt_id = a.attempt_id AND r.session_id = a.session_id)",
+        [state.trace().session_id().as_str()],
+        |row| row.get(0),
+    )
+    .map_err(|_| corrupt())?;
+    let receipts_sql = "SELECT a.attempt_id, a.graph_node_id, r.receipt_id, r.receipt_json FROM v2_attempts a \
+         JOIN v2_delegation_receipts r ON r.attempt_id = a.attempt_id AND r.session_id = a.session_id \
+         WHERE a.session_id = ?1 ORDER BY a.trace_sequence DESC LIMIT ?2";
+    let mut statement = crate::query_accounting::accounted_prepare(connection, receipts_sql)
         .map_err(|_| corrupt())?;
-    let mut statement = connection
-        .prepare(
-            "SELECT a.attempt_id, a.graph_node_id, r.receipt_id, r.receipt_json FROM v2_attempts a \
-             JOIN v2_delegation_receipts r ON r.attempt_id = a.attempt_id AND r.session_id = a.session_id \
-             WHERE a.session_id = ?1 ORDER BY a.trace_sequence DESC LIMIT ?2",
-        )
-        .map_err(|_| corrupt())?;
-    let receipt_rows = statement
-        .query_map(
-            params![
-                state.trace().session_id().as_str(),
-                MAX_DELEGATION_RECEIPT_SUMMARIES_V1 as i64
-            ],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                ))
-            },
-        )
-        .map_err(|_| corrupt())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| corrupt())?;
+    let receipt_rows = crate::query_accounting::accounted_query_map_prepared(
+        &mut statement,
+        receipts_sql,
+        params![
+            state.trace().session_id().as_str(),
+            MAX_DELEGATION_RECEIPT_SUMMARIES_V1 as i64
+        ],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        },
+    )
+    .map_err(|_| corrupt())?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(|_| corrupt())?;
     let receipts = receipt_rows
         .iter()
         .map(|(attempt_id, graph_node_id, receipt_id, json)| {
@@ -476,14 +475,14 @@ pub(crate) fn read_receipt_connection_v1(
     session_id: &SessionId,
     attempt_id: &AttemptId,
 ) -> Result<Option<DelegationReceiptV1>, StoreErrorV1> {
-    let row: Option<(String, String)> = connection
-        .query_row(
-            "SELECT receipt_id, receipt_json FROM v2_delegation_receipts WHERE session_id = ?1 AND attempt_id = ?2",
-            params![session_id.as_str(), attempt_id.as_str()],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .optional()
-        .map_err(|_| corrupt())?;
+    let row: Option<(String, String)> = crate::query_accounting::accounted_query_row(
+        connection,
+        "SELECT receipt_id, receipt_json FROM v2_delegation_receipts WHERE session_id = ?1 AND attempt_id = ?2",
+        params![session_id.as_str(), attempt_id.as_str()],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .optional()
+    .map_err(|_| corrupt())?;
     row.map(|(receipt_id, json)| {
         let receipt = DelegationReceiptV1::decode(&json)?;
         if receipt.session_id() != *session_id

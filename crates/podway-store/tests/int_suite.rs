@@ -1,3 +1,7 @@
+#[path = "int_reads001_negative_boundaries.rs"]
+mod int_reads001_negative_boundaries;
+#[path = "int_reads001_query_inventory.rs"]
+mod int_reads001_query_inventory;
 #[path = "int_v2_goal_state.rs"]
 mod int_v2_goal_state;
 #[path = "int_v2_workflow_memory.rs"]

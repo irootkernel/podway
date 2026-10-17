@@ -16,6 +16,9 @@ use podway_core::{
 use rusqlite::{Connection, Transaction, params};
 use serde_json::Value;
 
+use crate::query_accounting::{
+    accounted_prepare, accounted_query_map_prepared, accounted_query_row,
+};
 use crate::v2_state::{AttemptMetadataV2, ProcedureSnapshotV2};
 use crate::{
     RusqliteErrorContextV1, StoreErrorV1, StoreRecordKindV1, StoreValueErrorV1,
@@ -553,17 +556,22 @@ fn load_attempt_memory_v2(
         Option<i64>,
         Option<String>,
     );
-    let mut statement = connection
-        .prepare(if cached.is_some() {
-            "SELECT item_id, item_type, item_revision, typeof(value_json) != 'null', NULL, NULL, NULL \
-             FROM v2_item_slots WHERE attempt_id = ?1"
-        } else {
-            "SELECT item_id, item_type, item_revision, value_json IS NOT NULL, created_at_ms, updated_at_ms, value_json \
-             FROM v2_item_slots WHERE attempt_id = ?1"
-        })
+    #[cfg(any(test, feature = "test-support"))]
+    let _reads001_slot_scope = crate::query_accounting::RawSlotScope::enter();
+    let slots_sql = if cached.is_some() {
+        "SELECT item_id, item_type, item_revision, typeof(value_json) != 'null', NULL, NULL, NULL \
+         FROM v2_item_slots WHERE attempt_id = ?1"
+    } else {
+        "SELECT item_id, item_type, item_revision, value_json IS NOT NULL, created_at_ms, updated_at_ms, value_json \
+         FROM v2_item_slots WHERE attempt_id = ?1"
+    };
+    let mut statement = accounted_prepare(connection, slots_sql)
         .map_err(|error| record_error(error, StoreRecordKindV1::Item))?;
-    let rows = statement
-        .query_map([attempt.attempt_id().as_str()], |row| {
+    let rows = accounted_query_map_prepared(
+        &mut statement,
+        slots_sql,
+        [attempt.attempt_id().as_str()],
+        |row| {
             Ok((
                 row.get(0)?,
                 row.get(1)?,
@@ -573,11 +581,16 @@ fn load_attempt_memory_v2(
                 row.get(5)?,
                 row.get(6)?,
             ))
-        })
-        .map_err(|error| record_error(error, StoreRecordKindV1::Item))?;
+        },
+    )
+    .map_err(|error| record_error(error, StoreRecordKindV1::Item))?;
     let mut loaded = BTreeMap::new();
     for row in rows {
         let row: SlotRow = row.map_err(|error| record_error(error, StoreRecordKindV1::Item))?;
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(raw) = row.6.as_ref() {
+            crate::query_accounting::ledger::acquire_raw(raw.len());
+        }
         if loaded.insert(row.0.clone(), row).is_some() {
             return Err(corrupt(StoreRecordKindV1::Item));
         }
@@ -609,17 +622,35 @@ fn load_attempt_memory_v2(
             // Compatible writers keep identity/creation metadata immutable and
             // advance the revision with any value/update-time change. Reading
             // only the header avoids loading unchanged overflow-page payloads.
+            #[cfg(any(test, feature = "test-support"))]
+            {
+                crate::query_accounting::ledger::record_container_copy();
+                if let Some(pointer) = crate::query_accounting::ledger::payload_pointer(slot) {
+                    crate::query_accounting::ledger::record_reuse(pointer);
+                }
+            }
             slots.push(slot.clone());
             continue;
         }
         let (value, created_at, updated_at) = if cached.is_some() {
-            let (value, created_at, updated_at) = connection
-                .query_row(
-                    "SELECT value_json, created_at_ms, updated_at_ms FROM v2_item_slots WHERE attempt_id=?1 AND item_id=?2",
-                    params![attempt.attempt_id().as_str(), item.id().as_str()],
-                    |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)),
-                )
-                .map_err(|error| record_error(error, StoreRecordKindV1::Item))?;
+            let reload_sql = "SELECT value_json, created_at_ms, updated_at_ms FROM v2_item_slots WHERE attempt_id=?1 AND item_id=?2";
+            let (value, created_at, updated_at) = accounted_query_row(
+                connection,
+                reload_sql,
+                params![attempt.attempt_id().as_str(), item.id().as_str()],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .map_err(|error| record_error(error, StoreRecordKindV1::Item))?;
+            #[cfg(any(test, feature = "test-support"))]
+            if let Some(raw) = value.as_ref() {
+                crate::query_accounting::ledger::acquire_raw(raw.len());
+            }
             (value, created_at, updated_at)
         } else {
             (
@@ -628,28 +659,56 @@ fn load_attempt_memory_v2(
                 updated_at.ok_or_else(|| corrupt(StoreRecordKindV1::Item))?,
             )
         };
-        slots.push(
-            ItemSlotStateV2::new(
-                attempt.attempt_id().clone(),
-                item.id().clone(),
-                item_type,
-                revision,
-                value
-                    .map(|value| decode_item_value_v2(&value, item_type))
-                    .transpose()?,
-                UnixMillis::new(persisted_u64(created_at, StoreRecordKindV1::Item)?),
-                UnixMillis::new(persisted_u64(updated_at, StoreRecordKindV1::Item)?),
-            )
-            .map_err(|_| corrupt(StoreRecordKindV1::Item))?,
-        );
+        // The consuming map closure preserves the original drop behavior: the
+        // raw serialized payload is dropped when the decode consumes it.
+        #[cfg(any(test, feature = "test-support"))]
+        let reads001_raw_len = value.as_ref().map_or(0, |raw| raw.len());
+        let decoded_value = value
+            .map(|value| {
+                let decoded = decode_item_value_v2(&value, item_type);
+                #[cfg(any(test, feature = "test-support"))]
+                {
+                    // Count every decode attempt; account a successfully
+                    // decoded payload's logical bytes only when one exists,
+                    // while the raw string is still alive so the combined
+                    // peak observes the true overlap. The consumed raw bytes
+                    // are released on both outcomes.
+                    crate::query_accounting::ledger::record_decode_attempt();
+                    if decoded.is_ok() {
+                        crate::query_accounting::ledger::record_decoded_bytes(reads001_raw_len);
+                    }
+                    crate::query_accounting::ledger::release_raw(reads001_raw_len);
+                }
+                decoded
+            })
+            .transpose()?;
+        let slot = ItemSlotStateV2::new(
+            attempt.attempt_id().clone(),
+            item.id().clone(),
+            item_type,
+            revision,
+            decoded_value,
+            UnixMillis::new(persisted_u64(created_at, StoreRecordKindV1::Item)?),
+            UnixMillis::new(persisted_u64(updated_at, StoreRecordKindV1::Item)?),
+        )
+        .map_err(|_| corrupt(StoreRecordKindV1::Item))?;
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(pointer) = crate::query_accounting::ledger::payload_pointer(&slot) {
+            crate::query_accounting::ledger::register_payload_pointer(pointer, reads001_raw_len);
+        }
+        slots.push(slot);
     }
     if !loaded.is_empty() {
         return Err(corrupt(StoreRecordKindV1::Item));
     }
     let blockers = load_blockers_v2(connection, attempt, metadata)?;
     let evidence = load_evidence_v2(connection, attempt)?;
-    AttemptWorkflowMemoryV2::new(attempt.attempt_id().clone(), slots, blockers, evidence)
-        .map_err(|_| corrupt(StoreRecordKindV1::Attempt))
+    let memory =
+        AttemptWorkflowMemoryV2::new(attempt.attempt_id().clone(), slots, blockers, evidence)
+            .map_err(|_| corrupt(StoreRecordKindV1::Attempt))?;
+    #[cfg(any(test, feature = "test-support"))]
+    crate::query_accounting::ledger::commit_slot_scope();
+    Ok(memory)
 }
 
 fn load_blockers_v2(
@@ -657,14 +716,15 @@ fn load_blockers_v2(
     attempt: &SessionAttemptV2,
     _metadata: &AttemptMetadataV2,
 ) -> Result<Vec<BlockerStateV2>, StoreErrorV1> {
-    let mut statement = connection
-        .prepare(
-            "SELECT blocker_id, reason, state, created_at_ms, resolved_at_ms FROM v2_blockers \
-         WHERE attempt_id = ?1 ORDER BY created_at_ms, blocker_id",
-        )
+    let blockers_sql = "SELECT blocker_id, reason, state, created_at_ms, resolved_at_ms FROM v2_blockers \
+         WHERE attempt_id = ?1 ORDER BY created_at_ms, blocker_id";
+    let mut statement = accounted_prepare(connection, blockers_sql)
         .map_err(|error| record_error(error, StoreRecordKindV1::Blocker))?;
-    let rows = statement
-        .query_map([attempt.attempt_id().as_str()], |row| {
+    let rows = accounted_query_map_prepared(
+        &mut statement,
+        blockers_sql,
+        [attempt.attempt_id().as_str()],
+        |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -672,8 +732,9 @@ fn load_blockers_v2(
                 row.get::<_, i64>(3)?,
                 row.get::<_, Option<i64>>(4)?,
             ))
-        })
-        .map_err(|error| record_error(error, StoreRecordKindV1::Blocker))?;
+        },
+    )
+    .map_err(|error| record_error(error, StoreRecordKindV1::Blocker))?;
     rows.map(|row| {
         let (id, reason, state, created, resolved) =
             row.map_err(|error| record_error(error, StoreRecordKindV1::Blocker))?;
@@ -711,13 +772,16 @@ fn load_evidence_v2(
         Option<String>,
         Option<i64>,
     );
-    let mut statement = connection.prepare(
-        "SELECT source_graph_node_id, reference_ordinal, required, selected_item_ids_json, state, \
+    let evidence_sql = "SELECT source_graph_node_id, reference_ordinal, required, selected_item_ids_json, state, \
          source_attempt_id, source_attempt_number, items_digest, resolved_at_ms \
-         FROM v2_resolved_evidence_references WHERE attempt_id = ?1 ORDER BY reference_ordinal",
-    ).map_err(|error| record_error(error, StoreRecordKindV1::Attempt))?;
-    let rows = statement
-        .query_map([attempt.attempt_id().as_str()], |row| {
+         FROM v2_resolved_evidence_references WHERE attempt_id = ?1 ORDER BY reference_ordinal";
+    let mut statement = accounted_prepare(connection, evidence_sql)
+        .map_err(|error| record_error(error, StoreRecordKindV1::Attempt))?;
+    let rows = accounted_query_map_prepared(
+        &mut statement,
+        evidence_sql,
+        [attempt.attempt_id().as_str()],
+        |row| {
             Ok((
                 row.get(0)?,
                 row.get(1)?,
@@ -729,8 +793,9 @@ fn load_evidence_v2(
                 row.get(7)?,
                 row.get(8)?,
             ))
-        })
-        .map_err(|error| record_error(error, StoreRecordKindV1::Attempt))?;
+        },
+    )
+    .map_err(|error| record_error(error, StoreRecordKindV1::Attempt))?;
     rows.map(|row| {
         let row: EvidenceRow =
             row.map_err(|error| record_error(error, StoreRecordKindV1::Attempt))?;
@@ -818,14 +883,17 @@ fn load_decisions_v2(
         .iter()
         .map(|memory| (memory.attempt_id(), memory))
         .collect();
-    let mut statement = connection.prepare(
-        "SELECT attempt_id, session_id, trace_sequence, session_revision, procedure_snapshot_id, \
+    let decisions_sql = "SELECT attempt_id, session_id, trace_sequence, session_revision, procedure_snapshot_id, \
          procedure_digest, graph_node_id, node_definition_id, attempt_number, goal_revision, \
          selected_option_id, route_effect, route_target_graph_node_id, reason, actor, recorded_at_ms \
-         FROM v2_decision_records WHERE session_id = ?1 ORDER BY trace_sequence",
-    ).map_err(|error| record_error(error, StoreRecordKindV1::Attempt))?;
-    let rows = statement
-        .query_map([trace.session_id().as_str()], |row| {
+         FROM v2_decision_records WHERE session_id = ?1 ORDER BY trace_sequence";
+    let mut statement = accounted_prepare(connection, decisions_sql)
+        .map_err(|error| record_error(error, StoreRecordKindV1::Attempt))?;
+    let rows = accounted_query_map_prepared(
+        &mut statement,
+        decisions_sql,
+        [trace.session_id().as_str()],
+        |row| {
             Ok((
                 row.get(0)?,
                 row.get(1)?,
@@ -844,8 +912,9 @@ fn load_decisions_v2(
                 row.get(14)?,
                 row.get(15)?,
             ))
-        })
-        .map_err(|error| record_error(error, StoreRecordKindV1::Attempt))?;
+        },
+    )
+    .map_err(|error| record_error(error, StoreRecordKindV1::Attempt))?;
     rows.map(|row| {
         let row: DecisionRow =
             row.map_err(|error| record_error(error, StoreRecordKindV1::Attempt))?;
@@ -915,15 +984,13 @@ fn load_reworks_v2(
         Option<String>,
         i64,
     );
-    let mut statement = connection
-        .prepare(
-            "SELECT trace_sequence, kind, from_graph_node_id, to_graph_node_id, target_attempt_id, \
+    let reworks_sql = "SELECT trace_sequence, kind, from_graph_node_id, to_graph_node_id, target_attempt_id, \
          reason, reactivated, actor, recorded_at_ms FROM v2_rework_records \
-         WHERE session_id = ?1 ORDER BY trace_sequence",
-        )
+         WHERE session_id = ?1 ORDER BY trace_sequence";
+    let mut statement = accounted_prepare(connection, reworks_sql)
         .map_err(|error| record_error(error, StoreRecordKindV1::Attempt))?;
-    let rows = statement
-        .query_map([session_id.as_str()], |row| {
+    let rows =
+        accounted_query_map_prepared(&mut statement, reworks_sql, [session_id.as_str()], |row| {
             Ok((
                 row.get(0)?,
                 row.get(1)?,

@@ -275,6 +275,93 @@ changed source/test ownership references.
   the competing commit. OPTIM recorded no performance baseline or comparator
   for READS to extend. Do not present later measurements as an OPTIM baseline.
 
+READS-001 registration record (2026-10-17, instrumented unchanged-query
+candidate at `052f8625`):
+
+- Scoped observers and baseline live in `podway-store` `query_accounting`
+  (`test-support` feature) with the registered call-site scope, uncovered
+  reads, units and actual per-recipe numbers in the
+  [READS registered baseline](../implementation-tips/direct-cli-performance-qualification.md#reads-registered-unchanged-query-baseline).
+  Store characterization: `int_reads001_query_inventory` (S/M/grown-L/1,024
+  recipes, empty/single controls, paired observed/unobserved neutrality,
+  unchanged/sparse/dense prepared reloads with pointer-identity reuse proofs,
+  failed-decode release accounting) and `int_reads001_negative_boundaries`
+  (stale `value_json` refusal with byte-identical preimage and no sidecar,
+  exact typed re-encoding rejection of noncanonical-but-valid values, the
+  same-corrupted-archive list/summary success versus graph refusal with a
+  healthy control, multi-fault precedence pinned by real probe order through
+  the scoped observers because the public error is identical).
+- Projected-command oracles: `podway-engine` `int_reads001_readback_ports`
+  (compact and window-omitting standard status refuse with
+  `WORKSPACE_STATE_UNREADABLE`; archive-list of the same corrupted fixture
+  returns the exact session id and unchanged summary while archive-show
+  refuses; the four-way ordering current-corruption → archived-corruption →
+  `SESSION_ARCHIVE_NOT_FOUND` → `SESSION_ID_MISMATCH` is pinned as the
+  unchanged implementation behaves; healthy archive control decodes).
+- CLI preflight boundary: `podway-cli` preflight parser-surface unit tests
+  (`reads001_parser_surface_tests`) characterize the crafted-map rejection
+  surface separately from input-reachable failures; the input-reachable
+  unreadable mapping through `preflight_error` and the Busy/deadline
+  attribution reuse the existing
+  `e2e_v2dfc007_direct_cli` cases (`v2dfc015_invalid_current_stores_require_unfenced_confirmed_recovery`,
+  the SQLite-writer contention and maintenance-deadline cases). `Command::Record`'s
+  structural exclusion from `needs_facts` remains the recorded basis for the
+  future zero-preflight counters.
+- Registration-only for READS-004 (no implementation here): process-local
+  zero status/facts-preflight counters for `record --stdin` and delegation
+  acceptance, and the test-only post-facts barrier that proves release of the
+  read transaction, process-local connection gate and actual
+  shared/cold-exclusive `DirectOpenLease` before a confirmed second-writer
+  commit rejects the original fences.
+- Proof obligations: resolved rows above. Established gate facts from final
+  source review: the first byte/schema gate on standard status is the
+  projection validator (depth plus 1 MiB result bound), which maps to
+  `WORKSPACE_STATE_UNREADABLE` (exit 5, non-retryable); the envelope
+  `Protocol` gate maps to `REQUEST_INVALID` (exit 2, non-retryable) and can
+  fire only in the narrow band where a result fits the bound while the
+  enveloped output does not. Evidence-reference integrity is validated at
+  full graph admission — Core runs `validate_attempt_evidence_v2` on every
+  attempt, rejecting missing source trace/memory and mismatched
+  node/number/trace-order/lifecycle/resolved-at/digest before the graph is
+  constructed — and the evidence family persists in the relational
+  `v2_resolved_evidence_references` table, so missing-source corruption
+  classifies as a Store admission failure (`WORKSPACE_STATE_UNREADABLE`),
+  not a projection failure. Open rows carried to READS-004 as equivalence
+  obligations: extreme persisted `UnixMillis` values, schema-size arithmetic
+  for the standard-status path (a drift guard built on exact field overhead
+  or a normal-ASCII identifier invariant is the form such a proof would
+  take), and the selected-readback fallback's precise invariant trace if it
+  is excluded. None of these rows is claimed proven unreachable here.
+- Non-scope inventory (unchanged by READS): `WorkspaceShow`, doctor deep
+  scans, outcome lookup and the non-preflight CLI status consumers retain
+  their existing paths; omissions from the scoped counters are not
+  optimization targets.
+
+Read and preflight inventory (unchanged implementation, from
+`execute_read_v1` and the BOUND-005 preflight module). Every read variant
+first resolves the workspace, admits the Store and eagerly builds the full
+current-session view (complete cold decode including values outside any
+window); per-variant data and validation beyond that boundary:
+
+| Variant | Additional data | Validation/returned facts beyond the eager current view |
+|---|---|---|
+| `session.status` | none | Projects the requested tier/history window from the fully decoded state; schema-validated `podway.status-result/v5` family output |
+| `session.next` | none | Projects next-step readiness from decoded state |
+| `session.observe` | none | Projects the observation document from decoded state |
+| `evidence.read` | token binding check | Evidence page from decoded resolutions; page-token session binding; optional consumer-attempt fence |
+| `session.archive_list` | inactive summary rows only | Summary-row validation only; no archived graph reconstruction; returns exact ids, unchanged summaries, count/truncation/oldest |
+| `session.archive_show` | archived graph + archived summary | Full selected-session decode including values outside the window; summary joins the projected tier/history output |
+| `delegation.receipt` | one receipt row (current or archived view) | Receipt decode and identity/workspace match against its graph |
+| `delegation.package` | none beyond the eager view | Projects the delegation package from decoded state |
+
+The single CLI preflight read is `session.status` at Standard tier with
+`history_before: None` through `invocation.execute` in `preflight::prepare`;
+its reachable failures arrive as engine `Failure` envelopes mapped by
+`preflight_error` (corrupt state, Busy/maintenance/deadline), followed by
+the crafted-map-only parser surface recorded above, then the
+prepared-lifecycle rejection ordering (key validation, automation
+`--idempotency-key` requirement, revision conflict, `SESSION_NOT_RUNNING`).
+
 ### READS-002: Bulk-load attempt data without reducing validation
 
 - Batch slots, blockers, evidence references, goal criteria and criterion citations

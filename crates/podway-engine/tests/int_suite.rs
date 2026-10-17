@@ -21,6 +21,9 @@ mod int_v2run002_views;
 #[path = "int_v2dfc006_fixture_ports.rs"]
 mod int_v2dfc006_fixture_ports;
 
+#[path = "int_reads001_readback_ports.rs"]
+mod int_reads001_readback_ports;
+
 #[path = "int_v2dfc006_maintenance.rs"]
 mod int_v2dfc006_maintenance;
 #[path = "int_v2dfc006_runtime_ports.rs"]

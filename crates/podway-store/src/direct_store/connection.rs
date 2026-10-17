@@ -642,7 +642,8 @@ impl DirectReadSnapshotV1<'_> {
     }
 
     pub fn committed_sequence(&self) -> DirectStoreResultV1<u64> {
-        let sequence: i64 = self.connection.query_row(
+        let sequence: i64 = crate::query_accounting::accounted_query_row(
+            self.connection,
             "SELECT next_workspace_sequence FROM workspace_state WHERE singleton=1",
             [],
             |row| row.get(0),
@@ -663,9 +664,12 @@ impl DirectReadSnapshotV1<'_> {
 
     pub fn latest_outcome(&self) -> DirectStoreResultV1<Option<DirectRecordedOutcomeV1>> {
         use rusqlite::OptionalExtension;
-        let key: Option<String> = self.connection.query_row(
+        let key: Option<String> = crate::query_accounting::accounted_query_row(
+            self.connection,
             "SELECT idempotency_key FROM mutation_outcomes ORDER BY workspace_sequence DESC LIMIT 1",
-            [], |row| row.get(0)).optional()?;
+            [], |row| row.get(0),
+        )
+        .optional()?;
         key.map(|key| {
             let key = IdempotencyKeyV1::new(key).map_err(|_| DirectStoreErrorV1::Unreadable)?;
             self.outcome(&key)?.ok_or(DirectStoreErrorV1::Unreadable)
@@ -684,10 +688,13 @@ impl DirectReadSnapshotV1<'_> {
                 reason: "qualification outcome inventory bound is invalid",
             });
         }
-        let mut statement = self.connection.prepare(
-            "SELECT idempotency_key FROM mutation_outcomes ORDER BY workspace_sequence LIMIT ?1",
-        )?;
-        let rows = statement.query_map(
+        let outcome_keys_sql =
+            "SELECT idempotency_key FROM mutation_outcomes ORDER BY workspace_sequence LIMIT ?1";
+        let mut statement =
+            crate::query_accounting::accounted_prepare(self.connection, outcome_keys_sql)?;
+        let rows = crate::query_accounting::accounted_query_map_prepared(
+            &mut statement,
+            outcome_keys_sql,
             [i64::try_from(maximum + 1).expect("bounded qualification inventory")],
             |row| row.get::<_, String>(0),
         )?;
@@ -881,12 +888,14 @@ impl DirectStoreV1 {
             let Some(graph) = snapshot.current_graph()? else {
                 return Ok(None);
             };
-            let generation_id: String = snapshot.connection.query_row(
+            let generation_id: String = crate::query_accounting::accounted_query_row(
+                snapshot.connection,
                 "SELECT generation_id FROM writer_contract WHERE singleton=1",
                 [],
                 |row| row.get(0),
             )?;
-            let sequence: i64 = snapshot.connection.query_row(
+            let sequence: i64 = crate::query_accounting::accounted_query_row(
+                snapshot.connection,
                 "SELECT next_workspace_sequence FROM workspace_state WHERE singleton=1",
                 [],
                 |row| row.get(0),
@@ -921,9 +930,13 @@ fn file_uri(path: &std::path::Path, readonly: bool) -> String {
 }
 
 pub(super) fn read_binding(connection: &Connection) -> DirectStoreResultV1<WorkspaceBindingV1> {
-    let (uuid, common, admin, root): (String, String, String, String) = connection.query_row(
-        "SELECT workspace_uuid, git_common_fingerprint, git_worktree_fingerprint, last_validated_root FROM workspace_state WHERE singleton = 1",
-        [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))?;
+    let (uuid, common, admin, root): (String, String, String, String) =
+        crate::query_accounting::accounted_query_row(
+            connection,
+            "SELECT workspace_uuid, git_common_fingerprint, git_worktree_fingerprint, last_validated_root FROM workspace_state WHERE singleton = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )?;
     let identity = DurableWorktreeIdentityV1::new(
         Sha256Digest::new(common).map_err(|_| DirectStoreErrorV1::Unreadable)?,
         WorkspaceId::new(uuid).map_err(|_| DirectStoreErrorV1::Unreadable)?,

@@ -26,7 +26,7 @@ write-free snapshot reads are the current product boundaries.
 Current adopted work is tracked by the [active roadmap](roadmap/).
 The [internal-improvement sequence](roadmap/README.md#current-internal-improvements)
 is OPTIM, then BOUND, then READS. OPTIM and BOUND are completed and owner-accepted
-on 2026-10-17. READS remains Planned, with
+on 2026-10-17. READS is In Progress, with
 [one adopted design dossier](todo/README.md#current-adopted-dossiers).
 On 2026-10-16 the owner withdrew OPTIM latency, count, and memory measurement,
 including any baseline that would have blocked implementation. Completed OPTIM

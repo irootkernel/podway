@@ -13,6 +13,9 @@ use podway_core::{
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde_json::Value;
 
+use crate::query_accounting::{
+    accounted_prepare, accounted_query_map_prepared, accounted_query_row,
+};
 use crate::v2_goal::{insert_goal_state_v2, load_goal_state_v2, replace_goal_state_v2};
 use crate::v2_memory::{
     insert_workflow_memory_v2, load_workflow_memory_v2, replace_workflow_memory_v2,
@@ -1028,20 +1031,19 @@ fn query_archive_summary_row_v2(
     sql: &str,
     params: impl rusqlite::Params,
 ) -> Result<Option<SessionArchiveSummaryV2>, StoreErrorV1> {
-    let row = connection
-        .query_row(sql, params, |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, i64>(3)?,
-                row.get::<_, i64>(4)?,
-                row.get::<_, i64>(5)?,
-                row.get::<_, i64>(6)?,
-            ))
-        })
-        .optional()
-        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+    let row = accounted_query_row(connection, sql, params, |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, i64>(4)?,
+            row.get::<_, i64>(5)?,
+            row.get::<_, i64>(6)?,
+        ))
+    })
+    .optional()
+    .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
     row.map(
         |(session_id, task_title, lifecycle, revision, slot, archived_at, workspace_revision)| {
             session_archive_summary_from_parts_v2(
@@ -1069,39 +1071,39 @@ pub(crate) fn list_archived_sessions_connection_v2(
             },
         ));
     }
-    let count_i64: i64 = connection
-        .query_row(
-            "SELECT COUNT(*) FROM v2_task_sessions WHERE activity = 'inactive'",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+    let count_i64: i64 = accounted_query_row(
+        connection,
+        "SELECT COUNT(*) FROM v2_task_sessions WHERE activity = 'inactive'",
+        [],
+        |row| row.get(0),
+    )
+    .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
     let count = persisted_u64(count_i64, StoreRecordKindV1::Session)?;
     let limit = i64::try_from(window).map_err(|_| {
         StoreErrorV1::InvalidStateV1(StoreValueErrorV1::IntegerOutOfRange {
             field: "archive_list_window",
         })
     })?;
-    let mut statement = connection
-        .prepare(&format!(
-            "SELECT {ARCHIVE_SUMMARY_COLUMNS_V2} FROM v2_task_sessions \
-             WHERE activity = 'inactive' \
-             ORDER BY archived_at_ms DESC, session_id DESC LIMIT ?1"
+    let page_sql = format!(
+        "SELECT {ARCHIVE_SUMMARY_COLUMNS_V2} FROM v2_task_sessions \
+         WHERE activity = 'inactive' \
+         ORDER BY archived_at_ms DESC, session_id DESC LIMIT ?1"
+    );
+    let mut statement = accounted_prepare(connection, &page_sql)
+        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+    let page_parameters = params![limit];
+    let rows = accounted_query_map_prepared(&mut statement, &page_sql, page_parameters, |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, i64>(4)?,
+            row.get::<_, i64>(5)?,
+            row.get::<_, i64>(6)?,
         ))
-        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
-    let rows = statement
-        .query_map(params![limit], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, i64>(3)?,
-                row.get::<_, i64>(4)?,
-                row.get::<_, i64>(5)?,
-                row.get::<_, i64>(6)?,
-            ))
-        })
-        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+    })
+    .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
     let sessions = rows
         .map(|row| {
             let (
@@ -1162,7 +1164,8 @@ pub(crate) fn load_archived_session_connection_v2(
     connection: &Connection,
     session_id: &SessionId,
 ) -> Result<Option<GraphSessionStateV2>, StoreErrorV1> {
-    let row = connection.query_row(
+    let row = accounted_query_row(
+        connection,
         "SELECT archived_workspace_revision, session_id, task_title, procedure_snapshot_id, \
          lifecycle, session_revision, latest_trace_sequence, active_graph_node_id, \
          active_attempt_id, active_trace_sequence, goal_tracking, current_goal_revision, \
@@ -1301,27 +1304,29 @@ pub(crate) fn load_graph_session_with_cache_v2(
     connection: &Connection,
     cached: Option<&GraphSessionStateV2>,
 ) -> Result<Option<GraphSessionStateV2>, StoreErrorV1> {
-    let current_count: i64 = connection
-        .query_row(
-            "SELECT COUNT(*) FROM v2_task_sessions WHERE activity = 'current'",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
-    let workspace_count: i64 = connection
-        .query_row("SELECT COUNT(*) FROM v2_workspace_state", [], |row| {
-            row.get(0)
-        })
-        .map_err(|error| record_error(error, StoreRecordKindV1::Workspace))?;
+    let current_count: i64 = accounted_query_row(
+        connection,
+        "SELECT COUNT(*) FROM v2_task_sessions WHERE activity = 'current'",
+        [],
+        |row| row.get(0),
+    )
+    .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+    let workspace_count: i64 = accounted_query_row(
+        connection,
+        "SELECT COUNT(*) FROM v2_workspace_state",
+        [],
+        |row| row.get(0),
+    )
+    .map_err(|error| record_error(error, StoreRecordKindV1::Workspace))?;
     if current_count == 0 && workspace_count == 0 {
         return Ok(None);
     }
     if current_count != 1 || workspace_count != 1 {
         return Err(corrupt(StoreRecordKindV1::Session));
     }
-    let (workspace_revision, session) = connection
-        .query_row(
-            "SELECT w.workspace_revision, s.session_id, s.task_title, s.procedure_snapshot_id, \
+    let (workspace_revision, session) = accounted_query_row(
+        connection,
+        "SELECT w.workspace_revision, s.session_id, s.task_title, s.procedure_snapshot_id, \
              s.lifecycle, s.session_revision, \
              latest_trace_sequence, active_graph_node_id, active_attempt_id, active_trace_sequence, \
              goal_tracking, current_goal_revision, created_at_ms, completed_at_ms, cancelled_at_ms, \
@@ -1371,18 +1376,22 @@ fn load_present_graph_session_with_cache_v2(
     persisted: PersistedSessionV2,
     cached: Option<&GraphSessionStateV2>,
 ) -> Result<GraphSessionStateV2, StoreErrorV1> {
+    // One guard per whole reconstruction: committed slot payloads stay
+    // counted as live only when this function actually returns a graph.
+    #[cfg(any(test, feature = "test-support"))]
+    let _reads001_graph_scope = crate::query_accounting::GraphLoadScope::enter();
     let cached = cached.filter(|state| {
         state.trace().session_id().as_str() == persisted.session_id
             && state.snapshot().snapshot_id().as_str() == persisted.snapshot_id
     });
     let snapshot = if let Some(cached) = cached {
-        let digest: String = connection
-            .query_row(
-                "SELECT digest FROM v2_procedure_snapshots WHERE snapshot_id=?1",
-                [&persisted.snapshot_id],
-                |row| row.get(0),
-            )
-            .map_err(|error| record_error(error, StoreRecordKindV1::Snapshot))?;
+        let digest: String = accounted_query_row(
+            connection,
+            "SELECT digest FROM v2_procedure_snapshots WHERE snapshot_id=?1",
+            [&persisted.snapshot_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| record_error(error, StoreRecordKindV1::Snapshot))?;
         if digest != cached.snapshot().digest().as_str() {
             return Err(corrupt(StoreRecordKindV1::Snapshot));
         }
@@ -1447,9 +1456,9 @@ fn load_present_graph_session_with_cache_v2(
         persisted.cancel_reason,
     )
     .map_err(|_| corrupt(StoreRecordKindV1::Session))?;
-    let schema_version: i64 = connection
-        .query_row("PRAGMA user_version", [], |row| row.get(0))
-        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+    let schema_version: i64 =
+        accounted_query_row(connection, "PRAGMA user_version", [], |row| row.get(0))
+            .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
     if schema_version >= 5 {
         load_terminal_dispositions_connection_v2(connection, &state)?;
     }
@@ -1469,6 +1478,8 @@ fn load_present_graph_session_with_cache_v2(
     {
         return Err(corrupt(StoreRecordKindV1::Session));
     }
+    #[cfg(any(test, feature = "test-support"))]
+    _reads001_graph_scope.commit();
     Ok(state)
 }
 
@@ -1488,35 +1499,35 @@ fn load_snapshot_v2(
         i64,
         i64,
     );
-    let row: SnapshotRow = connection
-        .query_row(
-            "SELECT schema_id, procedure_id, procedure_version, name, purpose, digest, \
+    let row: SnapshotRow = accounted_query_row(
+        connection,
+        "SELECT schema_id, procedure_id, procedure_version, name, purpose, digest, \
              canonical_json, source_kind, goal_tracking, created_at_ms \
              FROM v2_procedure_snapshots WHERE snapshot_id = ?1",
-            [expected_snapshot_id],
-            |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                    row.get(6)?,
-                    row.get(7)?,
-                    row.get(8)?,
-                    row.get(9)?,
-                ))
-            },
-        )
-        .map_err(|error| record_error(error, StoreRecordKindV1::Snapshot))?;
-    let source_label: String = connection
-        .query_row(
-            "SELECT source_label FROM v2_procedure_snapshots WHERE snapshot_id = ?1",
-            [expected_snapshot_id],
-            |row| row.get(0),
-        )
-        .map_err(|error| record_error(error, StoreRecordKindV1::Snapshot))?;
+        [expected_snapshot_id],
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+                row.get(7)?,
+                row.get(8)?,
+                row.get(9)?,
+            ))
+        },
+    )
+    .map_err(|error| record_error(error, StoreRecordKindV1::Snapshot))?;
+    let source_label: String = accounted_query_row(
+        connection,
+        "SELECT source_label FROM v2_procedure_snapshots WHERE snapshot_id = ?1",
+        [expected_snapshot_id],
+        |row| row.get(0),
+    )
+    .map_err(|error| record_error(error, StoreRecordKindV1::Snapshot))?;
     if row.0 != PROCEDURE_SCHEMA_V2 {
         return Err(corrupt(StoreRecordKindV1::Snapshot));
     }
@@ -1548,15 +1559,16 @@ fn verify_snapshot_nodes_v2(
     connection: &Connection,
     snapshot: &ProcedureSnapshotV2,
 ) -> Result<(), StoreErrorV1> {
-    let mut statement = connection
-        .prepare(
-            "SELECT graph_node_id, node_definition_id, placement_index, node_type, \
+    let nodes_sql = "SELECT graph_node_id, node_definition_id, placement_index, node_type, \
              goal_assessment, canonical_placement_json FROM v2_graph_nodes \
-             WHERE snapshot_id = ?1 ORDER BY placement_index",
-        )
+             WHERE snapshot_id = ?1 ORDER BY placement_index";
+    let mut statement = accounted_prepare(connection, nodes_sql)
         .map_err(|error| record_error(error, StoreRecordKindV1::Snapshot))?;
-    let rows = statement
-        .query_map([snapshot.snapshot_id().as_str()], |row| {
+    let rows = accounted_query_map_prepared(
+        &mut statement,
+        nodes_sql,
+        [snapshot.snapshot_id().as_str()],
+        |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -1565,8 +1577,9 @@ fn verify_snapshot_nodes_v2(
                 row.get::<_, i64>(4)?,
                 row.get::<_, String>(5)?,
             ))
-        })
-        .map_err(|error| record_error(error, StoreRecordKindV1::Snapshot))?;
+        },
+    )
+    .map_err(|error| record_error(error, StoreRecordKindV1::Snapshot))?;
     let persisted = rows
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| record_error(error, StoreRecordKindV1::Snapshot))?;
@@ -1592,15 +1605,13 @@ fn load_attempts_v2(
     session_id: &SessionId,
     snapshot: &ProcedureSnapshotV2,
 ) -> Result<Vec<SessionAttemptV2>, StoreErrorV1> {
-    let mut statement = connection
-        .prepare(
-            "SELECT attempt_id, snapshot_id, graph_node_id, node_definition_id, attempt_number, \
+    let attempts_sql = "SELECT attempt_id, snapshot_id, graph_node_id, node_definition_id, attempt_number, \
              trace_sequence, lifecycle, validity, goal_revision FROM v2_attempts \
-             WHERE session_id = ?1 ORDER BY trace_sequence",
-        )
+             WHERE session_id = ?1 ORDER BY trace_sequence";
+    let mut statement = accounted_prepare(connection, attempts_sql)
         .map_err(|error| record_error(error, StoreRecordKindV1::Attempt))?;
-    let rows = statement
-        .query_map([session_id.as_str()], |row| {
+    let rows =
+        accounted_query_map_prepared(&mut statement, attempts_sql, [session_id.as_str()], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -1650,14 +1661,12 @@ fn load_attempt_metadata_v2(
     connection: &Connection,
     session_id: &SessionId,
 ) -> Result<Vec<AttemptMetadataV2>, StoreErrorV1> {
-    let mut statement = connection
-        .prepare(
-            "SELECT attempt_id, started_at_ms, ended_at_ms, terminal_reason FROM v2_attempts \
-             WHERE session_id = ?1 ORDER BY trace_sequence",
-        )
+    let metadata_sql = "SELECT attempt_id, started_at_ms, ended_at_ms, terminal_reason FROM v2_attempts \
+             WHERE session_id = ?1 ORDER BY trace_sequence";
+    let mut statement = accounted_prepare(connection, metadata_sql)
         .map_err(|error| record_error(error, StoreRecordKindV1::Attempt))?;
-    let rows = statement
-        .query_map([session_id.as_str()], |row| {
+    let rows =
+        accounted_query_map_prepared(&mut statement, metadata_sql, [session_id.as_str()], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, i64>(1)?,
@@ -1684,16 +1693,14 @@ fn load_counters_v2(
     session_id: &SessionId,
     snapshot: &ProcedureSnapshotV2,
 ) -> Result<Vec<GraphNodeCounterV2>, StoreErrorV1> {
-    let mut statement = connection
-        .prepare(
-            "SELECT c.snapshot_id, c.graph_node_id, c.attempt_count, c.rework_traversal_count \
+    let counters_sql = "SELECT c.snapshot_id, c.graph_node_id, c.attempt_count, c.rework_traversal_count \
              FROM v2_graph_node_counters c JOIN v2_graph_nodes n \
              ON n.snapshot_id = c.snapshot_id AND n.graph_node_id = c.graph_node_id \
-             WHERE c.session_id = ?1 ORDER BY n.placement_index",
-        )
+             WHERE c.session_id = ?1 ORDER BY n.placement_index";
+    let mut statement = accounted_prepare(connection, counters_sql)
         .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
-    let rows = statement
-        .query_map([session_id.as_str()], |row| {
+    let rows =
+        accounted_query_map_prepared(&mut statement, counters_sql, [session_id.as_str()], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -1777,19 +1784,20 @@ pub(crate) fn load_terminal_dispositions_connection_v2(
         Option<String>,
         i64,
     );
-    let schema_version: i64 = connection
-        .query_row("PRAGMA user_version", [], |row| row.get(0))
-        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
-    let persisted = if schema_version >= 8 {
-        let mut statement = connection
-            .prepare(
-                "SELECT session_id, terminal_session_revision, kind, summary, stable_reference, \
-                 reason, successor_session_id, actor, recorded_at_ms FROM v2_terminal_dispositions \
-                 WHERE session_id = ?1 ORDER BY terminal_session_revision",
-            )
+    let schema_version: i64 =
+        accounted_query_row(connection, "PRAGMA user_version", [], |row| row.get(0))
             .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
-        statement
-            .query_map([state.trace().session_id().as_str()], |row| {
+    let persisted = if schema_version >= 8 {
+        let dispositions_v8_sql = "SELECT session_id, terminal_session_revision, kind, summary, stable_reference, \
+                 reason, successor_session_id, actor, recorded_at_ms FROM v2_terminal_dispositions \
+                 WHERE session_id = ?1 ORDER BY terminal_session_revision";
+        let mut statement = accounted_prepare(connection, dispositions_v8_sql)
+            .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
+        accounted_query_map_prepared(
+            &mut statement,
+            dispositions_v8_sql,
+            [state.trace().session_id().as_str()],
+            |row| {
                 Ok((
                     row.get(0)?,
                     row.get(1)?,
@@ -1801,20 +1809,22 @@ pub(crate) fn load_terminal_dispositions_connection_v2(
                     row.get(7)?,
                     row.get(8)?,
                 ))
-            })
-            .map_err(|error| record_error(error, StoreRecordKindV1::Session))?
-            .collect::<Result<Vec<PersistedDispositionV2>, _>>()
-            .map_err(|error| record_error(error, StoreRecordKindV1::Session))?
+            },
+        )
+        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?
+        .collect::<Result<Vec<PersistedDispositionV2>, _>>()
+        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?
     } else {
-        let mut statement = connection
-            .prepare(
-                "SELECT session_id, terminal_session_revision, kind, summary, stable_reference, \
+        let dispositions_legacy_sql = "SELECT session_id, terminal_session_revision, kind, summary, stable_reference, \
                  reason, actor, recorded_at_ms FROM v2_terminal_dispositions \
-                 WHERE session_id = ?1 ORDER BY terminal_session_revision",
-            )
+                 WHERE session_id = ?1 ORDER BY terminal_session_revision";
+        let mut statement = accounted_prepare(connection, dispositions_legacy_sql)
             .map_err(|error| record_error(error, StoreRecordKindV1::Session))?;
-        statement
-            .query_map([state.trace().session_id().as_str()], |row| {
+        accounted_query_map_prepared(
+            &mut statement,
+            dispositions_legacy_sql,
+            [state.trace().session_id().as_str()],
+            |row| {
                 Ok((
                     row.get(0)?,
                     row.get(1)?,
@@ -1826,10 +1836,11 @@ pub(crate) fn load_terminal_dispositions_connection_v2(
                     row.get(6)?,
                     row.get(7)?,
                 ))
-            })
-            .map_err(|error| record_error(error, StoreRecordKindV1::Session))?
-            .collect::<Result<Vec<PersistedDispositionV2>, _>>()
-            .map_err(|error| record_error(error, StoreRecordKindV1::Session))?
+            },
+        )
+        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?
+        .collect::<Result<Vec<PersistedDispositionV2>, _>>()
+        .map_err(|error| record_error(error, StoreRecordKindV1::Session))?
     };
     let mut dispositions = Vec::with_capacity(persisted.len());
     for (session_id, revision, kind, summary, reference, reason, successor, actor, recorded_at) in
