@@ -151,7 +151,7 @@ fn strip_materialized_list_bound(current: GraphSessionStateV2) -> GraphSessionSt
     let digest =
         Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))).unwrap();
     assert_ne!(&digest, current.snapshot().digest());
-    let snapshot = ProcedureSnapshotV2::new(
+    let snapshot = podway_store::admit_procedure_snapshot_v2(
         current.snapshot().snapshot_id().clone(),
         CanonicalProcedureJsonV1::new(canonical).unwrap(),
         digest,

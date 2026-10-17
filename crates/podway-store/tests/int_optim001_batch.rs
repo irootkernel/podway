@@ -33,7 +33,7 @@ fn snapshot_from(document: Value, snapshot_id: &str) -> ProcedureSnapshotV2 {
     let canonical = canonicalize_json_v1(&document).unwrap();
     let digest =
         Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))).unwrap();
-    ProcedureSnapshotV2::new(
+    podway_store::admit_procedure_snapshot_v2(
         ProcedureSnapshotId::new(snapshot_id).unwrap(),
         CanonicalProcedureJsonV1::new(canonical).unwrap(),
         digest,

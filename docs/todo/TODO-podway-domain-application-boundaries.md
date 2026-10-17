@@ -362,6 +362,34 @@ separate final acceptance checks.
   stored states reconstruct and transition identically; no reverse production
   dependency or duplicated transition implementation remains.
 
+#### BOUND-002 implementation handoff
+
+Core now owns `graph_v2`, `workflow_v2`, `goal_state_v2` and the pure
+`ProcedureStateErrorV2`. Store's three corresponding modules retain schema
+admission, SQL/row codecs and successor persistence, reexporting the same Core
+types. Known snapshot constructors use Store's `admit_procedure_snapshot_v2`;
+pure Core fixtures use `CanonicalProcedureDocumentV2` followed by
+`ProcedureSnapshotV2::from_admitted_document`.
+
+The canonical document's private fields bind its parsed value to exact bytes
+and digest. Admission order remains canonical verification, digest, parse,
+Store schema validation, Core metadata/graph construction and retained derived
+memory-model result. The construction adapter passes the parsed document without another parse
+and keeps goal-model admission on demand. Store converts pure structural errors explicitly while
+cold row loading keeps its independent corruption classification.
+New graph insertion separately parses the bounded canonical bytes and checks
+persisted snapshot shape, including
+aggregates constructed directly through Core. The relational regression
+`bound002_core_state_cannot_bypass_persisted_shape_admission` requires rejection
+without graph rows, sequence change or outcome; it fails when that guard is absent.
+
+The original 29 workflow and 18 goal tests retain all 47 names: 20 and 11 pure
+cases now run in Core module unit tests; 9 and 7 SQL/codec/corruption cases remain
+registered Store integration tests. Only reachable fixture helpers accompany
+each group. No test-support crate, dependency, schema or database change is
+introduced. BOUND-003 builds on these already functional runtime types rather
+than repairing a deferred BOUND-002 prerequisite.
+
 ### BOUND-003: Clarify Procedure runtime representation and admission
 
 - Build on the pure snapshot/declaration types already delivered by BOUND-002.

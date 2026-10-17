@@ -21,7 +21,7 @@ fn session_state_with_items() -> GraphSessionStateV2 {
     let canonical = canonicalize_json_v1(&document).unwrap();
     let procedure_digest =
         Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))).unwrap();
-    let snapshot = podway_store::ProcedureSnapshotV2::new(
+    let snapshot = podway_store::admit_procedure_snapshot_v2(
         ProcedureSnapshotId::new("00000000-0000-4000-8000-000000000452").unwrap(),
         CanonicalProcedureJsonV1::new(canonical).unwrap(),
         procedure_digest,

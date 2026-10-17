@@ -64,6 +64,19 @@ protocol behavior, not a live executor integration.
 
 ## Functional regression owners
 
+Pure workflow and goal tests live beside their Core implementations in
+[`workflow_v2/tests.rs`](../../crates/podway-core/src/workflow_v2/tests.rs) and
+[`goal_state_v2/tests.rs`](../../crates/podway-core/src/goal_state_v2/tests.rs).
+BOUND-002 moved 20 workflow and 11 goal cases from the Store suites with their
+original names; they run as library unit tests without SQLite or filesystem
+fixtures. The registered Store workflow/goal suites retain the 9 and 7 native
+round-trip, successor, row-codec and corruption cases respectively.
+
+The BOUND-001 Store/Engine characterization in `int_v2dfc005_relational` and
+`int_v2dfc006_domain_ports` preserves snapshot-success/later-declaration-error
+timing, competing revision priority and distinct cold persisted refusal. Keep
+those checks when adapting either runtime declarations or stored admission.
+
 These tests own direct identity, attempt-content overflow, and one-draft atomic
 batch behavior:
 

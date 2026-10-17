@@ -12,19 +12,35 @@ pub mod aggregate;
 pub mod authoring;
 pub mod canonical;
 pub mod goal_record_v2;
+pub mod goal_state_v2;
+pub mod graph_v2;
 pub mod procedure;
+mod procedure_state_error_v2;
 pub mod procedure_v2;
 pub mod record_v2;
 pub mod session_v2;
+pub mod workflow_v2;
 
 pub use aggregate::*;
 pub use authoring::*;
 pub use canonical::*;
 pub use goal_record_v2::*;
+pub use goal_state_v2::{
+    AttemptCriterionAssessmentStateV2, CriterionAssessmentStateV2, GoalStateV2,
+};
+pub use graph_v2::*;
 pub use procedure::*;
+pub use procedure_state_error_v2::ProcedureStateErrorV2;
 pub use procedure_v2::*;
 pub use record_v2::*;
 pub use session_v2::*;
+pub use workflow_v2::{
+    ActiveItemMutationRequestV2, ActiveItemMutationV2, AttemptWorkflowMemoryV2, BlockerStateV2,
+    EvidenceLookupErrorV2, EvidenceReadbackV2, EvidenceResolutionStateV2, GraphMutationErrorV2,
+    ItemSlotStateV2, MAX_ACTIVE_ITEM_MUTATIONS_V2, MAX_OPEN_BLOCKERS_V2, SelectedEvidenceItemV2,
+    WorkflowMemoryStateV2, canonical_recorded_items_json_v2, recorded_items_digest_v2,
+    recorded_value_digest_v2, recorded_value_encoded_size_v2,
+};
 
 pub const MAX_PROCEDURE_IDENTIFIER_BYTES: usize = 64;
 /// Maximum UTF-8 byte length of an admitted canonical procedure document.

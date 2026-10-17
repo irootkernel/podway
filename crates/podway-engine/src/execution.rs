@@ -186,7 +186,7 @@ fn embedded_preset_snapshot_v2(
         ProcedureV2SourceAdmissionErrorV1::Rejected(ExecutionBoundaryErrorV1::domain(error))
     })?;
     let pinned_digest = admitted.pinned_digest().clone();
-    let snapshot = ProcedureSnapshotV2::new(
+    let snapshot = podway_store::admit_procedure_snapshot_v2(
         snapshot_id,
         canonical_json,
         admitted.digest().clone(),
@@ -257,7 +257,7 @@ impl PreparedProcedureSourceV2 {
         snapshot_id: ProcedureSnapshotId,
         created_at: UnixMillis,
     ) -> Result<ProcedureSnapshotV2, ProcedureV2SourceAdmissionErrorV1> {
-        ProcedureSnapshotV2::new(
+        podway_store::admit_procedure_snapshot_v2(
             snapshot_id,
             self.canonical_json,
             self.digest,
@@ -504,10 +504,10 @@ pub fn graph_session_state_from_procedure_v2_snapshot(
         })
         .collect();
     let metadata = AttemptMetadataV2::new(first_attempt_id, created_at, None, None)
-        .map_err(ProcedureV2StartPreparationErrorV1::InvalidStoreValue)?;
+        .map_err(|error| ProcedureV2StartPreparationErrorV1::InvalidStoreValue(error.into()))?;
     let metadata = vec![metadata];
     let workflow_memory = WorkflowMemoryStateV2::initial_for_trace(&snapshot, &trace, &metadata)
-        .map_err(ProcedureV2StartPreparationErrorV1::InvalidStoreValue)?;
+        .map_err(|error| ProcedureV2StartPreparationErrorV1::InvalidStoreValue(error.into()))?;
     GraphSessionStateV2::new_with_workflow_memory(
         Revision::new(1),
         task_title,
@@ -521,7 +521,7 @@ pub fn graph_session_state_from_procedure_v2_snapshot(
         None,
         None,
     )
-    .map_err(ProcedureV2StartPreparationErrorV1::InvalidStoreValue)
+    .map_err(|error| ProcedureV2StartPreparationErrorV1::InvalidStoreValue(error.into()))
 }
 
 pub fn graph_prepared_session_state_from_procedure_v2_snapshot(
@@ -537,7 +537,7 @@ pub fn graph_prepared_session_state_from_procedure_v2_snapshot(
         session_id,
         created_at,
     )
-    .map_err(ProcedureV2StartPreparationErrorV1::InvalidStoreValue)
+    .map_err(|error| ProcedureV2StartPreparationErrorV1::InvalidStoreValue(error.into()))
 }
 
 pub fn bind_initial_goal_for_start_v2(

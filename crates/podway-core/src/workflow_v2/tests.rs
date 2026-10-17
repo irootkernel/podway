@@ -1,0 +1,2513 @@
+//! Pure workflow cases migrated from Store int_v2_workflow_memory; original names retained.
+
+use crate::{
+    ActiveItemMutationRequestV2, ActiveItemMutationV2, AttemptMetadataV2, AttemptWorkflowMemoryV2,
+    BlockerStateV2, EvidenceResolutionStateV2, GraphMutationErrorV2, GraphNodeCounterV2,
+    GraphSessionStateV2, ItemSlotStateV2, MAX_ACTIVE_ITEM_MUTATIONS_V2, ProcedureSnapshotV2,
+    ProcedureStateErrorV2, WorkflowMemoryStateV2,
+};
+use crate::{
+    ActorAttributionV2, ArtifactValueV1, AttemptId, AttemptLifecycle, AttemptNumberV2,
+    AttemptValidityV2, BlockerId, BlockerState, CanonicalProcedureJsonV1, DecisionRecordInputV2,
+    DecisionRecordV2, EvidenceReferenceSnapshotV2, GoalRevisionNumberV2, GraphNodeId, ItemId,
+    ItemTypeV1, NodeDefinitionId, OptionId, ProcedureSnapshotId, ProcedureSourceLabelV1, ReasonV2,
+    RecordedItemValueV2, ResolvedEvidenceReferenceV2, ResolvedEvidenceSetV2, Revision,
+    ReworkKindV2, ReworkRecordInputV2, ReworkRecordV2, SessionAttemptV2, SessionId,
+    SessionLifecycle, SessionTraceV2, Sha256Digest, TraceSequenceV2, TransitionEffectV2,
+    UnixMillis, canonicalize_json_v1,
+};
+use serde_json::json;
+use sha2::{Digest, Sha256};
+
+fn snapshot_from_canonical(
+    id: crate::ProcedureSnapshotId,
+    canonical: crate::CanonicalProcedureJsonV1,
+    digest: crate::Sha256Digest,
+    source: crate::ProcedureSourceLabelV1,
+    now: crate::UnixMillis,
+) -> Result<crate::ProcedureSnapshotV2, crate::ProcedureStateErrorV2> {
+    crate::ProcedureSnapshotV2::from_admitted_document(
+        id,
+        crate::CanonicalProcedureDocumentV2::new(canonical, digest)?,
+        source,
+        now,
+    )
+}
+
+fn digest(nibble: char) -> Sha256Digest {
+    Sha256Digest::new(format!("sha256:{}", nibble.to_string().repeat(64))).unwrap()
+}
+
+fn node(value: &str) -> GraphNodeId {
+    GraphNodeId::new(value).unwrap()
+}
+
+fn item(value: &str) -> ItemId {
+    ItemId::new(value).unwrap()
+}
+
+fn attempt_id(number: u64) -> AttemptId {
+    AttemptId::new(format!("00000000-0000-4000-8000-{number:012x}")).unwrap()
+}
+
+fn blocker_id() -> BlockerId {
+    BlockerId::new("00000000-0000-4000-8000-000000000099").unwrap()
+}
+
+fn session_id() -> SessionId {
+    SessionId::new("00000000-0000-4000-8000-000000000120").unwrap()
+}
+
+fn snapshot() -> ProcedureSnapshotV2 {
+    let document = json!({
+        "schema": "podway.procedure/v2",
+        "id": "workflow-memory",
+        "version": "1",
+        "name": "Workflow memory",
+        "purpose": "Prove durable item, evidence, decision, and rework history.",
+        "node_definitions": {
+            "capture-def": {
+                "type": "action",
+                "title": "Capture",
+                "intent": "Capture bounded values.",
+                "items": [
+                    {"id":"z-summary","type":"text","prompt":"Summary","required":true},
+                    {"id":"a-count","type":"integer","prompt":"Count","required":false},
+                    {"id":"m-tags","type":"list","prompt":"Tags","required":false,"min_items":1},
+                    {"id":"c-confirm","type":"confirm","prompt":"Confirm","required":false},
+                    {"id":"b-choice","type":"choice","prompt":"Choice","required":false,"choices":["green","red"]},
+                    {"id":"y-artifact","type":"artifact","prompt":"Artifact","required":false,"allowed_media_types":["text/plain"]}
+                ]
+            },
+            "gate-def": {
+                "type": "decision",
+                "title": "Gate",
+                "objective": "Choose the next route.",
+                "prompt": "Proceed or redo?",
+                "options": [
+                    {"id":"proceed","label":"Proceed"},
+                    {"id":"redo","label":"Redo"}
+                ],
+                "reason": {"required":true}
+            },
+            "finish-def": {"type":"action","title":"Finish","intent":"Finish."}
+        },
+        "graph": {
+            "entry": "capture",
+            "nodes": [
+                {"id":"capture","use":"capture-def","next":"gate"},
+                {
+                    "id":"gate",
+                    "use":"gate-def",
+                    "evidence_from":[
+                        {"node":"capture","required":true,"items":["z-summary"]},
+                        {"node":"finish","required":false}
+                    ],
+                    "routes": {
+                        "proceed":{"to":"finish","effect":"advance"},
+                        "redo":{"to":"capture","effect":"rework"}
+                    }
+                },
+                {"id":"finish","use":"finish-def","terminal":true}
+            ]
+        },
+        "manual_rework":{"allowed_targets":["capture","finish"]}
+    });
+    let canonical = canonicalize_json_v1(&document).unwrap();
+    let digest =
+        Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))).unwrap();
+    snapshot_from_canonical(
+        ProcedureSnapshotId::new("00000000-0000-4000-8000-000000000110").unwrap(),
+        CanonicalProcedureJsonV1::new(canonical).unwrap(),
+        digest,
+        ProcedureSourceLabelV1::file("workflow.yaml").unwrap(),
+        UnixMillis::new(5),
+    )
+    .unwrap()
+}
+
+fn required_gate_item_snapshot() -> ProcedureSnapshotV2 {
+    let mut document: serde_json::Value =
+        serde_json::from_str(snapshot().canonical_json().as_str()).unwrap();
+    document["node_definitions"]["gate-def"]["items"] = json!([
+        {"id":"decision-note","type":"text","prompt":"Decision note","required":true}
+    ]);
+    let canonical = canonicalize_json_v1(&document).unwrap();
+    let digest =
+        Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))).unwrap();
+    snapshot_from_canonical(
+        ProcedureSnapshotId::new("00000000-0000-4000-8000-000000000112").unwrap(),
+        CanonicalProcedureJsonV1::new(canonical).unwrap(),
+        digest,
+        ProcedureSourceLabelV1::file("required-gate-item.yaml").unwrap(),
+        UnixMillis::new(5),
+    )
+    .unwrap()
+}
+
+fn attempt(
+    number: u64,
+    graph_node: &str,
+    node_attempt: u64,
+    trace: u64,
+    lifecycle: AttemptLifecycle,
+    validity: AttemptValidityV2,
+) -> SessionAttemptV2 {
+    SessionAttemptV2::new(
+        attempt_id(number),
+        node(graph_node),
+        AttemptNumberV2::new(node_attempt),
+        TraceSequenceV2::new(trace),
+        lifecycle,
+        validity,
+        None,
+    )
+    .unwrap()
+}
+
+fn capture_slots(
+    attempt_number: u64,
+    recorded: bool,
+    changed_summary: bool,
+) -> Vec<ItemSlotStateV2> {
+    let attempt_id = attempt_id(attempt_number);
+    let started_at = match attempt_number {
+        1 => 10,
+        3 => 40,
+        4 => 60,
+        _ => 40,
+    };
+    let values = if recorded {
+        vec![
+            Some(
+                RecordedItemValueV2::text(if changed_summary {
+                    "rewritten"
+                } else {
+                    "baseline"
+                })
+                .unwrap(),
+            ),
+            Some(RecordedItemValueV2::integer(7)),
+            Some(RecordedItemValueV2::list(vec!["fast".to_owned(), "locked".to_owned()]).unwrap()),
+            Some(RecordedItemValueV2::confirm()),
+            Some(RecordedItemValueV2::choice("green").unwrap()),
+            Some(RecordedItemValueV2::artifact(
+                ArtifactValueV1::local_path("reports/result.txt", digest('c'), 42, "text/plain")
+                    .unwrap(),
+            )),
+        ]
+    } else {
+        vec![None, None, None, None, None, None]
+    };
+    [
+        ("z-summary", ItemTypeV1::Text),
+        ("a-count", ItemTypeV1::Integer),
+        ("m-tags", ItemTypeV1::List),
+        ("c-confirm", ItemTypeV1::Confirm),
+        ("b-choice", ItemTypeV1::Choice),
+        ("y-artifact", ItemTypeV1::Artifact),
+    ]
+    .into_iter()
+    .zip(values)
+    .map(|((id, item_type), value)| {
+        ItemSlotStateV2::new(
+            attempt_id.clone(),
+            item(id),
+            item_type,
+            if recorded {
+                Revision::new(1)
+            } else {
+                Revision::ZERO
+            },
+            value,
+            UnixMillis::new(started_at),
+            UnixMillis::new(if recorded { started_at + 1 } else { started_at }),
+        )
+        .unwrap()
+    })
+    .collect()
+}
+
+fn capture_memory(
+    recorded: bool,
+    blocker: Option<(BlockerState, &str)>,
+) -> AttemptWorkflowMemoryV2 {
+    let blockers = blocker.map_or_else(Vec::new, |(state, reason)| {
+        vec![
+            BlockerStateV2::new(
+                blocker_id(),
+                attempt_id(1),
+                reason,
+                state,
+                UnixMillis::new(12),
+                (state == BlockerState::Resolved).then_some(UnixMillis::new(13)),
+            )
+            .unwrap(),
+        ]
+    });
+    AttemptWorkflowMemoryV2::new(
+        attempt_id(1),
+        capture_slots(1, recorded, false),
+        blockers,
+        Vec::new(),
+    )
+    .unwrap()
+}
+
+fn initial_state() -> GraphSessionStateV2 {
+    state_with_memory(
+        1,
+        SessionLifecycle::Running,
+        vec![attempt(
+            1,
+            "capture",
+            1,
+            1,
+            AttemptLifecycle::Active,
+            AttemptValidityV2::Valid,
+        )],
+        vec![AttemptMetadataV2::new(attempt_id(1), UnixMillis::new(10), None, None).unwrap()],
+        vec![
+            GraphNodeCounterV2::new(node("capture"), 1, 0),
+            GraphNodeCounterV2::new(node("gate"), 0, 0),
+            GraphNodeCounterV2::new(node("finish"), 0, 0),
+        ],
+        WorkflowMemoryStateV2::new(vec![capture_memory(false, None)], Vec::new(), Vec::new())
+            .unwrap(),
+        None,
+    )
+}
+
+fn active_recorded_state(revision: u64, blocker_state: BlockerState) -> GraphSessionStateV2 {
+    state_with_memory(
+        revision,
+        SessionLifecycle::Running,
+        vec![attempt(
+            1,
+            "capture",
+            1,
+            1,
+            AttemptLifecycle::Active,
+            AttemptValidityV2::Valid,
+        )],
+        vec![AttemptMetadataV2::new(attempt_id(1), UnixMillis::new(10), None, None).unwrap()],
+        vec![
+            GraphNodeCounterV2::new(node("capture"), 1, 0),
+            GraphNodeCounterV2::new(node("gate"), 0, 0),
+            GraphNodeCounterV2::new(node("finish"), 0, 0),
+        ],
+        WorkflowMemoryStateV2::new(
+            vec![capture_memory(
+                true,
+                Some((blocker_state, "Waiting for review.")),
+            )],
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap(),
+        None,
+    )
+}
+
+fn evidence(capture: &AttemptWorkflowMemoryV2) -> EvidenceResolutionStateV2 {
+    EvidenceResolutionStateV2::new(
+        0,
+        true,
+        vec![item("z-summary")],
+        ResolvedEvidenceReferenceV2::resolved(
+            EvidenceReferenceSnapshotV2::new(
+                node("capture"),
+                attempt_id(1),
+                AttemptNumberV2::FIRST,
+                capture.recorded_items_digest().unwrap(),
+                UnixMillis::new(30),
+            )
+            .unwrap(),
+        ),
+    )
+    .unwrap()
+}
+
+fn gate_evidence(capture: &AttemptWorkflowMemoryV2) -> Vec<EvidenceResolutionStateV2> {
+    vec![
+        evidence(capture),
+        EvidenceResolutionStateV2::new(
+            1,
+            false,
+            Vec::new(),
+            ResolvedEvidenceReferenceV2::unresolved(node("finish")),
+        )
+        .unwrap(),
+    ]
+}
+
+fn gate_state() -> GraphSessionStateV2 {
+    let capture = capture_memory(true, Some((BlockerState::Resolved, "Waiting for review.")));
+    let gate = AttemptWorkflowMemoryV2::new(
+        attempt_id(2),
+        Vec::new(),
+        Vec::new(),
+        gate_evidence(&capture),
+    )
+    .unwrap();
+    state_with_memory(
+        4,
+        SessionLifecycle::Running,
+        vec![
+            attempt(
+                1,
+                "capture",
+                1,
+                1,
+                AttemptLifecycle::Completed,
+                AttemptValidityV2::Valid,
+            ),
+            attempt(
+                2,
+                "gate",
+                1,
+                2,
+                AttemptLifecycle::Active,
+                AttemptValidityV2::Valid,
+            ),
+        ],
+        vec![
+            AttemptMetadataV2::new(
+                attempt_id(1),
+                UnixMillis::new(10),
+                Some(UnixMillis::new(30)),
+                None,
+            )
+            .unwrap(),
+            AttemptMetadataV2::new(attempt_id(2), UnixMillis::new(30), None, None).unwrap(),
+        ],
+        vec![
+            GraphNodeCounterV2::new(node("capture"), 1, 0),
+            GraphNodeCounterV2::new(node("gate"), 1, 0),
+            GraphNodeCounterV2::new(node("finish"), 0, 0),
+        ],
+        WorkflowMemoryStateV2::new(vec![capture, gate], Vec::new(), Vec::new()).unwrap(),
+        None,
+    )
+}
+
+fn proceed_decision(capture: &AttemptWorkflowMemoryV2) -> DecisionRecordV2 {
+    let gate_evidence = gate_evidence(capture);
+    DecisionRecordV2::new(DecisionRecordInputV2 {
+        trace: TraceSequenceV2::new(2),
+        session_id: session_id(),
+        session_revision: Revision::new(5),
+        procedure_snapshot_id: snapshot().snapshot_id().clone(),
+        procedure_digest: snapshot().digest().clone(),
+        graph_node_id: node("gate"),
+        node_definition_id: NodeDefinitionId::new("gate-def").unwrap(),
+        attempt_id: attempt_id(2),
+        attempt_number: AttemptNumberV2::FIRST,
+        goal_revision: None,
+        selected_option: OptionId::new("proceed").unwrap(),
+        route_effect: TransitionEffectV2::Advance,
+        route_target: node("finish"),
+        reason: ReasonV2::new("Proceed to finish.").unwrap(),
+        evidence: ResolvedEvidenceSetV2::new(
+            gate_evidence
+                .iter()
+                .map(|reference| reference.resolution().clone())
+                .collect(),
+        )
+        .unwrap(),
+        actor: None,
+        recorded_at: UnixMillis::new(40),
+    })
+    .unwrap()
+}
+
+fn finish_state(revision: u64, completed: bool) -> GraphSessionStateV2 {
+    let capture = capture_memory(true, Some((BlockerState::Resolved, "Waiting for review.")));
+    let gate = AttemptWorkflowMemoryV2::new(
+        attempt_id(2),
+        Vec::new(),
+        Vec::new(),
+        gate_evidence(&capture),
+    )
+    .unwrap();
+    let finish =
+        AttemptWorkflowMemoryV2::new(attempt_id(3), Vec::new(), Vec::new(), Vec::new()).unwrap();
+    state_with_memory(
+        revision,
+        if completed {
+            SessionLifecycle::Completed
+        } else {
+            SessionLifecycle::Running
+        },
+        vec![
+            attempt(
+                1,
+                "capture",
+                1,
+                1,
+                AttemptLifecycle::Completed,
+                AttemptValidityV2::Valid,
+            ),
+            attempt(
+                2,
+                "gate",
+                1,
+                2,
+                AttemptLifecycle::Completed,
+                AttemptValidityV2::Valid,
+            ),
+            attempt(
+                3,
+                "finish",
+                1,
+                3,
+                if completed {
+                    AttemptLifecycle::Completed
+                } else {
+                    AttemptLifecycle::Active
+                },
+                AttemptValidityV2::Valid,
+            ),
+        ],
+        vec![
+            AttemptMetadataV2::new(
+                attempt_id(1),
+                UnixMillis::new(10),
+                Some(UnixMillis::new(30)),
+                None,
+            )
+            .unwrap(),
+            AttemptMetadataV2::new(
+                attempt_id(2),
+                UnixMillis::new(30),
+                Some(UnixMillis::new(40)),
+                None,
+            )
+            .unwrap(),
+            AttemptMetadataV2::new(
+                attempt_id(3),
+                UnixMillis::new(40),
+                completed.then_some(UnixMillis::new(50)),
+                None,
+            )
+            .unwrap(),
+        ],
+        vec![
+            GraphNodeCounterV2::new(node("capture"), 1, 0),
+            GraphNodeCounterV2::new(node("gate"), 1, 0),
+            GraphNodeCounterV2::new(node("finish"), 1, 0),
+        ],
+        WorkflowMemoryStateV2::new(
+            vec![capture.clone(), gate, finish],
+            vec![proceed_decision(&capture)],
+            Vec::new(),
+        )
+        .unwrap(),
+        completed.then_some(UnixMillis::new(50)),
+    )
+}
+
+fn manual_reactivated_state() -> GraphSessionStateV2 {
+    let capture = capture_memory(true, Some((BlockerState::Resolved, "Waiting for review.")));
+    let gate = AttemptWorkflowMemoryV2::new(
+        attempt_id(2),
+        Vec::new(),
+        Vec::new(),
+        gate_evidence(&capture),
+    )
+    .unwrap();
+    let finish =
+        AttemptWorkflowMemoryV2::new(attempt_id(3), Vec::new(), Vec::new(), Vec::new()).unwrap();
+    let fresh = AttemptWorkflowMemoryV2::new(
+        attempt_id(4),
+        capture_slots(4, false, false),
+        Vec::new(),
+        Vec::new(),
+    )
+    .unwrap();
+    let rework = ReworkRecordV2::new(ReworkRecordInputV2 {
+        trace: TraceSequenceV2::new(4),
+        kind: ReworkKindV2::Manual,
+        from_node: node("finish"),
+        to_node: node("capture"),
+        target_attempt_id: attempt_id(4),
+        reason: ReasonV2::new("Requirements changed.").unwrap(),
+        reactivated: true,
+        actor: Some(ActorAttributionV2::new("operator").unwrap()),
+        recorded_at: UnixMillis::new(60),
+    })
+    .unwrap();
+    state_with_memory(
+        7,
+        SessionLifecycle::Running,
+        vec![
+            attempt(
+                1,
+                "capture",
+                1,
+                1,
+                AttemptLifecycle::Completed,
+                AttemptValidityV2::Stale,
+            ),
+            attempt(
+                2,
+                "gate",
+                1,
+                2,
+                AttemptLifecycle::Completed,
+                AttemptValidityV2::Stale,
+            ),
+            attempt(
+                3,
+                "finish",
+                1,
+                3,
+                AttemptLifecycle::Completed,
+                AttemptValidityV2::Stale,
+            ),
+            attempt(
+                4,
+                "capture",
+                2,
+                4,
+                AttemptLifecycle::Active,
+                AttemptValidityV2::Valid,
+            ),
+        ],
+        vec![
+            AttemptMetadataV2::new(
+                attempt_id(1),
+                UnixMillis::new(10),
+                Some(UnixMillis::new(30)),
+                None,
+            )
+            .unwrap(),
+            AttemptMetadataV2::new(
+                attempt_id(2),
+                UnixMillis::new(30),
+                Some(UnixMillis::new(40)),
+                None,
+            )
+            .unwrap(),
+            AttemptMetadataV2::new(
+                attempt_id(3),
+                UnixMillis::new(40),
+                Some(UnixMillis::new(50)),
+                None,
+            )
+            .unwrap(),
+            AttemptMetadataV2::new(attempt_id(4), UnixMillis::new(60), None, None).unwrap(),
+        ],
+        vec![
+            GraphNodeCounterV2::new(node("capture"), 2, 1),
+            GraphNodeCounterV2::new(node("gate"), 1, 0),
+            GraphNodeCounterV2::new(node("finish"), 1, 0),
+        ],
+        WorkflowMemoryStateV2::new(
+            vec![capture.clone(), gate, finish, fresh],
+            vec![proceed_decision(&capture)],
+            vec![rework],
+        )
+        .unwrap(),
+        None,
+    )
+}
+
+fn state_with_memory(
+    revision: u64,
+    lifecycle: SessionLifecycle,
+    attempts: Vec<SessionAttemptV2>,
+    metadata: Vec<AttemptMetadataV2>,
+    counters: Vec<GraphNodeCounterV2>,
+    memory: WorkflowMemoryStateV2,
+    completed_at: Option<UnixMillis>,
+) -> GraphSessionStateV2 {
+    try_state_with_memory(
+        revision,
+        lifecycle,
+        attempts,
+        metadata,
+        counters,
+        memory,
+        completed_at,
+    )
+    .unwrap()
+}
+
+fn try_state_with_memory(
+    revision: u64,
+    lifecycle: SessionLifecycle,
+    attempts: Vec<SessionAttemptV2>,
+    metadata: Vec<AttemptMetadataV2>,
+    counters: Vec<GraphNodeCounterV2>,
+    memory: WorkflowMemoryStateV2,
+    completed_at: Option<UnixMillis>,
+) -> Result<GraphSessionStateV2, ProcedureStateErrorV2> {
+    GraphSessionStateV2::new_with_workflow_memory(
+        Revision::new(revision),
+        "Persist workflow memory",
+        snapshot(),
+        SessionTraceV2::from_parts(session_id(), lifecycle, Revision::new(revision), attempts)
+            .unwrap(),
+        counters,
+        metadata,
+        memory,
+        UnixMillis::new(10),
+        completed_at,
+        None,
+        None,
+    )
+}
+
+#[test]
+fn v2drw001_decide_advance_records_the_route_and_activates_one_fresh_target() {
+    let state = gate_state();
+    let outcome = state
+        .decide_active_route_v2(
+            Revision::new(4),
+            &attempt_id(2),
+            OptionId::new("proceed").unwrap(),
+            attempt_id(3),
+            Some(ReasonV2::new("Proceed to finish.").unwrap()),
+            Some(ActorAttributionV2::new("reviewer").unwrap()),
+            UnixMillis::new(40),
+        )
+        .unwrap();
+
+    assert_eq!(outcome.from_graph_node_id(), &node("gate"));
+    assert_eq!(outcome.from_attempt_id(), &attempt_id(2));
+    assert_eq!(outcome.to_graph_node_id(), &node("finish"));
+    assert_eq!(outcome.to_attempt_id(), &attempt_id(3));
+    assert!(outcome.declared_rework_record().is_none());
+    let record = outcome.decision_record();
+    assert_eq!(record.selected_option(), &OptionId::new("proceed").unwrap());
+    assert_eq!(record.route_effect(), TransitionEffectV2::Advance);
+    assert_eq!(record.session_revision(), Revision::new(5));
+    assert_eq!(record.actor().unwrap().as_str(), "reviewer");
+    assert_eq!(record.evidence().references().len(), 2);
+
+    let next = outcome.into_state();
+    assert_eq!(next.workspace_revision(), Revision::new(5));
+    assert_eq!(next.trace().revision(), Revision::new(5));
+    assert_eq!(
+        next.trace().active_attempt().unwrap().graph_node_id(),
+        &node("finish")
+    );
+    assert_eq!(next.trace().attempts().len(), 3);
+    assert_eq!(next.workflow_memory().decisions().len(), 1);
+    assert!(next.workflow_memory().reworks().is_empty());
+    assert_eq!(next.counters()[2].attempt_count(), 1);
+    assert_eq!(next.counters()[2].rework_traversal_count(), 0);
+}
+
+#[test]
+fn v2drw001_decide_declared_rework_stales_the_suffix_and_records_one_reentry() {
+    let state = gate_state();
+    let outcome = state
+        .decide_active_route_v2(
+            Revision::new(4),
+            &attempt_id(2),
+            OptionId::new("redo").unwrap(),
+            attempt_id(3),
+            Some(ReasonV2::new("Redo the capture.").unwrap()),
+            Some(ActorAttributionV2::new("reviewer").unwrap()),
+            UnixMillis::new(40),
+        )
+        .unwrap();
+
+    assert_eq!(outcome.to_graph_node_id(), &node("capture"));
+    let rework = outcome.declared_rework_record().unwrap();
+    assert_eq!(rework.kind(), ReworkKindV2::Declared);
+    assert_eq!(rework.trace(), TraceSequenceV2::new(3));
+    assert_eq!(rework.target_attempt_id(), &attempt_id(3));
+    assert!(!rework.reactivated());
+    let next = outcome.into_state();
+    assert_eq!(
+        next.trace()
+            .attempts()
+            .iter()
+            .map(SessionAttemptV2::validity)
+            .collect::<Vec<_>>(),
+        vec![
+            AttemptValidityV2::Stale,
+            AttemptValidityV2::Stale,
+            AttemptValidityV2::Valid,
+        ]
+    );
+    assert_eq!(
+        next.trace().active_attempt().unwrap().attempt_id(),
+        &attempt_id(3)
+    );
+    assert_eq!(next.workflow_memory().decisions().len(), 1);
+    assert_eq!(next.workflow_memory().reworks().len(), 1);
+    assert_eq!(next.counters()[0].attempt_count(), 2);
+    assert_eq!(next.counters()[0].rework_traversal_count(), 1);
+}
+
+#[test]
+fn v2drw001_decide_rejects_stale_fences_option_and_missing_reason_without_mutation() {
+    let state = gate_state();
+    let before = state.clone();
+    assert!(matches!(
+        state.decide_active_route_with_goal_revision_v2(
+            Revision::new(4),
+            &attempt_id(2),
+            OptionId::new("proceed").unwrap(),
+            attempt_id(3),
+            Some(GoalRevisionNumberV2::FIRST),
+            Some(ReasonV2::new("Proceed.").unwrap()),
+            None,
+            UnixMillis::new(40),
+        ),
+        Err(GraphMutationErrorV2::SessionGoalMissing)
+    ));
+    assert_eq!(state, before);
+    assert_eq!(
+        state.decide_active_route_v2(
+            Revision::new(3),
+            &attempt_id(2),
+            OptionId::new("proceed").unwrap(),
+            attempt_id(3),
+            Some(ReasonV2::new("Proceed.").unwrap()),
+            None,
+            UnixMillis::new(40),
+        ),
+        Err(GraphMutationErrorV2::SessionRevisionConflict {
+            expected: Revision::new(3),
+            actual: Revision::new(4),
+        })
+    );
+    assert_eq!(state, before);
+    assert_eq!(
+        state.decide_active_route_v2(
+            Revision::new(4),
+            &attempt_id(99),
+            OptionId::new("proceed").unwrap(),
+            attempt_id(3),
+            Some(ReasonV2::new("Proceed.").unwrap()),
+            None,
+            UnixMillis::new(40),
+        ),
+        Err(GraphMutationErrorV2::AttemptNotCurrent {
+            expected: attempt_id(99),
+            actual: Some(attempt_id(2)),
+        })
+    );
+    assert_eq!(state, before);
+    let unknown = OptionId::new("unknown").unwrap();
+    assert_eq!(
+        state.decide_active_route_v2(
+            Revision::new(4),
+            &attempt_id(2),
+            unknown.clone(),
+            attempt_id(3),
+            Some(ReasonV2::new("Proceed.").unwrap()),
+            None,
+            UnixMillis::new(40),
+        ),
+        Err(GraphMutationErrorV2::OptionNotAllowed {
+            graph_node_id: node("gate"),
+            option_id: unknown,
+            allowed_option_ids: vec![
+                OptionId::new("proceed").unwrap(),
+                OptionId::new("redo").unwrap(),
+            ],
+        })
+    );
+    assert_eq!(state, before);
+    assert_eq!(
+        state.decide_active_route_v2(
+            Revision::new(4),
+            &attempt_id(2),
+            OptionId::new("proceed").unwrap(),
+            attempt_id(3),
+            None,
+            None,
+            UnixMillis::new(40),
+        ),
+        Err(GraphMutationErrorV2::DecisionReasonMissing {
+            graph_node_id: node("gate"),
+        })
+    );
+    assert_eq!(state, before);
+}
+
+#[test]
+fn v2drw001_decide_rejects_wrong_node_missing_local_item_and_open_blocker() {
+    let action = initial_state();
+    assert_eq!(
+        action.decide_active_route_v2(
+            Revision::new(1),
+            &attempt_id(1),
+            OptionId::new("proceed").unwrap(),
+            attempt_id(2),
+            Some(ReasonV2::new("Proceed.").unwrap()),
+            None,
+            UnixMillis::new(20),
+        ),
+        Err(GraphMutationErrorV2::GraphNodeTypeMismatch {
+            graph_node_id: node("capture"),
+            actual: crate::NodeKindV2::Action,
+        })
+    );
+
+    let capture = capture_memory(true, Some((BlockerState::Resolved, "Waiting for review.")));
+    let required_slot = ItemSlotStateV2::new(
+        attempt_id(2),
+        item("decision-note"),
+        ItemTypeV1::Text,
+        Revision::ZERO,
+        None,
+        UnixMillis::new(30),
+        UnixMillis::new(30),
+    )
+    .unwrap();
+    let required_gate = AttemptWorkflowMemoryV2::new(
+        attempt_id(2),
+        vec![required_slot],
+        Vec::new(),
+        gate_evidence(&capture),
+    )
+    .unwrap();
+    let required_state = GraphSessionStateV2::new_with_workflow_memory(
+        Revision::new(4),
+        "Required decision item",
+        required_gate_item_snapshot(),
+        gate_state().trace().clone(),
+        gate_state().counters().to_vec(),
+        gate_state().attempt_metadata().to_vec(),
+        WorkflowMemoryStateV2::new(vec![capture.clone(), required_gate], Vec::new(), Vec::new())
+            .unwrap(),
+        UnixMillis::new(10),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        required_state.decide_active_route_v2(
+            Revision::new(4),
+            &attempt_id(2),
+            OptionId::new("proceed").unwrap(),
+            attempt_id(3),
+            Some(ReasonV2::new("Proceed.").unwrap()),
+            None,
+            UnixMillis::new(40),
+        ),
+        Err(GraphMutationErrorV2::RequiredItemsMissing {
+            item_ids: vec![item("decision-note")],
+        })
+    );
+
+    let blocker = BlockerStateV2::new(
+        BlockerId::new("00000000-0000-4000-8000-000000000098").unwrap(),
+        attempt_id(2),
+        "Decision blocked.",
+        BlockerState::Open,
+        UnixMillis::new(35),
+        None,
+    )
+    .unwrap();
+    let blocked_gate = AttemptWorkflowMemoryV2::new(
+        attempt_id(2),
+        Vec::new(),
+        vec![blocker],
+        gate_evidence(&capture),
+    )
+    .unwrap();
+    let blocked_state = GraphSessionStateV2::new_with_workflow_memory(
+        Revision::new(4),
+        "Blocked decision",
+        snapshot(),
+        gate_state().trace().clone(),
+        gate_state().counters().to_vec(),
+        gate_state().attempt_metadata().to_vec(),
+        WorkflowMemoryStateV2::new(vec![capture, blocked_gate], Vec::new(), Vec::new()).unwrap(),
+        UnixMillis::new(10),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        blocked_state.decide_active_route_v2(
+            Revision::new(4),
+            &attempt_id(2),
+            OptionId::new("proceed").unwrap(),
+            attempt_id(3),
+            Some(ReasonV2::new("Proceed.").unwrap()),
+            None,
+            UnixMillis::new(40),
+        ),
+        Err(GraphMutationErrorV2::BlockersPresent)
+    );
+}
+
+#[test]
+fn v2drw001_unresolved_and_stale_required_evidence_fail_before_decision_admission() {
+    let capture = capture_memory(true, Some((BlockerState::Resolved, "Waiting for review.")));
+    let unresolved_gate = AttemptWorkflowMemoryV2::new(
+        attempt_id(2),
+        Vec::new(),
+        Vec::new(),
+        vec![
+            EvidenceResolutionStateV2::new(
+                0,
+                false,
+                vec![item("z-summary")],
+                ResolvedEvidenceReferenceV2::unresolved(node("capture")),
+            )
+            .unwrap(),
+            EvidenceResolutionStateV2::new(
+                1,
+                false,
+                Vec::new(),
+                ResolvedEvidenceReferenceV2::unresolved(node("finish")),
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    assert!(
+        GraphSessionStateV2::new_with_workflow_memory(
+            Revision::new(4),
+            "Unresolved required evidence",
+            snapshot(),
+            gate_state().trace().clone(),
+            gate_state().counters().to_vec(),
+            gate_state().attempt_metadata().to_vec(),
+            WorkflowMemoryStateV2::new(
+                vec![capture.clone(), unresolved_gate],
+                Vec::new(),
+                Vec::new(),
+            )
+            .unwrap(),
+            UnixMillis::new(10),
+            None,
+            None,
+            None,
+        )
+        .is_err()
+    );
+
+    let stale_trace = SessionTraceV2::from_parts(
+        session_id(),
+        SessionLifecycle::Running,
+        Revision::new(4),
+        vec![
+            attempt(
+                1,
+                "capture",
+                1,
+                1,
+                AttemptLifecycle::Completed,
+                AttemptValidityV2::Stale,
+            ),
+            attempt(
+                2,
+                "gate",
+                1,
+                2,
+                AttemptLifecycle::Active,
+                AttemptValidityV2::Valid,
+            ),
+        ],
+    )
+    .unwrap();
+    let stale_gate = AttemptWorkflowMemoryV2::new(
+        attempt_id(2),
+        Vec::new(),
+        Vec::new(),
+        gate_evidence(&capture),
+    )
+    .unwrap();
+    assert!(
+        GraphSessionStateV2::new_with_workflow_memory(
+            Revision::new(4),
+            "Stale required evidence",
+            snapshot(),
+            stale_trace,
+            gate_state().counters().to_vec(),
+            gate_state().attempt_metadata().to_vec(),
+            WorkflowMemoryStateV2::new(vec![capture, stale_gate], Vec::new(), Vec::new()).unwrap(),
+            UnixMillis::new(10),
+            None,
+            None,
+            None,
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn block_unblock_and_cancel_are_revision_checked_history_preserving_transitions() {
+    let initial = initial_state();
+    let blocker = BlockerId::new("00000000-0000-4000-8000-000000000099").unwrap();
+    let blocked = initial
+        .block_active_attempt_v2(
+            Revision::new(1),
+            &attempt_id(1),
+            blocker.clone(),
+            "Waiting for review.",
+            UnixMillis::new(20),
+        )
+        .unwrap()
+        .into_state();
+    assert_eq!(blocked.trace().revision(), Revision::new(2));
+    assert_eq!(
+        blocked.trace().active_attempt(),
+        initial.trace().active_attempt()
+    );
+    assert_eq!(blocked.counters(), initial.counters());
+    assert_eq!(blocked.goal_state(), initial.goal_state());
+    assert_eq!(
+        blocked.workflow_memory().attempts()[0].blockers()[0].blocker_id(),
+        &blocker
+    );
+
+    let outcome = blocked
+        .unblock_active_attempt_v2(
+            Revision::new(2),
+            &attempt_id(1),
+            Some(&blocker),
+            false,
+            UnixMillis::new(30),
+        )
+        .unwrap();
+    assert_eq!(outcome.blocker_ids(), &[blocker]);
+    let unblocked = outcome.into_state();
+    assert_eq!(unblocked.trace().revision(), Revision::new(3));
+    assert_eq!(
+        unblocked.workflow_memory().attempts()[0].blockers()[0].state(),
+        BlockerState::Resolved
+    );
+    assert_eq!(
+        unblocked.workflow_memory().attempts()[0].item_slots(),
+        initial.workflow_memory().attempts()[0].item_slots()
+    );
+
+    let cancelled = unblocked
+        .cancel_active_session_v2(
+            Revision::new(3),
+            &attempt_id(1),
+            ReasonV2::new("No longer needed.").unwrap(),
+            UnixMillis::new(40),
+        )
+        .unwrap()
+        .into_state();
+    assert_eq!(cancelled.trace().lifecycle(), SessionLifecycle::Cancelled);
+    assert!(cancelled.trace().active_attempt().is_none());
+    assert_eq!(cancelled.workflow_memory(), unblocked.workflow_memory());
+    assert_eq!(cancelled.counters(), unblocked.counters());
+    assert_eq!(cancelled.cancelled_at(), Some(UnixMillis::new(40)));
+    assert_eq!(cancelled.cancel_reason(), Some("No longer needed."));
+}
+
+#[test]
+fn block_enforces_the_v2_open_limit_and_session_global_id_uniqueness() {
+    let mut state = initial_state();
+    for number in 1..=64 {
+        let blocker = BlockerId::new(format!("00000000-0000-4000-8000-{number:012x}")).unwrap();
+        state = state
+            .block_active_attempt_v2(
+                Revision::new(number),
+                &attempt_id(1),
+                blocker,
+                "Open blocker.",
+                UnixMillis::new(20 + number),
+            )
+            .unwrap()
+            .into_state();
+    }
+    let before = state.clone();
+    assert_eq!(
+        state.block_active_attempt_v2(
+            Revision::new(65),
+            &attempt_id(1),
+            BlockerId::new("00000000-0000-4000-8000-000000000099").unwrap(),
+            "One too many.",
+            UnixMillis::new(100),
+        ),
+        Err(GraphMutationErrorV2::TooManyOpenBlockers { maximum: 64 })
+    );
+    assert_eq!(state, before);
+}
+
+#[test]
+fn retrying_a_decision_re_resolves_evidence_into_clean_attempt_memory() {
+    let state = gate_state();
+    let prior_attempt = state.trace().attempts()[0].clone();
+    let prior_metadata = state.attempt_metadata()[0].clone();
+    let prior_memory = state.workflow_memory().attempts()[0].clone();
+    let prior_counters = state.counters().to_vec();
+    let prior_evidence = state.workflow_memory().attempts()[1].evidence().to_vec();
+    let outcome = state
+        .retry_active_attempt_v2(
+            Revision::new(4),
+            &attempt_id(2),
+            attempt_id(3),
+            ReasonV2::new("Reconsider the decision.").unwrap(),
+            UnixMillis::new(40),
+        )
+        .unwrap();
+    let retried = outcome.state();
+    let fresh_memory = &retried.workflow_memory().attempts()[2];
+
+    assert_eq!(retried.trace().attempts()[0], prior_attempt);
+    assert_eq!(retried.attempt_metadata()[0], prior_metadata);
+    assert_eq!(retried.workflow_memory().attempts()[0], prior_memory);
+    assert_eq!(retried.counters()[0], prior_counters[0]);
+    assert_eq!(retried.counters()[2], prior_counters[2]);
+    assert_eq!(
+        retried.counters()[1].attempt_count(),
+        prior_counters[1].attempt_count() + 1
+    );
+    assert_eq!(
+        retried.counters()[1].rework_traversal_count(),
+        prior_counters[1].rework_traversal_count()
+    );
+    assert_eq!(
+        retried.trace().attempts()[0].validity(),
+        AttemptValidityV2::Valid
+    );
+    assert_eq!(
+        retried.trace().attempts()[1].lifecycle(),
+        AttemptLifecycle::Abandoned
+    );
+    assert_eq!(
+        retried.trace().attempts()[1].validity(),
+        AttemptValidityV2::Stale
+    );
+    assert_eq!(
+        retried.trace().active_attempt().unwrap().graph_node_id(),
+        &node("gate")
+    );
+    assert!(fresh_memory.item_slots().is_empty());
+    assert!(fresh_memory.blockers().is_empty());
+    assert_eq!(fresh_memory.evidence().len(), prior_evidence.len());
+    assert_eq!(
+        fresh_memory.evidence()[0]
+            .resolution()
+            .snapshot()
+            .unwrap()
+            .source_attempt_id(),
+        &attempt_id(1)
+    );
+    assert_eq!(
+        fresh_memory.evidence()[0]
+            .resolution()
+            .snapshot()
+            .unwrap()
+            .resolved_at(),
+        UnixMillis::new(40)
+    );
+    assert!(fresh_memory.evidence()[1].resolution().snapshot().is_none());
+    assert_eq!(
+        retried.workflow_memory().attempts()[1].evidence(),
+        prior_evidence
+    );
+    assert!(retried.selected_evidence_readback(&attempt_id(2)).unwrap()[0].stale());
+    assert!(!retried.selected_evidence_readback(&attempt_id(3)).unwrap()[0].stale());
+    assert!(retried.workflow_memory().decisions().is_empty());
+    assert!(retried.workflow_memory().reworks().is_empty());
+}
+
+#[test]
+fn retry_discards_missing_required_items_and_open_blockers_only_from_the_fresh_attempt() {
+    let old_memory = capture_memory(false, Some((BlockerState::Open, "Still blocked.")));
+    let state = state_with_memory(
+        1,
+        SessionLifecycle::Running,
+        vec![attempt(
+            1,
+            "capture",
+            1,
+            1,
+            AttemptLifecycle::Active,
+            AttemptValidityV2::Valid,
+        )],
+        vec![AttemptMetadataV2::new(attempt_id(1), UnixMillis::new(10), None, None).unwrap()],
+        vec![
+            GraphNodeCounterV2::new(node("capture"), 1, 0),
+            GraphNodeCounterV2::new(node("gate"), 0, 0),
+            GraphNodeCounterV2::new(node("finish"), 0, 0),
+        ],
+        WorkflowMemoryStateV2::new(vec![old_memory.clone()], Vec::new(), Vec::new()).unwrap(),
+        None,
+    );
+    assert!(old_memory.item_slots()[0].value().is_none());
+    assert_eq!(old_memory.blockers()[0].state(), BlockerState::Open);
+
+    let retried = state
+        .retry_active_attempt_v2(
+            Revision::new(1),
+            &attempt_id(1),
+            attempt_id(2),
+            ReasonV2::new("Retry despite incomplete work.").unwrap(),
+            UnixMillis::new(20),
+        )
+        .unwrap()
+        .into_state();
+    let fresh = &retried.workflow_memory().attempts()[1];
+
+    assert_eq!(retried.workflow_memory().attempts()[0], old_memory);
+    assert!(fresh.item_slots().iter().all(|slot| slot.value().is_none()));
+    assert!(fresh.blockers().is_empty());
+    assert_eq!(retried.counters()[0].attempt_count(), 2);
+    assert_eq!(retried.counters()[0].rework_traversal_count(), 0);
+    assert_eq!(retried.counters()[1], state.counters()[1]);
+    assert_eq!(retried.counters()[2], state.counters()[2]);
+}
+
+#[test]
+fn declarations_required_items_and_activation_evidence_fail_closed() {
+    let mut invalid_choice_slots = capture_slots(1, true, false);
+    invalid_choice_slots[4] = ItemSlotStateV2::new(
+        attempt_id(1),
+        item("b-choice"),
+        ItemTypeV1::Choice,
+        Revision::new(1),
+        Some(RecordedItemValueV2::choice("blue").unwrap()),
+        UnixMillis::new(10),
+        UnixMillis::new(11),
+    )
+    .unwrap();
+    let invalid_choice = try_state_with_memory(
+        1,
+        SessionLifecycle::Running,
+        vec![attempt(
+            1,
+            "capture",
+            1,
+            1,
+            AttemptLifecycle::Active,
+            AttemptValidityV2::Valid,
+        )],
+        vec![AttemptMetadataV2::new(attempt_id(1), UnixMillis::new(10), None, None).unwrap()],
+        vec![
+            GraphNodeCounterV2::new(node("capture"), 1, 0),
+            GraphNodeCounterV2::new(node("gate"), 0, 0),
+            GraphNodeCounterV2::new(node("finish"), 0, 0),
+        ],
+        WorkflowMemoryStateV2::new(
+            vec![
+                AttemptWorkflowMemoryV2::new(
+                    attempt_id(1),
+                    invalid_choice_slots,
+                    Vec::new(),
+                    Vec::new(),
+                )
+                .unwrap(),
+            ],
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap(),
+        None,
+    );
+    assert!(invalid_choice.is_err());
+
+    let empty_capture = capture_memory(false, None);
+    let gate = AttemptWorkflowMemoryV2::new(
+        attempt_id(2),
+        Vec::new(),
+        Vec::new(),
+        gate_evidence(&empty_capture),
+    )
+    .unwrap();
+    let missing_required = try_state_with_memory(
+        2,
+        SessionLifecycle::Running,
+        vec![
+            attempt(
+                1,
+                "capture",
+                1,
+                1,
+                AttemptLifecycle::Completed,
+                AttemptValidityV2::Valid,
+            ),
+            attempt(
+                2,
+                "gate",
+                1,
+                2,
+                AttemptLifecycle::Active,
+                AttemptValidityV2::Valid,
+            ),
+        ],
+        vec![
+            AttemptMetadataV2::new(
+                attempt_id(1),
+                UnixMillis::new(10),
+                Some(UnixMillis::new(30)),
+                None,
+            )
+            .unwrap(),
+            AttemptMetadataV2::new(attempt_id(2), UnixMillis::new(30), None, None).unwrap(),
+        ],
+        vec![
+            GraphNodeCounterV2::new(node("capture"), 1, 0),
+            GraphNodeCounterV2::new(node("gate"), 1, 0),
+            GraphNodeCounterV2::new(node("finish"), 0, 0),
+        ],
+        WorkflowMemoryStateV2::new(vec![empty_capture, gate], Vec::new(), Vec::new()).unwrap(),
+        None,
+    );
+    assert!(missing_required.is_err());
+
+    let capture = capture_memory(true, Some((BlockerState::Resolved, "Waiting for review.")));
+    let wrong_time_reference = EvidenceResolutionStateV2::new(
+        0,
+        true,
+        vec![item("z-summary")],
+        ResolvedEvidenceReferenceV2::resolved(
+            EvidenceReferenceSnapshotV2::new(
+                node("capture"),
+                attempt_id(1),
+                AttemptNumberV2::FIRST,
+                capture.recorded_items_digest().unwrap(),
+                UnixMillis::new(29),
+            )
+            .unwrap(),
+        ),
+    )
+    .unwrap();
+    let wrong_time_gate = AttemptWorkflowMemoryV2::new(
+        attempt_id(2),
+        Vec::new(),
+        Vec::new(),
+        vec![
+            wrong_time_reference,
+            EvidenceResolutionStateV2::new(
+                1,
+                false,
+                Vec::new(),
+                ResolvedEvidenceReferenceV2::unresolved(node("finish")),
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    let wrong_time = try_state_with_memory(
+        4,
+        SessionLifecycle::Running,
+        gate_state().trace().attempts().to_vec(),
+        gate_state().attempt_metadata().to_vec(),
+        gate_state().counters().to_vec(),
+        WorkflowMemoryStateV2::new(vec![capture, wrong_time_gate], Vec::new(), Vec::new()).unwrap(),
+        None,
+    );
+    assert!(wrong_time.is_err());
+}
+
+#[test]
+fn optional_evidence_cannot_remain_unresolved_when_a_valid_source_exists() {
+    let capture = capture_memory(true, Some((BlockerState::Resolved, "Waiting for review.")));
+    let finish =
+        AttemptWorkflowMemoryV2::new(attempt_id(3), Vec::new(), Vec::new(), Vec::new()).unwrap();
+    let gate = AttemptWorkflowMemoryV2::new(
+        attempt_id(2),
+        Vec::new(),
+        Vec::new(),
+        vec![
+            EvidenceResolutionStateV2::new(
+                0,
+                true,
+                vec![item("z-summary")],
+                ResolvedEvidenceReferenceV2::resolved(
+                    EvidenceReferenceSnapshotV2::new(
+                        node("capture"),
+                        attempt_id(1),
+                        AttemptNumberV2::FIRST,
+                        capture.recorded_items_digest().unwrap(),
+                        UnixMillis::new(40),
+                    )
+                    .unwrap(),
+                ),
+            )
+            .unwrap(),
+            EvidenceResolutionStateV2::new(
+                1,
+                false,
+                Vec::new(),
+                ResolvedEvidenceReferenceV2::unresolved(node("finish")),
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    let result = try_state_with_memory(
+        4,
+        SessionLifecycle::Running,
+        vec![
+            attempt(
+                1,
+                "capture",
+                1,
+                1,
+                AttemptLifecycle::Completed,
+                AttemptValidityV2::Valid,
+            ),
+            attempt(
+                3,
+                "finish",
+                1,
+                2,
+                AttemptLifecycle::Completed,
+                AttemptValidityV2::Valid,
+            ),
+            attempt(
+                2,
+                "gate",
+                1,
+                3,
+                AttemptLifecycle::Active,
+                AttemptValidityV2::Valid,
+            ),
+        ],
+        vec![
+            AttemptMetadataV2::new(
+                attempt_id(1),
+                UnixMillis::new(10),
+                Some(UnixMillis::new(30)),
+                None,
+            )
+            .unwrap(),
+            AttemptMetadataV2::new(
+                attempt_id(3),
+                UnixMillis::new(30),
+                Some(UnixMillis::new(40)),
+                None,
+            )
+            .unwrap(),
+            AttemptMetadataV2::new(attempt_id(2), UnixMillis::new(40), None, None).unwrap(),
+        ],
+        vec![
+            GraphNodeCounterV2::new(node("capture"), 1, 0),
+            GraphNodeCounterV2::new(node("gate"), 1, 0),
+            GraphNodeCounterV2::new(node("finish"), 1, 0),
+        ],
+        WorkflowMemoryStateV2::new(vec![capture, finish, gate], Vec::new(), Vec::new()).unwrap(),
+        None,
+    );
+    assert!(result.is_err());
+}
+
+#[test]
+fn rework_cannot_target_a_node_without_an_earlier_attempt() {
+    let capture = capture_memory(true, Some((BlockerState::Resolved, "Waiting for review.")));
+    let gate = AttemptWorkflowMemoryV2::new(
+        attempt_id(2),
+        Vec::new(),
+        Vec::new(),
+        gate_evidence(&capture),
+    )
+    .unwrap();
+    let finish =
+        AttemptWorkflowMemoryV2::new(attempt_id(3), Vec::new(), Vec::new(), Vec::new()).unwrap();
+    let fake_rework = ReworkRecordV2::new(ReworkRecordInputV2 {
+        trace: TraceSequenceV2::new(3),
+        kind: ReworkKindV2::Manual,
+        from_node: node("gate"),
+        to_node: node("finish"),
+        target_attempt_id: attempt_id(3),
+        reason: ReasonV2::new("Pretend this advance was rework.").unwrap(),
+        reactivated: false,
+        actor: None,
+        recorded_at: UnixMillis::new(40),
+    })
+    .unwrap();
+    let result = try_state_with_memory(
+        5,
+        SessionLifecycle::Running,
+        finish_state(5, false).trace().attempts().to_vec(),
+        finish_state(5, false).attempt_metadata().to_vec(),
+        finish_state(5, false).counters().to_vec(),
+        WorkflowMemoryStateV2::new(
+            vec![capture.clone(), gate, finish],
+            vec![proceed_decision(&capture)],
+            vec![fake_rework],
+        )
+        .unwrap(),
+        None,
+    );
+    assert!(result.is_err());
+}
+
+#[test]
+fn v2drw003_manual_rework_reenters_running_and_completed_sessions() {
+    let running = gate_state();
+    let running_outcome = running
+        .manual_rework_v2(
+            Revision::new(4),
+            Some(&attempt_id(2)),
+            node("capture"),
+            attempt_id(3),
+            ReasonV2::new("Revisit the capture.").unwrap(),
+            Some(ActorAttributionV2::new("operator").unwrap()),
+            UnixMillis::new(40),
+        )
+        .unwrap();
+    assert!(!running_outcome.reactivated());
+    assert_eq!(running_outcome.from_graph_node_id(), &node("gate"));
+    assert_eq!(running_outcome.to_graph_node_id(), &node("capture"));
+    assert_eq!(running_outcome.to_attempt_id(), &attempt_id(3));
+    assert_eq!(running_outcome.record().kind(), ReworkKindV2::Manual);
+    assert_eq!(
+        running_outcome.record().actor().unwrap().as_str(),
+        "operator"
+    );
+    let reentered = running_outcome.into_state();
+    assert_eq!(reentered.trace().lifecycle(), SessionLifecycle::Running);
+    assert_eq!(
+        reentered.trace().active_attempt().unwrap().attempt_id(),
+        &attempt_id(3)
+    );
+    assert_eq!(reentered.workflow_memory().reworks().len(), 1);
+    assert_eq!(reentered.counters()[0].attempt_count(), 2);
+    assert_eq!(reentered.counters()[0].rework_traversal_count(), 1);
+
+    let completed = finish_state(6, true);
+    let completed_outcome = completed
+        .manual_rework_v2(
+            Revision::new(6),
+            None,
+            node("capture"),
+            attempt_id(4),
+            ReasonV2::new("Requirements changed.").unwrap(),
+            Some(ActorAttributionV2::new("operator").unwrap()),
+            UnixMillis::new(60),
+        )
+        .unwrap();
+    assert!(completed_outcome.reactivated());
+    assert_eq!(completed_outcome.from_graph_node_id(), &node("finish"));
+    let reactivated = completed_outcome.into_state();
+    assert_eq!(reactivated.trace().revision(), Revision::new(7));
+    assert_eq!(reactivated.trace().lifecycle(), SessionLifecycle::Running);
+    assert!(reactivated.completed_at().is_none());
+    assert_eq!(
+        reactivated.trace().active_attempt().unwrap().attempt_id(),
+        &attempt_id(4)
+    );
+    assert_eq!(reactivated, manual_reactivated_state());
+}
+
+#[test]
+fn v2drw004_rework_successors_preserve_history_and_stale_exact_suffixes() {
+    struct Case {
+        name: &'static str,
+        before: GraphSessionStateV2,
+        after: GraphSessionStateV2,
+        target: GraphNodeId,
+        fresh_attempt_id: AttemptId,
+        expected_source_lifecycle: AttemptLifecycle,
+        expected_gate_evidence_stale: bool,
+        appended_decision: bool,
+    }
+
+    let declared_before = gate_state();
+    let declared_after = declared_before
+        .decide_active_route_v2(
+            Revision::new(4),
+            &attempt_id(2),
+            OptionId::new("redo").unwrap(),
+            attempt_id(3),
+            Some(ReasonV2::new("Redo the capture.").unwrap()),
+            Some(ActorAttributionV2::new("reviewer").unwrap()),
+            UnixMillis::new(40),
+        )
+        .unwrap()
+        .into_state();
+
+    let running_manual_before = gate_state();
+    let running_manual_after = running_manual_before
+        .manual_rework_v2(
+            Revision::new(4),
+            Some(&attempt_id(2)),
+            node("capture"),
+            attempt_id(3),
+            ReasonV2::new("Revisit the capture.").unwrap(),
+            Some(ActorAttributionV2::new("operator").unwrap()),
+            UnixMillis::new(40),
+        )
+        .unwrap()
+        .into_state();
+
+    let same_node_before = finish_state(5, false);
+    let same_node_after = same_node_before
+        .manual_rework_v2(
+            Revision::new(5),
+            Some(&attempt_id(3)),
+            node("finish"),
+            attempt_id(4),
+            ReasonV2::new("Repeat final checks.").unwrap(),
+            None,
+            UnixMillis::new(50),
+        )
+        .unwrap()
+        .into_state();
+
+    let completed_before = finish_state(6, true);
+    let completed_after = completed_before
+        .manual_rework_v2(
+            Revision::new(6),
+            None,
+            node("capture"),
+            attempt_id(4),
+            ReasonV2::new("Requirements changed.").unwrap(),
+            Some(ActorAttributionV2::new("operator").unwrap()),
+            UnixMillis::new(60),
+        )
+        .unwrap()
+        .into_state();
+
+    let cases = [
+        Case {
+            name: "declared gate to capture",
+            before: declared_before,
+            after: declared_after,
+            target: node("capture"),
+            fresh_attempt_id: attempt_id(3),
+            expected_source_lifecycle: AttemptLifecycle::Completed,
+            expected_gate_evidence_stale: true,
+            appended_decision: true,
+        },
+        Case {
+            name: "running manual gate to capture",
+            before: running_manual_before,
+            after: running_manual_after,
+            target: node("capture"),
+            fresh_attempt_id: attempt_id(3),
+            expected_source_lifecycle: AttemptLifecycle::Abandoned,
+            expected_gate_evidence_stale: true,
+            appended_decision: false,
+        },
+        Case {
+            name: "same-node manual finish to finish",
+            before: same_node_before,
+            after: same_node_after,
+            target: node("finish"),
+            fresh_attempt_id: attempt_id(4),
+            expected_source_lifecycle: AttemptLifecycle::Abandoned,
+            expected_gate_evidence_stale: false,
+            appended_decision: false,
+        },
+        Case {
+            name: "completed manual finish to capture",
+            before: completed_before,
+            after: completed_after,
+            target: node("capture"),
+            fresh_attempt_id: attempt_id(4),
+            expected_source_lifecycle: AttemptLifecycle::Completed,
+            expected_gate_evidence_stale: true,
+            appended_decision: false,
+        },
+    ];
+
+    for case in cases {
+        let old_attempt_count = case.before.trace().attempts().len();
+        let target_trace = case
+            .before
+            .trace()
+            .attempts()
+            .iter()
+            .find(|attempt| {
+                attempt.graph_node_id() == &case.target
+                    && attempt.validity() == AttemptValidityV2::Valid
+            })
+            .unwrap_or_else(|| panic!("{}: valid target is absent", case.name))
+            .trace();
+        let old_source = case.before.trace().attempts().last().unwrap();
+
+        assert_eq!(
+            case.after.workspace_revision(),
+            case.before.workspace_revision().checked_next().unwrap(),
+            "{}: workspace revision",
+            case.name
+        );
+        assert_eq!(
+            case.after.trace().revision(),
+            case.before.trace().revision().checked_next().unwrap(),
+            "{}: session revision",
+            case.name
+        );
+        assert_eq!(
+            case.after.trace().attempts().len(),
+            old_attempt_count + 1,
+            "{}: one fresh attempt",
+            case.name
+        );
+        assert_eq!(
+            &case.after.workflow_memory().attempts()[..old_attempt_count],
+            case.before.workflow_memory().attempts(),
+            "{}: old workflow memory",
+            case.name
+        );
+        assert_eq!(
+            &case.after.workflow_memory().decisions()
+                [..case.before.workflow_memory().decisions().len()],
+            case.before.workflow_memory().decisions(),
+            "{}: decision prefix",
+            case.name
+        );
+        assert_eq!(
+            &case.after.workflow_memory().reworks()
+                [..case.before.workflow_memory().reworks().len()],
+            case.before.workflow_memory().reworks(),
+            "{}: rework prefix",
+            case.name
+        );
+        assert_eq!(
+            case.after.workflow_memory().decisions().len(),
+            case.before.workflow_memory().decisions().len() + usize::from(case.appended_decision),
+            "{}: decision append count",
+            case.name
+        );
+        assert_eq!(
+            case.after.workflow_memory().reworks().len(),
+            case.before.workflow_memory().reworks().len() + 1,
+            "{}: rework append count",
+            case.name
+        );
+
+        for (old, new) in case
+            .before
+            .trace()
+            .attempts()
+            .iter()
+            .zip(case.after.trace().attempts())
+        {
+            assert_eq!(
+                new.attempt_id(),
+                old.attempt_id(),
+                "{}: attempt id",
+                case.name
+            );
+            assert_eq!(
+                new.graph_node_id(),
+                old.graph_node_id(),
+                "{}: graph node id",
+                case.name
+            );
+            assert_eq!(new.number(), old.number(), "{}: attempt number", case.name);
+            assert_eq!(new.trace(), old.trace(), "{}: trace identity", case.name);
+            assert_eq!(
+                new.goal_revision(),
+                old.goal_revision(),
+                "{}: goal binding",
+                case.name
+            );
+            let expected_validity =
+                if old.validity() == AttemptValidityV2::Valid && old.trace() >= target_trace {
+                    AttemptValidityV2::Stale
+                } else {
+                    old.validity()
+                };
+            assert_eq!(
+                new.validity(),
+                expected_validity,
+                "{}: exact suffix validity at trace {}",
+                case.name,
+                old.trace().get()
+            );
+            let expected_lifecycle = if old.attempt_id() == old_source.attempt_id() {
+                case.expected_source_lifecycle
+            } else {
+                old.lifecycle()
+            };
+            assert_eq!(
+                new.lifecycle(),
+                expected_lifecycle,
+                "{}: lifecycle at trace {}",
+                case.name,
+                old.trace().get()
+            );
+        }
+
+        let fresh = case.after.trace().attempts().last().unwrap();
+        assert_eq!(
+            fresh.attempt_id(),
+            &case.fresh_attempt_id,
+            "{}: fresh id",
+            case.name
+        );
+        assert_eq!(
+            fresh.graph_node_id(),
+            &case.target,
+            "{}: fresh target",
+            case.name
+        );
+        assert_eq!(
+            fresh.lifecycle(),
+            AttemptLifecycle::Active,
+            "{}: fresh lifecycle",
+            case.name
+        );
+        assert_eq!(
+            fresh.validity(),
+            AttemptValidityV2::Valid,
+            "{}: fresh validity",
+            case.name
+        );
+        assert_eq!(
+            fresh.trace(),
+            TraceSequenceV2::new(old_attempt_count as u64 + 1),
+            "{}: fresh trace",
+            case.name
+        );
+        assert_eq!(
+            case.after.trace().active_attempt(),
+            Some(fresh),
+            "{}: authoritative cursor",
+            case.name
+        );
+        assert_eq!(
+            case.after
+                .trace()
+                .attempts()
+                .iter()
+                .filter(|attempt| attempt.lifecycle() == AttemptLifecycle::Active)
+                .count(),
+            1,
+            "{}: sole cursor",
+            case.name
+        );
+        let fresh_memory = case.after.workflow_memory().attempts().last().unwrap();
+        assert_eq!(
+            fresh_memory.attempt_id(),
+            fresh.attempt_id(),
+            "{}: fresh memory",
+            case.name
+        );
+        assert!(
+            fresh_memory
+                .item_slots()
+                .iter()
+                .all(|slot| { slot.revision() == Revision::ZERO && slot.value().is_none() }),
+            "{}: fresh item memory",
+            case.name
+        );
+        assert!(
+            fresh_memory.blockers().is_empty(),
+            "{}: fresh blockers",
+            case.name
+        );
+        assert!(
+            fresh_memory.evidence().is_empty(),
+            "{}: fresh evidence",
+            case.name
+        );
+
+        let target_counter_before = case
+            .before
+            .counters()
+            .iter()
+            .find(|counter| counter.graph_node_id() == &case.target)
+            .unwrap();
+        for counter_before in case.before.counters() {
+            let counter_after = case
+                .after
+                .counters()
+                .iter()
+                .find(|counter| counter.graph_node_id() == counter_before.graph_node_id())
+                .unwrap();
+            let target_increment = u64::from(counter_before.graph_node_id() == &case.target);
+            assert_eq!(
+                counter_after.attempt_count(),
+                counter_before.attempt_count() + target_increment,
+                "{}: attempt counter for {}",
+                case.name,
+                counter_before.graph_node_id()
+            );
+            assert_eq!(
+                counter_after.rework_traversal_count(),
+                counter_before.rework_traversal_count() + target_increment,
+                "{}: rework counter for {}",
+                case.name,
+                counter_before.graph_node_id()
+            );
+        }
+        assert_eq!(
+            fresh.number().get(),
+            target_counter_before.attempt_count() + 1,
+            "{}: fresh node attempt number",
+            case.name
+        );
+
+        let gate_readback = case
+            .after
+            .selected_evidence_readback(&attempt_id(2))
+            .unwrap();
+        assert_eq!(
+            gate_readback[0].stale(),
+            case.expected_gate_evidence_stale,
+            "{}: evidence staleness",
+            case.name
+        );
+        assert_eq!(
+            gate_readback[0].reference(),
+            &case.before.workflow_memory().attempts()[1].evidence()[0],
+            "{}: evidence snapshot identity",
+            case.name
+        );
+        if case.appended_decision {
+            let decision = case.after.workflow_memory().decisions().last().unwrap();
+            assert_eq!(decision.attempt_id(), &attempt_id(2));
+            assert_eq!(decision.route_effect(), TransitionEffectV2::Rework);
+            assert_eq!(decision.route_target(), &node("capture"));
+            assert_eq!(
+                case.after.trace().attempts()[1].validity(),
+                AttemptValidityV2::Stale,
+                "{}: routing decision belongs to suffix",
+                case.name
+            );
+            assert_eq!(gate_readback[0].decision(), None);
+        } else if !case.before.workflow_memory().decisions().is_empty() {
+            assert_eq!(
+                case.after.workflow_memory().decisions(),
+                case.before.workflow_memory().decisions(),
+                "{}: retained decision record",
+                case.name
+            );
+        }
+    }
+}
+
+#[test]
+fn v2drw004_fresh_reentry_reresolves_evidence_without_rewriting_stale_history() {
+    let reworked = gate_state()
+        .decide_active_route_v2(
+            Revision::new(4),
+            &attempt_id(2),
+            OptionId::new("redo").unwrap(),
+            attempt_id(3),
+            Some(ReasonV2::new("Redo the capture.").unwrap()),
+            Some(ActorAttributionV2::new("reviewer").unwrap()),
+            UnixMillis::new(40),
+        )
+        .unwrap()
+        .into_state();
+    let stale_gate_memory = reworked.workflow_memory().attempts()[1].clone();
+    let stale_decision = reworked.workflow_memory().decisions()[0].clone();
+
+    let recorded = reworked
+        .mutate_active_item_v2(
+            &attempt_id(3),
+            &item("z-summary"),
+            Revision::ZERO,
+            ActiveItemMutationV2::Set {
+                value: "reworked proof".to_owned(),
+            },
+            UnixMillis::new(41),
+        )
+        .unwrap()
+        .into_state();
+    let advanced = recorded
+        .complete_active_action_v2(
+            Revision::new(6),
+            &attempt_id(3),
+            Some(attempt_id(4)),
+            UnixMillis::new(42),
+        )
+        .unwrap()
+        .into_state();
+
+    assert_eq!(advanced.workflow_memory().attempts()[1], stale_gate_memory);
+    assert_eq!(advanced.workflow_memory().decisions()[0], stale_decision);
+    assert!(advanced.selected_evidence_readback(&attempt_id(2)).unwrap()[0].stale());
+
+    let fresh_capture = &advanced.workflow_memory().attempts()[2];
+    let fresh_gate = &advanced.workflow_memory().attempts()[3];
+    let fresh_reference = fresh_gate.evidence()[0].resolution().snapshot().unwrap();
+    assert_eq!(fresh_reference.source_attempt_id(), &attempt_id(3));
+    assert_eq!(
+        fresh_reference.source_attempt_number(),
+        AttemptNumberV2::new(2)
+    );
+    assert_eq!(fresh_reference.resolved_at(), UnixMillis::new(42));
+    assert_eq!(
+        fresh_reference.items_digest(),
+        &fresh_capture.recorded_items_digest().unwrap()
+    );
+    assert!(!advanced.selected_evidence_readback(&attempt_id(4)).unwrap()[0].stale());
+}
+
+#[test]
+fn v2drw003_manual_rework_allows_the_current_node_and_rejects_invalid_policy_state() {
+    let active_finish = finish_state(5, false);
+    let same_node = active_finish
+        .manual_rework_v2(
+            Revision::new(5),
+            Some(&attempt_id(3)),
+            node("finish"),
+            attempt_id(4),
+            ReasonV2::new("Repeat final checks.").unwrap(),
+            None,
+            UnixMillis::new(50),
+        )
+        .unwrap()
+        .into_state();
+    assert_eq!(
+        same_node.trace().attempts()[2].validity(),
+        AttemptValidityV2::Stale
+    );
+    assert_eq!(
+        same_node.trace().active_attempt().unwrap().graph_node_id(),
+        &node("finish")
+    );
+    assert_eq!(same_node.counters()[2].attempt_count(), 2);
+    assert_eq!(same_node.counters()[2].rework_traversal_count(), 1);
+
+    let state = gate_state();
+    let before = state.clone();
+    assert_eq!(
+        state.manual_rework_v2(
+            Revision::new(3),
+            Some(&attempt_id(2)),
+            node("capture"),
+            attempt_id(3),
+            ReasonV2::new("Revisit.").unwrap(),
+            None,
+            UnixMillis::new(40),
+        ),
+        Err(GraphMutationErrorV2::SessionRevisionConflict {
+            expected: Revision::new(3),
+            actual: Revision::new(4),
+        })
+    );
+    assert_eq!(state, before);
+    assert_eq!(
+        state.manual_rework_v2(
+            Revision::new(4),
+            Some(&attempt_id(2)),
+            node("gate"),
+            attempt_id(3),
+            ReasonV2::new("Revisit.").unwrap(),
+            None,
+            UnixMillis::new(40),
+        ),
+        Err(GraphMutationErrorV2::ManualReworkTargetNotAllowed {
+            target_graph_node_id: node("gate"),
+        })
+    );
+    assert_eq!(state, before);
+    assert_eq!(
+        initial_state().manual_rework_v2(
+            Revision::new(1),
+            Some(&attempt_id(1)),
+            node("finish"),
+            attempt_id(2),
+            ReasonV2::new("Revisit.").unwrap(),
+            None,
+            UnixMillis::new(20),
+        ),
+        Err(GraphMutationErrorV2::ManualReworkTargetNotOnTrace {
+            target_graph_node_id: node("finish"),
+        })
+    );
+
+    let completed = finish_state(6, true);
+    assert_eq!(
+        completed.manual_rework_v2(
+            Revision::new(6),
+            Some(&attempt_id(3)),
+            node("capture"),
+            attempt_id(4),
+            ReasonV2::new("Revisit.").unwrap(),
+            None,
+            UnixMillis::new(60),
+        ),
+        Err(GraphMutationErrorV2::AttemptNotCurrent {
+            expected: attempt_id(3),
+            actual: None,
+        })
+    );
+
+    let cancelled = gate_state()
+        .cancel_active_session_v2(
+            Revision::new(4),
+            &attempt_id(2),
+            ReasonV2::new("Cancelled.").unwrap(),
+            UnixMillis::new(40),
+        )
+        .unwrap()
+        .into_state();
+    assert_eq!(
+        cancelled.manual_rework_v2(
+            Revision::new(5),
+            None,
+            node("capture"),
+            attempt_id(3),
+            ReasonV2::new("Revisit.").unwrap(),
+            None,
+            UnixMillis::new(50),
+        ),
+        Err(GraphMutationErrorV2::SessionCancelled)
+    );
+}
+
+#[test]
+fn active_item_mutations_cover_every_type_and_completion_freezes_activation_evidence() {
+    let mut state = initial_state();
+    let mutations = [
+        ("c-confirm", ActiveItemMutationV2::Check),
+        (
+            "z-summary",
+            ActiveItemMutationV2::Set {
+                value: "ready".to_owned(),
+            },
+        ),
+        (
+            "b-choice",
+            ActiveItemMutationV2::Set {
+                value: "green".to_owned(),
+            },
+        ),
+        (
+            "a-count",
+            ActiveItemMutationV2::Set {
+                value: "7".to_owned(),
+            },
+        ),
+        (
+            "m-tags",
+            ActiveItemMutationV2::Add {
+                value: "locked".to_owned(),
+            },
+        ),
+        (
+            "y-artifact",
+            ActiveItemMutationV2::Attach {
+                value: ArtifactValueV1::local_path(
+                    "reports/result.txt",
+                    digest('c'),
+                    42,
+                    "text/plain",
+                )
+                .unwrap(),
+            },
+        ),
+    ];
+    for (offset, (item_id, mutation)) in mutations.into_iter().enumerate() {
+        let outcome = state
+            .mutate_active_item_v2(
+                &attempt_id(1),
+                &item(item_id),
+                Revision::ZERO,
+                mutation,
+                UnixMillis::new(11 + u64::try_from(offset).unwrap()),
+            )
+            .unwrap();
+        assert!(outcome.changed());
+        assert_eq!(outcome.item_revision(), Revision::new(1));
+        if item_id == "y-artifact" {
+            assert_eq!(outcome.value_digest(), Some(&digest('c')));
+        } else {
+            assert!(outcome.value_digest().is_none());
+        }
+        state = outcome.into_state();
+    }
+    assert_eq!(state.workspace_revision(), Revision::new(7));
+    assert_eq!(state.trace().revision(), Revision::new(7));
+    assert!(
+        state.workflow_memory().attempts()[0]
+            .item_slots()
+            .iter()
+            .all(|slot| slot.value().is_some())
+    );
+
+    let cleared_list = state
+        .mutate_active_item_v2(
+            &attempt_id(1),
+            &item("m-tags"),
+            Revision::new(1),
+            ActiveItemMutationV2::Remove {
+                value: "locked".to_owned(),
+                ignore_missing: false,
+            },
+            UnixMillis::new(20),
+        )
+        .unwrap();
+    assert!(cleared_list.changed());
+    assert!(
+        cleared_list.state().workflow_memory().attempts()[0]
+            .item_slots()
+            .iter()
+            .find(|slot| slot.item_id() == &item("m-tags"))
+            .unwrap()
+            .value()
+            .is_none()
+    );
+
+    let no_op = state
+        .mutate_active_item_v2(
+            &attempt_id(1),
+            &item("c-confirm"),
+            Revision::new(1),
+            ActiveItemMutationV2::Check,
+            UnixMillis::new(20),
+        )
+        .unwrap();
+    assert!(!no_op.changed());
+    assert_eq!(no_op.state(), &state);
+
+    let completed = state
+        .complete_active_action_v2(
+            Revision::new(7),
+            &attempt_id(1),
+            Some(attempt_id(2)),
+            UnixMillis::new(30),
+        )
+        .unwrap();
+    assert_eq!(completed.to_graph_node_id(), Some(&node("gate")));
+    assert_eq!(completed.to_attempt_id(), Some(&attempt_id(2)));
+    assert_eq!(completed.state().trace().revision(), Revision::new(8));
+    let capture = &completed.state().workflow_memory().attempts()[0];
+    let gate = &completed.state().workflow_memory().attempts()[1];
+    assert_eq!(
+        gate.evidence()[0]
+            .resolution()
+            .snapshot()
+            .unwrap()
+            .items_digest(),
+        &capture.recorded_items_digest().unwrap()
+    );
+    let readback = completed
+        .state()
+        .selected_evidence_readback(&attempt_id(2))
+        .unwrap();
+    assert_eq!(readback[0].items().items().len(), 1);
+    assert_eq!(readback[0].items().items()[0].id(), &item("z-summary"));
+}
+
+#[test]
+fn active_item_batch_is_bounded_ordered_atomic_and_advances_the_session_once() {
+    let state = initial_state();
+    let active_before = state.trace().active_attempt().unwrap().clone();
+    let mutations = vec![
+        ActiveItemMutationRequestV2::new(
+            item("z-summary"),
+            Revision::ZERO,
+            ActiveItemMutationV2::Set {
+                value: "ready".to_owned(),
+            },
+        ),
+        ActiveItemMutationRequestV2::new(
+            item("c-confirm"),
+            Revision::ZERO,
+            ActiveItemMutationV2::Check,
+        ),
+        ActiveItemMutationRequestV2::new(
+            item("b-choice"),
+            Revision::ZERO,
+            ActiveItemMutationV2::Set {
+                value: "green".to_owned(),
+            },
+        ),
+        ActiveItemMutationRequestV2::new(
+            item("a-count"),
+            Revision::ZERO,
+            ActiveItemMutationV2::Set {
+                value: "7".to_owned(),
+            },
+        ),
+        ActiveItemMutationRequestV2::new(
+            item("m-tags"),
+            Revision::ZERO,
+            ActiveItemMutationV2::ReplaceList {
+                values: vec!["locked".to_owned()],
+            },
+        ),
+        ActiveItemMutationRequestV2::new(
+            item("y-artifact"),
+            Revision::ZERO,
+            ActiveItemMutationV2::Attach {
+                value: ArtifactValueV1::local_path(
+                    "reports/result.txt",
+                    digest('c'),
+                    42,
+                    "text/plain",
+                )
+                .unwrap(),
+            },
+        ),
+    ];
+
+    let outcome = state
+        .mutate_active_items_v2(&attempt_id(1), &mutations, UnixMillis::new(11))
+        .unwrap();
+    assert!(outcome.changed());
+    assert_eq!(outcome.state().workspace_revision(), Revision::new(2));
+    assert_eq!(outcome.state().trace().revision(), Revision::new(2));
+    assert_eq!(
+        outcome.state().trace().active_attempt(),
+        Some(&active_before)
+    );
+    assert_eq!(
+        outcome
+            .items()
+            .iter()
+            .map(|entry| entry.item_id().as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "a-count",
+            "b-choice",
+            "c-confirm",
+            "m-tags",
+            "y-artifact",
+            "z-summary"
+        ]
+    );
+    assert!(outcome.items().iter().all(|entry| entry.changed()));
+    assert!(
+        outcome
+            .items()
+            .iter()
+            .all(|entry| entry.item_revision() == Revision::new(1))
+    );
+    assert_eq!(outcome.items()[4].value_digest(), Some(&digest('c')));
+
+    let next = outcome.into_state();
+    let before_failed = next.clone();
+    let error = next
+        .mutate_active_items_v2(
+            &attempt_id(1),
+            &[
+                ActiveItemMutationRequestV2::new(
+                    item("c-confirm"),
+                    Revision::new(1),
+                    ActiveItemMutationV2::Uncheck,
+                ),
+                ActiveItemMutationRequestV2::new(
+                    item("z-summary"),
+                    Revision::ZERO,
+                    ActiveItemMutationV2::Clear,
+                ),
+            ],
+            UnixMillis::new(12),
+        )
+        .unwrap_err();
+    assert_eq!(
+        error,
+        GraphMutationErrorV2::ItemRevisionConflict {
+            expected: Revision::ZERO,
+            actual: Revision::new(1),
+        }
+    );
+    assert_eq!(next, before_failed);
+
+    let no_op = next
+        .mutate_active_items_v2(
+            &attempt_id(1),
+            &[ActiveItemMutationRequestV2::new(
+                item("c-confirm"),
+                Revision::new(1),
+                ActiveItemMutationV2::Check,
+            )],
+            UnixMillis::new(12),
+        )
+        .unwrap();
+    assert!(!no_op.changed());
+    assert_eq!(no_op.state(), &next);
+
+    assert!(matches!(
+        next.mutate_active_items_v2(&attempt_id(1), &[], UnixMillis::new(12)),
+        Err(GraphMutationErrorV2::ItemMutationBatchEmpty)
+    ));
+    let duplicate = ActiveItemMutationRequestV2::new(
+        item("c-confirm"),
+        Revision::new(1),
+        ActiveItemMutationV2::Check,
+    );
+    assert!(matches!(
+        next.mutate_active_items_v2(
+            &attempt_id(1),
+            &[duplicate.clone(), duplicate],
+            UnixMillis::new(12)
+        ),
+        Err(GraphMutationErrorV2::DuplicateItemMutation { .. })
+    ));
+    let excessive = (0..=MAX_ACTIVE_ITEM_MUTATIONS_V2)
+        .map(|index| {
+            ActiveItemMutationRequestV2::new(
+                item(&format!("item-{index}")),
+                Revision::ZERO,
+                ActiveItemMutationV2::Clear,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(matches!(
+        next.mutate_active_items_v2(&attempt_id(1), &excessive, UnixMillis::new(12)),
+        Err(GraphMutationErrorV2::TooManyItemMutations { maximum: 128 })
+    ));
+}
+
+#[test]
+fn action_completion_rejects_an_open_blocker_without_changing_state() {
+    let state = active_recorded_state(2, BlockerState::Open);
+    let before = state.clone();
+
+    assert_eq!(
+        state.complete_active_action_v2(
+            Revision::new(2),
+            &attempt_id(1),
+            Some(attempt_id(2)),
+            UnixMillis::new(30),
+        ),
+        Err(GraphMutationErrorV2::BlockersPresent)
+    );
+    assert_eq!(state, before);
+}
+
+#[test]
+fn v2scl003_attempt_content_is_measured_over_the_post_mutation_slots() {
+    let mut state = initial_state();
+    let mutations: Vec<(&str, ActiveItemMutationV2)> = vec![
+        (
+            "z-summary",
+            ActiveItemMutationV2::Set {
+                value: "abcdefghij".to_owned(),
+            },
+        ),
+        (
+            "m-tags",
+            ActiveItemMutationV2::Add {
+                value: "alpha".to_owned(),
+            },
+        ),
+        (
+            "m-tags",
+            ActiveItemMutationV2::Add {
+                value: "beta".to_owned(),
+            },
+        ),
+        ("c-confirm", ActiveItemMutationV2::Check),
+        (
+            "b-choice",
+            ActiveItemMutationV2::Set {
+                value: "green".to_owned(),
+            },
+        ),
+    ];
+    let mut revisions = std::collections::BTreeMap::<&str, Revision>::new();
+    for (offset, (item_id, mutation)) in mutations.into_iter().enumerate() {
+        let expected = revisions.get(item_id).copied().unwrap_or(Revision::ZERO);
+        let outcome = state
+            .mutate_active_item_v2(
+                &attempt_id(1),
+                &item(item_id),
+                expected,
+                mutation,
+                UnixMillis::new(11 + u64::try_from(offset).unwrap()),
+            )
+            .expect("each bounded mutation is admitted");
+        revisions.insert(item_id, outcome.item_revision());
+        state = outcome.into_state();
+    }
+
+    // 10 text scalars plus the 5 and 4 scalar list entries. The confirm and choice values
+    // contribute nothing, exactly as the aggregate's definition requires.
+    let attempt = &state.workflow_memory().attempts()[0];
+    assert_eq!(attempt.content_scalars(), 19);
+}

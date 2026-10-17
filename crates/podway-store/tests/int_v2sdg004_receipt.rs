@@ -48,7 +48,7 @@ pub(super) fn session_state() -> GraphSessionStateV2 {
     let canonical = canonicalize_json_v1(&document).unwrap();
     let procedure_digest =
         Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))).unwrap();
-    let snapshot = podway_store::ProcedureSnapshotV2::new(
+    let snapshot = podway_store::admit_procedure_snapshot_v2(
         ProcedureSnapshotId::new("00000000-0000-4000-8000-000000000402").unwrap(),
         CanonicalProcedureJsonV1::new(canonical).unwrap(),
         procedure_digest,
@@ -214,7 +214,7 @@ fn v2sdg004_delegated_placement_enforces_opaque_utf8_byte_limit() {
     let digest =
         Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))).unwrap();
     assert!(
-        podway_store::ProcedureSnapshotV2::new(
+        podway_store::admit_procedure_snapshot_v2(
             ProcedureSnapshotId::new("00000000-0000-4000-8000-000000000499").unwrap(),
             CanonicalProcedureJsonV1::new(canonical).unwrap(),
             digest,
@@ -245,7 +245,7 @@ fn v2sdg004_acceptance_successor_rejects_stale_and_direct_attempts() {
     let canonical = canonicalize_json_v1(&document).unwrap();
     let digest =
         Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))).unwrap();
-    let snapshot = podway_store::ProcedureSnapshotV2::new(
+    let snapshot = podway_store::admit_procedure_snapshot_v2(
         ProcedureSnapshotId::new("00000000-0000-4000-8000-000000000497").unwrap(),
         CanonicalProcedureJsonV1::new(canonical).unwrap(),
         digest,

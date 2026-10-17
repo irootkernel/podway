@@ -45,7 +45,7 @@ fn snapshot(document: Value) -> ProcedureSnapshotV2 {
     let canonical = canonicalize_json_v1(&document).unwrap();
     let hash =
         Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))).unwrap();
-    ProcedureSnapshotV2::new(
+    podway_store::admit_procedure_snapshot_v2(
         ProcedureSnapshotId::new("00000000-0000-4000-8000-000000000010").unwrap(),
         CanonicalProcedureJsonV1::new(canonical).unwrap(),
         hash,
@@ -125,9 +125,9 @@ fn bound001_deferred_memory_admission_and_cold_read_remain_distinct() {
             SessionId::new("00000000-0000-4000-8000-000000000011").unwrap(),
             UnixMillis::new(20),
         ),
-        Err(StoreValueErrorV1::InvalidProcedureV2State {
-            reason: "Procedure v2 item declaration is invalid",
-        })
+        Err(podway_core::ProcedureStateErrorV2::new(
+            "Procedure v2 item declaration is invalid"
+        ))
     );
     let counters = snapshot
         .graph_nodes()
@@ -159,9 +159,7 @@ fn bound001_deferred_memory_admission_and_cold_read_remain_distinct() {
         assert_eq!(
             state.begin_v2(Revision::ZERO, attempt(21), None, UnixMillis::new(21)),
             Err(GraphMutationErrorV2::InvalidState(
-                StoreValueErrorV1::InvalidProcedureV2State {
-                    reason: "Procedure v2 item declaration is invalid",
-                }
+                podway_core::ProcedureStateErrorV2::new("Procedure v2 item declaration is invalid")
             ))
         );
     };
@@ -175,6 +173,72 @@ fn bound001_deferred_memory_admission_and_cold_read_remain_distinct() {
             record: StoreRecordKindV1::Snapshot,
         }))
     ));
+}
+
+#[test]
+fn bound002_core_state_cannot_bypass_persisted_shape_admission() {
+    let canonical = canonicalize_json_v1(&json!({
+        "schema":"podway.procedure/v2", "id":"unadmitted", "version":"1",
+        "name":"Unadmitted shape", "purpose":"Keep Store admission independent.",
+        "unknown":true,
+        "node_definitions":{"work":{"type":"action", "title":"Work", "intent":"Record."}},
+        "graph":{"entry":"work", "nodes":[{"id":"work", "use":"work", "terminal":true}]}
+    }))
+    .unwrap();
+    let hash =
+        Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))).unwrap();
+    let snapshot = ProcedureSnapshotV2::from_admitted_document(
+        ProcedureSnapshotId::new("00000000-0000-4000-8000-000000000010").unwrap(),
+        podway_core::CanonicalProcedureDocumentV2::new(
+            CanonicalProcedureJsonV1::new(canonical).unwrap(),
+            hash,
+        )
+        .unwrap(),
+        ProcedureSourceLabelV1::file("unadmitted.json").unwrap(),
+        UnixMillis::new(20),
+    )
+    .unwrap();
+    let graph = GraphSessionStateV2::prepared(
+        Revision::new(1),
+        "Unadmitted shape",
+        snapshot,
+        SessionId::new("00000000-0000-4000-8000-000000000011").unwrap(),
+        UnixMillis::new(20),
+    )
+    .unwrap();
+    let (_root, direct) = fixture();
+    let before = direct
+        .read(deadline(), |snapshot| snapshot.committed_sequence())
+        .unwrap();
+    let request = request("unadmitted-shape");
+    let error = direct
+        .mutate(
+            &request,
+            deadline(),
+            || UnixMillis::new(20),
+            |transaction| {
+                transaction.now();
+                transaction.create_graph(&graph)?;
+                Ok(success(&request, json!({"seeded":true}), transaction.now()))
+            },
+        )
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        DirectStoreErrorV1::State(StoreErrorV1::InvalidStateV1(
+            StoreValueErrorV1::InvalidProcedureV2State {
+                reason: "Procedure v2 snapshot does not satisfy the canonical schema",
+            }
+        ))
+    ));
+    direct
+        .read(deadline(), |snapshot| {
+            assert_eq!(snapshot.committed_sequence()?, before);
+            assert!(snapshot.current_graph()?.is_none());
+            assert!(snapshot.outcome(request.key())?.is_none());
+            Ok(())
+        })
+        .unwrap();
 }
 
 fn session_request(

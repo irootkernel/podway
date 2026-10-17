@@ -13,7 +13,7 @@ use podway_core::{
 };
 use podway_store::{
     CanonicalExecutionJsonV1, GraphMutationErrorV2, GraphSessionStateV2, IdempotencyKeyV1,
-    ProcedureSnapshotV2, ValidatedWorkspaceRootV1,
+    ValidatedWorkspaceRootV1,
     direct_store::{
         DirectMutationRequestV1, DirectOutcomeScopeV1, DirectStoreClassificationV1,
         DirectStoreErrorV1, DirectStoreV1, DirectTransactionBoundaryV1, DirectWorkspaceLayoutV1,
@@ -49,7 +49,7 @@ pub(super) fn grown_graph(nodes: usize, completed_nodes: usize) -> GraphSessionS
         "graph":{"entry":"n0000","nodes":placements}})).unwrap();
     let digest =
         Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))).unwrap();
-    let snapshot = ProcedureSnapshotV2::new(
+    let snapshot = podway_store::admit_procedure_snapshot_v2(
         ProcedureSnapshotId::new("00000000-0000-4000-8000-000000000003").unwrap(),
         CanonicalProcedureJsonV1::new(canonical).unwrap(),
         digest,
@@ -230,7 +230,7 @@ fn prepared_graph(now: UnixMillis) -> GraphSessionStateV2 {
     .unwrap();
     let digest =
         Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))).unwrap();
-    let snapshot = ProcedureSnapshotV2::new(
+    let snapshot = podway_store::admit_procedure_snapshot_v2(
         ProcedureSnapshotId::new("00000000-0000-4000-8000-000000000003").unwrap(),
         CanonicalProcedureJsonV1::new(canonical).unwrap(),
         digest,
@@ -1895,7 +1895,7 @@ fn shared_item_values_revalidate_changed_declarations_without_changing_equality(
         let digest =
             Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes())))
                 .unwrap();
-        let snapshot = ProcedureSnapshotV2::new(
+        let snapshot = podway_store::admit_procedure_snapshot_v2(
             original.snapshot_id().clone(),
             CanonicalProcedureJsonV1::new(canonical).unwrap(),
             digest,
@@ -1925,9 +1925,7 @@ fn shared_item_values_revalidate_changed_declarations_without_changing_equality(
         } else {
             assert!(matches!(
                 reconstructed,
-                Err(podway_store::StoreValueErrorV1::InvalidProcedureV2State {
-                    reason: "Procedure v2 item value violates its immutable declaration"
-                })
+                Err(ref error) if error.reason() == "Procedure v2 item value violates its immutable declaration"
             ));
         }
     }

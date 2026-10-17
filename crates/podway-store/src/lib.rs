@@ -37,7 +37,7 @@ pub use v2_state::{
     GraphItemsMutationOutcomeV2, GraphNodeCounterV2, GraphNodeSnapshotV2, GraphRetryOutcomeV2,
     GraphSessionStateV2, GraphUnblockOutcomeV2, GraphWorkspaceViewV2,
     MAX_ARCHIVED_SESSION_LIST_WINDOW_V2, ProcedureSnapshotV2, SessionArchiveListPageV2,
-    SessionArchiveSummaryV2,
+    SessionArchiveSummaryV2, admit_procedure_snapshot_v2,
 };
 
 pub const MAX_IDEMPOTENCY_KEY_BYTES_V1: usize = 256;
@@ -414,6 +414,19 @@ pub(crate) fn map_rusqlite_error_v1(
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum StoreInvariantV1 {
     ProcedureV2GraphState,
+}
+
+impl From<podway_core::ProcedureStateErrorV2> for StoreValueErrorV1 {
+    fn from(error: podway_core::ProcedureStateErrorV2) -> Self {
+        Self::InvalidProcedureV2State {
+            reason: error.reason(),
+        }
+    }
+}
+impl From<podway_core::ProcedureStateErrorV2> for StoreErrorV1 {
+    fn from(error: podway_core::ProcedureStateErrorV2) -> Self {
+        Self::InvalidStateV1(error.into())
+    }
 }
 
 impl fmt::Display for StoreValueErrorV1 {

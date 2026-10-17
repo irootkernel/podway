@@ -2,7 +2,7 @@
 
 pub mod legacy_fixture;
 
-use crate::{AttemptMetadataV2, GraphNodeCounterV2, GraphSessionStateV2, ProcedureSnapshotV2};
+use crate::{AttemptMetadataV2, GraphNodeCounterV2, GraphSessionStateV2};
 use podway_core::{
     AttemptId, AttemptLifecycle, AttemptNumberV2, AttemptValidityV2, CanonicalProcedureJsonV1,
     GraphNodeId, ProcedureSnapshotId, ProcedureSourceLabelV1, Revision, SessionAttemptV2,
@@ -88,7 +88,7 @@ pub fn running_archive_fixture_session_v2(
     let procedure_digest =
         Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))).unwrap();
     let uuid = |number: u64| format!("00000000-0000-4000-8000-{number:012x}");
-    let snapshot = ProcedureSnapshotV2::new(
+    let snapshot = crate::admit_procedure_snapshot_v2(
         ProcedureSnapshotId::new(uuid(snapshot_number)).unwrap(),
         CanonicalProcedureJsonV1::new(canonical).unwrap(),
         procedure_digest,

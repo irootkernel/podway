@@ -49,6 +49,14 @@ Test-only dependencies do not grant production access. The Store's persistence
 boundary accepts core types and canonical execution documents, not a protocol or
 Engine dependency.
 
+Core's `graph_v2`, `workflow_v2` and `goal_state_v2` modules own pure aggregate
+state, transitions and history predicates. Store's `v2_state`, `v2_memory` and
+`v2_goal` modules retain schema admission, row codecs and transactional
+persistence, reexporting the same Core values for existing Rust consumers.
+`ProcedureStateErrorV2` is a pure structural failure; explicit Store/Engine
+conversion preserves its existing public classification separately from row
+corruption and ordinary command-domain rejection.
+
 ## Runtime model
 
 Commands use bounded synchronous I/O in the invoking process. There is no async

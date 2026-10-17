@@ -23,7 +23,7 @@ use podway_git::NativeGitResolverV1;
 use podway_protocol::*;
 use podway_store::{
     CanonicalExecutionJsonV1, GraphNodeCounterV2, GraphSessionStateV2, IdempotencyKeyV1,
-    ProcedureSnapshotV2, WorkflowMemoryStateV2,
+    WorkflowMemoryStateV2,
     direct_store::{DirectMutationRequestV1, DirectOutcomeScopeV1},
 };
 use serde_json::{Value, json};
@@ -41,7 +41,7 @@ fn bound001_deferred_memory_error_keeps_public_mapping_and_fence_priority() {
         "graph":{"entry":"work", "nodes":[{"id":"work", "use":"work", "terminal":true}]}
     }))
     .unwrap();
-    let snapshot = ProcedureSnapshotV2::new(
+    let snapshot = podway_store::admit_procedure_snapshot_v2(
         ProcedureSnapshotId::new("00000000-0000-4000-8000-000000000010").unwrap(),
         CanonicalProcedureJsonV1::new(canonical.clone()).unwrap(),
         Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))).unwrap(),
@@ -1692,7 +1692,7 @@ fn v2sdg006_delegated_archived_session_show_uses_v2_result() {
     // and acceptance at the actual direct API.
     let canonical = podway_core::canonicalize_json_v1(&source).unwrap();
     use sha2::{Digest as _, Sha256};
-    let snapshot = podway_store::ProcedureSnapshotV2::new(
+    let snapshot = podway_store::admit_procedure_snapshot_v2(
         podway_core::ProcedureSnapshotId::new("00000000-0000-4000-8000-000000015101").unwrap(),
         podway_core::CanonicalProcedureJsonV1::new(canonical.clone()).unwrap(),
         podway_core::Sha256Digest::new(format!(

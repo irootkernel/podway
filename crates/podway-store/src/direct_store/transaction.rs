@@ -940,7 +940,7 @@ mod tests {
     #[test]
     fn sqlite_full_rolls_back_rich_direct_state_and_retry_commits_one_outcome() {
         use super::super::DirectWorkspaceLayoutV1;
-        use crate::{ActiveItemMutationV2, ProcedureSnapshotV2, ValidatedWorkspaceRootV1};
+        use crate::{ActiveItemMutationV2, ValidatedWorkspaceRootV1};
         use podway_core::{
             AttemptId, CanonicalProcedureJsonV1, ItemId, ProcedureSnapshotId,
             ProcedureSourceLabelV1, canonicalize_json_v1,
@@ -997,7 +997,7 @@ mod tests {
             "node_definitions":{"work":{"type":"action","title":"Work","intent":"Record output.",
                 "items":[{"id":"note","type":"text","prompt":"Note","required":false,"max_length":65536}]}},
             "graph":{"entry":"work","nodes":[{"id":"work","use":"work","terminal":true}]}})).unwrap();
-        let snapshot = ProcedureSnapshotV2::new(
+        let snapshot = crate::admit_procedure_snapshot_v2(
             ProcedureSnapshotId::new("00000000-0000-4000-8000-000000000003").unwrap(),
             CanonicalProcedureJsonV1::new(canonical.clone()).unwrap(),
             Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes())))

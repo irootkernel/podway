@@ -324,7 +324,7 @@ fn with_v025_list_snapshot(current: GraphSessionStateV2) -> GraphSessionStateV2 
     let digest =
         Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))).unwrap();
     assert_ne!(&digest, current.snapshot().digest());
-    let snapshot = ProcedureSnapshotV2::new(
+    let snapshot = podway_store::admit_procedure_snapshot_v2(
         current.snapshot().snapshot_id().clone(),
         CanonicalProcedureJsonV1::new(canonical).unwrap(),
         digest,
@@ -393,7 +393,7 @@ fn delegated_prepared_state() -> GraphSessionStateV2 {
 
 fn delegated_prepared_state_from(source: &[u8]) -> GraphSessionStateV2 {
     let validated = validated_json_procedure(source);
-    let snapshot = ProcedureSnapshotV2::new(
+    let snapshot = podway_store::admit_procedure_snapshot_v2(
         ProcedureSnapshotId::new(SNAPSHOT_ID).unwrap(),
         CanonicalProcedureJsonV1::new(validated.canonical_json().as_str().to_owned()).unwrap(),
         validated.digest().clone(),
@@ -648,7 +648,7 @@ fn v2sdg006_prepared_projection_accepts_maximum_delegated_placements() {
     );
     let bytes = serde_json::to_vec(&document).unwrap();
     let validated = validated_json_procedure(&bytes);
-    let snapshot = ProcedureSnapshotV2::new(
+    let snapshot = podway_store::admit_procedure_snapshot_v2(
         ProcedureSnapshotId::new(SNAPSHOT_ID).unwrap(),
         CanonicalProcedureJsonV1::new(validated.canonical_json().as_str().to_owned()).unwrap(),
         validated.digest().clone(),

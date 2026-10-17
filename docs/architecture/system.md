@@ -163,6 +163,33 @@ A rejection records no outcome. Only COMMIT I/O ambiguity maps to
 an exact retry. Reset-all and removal are marker-governed maintenance protocols,
 not ordinary single-transaction mutations.
 
+### Pure graph state and persisted admission
+
+Core owns [graph/session transitions](../../crates/podway-core/src/graph_v2.rs),
+[workflow memory](../../crates/podway-core/src/workflow_v2.rs), and
+[goal state](../../crates/podway-core/src/goal_state_v2.rs). Time and identifiers
+remain explicit inputs. Store reexports these same values while retaining native
+row decoding, independent persisted validation, successor admission and
+changed-row writes; it has no second domain transition implementation.
+
+Snapshot admission first constructs Core's `CanonicalProcedureDocumentV2`,
+which binds exact canonical bytes and digest to one parsed document. Store's
+`admit_procedure_snapshot_v2` checks the canonical schema, then passes that value
+to `ProcedureSnapshotV2::from_admitted_document`. Core constructs bounded graph
+metadata and retains the derived memory-model result. Goal interpretation stays
+independent and on demand. No schema assets or SQL enter Core.
+Store also independently checks snapshot shape before inserting a newly supplied
+Core aggregate; a pure constructor cannot bypass persisted admission. This check
+does not admit a retained derived-model error earlier or alter successor writes.
+
+Snapshot construction can succeed with a retained declaration error. Convenience
+`prepared` construction demands the model, while explicit empty-workflow
+Prepared construction can defer it until `begin`; a stale revision still wins
+there. Cold Store reconstruction independently rejects malformed declarations
+as unreadable persisted state. `ProcedureStateErrorV2` carries the pure
+structural reason; Store/Engine conversions preserve the existing public error
+categories, details and exit status.
+
 ### Unpublished batch draft
 
 `WorkflowMemoryStateV2::mutate_active_items_v2` sorts the batch and applies every
@@ -217,7 +244,8 @@ work-package construction and package-result projection. Archive-show and
 prepared or running nested projections share that one scope.
 
 Reuse follows the current request's snapshot, session, Procedure snapshot
-identifier, and stored digest. Store keeps a distinct `SnapshotMemoryModelV2`.
+identifier, and stored digest. Core keeps the immutable `SnapshotMemoryModelV2`
+distinct from Config's authoring representation.
 The read scope does not attach the Config-owned Procedure to
 `ProcedureSnapshotV2` or the session cache, and `from_snapshot` returns the
 retained memory model without reparsing it.
