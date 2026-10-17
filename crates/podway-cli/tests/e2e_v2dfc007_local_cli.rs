@@ -757,3 +757,98 @@ fn top_level_help_flags_alias_the_canonical_help_command_only() {
         assert_eq!(output.status.code(), Some(2), "{arguments:?}: {output:?}");
     }
 }
+
+#[test]
+fn bound005_format_write_preserves_permissions_and_canonical_noop() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let fixture = Fixture::new();
+    let scaffold = fixture.run(&["procedure".into(), "scaffold".into()]);
+    assert!(scaffold.status.success());
+    let source = String::from_utf8(scaffold.stdout)
+        .unwrap()
+        .replace("version: \"1\"", "version: '1'");
+    let file = fixture.root.join("procedure.yaml");
+    fs::write(&file, source).unwrap();
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o664)).unwrap();
+    let args = ["procedure", "format", "procedure.yaml", "--write", "--json"].map(str::to_owned);
+    let first = fixture.run(&args);
+    assert_eq!(first.status.code(), Some(0), "{first:?}");
+    assert_eq!(one_json(&first)["result"]["changed"], true);
+    let bytes = fs::read(&file).unwrap();
+    let before = fs::metadata(&file).unwrap();
+    assert_eq!(before.mode() & 0o7777, 0o664);
+    let second = fixture.run(&args);
+    assert_eq!(second.status.code(), Some(0), "{second:?}");
+    assert_eq!(one_json(&second)["result"]["changed"], false);
+    let after = fs::metadata(&file).unwrap();
+    assert_eq!(
+        (after.ino(), after.mtime(), after.mtime_nsec(), after.mode()),
+        (
+            before.ino(),
+            before.mtime(),
+            before.mtime_nsec(),
+            before.mode()
+        )
+    );
+    assert_eq!(fs::read(&file).unwrap(), bytes);
+    assert!(fs::read_dir(&fixture.root).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains(".podway-tmp")
+    }));
+}
+
+#[test]
+fn bound005_format_refuses_symlinks_without_changing_the_victim() {
+    let fixture = Fixture::new();
+    let scaffold = fixture.run(&["procedure".into(), "scaffold".into()]);
+    assert!(scaffold.status.success());
+    let victim = fixture.root.join("victim.yaml");
+    fs::write(&victim, &scaffold.stdout).unwrap();
+    let link = fixture.root.join("linked.yaml");
+    std::os::unix::fs::symlink("victim.yaml", &link).unwrap();
+    let output = fixture.run(&[
+        "procedure".into(),
+        "format".into(),
+        "linked.yaml".into(),
+        "--write".into(),
+        "--json".into(),
+    ]);
+    assert_eq!(output.status.code(), Some(5), "{output:?}");
+    assert_eq!(one_json(&output)["code"], "PATH_OUTSIDE_WORKTREE");
+    assert!(output.stderr.is_empty());
+    assert_eq!(fs::read(&victim).unwrap(), scaffold.stdout);
+    assert_eq!(fs::read_link(&link).unwrap(), PathBuf::from("victim.yaml"));
+    assert!(fs::read_dir(&fixture.root).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains(".podway-tmp")
+    }));
+}
+
+#[test]
+fn bound005_fresh_preset_preview_remains_offline() {
+    let fixture = Fixture::new();
+    let output = fixture.run(
+        &[
+            "start",
+            "--preset",
+            "small-change-v2",
+            "--task",
+            "Offline preview",
+            "--dry-run",
+            "--json",
+        ]
+        .map(str::to_owned),
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let value = one_json(&output);
+    assert_eq!(value["result"]["dry_run"], true);
+    assert_eq!(value["result"]["session_state"], "prepared");
+    assert!(output.stderr.is_empty());
+    assert!(!fixture.root.join(".podway").exists());
+}

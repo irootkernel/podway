@@ -130,7 +130,7 @@ Dependencies: accepted `OPTIM` completion. Design: [BOUND dossier](../todo/TODO-
 | `BOUND-002` | Separate domain state and transitions from persistence | Completed | Move pure graph/workflow/goal rules into Core while retaining SQL reconstruction, relational checks and changed-row writes in Store. | [Task design](../todo/TODO-podway-domain-application-boundaries.md#bound-002-separate-domain-state-and-transitions-from-persistence) |
 | `BOUND-003` | Clarify Procedure runtime representation and admission | Completed | Share pure runtime declarations without merging authoring and persistence validation or adding reverse dependencies. | [Task design](../todo/TODO-podway-domain-application-boundaries.md#bound-003-clarify-procedure-runtime-representation-and-admission) |
 | `BOUND-004` | Unify typed mutation failure transport and shared helpers | Completed | Replace all inventoried callback error transports with per-site failure/replay proof, preserving distinct fences/envelopes and ordering; absorb DF-023. | [Task design](../todo/TODO-podway-domain-application-boundaries.md#bound-004-unify-typed-mutation-failure-transport-and-shared-helpers) |
-| `BOUND-005` | Decompose CLI responsibilities without changing behavior | Planned | Decompose CLI concerns and move fence-preflight fetching/parsing together under one owner for READS, leaving completion and separate start observations unchanged. | [Task design](../todo/TODO-podway-domain-application-boundaries.md#bound-005-decompose-cli-responsibilities-without-changing-behavior) |
+| `BOUND-005` | Decompose CLI responsibilities without changing behavior | Completed | Decompose CLI concerns and move fence-preflight fetching/parsing together under one owner for READS, leaving completion and separate start observations unchanged. | [Task design](../todo/TODO-podway-domain-application-boundaries.md#bound-005-decompose-cli-responsibilities-without-changing-behavior) |
 | `BOUND-006` | Qualify and close boundary refactoring | Planned | Prove dependency direction, current-Store continuity, error/behavior equivalence and no performance regression, then complete review and promotion. | [Task design](../todo/TODO-podway-domain-application-boundaries.md#bound-006-qualify-and-close-boundary-refactoring) |
 
 ### BOUND delivery record
@@ -158,6 +158,12 @@ PASS verdicts, the Leader's consolidated PASS, typed callback rollback/retry and
 identity checks, all-nine per-site error/replay checks, separate COMMIT I/O
 classification, static checks and the full `make test` development gate. One
 Store runner now transports typed failures; DF-023 is implemented.
+
+Main accepted BOUND-005 under the same delegation after Judge, two Worker and
+Main-native CLI PASS verdicts, the Leader's consolidated PASS, actual file-safety,
+preview, completion-budget, stdin-priority and archive-replay regressions, static
+checks and the full `make test` development gate. Private CLI modules now own
+grammar, authoring, file access, start, rendering and fence preflight.
 
 ## READS — Read Models and Data Access
 

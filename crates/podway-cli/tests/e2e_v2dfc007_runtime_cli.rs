@@ -851,7 +851,25 @@ fn bare_terminal_archive_uses_no_active_attempt_and_replays_after_current_sessio
         "SESSION_NOT_FOUND"
     );
     assert_eq!(fixture.run(&["archive", "list"])["result"]["count"], 1);
+    let revision = before["result"]["session"]["revision"]
+        .as_u64()
+        .unwrap()
+        .to_string();
     let session = before["result"]["session"]["id"].as_str().unwrap();
+    // A fully fenced replay missing only workspace UUID must skip status preflight;
+    // there is deliberately no current session for an accidental fetch to observe.
+    assert_eq!(
+        fixture.run(&[
+            "archive",
+            "--idempotency-key",
+            "archive",
+            "--if-session-id",
+            session,
+            "--if-session-revision",
+            &revision
+        ]),
+        archived
+    );
     assert_eq!(
         fixture.run(&["archive", "show", "--session-id", session])["result"]["state"]["session"]["lifecycle"],
         "cancelled"
@@ -1268,4 +1286,124 @@ fn general_decisions_evidence_queries_and_verbose_history_preserve_fences_and_ac
         assert_eq!(invalid.status.code(), Some(2));
         assert_eq!(fixture.run(&["status"])["result"], before["result"]);
     }
+}
+
+#[test]
+fn bound005_stdin_identity_and_flag_errors_keep_their_priority() {
+    use serde_json::json;
+    let fixture = running_fixture(STATE);
+    let before = fixture.run(&["status"]);
+    let snapshot = fixture.podway_snapshot();
+    for (input, message) in [
+        (&[0xff][..], "stdin text must be valid UTF-8"),
+        (
+            &b"valid text"[..],
+            "--if-session-revision does not apply to item commands",
+        ),
+    ] {
+        let output = fixture.output_with_stdin(
+            &["set", "!!!", "--stdin", "--if-session-revision", "1"],
+            input,
+        );
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+        let error = serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout)
+            .unwrap()
+            .into_value();
+        assert_eq!(error["code"], "REQUEST_INVALID");
+        assert_eq!(error["message"], message);
+        assert_eq!(error["command"], "item.set");
+        assert!(output.stderr.is_empty());
+        fixture.assert_podway_snapshot(&snapshot);
+    }
+    let input = json!({"schema":"podway.item-record-many-input/v1", "workspace_uuid":before["workspace"]["uuid"],
+        "session_id":before["result"]["session"]["id"], "session_revision":before["result"]["session"]["revision"],
+        "attempt_id":before["result"]["current"]["attempt"]["attempt_id"], "idempotency_key":"stdin-owned",
+        "operations":[{"item_id":"result","expected_item_revision":0,"record":{"type":"text","value":"record"}}]});
+    let output = fixture.output_with_stdin(
+        &[
+            "record",
+            "--stdin",
+            "--idempotency-key",
+            "duplicate-key",
+            "--yes",
+        ],
+        &serde_json::to_vec(&input).unwrap(),
+    );
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    let error = serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout)
+        .unwrap()
+        .into_value();
+    assert_eq!(error["code"], "REQUEST_INVALID");
+    assert_eq!(
+        error["message"],
+        "record identity, revision, and idempotency fences must come only from stdin"
+    );
+    assert_eq!(error["command"], "item.record_many");
+    assert!(output.stderr.is_empty());
+    fixture.assert_podway_snapshot(&snapshot);
+}
+
+#[test]
+fn bound005_fresh_and_stateful_previews_keep_distinct_admission() {
+    let fixture = running_fixture(STATE);
+    let status = fixture.run(&["status"]);
+    let revision = status["result"]["session"]["revision"]
+        .as_u64()
+        .unwrap()
+        .to_string();
+    let paused = fixture.pause_at_maintenance_boundary(
+        &[
+            "reset",
+            "--all",
+            "--force",
+            "--yes",
+            "--idempotency-key",
+            "paused-reset",
+        ],
+        "lease-acquired",
+    );
+    let before = fixture.podway_snapshot();
+    let fresh = fixture.run(&[
+        "start",
+        "--preset",
+        "small-change-v2",
+        "--task",
+        "Preview",
+        "--dry-run",
+        "--timeout",
+        "0ms",
+    ]);
+    assert_eq!(fresh["command"], "session.start");
+    assert_eq!(fresh["result"]["dry_run"], true);
+    let output = fixture.output(&[
+        "start",
+        "--preset",
+        "small-change-v2",
+        "--task",
+        "Preview",
+        "--dry-run",
+        "--on-existing",
+        "delete",
+        "--progress-summary",
+        "Preview only.",
+        "--timeout",
+        "0ms",
+        "--if-workspace-uuid",
+        status["workspace"]["uuid"].as_str().unwrap(),
+        "--if-session-id",
+        status["result"]["session"]["id"].as_str().unwrap(),
+        "--if-session-revision",
+        &revision,
+    ]);
+    assert_eq!(output.status.code(), Some(4), "{output:?}");
+    let error = serde_json::from_slice::<ErrorEnvelopeV2>(&output.stdout)
+        .unwrap()
+        .into_value();
+    assert_eq!(error["code"], "WORKSPACE_MAINTENANCE");
+    assert_eq!(error["command"], "session.start_replace");
+    assert_eq!(error["details"]["boundary"], "maintenance_lock");
+    assert_eq!(error["details"]["timeout_ms"], 0);
+    assert!(output.stderr.is_empty());
+    drop(paused);
+    fixture.assert_podway_snapshot(&before);
 }

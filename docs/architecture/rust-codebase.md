@@ -67,6 +67,14 @@ Store-only entry points are delegates. Shared direct mutation helpers construct
 only equivalent graph successes and fences; bootstrap and maintenance retain
 their distinct protocols.
 
+CLI's private `command/{grammar,authoring,procedure_files,start,render,preflight}`
+modules separate grammar, authoring, descriptor-safe file operations, start
+interviews/previews, output and fence lookup. Entry keeps shared input validation
+and orchestration; `direct`, `completion` and `retirement` retain their existing
+roles. Only command-scoped callers are exposed. The preflight module borrows the
+original Direct invocation and uses `ControlFlow` for existing error-result
+short-circuiting, without a second deadline or execution abstraction.
+
 ## Runtime model
 
 Commands use bounded synchronous I/O in the invoking process. There is no async

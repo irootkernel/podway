@@ -12,8 +12,9 @@ use podway_engine::{
 use podway_protocol as protocol;
 
 use super::*;
+use std::ops::ControlFlow;
 
-struct Invocation {
+pub(super) struct Invocation {
     resolver:
         podway_engine::workspace::DirectWorkspaceResolverV1<protocol_boundary::NativeGitResolverV1>,
     selector: protocol_boundary::WorktreeSelectorV1,
@@ -59,7 +60,7 @@ impl Invocation {
         })
     }
 
-    fn execute(
+    pub(super) fn execute(
         &self,
         command: Direct,
         workspace: Option<WorkspaceId>,
@@ -157,112 +158,6 @@ fn qualification_pause(
     }
 }
 
-fn needs_facts(command: &Command, fences: &ExplicitPreconditions) -> bool {
-    if command.is_item_mutation() {
-        return fences.session_id.is_none()
-            || fences.attempt_id.is_none()
-            || fences.item_revision.is_none();
-    }
-    if matches!(
-        command,
-        Command::Archive {
-            command: Some(ArchiveCommand::Purge { .. })
-        }
-    ) {
-        return false;
-    }
-    if !command.needs_preflight() || matches!(command, Command::Record(_)) {
-        return false;
-    }
-    if fences.session_id.is_none() || fences.session_revision.is_none() {
-        return true;
-    }
-    match command {
-        Command::Start(_)
-        | Command::Begin(_)
-        | Command::Disposition { .. }
-        | Command::Reset(_)
-        | Command::Archive { command: None }
-        | Command::Rework(_)
-        | Command::Goal {
-            command: GoalCommand::Define(_),
-        } => false,
-        Command::Goal {
-            command: GoalCommand::Revise(_),
-        } => fences.goal_revision.is_none(),
-        Command::Goal {
-            command: GoalCommand::AssessCriterion(_),
-        } => fences.attempt_id.is_none() || fences.goal_revision.is_none(),
-        _ => fences.attempt_id.is_none(),
-    }
-}
-
-fn fill_facts(command: &Command, fences: &mut ExplicitPreconditions, preflight: &StatusPreflight) {
-    fences
-        .workspace_id
-        .get_or_insert_with(|| preflight.transport_workspace_id.clone());
-    fences
-        .session_id
-        .get_or_insert_with(|| preflight.facts.session_id.clone());
-    fences
-        .session_revision
-        .get_or_insert(preflight.facts.session_revision);
-    if !matches!(
-        command,
-        Command::Start(_)
-            | Command::Begin(_)
-            | Command::Disposition { .. }
-            | Command::Reset(_)
-            | Command::Archive { command: None }
-            | Command::Goal {
-                command: GoalCommand::Define(_)
-            }
-    ) && fences.attempt_id.is_none()
-    {
-        fences.attempt_id = preflight.facts.attempt_id.clone();
-    }
-    if command.is_item_mutation() {
-        fences.session_revision = None;
-        if fences.item_revision.is_none() {
-            fences.item_revision = item_id(command).and_then(|selected| {
-                preflight
-                    .facts
-                    .item_revisions
-                    .iter()
-                    .find_map(|(id, revision)| (id == selected).then_some(*revision))
-                    // An absent active item still belongs to the engine's
-                    // ITEM_NOT_FOUND contract, rather than a missing CLI fence.
-                    .or(Some(Revision::new(0)))
-            });
-        }
-    }
-    if matches!(
-        command,
-        Command::Decide(_)
-            | Command::Goal {
-                command: GoalCommand::Revise(_) | GoalCommand::AssessCriterion(_)
-            }
-    ) && fences.goal_revision.is_none()
-    {
-        fences.goal_revision = preflight.facts.goal_revision;
-    }
-}
-
-fn preflight_error(
-    command: &Command,
-    error: protocol::ErrorEnvelopeV2,
-) -> Result<RunResult, LocalFailure> {
-    let mut value = error.into_value();
-    value["command"] = json!(command.canonical_route());
-    let error = protocol::ErrorEnvelopeV2::from_value(value).map_err(|_| {
-        LocalFailure::internal("cannot attribute the preflight error to the requested command")
-    })?;
-    Ok(direct_response_result(
-        command,
-        protocol_boundary::DirectResponseV1::Failure(error),
-    ))
-}
-
 pub(super) fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
     let started = Instant::now();
     if let Command::CompleteDynamic { kind } = &cli.command {
@@ -327,69 +222,10 @@ pub(super) fn execute(mut cli: Cli) -> Result<RunResult, LocalFailure> {
     let mut fences = ExplicitPreconditions::parse(&cli)?;
     apply_archive_purge_revision(&mut cli.command, &fences)?;
     let invocation = Invocation::new(&target, cli.timeout.unwrap_or(5_000), started)?;
-    let mut preflight = None;
-    if needs_facts(&cli.command, &fences) {
-        let status = invocation.execute(
-            Direct::Read {
-                command: ReadCommand::Status {
-                    tier: GraphStatusTierV2::Standard,
-                    history_before: None,
-                },
-                expected_session_id: fences.session_id.clone(),
-            },
-            fences.workspace_id.clone(),
-            None,
-        )?;
-        let output = match status {
-            protocol_boundary::DirectResponseV1::Success(output) => output,
-            protocol_boundary::DirectResponseV1::Failure(error) => {
-                return preflight_error(&cli.command, error);
-            }
-        };
-        let facts = StatusPreflight::from_direct(&output)?;
-        fill_facts(&cli.command, &mut fences, &facts);
-        if facts.facts.lifecycle == "prepared"
-            && (cli.command.is_item_mutation()
-                || matches!(
-                    &cli.command,
-                    Command::Complete
-                        | Command::Skip { .. }
-                        | Command::Retry { .. }
-                        | Command::Block { .. }
-                        | Command::Unblock { .. }
-                        | Command::Cancel { .. }
-                        | Command::Decide(_)
-                        | Command::Goal {
-                            command: GoalCommand::Revise(_) | GoalCommand::AssessCriterion(_)
-                        }
-                ))
-        {
-            // Prepared state has no attempt or goal fence to autofill. Reject it
-            // without manufacturing identities, after checking caller-owned fences.
-            if let Some(key) = &cli.idempotency_key {
-                protocol_boundary::IdempotencyKeyV1::new(key.clone()).map_err(invalid_v2_value)?;
-            } else if cli.json || !io::stdin().is_terminal() || !io::stdout().is_terminal() {
-                return Err(LocalFailure::request_invalid(
-                    "automation mutations require --idempotency-key",
-                ));
-            }
-            if let Some(expected) = fences.session_revision
-                && expected != facts.facts.session_revision
-            {
-                return Err(LocalFailure::session_revision_conflict(
-                    route,
-                    expected,
-                    facts.facts.session_revision,
-                ));
-            }
-            return Err(LocalFailure::catalog(
-                "SESSION_NOT_RUNNING",
-                "the command requires a running session",
-                route,
-            ));
-        }
-        preflight = Some(facts);
-    }
+    let preflight = match preflight::prepare(&invocation, &cli, &mut fences)? {
+        ControlFlow::Continue(facts) => facts,
+        ControlFlow::Break(result) => return Ok(result),
+    };
     if let (Command::Start(_), Some(preflight)) = (&cli.command, &preflight) {
         let terminal_disposed = if matches!(
             preflight.facts.lifecycle.as_str(),

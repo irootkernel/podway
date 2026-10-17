@@ -469,6 +469,26 @@ and independent completion review.
   human/JSON output, stdin identity, prepared-state rejection, interactive start,
   non-TTY refusal and deadline consumption. A smaller file alone is not proof.
 
+BOUND-005 implementation handoff: private grammar, authoring, procedure_files,
+start, render and preflight modules now own their corresponding CLI behavior.
+Entry retains shared stdin/flag/shape coordination, worktree targeting, failures,
+results and clock generation. Descriptor internals remain file-owned, with a
+borrowed byte accessor for authoring. Existing unit test names and aggregate E2E
+registration remain unchanged.
+
+The preflight parser, needs/fill helpers, gated standard-status fetch and
+prepared-state rejection moved together. Its `prepare` borrows the original
+Direct invocation and returns standard `ControlFlow` for the existing Engine
+error-result short circuit; shared error attribution remains at entry because
+other status callers also use it. Grammar keeps `needs_preflight` for its flag
+validation consumer. All four status observations remain distinct; no READS
+facts/SQL implementation or new execution framework is introduced.
+
+Functional regressions cover file mode/no-op/symlink/staging cleanup, independent
+fresh/stateful previews, completion budget, stdin priority and fully fenced
+archive replay missing only workspace UUID. Task acceptance requires focused
+checks, the full development gate and independent completion review.
+
 ### BOUND-006: Qualify and close boundary refactoring
 
 - Run the full development gate, applicable native crash/race/maintenance and

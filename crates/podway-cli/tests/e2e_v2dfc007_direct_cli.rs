@@ -3065,3 +3065,44 @@ fn retained_commands_commit_replay_lookup_and_reject_stale_fences_in_the_real_bi
     );
     assert!(!fixture.0.join("podwayd.sock").exists());
 }
+
+#[test]
+fn bound005_completion_keeps_its_best_effort_budget_during_maintenance() {
+    let fixture = Fixture::new();
+    fixture.run(&["init", "--idempotency-key", "init"]);
+    fixture.run(&[
+        "start",
+        "--preset",
+        "small-change-v2",
+        "--task",
+        "Completion budget",
+        "--idempotency-key",
+        "start",
+    ]);
+    fixture.run(&["begin", "--idempotency-key", "begin"]);
+    let ready = fixture.raw_output(&["__complete", "items"]);
+    assert_eq!(ready.status.code(), Some(0));
+    assert!(!ready.stdout.is_empty());
+    let paused = fixture.pause_at_maintenance_boundary(
+        &[
+            "reset",
+            "--all",
+            "--force",
+            "--yes",
+            "--idempotency-key",
+            "paused-reset",
+        ],
+        "lease-acquired",
+    );
+    let before = fixture.podway_snapshot();
+    let started = Instant::now();
+    let output = fixture.raw_output(&["__complete", "items", "--timeout", "10s"]);
+    assert!(started.elapsed() < Duration::from_secs(2), "{output:?}");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(
+        output.stdout.is_empty() && output.stderr.is_empty(),
+        "{output:?}"
+    );
+    drop(paused);
+    fixture.assert_podway_snapshot(&before);
+}

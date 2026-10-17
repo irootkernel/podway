@@ -96,6 +96,18 @@ case covers all nine callback sites and exact public mapping/retry behavior.
 separately owns the COMMIT-only unknown-outcome classification; callback errors
 must not acquire that classification.
 
+BOUND-005 keeps the existing `command::tests` and registered `e2e_suite` owners.
+New local CLI cases check successful format replacement with original
+permissions, canonical no-op inode/mtime/bytes, symlink refusal and offline
+fresh-start preview. A private file-module unit case forces rename failure after
+staging and checks preserved parked bytes/destination plus temporary cleanup.
+Direct/runtime cases check completion's independent 500 ms budget under
+maintenance, fresh versus fully fenced stateful preview admission, and stdin
+identity/flag/shape error priority. The existing terminal archive case now also
+replays with only workspace UUID omitted while no current session exists,
+making an accidental status fetch observable. Existing PTY, retirement-before-
+stdin, prepared-fence, rendering and plain-start replay cases remain required.
+
 These tests own direct identity, attempt-content overflow, and one-draft atomic
 batch behavior:
 
