@@ -661,6 +661,9 @@ fn in_transaction_workspace_revalidation_keeps_typed_errors_and_exact_retry() {
         let command = typed_revalidation_command(route, temporary.path(), &selector, &store);
         let before = graph(&store);
         let before_sequence = sequence(&store);
+        let before_binding = store
+            .read(deadline(), |snapshot| Ok(snapshot.binding().clone()))
+            .unwrap();
         let root = temporary.path().to_path_buf();
         let config = root.join(".podway/config.yaml");
         let original_config = std::fs::read(&config).ok();
@@ -689,16 +692,40 @@ fn in_transaction_workspace_revalidation_keeps_typed_errors_and_exact_retry() {
         } else {
             std::fs::remove_file(&config).unwrap();
         }
-        rejection(
-            response,
+        let DirectResponseV1::Failure(error) = response else {
+            panic!("{route}: transaction revalidation committed");
+        };
+        let error = error.into_value();
+        assert!(validate_daemon_free_document_v1("podway.error/v2", &error));
+        assert_eq!(
+            error["code"],
             if unsafe_git {
                 "WORKSPACE_PATH_UNSAFE"
             } else {
                 "WORKSPACE_CONFIG_INVALID"
             },
+            "{route}"
+        );
+        assert_eq!(error["exit_code"], 5, "{route}");
+        assert_eq!(error["retryable"], false, "{route}");
+        assert_eq!(
+            error["details"],
+            if unsafe_git {
+                json!({})
+            } else {
+                json!({"guidance":"Remove any non-prod mode from .podway/config.yaml, then run podway reset --all with explicit authorization."})
+            },
+            "{route}"
         );
         assert_eq!(graph(&store), before);
         assert_eq!(sequence(&store), before_sequence);
+        assert_eq!(
+            store
+                .read(deadline(), |snapshot| Ok(snapshot.binding().clone()))
+                .unwrap(),
+            before_binding,
+            "{route}"
+        );
         assert!(outcome(&store, "typed-revalidation").is_none());
         let output = success(
             execute_direct_v1(&resolver(), input.clone(), &Clock, &NativeDirectIdSourceV1).unwrap(),

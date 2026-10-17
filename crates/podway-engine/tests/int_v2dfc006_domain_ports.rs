@@ -4,21 +4,175 @@ use super::{
     int_v2dfc006_fixture_ports::{ACTION_READBACK_PROCEDURE, STATE_PROCEDURE},
     int_v2dfc006_runtime_ports::{Engine, NoClock},
 };
-use podway_core::{AttemptId, ItemId, Revision, SessionId, SessionLifecycle, UnixMillis};
+use podway_core::{
+    AttemptId, CanonicalProcedureJsonV1, ItemId, ProcedureSnapshotId, ProcedureSourceLabelV1,
+    Revision, SessionId, SessionLifecycle, SessionTraceV2, Sha256Digest, UnixMillis,
+    canonicalize_json_v1,
+};
 use podway_engine::{
     direct_api::{DirectCommandV1 as D, DirectResponseV1},
     direct_execution::{DirectCursorCommandV1 as C, DirectReadCommandV1 as R},
     direct_items::DirectItemCommandV1 as I,
     direct_sessions::DirectSessionCommandV1 as S,
     direct_start::DirectStartCommandV1 as T,
-    execution::prepare_workspace_procedure_source_v2,
+    execution::{ExecutionClockV1, prepare_workspace_procedure_source_v2},
     v2_read_service::GraphStatusTierV2,
     workspace::DirectWorkspaceResolverV1,
 };
 use podway_git::NativeGitResolverV1;
 use podway_protocol::*;
-use podway_store::{GraphSessionStateV2, IdempotencyKeyV1};
+use podway_store::{
+    CanonicalExecutionJsonV1, GraphNodeCounterV2, GraphSessionStateV2, IdempotencyKeyV1,
+    ProcedureSnapshotV2, WorkflowMemoryStateV2,
+    direct_store::{DirectMutationRequestV1, DirectOutcomeScopeV1},
+};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+
+#[test]
+fn bound001_deferred_memory_error_keeps_public_mapping_and_fence_priority() {
+    let engine = empty(STATE_PROCEDURE);
+    let canonical = canonicalize_json_v1(&json!({
+        "schema":"podway.procedure/v2", "id":"deferred-memory", "version":"1",
+        "name":"Deferred memory", "purpose":"Preserve persisted admission timing.",
+        "node_definitions":{"work":{"type":"action", "title":"Work", "intent":"Record.",
+            "items":[{"id":"proof", "type":"text", "prompt":"Proof", "required":true,
+                "min_length":2, "max_length":1}]}},
+        "graph":{"entry":"work", "nodes":[{"id":"work", "use":"work", "terminal":true}]}
+    }))
+    .unwrap();
+    let snapshot = ProcedureSnapshotV2::new(
+        ProcedureSnapshotId::new("00000000-0000-4000-8000-000000000010").unwrap(),
+        CanonicalProcedureJsonV1::new(canonical.clone()).unwrap(),
+        Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))).unwrap(),
+        ProcedureSourceLabelV1::file("persisted.json").unwrap(),
+        Clock.now(),
+    )
+    .unwrap();
+    let counters = snapshot
+        .graph_nodes()
+        .iter()
+        .map(|node| GraphNodeCounterV2::new(node.graph_node_id().clone(), 0, 0))
+        .collect();
+    let graph = GraphSessionStateV2::new_with_workflow_memory(
+        Revision::new(1),
+        "Deferred memory",
+        snapshot,
+        SessionTraceV2::prepared(SessionId::new("00000000-0000-4000-8000-000000000011").unwrap()),
+        counters,
+        vec![],
+        WorkflowMemoryStateV2::new(vec![], vec![], vec![]).unwrap(),
+        Clock.now(),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    let seed = DirectMutationRequestV1::new(
+        IdempotencyKeyV1::new("deferred-seed").unwrap(),
+        digest(),
+        "workspace.repair",
+        "00000000-0000-4000-8000-000000000002",
+        DirectOutcomeScopeV1::Workspace,
+    )
+    .unwrap();
+    engine
+        .store
+        .mutate(
+            &seed,
+            deadline(),
+            || Clock.now(),
+            |transaction| {
+                transaction.now();
+                transaction.create_graph(&graph)?;
+                Ok(CanonicalExecutionJsonV1::new(
+                    canonicalize_json_v1(&json!({
+                        "schema":"podway.output/v4", "request_id":seed.response_id(),
+                        "command":seed.command(), "generated_at":"2023-11-14T22:13:20.000Z",
+                        "result":{"seeded":true}, "warnings":[]
+                    }))
+                    .unwrap(),
+                )
+                .unwrap())
+            },
+        )
+        .unwrap();
+    let command = |revision| {
+        D::Procedure(ProcedureV2MutationCommandV1::SessionBegin(SessionBeginV1 {
+            initial_goal: None,
+            preconditions: SessionIdentityPreconditionsWireV1 {
+                expected_session_id: graph.trace().session_id().clone(),
+                expected_session_revision: revision,
+            },
+        }))
+    };
+    let context = podway_engine::direct_error::DirectErrorContextV1 {
+        request_id: RequestIdV1::new("00000000-0000-4000-8000-000000000099").unwrap(),
+        command: CommandNameV1::new("session.begin").unwrap(),
+        observed_at: Rfc3339MillisV1::new("2023-11-14T22:13:20.000Z").unwrap(),
+        idempotency_key: Some(IdempotencyKeyV1::new("deferred-invalid").unwrap()),
+        timeout_ms: 5000,
+        maintenance: None,
+    };
+    let render = |revision| {
+        let failure = graph
+            .begin_v2(
+                revision,
+                AttemptId::new("00000000-0000-4000-8000-000000000012").unwrap(),
+                None,
+                Clock.now(),
+            )
+            .unwrap_err();
+        podway_engine::direct_error::render_direct_error_v1(
+            &podway_engine::direct_execution::DirectExecutionErrorV1::Store(failure.into()),
+            &context,
+        )
+        .unwrap()
+        .into_value()
+    };
+    let stale = render(Revision::new(1));
+    assert_eq!(stale["code"], "SESSION_REVISION_CONFLICT");
+    assert_eq!(stale["exit_code"], 4);
+    assert_eq!(stale["retryable"], true);
+    assert_eq!(stale["details"]["expected_revision"], 1);
+    assert_eq!(stale["details"]["current_revision"], 0);
+    let invalid = render(Revision::ZERO);
+    assert_eq!(invalid["code"], "INTERNAL_ERROR");
+    assert_eq!(invalid["exit_code"], 6);
+    assert_eq!(invalid["retryable"], false);
+    assert_eq!(
+        invalid["details"],
+        json!({
+            "schema":"podway.internal-error-details/v2", "diagnostic_id":context.request_id,
+        })
+    );
+    let sequence = engine.sequence();
+    for revision in [Revision::ZERO, Revision::new(1)] {
+        // Cold persisted admission rejects before any domain revision fence.
+        let DirectResponseV1::Failure(error) =
+            engine.execute(engine.request(command(revision), "deferred-cold"), &NoClock)
+        else {
+            panic!("malformed persisted declaration was admitted")
+        };
+        let error = error.into_value();
+        assert_eq!(error["code"], "WORKSPACE_STATE_UNREADABLE");
+        assert_eq!(error["exit_code"], 5);
+        assert_eq!(error["retryable"], false);
+        assert_eq!(
+            error["details"]["schema"],
+            "podway.workspace-recovery-details/v2"
+        );
+        assert_eq!(engine.sequence(), sequence);
+        assert!(
+            engine
+                .store
+                .read(deadline(), |snapshot| snapshot
+                    .outcome(&IdempotencyKeyV1::new("deferred-cold").unwrap(),))
+                .unwrap()
+                .is_none()
+        );
+    }
+}
 
 fn empty(source: &str) -> Engine {
     let (temporary, selector, store, _) = fixture();

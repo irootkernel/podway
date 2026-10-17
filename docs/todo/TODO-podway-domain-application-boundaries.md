@@ -249,6 +249,101 @@ after BOUND, not in the middle of a type move.
   Core type requires infrastructure, and focused characterization tests cover
   the public behavior affected by each move.
 
+#### BOUND-001 implementation inventory
+
+The accepted source baseline is local commit
+`eb332d280b8b3f0fdf1169d565b748234626d2d7`. It preserves accepted OPTIM;
+the unrelated `.mulgae/config.yaml` change is excluded. The following is the
+concrete engineering handoff, not a second authority for Task status.
+
+| Current owner / move candidates | Target and retained boundary | Known production consumers |
+|---|---|---|
+| Store `v2_state`: `GraphSessionStateV2`, transition inputs/outcomes, `GraphNodeCounterV2`, `AttemptMetadataV2`, graph/member/terminal invariants | Core graph module; caller-supplied time and IDs. SQL loaders/writers, archive queries, `GraphWorkspaceViewV2` and durable worktree identity stay Store. | Store connection/transaction, delegation and test-support adapters; Engine execution/native execution, all graph mutation handlers and read projections |
+| Store `v2_memory`: `WorkflowMemoryStateV2`, attempt/item/blocker/evidence state, mutations/results, recorded-value digest helpers, pure history validation and `GraphMutationErrorV2` | Core workflow module. Preserve `RecordedSlotValueV2` immutable memo and `UnpublishedAttemptDraftV2`; row decoding, stored recorded JSON, changed-row writes and SQL successor checks stay Store. | Graph state, goal state, Store row adapters; Engine items, delegation, cursor and `v2_read_service` |
+| Store `v2_goal`: `GoalStateV2`, criterion/attempt assessment state, pure goal/history validation and goal runtime declarations | Core goal module. SQL loads, writes, record digests and persistence successor admission stay Store. Goal interpretation remains independently demanded, not eagerly merged with memory-model admission. | Graph/workflow state, Store row adapters; Engine goal commands/read projections |
+| Store `ProcedureSnapshotV2`, `GraphNodeSnapshotV2`, `SnapshotMemoryModelV2` and bounded node/item/evidence declarations | Minimum immutable runtime carrier and declaration interpretation move with BOUND-002. Store independently checks canonical bytes/digest/schema and persisted rows before constructing Core values; no schema assets or interpreter move to Core. | Engine start/source adapter, native execution and projections; Store snapshot loading and relational verification |
+| Config parsed Procedure/graph/delegation declarations and Engine placement readers | BOUND-003 aligns adapters on the Core runtime representation. Config retains YAML/JSON diagnostics, graph vetting, canonical/default emission and source admission. Store retains independent persisted admission. | Config authoring/canonical/DOT adapters; Engine preparation, cursor, delegation and read projections |
+
+Store's existing root reexports may temporarily expose the same Core types to
+known consumers; they must not conceal a second transition implementation.
+Update direct consumers to the actual owner where useful. Core receives no
+Store, Config, Protocol, filesystem or SQLite dependency. Existing dependency
+adjacency remains the executable constraint.
+
+| Invariant / failure seam | Owner after move and observable preservation |
+|---|---|
+| Cursor, lifecycle, attempt identity, revisions, counters and transition legality | Core; Engine preserves each command's validation order and public mapping. Item-local revision fences remain distinct from session-fenced batches. |
+| Goal revisions, citations, assessments and reactivation; delegation readiness; terminal eligibility | Core pure predicates/transitions; Store independently validates persisted histories and accepted receipts/dispositions. Engine retains goal fences, receipt checks and command-specific ordering. |
+| Structural invalid graph/runtime declaration | A Core structural error carrying the existing bounded reason replaces the mixed `StoreValueErrorV1` dependency. Explicit Store/Engine conversions preserve `GraphMutationErrorV2::InvalidState` as `INTERNAL_ERROR`, exit 6, nonretryable, internal diagnostic details. `DomainError::InvalidState` remains `REQUEST_INVALID`, exit 2. |
+| Invalid persisted canonical/schema/digest or relational row | Store; cold admission maps corruption to `WORKSPACE_STATE_UNREADABLE`, exit 5, nonretryable, workspace recovery details. Source admission keeps Config diagnostics and `PROCEDURE_INVALID`. |
+| Stale session/attempt/item/goal fences and competing errors | Core/Engine retain current priority and conflict details. Session revision conflict remains exit 4, retryable. Store never records a rejection outcome. |
+| Replay, clock/ID allocation, writer admission, rollback and COMMIT ambiguity | One Store transaction runner; Engine callback errors remain typed. Identity resolution receives the recorded outcome before digest comparison and replay selection; start replay recovers the pinned digest without fresh source preparation. Exact replay then bypasses the execution callback, clock reads and ID allocation. Only existing COMMIT I/O ambiguity gets unknown-outcome treatment. |
+| Validated reads and batch application | Preserve OPTIM's borrowed request `ReadScope`, immutable recorded payload memo, and one unpublished attempt draft. No persistent cache or READS query/facts redesign. |
+
+The deferred-model fixture is schema-shape-valid canonical JSON with a text item
+whose `min_length` is 2 and `max_length` is 1. Actual observed boundaries are:
+
+1. `ProcedureSnapshotV2::new` succeeds and retains its derived-model error.
+2. Convenience `GraphSessionStateV2::prepared` fails through `empty_for_trace`.
+3. Explicit `new_with_workflow_memory` with an empty workflow and Prepared trace
+   succeeds. A stale revision wins over the retained error in `begin_v2`; a
+   matching revision exposes `InvalidState` without changing the aggregate.
+4. Persisting that explicit fixture succeeds, but an independent cold load
+   rejects it as `CorruptStateV1 { record: Snapshot }` through
+   `load_workflow_memory_v2`. The Engine refuses it before domain fences, without
+   reading the mutation clock, changing sequence or recording an outcome.
+
+These distinctions are characterized in
+`int_v2dfc005_relational::bound001_deferred_memory_admission_and_cold_read_remain_distinct`
+and
+`int_v2dfc006_domain_ports::bound001_deferred_memory_error_keeps_public_mapping_and_fence_priority`.
+Do not turn snapshot admission into eager derived-model admission, or describe
+the malformed fixture as a supported Store that must continue successfully.
+
+The existing registered
+`int_v2dfc006_races::in_transaction_workspace_revalidation_keeps_typed_errors_and_exact_retry`
+covers all nine callback sites through ten routes: item, repair, record-many,
+cursor, begin, procedure, reset, archive, start and delegation. Both in-transaction
+config invalidation and unsafe Git replacement preserve exact public details,
+exit 5/nonretryable behavior, unchanged graph/binding/sequence, no failed-key
+outcome and same-key success/replay without clock or ID access. BOUND-004 must
+retain this per-site proof and the existing start identity-preparation,
+changed-input replay, competing-fence and COMMIT ambiguity tests.
+
+The chosen callback mechanism is one Store-owned generic runner with separate
+Store and caller-error branches. Both identity and execution closures return
+typed caller failures; current Store-only methods delegate to that runner and
+flatten its Store-only branch. Start's source handoff between closures may keep
+its legitimate ownership cell; error slots and preparation/refusal flags go.
+Bootstrap remains direct. The three helper groups above remain distinct.
+
+| CLI responsibility now | Concrete BOUND-005 destination / callers |
+|---|---|
+| `command.rs` Clap grammar and parse diagnostics | `command/grammar.rs`; shared entry/dispatch stays `command.rs` |
+| Local authoring handlers and descriptor-safe Procedure file operations | Separate `command/authoring.rs` and `command/procedure_files.rs`; preserve atomic replacement, mode/no-op/symlink and cleanup behavior |
+| Interactive start interviews and dry-run handling | `command/start.rs`; preserve non-TTY refusal and execution-first plain start |
+| `command.rs` `StatusFacts`, `StatusPreflight::from_direct/from_parts`; `direct.rs` `needs_facts`, `fill_facts`, gated standard-status fetch/prepared rejection | One `command/preflight.rs` owner. `Command::needs_preflight` remains a coordinated grammar classification, also used by explicit flag validation. The gate consumes the original `Invocation` deadline and attributes errors to the requested mutation. |
+| Rendering helpers | `command/render.rs`; existing `direct`, `completion` and `retirement` keep their existing roles |
+
+Four status paths remain distinguishable: gated missing-fence preflight;
+dynamic completion's separate best-effort 500 ms query; local fresh-start
+dry-run versus stateful replacement/reset disposition checks; and the later
+interactive read only after `SESSION_START_DECISION_REQUIRED`. READS replaces
+only the first. Missing workspace UUID alone does not trigger a fetch;
+stdin-owned record/delegation identities remain independent. Plain start executes
+first, preserving exact replay, and any retry reuses the key/deadline. Preserve
+retirement/late-JSON handling before stdin and current input/flag precedence.
+
+BOUND registers the complete nine-case `tools/run_native_qualification.py::CASES`
+matrix for BOUND-006: Store G1/G2 L/maximum, Engine G1/G2 at 300 and 1024 nodes,
+busy deadlines, five-boundary SIGKILL, random SIGKILL, 100 G5 reset/remove cycles,
+500 state plus 500 artifact G6 races, and ten-minute Store G9. Use the existing
+native Make entry point on frozen source, AC-powered Apple Silicon, without
+diagnostic overrides. Retain current blocking/informational thresholds; this
+registers no OPTIM metric baseline or new comparator. Fresh-process supported
+Store continuation, canonical assets/DDL/manifest identity and exact replay are
+separate final acceptance checks.
+
 ### BOUND-002: Separate domain state and transitions from persistence
 
 - Move pure graph/workflow/goal state and transition code into Core with explicit

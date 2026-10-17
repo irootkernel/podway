@@ -5,13 +5,16 @@ use podway_core::{
     CriterionAssessmentReasonV2, CriterionAssessmentResultV2, CriterionCitationV2, CriterionId,
     CriterionStatusV2, GoalCriterionV2, GoalDefinitionV2, GoalRevisionNumberV2,
     GoalRevisionReasonV2, GoalStatementV2, GraphNodeId, ItemId, OptionId, ProcedureSnapshotId,
-    ProcedureSourceLabelV1, ReasonV2, Revision, SessionId, Sha256Digest, TerminalDispositionV2,
-    UnixMillis, canonicalize_json_v1,
+    ProcedureSourceLabelV1, ReasonV2, Revision, SessionId, SessionTraceV2, Sha256Digest,
+    TerminalDispositionV2, UnixMillis, canonicalize_json_v1,
 };
 use podway_store::{
     ActiveItemMutationV2, DelegationReceiptV1, GraphInitialGoalV2, GraphMutationErrorV2,
-    GraphSessionStateV2, IdempotencyKeyV1, ProcedureSnapshotV2,
-    direct_store::{DirectMutationRequestV1, DirectOutcomeScopeV1, DirectStoreV1},
+    GraphNodeCounterV2, GraphSessionStateV2, IdempotencyKeyV1, ProcedureSnapshotV2, StoreErrorV1,
+    StoreRecordKindV1, StoreValueErrorV1, WorkflowMemoryStateV2,
+    direct_store::{
+        DirectMutationRequestV1, DirectOutcomeScopeV1, DirectStoreErrorV1, DirectStoreV1,
+    },
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -38,22 +41,25 @@ fn criteria() -> GoalDefinitionV2 {
     .unwrap()
 }
 
-fn prepared(document: Value) -> GraphSessionStateV2 {
+fn snapshot(document: Value) -> ProcedureSnapshotV2 {
     let canonical = canonicalize_json_v1(&document).unwrap();
     let hash =
         Sha256Digest::new(format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))).unwrap();
-    let snapshot = ProcedureSnapshotV2::new(
+    ProcedureSnapshotV2::new(
         ProcedureSnapshotId::new("00000000-0000-4000-8000-000000000010").unwrap(),
         CanonicalProcedureJsonV1::new(canonical).unwrap(),
         hash,
         ProcedureSourceLabelV1::file("direct-relational.yaml").unwrap(),
         UnixMillis::new(20),
     )
-    .unwrap();
+    .unwrap()
+}
+
+fn prepared(document: Value) -> GraphSessionStateV2 {
     GraphSessionStateV2::prepared(
         Revision::new(1),
         "Direct relational fixture",
-        snapshot,
+        snapshot(document),
         SessionId::new("00000000-0000-4000-8000-000000000011").unwrap(),
         UnixMillis::new(20),
     )
@@ -97,6 +103,78 @@ fn seed(direct: &DirectStoreV1, graph: &GraphSessionStateV2) {
             },
         )
         .unwrap();
+}
+
+#[test]
+fn bound001_deferred_memory_admission_and_cold_read_remain_distinct() {
+    // Shape admission accepts each bound independently. Domain admission is
+    // intentionally deferred until a transition needs the item declaration.
+    let snapshot = snapshot(json!({
+        "schema":"podway.procedure/v2", "id":"deferred-memory", "version":"1",
+        "name":"Deferred memory", "purpose":"Preserve persisted admission timing.",
+        "node_definitions":{"work":{"type":"action", "title":"Work", "intent":"Record.",
+            "items":[{"id":"proof", "type":"text", "prompt":"Proof", "required":true,
+                "min_length":2, "max_length":1}]}},
+        "graph":{"entry":"work", "nodes":[{"id":"work", "use":"work", "terminal":true}]}
+    }));
+    assert_eq!(
+        GraphSessionStateV2::prepared(
+            Revision::new(1),
+            "Deferred memory",
+            snapshot.clone(),
+            SessionId::new("00000000-0000-4000-8000-000000000011").unwrap(),
+            UnixMillis::new(20),
+        ),
+        Err(StoreValueErrorV1::InvalidProcedureV2State {
+            reason: "Procedure v2 item declaration is invalid",
+        })
+    );
+    let counters = snapshot
+        .graph_nodes()
+        .iter()
+        .map(|node| GraphNodeCounterV2::new(node.graph_node_id().clone(), 0, 0))
+        .collect();
+    let graph = GraphSessionStateV2::new_with_workflow_memory(
+        Revision::new(1),
+        "Deferred memory",
+        snapshot,
+        SessionTraceV2::prepared(SessionId::new("00000000-0000-4000-8000-000000000011").unwrap()),
+        counters,
+        vec![],
+        WorkflowMemoryStateV2::new(vec![], vec![], vec![]).unwrap(),
+        UnixMillis::new(20),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    let check = |state: &GraphSessionStateV2| {
+        assert_eq!(
+            state.begin_v2(Revision::new(1), attempt(21), None, UnixMillis::new(21)),
+            Err(GraphMutationErrorV2::SessionRevisionConflict {
+                expected: Revision::new(1),
+                actual: Revision::ZERO,
+            })
+        );
+        assert_eq!(
+            state.begin_v2(Revision::ZERO, attempt(21), None, UnixMillis::new(21)),
+            Err(GraphMutationErrorV2::InvalidState(
+                StoreValueErrorV1::InvalidProcedureV2State {
+                    reason: "Procedure v2 item declaration is invalid",
+                }
+            ))
+        );
+    };
+    check(&graph);
+    let (_root, direct) = fixture();
+    seed(&direct, &graph);
+    let reopened = store(&direct.layout().root().to_path_buf());
+    assert!(matches!(
+        reopened.prepare_graph(deadline()),
+        Err(DirectStoreErrorV1::State(StoreErrorV1::CorruptStateV1 {
+            record: StoreRecordKindV1::Snapshot,
+        }))
+    ));
 }
 
 fn session_request(
