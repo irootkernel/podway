@@ -1,9 +1,6 @@
 //! Source-backed prepared starts recover the pinned identity inside the authoritative lookup.
 
-use std::{
-    cell::{Cell, RefCell},
-    time::Instant,
-};
+use std::{cell::RefCell, time::Instant};
 
 use podway_core::{
     ActorAttributionV2, ReasonV2, Revision, SessionLifecycle, Sha256Digest, TerminalDispositionV2,
@@ -139,16 +136,14 @@ pub fn start_session_v1<R: GitResolverContractV1>(
     let command = request.command.slice();
     let prepared_graph = store.prepare_graph(request.deadline)?;
     let source = RefCell::new(Some(source));
-    let preparation_failed = Cell::new(false);
-    let failure = RefCell::new(None);
-    let result = store.mutate_resolving_identity(
+    let result = store.mutate_resolving_identity_typed(
         key,
         request.deadline,
         || clock.now(),
-        |outcome| {
+        |outcome| -> Result<_, DirectExecutionErrorV1> {
             let original_digest = if let Some(outcome) = outcome {
                 if outcome.command() != command.command_name() {
-                    return Err(DirectStoreErrorV1::IdempotencyKeyReused);
+                    return Err(DirectStoreErrorV1::IdempotencyKeyReused.into());
                 }
                 let output: OutputEnvelopeV4 = serde_json::from_str(outcome.response().as_str())
                     .map_err(|_| DirectStoreErrorV1::Unreadable)?;
@@ -157,17 +152,17 @@ pub fn start_session_v1<R: GitResolverContractV1>(
                 )
                 .map_err(|_| DirectStoreErrorV1::Unreadable)?
             } else {
-                match source
-                    .borrow()
+                let mut retained = source.borrow_mut();
+                match retained
                     .as_ref()
                     .expect("source preparation is retained before execution")
                 {
                     Ok(source) => source.digest().clone(),
                     Err(_) => {
-                        preparation_failed.set(true);
-                        return Err(DirectStoreErrorV1::InvalidInput {
-                            reason: "start source preparation failed",
-                        });
+                        let Some(Err(error)) = retained.take() else {
+                            unreachable!("the retained source preparation failed");
+                        };
+                        return Err(DirectExecutionErrorV1::Start(error));
                     }
                 }
             };
@@ -189,8 +184,9 @@ pub fn start_session_v1<R: GitResolverContractV1>(
                 request.request_id.as_str(),
                 DirectOutcomeScopeV1::Workspace,
             )
+            .map_err(DirectExecutionErrorV1::from)
         },
-        |transaction| {
+        |transaction| -> Result<_, DirectExecutionErrorV1> {
             let prior = transaction.use_prepared_graph(prepared_graph.as_ref())?;
             let prior = prior.as_deref();
             if let (Some(graph), DirectStartCommandV1::Replace(replace)) = (prior, &request.command)
@@ -200,65 +196,34 @@ pub fn start_session_v1<R: GitResolverContractV1>(
                     &replace.preconditions.expected_session_id,
                     replace.preconditions.expected_session_revision,
                 )
-                .map_err(|error| {
-                    failure.replace(Some(DirectExecutionErrorV1::Store(error)));
-                    DirectStoreErrorV1::InvalidInput {
-                        reason: "start caller fences rejected",
-                    }
-                })?;
+                .map_err(DirectExecutionErrorV1::Store)?;
             }
             resolver
                 .revalidate(&resolved, transaction.binding())
-                .map_err(|error| {
-                    failure.replace(Some(DirectExecutionErrorV1::from(error)));
-                    DirectStoreErrorV1::InvalidInput {
-                        reason: "workspace revalidation failed",
-                    }
-                })?;
+                .map_err(DirectExecutionErrorV1::from)?;
             let dispositions = transaction.terminal_dispositions()?;
             let disposed = prior.is_some_and(|graph| {
                 dispositions
                     .iter()
                     .any(|record| record.terminal_session_revision() == graph.trace().revision())
             });
-            let policy =
-                current_policy(&request.command, prior, disposed, false).map_err(|error| {
-                    failure.replace(Some(error));
-                    DirectStoreErrorV1::InvalidInput {
-                        reason: "start current-state policy rejected",
-                    }
-                })?;
+            let policy = current_policy(&request.command, prior, disposed, false)?;
             let source = source
                 .borrow_mut()
                 .take()
                 .expect("source preparation is consumed once")
-                .map_err(|error| {
-                    failure.replace(Some(DirectExecutionErrorV1::Start(error)));
-                    DirectStoreErrorV1::InvalidInput {
-                        reason: "start source preparation failed",
-                    }
-                })?;
+                .map_err(DirectExecutionErrorV1::Start)?;
             confirm_source(input, &source)
                 .and_then(|()| revalidate_source(&native, transaction.binding(), input, &source))
-                .map_err(|error| {
-                    failure.replace(Some(DirectExecutionErrorV1::Start(error)));
-                    DirectStoreErrorV1::InvalidInput {
-                        reason: "start source revalidation failed",
-                    }
-                })?;
+                .map_err(DirectExecutionErrorV1::Start)?;
             validate_title(input)?;
             let session = ids.next_session_id();
             let snapshot_id = ids.next_procedure_snapshot_id();
             let now = transaction.now();
             let mut body = prepared_start_result(&source, false);
-            let snapshot = source.into_snapshot(snapshot_id, now).map_err(|error| {
-                failure.replace(Some(DirectExecutionErrorV1::Start(StartError::Source(
-                    error,
-                ))));
-                DirectStoreErrorV1::InvalidInput {
-                    reason: "prepared snapshot construction failed",
-                }
-            })?;
+            let snapshot = source
+                .into_snapshot(snapshot_id, now)
+                .map_err(|error| DirectExecutionErrorV1::Start(StartError::Source(error)))?;
             let graph = GraphSessionStateV2::prepared(
                 Revision::new(1),
                 &input.task_title,
@@ -393,15 +358,7 @@ pub fn start_session_v1<R: GitResolverContractV1>(
             Ok(response)
         },
     );
-    if preparation_failed.get()
-        && let Some(Err(error)) = source.into_inner()
-    {
-        return Err(DirectExecutionErrorV1::Start(error));
-    }
-    if let Some(error) = failure.into_inner() {
-        return Err(error);
-    }
-    let result = result?;
+    let result = result.map_err(podway_store::direct_store::DirectMutationFailureV1::into_error)?;
     serde_json::from_str(result.outcome().response().as_str())
         .map_err(|_| DirectStoreErrorV1::Unreadable.into())
 }

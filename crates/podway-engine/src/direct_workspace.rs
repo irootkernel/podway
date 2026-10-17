@@ -29,7 +29,7 @@ use podway_store::{
     },
 };
 use sha2::{Digest as _, Sha256};
-use std::{cell::Cell, fmt, sync::Arc, time::Instant};
+use std::{fmt, sync::Arc, time::Instant};
 
 #[derive(Debug)]
 pub enum DirectWorkspaceErrorV1 {
@@ -232,18 +232,12 @@ fn existing_mutation<R: GitResolverContractV1>(
         // new plain init cannot replace or recommit an existing workspace.
         return Err(WorkspaceResolutionErrorV1::BootstrapBindingAlreadyPresent.into());
     }
-    let refused_plain_init = Cell::new(false);
-    let mut resolution_error = None;
-    let outcome = store.mutate(&mutation, request.deadline, || clock.now(), |transaction| {
-        resolver.revalidate(&resolved, transaction.binding()).map_err(|error| {
-            resolution_error = Some(DirectWorkspaceErrorV1::from(error));
-            DirectStoreErrorV1::InvalidInput { reason: "workspace revalidation failed" }
-        })?;
+    let outcome = store.mutate_typed(&mutation, request.deadline, || clock.now(), |transaction| -> Result<_, DirectWorkspaceErrorV1> {
+        resolver.revalidate(&resolved, transaction.binding()).map_err(DirectWorkspaceErrorV1::from)?;
         if plain_init {
             // Retention can remove the preliminary outcome before BEGIN. Only
             // the transaction's retained exact success may replay plain init.
-            refused_plain_init.set(true);
-            return Err(DirectStoreErrorV1::InvalidInput { reason:"plain init requires an uninitialized workspace" });
+            return Err(WorkspaceResolutionErrorV1::BootstrapBindingAlreadyPresent.into());
         }
         let repaired = transaction.binding().last_validated_root() != resolved.workspace_root();
         let result = if matches!(command, SliceCommandV1::WorkspaceInit(_)) {
@@ -255,15 +249,10 @@ fn existing_mutation<R: GitResolverContractV1>(
         let sequence = transaction.next_workspace_sequence()?;
         canonical(envelope(&request.request_id, command.command_name(), transaction.now(),
             &uuid, resolved.worktree(), sequence, result).map_err(|_| DirectStoreErrorV1::InvalidInput {
-                reason:"invalid workspace success envelope" })?)
+                reason:"invalid workspace success envelope" })?).map_err(DirectWorkspaceErrorV1::from)
     });
-    if let Some(error) = resolution_error {
-        return Err(error);
-    }
-    if refused_plain_init.get() {
-        return Err(WorkspaceResolutionErrorV1::BootstrapBindingAlreadyPresent.into());
-    }
-    let outcome = outcome?;
+    let outcome =
+        outcome.map_err(podway_store::direct_store::DirectMutationFailureV1::into_error)?;
     decode(outcome.outcome().response())
 }
 

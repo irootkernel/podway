@@ -32,8 +32,8 @@ pub use markers::{
 };
 pub use predecessor::writer_predecessor_manifests_v1;
 pub use transaction::{
-    DirectMutationRequestV1, DirectMutationResultV1, DirectOutcomeScopeV1, DirectRecordedOutcomeV1,
-    DirectTransactionBoundaryV1, DirectTransactionV1,
+    DirectMutationFailureV1, DirectMutationRequestV1, DirectMutationResultV1, DirectOutcomeScopeV1,
+    DirectRecordedOutcomeV1, DirectTransactionBoundaryV1, DirectTransactionV1,
 };
 
 pub const DIRECT_SCHEMA_GENERATION_V1: u32 = 15;

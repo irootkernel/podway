@@ -15,6 +15,28 @@ use super::{
     connection::configure_connection, maintenance::DirectOpenLease,
 };
 
+/// Keeps caller failures distinct from transaction and persistence failures.
+#[derive(Debug)]
+pub enum DirectMutationFailureV1<E> {
+    Store(DirectStoreErrorV1),
+    Callback(E),
+}
+
+impl<E: From<DirectStoreErrorV1>> DirectMutationFailureV1<E> {
+    pub fn into_error(self) -> E {
+        match self {
+            Self::Store(error) => error.into(),
+            Self::Callback(error) => error,
+        }
+    }
+}
+
+impl<E> From<DirectStoreErrorV1> for DirectMutationFailureV1<E> {
+    fn from(error: DirectStoreErrorV1) -> Self {
+        Self::Store(error)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DirectOutcomeScopeV1 {
     Workspace,
@@ -501,11 +523,52 @@ impl DirectStoreV1 {
             &mut DirectTransactionV1<'_, '_, Clock>,
         ) -> DirectStoreResultV1<CanonicalExecutionJsonV1>,
     {
+        self.mutate_resolving_identity_typed(key, deadline, clock, identity, execute)
+            .map_err(DirectMutationFailureV1::into_error)
+    }
+
+    pub fn mutate_typed<Clock, Execute, E>(
+        &self,
+        request: &DirectMutationRequestV1,
+        deadline: Instant,
+        clock: Clock,
+        execute: Execute,
+    ) -> Result<DirectMutationResultV1, DirectMutationFailureV1<E>>
+    where
+        Clock: FnOnce() -> UnixMillis,
+        Execute:
+            FnOnce(&mut DirectTransactionV1<'_, '_, Clock>) -> Result<CanonicalExecutionJsonV1, E>,
+    {
+        self.mutate_resolving_identity_typed(
+            &request.key,
+            deadline,
+            clock,
+            |_| Ok(request.clone()),
+            execute,
+        )
+    }
+
+    /// Identity still runs before replay selection; only new requests execute work.
+    pub fn mutate_resolving_identity_typed<Clock, Identity, Execute, E>(
+        &self,
+        key: &IdempotencyKeyV1,
+        deadline: Instant,
+        clock: Clock,
+        identity: Identity,
+        execute: Execute,
+    ) -> Result<DirectMutationResultV1, DirectMutationFailureV1<E>>
+    where
+        Clock: FnOnce() -> UnixMillis,
+        Identity: FnOnce(Option<&DirectRecordedOutcomeV1>) -> Result<DirectMutationRequestV1, E>,
+        Execute:
+            FnOnce(&mut DirectTransactionV1<'_, '_, Clock>) -> Result<CanonicalExecutionJsonV1, E>,
+    {
         let lease = DirectOpenLease::acquire(&self.layout, deadline, &mut || {
             self.boundary(DirectTransactionBoundaryV1::UnmarkedMissingReadClassified)
         })?;
         let _connection_gate = super::connection::connection_gate(deadline)?;
-        let database = super::classification::open_read_nofollow(&self.layout.database())?;
+        let database = super::classification::open_read_nofollow(&self.layout.database())
+            .map_err(DirectStoreErrorV1::from)?;
         // A foreign or corrupt Store is rejected before a read-write SQLite open
         // could create SHM. This preflight does not replace transaction revalidation.
         self.qualified_read(deadline, lease.heap_snapshot(), |_, _| {
@@ -514,20 +577,23 @@ impl DirectStoreV1 {
         })?;
         let mut connection = self.open_connection(false, deadline)?;
         self.boundary(DirectTransactionBoundaryV1::BeforeBegin);
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(DirectStoreErrorV1::from)?;
         self.boundary(DirectTransactionBoundaryV1::AfterBegin);
         let binding = self.validate_connection(&transaction)?;
         self.revalidate_files(&lease, &database)?;
         let outcome = read_outcome(&transaction, key)?;
-        let mut request = identity(outcome.as_ref())?;
+        let mut request = identity(outcome.as_ref()).map_err(DirectMutationFailureV1::Callback)?;
         if request.key() != key {
             return Err(DirectStoreErrorV1::InvalidInput {
                 reason: "resolved request changed the outcome key",
-            });
+            }
+            .into());
         }
         if let Some(outcome) = outcome {
             if outcome.digest != request.digest {
-                return Err(DirectStoreErrorV1::IdempotencyKeyReused);
+                return Err(DirectStoreErrorV1::IdempotencyKeyReused.into());
             }
             return Ok(DirectMutationResultV1 {
                 outcome,
@@ -544,7 +610,7 @@ impl DirectStoreV1 {
             now: None,
             created_session_scope: None,
         };
-        let response = execute(&mut context)?;
+        let response = execute(&mut context).map_err(DirectMutationFailureV1::Callback)?;
         let now = context.require_clock()?;
         if let Some(session) = context.created_session_scope.take() {
             request.scope = DirectOutcomeScopeV1::Session(session);

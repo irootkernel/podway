@@ -6,23 +6,23 @@ use std::time::Instant;
 use podway_core::{
     ActorAttributionV2, AttemptId, BlockerId, DelegationReceiptIdV1, DomainError, GoalStatementV2,
     GraphNodeId, ItemId, ProcedureSnapshotId, ReasonV2, SessionId, SessionLifecycle, Sha256Digest,
-    TraceSequenceV2, WorkspaceId, canonicalize_json_v1,
+    TraceSequenceV2, WorkspaceId,
 };
 use podway_git::{GitResolverContractV1, WorktreeSelectorV1};
 use podway_protocol::{
-    CommandNameV1, DirectSessionOutputV1, EvidencePageTokenV1, OutputEnvelopeInputV4,
-    OutputEnvelopeV4, ProcedureV2MutationCommandV1, ProtocolError, RequestIdV1, Rfc3339MillisV1,
-    SessionBeginV1, SessionBlockV1, SessionCancelV1, SessionCompleteV1,
-    SessionMutationPreconditionsWireV1, SessionRetryV1, SessionSkipV1, SessionUnblockV1,
-    SliceCommandV1, WorkspaceOutputV1, canonical_direct_slice_mutation_identity_v1,
-    canonical_procedure_v2_command_identity_v1,
+    CommandNameV1, EvidencePageTokenV1, OutputEnvelopeInputV4, OutputEnvelopeV4,
+    ProcedureV2MutationCommandV1, ProtocolError, RequestIdV1, Rfc3339MillisV1, SessionBeginV1,
+    SessionBlockV1, SessionCancelV1, SessionCompleteV1, SessionMutationPreconditionsWireV1,
+    SessionRetryV1, SessionSkipV1, SessionUnblockV1, SliceCommandV1, WorkspaceOutputV1,
+    canonical_direct_slice_mutation_identity_v1, canonical_procedure_v2_command_identity_v1,
 };
 use podway_store::{
-    CanonicalExecutionJsonV1, GraphInitialGoalV2, GraphMutationErrorV2, IdempotencyKeyV1,
+    GraphInitialGoalV2, GraphMutationErrorV2, IdempotencyKeyV1,
     direct_store::{DirectMutationRequestV1, DirectOutcomeScopeV1, DirectStoreErrorV1},
 };
 
 use crate::{
+    direct_mutation::{check_attempt_fence, check_session_fences, graph_success},
     direct_read_service::{
         project_direct_delegation_package_v1, project_direct_evidence_v1, project_direct_next_v1,
         project_direct_observation_v1, project_direct_status_v1,
@@ -128,37 +128,20 @@ pub fn execute_cursor_v1<R: GitResolverContractV1>(
     } else {
         Ok(Vec::new())
     };
-    let mut execution_error = None;
-    let result = store.mutate(&mutation, request.deadline, || clock.now(), |transaction| {
+    let result = store.mutate_typed(&mutation, request.deadline, || clock.now(), |transaction| -> Result<_, DirectExecutionErrorV1> {
         let current = transaction.use_prepared_graph(prepared.as_ref())?;
         let current = current.as_ref().ok_or_else(|| DirectStoreErrorV1::Domain(
             GraphMutationErrorV2::Domain(DomainError::SessionIdentityMismatch {
                 expected: fences.expected_session_id.clone(), actual: None,
             })))?;
         let prior = current.as_ref();
-        if prior.trace().session_id() != &fences.expected_session_id {
-            return Err(GraphMutationErrorV2::Domain(DomainError::SessionIdentityMismatch {
-                expected: fences.expected_session_id.clone(), actual: Some(prior.trace().session_id().clone()),
-            }).into());
-        }
-        if prior.trace().revision() != fences.expected_session_revision {
-            return Err(GraphMutationErrorV2::SessionRevisionConflict {
-                expected: fences.expected_session_revision, actual: prior.trace().revision(),
-            }.into());
-        }
+        check_session_fences(prior, &fences.expected_session_id, fences.expected_session_revision)?;
         if prior.trace().lifecycle() != SessionLifecycle::Running {
             return Err(GraphMutationErrorV2::SessionNotRunning.into());
         }
         let active = prior.trace().active_attempt().ok_or(GraphMutationErrorV2::SessionNotRunning)?;
-        if active.attempt_id() != &fences.expected_attempt_id {
-            return Err(GraphMutationErrorV2::AttemptNotCurrent {
-                expected: fences.expected_attempt_id.clone(), actual: Some(active.attempt_id().clone()),
-            }.into());
-        }
-        resolver.revalidate(&resolved, transaction.binding()).map_err(|error| {
-            execution_error = Some(DirectExecutionErrorV1::from(error));
-            DirectStoreErrorV1::InvalidInput { reason: "workspace revalidation failed" }
-        })?;
+        check_attempt_fence(prior, &fences.expected_attempt_id)?;
+        resolver.revalidate(&resolved, transaction.binding()).map_err(DirectExecutionErrorV1::from)?;
         if matches!(request.command, DirectCursorCommandV1::Complete(_)) {
             use podway_store::v2_delegation::DelegationReadinessV1;
             let failure = match transaction.delegation_receipts()?.readiness() {
@@ -168,17 +151,10 @@ pub fn execute_cursor_v1<R: GitResolverContractV1>(
                 DelegationReadinessV1::ItemsChanged => Some(DirectDelegationFailureV1::ItemsChanged),
             };
             if let Some(failure) = failure {
-                execution_error = Some(DirectExecutionErrorV1::Delegation(failure));
-                return Err(DirectStoreErrorV1::InvalidInput { reason: "delegation is not ready for completion" });
+                return Err(DirectExecutionErrorV1::Delegation(failure));
             }
-            let artifacts = artifacts.map_err(|error| {
-                execution_error = Some(error);
-                DirectStoreErrorV1::InvalidInput { reason: "required artifact preparation failed" }
-            })?;
-            if let Err(error) = native.verify_required_artifacts_v2(transaction.binding(), prior, &artifacts) {
-                execution_error = Some(error);
-                return Err(DirectStoreErrorV1::InvalidInput { reason: "required artifact changed" });
-            }
+            let artifacts = artifacts?;
+            native.verify_required_artifacts_v2(transaction.binding(), prior, &artifacts)?;
         }
         let (next, mut body) = match &request.command {
             DirectCursorCommandV1::Complete(_) => {
@@ -213,7 +189,7 @@ pub fn execute_cursor_v1<R: GitResolverContractV1>(
             DirectCursorCommandV1::Block(input) => {
                 // The block-specific bound is tighter than a general transition reason.
                 if input.reason.is_empty() || input.reason.chars().count() > 1000 {
-                    return Err(DirectStoreErrorV1::InvalidInput { reason: "invalid block reason" });
+                    return Err(DirectStoreErrorV1::InvalidInput { reason: "invalid block reason" }.into());
                 }
                 let blocker = ids.next_blocker_id();
                 let outcome = prior.block_active_attempt_v2(fences.expected_session_revision,
@@ -224,7 +200,7 @@ pub fn execute_cursor_v1<R: GitResolverContractV1>(
             }
             DirectCursorCommandV1::Unblock(input) => {
                 if input.all == input.blocker_id.is_some() {
-                    return Err(DirectStoreErrorV1::InvalidInput { reason: "unblock requires a blocker or all" });
+                    return Err(DirectStoreErrorV1::InvalidInput { reason: "unblock requires a blocker or all" }.into());
                 }
                 let outcome = prior.unblock_active_attempt_v2(fences.expected_session_revision,
                     &fences.expected_attempt_id, input.blocker_id.as_ref(), input.all, transaction.now())?;
@@ -247,27 +223,12 @@ pub fn execute_cursor_v1<R: GitResolverContractV1>(
         body["from_graph_node_id"] = serde_json::json!(active.graph_node_id());
         body["from_attempt_id"] = serde_json::json!(active.attempt_id());
         body["revision"] = serde_json::json!(next.trace().revision());
-        let response = OutputEnvelopeV4::new(OutputEnvelopeInputV4 {
-            request_id: request.request_id, command: CommandNameV1::new(command.command_name()).expect("static command"),
-            generated_at: Rfc3339MillisV1::from_unix_millis(transaction.now().get())
-                .map_err(|_| DirectStoreErrorV1::InvalidInput { reason: "clock exceeds the public timestamp range" })?,
-            workspace: Some(WorkspaceOutputV1::new(transaction.binding().identity().workspace_uuid().clone(),
-                resolved.worktree().roots().worktree_root().display().as_str(), transaction.next_workspace_sequence()?)
-                .map_err(|_| DirectStoreErrorV1::BindingMismatch)?),
-            session: Some(DirectSessionOutputV1 { id: next.trace().session_id().clone(), title: next.task_title().into(),
-                lifecycle: next.trace().lifecycle(), revision_before: prior.trace().revision(), revision_after: next.trace().revision() }),
-            result: body.as_object().expect("cursor result is an object").clone(), warnings: Vec::new(),
-        }).map_err(|_| DirectStoreErrorV1::InvalidInput { reason: "cursor success violates the canonical envelope" })?;
-        let response = CanonicalExecutionJsonV1::new(canonicalize_json_v1(response.as_value())
-            .map_err(|_| DirectStoreErrorV1::Unreadable)?)
-            .map_err(|_| DirectStoreErrorV1::InvalidInput { reason: "cursor success exceeds the outcome bound" })?;
+        let response = graph_success(transaction, &resolved, request.request_id, command.command_name(), prior, &next,
+            body.as_object().expect("cursor result is an object").clone())?;
         transaction.replace_graph(prior.workspace_revision(), prior.trace().revision(), &next)?;
         Ok(response)
     });
-    if let Some(error) = execution_error {
-        return Err(error);
-    }
-    let result = result?;
+    let result = result.map_err(podway_store::direct_store::DirectMutationFailureV1::into_error)?;
     serde_json::from_str(result.outcome().response().as_str())
         .map_err(|_| DirectStoreErrorV1::Unreadable.into())
 }
@@ -348,8 +309,7 @@ pub fn begin_session_v1<R: GitResolverContractV1>(
         .transpose()
         .map_err(DirectExecutionErrorV1::Domain)?;
     let prepared = store.prepare_graph(request.deadline)?;
-    let mut execution_error = None;
-    let result = store.mutate(&mutation, request.deadline, || clock.now(), |transaction| {
+    let result = store.mutate_typed(&mutation, request.deadline, || clock.now(), |transaction| -> Result<_, DirectExecutionErrorV1> {
         let current = transaction.use_prepared_graph(prepared.as_ref())?;
         let current = current.as_ref().ok_or_else(|| DirectStoreErrorV1::Domain(
             GraphMutationErrorV2::Domain(DomainError::SessionIdentityMismatch {
@@ -357,26 +317,14 @@ pub fn begin_session_v1<R: GitResolverContractV1>(
             })))?;
         let prior = current.as_ref();
         let fences = &request.input.preconditions;
-        if prior.trace().session_id() != &fences.expected_session_id {
-            return Err(GraphMutationErrorV2::Domain(DomainError::SessionIdentityMismatch {
-                expected: fences.expected_session_id.clone(), actual: Some(prior.trace().session_id().clone()),
-            }).into());
-        }
-        if prior.trace().revision() != fences.expected_session_revision {
-            return Err(GraphMutationErrorV2::SessionRevisionConflict {
-                expected: fences.expected_session_revision, actual: prior.trace().revision(),
-            }.into());
-        }
+        check_session_fences(prior, &fences.expected_session_id, fences.expected_session_revision)?;
         if prior.trace().lifecycle() != SessionLifecycle::Prepared {
             return Err(GraphMutationErrorV2::SessionNotPrepared.into());
         }
         if initial_goal.is_some() && !prior.snapshot().goal_tracking() {
             return Err(GraphMutationErrorV2::GoalTrackingNotEnabled.into());
         }
-        resolver.revalidate(&resolved, transaction.binding()).map_err(|error| {
-            execution_error = Some(DirectExecutionErrorV1::from(error));
-            DirectStoreErrorV1::InvalidInput { reason: "workspace revalidation failed" }
-        })?;
+        resolver.revalidate(&resolved, transaction.binding()).map_err(DirectExecutionErrorV1::from)?;
         let attempt_id = ids.next_attempt_id();
         let now = transaction.now();
         let outcome = prior.begin_v2(fences.expected_session_revision, attempt_id.clone(), initial_goal, now)?;
@@ -390,29 +338,11 @@ pub fn begin_session_v1<R: GitResolverContractV1>(
             "goal_tracking":next.snapshot().goal_tracking(), "goal_defined":outcome.goal_revision().is_some(),
             "goal_revision":outcome.goal_revision().map(|revision| revision.get()),
         }).as_object().expect("begin result is an object").clone();
-        let response = OutputEnvelopeV4::new(OutputEnvelopeInputV4 {
-            request_id: request.request_id, command: CommandNameV1::new("session.begin").expect("static command"),
-            generated_at: Rfc3339MillisV1::from_unix_millis(now.get())
-                .map_err(|_| DirectStoreErrorV1::InvalidInput { reason: "clock exceeds the public timestamp range" })?,
-            workspace: Some(WorkspaceOutputV1::new(transaction.binding().identity().workspace_uuid().clone(),
-                resolved.worktree().roots().worktree_root().display().as_str(), transaction.next_workspace_sequence()?)
-                .map_err(|_| DirectStoreErrorV1::BindingMismatch)?),
-            session: Some(DirectSessionOutputV1 { id: next.trace().session_id().clone(),
-                title: next.task_title().into(), lifecycle: next.trace().lifecycle(),
-                revision_before: prior.trace().revision(), revision_after: next.trace().revision() }),
-            result: body, warnings: Vec::new(),
-        }).map_err(|_| DirectStoreErrorV1::InvalidInput { reason: "begin success violates the canonical envelope" })?;
-        let response = canonicalize_json_v1(response.as_value())
-            .map_err(|_| DirectStoreErrorV1::Unreadable)?;
-        let response = CanonicalExecutionJsonV1::new(response)
-            .map_err(|_| DirectStoreErrorV1::InvalidInput { reason: "begin success exceeds the outcome bound" })?;
+        let response = graph_success(transaction, &resolved, request.request_id, "session.begin", prior, next, body)?;
         transaction.replace_graph(prior.workspace_revision(), prior.trace().revision(), next)?;
         Ok(response)
     });
-    if let Some(error) = execution_error {
-        return Err(error);
-    }
-    let result = result?;
+    let result = result.map_err(podway_store::direct_store::DirectMutationFailureV1::into_error)?;
     serde_json::from_str(result.outcome().response().as_str())
         .map_err(|_| DirectStoreErrorV1::Unreadable.into())
 }
@@ -673,6 +603,20 @@ impl From<crate::workspace::WorkspaceResolutionErrorV1> for DirectExecutionError
 impl From<DirectStoreErrorV1> for DirectExecutionErrorV1 {
     fn from(error: DirectStoreErrorV1) -> Self {
         Self::Store(error)
+    }
+}
+
+// Callback transport retains the prior Store classification of pure graph
+// failures and persistence failures; it does not reclassify them as input errors.
+impl From<GraphMutationErrorV2> for DirectExecutionErrorV1 {
+    fn from(error: GraphMutationErrorV2) -> Self {
+        Self::Store(error.into())
+    }
+}
+
+impl From<podway_store::StoreErrorV1> for DirectExecutionErrorV1 {
+    fn from(error: podway_store::StoreErrorV1) -> Self {
+        Self::Store(error.into())
     }
 }
 

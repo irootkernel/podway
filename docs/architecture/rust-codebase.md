@@ -61,6 +61,12 @@ while source diagnostics and persisted schema/row admission retain their owners.
 conversion preserves its existing public classification separately from row
 corruption and ordinary command-domain rejection.
 
+Ordinary direct mutations have one Store transaction runner with typed identity
+and execution callback failures. Engine keeps public error classification;
+Store-only entry points are delegates. Shared direct mutation helpers construct
+only equivalent graph successes and fences; bootstrap and maintenance retain
+their distinct protocols.
+
 ## Runtime model
 
 Commands use bounded synchronous I/O in the invoking process. There is no async

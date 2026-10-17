@@ -148,15 +148,11 @@ pub fn execute_session_v1<R: GitResolverContractV1>(
     } else {
         store.prepare_graph(request.deadline)?
     };
-    let mut execution_error = None;
-    let result = store.mutate(&mutation, request.deadline, || clock.now(), |transaction| {
-        resolver.revalidate(&resolved, transaction.binding()).map_err(|error| {
-            execution_error = Some(DirectExecutionErrorV1::from(error));
-            DirectStoreErrorV1::InvalidInput { reason: "workspace revalidation failed" }
-        })?;
+    let result = store.mutate_typed(&mutation, request.deadline, || clock.now(), |transaction| -> Result<_, DirectExecutionErrorV1> {
+        resolver.revalidate(&resolved, transaction.binding()).map_err(DirectExecutionErrorV1::from)?;
         let body = match &request.command {
             DirectSessionCommandV1::Purge(input) => {
-                if !input.confirmed { return Err(DirectStoreErrorV1::InvalidInput { reason: "archive purge requires confirmation" }); }
+                if !input.confirmed { return Err(DirectStoreErrorV1::InvalidInput { reason: "archive purge requires confirmation" }.into()); }
                 // Store checks the archived session revision atomically before deleting any row.
                 let archived = transaction.archive_summary(&input.session_id)?
                     .ok_or_else(|| StoreErrorV1::SessionArchiveNotFoundV1 { session_id: input.session_id.clone() })?;
@@ -207,12 +203,9 @@ pub fn execute_session_v1<R: GitResolverContractV1>(
             result: body.as_object().expect("session result is an object").clone(), warnings: Vec::new() })
                 .map_err(|_| DirectStoreErrorV1::InvalidInput { reason: "session success violates the canonical envelope" })?;
         CanonicalExecutionJsonV1::new(podway_core::canonicalize_json_v1(response.as_value()).map_err(|_| DirectStoreErrorV1::Unreadable)?)
-            .map_err(|_| DirectStoreErrorV1::InvalidInput { reason: "session success exceeds the outcome bound" })
+            .map_err(|_| DirectStoreErrorV1::InvalidInput { reason: "session success exceeds the outcome bound" }).map_err(DirectExecutionErrorV1::from)
     });
-    if let Some(error) = execution_error {
-        return Err(error);
-    }
-    let result = result?;
+    let result = result.map_err(podway_store::direct_store::DirectMutationFailureV1::into_error)?;
     serde_json::from_str(result.outcome().response().as_str())
         .map_err(|_| DirectStoreErrorV1::Unreadable.into())
 }

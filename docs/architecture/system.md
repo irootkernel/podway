@@ -163,6 +163,29 @@ A rejection records no outcome. Only COMMIT I/O ambiguity maps to
 an exact retry. Reset-all and removal are marker-governed maintenance protocols,
 not ordinary single-transaction mutations.
 
+### Typed mutation callback failures
+
+Store's `mutate_resolving_identity_typed` is the single ordinary mutation
+transaction implementation. `mutate_typed` supplies fixed identity; existing
+Store-only methods delegate to that same runner. Identity and execution
+callbacks return their caller's error type. `DirectMutationFailureV1` keeps
+callback errors separate from Store qualification, transaction and persistence
+failures; Engine maps either branch without placeholder Store errors or outer
+error slots. Bootstrap keeps its distinct private-publication protocol.
+
+Outcome lookup still precedes identity resolution, which precedes resolved-key
+and digest checks. Exact replay runs identity resolution but bypasses execution,
+clock and IDs. Start recovers the original pinned digest on replay; failed fresh
+source preparation is consumed only when no retained outcome exists. Callback
+failure drops the transaction without a success outcome. Only the existing
+COMMIT I/O classification yields an unknown mutation outcome.
+
+Equivalent session/attempt fences and graph success construction share
+`direct_mutation` helpers across cursor, begin, item, batch, procedure and
+acceptance commands. Single-item commands retain item-local revision checks;
+prepared, goal, reset/archive/purge, source-backed start and workspace bootstrap
+keep their distinct validation and envelope ordering.
+
 ### Pure graph state and persisted admission
 
 Core owns [graph/session transitions](../../crates/podway-core/src/graph_v2.rs),

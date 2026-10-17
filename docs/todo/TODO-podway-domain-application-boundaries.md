@@ -441,6 +441,24 @@ development gate. This handoff records implementation, not Task acceptance.
   I/O ambiguity separately from callback failure, using its existing classification.
   Store must not depend on Engine or gain a second transaction implementation.
 
+BOUND-004 implementation handoff: `DirectMutationFailureV1<E>` separates Store
+and callback failures around one `mutate_resolving_identity_typed` transaction
+body. Both identity and execution return caller `E`; fixed-identity typed and
+legacy Store-only entry points delegate. All nine inventoried Engine callbacks
+now return their typed error directly; outer error slots, preparation-failed and
+plain-init refusal flags are removed. Start retains only the legitimate source
+ownership cell. Graph failures still map through Store Domain, persistence
+failures through Store State, and identity resolution remains before replay.
+
+Cursor, begin and single-item successes now reuse the existing graph envelope
+helper; equivalent cursor/begin session fences and cursor attempt fences use the
+shared helpers. Item-local revision and all distinct maintenance/start rules
+retain their original order. The new registered Store rollback/identity case
+complements the unchanged 20-route Engine per-site proof and source/replay tests.
+The existing COMMIT I/O classification test remains separate. DF-023 is
+implemented by this change; Task acceptance still requires the development gate
+and independent completion review.
+
 ### BOUND-005: Decompose CLI responsibilities without changing behavior
 
 - Extract the modules described above. Move the fence-preflight fetch and parser

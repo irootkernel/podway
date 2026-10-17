@@ -69,18 +69,14 @@ pub fn accept_delegation_v1<R: GitResolverContractV1>(
         DirectOutcomeScopeV1::Session(fences.expected_session_id.clone()),
     )?;
     let prepared = store.prepare_graph(request.deadline)?;
-    let mut execution_error = None;
-    let result = store.mutate(&mutation, request.deadline, || clock.now(), |transaction| {
+    let result = store.mutate_typed(&mutation, request.deadline, || clock.now(), |transaction| -> Result<_, DirectExecutionErrorV1> {
         let current = transaction.use_prepared_graph(prepared.as_ref())?;
         let current = current.as_ref().ok_or(GraphMutationErrorV2::SessionNotRunning)?;
         let prior = current.as_ref();
         check_session_fences(prior, &fences.expected_session_id, fences.expected_session_revision)?;
         check_attempt_fence(prior, &fences.expected_attempt_id)?;
         if prior.trace().lifecycle() != SessionLifecycle::Running { return Err(GraphMutationErrorV2::SessionNotRunning.into()); }
-        resolver.revalidate(&resolved, transaction.binding()).map_err(|error| {
-            execution_error = Some(DirectExecutionErrorV1::from(error));
-            DirectStoreErrorV1::InvalidInput { reason: "workspace revalidation failed" }
-        })?;
+        resolver.revalidate(&resolved, transaction.binding()).map_err(DirectExecutionErrorV1::from)?;
         let input = &request.input.input;
         if !validate_delegation_document_v1("podway.delegation-accept-input/v1", input)
             || input["workspace_uuid"].as_str() != Some(transaction.binding().identity().workspace_uuid().as_str())
@@ -88,19 +84,16 @@ pub fn accept_delegation_v1<R: GitResolverContractV1>(
             || input["session_revision"].as_u64() != Some(fences.expected_session_revision.get())
             || input["attempt_id"].as_str() != Some(fences.expected_attempt_id.as_str())
             || input["idempotency_key"].as_str() != Some(request.key.as_str()) {
-            return Err(DirectStoreErrorV1::InvalidInput { reason: "invalid delegation acceptance input or fences" });
+            return Err(DirectStoreErrorV1::InvalidInput { reason: "invalid delegation acceptance input or fences" }.into());
         }
         let receipts = transaction.delegation_receipts()?;
         let view = GraphWorkspaceViewV2::new(transaction.binding().identity().clone(), Some(prior.clone()),
             transaction.next_workspace_sequence()? - 1, prior.created_at())
             .with_delegation_receipts(receipts.clone());
-        let package = delegation_work_package_from_view_v1(&view).map_err(|error| {
-            execution_error = Some(match error {
+        let package = delegation_work_package_from_view_v1(&view).map_err(|error| match error {
                 GraphViewErrorV2::DelegationNotApplicable => DirectExecutionErrorV1::Delegation(Failure::NotApplicable),
                 other => DirectExecutionErrorV1::View(other),
-            });
-            DirectStoreErrorV1::InvalidInput { reason: "delegation package is unavailable" }
-        })?;
+            })?;
         let failure = if receipts.readiness() != DelegationReadinessV1::ReceiptMissing {
             Some(Failure::AlreadyAccepted)
         } else if input["package_digest"].as_str() != Some(package.digest().as_str()) {
@@ -109,8 +102,7 @@ pub fn accept_delegation_v1<R: GitResolverContractV1>(
             acceptance_binding_mismatch_v1(&package.package()["delegation"], input).map(Failure::BindingMismatch)
         };
         if let Some(failure) = failure {
-            execution_error = Some(DirectExecutionErrorV1::Delegation(failure));
-            return Err(DirectStoreErrorV1::InvalidInput { reason: "delegation acceptance binding mismatch" });
+            return Err(DirectExecutionErrorV1::Delegation(failure));
         }
         // Readiness and immutable input checks precede both identity generation and the clock.
         let next = prior.accept_delegation_successor_v1(&fences.expected_attempt_id)?;
@@ -136,10 +128,7 @@ pub fn accept_delegation_v1<R: GitResolverContractV1>(
         transaction.accept_delegation(prior.workspace_revision(), prior.trace().revision(), &next, package.digest(), &receipt)?;
         Ok(response)
     });
-    if let Some(error) = execution_error {
-        return Err(error);
-    }
-    let result = result?;
+    let result = result.map_err(podway_store::direct_store::DirectMutationFailureV1::into_error)?;
     serde_json::from_str(result.outcome().response().as_str())
         .map_err(|_| DirectStoreErrorV1::Unreadable.into())
 }

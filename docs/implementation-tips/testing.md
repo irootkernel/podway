@@ -85,6 +85,17 @@ Core checks keep goal interpretation independent of deferred memory errors and
 preserve local placement queries for absent, null, malformed and contradictory
 fields. These pure malformed examples do not authorize Store schema bypass.
 
+BOUND-004's registered Store test
+`int_v2dfc005_direct_store::bound004_typed_identity_and_execution_failures_roll_back_and_retry`
+checks typed identity refusal, execution refusal after actual graph-row writes,
+unchanged binding/sequence and absent failed outcomes, same-key success and
+byte-identical replay, identity-before-replay failure, resolved-key mismatch and
+changed-digest reuse. The Engine's named 20-route in-transaction revalidation
+case covers all nine callback sites and exact public mapping/retry behavior.
+`direct_store::transaction::tests::uncertain_outcome_is_only_the_commit_io_error_mapping`
+separately owns the COMMIT-only unknown-outcome classification; callback errors
+must not acquire that classification.
+
 These tests own direct identity, attempt-content overflow, and one-draft atomic
 batch behavior:
 

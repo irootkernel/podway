@@ -2,24 +2,22 @@
 
 use std::time::Instant;
 
-use podway_core::{
-    ArtifactValueV1, DomainError, SessionLifecycle, Sha256Digest, WorkspaceId, canonicalize_json_v1,
-};
+use podway_core::{ArtifactValueV1, DomainError, SessionLifecycle, Sha256Digest, WorkspaceId};
 use podway_git::{GitResolverContractV1, WorktreeSelectorV1};
 use podway_protocol::{
-    CommandNameV1, DirectSessionOutputV1, ItemAddV1, ItemAttachSourceV1, ItemAttachV1, ItemCheckV1,
-    ItemClearV1, ItemMutationPreconditionsWireV1, ItemRemoveV1, ItemSetV1, ItemUncheckV1,
-    OutputEnvelopeInputV4, OutputEnvelopeV4, RequestIdV1, Rfc3339MillisV1, SliceCommandV1,
-    WorkspaceOutputV1, canonical_direct_slice_mutation_identity_v1,
+    ItemAddV1, ItemAttachSourceV1, ItemAttachV1, ItemCheckV1, ItemClearV1,
+    ItemMutationPreconditionsWireV1, ItemRemoveV1, ItemSetV1, ItemUncheckV1, OutputEnvelopeV4,
+    RequestIdV1, SliceCommandV1, canonical_direct_slice_mutation_identity_v1,
 };
 use podway_store::{
-    CanonicalExecutionJsonV1, GraphMutationErrorV2, IdempotencyKeyV1,
+    GraphMutationErrorV2, IdempotencyKeyV1,
     direct_store::{DirectMutationRequestV1, DirectOutcomeScopeV1, DirectStoreErrorV1},
 };
 use sha2::{Digest as _, Sha256};
 
 use crate::{
     direct_execution::DirectExecutionErrorV1,
+    direct_mutation::{check_attempt_fence, check_session_fences, graph_success},
     execution::{ExecutionClockV1, prepare_procedure_v2_item_mutation_v1},
     workspace::DirectWorkspaceResolverV1,
 };
@@ -101,10 +99,7 @@ pub fn record_many_v1<R: GitResolverContractV1>(
     mut request: DirectRecordManyRequestV1,
     clock: &impl ExecutionClockV1,
 ) -> Result<OutputEnvelopeV4, DirectExecutionErrorV1> {
-    use crate::{
-        direct_mutation::{check_attempt_fence, check_session_fences, graph_success},
-        execution::{ResolvedBatchArtifactV1, prepare_procedure_v2_item_mutations_v1},
-    };
+    use crate::execution::{ResolvedBatchArtifactV1, prepare_procedure_v2_item_mutations_v1};
     let (resolved, store, binding) = resolver.resolve_existing_with_binding(
         request.selector.clone(),
         request.expected_workspace_id.as_ref(),
@@ -197,8 +192,7 @@ pub fn record_many_v1<R: GitResolverContractV1>(
         .ok()
         .map(|attachments| prepare_procedure_v2_item_mutations_v1(&command, attachments));
     let prepared = store.prepare_graph(request.deadline)?;
-    let mut execution_error = None;
-    let result = store.mutate(&mutation, request.deadline, || clock.now(), |transaction| {
+    let result = store.mutate_typed(&mutation, request.deadline, || clock.now(), |transaction| -> Result<_, DirectExecutionErrorV1> {
         let current = transaction.use_prepared_graph(prepared.as_ref())?;
         let current = current.as_ref().ok_or(GraphMutationErrorV2::SessionNotRunning)?;
         let prior = current.as_ref();
@@ -217,24 +211,13 @@ pub fn record_many_v1<R: GitResolverContractV1>(
                 }.into());
             }
         }
-        resolver.revalidate(&resolved, transaction.binding()).map_err(|error| {
-            execution_error = Some(DirectExecutionErrorV1::from(error));
-            DirectStoreErrorV1::InvalidInput { reason: "workspace revalidation failed" }
-        })?;
-        attachments.map_err(|error| {
-            execution_error = Some(error);
-            DirectStoreErrorV1::InvalidInput { reason: "batch attachment preparation failed" }
-        })?;
+        resolver.revalidate(&resolved, transaction.binding()).map_err(DirectExecutionErrorV1::from)?;
+        attachments?;
         let prepared_items = prepared_items.expect("successful attachment preparation produces item mutations")
-            .map_err(|error| {
-                execution_error = Some(DirectExecutionErrorV1::Preparation(error));
-                DirectStoreErrorV1::InvalidInput { reason: "batch preparation failed" }
-            })?;
+            .map_err(DirectExecutionErrorV1::Preparation)?;
         for artifact in &local_artifacts {
-            if let Err(error) = native.verify_prepared_local_artifact_v1(transaction.binding(), artifact) {
-                execution_error = Some(DirectExecutionErrorV1::Boundary(error));
-                return Err(DirectStoreErrorV1::InvalidInput { reason: "batch attachment revalidation failed" });
-            }
+            native.verify_prepared_local_artifact_v1(transaction.binding(), artifact)
+                .map_err(DirectExecutionErrorV1::Boundary)?;
         }
         let outcome = prior.mutate_active_items_v2(&fences.expected_attempt_id, &prepared_items, transaction.now())?;
         let next = outcome.state();
@@ -252,10 +235,7 @@ pub fn record_many_v1<R: GitResolverContractV1>(
         if outcome.changed() { transaction.replace_graph(prior.workspace_revision(), prior.trace().revision(), next)?; }
         Ok(response)
     });
-    if let Some(error) = execution_error {
-        return Err(error);
-    }
-    let result = result?;
+    let result = result.map_err(podway_store::direct_store::DirectMutationFailureV1::into_error)?;
     serde_json::from_str(result.outcome().response().as_str())
         .map_err(|_| DirectStoreErrorV1::Unreadable.into())
 }
@@ -384,8 +364,7 @@ pub fn execute_item_v1<R: GitResolverContractV1>(
     let expected_attempt = &fences.expected_attempt_id;
     let expected_item_revision = fences.expected_item_revision;
     let prepared = store.prepare_graph(request.deadline)?;
-    let mut execution_error = None;
-    let result = store.mutate(&mutation, request.deadline, || clock.now(), |transaction| {
+    let result = store.mutate_typed(&mutation, request.deadline, || clock.now(), |transaction| -> Result<_, DirectExecutionErrorV1> {
         let current = transaction.use_prepared_graph(prepared.as_ref())?;
         let current = current.as_ref().ok_or_else(|| DirectStoreErrorV1::Domain(
             GraphMutationErrorV2::Domain(DomainError::SessionIdentityMismatch {
@@ -412,24 +391,14 @@ pub fn execute_item_v1<R: GitResolverContractV1>(
         if slot.revision() != expected_item_revision {
             return Err(GraphMutationErrorV2::ItemRevisionConflict { expected: expected_item_revision, actual: slot.revision() }.into());
         }
-        resolver.revalidate(&resolved, transaction.binding()).map_err(|error| {
-            execution_error = Some(DirectExecutionErrorV1::from(error));
-            DirectStoreErrorV1::InvalidInput { reason: "workspace revalidation failed" }
-        })?;
-        attachment.map_err(|error| {
-            execution_error = Some(error);
-            DirectStoreErrorV1::InvalidInput { reason: "attachment preparation failed" }
-        })?;
+        resolver.revalidate(&resolved, transaction.binding()).map_err(DirectExecutionErrorV1::from)?;
+        attachment?;
         let (_, _, _, item_mutation) = prepared_item
             .expect("successful attachment preparation produces a prepared mutation")
-            .map_err(|error| {
-                execution_error = Some(DirectExecutionErrorV1::Preparation(error));
-                DirectStoreErrorV1::InvalidInput { reason: "item preparation failed" }
-            })?.into_parts();
-        if let Some(artifact) = &local_artifact
-            && let Err(error) = native.verify_prepared_local_artifact_v1(transaction.binding(), artifact) {
-                execution_error = Some(DirectExecutionErrorV1::Boundary(error));
-                return Err(DirectStoreErrorV1::InvalidInput { reason: "attachment revalidation failed" });
+            .map_err(DirectExecutionErrorV1::Preparation)?.into_parts();
+        if let Some(artifact) = &local_artifact {
+            native.verify_prepared_local_artifact_v1(transaction.binding(), artifact)
+                .map_err(DirectExecutionErrorV1::Boundary)?;
         }
         let now = transaction.now();
         let outcome = prior.mutate_active_item_v2(expected_attempt, item_id, expected_item_revision, item_mutation, now)?;
@@ -438,27 +407,12 @@ pub fn execute_item_v1<R: GitResolverContractV1>(
             "graph_node_id":active.graph_node_id(), "attempt_id":active.attempt_id(), "attempt_number":active.number().get(),
             "item_id":item_id, "revision":next.trace().revision()});
         if let Some(digest) = outcome.value_digest() { body["value_digest"] = serde_json::json!(digest); }
-        let response = OutputEnvelopeV4::new(OutputEnvelopeInputV4 {
-            request_id: request.request_id, command: CommandNameV1::new(command.command_name()).expect("static command"),
-            generated_at: Rfc3339MillisV1::from_unix_millis(now.get())
-                .map_err(|_| DirectStoreErrorV1::InvalidInput { reason: "clock exceeds the public timestamp range" })?,
-            workspace: Some(WorkspaceOutputV1::new(transaction.binding().identity().workspace_uuid().clone(),
-                resolved.worktree().roots().worktree_root().display().as_str(), transaction.next_workspace_sequence()?)
-                .map_err(|_| DirectStoreErrorV1::BindingMismatch)?),
-            session: Some(DirectSessionOutputV1 { id: next.trace().session_id().clone(), title: next.task_title().into(),
-                lifecycle: next.trace().lifecycle(), revision_before: prior.trace().revision(), revision_after: next.trace().revision() }),
-            result: body.as_object().expect("item result is an object").clone(), warnings: Vec::new(),
-        }).map_err(|_| DirectStoreErrorV1::InvalidInput { reason: "item success violates the canonical envelope" })?;
-        let response = CanonicalExecutionJsonV1::new(canonicalize_json_v1(response.as_value())
-            .map_err(|_| DirectStoreErrorV1::Unreadable)?)
-            .map_err(|_| DirectStoreErrorV1::InvalidInput { reason: "item success exceeds the outcome bound" })?;
+        let response = graph_success(transaction, &resolved, request.request_id, command.command_name(), prior, next,
+            body.as_object().expect("item result is an object").clone())?;
         if outcome.changed() { transaction.replace_graph(prior.workspace_revision(), prior.trace().revision(), next)?; }
         Ok(response)
     });
-    if let Some(error) = execution_error {
-        return Err(error);
-    }
-    let result = result?;
+    let result = result.map_err(podway_store::direct_store::DirectMutationFailureV1::into_error)?;
     serde_json::from_str(result.outcome().response().as_str())
         .map_err(|_| DirectStoreErrorV1::Unreadable.into())
 }

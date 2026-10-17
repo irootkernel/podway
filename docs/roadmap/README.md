@@ -129,7 +129,7 @@ Dependencies: accepted `OPTIM` completion. Design: [BOUND dossier](../todo/TODO-
 | `BOUND-001` | Freeze responsibility and invariant ownership | Completed | Inventory type/error seams, all nine callback transports, three helper groups, preflight ownership and verification against accepted OPTIM. | [Task design](../todo/TODO-podway-domain-application-boundaries.md#bound-001-freeze-responsibility-and-invariant-ownership) |
 | `BOUND-002` | Separate domain state and transitions from persistence | Completed | Move pure graph/workflow/goal rules into Core while retaining SQL reconstruction, relational checks and changed-row writes in Store. | [Task design](../todo/TODO-podway-domain-application-boundaries.md#bound-002-separate-domain-state-and-transitions-from-persistence) |
 | `BOUND-003` | Clarify Procedure runtime representation and admission | Completed | Share pure runtime declarations without merging authoring and persistence validation or adding reverse dependencies. | [Task design](../todo/TODO-podway-domain-application-boundaries.md#bound-003-clarify-procedure-runtime-representation-and-admission) |
-| `BOUND-004` | Unify typed mutation failure transport and shared helpers | Planned | Replace all inventoried callback error transports with per-site failure/replay proof, preserving distinct fences/envelopes and ordering; absorb DF-023. | [Task design](../todo/TODO-podway-domain-application-boundaries.md#bound-004-unify-typed-mutation-failure-transport-and-shared-helpers) |
+| `BOUND-004` | Unify typed mutation failure transport and shared helpers | Completed | Replace all inventoried callback error transports with per-site failure/replay proof, preserving distinct fences/envelopes and ordering; absorb DF-023. | [Task design](../todo/TODO-podway-domain-application-boundaries.md#bound-004-unify-typed-mutation-failure-transport-and-shared-helpers) |
 | `BOUND-005` | Decompose CLI responsibilities without changing behavior | Planned | Decompose CLI concerns and move fence-preflight fetching/parsing together under one owner for READS, leaving completion and separate start observations unchanged. | [Task design](../todo/TODO-podway-domain-application-boundaries.md#bound-005-decompose-cli-responsibilities-without-changing-behavior) |
 | `BOUND-006` | Qualify and close boundary refactoring | Planned | Prove dependency direction, current-Store continuity, error/behavior equivalence and no performance regression, then complete review and promotion. | [Task design](../todo/TODO-podway-domain-application-boundaries.md#bound-006-qualify-and-close-boundary-refactoring) |
 
@@ -152,6 +152,12 @@ PASS verdicts, source/persisted adapter and historical identity checks, pure
 placement/goal independence checks, static checks and the full `make test`
 development gate. Source and Store share Core runtime declarations while
 retaining their independent admission boundaries.
+
+Main accepted BOUND-004 under the same delegation after Judge and two Worker
+PASS verdicts, the Leader's consolidated PASS, typed callback rollback/retry and
+identity checks, all-nine per-site error/replay checks, separate COMMIT I/O
+classification, static checks and the full `make test` development gate. One
+Store runner now transports typed failures; DF-023 is implemented.
 
 ## READS — Read Models and Data Access
 

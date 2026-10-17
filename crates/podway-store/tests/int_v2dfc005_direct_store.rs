@@ -2034,3 +2034,170 @@ fn stale_prepared_history_matches_cold_state_after_set_clear_and_complete() {
     }
     direct.verify_integrity(deadline()).unwrap();
 }
+
+#[test]
+fn bound004_typed_identity_and_execution_failures_roll_back_and_retry() {
+    use podway_store::direct_store::DirectMutationFailureV1 as Failure;
+    use std::cell::Cell;
+
+    #[derive(Debug)]
+    enum CallbackError {
+        Marker(&'static str),
+        Store(DirectStoreErrorV1),
+    }
+    impl From<DirectStoreErrorV1> for CallbackError {
+        fn from(error: DirectStoreErrorV1) -> Self {
+            Self::Store(error)
+        }
+    }
+
+    for identity_failure in [true, false] {
+        let (_root, store) = fixture();
+        let request = request("typed-failure");
+        let binding = store
+            .read(deadline(), |snapshot| Ok(snapshot.binding().clone()))
+            .unwrap();
+        let failed = store
+            .mutate_resolving_identity_typed(
+                request.key(),
+                deadline(),
+                || {
+                    assert!(!identity_failure, "identity failure must not read clock");
+                    UnixMillis::new(20)
+                },
+                |outcome| -> Result<_, CallbackError> {
+                    assert!(outcome.is_none());
+                    if identity_failure {
+                        Err(CallbackError::Marker("identity"))
+                    } else {
+                        Ok(request.clone())
+                    }
+                },
+                |transaction| -> Result<_, CallbackError> {
+                    assert!(!identity_failure, "identity failure must not execute");
+                    let now = transaction.now();
+                    transaction.create_graph(&prepared_graph(now))?;
+                    Err(CallbackError::Marker("execution"))
+                },
+            )
+            .unwrap_err();
+        match failed {
+            Failure::Callback(CallbackError::Marker(marker)) => assert_eq!(
+                marker,
+                if identity_failure {
+                    "identity"
+                } else {
+                    "execution"
+                }
+            ),
+            other => panic!("typed callback failure was changed: {other:?}"),
+        }
+        store
+            .read(deadline(), |snapshot| {
+                assert!(snapshot.current_graph()?.is_none());
+                assert!(snapshot.outcome(request.key())?.is_none());
+                assert_eq!(snapshot.view(UnixMillis::new(20))?.sequence(), 1);
+                assert_eq!(snapshot.binding(), &binding);
+                Ok(())
+            })
+            .unwrap();
+        let first = store
+            .mutate_typed(
+                &request,
+                deadline(),
+                || UnixMillis::new(20),
+                |transaction| -> Result<_, CallbackError> {
+                    let now = transaction.now();
+                    transaction.create_graph(&prepared_graph(now))?;
+                    Ok(success(&request, json!({"created":true}), now))
+                },
+            )
+            .map_err(Failure::into_error)
+            .unwrap();
+        let identities = Cell::new(0);
+        let replay = store
+            .mutate_resolving_identity_typed(
+                request.key(),
+                deadline(),
+                || panic!("replay clock"),
+                |outcome| -> Result<_, CallbackError> {
+                    assert_eq!(outcome, Some(first.outcome()));
+                    identities.set(identities.get() + 1);
+                    Ok(request.clone())
+                },
+                |_| panic!("replay execution"),
+            )
+            .unwrap();
+        assert_eq!(identities.get(), 1);
+        assert!(replay.replayed());
+        assert_eq!(first.outcome(), replay.outcome());
+
+        let identity_error = store
+            .mutate_resolving_identity_typed(
+                request.key(),
+                deadline(),
+                || panic!("identity rejection clock"),
+                |outcome| -> Result<DirectMutationRequestV1, CallbackError> {
+                    assert!(outcome.is_some());
+                    Err(CallbackError::Marker("before replay"))
+                },
+                |_| panic!("identity rejection execution"),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            identity_error,
+            Failure::Callback(CallbackError::Marker("before replay"))
+        ));
+        for changed_key in [true, false] {
+            let changed = DirectMutationRequestV1::new(
+                if changed_key {
+                    IdempotencyKeyV1::new("different-key").unwrap()
+                } else {
+                    request.key().clone()
+                },
+                digest('e'),
+                request.command(),
+                request.response_id(),
+                DirectOutcomeScopeV1::Workspace,
+            )
+            .unwrap();
+            let error = store
+                .mutate_resolving_identity_typed(
+                    request.key(),
+                    deadline(),
+                    || panic!("invalid identity clock"),
+                    |_| Ok::<_, CallbackError>(changed),
+                    |_| panic!("invalid identity execution"),
+                )
+                .map_err(Failure::into_error)
+                .unwrap_err();
+            assert!(matches!(
+                (changed_key, error),
+                (
+                    true,
+                    CallbackError::Store(DirectStoreErrorV1::InvalidInput {
+                        reason: "resolved request changed the outcome key"
+                    })
+                ) | (
+                    false,
+                    CallbackError::Store(DirectStoreErrorV1::IdempotencyKeyReused)
+                )
+            ));
+        }
+        store
+            .read(deadline(), |snapshot| {
+                assert_eq!(
+                    snapshot.current_graph()?,
+                    Some(prepared_graph(UnixMillis::new(20)))
+                );
+                assert_eq!(
+                    snapshot.outcome(request.key())?,
+                    Some(first.outcome().clone())
+                );
+                assert_eq!(snapshot.view(UnixMillis::new(20))?.sequence(), 2);
+                assert_eq!(snapshot.binding(), &binding);
+                Ok(())
+            })
+            .unwrap();
+    }
+}

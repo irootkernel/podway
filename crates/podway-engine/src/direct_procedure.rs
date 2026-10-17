@@ -183,8 +183,7 @@ pub fn execute_procedure_v1<R: GitResolverContractV1>(
     } else {
         None
     };
-    let mut execution_error = None;
-    let result = store.mutate(&mutation, request.deadline, || clock.now(), |transaction| {
+    let result = store.mutate_typed(&mutation, request.deadline, || clock.now(), |transaction| -> Result<_, DirectExecutionErrorV1> {
         let current = transaction.use_prepared_graph(prepared.as_ref())?;
         let current = current.as_ref().ok_or_else(|| GraphMutationErrorV2::Domain(DomainError::SessionIdentityMismatch {
             expected: session.clone(), actual: None,
@@ -195,12 +194,12 @@ pub fn execute_procedure_v1<R: GitResolverContractV1>(
             && prior.trace().active_attempt().is_none() {
             return Err(DirectStoreErrorV1::InvalidInput {
                 reason: "terminal rework must not carry an attempt fence",
-            });
+            }.into());
         }
         if let Some(attempt) = attempt { check_attempt_fence(prior, attempt)?; }
         if matches!(command, C::SessionRework(_) | C::GoalRevise(_))
             && attempt.is_none() && prior.trace().active_attempt().is_some() {
-            return Err(DirectStoreErrorV1::InvalidInput { reason: "running rework requires an attempt fence" });
+            return Err(DirectStoreErrorV1::InvalidInput { reason: "running rework requires an attempt fence" }.into());
         }
         if matches!(command, C::GoalRevise(_) | C::GoalAssessCriterion(_))
             && !prior.snapshot().goal_tracking() {
@@ -213,7 +212,7 @@ pub fn execute_procedure_v1<R: GitResolverContractV1>(
             }) {
             return Err(DirectStoreErrorV1::InvalidInput {
                 reason: "goal-assessment decisions require a goal revision precondition",
-            });
+            }.into());
         }
         if let Some(expected) = goal_revision {
             let actual = prior.goal_state().current_revision().ok_or(GraphMutationErrorV2::SessionGoalMissing)?;
@@ -221,19 +220,10 @@ pub fn execute_procedure_v1<R: GitResolverContractV1>(
                 return Err(GraphMutationErrorV2::GoalRevisionStale { expected: GoalRevisionNumberV2::new(expected), actual }.into());
             }
         }
-        resolver.revalidate(&resolved, transaction.binding()).map_err(|error| {
-            execution_error = Some(DirectExecutionErrorV1::from(error));
-            DirectStoreErrorV1::InvalidInput { reason: "workspace revalidation failed" }
-        })?;
+        resolver.revalidate(&resolved, transaction.binding()).map_err(DirectExecutionErrorV1::from)?;
         if matches!(command, C::SessionDecide(_)) {
-            let artifacts = artifacts.map_err(|error| {
-                execution_error = Some(error);
-                DirectStoreErrorV1::InvalidInput { reason: "required artifact preparation failed" }
-            })?;
-            if let Err(error) = native.verify_required_artifacts_v2(transaction.binding(), prior, &artifacts) {
-                execution_error = Some(error);
-                return Err(DirectStoreErrorV1::InvalidInput { reason: "required artifact changed" });
-            }
+            let artifacts = artifacts?;
+            native.verify_required_artifacts_v2(transaction.binding(), prior, &artifacts)?;
         }
         let (next, body, disposition) = match command {
             C::GoalDefine(input) => {
@@ -300,8 +290,7 @@ pub fn execute_procedure_v1<R: GitResolverContractV1>(
             }
             C::SessionTerminalDisposition(input) => {
                 if !matches!(prior.trace().lifecycle(), SessionLifecycle::Completed | SessionLifecycle::Cancelled) {
-                    execution_error = Some(DirectExecutionErrorV1::SessionNotTerminal);
-                    return Err(DirectStoreErrorV1::InvalidInput { reason: "disposition requires a terminal session" });
+                    return Err(DirectExecutionErrorV1::SessionNotTerminal);
                 }
                 let actor = actor(&input.actor)?;
                 // Validate bounded caller text before obtaining the mutation timestamp.
@@ -331,10 +320,7 @@ pub fn execute_procedure_v1<R: GitResolverContractV1>(
         else { transaction.replace_graph(prior.workspace_revision(), prior.trace().revision(), &next)?; }
         Ok(response)
     });
-    if let Some(error) = execution_error {
-        return Err(error);
-    }
-    let result = result?;
+    let result = result.map_err(podway_store::direct_store::DirectMutationFailureV1::into_error)?;
     serde_json::from_str(result.outcome().response().as_str())
         .map_err(|_| DirectStoreErrorV1::Unreadable.into())
 }
